@@ -73,20 +73,33 @@ export async function registerRoutes(
     }
   });
 
-  // Encounters API
-  app.get("/api/encounters", async (req: Request, res: Response) => {
+  // Encounters API - List by filter
+  app.get("/api/encounters/pending", async (req: Request, res: Response) => {
     try {
-      const filterParam = req.query.filter;
-      const filter = typeof filterParam === "string" ? filterParam : undefined;
-      let status: string | undefined;
-      
-      if (filter === "pending") status = "pending_review";
-      else if (filter === "approved") status = "approved";
-      
-      const encounters = await storage.getEncountersByStatus(status);
+      const encounters = await storage.getEncountersByStatus("pending_review");
       res.json(encounters);
     } catch (error) {
-      console.error("Error fetching encounters:", error);
+      console.error("Error fetching pending encounters:", error);
+      res.status(500).json({ error: "Failed to fetch encounters" });
+    }
+  });
+
+  app.get("/api/encounters/approved", async (req: Request, res: Response) => {
+    try {
+      const encounters = await storage.getEncountersByStatus("approved");
+      res.json(encounters);
+    } catch (error) {
+      console.error("Error fetching approved encounters:", error);
+      res.status(500).json({ error: "Failed to fetch encounters" });
+    }
+  });
+
+  app.get("/api/encounters/all", async (req: Request, res: Response) => {
+    try {
+      const encounters = await storage.getEncountersByStatus(undefined);
+      res.json(encounters);
+    } catch (error) {
+      console.error("Error fetching all encounters:", error);
       res.status(500).json({ error: "Failed to fetch encounters" });
     }
   });
