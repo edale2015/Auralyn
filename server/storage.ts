@@ -4,8 +4,10 @@ import {
   type Encounter, type InsertEncounter,
   type Order, type InsertOrder,
   type WhatsappMessage, type InsertWhatsappMessage,
+  physicians, patients, encounters, orders, whatsappMessages,
 } from "@shared/schema";
-import { randomUUID } from "crypto";
+import { db } from "./db";
+import { eq, desc, and, or } from "drizzle-orm";
 
 export interface IStorage {
   // Physicians
@@ -235,4 +237,148 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export class DatabaseStorage implements IStorage {
+  
+  constructor() {
+    this.initDefaultPhysician();
+  }
+
+  private async initDefaultPhysician() {
+    const existing = await this.getPhysicianByUsername("admin");
+    if (!existing) {
+      const mdPassword = process.env.MD_PASSWORD || "physician123";
+      await this.createPhysician({
+        username: "admin",
+        password: mdPassword,
+        name: "Dr. Smith",
+        specialty: "Internal Medicine",
+      });
+    }
+  }
+
+  async getPhysician(id: number): Promise<Physician | undefined> {
+    const result = await db.select().from(physicians).where(eq(physicians.id, id));
+    return result[0];
+  }
+
+  async getPhysicianByUsername(username: string): Promise<Physician | undefined> {
+    const result = await db.select().from(physicians).where(eq(physicians.username, username));
+    return result[0];
+  }
+
+  async createPhysician(physician: InsertPhysician): Promise<Physician> {
+    const result = await db.insert(physicians).values(physician).returning();
+    return result[0];
+  }
+
+  async getPatient(id: number): Promise<Patient | undefined> {
+    const result = await db.select().from(patients).where(eq(patients.id, id));
+    return result[0];
+  }
+
+  async getPatientByPhone(phoneNumber: string): Promise<Patient | undefined> {
+    const result = await db.select().from(patients).where(eq(patients.phoneNumber, phoneNumber));
+    return result[0];
+  }
+
+  async createPatient(patient: InsertPatient): Promise<Patient> {
+    const result = await db.insert(patients).values(patient).returning();
+    return result[0];
+  }
+
+  async getEncounter(id: number): Promise<Encounter | undefined> {
+    const result = await db.select().from(encounters).where(eq(encounters.id, id));
+    return result[0];
+  }
+
+  async getEncounterWithDetails(id: number): Promise<(Encounter & { messages?: WhatsappMessage[], orders?: Order[] }) | undefined> {
+    const encounter = await this.getEncounter(id);
+    if (!encounter) return undefined;
+    
+    const messages = await this.getMessagesByEncounter(id);
+    const ordersList = await this.getOrdersByEncounter(id);
+    
+    return { ...encounter, messages, orders: ordersList };
+  }
+
+  async getEncountersByStatus(status?: string): Promise<Encounter[]> {
+    if (!status || status === "all") {
+      return await db.select().from(encounters).orderBy(desc(encounters.createdAt));
+    }
+    return await db.select().from(encounters)
+      .where(eq(encounters.status, status))
+      .orderBy(desc(encounters.createdAt));
+  }
+
+  async getActiveEncounterByPatient(patientId: number): Promise<Encounter | undefined> {
+    const result = await db.select().from(encounters)
+      .where(and(
+        eq(encounters.patientId, patientId),
+        or(
+          eq(encounters.status, "gathering_info"),
+          eq(encounters.status, "pending_review")
+        )
+      ));
+    return result[0];
+  }
+
+  async createEncounter(encounter: InsertEncounter): Promise<Encounter> {
+    const result = await db.insert(encounters).values({
+      ...encounter,
+      status: encounter.status || "gathering_info",
+      urgencyLevel: encounter.urgencyLevel || "routine",
+    }).returning();
+    return result[0];
+  }
+
+  async updateEncounter(id: number, updates: Partial<Encounter>): Promise<Encounter | undefined> {
+    const result = await db.update(encounters)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(encounters.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async getOrdersByEncounter(encounterId: number): Promise<Order[]> {
+    return await db.select().from(orders)
+      .where(eq(orders.encounterId, encounterId))
+      .orderBy(orders.createdAt);
+  }
+
+  async createOrder(order: InsertOrder): Promise<Order> {
+    const result = await db.insert(orders).values({
+      ...order,
+      status: order.status || "pending",
+      aiGenerated: order.aiGenerated ?? true,
+      physicianApproved: order.physicianApproved ?? false,
+    }).returning();
+    return result[0];
+  }
+
+  async updateOrder(id: number, updates: Partial<Order>): Promise<Order | undefined> {
+    const result = await db.update(orders)
+      .set(updates)
+      .where(eq(orders.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async getMessagesByEncounter(encounterId: number): Promise<WhatsappMessage[]> {
+    return await db.select().from(whatsappMessages)
+      .where(eq(whatsappMessages.encounterId, encounterId))
+      .orderBy(whatsappMessages.createdAt);
+  }
+
+  async getMessagesByPatient(patientId: number): Promise<WhatsappMessage[]> {
+    return await db.select().from(whatsappMessages)
+      .where(eq(whatsappMessages.patientId, patientId))
+      .orderBy(whatsappMessages.createdAt);
+  }
+
+  async createMessage(message: InsertWhatsappMessage): Promise<WhatsappMessage> {
+    const result = await db.insert(whatsappMessages).values(message).returning();
+    return result[0];
+  }
+}
+
+export const storage = new DatabaseStorage();
