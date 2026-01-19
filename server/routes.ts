@@ -447,9 +447,27 @@ async function getAIResponse(history: { role: "user" | "assistant"; content: str
 
 // Helper function to send WhatsApp message
 async function sendWhatsAppMessage(to: string, body: string): Promise<void> {
+  // Ensure proper WhatsApp phone number format: whatsapp:+1234567890
+  let formattedTo = to;
+  
+  // Remove "whatsapp:" prefix if present to normalize
+  if (formattedTo.startsWith("whatsapp:")) {
+    formattedTo = formattedTo.replace("whatsapp:", "").trim();
+  }
+  
+  // Ensure + prefix for E.164 format
+  if (!formattedTo.startsWith("+")) {
+    formattedTo = "+" + formattedTo;
+  }
+  
+  // Add whatsapp: prefix back
+  formattedTo = "whatsapp:" + formattedTo;
+  
+  console.log(`Sending WhatsApp message to: ${formattedTo}`);
+  
   await twilioClient.messages.create({
     from: TWILIO_WHATSAPP_NUMBER,
-    to: to,
+    to: formattedTo,
     body: body,
   });
 }
