@@ -10,12 +10,14 @@ const openai = new OpenAI({
 });
 
 // Initialize Twilio client
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER || "whatsapp:+14155238886";
 
-const TWILIO_WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER || "whatsapp:+18778370984";
+// Log credential info for debugging (masked for security)
+console.log(`Twilio Config: SID=${TWILIO_SID?.substring(0, 8)}..., Token=${TWILIO_TOKEN ? `${TWILIO_TOKEN.substring(0, 4)}...` : 'NOT SET'}, WhatsApp=${TWILIO_WHATSAPP_NUMBER}`);
+
+const twilioClient = twilio(TWILIO_SID, TWILIO_TOKEN);
 
 // System prompt for the medical AI assistant
 const MEDICAL_AI_SYSTEM_PROMPT = `You are a medical triage assistant helping gather patient information through WhatsApp. Your job is to:
