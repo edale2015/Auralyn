@@ -259,19 +259,24 @@ export async function registerRoutes(
       }));
       
       // Get AI response
+      console.log(`Conversation history length: ${conversationHistory.length} messages`);
       const aiResponse = await getAIResponse(conversationHistory, Body);
+      console.log(`AI Response received: ${aiResponse.substring(0, 200)}...`);
       
       // Check if AI thinks we have enough info
       let aiResult = null;
       try {
         // Try to parse as JSON (complete assessment)
         if (aiResponse.includes('"complete": true') || aiResponse.includes('"complete":true')) {
+          console.log("AI indicates assessment is complete, parsing JSON...");
           const jsonMatch = aiResponse.match(/\{[\s\S]*"complete"[\s\S]*\}/);
           if (jsonMatch) {
             aiResult = JSON.parse(jsonMatch[0]);
+            console.log("Parsed AI result:", JSON.stringify(aiResult));
           }
         }
       } catch (parseError) {
+        console.error("Error parsing AI JSON response:", parseError);
         // Not a complete assessment yet, continue conversation
       }
       
