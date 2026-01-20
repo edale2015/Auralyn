@@ -36,10 +36,11 @@ Preferred communication style: Simple, everyday language.
 - **Build**: esbuild for production bundling with selective dependency bundling
 
 ### Data Storage
-- **ORM**: Drizzle ORM
-- **Database**: PostgreSQL (configured via DATABASE_URL environment variable)
-- **Schema Location**: `shared/schema.ts` - contains physicians, patients, encounters, orders, and whatsapp_messages tables
-- **Current Storage**: DatabaseStorage class in `server/storage.ts` (PostgreSQL-backed, persistent)
+- **Database**: Firebase Firestore (Google Cloud)
+- **Admin SDK**: firebase-admin with applicationDefault() credentials
+- **Schema Location**: `shared/schema.ts` - TypeScript types for physicians, patients, encounters, orders, and whatsapp_messages
+- **Current Storage**: FirebaseStorage class in `server/storage.ts` (Firestore-backed, persistent)
+- **Firebase Config**: `server/firebase.ts` - initializes Admin SDK using GOOGLE_SERVICE_ACCOUNT_JSON secret
 
 ### Authentication
 - Simple username/password login for physicians
@@ -69,9 +70,10 @@ Preferred communication style: Simple, everyday language.
   - `TWILIO_WHATSAPP_NUMBER`
 
 ### Database
-- **PostgreSQL**: Primary database
+- **Firebase Firestore**: Primary database (Google Cloud)
 - **Environment Variables**:
-  - `DATABASE_URL`
+  - `GOOGLE_SERVICE_ACCOUNT_JSON` (secret) - Service account credentials JSON
+  - `FIREBASE_PROJECT_ID` - Firebase project ID (medicalm-dec9d)
 
 ### Replit Integrations
 Located in `server/replit_integrations/` and `client/replit_integrations/`:
