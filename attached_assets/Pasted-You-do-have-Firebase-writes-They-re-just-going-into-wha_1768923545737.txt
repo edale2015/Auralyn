@@ -1,0 +1,117 @@
+You do have Firebase writes. 👍
+They’re just going into whatsapp_sessions, not into encounters (the canonical place we need for physician review + stability).
+
+Your screenshot proves it:
+
+You’re in the whatsapp_sessions collection
+
+It has:
+
+complaint: "Sore throat"
+
+messages[] with your conversation
+
+So the system is writing to Firestore, but your “medical encounter” record isn’t being created/updated in encounters, which is why you feel like “nothing is in Firebase.”
+
+✅ Fix = map each WhatsApp session to an encounter (one doc) and keep writing to that.
+
+This is a single, clean patch in the webhook.
+
+What to do next (the exact fix)
+Goal (lock this forever)
+
+When a WhatsApp message comes in:
+
+Find or create a whatsapp_sessions/{sessionId} (you already do)
+
+Find or create a matching encounters/{encounterId}
+
+Update both, but treat encounters as the source of truth
+
+Canonical linkage fields
+
+Add these two fields:
+
+In whatsapp_sessions:
+
+encounter_id: "<encounterId>"
+
+In encounters:
+
+whatsapp_session_id: "<sessionId>"
+
+Then everything becomes traceable and persistent.
+
+The patch you make in server/routes.ts (right after “get or create active encounter”)
+
+You said lines 236–252: “Gets or creates an active encounter”.
+
+Right there, do this:
+
+A) Ensure you actually create/update an encounter document
+
+If your code currently only creates a whatsapp session, add:
+
+// after you have patient + session
+const encounter = await getOrCreateActiveEncounter({
+  patientId: patient.id,
+  channel: "whatsapp",
+});
+
+// force ENT flu-like (for this slice)
+encounter.system = "ENT";
+encounter.complaint = "FLU_LIKE_URI";
+encounter.status = encounter.status ?? "IN_PROGRESS";
+encounter.answers = encounter.answers ?? {};
+encounter.flowIndex = encounter.flowIndex ?? 0;
+encounter.whatsapp_session_id = whatsappSession.id;
+
+await saveEncounter(encounter);
+
+B) Link the whatsapp session to the encounter
+await updateWhatsappSession(whatsappSession.id, {
+  encounter_id: encounter.id
+});
+
+
+Now Firestore will show docs in BOTH places.
+
+Why you currently see “Sore throat” and not ENT flu-like
+
+Because the current system is doing “free text complaint classification” into the session record (like complaint: "Sore throat"). That’s fine as a log, but it’s not the structured encounter we need.
+
+We are going to set the encounter complaint explicitly to ENT flu-like for this vertical slice.
+
+Quick verification after the patch (2 minutes)
+
+Text WhatsApp again: hi
+
+In Firestore:
+
+open whatsapp_sessions newest doc → confirm it has encounter_id
+
+open encounters collection → confirm a new doc exists with:
+
+system: ENT
+
+complaint: FLU_LIKE_URI
+
+whatsapp_session_id: ...
+
+status: IN_PROGRESS then PENDING_PHYSICIAN_REVIEW when done
+
+If that happens, persistence is fixed.
+
+I need one concrete thing from you to give you the exact code lines
+
+Because your project already has its own helper functions, please paste the actual function names used in routes.ts for:
+
+“get or create whatsapp session” function name
+
+“get or create encounter” function name (if it exists)
+
+“save encounter” function name
+
+If you don’t want to paste code, just tell me the names you see in routes.ts around lines 236–252 (e.g., getOrCreateActiveEncounter, EncounterService.upsert, etc.).
+
+Then I’ll return an exact drop-in snippet using your real functions, not placeholders.
