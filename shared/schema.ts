@@ -46,7 +46,7 @@ export const encounters = pgTable("encounters", {
   aiDiagnosis: text("ai_diagnosis"),
   aiDisposition: text("ai_disposition"),
   aiConfidence: integer("ai_confidence"), // 0-100
-  status: text("status").notNull().default("gathering_info"), // gathering_info, pending_review, approved, rejected
+  status: text("status").notNull().default("gathering_info"), // gathering_info, in_progress, pending_review, approved, rejected
   urgencyLevel: text("urgency_level").default("routine"), // routine, urgent, emergent
   physicianId: integer("physician_id").references(() => physicians.id),
   physicianDiagnosis: text("physician_diagnosis"),
@@ -55,6 +55,15 @@ export const encounters = pgTable("encounters", {
   approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  // ENT Flu Flow fields
+  system: text("system"), // e.g., "ENT"
+  complaint: text("complaint"), // e.g., "FLU_LIKE_URI"
+  specialty: text("specialty"), // e.g., "ENT"
+  flowId: text("flow_id"), // e.g., "ENT_FLU_LIKE_V1"
+  flowIndex: integer("flow_index").default(0), // current question index
+  answers: text("answers"), // JSON string of collected answers
+  proposal: text("proposal"), // JSON string of computed proposal
+  physicianSummary: text("physician_summary"), // JSON string of summary for physician
 });
 
 export const insertEncounterSchema = createInsertSchema(encounters).omit({

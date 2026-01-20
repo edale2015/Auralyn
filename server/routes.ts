@@ -1,13 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import OpenAI from "openai";
 import twilio from "twilio";
-
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
 
 // Initialize Twilio client
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -19,23 +13,101 @@ console.log(`Twilio Config: SID=${TWILIO_SID?.substring(0, 8)}..., Token=${TWILI
 
 const twilioClient = twilio(TWILIO_SID, TWILIO_TOKEN);
 
-// System prompt for the medical AI assistant
-const MEDICAL_AI_SYSTEM_PROMPT = `You are a medical triage assistant helping gather patient information through WhatsApp. Your job is to:
+// ENT Flu Triage Questionnaire Flow
+const ENT_FLU_FLOW = [
+  { id: "RF_SOB", text: "Trouble breathing at rest? (yes/no)", type: "yesno" },
+  { id: "RF_CP", text: "Chest pain or pressure? (yes/no)", type: "yesno" },
+  { id: "RF_NEURO", text: "Confusion, fainting, or severe weakness? (yes/no)", type: "yesno" },
+  { id: "RF_DEHY", text: "Unable to keep fluids down or signs of dehydration? (yes/no)", type: "yesno" },
+  { id: "ONSET_DAYS", text: "How many days since symptoms started? (number)", type: "number" },
+  { id: "FEVER", text: "Fever ≥100.4°F / 38°C? (yes/no)", type: "yesno" },
+  { id: "ACHES", text: "Body aches or marked fatigue? (yes/no)", type: "yesno" },
+  { id: "COUGH", text: "Cough? (yes/no)", type: "yesno" },
+  { id: "SORE_THROAT", text: "Sore throat? (yes/no)", type: "yesno" },
+  { id: "CONGESTION", text: "Nasal congestion or sinus pressure? (yes/no)", type: "yesno" },
+  { id: "EAR_PAIN", text: "Ear pain or fullness? (yes/no)", type: "yesno" },
+  { id: "GI", text: "Nausea or diarrhea? (yes/no)", type: "yesno" },
+  { id: "PREGNANT", text: "Are you pregnant? (yes/no)", type: "yesno" },
+  { id: "HTN", text: "Do you have high blood pressure? (yes/no)", type: "yesno" },
+  { id: "ANXIETY", text: "Anxiety/panic or very sensitive to stimulants? (yes/no)", type: "yesno" },
+  { id: "SSRI", text: "Do you take an SSRI/SNRI antidepressant? (yes/no)", type: "yesno" },
+  { id: "ALLERGIES", text: "Any medication allergies? (short answer)", type: "text" },
+  { id: "COVID_POS", text: "COVID test positive? (yes/no/not tested)", type: "choice" },
+  { id: "FLU_POS", text: "Flu test positive? (yes/no/not tested)", type: "choice" }
+];
 
-1. Greet the patient warmly and ask about their chief complaint
-2. Ask focused follow-up questions ONE AT A TIME to understand their symptoms
-3. Keep questions simple and clear - patients are not medical professionals
-4. After gathering sufficient information (usually 3-5 questions), provide a summary
+// Helper function to parse patient answers
+function parseAnswer(type: string, raw: string): boolean | number | string {
+  const v = raw.toLowerCase().trim();
+  if (type === "yesno") return ["yes", "y", "yeah", "yep", "true", "1"].includes(v);
+  if (type === "number") return Number(v) || 0;
+  if (type === "choice") {
+    if (v.startsWith("y")) return "yes";
+    if (v.startsWith("n")) return "no";
+    return "not tested";
+  }
+  return raw.trim();
+}
 
-When you have enough information, respond with a JSON summary in this format:
-{"complete": true, "chiefComplaint": "brief description", "diagnosis": "likely condition", "disposition": "recommendation", "urgency": "routine|urgent|emergent", "confidence": 0-100}
+// Compute medical proposal based on answers
+function computeProposal(a: Record<string, any>) {
+  const redFlag =
+    a.RF_SOB === true || a.RF_CP === true || a.RF_NEURO === true || a.RF_DEHY === true;
 
-Until you have enough info, just respond conversationally to gather more details. Always be empathetic and professional.
+  const onsetDays = typeof a.ONSET_DAYS === "number" ? a.ONSET_DAYS : null;
 
-Important symptoms that indicate urgency:
-- Chest pain, difficulty breathing, severe bleeding = emergent
-- High fever, severe pain, concerning symptoms = urgent
-- Mild symptoms, chronic issues = routine`;
+  const tamifluEligible =
+    !redFlag &&
+    onsetDays !== null &&
+    onsetDays <= 2 &&
+    a.FEVER === true &&
+    a.ACHES === true;
+
+  const paxlovidFlag = a.COVID_POS === "yes";
+
+  // Med suggestions (simple baseline + pruning)
+  const meds: string[] = ["acetaminophen", "saline nasal spray", "guaifenesin"];
+  const avoid: string[] = [];
+
+  if (a.SSRI === true) avoid.push("dextromethorphan");
+  if (a.HTN === true || a.ANXIETY === true) avoid.push("pseudoephedrine/phenylephrine");
+  if (a.PREGNANT === true) avoid.push("ibuprofen/NSAIDs");
+
+  const disposition = redFlag ? "urgent_or_ed" : "self_care_with_precautions";
+
+  const tests: string[] = [];
+  tests.push("COVID antigen/NAAT (if available)");
+  if (tamifluEligible) tests.push("Influenza test (if available)");
+
+  return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition };
+}
+
+// Build physician summary for review
+function buildPhysicianSummary(a: Record<string, any>, p: ReturnType<typeof computeProposal>) {
+  const onset = a.ONSET_DAYS ?? "unknown";
+  const positives = [
+    a.FEVER ? "fever" : null,
+    a.ACHES ? "aches/fatigue" : null,
+    a.COUGH ? "cough" : null,
+    a.SORE_THROAT ? "sore throat" : null,
+    a.CONGESTION ? "congestion/sinus pressure" : null,
+    a.EAR_PAIN ? "ear pain" : null,
+    a.GI ? "GI symptoms" : null,
+  ].filter(Boolean);
+
+  return {
+    hpi: `Onset: ${onset} days. Positives: ${positives.join(", ") || "none specified"}.`,
+    redFlags: p.redFlag ? "Present" : "None reported",
+    proposedDisposition: p.disposition,
+    proposedTests: p.tests,
+    meds: p.meds,
+    avoid: p.avoid,
+    flags: {
+      tamifluEligible: p.tamifluEligible,
+      paxlovidFlag: p.paxlovidFlag
+    }
+  };
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -216,13 +288,14 @@ export async function registerRoutes(
     }
   });
 
-  // Twilio WhatsApp Webhook
+  // Twilio WhatsApp Webhook - Deterministic ENT Flu Triage Flow
   app.post("/api/webhooks/whatsapp", async (req: Request, res: Response) => {
     try {
       const { From, Body, MessageSid } = req.body;
       const phoneNumber = From; // Format: whatsapp:+1234567890
+      const msg = Body.trim();
       
-      console.log(`Received WhatsApp message from ${phoneNumber}: ${Body}`);
+      console.log(`Received WhatsApp message from ${phoneNumber}: ${msg}`);
       
       // Get or create patient
       let patient = await storage.getPatientByPhone(phoneNumber);
@@ -238,8 +311,28 @@ export async function registerRoutes(
       if (!encounter) {
         encounter = await storage.createEncounter({
           patientId: patient.id,
-          status: "gathering_info",
+          status: "in_progress",
+          system: "ENT",
+          complaint: "FLU_LIKE_URI",
+          specialty: "ENT",
+          flowId: "ENT_FLU_LIKE_V1",
+          flowIndex: 0,
+          answers: JSON.stringify({}),
         });
+      }
+      
+      // Ensure ENT flow fields are set (for existing encounters)
+      if (!encounter.system) {
+        await storage.updateEncounter(encounter.id, {
+          system: "ENT",
+          complaint: "FLU_LIKE_URI",
+          specialty: "ENT",
+          flowId: "ENT_FLU_LIKE_V1",
+          flowIndex: encounter.flowIndex ?? 0,
+          answers: encounter.answers ?? JSON.stringify({}),
+          status: "in_progress",
+        });
+        encounter = await storage.getEncounter(encounter.id) as typeof encounter;
       }
       
       // Save incoming message
@@ -247,66 +340,96 @@ export async function registerRoutes(
         patientId: patient.id,
         encounterId: encounter.id,
         direction: "inbound",
-        messageBody: Body,
+        messageBody: msg,
         messageSid: MessageSid,
       });
       
-      // Get conversation history for context
-      const messages = await storage.getMessagesByEncounter(encounter.id);
-      const conversationHistory = messages.map(m => ({
-        role: m.direction === "inbound" ? "user" : "assistant" as const,
-        content: m.messageBody,
-      }));
+      // Get current flow state
+      const flowIndex = encounter.flowIndex ?? 0;
+      const answers: Record<string, any> = encounter.answers ? JSON.parse(encounter.answers) : {};
       
-      // Get AI response
-      console.log(`Conversation history length: ${conversationHistory.length} messages`);
-      const aiResponse = await getAIResponse(conversationHistory, Body);
-      console.log(`AI Response received: ${aiResponse.substring(0, 200)}...`);
-      
-      // Check if AI thinks we have enough info
-      let aiResult = null;
-      try {
-        // Try to parse as JSON (complete assessment)
-        if (aiResponse.includes('"complete": true') || aiResponse.includes('"complete":true')) {
-          console.log("AI indicates assessment is complete, parsing JSON...");
-          const jsonMatch = aiResponse.match(/\{[\s\S]*"complete"[\s\S]*\}/);
-          if (jsonMatch) {
-            aiResult = JSON.parse(jsonMatch[0]);
-            console.log("Parsed AI result:", JSON.stringify(aiResult));
-          }
-        }
-      } catch (parseError) {
-        console.error("Error parsing AI JSON response:", parseError);
-        // Not a complete assessment yet, continue conversation
-      }
+      console.log(`Flow state: index=${flowIndex}, answers=${JSON.stringify(answers)}`);
       
       let responseMessage: string;
       
-      if (aiResult && aiResult.complete) {
-        // Update encounter with AI assessment
-        await storage.updateEncounter(encounter.id, {
-          chiefComplaint: aiResult.chiefComplaint,
-          aiDiagnosis: aiResult.diagnosis,
-          aiDisposition: aiResult.disposition,
-          urgencyLevel: aiResult.urgency || "routine",
-          aiConfidence: aiResult.confidence || 70,
-          status: "pending_review",
-        });
+      // If this is the first message (flowIndex = 0), send the first question
+      if (flowIndex === 0) {
+        const firstQuestion = ENT_FLU_FLOW[0];
+        responseMessage = `Welcome to the ENT Flu Triage System. I'll ask you a series of questions to assess your symptoms.\n\n${firstQuestion.text}`;
         
-        // Create suggested orders based on disposition
-        if (aiResult.disposition) {
-          await storage.createOrder({
-            encounterId: encounter.id,
-            orderType: "referral",
-            description: `Suggested: ${aiResult.disposition}`,
-            aiGenerated: true,
+        await storage.updateEncounter(encounter.id, {
+          flowIndex: 1,
+        });
+      } else {
+        // Save the answer for the previous question
+        const prevQuestion = ENT_FLU_FLOW[flowIndex - 1];
+        const parsed = parseAnswer(prevQuestion.type, msg);
+        answers[prevQuestion.id] = parsed;
+        
+        console.log(`Saved answer for ${prevQuestion.id}: ${parsed}`);
+        
+        // Check if we've completed all questions
+        if (flowIndex >= ENT_FLU_FLOW.length) {
+          // Compute proposal and finalize
+          const proposal = computeProposal(answers);
+          const physicianSummary = buildPhysicianSummary(answers, proposal);
+          
+          // Determine urgency based on red flags
+          const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
+          
+          await storage.updateEncounter(encounter.id, {
+            answers: JSON.stringify(answers),
+            proposal: JSON.stringify(proposal),
+            physicianSummary: JSON.stringify(physicianSummary),
+            status: "pending_review",
+            urgencyLevel,
+            chiefComplaint: "Flu-like symptoms / URI",
+            aiDiagnosis: physicianSummary.hpi,
+            aiDisposition: proposal.disposition,
+          });
+          
+          // Create suggested orders
+          for (const test of proposal.tests) {
+            await storage.createOrder({
+              encounterId: encounter.id,
+              orderType: "lab",
+              description: test,
+              aiGenerated: true,
+            });
+          }
+          
+          // Create medication recommendations
+          if (proposal.meds.length > 0) {
+            await storage.createOrder({
+              encounterId: encounter.id,
+              orderType: "prescription",
+              description: `Suggested OTC: ${proposal.meds.join(", ")}`,
+              aiGenerated: true,
+            });
+          }
+          
+          if (proposal.avoid.length > 0) {
+            await storage.createOrder({
+              encounterId: encounter.id,
+              orderType: "prescription",
+              description: `AVOID: ${proposal.avoid.join(", ")}`,
+              aiGenerated: true,
+            });
+          }
+          
+          responseMessage = proposal.redFlag
+            ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room. A physician will also review your case."
+            : "Thank you for completing the assessment. Your case has been sent to a physician for review. If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.";
+        } else {
+          // Ask the next question
+          const nextQuestion = ENT_FLU_FLOW[flowIndex];
+          responseMessage = nextQuestion.text;
+          
+          await storage.updateEncounter(encounter.id, {
+            flowIndex: flowIndex + 1,
+            answers: JSON.stringify(answers),
           });
         }
-        
-        responseMessage = `Thank you for the information. I've gathered your symptoms and a physician will review your case shortly. Based on the initial assessment:\n\nChief Complaint: ${aiResult.chiefComplaint}\nRecommendation: ${aiResult.disposition}\n\nA physician will confirm this and provide further instructions.`;
-      } else {
-        // Continue conversation
-        responseMessage = aiResponse;
       }
       
       // Save and send response
@@ -333,10 +456,11 @@ export async function registerRoutes(
     }
   });
 
-  // Test endpoint to simulate WhatsApp message
+  // Test endpoint to simulate WhatsApp message using deterministic flow
   app.post("/api/test/simulate-message", async (req: Request, res: Response) => {
     try {
       const { phoneNumber, message } = req.body;
+      const msg = message.trim();
       
       // Simulate the webhook request
       const fakeFrom = phoneNumber.startsWith("whatsapp:") ? phoneNumber : `whatsapp:${phoneNumber}`;
@@ -350,13 +474,33 @@ export async function registerRoutes(
         });
       }
       
-      // Get or create active encounter
+      // Get or create active encounter with ENT flow fields
       let encounter = await storage.getActiveEncounterByPatient(patient.id);
       if (!encounter) {
         encounter = await storage.createEncounter({
           patientId: patient.id,
-          status: "gathering_info",
+          status: "in_progress",
+          system: "ENT",
+          complaint: "FLU_LIKE_URI",
+          specialty: "ENT",
+          flowId: "ENT_FLU_LIKE_V1",
+          flowIndex: 0,
+          answers: JSON.stringify({}),
         });
+      }
+      
+      // Ensure ENT flow fields are set
+      if (!encounter.system) {
+        await storage.updateEncounter(encounter.id, {
+          system: "ENT",
+          complaint: "FLU_LIKE_URI",
+          specialty: "ENT",
+          flowId: "ENT_FLU_LIKE_V1",
+          flowIndex: encounter.flowIndex ?? 0,
+          answers: encounter.answers ?? JSON.stringify({}),
+          status: "in_progress",
+        });
+        encounter = await storage.getEncounter(encounter.id) as typeof encounter;
       }
       
       // Save incoming message
@@ -364,56 +508,60 @@ export async function registerRoutes(
         patientId: patient.id,
         encounterId: encounter.id,
         direction: "inbound",
-        messageBody: message,
+        messageBody: msg,
       });
       
-      // Get conversation history
-      const messages = await storage.getMessagesByEncounter(encounter.id);
-      const conversationHistory = messages.map(m => ({
-        role: m.direction === "inbound" ? "user" : "assistant" as const,
-        content: m.messageBody,
-      }));
-      
-      // Get AI response
-      const aiResponse = await getAIResponse(conversationHistory, message);
-      
-      // Check for complete assessment
-      let aiResult = null;
-      try {
-        if (aiResponse.includes('"complete": true') || aiResponse.includes('"complete":true')) {
-          const jsonMatch = aiResponse.match(/\{[\s\S]*"complete"[\s\S]*\}/);
-          if (jsonMatch) {
-            aiResult = JSON.parse(jsonMatch[0]);
-          }
-        }
-      } catch (parseError) {
-        // Continue
-      }
+      // Get current flow state
+      const flowIndex = encounter.flowIndex ?? 0;
+      const answers: Record<string, any> = encounter.answers ? JSON.parse(encounter.answers) : {};
       
       let responseMessage: string;
+      let newStatus = encounter.status;
       
-      if (aiResult && aiResult.complete) {
-        await storage.updateEncounter(encounter.id, {
-          chiefComplaint: aiResult.chiefComplaint,
-          aiDiagnosis: aiResult.diagnosis,
-          aiDisposition: aiResult.disposition,
-          urgencyLevel: aiResult.urgency || "routine",
-          aiConfidence: aiResult.confidence || 70,
-          status: "pending_review",
-        });
+      // Process flow
+      if (flowIndex === 0) {
+        const firstQuestion = ENT_FLU_FLOW[0];
+        responseMessage = `Welcome to the ENT Flu Triage System. I'll ask you a series of questions to assess your symptoms.\n\n${firstQuestion.text}`;
         
-        if (aiResult.disposition) {
-          await storage.createOrder({
-            encounterId: encounter.id,
-            orderType: "referral",
-            description: `Suggested: ${aiResult.disposition}`,
-            aiGenerated: true,
+        await storage.updateEncounter(encounter.id, {
+          flowIndex: 1,
+        });
+      } else {
+        // Save the answer for the previous question
+        const prevQuestion = ENT_FLU_FLOW[flowIndex - 1];
+        const parsed = parseAnswer(prevQuestion.type, msg);
+        answers[prevQuestion.id] = parsed;
+        
+        if (flowIndex >= ENT_FLU_FLOW.length) {
+          // Finalize
+          const proposal = computeProposal(answers);
+          const physicianSummary = buildPhysicianSummary(answers, proposal);
+          const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
+          
+          await storage.updateEncounter(encounter.id, {
+            answers: JSON.stringify(answers),
+            proposal: JSON.stringify(proposal),
+            physicianSummary: JSON.stringify(physicianSummary),
+            status: "pending_review",
+            urgencyLevel,
+            chiefComplaint: "Flu-like symptoms / URI",
+            aiDiagnosis: physicianSummary.hpi,
+            aiDisposition: proposal.disposition,
+          });
+          
+          newStatus = "pending_review";
+          responseMessage = proposal.redFlag
+            ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room."
+            : "Thank you for completing the assessment. Your case has been sent to a physician for review.";
+        } else {
+          const nextQuestion = ENT_FLU_FLOW[flowIndex];
+          responseMessage = nextQuestion.text;
+          
+          await storage.updateEncounter(encounter.id, {
+            flowIndex: flowIndex + 1,
+            answers: JSON.stringify(answers),
           });
         }
-        
-        responseMessage = `Thank you for the information. I've gathered your symptoms and a physician will review your case shortly. Based on the initial assessment:\n\nChief Complaint: ${aiResult.chiefComplaint}\nRecommendation: ${aiResult.disposition}\n\nA physician will confirm this and provide further instructions.`;
-      } else {
-        responseMessage = aiResponse;
       }
       
       await storage.createMessage({
@@ -426,7 +574,9 @@ export async function registerRoutes(
       res.json({
         response: responseMessage,
         encounterId: encounter.id,
-        status: encounter.status,
+        status: newStatus,
+        flowIndex: (encounter.flowIndex ?? 0) + 1,
+        questionsRemaining: ENT_FLU_FLOW.length - (encounter.flowIndex ?? 0),
       });
     } catch (error) {
       console.error("Simulate message error:", error);
@@ -435,32 +585,6 @@ export async function registerRoutes(
   });
 
   return httpServer;
-}
-
-// Helper function to get AI response
-async function getAIResponse(history: { role: "user" | "assistant"; content: string }[], currentMessage: string): Promise<string> {
-  try {
-    const messages = [
-      { role: "system" as const, content: MEDICAL_AI_SYSTEM_PROMPT },
-      ...history,
-    ];
-    
-    // Add current message if not already in history
-    if (history.length === 0 || history[history.length - 1].content !== currentMessage) {
-      messages.push({ role: "user" as const, content: currentMessage });
-    }
-    
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages,
-      max_completion_tokens: 500,
-    });
-    
-    return response.choices[0]?.message?.content || "I apologize, I'm having trouble processing your request. Please try again.";
-  } catch (error) {
-    console.error("AI response error:", error);
-    return "I apologize, I'm experiencing technical difficulties. Please try again in a moment.";
-  }
 }
 
 // Helper function to send WhatsApp message

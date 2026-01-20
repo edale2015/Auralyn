@@ -1,0 +1,134 @@
+B) Replace GPT call block with deterministic step
+
+Instead of building history + calling GPT (your lines 254–264), do:
+
+const msg = incomingBody.trim();
+
+const step = ENT_FLU_FLOW[encounter.flowIndex];
+
+// save the answer for the *previous* question if flowIndex > 0
+if (encounter.flowIndex > 0) {
+  const prev = ENT_FLU_FLOW[encounter.flowIndex - 1];
+  const parsed = parseAnswer(prev.type, msg);
+  encounter.answers[prev.id] = parsed;
+  await saveEncounter(encounter);
+}
+
+// if we just saved the last answer, finalize
+if (encounter.flowIndex >= ENT_FLU_FLOW.length) {
+  const proposal = computeProposal(encounter.answers);
+  encounter.proposal = proposal;
+  encounter.status = "PENDING_PHYSICIAN_REVIEW";
+  encounter.physicianSummary = buildPhysicianSummary(encounter.answers, proposal);
+  await saveEncounter(encounter);
+
+  const patientText = "Thanks. Your disposition has been sent to the physician for review. If you develop trouble breathing, chest pain, confusion, or can’t keep fluids down, seek urgent care/ER.";
+  return sendWhatsApp(to, from, patientText);
+}
+
+// otherwise advance and ask the next question
+encounter.flowIndex += 1;
+await saveEncounter(encounter);
+
+const nextQ = ENT_FLU_FLOW[encounter.flowIndex - 1].text;
+return sendWhatsApp(to, from, nextQ);
+
+
+You’ll need these helper functions:
+
+function parseAnswer(type: string, raw: string) {
+  const v = raw.toLowerCase().trim();
+  if (type === "yesno") return ["yes", "y"].includes(v);
+  if (type === "number") return Number(v);
+  if (type === "choice") {
+    if (v.startsWith("y")) return "yes";
+    if (v.startsWith("n")) return "no";
+    return "not tested";
+  }
+  return raw.trim();
+}
+
+function buildPhysicianSummary(a: any, p: any) {
+  const onset = a.ONSET_DAYS ?? "unknown";
+  const positives = [
+    a.FEVER ? "fever" : null,
+    a.ACHES ? "aches/fatigue" : null,
+    a.COUGH ? "cough" : null,
+    a.SORE_THROAT ? "sore throat" : null,
+    a.CONGESTION ? "congestion/sinus pressure" : null,
+    a.EAR_PAIN ? "ear pain" : null,
+    a.GI ? "GI symptoms" : null,
+  ].filter(Boolean);
+
+  return {
+    hpi: `Onset: ${onset} days. Positives: ${positives.join(", ") || "none specified"}.`,
+    redFlags: p.redFlag ? "Present" : "None reported",
+    proposedDisposition: p.disposition,
+    proposedTests: p.tests,
+    meds: p.meds,
+    avoid: p.avoid,
+    flags: {
+      tamifluEligible: p.tamifluEligible,
+      paxlovidFlag: p.paxlovidFlag
+    }
+  };
+}
+
+C) Leave the physician approval logic untouched
+
+You said it already exists (“marks it for physician review”). Great.
+Now it will mark ENT flu-like encounters, not chest pain.
+
+Why this fixes your “cases disappear” issue
+
+Because now:
+
+every message updates the same Firestore encounters/{id}
+
+state (flowIndex) and answers persist
+
+if you refresh or lock screen, the encounter is still there
+
+No more in-memory reliance.
+
+Your Twilio webhook URL is correct
+
+Use (Sandbox):
+https://61cec9e4-00a9-4d94-acfa-e596f88c5659-00-2ffbhly9zabi6.spock.replit.dev/api/webhooks/whatsapp
+
+✅ Keep that.
+
+What to do immediately after patching
+
+Deploy/run Replit
+
+WhatsApp “hi”
+
+You should immediately get:
+“Trouble breathing at rest?”
+
+After finishing, check Firestore:
+
+newest encounters doc should show:
+
+system: ENT
+
+complaint: FLU_LIKE_URI
+
+status: PENDING_PHYSICIAN_REVIEW
+
+answers filled
+
+That’s your end-to-end template.
+
+One thing I need from you to make the patch exact
+
+In server/routes.ts, what is the encounter field name for:
+
+the “status” string (e.g., status vs state)
+
+the “answers” object (e.g., answers vs intakeAnswers)
+
+the save method name (e.g., updateEncounter(encounter))
+
+If you paste just the function signature / the encounter update block (10–20 lines around where it updates encounter), I’ll give you the exact drop-in code with your real names.

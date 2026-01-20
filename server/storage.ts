@@ -132,7 +132,7 @@ export class MemStorage implements IStorage {
 
   async getActiveEncounterByPatient(patientId: number): Promise<Encounter | undefined> {
     return Array.from(this.encounters.values()).find(
-      e => e.patientId === patientId && (e.status === "gathering_info" || e.status === "pending_review")
+      e => e.patientId === patientId && (e.status === "gathering_info" || e.status === "in_progress" || e.status === "pending_review")
     );
   }
 
@@ -156,6 +156,15 @@ export class MemStorage implements IStorage {
       approvedAt: null,
       createdAt: now,
       updatedAt: now,
+      // ENT flow fields
+      system: encounter.system || null,
+      complaint: encounter.complaint || null,
+      specialty: encounter.specialty || null,
+      flowId: encounter.flowId || null,
+      flowIndex: encounter.flowIndex ?? 0,
+      answers: encounter.answers || null,
+      proposal: encounter.proposal || null,
+      physicianSummary: encounter.physicianSummary || null,
     };
     this.encounters.set(id, newEncounter);
     return newEncounter;
@@ -316,6 +325,7 @@ export class DatabaseStorage implements IStorage {
         eq(encounters.patientId, patientId),
         or(
           eq(encounters.status, "gathering_info"),
+          eq(encounters.status, "in_progress"),
           eq(encounters.status, "pending_review")
         )
       ));
