@@ -1,4 +1,4 @@
-import * as admin from "firebase-admin";
+import admin from "firebase-admin";
 
 let firebaseApp: admin.app.App | null = null;
 
@@ -34,7 +34,9 @@ export function getFirebaseApp(): admin.app.App {
   }
 }
 
-export function getFirestore(): admin.firestore.Firestore {
+export function getFirestore(): FirebaseFirestore.Firestore {
   const app = getFirebaseApp();
   return app.firestore();
 }
+
+export { admin };

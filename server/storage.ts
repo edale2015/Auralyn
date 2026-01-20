@@ -8,6 +8,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or } from "drizzle-orm";
+import { getFirestore, admin } from "./firebase";
 
 export interface IStorage {
   // Physicians
@@ -391,4 +392,391 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage = new DatabaseStorage();
+export class FirebaseStorage implements IStorage {
+  private db: admin.firestore.Firestore | null = null;
+  private initialized = false;
+
+  private getDb(): admin.firestore.Firestore {
+    if (!this.db) {
+      this.db = getFirestore();
+    }
+    return this.db;
+  }
+
+  private async getNextId(collection: string): Promise<number> {
+    const db = this.getDb();
+    const counterRef = db.collection("_counters").doc(collection);
+    
+    return await db.runTransaction(async (transaction) => {
+      const counterDoc = await transaction.get(counterRef);
+      let nextId = 1;
+      
+      if (counterDoc.exists) {
+        nextId = (counterDoc.data()?.value || 0) + 1;
+      }
+      
+      transaction.set(counterRef, { value: nextId });
+      return nextId;
+    });
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    
+    const existing = await this.getPhysicianByUsername("admin");
+    if (!existing) {
+      const mdPassword = process.env.MD_PASSWORD || "physician123";
+      await this.createPhysician({
+        username: "admin",
+        password: mdPassword,
+        name: "Dr. Smith",
+        specialty: "Internal Medicine",
+      });
+    }
+    this.initialized = true;
+  }
+
+  async getPhysician(id: number): Promise<Physician | undefined> {
+    const db = this.getDb();
+    const snapshot = await db.collection("physicians").where("id", "==", id).limit(1).get();
+    if (snapshot.empty) return undefined;
+    return snapshot.docs[0].data() as Physician;
+  }
+
+  async getPhysicianByUsername(username: string): Promise<Physician | undefined> {
+    const db = this.getDb();
+    const snapshot = await db.collection("physicians").where("username", "==", username).limit(1).get();
+    if (snapshot.empty) return undefined;
+    return snapshot.docs[0].data() as Physician;
+  }
+
+  async createPhysician(physician: InsertPhysician): Promise<Physician> {
+    const db = this.getDb();
+    const id = await this.getNextId("physicians");
+    const now = new Date();
+    
+    const newPhysician: Physician = {
+      id,
+      username: physician.username,
+      password: physician.password,
+      name: physician.name,
+      specialty: physician.specialty || null,
+      createdAt: now,
+    };
+    
+    await db.collection("physicians").doc(String(id)).set({
+      ...newPhysician,
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+    });
+    
+    return newPhysician;
+  }
+
+  async getPatient(id: number): Promise<Patient | undefined> {
+    const db = this.getDb();
+    const snapshot = await db.collection("patients").where("id", "==", id).limit(1).get();
+    if (snapshot.empty) return undefined;
+    const data = snapshot.docs[0].data();
+    return {
+      ...data,
+      createdAt: data.createdAt?.toDate?.() || new Date(),
+    } as Patient;
+  }
+
+  async getPatientByPhone(phoneNumber: string): Promise<Patient | undefined> {
+    const db = this.getDb();
+    const snapshot = await db.collection("patients").where("phoneNumber", "==", phoneNumber).limit(1).get();
+    if (snapshot.empty) return undefined;
+    const data = snapshot.docs[0].data();
+    return {
+      ...data,
+      createdAt: data.createdAt?.toDate?.() || new Date(),
+    } as Patient;
+  }
+
+  async createPatient(patient: InsertPatient): Promise<Patient> {
+    const db = this.getDb();
+    const id = await this.getNextId("patients");
+    const now = new Date();
+    
+    const newPatient: Patient = {
+      id,
+      phoneNumber: patient.phoneNumber,
+      name: patient.name || null,
+      createdAt: now,
+    };
+    
+    await db.collection("patients").doc(String(id)).set({
+      ...newPatient,
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+    });
+    
+    return newPatient;
+  }
+
+  async getEncounter(id: number): Promise<Encounter | undefined> {
+    const db = this.getDb();
+    const doc = await db.collection("encounters").doc(String(id)).get();
+    if (!doc.exists) return undefined;
+    return this.docToEncounter(doc);
+  }
+
+  private docToEncounter(doc: admin.firestore.DocumentSnapshot): Encounter {
+    const data = doc.data()!;
+    return {
+      id: data.id,
+      patientId: data.patientId,
+      chiefComplaint: data.chiefComplaint || null,
+      conversationHistory: data.conversationHistory || null,
+      aiDiagnosis: data.aiDiagnosis || null,
+      aiDisposition: data.aiDisposition || null,
+      aiConfidence: data.aiConfidence || null,
+      status: data.status || "gathering_info",
+      urgencyLevel: data.urgencyLevel || "routine",
+      physicianId: data.physicianId || null,
+      physicianDiagnosis: data.physicianDiagnosis || null,
+      physicianDisposition: data.physicianDisposition || null,
+      physicianNotes: data.physicianNotes || null,
+      approvedAt: data.approvedAt?.toDate?.() || null,
+      createdAt: data.createdAt?.toDate?.() || new Date(),
+      updatedAt: data.updatedAt?.toDate?.() || new Date(),
+      system: data.system || null,
+      complaint: data.complaint || null,
+      specialty: data.specialty || null,
+      flowId: data.flowId || null,
+      flowIndex: data.flowIndex ?? 0,
+      answers: data.answers || null,
+      proposal: data.proposal || null,
+      physicianSummary: data.physicianSummary || null,
+    };
+  }
+
+  async getEncounterWithDetails(id: number): Promise<(Encounter & { messages?: WhatsappMessage[], orders?: Order[] }) | undefined> {
+    const encounter = await this.getEncounter(id);
+    if (!encounter) return undefined;
+    
+    const messages = await this.getMessagesByEncounter(id);
+    const ordersList = await this.getOrdersByEncounter(id);
+    
+    return { ...encounter, messages, orders: ordersList };
+  }
+
+  async getEncountersByStatus(status?: string): Promise<Encounter[]> {
+    const db = this.getDb();
+    let query: admin.firestore.Query = db.collection("encounters");
+    
+    if (status && status !== "all") {
+      query = query.where("status", "==", status);
+    }
+    
+    query = query.orderBy("createdAt", "desc");
+    const snapshot = await query.get();
+    
+    return snapshot.docs.map(doc => this.docToEncounter(doc));
+  }
+
+  async getActiveEncounterByPatient(patientId: number): Promise<Encounter | undefined> {
+    const db = this.getDb();
+    const activeStatuses = ["gathering_info", "in_progress", "pending_review"];
+    
+    const snapshot = await db.collection("encounters")
+      .where("patientId", "==", patientId)
+      .where("status", "in", activeStatuses)
+      .limit(1)
+      .get();
+    
+    if (snapshot.empty) return undefined;
+    return this.docToEncounter(snapshot.docs[0]);
+  }
+
+  async createEncounter(encounter: InsertEncounter): Promise<Encounter> {
+    const db = this.getDb();
+    const id = await this.getNextId("encounters");
+    const now = new Date();
+    
+    const newEncounter: Encounter = {
+      id,
+      patientId: encounter.patientId,
+      chiefComplaint: encounter.chiefComplaint || null,
+      conversationHistory: encounter.conversationHistory || null,
+      aiDiagnosis: encounter.aiDiagnosis || null,
+      aiDisposition: encounter.aiDisposition || null,
+      aiConfidence: encounter.aiConfidence || null,
+      status: encounter.status || "gathering_info",
+      urgencyLevel: encounter.urgencyLevel || "routine",
+      physicianId: encounter.physicianId || null,
+      physicianDiagnosis: encounter.physicianDiagnosis || null,
+      physicianDisposition: encounter.physicianDisposition || null,
+      physicianNotes: encounter.physicianNotes || null,
+      approvedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      system: encounter.system || null,
+      complaint: encounter.complaint || null,
+      specialty: encounter.specialty || null,
+      flowId: encounter.flowId || null,
+      flowIndex: encounter.flowIndex ?? 0,
+      answers: encounter.answers || null,
+      proposal: encounter.proposal || null,
+      physicianSummary: encounter.physicianSummary || null,
+    };
+    
+    const firestoreData = {
+      ...newEncounter,
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+      updatedAt: admin.firestore.Timestamp.fromDate(now),
+    };
+    
+    await db.collection("encounters").doc(String(id)).set(firestoreData);
+    console.log(`Created encounter ${id} in Firebase`);
+    
+    return newEncounter;
+  }
+
+  async updateEncounter(id: number, updates: Partial<Encounter>): Promise<Encounter | undefined> {
+    const db = this.getDb();
+    const docRef = db.collection("encounters").doc(String(id));
+    const doc = await docRef.get();
+    
+    if (!doc.exists) return undefined;
+    
+    const now = new Date();
+    const updateData: any = { ...updates, updatedAt: admin.firestore.Timestamp.fromDate(now) };
+    
+    if (updates.approvedAt) {
+      updateData.approvedAt = admin.firestore.Timestamp.fromDate(updates.approvedAt);
+    }
+    
+    await docRef.update(updateData);
+    console.log(`Updated encounter ${id} in Firebase`);
+    
+    return this.getEncounter(id);
+  }
+
+  async getOrdersByEncounter(encounterId: number): Promise<Order[]> {
+    const db = this.getDb();
+    const snapshot = await db.collection("orders")
+      .where("encounterId", "==", encounterId)
+      .orderBy("createdAt", "asc")
+      .get();
+    
+    return snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || new Date(),
+        approvedAt: data.approvedAt?.toDate?.() || null,
+      } as Order;
+    });
+  }
+
+  async createOrder(order: InsertOrder): Promise<Order> {
+    const db = this.getDb();
+    const id = await this.getNextId("orders");
+    const now = new Date();
+    
+    const newOrder: Order = {
+      id,
+      encounterId: order.encounterId,
+      orderType: order.orderType,
+      description: order.description,
+      status: order.status || "pending",
+      aiGenerated: order.aiGenerated ?? true,
+      physicianApproved: order.physicianApproved ?? false,
+      physicianId: order.physicianId || null,
+      approvedAt: null,
+      createdAt: now,
+    };
+    
+    await db.collection("orders").doc(String(id)).set({
+      ...newOrder,
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+    });
+    
+    return newOrder;
+  }
+
+  async updateOrder(id: number, updates: Partial<Order>): Promise<Order | undefined> {
+    const db = this.getDb();
+    const docRef = db.collection("orders").doc(String(id));
+    const doc = await docRef.get();
+    
+    if (!doc.exists) return undefined;
+    
+    const updateData: any = { ...updates };
+    if (updates.approvedAt) {
+      updateData.approvedAt = admin.firestore.Timestamp.fromDate(updates.approvedAt);
+    }
+    
+    await docRef.update(updateData);
+    
+    const updated = await docRef.get();
+    const data = updated.data()!;
+    return {
+      ...data,
+      createdAt: data.createdAt?.toDate?.() || new Date(),
+      approvedAt: data.approvedAt?.toDate?.() || null,
+    } as Order;
+  }
+
+  async getMessagesByEncounter(encounterId: number): Promise<WhatsappMessage[]> {
+    const db = this.getDb();
+    const snapshot = await db.collection("whatsapp_messages")
+      .where("encounterId", "==", encounterId)
+      .orderBy("createdAt", "asc")
+      .get();
+    
+    return snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || new Date(),
+      } as WhatsappMessage;
+    });
+  }
+
+  async getMessagesByPatient(patientId: number): Promise<WhatsappMessage[]> {
+    const db = this.getDb();
+    const snapshot = await db.collection("whatsapp_messages")
+      .where("patientId", "==", patientId)
+      .orderBy("createdAt", "asc")
+      .get();
+    
+    return snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || new Date(),
+      } as WhatsappMessage;
+    });
+  }
+
+  async createMessage(message: InsertWhatsappMessage): Promise<WhatsappMessage> {
+    const db = this.getDb();
+    const id = await this.getNextId("whatsapp_messages");
+    const now = new Date();
+    
+    const newMessage: WhatsappMessage = {
+      id,
+      encounterId: message.encounterId || null,
+      patientId: message.patientId,
+      direction: message.direction,
+      messageBody: message.messageBody,
+      messageSid: message.messageSid || null,
+      createdAt: now,
+    };
+    
+    await db.collection("whatsapp_messages").doc(String(id)).set({
+      ...newMessage,
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+    });
+    
+    return newMessage;
+  }
+}
+
+// Use Firebase storage
+const firebaseStorage = new FirebaseStorage();
+firebaseStorage.initialize().catch(console.error);
+
+export const storage: IStorage = firebaseStorage;
