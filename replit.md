@@ -2,15 +2,15 @@
 
 ## Overview
 
-This is a medical triage platform that enables physicians to review and approve patient cases submitted via WhatsApp. The system uses AI (OpenAI GPT) to conduct preliminary patient interviews through WhatsApp, gathering symptoms and medical information before presenting cases to physicians for final review and disposition.
+This is a medical triage platform that enables physicians to review and approve patient cases submitted via WhatsApp. The system uses a deterministic ENT Flu questionnaire flow through WhatsApp, gathering symptoms and medical information before presenting cases to physicians for final review and disposition.
 
 **Project Name**: env_flu_slice
 
 The core workflow is:
-1. Patients message via WhatsApp with their symptoms
-2. AI conducts a conversational triage interview (gathers chief complaint, asks follow-up questions)
-3. AI generates preliminary diagnosis with confidence level and urgency classification
-4. Cases are queued for physician review with AI-generated diagnoses/dispositions
+1. Patients message via WhatsApp to start triage
+2. Deterministic questionnaire asks 19 structured questions (red flags, symptom onset, symptoms, medications/allergies, test results)
+3. System computes proposal with disposition, medication suggestions, and tests to consider
+4. Cases are queued for physician review with computed recommendations
 5. Physicians approve/reject cases with their own diagnosis and disposition
 6. Approved orders/dispositions are sent back to patient via WhatsApp
 
@@ -39,7 +39,7 @@ Preferred communication style: Simple, everyday language.
 - **ORM**: Drizzle ORM
 - **Database**: PostgreSQL (configured via DATABASE_URL environment variable)
 - **Schema Location**: `shared/schema.ts` - contains physicians, patients, encounters, orders, and whatsapp_messages tables
-- **Current Storage**: MemStorage class in `server/storage.ts` (in-memory, will migrate to Postgres)
+- **Current Storage**: DatabaseStorage class in `server/storage.ts` (PostgreSQL-backed, persistent)
 
 ### Authentication
 - Simple username/password login for physicians
@@ -106,6 +106,17 @@ Located in `server/replit_integrations/` and `client/replit_integrations/`:
 - Password: Set via `MD_PASSWORD` environment variable (default: physician123)
 
 ## Recent Changes
+- 2026-01-20: Replaced GPT with deterministic ENT Flu questionnaire
+  - 19-question structured flow for flu-like symptoms
+  - Red flag detection (SOB, chest pain, neuro symptoms, dehydration)
+  - Tamiflu eligibility calculation (onset ≤2 days + fever + aches)
+  - Medication suggestions with pruning based on conditions (pregnancy, HTN, SSRI)
+  - COVID/Flu test recommendations
+  - Invalid input re-prompting for numeric fields
+  - Database persistence for encounter flow state (flowIndex, answers, proposal)
+- 2026-01-19: Migrated to PostgreSQL persistence
+  - DatabaseStorage class replaces MemStorage
+  - Encounters and patients now survive server restarts
 - 2026-01-18: Initial MVP implementation
   - Physician login and dashboard
   - Patient queue with urgency badges

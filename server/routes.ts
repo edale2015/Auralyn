@@ -37,10 +37,15 @@ const ENT_FLU_FLOW = [
 ];
 
 // Helper function to parse patient answers
-function parseAnswer(type: string, raw: string): boolean | number | string {
+// Returns null if the answer is invalid for the type (caller should re-prompt)
+function parseAnswer(type: string, raw: string): boolean | number | string | null {
   const v = raw.toLowerCase().trim();
   if (type === "yesno") return ["yes", "y", "yeah", "yep", "true", "1"].includes(v);
-  if (type === "number") return Number(v) || 0;
+  if (type === "number") {
+    const num = Number(v);
+    if (isNaN(num) || v === "") return null; // Invalid input, need to re-prompt
+    return num;
+  }
   if (type === "choice") {
     if (v.startsWith("y")) return "yes";
     if (v.startsWith("n")) return "no";
@@ -361,11 +366,35 @@ export async function registerRoutes(
           flowIndex: 1,
         });
       } else {
-        // Save the answer for the previous question
+        // Parse the answer for the previous question
         const prevQuestion = ENT_FLU_FLOW[flowIndex - 1];
         const parsed = parseAnswer(prevQuestion.type, msg);
-        answers[prevQuestion.id] = parsed;
         
+        // If parsing failed (invalid input), re-prompt the same question
+        if (parsed === null) {
+          console.log(`Invalid answer for ${prevQuestion.id}: "${msg}", re-prompting`);
+          responseMessage = `I didn't understand that response. Please enter a valid number.\n\n${prevQuestion.text}`;
+          
+          // Don't advance the flow, just re-send the same question
+          await storage.createMessage({
+            patientId: patient.id,
+            encounterId: encounter.id,
+            direction: "outbound",
+            messageBody: responseMessage,
+          });
+          
+          try {
+            await sendWhatsAppMessage(phoneNumber, responseMessage);
+          } catch (twilioError) {
+            console.error("Failed to send WhatsApp response:", twilioError);
+          }
+          
+          res.set("Content-Type", "text/xml");
+          res.send("<Response></Response>");
+          return;
+        }
+        
+        answers[prevQuestion.id] = parsed;
         console.log(`Saved answer for ${prevQuestion.id}: ${parsed}`);
         
         // Check if we've completed all questions
@@ -527,9 +556,29 @@ export async function registerRoutes(
           flowIndex: 1,
         });
       } else {
-        // Save the answer for the previous question
+        // Parse the answer for the previous question
         const prevQuestion = ENT_FLU_FLOW[flowIndex - 1];
         const parsed = parseAnswer(prevQuestion.type, msg);
+        
+        // If parsing failed, re-prompt
+        if (parsed === null) {
+          responseMessage = `I didn't understand that response. Please enter a valid number.\n\n${prevQuestion.text}`;
+          await storage.createMessage({
+            patientId: patient.id,
+            encounterId: encounter.id,
+            direction: "outbound",
+            messageBody: responseMessage,
+          });
+          return res.json({
+            response: responseMessage,
+            encounterId: encounter.id,
+            status: newStatus,
+            flowIndex: encounter.flowIndex ?? 0,
+            questionsRemaining: ENT_FLU_FLOW.length - (encounter.flowIndex ?? 0) + 1,
+            error: "Invalid input, please try again",
+          });
+        }
+        
         answers[prevQuestion.id] = parsed;
         
         if (flowIndex >= ENT_FLU_FLOW.length) {
