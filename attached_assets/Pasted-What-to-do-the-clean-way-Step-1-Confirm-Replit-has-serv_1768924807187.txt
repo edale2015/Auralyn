@@ -1,0 +1,102 @@
+What to do (the clean way)
+Step 1: Confirm Replit has service account credentials
+
+In Replit Secrets, set:
+
+GOOGLE_APPLICATION_CREDENTIALS = service_account.json
+
+FIREBASE_PROJECT_ID = medicalm-dec9d
+
+And ensure the file service_account.json exists in the project root.
+
+Then restart the repl.
+
+Step 2: Ensure server/storage.ts uses Admin SDK (this is the fix)
+
+Open server/storage.ts and look at the imports.
+
+If you see something like:
+
+import { initializeApp } from "firebase/app"
+
+import { getFirestore } from "firebase/firestore"
+that’s the client SDK and will trigger rules errors.
+
+You want instead:
+
+import admin from "firebase-admin"
+
+admin.firestore() (Admin SDK)
+
+Here is the exact minimal Admin SDK init you should have (usually in server/storage.ts or a server/firebaseAdmin.ts):
+
+import admin from "firebase-admin";
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+    projectId: process.env.FIREBASE_PROJECT_ID,
+  });
+}
+
+export const db = admin.firestore();
+
+
+Then inside your storage functions (getPatientByPhone, createEncounter, updateEncounter, etc.) use db.collection("...")....
+
+✅ If you do this, Firestore rules are irrelevant for server writes.
+
+Step 3: IAM roles (what permissions matter for the service account)
+
+In Google Cloud IAM for medicalm-dec9d, ensure the service account has one of these roles:
+
+Cloud Datastore User (Firestore uses Datastore permissions under the hood)
+or
+
+Firestore Admin (broad, fine for dev)
+
+This is a Google Cloud role, not a Firestore Rules thing.
+
+Temporary Firestore Rules “allow read, write: if true”
+
+You can do this temporarily to confirm connectivity, but it’s risky.
+
+If you do it, keep it short-lived, then lock it back down.
+
+If your server is using Admin SDK properly, you don’t need to open rules.
+
+Exactly what to change in your code using your function names
+
+You told me the function names. Perfect. The only thing we need is that these functions write to Firestore using Admin SDK:
+
+storage.getActiveEncounterByPatient()
+
+storage.createEncounter()
+
+storage.updateEncounter()
+
+storage.createMessage()
+
+Once those use admin.firestore(), your encounter docs will persist and won’t vanish after refresh.
+
+What to tell Replit about “permissions”
+
+Tell Replit nothing about Firestore Rules.
+
+Do this instead:
+
+✅ “Replit should use the service account JSON and Admin SDK. Secrets set. Restart repl.”
+
+That’s the correct operational answer.
+
+Quick yes/no so I can steer you precisely
+
+In server/storage.ts, do you see firebase-admin anywhere?
+
+Reply with just:
+
+“Admin SDK” or
+
+“Client SDK”
+
+If you paste the first ~20 lines of server/storage.ts (imports + initialization), I’ll tell you exactly what to replace, line-for-line, using your project structure.

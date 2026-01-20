@@ -8,7 +8,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or } from "drizzle-orm";
-import { getFirestore, admin } from "./firebase";
+import { db as firestoreDb, admin } from "./firebase";
 
 export interface IStorage {
   // Physicians
@@ -393,21 +393,12 @@ export class DatabaseStorage implements IStorage {
 }
 
 export class FirebaseStorage implements IStorage {
-  private db: admin.firestore.Firestore | null = null;
   private initialized = false;
 
-  private getDb(): admin.firestore.Firestore {
-    if (!this.db) {
-      this.db = getFirestore();
-    }
-    return this.db;
-  }
-
   private async getNextId(collection: string): Promise<number> {
-    const db = this.getDb();
-    const counterRef = db.collection("_counters").doc(collection);
+    const counterRef = firestoreDb.collection("_counters").doc(collection);
     
-    return await db.runTransaction(async (transaction) => {
+    return await firestoreDb.runTransaction(async (transaction) => {
       const counterDoc = await transaction.get(counterRef);
       let nextId = 1;
       
@@ -437,21 +428,18 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getPhysician(id: number): Promise<Physician | undefined> {
-    const db = this.getDb();
-    const snapshot = await db.collection("physicians").where("id", "==", id).limit(1).get();
+    const snapshot = await firestoreDb.collection("physicians").where("id", "==", id).limit(1).get();
     if (snapshot.empty) return undefined;
     return snapshot.docs[0].data() as Physician;
   }
 
   async getPhysicianByUsername(username: string): Promise<Physician | undefined> {
-    const db = this.getDb();
-    const snapshot = await db.collection("physicians").where("username", "==", username).limit(1).get();
+    const snapshot = await firestoreDb.collection("physicians").where("username", "==", username).limit(1).get();
     if (snapshot.empty) return undefined;
     return snapshot.docs[0].data() as Physician;
   }
 
   async createPhysician(physician: InsertPhysician): Promise<Physician> {
-    const db = this.getDb();
     const id = await this.getNextId("physicians");
     const now = new Date();
     
@@ -464,7 +452,7 @@ export class FirebaseStorage implements IStorage {
       createdAt: now,
     };
     
-    await db.collection("physicians").doc(String(id)).set({
+    await firestoreDb.collection("physicians").doc(String(id)).set({
       ...newPhysician,
       createdAt: admin.firestore.Timestamp.fromDate(now),
     });
@@ -473,8 +461,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getPatient(id: number): Promise<Patient | undefined> {
-    const db = this.getDb();
-    const snapshot = await db.collection("patients").where("id", "==", id).limit(1).get();
+    const snapshot = await firestoreDb.collection("patients").where("id", "==", id).limit(1).get();
     if (snapshot.empty) return undefined;
     const data = snapshot.docs[0].data();
     return {
@@ -484,8 +471,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getPatientByPhone(phoneNumber: string): Promise<Patient | undefined> {
-    const db = this.getDb();
-    const snapshot = await db.collection("patients").where("phoneNumber", "==", phoneNumber).limit(1).get();
+    const snapshot = await firestoreDb.collection("patients").where("phoneNumber", "==", phoneNumber).limit(1).get();
     if (snapshot.empty) return undefined;
     const data = snapshot.docs[0].data();
     return {
@@ -495,7 +481,6 @@ export class FirebaseStorage implements IStorage {
   }
 
   async createPatient(patient: InsertPatient): Promise<Patient> {
-    const db = this.getDb();
     const id = await this.getNextId("patients");
     const now = new Date();
     
@@ -506,7 +491,7 @@ export class FirebaseStorage implements IStorage {
       createdAt: now,
     };
     
-    await db.collection("patients").doc(String(id)).set({
+    await firestoreDb.collection("patients").doc(String(id)).set({
       ...newPatient,
       createdAt: admin.firestore.Timestamp.fromDate(now),
     });
@@ -515,8 +500,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getEncounter(id: number): Promise<Encounter | undefined> {
-    const db = this.getDb();
-    const doc = await db.collection("encounters").doc(String(id)).get();
+    const doc = await firestoreDb.collection("encounters").doc(String(id)).get();
     if (!doc.exists) return undefined;
     return this.docToEncounter(doc);
   }
@@ -562,8 +546,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getEncountersByStatus(status?: string): Promise<Encounter[]> {
-    const db = this.getDb();
-    let query: admin.firestore.Query = db.collection("encounters");
+    let query: admin.firestore.Query = firestoreDb.collection("encounters");
     
     if (status && status !== "all") {
       query = query.where("status", "==", status);
@@ -576,10 +559,9 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getActiveEncounterByPatient(patientId: number): Promise<Encounter | undefined> {
-    const db = this.getDb();
     const activeStatuses = ["gathering_info", "in_progress", "pending_review"];
     
-    const snapshot = await db.collection("encounters")
+    const snapshot = await firestoreDb.collection("encounters")
       .where("patientId", "==", patientId)
       .where("status", "in", activeStatuses)
       .limit(1)
@@ -590,7 +572,6 @@ export class FirebaseStorage implements IStorage {
   }
 
   async createEncounter(encounter: InsertEncounter): Promise<Encounter> {
-    const db = this.getDb();
     const id = await this.getNextId("encounters");
     const now = new Date();
     
@@ -627,15 +608,14 @@ export class FirebaseStorage implements IStorage {
       updatedAt: admin.firestore.Timestamp.fromDate(now),
     };
     
-    await db.collection("encounters").doc(String(id)).set(firestoreData);
+    await firestoreDb.collection("encounters").doc(String(id)).set(firestoreData);
     console.log(`Created encounter ${id} in Firebase`);
     
     return newEncounter;
   }
 
   async updateEncounter(id: number, updates: Partial<Encounter>): Promise<Encounter | undefined> {
-    const db = this.getDb();
-    const docRef = db.collection("encounters").doc(String(id));
+    const docRef = firestoreDb.collection("encounters").doc(String(id));
     const doc = await docRef.get();
     
     if (!doc.exists) return undefined;
@@ -654,8 +634,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getOrdersByEncounter(encounterId: number): Promise<Order[]> {
-    const db = this.getDb();
-    const snapshot = await db.collection("orders")
+    const snapshot = await firestoreDb.collection("orders")
       .where("encounterId", "==", encounterId)
       .orderBy("createdAt", "asc")
       .get();
@@ -671,7 +650,6 @@ export class FirebaseStorage implements IStorage {
   }
 
   async createOrder(order: InsertOrder): Promise<Order> {
-    const db = this.getDb();
     const id = await this.getNextId("orders");
     const now = new Date();
     
@@ -688,7 +666,7 @@ export class FirebaseStorage implements IStorage {
       createdAt: now,
     };
     
-    await db.collection("orders").doc(String(id)).set({
+    await firestoreDb.collection("orders").doc(String(id)).set({
       ...newOrder,
       createdAt: admin.firestore.Timestamp.fromDate(now),
     });
@@ -697,8 +675,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async updateOrder(id: number, updates: Partial<Order>): Promise<Order | undefined> {
-    const db = this.getDb();
-    const docRef = db.collection("orders").doc(String(id));
+    const docRef = firestoreDb.collection("orders").doc(String(id));
     const doc = await docRef.get();
     
     if (!doc.exists) return undefined;
@@ -720,8 +697,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getMessagesByEncounter(encounterId: number): Promise<WhatsappMessage[]> {
-    const db = this.getDb();
-    const snapshot = await db.collection("whatsapp_messages")
+    const snapshot = await firestoreDb.collection("whatsapp_messages")
       .where("encounterId", "==", encounterId)
       .orderBy("createdAt", "asc")
       .get();
@@ -736,8 +712,7 @@ export class FirebaseStorage implements IStorage {
   }
 
   async getMessagesByPatient(patientId: number): Promise<WhatsappMessage[]> {
-    const db = this.getDb();
-    const snapshot = await db.collection("whatsapp_messages")
+    const snapshot = await firestoreDb.collection("whatsapp_messages")
       .where("patientId", "==", patientId)
       .orderBy("createdAt", "asc")
       .get();
@@ -752,7 +727,6 @@ export class FirebaseStorage implements IStorage {
   }
 
   async createMessage(message: InsertWhatsappMessage): Promise<WhatsappMessage> {
-    const db = this.getDb();
     const id = await this.getNextId("whatsapp_messages");
     const now = new Date();
     
@@ -766,7 +740,7 @@ export class FirebaseStorage implements IStorage {
       createdAt: now,
     };
     
-    await db.collection("whatsapp_messages").doc(String(id)).set({
+    await firestoreDb.collection("whatsapp_messages").doc(String(id)).set({
       ...newMessage,
       createdAt: admin.firestore.Timestamp.fromDate(now),
     });

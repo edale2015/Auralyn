@@ -1,42 +1,48 @@
 import admin from "firebase-admin";
+import * as fs from "fs";
+import * as path from "path";
 
-let firebaseApp: admin.app.App | null = null;
+let initialized = false;
 
-export function getFirebaseApp(): admin.app.App {
-  if (firebaseApp) {
-    return firebaseApp;
+function initializeFirebase(): void {
+  if (initialized || admin.apps.length > 0) {
+    return;
   }
 
-  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const projectId = process.env.FIREBASE_PROJECT_ID;
-
-  if (!serviceAccountJson) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON environment variable is required");
-  }
-
+  
   if (!projectId) {
     throw new Error("FIREBASE_PROJECT_ID environment variable is required");
   }
 
+  // Check for service account JSON in environment variable
+  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  
+  if (serviceAccountJson) {
+    // Write to temp file and set GOOGLE_APPLICATION_CREDENTIALS
+    const tempPath = "/tmp/service_account.json";
+    fs.writeFileSync(tempPath, serviceAccountJson);
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = tempPath;
+    console.log("Service account credentials written to temp file");
+  }
+
   try {
-    const serviceAccount = JSON.parse(serviceAccountJson);
-    
-    firebaseApp = admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
+    admin.initializeApp({
+      credential: admin.credential.applicationDefault(),
       projectId: projectId,
     });
-
-    console.log(`Firebase initialized for project: ${projectId}`);
-    return firebaseApp;
+    
+    initialized = true;
+    console.log(`Firebase Admin SDK initialized for project: ${projectId}`);
   } catch (error) {
     console.error("Failed to initialize Firebase:", error);
     throw error;
   }
 }
 
-export function getFirestore(): FirebaseFirestore.Firestore {
-  const app = getFirebaseApp();
-  return app.firestore();
-}
+// Initialize immediately
+initializeFirebase();
+
+export const db = admin.firestore();
 
 export { admin };
