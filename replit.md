@@ -107,7 +107,38 @@ Located in `server/replit_integrations/` and `client/replit_integrations/`:
 - Username: admin
 - Password: Set via `MD_PASSWORD` environment variable (default: physician123)
 
+## Gold Slice V1
+
+**Status**: Frozen as stable baseline (January 21, 2026)
+
+The current implementation is marked as "Gold Slice V1" - a fully functional, tested end-to-end medical triage system.
+
+### Smoke Test
+
+Run to verify the complete flow:
+
+```bash
+npx tsx scripts/smoke-test.ts
+```
+
+Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, approval, notifications)
+
+### Key Files
+
+- `scripts/smoke-test.ts` - End-to-end validation script
+- `GOLD_SLICE_V1.md` - Detailed documentation of frozen features
+
 ## Recent Changes
+
+- 2026-01-21: Gold Slice V1 frozen
+  - Created comprehensive smoke test script (14 test cases)
+  - All end-to-end flows verified working
+  - Firebase Firestore fully operational
+  - WhatsApp → Questionnaire → Approval → Notification flow complete
+- 2026-01-20: Migrated from PostgreSQL to Firebase Firestore
+  - FirebaseStorage class replaces DatabaseStorage
+  - In-memory sorting to avoid composite index requirements
+  - Numeric IDs with _counters collection for interface compatibility
 - 2026-01-20: Replaced GPT with deterministic ENT Flu questionnaire
   - 19-question structured flow for flu-like symptoms
   - Red flag detection (SOB, chest pain, neuro symptoms, dehydration)
@@ -125,3 +156,9 @@ Located in `server/replit_integrations/` and `client/replit_integrations/`:
   - Case detail panel with physician sign-off form
   - WhatsApp webhook integration with AI triage
   - OpenAI integration for medical triage conversations
+
+## Roadmap (Post Gold Slice)
+
+1. **Sheet-driven questions** - Load ENT flu questions from Google Sheets
+2. **ChatGPT phrasing layer** - AI for message polish only (not decisions)
+3. **Centor sore throat module** - Next clinical capability
