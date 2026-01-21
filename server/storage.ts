@@ -9,6 +9,9 @@ import {
 import { db } from "./db";
 import { eq, desc, and, or } from "drizzle-orm";
 import { db as firestoreDb, admin } from "./firebase";
+import { getFlowQuestionsFromSheet, type FlowQuestion } from "./flows/sheetFlowLoader";
+
+export type { FlowQuestion };
 
 export interface IStorage {
   // Physicians
@@ -38,6 +41,9 @@ export interface IStorage {
   getMessagesByEncounter(encounterId: number): Promise<WhatsappMessage[]>;
   getMessagesByPatient(patientId: number): Promise<WhatsappMessage[]>;
   createMessage(message: InsertWhatsappMessage): Promise<WhatsappMessage>;
+  
+  // Flow Questions (from Google Sheets)
+  getFlowQuestions(flowId: string): Promise<FlowQuestion[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -245,6 +251,10 @@ export class MemStorage implements IStorage {
     this.whatsappMessages.set(id, newMessage);
     return newMessage;
   }
+
+  async getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
+    return getFlowQuestionsFromSheet(flowId);
+  }
 }
 
 export class DatabaseStorage implements IStorage {
@@ -389,6 +399,10 @@ export class DatabaseStorage implements IStorage {
   async createMessage(message: InsertWhatsappMessage): Promise<WhatsappMessage> {
     const result = await db.insert(whatsappMessages).values(message).returning();
     return result[0];
+  }
+
+  async getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
+    return getFlowQuestionsFromSheet(flowId);
   }
 }
 
@@ -761,6 +775,10 @@ export class FirebaseStorage implements IStorage {
     });
     
     return newMessage;
+  }
+
+  async getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
+    return getFlowQuestionsFromSheet(flowId);
   }
 }
 

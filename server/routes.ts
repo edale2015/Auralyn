@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { storage, type FlowQuestion } from "./storage";
 import twilio from "twilio";
 
 // Initialize Twilio client
@@ -13,27 +13,45 @@ console.log(`Twilio Config: SID=${TWILIO_SID?.substring(0, 8)}..., Token=${TWILI
 
 const twilioClient = twilio(TWILIO_SID, TWILIO_TOKEN);
 
-// ENT Flu Triage Questionnaire Flow
-const ENT_FLU_FLOW = [
-  { id: "RF_SOB", text: "Trouble breathing at rest? (yes/no)", type: "yesno" },
-  { id: "RF_CP", text: "Chest pain or pressure? (yes/no)", type: "yesno" },
-  { id: "RF_NEURO", text: "Confusion, fainting, or severe weakness? (yes/no)", type: "yesno" },
-  { id: "RF_DEHY", text: "Unable to keep fluids down or signs of dehydration? (yes/no)", type: "yesno" },
-  { id: "ONSET_DAYS", text: "How many days since symptoms started? (number)", type: "number" },
-  { id: "FEVER", text: "Fever ≥100.4°F / 38°C? (yes/no)", type: "yesno" },
-  { id: "ACHES", text: "Body aches or marked fatigue? (yes/no)", type: "yesno" },
-  { id: "COUGH", text: "Cough? (yes/no)", type: "yesno" },
-  { id: "SORE_THROAT", text: "Sore throat? (yes/no)", type: "yesno" },
-  { id: "CONGESTION", text: "Nasal congestion or sinus pressure? (yes/no)", type: "yesno" },
-  { id: "EAR_PAIN", text: "Ear pain or fullness? (yes/no)", type: "yesno" },
-  { id: "GI", text: "Nausea or diarrhea? (yes/no)", type: "yesno" },
-  { id: "PREGNANT", text: "Are you pregnant? (yes/no)", type: "yesno" },
-  { id: "HTN", text: "Do you have high blood pressure? (yes/no)", type: "yesno" },
-  { id: "ANXIETY", text: "Anxiety/panic or very sensitive to stimulants? (yes/no)", type: "yesno" },
-  { id: "SSRI", text: "Do you take an SSRI/SNRI antidepressant? (yes/no)", type: "yesno" },
-  { id: "ALLERGIES", text: "Any medication allergies? (short answer)", type: "text" },
-  { id: "COVID_POS", text: "COVID test positive? (yes/no/not tested)", type: "choice" },
-  { id: "FLU_POS", text: "Flu test positive? (yes/no/not tested)", type: "choice" }
+// Get flow questions - tries Google Sheets first, falls back to hardcoded
+async function getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
+  // Only try Sheets if SHEETS_SPREADSHEET_ID is configured
+  if (process.env.SHEETS_SPREADSHEET_ID) {
+    try {
+      const questions = await storage.getFlowQuestions(flowId);
+      if (questions.length > 0) {
+        return questions;
+      }
+    } catch (error) {
+      console.warn(`Failed to load questions from Sheets for ${flowId}, using fallback:`, error);
+    }
+  }
+  
+  // Fallback to hardcoded flow
+  return HARDCODED_ENT_FLU_FLOW;
+}
+
+// Hardcoded ENT Flu Triage Questionnaire Flow (fallback when Sheets not configured)
+const HARDCODED_ENT_FLU_FLOW: FlowQuestion[] = [
+  { id: "RF_SOB", text: "Trouble breathing at rest? (yes/no)", type: "yesno", required: true },
+  { id: "RF_CP", text: "Chest pain or pressure? (yes/no)", type: "yesno", required: true },
+  { id: "RF_NEURO", text: "Confusion, fainting, or severe weakness? (yes/no)", type: "yesno", required: true },
+  { id: "RF_DEHY", text: "Unable to keep fluids down or signs of dehydration? (yes/no)", type: "yesno", required: true },
+  { id: "ONSET_DAYS", text: "How many days since symptoms started? (number)", type: "number", required: true },
+  { id: "FEVER", text: "Fever ≥100.4°F / 38°C? (yes/no)", type: "yesno", required: true },
+  { id: "ACHES", text: "Body aches or marked fatigue? (yes/no)", type: "yesno", required: true },
+  { id: "COUGH", text: "Cough? (yes/no)", type: "yesno", required: true },
+  { id: "SORE_THROAT", text: "Sore throat? (yes/no)", type: "yesno", required: true },
+  { id: "CONGESTION", text: "Nasal congestion or sinus pressure? (yes/no)", type: "yesno", required: true },
+  { id: "EAR_PAIN", text: "Ear pain or fullness? (yes/no)", type: "yesno", required: true },
+  { id: "GI", text: "Nausea or diarrhea? (yes/no)", type: "yesno", required: true },
+  { id: "PREGNANT", text: "Are you pregnant? (yes/no)", type: "yesno", required: true },
+  { id: "HTN", text: "Do you have high blood pressure? (yes/no)", type: "yesno", required: true },
+  { id: "ANXIETY", text: "Anxiety/panic or very sensitive to stimulants? (yes/no)", type: "yesno", required: true },
+  { id: "SSRI", text: "Do you take an SSRI/SNRI antidepressant? (yes/no)", type: "yesno", required: true },
+  { id: "ALLERGIES", text: "Any medication allergies? (short answer)", type: "text", required: true },
+  { id: "COVID_POS", text: "COVID test positive? (yes/no/not tested)", type: "choice", required: true },
+  { id: "FLU_POS", text: "Flu test positive? (yes/no/not tested)", type: "choice", required: true }
 ];
 
 // Helper function to parse patient answers
@@ -353,13 +371,17 @@ export async function registerRoutes(
       const flowIndex = encounter.flowIndex ?? 0;
       const answers: Record<string, any> = encounter.answers ? JSON.parse(encounter.answers) : {};
       
-      console.log(`Flow state: index=${flowIndex}, answers=${JSON.stringify(answers)}`);
+      // Load flow questions dynamically (tries Sheets first, falls back to hardcoded)
+      const flowId = encounter.flowId || "ENT_FLU_LIKE_V1";
+      const flow = await getFlowQuestions(flowId);
+      
+      console.log(`Flow state: index=${flowIndex}, answers=${JSON.stringify(answers)}, using ${flow.length} questions`);
       
       let responseMessage: string;
       
       // If this is the first message (flowIndex = 0), send the first question
       if (flowIndex === 0) {
-        const firstQuestion = ENT_FLU_FLOW[0];
+        const firstQuestion = flow[0];
         responseMessage = `Welcome to the ENT Flu Triage System. I'll ask you a series of questions to assess your symptoms.\n\n${firstQuestion.text}`;
         
         await storage.updateEncounter(encounter.id, {
@@ -367,7 +389,7 @@ export async function registerRoutes(
         });
       } else {
         // Parse the answer for the previous question
-        const prevQuestion = ENT_FLU_FLOW[flowIndex - 1];
+        const prevQuestion = flow[flowIndex - 1];
         const parsed = parseAnswer(prevQuestion.type, msg);
         
         // If parsing failed (invalid input), re-prompt the same question
@@ -398,7 +420,7 @@ export async function registerRoutes(
         console.log(`Saved answer for ${prevQuestion.id}: ${parsed}`);
         
         // Check if we've completed all questions
-        if (flowIndex >= ENT_FLU_FLOW.length) {
+        if (flowIndex >= flow.length) {
           // Compute proposal and finalize
           const proposal = computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
@@ -451,7 +473,7 @@ export async function registerRoutes(
             : "Thank you for completing the assessment. Your case has been sent to a physician for review. If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.";
         } else {
           // Ask the next question
-          const nextQuestion = ENT_FLU_FLOW[flowIndex];
+          const nextQuestion = flow[flowIndex];
           responseMessage = nextQuestion.text;
           
           await storage.updateEncounter(encounter.id, {
@@ -544,12 +566,16 @@ export async function registerRoutes(
       const flowIndex = encounter.flowIndex ?? 0;
       const answers: Record<string, any> = encounter.answers ? JSON.parse(encounter.answers) : {};
       
+      // Load flow questions dynamically
+      const flowId = encounter.flowId || "ENT_FLU_LIKE_V1";
+      const flow = await getFlowQuestions(flowId);
+      
       let responseMessage: string;
       let newStatus = encounter.status;
       
       // Process flow
       if (flowIndex === 0) {
-        const firstQuestion = ENT_FLU_FLOW[0];
+        const firstQuestion = flow[0];
         responseMessage = `Welcome to the ENT Flu Triage System. I'll ask you a series of questions to assess your symptoms.\n\n${firstQuestion.text}`;
         
         await storage.updateEncounter(encounter.id, {
@@ -557,7 +583,7 @@ export async function registerRoutes(
         });
       } else {
         // Parse the answer for the previous question
-        const prevQuestion = ENT_FLU_FLOW[flowIndex - 1];
+        const prevQuestion = flow[flowIndex - 1];
         const parsed = parseAnswer(prevQuestion.type, msg);
         
         // If parsing failed, re-prompt
@@ -574,14 +600,14 @@ export async function registerRoutes(
             encounterId: encounter.id,
             status: newStatus,
             flowIndex: encounter.flowIndex ?? 0,
-            questionsRemaining: ENT_FLU_FLOW.length - (encounter.flowIndex ?? 0) + 1,
+            questionsRemaining: flow.length - (encounter.flowIndex ?? 0) + 1,
             error: "Invalid input, please try again",
           });
         }
         
         answers[prevQuestion.id] = parsed;
         
-        if (flowIndex >= ENT_FLU_FLOW.length) {
+        if (flowIndex >= flow.length) {
           // Finalize
           const proposal = computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
@@ -603,7 +629,7 @@ export async function registerRoutes(
             ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room."
             : "Thank you for completing the assessment. Your case has been sent to a physician for review.";
         } else {
-          const nextQuestion = ENT_FLU_FLOW[flowIndex];
+          const nextQuestion = flow[flowIndex];
           responseMessage = nextQuestion.text;
           
           await storage.updateEncounter(encounter.id, {
@@ -625,7 +651,7 @@ export async function registerRoutes(
         encounterId: encounter.id,
         status: newStatus,
         flowIndex: (encounter.flowIndex ?? 0) + 1,
-        questionsRemaining: ENT_FLU_FLOW.length - (encounter.flowIndex ?? 0),
+        questionsRemaining: flow.length - (encounter.flowIndex ?? 0),
       });
     } catch (error) {
       console.error("Simulate message error:", error);

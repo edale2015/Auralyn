@@ -1,0 +1,246 @@
+Here’s a drop-in loader for ENT_FLU_QUESTIONS that:
+
+reads your sheet tab
+
+filters flow_id and active=Y
+
+sorts by order
+
+returns a clean FlowQuestion[]
+
+caches results for 5 minutes (so you don’t hammer Sheets)
+
+is defensive about weird cells
+
+1) Add this file: server/flows/sheetFlowLoader.ts
+// server/flows/sheetFlowLoader.ts
+import { google } from "googleapis";
+
+export type FlowQuestion = {
+  id: string;
+  text: string;
+  type: "yesno" | "number" | "text" | "choice";
+  required: boolean;
+  min?: number | null;
+  max?: number | null;
+  choices?: string[] | null;
+  helpText?: string | null;
+};
+
+type CacheEntry = { expiresAt: number; value: FlowQuestion[] };
+
+const CACHE: Record<string, CacheEntry> = {};
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function envOrThrow(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required env var: ${name}`);
+  return v;
+}
+
+function toBoolYN(v: any): boolean {
+  return String(v ?? "").trim().toUpperCase() === "Y";
+}
+
+function toNumOrNull(v: any): number | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function splitChoices(v: any): string[] | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  return s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function normType(v: any): FlowQuestion["type"] {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "yesno" || s === "number" || s === "text" || s === "choice") return s;
+  // default safe fallback
+  return "text";
+}
+
+/**
+ * Reads ENT_FLU_QUESTIONS sheet and returns ordered questions.
+ * Expects headers in row 1:
+ * flow_id, order, question_id, question_text, answer_type, required, min, max, choices, help_text, active
+ */
+export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQuestion[]> {
+  const cached = CACHE[flowId];
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
+  const credsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS; // optional if running with default creds
+
+  // Auth: uses GOOGLE_APPLICATION_CREDENTIALS if set, otherwise ADC
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    keyFile: credsPath || undefined,
+  });
+
+  const sheets = google.sheets({ version: "v4", auth });
+  const range = `ENT_FLU_QUESTIONS!A1:K1000`;
+
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+    valueRenderOption: "UNFORMATTED_VALUE",
+  });
+
+  const values = resp.data.values || [];
+  if (values.length < 2) {
+    throw new Error(`ENT_FLU_QUESTIONS appears empty or missing rows (range ${range})`);
+  }
+
+  const header = values[0].map((h) => String(h ?? "").trim());
+  const idx = (name: string) => header.findIndex((h) => h === name);
+
+  const iFlow = idx("flow_id");
+  const iOrder = idx("order");
+  const iQid = idx("question_id");
+  const iText = idx("question_text");
+  const iType = idx("answer_type");
+  const iReq = idx("required");
+  const iMin = idx("min");
+  const iMax = idx("max");
+  const iChoices = idx("choices");
+  const iHelp = idx("help_text");
+  const iActive = idx("active");
+
+  const requiredCols = [
+    ["flow_id", iFlow],
+    ["order", iOrder],
+    ["question_id", iQid],
+    ["question_text", iText],
+    ["answer_type", iType],
+    ["required", iReq],
+    ["active", iActive],
+  ] as const;
+
+  const missing = requiredCols.filter(([, n]) => n < 0).map(([k]) => k);
+  if (missing.length) {
+    throw new Error(`ENT_FLU_QUESTIONS missing required headers: ${missing.join(", ")}`);
+  }
+
+  const rows = values.slice(1);
+
+  const questions: FlowQuestion[] = rows
+    .map((row) => {
+      const rowFlow = String(row[iFlow] ?? "").trim();
+      if (rowFlow !== flowId) return null;
+
+      const active = String(row[iActive] ?? "").trim().toUpperCase() === "Y";
+      if (!active) return null;
+
+      const orderRaw = String(row[iOrder] ?? "").trim();
+      const orderNum = Number(orderRaw);
+      if (!Number.isFinite(orderNum)) return null;
+
+      const qid = String(row[iQid] ?? "").trim();
+      const qtext = String(row[iText] ?? "").trim();
+      if (!qid || !qtext) return null;
+
+      const type = normType(row[iType]);
+      const required = toBoolYN(row[iReq]);
+
+      const min = iMin >= 0 ? toNumOrNull(row[iMin]) : null;
+      const max = iMax >= 0 ? toNumOrNull(row[iMax]) : null;
+      const choices = iChoices >= 0 ? splitChoices(row[iChoices]) : null;
+      const helpText = iHelp >= 0 ? String(row[iHelp] ?? "").trim() || null : null;
+
+      return {
+        // attach order in a private field for sorting, then remove
+        _order: orderNum,
+        id: qid,
+        text: qtext,
+        type,
+        required,
+        min,
+        max,
+        choices,
+        helpText,
+      } as any;
+    })
+    .filter(Boolean) as any[];
+
+  questions.sort((a: any, b: any) => a._order - b._order);
+
+  const cleaned: FlowQuestion[] = questions.map((q: any) => {
+    const { _order, ...rest } = q;
+    // normalize: empty arrays -> null
+    if (rest.choices && rest.choices.length === 0) rest.choices = null;
+    return rest;
+  });
+
+  // Cache
+  CACHE[flowId] = { expiresAt: now + CACHE_TTL_MS, value: cleaned };
+
+  return cleaned;
+}
+
+// Optional: manual cache bust (handy during dev)
+export function invalidateFlowCache(flowId: string) {
+  delete CACHE[flowId];
+}
+
+2) Add a wrapper in your existing server/storage.ts
+
+Since you already have storage.* functions, just add:
+
+// server/storage.ts
+import { getFlowQuestionsFromSheet } from "./flows/sheetFlowLoader";
+
+export async function getFlowQuestions(flowId: string) {
+  return getFlowQuestionsFromSheet(flowId);
+}
+
+
+(If your storage is an object, add it as a method instead.)
+
+3) Use it in the WhatsApp webhook (routes.ts)
+
+Replace the hardcoded flow import with:
+
+const flowId = "ENT_FLU_LIKE"; // matches your sheet column A
+const flow = await storage.getFlowQuestions(flowId);
+
+if (!flow.length) {
+  throw new Error(`No active questions found for flow_id=${flowId} in ENT_FLU_QUESTIONS`);
+}
+
+
+Then use flow[idx].text, flow[idx].type, etc.
+
+Important: your sheet’s flow_id is ENT_FLU_LIKE (not ENT_FLU_LIKE_V1) based on your screenshot, so keep it consistent.
+
+4) One-time env var name check
+
+This loader expects:
+
+SHEETS_SPREADSHEET_ID (not SHEETS_SPREADSHEET_ID)
+
+GOOGLE_APPLICATION_CREDENTIALS (optional; if omitted it uses default credentials)
+
+But earlier you used SHEETS_SPREADSHEET_ID in chat and your app might be using SHEETS_SPREADSHEET_ID. To avoid mismatch, set both in Replit Secrets to the same ID for now:
+
+SHEETS_SPREADSHEET_ID = your sheet id
+
+SHEETS_SPREADSHEET_ID = your sheet id
+
+(Once we confirm which your code uses, we keep one.)
+
+5) Quick verification
+
+Change the wording of Q1 in the sheet
+
+Restart server (or wait 5 minutes for cache expiry)
+
+Text WhatsApp “hi”
+
+You should see the new wording
