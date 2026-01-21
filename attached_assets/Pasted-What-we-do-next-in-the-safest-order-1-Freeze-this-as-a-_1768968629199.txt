@@ -1,0 +1,104 @@
+What we do next (in the safest order)
+1) Freeze this as a “Gold Slice”
+
+Do this immediately so it never breaks again:
+
+Tag the current state in git (or zip a backup)
+
+Add a simple “smoke test” script that simulates a full intake and verifies:
+
+encounter created
+
+proposal generated
+
+status transitions
+
+approval updates
+
+WhatsApp send fires (stub in tests)
+
+If you want, I’ll give you the exact smoke test checklist and a tiny script structure next.
+
+2) Make the ENT flu slice sheet-driven (but only for questions and thresholds first)
+
+We don’t dump your whole old schema in at once.
+
+Phase 2A: Questions from Google Sheets
+Create a sheet tab like ENT_FLU_QUESTIONS with columns:
+
+order
+
+question_id
+
+question_text
+
+answer_type
+
+required
+
+The flow loads this at startup and uses it instead of hardcoded arrays.
+
+Phase 2B: Rules thresholds from Google Sheets
+Create ENT_FLU_RULES with:
+
+rule_id
+
+condition_expression
+
+action
+
+value
+
+Start with just:
+
+Tamiflu onset threshold (2 days)
+
+Which red flags trigger urgent/ED
+
+This gives you the “continuously upgrade” capability without adding new tables every time.
+
+3) Add ChatGPT only for language (not decisions)
+
+Keep your deterministic proposal as the source of truth.
+
+ChatGPT’s job:
+
+rewrite patient-facing messages into clearer/warmer text
+
+produce a physician-facing concise summary
+
+generate “return precautions” wording
+
+Guardrail:
+
+ChatGPT cannot change disposition or orders, only phrasing.
+
+This is the safe way to add AI without destabilizing.
+
+4) Expand ENT beyond flu-like, one micro-module at a time
+
+Next modules in ENT, in this order:
+
+Sore throat Centor module (score → test recommendation, not auto-abx)
+
+Sinusitis duration module (>10 days → consider abx criteria)
+
+AOM vs AOE module (action-oriented discriminators)
+
+Cough > 3 weeks / pneumonia flags (CXR triggers)
+
+Medication pruning expands (pregnancy/HTN/SSRI/anxiety plus common interactions)
+
+Each becomes a “slice” that plugs into the same encounter + approval backbone.
+
+Pick the next upgrade (choose one)
+
+To keep momentum and avoid sprawl, choose one:
+
+Sheet-driven questions (best next step)
+
+ChatGPT phrasing layer (patient/physician text polish)
+
+Centor sore throat module (next clinical capability)
+
+Reply with 1, 2, or 3 and I’ll give you the exact implementation plan and the minimal sheet columns / code changes needed.
