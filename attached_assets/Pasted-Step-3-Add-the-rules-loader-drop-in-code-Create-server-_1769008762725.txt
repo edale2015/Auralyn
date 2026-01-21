@@ -1,0 +1,380 @@
+Step 3: Add the rules loader (drop-in code)
+
+Create: server/rules/sheetRuleLoader.ts
+
+import { google } from "googleapis";
+
+type CacheEntry = { expiresAt: number; value: Record<string, any> };
+const CACHE: CacheEntry = { expiresAt: 0, value: {} };
+const TTL_MS = 5 * 60 * 1000;
+
+function envOrThrow(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+function parseValue(valueType: string, raw: any): any {
+  const t = String(valueType || "").trim().toLowerCase();
+  const s = String(raw ?? "").trim();
+  if (t === "number") {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (t === "boolean") return s.toLowerCase() === "true";
+  // text/json fallback
+  if (t === "json") {
+    try { return JSON.parse(s); } catch { return null; }
+  }
+  return s;
+}
+
+export async function getEntFluRulesFromSheet(): Promise<Record<string, any>> {
+  const now = Date.now();
+  if (CACHE.expiresAt > now) return CACHE.value;
+
+  const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
+  const credsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    keyFile: credsPath || undefined,
+  });
+
+  const sheets = google.sheets({ version: "v4", auth });
+  const range = `ENT_FLU_RULES!A1:E500`;
+
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+    valueRenderOption: "UNFORMATTED_VALUE",
+  });
+
+  const values = resp.data.values || [];
+  if (values.length < 2) throw new Error("ENT_FLU_RULES is empty.");
+
+  const header = values[0].map((h) => String(h ?? "").trim());
+  const idx = (name: string) => header.indexOf(name);
+
+  const iKey = idx("rule_key");
+  const iType = idx("value_type");
+  const iVal = idx("value");
+  const iActive = idx("active");
+
+  if (iKey < 0 || iType < 0 || iVal < 0 || iActive < 0) {
+    throw new Error("ENT_FLU_RULES missing required headers.");
+  }
+
+  const rules: Record<string, any> = {};
+  for (const row of values.slice(1)) {
+    const active = String(row[iActive] ?? "").trim().toUpperCase() === "Y";
+    if (!active) continue;
+
+    const key = String(row[iKey] ?? "").trim();
+    if (!key) continue;
+
+    const type = String(row[iType] ?? "").trim();
+    const val = parseValue(type, row[iVal]);
+
+    rules[key] = val;
+  }
+
+  CACHE.value = rules;
+  CACHE.expiresAt = now + TTL_MS;
+  return rules;
+}
+
+export function invalidateEntFluRulesCache() {
+  CACHE.expiresAt = 0;
+  CACHE.value = {};
+}
+
+Step 4: Use rules in your deterministic proposal
+
+In your computeEntFluProposal(...) function:
+
+Load rules once per request (or cached) before proposal compute.
+
+Use rule values instead of hardcoded constants.
+
+Example pattern:
+
+import { getEntFluRulesFromSheet } from "./sheetRuleLoader";
+
+export async function computeEntFluProposal(answers: any) {
+  const rules = await getEntFluRulesFromSheet();
+
+  const tamifluMaxDays = rules.TAMIFLU_MAX_DAYS ?? 2;
+  const requireFever = rules.TAMIFLU_REQUIRE_FEVER ?? true;
+  const requireAches = rules.TAMIFLU_REQUIRE_ACHES ?? true;
+
+  const redFlagDisposition = rules.RED_FLAG_DISPOSITION ?? "urgent_or_ed";
+  const nonRedFlagDisposition = rules.NON_RED_FLAG_DISPOSITION ?? "self_care_with_precautions";
+
+  const redFlag = answers.RF_SOB || answers.RF_CP || answers.RF_NEURO || answers.RF_DEHY;
+
+  const onsetDays = typeof answers.ONSET_DAYS === "number" ? answers.ONSET_DAYS : null;
+
+  const feverOk = requireFever ? !!answers.FEVER : true;
+  const achesOk = requireAches ? !!answers.ACHES : true;
+
+  const tamifluEligible =
+    !redFlag &&
+    onsetDays !== null &&
+    onsetDays <= tamifluMaxDays &&
+    feverOk &&
+    achesOk;
+
+  const disposition = redFlag ? redFlagDisposition : nonRedFlagDisposition;
+
+  // tests toggles
+  const tests: string[] = [];
+  if (rules.PROPOSE_COVID_TEST ?? true) tests.push("COVID test (if available)");
+  if (tamifluEligible && (rules.PROPOSE_FLU_TEST_IF_TAMIFLU ?? true)) tests.push("Influenza test (if available)");
+
+  // meds pruning stays deterministic
+  ...
+  return { ... };
+}
+
+Fallback behavior
+
+If the rules sheet fails to load:
+
+catch error
+
+log warning
+
+use defaults
+Gold Slice never breaks.
+
+Step 5: Smoke test update
+
+Add checks:
+
+loader returns the rule keys
+
+tamiflu eligibility changes if you temporarily set TAMIFLU_MAX_DAYS = 1
+
+Quick next actions for you
+
+Fix COVID_POS and FLU_POS rows (choices in one cell, active=Y, flow_id exact).
+
+Create ENT_FLU_RULES tab + paste the rows above.
+
+Tell me when that tab exists.
+
+If you confirm the tab is created, I’ll help you wire the getEntFluRulesFromSheet() into your existing rule function cleanly (with caching + fallback, matching your current code style).
+
+ROWS FIXED, CREATED ENT FLU RULES TAB AND PASTED ROWS.
+
+Perfect. Next we wire it in with the smallest, safest patch: add the rules loader, then have computeEntFluProposal read from it with fallback defaults.
+
+1) Add file server/rules/entFluRuleLoader.ts
+
+Create this file exactly:
+
+// server/rules/entFluRuleLoader.ts
+import { google } from "googleapis";
+
+type CacheEntry = { expiresAt: number; value: Record<string, any> };
+let CACHE: CacheEntry = { expiresAt: 0, value: {} };
+const TTL_MS = 5 * 60 * 1000;
+
+function envOrThrow(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+function parseValue(valueType: string, raw: any): any {
+  const t = String(valueType || "").trim().toLowerCase();
+  const s = String(raw ?? "").trim();
+
+  if (t === "number") {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (t === "boolean") return s.toLowerCase() === "true";
+  if (t === "json") {
+    try { return JSON.parse(s); } catch { return null; }
+  }
+  return s; // text fallback
+}
+
+export async function getEntFluRules(): Promise<Record<string, any>> {
+  const now = Date.now();
+  if (CACHE.expiresAt > now) return CACHE.value;
+
+  const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
+  const credsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    keyFile: credsPath || undefined,
+  });
+
+  const sheets = google.sheets({ version: "v4", auth });
+  const range = `ENT_FLU_RULES!A1:E500`;
+
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range,
+    valueRenderOption: "UNFORMATTED_VALUE",
+  });
+
+  const values = resp.data.values || [];
+  if (values.length < 2) throw new Error("ENT_FLU_RULES is empty or missing.");
+
+  const header = values[0].map((h) => String(h ?? "").trim());
+  const idx = (name: string) => header.indexOf(name);
+
+  const iKey = idx("rule_key");
+  const iType = idx("value_type");
+  const iVal = idx("value");
+  const iActive = idx("active");
+
+  if ([iKey, iType, iVal, iActive].some((n) => n < 0)) {
+    throw new Error("ENT_FLU_RULES missing required headers: rule_key, value_type, value, active");
+  }
+
+  const rules: Record<string, any> = {};
+  for (const row of values.slice(1)) {
+    const active = String(row[iActive] ?? "").trim().toUpperCase() === "Y";
+    if (!active) continue;
+
+    const key = String(row[iKey] ?? "").trim();
+    if (!key) continue;
+
+    const type = String(row[iType] ?? "").trim();
+    rules[key] = parseValue(type, row[iVal]);
+  }
+
+  CACHE = { expiresAt: now + TTL_MS, value: rules };
+  return rules;
+}
+
+export function invalidateEntFluRulesCache() {
+  CACHE = { expiresAt: 0, value: {} };
+}
+
+2) Patch computeEntFluProposal to use the sheet rules (with safe fallback)
+
+In your existing ENT flu rules file (where computeEntFluProposal lives), change it to async and wrap rules load in try/catch:
+
+import { getEntFluRules } from "./entFluRuleLoader";
+
+export async function computeEntFluProposal(answers: any) {
+  // Defaults (gold slice stays stable even if Sheets breaks)
+  const defaults = {
+    TAMIFLU_MAX_DAYS: 2,
+    TAMIFLU_REQUIRE_FEVER: true,
+    TAMIFLU_REQUIRE_ACHES: true,
+    RED_FLAG_DISPOSITION: "urgent_or_ed",
+    NON_RED_FLAG_DISPOSITION: "self_care_with_precautions",
+    PROPOSE_COVID_TEST: true,
+    PROPOSE_FLU_TEST_IF_TAMIFLU: true,
+  };
+
+  let rules: any = {};
+  try {
+    rules = await getEntFluRules();
+  } catch (e) {
+    console.warn("[ENT_FLU_RULES] load failed, using defaults:", (e as any)?.message || e);
+  }
+
+  const tamifluMaxDays = rules.TAMIFLU_MAX_DAYS ?? defaults.TAMIFLU_MAX_DAYS;
+  const requireFever = rules.TAMIFLU_REQUIRE_FEVER ?? defaults.TAMIFLU_REQUIRE_FEVER;
+  const requireAches = rules.TAMIFLU_REQUIRE_ACHES ?? defaults.TAMIFLU_REQUIRE_ACHES;
+
+  const redFlagDisposition = rules.RED_FLAG_DISPOSITION ?? defaults.RED_FLAG_DISPOSITION;
+  const nonRedFlagDisposition = rules.NON_RED_FLAG_DISPOSITION ?? defaults.NON_RED_FLAG_DISPOSITION;
+
+  const proposeCovidTest = rules.PROPOSE_COVID_TEST ?? defaults.PROPOSE_COVID_TEST;
+  const proposeFluTestIfTamiflu = rules.PROPOSE_FLU_TEST_IF_TAMIFLU ?? defaults.PROPOSE_FLU_TEST_IF_TAMIFLU;
+
+  const redFlag =
+    !!answers.RF_SOB || !!answers.RF_CP || !!answers.RF_NEURO || !!answers.RF_DEHY;
+
+  const onsetDays = typeof answers.ONSET_DAYS === "number" ? answers.ONSET_DAYS : null;
+
+  const feverOk = requireFever ? !!answers.FEVER : true;
+  const achesOk = requireAches ? !!answers.ACHES : true;
+
+  const tamifluEligible =
+    !redFlag &&
+    onsetDays !== null &&
+    onsetDays <= tamifluMaxDays &&
+    feverOk &&
+    achesOk;
+
+  const paxlovidFlag = answers.COVID_POS === "yes";
+
+  const meds: string[] = ["acetaminophen", "saline nasal spray", "guaifenesin"];
+  const avoid: string[] = [];
+
+  if (answers.SSRI) avoid.push("dextromethorphan");
+  if (answers.HTN || answers.ANXIETY) avoid.push("pseudoephedrine / phenylephrine");
+  if (answers.PREGNANT) avoid.push("NSAIDs");
+
+  const disposition = redFlag ? redFlagDisposition : nonRedFlagDisposition;
+
+  const tests: string[] = [];
+  if (proposeCovidTest) tests.push("COVID test (if available)");
+  if (tamifluEligible && proposeFluTestIfTamiflu) tests.push("Influenza test (if available)");
+
+  return {
+    redFlag,
+    tamifluEligible,
+    paxlovidFlag,
+    disposition,
+    tests,
+    meds,
+    avoid,
+  };
+}
+
+Important: update the caller
+
+Because computeEntFluProposal is now async, wherever you call it, change:
+
+const proposal = computeEntFluProposal(answers);
+
+
+to:
+
+const proposal = await computeEntFluProposal(answers);
+
+
+(Usually in the WhatsApp handler when you finalize the encounter.)
+
+3) Verify in 2 minutes
+Test A: Make Tamiflu stricter
+
+In ENT_FLU_RULES tab set:
+
+TAMIFLU_MAX_DAYS from 2 → 1
+
+Restart server (or wait 5 min), run a patient with onset 2 days + fever + aches.
+
+Expected:
+
+Tamiflu should now NOT be proposed.
+
+Test B: Turn off COVID test proposal
+
+Set:
+
+PROPOSE_COVID_TEST → false
+
+Expected:
+
+COVID test no longer appears in proposed tests.
+
+4) Confirm COVID_POS and FLU_POS are now asked
+
+Text “hi” and you should now see both choice questions at the end.
+
+If you still don’t, the loader is filtering them. The most common remaining cause is flow_id mismatch (ENT_FLU_LIKE vs ENT_FLU_LIKE_V1). Your logs will show which flow_id it’s using.
+
+If you paste the exact log line that says “Loaded X questions for flow ___” I can tell you immediately whether your sheet should be ENT_FLU_LIKE or ENT_FLU_LIKE_V1 and we’ll eliminate any mismatch permanently.

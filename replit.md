@@ -86,6 +86,23 @@ Preferred communication style: Simple, everyday language.
 - **Fallback**: Uses hardcoded flow if Sheets unavailable or not configured
 - **Loader**: `server/flows/sheetFlowLoader.ts`
 
+### Google Sheets Integration (Clinical Rules)
+- **Purpose**: Dynamic loading of clinical decision rules from Google Sheets
+- **Sheet Tab**: `ENT_FLU_RULES`
+- **Required Columns**: `rule_key`, `value_type`, `value`, `active`
+- **Supported value_type**: `number`, `boolean`, `text`, `json`
+- **Configurable Rules**:
+  - `TAMIFLU_MAX_DAYS` (number, default: 2) - Max symptom onset days for Tamiflu eligibility
+  - `TAMIFLU_REQUIRE_FEVER` (boolean, default: true) - Require fever for Tamiflu
+  - `TAMIFLU_REQUIRE_ACHES` (boolean, default: true) - Require aches for Tamiflu
+  - `RED_FLAG_DISPOSITION` (text, default: "urgent_or_ed") - Disposition when red flags present
+  - `NON_RED_FLAG_DISPOSITION` (text, default: "self_care_with_precautions") - Default disposition
+  - `PROPOSE_COVID_TEST` (boolean, default: true) - Whether to propose COVID test
+  - `PROPOSE_FLU_TEST_IF_TAMIFLU` (boolean, default: true) - Propose flu test if Tamiflu eligible
+- **Caching**: Rules cached for 5 minutes
+- **Fallback**: Uses hardcoded defaults if Sheets unavailable
+- **Loader**: `server/rules/entFluRuleLoader.ts`
+
 ### Replit Integrations
 Located in `server/replit_integrations/` and `client/replit_integrations/`:
 - **Audio**: Voice chat with speech-to-text and text-to-speech
@@ -141,9 +158,15 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-21: Added sheet-driven clinical rules
+  - New loader: `server/rules/entFluRuleLoader.ts`
+  - Rules loaded from `ENT_FLU_RULES` sheet tab
+  - Configurable: Tamiflu eligibility, disposition rules, test proposals
+  - 5-minute caching with safe fallback to hardcoded defaults
+  - `computeProposal()` now async, reads rules from Sheets
 - 2026-01-21: Added Google Sheets integration for dynamic questions
   - New loader: `server/flows/sheetFlowLoader.ts`
-  - Questions loaded from `ENT_FLU_QUESTIONS` sheet tab
+  - Questions loaded from `ENT_FLU_QUESTIONS` sheet tab (19 questions including COVID_POS, FLU_POS)
   - 5-minute caching to avoid API quota issues
   - Falls back to hardcoded flow if Sheets unavailable
   - Added `SHEETS_SPREADSHEET_ID` secret

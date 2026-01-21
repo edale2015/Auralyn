@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage, type FlowQuestion } from "./storage";
 import twilio from "twilio";
+import { getEntFluRules } from "./rules/entFluRuleLoader";
 
 // Initialize Twilio client
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -76,23 +77,50 @@ function parseAnswer(type: string, raw: string): boolean | number | string | nul
   return raw.trim();
 }
 
-// Compute medical proposal based on answers
-function computeProposal(a: Record<string, any>) {
+// Compute medical proposal based on answers (now uses sheet-driven rules with fallback)
+async function computeProposal(a: Record<string, any>) {
+  const defaults = {
+    TAMIFLU_MAX_DAYS: 2,
+    TAMIFLU_REQUIRE_FEVER: true,
+    TAMIFLU_REQUIRE_ACHES: true,
+    RED_FLAG_DISPOSITION: "urgent_or_ed",
+    NON_RED_FLAG_DISPOSITION: "self_care_with_precautions",
+    PROPOSE_COVID_TEST: true,
+    PROPOSE_FLU_TEST_IF_TAMIFLU: true,
+  };
+
+  let rules: Record<string, any> = {};
+  try {
+    rules = await getEntFluRules();
+  } catch (e) {
+    console.warn("[ENT_FLU_RULES] load failed, using defaults:", (e as any)?.message || e);
+  }
+
+  const tamifluMaxDays = rules.TAMIFLU_MAX_DAYS ?? defaults.TAMIFLU_MAX_DAYS;
+  const requireFever = rules.TAMIFLU_REQUIRE_FEVER ?? defaults.TAMIFLU_REQUIRE_FEVER;
+  const requireAches = rules.TAMIFLU_REQUIRE_ACHES ?? defaults.TAMIFLU_REQUIRE_ACHES;
+  const redFlagDisposition = rules.RED_FLAG_DISPOSITION ?? defaults.RED_FLAG_DISPOSITION;
+  const nonRedFlagDisposition = rules.NON_RED_FLAG_DISPOSITION ?? defaults.NON_RED_FLAG_DISPOSITION;
+  const proposeCovidTest = rules.PROPOSE_COVID_TEST ?? defaults.PROPOSE_COVID_TEST;
+  const proposeFluTestIfTamiflu = rules.PROPOSE_FLU_TEST_IF_TAMIFLU ?? defaults.PROPOSE_FLU_TEST_IF_TAMIFLU;
+
   const redFlag =
-    a.RF_SOB === true || a.RF_CP === true || a.RF_NEURO === true || a.RF_DEHY === true;
+    !!a.RF_SOB || !!a.RF_CP || !!a.RF_NEURO || !!a.RF_DEHY;
 
   const onsetDays = typeof a.ONSET_DAYS === "number" ? a.ONSET_DAYS : null;
+
+  const feverOk = requireFever ? !!a.FEVER : true;
+  const achesOk = requireAches ? !!a.ACHES : true;
 
   const tamifluEligible =
     !redFlag &&
     onsetDays !== null &&
-    onsetDays <= 2 &&
-    a.FEVER === true &&
-    a.ACHES === true;
+    onsetDays <= tamifluMaxDays &&
+    feverOk &&
+    achesOk;
 
   const paxlovidFlag = a.COVID_POS === "yes";
 
-  // Med suggestions (simple baseline + pruning)
   const meds: string[] = ["acetaminophen", "saline nasal spray", "guaifenesin"];
   const avoid: string[] = [];
 
@@ -100,17 +128,17 @@ function computeProposal(a: Record<string, any>) {
   if (a.HTN === true || a.ANXIETY === true) avoid.push("pseudoephedrine/phenylephrine");
   if (a.PREGNANT === true) avoid.push("ibuprofen/NSAIDs");
 
-  const disposition = redFlag ? "urgent_or_ed" : "self_care_with_precautions";
+  const disposition = redFlag ? redFlagDisposition : nonRedFlagDisposition;
 
   const tests: string[] = [];
-  tests.push("COVID antigen/NAAT (if available)");
-  if (tamifluEligible) tests.push("Influenza test (if available)");
+  if (proposeCovidTest) tests.push("COVID antigen/NAAT (if available)");
+  if (tamifluEligible && proposeFluTestIfTamiflu) tests.push("Influenza test (if available)");
 
   return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition };
 }
 
 // Build physician summary for review
-function buildPhysicianSummary(a: Record<string, any>, p: ReturnType<typeof computeProposal>) {
+function buildPhysicianSummary(a: Record<string, any>, p: Awaited<ReturnType<typeof computeProposal>>) {
   const onset = a.ONSET_DAYS ?? "unknown";
   const positives = [
     a.FEVER ? "fever" : null,
@@ -426,7 +454,7 @@ export async function registerRoutes(
         // Check if we've completed all questions
         if (flowIndex >= flow.length) {
           // Compute proposal and finalize
-          const proposal = computeProposal(answers);
+          const proposal = await computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
           
           // Determine urgency based on red flags
@@ -613,7 +641,7 @@ export async function registerRoutes(
         
         if (flowIndex >= flow.length) {
           // Finalize
-          const proposal = computeProposal(answers);
+          const proposal = await computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
           const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
           
