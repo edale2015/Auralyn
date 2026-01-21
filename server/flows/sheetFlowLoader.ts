@@ -51,7 +51,11 @@ function normType(v: any): FlowQuestion["type"] {
 export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQuestion[]> {
   const cached = CACHE[flowId];
   const now = Date.now();
-  if (cached && cached.expiresAt > now) return cached.value;
+  if (cached && cached.expiresAt > now) {
+    console.log(`[SheetFlowLoader] Cache HIT for ${flowId} (${cached.value.length} questions, expires in ${Math.round((cached.expiresAt - now) / 1000)}s)`);
+    return cached.value;
+  }
+  console.log(`[SheetFlowLoader] Cache MISS for ${flowId}, loading from Sheets...`);
 
   const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
   
@@ -163,16 +167,27 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
     return rest;
   });
 
+  // Warn if no questions found - this might indicate a configuration issue
+  if (cleaned.length === 0) {
+    console.warn(`[SheetFlowLoader] WARNING: No active questions found for flow_id="${flowId}" in sheet. Check that:
+  - flow_id column matches exactly (case-sensitive)
+  - active column is "Y" for questions you want to include
+  - question_id and question_text are not empty`);
+  }
+
   CACHE[flowId] = { expiresAt: now + CACHE_TTL_MS, value: cleaned };
 
-  console.log(`Loaded ${cleaned.length} questions for flow ${flowId} from Google Sheets`);
+  console.log(`[SheetFlowLoader] Loaded ${cleaned.length} questions for flow ${flowId} from Google Sheets (cached for 5 min)`);
   return cleaned;
 }
 
 export function invalidateFlowCache(flowId: string) {
+  console.log(`[SheetFlowLoader] Invalidating cache for flow: ${flowId}`);
   delete CACHE[flowId];
 }
 
 export function invalidateAllFlowCache() {
+  const count = Object.keys(CACHE).length;
+  console.log(`[SheetFlowLoader] Invalidating all ${count} cached flows`);
   Object.keys(CACHE).forEach(key => delete CACHE[key]);
 }

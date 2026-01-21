@@ -75,6 +75,17 @@ Preferred communication style: Simple, everyday language.
   - `GOOGLE_SERVICE_ACCOUNT_JSON` (secret) - Service account credentials JSON
   - `FIREBASE_PROJECT_ID` - Firebase project ID (medicalm-dec9d)
 
+### Google Sheets Integration (Flow Questions)
+- **Purpose**: Dynamic loading of questionnaire questions from Google Sheets
+- **Sheet Tab**: `ENT_FLU_QUESTIONS`
+- **Required Columns**: `flow_id`, `order`, `question_id`, `question_text`, `answer_type`, `required`, `active`
+- **Optional Columns**: `min`, `max`, `choices`, `help_text`
+- **Environment Variables**:
+  - `SHEETS_SPREADSHEET_ID` (secret) - Google Sheets spreadsheet ID
+- **Caching**: Questions cached for 5 minutes to avoid API quota issues
+- **Fallback**: Uses hardcoded flow if Sheets unavailable or not configured
+- **Loader**: `server/flows/sheetFlowLoader.ts`
+
 ### Replit Integrations
 Located in `server/replit_integrations/` and `client/replit_integrations/`:
 - **Audio**: Voice chat with speech-to-text and text-to-speech
@@ -130,6 +141,12 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-21: Added Google Sheets integration for dynamic questions
+  - New loader: `server/flows/sheetFlowLoader.ts`
+  - Questions loaded from `ENT_FLU_QUESTIONS` sheet tab
+  - 5-minute caching to avoid API quota issues
+  - Falls back to hardcoded flow if Sheets unavailable
+  - Added `SHEETS_SPREADSHEET_ID` secret
 - 2026-01-21: Gold Slice V1 frozen
   - Created comprehensive smoke test script (14 test cases)
   - All end-to-end flows verified working

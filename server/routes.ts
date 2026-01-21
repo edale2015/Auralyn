@@ -22,9 +22,13 @@ async function getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
       if (questions.length > 0) {
         return questions;
       }
+      // If Sheets returns empty, fall through to hardcoded with warning
+      console.warn(`[FlowLoader] Sheets returned 0 questions for ${flowId}, using hardcoded fallback (${HARDCODED_ENT_FLU_FLOW.length} questions)`);
     } catch (error) {
-      console.warn(`Failed to load questions from Sheets for ${flowId}, using fallback:`, error);
+      console.warn(`[FlowLoader] Failed to load questions from Sheets for ${flowId}, using hardcoded fallback:`, error);
     }
+  } else {
+    console.log(`[FlowLoader] SHEETS_SPREADSHEET_ID not configured, using hardcoded flow`);
   }
   
   // Fallback to hardcoded flow
