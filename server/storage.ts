@@ -639,10 +639,9 @@ export class FirebaseStorage implements IStorage {
   async getOrdersByEncounter(encounterId: number): Promise<Order[]> {
     const snapshot = await firestoreDb.collection("orders")
       .where("encounterId", "==", encounterId)
-      .orderBy("createdAt", "asc")
       .get();
     
-    return snapshot.docs.map(doc => {
+    const orders = snapshot.docs.map(doc => {
       const data = doc.data();
       return {
         ...data,
@@ -650,6 +649,11 @@ export class FirebaseStorage implements IStorage {
         approvedAt: data.approvedAt?.toDate?.() || null,
       } as Order;
     });
+    
+    // Sort in memory to avoid needing composite index
+    return orders.sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
   }
 
   async createOrder(order: InsertOrder): Promise<Order> {
@@ -702,31 +706,39 @@ export class FirebaseStorage implements IStorage {
   async getMessagesByEncounter(encounterId: number): Promise<WhatsappMessage[]> {
     const snapshot = await firestoreDb.collection("whatsapp_messages")
       .where("encounterId", "==", encounterId)
-      .orderBy("createdAt", "asc")
       .get();
     
-    return snapshot.docs.map(doc => {
+    const messages = snapshot.docs.map(doc => {
       const data = doc.data();
       return {
         ...data,
         createdAt: data.createdAt?.toDate?.() || new Date(),
       } as WhatsappMessage;
     });
+    
+    // Sort in memory to avoid needing composite index
+    return messages.sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
   }
 
   async getMessagesByPatient(patientId: number): Promise<WhatsappMessage[]> {
     const snapshot = await firestoreDb.collection("whatsapp_messages")
       .where("patientId", "==", patientId)
-      .orderBy("createdAt", "asc")
       .get();
     
-    return snapshot.docs.map(doc => {
+    const messages = snapshot.docs.map(doc => {
       const data = doc.data();
       return {
         ...data,
         createdAt: data.createdAt?.toDate?.() || new Date(),
       } as WhatsappMessage;
     });
+    
+    // Sort in memory to avoid needing composite index
+    return messages.sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
   }
 
   async createMessage(message: InsertWhatsappMessage): Promise<WhatsappMessage> {
