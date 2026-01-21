@@ -552,10 +552,13 @@ export class FirebaseStorage implements IStorage {
       query = query.where("status", "==", status);
     }
     
-    query = query.orderBy("createdAt", "desc");
     const snapshot = await query.get();
+    const encounters = snapshot.docs.map(doc => this.docToEncounter(doc));
     
-    return snapshot.docs.map(doc => this.docToEncounter(doc));
+    // Sort in memory to avoid needing composite index
+    return encounters.sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
   }
 
   async getActiveEncounterByPatient(patientId: number): Promise<Encounter | undefined> {
