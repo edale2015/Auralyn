@@ -2,6 +2,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { storage } from "./storage";
+import { getEntFluRules } from "./rules/entFluRuleLoader";
 
 const app = express();
 const httpServer = createServer(app);
@@ -61,6 +63,24 @@ app.use((req, res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
+
+  // Warm cache: load flows and rules at startup (prevents first-request delay)
+  try {
+    console.log("[Startup] Warming cache: loading questions and rules from Sheets...");
+    const [questions, rules] = await Promise.all([
+      storage.getFlowQuestions("ENT_FLU_LIKE_V1").catch((e) => {
+        console.warn("[Startup] Failed to load questions from Sheets:", e?.message || e);
+        return [];
+      }),
+      getEntFluRules().catch((e) => {
+        console.warn("[Startup] Failed to load rules from Sheets:", e?.message || e);
+        return {};
+      }),
+    ]);
+    console.log(`[Startup] Cache warmed: ${questions.length} questions, ${Object.keys(rules).length} rules loaded`);
+  } catch (e) {
+    console.warn("[Startup] Cache warming failed, will use fallback defaults:", e);
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

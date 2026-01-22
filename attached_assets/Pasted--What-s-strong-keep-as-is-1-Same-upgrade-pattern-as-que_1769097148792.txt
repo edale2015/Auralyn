@@ -1,0 +1,136 @@
+✅ What’s strong (keep as-is)
+1) Same upgrade pattern as questions
+
+5-minute cache ✅
+
+graceful fallback to defaults ✅
+
+warnings when sheet misconfigured / empty ✅
+That consistency is gold. It prevents “one module behaves differently” bugs.
+
+2) Deterministic medical logic remains the authority
+
+Even though rules are dynamic, you didn’t hand decision power to ChatGPT. Good.
+
+3) The rule surface is small and well-chosen
+
+You picked the right knobs:
+
+Tamiflu window and requirements
+
+Disposition strings
+
+whether to propose tests
+
+That’s exactly the right “minimum viable configurability.”
+
+🔧 Two improvements I recommend (small, high value)
+A) Add schema validation + typed parsing guardrails
+
+Right now rules are flexible (number/boolean/text/json), which is good, but you want to prevent silent errors like:
+
+TAMIFLU_MAX_DAYS = "two" → parse becomes null → default used quietly
+
+Add a strict check after loading:
+
+if a key exists but parsed value is null, log:
+
+[EntFluRules] Invalid value for TAMIFLU_MAX_DAYS: "two" (expected number). Using default 2.
+
+This makes sheet editing safe for future-you.
+
+B) Add a “rules_version” row and log it on each encounter
+
+Add in ENT_FLU_RULES:
+
+RULES_VERSION,text,2026-01-22a,Y
+
+Then when computing proposal:
+
+store proposal.rules_version
+
+This gives you auditability: when you review outcomes later, you know exactly which rules produced a given recommendation.
+
+🧷 One operational safeguard (prevents “it works but not in prod”)
+Load flows/rules at server startup (warm cache)
+
+On server start:
+
+load ENT_FLU questions
+
+load ENT_FLU rules
+
+If it fails:
+
+log loud warning once
+
+continue with defaults
+
+This prevents the first patient message from being delayed by Sheets latency, and makes failures obvious immediately.
+
+✅ Next upgrades (in the safest order)
+
+You now have:
+
+WhatsApp intake ✅
+
+Firestore persistence ✅
+
+Physician review ✅
+
+Sheet-driven questions ✅
+
+Sheet-driven rules ✅
+
+So the next upgrades should be:
+
+1) Add sheet-driven “med pruning rules” (still deterministic)
+
+Right now med pruning is hardcoded (HTN/anxiety/SSRI/pregnancy). Keep that logic, but move “avoid list” rules to a sheet tab like:
+
+ENT_FLU_MED_RULES
+
+rule_key
+
+condition_expression
+
+action (block_med/add_med)
+
+med_name
+
+This lets you tune safely without messing with diagnosis logic.
+
+2) Add ChatGPT only for phrasing
+
+patient-facing message rewrite
+
+physician summary rewrite
+
+note narrative polishing
+
+Guardrails:
+
+ChatGPT sees proposal + answers and can only output text fields
+
+it cannot alter disposition, tests, tamifluEligible, etc.
+
+3) Expand ENT clinically: Centor sore throat module
+
+This is your next high-value clinical block and plugs into the same engine:
+
+only triggers if sore throat = yes
+
+compute score
+
+propose test pathway (not autonomous antibiotics)
+
+physician signs off
+
+🔍 Quick question (so we don’t drift)
+
+Are COVID_POS and FLU_POS now being asked on WhatsApp?
+
+If yes, you’re fully sheet-driven for the full question set.
+If no, we’ll fix the remaining filter (it’s almost always flow_id mismatch or active flag).
+
+Either way, you’ve reached the place you wanted: working system, continuously upgradable.

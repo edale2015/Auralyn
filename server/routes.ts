@@ -87,6 +87,7 @@ async function computeProposal(a: Record<string, any>) {
     NON_RED_FLAG_DISPOSITION: "self_care_with_precautions",
     PROPOSE_COVID_TEST: true,
     PROPOSE_FLU_TEST_IF_TAMIFLU: true,
+    RULES_VERSION: "default",
   };
 
   let rules: Record<string, any> = {};
@@ -103,6 +104,7 @@ async function computeProposal(a: Record<string, any>) {
   const nonRedFlagDisposition = rules.NON_RED_FLAG_DISPOSITION ?? defaults.NON_RED_FLAG_DISPOSITION;
   const proposeCovidTest = rules.PROPOSE_COVID_TEST ?? defaults.PROPOSE_COVID_TEST;
   const proposeFluTestIfTamiflu = rules.PROPOSE_FLU_TEST_IF_TAMIFLU ?? defaults.PROPOSE_FLU_TEST_IF_TAMIFLU;
+  const rulesVersion = rules.RULES_VERSION ?? defaults.RULES_VERSION;
 
   const redFlag =
     !!a.RF_SOB || !!a.RF_CP || !!a.RF_NEURO || !!a.RF_DEHY;
@@ -134,7 +136,7 @@ async function computeProposal(a: Record<string, any>) {
   if (proposeCovidTest) tests.push("COVID antigen/NAAT (if available)");
   if (tamifluEligible && proposeFluTestIfTamiflu) tests.push("Influenza test (if available)");
 
-  return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition };
+  return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition, rulesVersion };
 }
 
 // Build physician summary for review

@@ -4,6 +4,28 @@ type CacheEntry = { expiresAt: number; value: Record<string, any> };
 let CACHE: CacheEntry = { expiresAt: 0, value: {} };
 const TTL_MS = 5 * 60 * 1000;
 
+const EXPECTED_TYPES: Record<string, string> = {
+  TAMIFLU_MAX_DAYS: "number",
+  TAMIFLU_REQUIRE_FEVER: "boolean",
+  TAMIFLU_REQUIRE_ACHES: "boolean",
+  RED_FLAG_DISPOSITION: "text",
+  NON_RED_FLAG_DISPOSITION: "text",
+  PROPOSE_COVID_TEST: "boolean",
+  PROPOSE_FLU_TEST_IF_TAMIFLU: "boolean",
+  RULES_VERSION: "text",
+};
+
+const DEFAULTS: Record<string, any> = {
+  TAMIFLU_MAX_DAYS: 2,
+  TAMIFLU_REQUIRE_FEVER: true,
+  TAMIFLU_REQUIRE_ACHES: true,
+  RED_FLAG_DISPOSITION: "urgent_or_ed",
+  NON_RED_FLAG_DISPOSITION: "self_care_with_precautions",
+  PROPOSE_COVID_TEST: true,
+  PROPOSE_FLU_TEST_IF_TAMIFLU: true,
+  RULES_VERSION: "default",
+};
+
 function envOrThrow(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -23,6 +45,25 @@ function parseValue(valueType: string, raw: any): any {
     try { return JSON.parse(s); } catch { return null; }
   }
   return s;
+}
+
+function validateRule(key: string, value: any, rawValue: any): any {
+  const expectedType = EXPECTED_TYPES[key];
+  if (!expectedType) return value;
+
+  if (expectedType === "number" && value === null) {
+    console.warn(`[EntFluRules] Invalid value for ${key}: "${rawValue}" (expected number). Using default ${DEFAULTS[key]}.`);
+    return DEFAULTS[key];
+  }
+  if (expectedType === "boolean" && typeof value !== "boolean") {
+    console.warn(`[EntFluRules] Invalid value for ${key}: "${rawValue}" (expected boolean). Using default ${DEFAULTS[key]}.`);
+    return DEFAULTS[key];
+  }
+  if (expectedType === "text" && (value === null || value === "")) {
+    console.warn(`[EntFluRules] Empty value for ${key}. Using default "${DEFAULTS[key]}".`);
+    return DEFAULTS[key];
+  }
+  return value;
 }
 
 export async function getEntFluRules(): Promise<Record<string, any>> {
@@ -75,7 +116,9 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
     if (!key) continue;
 
     const type = String(row[iType] ?? "").trim();
-    rules[key] = parseValue(type, row[iVal]);
+    const rawValue = row[iVal];
+    const parsed = parseValue(type, rawValue);
+    rules[key] = validateRule(key, parsed, rawValue);
   }
 
   CACHE = { expiresAt: now + TTL_MS, value: rules };

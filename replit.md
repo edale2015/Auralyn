@@ -158,6 +158,10 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-22: Enhanced rules loader with validation and auditability
+  - Schema validation: warns on invalid values (e.g., "two" for number), uses defaults safely
+  - Rules version tracking: `RULES_VERSION` row stored in proposal for audit trail
+  - Warm cache at startup: questions and rules loaded eagerly to prevent first-request delay
 - 2026-01-21: Added sheet-driven clinical rules
   - New loader: `server/rules/entFluRuleLoader.ts`
   - Rules loaded from `ENT_FLU_RULES` sheet tab
