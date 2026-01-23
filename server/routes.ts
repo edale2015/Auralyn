@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import { storage, type FlowQuestion } from "./storage";
 import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
+import { syncClinicalSheets } from "./admin/sheetsAgent";
+import { runTests, applyPatch } from "./admin/devAgent";
 
 // Initialize Twilio client
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -692,6 +694,20 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to process message" });
     }
   });
+
+  // Admin routes - simple token-based auth for now
+  const requireAdmin = (req: Request, res: Response, next: any) => {
+    const token = req.headers["x-admin-token"];
+    const adminToken = process.env.ADMIN_TOKEN || "admin-secret";
+    if (token !== adminToken) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  };
+
+  app.post("/api/admin/sheets/sync", requireAdmin, syncClinicalSheets);
+  app.post("/api/admin/dev/run-tests", requireAdmin, runTests);
+  app.post("/api/admin/dev/apply-patch", requireAdmin, applyPatch);
 
   return httpServer;
 }
