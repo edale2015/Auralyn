@@ -1,0 +1,237 @@
+Step 1 — Google Sheets Seeder / Sync Agent
+
+This eliminates manual tab creation, headers, and row pasting forever.
+
+1️⃣ Paste this into server/admin/sheetsAgent.ts
+import { google } from "googleapis";
+import { Request, Response } from "express";
+
+const REQUIRED_QUESTION_HEADERS = [
+  "flow_id","system","chief_complaint","module","order",
+  "question_id","question_text","answer_type","required",
+  "min","max","choices","help_text","active"
+];
+
+const REQUIRED_RULE_HEADERS = [
+  "flow_id","system","chief_complaint","module",
+  "rule_key","value_type","value","active"
+];
+
+function authSheets() {
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+  });
+  return google.sheets({ version: "v4", auth });
+}
+
+async function ensureTab(
+  sheets: any,
+  spreadsheetId: string,
+  title: string
+) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const exists = meta.data.sheets?.some(
+    (s: any) => s.properties?.title === title
+  );
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title } } }],
+      },
+    });
+  }
+}
+
+async function ensureHeaders(
+  sheets: any,
+  spreadsheetId: string,
+  tab: string,
+  headers: string[]
+) {
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${tab}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [headers] },
+  });
+}
+
+export async function syncClinicalSheets(req: Request, res: Response) {
+  try {
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
+    const sheets = authSheets();
+
+    await ensureTab(sheets, spreadsheetId, "CLINICAL_QUESTIONS");
+    await ensureTab(sheets, spreadsheetId, "CLINICAL_RULES");
+
+    await ensureHeaders(
+      sheets,
+      spreadsheetId,
+      "CLINICAL_QUESTIONS",
+      REQUIRED_QUESTION_HEADERS
+    );
+    await ensureHeaders(
+      sheets,
+      spreadsheetId,
+      "CLINICAL_RULES",
+      REQUIRED_RULE_HEADERS
+    );
+
+    res.json({
+      ok: true,
+      message: "CLINICAL_QUESTIONS and CLINICAL_RULES ensured with headers",
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err.message || String(err),
+    });
+  }
+}
+
+What this agent does
+
+Creates CLINICAL_QUESTIONS and CLINICAL_RULES if missing
+
+Writes the correct headers every time
+
+Safe to run repeatedly (idempotent)
+
+Uses the same service account you already configured
+
+2️⃣ Wire the route (one line change)
+
+In server/routes.ts (or wherever you register routes):
+
+import { syncClinicalSheets } from "./admin/sheetsAgent";
+
+app.post("/api/admin/sheets/sync", requireAdmin, syncClinicalSheets);
+
+
+requireAdmin can be:
+
+your existing physician auth
+
+or a simple ADMIN_TOKEN check for now
+
+3️⃣ Test it (30 seconds)
+
+From your browser or curl:
+
+POST /api/admin/sheets/sync
+
+
+Expected JSON:
+
+{
+  "ok": true,
+  "message": "CLINICAL_QUESTIONS and CLINICAL_RULES ensured with headers"
+}
+
+
+At this point:
+
+you never manually create tabs again
+
+headers never drift
+
+onboarding new flows becomes mechanical
+
+Step 2 — Replit Dev / Patch / Test Agent
+
+This replaces “paste code → run → screenshot → explain”.
+
+We do this safely.
+
+1️⃣ Paste this into server/admin/devAgent.ts
+import { Request, Response } from "express";
+import { execSync } from "child_process";
+import fs from "fs";
+
+export function runTests(req: Request, res: Response) {
+  try {
+    const output = execSync("npm test", {
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    res.json({ ok: true, output });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      output: err.stdout?.toString(),
+      error: err.stderr?.toString(),
+    });
+  }
+}
+
+export function applyPatch(req: Request, res: Response) {
+  const { patch } = req.body;
+  if (!patch) {
+    return res.status(400).json({ ok: false, error: "Missing patch" });
+  }
+
+  const tmp = "/tmp/patch.diff";
+  fs.writeFileSync(tmp, patch);
+
+  try {
+    execSync(`git apply ${tmp}`, { stdio: "pipe" });
+    const testOut = execSync("npm test", { encoding: "utf-8" });
+    res.json({
+      ok: true,
+      applied: true,
+      tests: "passed",
+      output: testOut,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      applied: false,
+      error: err.stderr?.toString(),
+    });
+  }
+}
+
+2️⃣ Wire Dev routes
+import { runTests, applyPatch } from "./admin/devAgent";
+
+app.post("/api/admin/dev/run-tests", requireAdmin, runTests);
+app.post("/api/admin/dev/apply-patch", requireAdmin, applyPatch);
+
+What you now have (this is the big picture)
+You can now:
+
+Ask me for sheet schema or flow content
+
+Paste nothing into Google Sheets manually
+
+Run /api/admin/sheets/sync → tabs + headers created
+
+Ask me for code changes
+
+Apply them as a patch
+
+Run tests and get structured results
+
+This is how future work goes:
+
+You ask: “Add Centor module”
+
+I give:
+
+JSON rows for questions/rules
+
+optional patch
+
+You call:
+
+/api/admin/sheets/sync
+
+/api/admin/dev/apply-patch
+
+You get back:
+
+“Applied, tests passed”
+
+Zero screenshots. Zero retyping.
