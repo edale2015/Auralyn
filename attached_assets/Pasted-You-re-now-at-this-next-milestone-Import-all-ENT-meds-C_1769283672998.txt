@@ -1,0 +1,592 @@
+You’re now at this next milestone:
+
+✅ Import all ENT meds → CLINICAL_MEDICATIONS (via admin endpoint)
+✅ Import all ENT diagnoses → CLINICAL_DIAGNOSES (via admin endpoint)
+✅ Then wire the runtime to use the imported meds + diagnoses, while we expand modifiers progressively.
+
+Below is the concrete “do this next” plan + the endpoints to add.
+
+Step 1 (now): Add two import endpoints to your Sheets Admin Agent
+
+You already have server/admin/sheetsAgent.ts and working auth. We’re going to add:
+
+POST /api/admin/sheets/import-medications
+
+POST /api/admin/sheets/import-diagnoses
+
+These will read:
+
+ENT_Medications_Master → write into CLINICAL_MEDICATIONS
+
+ENT_Diagnosis_Master → write into CLINICAL_DIAGNOSES
+
+A) Create these new master tabs (once)
+
+If you haven’t already:
+
+CLINICAL_MEDICATIONS (you already did)
+
+CLINICAL_DIAGNOSES (create now)
+
+1A) Header row for CLINICAL_DIAGNOSES (paste into row 1)
+
+Paste this as one line (tab-separated):
+
+Diagnosis_ID	System	Chief_Complaint	Diagnosis	Cluster	Subcluster	Mechanism_Etiology	Severity_Level	Diagnostic_Criteria	Red_Flag	Red_Flag_Criteria	Key_Modifiers	Secondary_Questions	Exam_Findings	Testing_Imaging	Testing_Labs	Disposition	Disposition_Rationale	Default_Triage_Route	ER_Threshold	UC_Threshold	PC_Threshold	Follow_up_Plan	Treatment_First_Line	Treatment_Alternatives	Supportive_Care	Pediatric_Variant	Modifier_Rule	Cluster_Link	Medication_Link	Logic_Notes	Active
+
+
+(Active can be blank for imported rows, but it’s nice to have.)
+
+Step 2: Implement import logic (safe mapping by header name)
+The rule
+
+We will not assume columns are in the same order. We map by header name so it’s robust.
+
+Dedupe keys
+
+Medications dedupe: (System, Medication_Name, Route)
+
+Diagnoses dedupe: (Diagnosis_ID) (or (System, Chief Complaint, Diagnosis) if ID missing)
+
+Code you add (drop-in snippets)
+Add to server/admin/sheetsAgent.ts
+
+Add these helper functions (below your existing helpers):
+
+async function readTabAsObjects(sheets: any, spreadsheetId: string, tab: string, range = "A1:ZZ5000") {
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tab}!${range}`,
+    valueRenderOption: "UNFORMATTED_VALUE",
+  });
+
+  const values: any[][] = resp.data.values || [];
+  if (values.length < 2) return { headers: [], rows: [] };
+
+  const headers = values[0].map((h) => String(h ?? "").trim());
+  const rows = values.slice(1);
+
+  return { headers, rows };
+}
+
+function buildRowByTargetHeaders(
+  sourceHeaders: string[],
+  sourceRow: any[],
+  targetHeaders: string[]
+) {
+  const srcIdx = (h: string) => sourceHeaders.findIndex((x) => x === h);
+
+  return targetHeaders.map((h) => {
+    const i = srcIdx(h);
+    return i >= 0 ? (sourceRow[i] ?? "") : "";
+  });
+}
+
+function makeKey(row: any[], headers: string[], keyCols: string[]) {
+  const idx = (h: string) => headers.indexOf(h);
+  return keyCols.map((k) => String(row[idx(k)] ?? "").trim()).join("||");
+}
+
+
+Now add two handlers:
+
+2A) Import ENT meds
+export async function importEntMedications(req: Request, res: Response) {
+  try {
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
+    const sheets = authSheets();
+
+    const sourceTab = "ENT_Medications_Master";
+    const targetTab = "CLINICAL_MEDICATIONS";
+
+    // Ensure target exists
+    await ensureTab(sheets, spreadsheetId, targetTab);
+
+    // Read source
+    const src = await readTabAsObjects(sheets, spreadsheetId, sourceTab);
+    if (!src.headers.length) throw new Error(`Source tab ${sourceTab} is empty or missing headers.`);
+
+    // Read target headers from row 1
+    const tgt = await readTabAsObjects(sheets, spreadsheetId, targetTab, "A1:ZZ1");
+    const targetHeaders = tgt.headers;
+    if (!targetHeaders.length) throw new Error(`Target tab ${targetTab} missing headers.`);
+
+    // Build new rows in target schema
+    const newRows = src.rows.map((r) => buildRowByTargetHeaders(src.headers, r, targetHeaders));
+
+    // Dedupe by System+Medication_Name+Route
+    const existing = await readTabAsObjects(sheets, spreadsheetId, targetTab);
+    const existingKeys = new Set(
+      (existing.rows || []).map((r) => makeKey(r, targetHeaders, ["System", "Medication_Name", "Route"]))
+    );
+
+    const rowsToAppend = newRows.filter((r) => {
+      const k = makeKey(r, targetHeaders, ["System", "Medication_Name", "Route"]);
+      if (!k.replace(/\|\|/g, "").trim()) return false;
+      return !existingKeys.has(k);
+    });
+
+    if (rowsToAppend.length) {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${targetTab}!A1`,
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: rowsToAppend },
+      });
+    }
+
+    res.json({
+      ok: true,
+      sourceTab,
+      targetTab,
+      appended: rowsToAppend.length,
+      skippedDuplicates: newRows.length - rowsToAppend.length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+}
+
+2B) Import ENT diagnoses
+export async function importEntDiagnoses(req: Request, res: Response) {
+  try {
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
+    const sheets = authSheets();
+
+    const sourceTab = "ENT_Diagnosis_Master";
+    const targetTab = "CLINICAL_DIAGNOSES";
+
+    await ensureTab(sheets, spreadsheetId, targetTab);
+
+    const src = await readTabAsObjects(sheets, spreadsheetId, sourceTab);
+    if (!src.headers.length) throw new Error(`Source tab ${sourceTab} is empty or missing headers.`);
+
+    const tgt = await readTabAsObjects(sheets, spreadsheetId, targetTab, "A1:ZZ1");
+    const targetHeaders = tgt.headers;
+    if (!targetHeaders.length) throw new Error(`Target tab ${targetTab} missing headers.`);
+
+    const newRows = src.rows.map((r) => buildRowByTargetHeaders(src.headers, r, targetHeaders));
+
+    // Dedupe by Diagnosis_ID
+    const existing = await readTabAsObjects(sheets, spreadsheetId, targetTab);
+    const existingKeys = new Set(
+      (existing.rows || []).map((r) => makeKey(r, targetHeaders, ["Diagnosis_ID"]))
+    );
+
+    const rowsToAppend = newRows.filter((r) => {
+      const idIdx = targetHeaders.indexOf("Diagnosis_ID");
+      const id = String(r[idIdx] ?? "").trim();
+      if (!id) return false;
+      return !existingKeys.has(id);
+    });
+
+    if (rowsToAppend.length) {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${targetTab}!A1`,
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: rowsToAppend },
+      });
+    }
+
+    res.json({
+      ok: true,
+      sourceTab,
+      targetTab,
+      appended: rowsToAppend.length,
+      skippedDuplicates: newRows.length - rowsToAppend.length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+}
+
+Wire the routes
+
+Where you wire admin routes:
+
+app.post("/api/admin/sheets/import-medications", requireAdmin, importEntMedications);
+app.post("/api/admin/sheets/import-diagnoses", requireAdmin, importEntDiagnoses);
+
+Step 3: Run the imports (no copy/paste)
+Import ENT meds into CLINICAL_MEDICATIONS
+curl -X POST "https://YOUR_REPLIT_DOMAIN/api/admin/sheets/import-medications" \
+  -H "x-admin-token: admin-secret"
+
+Import ENT diagnoses into CLINICAL_DIAGNOSES
+curl -X POST "https://YOUR_REPLIT_DOMAIN/api/admin/sheets/import-diagnoses" \
+  -H "x-admin-token: admin-secret"
+
+
+You’ll get a JSON response with appended counts.
+
+Step 4: Where legacy diagnoses fit (and why importing now is great)
+
+Once CLINICAL_DIAGNOSES is populated, you immediately unlock:
+
+physician dashboard “browse diagnosis” (search by chief complaint/cluster)
+
+note generation using diagnosis metadata
+
+later: rules that output Diagnosis_ID and link into that table
+
+So yes: import diagnoses now. It strengthens the core app, even before every ENT pathway is complete.
+
+Step 5: Modifiers “bringing over” (what it means here)
+
+You’re correct: legacy modifiers aren’t well developed. That’s normal.
+
+We do this:
+
+keep expanding CLINICAL_MODIFIERS as the authoritative dictionary
+
+map current answers → encounter.modifiers at proposal time
+
+One important improvement later:
+
+stop storing answers as a string; store it as a real map in Firestore.
+
+But we can defer that; it’s not blocking meds or diagnoses import.
+
+Next action for you
+
+Do you want to implement the two import endpoints via:
+
+Dev agent patch (recommended), or
+
+paste code manually?
+
+If you say “patch”, I’ll generate a unified diff you can POST to /api/admin/dev/apply-patch and you’ll be importing meds/diagnoses in minutes.
+
+patch
+
+Got it. Here’s a single unified diff patch that adds:
+
+POST /api/admin/sheets/import-medications (imports ENT_Medications_Master → CLINICAL_MEDICATIONS)
+
+POST /api/admin/sheets/import-diagnoses (imports ENT_Diagnosis_Master → CLINICAL_DIAGNOSES)
+
+Robust header-name mapping (doesn’t assume column order)
+
+Deduping
+
+meds: System + Medication_Name + Route
+
+diagnoses: Diagnosis_ID
+
+Uses your existing authSheets(), ensureTab(), ensureHeaders() patterns
+
+Apply via your Dev Agent:
+POST /api/admin/dev/apply-patch with { "patch": "..." }
+
+diff --git a/server/admin/sheetsAgent.ts b/server/admin/sheetsAgent.ts
+index 1111111..2222222 100644
+--- a/server/admin/sheetsAgent.ts
++++ b/server/admin/sheetsAgent.ts
+@@ -1,8 +1,12 @@
+ import { google } from "googleapis";
+ import { Request, Response } from "express";
+ 
++// NOTE: This file already contains syncClinicalSheets() and helpers.
++// This patch adds two import endpoints:
++// - importEntMedications: ENT_Medications_Master -> CLINICAL_MEDICATIONS
++// - importEntDiagnoses:   ENT_Diagnosis_Master  -> CLINICAL_DIAGNOSES
++
+ const REQUIRED_QUESTION_HEADERS = [
+   "flow_id","system","chief_complaint","module","order",
+   "question_id","question_text","answer_type","required",
+   "min","max","choices","help_text","active"
+ ];
+ 
+ const REQUIRED_RULE_HEADERS = [
+   "flow_id","system","chief_complaint","module",
+   "rule_key","value_type","value","active"
+ ];
+ 
+ function authSheets() {
+   const auth = new google.auth.GoogleAuth({
+     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+     keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+   });
+   return google.sheets({ version: "v4", auth });
+ }
+ 
+ async function ensureTab(
+   sheets: any,
+   spreadsheetId: string,
+   title: string
+ ) {
+   const meta = await sheets.spreadsheets.get({ spreadsheetId });
+   const exists = meta.data.sheets?.some(
+     (s: any) => s.properties?.title === title
+   );
+   if (!exists) {
+     await sheets.spreadsheets.batchUpdate({
+       spreadsheetId,
+       requestBody: {
+         requests: [{ addSheet: { properties: { title } } }],
+       },
+     });
+   }
+ }
+ 
+ async function ensureHeaders(
+   sheets: any,
+   spreadsheetId: string,
+   tab: string,
+   headers: string[]
+ ) {
+   await sheets.spreadsheets.values.update({
+     spreadsheetId,
+     range: `${tab}!A1`,
+     valueInputOption: "RAW",
+     requestBody: { values: [headers] },
+   });
+ }
+ 
++// ----------------------------
++// Generic read + mapping helpers
++// ----------------------------
++async function readTabRaw(sheets: any, spreadsheetId: string, tab: string, a1Range = "A1:ZZ5000") {
++  const resp = await sheets.spreadsheets.values.get({
++    spreadsheetId,
++    range: `${tab}!${a1Range}`,
++    valueRenderOption: "UNFORMATTED_VALUE",
++  });
++  const values: any[][] = resp.data.values || [];
++  if (values.length === 0) return { headers: [], rows: [] };
++  const headers = (values[0] || []).map((h) => String(h ?? "").trim());
++  const rows = values.slice(1);
++  return { headers, rows };
++}
++
++function buildRowByTargetHeaders(sourceHeaders: string[], sourceRow: any[], targetHeaders: string[]) {
++  const srcIdx = (h: string) => sourceHeaders.findIndex((x) => x === h);
++  return targetHeaders.map((h) => {
++    const i = srcIdx(h);
++    return i >= 0 ? (sourceRow[i] ?? "") : "";
++  });
++}
++
++function makeKey(row: any[], headers: string[], keyCols: string[]) {
++  const idx = (h: string) => headers.indexOf(h);
++  return keyCols.map((k) => String(row[idx(k)] ?? "").trim()).join("||");
++}
++
++function hasHeader(headers: string[], name: string) {
++  return headers.includes(name);
++}
++
+ export async function syncClinicalSheets(req: Request, res: Response) {
+   try {
+     const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
+     const sheets = authSheets();
+ 
+     await ensureTab(sheets, spreadsheetId, "CLINICAL_QUESTIONS");
+     await ensureTab(sheets, spreadsheetId, "CLINICAL_RULES");
+ 
+     await ensureHeaders(
+       sheets,
+       spreadsheetId,
+       "CLINICAL_QUESTIONS",
+       REQUIRED_QUESTION_HEADERS
+     );
+     await ensureHeaders(
+       sheets,
+       spreadsheetId,
+       "CLINICAL_RULES",
+       REQUIRED_RULE_HEADERS
+     );
+ 
+     res.json({
+       ok: true,
+       message: "CLINICAL_QUESTIONS and CLINICAL_RULES ensured with headers",
+     });
+   } catch (err: any) {
+     res.status(500).json({
+       ok: false,
+       error: err.message || String(err),
+     });
+   }
+ }
++
++// ----------------------------
++// Import ENT meds -> CLINICAL_MEDICATIONS
++// ----------------------------
++export async function importEntMedications(req: Request, res: Response) {
++  try {
++    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
++    const sheets = authSheets();
++
++    const sourceTab = "ENT_Medications_Master";
++    const targetTab = "CLINICAL_MEDICATIONS";
++
++    await ensureTab(sheets, spreadsheetId, targetTab);
++
++    // Read source
++    const src = await readTabRaw(sheets, spreadsheetId, sourceTab);
++    if (!src.headers.length) throw new Error(`Source tab ${sourceTab} is empty or missing headers.`);
++
++    // Read target headers
++    const tgtHead = await readTabRaw(sheets, spreadsheetId, targetTab, "A1:ZZ1");
++    const targetHeaders = tgtHead.headers;
++    if (!targetHeaders.length) throw new Error(`Target tab ${targetTab} missing headers.`);
++
++    // Basic validation: must have System, Medication_Name, Route in target for dedupe
++    if (!hasHeader(targetHeaders, "System") || !hasHeader(targetHeaders, "Medication_Name") || !hasHeader(targetHeaders, "Route")) {
++      throw new Error(`Target tab ${targetTab} must include headers: System, Medication_Name, Route`);
++    }
++
++    // Build new rows in target schema
++    const newRows = src.rows.map((r) => buildRowByTargetHeaders(src.headers, r, targetHeaders));
++
++    // Read existing to dedupe
++    const existing = await readTabRaw(sheets, spreadsheetId, targetTab);
++    const existingKeys = new Set(
++      (existing.rows || []).map((r) => makeKey(r, targetHeaders, ["System", "Medication_Name", "Route"]))
++    );
++
++    const rowsToAppend = newRows.filter((r) => {
++      const k = makeKey(r, targetHeaders, ["System", "Medication_Name", "Route"]);
++      if (!k.replace(/\|\|/g, "").trim()) return false;
++      return !existingKeys.has(k);
++    });
++
++    if (rowsToAppend.length) {
++      await sheets.spreadsheets.values.append({
++        spreadsheetId,
++        range: `${targetTab}!A1`,
++        valueInputOption: "RAW",
++        insertDataOption: "INSERT_ROWS",
++        requestBody: { values: rowsToAppend },
++      });
++    }
++
++    res.json({
++      ok: true,
++      sourceTab,
++      targetTab,
++      scanned: newRows.length,
++      appended: rowsToAppend.length,
++      skippedDuplicates: newRows.length - rowsToAppend.length,
++    });
++  } catch (err: any) {
++    res.status(500).json({ ok: false, error: err.message || String(err) });
++  }
++}
++
++// ----------------------------
++// Import ENT diagnoses -> CLINICAL_DIAGNOSES
++// ----------------------------
++export async function importEntDiagnoses(req: Request, res: Response) {
++  try {
++    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
++    const sheets = authSheets();
++
++    const sourceTab = "ENT_Diagnosis_Master";
++    const targetTab = "CLINICAL_DIAGNOSES";
++
++    await ensureTab(sheets, spreadsheetId, targetTab);
++
++    // Read source
++    const src = await readTabRaw(sheets, spreadsheetId, sourceTab);
++    if (!src.headers.length) throw new Error(`Source tab ${sourceTab} is empty or missing headers.`);
++
++    // Read target headers
++    const tgtHead = await readTabRaw(sheets, spreadsheetId, targetTab, "A1:ZZ1");
++    const targetHeaders = tgtHead.headers;
++    if (!targetHeaders.length) throw new Error(`Target tab ${targetTab} missing headers.`);
++
++    if (!hasHeader(targetHeaders, "Diagnosis_ID")) {
++      throw new Error(`Target tab ${targetTab} must include header: Diagnosis_ID`);
++    }
++
++    const newRows = src.rows.map((r) => buildRowByTargetHeaders(src.headers, r, targetHeaders));
++
++    // Dedupe by Diagnosis_ID
++    const existing = await readTabRaw(sheets, spreadsheetId, targetTab);
++    const idIdx = targetHeaders.indexOf("Diagnosis_ID");
++    const existingIds = new Set(
++      (existing.rows || []).map((r) => String(r[idIdx] ?? "").trim()).filter(Boolean)
++    );
++
++    const rowsToAppend = newRows.filter((r) => {
++      const id = String(r[idIdx] ?? "").trim();
++      if (!id) return false;
++      return !existingIds.has(id);
++    });
++
++    if (rowsToAppend.length) {
++      await sheets.spreadsheets.values.append({
++        spreadsheetId,
++        range: `${targetTab}!A1`,
++        valueInputOption: "RAW",
++        insertDataOption: "INSERT_ROWS",
++        requestBody: { values: rowsToAppend },
++      });
++    }
++
++    res.json({
++      ok: true,
++      sourceTab,
++      targetTab,
++      scanned: newRows.length,
++      appended: rowsToAppend.length,
++      skippedDuplicates: newRows.length - rowsToAppend.length,
++    });
++  } catch (err: any) {
++    res.status(500).json({ ok: false, error: err.message || String(err) });
++  }
++}
+diff --git a/server/routes.ts b/server/routes.ts
+index 3333333..4444444 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,12 +1,19 @@
+ // ... existing imports
+-import { syncClinicalSheets } from "./admin/sheetsAgent";
++import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
+ 
+ // ... existing code
+ // requireAdmin middleware already exists in your project
+ // app.post("/api/admin/sheets/sync", requireAdmin, syncClinicalSheets);
+ 
++// Ensure tabs/headers
+ app.post("/api/admin/sheets/sync", requireAdmin, syncClinicalSheets);
++
++// Importers
++app.post("/api/admin/sheets/import-medications", requireAdmin, importEntMedications);
++app.post("/api/admin/sheets/import-diagnoses", requireAdmin, importEntDiagnoses);
+
+After applying: one-time setup
+
+Before running the diagnosis import, make sure CLINICAL_DIAGNOSES exists and has headers.
+If you haven’t created it yet, create the tab and paste the header row we discussed earlier.
+
+(If you want, tell me whether CLINICAL_DIAGNOSES already exists and I’ll give you the exact header line again.)
+
+How to run the imports
+Import ENT meds
+curl -X POST "https://YOUR_REPLIT_DOMAIN/api/admin/sheets/import-medications" \
+  -H "x-admin-token: admin-secret"
+
+Import ENT diagnoses
+curl -X POST "https://YOUR_REPLIT_DOMAIN/api/admin/sheets/import-diagnoses" \
+  -H "x-admin-token: admin-secret"
+
+
+You’ll get counts for appended vs duplicates.
+
+Next step after import
+
+Once imported, we wire the runtime to:
+
+lookup meds from CLINICAL_MEDICATIONS when generating the plan
+
+lookup diagnosis details from CLINICAL_DIAGNOSES for physician view + note generation
+
+parse answers (string) → modifiers object for pruning
+
+If you hit any patch-apply conflicts (because the file differs slightly), paste the top of server/admin/sheetsAgent.ts and the section of server/routes.ts where admin routes are registered, and I’ll reissue a patch that matches your exact code.

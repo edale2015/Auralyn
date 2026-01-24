@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage, type FlowQuestion } from "./storage";
 import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
-import { syncClinicalSheets } from "./admin/sheetsAgent";
+import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
 
 // Initialize Twilio client
@@ -706,6 +706,8 @@ export async function registerRoutes(
   };
 
   app.post("/api/admin/sheets/sync", requireAdmin, syncClinicalSheets);
+  app.post("/api/admin/sheets/import-medications", requireAdmin, importEntMedications);
+  app.post("/api/admin/sheets/import-diagnoses", requireAdmin, importEntDiagnoses);
   app.post("/api/admin/dev/run-tests", requireAdmin, runTests);
   app.post("/api/admin/dev/apply-patch", requireAdmin, applyPatch);
 
