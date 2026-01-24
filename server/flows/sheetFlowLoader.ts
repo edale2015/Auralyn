@@ -76,7 +76,7 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  const range = `ENT_FLU_QUESTIONS!A1:K1000`;
+  const range = `CLINICAL_QUESTIONS!A1:K1000`;
 
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -86,7 +86,7 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
 
   const values = resp.data.values || [];
   if (values.length < 2) {
-    throw new Error(`ENT_FLU_QUESTIONS appears empty or missing rows (range ${range})`);
+    throw new Error(`CLINICAL_QUESTIONS appears empty or missing rows (range ${range})`);
   }
 
   const header = values[0].map((h) => String(h ?? "").trim());
@@ -116,7 +116,7 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
 
   const missing = requiredCols.filter(([, n]) => n < 0).map(([k]) => k);
   if (missing.length) {
-    throw new Error(`ENT_FLU_QUESTIONS missing required headers: ${missing.join(", ")}`);
+    throw new Error(`CLINICAL_QUESTIONS missing required headers: ${missing.join(", ")}`);
   }
 
   const rows = values.slice(1);

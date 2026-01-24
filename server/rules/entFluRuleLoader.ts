@@ -84,7 +84,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   });
 
   const sheets = google.sheets({ version: "v4", auth });
-  const range = `ENT_FLU_RULES!A1:E500`;
+  const range = `CLINICAL_RULES!A1:E500`;
 
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -93,7 +93,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   });
 
   const values = resp.data.values || [];
-  if (values.length < 2) throw new Error("ENT_FLU_RULES is empty or missing.");
+  if (values.length < 2) throw new Error("CLINICAL_RULES is empty or missing.");
 
   const header = values[0].map((h) => String(h ?? "").trim());
   const idx = (name: string) => header.indexOf(name);
@@ -104,7 +104,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   const iActive = idx("active");
 
   if ([iKey, iType, iVal, iActive].some((n) => n < 0)) {
-    throw new Error("ENT_FLU_RULES missing required headers: rule_key, value_type, value, active");
+    throw new Error("CLINICAL_RULES missing required headers: rule_key, value_type, value, active");
   }
 
   const rules: Record<string, any> = {};
@@ -125,7 +125,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   
   const ruleCount = Object.keys(rules).length;
   if (ruleCount === 0) {
-    console.warn(`[EntFluRules] WARNING: No active rules found in ENT_FLU_RULES sheet. Check that:
+    console.warn(`[EntFluRules] WARNING: No active rules found in CLINICAL_RULES sheet. Check that:
   - active column is "Y" for rules you want to include
   - rule_key is not empty
   Defaults will be used for all clinical rules.`);
