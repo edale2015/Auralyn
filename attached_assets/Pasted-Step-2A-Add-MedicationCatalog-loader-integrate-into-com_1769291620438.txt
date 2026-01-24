@@ -1,0 +1,337 @@
+Step 2A: Add MedicationCatalog loader + integrate into computeProposal
+Patch overview
+
+This patch will:
+
+Add server/meds/medCatalog.ts
+
+loads CLINICAL_MEDICATIONS (cached 5 min)
+
+builds lookup map by normalized Medication_Name
+
+returns structured med objects
+
+Update computeProposal(a):
+
+creates modifiers already persisted (you just did)
+
+uses catalog to look up meds and produce structured medsDetailed
+
+applies pruning rules using your modifiers:
+
+pregnant → block NSAIDs
+
+htn/anxiety → block pseudoephedrine/phenylephrine
+
+ssri_snri → block dextromethorphan
+
+allergies list → block matching names/classes (basic string match first pass)
+
+Keeps backwards compatibility:
+
+still returns meds: string[] for now (so nothing downstream breaks)
+
+adds new fields:
+
+medsDetailed
+
+avoidDetailed
+
+So your UI won’t break, but you immediately see the richer structure in Firestore and can start displaying it.
+
+✅ Patch (apply via Dev Agent)
+diff --git a/server/meds/medCatalog.ts b/server/meds/medCatalog.ts
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/server/meds/medCatalog.ts
+@@ -0,0 +1,178 @@
++import { google } from "googleapis";
++
++export type MedRow = {
++  System?: string;
++  Medication_Name: string;
++  Medication_Group?: string;
++  Indications_Cluster?: string;
++  First_Line?: string;
++  Adult_Dose?: string;
++  Adult_Max_Dose?: string;
++  Pediatric_Dose?: string;
++  Pregnancy_Considerations?: string;
++  Contraindications?: string;
++  Key_Interactions?: string;
++  Common_Side_Effects?: string;
++  Route?: string;
++  Renal_Adjust?: string;
++  Hepatic_Adjust?: string;
++  Notes?: string;
++  Active?: string;
++};
++
++type CacheEntry = { expiresAt: number; byName: Map<string, MedRow[]> };
++let CACHE: CacheEntry = { expiresAt: 0, byName: new Map() };
++const TTL_MS = 5 * 60 * 1000;
++
++function envOrThrow(name: string): string {
++  const v = process.env[name];
++  if (!v) throw new Error(`Missing env var: ${name}`);
++  return v;
++}
++
++function norm(s: any): string {
++  return String(s ?? "").trim().toLowerCase();
++}
++
++function authSheets() {
++  const auth = new google.auth.GoogleAuth({
++    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
++    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
++  });
++  return google.sheets({ version: "v4", auth });
++}
++
++function rowToObj(headers: string[], row: any[]): MedRow {
++  const obj: any = {};
++  headers.forEach((h, i) => {
++    obj[h] = row[i] ?? "";
++  });
++  return obj as MedRow;
++}
++
++export async function getMedicationCatalog(): Promise<Map<string, MedRow[]>> {
++  const now = Date.now();
++  if (CACHE.expiresAt > now) return CACHE.byName;
++
++  const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
++  const sheets = authSheets();
++  const range = `CLINICAL_MEDICATIONS!A1:ZZ5000`;
++
++  const resp = await sheets.spreadsheets.values.get({
++    spreadsheetId,
++    range,
++    valueRenderOption: "UNFORMATTED_VALUE",
++  });
++
++  const values: any[][] = resp.data.values || [];
++  if (values.length < 2) {
++    CACHE = { expiresAt: now + TTL_MS, byName: new Map() };
++    return CACHE.byName;
++  }
++
++  const headers = values[0].map((h) => String(h ?? "").trim());
++  const rows = values.slice(1);
++
++  const byName = new Map<string, MedRow[]>();
++  const nameIdx = headers.indexOf("Medication_Name");
++  if (nameIdx < 0) {
++    throw new Error("CLINICAL_MEDICATIONS missing header Medication_Name");
++  }
++
++  for (const r of rows) {
++    const name = norm(r[nameIdx]);
++    if (!name) continue;
++    const obj = rowToObj(headers, r);
++    // optional active filter (if column exists)
++    const active = norm((obj as any).Active || (obj as any).active);
++    if (active && active !== "y" && active !== "yes" && active !== "true") {
++      // treat any explicit non-active as inactive
++      // if Active is blank, we still include
++      continue;
++    }
++    const list = byName.get(name) || [];
++    list.push(obj);
++    byName.set(name, list);
++  }
++
++  CACHE = { expiresAt: now + TTL_MS, byName };
++  return byName;
++}
++
++export function pickBestMed(rows: MedRow[], preferredRoute?: string): MedRow {
++  if (!rows.length) throw new Error("No rows");
++  if (preferredRoute) {
++    const match = rows.find((r) => norm(r.Route) === norm(preferredRoute));
++    if (match) return match;
++  }
++  return rows[0];
++}
++
++export function medMatchesAllergy(medName: string, allergies: string[]): boolean {
++  const n = norm(medName);
++  for (const a of allergies) {
++    const al = norm(a);
++    if (!al) continue;
++    // simple containment match (first pass). We can improve later with class mapping.
++    if (n.includes(al) || al.includes(n)) return true;
++  }
++  return false;
++}
++
++export function shouldAvoidMedByModifiers(medName: string, modifiers: any): string | null {
++  const n = norm(medName);
++  if (modifiers?.pregnant) {
++    if (n.includes("ibuprofen") || n.includes("naproxen") || n.includes("nsaid")) {
++      return "Pregnancy: avoid NSAIDs unless physician-directed.";
++    }
++  }
++  if (modifiers?.htn || modifiers?.anxiety) {
++    if (n.includes("pseudoephedrine") || n.includes("phenylephrine")) {
++      return "HTN/anxiety: avoid oral decongestants (pseudoephedrine/phenylephrine).";
++    }
++  }
++  if (modifiers?.ssri_snri) {
++    if (n.includes("dextromethorphan")) {
++      return "SSRI/SNRI: avoid dextromethorphan (serotonergic risk).";
++    }
++  }
++  return null;
++}
++
+diff --git a/server/routes.ts b/server/routes.ts
+index 2222222..3333333 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,6 +1,7 @@
+ // ... existing imports
++import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers } from "./meds/medCatalog";
+ 
+ async function computeProposal(a: Record<string, any>) {
+   // ... loads rules from sheets
+   // ... checks red flags: a.RF_SOB, a.RF_CP, a.RF_NEURO, a.RF_DEHY
+   // ... checks symptoms: a.FEVER, a.ACHES, a.ONSET_DAYS, etc.
+   // ... checks modifiers: a.SSRI, a.HTN, a.PREGNANT, a.ANXIETY
+   // ... returns { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition, rulesVersion }
+@@ -110,6 +111,64 @@ async function computeProposal(a: Record<string, any>) {
+   const paxlovidFlag = a.COVID_POS === "yes";
+ 
+-  const meds: string[] = ["acetaminophen", "saline nasal spray", "guaifenesin"];
+-  const avoid: string[] = [];
+-
+-  if (a.SSRI) avoid.push("dextromethorphan");
+-  if (a.HTN || a.ANXIETY) avoid.push("pseudoephedrine / phenylephrine");
+-  if (a.PREGNANT) avoid.push("NSAIDs");
++  // Base med candidates (deterministic). We now enrich via CLINICAL_MEDICATIONS.
++  const meds: string[] = ["acetaminophen", "saline nasal spray", "guaifenesin"];
++  const avoid: string[] = [];
++
++  // Keep legacy avoid list (backwards compatibility)
++  if (a.SSRI) avoid.push("dextromethorphan");
++  if (a.HTN || a.ANXIETY) avoid.push("pseudoephedrine / phenylephrine");
++  if (a.PREGNANT) avoid.push("NSAIDs");
++
++  // New: structured meds using catalog + modifiers
++  const modifiers = buildModifiersFromAnswers(a); // already defined above in this file
++  const allergies = modifiers.allergies || [];
++
++  let medsDetailed: any[] = [];
++  let avoidDetailed: any[] = [];
++
++  try {
++    const catalog = await getMedicationCatalog();
++
++    // Add structured meds
++    for (const m of meds) {
++      const rows = catalog.get(String(m).trim().toLowerCase()) || [];
++      if (!rows.length) {
++        medsDetailed.push({ name: m, source: "fallback", note: "Not found in CLINICAL_MEDICATIONS yet." });
++        continue;
++      }
++      const picked = pickBestMed(rows);
++
++      // allergy check
++      if (medMatchesAllergy(picked.Medication_Name, allergies)) {
++        avoidDetailed.push({
++          name: picked.Medication_Name,
++          reason: "Allergy match",
++          details: picked.Contraindications || "",
++        });
++        continue;
++      }
++
++      const avoidReason = shouldAvoidMedByModifiers(picked.Medication_Name, modifiers);
++      if (avoidReason) {
++        avoidDetailed.push({
++          name: picked.Medication_Name,
++          reason: avoidReason,
++          details: picked.Pregnancy_Considerations || picked.Contraindications || "",
++        });
++        continue;
++      }
++
++      medsDetailed.push({
++        name: picked.Medication_Name,
++        group: picked.Medication_Group || "",
++        route: picked.Route || "",
++        pregnancy: picked.Pregnancy_Considerations || "",
++        contraindications: picked.Contraindications || "",
++        interactions: picked.Key_Interactions || "",
++        notes: picked.Notes || "",
++      });
++    }
++
++    // Add structured avoids from legacy avoid list (strings)
++    for (const av of avoid) {
++      avoidDetailed.push({ name: av, reason: "Rule-based avoid", details: "" });
++    }
++  } catch (e: any) {
++    // If catalog load fails, keep old behavior only
++    console.warn("[CLINICAL_MEDICATIONS] lookup failed, continuing with legacy meds/avoid:", e?.message || e);
++  }
+ 
+   const disposition = redFlag ? redFlagDisposition : nonRedFlagDisposition;
+ 
+   const tests: string[] = [];
+   if (proposeCovidTest) tests.push("COVID test (if available)");
+   if (tamifluEligible && proposeFluTestIfTamiflu) tests.push("Influenza test (if available)");
+ 
+   return {
+     redFlag,
+     tamifluEligible,
+     paxlovidFlag,
+     disposition,
+     tests,
+     meds,
+     avoid,
++    medsDetailed,
++    avoidDetailed,
+     rulesVersion: rules.RULES_VERSION ?? defaults.RULES_VERSION,
+   };
+ }
+
+After applying Step 2A
+
+Run one ENT flu intake and then check Firestore encounter:
+
+You should see in proposal:
+
+meds (string list, still present)
+
+avoid (string list, still present)
+
+medsDetailed (structured objects)
+
+avoidDetailed (structured objects)
+
+Even with only 11 meds imported, you’ll immediately see:
+
+which meds were found vs “not found yet”
+
+which were pruned for pregnancy/HTN/SSRI/allergies
+
+That’s the right feedback loop while importing the full catalog.
+
+Next: Admin endpoint to import all meds (ENT first, then all systems)
+
+You already have tab naming convention. Next patch after Step 2A will add:
+
+POST /api/admin/sheets/import-medications-all
+
+scans all tabs ending _Medications_Master
+
+imports into CLINICAL_MEDICATIONS
+
+But for now, since you imported ENT, we can validate integration first.
+
+Reply “patch” if you want this Step 2A patch applied
+
+Or if you want me to adjust med matching logic to use a stronger key (e.g., exact match on Medication_Name case), tell me how the names appear in CLINICAL_MEDICATIONS (e.g., “Acetaminophen” vs “acetaminophen”).

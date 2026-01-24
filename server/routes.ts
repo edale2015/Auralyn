@@ -5,6 +5,7 @@ import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
+import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers } from "./meds/medCatalog";
 
 // Initialize Twilio client
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -156,12 +157,71 @@ async function computeProposal(a: Record<string, any>) {
 
   const paxlovidFlag = a.COVID_POS === "yes";
 
+  // Base med candidates (deterministic)
   const meds: string[] = ["acetaminophen", "saline nasal spray", "guaifenesin"];
   const avoid: string[] = [];
 
+  // Legacy avoid list (backwards compatibility)
   if (a.SSRI === true) avoid.push("dextromethorphan");
   if (a.HTN === true || a.ANXIETY === true) avoid.push("pseudoephedrine/phenylephrine");
   if (a.PREGNANT === true) avoid.push("ibuprofen/NSAIDs");
+
+  // New: structured meds using catalog + modifiers
+  const modifiers = buildModifiersFromAnswers(a);
+  const allergies = modifiers.allergies || [];
+
+  let medsDetailed: any[] = [];
+  let avoidDetailed: any[] = [];
+
+  try {
+    const catalog = await getMedicationCatalog();
+
+    for (const m of meds) {
+      const rows = catalog.get(String(m).trim().toLowerCase()) || [];
+      if (!rows.length) {
+        medsDetailed.push({ name: m, source: "fallback", note: "Not found in CLINICAL_MEDICATIONS yet." });
+        continue;
+      }
+      const picked = pickBestMed(rows);
+
+      // allergy check
+      if (medMatchesAllergy(picked.Medication_Name, allergies)) {
+        avoidDetailed.push({
+          name: picked.Medication_Name,
+          reason: "Allergy match",
+          details: picked.Contraindications || "",
+        });
+        continue;
+      }
+
+      const avoidReason = shouldAvoidMedByModifiers(picked.Medication_Name, modifiers);
+      if (avoidReason) {
+        avoidDetailed.push({
+          name: picked.Medication_Name,
+          reason: avoidReason,
+          details: picked.Pregnancy_Considerations || picked.Contraindications || "",
+        });
+        continue;
+      }
+
+      medsDetailed.push({
+        name: picked.Medication_Name,
+        group: picked.Medication_Group || "",
+        route: picked.Route || "",
+        pregnancy: picked.Pregnancy_Considerations || "",
+        contraindications: picked.Contraindications || "",
+        interactions: picked.Key_Interactions || "",
+        notes: picked.Notes || "",
+      });
+    }
+
+    // Add structured avoids from legacy avoid list
+    for (const av of avoid) {
+      avoidDetailed.push({ name: av, reason: "Rule-based avoid", details: "" });
+    }
+  } catch (e: any) {
+    console.warn("[CLINICAL_MEDICATIONS] lookup failed, continuing with legacy meds/avoid:", e?.message || e);
+  }
 
   const disposition = redFlag ? redFlagDisposition : nonRedFlagDisposition;
 
@@ -169,7 +229,7 @@ async function computeProposal(a: Record<string, any>) {
   if (proposeCovidTest) tests.push("COVID antigen/NAAT (if available)");
   if (tamifluEligible && proposeFluTestIfTamiflu) tests.push("Influenza test (if available)");
 
-  return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition, rulesVersion };
+  return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, medsDetailed, avoidDetailed, tests, disposition, rulesVersion };
 }
 
 // Build physician summary for review

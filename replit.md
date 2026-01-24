@@ -158,6 +158,22 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-24: Medication catalog integration (Step 2A)
+  - New loader: `server/meds/medCatalog.ts` - loads CLINICAL_MEDICATIONS with 5-min cache
+  - `computeProposal()` now returns `medsDetailed` and `avoidDetailed` structured objects
+  - Medication pruning via modifiers: pregnancy blocks NSAIDs, HTN/anxiety blocks decongestants, SSRI blocks dextromethorphan
+  - Allergy matching: compares patient allergies against medication names
+  - Fallback tracking: shows which meds aren't in catalog yet
+  - Legacy `meds`/`avoid` arrays preserved for backward compatibility
+- 2026-01-24: Patient modifiers extraction (Step 1)
+  - New function `buildModifiersFromAnswers()` extracts structured modifiers from questionnaire answers
+  - Modifiers include: pregnant, htn, anxiety, ssri_snri, allergies[], onset_days, demographics
+  - Persisted to encounter for audit trail and medication pruning
+- 2026-01-24: Consolidated clinical data tabs and import endpoints
+  - CLINICAL_QUESTIONS, CLINICAL_RULES, CLINICAL_MEDICATIONS, CLINICAL_DIAGNOSES
+  - Import endpoints: POST /api/admin/sheets/import-medications, /api/admin/sheets/import-diagnoses
+  - Deduplication: Medications by System+Medication_Name+Route, Diagnoses by Diagnosis_ID
+  - Admin auth via x-admin-token header
 - 2026-01-22: Enhanced rules loader with validation and auditability
   - Schema validation: warns on invalid values (e.g., "two" for number), uses defaults safely
   - Rules version tracking: `RULES_VERSION` row stored in proposal for audit trail
