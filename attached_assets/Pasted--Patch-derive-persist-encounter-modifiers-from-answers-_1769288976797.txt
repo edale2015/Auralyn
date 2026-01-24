@@ -1,0 +1,145 @@
+✅ Patch: derive + persist encounter.modifiers from answers
+What this patch does
+
+Adds a small helper buildModifiersFromAnswers(a)
+
+When you compute the proposal (at both call sites you mentioned: lines ~461 and ~648), it:
+
+builds modifiers
+
+writes encounter.modifiers = modifiers
+
+includes modifiers in the update payload alongside proposal/status
+
+Does not change your existing logic yet
+
+Keeps everything deterministic
+
+Unified diff patch
+
+Apply with /api/admin/dev/apply-patch
+
+diff --git a/server/routes.ts b/server/routes.ts
+index 1111111..2222222 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,6 +1,7 @@
+ // ... existing imports
++// (no new external deps required)
+
++function normalizeAllergies(raw: any): string[] {
++  if (!raw) return [];
++  const s = String(raw).trim();
++  if (!s) return [];
++  // split on commas/semicolons/newlines
++  return s
++    .split(/[,;\n]+/)
++    .map((x) => x.trim())
++    .filter(Boolean);
++}
++
++function buildModifiersFromAnswers(a: Record<string, any>) {
++  // Keep this small and deterministic. Expand later via CLINICAL_MODIFIERS.
++  const onsetDays =
++    typeof a.ONSET_DAYS === "number" ? a.ONSET_DAYS : Number(a.ONSET_DAYS);
++
++  return {
++    // Core demographics (optional now, expand later)
++    age: a.AGE ?? null,
++    sex_assigned_at_birth: a.SEX_ASSIGNED_AT_BIRTH ?? null,
++    gender_identity: a.GENDER_IDENTITY ?? null,
++
++    // Key safety modifiers for meds
++    pregnant: !!a.PREGNANT,
++    htn: !!a.HTN,
++    anxiety: !!a.ANXIETY,
++    ssri_snri: !!a.SSRI,
++
++    allergies: normalizeAllergies(a.ALLERGIES),
++
++    // Helpful for future ENT modules / meds and diagnosis logic
++    smoking_status: a.SMOKING_STATUS ?? null,
++    alcohol_use: a.ALCOHOL_USE ?? null,
++    drug_use: a.DRUG_USE ?? null,
++    family_history: a.FAMILY_HISTORY ?? null,
++    pmh: a.PMH ?? null,
++    current_meds: a.CURRENT_MEDS ?? null,
++
++    onset_days: Number.isFinite(onsetDays) ? onsetDays : null,
++  };
++}
++
+ async function computeProposal(a: Record<string, any>) {
+   // ... loads rules from sheets
+   // ... checks red flags: a.RF_SOB, a.RF_CP, a.RF_NEURO, a.RF_DEHY
+   // ... checks symptoms: a.FEVER, a.ACHES, a.ONSET_DAYS, etc.
+   // ... checks modifiers: a.SSRI, a.HTN, a.PREGNANT, a.ANXIETY
+   // ... returns { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, tests, disposition, rulesVersion }
+ }
+@@ -440,10 +492,20 @@
+   // ... inside WhatsApp intake finalize (first call site around line ~461)
+   // a is already parsed answers object
+-  const proposal = await computeProposal(a);
++  const proposal = await computeProposal(a);
++  const modifiers = buildModifiersFromAnswers(a);
+ 
+   // ... update encounter for physician review
+   await storage.updateEncounter(encounter.id, {
+     status: "pending_review",
+     proposal,
++    modifiers,
+     // ... any other fields already set here (physicianSummary, etc.)
+   });
+@@ -628,10 +690,20 @@
+   // ... second call site around line ~648 (likely physician approval or follow-up finalize)
+   // a is already parsed answers object
+-  const proposal = await computeProposal(a);
++  const proposal = await computeProposal(a);
++  const modifiers = buildModifiersFromAnswers(a);
+ 
+   await storage.updateEncounter(encounter.id, {
+     // keep existing status transitions as-is
+     proposal,
++    modifiers,
+     // ... other fields
+   });
+
+Notes about this patch
+
+It assumes you have storage.updateEncounter(encounter.id, {...}) at both call sites. If your update calls are slightly different, the patch may need a tiny adjustment.
+
+It does not require changing Firestore rules or schema.
+
+It will immediately make encounters easier to audit: you’ll see a stable modifiers object next to the raw answers.
+
+✅ After applying: verify quickly
+
+Run a WhatsApp intake to completion
+
+Open the resulting Firestore encounter doc
+
+Confirm a new field exists:
+
+modifiers with keys like pregnant, htn, ssri_snri, allergies[]
+
+That confirms Step 1 is done.
+
+What comes next (Step 2: meds lookup + pruning using CLINICAL_MEDICATIONS)
+
+Once modifiers exist, we can safely do medication integration:
+
+Load CLINICAL_MEDICATIONS into a cached catalog
+
+Replace meds: string[] with structured meds:
+
+name, group, route, notes, pregnancy considerations
+
+Prune using encounter.modifiers + contraindications
+
+We’ll implement that as another patch right after you confirm the modifiers field appears in Firestore.
+
+One small question before you apply
+
+Do your two updateEncounter calls already include a proposal object in the payload (exactly as shown), or do you wrap it under something like encounter.proposal?
+
+If it’s standard proposal, go ahead and apply the patch as-is.

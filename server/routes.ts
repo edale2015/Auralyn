@@ -79,6 +79,37 @@ function parseAnswer(type: string, raw: string): boolean | number | string | nul
   return raw.trim();
 }
 
+// Normalize allergies from free-text input
+function normalizeAllergies(raw: any): string[] {
+  if (!raw) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  return s.split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean);
+}
+
+// Build modifiers object from answers for medication pruning and audit
+function buildModifiersFromAnswers(a: Record<string, any>) {
+  const onsetDays = typeof a.ONSET_DAYS === "number" ? a.ONSET_DAYS : Number(a.ONSET_DAYS);
+
+  return {
+    age: a.AGE ?? null,
+    sex_assigned_at_birth: a.SEX_ASSIGNED_AT_BIRTH ?? null,
+    gender_identity: a.GENDER_IDENTITY ?? null,
+    pregnant: !!a.PREGNANT,
+    htn: !!a.HTN,
+    anxiety: !!a.ANXIETY,
+    ssri_snri: !!a.SSRI,
+    allergies: normalizeAllergies(a.ALLERGIES),
+    smoking_status: a.SMOKING_STATUS ?? null,
+    alcohol_use: a.ALCOHOL_USE ?? null,
+    drug_use: a.DRUG_USE ?? null,
+    family_history: a.FAMILY_HISTORY ?? null,
+    pmh: a.PMH ?? null,
+    current_meds: a.CURRENT_MEDS ?? null,
+    onset_days: Number.isFinite(onsetDays) ? onsetDays : null,
+  };
+}
+
 // Compute medical proposal based on answers (now uses sheet-driven rules with fallback)
 async function computeProposal(a: Record<string, any>) {
   const defaults = {
@@ -460,6 +491,7 @@ export async function registerRoutes(
           // Compute proposal and finalize
           const proposal = await computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
+          const modifiers = buildModifiersFromAnswers(answers);
           
           // Determine urgency based on red flags
           const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
@@ -468,6 +500,7 @@ export async function registerRoutes(
             answers: JSON.stringify(answers),
             proposal: JSON.stringify(proposal),
             physicianSummary: JSON.stringify(physicianSummary),
+            modifiers: JSON.stringify(modifiers),
             status: "pending_review",
             urgencyLevel,
             chiefComplaint: "Flu-like symptoms / URI",
@@ -647,12 +680,14 @@ export async function registerRoutes(
           // Finalize
           const proposal = await computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
+          const modifiers = buildModifiersFromAnswers(answers);
           const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
           
           await storage.updateEncounter(encounter.id, {
             answers: JSON.stringify(answers),
             proposal: JSON.stringify(proposal),
             physicianSummary: JSON.stringify(physicianSummary),
+            modifiers: JSON.stringify(modifiers),
             status: "pending_review",
             urgencyLevel,
             chiefComplaint: "Flu-like symptoms / URI",
