@@ -1,0 +1,56 @@
+export async function importEntMedications(req: Request, res: Response) {
+  try {
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID!;
+    const sheets = authSheets();
+
+    const sourceTab = "ENT_Medications_Master";
+    const targetTab = "CLINICAL_MEDICATIONS";
+
+    // Ensure target exists
+    await ensureTab(sheets, spreadsheetId, targetTab);
+
+    // Read source
+    const src = await readTabAsObjects(sheets, spreadsheetId, sourceTab);
+    if (!src.headers.length) throw new Error(`Source tab ${sourceTab} is empty or missing headers.`);
+
+    // Read target headers from row 1
+    const tgt = await readTabAsObjects(sheets, spreadsheetId, targetTab, "A1:ZZ1");
+    const targetHeaders = tgt.headers;
+    if (!targetHeaders.length) throw new Error(`Target tab ${targetTab} missing headers.`);
+
+    // Build new rows in target schema
+    const newRows = src.rows.map((r) => buildRowByTargetHeaders(src.headers, r, targetHeaders));
+
+    // Dedupe by System+Medication_Name+Route
+    const existing = await readTabAsObjects(sheets, spreadsheetId, targetTab);
+    const existingKeys = new Set(
+      (existing.rows || []).map((r) => makeKey(r, targetHeaders, ["System", "Medication_Name", "Route"]))
+    );
+
+    const rowsToAppend = newRows.filter((r) => {
+      const k = makeKey(r, targetHeaders, ["System", "Medication_Name", "Route"]);
+      if (!k.replace(/\|\|/g, "").trim()) return false;
+      return !existingKeys.has(k);
+    });
+
+    if (rowsToAppend.length) {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${targetTab}!A1`,
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: rowsToAppend },
+      });
+    }
+
+    res.json({
+      ok: true,
+      sourceTab,
+      targetTab,
+      appended: rowsToAppend.length,
+      skippedDuplicates: newRows.length - rowsToAppend.length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+}
