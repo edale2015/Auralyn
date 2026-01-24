@@ -76,7 +76,7 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
   }
 
   const sheets = google.sheets({ version: "v4", auth });
-  const range = `CLINICAL_QUESTIONS!A1:K1000`;
+  const range = `CLINICAL_QUESTIONS!A1:N1000`;
 
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId,

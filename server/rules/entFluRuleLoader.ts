@@ -84,7 +84,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   });
 
   const sheets = google.sheets({ version: "v4", auth });
-  const range = `CLINICAL_RULES!A1:E500`;
+  const range = `CLINICAL_RULES!A1:H500`;
 
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId,
