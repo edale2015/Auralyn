@@ -186,18 +186,23 @@ export async function importEntDiagnoses(req: Request, res: Response) {
     const src = await readTabRaw(sheets, spreadsheetId, sourceTab);
     if (!src.headers.length) throw new Error(`Source tab ${sourceTab} is empty or missing headers.`);
 
-    const tgtHead = await readTabRaw(sheets, spreadsheetId, targetTab, "A1:ZZ1");
-    const targetHeaders = tgtHead.headers;
-    if (!targetHeaders.length) throw new Error(`Target tab ${targetTab} missing headers.`);
+    let tgtHead = await readTabRaw(sheets, spreadsheetId, targetTab, "A1:ZZ1");
+    let targetHeaders = tgtHead.headers;
+    
+    if (!targetHeaders.length) {
+      await ensureHeaders(sheets, spreadsheetId, targetTab, src.headers);
+      targetHeaders = src.headers;
+    }
 
-    if (!hasHeader(targetHeaders, "Diagnosis_ID")) {
-      throw new Error(`Target tab ${targetTab} must include header: Diagnosis_ID`);
+    const diagIdCol = targetHeaders.find(h => h === "Diagnosis_ID" || h === "Diagnosis ID");
+    if (!diagIdCol) {
+      throw new Error(`Target tab ${targetTab} must include header: Diagnosis_ID or Diagnosis ID`);
     }
 
     const newRows = src.rows.map((r) => buildRowByTargetHeaders(src.headers, r, targetHeaders));
 
     const existing = await readTabRaw(sheets, spreadsheetId, targetTab);
-    const idIdx = targetHeaders.indexOf("Diagnosis_ID");
+    const idIdx = targetHeaders.indexOf(diagIdCol);
     const existingIds = new Set(
       (existing.rows || []).map((r) => String(r[idIdx] ?? "").trim()).filter(Boolean)
     );
