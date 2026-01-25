@@ -1,0 +1,162 @@
+diff --git a/server/diagnoses/diagnosisCatalog.ts b/server/diagnoses/diagnosisCatalog.ts
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/server/diagnoses/diagnosisCatalog.ts
+@@ -0,0 +1,162 @@
++import { google } from "googleapis";
++
++export type DiagnosisRow = Record<string, any>;
++
++type CacheEntry = { expiresAt: number; byId: Map<string, DiagnosisRow> };
++let CACHE: CacheEntry = { expiresAt: 0, byId: new Map() };
++const TTL_MS = 5 * 60 * 1000;
++
++function envOrThrow(name: string): string {
++  const v = process.env[name];
++  if (!v) throw new Error(`Missing env var: ${name}`);
++  return v;
++}
++
++function authSheets() {
++  const auth = new google.auth.GoogleAuth({
++    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
++    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
++  });
++  return google.sheets({ version: "v4", auth });
++}
++
++function norm(s: any) {
++  return String(s ?? "").trim();
++}
++
++export async function getDiagnosisCatalog(): Promise<Map<string, DiagnosisRow>> {
++  const now = Date.now();
++  if (CACHE.expiresAt > now) return CACHE.byId;
++
++  const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
++  const sheets = authSheets();
++  const range = `CLINICAL_DIAGNOSES!A1:ZZ5000`;
++
++  const resp = await sheets.spreadsheets.values.get({
++    spreadsheetId,
++    range,
++    valueRenderOption: "UNFORMATTED_VALUE",
++  });
++
++  const values: any[][] = resp.data.values || [];
++  if (values.length < 2) {
++    CACHE = { expiresAt: now + TTL_MS, byId: new Map() };
++    return CACHE.byId;
++  }
++
++  const headers = values[0].map((h) => String(h ?? "").trim());
++  const rows = values.slice(1);
++
++  const idIdx = headers.indexOf("Diagnosis_ID");
++  if (idIdx < 0) throw new Error("CLINICAL_DIAGNOSES missing header Diagnosis_ID");
++
++  const byId = new Map<string, DiagnosisRow>();
++  for (const r of rows) {
++    const id = norm(r[idIdx]);
++    if (!id) continue;
++    const obj: any = {};
++    headers.forEach((h, i) => (obj[h] = r[i] ?? ""));
++    // optional active filter
++    const activeVal = norm(obj.Active ?? obj.active);
++    if (activeVal && activeVal.toUpperCase() === "N") continue;
++    byId.set(id, obj);
++  }
++
++  CACHE = { expiresAt: now + TTL_MS, byId };
++  return byId;
++}
++
++export function pickDiagnosisDetails(byId: Map<string, DiagnosisRow>, ids: string[]) {
++  const out: DiagnosisRow[] = [];
++  for (const id of ids || []) {
++    const row = byId.get(id);
++    if (row) out.push(row);
++  }
++  return out;
++}
++
+diff --git a/server/routes.ts b/server/routes.ts
+index 3333333..4444444 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,6 +1,7 @@
+ // ... existing imports
+ import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers } from "./meds/medCatalog";
++import { getDiagnosisCatalog, pickDiagnosisDetails } from "./diagnoses/diagnosisCatalog";
+ 
++function isFluSeason(d: Date) {
++  // Nov–Mar inclusive
++  const m = d.getMonth(); // 0=Jan
++  return m === 10 || m === 11 || m === 0 || m === 1 || m === 2;
++}
++
+ async function computeProposal(a: Record<string, any>) {
+   // ... loads rules from sheets
+   // ... checks red flags: a.RF_SOB, a.RF_CP, a.RF_NEURO, a.RF_DEHY
+@@ -150,6 +160,27 @@ async function computeProposal(a: Record<string, any>) {
+   // New: structured meds using catalog + modifiers
+   const modifiers = buildModifiersFromAnswers(a); // already defined above in this file
+   const allergies = modifiers.allergies || [];
+ 
++  // ----------------------------
++  // Diagnosis assignment (deterministic)
++  // ----------------------------
++  const diagnosis_ids: string[] = ["ENT_VIRAL_SYNDROME"];
++  let presentation_label = "Viral syndrome";
++
++  // You wanted: during flu season Nov–Mar, if fever + body aches/fatigue -> "flu-like symptoms"
++  // In this flow, ACHES is "Body aches or marked fatigue?"
++  const fluLike = !!a.FEVER && !!a.ACHES;
++  if (isFluSeason(new Date()) && fluLike) {
++    presentation_label = "Flu-like viral syndrome";
++  } else if (fluLike) {
++    presentation_label = "Flu-like symptoms";
++  }
++
+   let medsDetailed: any[] = [];
+   let avoidDetailed: any[] = [];
+ 
+   try {
+@@ -228,6 +259,8 @@ async function computeProposal(a: Record<string, any>) {
+     paxlovidFlag,
+     disposition,
+     tests,
+     meds,
+     avoid,
+     medsDetailed,
+     avoidDetailed,
++    diagnosis_ids,
++    presentation_label,
+     rulesVersion: rules.RULES_VERSION ?? defaults.RULES_VERSION,
+   };
+ }
+ 
+@@ -1,0 +1,0 @@
+diff --git a/server/routes.ts b/server/routes.ts
+index 4444444..5555555 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -720,6 +753,60 @@
+   // existing API routes...
+ 
++  // ----------------------------
++  // Augment encounter detail with diagnosisDetails (physician display + notes)
++  // ----------------------------
++  // Find the existing handler for:
++  // GET /api/encounters/:id
++  // and add the block below just before res.json(...)
++
++  // (PATCH NOTE): If your project already has this route defined elsewhere,
++  // move this logic into that handler instead.
++
+diff --git a/server/routes.ts b/server/routes.ts
+index 5555555..6666666 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,0 +1,0 @@
