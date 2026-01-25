@@ -5,7 +5,7 @@ import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
-import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers } from "./meds/medCatalog";
+import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses } from "./meds/medCatalog";
 import { getDiagnosisCatalog } from "./meds/diagnosisCatalog";
 
 // Initialize Twilio client
@@ -253,9 +253,49 @@ async function computeProposal(a: Record<string, any>) {
   if (a.COUGH) diagnosis_ids.push("ENT_ACUTE_BRONCHITIS");
   if (a.CONGESTION) diagnosis_ids.push("ENT_RHINOSINUSITIS");
 
+  // --- Diagnosis-based medication prioritization ---
+  let diagnosisMeds: any = { recommended: [], avoid: [] };
+  try {
+    diagnosisMeds = await getMedsForDiagnoses(diagnosis_ids, modifiers, allergies);
+    console.log(`[MedPrioritization] Found ${diagnosisMeds.recommended.length} recommended, ${diagnosisMeds.avoid.length} avoid for diagnoses: ${diagnosis_ids.join(", ")}`);
+  } catch (e: any) {
+    console.warn("[MedPrioritization] Failed to get diagnosis-based meds:", e?.message || e);
+  }
+
+  // Merge diagnosis-based meds with base meds (diagnosis meds take priority)
+  const diagMedsDetailed = diagnosisMeds.recommended.map((m: any) => ({
+    name: m.name,
+    source: m.source,
+    firstLine: m.firstLine,
+    indication: m.indication,
+    group: m.row?.Medication_Group || "",
+    route: m.row?.Route || "",
+    adultDose: m.row?.Adult_Dose || "",
+    pregnancy: m.row?.Pregnancy_Considerations || "",
+    contraindications: m.row?.Contraindications || "",
+    notes: m.row?.Notes || "",
+  }));
+
+  const diagAvoidDetailed = diagnosisMeds.avoid.map((m: any) => ({
+    name: m.name,
+    reason: m.avoidReason || "Diagnosis-based avoid",
+    indication: m.indication,
+    details: m.row?.Contraindications || m.row?.Pregnancy_Considerations || "",
+  }));
+
+  // Combine: diagnosis-based meds first, then fallback base meds
+  const finalMedsDetailed = [...diagMedsDetailed, ...medsDetailed.filter((m: any) => 
+    !diagMedsDetailed.some((dm: any) => dm.name.toLowerCase() === m.name.toLowerCase())
+  )];
+  const finalAvoidDetailed = [...diagAvoidDetailed, ...avoidDetailed.filter((m: any) => 
+    !diagAvoidDetailed.some((da: any) => da.name.toLowerCase() === m.name.toLowerCase())
+  )];
+
   return { 
     redFlag, tamifluEligible, paxlovidFlag, 
-    meds, avoid, medsDetailed, avoidDetailed, 
+    meds, avoid, 
+    medsDetailed: finalMedsDetailed, 
+    avoidDetailed: finalAvoidDetailed, 
     tests, disposition, rulesVersion,
     diagnosis_ids, presentation_label
   };

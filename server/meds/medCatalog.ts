@@ -135,3 +135,99 @@ export function shouldAvoidMedByModifiers(medName: string, modifiers: any): stri
   }
   return null;
 }
+
+// Map diagnosis IDs to Indications_Cluster values
+const DIAGNOSIS_TO_CLUSTER: Record<string, string[]> = {
+  "ent_flu_like_tamiflu_eligible": ["flu", "influenza", "viral uri", "flu-like"],
+  "ent_pharyngitis": ["pharyngitis", "sore throat", "strep"],
+  "ent_acute_bronchitis": ["bronchitis", "cough", "acute bronchitis"],
+  "ent_viral_uri": ["viral uri", "uri", "common cold", "upper respiratory"],
+  "ent_rhinosinusitis": ["sinusitis", "rhinosinusitis", "congestion", "sinus"],
+  "ent_red_flag": ["urgent", "red flag"],
+  "ent_covid_positive": ["covid", "covid-19", "sars-cov-2"],
+};
+
+export type MedPickResult = {
+  name: string;
+  source: "catalog" | "fallback";
+  firstLine: boolean;
+  indication: string;
+  row?: MedRow;
+  avoidReason?: string;
+};
+
+export async function getMedsForDiagnoses(
+  diagnosisIds: string[],
+  modifiers: any,
+  allergies: string[]
+): Promise<{ recommended: MedPickResult[]; avoid: MedPickResult[] }> {
+  const catalog = await getMedicationCatalog();
+  const recommended: MedPickResult[] = [];
+  const avoid: MedPickResult[] = [];
+  const seenMeds = new Set<string>();
+
+  // Collect all matching clusters for the diagnoses
+  const targetClusters: string[] = [];
+  for (const dxId of diagnosisIds) {
+    const clusters = DIAGNOSIS_TO_CLUSTER[norm(dxId)] || [];
+    targetClusters.push(...clusters);
+  }
+
+  // Search through all medications for matching clusters
+  for (const [medName, rows] of catalog.entries()) {
+    for (const row of rows) {
+      const cluster = norm(row.Indications_Cluster || "");
+      const matchesCluster = targetClusters.some(tc => cluster.includes(tc) || tc.includes(cluster));
+      
+      if (!matchesCluster) continue;
+      if (seenMeds.has(medName)) continue;
+      seenMeds.add(medName);
+
+      const firstLine = norm(row.First_Line || "") === "yes" || norm(row.First_Line || "") === "y";
+
+      // Check for allergy match
+      if (medMatchesAllergy(row.Medication_Name, allergies)) {
+        avoid.push({
+          name: row.Medication_Name,
+          source: "catalog",
+          firstLine,
+          indication: row.Indications_Cluster || "",
+          row,
+          avoidReason: "Allergy match",
+        });
+        continue;
+      }
+
+      // Check for modifier-based avoidance
+      const avoidReason = shouldAvoidMedByModifiers(row.Medication_Name, modifiers);
+      if (avoidReason) {
+        avoid.push({
+          name: row.Medication_Name,
+          source: "catalog",
+          firstLine,
+          indication: row.Indications_Cluster || "",
+          row,
+          avoidReason,
+        });
+        continue;
+      }
+
+      recommended.push({
+        name: row.Medication_Name,
+        source: "catalog",
+        firstLine,
+        indication: row.Indications_Cluster || "",
+        row,
+      });
+    }
+  }
+
+  // Sort recommended: first-line first, then alphabetically
+  recommended.sort((a, b) => {
+    if (a.firstLine && !b.firstLine) return -1;
+    if (!a.firstLine && b.firstLine) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return { recommended, avoid };
+}
