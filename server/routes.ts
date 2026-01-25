@@ -6,6 +6,7 @@ import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
 import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers } from "./meds/medCatalog";
+import { getDiagnosisCatalog } from "./meds/diagnosisCatalog";
 
 // Initialize Twilio client
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -362,6 +363,42 @@ export async function registerRoutes(
       
       if (!encounter) {
         return res.status(404).json({ error: "Encounter not found" });
+      }
+
+      // --- Add diagnosisDetails for physician view + note generation ---
+      try {
+        // Parse proposal if it's a string
+        const proposal = typeof (encounter as any).proposal === 'string' 
+          ? JSON.parse((encounter as any).proposal) 
+          : (encounter as any).proposal;
+        
+        const diagnosisIds: string[] =
+          proposal?.diagnosis_ids ||
+          (encounter as any)?.diagnosis_ids ||
+          [];
+
+        if (Array.isArray(diagnosisIds) && diagnosisIds.length > 0) {
+          const catalog = await getDiagnosisCatalog();
+
+          const details = diagnosisIds.map((dxId: string) => {
+            const row = catalog.get(dxId.toLowerCase());
+
+            return (
+              row || {
+                Diagnosis_ID: dxId,
+                Diagnosis_Name: "(Not found in CLINICAL_DIAGNOSES)",
+                System: "ENT",
+              }
+            );
+          });
+
+          (encounter as any).diagnosisDetails = details;
+        } else {
+          (encounter as any).diagnosisDetails = [];
+        }
+      } catch (dxErr) {
+        console.warn("Diagnosis catalog lookup failed:", dxErr);
+        (encounter as any).diagnosisDetails = [];
       }
       
       res.json(encounter);

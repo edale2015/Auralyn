@@ -67,9 +67,16 @@ export async function getDiagnosisCatalog(): Promise<Map<string, DiagnosisRow>> 
   const rows = values.slice(1);
 
   const byId = new Map<string, DiagnosisRow>();
-  const idIdx = headers.indexOf("Diagnosis_ID");
+  // Try multiple possible column names for diagnosis ID
+  let idIdx = headers.indexOf("Diagnosis_ID");
+  if (idIdx < 0) idIdx = headers.indexOf("Diagnosis ID");
+  if (idIdx < 0) idIdx = headers.indexOf("diagnosis_id");
+  if (idIdx < 0) idIdx = headers.indexOf("DiagnosisID");
+  if (idIdx < 0) idIdx = headers.indexOf("ID");
   if (idIdx < 0) {
-    throw new Error("CLINICAL_DIAGNOSES missing header Diagnosis_ID");
+    console.warn("[DiagnosisCatalog] No Diagnosis_ID column found. Headers:", headers.join(", "));
+    CACHE = { expiresAt: now + TTL_MS, byId: new Map() };
+    return CACHE.byId;
   }
 
   for (const r of rows) {

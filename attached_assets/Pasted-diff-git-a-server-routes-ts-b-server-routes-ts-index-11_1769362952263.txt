@@ -1,0 +1,60 @@
+diff --git a/server/routes.ts b/server/routes.ts
+index 1111111..2222222 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,6 +1,7 @@
+ import { Request, Response } from "express";
+ // ... your existing imports
++import { getDiagnosisCatalog } from "./diagnoses/diagnosisCatalog";
+ 
+ app.get("/api/encounters/:id", async (req: Request, res: Response) => {
+   try {
+     const idParam = req.params.id;
+     const id = parseInt(typeof idParam === "string" ? idParam : "0");
+     const encounter = await storage.getEncounterWithDetails(id);
+     
+     if (!encounter) {
+       return res.status(404).json({ error: "Encounter not found" });
+     }
++
++    // --- Add diagnosisDetails for physician view + note generation ---
++    try {
++      const diagnosisIds: string[] =
++        (encounter as any)?.proposal?.diagnosis_ids ||
++        (encounter as any)?.diagnosis_ids ||
++        [];
++
++      if (Array.isArray(diagnosisIds) && diagnosisIds.length > 0) {
++        const catalog = await getDiagnosisCatalog();
++
++        const details = diagnosisIds.map((dxId: string) => {
++          // catalog may be Map or plain object depending on implementation
++          const row =
++            (catalog instanceof Map)
++              ? catalog.get(dxId)
++              : (catalog as any)[dxId];
++
++          return (
++            row || {
++              Diagnosis_ID: dxId,
++              Diagnosis: "(Not found in CLINICAL_DIAGNOSES)",
++              System: (encounter as any)?.system || "",
++            }
++          );
++        });
++
++        (encounter as any).diagnosisDetails = details;
++      } else {
++        (encounter as any).diagnosisDetails = [];
++      }
++    } catch (dxErr) {
++      console.warn("Diagnosis catalog lookup failed:", dxErr);
++      (encounter as any).diagnosisDetails = [];
++    }
+     
+     res.json(encounter);
+   } catch (error) {
+     console.error("Error fetching encounter:", error);
+     res.status(500).json({ error: "Failed to fetch encounter" });
+   }
+ });
