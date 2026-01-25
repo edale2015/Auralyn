@@ -229,7 +229,35 @@ async function computeProposal(a: Record<string, any>) {
   if (proposeCovidTest) tests.push("COVID antigen/NAAT (if available)");
   if (tamifluEligible && proposeFluTestIfTamiflu) tests.push("Influenza test (if available)");
 
-  return { redFlag, tamifluEligible, paxlovidFlag, meds, avoid, medsDetailed, avoidDetailed, tests, disposition, rulesVersion };
+  // Assign diagnosis_ids based on clinical presentation
+  const diagnosis_ids: string[] = [];
+  let presentation_label = "Flu-like illness";
+
+  if (redFlag) {
+    diagnosis_ids.push("ENT_RED_FLAG");
+    presentation_label = "Red flag symptoms requiring urgent evaluation";
+  } else if (paxlovidFlag) {
+    diagnosis_ids.push("ENT_COVID_POSITIVE");
+    presentation_label = "COVID-19 positive, flu-like symptoms";
+  } else if (tamifluEligible) {
+    diagnosis_ids.push("ENT_FLU_LIKE_TAMIFLU_ELIGIBLE");
+    presentation_label = "Flu-like illness, Tamiflu eligible";
+  } else {
+    diagnosis_ids.push("ENT_VIRAL_URI");
+    presentation_label = "Viral upper respiratory infection";
+  }
+
+  // Add secondary diagnoses based on symptoms
+  if (a.SORE_THROAT) diagnosis_ids.push("ENT_PHARYNGITIS");
+  if (a.COUGH) diagnosis_ids.push("ENT_ACUTE_BRONCHITIS");
+  if (a.CONGESTION) diagnosis_ids.push("ENT_RHINOSINUSITIS");
+
+  return { 
+    redFlag, tamifluEligible, paxlovidFlag, 
+    meds, avoid, medsDetailed, avoidDetailed, 
+    tests, disposition, rulesVersion,
+    diagnosis_ids, presentation_label
+  };
 }
 
 // Build physician summary for review
