@@ -167,6 +167,13 @@ async function computeProposal(a: Record<string, any>) {
   if (a.HTN === true || a.ANXIETY === true) avoid.push("pseudoephedrine/phenylephrine");
   if (a.PREGNANT === true) avoid.push("ibuprofen/NSAIDs");
 
+  // Proposal-level arrays for diagnosis labels and indication clusters
+  const diagnosis_labels: string[] = Array.isArray((a as any).diagnosis_labels) ? (a as any).diagnosis_labels : [];
+  const pushUnique = (arr: string[], v: string) => {
+    if (!v) return;
+    if (!arr.includes(v)) arr.push(v);
+  };
+
   // New: structured meds using catalog + modifiers
   const modifiers = buildModifiersFromAnswers(a);
   const allergies = modifiers.allergies || [];
@@ -254,6 +261,22 @@ async function computeProposal(a: Record<string, any>) {
   if (a.COUGH) diagnosis_ids.push("ENT_ACUTE_BRONCHITIS");
   if (a.CONGESTION) diagnosis_ids.push("ENT_RHINOSINUSITIS");
 
+  // ----------------------------
+  // THRUSH BRANCH (ENT_THROAT)
+  // Uses Indications_Cluster fallback: "Oral thrush cluster"
+  // ----------------------------
+  const whiteWisps = !!(a as any).TH_WHITE_WISPS;
+  const thrushConcern = !!(a as any).TH_THRUSH_CONCERN;
+  const steroidsRecent = !!(a as any).TH_STEROIDS_RECENT;
+  const immunocomp = !!(a as any).TH_IMMUNOCOMPROMISED || !!modifiers.immunocompromised;
+
+  if (whiteWisps || thrushConcern) {
+    if (steroidsRecent || immunocomp || thrushConcern) {
+      pushUnique(diagnosis_labels, "Possible oral thrush");
+      diagnosis_ids.push("ENT_ORAL_THRUSH");
+    }
+  }
+
   // --- Diagnosis_ID-first med selection + Indications_Cluster fallback ---
   const DIAGNOSIS_TO_CLUSTER: Record<string, string[]> = {
     "ent_flu_like_tamiflu_eligible": ["flu", "influenza", "viral uri", "flu-like"],
@@ -263,6 +286,7 @@ async function computeProposal(a: Record<string, any>) {
     "ent_rhinosinusitis": ["sinusitis", "rhinosinusitis", "congestion", "sinus", "aom/sinusitis cluster"],
     "ent_red_flag": ["urgent", "red flag"],
     "ent_covid_positive": ["covid", "covid-19", "sars-cov-2"],
+    "ent_oral_thrush": ["oral thrush cluster", "thrush", "candidiasis"],
   };
 
   const indicationClusters: string[] = [];
@@ -362,7 +386,8 @@ async function computeProposal(a: Record<string, any>) {
     medsDetailed: finalMedsDetailed, 
     avoidDetailed: finalAvoidDetailed, 
     tests, disposition, rulesVersion,
-    diagnosis_ids, presentation_label
+    diagnosis_ids, presentation_label,
+    diagnosis_labels, indicationClusters
   };
 }
 

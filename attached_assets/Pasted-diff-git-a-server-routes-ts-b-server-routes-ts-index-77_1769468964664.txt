@@ -1,0 +1,68 @@
+diff --git a/server/routes.ts b/server/routes.ts
+index 7777777..8888888 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -80,6 +80,22 @@ async function computeProposal(a: Record<string, any>) {
+   // ... existing logic that computes redFlag, tests, medsDetailed, avoidDetailed, diagnosis_ids, presentation_label, rulesVersion, etc.
+ 
++  // Ensure proposal-level arrays exist (backward compatible)
++  // These will be used by meds selection and physician display.
++  const diagnosis_labels: string[] = Array.isArray((a as any).diagnosis_labels) ? (a as any).diagnosis_labels : [];
++  const indicationClusters: string[] = Array.isArray((a as any).indicationClusters) ? (a as any).indicationClusters : [];
++
++  // Helper to push unique strings
++  const pushUnique = (arr: string[], v: string) => {
++    if (!v) return;
++    if (!arr.includes(v)) arr.push(v);
++  };
++
+   // New: structured meds using catalog + modifiers
+   const modifiers = buildModifiersFromAnswers(a);
+   const allergies = modifiers.allergies || [];
+ 
+@@ -120,6 +136,32 @@ async function computeProposal(a: Record<string, any>) {
+   const diagnosis_ids: string[] = a.diagnosis_ids || ["ENT_VIRAL_SYNDROME"];
+   let presentation_label = a.presentation_label || "Viral syndrome";
+ 
++  // ----------------------------
++  // THRUSH BRANCH (ENT_THROAT)
++  // Uses Indications_Cluster fallback: "Oral thrush cluster"
++  // ----------------------------
++  const whiteWisps = !!(a as any).TH_WHITE_WISPS;
++  const thrushConcern = !!(a as any).TH_THRUSH_CONCERN;
++  const steroidsRecent = !!(a as any).TH_STEROIDS_RECENT;
++  const immunocomp = !!(a as any).TH_IMMUNOCOMPROMISED || !!modifiers.immunocompromised;
++
++  // Trigger when patient reports white wisps OR is concerned, plus risk factor/concern
++  if (whiteWisps || thrushConcern) {
++    // If any risk factor or concern, we treat as "possible thrush" for proposal
++    if (steroidsRecent || immunocomp || thrushConcern) {
++      pushUnique(diagnosis_labels, "Possible oral thrush");
++      pushUnique(indicationClusters, "Oral thrush cluster");
++      // Helpful counseling note for physician/patient message rendering later
++      pushUnique((a as any).counselingNotes ?? ((a as any).counselingNotes = []), "If using inhaled steroids, rinse mouth after each use to reduce thrush risk.");
++    }
++  }
++
+   let medsDetailed: any[] = [];
+   let avoidDetailed: any[] = [];
+ 
+   try {
+     const catalog = await getMedicationCatalog();
+ 
+-    const indicationClusters: string[] = (a.indicationClusters || a.indications_clusters || []) as any;
++    // Use proposal.indicationClusters if present; otherwise fallback to empty
++    // (We now populate indicationClusters above.)
+ 
+     // Diagnosis_ID-first selection (then cluster fallback)
+     const candidateRows = getMedsForDiagnoses(catalog, diagnosis_ids, indicationClusters);
+@@ -240,6 +282,8 @@ async function computeProposal(a: Record<string, any>) {
+     medsDetailed,
+     avoidDetailed,
+     diagnosis_ids,
+     presentation_label,
++    diagnosis_labels,
++    indicationClusters,
+     rulesVersion: rules.RULES_VERSION ?? defaults.RULES_VERSION,
+   };
+ }
