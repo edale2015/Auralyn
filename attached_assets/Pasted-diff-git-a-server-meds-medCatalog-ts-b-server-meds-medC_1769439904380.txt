@@ -1,0 +1,383 @@
+diff --git a/server/meds/medCatalog.ts b/server/meds/medCatalog.ts
+index 1111111..2222222 100644
+--- a/server/meds/medCatalog.ts
++++ b/server/meds/medCatalog.ts
+@@ -1,34 +1,58 @@
+ import { google } from "googleapis";
+ 
+ export type MedRow = {
++  Diagnosis_ID?: string;
+   System?: string;
+   Medication_Name: string;
+   Medication_Group?: string;
+   Indications_Cluster?: string;
+-  First_Line?: string;
++  // Note: sheet header is often "First_Line?" so we must access dynamically
+   Adult_Dose?: string;
+   Adult_Max_Dose?: string;
+   Pediatric_Dose?: string;
+   Pregnancy_Considerations?: string;
+   Contraindications?: string;
+   Key_Interactions?: string;
+   Common_Side_Effects?: string;
+   Route?: string;
+   Renal_Adjust?: string;
+   Hepatic_Adjust?: string;
+   Notes?: string;
+   Active?: string;
+ };
+ 
+-type CacheEntry = { expiresAt: number; byName: Map<string, MedRow[]> };
+-let CACHE: CacheEntry = { expiresAt: 0, byName: new Map() };
++type CacheEntry = {
++  expiresAt: number;
++  byName: Map<string, MedRow[]>;
++  byDiagnosisId: Map<string, MedRow[]>;
++  byIndicationCluster: Map<string, MedRow[]>;
++};
++let CACHE: CacheEntry = {
++  expiresAt: 0,
++  byName: new Map(),
++  byDiagnosisId: new Map(),
++  byIndicationCluster: new Map(),
++};
+ const TTL_MS = 5 * 60 * 1000;
+ 
+ function envOrThrow(name: string): string {
+   const v = process.env[name];
+   if (!v) throw new Error(`Missing env var: ${name}`);
+   return v;
+ }
+ 
+ function norm(s: any): string {
+   return String(s ?? "").trim().toLowerCase();
+ }
+ 
++export function isFirstLine(row: MedRow): boolean {
++  const v =
++    (row as any)["First_Line?"] ??
++    (row as any)["First_Line"] ??
++    (row as any)["first_line"] ??
++    "";
++  return String(v).trim().toLowerCase() === "yes";
++}
++
+ function authSheets() {
+   const auth = new google.auth.GoogleAuth({
+     scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+     keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+   });
+   return google.sheets({ version: "v4", auth });
+ }
+ 
+ function rowToObj(headers: string[], row: any[]): MedRow {
+   const obj: any = {};
+   headers.forEach((h, i) => {
+     obj[h] = row[i] ?? "";
+   });
+   return obj as MedRow;
+ }
+ 
+-export async function getMedicationCatalog(): Promise<Map<string, MedRow[]>> {
++export async function getMedicationCatalog() {
+   const now = Date.now();
+-  if (CACHE.expiresAt > now) return CACHE.byName;
++  if (CACHE.expiresAt > now) return CACHE;
+ 
+   const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
+   const sheets = authSheets();
+   const range = `CLINICAL_MEDICATIONS!A1:ZZ5000`;
+ 
+   const resp = await sheets.spreadsheets.values.get({
+     spreadsheetId,
+     range,
+     valueRenderOption: "UNFORMATTED_VALUE",
+   });
+ 
+   const values: any[][] = resp.data.values || [];
+   if (values.length < 2) {
+-    CACHE = { expiresAt: now + TTL_MS, byName: new Map() };
+-    return CACHE.byName;
++    CACHE = {
++      expiresAt: now + TTL_MS,
++      byName: new Map(),
++      byDiagnosisId: new Map(),
++      byIndicationCluster: new Map(),
++    };
++    return CACHE;
+   }
+ 
+   const headers = values[0].map((h) => String(h ?? "").trim());
+   const rows = values.slice(1);
+ 
+   const byName = new Map<string, MedRow[]>();
++  const byDiagnosisId = new Map<string, MedRow[]>();
++  const byIndicationCluster = new Map<string, MedRow[]>();
++
+   const nameIdx = headers.indexOf("Medication_Name");
+   if (nameIdx < 0) {
+     throw new Error("CLINICAL_MEDICATIONS missing header Medication_Name");
+   }
++  const dxIdx = headers.indexOf("Diagnosis_ID");
++  const indIdx = headers.indexOf("Indications_Cluster");
+ 
+   for (const r of rows) {
+     const name = norm(r[nameIdx]);
+     if (!name) continue;
+     const obj = rowToObj(headers, r);
+     // optional active filter (if column exists)
+     const active = norm((obj as any).Active || (obj as any).active);
+     if (active && active !== "y" && active !== "yes" && active !== "true") {
+       // treat any explicit non-active as inactive
+       // if Active is blank, we still include
+       continue;
+     }
+     const list = byName.get(name) || [];
+     list.push(obj);
+     byName.set(name, list);
++
++    // index by diagnosis id (if present)
++    if (dxIdx >= 0) {
++      const dx = norm((obj as any)["Diagnosis_ID"]);
++      if (dx) {
++        const l2 = byDiagnosisId.get(dx) || [];
++        l2.push(obj);
++        byDiagnosisId.set(dx, l2);
++      }
++    }
++
++    // index by indications cluster
++    if (indIdx >= 0) {
++      const ind = norm((obj as any)["Indications_Cluster"]);
++      if (ind) {
++        const l3 = byIndicationCluster.get(ind) || [];
++        l3.push(obj);
++        byIndicationCluster.set(ind, l3);
++      }
++    }
+   }
+ 
+-  CACHE = { expiresAt: now + TTL_MS, byName };
+-  return byName;
++  CACHE = { expiresAt: now + TTL_MS, byName, byDiagnosisId, byIndicationCluster };
++  return CACHE;
+ }
+ 
+ export function pickBestMed(rows: MedRow[], preferredRoute?: string): MedRow {
+   if (!rows.length) throw new Error("No rows");
+   if (preferredRoute) {
+     const match = rows.find((r) => norm(r.Route) === norm(preferredRoute));
+     if (match) return match;
+   }
+   return rows[0];
+ }
+ 
+ export function medMatchesAllergy(medName: string, allergies: string[]): boolean {
+   const n = norm(medName);
+   for (const a of allergies) {
+     const al = norm(a);
+     if (!al) continue;
+     // simple containment match (first pass). We can improve later with class mapping.
+     if (n.includes(al) || al.includes(n)) return true;
+   }
+   return false;
+ }
+ 
+ export function shouldAvoidMedByModifiers(medName: string, modifiers: any): string | null {
+   const n = norm(medName);
+   if (modifiers?.pregnant) {
+     if (n.includes("ibuprofen") || n.includes("naproxen") || n.includes("nsaid")) {
+       return "Pregnancy: avoid NSAIDs unless physician-directed.";
+     }
+   }
+   if (modifiers?.htn || modifiers?.anxiety) {
+     if (n.includes("pseudoephedrine") || n.includes("phenylephrine")) {
+       return "HTN/anxiety: avoid oral decongestants (pseudoephedrine/phenylephrine).";
+     }
+   }
+   if (modifiers?.ssri_snri) {
+     if (n.includes("dextromethorphan")) {
+       return "SSRI/SNRI: avoid dextromethorphan (serotonergic risk).";
+     }
+   }
+   return null;
+ }
++
++export function getMedsForDiagnoses(
++  catalog: { byDiagnosisId: Map<string, MedRow[]>; byIndicationCluster: Map<string, MedRow[]> },
++  diagnosisIds: string[],
++  indicationClusters: string[]
++) {
++  const out: MedRow[] = [];
++
++  // 1) Exact Diagnosis_ID matches
++  for (const dx of diagnosisIds || []) {
++    const key = norm(dx);
++    const rows = catalog.byDiagnosisId.get(key);
++    if (rows?.length) out.push(...rows);
++  }
++
++  // 2) Fallback: Indications_Cluster matches
++  for (const ic of indicationClusters || []) {
++    const key = norm(ic);
++    const rows = catalog.byIndicationCluster.get(key);
++    if (rows?.length) out.push(...rows);
++  }
++
++  // de-dupe by (Medication_Name, Route, Adult_Dose)
++  const seen = new Set<string>();
++  const deduped: MedRow[] = [];
++  for (const r of out) {
++    const k = `${norm(r.Medication_Name)}||${norm(r.Route)}||${norm(r.Adult_Dose)}`;
++    if (seen.has(k)) continue;
++    seen.add(k);
++    deduped.push(r);
++  }
++
++  // sort: first-line first, then name
++  deduped.sort((a, b) => {
++    const fa = isFirstLine(a) ? 1 : 0;
++    const fb = isFirstLine(b) ? 1 : 0;
++    if (fb !== fa) return fb - fa;
++    return norm(a.Medication_Name).localeCompare(norm(b.Medication_Name));
++  });
++
++  return deduped;
++}
+diff --git a/server/routes.ts b/server/routes.ts
+index 6666666..7777777 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -1,7 +1,7 @@
+ // ... existing imports
+-import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers } from "./meds/medCatalog";
++import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses, isFirstLine } from "./meds/medCatalog";
+ 
+ async function computeProposal(a: Record<string, any>) {
+   // ... existing logic
+@@ -150,8 +150,10 @@ async function computeProposal(a: Record<string, any>) {
+   const diagnosis_ids: string[] = a.diagnosis_ids || ["ENT_VIRAL_SYNDROME"]; // keep your existing behavior
+   let presentation_label = a.presentation_label || "Viral syndrome";
+ 
+   let medsDetailed: any[] = [];
+   let avoidDetailed: any[] = [];
+ 
+   try {
+-    const catalog = await getMedicationCatalog();
++    const catalog = await getMedicationCatalog();
+ 
++    // If your code already has these, keep them. Otherwise:
++    const indicationClusters: string[] = (a.indicationClusters || a.indications_clusters || []) as any;
++
++    // Diagnosis_ID-first selection (then cluster fallback)
++    const candidateRows = getMedsForDiagnoses(catalog, diagnosis_ids, indicationClusters);
++
+     // Add structured meds
+-    for (const m of meds) {
+-      const rows = catalog.get(String(m).trim().toLowerCase()) || [];
++    // 1) First: diagnosis-based candidates (preferred)
++    for (const picked of candidateRows) {
++      // allergy check
++      if (medMatchesAllergy(picked.Medication_Name, allergies)) {
++        avoidDetailed.push({
++          name: picked.Medication_Name,
++          reason: "Allergy match",
++          details: picked.Contraindications || "",
++        });
++        continue;
++      }
++
++      const avoidReason = shouldAvoidMedByModifiers(picked.Medication_Name, modifiers);
++      if (avoidReason) {
++        avoidDetailed.push({
++          name: picked.Medication_Name,
++          reason: avoidReason,
++          details: picked.Pregnancy_Considerations || picked.Contraindications || "",
++        });
++        continue;
++      }
++
++      medsDetailed.push({
++        name: picked.Medication_Name,
++        source: "catalog",
++        firstLine: isFirstLine(picked),
++        indication: picked.Indications_Cluster || "",
++        group: picked.Medication_Group || "",
++        route: picked.Route || "",
++        adultDose: picked.Adult_Dose || "",
++        adultMaxDose: picked.Adult_Max_Dose || "",
++        pediatricDose: picked.Pediatric_Dose || "",
++        pregnancy: picked.Pregnancy_Considerations || "",
++        contraindications: picked.Contraindications || "",
++        interactions: picked.Key_Interactions || "",
++        notes: picked.Notes || "",
++      });
++    }
++
++    // 2) Then: symptomatic base meds list (fallback / supplement)
++    const byName = catalog.byName;
++    for (const m of meds) {
++      const rows = byName.get(String(m).trim().toLowerCase()) || [];
+       if (!rows.length) {
+         medsDetailed.push({ name: m, source: "fallback", note: "Not found in CLINICAL_MEDICATIONS yet." });
+         continue;
+       }
+       const picked2 = pickBestMed(rows);
+ 
+       // allergy check
+-      if (medMatchesAllergy(picked.Medication_Name, allergies)) {
++      if (medMatchesAllergy(picked2.Medication_Name, allergies)) {
+         avoidDetailed.push({
+-          name: picked.Medication_Name,
++          name: picked2.Medication_Name,
+           reason: "Allergy match",
+-          details: picked.Contraindications || "",
++          details: picked2.Contraindications || "",
+         });
+         continue;
+       }
+ 
+-      const avoidReason = shouldAvoidMedByModifiers(picked.Medication_Name, modifiers);
++      const avoidReason = shouldAvoidMedByModifiers(picked2.Medication_Name, modifiers);
+       if (avoidReason) {
+         avoidDetailed.push({
+-          name: picked.Medication_Name,
++          name: picked2.Medication_Name,
+           reason: avoidReason,
+-          details: picked.Pregnancy_Considerations || picked.Contraindications || "",
++          details: picked2.Pregnancy_Considerations || picked2.Contraindications || "",
+         });
+         continue;
+       }
+ 
+       medsDetailed.push({
+-        name: picked.Medication_Name,
+-        group: picked.Medication_Group || "",
+-        route: picked.Route || "",
+-        pregnancy: picked.Pregnancy_Considerations || "",
+-        contraindications: picked.Contraindications || "",
+-        interactions: picked.Key_Interactions || "",
+-        notes: picked.Notes || "",
++        name: picked2.Medication_Name,
++        source: "catalog",
++        firstLine: isFirstLine(picked2),
++        indication: picked2.Indications_Cluster || "",
++        group: picked2.Medication_Group || "",
++        route: picked2.Route || "",
++        adultDose: picked2.Adult_Dose || "",
++        adultMaxDose: picked2.Adult_Max_Dose || "",
++        pediatricDose: picked2.Pediatric_Dose || "",
++        pregnancy: picked2.Pregnancy_Considerations || "",
++        contraindications: picked2.Contraindications || "",
++        interactions: picked2.Key_Interactions || "",
++        notes: picked2.Notes || "",
+       });
+     }
+ 
+     // Add structured avoids from legacy avoid list (strings)
+     for (const av of avoid) {
+       avoidDetailed.push({ name: av, reason: "Rule-based avoid", details: "" });
+     }
+   } catch (e: any) {
+     console.warn("[CLINICAL_MEDICATIONS] lookup failed, continuing with legacy meds/avoid:", e?.message || e);
+   }

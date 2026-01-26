@@ -1,11 +1,11 @@
 import { google } from "googleapis";
 
 export type MedRow = {
+  Diagnosis_ID?: string;
   System?: string;
   Medication_Name: string;
   Medication_Group?: string;
   Indications_Cluster?: string;
-  First_Line?: string;
   Adult_Dose?: string;
   Adult_Max_Dose?: string;
   Pediatric_Dose?: string;
@@ -20,8 +20,18 @@ export type MedRow = {
   Active?: string;
 };
 
-type CacheEntry = { expiresAt: number; byName: Map<string, MedRow[]> };
-let CACHE: CacheEntry = { expiresAt: 0, byName: new Map() };
+type CacheEntry = {
+  expiresAt: number;
+  byName: Map<string, MedRow[]>;
+  byDiagnosisId: Map<string, MedRow[]>;
+  byIndicationCluster: Map<string, MedRow[]>;
+};
+let CACHE: CacheEntry = {
+  expiresAt: 0,
+  byName: new Map(),
+  byDiagnosisId: new Map(),
+  byIndicationCluster: new Map(),
+};
 const TTL_MS = 5 * 60 * 1000;
 
 function envOrThrow(name: string): string {
@@ -32,6 +42,15 @@ function envOrThrow(name: string): string {
 
 function norm(s: any): string {
   return String(s ?? "").trim().toLowerCase();
+}
+
+export function isFirstLine(row: MedRow): boolean {
+  const v =
+    (row as any)["First_Line?"] ??
+    (row as any)["First_Line"] ??
+    (row as any)["first_line"] ??
+    "";
+  return String(v).trim().toLowerCase() === "yes";
 }
 
 function authSheets() {
@@ -50,9 +69,9 @@ function rowToObj(headers: string[], row: any[]): MedRow {
   return obj as MedRow;
 }
 
-export async function getMedicationCatalog(): Promise<Map<string, MedRow[]>> {
+export async function getMedicationCatalog() {
   const now = Date.now();
-  if (CACHE.expiresAt > now) return CACHE.byName;
+  if (CACHE.expiresAt > now) return CACHE;
 
   const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
   const sheets = authSheets();
@@ -66,18 +85,28 @@ export async function getMedicationCatalog(): Promise<Map<string, MedRow[]>> {
 
   const values: any[][] = resp.data.values || [];
   if (values.length < 2) {
-    CACHE = { expiresAt: now + TTL_MS, byName: new Map() };
-    return CACHE.byName;
+    CACHE = {
+      expiresAt: now + TTL_MS,
+      byName: new Map(),
+      byDiagnosisId: new Map(),
+      byIndicationCluster: new Map(),
+    };
+    return CACHE;
   }
 
   const headers = values[0].map((h) => String(h ?? "").trim());
   const rows = values.slice(1);
 
   const byName = new Map<string, MedRow[]>();
+  const byDiagnosisId = new Map<string, MedRow[]>();
+  const byIndicationCluster = new Map<string, MedRow[]>();
+
   const nameIdx = headers.indexOf("Medication_Name");
   if (nameIdx < 0) {
     throw new Error("CLINICAL_MEDICATIONS missing header Medication_Name");
   }
+  const dxIdx = headers.indexOf("Diagnosis_ID");
+  const indIdx = headers.indexOf("Indications_Cluster");
 
   for (const r of rows) {
     const name = norm(r[nameIdx]);
@@ -90,11 +119,29 @@ export async function getMedicationCatalog(): Promise<Map<string, MedRow[]>> {
     const list = byName.get(name) || [];
     list.push(obj);
     byName.set(name, list);
+
+    if (dxIdx >= 0) {
+      const dx = norm((obj as any)["Diagnosis_ID"]);
+      if (dx) {
+        const l2 = byDiagnosisId.get(dx) || [];
+        l2.push(obj);
+        byDiagnosisId.set(dx, l2);
+      }
+    }
+
+    if (indIdx >= 0) {
+      const ind = norm((obj as any)["Indications_Cluster"]);
+      if (ind) {
+        const l3 = byIndicationCluster.get(ind) || [];
+        l3.push(obj);
+        byIndicationCluster.set(ind, l3);
+      }
+    }
   }
 
-  console.log(`[MedCatalog] Loaded ${byName.size} unique medications from CLINICAL_MEDICATIONS (cached for 5 min)`);
-  CACHE = { expiresAt: now + TTL_MS, byName };
-  return byName;
+  console.log(`[MedCatalog] Loaded ${byName.size} meds, ${byDiagnosisId.size} diagnosis keys, ${byIndicationCluster.size} cluster keys (cached 5 min)`);
+  CACHE = { expiresAt: now + TTL_MS, byName, byDiagnosisId, byIndicationCluster };
+  return CACHE;
 }
 
 export function pickBestMed(rows: MedRow[], preferredRoute?: string): MedRow {
@@ -136,98 +183,40 @@ export function shouldAvoidMedByModifiers(medName: string, modifiers: any): stri
   return null;
 }
 
-// Map diagnosis IDs to Indications_Cluster values
-const DIAGNOSIS_TO_CLUSTER: Record<string, string[]> = {
-  "ent_flu_like_tamiflu_eligible": ["flu", "influenza", "viral uri", "flu-like"],
-  "ent_pharyngitis": ["pharyngitis", "sore throat", "strep"],
-  "ent_acute_bronchitis": ["bronchitis", "cough", "acute bronchitis"],
-  "ent_viral_uri": ["viral uri", "uri", "common cold", "upper respiratory"],
-  "ent_rhinosinusitis": ["sinusitis", "rhinosinusitis", "congestion", "sinus"],
-  "ent_red_flag": ["urgent", "red flag"],
-  "ent_covid_positive": ["covid", "covid-19", "sars-cov-2"],
-};
-
-export type MedPickResult = {
-  name: string;
-  source: "catalog" | "fallback";
-  firstLine: boolean;
-  indication: string;
-  row?: MedRow;
-  avoidReason?: string;
-};
-
-export async function getMedsForDiagnoses(
+export function getMedsForDiagnoses(
+  catalog: { byDiagnosisId: Map<string, MedRow[]>; byIndicationCluster: Map<string, MedRow[]> },
   diagnosisIds: string[],
-  modifiers: any,
-  allergies: string[]
-): Promise<{ recommended: MedPickResult[]; avoid: MedPickResult[] }> {
-  const catalog = await getMedicationCatalog();
-  const recommended: MedPickResult[] = [];
-  const avoid: MedPickResult[] = [];
-  const seenMeds = new Set<string>();
+  indicationClusters: string[]
+): MedRow[] {
+  const out: MedRow[] = [];
 
-  // Collect all matching clusters for the diagnoses
-  const targetClusters: string[] = [];
-  for (const dxId of diagnosisIds) {
-    const clusters = DIAGNOSIS_TO_CLUSTER[norm(dxId)] || [];
-    targetClusters.push(...clusters);
+  for (const dx of diagnosisIds || []) {
+    const key = norm(dx);
+    const rows = catalog.byDiagnosisId.get(key);
+    if (rows?.length) out.push(...rows);
   }
 
-  // Search through all medications for matching clusters
-  for (const [medName, rows] of catalog.entries()) {
-    for (const row of rows) {
-      const cluster = norm(row.Indications_Cluster || "");
-      const matchesCluster = targetClusters.some(tc => cluster.includes(tc) || tc.includes(cluster));
-      
-      if (!matchesCluster) continue;
-      if (seenMeds.has(medName)) continue;
-      seenMeds.add(medName);
-
-      const firstLine = norm(row.First_Line || "") === "yes" || norm(row.First_Line || "") === "y";
-
-      // Check for allergy match
-      if (medMatchesAllergy(row.Medication_Name, allergies)) {
-        avoid.push({
-          name: row.Medication_Name,
-          source: "catalog",
-          firstLine,
-          indication: row.Indications_Cluster || "",
-          row,
-          avoidReason: "Allergy match",
-        });
-        continue;
-      }
-
-      // Check for modifier-based avoidance
-      const avoidReason = shouldAvoidMedByModifiers(row.Medication_Name, modifiers);
-      if (avoidReason) {
-        avoid.push({
-          name: row.Medication_Name,
-          source: "catalog",
-          firstLine,
-          indication: row.Indications_Cluster || "",
-          row,
-          avoidReason,
-        });
-        continue;
-      }
-
-      recommended.push({
-        name: row.Medication_Name,
-        source: "catalog",
-        firstLine,
-        indication: row.Indications_Cluster || "",
-        row,
-      });
-    }
+  for (const ic of indicationClusters || []) {
+    const key = norm(ic);
+    const rows = catalog.byIndicationCluster.get(key);
+    if (rows?.length) out.push(...rows);
   }
 
-  // Sort recommended: first-line first, then alphabetically
-  recommended.sort((a, b) => {
-    if (a.firstLine && !b.firstLine) return -1;
-    if (!a.firstLine && b.firstLine) return 1;
-    return a.name.localeCompare(b.name);
+  const seen = new Set<string>();
+  const deduped: MedRow[] = [];
+  for (const r of out) {
+    const k = `${norm(r.Medication_Name)}||${norm(r.Route)}||${norm(r.Adult_Dose)}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    deduped.push(r);
+  }
+
+  deduped.sort((a, b) => {
+    const fa = isFirstLine(a) ? 1 : 0;
+    const fb = isFirstLine(b) ? 1 : 0;
+    if (fb !== fa) return fb - fa;
+    return norm(a.Medication_Name).localeCompare(norm(b.Medication_Name));
   });
 
-  return { recommended, avoid };
+  return deduped;
 }

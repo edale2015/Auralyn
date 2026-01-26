@@ -5,7 +5,7 @@ import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
-import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses } from "./meds/medCatalog";
+import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses, isFirstLine } from "./meds/medCatalog";
 import { getDiagnosisCatalog } from "./meds/diagnosisCatalog";
 
 // Initialize Twilio client
@@ -176,9 +176,10 @@ async function computeProposal(a: Record<string, any>) {
 
   try {
     const catalog = await getMedicationCatalog();
+    const byName = catalog.byName;
 
     for (const m of meds) {
-      const rows = catalog.get(String(m).trim().toLowerCase()) || [];
+      const rows = byName.get(String(m).trim().toLowerCase()) || [];
       if (!rows.length) {
         medsDetailed.push({ name: m, source: "fallback", note: "Not found in CLINICAL_MEDICATIONS yet." });
         continue;
@@ -253,43 +254,107 @@ async function computeProposal(a: Record<string, any>) {
   if (a.COUGH) diagnosis_ids.push("ENT_ACUTE_BRONCHITIS");
   if (a.CONGESTION) diagnosis_ids.push("ENT_RHINOSINUSITIS");
 
-  // --- Diagnosis-based medication prioritization ---
-  let diagnosisMeds: any = { recommended: [], avoid: [] };
-  try {
-    diagnosisMeds = await getMedsForDiagnoses(diagnosis_ids, modifiers, allergies);
-    console.log(`[MedPrioritization] Found ${diagnosisMeds.recommended.length} recommended, ${diagnosisMeds.avoid.length} avoid for diagnoses: ${diagnosis_ids.join(", ")}`);
-  } catch (e: any) {
-    console.warn("[MedPrioritization] Failed to get diagnosis-based meds:", e?.message || e);
+  // --- Diagnosis_ID-first med selection + Indications_Cluster fallback ---
+  const DIAGNOSIS_TO_CLUSTER: Record<string, string[]> = {
+    "ent_flu_like_tamiflu_eligible": ["flu", "influenza", "viral uri", "flu-like"],
+    "ent_pharyngitis": ["pharyngitis", "sore throat", "strep pharyngitis cluster"],
+    "ent_acute_bronchitis": ["bronchitis", "cough", "acute bronchitis"],
+    "ent_viral_uri": ["viral uri", "uri", "common cold", "upper respiratory"],
+    "ent_rhinosinusitis": ["sinusitis", "rhinosinusitis", "congestion", "sinus", "aom/sinusitis cluster"],
+    "ent_red_flag": ["urgent", "red flag"],
+    "ent_covid_positive": ["covid", "covid-19", "sars-cov-2"],
+  };
+
+  const indicationClusters: string[] = [];
+  for (const dx of diagnosis_ids) {
+    const clusters = DIAGNOSIS_TO_CLUSTER[dx.toLowerCase()] || [];
+    indicationClusters.push(...clusters);
   }
 
-  // Merge diagnosis-based meds with base meds (diagnosis meds take priority)
-  const diagMedsDetailed = diagnosisMeds.recommended.map((m: any) => ({
-    name: m.name,
-    source: m.source,
-    firstLine: m.firstLine,
-    indication: m.indication,
-    group: m.row?.Medication_Group || "",
-    route: m.row?.Route || "",
-    adultDose: m.row?.Adult_Dose || "",
-    pregnancy: m.row?.Pregnancy_Considerations || "",
-    contraindications: m.row?.Contraindications || "",
-    notes: m.row?.Notes || "",
-  }));
+  let finalMedsDetailed: any[] = [];
+  let finalAvoidDetailed: any[] = [];
 
-  const diagAvoidDetailed = diagnosisMeds.avoid.map((m: any) => ({
-    name: m.name,
-    reason: m.avoidReason || "Diagnosis-based avoid",
-    indication: m.indication,
-    details: m.row?.Contraindications || m.row?.Pregnancy_Considerations || "",
-  }));
+  try {
+    const catalog = await getMedicationCatalog();
+    const candidateRows = getMedsForDiagnoses(catalog, diagnosis_ids, indicationClusters);
+    console.log(`[MedPrioritization] Diagnosis_ID-first: ${candidateRows.length} candidates for ${diagnosis_ids.join(", ")}`);
 
-  // Combine: diagnosis-based meds first, then fallback base meds
-  const finalMedsDetailed = [...diagMedsDetailed, ...medsDetailed.filter((m: any) => 
-    !diagMedsDetailed.some((dm: any) => dm.name.toLowerCase() === m.name.toLowerCase())
-  )];
-  const finalAvoidDetailed = [...diagAvoidDetailed, ...avoidDetailed.filter((m: any) => 
-    !diagAvoidDetailed.some((da: any) => da.name.toLowerCase() === m.name.toLowerCase())
-  )];
+    for (const picked of candidateRows) {
+      if (medMatchesAllergy(picked.Medication_Name, allergies)) {
+        finalAvoidDetailed.push({
+          name: picked.Medication_Name,
+          reason: "Allergy match",
+          details: picked.Contraindications || "",
+        });
+        continue;
+      }
+
+      const avoidReason = shouldAvoidMedByModifiers(picked.Medication_Name, modifiers);
+      if (avoidReason) {
+        finalAvoidDetailed.push({
+          name: picked.Medication_Name,
+          reason: avoidReason,
+          details: picked.Pregnancy_Considerations || picked.Contraindications || "",
+        });
+        continue;
+      }
+
+      finalMedsDetailed.push({
+        name: picked.Medication_Name,
+        source: "catalog",
+        firstLine: isFirstLine(picked),
+        indication: picked.Indications_Cluster || "",
+        group: picked.Medication_Group || "",
+        route: picked.Route || "",
+        adultDose: picked.Adult_Dose || "",
+        adultMaxDose: picked.Adult_Max_Dose || "",
+        pediatricDose: picked.Pediatric_Dose || "",
+        pregnancy: picked.Pregnancy_Considerations || "",
+        contraindications: picked.Contraindications || "",
+        interactions: picked.Key_Interactions || "",
+        notes: picked.Notes || "",
+      });
+    }
+
+    // Fallback: add symptomatic meds not already in list
+    const seenNames = new Set(finalMedsDetailed.map((m: any) => m.name.toLowerCase()));
+    const byName = catalog.byName;
+    for (const m of meds) {
+      const key = String(m).trim().toLowerCase();
+      if (seenNames.has(key)) continue;
+      const rows = byName.get(key) || [];
+      if (!rows.length) {
+        finalMedsDetailed.push({ name: m, source: "fallback", note: "Not found in CLINICAL_MEDICATIONS yet." });
+        continue;
+      }
+      const picked2 = pickBestMed(rows);
+      if (medMatchesAllergy(picked2.Medication_Name, allergies)) {
+        finalAvoidDetailed.push({ name: picked2.Medication_Name, reason: "Allergy match", details: picked2.Contraindications || "" });
+        continue;
+      }
+      const avoidReason2 = shouldAvoidMedByModifiers(picked2.Medication_Name, modifiers);
+      if (avoidReason2) {
+        finalAvoidDetailed.push({ name: picked2.Medication_Name, reason: avoidReason2, details: picked2.Pregnancy_Considerations || "" });
+        continue;
+      }
+      finalMedsDetailed.push({
+        name: picked2.Medication_Name,
+        source: "catalog",
+        firstLine: isFirstLine(picked2),
+        indication: picked2.Indications_Cluster || "",
+        group: picked2.Medication_Group || "",
+        route: picked2.Route || "",
+        adultDose: picked2.Adult_Dose || "",
+        pregnancy: picked2.Pregnancy_Considerations || "",
+        contraindications: picked2.Contraindications || "",
+        notes: picked2.Notes || "",
+      });
+    }
+  } catch (e: any) {
+    console.warn("[MedPrioritization] Failed:", e?.message || e);
+    finalMedsDetailed = medsDetailed;
+    finalAvoidDetailed = avoidDetailed;
+  }
 
   return { 
     redFlag, tamifluEligible, paxlovidFlag, 
