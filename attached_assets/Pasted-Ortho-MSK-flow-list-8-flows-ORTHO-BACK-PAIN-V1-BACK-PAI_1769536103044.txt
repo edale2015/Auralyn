@@ -1,0 +1,284 @@
+Ortho/MSK flow list (8 flows)
+
+ORTHO_BACK_PAIN_V1 (BACK_PAIN)
+
+ORTHO_NECK_PAIN_V1 (NECK_PAIN)
+
+ORTHO_SHOULDER_PAIN_V1 (SHOULDER_PAIN)
+
+ORTHO_ELBOW_PAIN_V1 (ELBOW_PAIN)
+
+ORTHO_WRIST_HAND_PAIN_V1 (WRIST_HAND_PAIN)
+
+ORTHO_HIP_PAIN_V1 (HIP_PAIN)
+
+ORTHO_KNEE_PAIN_V1 (KNEE_PAIN)
+
+ORTHO_ANKLE_FOOT_PAIN_V1 (ANKLE_FOOT_PAIN)
+
+Each flow = 19 questions (tri-state grid).
+
+Folder + import commands
+
+Create:
+
+server/imports/ORTHO/
+
+
+Import order:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/ORTHO/CLINICAL_QUESTIONS_ORTHO.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/ORTHO/CLINICAL_RULES_ORTHO.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/ORTHO/CLINICAL_DIAGNOSES_ORTHO.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/ORTHO/CLINICAL_MEDICATIONS_ORTHO.csv upsert Notes
+
+1) CLINICAL_QUESTIONS_ORTHO.csv (8 flows × 19 = 152 rows)
+
+Save: server/imports/ORTHO/CLINICAL_QUESTIONS_ORTHO.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,1,ORTHO_BACK_01,"Severe back pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,2,ORTHO_BACK_02,"New weakness in legs?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,3,ORTHO_BACK_03,"New numbness/tingling down a leg (sciatica)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,4,ORTHO_BACK_04,"New bladder or bowel problems?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,5,ORTHO_BACK_05,"Saddle anesthesia (numbness in groin area)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,6,ORTHO_BACK_06,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,7,ORTHO_BACK_07,"History of cancer?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,8,ORTHO_BACK_08,"Recent fall/trauma?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,9,ORTHO_BACK_09,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,10,ORTHO_BACK_10,"IV drug use or immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,11,ORTHO_BACK_11,"Pain worse at night or at rest?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,12,ORTHO_BACK_12,"Unexplained weight loss?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,13,ORTHO_BACK_13,"Pain radiates below the knee?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,14,ORTHO_BACK_14,"Numbness/tingling in both legs?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,15,ORTHO_BACK_15,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,16,ORTHO_BACK_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,17,ORTHO_BACK_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,18,ORTHO_BACK_18,"Numbness/tingling in arms (not just legs)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,CORE,19,ORTHO_BACK_19,"Severe abdominal pain with back pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,1,ORTHO_NECK_01,"Severe neck pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,2,ORTHO_NECK_02,"Recent fall/trauma (car accident, sports injury)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,3,ORTHO_NECK_03,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,4,ORTHO_NECK_04,"Severe headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,5,ORTHO_NECK_05,"Neck stiffness (hard to touch chin to chest)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,6,ORTHO_NECK_06,"New weakness/numbness in arms or legs?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,7,ORTHO_NECK_07,"Trouble walking or poor coordination?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,8,ORTHO_NECK_08,"Radiating pain down an arm?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,9,ORTHO_NECK_09,"Numbness/tingling in fingers?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,10,ORTHO_NECK_10,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,11,ORTHO_NECK_11,"Immunocompromised or IV drug use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,12,ORTHO_NECK_12,"Cancer history?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,13,ORTHO_NECK_13,"Pain wakes you from sleep or worse at night?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,14,ORTHO_NECK_14,"Vision changes or dizziness with neck pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,15,ORTHO_NECK_15,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,16,ORTHO_NECK_16,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,17,ORTHO_NECK_17,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,18,ORTHO_NECK_18,"New bladder/bowel problems?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,CORE,19,ORTHO_NECK_19,"Severe chest pain or trouble breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,1,ORTHO_SHLD_01,"Recent trauma or fall onto shoulder?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,2,ORTHO_SHLD_02,"Deformity or unable to move shoulder?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,3,ORTHO_SHLD_03,"Severe pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,4,ORTHO_SHLD_04,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,5,ORTHO_SHLD_05,"Red, hot, swollen joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,6,ORTHO_SHLD_06,"Unable to raise arm above shoulder level?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,7,ORTHO_SHLD_07,"Pain with overhead activity?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,8,ORTHO_SHLD_08,"Night pain that wakes you from sleep?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,9,ORTHO_SHLD_09,"Numbness/tingling down arm or hand?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,10,ORTHO_SHLD_10,"Weakness when lifting objects?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,11,ORTHO_SHLD_11,"History of dislocation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,12,ORTHO_SHLD_12,"Immunocompromised or diabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,13,ORTHO_SHLD_13,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,14,ORTHO_SHLD_14,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,15,ORTHO_SHLD_15,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,16,ORTHO_SHLD_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,17,ORTHO_SHLD_17,"Chest pain or trouble breathing with shoulder pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,18,ORTHO_SHLD_18,"New neck pain with radiating symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,CORE,19,ORTHO_SHLD_19,"Pain after lifting/repetitive use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,1,ORTHO_ELB_01,"Recent trauma or fall onto elbow?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,2,ORTHO_ELB_02,"Deformity or unable to bend/straighten elbow?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,3,ORTHO_ELB_03,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,4,ORTHO_ELB_04,"Red, hot, swollen joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,5,ORTHO_ELB_05,"Pain on outside of elbow with gripping/lifting (tennis elbow)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,6,ORTHO_ELB_06,"Pain on inside of elbow with throwing/gripping (golfer’s elbow)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,7,ORTHO_ELB_07,"Numbness/tingling in ring/small finger (ulnar nerve)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,8,ORTHO_ELB_08,"Hand weakness or dropping objects?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,9,ORTHO_ELB_09,"Immunocompromised or diabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,10,ORTHO_ELB_10,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,11,ORTHO_ELB_11,"Swelling after repetitive use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,12,ORTHO_ELB_12,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,13,ORTHO_ELB_13,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,14,ORTHO_ELB_14,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,15,ORTHO_ELB_15,"Open wound or bite near the joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,16,ORTHO_ELB_16,"Pain limits normal daily activities?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,17,ORTHO_ELB_17,"Chest pain or trouble breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,18,ORTHO_ELB_18,"Neck pain with radiating arm pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,CORE,19,ORTHO_ELB_19,"New swelling of whole arm/hand?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,1,ORTHO_WH_01,"Recent fall onto outstretched hand?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,2,ORTHO_WH_02,"Deformity or severe swelling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,3,ORTHO_WH_03,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,4,ORTHO_WH_04,"Red, hot, swollen joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,5,ORTHO_WH_05,"Numbness/tingling in thumb/index/middle finger (carpal tunnel)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,6,ORTHO_WH_06,"Numbness/tingling in ring/small finger (ulnar nerve)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,7,ORTHO_WH_07,"Weak grip or dropping objects?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,8,ORTHO_WH_08,"Pain at base of thumb with gripping (thumb arthritis)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,9,ORTHO_WH_09,"Open wound, bite, or puncture?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,10,ORTHO_WH_10,"Finger cannot fully straighten or bend?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,11,ORTHO_WH_11,"Immunocompromised or diabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,12,ORTHO_WH_12,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,13,ORTHO_WH_13,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,14,ORTHO_WH_14,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,15,ORTHO_WH_15,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,16,ORTHO_WH_16,"Pain after repetitive use (typing/tool use)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,17,ORTHO_WH_17,"Hand is cold/pale or severe numbness (circulation concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,18,ORTHO_WH_18,"Severe pain with passive finger motion (tenosynovitis concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,CORE,19,ORTHO_WH_19,"Neck pain with radiating arm symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,1,ORTHO_HIP_01,"Recent fall/trauma?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,2,ORTHO_HIP_02,"Unable to bear weight (cannot walk)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,3,ORTHO_HIP_03,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,4,ORTHO_HIP_04,"Red, hot, swollen joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,5,ORTHO_HIP_05,"Severe pain out of proportion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,6,ORTHO_HIP_06,"Pain in groin area (true hip) vs outer hip?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,7,ORTHO_HIP_07,"Pain radiates down leg?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,8,ORTHO_HIP_08,"Immunocompromised or diabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,9,ORTHO_HIP_09,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,10,ORTHO_HIP_10,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,11,ORTHO_HIP_11,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,12,ORTHO_HIP_12,"History of osteoporosis?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,13,ORTHO_HIP_13,"Severe abdominal pain with hip/groin pain (hernia concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,14,ORTHO_HIP_14,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,15,ORTHO_HIP_15,"New weakness/numbness in leg?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,16,ORTHO_HIP_16,"Back pain with radiating symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,17,ORTHO_HIP_17,"Open wound/bite near joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,18,ORTHO_HIP_18,"Pain limits sleep or night pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,CORE,19,ORTHO_HIP_19,"Chest pain or shortness of breath (clot concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,1,ORTHO_KNEE_01,"Recent trauma (twist/fall) to knee?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,2,ORTHO_KNEE_02,"Unable to bear weight (cannot walk)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,3,ORTHO_KNEE_03,"Large swelling/effusion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,4,ORTHO_KNEE_04,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,5,ORTHO_KNEE_05,"Red, hot, swollen joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,6,ORTHO_KNEE_06,"Severe pain out of proportion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,7,ORTHO_KNEE_07,"Locking/catching of knee?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,8,ORTHO_KNEE_08,"Knee feels unstable/gives out?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,9,ORTHO_KNEE_09,"Pain with stairs/squatting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,10,ORTHO_KNEE_10,"Immunocompromised or diabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,11,ORTHO_KNEE_11,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,12,ORTHO_KNEE_12,"History of gout or inflammatory arthritis?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,13,ORTHO_KNEE_13,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,14,ORTHO_KNEE_14,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,15,ORTHO_KNEE_15,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,16,ORTHO_KNEE_16,"Calf pain/swelling (DVT concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,17,ORTHO_KNEE_17,"Open wound or bite near joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,18,ORTHO_KNEE_18,"Numbness/tingling in foot?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,CORE,19,ORTHO_KNEE_19,"Back pain with radiating leg symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,1,ORTHO_AF_01,"Recent twist/injury to ankle/foot?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,2,ORTHO_AF_02,"Unable to bear weight (cannot walk)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,3,ORTHO_AF_03,"Deformity or severe swelling/bruising?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,4,ORTHO_AF_04,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,5,ORTHO_AF_05,"Red, hot, swollen joint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,6,ORTHO_AF_06,"Severe pain out of proportion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,7,ORTHO_AF_07,"Numbness/tingling in foot?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,8,ORTHO_AF_08,"Foot is cold/pale (circulation concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,9,ORTHO_AF_09,"Open wound/puncture or bite?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,10,ORTHO_AF_10,"Immunocompromised or diabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,11,ORTHO_AF_11,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,12,ORTHO_AF_12,"Pain mainly at ankle bone area?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,13,ORTHO_AF_13,"Pain mainly at midfoot area?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,14,ORTHO_AF_14,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,15,ORTHO_AF_15,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,16,ORTHO_AF_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,17,ORTHO_AF_17,"History of gout or inflammatory arthritis?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,18,ORTHO_AF_18,"Calf pain/swelling (DVT concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,CORE,19,ORTHO_AF_19,"Pain limits sleep or severe night pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+2) CLINICAL_RULES_ORTHO.csv (KV schema)
+
+Save: server/imports/ORTHO/CLINICAL_RULES_ORTHO.csv
+Import: upsert rule_key
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,ORTHO_BACK,ORTHO_BACK_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,ORTHO_BACK,ORTHO_BACK_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_BACK_PAIN_V1,ORTHO,BACK_PAIN,ORTHO_BACK,ORTHO_BACK_PAIN_V1_MED_PACK,text,BACK_PAIN_SUPPORTIVE_PACK,Y
+
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,ORTHO_NECK,ORTHO_NECK_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,ORTHO_NECK,ORTHO_NECK_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_NECK_PAIN_V1,ORTHO,NECK_PAIN,ORTHO_NECK,ORTHO_NECK_PAIN_V1_MED_PACK,text,NECK_PAIN_SUPPORTIVE_PACK,Y
+
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,ORTHO_SHLD,ORTHO_SHOULDER_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,ORTHO_SHLD,ORTHO_SHOULDER_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_SHOULDER_PAIN_V1,ORTHO,SHOULDER_PAIN,ORTHO_SHLD,ORTHO_SHOULDER_PAIN_V1_MED_PACK,text,SHOULDER_PAIN_SUPPORTIVE_PACK,Y
+
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,ORTHO_ELB,ORTHO_ELBOW_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,ORTHO_ELB,ORTHO_ELBOW_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_ELBOW_PAIN_V1,ORTHO,ELBOW_PAIN,ORTHO_ELB,ORTHO_ELBOW_PAIN_V1_MED_PACK,text,ELBOW_PAIN_SUPPORTIVE_PACK,Y
+
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,ORTHO_WH,ORTHO_WRIST_HAND_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,ORTHO_WH,ORTHO_WRIST_HAND_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_WRIST_HAND_PAIN_V1,ORTHO,WRIST_HAND_PAIN,ORTHO_WH,ORTHO_WRIST_HAND_PAIN_V1_MED_PACK,text,WRIST_HAND_SUPPORTIVE_PACK,Y
+
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,ORTHO_HIP,ORTHO_HIP_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,ORTHO_HIP,ORTHO_HIP_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_supportive,Y
+ORTHO_HIP_PAIN_V1,ORTHO,HIP_PAIN,ORTHO_HIP,ORTHO_HIP_PAIN_V1_MED_PACK,text,HIP_PAIN_SUPPORTIVE_PACK,Y
+
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,ORTHO_KNEE,ORTHO_KNEE_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,ORTHO_KNEE,ORTHO_KNEE_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_KNEE_PAIN_V1,ORTHO,KNEE_PAIN,ORTHO_KNEE,ORTHO_KNEE_PAIN_V1_MED_PACK,text,KNEE_PAIN_SUPPORTIVE_PACK,Y
+
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,ORTHO_AF,ORTHO_ANKLE_FOOT_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,ORTHO_AF,ORTHO_ANKLE_FOOT_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ORTHO_ANKLE_FOOT_PAIN_V1,ORTHO,ANKLE_FOOT_PAIN,ORTHO_AF,ORTHO_ANKLE_FOOT_PAIN_V1_MED_PACK,text,ANKLE_FOOT_SUPPORTIVE_PACK,Y
+
+3) CLINICAL_DIAGNOSES_ORTHO.csv (your exact headers)
+
+Save: server/imports/ORTHO/CLINICAL_DIAGNOSES_ORTHO.csv
+Import: upsert "Diagnosis ID"
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+ORTHO_BACK_CEQ_01,ORTHO,BACK_PAIN,Cauda equina / spinal cord compression concern,Back pain,Red flags,Compression,High,Back pain + bladder/bowel changes or saddle anesthesia,Y,"Bladder/bowel changes, saddle anesthesia, progressive weakness",,Urinary retention; saddle numbness,Weakness/sensory loss,MRI spine,,"ED",Neurologic emergency,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Back pain cluster,"ROW_KEY=ORTHO_BACK_CEQ_01|EDReferral","Do not delay",ORTHO_BACK_CEQ
+ORTHO_BACK_STRAIN_01,ORTHO,BACK_PAIN,Mechanical back strain,Back pain,Strain,Muscle/ligament strain,Low,No red flags; worse with movement,N,,,"Duration, lifting event",Paraspinal tenderness,,"",PC,Supportive,PC,,"UC if severe",PC,Follow-up if not improving 1–2 weeks,"",,Heat/activity as tolerated,Yes,,"",Back pain cluster,"ROW_KEY=ORTHO_BACK_STRAIN_01|Acetaminophen;ROW_KEY=ORTHO_BACK_STRAIN_01|Ibuprofen;ROW_KEY=ORTHO_BACK_STRAIN_01|LidocainePatch","Escalate if neuro deficit",ORTHO_BACK_STRAIN
+ORTHO_NECK_RED_01,ORTHO,NECK_PAIN,Meningitis/cord injury concern (neck red flags),Neck pain,Red flags,Infection/cord injury,High,Fever + neck stiffness or neuro deficit after trauma,Y,"Fever + stiffness, neuro deficit, trauma with midline tenderness",,Headache; photophobia; trauma,Neuro deficit/meningeal signs,CT/MRI as indicated,,"ED",High-risk,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Neck pain cluster,"ROW_KEY=ORTHO_NECK_RED_01|EDReferral","Route by red flags",ORTHO_NECK_RED
+ORTHO_SHLD_DISLOC_01,ORTHO,SHOULDER_PAIN,Shoulder dislocation/fracture concern,Shoulder pain,Trauma,Dislocation/fracture,High,Deformity or cannot move after trauma,Y,"Deformity, unable to move, neurovascular compromise",anticoagulant_use,Mechanism; numbness,Deformity; limited ROM,X-ray,,"ED/UC",Needs imaging/reduction,UC,"ED if neurovascular compromise",UC,PC if mild,Recheck if worse,,"",Sling/ice,Yes,,"",Shoulder cluster,"ROW_KEY=ORTHO_SHLD_DISLOC_01|EDReferral","Protect NV status",ORTHO_SHLD_DISLOC
+ORTHO_CELL_SEPTIC_01,ORTHO,SHOULDER_PAIN,Septic joint concern (any joint),Joint pain,Red flags,Infection,High,Fever + red/hot swollen joint + severe pain,Y,"Fever + hot swollen joint + severe pain",immunocompromised,IVDU; rapid onset,Hot swollen joint,Imaging as needed,CBC/CRP,ED,Joint infection risk,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Joint red flags,"ROW_KEY=ORTHO_SEPTIC_01|EDReferral","Use for any joint red flags",ORTHO_SEPTIC
+ORTHO_ELB_TENNIS_01,ORTHO,ELBOW_PAIN,Lateral epicondylitis (tennis elbow),Elbow pain,Overuse,Tendon overuse,Low,Outside elbow pain with gripping/lifting,N,,,"Repetitive use",Tender lateral epicondyle,,"",PC,Supportive,PC,,"UC if severe",PC,Follow-up PRN,,"",Brace/rest,Yes,,"",Elbow cluster,"ROW_KEY=ORTHO_ELB_TENNIS_01|Ibuprofen;ROW_KEY=ORTHO_ELB_TENNIS_01|TopicalDiclofenac","Consider PT",ORTHO_ELB_TENNIS
+ORTHO_WH_CARPAL_01,ORTHO,WRIST_HAND_PAIN,Carpal tunnel syndrome,Hand pain,Neuropathy,Median nerve compression,Low,Numbness thumb/index/middle + nighttime symptoms,N,,diabetes,Repetitive use; nighttime symptoms,Decreased sensation,,"",PC,Outpatient,PC,,"UC if weakness severe",PC,Follow-up PCP/hand,,"",Wrist splint,Yes,,"",Hand cluster,"ROW_KEY=ORTHO_WH_CARPAL_01|WristSplint","Escalate if severe weakness",ORTHO_WH_CARPAL
+ORTHO_KNEE_RED_01,ORTHO,KNEE_PAIN,Septic arthritis concern,Joint pain,Red flags,Infection,High,Fever + hot swollen knee + unable to bear weight,Y,"Fever + hot swollen joint + severe pain/limited ROM",immunocompromised,IVDU; rapid onset,Hot swollen joint,,"CBC/CRP",ED,Joint infection risk,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Knee cluster,"ROW_KEY=ORTHO_KNEE_RED_01|EDReferral","Route hot swollen knee with fever",ORTHO_KNEE_SEPTIC
+ORTHO_AF_FX_01,ORTHO,ANKLE_FOOT_PAIN,Fracture concern (Ottawa rule type),Ankle/foot pain,Trauma,Fracture,High,Unable to bear weight or bony tenderness after injury,Y,"Unable to bear weight, deformity, severe swelling",anticoagulant_use,Mechanism; pop,Deformity; swelling,X-ray,,"UC/ED",Needs imaging,UC,"ED if deformity/circulation issue",UC,PC if mild,Recheck if worse,,"",RICE,Yes,,"",Ankle/foot cluster,"ROW_KEY=ORTHO_AF_FX_01|RICE","Escalate if cold/pale foot",ORTHO_AF_FX
+
+
+(If you want, we can add more common diagnoses like OA knee, meniscus tear, ankle sprain, plantar fasciitis, etc., but this is a safe “minimum viable” Ortho pack.)
+
+4) CLINICAL_MEDICATIONS_ORTHO.csv (ROW_KEY in Notes)
+
+Save: server/imports/ORTHO/CLINICAL_MEDICATIONS_ORTHO.csv
+Import: upsert Notes
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+ORTHO_BACK_CEQ_01,ORTHO,Emergency referral (ED),Disposition Aid,Cauda equina escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ORTHO_BACK_CEQ_01|EDReferral"
+ORTHO_NECK_RED_01,ORTHO,Emergency referral (ED),Disposition Aid,Neck red flag escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ORTHO_NECK_RED_01|EDReferral"
+ORTHO_SHLD_DISLOC_01,ORTHO,Emergency referral (ED),Disposition Aid,Dislocation/fracture escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ORTHO_SHLD_DISLOC_01|EDReferral"
+ORTHO_SEPTIC_01,ORTHO,Emergency referral (ED),Disposition Aid,Septic joint escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ORTHO_SEPTIC_01|EDReferral"
+ORTHO_KNEE_RED_01,ORTHO,Emergency referral (ED),Disposition Aid,Septic knee escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ORTHO_KNEE_RED_01|EDReferral"
+
+ORTHO_BACK_STRAIN_01,ORTHO,Acetaminophen,Analgesic/Antipyretic,Back pain supportive,Yes,"650–1000 mg q6–8h PRN","3000 mg/day","Peds per clinician","Generally ok",Severe liver disease,Alcohol,GI upset (rare),Oral,No,Caution,"ROW_KEY=ORTHO_BACK_STRAIN_01|Acetaminophen"
+ORTHO_BACK_STRAIN_01,ORTHO,Ibuprofen,NSAID,Back pain supportive,No,"400–600 mg q6–8h PRN","2400 mg/day","Peds per clinician","Avoid late pregnancy; clinician guidance",CKD/GI bleed risk,Anticoagulants,GI upset,Oral,Caution,Caution,"ROW_KEY=ORTHO_BACK_STRAIN_01|Ibuprofen"
+ORTHO_BACK_STRAIN_01,ORTHO,Lidocaine 4% patch (OTC),Topical analgesic,Back pain supportive,No,"Apply up to 12h on/12h off","", "","Generally ok",,,"Skin irritation",Topical,No,No,"ROW_KEY=ORTHO_BACK_STRAIN_01|LidocainePatch"
+
+ORTHO_ELB_TENNIS_01,ORTHO,Topical diclofenac gel,Topical NSAID,Overuse pain supportive,Yes,"Apply per label up to QID","", "Peds per clinician","Avoid late pregnancy; clinician guidance",NSAID allergy,Anticoagulants,Local irritation,Topical,Caution,Caution,"ROW_KEY=ORTHO_ELB_TENNIS_01|TopicalDiclofenac"
+ORTHO_ELB_TENNIS_01,ORTHO,Ibuprofen,NSAID,Overuse pain supportive,No,"400–600 mg q6–8h PRN","2400 mg/day","Peds per clinician","Avoid late pregnancy; clinician guidance",CKD/GI bleed risk,Anticoagulants,GI upset,Oral,Caution,Caution,"ROW_KEY=ORTHO_ELB_TENNIS_01|Ibuprofen"
+
+ORTHO_WH_CARPAL_01,ORTHO,Wrist splint (night),Supportive,Carpal tunnel supportive,Yes,"Wear at night","", "","Safe","",,"",Device,No,No,"ROW_KEY=ORTHO_WH_CARPAL_01|WristSplint"
+
+ORTHO_AF_FX_01,ORTHO,RICE (rest/ice/compression/elevation),Supportive,Ankle/foot injury supportive,Yes,"Rest + ice 15–20 min several times/day + compression + elevation","", "","Safe","",,"",Support,No,No,"ROW_KEY=ORTHO_AF_FX_01|RICE"
+
+If you want the Ortho pack to be “clinically richer”
+
+I can add more common diagnoses (OA knee, meniscus tear, ankle sprain, plantar fasciitis, rotator cuff tendinopathy, bursitis) and tie them to the same supportive meds without changing anything.
+
+And after Ortho: your requested “back pain in ortho” is now fully in place, and it connects nicely with the Neuropathy radiculopathy flow you already added.
