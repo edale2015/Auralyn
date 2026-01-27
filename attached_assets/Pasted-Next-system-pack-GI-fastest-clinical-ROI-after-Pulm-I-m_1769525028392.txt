@@ -1,0 +1,210 @@
+Next system pack: GI (fastest clinical ROI after Pulm)
+
+I’m going to give you GI CSV packs for the same tabs you already use:
+
+CLINICAL_QUESTIONS: 4 flows × 19 questions = 76
+
+CLINICAL_RULES: KV schema (same as your current CLINICAL_RULES tab)
+
+CLINICAL_DIAGNOSES: matches your diagnosis headers exactly
+
+CLINICAL_MEDICATIONS: uses Notes as UPSERT key with ROW_KEY=... (same as ENT + Pulm)
+
+CLINICAL_MODIFIERS: likely none needed beyond what you already have, but I’ll include only true additions if any
+
+GI Flows (no new tabs)
+
+GI_ABD_PAIN_V1 (Abdominal Pain)
+
+GI_NAUSEA_VOMITING_V1 (Nausea/Vomiting)
+
+GI_DIARRHEA_V1 (Diarrhea)
+
+GI_CONSTIPATION_V1 (Constipation)
+
+1) CLINICAL_QUESTIONS_GI.csv (76 rows)
+
+Save as:
+server/imports/GI/CLINICAL_QUESTIONS_GI.csv
+
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS server/imports/GI/CLINICAL_QUESTIONS_GI.csv upsert question_id
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,1,GI_ABD_01,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,2,GI_ABD_02,"Pain started suddenly (abrupt onset)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,3,GI_ABD_03,"Pain in right lower abdomen (RLQ)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,4,GI_ABD_04,"Pain in right upper abdomen (RUQ)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,5,GI_ABD_05,"Pain in upper middle abdomen (epigastric)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,6,GI_ABD_06,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,7,GI_ABD_07,"Vomiting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,8,GI_ABD_08,"Cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,9,GI_ABD_09,"Blood in vomit (coffee-ground or red)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,10,GI_ABD_10,"Black tarry stool or blood in stool?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,11,GI_ABD_11,"Severe tenderness or belly feels rigid/hard?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,12,GI_ABD_12,"Pain with urination or urinary symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,13,GI_ABD_13,"Diarrhea?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,14,GI_ABD_14,"Constipation or no bowel movement > 3 days?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,15,GI_ABD_15,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,16,GI_ABD_16,"History of abdominal surgery?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,17,GI_ABD_17,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,18,GI_ABD_18,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,CORE,19,GI_ABD_19,"Worsening rapidly or looks very ill/confused?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,1,GI_NV_01,"Vomiting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,2,GI_NV_02,"Cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,3,GI_NV_03,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,4,GI_NV_04,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,5,GI_NV_05,"Blood in vomit (coffee-ground or red)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,6,GI_NV_06,"Black tarry stool or blood in stool?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,7,GI_NV_07,"Severe headache/neck stiffness/confusion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,8,GI_NV_08,"Diarrhea?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,9,GI_NV_09,"Recent food poisoning or sick contacts?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,10,GI_NV_10,"Recent travel?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,11,GI_NV_11,"Dizziness or fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,12,GI_NV_12,"Signs of dehydration (very dry mouth, minimal urination)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,13,GI_NV_13,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,14,GI_NV_14,"Diabetes and possible high sugars/ketones?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,15,GI_NV_15,"Severe chest pain or trouble breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,16,GI_NV_16,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,17,GI_NV_17,"Started a new medication recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,18,GI_NV_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,CORE,19,GI_NV_19,"Age 65+ or significant chronic disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,1,GI_DIA_01,"Diarrhea?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,2,GI_DIA_02,"Blood in stool?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,3,GI_DIA_03,"Black tarry stool?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,4,GI_DIA_04,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,5,GI_DIA_05,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,6,GI_DIA_06,"Cannot keep fluids down (vomiting + diarrhea)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,7,GI_DIA_07,"Severe dehydration symptoms (dizzy/faint, very low urine)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,8,GI_DIA_08,"Recent antibiotic use (last 30 days)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,9,GI_DIA_09,"Recent travel?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,10,GI_DIA_10,"Sick contacts or food poisoning exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,11,GI_DIA_11,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,12,GI_DIA_12,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,13,GI_DIA_13,"Diarrhea lasting longer than 7 days?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,14,GI_DIA_14,"Severe weakness or confusion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,15,GI_DIA_15,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,16,GI_DIA_16,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,17,GI_DIA_17,"Severe abdominal tenderness or rigid belly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,18,GI_DIA_18,"Signs of dehydration (very dry mouth, minimal urination)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,CORE,19,GI_DIA_19,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,1,GI_CONS_01,"No bowel movement > 3 days?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,2,GI_CONS_02,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,3,GI_CONS_03,"Vomiting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,4,GI_CONS_04,"Cannot pass gas?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,5,GI_CONS_05,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,6,GI_CONS_06,"Blood in stool or black stool?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,7,GI_CONS_07,"Significant belly swelling/distention?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,8,GI_CONS_08,"History of bowel obstruction or abdominal surgery?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,9,GI_CONS_09,"New constipation with weight loss or anemia concern?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,10,GI_CONS_10,"Severe rectal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,11,GI_CONS_11,"On opioids (pain meds) or constipating meds?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,12,GI_CONS_12,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,13,GI_CONS_13,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,14,GI_CONS_14,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,15,GI_CONS_15,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,16,GI_CONS_16,"Severe weakness or confusion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,17,GI_CONS_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,18,GI_CONS_18,"Unable to tolerate fluids?",TRI,Y,,,,"Yes|No|Not sure",,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,CORE,19,GI_CONS_19,"Rigid belly or severe tenderness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+
+If you want me to keep going right now (same style, same headers), say:
+
+“Generate GI RULES + DIAGNOSES + MEDICATIONS CSVs”
+
+and I’ll output the remaining 3 packs in this same message style, ready for UPSERT imports.
+
+generate GI Rules + Diagnoses + Medications CSVs
+
+Below are the GI packs for your existing tabs, with your existing headers, designed for UPSERT (no new tabs, no schema changes).
+
+1) GI Rules CSV (KV schema)
+
+Save as: server/imports/GI/CLINICAL_RULES_GI.csv
+Import (UPSERT by rule_key):
+
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES server/imports/GI/CLINICAL_RULES_GI.csv upsert rule_key
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,GI_ABD,GI_ABD_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,GI_ABD,GI_ABD_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,GI_ABD,GI_ABD_PAIN_V1_TEST_DEFAULT,text,ABD_EXAM_LABS_IMAGING_AS_INDICATED,Y
+GI_ABD_PAIN_V1,GI,ABDOMINAL_PAIN,GI_ABD,GI_ABD_PAIN_V1_MED_SUPPORTIVE_PACK,text,ABD_PAIN_SUPPORTIVE_PACK,Y
+
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,GI_NV,GI_NAUSEA_VOMITING_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,GI_NV,GI_NAUSEA_VOMITING_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+GI_NAUSEA_VOMITING_V1,GI,NAUSEA_VOMITING,GI_NV,GI_NAUSEA_VOMITING_V1_MED_PACK,text,NAUSEA_VOMITING_PACK,Y
+
+GI_DIARRHEA_V1,GI,DIARRHEA,GI_DIA,GI_DIARRHEA_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,GI_DIA,GI_DIARRHEA_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+GI_DIARRHEA_V1,GI,DIARRHEA,GI_DIA,GI_DIARRHEA_V1_STOOL_TEST_IF,text,STOOL_PCR_CDIFF_IF_ANTIBIOTICS,BY_CONDITION
+GI_DIARRHEA_V1,GI,DIARRHEA,GI_DIA,GI_DIARRHEA_V1_MED_SUPPORTIVE_PACK,text,DIARRHEA_SUPPORTIVE_PACK,Y
+
+GI_CONSTIPATION_V1,GI,CONSTIPATION,GI_CONS,GI_CONSTIPATION_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,GI_CONS,GI_CONSTIPATION_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+GI_CONSTIPATION_V1,GI,CONSTIPATION,GI_CONS,GI_CONSTIPATION_V1_MED_PACK,text,CONSTIPATION_PACK,Y
+
+
+(Note: your rules engine can treat these as “pack selectors” just like ENT/Pulm. If you later want more granular triggers, we can add extra rule rows without changing schema.)
+
+2) GI Diagnoses CSV (your exact CLINICAL_DIAGNOSES headers)
+
+Save as: server/imports/GI/CLINICAL_DIAGNOSES_GI.csv
+Import (UPSERT by "Diagnosis ID"):
+
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES server/imports/GI/CLINICAL_DIAGNOSES_GI.csv upsert "Diagnosis ID"
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+GI_ABD_RED_01,GI,ABDOMINAL_PAIN,Acute abdomen / surgical emergency concern,Abdominal pain,Red flags,Peritonitis/ischemia/perforation/obstruction,High,Severe pain + rigid abdomen/rapid worsening,Y,"Rigid belly, severe tenderness, vomiting with inability to tolerate fluids, blood in vomit/stool, confusion","pregnancy,anticoagulant_use,immunocompromised","Onset sudden, location (RLQ/RUQ), vomiting, blood, pregnancy","Guarding/rigidity, rebound",CT/US as indicated,CBC/CMP/Lipase/UA +/- preg test,ED,High-risk condition,ED,ED,ED,,Immediate ED evaluation,"",,Yes,,"",Abdominal pain cluster,,"Route by red flags",GI_ABD_RED
+GI_ABD_APPY_01,GI,ABDOMINAL_PAIN,Appendicitis concern,Abdominal pain,RLQ,Inflamed appendix,High,RLQ pain + fever +/- vomiting,Y,"RLQ pain + fever + worsening","pregnancy",Migration of pain,RLQ tenderness/guarding,CT/US, CBC/CRP,ED,Needs imaging/surgery eval,ED,ED,ED,,Immediate ED evaluation,"",,Yes,,"",Abdominal pain cluster,,"Pregnancy alters imaging pathway",GI_ABD_APPY
+GI_ABD_BILIARY_01,GI,ABDOMINAL_PAIN,Biliary colic / cholecystitis concern,Abdominal pain,RUQ,Gallstones/inflammation,Moderate,RUQ pain +/- fever,N,,"pregnancy",RUQ pain after fatty meals, RUQ tenderness,US RUQ, CBC/LFTs,UC,RUQ pain may need imaging,UC,"ED if severe + fever/rigid",UC,PC if mild,Follow-up 24–48h if worse,"",,Analgesia/hydration,Yes,,"",Abdominal pain cluster,,"Escalate if fever/rigidity",GI_ABD_BILIARY
+GI_NV_GASTRO_01,GI,NAUSEA_VOMITING,Acute gastroenteritis,GI upset,Gastroenteritis,Viral/food-borne,Low,N/V +/- diarrhea without red flags,N,,pregnancy,Exposure/sick contacts,Hydration status,None,,"",PC,Supportive care,PC,,"UC if dehydration",PC,Return if worse 24–48h,"",,Oral rehydration,Yes,,"",GI upset cluster,,"Avoid dehydration; consider pregnancy",GI_NV_GASTRO
+GI_NV_RED_01,GI,NAUSEA_VOMITING,Severe dehydration / GI bleed / serious cause,GI upset,Red flags,Volume depletion/bleed/serious infection,High,Cannot keep fluids + blood/black stool/confusion,Y,"Coffee-ground/red emesis, black/bloody stool, confusion, severe pain","anticoagulant_use,immunocompromised,pregnancy",Dizziness/fainting, dry mouth,Shock signs,CT as indicated,CBC/CMP,ED,High-risk,ED,ED,ED,,Immediate ED evaluation,"",,Yes,,"",GI upset cluster,,"Route by red flags",GI_NV_RED
+GI_DIA_VIRAL_01,GI,DIARRHEA,Acute viral diarrhea,Diarrhea,Viral,Viral enteritis,Low,Watery diarrhea without blood or high fever,N,,,"Duration, exposures",Mild tenderness,,"",PC,Supportive,PC,,"UC if dehydration",PC,Return if >7d,"",,Oral rehydration,Yes,,"",Diarrhea cluster,,"Avoid dehydration",GI_DIA_VIRAL
+GI_DIA_CDIFF_01,GI,DIARRHEA,C. difficile concern,Diarrhea,Antibiotic-associated,Toxin-mediated colitis,Moderate,Recent antibiotics + watery diarrhea +/- fever,N,,"recent_antibiotics",Recent antibiotics,Abdominal tenderness,,"Stool C diff",UC,May need testing/treatment,UC,"ED if severe pain/blood",UC,PC if mild,Follow-up if worse,"",,Hydration,Yes,,"",Diarrhea cluster,,"Test if antibiotic exposure",GI_DIA_CDIFF
+GI_CONS_SIMPLE_01,GI,CONSTIPATION,Functional constipation,Constipation,Functional,Low motility/diet/meds,Low,No BM >3 days without red flags,N,,,"Opioids, diet, fluids",Mild distention,,"",PC,Supportive and laxatives,PC,,"UC if severe pain/vomiting",PC,Reassess in 48–72h,"",,Fiber/fluids,Yes,,"",Constipation cluster,,"Escalate if obstruction signs",GI_CONS_SIMPLE
+GI_CONS_OBS_01,GI,CONSTIPATION,Bowel obstruction concern,Constipation,Obstruction,Mechanical obstruction,High,Vomiting + no gas + severe distention,Y,"Cannot pass gas, vomiting, severe distention, severe pain","surgery_history",Prior surgery,Distention/tinkling/rigid,CT abdomen,CBC/CMP,ED,High-risk,ED,ED,ED,,Immediate ED evaluation,"",,Yes,,"",Constipation cluster,,"Red flags route to ED",GI_CONS_OBS
+
+3) GI Medications CSV (ROW_KEY in Notes, UPSERT by Notes)
+
+Save as: server/imports/GI/CLINICAL_MEDICATIONS_GI.csv
+Import (UPSERT by Notes):
+
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/GI/CLINICAL_MEDICATIONS_GI.csv upsert Notes
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+GI_NV_GASTRO_01,GI,Ondansetron,Antiemetic,Nausea/vomiting support,Yes,"4–8 mg PO/ODT q8h PRN","24 mg/day","Peds per clinician","Clinician guidance",QT prolongation risk,QT-prolonging meds,Headache/constipation,Oral/ODT,No,Caution,"ROW_KEY=GI_NV_GASTRO_01|Ondansetron"
+GI_NV_GASTRO_01,GI,Oral rehydration solution (ORS),Supportive,Dehydration prevention,Yes,"Frequent small sips","", "Peds per clinician","Safe","",,"",Oral,No,No,"ROW_KEY=GI_NV_GASTRO_01|ORS"
+GI_NV_GASTRO_01,GI,Bismuth subsalicylate,Antidiarrheal/Supportive,Gastroenteritis supportive,No,"524 mg PO q30–60 min PRN","", "Avoid young children; clinician guidance","Avoid in pregnancy if concerned; clinician guidance",Salicylate allergy/bleeding risk,Anticoagulants,Black stool/constipation,Oral,No,No,"ROW_KEY=GI_NV_GASTRO_01|Bismuth"
+
+GI_DIA_VIRAL_01,GI,Loperamide,Antidiarrheal,Viral diarrhea symptom relief,No,"4 mg once then 2 mg after each loose stool","16 mg/day","Avoid in young children; clinician guidance","Clinician guidance",Bloody diarrhea/high fever suspicion,,Constipation,Oral,No,No,"ROW_KEY=GI_DIA_VIRAL_01|Loperamide"
+GI_DIA_VIRAL_01,GI,ORS (oral rehydration solution),Supportive,Diarrhea hydration,Yes,"Frequent small sips","", "Peds per clinician","Safe","",,"",Oral,No,No,"ROW_KEY=GI_DIA_VIRAL_01|ORS"
+GI_DIA_CDIFF_01,GI,Stool testing (C. diff PCR/toxin),Testing,C diff evaluation,Yes,"If recent antibiotics + watery diarrhea","", "","",,,"",Lab,No,No,"ROW_KEY=GI_DIA_CDIFF_01|StoolTest"
+
+GI_CONS_SIMPLE_01,GI,Polyethylene glycol (PEG 3350),Osmotic laxative,Constipation first-line,Yes,"17 g in water daily PRN","", "Peds per clinician","Generally ok; clinician guidance",Bowel obstruction,,Bloating,Oral,Caution,No,"ROW_KEY=GI_CONS_SIMPLE_01|PEG"
+GI_CONS_SIMPLE_01,GI,Senna,Stimulant laxative,Constipation alternative,No,"8.6–17.2 mg PO qHS PRN","", "Peds per clinician","Clinician guidance",Bowel obstruction,,Cramping,Oral,Caution,No,"ROW_KEY=GI_CONS_SIMPLE_01|Senna"
+GI_CONS_SIMPLE_01,GI,Docusate,Stool softener,Constipation supportive,No,"100 mg PO BID PRN","", "Peds per clinician","Generally ok",,,"",Oral,No,No,"ROW_KEY=GI_CONS_SIMPLE_01|Docusate"
+
+GI_ABD_BILIARY_01,GI,Acetaminophen,Analgesic/Antipyretic,Abdominal pain supportive,Yes,"650–1000 mg q6–8h PRN","3000 mg/day","Peds per clinician","Generally ok",Severe liver disease,Alcohol,GI upset (rare),Oral,No,Caution,"ROW_KEY=GI_ABD_BILIARY_01|Acetaminophen"
+GI_ABD_BILIARY_01,GI,Ibuprofen,NSAID,Abdominal pain supportive,No,"400–600 mg q6–8h PRN","2400 mg/day","Peds per clinician","Avoid in pregnancy (late) and clinician guidance",CKD/GI bleed risk,Anticoagulants,GI upset,Oral,Caution,Caution,"ROW_KEY=GI_ABD_BILIARY_01|Ibuprofen"
+
+GI_NV_RED_01,GI,Emergency referral (ED),Disposition Aid,GI red flag escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=GI_NV_RED_01|EDReferral"
+GI_CONS_OBS_01,GI,Emergency referral (ED),Disposition Aid,Obstruction concern escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=GI_CONS_OBS_01|EDReferral"
+GI_ABD_RED_01,GI,Emergency referral (ED),Disposition Aid,Acute abdomen escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=GI_ABD_RED_01|EDReferral"
+
+Import order for GI (recommended)
+
+Questions
+
+Rules
+
+Diagnoses
+
+Medications
+
+This keeps your rule references consistent.
