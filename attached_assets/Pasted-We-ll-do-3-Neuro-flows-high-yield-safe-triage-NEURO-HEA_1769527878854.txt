@@ -1,0 +1,428 @@
+We’ll do 3 Neuro flows (high-yield, safe triage):
+
+NEURO_HEADACHE_V1 (HEADACHE)
+
+NEURO_WEAKNESS_V1 (WEAKNESS_NEURO)
+
+NEURO_SEIZURE_AMS_V1 (SEIZURE_AMS)
+
+That’s 57 questions (3 × 19), plus rules, diagnoses, meds.
+
+0) Folder + import commands
+
+Create:
+
+server/imports/NEURO/
+
+
+Run (recommended order):
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/NEURO/CLINICAL_QUESTIONS_NEURO.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/NEURO/CLINICAL_RULES_NEURO.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/NEURO/CLINICAL_DIAGNOSES_NEURO.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/NEURO/CLINICAL_MEDICATIONS_NEURO.csv upsert Notes
+
+1) CLINICAL_QUESTIONS_NEURO.csv (57)
+
+Save: server/imports/NEURO/CLINICAL_QUESTIONS_NEURO.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,1,NEURO_HA_01,"Worst headache of life or sudden thunderclap onset?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,2,NEURO_HA_02,"Headache started suddenly (max intensity within 1 minute)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,3,NEURO_HA_03,"New weakness, numbness, or facial droop?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,4,NEURO_HA_04,"Trouble speaking or understanding speech?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,5,NEURO_HA_05,"Vision changes or double vision?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,6,NEURO_HA_06,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,7,NEURO_HA_07,"Neck stiffness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,8,NEURO_HA_08,"Confusion or new mental status change?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,9,NEURO_HA_09,"Seizure occurred with the headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,10,NEURO_HA_10,"Head injury or fall recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,11,NEURO_HA_11,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,12,NEURO_HA_12,"Pregnant or within 6 weeks postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,13,NEURO_HA_13,"Age 50+ with new or different headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,14,NEURO_HA_14,"Headache with eye pain/red eye or halos?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,15,NEURO_HA_15,"Headache wakes you from sleep or worse when lying down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,16,NEURO_HA_16,"History of migraine headaches?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,17,NEURO_HA_17,"Severe vomiting or cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,18,NEURO_HA_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,CORE,19,NEURO_HA_19,"Immunocompromised or known cancer?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,1,NEURO_WK_01,"Sudden onset weakness or numbness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,2,NEURO_WK_02,"One-sided weakness, numbness, or facial droop?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,3,NEURO_WK_03,"Trouble speaking or understanding speech?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,4,NEURO_WK_04,"Vision changes or double vision?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,5,NEURO_WK_05,"Severe dizziness/vertigo or trouble walking?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,6,NEURO_WK_06,"Severe headache with weakness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,7,NEURO_WK_07,"Recent fall or head injury?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,8,NEURO_WK_08,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,9,NEURO_WK_09,"Seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,10,NEURO_WK_10,"Confusion or new mental status change?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,11,NEURO_WK_11,"Fever or signs of infection?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,12,NEURO_WK_12,"Severe neck/back pain or new bladder/bowel issues?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,13,NEURO_WK_13,"New severe numbness in groin/saddle area?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,14,NEURO_WK_14,"Pregnant or within 6 weeks postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,15,NEURO_WK_15,"Age 60+ or history of stroke/TIA/atrial fibrillation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,16,NEURO_WK_16,"Symptoms improving within an hour (possible TIA)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,17,NEURO_WK_17,"Severe shortness of breath or chest pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,18,NEURO_WK_18,"Immunocompromised or known cancer?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,CORE,19,NEURO_WK_19,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,1,NEURO_AMS_01,"Seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,2,NEURO_AMS_02,"Still confused or not back to normal now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,3,NEURO_AMS_03,"Trouble breathing or turning blue during/after episode?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,4,NEURO_AMS_04,"Head injury or fall?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,5,NEURO_AMS_05,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,6,NEURO_AMS_06,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,7,NEURO_AMS_07,"Neck stiffness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,8,NEURO_AMS_08,"New weakness/numbness or facial droop?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,9,NEURO_AMS_09,"Trouble speaking or understanding speech?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,10,NEURO_AMS_10,"Severe headache (especially sudden/worst)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,11,NEURO_AMS_11,"Low blood sugar risk (diabetes/insulin) or could be hypoglycemia?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,12,NEURO_AMS_12,"Alcohol/drug use or withdrawal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,13,NEURO_AMS_13,"New medication or missed seizure meds?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,14,NEURO_AMS_14,"Pregnant or within 6 weeks postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,15,NEURO_AMS_15,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,16,NEURO_AMS_16,"Age 60+ or known stroke/TIA history?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,17,NEURO_AMS_17,"Persistent vomiting or cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,18,NEURO_AMS_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,CORE,19,NEURO_AMS_19,"Severe weakness or unable to walk?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+2) CLINICAL_RULES_NEURO.csv (KV schema)
+
+Save: server/imports/NEURO/CLINICAL_RULES_NEURO.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES server/imports/NEURO/CLINICAL_RULES_NEURO.csv upsert rule_key
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+NEURO_HEADACHE_V1,NEURO,HEADACHE,NEURO_HA,NEURO_HEADACHE_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,NEURO_HA,NEURO_HEADACHE_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+NEURO_HEADACHE_V1,NEURO,HEADACHE,NEURO_HA,NEURO_HEADACHE_V1_MED_PACK,text,HEADACHE_SUPPORTIVE_PACK,Y
+
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,NEURO_WK,NEURO_WEAKNESS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NEURO_WEAKNESS_V1,NEURO,WEAKNESS_NEURO,NEURO_WK,NEURO_WEAKNESS_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,NEURO_AMS,NEURO_SEIZURE_AMS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,NEURO_AMS,NEURO_SEIZURE_AMS_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NEURO_SEIZURE_AMS_V1,NEURO,SEIZURE_AMS,NEURO_AMS,NEURO_SEIZURE_AMS_V1_TEST_PACK,text,GLUCOSE_EVAL_PACK,Y
+
+3) CLINICAL_DIAGNOSES_NEURO.csv (your exact headers)
+
+Save: server/imports/NEURO/CLINICAL_DIAGNOSES_NEURO.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES server/imports/NEURO/CLINICAL_DIAGNOSES_NEURO.csv upsert "Diagnosis ID"
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+NEURO_HA_MIGRAINE_01,NEURO,HEADACHE,Migraine headache,Headache,Primary,Migraine physiology,Moderate,Recurrent headache with typical migraine features,N,,,"Aura, photophobia, nausea, prior history",Normal neuro exam,,"",PC,Supportive outpatient,PC,,"UC if severe/new",PC,Return if new neuro deficits,,"",Hydration/dark room/NSAIDs if appropriate,Yes,,"",Headache cluster,,"Escalate if thunderclap/AMS/neuro deficits",NEURO_HA_MIGRAINE
+NEURO_HA_RED_01,NEURO,HEADACHE,Intracranial bleed/SAH/meningitis concern,Headache,Red flags,Bleed/infection/space-occupying lesion,High,Thunderclap/worst headache or fever+neck stiffness or neuro deficits,Y,"Thunderclap/worst headache, neck stiffness+fever, neuro deficits, AMS, anticoagulants, head trauma",anticoagulant_use,Onset sudden; fever; neck stiffness; neuro deficits,Neuro deficits/meningeal signs,CT/MRI as indicated,CBC/CMP,ED,Time-critical evaluation,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Headache cluster,,"Route by red flags",NEURO_HA_RED
+NEURO_WK_STROKE_01,NEURO,WEAKNESS_NEURO,Stroke/TIA concern,Weakness,Stroke/TIA,Vascular event,High,Sudden focal deficit +/- speech/vision issues,Y,"Sudden weakness/numbness, facial droop, speech difficulty, vision changes, ataxia",vascular_risk,Time last known well,FAST findings,CT/MRI,,"ED",Time-critical stroke protocol,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Weakness cluster,,"Do not delay ED evaluation",NEURO_WK_STROKE
+NEURO_WK_SPINE_01,NEURO,WEAKNESS_NEURO,Spinal cord compression / cauda equina concern,Weakness,Spine,Compression,High,Weakness + severe back pain + bladder/bowel changes or saddle anesthesia,Y,"Severe back pain with new neuro deficits, saddle anesthesia, bladder/bowel changes",,Bladder/bowel changes; saddle numbness,Decreased sensation/weakness,MRI spine,,"ED",Neurologic emergency,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Weakness cluster,,"Route by spine red flags",NEURO_WK_SPINE
+NEURO_AMS_HYPO_01,NEURO,SEIZURE_AMS,Hypoglycemia or metabolic cause,AMS,Metabolic,Low glucose/metabolic derangement,High,Diabetes/insulin + confusion or seizure,Y,"Diabetes/insulin with confusion/seizure; persistent AMS",diabetes,Last meal; insulin use; symptoms,AMS,,"Glucose check",ED,Potentially life-threatening,ED,ED,ED,,Immediate ED evaluation if persistent AMS,,"",,Yes,,"",AMS cluster,,"Check glucose urgently",NEURO_AMS_HYPO
+NEURO_AMS_SEIZURE_01,NEURO,SEIZURE_AMS,Seizure/postictal state concern,AMS,Seizure,Seizure disorder,High,Seizure + not back to baseline or new focal deficits,Y,"Persistent AMS, recurrent seizures, injury, anticoagulants, fever/neck stiffness",anticoagulant_use,"Seizure duration; meds missed; fever",Postictal confusion,CT as indicated,CBC/CMP,ED,High-risk until stable,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",AMS cluster,,"Err on ED if not baseline",NEURO_AMS_SEIZURE
+
+4) CLINICAL_MEDICATIONS_NEURO.csv (ROW_KEY in Notes)
+
+Save: server/imports/NEURO/CLINICAL_MEDICATIONS_NEURO.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/NEURO/CLINICAL_MEDICATIONS_NEURO.csv upsert Notes
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+NEURO_HA_MIGRAINE_01,NEURO,Acetaminophen,Analgesic/Antipyretic,Headache supportive,Yes,"650–1000 mg q6–8h PRN","3000 mg/day","Peds per clinician","Generally ok",Severe liver disease,Alcohol,GI upset (rare),Oral,No,Caution,"ROW_KEY=NEURO_HA_MIGRAINE_01|Acetaminophen"
+NEURO_HA_MIGRAINE_01,NEURO,Ibuprofen,NSAID,Headache supportive,No,"400–600 mg q6–8h PRN","2400 mg/day","Peds per clinician","Avoid late pregnancy; clinician guidance",CKD/GI bleed risk,Anticoagulants,GI upset,Oral,Caution,Caution,"ROW_KEY=NEURO_HA_MIGRAINE_01|Ibuprofen"
+NEURO_HA_RED_01,NEURO,Emergency referral (ED),Disposition Aid,Headache red flag escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_HA_RED_01|EDReferral"
+
+NEURO_WK_STROKE_01,NEURO,Emergency referral (ED),Disposition Aid,Stroke/TIA escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_WK_STROKE_01|EDReferral"
+NEURO_WK_SPINE_01,NEURO,Emergency referral (ED),Disposition Aid,Spine emergency escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_WK_SPINE_01|EDReferral"
+
+NEURO_AMS_HYPO_01,NEURO,Glucose check (point-of-care),Testing/Support,AMS metabolic evaluation,Yes,"Check blood glucose immediately","", "","",,,"",POC,No,No,"ROW_KEY=NEURO_AMS_HYPO_01|GlucoseCheck"
+NEURO_AMS_SEIZURE_01,NEURO,Emergency referral (ED),Disposition Aid,Seizure/AMS escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_AMS_SEIZURE_01|EDReferral"
+
+
+If you want the next system after Neuro, the usual high-yield sequence is GU/STD (dysuria, discharge, pelvic pain, testicular pain) or Cardiology (chest pain, palpitations, syncope).
+
+will this cover head trauma? syncope? chronic pain and neuropathy?  what system or complaint covers these?
+
+Not fully yet. The Neuro pack you just got is acute neuro triage (headache, focal weakness/stroke red flags, seizure/AMS). It touches head trauma and syncope only as red-flag questions, but it doesn’t give you dedicated flows for them. Chronic pain/neuropathy also needs its own flows.
+
+Here’s how to cover each one cleanly without adding tabs (just add new flows/rows to the same 5 tabs).
+
+Head trauma
+Where it belongs
+
+NEURO system.
+
+Add a dedicated complaint/flow
+
+Flow: NEURO_HEAD_TRAUMA_V1
+
+Chief complaint: HEAD_TRAUMA (or CONCUSSION if you prefer)
+
+Why
+
+Head trauma needs targeted questions (LOC, vomiting, anticoagulants, seizure, worsening headache, neuro deficit), and rules/diagnoses for:
+
+concussion
+
+intracranial bleed risk
+
+skull fracture red flags
+
+Syncope / near-syncope
+Where it belongs
+
+Usually CARDIO (primary), with overlap in neuro/metabolic.
+
+Add a dedicated system + complaint
+
+System: CARDIO
+
+Flow: CARDIO_SYNCOPE_V1
+
+Chief complaint: SYNCOPE
+
+Why
+
+Syncope triage is cardiac first: chest pain, palpitations, exertional syncope, family history sudden death, abnormal vitals, GI bleed, pregnancy, etc. Neuro questions are secondary.
+
+Chronic pain
+Where it belongs
+
+Depends on location, but a practical structure is:
+
+MSK: back pain, neck pain, joint pain
+
+NEURO: headache chronic, neuropathic pain syndromes (sciatica overlaps)
+
+RHEUM (optional later): inflammatory patterns
+
+If you want simplest coverage now
+
+Add an MSK system with:
+
+MSK_BACK_PAIN_V1
+
+MSK_NECK_PAIN_V1
+
+MSK_JOINT_PAIN_V1
+
+That will cover most chronic pain intake and red flags (cauda equina, malignancy, fever/IVDU).
+
+Neuropathy (numbness/tingling, burning pain)
+Where it belongs
+
+NEURO.
+
+Add a dedicated flow
+
+Flow: NEURO_NEUROPATHY_V1
+
+Chief complaint: NEUROPATHY
+
+Why
+
+Needs pattern questions (stocking-glove, unilateral radicular, weakness, diabetes, B12 risk, chemo, alcohol), plus red flags (acute weakness, bladder/bowel).
+
+Summary table (what covers what)
+Topic	Best System	Complaint Key	Suggested Flow
+Head trauma / concussion	NEURO	HEAD_TRAUMA	NEURO_HEAD_TRAUMA_V1
+Syncope / near-syncope	CARDIO	SYNCOPE	CARDIO_SYNCOPE_V1
+Chronic pain (general)	MSK	BACK_PAIN / NECK_PAIN / JOINT_PAIN	MSK_BACK_PAIN_V1 etc.
+Neuropathy	NEURO	NEUROPATHY	NEURO_NEUROPATHY_V1
+If you want, I’ll generate the next packs now
+
+Tell me which one you want first and I’ll output the same 5-tab CSVs (questions/rules/diagnoses/meds, modifiers only if needed), UPSERT-ready:
+
+NEURO_HEAD_TRAUMA_V1
+
+CARDIO_SYNCOPE_V1
+
+NEURO_NEUROPATHY_V1
+
+MSK_BACK_PAIN_V1 (best first chronic pain flow)
+
+If you say “all four,” I’ll generate them in the order above.
+
+1, 2, 3.  I like back pain in ortho which would be nice to do next.
+
+Locked. We’ll generate 1) Head trauma, 2) Syncope, 3) Neuropathy now in the same 5 tabs, same headers, UPSERT only, ROW_KEY in meds Notes, no new tabs.
+
+Below are the CSV packs for each flow: Questions + Rules (KV schema) + Diagnoses + Medications.
+
+Create folders:
+
+server/imports/NEURO/
+server/imports/CARDIO/
+
+
+Run imports in this order for each pack:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   <questions.csv>   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       <rules.csv>       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   <diagnoses.csv>   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS <meds.csv>        upsert Notes
+
+1) NEURO_HEAD_TRAUMA_V1 (HEAD_TRAUMA)
+A) CLINICAL_QUESTIONS_NEURO_HEAD_TRAUMA.csv
+
+Save: server/imports/NEURO/CLINICAL_QUESTIONS_NEURO_HEAD_TRAUMA.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,1,NEURO_HT_01,"Head injury within the last 72 hours?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,2,NEURO_HT_02,"Lost consciousness (passed out) after the injury?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,3,NEURO_HT_03,"Repeated vomiting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,4,NEURO_HT_04,"Severe or worsening headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,5,NEURO_HT_05,"Confusion, unusual behavior, or not acting normal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,6,NEURO_HT_06,"New weakness, numbness, or trouble walking?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,7,NEURO_HT_07,"Seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,8,NEURO_HT_08,"On blood thinners (anticoagulants) or bleeding disorder?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,9,NEURO_HT_09,"Age 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,10,NEURO_HT_10,"Severe drowsiness or hard to wake?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,11,NEURO_HT_11,"Neck pain with midline tenderness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,12,NEURO_HT_12,"Fluid/blood from nose or ears?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,13,NEURO_HT_13,"Vision changes or double vision?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,14,NEURO_HT_14,"Severe dizziness or balance problems?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,15,NEURO_HT_15,"Persistent nausea?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,16,NEURO_HT_16,"Amnesia (cannot remember events before/after injury)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,17,NEURO_HT_17,"Alcohol/drug intoxication around the time of injury?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,18,NEURO_HT_18,"Severe worsening symptoms rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,CORE,19,NEURO_HT_19,"Immunocompromised or significant medical problems?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) CLINICAL_RULES_NEURO_HEAD_TRAUMA.csv (KV)
+
+Save: server/imports/NEURO/CLINICAL_RULES_NEURO_HEAD_TRAUMA.csv
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,NEURO_TRAUMA,NEURO_HEAD_TRAUMA_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,NEURO_TRAUMA,NEURO_HEAD_TRAUMA_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,NEURO_TRAUMA,NEURO_HEAD_TRAUMA_V1_TEST_PACK,text,HEAD_INJURY_EVAL_PACK,Y
+NEURO_HEAD_TRAUMA_V1,NEURO,HEAD_TRAUMA,NEURO_TRAUMA,NEURO_HEAD_TRAUMA_V1_MED_PACK,text,CONCUSSION_SUPPORTIVE_PACK,Y
+
+C) CLINICAL_DIAGNOSES_NEURO_HEAD_TRAUMA.csv
+
+Save: server/imports/NEURO/CLINICAL_DIAGNOSES_NEURO_HEAD_TRAUMA.csv
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+NEURO_HT_CONCUSSION_01,NEURO,HEAD_TRAUMA,Concussion / mild traumatic brain injury,Head trauma,Concussion,Functional brain injury,Moderate,Head injury + symptoms (headache/dizziness/nausea) without red flags,N,,anticoagulant_use,"LOC, amnesia, vomiting, worsening headache",Normal neuro exam often,,"",UC,Needs evaluation and precautions,UC,"ED if red flags",UC,PC if mild,Return precautions; rest and gradual return,"",,Cognitive/physical rest,Yes,,"",Head trauma cluster,,"Escalate if worsening/AMS",NEURO_HT_CONCUSSION
+NEURO_HT_ICH_01,NEURO,HEAD_TRAUMA,Intracranial bleed concern,Head trauma,Red flags,Hemorrhage,High,Head injury + anticoagulant/age65/LOC/vomiting/worsening HA/AMS,Y,"Anticoagulants, age 65+, repeated vomiting, worsening headache, AMS, focal deficit",anticoagulant_use,"LOC, vomiting, confusion",AMS/focal deficit,CT head,,"ED",Time-critical evaluation,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Head trauma cluster,,"Do not delay imaging/ED",NEURO_HT_ICH
+NEURO_HT_CSPINE_01,NEURO,HEAD_TRAUMA,Cervical spine injury concern,Head trauma,C-spine,Traumatic injury,High,Midline neck tenderness/neurologic deficit,Y,"Midline tenderness, neuro deficit, high-risk mechanism",,Mechanism; neck pain,Midline tenderness,CT C-spine,,"ED",Spine emergency risk,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Head trauma cluster,,"Escalate if neck midline tenderness",NEURO_HT_CSPINE
+
+D) CLINICAL_MEDICATIONS_NEURO_HEAD_TRAUMA.csv (ROW_KEY)
+
+Save: server/imports/NEURO/CLINICAL_MEDICATIONS_NEURO_HEAD_TRAUMA.csv
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+NEURO_HT_CONCUSSION_01,NEURO,Acetaminophen,Analgesic/Antipyretic,Concussion supportive,Yes,"650–1000 mg q6–8h PRN","3000 mg/day","Peds per clinician","Generally ok",Severe liver disease,Alcohol,GI upset (rare),Oral,No,Caution,"ROW_KEY=NEURO_HT_CONCUSSION_01|Acetaminophen"
+NEURO_HT_CONCUSSION_01,NEURO,Ondansetron,Antiemetic,Concussion nausea support,No,"4–8 mg PO/ODT q8h PRN","24 mg/day","Peds per clinician","Clinician guidance",QT prolongation risk,QT-prolonging meds,Headache/constipation,Oral/ODT,No,Caution,"ROW_KEY=NEURO_HT_CONCUSSION_01|Ondansetron"
+NEURO_HT_ICH_01,NEURO,Emergency referral (ED),Disposition Aid,Head trauma red flag escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_HT_ICH_01|EDReferral"
+NEURO_HT_CSPINE_01,NEURO,Emergency referral (ED),Disposition Aid,C-spine concern escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_HT_CSPINE_01|EDReferral"
+
+2) CARDIO_SYNCOPE_V1 (SYNCOPE)
+A) CLINICAL_QUESTIONS_CARDIO_SYNCOPE.csv
+
+Save: server/imports/CARDIO/CLINICAL_QUESTIONS_CARDIO_SYNCOPE.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,1,CARDIO_SYNC_01,"Passed out (true loss of consciousness)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,2,CARDIO_SYNC_02,"Nearly passed out (near-syncope) with severe symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,3,CARDIO_SYNC_03,"Chest pain or chest pressure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,4,CARDIO_SYNC_04,"Palpitations before passing out?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,5,CARDIO_SYNC_05,"Shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,6,CARDIO_SYNC_06,"Syncope during exertion (exercise) or while lying down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,7,CARDIO_SYNC_07,"Injury from the fall (head injury)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,8,CARDIO_SYNC_08,"New weakness/numbness or trouble speaking?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,9,CARDIO_SYNC_09,"Seizure-like activity during event?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,10,CARDIO_SYNC_10,"Fever or severe infection symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,11,CARDIO_SYNC_11,"Black stools or vomiting blood (GI bleed concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,12,CARDIO_SYNC_12,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,13,CARDIO_SYNC_13,"Dehydration (poor intake, vomiting/diarrhea) before event?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,14,CARDIO_SYNC_14,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,15,CARDIO_SYNC_15,"Known heart disease, heart failure, or abnormal rhythm?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,16,CARDIO_SYNC_16,"Family history of sudden cardiac death?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,17,CARDIO_SYNC_17,"Diabetes/insulin or low blood sugar risk?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,18,CARDIO_SYNC_18,"Symptoms worsening rapidly or repeated episodes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CORE,19,CARDIO_SYNC_19,"Age 60+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) CLINICAL_RULES_CARDIO_SYNCOPE.csv (KV)
+
+Save: server/imports/CARDIO/CLINICAL_RULES_CARDIO_SYNCOPE.csv
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CARDIO_SYNC,CARDIO_SYNCOPE_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CARDIO_SYNC,CARDIO_SYNCOPE_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+CARDIO_SYNCOPE_V1,CARDIO,SYNCOPE,CARDIO_SYNC,CARDIO_SYNCOPE_V1_TEST_PACK,text,ECG_ORTHOSTATICS_GLUCOSE_PACK,Y
+
+C) CLINICAL_DIAGNOSES_CARDIO_SYNCOPE.csv
+
+Save: server/imports/CARDIO/CLINICAL_DIAGNOSES_CARDIO_SYNCOPE.csv
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+CARDIO_SYNC_RED_01,CARDIO,SYNCOPE,High-risk syncope (cardiac/serious cause concern),Syncope,Red flags,Arrhythmia/structural disease/bleed/PE,High,Syncope with chest pain/palpitations/exertion/SOB/neurologic deficits/GI bleed,Y,"Chest pain, palpitations, exertional syncope, SOB, neuro deficits, GI bleed, anticoagulants",anticoagulant_use,"Prodrome, exertion, palpitations, GI bleed symptoms",Abnormal vitals possible,,"ECG + glucose",ED,High-risk until proven otherwise,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Syncope cluster,,"Default to ED for true syncope",CARDIO_SYNC_RED
+CARDIO_SYNC_VASO_01,CARDIO,SYNCOPE,Vasovagal syncope / dehydration-related,Syncope,Vasovagal,Reflex hypotension/dehydration,Moderate,Clear trigger + prodrome + quick recovery and no red flags,N,,,"Trigger, standing, heat, dehydration",Normal exam,,"",UC,Needs evaluation to rule out high-risk causes,UC,"ED if red flags",UC,PC if classic and mild,Hydration and follow-up,"",,Hydration/slow position changes,Yes,,"",Syncope cluster,,"Even likely vasovagal should be evaluated if true syncope",CARDIO_SYNC_VASO
+
+D) CLINICAL_MEDICATIONS_CARDIO_SYNCOPE.csv (ROW_KEY)
+
+Save: server/imports/CARDIO/CLINICAL_MEDICATIONS_CARDIO_SYNCOPE.csv
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+CARDIO_SYNC_VASO_01,CARDIO,Oral rehydration solution (ORS),Supportive,Dehydration support,Yes,"Frequent small sips","", "Peds per clinician","Safe","",,"",Oral,No,No,"ROW_KEY=CARDIO_SYNC_VASO_01|ORS"
+CARDIO_SYNC_RED_01,CARDIO,ECG evaluation,Testing/Support,High-risk syncope evaluation,Yes,"12-lead ECG","", "","",,,"",Test,No,No,"ROW_KEY=CARDIO_SYNC_RED_01|ECG"
+CARDIO_SYNC_RED_01,CARDIO,Glucose check (point-of-care),Testing/Support,Syncope metabolic evaluation,Yes,"Check blood glucose","", "","",,,"",POC,No,No,"ROW_KEY=CARDIO_SYNC_RED_01|GlucoseCheck"
+CARDIO_SYNC_RED_01,CARDIO,Emergency referral (ED),Disposition Aid,High-risk syncope escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=CARDIO_SYNC_RED_01|EDReferral"
+
+3) NEURO_NEUROPATHY_V1 (NEUROPATHY)
+A) CLINICAL_QUESTIONS_NEURO_NEUROPATHY.csv
+
+Save: server/imports/NEURO/CLINICAL_QUESTIONS_NEURO_NEUROPATHY.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,1,NEURO_NP_01,"Numbness or tingling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,2,NEURO_NP_02,"Burning pain in hands/feet?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,3,NEURO_NP_03,"Weakness in arms or legs?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,4,NEURO_NP_04,"Symptoms started suddenly (hours–1 day)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,5,NEURO_NP_05,"One-sided symptoms only?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,6,NEURO_NP_06,"Stocking-glove pattern (both feet/hands)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,7,NEURO_NP_07,"Back pain with radiating leg pain (sciatica)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,8,NEURO_NP_08,"Neck pain with radiating arm pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,9,NEURO_NP_09,"Diabetes or high blood sugar?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,10,NEURO_NP_10,"Heavy alcohol use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,11,NEURO_NP_11,"B12 deficiency risk (poor diet, gastric surgery) or anemia?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,12,NEURO_NP_12,"Cancer history or chemotherapy exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,13,NEURO_NP_13,"Fever or signs of infection?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,14,NEURO_NP_14,"New bladder or bowel problems?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,15,NEURO_NP_15,"Saddle anesthesia (numbness in groin area)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,16,NEURO_NP_16,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,17,NEURO_NP_17,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,18,NEURO_NP_18,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,CORE,19,NEURO_NP_19,"Age 60+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) CLINICAL_RULES_NEURO_NEUROPATHY.csv (KV)
+
+Save: server/imports/NEURO/CLINICAL_RULES_NEURO_NEUROPATHY.csv
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,NEURO_NP,NEURO_NEUROPATHY_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,NEURO_NP,NEURO_NEUROPATHY_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,NEURO_NP,NEURO_NEUROPATHY_V1_TEST_PACK,text,NEUROPATHY_BASIC_LABS_PACK,Y
+NEURO_NEUROPATHY_V1,NEURO,NEUROPATHY,NEURO_NP,NEURO_NEUROPATHY_V1_MED_PACK,text,NEUROPATHY_SUPPORTIVE_PACK,Y
+
+C) CLINICAL_DIAGNOSES_NEURO_NEUROPATHY.csv
+
+Save: server/imports/NEURO/CLINICAL_DIAGNOSES_NEURO_NEUROPATHY.csv
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+NEURO_NP_DIAB_01,NEURO,NEUROPATHY,Diabetic peripheral neuropathy,Neuropathy,Diabetes,Chronic nerve injury,Moderate,Stocking-glove numbness/tingling + diabetes,N,,diabetes,Duration/pattern,Decreased sensation,,"A1c/B12/CBC/CMP as indicated",PC,Outpatient management,PC,,"UC if rapid weakness",PC,Follow-up with PCP,,"",Foot care/safety,Yes,,"",Neuropathy cluster,,"Screen for red flags and foot injury",NEURO_NP_DIAB
+NEURO_NP_RADIC_01,NEURO,NEUROPATHY,Radiculopathy (sciatica/cervical radiculopathy),Neuropathy,Radiculopathy,Nerve root irritation/compression,Moderate,Radiating pain with dermatomal symptoms,N,,"",Back/neck pain; weakness,Neuro exam as indicated,Imaging if red flags,,"PC/UC",Depends severity,UC,"ED if cauda equina",UC,PC if mild,Return precautions,"",,Activity modification,Yes,,"",Neuropathy cluster,,"If bladder/bowel or saddle anesthesia -> ED",NEURO_NP_RADIC
+NEURO_NP_CEQ_01,NEURO,NEUROPATHY,Cauda equina / spinal cord compression concern,Neuropathy,Red flags,Compression,High,New bladder/bowel changes or saddle anesthesia + weakness,Y,"Bladder/bowel changes, saddle anesthesia, rapidly worsening weakness",,Back pain; urinary retention,Weakness/sensory loss,MRI spine,,"ED",Neurologic emergency,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Neuropathy cluster,,"Do not delay imaging/ED",NEURO_NP_CEQ
+
+D) CLINICAL_MEDICATIONS_NEURO_NEUROPATHY.csv (ROW_KEY)
+
+Save: server/imports/NEURO/CLINICAL_MEDICATIONS_NEURO_NEUROPATHY.csv
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+NEURO_NP_RADIC_01,NEURO,Acetaminophen,Analgesic/Antipyretic,Neuropathic pain supportive,Yes,"650–1000 mg q6–8h PRN","3000 mg/day","Peds per clinician","Generally ok",Severe liver disease,Alcohol,GI upset (rare),Oral,No,Caution,"ROW_KEY=NEURO_NP_RADIC_01|Acetaminophen"
+NEURO_NP_RADIC_01,NEURO,Ibuprofen,NSAID,Radicular pain supportive,No,"400–600 mg q6–8h PRN","2400 mg/day","Peds per clinician","Avoid late pregnancy; clinician guidance",CKD/GI bleed risk,Anticoagulants,GI upset,Oral,Caution,Caution,"ROW_KEY=NEURO_NP_RADIC_01|Ibuprofen"
+NEURO_NP_CEQ_01,NEURO,Emergency referral (ED),Disposition Aid,Cauda equina escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NEURO_NP_CEQ_01|EDReferral"
+
+Quick reminder: you said Ortho back pain next
