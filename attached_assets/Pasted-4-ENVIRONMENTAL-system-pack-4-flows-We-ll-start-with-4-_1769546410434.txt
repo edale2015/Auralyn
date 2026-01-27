@@ -1,0 +1,171 @@
+4) ENVIRONMENTAL system pack (4 flows)
+
+We’ll start with 4 high-yield environmental flows (19 questions each = 76) and expand later:
+
+ENV_BITE_STING_V1 (BITE_STING)
+
+ENV_HEAT_ILLNESS_V1 (HEAT_ILLNESS)
+
+ENV_CO_EXPOSURE_V1 (CO_EXPOSURE)
+
+ENV_CHEM_EXPOSURE_V1 (CHEMICAL_EXPOSURE)
+
+Save + import
+
+Create:
+
+server/imports/ENV/
+
+
+Import order:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/ENV/CLINICAL_QUESTIONS_ENV.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/ENV/CLINICAL_RULES_ENV.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/ENV/CLINICAL_DIAGNOSES_ENV.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/ENV/CLINICAL_MEDICATIONS_ENV.csv upsert Notes
+
+CLINICAL_RULES_ENV.csv (KV)
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,ENV_BITE,ENV_BITE_STING_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,ENV_BITE,ENV_BITE_STING_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,ENV_BITE,ENV_BITE_STING_V1_MED_PACK,text,BITE_STING_SUPPORTIVE_PACK,Y
+
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,ENV_HEAT,ENV_HEAT_ILLNESS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,ENV_HEAT,ENV_HEAT_ILLNESS_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_supportive,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,ENV_HEAT,ENV_HEAT_ILLNESS_V1_MED_PACK,text,HEAT_ILLNESS_SUPPORT_PACK,Y
+
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,ENV_CO,ENV_CO_EXPOSURE_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,ENV_CO,ENV_CO_EXPOSURE_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,ENV_CO,ENV_CO_EXPOSURE_V1_TEST_PACK,text,CO_LEVEL_O2_PACK,Y
+
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,ENV_CHEM,ENV_CHEM_EXPOSURE_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,ENV_CHEM,ENV_CHEM_EXPOSURE_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,ENV_CHEM,ENV_CHEM_EXPOSURE_V1_MED_PACK,text,CHEM_EXPOSURE_DECONTAM_PACK,Y
+
+CLINICAL_DIAGNOSES_ENV.csv
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+ENV_ANAPHYLAXIS_01,ENVIRONMENTAL,BITE_STING,Anaphylaxis concern (sting/food exposure),Environmental,Bite/Sting,Systemic allergic reaction,High,Hives + breathing/throat swelling or fainting,Y,"Trouble breathing, throat/tongue swelling, fainting, severe GI symptoms",anaphylaxis_history,Timing; exposure,Angioedema/wheeze,,"",ED,Life-threatening airway/circulation risk,ED,ED,ED,,Immediate ED evaluation (epi if indicated),,"",,Yes,,"",Environmental red flags,"ROW_KEY=ENV_ANAPHYLAXIS_01|EDReferral",Use Derm epi too,ENV_ANAPHYLAXIS
+ENV_LOCAL_REACTION_01,ENVIRONMENTAL,BITE_STING,Localized bite/sting reaction,Environmental,Bite/Sting,Local inflammation,Low,Localized redness/itching without systemic symptoms,N,,,"Location, expanding?",Local swelling,,"",PC,Supportive,PC,,"UC if spreading cellulitis",PC,Return if worse,,"",Cool compress/antihistamine,Yes,,"",Environmental cluster,"ROW_KEY=ENV_LOCAL_REACTION_01|Cetirizine","Monitor for infection",ENV_LOCAL
+ENV_HEAT_EXHAUST_01,ENVIRONMENTAL,HEAT_ILLNESS,Heat exhaustion,Environmental,Heat,Dehydration/heat stress,Moderate,Heat exposure + weakness/dizziness without AMS,N,,,"Exposure duration; hydration",Tachycardia possible,,"",UC,May need rehydration,UC,"ED if AMS",UC,PC if mild,Recheck if worse,,"",Cooling/fluids,Yes,,"",Environmental cluster,"ROW_KEY=ENV_HEAT_EXHAUST_01|ORS","Escalate if confusion",ENV_HEAT_EXHAUST
+ENV_HEAT_STROKE_01,ENVIRONMENTAL,HEAT_ILLNESS,Heat stroke concern,Environmental,Heat,Hyperthermia with AMS,High,Heat exposure + confusion/seizure,Y,"Confusion, seizure, very high temp",,AMS,AMS,,"",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Environmental red flags,"ROW_KEY=ENV_HEAT_STROKE_01|EDReferral","Time critical cooling",ENV_HEAT_STROKE
+ENV_CO_POISON_01,ENVIRONMENTAL,CO_EXPOSURE,Carbon monoxide poisoning concern,Environmental,CO,Toxic exposure,High,Headache+dizziness+nausea + exposure and others affected,Y,"Multiple people symptomatic, AMS, pregnancy",pregnancy,Source exposure; others ill,AMS possible,,"CO level",ED,Potentially fatal,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Environmental red flags,"ROW_KEY=ENV_CO_POISON_01|EDReferral","Remove from source; oxygen",ENV_CO_POISON
+ENV_CHEM_IRRIT_01,ENVIRONMENTAL,CHEMICAL_EXPOSURE,Chemical irritant exposure (skin/eyes/lungs),Environmental,Chemical,Irritant injury,Moderate,Exposure + irritation; no severe symptoms,N,,,"What chemical? eyes/skin/lungs?",Irritation,,"",UC,Needs decontam guidance,UC,"ED if respiratory distress/eye injury",UC,PC if mild,Follow-up PRN,,"",Flush/decontam,Yes,,"",Environmental cluster,"ROW_KEY=ENV_CHEM_IRRIT_01|Decon","Eye pain/vision change -> ED",ENV_CHEM_IRRIT
+
+CLINICAL_MEDICATIONS_ENV.csv (ROW_KEY)
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+ENV_ANAPHYLAXIS_01,ENVIRONMENTAL,Emergency referral (ED),Disposition Aid,Anaphylaxis escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENV_ANAPHYLAXIS_01|EDReferral"
+ENV_LOCAL_REACTION_01,ENVIRONMENTAL,Cetirizine,Antihistamine,Bite/sting itch,Yes,"10 mg PO daily PRN","", "Peds per clinician","Generally ok",,,"Drowsiness (less common)",Oral,No,No,"ROW_KEY=ENV_LOCAL_REACTION_01|Cetirizine"
+ENV_HEAT_EXHAUST_01,ENVIRONMENTAL,Oral rehydration solution (ORS),Supportive,Heat dehydration support,Yes,"Frequent small sips","", "Peds per clinician","Safe","",,"",Oral,No,No,"ROW_KEY=ENV_HEAT_EXHAUST_01|ORS"
+ENV_HEAT_STROKE_01,ENVIRONMENTAL,Emergency referral (ED),Disposition Aid,Heat stroke escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENV_HEAT_STROKE_01|EDReferral"
+ENV_CO_POISON_01,ENVIRONMENTAL,Emergency referral (ED),Disposition Aid,CO exposure escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENV_CO_POISON_01|EDReferral"
+ENV_CHEM_IRRIT_01,ENVIRONMENTAL,Decontamination (flush/airway removal),Supportive,Chemical exposure supportive,Yes,"Immediate irrigation/leave exposure","", "","",,,"",Support,No,No,"ROW_KEY=ENV_CHEM_IRRIT_01|Decon"
+
+CLINICAL_QUESTIONS_ENV.csv (76 rows, 4 flows × 19)
+
+This one is long; to keep this message usable, tell me and I’ll paste it exactly like we’ve been doing (same headers, 19 questions per flow).
+
+Reply: “Paste ENV questions CSV” and I’ll drop it in full.
+
+What you can run right now
+
+You can import:
+
+Knee add-on (3 files)
+
+Ankle/foot add-on (3 files)
+
+T-spine/ribs add-on (3 files)
+
+Environmental rules/diagnoses/meds (3 files)
+
+Then I’ll provide ENV questions as soon as you say the word.
+
+paste env questions csv
+
+Here you go: CLINICAL_QUESTIONS_ENV.csv (4 flows × 19 questions = 76), in your exact CLINICAL_QUESTIONS header format.
+
+Save: server/imports/ENV/CLINICAL_QUESTIONS_ENV.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS server/imports/ENV/CLINICAL_QUESTIONS_ENV.csv upsert question_id
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,1,ENV_BITE_01,"Was there a bite or sting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,2,ENV_BITE_02,"Trouble breathing or wheezing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,3,ENV_BITE_03,"Throat closing sensation or tongue/lip swelling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,4,ENV_BITE_04,"Dizziness or fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,5,ENV_BITE_05,"Hives (raised itchy welts) or widespread rash?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,6,ENV_BITE_06,"Facial swelling around eyes/lips?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,7,ENV_BITE_07,"Vomiting or severe diarrhea with the reaction?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,8,ENV_BITE_08,"Symptoms started within 2 hours of exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,9,ENV_BITE_09,"Known severe allergy or prior anaphylaxis?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,10,ENV_BITE_10,"Location is red, hot, very swollen, or spreading rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,11,ENV_BITE_11,"Pus/drainage or open wound at the site?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,12,ENV_BITE_12,"Severe pain out of proportion to appearance?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,13,ENV_BITE_13,"Tick bite or possible tick exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,14,ENV_BITE_14,"Bullseye or expanding ring rash?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,15,ENV_BITE_15,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,16,ENV_BITE_16,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,17,ENV_BITE_17,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,18,ENV_BITE_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_BITE_STING_V1,ENVIRONMENTAL,BITE_STING,CORE,19,ENV_BITE_19,"Signs of poor circulation near site (cold/pale/numb)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,1,ENV_HEAT_01,"Recent heat exposure (hot environment, exertion, poor AC)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,2,ENV_HEAT_02,"Very high fever or felt extremely hot?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,3,ENV_HEAT_03,"Confusion or not acting normal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,4,ENV_HEAT_04,"Fainted or nearly fainted?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,5,ENV_HEAT_05,"Severe headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,6,ENV_HEAT_06,"Vomiting or cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,7,ENV_HEAT_07,"Muscle cramps?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,8,ENV_HEAT_08,"Dizziness or severe weakness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,9,ENV_HEAT_09,"Stopped sweating or very dry skin?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,10,ENV_HEAT_10,"Fast heartbeat or chest pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,11,ENV_HEAT_11,"Trouble breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,12,ENV_HEAT_12,"Dark urine or very little urination (dehydration)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,13,ENV_HEAT_13,"Age 65+ or very young child?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,14,ENV_HEAT_14,"Heart disease, kidney disease, or significant chronic illness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,15,ENV_HEAT_15,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,16,ENV_HEAT_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,17,ENV_HEAT_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,18,ENV_HEAT_18,"Used alcohol or drugs during exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_HEAT_ILLNESS_V1,ENVIRONMENTAL,HEAT_ILLNESS,CORE,19,ENV_HEAT_19,"Unable to cool down despite rest/cooling attempts?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,1,ENV_CO_01,"Possible carbon monoxide source (heater, generator, car in garage)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,2,ENV_CO_02,"Headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,3,ENV_CO_03,"Dizziness or lightheadedness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,4,ENV_CO_04,"Nausea or vomiting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,5,ENV_CO_05,"Chest pain or shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,6,ENV_CO_06,"Confusion or not acting normal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,7,ENV_CO_07,"Fainted or seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,8,ENV_CO_08,"Symptoms improve when leaving the area?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,9,ENV_CO_09,"Other people in the same area have similar symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,10,ENV_CO_10,"Exposure in an enclosed space?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,11,ENV_CO_11,"Used a generator/heater indoors or poor ventilation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,12,ENV_CO_12,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,13,ENV_CO_13,"Age 65+ or very young child?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,14,ENV_CO_14,"Heart disease or chronic lung disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,15,ENV_CO_15,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,16,ENV_CO_16,"Severe weakness or cannot walk?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,17,ENV_CO_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,18,ENV_CO_18,"Loss of consciousness at any point?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CO_EXPOSURE_V1,ENVIRONMENTAL,CO_EXPOSURE,CORE,19,ENV_CO_19,"Currently still in the exposure area?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,1,ENV_CHEM_01,"Chemical exposure occurred (skin/eyes/inhalation)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,2,ENV_CHEM_02,"Exposure to eyes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,3,ENV_CHEM_03,"Eye pain or vision changes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,4,ENV_CHEM_04,"Trouble breathing, wheezing, or severe cough?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,5,ENV_CHEM_05,"Chest tightness or shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,6,ENV_CHEM_06,"Burning pain on skin or blistering?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,7,ENV_CHEM_07,"Large area of skin involved?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,8,ENV_CHEM_08,"Ingestion (swallowed chemical)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,9,ENV_CHEM_09,"Vomiting or severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,10,ENV_CHEM_10,"Confusion or fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,11,ENV_CHEM_11,"Unknown chemical or high-risk chemical (strong acid/alkali)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,12,ENV_CHEM_12,"Exposure in an enclosed space with poor ventilation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,13,ENV_CHEM_13,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,14,ENV_CHEM_14,"Age 65+ or very young child?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,15,ENV_CHEM_15,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,16,ENV_CHEM_16,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,17,ENV_CHEM_17,"Severe throat pain or trouble swallowing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,18,ENV_CHEM_18,"Skin exposure but NOT flushed/irrigated yet?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_CHEM_EXPOSURE_V1,ENVIRONMENTAL,CHEMICAL_EXPOSURE,CORE,19
