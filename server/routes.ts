@@ -857,7 +857,14 @@ export async function registerRoutes(
   // Test endpoint to simulate WhatsApp message using deterministic flow
   app.post("/api/test/simulate-message", async (req: Request, res: Response) => {
     try {
-      const { phoneNumber, message } = req.body;
+      // Accept both "from"/"body" (WhatsApp style) or "phoneNumber"/"message" (legacy)
+      const phoneNumber = req.body.from || req.body.phoneNumber;
+      const message = req.body.body || req.body.message;
+      
+      if (!phoneNumber || !message) {
+        return res.status(400).json({ error: "Missing from/phoneNumber or body/message" });
+      }
+      
       const msg = message.trim();
       
       // Simulate the webhook request
@@ -921,13 +928,38 @@ export async function registerRoutes(
       let newStatus = encounter.status;
       
       // Process flow
+      let intakeToken: string | undefined;
+      let intakeCode: string | undefined;
+      
       if (flowIndex === 0) {
-        const firstQuestion = flow[0];
-        responseMessage = `Welcome to the ENT Flu Triage System. I'll ask you a series of questions to assess your symptoms.\n\n${firstQuestion.text}`;
+        // Generate secure intake token and code (matching the real WhatsApp webhook)
+        intakeToken = generateToken();
+        intakeCode = generateCode();
+        const intakeExpiresAt = expiresAtMinutes(INTAKE_EXPIRY_MINUTES);
         
+        // Store token+code on encounter
+        await storage.updateEncounter(encounter.id, {
+          intakeToken,
+          intakeCode,
+          intakeExpiresAt,
+          flowIndex: 1, // Mark as started
+        } as any);
+        
+        const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
+        
+        responseMessage = `Welcome to Med Scribe ENT Triage.\n\nTap to answer quickly:\n${intakeLink}\n\nCode: ${intakeCode}\n\n⚠️ If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.\n\nCan't open the link? Reply "questions" to answer here instead.`;
+      } else if (msg.toLowerCase() === "questions" || msg.toLowerCase() === "question") {
+        // Patient requested fallback to WhatsApp Q&A
+        const firstQuestion = flow[0];
+        responseMessage = `OK, I'll ask you the questions here.\n\n${firstQuestion.text}`;
+        
+        // Reset to start Q&A flow
         await storage.updateEncounter(encounter.id, {
           flowIndex: 1,
-        });
+          intakeToken: null,
+          intakeCode: null,
+          intakeExpiresAt: null,
+        } as any);
       } else {
         // Parse the answer for the previous question
         const prevQuestion = flow[flowIndex - 1];
@@ -995,13 +1027,19 @@ export async function registerRoutes(
         messageBody: responseMessage,
       });
       
-      res.json({
+      const responseData: any = {
         response: responseMessage,
         encounterId: encounter.id,
         status: newStatus,
         flowIndex: (encounter.flowIndex ?? 0) + 1,
         questionsRemaining: flow.length - (encounter.flowIndex ?? 0),
-      });
+      };
+      
+      // Include intake credentials if available (for testing)
+      if (intakeToken) responseData.intakeToken = intakeToken;
+      if (intakeCode) responseData.intakeCode = intakeCode;
+      
+      res.json(responseData);
     } catch (error) {
       console.error("Simulate message error:", error);
       res.status(500).json({ error: "Failed to process message" });

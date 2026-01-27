@@ -13,13 +13,15 @@ type TriState = "yes" | "no" | "not_sure" | null;
 interface FlowQuestion {
   id: string;
   text: string;
-  type: "yes_no" | "number" | "choice" | "text" | "multi_select";
+  type: "yes_no" | "yesno" | "number" | "choice" | "text" | "multi_select";
   choices?: string[];
   min?: number;
   max?: number;
   required?: boolean;
   helpText?: string;
 }
+
+const isYesNoType = (type: string) => type === "yes_no" || type === "yesno";
 
 type IntakeStep = "code" | "form" | "submitting" | "success" | "error";
 
@@ -71,7 +73,7 @@ export default function PatientIntake() {
         setQuestions(data.questions);
         const initial: Record<string, any> = {};
         data.questions.forEach((q: FlowQuestion) => {
-          if (q.type === "yes_no") initial[q.id] = null;
+          if (isYesNoType(q.type)) initial[q.id] = null;
           else if (q.type === "number") initial[q.id] = "";
           else if (q.type === "choice" || q.type === "multi_select") initial[q.id] = null;
           else initial[q.id] = "";
@@ -113,7 +115,7 @@ export default function PatientIntake() {
       const normalized: Record<string, any> = {};
       questions.forEach((q) => {
         const val = answers[q.id];
-        if (q.type === "yes_no") {
+        if (isYesNoType(q.type)) {
           normalized[q.id] = val === "yes" ? true : val === "no" ? false : null;
         } else if (q.type === "number") {
           normalized[q.id] = val !== "" ? parseInt(val, 10) : null;
@@ -205,7 +207,7 @@ export default function PatientIntake() {
                 </div>
                 {q.helpText && <p className="text-xs text-muted-foreground ml-5">{q.helpText}</p>}
 
-                {q.type === "yes_no" && (
+                {isYesNoType(q.type) && (
                   <div className="flex gap-2 ml-5">
                     <Button
                       data-testid={`button-${q.id}-yes`}

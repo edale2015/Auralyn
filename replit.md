@@ -8,11 +8,14 @@ This is a medical triage platform that enables physicians to review and approve 
 
 The core workflow is:
 1. Patients message via WhatsApp to start triage
-2. Deterministic questionnaire asks 19 structured questions (red flags, symptom onset, symptoms, medications/allergies, test results)
-3. System computes proposal with disposition, medication suggestions, and tests to consider
-4. Cases are queued for physician review with computed recommendations
-5. Physicians approve/reject cases with their own diagnosis and disposition
-6. Approved orders/dispositions are sent back to patient via WhatsApp
+2. System sends a secure link + 6-digit code (30-minute expiry) for grid-based intake
+3. Patient opens web intake form, enters code, and answers 19 questions via tri-state checkboxes (Yes/No/Not Sure)
+4. System computes proposal with disposition, medication suggestions, and tests to consider
+5. Cases are queued for physician review with computed recommendations
+6. Physicians approve/reject cases with their own diagnosis and disposition
+7. Approved orders/dispositions are sent back to patient via WhatsApp
+
+**Fallback**: If patient can't use the web link, they can reply "questions" to answer via WhatsApp Q&A instead.
 
 ## User Preferences
 
@@ -158,6 +161,14 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-27: Grid-based patient intake system
+  - New secure intake link+code flow replaces WhatsApp Q&A as primary intake method
+  - 48-char hex token + 6-digit code + 30-minute expiry for security
+  - PatientIntakePage component with tri-state checkboxes (Yes/No/Not Sure)
+  - New endpoints: GET /api/flows/:flowId/questions, POST /api/intake/:token/verify, POST /api/intake/:token/submit
+  - WhatsApp webhook now sends link+code, with "questions" fallback to Q&A
+  - Intake fields added to encounters: intakeToken, intakeCode, intakeExpiresAt
+  - server/intake/intakeAuth.ts for token/code generation utilities
 - 2026-01-24: Medication catalog integration (Step 2A)
   - New loader: `server/meds/medCatalog.ts` - loads CLINICAL_MEDICATIONS with 5-min cache
   - `computeProposal()` now returns `medsDetailed` and `avoidDetailed` structured objects
