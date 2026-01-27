@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage, type FlowQuestion } from "./storage";
 import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
+import { generateToken, generateCode, expiresAtMinutes, INTAKE_EXPIRY_MINUTES, BASE_URL } from "./intake/intakeAuth";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
 import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses, isFirstLine } from "./meds/medCatalog";
@@ -701,14 +702,36 @@ export async function registerRoutes(
       
       let responseMessage: string;
       
-      // If this is the first message (flowIndex = 0), send the first question
+      // If this is the first message (flowIndex = 0), send the intake link+code
       if (flowIndex === 0) {
-        const firstQuestion = flow[0];
-        responseMessage = `Welcome to the ENT Flu Triage System. I'll ask you a series of questions to assess your symptoms.\n\n${firstQuestion.text}`;
+        // Generate secure intake token and code
+        const intakeToken = generateToken();
+        const intakeCode = generateCode();
+        const intakeExpiresAt = expiresAtMinutes(INTAKE_EXPIRY_MINUTES);
         
+        // Store token+code on encounter
+        await storage.updateEncounter(encounter.id, {
+          intakeToken,
+          intakeCode,
+          intakeExpiresAt,
+          flowIndex: 1, // Mark as started
+        } as any);
+        
+        const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
+        
+        responseMessage = `Welcome to Med Scribe ENT Triage.\n\nTap to answer quickly:\n${intakeLink}\n\nCode: ${intakeCode}\n\n⚠️ If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.\n\nCan't open the link? Reply "questions" to answer here instead.`;
+      } else if (msg.toLowerCase() === "questions" || msg.toLowerCase() === "question") {
+        // Patient requested fallback to WhatsApp Q&A
+        const firstQuestion = flow[0];
+        responseMessage = `OK, I'll ask you the questions here.\n\n${firstQuestion.text}`;
+        
+        // Reset to start Q&A flow
         await storage.updateEncounter(encounter.id, {
           flowIndex: 1,
-        });
+          intakeToken: null,
+          intakeCode: null,
+          intakeExpiresAt: null,
+        } as any);
       } else {
         // Parse the answer for the previous question
         const prevQuestion = flow[flowIndex - 1];
@@ -982,6 +1005,107 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Simulate message error:", error);
       res.status(500).json({ error: "Failed to process message" });
+    }
+  });
+
+  // ============================================
+  // INTAKE ENDPOINTS (Grid-based patient intake)
+  // ============================================
+
+  // Get flow questions for a given flowId
+  app.get("/api/flows/:flowId/questions", async (req: Request, res: Response) => {
+    try {
+      const { flowId } = req.params;
+      const questions = await getFlowQuestions(flowId);
+      res.json({ ok: true, flowId, questions });
+    } catch (error: any) {
+      console.error("Error fetching flow questions:", error);
+      res.status(500).json({ ok: false, error: error?.message || "Failed to load questions" });
+    }
+  });
+
+  // Verify intake code
+  app.post("/api/intake/:token/verify", async (req: Request, res: Response) => {
+    try {
+      const token = req.params.token;
+      const { code } = req.body || {};
+      if (!code) return res.status(400).json({ ok: false, error: "Missing code" });
+
+      const encounter = await storage.getEncounterByIntakeToken(token);
+      if (!encounter) return res.status(404).json({ ok: false, error: "Invalid or expired link" });
+
+      if (!encounter.intakeCode || String(code).trim() !== String(encounter.intakeCode).trim()) {
+        return res.status(401).json({ ok: false, error: "Invalid code" });
+      }
+      if (encounter.intakeExpiresAt && Date.now() > encounter.intakeExpiresAt) {
+        return res.status(401).json({ ok: false, error: "Code expired. Please text 'hi' to start again." });
+      }
+
+      return res.json({ ok: true, encounterId: encounter.id, flowId: encounter.flowId || "ENT_FLU_LIKE_V1" });
+    } catch (e: any) {
+      console.error("Intake verify error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Submit intake answers
+  app.post("/api/intake/:token/submit", async (req: Request, res: Response) => {
+    try {
+      const token = req.params.token;
+      const { code, answers } = req.body || {};
+      if (!code || !answers) return res.status(400).json({ ok: false, error: "Missing code or answers" });
+
+      const encounter = await storage.getEncounterByIntakeToken(token);
+      if (!encounter) return res.status(404).json({ ok: false, error: "Invalid or expired link" });
+
+      if (!encounter.intakeCode || String(code).trim() !== String(encounter.intakeCode).trim()) {
+        return res.status(401).json({ ok: false, error: "Invalid code" });
+      }
+      if (encounter.intakeExpiresAt && Date.now() > encounter.intakeExpiresAt) {
+        return res.status(401).json({ ok: false, error: "Code expired. Please text 'hi' to start again." });
+      }
+
+      // Parse answers if string
+      const parsedAnswers = typeof answers === "string" ? JSON.parse(answers) : answers;
+
+      // Compute proposal
+      const proposal = await computeProposal(parsedAnswers);
+      const modifiers = buildModifiersFromAnswers(parsedAnswers);
+      const physicianSummary = buildPhysicianSummary(parsedAnswers, proposal);
+      const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
+
+      // Update encounter
+      await storage.updateEncounter(encounter.id, {
+        answers: JSON.stringify(parsedAnswers),
+        proposal: JSON.stringify(proposal),
+        physicianSummary: JSON.stringify(physicianSummary),
+        modifiers: JSON.stringify(modifiers),
+        status: "pending_review",
+        urgencyLevel,
+        chiefComplaint: "Flu-like symptoms / URI",
+        aiDiagnosis: physicianSummary.hpi,
+        aiDisposition: proposal.disposition,
+        // Invalidate token after use
+        intakeCode: null,
+        intakeExpiresAt: null,
+      } as any);
+
+      // Notify patient via WhatsApp
+      if (encounter.phoneNumber) {
+        const confirmMsg = proposal.redFlag
+          ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room immediately."
+          : "Thanks! Your answers have been sent to a physician for review. You'll receive a message once they've reviewed your case.";
+        try {
+          await sendWhatsAppMessage(encounter.phoneNumber, confirmMsg);
+        } catch (whatsappErr) {
+          console.error("Failed to send WhatsApp confirmation:", whatsappErr);
+        }
+      }
+
+      res.json({ ok: true, encounterId: encounter.id, redFlag: proposal.redFlag });
+    } catch (e: any) {
+      console.error("Intake submit error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
     }
   });
 
