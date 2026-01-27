@@ -1,0 +1,115 @@
+1) ENV imports you should run (if not already)
+
+Folder:
+
+server/imports/ENV/
+
+
+Commands:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/ENV/CLINICAL_QUESTIONS_ENV.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/ENV/CLINICAL_RULES_ENV.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/ENV/CLINICAL_DIAGNOSES_ENV.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/ENV/CLINICAL_MEDICATIONS_ENV.csv upsert Notes
+
+2) Add two Environmental flows (optional but recommended)
+
+Still no new tabs. These are just extra flows (rows) in the same tabs.
+
+A) Tick/Lyme exposure
+
+ENV_TICK_LYME_V1 (TICK_LYME)
+
+B) Cold exposure / frostbite
+
+ENV_COLD_EXPOSURE_V1 (COLD_EXPOSURE)
+
+If you want these, here are the add-on CSVs (questions/rules/diagnoses/meds) to paste and import.
+
+ENV Add-on: Tick/Lyme + Cold Exposure
+A) Questions add-on (38 rows)
+
+Save: server/imports/ENV/CLINICAL_QUESTIONS_ENV_ADDON.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS server/imports/ENV/CLINICAL_QUESTIONS_ENV_ADDON.csv upsert question_id
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,1,ENV_TICK_01,"Tick bite or tick found attached?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,2,ENV_TICK_02,"Tick attached for 36 hours or longer (or unsure)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,3,ENV_TICK_03,"Bullseye or expanding ring rash (erythema migrans)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,4,ENV_TICK_04,"Fever, chills, or flu-like symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,5,ENV_TICK_05,"Severe headache or neck stiffness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,6,ENV_TICK_06,"Facial droop or weakness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,7,ENV_TICK_07,"Joint swelling or severe joint pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,8,ENV_TICK_08,"Heart palpitations, chest pain, or fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,9,ENV_TICK_09,"Rash spreading rapidly or multiple rashes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,10,ENV_TICK_10,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,11,ENV_TICK_11,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,12,ENV_TICK_12,"Age under 8 years?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,13,ENV_TICK_13,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,14,ENV_TICK_14,"Tick removed but mouthparts may remain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,15,ENV_TICK_15,"Bite area is increasingly red, hot, painful, or pus?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,16,ENV_TICK_16,"Known exposure in endemic area (woods/grass, pets)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,17,ENV_TICK_17,"Took doxycycline prophylaxis already?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,18,ENV_TICK_18,"New neurologic symptoms (numbness/tingling)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,CORE,19,ENV_TICK_19,"Severe fatigue limiting daily activity?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,1,ENV_COLD_01,"Cold exposure occurred (outdoors, wet clothing, poor heat)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,2,ENV_COLD_02,"Shivering severe or uncontrolled?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,3,ENV_COLD_03,"Confusion, sleepiness, or not acting normal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,4,ENV_COLD_04,"Fainting or near fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,5,ENV_COLD_05,"Skin is pale/blue, numb, hard, or blistering (frostbite)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,6,ENV_COLD_06,"Severe pain in fingers/toes/ears/nose?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,7,ENV_COLD_07,"Chest pain or trouble breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,8,ENV_COLD_08,"Irregular heartbeat or very slow heartbeat?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,9,ENV_COLD_09,"Wet clothing or immersion in cold water?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,10,ENV_COLD_10,"Age 65+ or very young child?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,11,ENV_COLD_11,"Alcohol/drug use during exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,12,ENV_COLD_12,"Diabetes or circulation problems (PAD/Raynaud)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,13,ENV_COLD_13,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,14,ENV_COLD_14,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,15,ENV_COLD_15,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,16,ENV_COLD_16,"Skin not rewarmed yet (still cold/numb)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,17,ENV_COLD_17,"Severe weakness or inability to walk?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,18,ENV_COLD_18,"Severe blistering or black skin (necrosis concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,CORE,19,ENV_COLD_19,"No access to safe warm shelter now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) Rules add-on (KV)
+
+Save: server/imports/ENV/CLINICAL_RULES_ENV_ADDON.csv
+Import: upsert rule_key
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,ENV_TICK,ENV_TICK_LYME_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,ENV_TICK,ENV_TICK_LYME_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,ENV_TICK,ENV_TICK_LYME_V1_TEST_PACK,text,LYME_TICK_EVAL_PACK,Y
+ENV_TICK_LYME_V1,ENVIRONMENTAL,TICK_LYME,ENV_TICK,ENV_TICK_LYME_V1_MED_PACK,text,TICK_BITE_SUPPORTIVE_PACK,Y
+
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,ENV_COLD,ENV_COLD_EXPOSURE_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,ENV_COLD,ENV_COLD_EXPOSURE_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENV_COLD_EXPOSURE_V1,ENVIRONMENTAL,COLD_EXPOSURE,ENV_COLD,ENV_COLD_EXPOSURE_V1_MED_PACK,text,COLD_REWARM_PACK,Y
+
+C) Diagnoses add-on
+
+Save: server/imports/ENV/CLINICAL_DIAGNOSES_ENV_ADDON.csv
+Import: upsert "Diagnosis ID"
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+ENV_TICK_LOCAL_01,ENVIRONMENTAL,TICK_LYME,Tick bite (local reaction),Environmental,Ticks,Local inflammation,Low,Tick bite without systemic symptoms,N,,,"Attachment duration; rash",Local erythema,,"",PC,Supportive,PC,,"UC if spreading rash/fever",PC,Return precautions,,"",Local wound care,Yes,,"",Environmental cluster,"ROW_KEY=ENV_TICK_LOCAL_01|WoundCare","Consider prophylaxis criteria separately",ENV_TICK_LOCAL
+ENV_LYME_EM_01,ENVIRONMENTAL,TICK_LYME,Erythema migrans (Lyme suspected),Environmental,Ticks,Borrelia infection,Moderate,Expanding bullseye/ring rash + exposure,N,,pregnancy,"Neuro/cardiac sx",EM rash,,"",UC,Often treated clinically,UC,"ED if neuro/cardiac red flags",UC,PC if mild,Follow-up 1–2 weeks,,"",Supportive,Yes,,"",Environmental cluster,,"If facial droop/palpitations -> urgent",ENV_LYME_EM
+ENV_COLD_HYPOTHERMIA_01,ENVIRONMENTAL,COLD_EXPOSURE,Hypothermia concern,Environmental,Cold,Systemic cold injury,High,Cold exposure + confusion/shivering issues,Y,"Confusion, fainting, severe symptoms",,Exposure duration,AMS,,"",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Environmental red flags,"ROW_KEY=ENV_COLD_HYPOTHERMIA_01|EDReferral","Rewarm + monitor",ENV_COLD_HYPO
+ENV_FROSTBITE_01,ENVIRONMENTAL,COLD_EXPOSURE,Frostbite concern,Environmental,Cold,Local cold injury,High,Pale/blue numb hard skin or blistering,Y,"Blistering, black skin, severe pain",diabetes,Exposure/wet clothing,Hard numb skin,,"",ED,Risk tissue loss,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Environmental red flags,"ROW_KEY=ENV_FROSTBITE_01|EDReferral","Avoid refreezing",ENV_FROSTBITE
+
+D) Medications add-on (ROW_KEY in Notes)
+
+Save: server/imports/ENV/CLINICAL_MEDICATIONS_ENV_ADDON.csv
+Import: upsert Notes
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+ENV_COLD_HYPOTHERMIA_01,ENVIRONMENTAL,Emergency referral (ED),Disposition Aid,Hypothermia escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENV_COLD_HYPOTHERMIA_01|EDReferral"
+ENV_FROSTBITE_01,ENVIRONMENTAL,Emergency referral (ED),Disposition Aid,Frostbite escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENV_FROSTBITE_01|EDReferral"
+ENV_TICK_LOCAL_01,ENVIRONMENTAL,Wound care (clean + monitor),Supportive,Tick bite supportive,Yes,"Clean area; monitor redness","", "","Safe","",,"",Support,No,No,"ROW_KEY=ENV_TICK_LOCAL_01|WoundCare"
+ENV_LYME_EM_01,ENVIRONMENTAL,Follow-up / clinician evaluation,Supportive,Lyme suspected,Yes,"Clinician evaluation for treatment","", "","",,,"",Support,No,No,"ROW_KEY=ENV_LYME_EM_01|ClinicianEval"
+
+Confirmed: Environmental proceeds with the same 5 tabs only
