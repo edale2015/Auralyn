@@ -44,6 +44,9 @@ export interface IStorage {
   
   // Flow Questions (from Google Sheets)
   getFlowQuestions(flowId: string): Promise<FlowQuestion[]>;
+  
+  // Intake token lookup
+  getEncounterByIntakeToken(token: string): Promise<(Encounter & { intakeToken?: string; intakeCode?: string; intakeExpiresAt?: number; phoneNumber?: string }) | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -255,6 +258,10 @@ export class MemStorage implements IStorage {
   async getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
     return getFlowQuestionsFromSheet(flowId);
   }
+
+  async getEncounterByIntakeToken(token: string): Promise<(Encounter & { intakeToken?: string; intakeCode?: string; intakeExpiresAt?: number; phoneNumber?: string }) | undefined> {
+    return undefined;
+  }
 }
 
 export class DatabaseStorage implements IStorage {
@@ -403,6 +410,10 @@ export class DatabaseStorage implements IStorage {
 
   async getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
     return getFlowQuestionsFromSheet(flowId);
+  }
+
+  async getEncounterByIntakeToken(token: string): Promise<(Encounter & { intakeToken?: string; intakeCode?: string; intakeExpiresAt?: number; phoneNumber?: string }) | undefined> {
+    return undefined;
   }
 }
 
@@ -779,6 +790,36 @@ export class FirebaseStorage implements IStorage {
 
   async getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
     return getFlowQuestionsFromSheet(flowId);
+  }
+
+  async getEncounterByIntakeToken(token: string): Promise<(Encounter & { intakeToken?: string; intakeCode?: string; intakeExpiresAt?: number; phoneNumber?: string }) | undefined> {
+    if (!token) return undefined;
+    
+    const snapshot = await firestoreDb.collection("encounters")
+      .where("intakeToken", "==", token)
+      .limit(1)
+      .get();
+    
+    if (snapshot.empty) return undefined;
+    
+    const doc = snapshot.docs[0];
+    const data = doc.data();
+    const encounter = this.docToEncounter(doc);
+    
+    // Also fetch the patient to get phone number
+    let phoneNumber: string | undefined;
+    if (encounter.patientId) {
+      const patient = await this.getPatient(encounter.patientId);
+      phoneNumber = patient?.phoneNumber;
+    }
+    
+    return {
+      ...encounter,
+      intakeToken: data.intakeToken,
+      intakeCode: data.intakeCode,
+      intakeExpiresAt: data.intakeExpiresAt,
+      phoneNumber,
+    };
   }
 }
 
