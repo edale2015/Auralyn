@@ -1,0 +1,148 @@
+We’ll do 3 Derm flows (clean and high-yield):
+
+DERM_RASH_V1 (RASH)
+
+DERM_CELLULITIS_V1 (CELLULITIS)
+
+DERM_HIVES_ANAPHYLAXIS_V1 (HIVES_ANAPHYLAXIS)
+
+That’s 57 questions (3 × 19), plus rules, diagnoses, meds.
+
+0) Files + import commands
+
+Create folder:
+
+server/imports/DERM/
+
+Import sequence
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/DERM/CLINICAL_QUESTIONS_DERM.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/DERM/CLINICAL_RULES_DERM.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/DERM/CLINICAL_DIAGNOSES_DERM.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/DERM/CLINICAL_MEDICATIONS_DERM.csv upsert Notes
+
+1) CLINICAL_QUESTIONS_DERM.csv (57 rows)
+
+Save as: server/imports/DERM/CLINICAL_QUESTIONS_DERM.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+DERM_RASH_V1,DERM,RASH,CORE,1,DERM_RASH_01,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,2,DERM_RASH_02,"Rash spreading quickly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,3,DERM_RASH_03,"Rash is painful (more than itchy)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,4,DERM_RASH_04,"Blisters or skin peeling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,5,DERM_RASH_05,"Involves eyes, mouth, or genitals (mucosal involvement)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,6,DERM_RASH_06,"New medication started within last 2–8 weeks?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,7,DERM_RASH_07,"Trouble breathing or throat swelling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,8,DERM_RASH_08,"Facial swelling or swelling around eyes/lips?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,9,DERM_RASH_09,"Severe itching?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,10,DERM_RASH_10,"New soap/lotion/detergent or plant exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,11,DERM_RASH_11,"Recent sick contacts or viral symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,12,DERM_RASH_12,"Tick bite or possible tick exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,13,DERM_RASH_13,"Rash in a ring or bullseye pattern?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,14,DERM_RASH_14,"Rash mainly in skin folds/groin/armpits?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,15,DERM_RASH_15,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,16,DERM_RASH_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,17,DERM_RASH_17,"Rash on palms or soles?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,18,DERM_RASH_18,"Severe weakness or confusion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_RASH_V1,DERM,RASH,CORE,19,DERM_RASH_19,"Looks infected (pus, warmth, red streaks)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,1,DERM_CELL_01,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,2,DERM_CELL_02,"Rapidly spreading redness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,3,DERM_CELL_03,"Severe pain out of proportion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,4,DERM_CELL_04,"Skin blistering/black discoloration?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,5,DERM_CELL_05,"Red streaks up the limb (lymphangitis)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,6,DERM_CELL_06,"Pus or abscess (drainage or fluctuant area)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,7,DERM_CELL_07,"Bite, cut, wound, or recent trauma?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,8,DERM_CELL_08,"Diabetes or immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,9,DERM_CELL_09,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,10,DERM_CELL_10,"Involves face/around eye?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,11,DERM_CELL_11,"Involves groin/genital area?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,12,DERM_CELL_12,"Severe swelling of the limb?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,13,DERM_CELL_13,"Numbness/tingling or decreased sensation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,14,DERM_CELL_14,"History of MRSA or recurrent skin infections?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,15,DERM_CELL_15,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,16,DERM_CELL_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,17,DERM_CELL_17,"Allergy to penicillin/cephalosporins?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,18,DERM_CELL_18,"Allergic reaction symptoms (hives, throat swelling, wheeze)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,CORE,19,DERM_CELL_19,"Pain with eye movement or vision changes (if near eye)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,1,DERM_HIVE_01,"Hives (raised itchy welts)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,2,DERM_HIVE_02,"Trouble breathing or wheezing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,3,DERM_HIVE_03,"Throat closing sensation or tongue/lip swelling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,4,DERM_HIVE_04,"Dizziness/fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,5,DERM_HIVE_05,"Vomiting or severe diarrhea with hives?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,6,DERM_HIVE_06,"New medication or food exposure today?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,7,DERM_HIVE_07,"Known severe allergy/anaphylaxis history?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,8,DERM_HIVE_08,"Symptoms started within 2 hours of exposure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,9,DERM_HIVE_09,"Facial swelling around eyes/lips?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,10,DERM_HIVE_10,"Chest tightness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,11,DERM_HIVE_11,"Hoarse voice?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,12,DERM_HIVE_12,"Swelling without hives (angioedema)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,13,DERM_HIVE_13,"Fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,14,DERM_HIVE_14,"Rash is painful or blistering?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,15,DERM_HIVE_15,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,16,DERM_HIVE_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,17,DERM_HIVE_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,18,DERM_HIVE_18,"Used epinephrine already?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,CORE,19,DERM_HIVE_19,"Any mucosal involvement or skin peeling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+2) CLINICAL_RULES_DERM.csv (KV schema)
+
+Save as: server/imports/DERM/CLINICAL_RULES_DERM.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES server/imports/DERM/CLINICAL_RULES_DERM.csv upsert rule_key
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+DERM_RASH_V1,DERM,RASH,DERM_RASH,DERM_RASH_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+DERM_RASH_V1,DERM,RASH,DERM_RASH,DERM_RASH_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+DERM_RASH_V1,DERM,RASH,DERM_RASH,DERM_RASH_V1_MED_PACK,text,RASH_SUPPORTIVE_PACK,Y
+
+DERM_CELLULITIS_V1,DERM,CELLULITIS,DERM_CELL,DERM_CELLULITIS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,DERM_CELL,DERM_CELLULITIS_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+DERM_CELLULITIS_V1,DERM,CELLULITIS,DERM_CELL,DERM_CELLULITIS_V1_MED_PACK,text,CELLULITIS_PACK,Y
+
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,DERM_HIVE,DERM_HIVES_ANAPHYLAXIS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,DERM_HIVE,DERM_HIVES_ANAPHYLAXIS_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,DERM_HIVE,DERM_HIVES_ANAPHYLAXIS_V1_MED_PACK,text,HIVES_PACK,Y
+DERM_HIVES_ANAPHYLAXIS_V1,DERM,HIVES_ANAPHYLAXIS,DERM_HIVE,DERM_HIVES_ANAPHYLAXIS_V1_EPINEPHRINE_ALERT,boolean,TRUE,Y
+
+3) CLINICAL_DIAGNOSES_DERM.csv (your exact headers)
+
+Save as: server/imports/DERM/CLINICAL_DIAGNOSES_DERM.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES server/imports/DERM/CLINICAL_DIAGNOSES_DERM.csv upsert "Diagnosis ID"
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+DERM_RASH_RED_01,DERM,RASH,Severe drug reaction / SJS-TEN concern,Rash,Red flags,Severe cutaneous adverse reaction,High,Blistering/peeling and/or mucosal involvement +/- new med,Y,"Blistering/peeling, mucosal involvement, facial swelling, trouble breathing, systemic symptoms",immunocompromised,painful rash; mucosal; new meds,Target lesions; skin detachment,,"CBC/CMP if eval",ED,Vision/life-threatening risk,ED,ED,ED,,Immediate ED evaluation,"",,Yes,,"",Rash cluster,,"Route by mucosal/peeling/new med",DERM_RASH_RED
+DERM_RASH_CONTACT_01,DERM,RASH,Contact dermatitis (irritant/allergic),Rash,Contact,Exposure reaction,Low,Itchy rash after new products/plant exposure,N,,,"New soaps/detergents; plant exposure",Erythema; patches,,"",PC,Supportive care,PC,,"UC if severe",PC,Follow-up if not improved 5–7d,"",,Moisturizer/cool compress,Yes,,"",Rash cluster,,"Topical steroid/antihistamine supportive",DERM_RASH_CONTACT
+DERM_CELL_SIMPLE_01,DERM,CELLULITIS,Simple cellulitis (non-purulent),Cellulitis,Non-purulent,Bacterial skin infection,Moderate,Redness/warmth/tenderness without abscess,N,,diabetes,Trauma; rapid spread,Warmth/tenderness,,"",UC,May need antibiotics,UC,"ED if severe pain/necrosis",UC,PC if mild,Recheck 24–48h if worse,"",,Elevation/analgesia,Yes,,"",Cellulitis cluster,,"Consider MRSA risk",DERM_CELL_SIMPLE
+DERM_CELL_ABS_01,DERM,CELLULITIS,Abscess / purulent SSTI,Cellulitis,Purulent,Staph abscess,Moderate,Fluctuant/pus/drainage,N,,mrsa_history,Drainage; size; fever,Fluctuant abscess,,"",UC,May need I&D +/- antibiotics,UC,"ED if systemic toxicity",UC,PC if very small,Recheck 24–48h,,"",Warm compress,Yes,,"",Cellulitis cluster,,"If severe pain/necrosis treat as red flag",DERM_CELL_ABS
+DERM_CELL_RED_01,DERM,CELLULITIS,Necrotizing infection concern,Cellulitis,Red flags,Necrotizing fasciitis,High,Pain out of proportion, rapid spread, bullae/black skin,Y,"Pain out of proportion, bullae/black skin, severe systemic symptoms",immunocompromised,Severe pain; rapid spread,Bullae/necrosis possible,CT/MRI if eval,,"ED",Time-critical surgical emergency,ED,ED,ED,,Immediate ED evaluation,"",,Yes,,"",Cellulitis cluster,,"Do not delay urgent escalation",DERM_CELL_RED
+DERM_HIVE_SIMPLE_01,DERM,HIVES_ANAPHYLAXIS,Acute urticaria (hives),Hives,Urticaria,Histamine-mediated,Low,Hives without breathing/throat symptoms,N,,allergy_history,Trigger exposure; timing,Hives/urticaria,,"",PC,Antihistamines/supportive,PC,,"UC if worsening",PC,Return if breathing/throat symptoms,"",,Avoid trigger,Yes,,"",Hives cluster,,"Escalate if airway symptoms",DERM_HIVE_SIMPLE
+DERM_ANAPHYLAXIS_01,DERM,HIVES_ANAPHYLAXIS,Anaphylaxis concern,Hives,Anaphylaxis,Systemic allergic reaction,High,Hives + breathing/throat swelling or hypotension symptoms,Y,"Trouble breathing, throat/tongue swelling, fainting, severe GI symptoms",anaphylaxis_history,Timing <2h; exposures,Wheeze/angioedema,,"",ED,Life-threatening airway/circulation risk,ED,ED,ED,,Immediate ED evaluation (epi if indicated),,"",,Yes,,"",Hives cluster,,"Epinephrine alert",DERM_ANAPHYLAXIS
+
+4) CLINICAL_MEDICATIONS_DERM.csv (ROW_KEY in Notes)
+
+Save as: server/imports/DERM/CLINICAL_MEDICATIONS_DERM.csv
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/DERM/CLINICAL_MEDICATIONS_DERM.csv upsert Notes
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+DERM_RASH_CONTACT_01,DERM,Hydrocortisone 1% cream,Topical steroid,Contact dermatitis supportive,Yes,"Apply thin layer BID x 7–14 days","", "Peds per clinician","Generally ok; clinician guidance",,,"Skin irritation",Topical,No,No,"ROW_KEY=DERM_RASH_CONTACT_01|Hydrocortisone1"
+DERM_RASH_CONTACT_01,DERM,Cetirizine,Antihistamine,Itch control,Yes,"10 mg PO daily PRN","", "Peds per clinician","Generally ok; clinician guidance",,,"Drowsiness (less common)",Oral,No,No,"ROW_KEY=DERM_RASH_CONTACT_01|Cetirizine"
+DERM_RASH_CONTACT_01,DERM,Diphenhydramine,Antihistamine,Itch control (night),No,"25–50 mg PO q6h PRN","300 mg/day","Peds per clinician","Clinician guidance",,,"Sedation",Oral,No,Caution,"ROW_KEY=DERM_RASH_CONTACT_01|Diphenhydramine"
+
+DERM_CELL_SIMPLE_01,DERM,Cephalexin,Antibiotic,Non-purulent cellulitis,Yes,"500 mg PO QID x 5–7 days","", "Peds per clinician","Generally used; clinician guidance",Cephalosporin allergy,Warfarin interaction possible,GI upset,Oral,Caution,Caution,"ROW_KEY=DERM_CELL_SIMPLE_01|Cephalexin"
+DERM_CELL_SIMPLE_01,DERM,Clindamycin,Antibiotic,Cellulitis alternative/MRSA coverage,No,"300 mg PO QID x 5–7 days","", "Peds per clinician","Clinician guidance",History of C. diff,,"Diarrhea",Oral,Caution,Caution,"ROW_KEY=DERM_CELL_SIMPLE_01|Clindamycin"
+DERM_CELL_ABS_01,DERM,Trimethoprim-sulfamethoxazole (TMP-SMX),Antibiotic,Purulent SSTI/MRSA,Yes,"1 DS tab PO BID x 5–7 days","", "Peds per clinician","Avoid if pregnant (esp 1st/3rd); clinician guidance",Sulfa allergy,Warfarin interaction possible,Rash/GI upset,Oral,Caution,Caution,"ROW_KEY=DERM_CELL_ABS_01|TMP_SMX"
+DERM_CELL_ABS_01,DERM,Doxycycline,Antibiotic,Purulent SSTI/MRSA alternative,No,"100 mg PO BID x 5–7 days","", "Avoid in young children; clinician guidance","Avoid if pregnant; clinician guidance",Pregnancy/age restrictions,Isotretinoin,Photosensitivity/GI upset,Oral,Caution,Caution,"ROW_KEY=DERM_CELL_ABS_01|Doxycycline"
+
+DERM_HIVE_SIMPLE_01,DERM,Cetirizine,Antihistamine,Hives first-line,Yes,"10 mg PO daily PRN","", "Peds per clinician","Generally ok; clinician guidance",,,"Drowsiness (less common)",Oral,No,No,"ROW_KEY=DERM_HIVE_SIMPLE_01|Cetirizine"
+DERM_HIVE_SIMPLE_01,DERM,Famotidine,H2 blocker,Adjunct for hives,No,"20 mg PO BID PRN","", "Peds per clinician","Generally ok; clinician guidance",,,"Headache",Oral,Caution,No,"ROW_KEY=DERM_HIVE_SIMPLE_01|Famotidine"
+DERM_ANAPHYLAXIS_01,DERM,Epinephrine auto-injector,Emergency,Anaphylaxis first-line,Yes,"Use immediately and call 911","", "Peds per clinician","Clinician guidance",,,"Tremor/tachycardia",IM,No,No,"ROW_KEY=DERM_ANAPHYLAXIS_01|Epinephrine"
+DERM_ANAPHYLAXIS_01,DERM,Emergency referral (ED),Disposition Aid,Anaphylaxis escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=DERM_ANAPHYLAXIS_01|EDReferral"
+
+DERM_CELL_RED_01,DERM,Emergency referral (ED),Disposition Aid,Necrotizing infection escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=DERM_CELL_RED_01|EDReferral"
+DERM_RASH_RED_01,DERM,Emergency referral (ED),Disposition Aid,Severe rash escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=DERM_RASH_RED_01|EDReferral"
