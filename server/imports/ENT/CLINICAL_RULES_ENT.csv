@@ -1,54 +1,34 @@
-Rule_ID,System,Chief_Complaint,Cluster,Diagnosis_ID,Trigger_Level,Trigger_Modifier,Condition_Expression,Target_Type,Target_IDs,Priority,Notes
-ENT_URI_RED_01,ENT,Flu-like / URI,URI red flags,,RED_FLAG,,ENT_URI_05==Yes,DISPOSITION,urgent_or_ed,1,"SOB/trouble breathing"
-ENT_URI_RED_02,ENT,Flu-like / URI,URI red flags,,RED_FLAG,,ENT_URI_06==Yes,DISPOSITION,urgent_or_ed,2,"Chest pain/pressure"
-ENT_URI_RED_03,ENT,Flu-like / URI,URI red flags,,RED_FLAG,,ENT_URI_10==Yes,DISPOSITION,urgent_or_ed,3,"Stiff neck"
-ENT_URI_RED_04,ENT,Flu-like / URI,URI red flags,,RED_FLAG,,ENT_URI_11==Yes,DISPOSITION,urgent_or_ed,4,"Confusion/AMS"
-ENT_URI_RED_05,ENT,Flu-like / URI,URI red flags,,RED_FLAG,,ENT_URI_12==Yes,DISPOSITION,urgent_or_ed,5,"Low O2 concern"
-ENT_URI_TX_01,ENT,Flu-like / URI,URI standard,,NON_RED_FLAG,,TRUE,DISPOSITION,self_care_with_routine_followup,50,"No red flags default"
-ENT_URI_TEST_01,ENT,Flu-like / URI,URI testing,,TEST,,ENT_URI_01==Yes,TEST_IDS,FLU_COVID_RAPID,20,"Fever suggests flu/COVID testing"
-ENT_URI_MED_01,ENT,Flu-like / URI,URI supportive,,MED,,TRUE,MED_IDS,SUPPORTIVE_URI_PACK,60,"Supportive care pack"
-ENT_ST_RED_01,ENT,Sore Throat (Acute),Sore throat red flags,,RED_FLAG,,ENT_ST_06==Yes,DISPOSITION,urgent_or_ed,1,"Throat closing / trouble breathing"
-ENT_ST_RED_02,ENT,Sore Throat (Acute),Sore throat red flags,,RED_FLAG,,ENT_ST_07==Yes,DISPOSITION,urgent_or_ed,2,"Tongue swelling"
-ENT_ST_RED_03,ENT,Sore Throat (Acute),Sore throat red flags,,RED_FLAG,,ENT_ST_05==Yes,DISPOSITION,urgent_or_ed,3,"Drooling/can't swallow"
-ENT_ST_RED_04,ENT,Sore Throat (Acute),Sore throat red flags,,RED_FLAG,,ENT_ST_13==Yes,DISPOSITION,urgent_or_ed,4,"Tonsil bulge/uvula deviation (PTA concern)"
-ENT_ST_RED_05,ENT,Sore Throat (Acute),Sore throat red flags,,RED_FLAG,,ENT_ST_19==Yes,DISPOSITION,urgent_or_ed,5,"Unilateral sore throat + fever after antibiotics (Lemierre's concern)"
-ENT_ST_TEST_01,ENT,Sore Throat (Acute),Sore throat tests,,TEST,,TRUE,TEST_IDS,RAPID_STREP,20,"Recommend rapid strep for sore throat"
-ENT_ST_TEST_02,ENT,Sore Throat (Acute),Sore throat tests,,TEST,,ENT_ST_16==Yes,TEST_IDS,GC_CT_THROAT_SWAB,30,"STD risk: offer GC/CT throat swab"
-ENT_ST_TEST_03,ENT,Sore Throat (Acute),Sore throat tests,,TEST,,ENT_ST_15==Yes,TEST_IDS,MONO_TEST,40,"Mono testing only if fatigue/lymph nodes > ~1–2 weeks"
-ENT_ST_TX_01,ENT,Sore Throat (Acute),Sore throat default,,NON_RED_FLAG,,TRUE,DISPOSITION,routine_followup_or_testing,50,"No red flags default"
-ENT_ST_MED_01,ENT,Sore Throat (Acute),Sore throat antibiotics,,MED,,ENT_ST_01==Yes,MED_IDS,PHARYNGITIS_SUPPORTIVE_PACK,60,"Supportive sore throat care"
-ENT_ST_MED_02,ENT,Sore Throat (Acute),Sore throat antibiotics,,MED,,TRUE,MED_IDS,STREP_TX_PACK,70,"If clinician chooses to treat per Centor/age rules"
-ENT_EAR_RED_01,ENT,Ear Pain (Otalgia),Ear pain red flags,,RED_FLAG,,ENT_EAR_09==Yes,DISPOSITION,urgent_or_ed,1,"Mastoid pain/swelling"
-ENT_EAR_RED_02,ENT,Ear Pain (Otalgia),Ear pain red flags,,RED_FLAG,,ENT_EAR_10==Yes,DISPOSITION,urgent_or_ed,2,"Facial weakness (Ramsay Hunt/Bell palsy concern)"
-ENT_EAR_RED_03,ENT,Ear Pain (Otalgia),Ear pain red flags,,RED_FLAG,,ENT_EAR_16==Yes,DISPOSITION,urgent_or_ed,3,"Neck stiffness"
-ENT_EAR_TX_01,ENT,Ear Pain (Otalgia),Ear pain default,,NON_RED_FLAG,,TRUE,DISPOSITION,routine_followup_or_exam,50,"No red flags default (needs ear exam)"
-ENT_EAR_MED_01,ENT,Ear Pain (Otalgia),Ear pain supportive,,MED,,TRUE,MED_IDS,EAR_PAIN_SUPPORTIVE_PACK,60,"Analgesics + supportive"
-ENT_SIN_RED_01,ENT,Nasal Congestion / Sinus Press,Sinus red flags,,RED_FLAG,,ENT_SINUS_09==Yes,DISPOSITION,urgent_or_ed,1,"Eye swelling/redness"
-ENT_SIN_RED_02,ENT,Nasal Congestion / Sinus Press,Sinus red flags,,RED_FLAG,,ENT_SINUS_10==Yes,DISPOSITION,urgent_or_ed,2,"Pain with eye movement"
-ENT_SIN_RED_03,ENT,Nasal Congestion / Sinus Press,Sinus red flags,,RED_FLAG,,ENT_SINUS_08==Yes,DISPOSITION,urgent_or_ed,3,"Vision changes"
-ENT_SIN_RED_04,ENT,Nasal Congestion / Sinus Press,Sinus red flags,,RED_FLAG,,ENT_SINUS_11==Yes,DISPOSITION,urgent_or_ed,4,"Neck stiffness"
-ENT_SIN_TX_01,ENT,Nasal Congestion / Sinus Press,Sinus default,,NON_RED_FLAG,,TRUE,DISPOSITION,self_care_with_followup,50,"Default: most viral; consider bacterial criteria"
-ENT_SIN_RULE_01,ENT,Nasal Congestion / Sinus Press,Bacterial sinusitis criteria,,RULE,,ENT_SINUS_05==Yes,ALERT,CONSIDER_BACTERIAL_SINUSITIS,20,">10 days suggests bacterial sinusitis"
-ENT_SIN_RULE_02,ENT,Nasal Congestion / Sinus Press,Bacterial sinusitis criteria,,RULE,,ENT_SINUS_06==Yes,ALERT,DOUBLE_WORSENING,21,"Double worsening suggests bacterial sinusitis"
-ENT_SIN_MED_01,ENT,Nasal Congestion / Sinus Press,Sinus supportive,,MED,,TRUE,MED_IDS,SINUS_SUPPORTIVE_PACK,60,"Intranasal steroid/saline/analgesics"
-ENT_SIN_MED_02,ENT,Nasal Congestion / Sinus Press,Sinus antibiotics,,MED,,ENT_SINUS_05==Yes OR ENT_SINUS_06==Yes,MED_IDS,BACTERIAL_SINUSITIS_TX_PACK,70,"If bacterial criteria met, clinician may treat"
-ENT_EYE_RED_01,ENT,Pink Eye / Eye redness or discharge,Eye red flags,,RED_FLAG,,ENT_EYE_04==Yes,DISPOSITION,urgent_or_ed,1,"Eye pain"
-ENT_EYE_RED_02,ENT,Pink Eye / Eye redness or discharge,Eye red flags,,RED_FLAG,,ENT_EYE_05==Yes,DISPOSITION,urgent_or_ed,2,"Photophobia"
-ENT_EYE_RED_03,ENT,Pink Eye / Eye redness or discharge,Eye red flags,,RED_FLAG,,ENT_EYE_06==Yes,DISPOSITION,urgent_or_ed,3,"Vision changes"
-ENT_EYE_RED_04,ENT,Pink Eye / Eye redness or discharge,Eye red flags,,RED_FLAG,,ENT_EYE_12==Yes,DISPOSITION,urgent_or_ed,4,"Trauma"
-ENT_EYE_RULE_01,ENT,Pink Eye / Eye redness or discharge,Contact lens risk,,RULE,,ENT_EYE_07==Yes,ALERT,CONTACT_LENS_HIGH_RISK,10,"Contact lens: higher keratitis risk"
-ENT_EYE_TX_01,ENT,Pink Eye / Eye redness or discharge,Eye default,,NON_RED_FLAG,,TRUE,DISPOSITION,routine_or_supportive,50,"Default: many are viral/allergic"
-ENT_EYE_MED_01,ENT,Pink Eye / Eye redness or discharge,Bacterial conjunctivitis meds,,MED,,ENT_EYE_02==Yes,MED_IDS,"ROW_KEY=ENT_CONJ_BACT_01|Polytrim;ROW_KEY=ENT_CONJ_BACT_01|Erythromycin_oph",60,"Thick discharge: consider bacterial coverage"
-ENT_EYE_MED_02,ENT,Pink Eye / Eye redness or discharge,Contact lens conjunctivitis meds,,MED,,ENT_EYE_07==Yes,MED_IDS,"ROW_KEY=ENT_CONJ_CL_01|Ofloxacin_oph",55,"Contact lens: fluoroquinolone drops"
-ENT_EYE_MED_03,ENT,Pink Eye / Eye redness or discharge,Allergic conjunctivitis meds,,MED,,ENT_EYE_03==Yes,MED_IDS,"ROW_KEY=ENT_CONJ_ALL_01|Ketotifen",70,"Itching: allergic pattern"
-ENT_EYE_MED_04,ENT,Pink Eye / Eye redness or discharge,Supportive eye care,,MED,,TRUE,MED_IDS,"ROW_KEY=ENT_CONJ_SUPP_01|Artificial_tears",90,"Supportive care"
-ENT_VERT_RED_01,ENT,Dizziness / Vertigo,Vertigo red flags,,RED_FLAG,,ENT_VERTIGO_09==Yes,DISPOSITION,urgent_or_ed,1,"Unilateral weakness/numbness"
-ENT_VERT_RED_02,ENT,Dizziness / Vertigo,Vertigo red flags,,RED_FLAG,,ENT_VERTIGO_10==Yes,DISPOSITION,urgent_or_ed,2,"Speech difficulty"
-ENT_VERT_RED_03,ENT,Dizziness / Vertigo,Vertigo red flags,,RED_FLAG,,ENT_VERTIGO_11==Yes,DISPOSITION,urgent_or_ed,3,"Vision changes/diplopia"
-ENT_VERT_RED_04,ENT,Dizziness / Vertigo,Vertigo red flags,,RED_FLAG,,ENT_VERTIGO_12==Yes,DISPOSITION,urgent_or_ed,4,"Ataxia/coordination trouble"
-ENT_VERT_RED_05,ENT,Dizziness / Vertigo,Vertigo red flags,,RED_FLAG,,ENT_VERTIGO_08==Yes,DISPOSITION,urgent_or_ed,5,"Severe headache"
-ENT_VERT_RED_06,ENT,Dizziness / Vertigo,Vertigo red flags,,RED_FLAG,,ENT_VERTIGO_14==Yes,DISPOSITION,urgent_or_ed,6,"Syncope/near syncope"
-ENT_VERT_RULE_01,ENT,Dizziness / Vertigo,BPPV pattern,,RULE,,ENT_VERTIGO_03==Yes AND ENT_VERTIGO_01==Yes,ALERT,BPPV_PATTERN,20,"Positional spinning suggests BPPV"
-ENT_VERT_TX_01,ENT,Dizziness / Vertigo,Vertigo default,,NON_RED_FLAG,,TRUE,DISPOSITION,routine_or_supportive,50,"Default if no neuro/cardiac red flags"
-ENT_VERT_MED_01,ENT,Dizziness / Vertigo,Vertigo symptom meds,,MED,,TRUE,MED_IDS,"ROW_KEY=ENT_VERTIGO_SYMP_01|Meclizine",60,"Meclizine PRN symptom control"
-ENT_VERT_MED_02,ENT,Dizziness / Vertigo,Vertigo nausea meds,,MED,,ENT_VERTIGO_15==Yes,MED_IDS,"ROW_KEY=ENT_VERTIGO_NAUSEA_01|Ondansetron",61,"If significant nausea/vomiting"
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+ENT_FLU_LIKE_V1,ENT,Flu-like / URI,ENT_FLU,ENT_FLU_LIKE_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENT_FLU_LIKE_V1,ENT,Flu-like / URI,ENT_FLU,ENT_FLU_LIKE_V1_NON_RED_FLAG_DISPOSITION,text,self_care_with_routine_followup,Y
+ENT_FLU_LIKE_V1,ENT,Flu-like / URI,ENT_FLU,ENT_FLU_LIKE_V1_TEST_DEFAULT,text,FLU_COVID_RAPID,Y
+ENT_FLU_LIKE_V1,ENT,Flu-like / URI,ENT_FLU,ENT_FLU_LIKE_V1_SUPPORTIVE_MED_PACK,text,SUPPORTIVE_URI_PACK,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_NON_RED_FLAG_DISPOSITION,text,routine_followup_or_testing,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_TEST_DEFAULT,text,RAPID_STREP,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_TEST_STD_RISK,text,GC_CT_THROAT_SWAB,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_TEST_MONO_IF,text,MONO_TEST,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_MED_SUPPORTIVE_PACK,text,PHARYNGITIS_SUPPORTIVE_PACK,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_MED_STREP_TX_PACK,text,STREP_TX_PACK,Y
+ENT_SORE_THROAT_V1,ENT,Sore Throat (Acute),ENT_ST,ENT_SORE_THROAT_V1_ALWAYS_RECOMMEND_RAPID_STREP,boolean,TRUE,Y
+ENT_EAR_PAIN_V1,ENT,Ear Pain (Otalgia),ENT_EAR,ENT_EAR_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENT_EAR_PAIN_V1,ENT,Ear Pain (Otalgia),ENT_EAR,ENT_EAR_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,routine_followup_or_exam,Y
+ENT_EAR_PAIN_V1,ENT,Ear Pain (Otalgia),ENT_EAR,ENT_EAR_PAIN_V1_EAR_SUPPORTIVE_PACK,text,EAR_PAIN_SUPPORTIVE_PACK,Y
+ENT_SINUS_V1,ENT,Nasal Congestion / Sinus Press,ENT_SINUS,ENT_SINUS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENT_SINUS_V1,ENT,Nasal Congestion / Sinus Press,ENT_SINUS,ENT_SINUS_V1_NON_RED_FLAG_DISPOSITION,text,self_care_with_followup,Y
+ENT_SINUS_V1,ENT,Nasal Congestion / Sinus Press,ENT_SINUS,ENT_SINUS_V1_BACTERIAL_CRITERIA_DAYS_OVER_10,boolean,TRUE,Y
+ENT_SINUS_V1,ENT,Nasal Congestion / Sinus Press,ENT_SINUS,ENT_SINUS_V1_BACTERIAL_CRITERIA_DOUBLE_WORSENING,boolean,TRUE,Y
+ENT_SINUS_V1,ENT,Nasal Congestion / Sinus Press,ENT_SINUS,ENT_SINUS_V1_SUPPORTIVE_PACK,text,SINUS_SUPPORTIVE_PACK,Y
+ENT_SINUS_V1,ENT,Nasal Congestion / Sinus Press,ENT_SINUS,ENT_SINUS_V1_BACTERIAL_TX_PACK,text,BACTERIAL_SINUSITIS_TX_PACK,Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_CONTACT_LENS_ALERT,boolean,TRUE,Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_MED_BACTERIAL_CONJ_PACK,text,"ROW_KEY=ENT_CONJ_BACT_01|Polytrim;ROW_KEY=ENT_CONJ_BACT_01|Erythromycin_oph",Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_MED_CONTACT_LENS_PACK,text,"ROW_KEY=ENT_CONJ_CL_01|Ofloxacin_oph",Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_MED_ALLERGIC_PACK,text,"ROW_KEY=ENT_CONJ_ALL_01|Ketotifen",Y
+ENT_CONJUNCTIVITIS_V1,ENT,Pink Eye / Eye redness or discharge,ENT_EYE,ENT_CONJUNCTIVITIS_V1_MED_SUPPORTIVE_PACK,text,"ROW_KEY=ENT_CONJ_SUPP_01|Artificial_tears",Y
+ENT_VERTIGO_V1,ENT,Dizziness / Vertigo,ENT_VERTIGO,ENT_VERTIGO_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENT_VERTIGO_V1,ENT,Dizziness / Vertigo,ENT_VERTIGO,ENT_VERTIGO_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENT_VERTIGO_V1,ENT,Dizziness / Vertigo,ENT_VERTIGO,ENT_VERTIGO_V1_BPPV_PATTERN_ALERT,boolean,TRUE,Y
+ENT_VERTIGO_V1,ENT,Dizziness / Vertigo,ENT_VERTIGO,ENT_VERTIGO_V1_MED_VERTIGO_SYMPTOM,text,"ROW_KEY=ENT_VERTIGO_SYMP_01|Meclizine",Y
+ENT_VERTIGO_V1,ENT,Dizziness / Vertigo,ENT_VERTIGO,ENT_VERTIGO_V1_MED_VERTIGO_NAUSEA,text,"ROW_KEY=ENT_VERTIGO_NAUSEA_01|Ondansetron",Y
