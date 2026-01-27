@@ -1,0 +1,61 @@
+✅ What to run for CLINICAL_MEDICATIONS (UPSERT)
+
+Use Notes as the key column:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/ENT/CLINICAL_MEDICATIONS_ENT.csv upsert Notes
+
+
+That’s the correct UPSERT command for this tab given its schema.
+
+Where to save the CSV
+
+Save it here:
+
+server/imports/ENT/CLINICAL_MEDICATIONS_ENT.csv
+
+✅ ENT medications CSV (starter “additions pack”)
+
+Below is an import-ready CSV block using your exact headers.
+It adds meds commonly needed for the ENT flows we just loaded (conjunctivitis + vertigo).
+You may need to adjust the Diagnosis_ID values to match your existing Diagnoses tab IDs (if your conjunctivitis/vertigo diagnosis IDs differ). Everything else can stay.
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+ENT_CONJ_BACT_01,ENT,Trimethoprim-Polymyxin B (Polytrim),Topical Antibiotic,Bacterial conjunctivitis cluster,Yes,"1 gtt Q3H (max 6x/day) x 7 days",,,"Generally ok; confirm clinician guidance",Hypersensitivity to components,,Stinging/irritation,Eye drops,No,No,"ROW_KEY=ENT_CONJ_BACT_01|Polytrim"
+ENT_CONJ_BACT_01,ENT,Erythromycin ophthalmic ointment,Topical Antibiotic,Bacterial conjunctivitis cluster,Yes,"~1 cm ribbon QID x 7 days",,,"Generally considered safe in pregnancy",Macrolide allergy,,Blurred vision (temporary),Ophthalmic ointment,No,No,"ROW_KEY=ENT_CONJ_BACT_01|Erythromycin_oph"
+ENT_CONJ_CL_01,ENT,Ofloxacin ophthalmic,Topical Fluoroquinolone,Contact lens conjunctivitis cluster,Yes,"1–2 gtt QID x 7 days",,,"Use if benefits outweigh risks; clinician guidance",Fluoroquinolone allergy,,Irritation/burning,Eye drops,No,No,"ROW_KEY=ENT_CONJ_CL_01|Ofloxacin_oph"
+ENT_CONJ_ALL_01,ENT,Ketotifen ophthalmic (OTC),Antihistamine/Mast cell stabilizer,Allergic conjunctivitis cluster,Yes,"1 gtt BID PRN",,,"Generally ok; clinician guidance",,,"Stinging/dryness",Eye drops,No,No,"ROW_KEY=ENT_CONJ_ALL_01|Ketotifen"
+ENT_CONJ_SUPP_01,ENT,Artificial tears (preservative-free),Supportive care,Conjunctivitis supportive care,Yes,"1–2 gtt QID PRN",,,,"",,,"Temporary blur",Eye drops,No,No,"ROW_KEY=ENT_CONJ_SUPP_01|Artificial_tears"
+ENT_VERTIGO_SYMP_01,ENT,Meclizine,Antiemetic/Antivertigo,Vertigo symptom control cluster,Yes,"25–50 mg PO q6–8h PRN","100 mg/day","12.5–25 mg PO q6–8h PRN (age-dependent)","Use only if needed; clinician guidance",Hypersensitivity; caution glaucoma/BPH/CNS depression,"Sedatives, alcohol",Drowsiness/dry mouth,Oral,No,Caution,"ROW_KEY=ENT_VERTIGO_SYMP_01|Meclizine"
+ENT_VERTIGO_NAUSEA_01,ENT,Ondansetron,Antiemetic,Vertigo nausea/vomiting cluster,Yes,"4–8 mg PO/ODT q8h PRN","24 mg/day","0.15 mg/kg/dose q8h PRN (max per clinician)","Often used; clinician guidance",QT prolongation risk,QT-prolonging meds,Headache/constipation,Oral/ODT,No,Caution,"ROW_KEY=ENT_VERTIGO_NAUSEA_01|Ondansetron"
+
+Notes on that CSV
+
+It uses your exact columns and keeps everything stable.
+
+UPSERT works because Notes is unique per row via ROW_KEY=....
+
+If your Diagnoses IDs differ, change only the Diagnosis_ID strings — nothing else.
+
+Next: finishing ENT across ALL tabs (fast path)
+
+To “finish ENT” properly, we do this in order:
+
+CLINICAL_RULES (new canonical headers)
+
+Add red flags + disposition + test triggers + med suggestions per complaint
+
+CLINICAL_DIAGNOSES
+
+Ensure each of the 6 ENT complaints has a complete differential list (IDs match rules + meds)
+
+CLINICAL_MEDICATIONS
+
+Add only missing meds referenced by rules/diagnoses (like the pack above)
+
+CLINICAL_MODIFIERS
+
+Add only missing ENT-specific modifiers (you already have a strong global set)
+
+If you paste the header row from CLINICAL_DIAGNOSES (row 1 exactly), I’ll generate an ENT_DIAGNOSES additions CSV that matches your exact sheet format and ties into these meds/rules cleanly.
+
+And if you want, I can generate the ENT CLINICAL_RULES CSV next immediately since we already locked that header format.
