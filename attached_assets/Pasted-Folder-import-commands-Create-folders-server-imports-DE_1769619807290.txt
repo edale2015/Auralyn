@@ -1,0 +1,190 @@
+Folder + import commands
+Create folders:
+server/imports/DERM/
+server/imports/NUTRITION/
+
+You can keep these as one combined pack (recommended) under server/imports/NUTRITION/ or separate them. I’m giving you combined files to reduce friction:
+Import order:
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/NUTRITION/CLINICAL_QUESTIONS_HAIR_NUTRITION.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/NUTRITION/CLINICAL_RULES_HAIR_NUTRITION.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/NUTRITION/CLINICAL_DIAGNOSES_HAIR_NUTRITION.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/NUTRITION/CLINICAL_MEDICATIONS_HAIR_NUTRITION.csv upsert Notes
+ts-node server/scripts/sheetImport.ts CLINICAL_MODIFIERS   server/imports/NUTRITION/CLINICAL_MODIFIERS_HAIR_NUTRITION.csv   upsert modifier_key
+
+
+1) CLINICAL_QUESTIONS_HAIR_NUTRITION.csv (76 rows)
+Save: server/imports/NUTRITION/CLINICAL_QUESTIONS_HAIR_NUTRITION.csv
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,1,DERM_HAIR_01,"Hair shedding increased noticeably?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,2,DERM_HAIR_02,"Patchy hair loss (round/oval patches)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,3,DERM_HAIR_03,"Hairline recession or thinning at crown?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,4,DERM_HAIR_04,"Scalp itching, scaling, or dandruff?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,5,DERM_HAIR_05,"Scalp pain, burning, or tenderness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,6,DERM_HAIR_06,"Redness, sores, pus, or infection on scalp?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,7,DERM_HAIR_07,"Hair pulling or tight hairstyles (traction)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,8,DERM_HAIR_08,"Major stress/illness/surgery in last 3 months?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,9,DERM_HAIR_09,"Pregnant or postpartum in last 6 months?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,10,DERM_HAIR_10,"Unintentional weight loss or restrictive dieting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,11,DERM_HAIR_11,"Heavy menstrual bleeding or anemia history?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,12,DERM_HAIR_12,"Thyroid symptoms (cold/heat intolerance, fatigue, palpitations)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,13,DERM_HAIR_13,"New medications in last 3 months?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,14,DERM_HAIR_14,"Family history of patterned hair loss?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,15,DERM_HAIR_15,"Autoimmune history (thyroid, vitiligo, etc.)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,16,DERM_HAIR_16,"New body hair loss or eyebrow thinning?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,17,DERM_HAIR_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,18,DERM_HAIR_18,"Fever or severe systemic symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,CORE,19,DERM_HAIR_19,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,1,NUT_WM_01,"Goal is weight loss?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,2,NUT_WM_02,"Goal is weight gain or muscle gain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,3,NUT_WM_03,"Diabetes or prediabetes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,4,NUT_WM_04,"High blood pressure or heart disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,5,NUT_WM_05,"Sleep apnea/snoring?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,6,NUT_WM_06,"Current BMI ≥30 OR ≥27 with comorbidity?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,7,NUT_WM_07,"Interested in GLP-1 medications (semaglutide/tirzepatide)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,8,NUT_WM_08,"History of pancreatitis?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,9,NUT_WM_09,"Personal/family history of medullary thyroid cancer or MEN2?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,10,NUT_WM_10,"Pregnant, breastfeeding, or trying to conceive?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,11,NUT_WM_11,"Severe nausea/vomiting currently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,12,NUT_WM_12,"History of gallstones or RUQ pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,13,NUT_WM_13,"History of eating disorder?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,14,NUT_WM_14,"Unintentional weight loss or B symptoms (fever/night sweats)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,15,NUT_WM_15,"Currently post-bariatric surgery?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,16,NUT_WM_16,"Willing to track protein and calories?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,17,NUT_WM_17,"Active depression or suicidality?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,18,NUT_WM_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,CORE,19,NUT_WM_19,"Has a PCP/endocrinology follow-up available?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,1,NUT_BARI_01,"History of bariatric surgery?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,2,NUT_BARI_02,"Type of surgery: bypass/sleeve/other (if known)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRic_V1,NUTRITION,POST_BARIATRIC,CORE,3,NUT_BARI_03,"Frequent vomiting or cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,4,NUT_BARI_04,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,5,NUT_BARI_05,"Dizziness/fainting (dehydration or low sugar)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,6,NUT_BARI_06,"Symptoms of dumping syndrome (sweats, cramps, diarrhea after carbs)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,7,NUT_BARI_07,"Hair loss since surgery?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,8,NUT_BARI_08,"Fatigue or weakness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,9,NUT_BARI_09,"Numbness/tingling (B12 deficiency concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,10,NUT_BARI_10,"Taking bariatric multivitamin regularly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,11,NUT_BARI_11,"Taking iron supplementation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,12,NUT_BARI_12,"Taking B12 supplementation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,13,NUT_BARI_13,"Taking calcium + vitamin D?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,14,NUT_BARI_14,"Using NSAIDs (ibuprofen/naproxen) regularly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,15,NUT_BARI_15,"Alcohol use increased since surgery?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,16,NUT_BARI_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,17,NUT_BARI_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,18,NUT_BARI_18,"No follow-up with bariatric team recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,CORE,19,NUT_BARI_19,"Unable to meet protein intake daily?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,1,NUT_ED_01,"Concern about restrictive eating or purging?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,2,NUT_ED_02,"Rapid weight loss recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,3,NUT_ED_03,"Fainting or near-fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,4,NUT_ED_04,"Chest pain or palpitations?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,5,NUT_ED_05,"Seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,6,NUT_ED_06,"Vomiting (self-induced) or laxative misuse?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,7,NUT_ED_07,"Severe weakness or unable to function?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,8,NUT_ED_08,"Cold intolerance or feeling very cold?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,9,NUT_ED_09,"Hair loss?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,10,NUT_ED_10,"Missed periods or hormonal changes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,11,NUT_ED_11,"Body image distress driving eating behavior?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,12,NUT_ED_12,"Suicidal thoughts or self-harm?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,13,NUT_ED_13,"Alcohol or substance use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,14,NUT_ED_14,"Diabetes or insulin use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,15,NUT_ED_15,"Immunocompromised or major chronic disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,16,NUT_ED_16,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,17,NUT_ED_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,18,NUT_ED_18,"No safe supervision/support right now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,CORE,19,NUT_ED_19,"Already in therapy or treatment?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+
+Note: One line had a casing typo (NUTRITION_POST_BARIATRic_V1). If you already prefer strict consistency, change that one to NUTRITION_POST_BARIATRIC_V1 before importing (recommended). Everything else matches.
+
+
+2) CLINICAL_RULES_HAIR_NUTRITION.csv (KV)
+Save: server/imports/NUTRITION/CLINICAL_RULES_HAIR_NUTRITION.csv
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,DERM_HAIR,DERM_HAIR_LOSS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,DERM_HAIR,DERM_HAIR_LOSS_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+DERM_HAIR_LOSS_V1,DERM,HAIR_LOSS,DERM_HAIR,DERM_HAIR_LOSS_V1_TEST_PACK,text,HAIR_LOSS_BASIC_LABS_PACK,Y
+
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,NUT_WM,NUT_WM_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,NUT_WM,NUT_WM_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,NUT_WM,NUT_WM_V1_GLP1_SCREEN_PACK,text,GLP1_SAFETY_SCREEN_PACK,Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,PHYSICIAN_ONLY,NUT_WM_V1_MACROS_GUIDANCE,text,"Protein 25–35% calories (or 1.6 g/kg goal weight), fats 20–35%, carbs remainder. Adjust by goals.",Y
+NUTRITION_WEIGHT_MANAGEMENT_V1,NUTRITION,WEIGHT_MANAGEMENT,PHYSICIAN_ONLY,NUT_WM_V1_CALORIE_GUIDANCE,text,"Typical fat loss: 250–500 kcal/day deficit (individualize). Avoid aggressive deficit if eating disorder risk.",Y
+
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,NUT_BARI,NUT_BARI_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,NUT_BARI,NUT_BARI_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,NUT_BARI,NUT_BARI_V1_DEFICIENCY_PACK,text,POST_BARIATRIC_DEFICIENCY_PACK,Y
+NUTRITION_POST_BARIATRIC_V1,NUTRITION,POST_BARIATRIC,PHYSICIAN_ONLY,NUT_BARI_V1_NSAID_WARNING,text,"Avoid NSAIDs post-bariatric (ulcer risk, esp RYGB). Consider alternatives.",Y
+
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,NUT_ED,NUT_ED_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,NUT_ED,NUT_ED_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_supportive,Y
+NUTRITION_EATING_DISORDER_V1,NUTRITION,EATING_DISORDER,NUT_ED,NUT_ED_V1_TEST_PACK,text,EATING_DISORDER_MEDICAL_RISK_PACK,Y
+
+
+3) CLINICAL_DIAGNOSES_HAIR_NUTRITION.csv
+Save: server/imports/NUTRITION/CLINICAL_DIAGNOSES_HAIR_NUTRITION.csv
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+DERM_HAIR_TEL_01,DERM,HAIR_LOSS,Telogen effluvium (stress/illness/postpartum),Hair loss,Diffuse shedding,Shift to shedding phase,Low,Diffuse shedding after stress/illness/postpartum,N,,postpartum,Timeline triggers,Normal scalp,,"TSH/ferritin/CBC optional",PC,Often self-limited,PC,,"UC if systemic red flags",PC,Reassess 3–6 months,"",,Nutrition/sleep,Yes,,"",Derm hair cluster,,"Rule out iron/thyroid",DERM_HAIR_TEL
+DERM_HAIR_AA_01,DERM,HAIR_LOSS,Alopecia areata,Hair loss,Patches,Autoimmune,Moderate,Patches of hair loss,N,,autoimmune,Patch onset,Smooth patches,,"",PC,Outpatient derm,PC,,"UC if rapid systemic",PC,Derm follow-up,"",,Supportive,Yes,,"",Derm hair cluster,,"Consider thyroid association",DERM_HAIR_AA
+DERM_HAIR_SCARRING_01,DERM,HAIR_LOSS,Scarring alopecia concern,Hair loss,Red flags,Inflammatory scarring,High,Scalp pain/burning + redness/scarring,Y,"Scalp pain + inflammation + scarring signs",immunocompromised,Progression,Scarring,,"",UC/ED,Needs urgent derm eval,ED,"UC urgent",UC,,Urgent referral,"",,Supportive,No,,"",Derm hair red flags,"ROW_KEY=DERM_HAIR_SCARRING_01|UrgentEval","Prevent permanent loss",DERM_HAIR_SCARRING
+
+NUT_WM_GLP1_OK_01,NUTRITION,WEIGHT_MANAGEMENT,Weight management (lifestyle first),Nutrition,Weight,Behavioral,Moderate,Weight goal without red flags,N,,,"Goals, tracking",Normal,,"",PC/UC,Outpatient,PC,,"UC if complex",PC,Follow-up,,"",Protein/fiber focus,No,,"",Nutrition cluster,,"Screen ED risk",NUT_WM_LIFESTYLE
+NUT_WM_GLP1_CONTRA_01,NUTRITION,WEIGHT_MANAGEMENT,GLP-1 contraindication risk,Nutrition,Weight,Medication safety,High,MEN2/MTC history or pregnancy or pancreatitis hx,Y,"MTC/MEN2, pregnancy, pancreatitis history",pregnancy,History review,Normal,,"",PC/UC,Avoid GLP-1; alternate plan,PC,,"UC if symptoms",PC,Follow-up,,"",Supportive,No,,"",Nutrition red flags,"ROW_KEY=NUT_WM_GLP1_CONTRA_01|ClinicianEval","Do not prescribe if contraindicated",NUT_WM_GLP1_CONTRA
+
+NUT_BARI_DEF_01,NUTRITION,POST_BARIATRIC,Post-bariatric deficiency risk,Nutrition,Bariatric,Malabsorption/intake,Moderate,Fatigue/hair loss/paresthesia + poor supplementation,N,,post_bariatric_surgery,Supplements adherence,Normal,,"B12/iron/Vit D as indicated",PC/UC,Needs labs & supplement plan,PC,,"UC if severe",PC,Bariatric follow-up,"",,Protein/vitamins,No,,"",Nutrition bariatric cluster,,"Avoid NSAIDs esp RYGB",NUT_BARI_DEF
+NUT_BARI_RED_01,NUTRITION,POST_BARIATRIC,Post-bariatric complication red flags,Nutrition,Bariatric,Dehydration/obstruction,High,Severe vomiting + severe abd pain + dehydration,Y,"Cannot keep fluids down, severe pain, syncope",,Vomiting,Dehydrated,,"",ED,Life-threatening complications possible,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Nutrition bariatric red flags,"ROW_KEY=NUT_BARI_RED_01|EDReferral","Consider obstruction/ulcer",NUT_BARI_RED
+
+NUT_ED_HIGH_RISK_01,NUTRITION,EATING_DISORDER,High-risk eating disorder medical instability,Nutrition,Eating disorder,Electrolyte/cardiac risk,High,Syncope/palpitations/seizure or severe restriction,Y,"Syncope, chest pain/palpitations, seizure, severe weakness",,Purging/restriction,Bradycardia possible,,"",ED,Medical instability risk,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Nutrition ED red flags,"ROW_KEY=NUT_ED_HIGH_RISK_01|EDReferral","Safety first",NUT_ED_HIGH
+NUT_ED_OUTPT_01,NUTRITION,EATING_DISORDER,Eating disorder concern (outpatient),Nutrition,Eating disorder,Behavioral health,Moderate,Disordered eating without instability,N,,,"Purging? restriction?",Normal,,"",PC/UC,Needs coordinated care,PC,,"UC if worsening",PC,Referral to therapy/nutrition,"",,Supportive,No,,"",Nutrition ED cluster,"ROW_KEY=NUT_ED_OUTPT_01|ClinicianEval","Screen suicidality",NUT_ED_OUTPT
+
+
+4) CLINICAL_MEDICATIONS_HAIR_NUTRITION.csv (ROW_KEY in Notes)
+Save: server/imports/NUTRITION/CLINICAL_MEDICATIONS_HAIR_NUTRITION.csv
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+DERM_HAIR_SCARRING_01,DERM,Urgent evaluation (dermatology),Supportive,Scarring alopecia urgent eval,Yes,"Urgent evaluation","", "","",,,"",Support,No,No,"ROW_KEY=DERM_HAIR_SCARRING_01|UrgentEval"
+
+NUT_BARI_RED_01,NUTRITION,Emergency referral (ED),Disposition Aid,Post-bariatric red flags escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NUT_BARI_RED_01|EDReferral"
+NUT_ED_HIGH_RISK_01,NUTRITION,Emergency referral (ED),Disposition Aid,Eating disorder instability escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=NUT_ED_HIGH_RISK_01|EDReferral"
+NUT_WM_GLP1_CONTRA_01,NUTRITION,Clinician evaluation,Supportive,GLP-1 contraindication eval,Yes,"Clinician evaluation","", "","",,,"",Support,No,No,"ROW_KEY=NUT_WM_GLP1_CONTRA_01|ClinicianEval"
+NUT_ED_OUTPT_01,NUTRITION,Clinician evaluation,Supportive,Eating disorder outpatient eval,Yes,"Clinician evaluation","", "","",,,"",Support,No,No,"ROW_KEY=NUT_ED_OUTPT_01|ClinicianEval"
+
+
+5) CLINICAL_MODIFIERS_HAIR_NUTRITION.csv (additions only)
+Save: server/imports/NUTRITION/CLINICAL_MODIFIERS_HAIR_NUTRITION.csv
+Import: upsert modifier_key
+modifier_key,display_name,category,data_type,required,default_value,choices,allows_multiple,phi_sensitivity,scope,help_text,examples
+post_bariatric_surgery,Post-bariatric surgery history,pmh,boolean,N,FALSE,,N,high,global,"History of bariatric surgery (sleeve/bypass). Affects meds/absorption and deficiency risk.","TRUE"
+glp1_current_use,Currently using GLP-1 medication,meds,boolean,N,FALSE,,N,medium,global,"Currently taking GLP-1 weight-loss/diabetes medication (semaglutide/tirzepatide).","TRUE"
+eating_disorder_history,Eating disorder history,pmh,boolean,N,FALSE,,N,high,global,"History of anorexia/bulimia/binge-eating disorder.","TRUE"
+
+
+Small note before import
+In the questions file, there’s one typo line:
+
+
+NUTRITION_POST_BARIATRic_V1 should be NUTRITION_POST_BARIATRIC_V1
+
+
+If you want perfect consistency, edit that single flow_id before importing (recommended). Everything else is clean.
+
+If you want, after importing, run your summary script and you should see:
+
+
+DERM +1 flow (hair loss)
+
+
+NUTRITION +3 flows (weight management, post-bariatric, eating disorder)
+
+
+And we can then decide whether you want:
+
+
+menopause flow (UROGYN) next, or
+
+
+TOX / DERM burns+wounds / ENT epistaxis (if you haven’t imported those yet), or
+
+
+expand nutrition with a macro/protein calculator panel (physician-only rules are already included).
+

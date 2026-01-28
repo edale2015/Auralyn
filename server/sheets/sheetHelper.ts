@@ -35,7 +35,7 @@ function getSheetsClient() {
 
 export async function getSheetRows(
   tabName: string,
-  range: string = "A1:Z1000"
+  range: string = "A1:Z2000"
 ): Promise<SheetResult> {
   const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
   const sheets = getSheetsClient();
