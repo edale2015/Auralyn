@@ -1,0 +1,270 @@
+1) System Summary Report (no new tabs)
+
+Create this file:
+
+server/scripts/clinicalSummary.ts
+import { getSheetRows } from "../sheets/sheetHelper";
+
+type TabSpec = {
+  tab: string;
+  keyCols: string[];
+  flowCol?: string;
+  systemCol?: string;
+};
+
+const TABS: TabSpec[] = [
+  { tab: "CLINICAL_QUESTIONS", keyCols: ["question_id"], flowCol: "flow_id", systemCol: "system" },
+  { tab: "CLINICAL_RULES", keyCols: ["rule_key"], flowCol: "flow_id", systemCol: "system" },
+  { tab: "CLINICAL_DIAGNOSES", keyCols: ["Diagnosis ID"], systemCol: "System" },
+  { tab: "CLINICAL_MEDICATIONS", keyCols: ["Notes"], systemCol: "System" },
+  { tab: "CLINICAL_MODIFIERS", keyCols: ["modifier_key"], systemCol: "scope" }, // global-ish; still counts
+];
+
+function norm(s: any) {
+  return String(s ?? "").trim();
+}
+
+function inc(map: Map<string, number>, key: string, by = 1) {
+  map.set(key, (map.get(key) || 0) + by);
+}
+
+async function main() {
+  const bySystem = new Map<string, Map<string, number>>(); // system -> tab -> count
+  const byFlow = new Map<string, Map<string, number>>();   // flow -> tab -> count
+
+  for (const spec of TABS) {
+    const { rowsAsObjects } = await getSheetRows(spec.tab);
+
+    for (const r of rowsAsObjects) {
+      // Skip inactive rows if 'active' exists and is clearly false
+      const active = norm((r as any).active);
+      if (active && ["n", "no", "false", "0"].includes(active.toLowerCase())) continue;
+
+      const system = spec.systemCol ? norm((r as any)[spec.systemCol]) : "";
+      const flow = spec.flowCol ? norm((r as any)[spec.flowCol]) : "";
+
+      // Count system totals
+      if (system) {
+        if (!bySystem.has(system)) bySystem.set(system, new Map());
+        inc(bySystem.get(system)!, spec.tab, 1);
+      }
+
+      // Count flow totals
+      if (flow) {
+        if (!byFlow.has(flow)) byFlow.set(flow, new Map());
+        inc(byFlow.get(flow)!, spec.tab, 1);
+      }
+    }
+  }
+
+  // Print system summary
+  console.log("\n=== SYSTEM SUMMARY ===");
+  const systems = Array.from(bySystem.keys()).sort();
+  for (const s of systems) {
+    const m = bySystem.get(s)!;
+    const q = m.get("CLINICAL_QUESTIONS") || 0;
+    const r = m.get("CLINICAL_RULES") || 0;
+    const d = m.get("CLINICAL_DIAGNOSES") || 0;
+    const meds = m.get("CLINICAL_MEDICATIONS") || 0;
+    const mods = m.get("CLINICAL_MODIFIERS") || 0;
+    console.log(`${s}: Questions=${q}, Rules=${r}, Diagnoses=${d}, Medications=${meds}, Modifiers=${mods}`);
+  }
+
+  // Print top flows (from questions tab presence)
+  console.log("\n=== FLOW SUMMARY (from flow_id rows present) ===");
+  const flows = Array.from(byFlow.keys()).sort();
+  for (const f of flows) {
+    const m = byFlow.get(f)!;
+    const q = m.get("CLINICAL_QUESTIONS") || 0;
+    const r = m.get("CLINICAL_RULES") || 0;
+    console.log(`${f}: Questions=${q}, Rules=${r}`);
+  }
+}
+
+main().catch((e) => {
+  console.error("clinicalSummary failed:", e);
+  process.exit(1);
+});
+
+
+Run it:
+
+ts-node server/scripts/clinicalSummary.ts
+
+
+It prints:
+
+System totals (Questions/Rules/Diagnoses/Meds/Modifiers)
+
+Flow totals (Questions + Rules per flow_id)
+
+No new tabs, no new headers, just reads what’s already there.
+
+2) PSYCH system pack (3 flows)
+
+I’m keeping PSYCH meds minimal (supportive + ED referral) because psych prescribing is complex/risky; you can add curated meds later if you want.
+
+PSYCH Flows
+
+PSYCH_ANXIETY_PANIC_V1 (ANXIETY_PANIC)
+
+PSYCH_DEPRESSION_V1 (DEPRESSION)
+
+PSYCH_INSOMNIA_V1 (INSOMNIA)
+
+Save to
+
+server/imports/PSYCH/:
+
+CLINICAL_QUESTIONS_PSYCH.csv
+
+CLINICAL_RULES_PSYCH.csv
+
+CLINICAL_DIAGNOSES_PSYCH.csv
+
+CLINICAL_MEDICATIONS_PSYCH.csv
+
+Import
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/PSYCH/CLINICAL_QUESTIONS_PSYCH.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/PSYCH/CLINICAL_RULES_PSYCH.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/PSYCH/CLINICAL_DIAGNOSES_PSYCH.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/PSYCH/CLINICAL_MEDICATIONS_PSYCH.csv upsert Notes
+
+
+If you want me to paste the full 57-question CSV blocks + rules/diagnoses/meds next, say “paste PSYCH CSVs” and I’ll drop them exactly like we did for ENV (it’s long).
+
+3) UROGYN system pack (4 flows)
+UROGYN Flows
+
+UROGYN_DYSURIA_UTI_V1 (UTI_DYSURIA)
+
+UROGYN_VAGINAL_DISCHARGE_V1 (VAGINAL_DISCHARGE)
+
+UROGYN_PELVIC_PAIN_V1 (PELVIC_PAIN)
+
+UROGYN_TESTICULAR_PAIN_V1 (TESTICULAR_PAIN)
+
+Same import pattern as always.
+
+If you want, I can paste UROGYN CSVs right after PSYCH in the next message.
+
+Quick check before I paste (so you don’t hit parsing issues again)
+
+Do you want the PSYCH and UROGYN CSVs:
+
+One file per tab per system (recommended), or
+
+One flow per file (smaller chunks, helps rate-limits)
+
+Reply with:
+“one file per tab” or “one flow per file” and I’ll paste PSYCH then UROGYN in that exact structure.
+
+one file per tab as recommended
+
+Perfect. I’ll give you ONE FILE PER TAB, first PSYCH, then UROGYN, exactly like ENV and ORTHO.
+Same headers, UPSERT-safe, no new tabs, ready to paste/import.
+
+I’ll split this into two sections so it’s usable and doesn’t get corrupted:
+
+PSYCH system (complete)
+
+UROGYN system (complete)
+
+🧠 PSYCH SYSTEM (ONE FILE PER TAB)
+PSYCH flows
+
+PSYCH_ANXIETY_PANIC_V1
+
+PSYCH_DEPRESSION_V1
+
+PSYCH_INSOMNIA_V1
+
+1️⃣ CLINICAL_QUESTIONS_PSYCH.csv (57 rows)
+
+Save: server/imports/PSYCH/CLINICAL_QUESTIONS_PSYCH.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,1,PSY_ANX_01,"Sudden intense fear or panic?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,2,PSY_ANX_02,"Heart racing or chest tightness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,3,PSY_ANX_03,"Shortness of breath or choking sensation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,4,PSY_ANX_04,"Dizziness or feeling faint?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,5,PSY_ANX_05,"Fear of dying or losing control?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,6,PSY_ANX_06,"Tingling or numbness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,7,PSY_ANX_07,"Triggering stress or anxiety history?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,8,PSY_ANX_08,"Symptoms peak within minutes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,9,PSY_ANX_09,"Substance use or stimulant intake?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,10,PSY_ANX_10,"New chest pain different than usual?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,11,PSY_ANX_11,"Fever or signs of infection?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,12,PSY_ANX_12,"History of heart or lung disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,13,PSY_ANX_13,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,14,PSY_ANX_14,"Thoughts of harming yourself?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,15,PSY_ANX_15,"Pregnant or postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,16,PSY_ANX_16,"Poor sleep recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,17,PSY_ANX_17,"Recent medication changes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,18,PSY_ANX_18,"Episodes recurring?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,CORE,19,PSY_ANX_19,"Able to calm with reassurance/breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,1,PSY_DEP_01,"Feeling down or hopeless most days?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,2,PSY_DEP_02,"Loss of interest or pleasure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,3,PSY_DEP_03,"Sleep problems (too much or too little)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,4,PSY_DEP_04,"Low energy or fatigue?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,5,PSY_DEP_05,"Poor concentration or indecisiveness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,6,PSY_DEP_06,"Appetite or weight changes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,7,PSY_DEP_07,"Feelings of guilt or worthlessness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,8,PSY_DEP_08,"Thoughts of death or suicide?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,9,PSY_DEP_09,"Plan or intent to harm yourself?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,10,PSY_DEP_10,"History of depression or bipolar disorder?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,11,PSY_DEP_11,"Substance or alcohol use increased?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,12,PSY_DEP_12,"Recent major life stressor or loss?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,13,PSY_DEP_13,"Symptoms for 2 weeks or longer?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,14,PSY_DEP_14,"Psychotic symptoms (voices, paranoia)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,15,PSY_DEP_15,"Pregnant or postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,16,PSY_DEP_16,"Support system available?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,17,PSY_DEP_17,"Able to keep yourself safe right now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,18,PSY_DEP_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,CORE,19,PSY_DEP_19,"Currently under mental health care?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,1,PSY_INS_01,"Difficulty falling or staying asleep?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,2,PSY_INS_02,"Sleep problem 3+ nights per week?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,3,PSY_INS_03,"Symptoms longer than 1 month?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,4,PSY_INS_04,"Daytime sleepiness or impairment?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,5,PSY_INS_05,"Anxiety or racing thoughts at night?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,6,PSY_INS_06,"Depressed mood?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,7,PSY_INS_07,"Snoring or pauses in breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,8,PSY_INS_08,"Restless legs symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,9,PSY_INS_09,"Caffeine late in day?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,10,PSY_INS_10,"Alcohol used to help sleep?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,11,PSY_INS_11,"Shift work or irregular schedule?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,12,PSY_INS_12,"Pain waking you at night?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,13,PSY_INS_13,"Medication affecting sleep?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,14,PSY_INS_14,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,15,PSY_INS_15,"Thoughts of self-harm?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,16,PSY_INS_16,"Pregnant or postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,17,PSY_INS_17,"Able to nap during day?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,18,PSY_INS_18,"Using screens before bed?",TRI,Y,,,,"Yes|No|Not sure",,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,CORE,19,PSY_INS_19,"Willing to try sleep hygiene changes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+2️⃣ CLINICAL_RULES_PSYCH.csv
+
+Save: server/imports/PSYCH/CLINICAL_RULES_PSYCH.csv
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,PSY_ANX,PSYCH_ANX_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+PSYCH_ANXIETY_PANIC_V1,PSYCH,ANXIETY_PANIC,PSY_ANX,PSYCH_ANX_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,PSY_DEP,PSYCH_DEP_V1_SUICIDAL_ALERT,boolean,TRUE,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,PSY_DEP,PSYCH_DEP_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+PSYCH_DEPRESSION_V1,PSYCH,DEPRESSION,PSY_DEP,PSYCH_DEP_V1_NON_RED_FLAG_DISPOSITION,text,routine_followup,Y
+
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,PSY_INS,PSYCH_INS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+PSYCH_INSOMNIA_V1,PSYCH,INSOMNIA,PSY_INS,PSYCH_INS_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+
+3️⃣ CLINICAL_DIAGNOSES_PSYCH.csv
+
+Save: server/imports/PSYCH/CLINICAL_DIAGNOSES_PSYCH.csv
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+PSYCH_ANX_PANIC_01,PSYCH,ANXIETY_PANIC,Panic attack,Anxiety,Panic,Autonomic surge,Moderate,Sudden fear + autonomic symptoms,N,,,"Triggers, duration",Anxious affect,,"",PC,Reassurance,PC,,"UC if severe",PC,Follow-up mental health,,"",Breathing techniques,Yes,,"",Psych cluster,,"Rule out medical causes first",PSYCH_ANX_PANIC
+PSYCH_DEP_MDD_01,PSYCH,DEPRESSION,Major depressive disorder,Depression,MDD,Neurochemical dysregulation,Moderate,≥2 weeks depressed mood or anhedonia,N,,,"Duration, severity",Depressed affect,,"",PC,Outpatient management,PC,,"UC if severe",PC,Mental health follow-up,,"",Supportive therapy,Yes,,"",Psych cluster,,"Screen suicidality always",PSYCH_DEP_MDD
+PSYCH_DEP_SUICIDAL_01,PSYCH,DEPRESSION,Suicidal ideation/behavior,Depression,Red flags,Acute safety risk,High,Thoughts/plan/intent,Y,"Plan, intent, inability to stay safe",,Means access,Distress,,"",ED,Immediate safety need,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Psych red flags,"ROW_KEY=PSYCH_DEP_SUICIDAL_01|EDReferral","Safety first",PSYCH_DEP_SUICIDAL
+PSYCH_INS_PRIMARY_01,PSYCH,INSOMNIA,Primary insomnia,Insomnia
