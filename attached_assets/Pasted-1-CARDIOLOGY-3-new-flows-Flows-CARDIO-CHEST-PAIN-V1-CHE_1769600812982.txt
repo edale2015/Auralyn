@@ -1,0 +1,277 @@
+1) CARDIOLOGY (3 new flows)
+Flows
+
+CARDIO_CHEST_PAIN_V1 (CHEST_PAIN)
+
+CARDIO_PALPITATIONS_V1 (PALPITATIONS)
+
+CARDIO_HTN_URGENT_V1 (HYPERTENSION)
+
+Folder:
+
+server/imports/CARDIO/
+
+
+Import order:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/CARDIO/CLINICAL_QUESTIONS_CARDIO.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/CARDIO/CLINICAL_RULES_CARDIO.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/CARDIO/CLINICAL_DIAGNOSES_CARDIO.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/CARDIO/CLINICAL_MEDICATIONS_CARDIO.csv upsert Notes
+
+A) CLINICAL_QUESTIONS_CARDIO.csv (57 rows)
+
+Save: server/imports/CARDIO/CLINICAL_QUESTIONS_CARDIO.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,1,CARD_CP_01,"Chest pain or chest pressure now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,2,CARD_CP_02,"Chest pain started suddenly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,3,CARD_CP_03,"Shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,4,CARD_CP_04,"Pain radiates to arm/jaw/back?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,5,CARD_CP_05,"Sweating, nausea, or vomiting with pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,6,CARD_CP_06,"Fainting or near-fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,7,CARD_CP_07,"Pain worse with deep breath (pleuritic)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,8,CARD_CP_08,"Coughing up blood (hemoptysis)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,9,CARD_CP_09,"Leg swelling/pain (DVT symptoms)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,10,CARD_CP_10,"Recent surgery/immobility/long travel?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,11,CARD_CP_11,"History of heart disease (CAD/MI/stent) or stroke?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,12,CARD_CP_12,"Known aortic aneurysm or connective tissue disorder?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,13,CARD_CP_13,"Severe tearing chest/back pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,14,CARD_CP_14,"Fever or recent viral illness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,15,CARD_CP_15,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,16,CARD_CP_16,"Pregnant or postpartum (within 6 weeks)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,17,CARD_CP_17,"Age 60+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,18,CARD_CP_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CORE,19,CARD_CP_19,"Pain reproducible with pressing on chest wall?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,1,CARD_PAL_01,"Feeling heart racing or skipping beats?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,2,CARD_PAL_02,"Chest pain or chest pressure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,3,CARD_PAL_03,"Shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,4,CARD_PAL_04,"Fainting or near-fainting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,5,CARD_PAL_05,"Episode lasts > 15 minutes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,6,CARD_PAL_06,"Starts/stops suddenly (like a switch)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,7,CARD_PAL_07,"Irregular heartbeat sensation?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,8,CARD_PAL_08,"Recent stimulant/caffeine/energy drinks?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,9,CARD_PAL_09,"Alcohol or drug use?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,10,CARD_PAL_10,"Fever or infection symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,11,CARD_PAL_11,"Known thyroid disease or weight loss/heat intolerance?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,12,CARD_PAL_12,"History of heart disease or prior arrhythmia?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,13,CARD_PAL_13,"Family history sudden cardiac death?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,14,CARD_PAL_14,"Pregnant or postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,15,CARD_PAL_15,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,16,CARD_PAL_16,"Anxiety/panic symptoms with episode?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,17,CARD_PAL_17,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,18,CARD_PAL_18,"Severe weakness or confusion?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CORE,19,CARD_PAL_19,"Chest pain + palpitations together?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,1,CARD_HTN_01,"Very high blood pressure reading recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,2,CARD_HTN_02,"Severe headache?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,3,CARD_HTN_03,"Vision changes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,4,CARD_HTN_04,"Chest pain or chest pressure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,5,CARD_HTN_05,"Shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,6,CARD_HTN_06,"New weakness/numbness or trouble speaking?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,7,CARD_HTN_07,"Confusion or severe drowsiness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,8,CARD_HTN_08,"Severe back/tearing pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,9,CARD_HTN_09,"Pregnant or postpartum (within 6 weeks)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,10,CARD_HTN_10,"Seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,11,CARD_HTN_11,"New kidney symptoms (very low urine) or swelling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,12,CARD_HTN_12,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,13,CARD_HTN_13,"Missed blood pressure meds recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,14,CARD_HTN_14,"Used cocaine/amphetamines/stimulants?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,15,CARD_HTN_15,"Age 60+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,16,CARD_HTN_16,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,17,CARD_HTN_17,"Known heart disease, stroke, or kidney disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,18,CARD_HTN_18,"Severe nausea/vomiting?",TRI,Y,,,,"Yes|No|Not sure",,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CORE,19,CARD_HTN_19,"Able to recheck BP after resting 5–10 minutes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) CLINICAL_RULES_CARDIO.csv (KV)
+
+Save: server/imports/CARDIO/CLINICAL_RULES_CARDIO.csv
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CARD_CP,CARDIO_CHEST_PAIN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CARD_CP,CARDIO_CHEST_PAIN_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+CARDIO_CHEST_PAIN_V1,CARDIO,CHEST_PAIN,CARD_CP,CARDIO_CHEST_PAIN_V1_TEST_PACK,text,ECG_TROPONIN_PACK,Y
+
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CARD_PAL,CARDIO_PALPITATIONS_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CARD_PAL,CARDIO_PALPITATIONS_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+CARDIO_PALPITATIONS_V1,CARDIO,PALPITATIONS,CARD_PAL,CARDIO_PALPITATIONS_V1_TEST_PACK,text,ECG_BASIC_LABS_PACK,Y
+
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CARD_HTN,CARDIO_HTN_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CARD_HTN,CARDIO_HTN_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+CARDIO_HTN_URGENT_V1,CARDIO,HYPERTENSION,CARD_HTN,CARDIO_HTN_V1_TEST_PACK,text,BP_REPEAT_NEURO_SCREEN_PACK,Y
+
+C) CLINICAL_DIAGNOSES_CARDIO.csv
+
+Save: server/imports/CARDIO/CLINICAL_DIAGNOSES_CARDIO.csv
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+CARD_CP_ACS_01,CARDIO,CHEST_PAIN,ACS / MI concern,Chest pain,Red flags,Coronary ischemia,High,Pressure pain + SOB/diaphoresis/radiation,Y,"Chest pain with SOB/diaphoresis/syncope, high risk history",,Onset/exertion,Possible distress,,"ECG/troponin",ED,Time-critical,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Cardio red flags,"ROW_KEY=CARD_CP_ACS_01|EDReferral",Route conservatively,CARD_CP_ACS
+CARD_CP_DISSECTION_01,CARDIO,CHEST_PAIN,Aortic dissection concern,Chest pain,Red flags,Aortic tear,High,Severe tearing chest/back pain,Y,"Tearing pain, neuro deficits, syncope",,Sudden onset,Possible pulse deficit,,"",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Cardio red flags,"ROW_KEY=CARD_CP_DISSECTION_01|EDReferral","Do not delay",CARD_CP_DISSECTION
+CARD_CP_PE_01,CARDIO,CHEST_PAIN,Pulmonary embolism concern,Chest pain,Red flags,Thromboembolism,High,Pleuritic pain + SOB + clot risk/hemoptysis,Y,"SOB, pleuritic pain, hemoptysis, syncope",,DVT risk,Possible tachycardia,,"",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Cardio red flags,"ROW_KEY=CARD_CP_PE_01|EDReferral","Overlap Pulm",CARD_CP_PE
+CARD_CP_MSKE_01,CARDIO,CHEST_PAIN,Musculoskeletal chest wall pain,Chest pain,MSK,Chest wall strain,Low,Reproducible pain with palpation,N,,,"Injury/strain",Tender chest wall,,"",PC,Supportive,PC,,"UC if uncertain",PC,Return if worse,,"",Heat/NSAIDs,Yes,,"",Cardio cluster,,"Rule out red flags first",CARD_CP_MSKE
+
+CARD_PAL_AFB_01,CARDIO,PALPITATIONS,Atrial fibrillation/flutter concern,Palpitations,Arrhythmia,Irregular rhythm,High,Irregular palpitations +/- SOB/chest pain/syncope,Y,"Syncope, chest pain, SOB, persistent tachy",,Duration/trigger,Irregular pulse,,"ECG",ED/UC,Risk of instability/stroke,ED,"UC if stable",UC,PC if mild,Follow-up cardiology,,"",Avoid stimulants,Yes,,"",Cardio arrhythmia,"ROW_KEY=CARD_PAL_AFB_01|ECG","Rule out instability",CARD_PAL_AFB
+CARD_PAL_SVT_01,CARDIO,PALPITATIONS,SVT concern,Palpitations,Arrhythmia,Re-entrant tachycardia,Moderate,Sudden onset/offset rapid HR,N,,,"Triggers, duration",Tachycardia,,"ECG",UC,May need vagal/ED if unstable,UC,"ED if syncope/chest pain",UC,PC if mild,Follow-up,,"",Hydration,Yes,,"",Cardio arrhythmia,"ROW_KEY=CARD_PAL_SVT_01|ECG","Escalate if unstable",CARD_PAL_SVT
+CARD_PAL_PANIC_01,CARDIO,PALPITATIONS,Anxiety/panic mimic,Palpitations,Mimic,Autonomic surge,Low,Palpitations with anxiety symptoms and no red flags,N,,,"Stress, triggers",Normal exam,,"",PC,Supportive,PC,,"UC if uncertain",PC,Follow-up,,"",Breathing/reassurance,Yes,,"",Cardio mimic,,Do not miss red flags,CARD_PAL_PANIC
+
+CARD_HTN_EMERG_01,CARDIO,HYPERTENSION,Hypertensive emergency concern,Hypertension,Red flags,End-organ damage,High,Very high BP + neuro/chest pain/SOB/renal issues/preg postpartum,Y,"Neuro deficits, chest pain, SOB, seizure, pregnancy/postpartum",pregnancy,Symptoms,Possible neuro findings,,"",ED,End-organ injury risk,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Cardio red flags,"ROW_KEY=CARD_HTN_EMERG_01|EDReferral","Do not delay",CARD_HTN_EMERG
+CARD_HTN_URGENCY_01,CARDIO,HYPERTENSION,Hypertensive urgency (no end-organ signs),Hypertension,Urgency,Elevated BP,Moderate,High BP without red flag symptoms,N,,,"Missed meds, recheck",Often normal exam,,"",UC/PC,Outpatient management,UC,,"UC if symptomatic",PC,Follow-up within days,,"",Rest/recheck,Yes,,"",Cardio cluster,,"Rule out emergency first",CARD_HTN_URGENCY
+
+D) CLINICAL_MEDICATIONS_CARDIO.csv (ROW_KEY in Notes)
+
+Save: server/imports/CARDIO/CLINICAL_MEDICATIONS_CARDIO.csv
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+CARD_CP_ACS_01,CARDIO,Emergency referral (ED),Disposition Aid,Chest pain red flags,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=CARD_CP_ACS_01|EDReferral"
+CARD_CP_DISSECTION_01,CARDIO,Emergency referral (ED),Disposition Aid,Aortic dissection escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=CARD_CP_DISSECTION_01|EDReferral"
+CARD_CP_PE_01,CARDIO,Emergency referral (ED),Disposition Aid,PE escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=CARD_CP_PE_01|EDReferral"
+CARD_CP_MSKE_01,CARDIO,Ibuprofen,NSAID,MSK chest pain supportive,No,"400–600 mg q6–8h PRN","2400 mg/day","Peds per clinician","Avoid late pregnancy",CKD/GI bleed risk,Anticoagulants,GI upset,Oral,Caution,Caution,"ROW_KEY=CARD_CP_MSKE_01|NSAIDs"
+CARD_PAL_AFB_01,CARDIO,ECG evaluation,Testing/Support,Arrhythmia evaluation,Yes,"12-lead ECG","", "","",,,"",Test,No,No,"ROW_KEY=CARD_PAL_AFB_01|ECG"
+CARD_PAL_SVT_01,CARDIO,ECG evaluation,Testing/Support,SVT evaluation,Yes,"12-lead ECG","", "","",,,"",Test,No,No,"ROW_KEY=CARD_PAL_SVT_01|ECG"
+CARD_HTN_EMERG_01,CARDIO,Emergency referral (ED),Disposition Aid,Hypertensive emergency escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=CARD_HTN_EMERG_01|EDReferral"
+CARD_HTN_URGENCY_01,CARDIO,BP recheck after rest,Supportive,Hypertension recheck,Yes,"Rest 5–10 min then repeat BP","", "","",,,"",Support,No,No,"ROW_KEY=CARD_HTN_URGENCY_01|BPRecheck"
+
+2) INFECTIOUS DISEASE (2 flows)
+Flows
+
+ID_FEVER_V1 (FEVER)
+
+ID_RASH_FEVER_V1 (RASH_FEVER)
+
+Folder:
+
+server/imports/ID/
+
+
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/ID/CLINICAL_QUESTIONS_ID.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/ID/CLINICAL_RULES_ID.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/ID/CLINICAL_DIAGNOSES_ID.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/ID/CLINICAL_MEDICATIONS_ID.csv upsert Notes
+
+A) CLINICAL_QUESTIONS_ID.csv (38)
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,1,ID_FEV_01,"Fever now or within last 48 hours?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,2,ID_FEV_02,"Severe weakness or looks very ill (toxic)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,3,ID_FEV_03,"Confusion or new mental status change?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,4,ID_FEV_04,"Trouble breathing or low oxygen concern?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,5,ID_FEV_05,"Chest pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,6,ID_FEV_06,"Severe headache or neck stiffness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,7,ID_FEV_07,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,8,ID_FEV_08,"Cannot keep fluids down (severe vomiting)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,9,ID_FEV_09,"Rash with fever?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,10,ID_FEV_10,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,11,ID_FEV_11,"Age 65+ or very young child?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,12,ID_FEV_12,"Pregnant or postpartum?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,13,ID_FEV_13,"Recent travel?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,14,ID_FEV_14,"Known exposure to flu/COVID?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,15,ID_FEV_15,"Worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,16,ID_FEV_16,"Painful urination or flank pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,17,ID_FEV_17,"Cough or sore throat?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,18,ID_FEV_18,"Skin infection signs (red hot spreading area)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,CORE,19,ID_FEV_19,"Severe pain out of proportion anywhere?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,1,ID_RF_01,"Fever with rash?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,2,ID_RF_02,"Rash is purple spots/bruising (non-blanching)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,3,ID_RF_03,"Severe headache or neck stiffness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,4,ID_RF_04,"Confusion or very ill appearance?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,5,ID_RF_05,"Blistering/skin peeling or mucosal involvement?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,6,ID_RF_06,"New medication started in last 2–8 weeks?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,7,ID_RF_07,"Tick exposure or bullseye rash?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,8,ID_RF_08,"Sore throat or swollen nodes?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,9,ID_RF_09,"Cough or runny nose?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,10,ID_RF_10,"Immunocompromised?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,11,ID_RF_11,"Pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,12,ID_RF_12,"Rash spreading rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,13,ID_RF_13,"Pain out of proportion to rash?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,14,ID_RF_14,"Severe vomiting or cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,15,ID_RF_15,"Age under 1 or 65+?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,16,ID_RF_16,"Recent travel?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,17,ID_RF_17,"Trouble breathing or throat swelling?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,18,ID_RF_18,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,CORE,19,ID_RF_19,"Rash on palms/soles?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) CLINICAL_RULES_ID.csv
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,ID_FEV,ID_FEVER_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,ID_FEV,ID_FEVER_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ID_FEVER_V1,INFECTIOUS_DISEASE,FEVER,ID_FEV,ID_FEVER_V1_TEST_PACK,text,FLU_COVID_SEPSIS_SCREEN_PACK,Y
+
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,ID_RF,ID_RASH_FEVER_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,ID_RF,ID_RASH_FEVER_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_supportive,Y
+ID_RASH_FEVER_V1,INFECTIOUS_DISEASE,RASH_FEVER,ID_RF,ID_RASH_FEVER_V1_TEST_PACK,text,ID_RASH_FEVER_PACK,Y
+
+C) CLINICAL_DIAGNOSES_ID.csv
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+ID_FEV_SEPSIS_01,INFECTIOUS_DISEASE,FEVER,Sepsis concern,Infection,Red flags,Systemic infection,High,Toxic/AMS/hypoxia/hypotension signs,Y,"Confusion, hypoxia, severe weakness, rapidly worsening",immunocompromised,Source symptoms,Ill appearance,,"CBC/CMP +/- lactate",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",ID red flags,"ROW_KEY=ID_FEV_SEPSIS_01|EDReferral","Route conservatively",ID_FEV_SEPSIS
+ID_FEV_VIRAL_01,INFECTIOUS_DISEASE,FEVER,Viral syndrome,Infection,Viral,Viral illness,Low,Fever + URI symptoms without red flags,N,,,"Cough/sore throat",Benign,,"",PC,Supportive,PC,,"UC if high risk",PC,Return precautions,,"",Fluids/rest,Yes,,"",ID cluster,,"Escalate if red flags",ID_FEV_VIRAL
+ID_RF_MENINGO_01,INFECTIOUS_DISEASE,RASH_FEVER,Meningococcemia/meningitis concern,Infection,Red flags,Bacterial invasion,High,Fever + non-blanching rash + headache/neck stiffness,Y,"Purple rash, neck stiffness, AMS",,Onset,Ill appearance,,"",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",ID red flags,"ROW_KEY=ID_RF_MENINGO_01|EDReferral","Time critical",ID_RF_MENINGO
+ID_RF_DRUG_01,INFECTIOUS_DISEASE,RASH_FEVER,Severe drug reaction concern,Infection,Mimic,Drug hypersensitivity,High,Fever + rash + mucosal/blistering + new meds,Y,"Mucosal involvement, blistering/peeling",,New meds,Possible mucosal lesions,,"",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",ID red flags,"ROW_KEY=ID_RF_DRUG_01|EDReferral","Overlap Derm",ID_RF_DRUG
+
+D) CLINICAL_MEDICATIONS_ID.csv
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+ID_FEV_SEPSIS_01,INFECTIOUS_DISEASE,Emergency referral (ED),Disposition Aid,Sepsis escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ID_FEV_SEPSIS_01|EDReferral"
+ID_RF_MENINGO_01,INFECTIOUS_DISEASE,Emergency referral (ED),Disposition Aid,Meningococcemia escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ID_RF_MENINGO_01|EDReferral"
+ID_RF_DRUG_01,INFECTIOUS_DISEASE,Emergency referral (ED),Disposition Aid,Severe drug reaction escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ID_RF_DRUG_01|EDReferral"
+ID_FEV_VIRAL_01,INFECTIOUS_DISEASE,Hydration / fluids,Supportive,Viral supportive,Yes,"Increase fluids","", "","Safe","",,"",Support,No,No,"ROW_KEY=ID_FEV_VIRAL_01|Hydration"
+
+3) ENDO/METABOLIC (1 flow)
+
+Flow: ENDO_DIABETES_LOW_HIGH_V1 (DIABETES_LOW_HIGH)
+
+Folder:
+
+server/imports/ENDO/
+
+
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/ENDO/CLINICAL_QUESTIONS_ENDO.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/ENDO/CLINICAL_RULES_ENDO.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/ENDO/CLINICAL_DIAGNOSES_ENDO.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/ENDO/CLINICAL_MEDICATIONS_ENDO.csv upsert Notes
+
+A) CLINICAL_QUESTIONS_ENDO.csv (19)
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,1,ENDO_DM_01,"Diabetes diagnosis?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,2,ENDO_DM_02,"Confusion or not acting normal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,3,ENDO_DM_03,"Fainted or seizure occurred?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,4,ENDO_DM_04,"Sweating/shaking/hunger (low sugar symptoms)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,5,ENDO_DM_05,"Very thirsty or urinating a lot?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,6,ENDO_DM_06,"Vomiting or cannot keep fluids down?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,7,ENDO_DM_07,"Deep/rapid breathing or shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,8,ENDO_DM_08,"Severe abdominal pain?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,9,ENDO_DM_09,"Blood sugar very low (<70) or very high (>300)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,10,ENDO_DM_10,"Missed insulin/diabetes meds recently?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,11,ENDO_DM_11,"Infection symptoms (fever/cough/UTI)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,12,ENDO_DM_12,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,13,ENDO_DM_13,"Age under 5 or over 65?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,14,ENDO_DM_14,"Severe weakness or unable to walk?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,15,ENDO_DM_15,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,16,ENDO_DM_16,"Used alcohol or recreational drugs?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,17,ENDO_DM_17,"Known kidney disease?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,18,ENDO_DM_18,"New chest pain or shortness of breath?",TRI,Y,,,,"Yes|No|Not sure",,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,CORE,19,ENDO_DM_19,"Able to check glucose right now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+B) CLINICAL_RULES_ENDO.csv
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,ENDO_DM,ENDO_DM_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,ENDO_DM,ENDO_DM_V1_NON_RED_FLAG_DISPOSITION,text,routine_or_supportive,Y
+ENDO_DIABETES_LOW_HIGH_V1,ENDO,DIABETES_LOW_HIGH,ENDO_DM,ENDO_DM_V1_TEST_PACK,text,GLUCOSE_KETONE_PACK,Y
+
+C) CLINICAL_DIAGNOSES_ENDO.csv
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+ENDO_HYPO_01,ENDO,DIABETES_LOW_HIGH,Hypoglycemia concern,Diabetes,Red flags,Low glucose,High,Confusion/sweats/seizure with diabetes meds,Y,"Confusion, seizure, cannot take PO",,Glucose reading,AMS,,"POC glucose",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Endo red flags,"ROW_KEY=ENDO_HYPO_01|EDReferral","Treat immediately",ENDO_HYPO
+ENDO_DKA_01,ENDO,DIABETES_LOW_HIGH,DKA/HHS concern,Diabetes,Red flags,Severe hyperglycemia/ketosis,High,Vomiting + dehydration + very high sugar,Y,"Vomiting, AMS, deep breathing, very high sugar",,Ketones,Dehydrated,,"Glucose/ketones",ED,Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Endo red flags,"ROW_KEY=ENDO_DKA_01|EDReferral","Do not delay",ENDO_DKA
+ENDO_DM_MILD_01,ENDO,DIABETES_LOW_HIGH,Mild glucose issue without red flags,Diabetes,Outpatient,Glucose variability,Moderate,No AMS/ vomiting/ severe symptoms,N,,,"Medication adherence",Normal,,"",PC,Outpatient management,PC,,"UC if uncertain",PC,Follow-up,,"",Hydration/diet,Yes,,"",Endo cluster,,"Escalate if red flags develop",ENDO_DM_MILD
+
+D) CLINICAL_MEDICATIONS_ENDO.csv
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+ENDO_HYPO_01,ENDO,Emergency referral (ED),Disposition Aid,Hypoglycemia escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENDO_HYPO_01|EDReferral"
+ENDO_DKA_01,ENDO,Emergency referral (ED),Disposition Aid,DKA/HHS escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=ENDO_DKA_01|EDReferral"
+ENDO_DM_MILD_01,ENDO,Glucose check (point-of-care),Testing/Support,Glucose evaluation,Yes,"Check blood glucose","", "","",,,"",POC,No,No,"ROW_KEY=ENDO_DM_MILD_01|GlucoseCheck"
+
+
+If you want, you can import Cardio + ID + Endo now, and I’ll generate OPHTH + DENTAL next in the same exact pattern (or I can paste them immediately if you say “pa
