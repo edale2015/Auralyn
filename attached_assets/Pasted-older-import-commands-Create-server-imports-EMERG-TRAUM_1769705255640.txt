@@ -1,0 +1,114 @@
+older + import commands
+
+Create:
+
+server/imports/EMERG_TRAUMA/
+
+
+Import:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_QUESTIONS   server/imports/EMERG_TRAUMA/CLINICAL_QUESTIONS_EMERG_TRAUMA.csv   upsert question_id
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES       server/imports/EMERG_TRAUMA/CLINICAL_RULES_EMERG_TRAUMA.csv       upsert rule_key
+ts-node server/scripts/sheetImport.ts CLINICAL_DIAGNOSES   server/imports/EMERG_TRAUMA/CLINICAL_DIAGNOSES_EMERG_TRAUMA.csv   upsert "Diagnosis ID"
+ts-node server/scripts/sheetImport.ts CLINICAL_MEDICATIONS server/imports/EMERG_TRAUMA/CLINICAL_MEDICATIONS_EMERG_TRAUMA.csv upsert Notes
+
+1) CLINICAL_QUESTIONS_EMERG_TRAUMA.csv (38 rows)
+
+Save: server/imports/EMERG_TRAUMA/CLINICAL_QUESTIONS_EMERG_TRAUMA.csv
+
+flow_id,system,chief_complaint,module,order,question_id,question_text,answer_type,required,min,max,choices,help_text,active
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,1,EMERG_01,"Unresponsive or no pulse?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,2,EMERG_02,"Severe trouble breathing or turning blue?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,3,EMERG_03,"Severe chest pain or pressure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,4,EMERG_04,"Severe bleeding that won’t stop with pressure?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,5,EMERG_05,"Seizure now or repeated seizures?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,6,EMERG_06,"New weakness/numbness or trouble speaking (stroke concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,7,EMERG_07,"Severe allergic reaction (throat swelling/wheeze/fainting)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,8,EMERG_08,"Severe confusion or not acting normal?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,9,EMERG_09,"Severe headache (worst) with neuro symptoms?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,10,EMERG_10,"Severe abdominal pain with fainting or black/bloody stool?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,11,EMERG_11,"Major trauma (high-speed crash, fall from height, penetrating injury)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,12,EMERG_12,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,13,EMERG_13,"Pregnant or postpartum (within 6 weeks)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,14,EMERG_14,"Age under 6 or over 65?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,15,EMERG_15,"Fever with stiff neck or purple rash?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,16,EMERG_16,"Severe dehydration (cannot keep fluids, fainting)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,17,EMERG_17,"Severe pain out of proportion (compartment/ischemia concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,18,EMERG_18,"No safe way to get emergency help now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,CORE,19,EMERG_19,"Symptoms worsening rapidly right now?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,1,TRM_01,"High-speed motor vehicle crash (MVA)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,2,TRM_02,"Rollover, ejection, death in same vehicle, or prolonged extrication?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,3,TRM_03,"Fall from height (adult >10 ft / child >5 ft)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,4,TRM_04,"Penetrating injury (stab/gunshot) or major blunt force?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,5,TRM_05,"Loss of consciousness or amnesia?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,6,TRM_06,"Vomiting or worsening headache after injury?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,7,TRM_07,"On blood thinners (anticoagulants)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,8,TRM_08,"Neck pain or midline spine tenderness?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,9,TRM_09,"New weakness/numbness or trouble speaking/walking?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,10,TRM_10,"Chest pain or trouble breathing?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,11,TRM_11,"Abdominal pain, distention, or seatbelt sign?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,12,TRM_12,"Pelvic pain or instability, or blood in urine?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,13,TRM_13,"Severe bleeding or large wounds?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,14,TRM_14,"Severe pain out of proportion or tense swollen limb?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,15,TRM_15,"Pregnant or could be pregnant?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,16,TRM_16,"Age 65+ or child under 6?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,17,TRM_17,"Severe weakness, confusion, or looks very ill (shock concern)?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,18,TRM_18,"Unable to bear weight or use limb normally?",TRI,Y,,,,"Yes|No|Not sure",,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,CORE,19,TRM_19,"Symptoms worsening rapidly?",TRI,Y,,,,"Yes|No|Not sure",,Y
+
+2) CLINICAL_RULES_EMERG_TRAUMA.csv (KV + physician-only imaging guidance)
+
+Save: server/imports/EMERG_TRAUMA/CLINICAL_RULES_EMERG_TRAUMA.csv
+
+flow_id,system,chief_complaint,module,rule_key,value_type,value,active
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,EMERG,EMERG_CRITICAL_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,EMERG,EMERG_CRITICAL_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+EMERG_CRITICAL_V1,EMERG,CRITICAL_EMERGENCY,EMERG,EMERG_CRITICAL_V1_ACTION_PACK,text,CALL_911_PACK,Y
+
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,TRM,TRAUMA_MAJOR_V1_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,TRM,TRAUMA_MAJOR_V1_NON_RED_FLAG_DISPOSITION,text,urgent_or_ed,Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,TRM,TRAUMA_MAJOR_V1_TEST_PACK,text,TRAUMA_EVAL_IMAGING_PACK,Y
+
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,PHYSICIAN_ONLY,PHYS_TRAUMA_MVA_ED_CRITERIA,text,"MVA ED/hospital: high-speed, rollover/ejection, death in same vehicle, prolonged extrication, LOC/AMS, anticoagulants, pregnancy, neuro deficits, chest/abd pain, seatbelt sign.",Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,PHYSICIAN_ONLY,PHYS_TRAUMA_CSPINE_IMAGING_REMINDER,text,"C-spine imaging: midline tenderness, neuro deficit, intoxication, distracting injury, AMS. Canadian C-spine high-risk: age ≥65, dangerous mechanism, paresthesias. Low-risk + able rotate 45° may avoid imaging.",Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,PHYSICIAN_ONLY,PHYS_TRAUMA_TL_SPINE_IMAGING_REMINDER,text,"T/L spine imaging: midline back tenderness, neuro deficit, high-energy mechanism, older age/osteoporosis, anticoagulants, or concerning pain pattern.",Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,PHYSICIAN_ONLY,PHYS_TRAUMA_HEAD_CT_PED_PECARN_REMINDER,text,"Peds head CT (PECARN style): CT/obs if AMS, palpable skull fracture, basilar skull signs, severe mechanism, LOC, persistent vomiting, severe headache. Use age <2 vs ≥2 criteria; consider observation when intermediate risk.",Y
+TRAUMA_MAJOR_V1,TRAUMA,MAJOR_TRAUMA,PHYSICIAN_ONLY,PHYS_TRAUMA_HEAD_CT_ADULT_ELDERLY_REMINDER,text,"Adult/elderly head CT: anticoagulants/antiplatelets, age ≥65, vomiting, severe/worsening headache, seizure, neuro deficit, basilar skull signs, dangerous mechanism, or persistent AMS. Lower threshold in elderly.",Y
+
+3) CLINICAL_DIAGNOSES_EMERG_TRAUMA.csv
+
+Save: server/imports/EMERG_TRAUMA/CLINICAL_DIAGNOSES_EMERG_TRAUMA.csv
+
+Diagnosis ID,System,Chief Complaint,Diagnosis,Cluster,Subcluster,Mechanism / Etiology,Severity Level,Diagnostic Criteria,Red Flag?,Red Flag Criteria,Key Modifiers,Secondary Questions,Exam Findings,Testing – Imaging,Testing – Labs,Disposition,Disposition Rationale,Default Triage Route,ER Threshold,UC Threshold,PC Threshold,Follow-up Plan,Treatment – First Line,Treatment – Alternatives,Supportive Care,Pediatric Variant,Modifier Rule,Cluster Link,Medication Link,Logic Notes,Dx_Key
+EMERG_CRIT_01,EMERG,CRITICAL_EMERGENCY,Critical emergency (call 911 now),Emergency,Red flags,Life-threatening instability,High,Unresponsive/no pulse/can’t breathe/severe bleeding,Y,"No pulse/unresponsive, severe respiratory distress, uncontrolled bleeding",anticoagulant_use,Symptoms,Severe distress,,"",ED,Immediate life threat,ED,ED,ED,,Call 911 / immediate ED,,"",,Yes,,"",Emergency cluster,"ROW_KEY=EMERG_CRIT_01|EDReferral","Hard stop flow",EMERG_CRIT
+
+TRM_MAJOR_01,TRAUMA,MAJOR_TRAUMA,Major trauma (ED evaluation required),Trauma,Major trauma,High-energy injury,High,High-energy mechanism or red-flag symptoms,Y,"Rollover/ejection, fall height, penetrating injury, AMS, neuro deficit",pregnancy,Mechanism details,Possible shock,CT/US per trauma protocol,,"ED",Potential internal injury,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Trauma cluster,"ROW_KEY=TRM_MAJOR_01|EDReferral","Not a body-part flow; mechanism first",TRM_MAJOR
+TRM_HEAD_INJURY_01,TRAUMA,MAJOR_TRAUMA,Head injury with intracranial bleed risk,Trauma,Head injury,Traumatic brain injury,High,LOC/amnesia/vomiting/anticoagulants/age extremes,Y,"Anticoagulants, repeated vomiting, worsening HA, neuro deficit",anticoagulant_use,LOC? vomiting?,AMS/neuro deficit,CT head,,"ED",Time-critical imaging,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Trauma red flags,"ROW_KEY=TRM_HEAD_INJURY_01|EDReferral","Use physician-only imaging reminder",TRM_HEAD
+TRM_SPINE_01,TRAUMA,MAJOR_TRAUMA,Spine injury concern (C/T/L),Trauma,Spine,Fracture/cord injury,High,Midline tenderness or neuro deficits after trauma,Y,"Midline tenderness, neuro deficit",,Neck/back pain,Midline tenderness,CT spine as indicated,,"ED",Potential cord injury,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Trauma red flags,"ROW_KEY=TRM_SPINE_01|EDReferral","C-spine/NEXUS/Cdn reminder",TRM_SPINE
+TRM_INTERNAL_BLEED_01,TRAUMA,MAJOR_TRAUMA,Internal bleeding/shock concern,Trauma,Shock,Hemorrhage,High,Confusion/weakness with chest/abd/pelvic pain,Y,"AMS, severe weakness, major mechanism, abdominal pain/seatbelt sign",anticoagulant_use,Seatbelt sign?,Pallor possible,FAST/CT,,"ED",Life-threatening,ED,ED,ED,,Immediate ED evaluation,,"",,Yes,,"",Trauma red flags,"ROW_KEY=TRM_INTERNAL_BLEED_01|EDReferral","Low threshold if anticoagulants",TRM_SHOCK
+
+4) CLINICAL_MEDICATIONS_EMERG_TRAUMA.csv (ROW_KEY)
+
+Save: server/imports/EMERG_TRAUMA/CLINICAL_MEDICATIONS_EMERG_TRAUMA.csv
+
+Diagnosis_ID,System,Medication_Name,Medication_Group,Indications_Cluster,First_Line?,Adult_Dose,Adult_Max_Dose,Pediatric_Dose,Pregnancy_Considerations,Contraindications,Key_Interactions,Common_Side_Effects,Route,Renal_Adjust?,Hepatic_Adjust?,Notes
+EMERG_CRIT_01,EMERG,Emergency referral (ED),Disposition Aid,Critical emergency escalation,Yes,"Call 911 / ED now","", "","",,,"",Route,No,No,"ROW_KEY=EMERG_CRIT_01|EDReferral"
+TRM_MAJOR_01,TRAUMA,Emergency referral (ED),Disposition Aid,Major trauma escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=TRM_MAJOR_01|EDReferral"
+TRM_HEAD_INJURY_01,TRAUMA,Emergency referral (ED),Disposition Aid,Head injury escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=TRM_HEAD_INJURY_01|EDReferral"
+TRM_SPINE_01,TRAUMA,Emergency referral (ED),Disposition Aid,Spine injury escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=TRM_SPINE_01|EDReferral"
+TRM_INTERNAL_BLEED_01,TRAUMA,Emergency referral (ED),Disposition Aid,Shock/internal bleed escalation,Yes,"ED evaluation","", "","",,,"",Route,No,No,"ROW_KEY=TRM_INTERNAL_BLEED_01|EDReferral"
+
+Notes / alignment with your request
+
+✅ Electrical injuries: already in TOX; we didn’t duplicate.
+
+✅ Head injury imaging: added as PHYSICIAN_ONLY rule reminders (peds + elderly/anticoag).
+
+✅ Spine imaging: C-spine + T/L spine imaging reminders included.
+
+✅ MVA hospital indications: included in PHYSICIAN_ONLY rule.
+
+✅ This is decision-support “reminder level” so it stays physician-assistive and maintainable.
+
+After import: run your summary
