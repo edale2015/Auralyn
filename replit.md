@@ -161,6 +161,19 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-29: WhatsApp multi-system flow router
+  - New file: `server/flows/whatsappFlowRouter.ts`
+  - Menu-based flow selection: patients text "hi" to see numbered menu (1-6)
+  - Keyword routing: free-text symptom description auto-routes to appropriate flow
+  - Supported systems: EMERG, TRAUMA, CARDIO, PULMONARY, UROGYN, DERM, ENVIRONMENTAL, ORTHO, ENT
+  - EMERG/TRAUMA get immediate "call 911" / "go to ER" warnings before intake link
+  - Menu state stored in encounter.answers.__menu (no schema change required)
+  - Functions: routeFlowFromText(), flowFromMenuChoice(), menuText(), isAwaitingChoice()
+- 2026-01-29: Added EMERG and TRAUMA systems
+  - EMERG_CRITICAL_V1: 19 questions for life-threatening emergencies (unresponsive, no pulse, severe bleeding)
+  - TRAUMA_MAJOR_V1: 19 questions for major trauma (MVA, falls, penetrating injury, head/spine)
+  - 11 rules including physician-only imaging reminders (PECARN, C-spine, adult head CT)
+  - 5 diagnoses covering critical emergencies, major trauma, head/spine injury, internal bleeding
 - 2026-01-27: Grid-based patient intake system
   - New secure intake link+code flow replaces WhatsApp Q&A as primary intake method
   - 48-char hex token + 6-digit code + 30-minute expiry for security

@@ -8,6 +8,14 @@ import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./
 import { runTests, applyPatch } from "./admin/devAgent";
 import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses, isFirstLine } from "./meds/medCatalog";
 import { getDiagnosisCatalog } from "./meds/diagnosisCatalog";
+import {
+  routeFlowFromText,
+  flowFromMenuChoice,
+  menuText,
+  getAnswersObj,
+  setMenuState,
+  isAwaitingChoice,
+} from "./flows/whatsappFlowRouter";
 
 // Initialize Twilio client
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -655,6 +663,7 @@ export async function registerRoutes(
       // Get or create active encounter
       let encounter = await storage.getActiveEncounterByPatient(patient.id);
       if (!encounter) {
+        // Create encounter with minimal defaults; flow will be chosen below
         encounter = await storage.createEncounter({
           patientId: patient.id,
           status: "in_progress",
@@ -666,19 +675,76 @@ export async function registerRoutes(
           answers: JSON.stringify({}),
         });
       }
-      
-      // Ensure ENT flow fields are set (for existing encounters)
-      if (!encounter.system) {
+
+      // Parse answers JSON so we can store menu state without schema changes
+      let answersObj = getAnswersObj(encounter.answers);
+
+      // Handle "hi/start/help" with menu (if not already selected)
+      const lower = msg.toLowerCase();
+      const isGreeting =
+        lower === "hi" || lower === "hello" || lower === "start" || lower === "help" || lower === "menu";
+
+      // If we are waiting for a menu choice, interpret it
+      if (isAwaitingChoice(answersObj)) {
+        const pick = flowFromMenuChoice(msg);
+        if (!pick) {
+          // If they typed 6 or something else, prompt them to describe symptoms
+          const cleared = setMenuState(answersObj, { awaitingChoice: false });
+          await storage.updateEncounter(encounter.id, { answers: JSON.stringify(cleared) } as any);
+
+          await sendWhatsAppMessage(phoneNumber, "Okay. Please describe your main symptom in one sentence.");
+          return res.status(200).send("ok");
+        }
+
+        // Set chosen flow on encounter
+        const cleared = setMenuState(answersObj, { awaitingChoice: false });
         await storage.updateEncounter(encounter.id, {
-          system: "ENT",
-          complaint: "FLU_LIKE_URI",
-          specialty: "ENT",
-          flowId: "ENT_FLU_LIKE_V1",
-          flowIndex: encounter.flowIndex ?? 0,
-          answers: encounter.answers ?? JSON.stringify({}),
+          system: pick.system,
+          complaint: pick.complaint,
+          specialty: pick.specialty,
+          flowId: pick.flowId,
+          flowIndex: 0,
+          answers: JSON.stringify(cleared),
           status: "in_progress",
-        });
+        } as any);
+
         encounter = await storage.getEncounter(encounter.id) as typeof encounter;
+        answersObj = getAnswersObj(encounter.answers);
+      }
+
+      // If greeting and we don't have a meaningful flow chosen yet, show menu
+      if (isGreeting && (encounter.flowIndex === 0 || !encounter.flowId || encounter.flowId === "ENT_FLU_LIKE_V1")) {
+        // Mark awaiting choice and send menu
+        const updated = setMenuState(answersObj, { awaitingChoice: true });
+        await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+
+        await sendWhatsAppMessage(phoneNumber, menuText());
+        return res.status(200).send("ok");
+      }
+
+      // If we still have default ENT flow OR no system, try keyword routing from free text
+      if (!encounter.system || !encounter.flowId || (encounter.flowId === "ENT_FLU_LIKE_V1" && encounter.flowIndex === 0)) {
+        const pick = routeFlowFromText(msg);
+
+        // If router picks EMERG or TRAUMA, we still use the web intake link, but send immediate warning
+        await storage.updateEncounter(encounter.id, {
+          system: pick.system,
+          complaint: pick.complaint,
+          specialty: pick.specialty,
+          flowId: pick.flowId,
+          flowIndex: 0,
+          status: "in_progress",
+        } as any);
+
+        encounter = await storage.getEncounter(encounter.id) as typeof encounter;
+      }
+
+      // Immediate ED warning for EMERG/TRAUMA picks
+      if (encounter.flowId === "EMERG_CRITICAL_V1") {
+        await sendWhatsAppMessage(phoneNumber, "This may be an emergency. If someone is unresponsive, not breathing, or bleeding heavily, call 911 now.");
+      }
+      if (encounter.flowId === "TRAUMA_MAJOR_V1") {
+        await sendWhatsAppMessage(phoneNumber, "This may require urgent emergency evaluation. If severe pain, head injury, bleeding, or confusion, go to the ER now.");
       }
       
       // Save incoming message
@@ -879,7 +945,7 @@ export async function registerRoutes(
         });
       }
       
-      // Get or create active encounter with ENT flow fields
+      // Get or create active encounter
       let encounter = await storage.getActiveEncounterByPatient(patient.id);
       if (!encounter) {
         encounter = await storage.createEncounter({
@@ -893,18 +959,68 @@ export async function registerRoutes(
           answers: JSON.stringify({}),
         });
       }
-      
-      // Ensure ENT flow fields are set
-      if (!encounter.system) {
+
+      // Parse answers JSON for menu state
+      let answersObj = getAnswersObj(encounter.answers);
+
+      // Handle greeting/menu flow
+      const lower = msg.toLowerCase();
+      const isGreeting =
+        lower === "hi" || lower === "hello" || lower === "start" || lower === "help" || lower === "menu";
+
+      // If we are waiting for a menu choice, interpret it
+      if (isAwaitingChoice(answersObj)) {
+        const pick = flowFromMenuChoice(msg);
+        if (!pick) {
+          const cleared = setMenuState(answersObj, { awaitingChoice: false });
+          await storage.updateEncounter(encounter.id, { answers: JSON.stringify(cleared) } as any);
+          return res.json({
+            message: "Okay. Please describe your main symptom in one sentence.",
+            encounterId: encounter.id,
+            flowId: encounter.flowId,
+          });
+        }
+
+        const cleared = setMenuState(answersObj, { awaitingChoice: false });
         await storage.updateEncounter(encounter.id, {
-          system: "ENT",
-          complaint: "FLU_LIKE_URI",
-          specialty: "ENT",
-          flowId: "ENT_FLU_LIKE_V1",
-          flowIndex: encounter.flowIndex ?? 0,
-          answers: encounter.answers ?? JSON.stringify({}),
+          system: pick.system,
+          complaint: pick.complaint,
+          specialty: pick.specialty,
+          flowId: pick.flowId,
+          flowIndex: 0,
+          answers: JSON.stringify(cleared),
           status: "in_progress",
+        } as any);
+
+        encounter = await storage.getEncounter(encounter.id) as typeof encounter;
+        answersObj = getAnswersObj(encounter.answers);
+      }
+
+      // If greeting, show menu
+      if (isGreeting && (encounter.flowIndex === 0 || !encounter.flowId || encounter.flowId === "ENT_FLU_LIKE_V1")) {
+        const updated = setMenuState(answersObj, { awaitingChoice: true });
+        await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+        return res.json({
+          message: menuText(),
+          encounterId: encounter.id,
+          flowId: encounter.flowId,
+          awaitingChoice: true,
         });
+      }
+
+      // Keyword routing from free text
+      if (!encounter.system || !encounter.flowId || (encounter.flowId === "ENT_FLU_LIKE_V1" && encounter.flowIndex === 0)) {
+        const pick = routeFlowFromText(msg);
+
+        await storage.updateEncounter(encounter.id, {
+          system: pick.system,
+          complaint: pick.complaint,
+          specialty: pick.specialty,
+          flowId: pick.flowId,
+          flowIndex: 0,
+          status: "in_progress",
+        } as any);
+
         encounter = await storage.getEncounter(encounter.id) as typeof encounter;
       }
       
