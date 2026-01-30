@@ -1,0 +1,89 @@
+1) Add a “Change my topic” command (menu reset)
+
+Patients will pick the wrong option sometimes. Give them an escape hatch.
+
+Behavior
+
+If they text any of: menu, change, restart, switch, topic
+
+set __menu.awaitingChoice = true
+
+send the menu again
+
+do not generate a new link+code yet (only after they choose)
+
+This reduces junk encounters and makes the system feel intentional.
+
+2) Add a “status” command (link re-send without new encounter)
+
+Common issue: they lose the link/code.
+
+Behavior
+
+If they text link or code:
+
+if there’s an active encounter with unexpired token/code → resend
+
+else → start fresh
+
+This cuts repeated re-registrations.
+
+3) Normalize all “Other” messages into keyword routing
+
+Right now option 6 prompts “describe in one sentence” which is good. Next micro-improvement:
+
+after they describe, call routeFlowFromText() and immediately set flow + send link
+
+(If you already did this, perfect.)
+
+4) Make physician review queue triage-ready
+
+Now that you’re spanning 65 flows, the review queue should show:
+
+system / flowId
+
+urgencyLevel
+
+redFlag boolean
+
+timestamp
+
+patient phone
+
+If you haven’t already, this is where speed comes from.
+
+5) Track flow selection in audit log (so you can measure routing quality)
+
+Even if you don’t have a full audit table yet, at minimum append to encounter:
+
+routerPickedFlowId
+
+routerReason (menu vs keyword)
+
+routerTextSnippet (first 60 chars)
+
+This will let you see “why did it choose this” when something seems off.
+
+Quick “smoke test checklist” (10 messages)
+
+Send these via WhatsApp and make sure routing matches:
+
+“menu” → shows menu
+
+“1” → chest pain flow
+
+“palpitations” → palpitations flow
+
+“fainted” → syncope flow
+
+“burned my hand” → burns flow
+
+“tick bite bullseye” → tick/lyme flow
+
+“bleeding after menopause” → vaginal bleeding flow + ED warning (if you choose to add)
+
+“testicle pain sudden” → torsion flow + ED warning (you could add)
+
+“unresponsive no pulse” → emerg flow + 911 warning
+
+“car crash rollover” → trauma flow + ED warning

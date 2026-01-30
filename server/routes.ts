@@ -15,6 +15,11 @@ import {
   getAnswersObj,
   setMenuState,
   isAwaitingChoice,
+  isAwaitingOtherText,
+  isMenuResetCommand,
+  isStatusCommand,
+  buildRouterAudit,
+  type RouterAudit,
 } from "./flows/whatsappFlowRouter";
 
 // Initialize Twilio client
@@ -467,7 +472,29 @@ export async function registerRoutes(
   app.get("/api/encounters/pending", async (req: Request, res: Response) => {
     try {
       const encounters = await storage.getEncountersByStatus("pending_review");
-      res.json(encounters);
+      
+      // Enhance with patient phone and computed redFlag for triage-ready view
+      const enhanced = await Promise.all(
+        encounters.map(async (enc) => {
+          const patient = enc.patientId ? await storage.getPatient(enc.patientId) : null;
+          const proposal = enc.proposal ? (typeof enc.proposal === "string" ? JSON.parse(enc.proposal) : enc.proposal) : null;
+          const answers = enc.answers ? (typeof enc.answers === "string" ? JSON.parse(enc.answers) : enc.answers) : {};
+          
+          return {
+            ...enc,
+            patientPhone: patient?.phoneNumber || null,
+            redFlag: proposal?.redFlag ?? false,
+            urgencyLevel: enc.urgencyLevel || (proposal?.redFlag ? "urgent" : "routine"),
+            routerAudit: answers?.__routerAudit || null,
+            timestamp: enc.createdAt,
+          };
+        })
+      );
+      
+      // Sort by timestamp descending (newest first)
+      enhanced.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      res.json(enhanced);
     } catch (error) {
       console.error("Error fetching pending encounters:", error);
       res.status(500).json({ error: "Failed to fetch encounters" });
@@ -487,7 +514,29 @@ export async function registerRoutes(
   app.get("/api/encounters/all", async (req: Request, res: Response) => {
     try {
       const encounters = await storage.getEncountersByStatus(undefined);
-      res.json(encounters);
+      
+      // Enhance with patient phone and computed redFlag for triage-ready view
+      const enhanced = await Promise.all(
+        encounters.map(async (enc) => {
+          const patient = enc.patientId ? await storage.getPatient(enc.patientId) : null;
+          const proposal = enc.proposal ? (typeof enc.proposal === "string" ? JSON.parse(enc.proposal) : enc.proposal) : null;
+          const answers = enc.answers ? (typeof enc.answers === "string" ? JSON.parse(enc.answers) : enc.answers) : {};
+          
+          return {
+            ...enc,
+            patientPhone: patient?.phoneNumber || null,
+            redFlag: proposal?.redFlag ?? false,
+            urgencyLevel: enc.urgencyLevel || (proposal?.redFlag ? "urgent" : "routine"),
+            routerAudit: answers?.__routerAudit || null,
+            timestamp: enc.createdAt,
+          };
+        })
+      );
+      
+      // Sort by timestamp descending (newest first)
+      enhanced.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      res.json(enhanced);
     } catch (error) {
       console.error("Error fetching all encounters:", error);
       res.status(500).json({ error: "Failed to fetch encounters" });
@@ -679,25 +728,89 @@ export async function registerRoutes(
       // Parse answers JSON so we can store menu state without schema changes
       let answersObj = getAnswersObj(encounter.answers);
 
+      // Handle menu reset command (menu/change/restart/switch/topic)
+      if (isMenuResetCommand(msg)) {
+        const updated = setMenuState(answersObj, { awaitingChoice: true });
+        await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+        await sendWhatsAppMessage(phoneNumber, menuText());
+        return res.status(200).send("ok");
+      }
+
+      // Handle status command (link/code) - resend existing link or start fresh
+      if (isStatusCommand(msg)) {
+        const now = new Date();
+        const tokenValid = encounter.intakeToken && encounter.intakeExpiresAt && new Date(encounter.intakeExpiresAt) > now;
+        
+        if (tokenValid) {
+          const intakeLink = `${BASE_URL}/intake/${encounter.intakeToken}`;
+          await sendWhatsAppMessage(
+            phoneNumber,
+            `Here's your intake link again:\n${intakeLink}\n\nCode: ${encounter.intakeCode}\n\nExpires in ${Math.round((new Date(encounter.intakeExpiresAt!).getTime() - now.getTime()) / 60000)} minutes.`
+          );
+        } else {
+          const intakeToken = generateToken();
+          const intakeCode = generateCode();
+          const intakeExpiresAt = expiresAtMinutes(INTAKE_EXPIRY_MINUTES);
+          
+          await storage.updateEncounter(encounter.id, {
+            intakeToken,
+            intakeCode,
+            intakeExpiresAt,
+            flowIndex: 1,
+          } as any);
+          
+          const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
+          await sendWhatsAppMessage(
+            phoneNumber,
+            `Here's a fresh intake link:\n${intakeLink}\n\nCode: ${intakeCode}\n\nValid for 30 minutes.`
+          );
+        }
+        return res.status(200).send("ok");
+      }
+
       // Handle "hi/start/help" with menu (if not already selected)
       const lower = msg.toLowerCase();
       const isGreeting =
-        lower === "hi" || lower === "hello" || lower === "start" || lower === "help" || lower === "menu";
+        lower === "hi" || lower === "hello" || lower === "start" || lower === "help";
+
+      // If awaiting "Other" description (option 6), route using keyword
+      if (isAwaitingOtherText(answersObj)) {
+        const pick = routeFlowFromText(msg);
+        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
+        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
+        const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
+        cleared.__routerAudit = audit;
+
+        await storage.updateEncounter(encounter.id, {
+          system: pick.system,
+          complaint: pick.complaint,
+          specialty: pick.specialty,
+          flowId: pick.flowId,
+          flowIndex: 0,
+          answers: JSON.stringify(cleared),
+          status: "in_progress",
+        } as any);
+
+        encounter = await storage.getEncounter(encounter.id) as typeof encounter;
+        answersObj = getAnswersObj(encounter.answers);
+      }
 
       // If we are waiting for a menu choice, interpret it
       if (isAwaitingChoice(answersObj)) {
         const pick = flowFromMenuChoice(msg);
         if (!pick) {
-          // If they typed 6 or something else, prompt them to describe symptoms
-          const cleared = setMenuState(answersObj, { awaitingChoice: false });
+          // If they typed 6 or something else, set awaitingOtherText and prompt them to describe symptoms
+          const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: true });
           await storage.updateEncounter(encounter.id, { answers: JSON.stringify(cleared) } as any);
 
           await sendWhatsAppMessage(phoneNumber, "Okay. Please describe your main symptom in one sentence.");
           return res.status(200).send("ok");
         }
 
-        // Set chosen flow on encounter
+        // Set chosen flow on encounter with router audit
+        const audit = buildRouterAudit(pick.flowId, "menu", msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false });
+        cleared.__routerAudit = audit;
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
           complaint: pick.complaint,
@@ -725,6 +838,9 @@ export async function registerRoutes(
       // If we still have default ENT flow OR no system, try keyword routing from free text
       if (!encounter.system || !encounter.flowId || (encounter.flowId === "ENT_FLU_LIKE_V1" && encounter.flowIndex === 0)) {
         const pick = routeFlowFromText(msg);
+        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
+        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
+        answersObj.__routerAudit = audit;
 
         // If router picks EMERG or TRAUMA, we still use the web intake link, but send immediate warning
         await storage.updateEncounter(encounter.id, {
@@ -734,6 +850,7 @@ export async function registerRoutes(
           flowId: pick.flowId,
           flowIndex: 0,
           status: "in_progress",
+          answers: JSON.stringify(answersObj),
         } as any);
 
         encounter = await storage.getEncounter(encounter.id) as typeof encounter;
@@ -963,25 +1080,105 @@ export async function registerRoutes(
       // Parse answers JSON for menu state
       let answersObj = getAnswersObj(encounter.answers);
 
+      // Handle menu reset command (menu/change/restart/switch/topic)
+      if (isMenuResetCommand(msg)) {
+        const updated = setMenuState(answersObj, { awaitingChoice: true });
+        await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+        return res.json({
+          message: menuText(),
+          encounterId: encounter.id,
+          flowId: encounter.flowId,
+          awaitingChoice: true,
+          command: "menu_reset",
+        });
+      }
+
+      // Handle status command (link/code) - resend existing link or start fresh
+      if (isStatusCommand(msg)) {
+        const now = new Date();
+        const tokenValid = encounter.intakeToken && encounter.intakeExpiresAt && new Date(encounter.intakeExpiresAt) > now;
+        
+        if (tokenValid) {
+          const intakeLink = `${BASE_URL}/intake/${encounter.intakeToken}`;
+          const expiresIn = Math.round((new Date(encounter.intakeExpiresAt!).getTime() - now.getTime()) / 60000);
+          return res.json({
+            message: `Here's your intake link again:\n${intakeLink}\n\nCode: ${encounter.intakeCode}\n\nExpires in ${expiresIn} minutes.`,
+            encounterId: encounter.id,
+            flowId: encounter.flowId,
+            command: "status_resend",
+            intakeToken: encounter.intakeToken,
+            intakeCode: encounter.intakeCode,
+          });
+        } else {
+          const intakeToken = generateToken();
+          const intakeCode = generateCode();
+          const intakeExpiresAt = expiresAtMinutes(INTAKE_EXPIRY_MINUTES);
+          
+          await storage.updateEncounter(encounter.id, {
+            intakeToken,
+            intakeCode,
+            intakeExpiresAt,
+            flowIndex: 1,
+          } as any);
+          
+          const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
+          return res.json({
+            message: `Here's a fresh intake link:\n${intakeLink}\n\nCode: ${intakeCode}\n\nValid for 30 minutes.`,
+            encounterId: encounter.id,
+            flowId: encounter.flowId,
+            command: "status_fresh",
+            intakeToken,
+            intakeCode,
+          });
+        }
+      }
+
       // Handle greeting/menu flow
       const lower = msg.toLowerCase();
       const isGreeting =
-        lower === "hi" || lower === "hello" || lower === "start" || lower === "help" || lower === "menu";
+        lower === "hi" || lower === "hello" || lower === "start" || lower === "help";
+
+      // If awaiting "Other" description (option 6), route using keyword
+      if (isAwaitingOtherText(answersObj)) {
+        const pick = routeFlowFromText(msg);
+        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
+        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
+        const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
+        cleared.__routerAudit = audit;
+
+        await storage.updateEncounter(encounter.id, {
+          system: pick.system,
+          complaint: pick.complaint,
+          specialty: pick.specialty,
+          flowId: pick.flowId,
+          flowIndex: 0,
+          answers: JSON.stringify(cleared),
+          status: "in_progress",
+        } as any);
+
+        encounter = await storage.getEncounter(encounter.id) as typeof encounter;
+        answersObj = getAnswersObj(encounter.answers);
+      }
 
       // If we are waiting for a menu choice, interpret it
       if (isAwaitingChoice(answersObj)) {
         const pick = flowFromMenuChoice(msg);
         if (!pick) {
-          const cleared = setMenuState(answersObj, { awaitingChoice: false });
+          // Set awaitingOtherText for option 6
+          const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: true });
           await storage.updateEncounter(encounter.id, { answers: JSON.stringify(cleared) } as any);
           return res.json({
             message: "Okay. Please describe your main symptom in one sentence.",
             encounterId: encounter.id,
             flowId: encounter.flowId,
+            awaitingOtherText: true,
           });
         }
 
+        // Set chosen flow on encounter with router audit
+        const audit = buildRouterAudit(pick.flowId, "menu", msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false });
+        cleared.__routerAudit = audit;
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
           complaint: pick.complaint,
@@ -1011,6 +1208,9 @@ export async function registerRoutes(
       // Keyword routing from free text
       if (!encounter.system || !encounter.flowId || (encounter.flowId === "ENT_FLU_LIKE_V1" && encounter.flowIndex === 0)) {
         const pick = routeFlowFromText(msg);
+        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
+        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
+        answersObj.__routerAudit = audit;
 
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
@@ -1019,6 +1219,7 @@ export async function registerRoutes(
           flowId: pick.flowId,
           flowIndex: 0,
           status: "in_progress",
+          answers: JSON.stringify(answersObj),
         } as any);
 
         encounter = await storage.getEncounter(encounter.id) as typeof encounter;

@@ -161,6 +161,12 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-30: WhatsApp commands and router audit tracking
+  - "Change my topic" command: menu/change/restart/switch/topic → resets menu selection
+  - "Status" command: link/code/status/resend → resends intake link (reuses unexpired token or generates fresh)
+  - Router audit tracking: `__routerAudit` object in answers stores routerPickedFlowId, routerReason, routerTextSnippet
+  - Enhanced physician queue: /api/encounters/pending now includes patientPhone, redFlag, urgencyLevel, routerAudit
+  - Functions added: isMenuResetCommand(), isStatusCommand(), buildRouterAudit()
 - 2026-01-29: WhatsApp multi-system flow router
   - New file: `server/flows/whatsappFlowRouter.ts`
   - Menu-based flow selection: patients text "hi" to see numbered menu (1-6)

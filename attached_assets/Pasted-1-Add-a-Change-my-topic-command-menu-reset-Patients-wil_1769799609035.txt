@@ -1,0 +1,346 @@
+1) Add a “Change my topic” command (menu reset)
+
+Patients will pick the wrong option sometimes. Give them an escape hatch.
+
+Behavior
+
+If they text any of: menu, change, restart, switch, topic
+
+set __menu.awaitingChoice = true
+
+send the menu again
+
+do not generate a new link+code yet (only after they choose)
+
+This reduces junk encounters and makes the system feel intentional.
+
+2) Add a “status” command (link re-send without new encounter)
+
+Common issue: they lose the link/code.
+
+Behavior
+
+If they text link or code:
+
+if there’s an active encounter with unexpired token/code → resend
+
+else → start fresh
+
+This cuts repeated re-registrations.
+
+3) Normalize all “Other” messages into keyword routing
+
+Right now option 6 prompts “describe in one sentence” which is good. Next micro-improvement:
+
+after they describe, call routeFlowFromText() and immediately set flow + send link
+
+(If you already did this, perfect.)
+
+4) Make physician review queue triage-ready
+
+Now that you’re spanning 65 flows, the review queue should show:
+
+system / flowId
+
+urgencyLevel
+
+redFlag boolean
+
+timestamp
+
+patient phone
+
+If you haven’t already, this is where speed comes from.
+
+5) Track flow selection in audit log (so you can measure routing quality)
+
+Even if you don’t have a full audit table yet, at minimum append to encounter:
+
+routerPickedFlowId
+
+routerReason (menu vs keyword)
+
+routerTextSnippet (first 60 chars)
+
+This will let you see “why did it choose this” when something seems off.
+
+Quick “smoke test checklist” (10 messages)
+
+Send these via WhatsApp and make sure routing matches:
+
+“menu” → shows menu
+
+“1” → chest pain flow
+
+“palpitations” → palpitations flow
+
+“fainted” → syncope flow
+
+“burned my hand” → burns flow
+
+“tick bite bullseye” → tick/lyme flow
+
+“bleeding after menopause” → vaginal bleeding flow + ED warning (if you choose to add)
+
+“testicle pain sudden” → torsion flow + ED warning (you could add)
+
+“unresponsive no pulse” → emerg flow + 911 warning
+
+“car crash rollover” → trauma flow + ED warning
+
+If any mismatch, it’s just keyword tuning.
+
+If you want the next patch from me
+
+Tell me which of these you want first and I’ll give drop-in code:
+
+Menu reset + status link resend commands
+
+Resend existing token/code logic (idempotent)
+
+Review queue upgrades (API + UI)
+
+Router telemetry fields saved to encounter
+
+Just reply with the number(s).
+
+please do 1-4 in that order.  is adding telegram easy? or adding apple messaging? 
+Thought for 20s
+
+Awesome — here are drop-in patches for 1–4 in order (menu reset, status/link resend, “Other” → keyword routing, and router telemetry). These are written to match the approach you already implemented: no new tabs, no schema change, store state in encounter.answers.__menu and telemetry in encounter.answers.__router.
+
+At the end: Telegram vs Apple messaging.
+
+1) Menu reset commands (menu/change/restart/switch/topic)
+Goal
+
+At any time, if patient texts one of these, you:
+
+flip __menu.awaitingChoice = true
+
+send menu
+
+stop processing
+
+Add to server/flows/whatsappFlowRouter.ts
+
+Update menu helpers to support extra state.
+
+export function setMenuState(
+  answersObj: any,
+  state: { awaitingChoice?: boolean; awaitingOtherText?: boolean } = {}
+) {
+  const a = answersObj || {};
+  a.__menu = {
+    awaitingChoice: state.awaitingChoice ?? false,
+    awaitingOtherText: state.awaitingOtherText ?? false,
+    ts: Date.now(),
+  };
+  return a;
+}
+
+export function isAwaitingOtherText(answersObj: any): boolean {
+  return Boolean(answersObj?.__menu?.awaitingOtherText);
+}
+
+Patch in WhatsApp webhook (near the top after msg and answersObj)
+
+Add this before the “awaiting choice” logic:
+
+const cmd = msg.toLowerCase().trim();
+const isMenuReset = ["menu", "change", "restart", "switch", "topic"].includes(cmd);
+
+if (isMenuReset) {
+  const updated = setMenuState(answersObj, { awaitingChoice: true, awaitingOtherText: false });
+  await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+  await sendWhatsAppMessage(phoneNumber, menuText());
+  return res.status(200).send("ok");
+}
+
+2) “status / link / code” resend without new encounter
+Goal
+
+If the patient lost the link/code, they can text link or code and you resend if still valid, otherwise you restart.
+
+Add helper in server/intake/intakeAuth.ts usage
+
+You already have BASE_URL. In your webhook file, import it:
+
+import { BASE_URL } from "./intake/intakeAuth"; // adjust relative path if needed
+
+Add resend block in webhook (after answersObj parsing, early)
+const isLinkResend = ["link", "code", "status"].includes(cmd);
+
+if (isLinkResend) {
+  const hasToken = Boolean((encounter as any).intakeToken);
+  const hasCode = Boolean((encounter as any).intakeCode);
+  const exp = Number((encounter as any).intakeExpiresAt || 0);
+
+  if (hasToken && hasCode && exp && Date.now() < exp) {
+    const link = `${BASE_URL}/intake/${(encounter as any).intakeToken}`;
+    const minutesLeft = Math.max(0, Math.ceil((exp - Date.now()) / 60000));
+    await sendWhatsAppMessage(
+      phoneNumber,
+      `Here’s your secure intake link:\n${link}\nCode: ${(encounter as any).intakeCode}\n(Expires in ~${minutesLeft} min)`
+    );
+    return res.status(200).send("ok");
+  }
+
+  // Otherwise: reset flow selection menu (or restart)
+  const updated = setMenuState(answersObj, { awaitingChoice: true, awaitingOtherText: false });
+  await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+  await sendWhatsAppMessage(phoneNumber, "Your previous link expired. Let’s start again.\n\n" + menuText());
+  return res.status(200).send("ok");
+}
+
+
+This is idempotent and avoids “new encounter spam.”
+
+3) “Other” (menu option 6) → accept free text → keyword route → send link
+Update flowFromMenuChoice behavior
+
+In whatsappFlowRouter.ts, keep returning null for “6” (as we already had). That’s fine.
+
+Patch your “awaiting choice” block
+
+Where you currently handle menu choice:
+
+If choice is 6, set awaitingOtherText = true and prompt “describe”.
+
+If choice is 1–5, set flow and proceed.
+
+Replace your “pick == null” section with:
+
+if (!pick) {
+  // They either chose 6 or typed something invalid while in menu state.
+  const updated = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: true });
+  await storage.updateEncounter(encounter.id, { answers: JSON.stringify(updated) } as any);
+  await sendWhatsAppMessage(phoneNumber, "Okay. Please describe your main symptom in one sentence.");
+  return res.status(200).send("ok");
+}
+
+Add a handler for awaitingOtherText (right after that menu-choice block)
+import { isAwaitingOtherText, routeFlowFromText } from "./flows/whatsappFlowRouter";
+
+// ...
+
+if (isAwaitingOtherText(answersObj)) {
+  const pick = routeFlowFromText(msg);
+
+  // clear menu state
+  const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
+
+  // telemetry stored in answers (see #4)
+  cleared.__router = {
+    source: "other_text",
+    pickedFlowId: pick.flowId,
+    pickedSystem: pick.system,
+    snippet: msg.slice(0, 60),
+    ts: Date.now(),
+  };
+
+  await storage.updateEncounter(encounter.id, {
+    system: pick.system,
+    complaint: pick.complaint,
+    specialty: pick.specialty,
+    flowId: pick.flowId,
+    flowIndex: 0,
+    answers: JSON.stringify(cleared),
+    status: "in_progress",
+  } as any);
+
+  encounter = await storage.getEncounter(encounter.id) as typeof encounter;
+}
+
+
+Now “Other” becomes a smooth path: menu → describe → router → link+code.
+
+4) Router telemetry (menu vs keyword vs other)
+Goal
+
+When something routes wrong, you can look at the encounter and see:
+
+menu vs keyword
+
+snippet
+
+chosen flow
+
+Add telemetry when a menu choice (1–5) is applied
+
+Right before storage.updateEncounter() that sets the chosen flow:
+
+const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
+
+cleared.__router = {
+  source: "menu",
+  pickedFlowId: pick.flowId,
+  pickedSystem: pick.system,
+  snippet: msg.slice(0, 60),
+  ts: Date.now(),
+};
+
+
+Then use answers: JSON.stringify(cleared) in the same update call.
+
+Add telemetry when keyword routing runs (free text)
+
+Where you do:
+
+const pick = routeFlowFromText(msg);
+await storage.updateEncounter(encounter.id, { ... });
+
+
+Change it to:
+
+const pick = routeFlowFromText(msg);
+const updated = getAnswersObj(encounter.answers);
+updated.__router = {
+  source: "keyword",
+  pickedFlowId: pick.flowId,
+  pickedSystem: pick.system,
+  snippet: msg.slice(0, 60),
+  ts: Date.now(),
+};
+
+await storage.updateEncounter(encounter.id, {
+  system: pick.system,
+  complaint: pick.complaint,
+  specialty: pick.specialty,
+  flowId: pick.flowId,
+  flowIndex: 0,
+  answers: JSON.stringify(updated),
+  status: "in_progress",
+} as any);
+
+
+Now every encounter carries a lightweight “routing receipt.”
+
+Patch the simulate-message endpoint too
+
+In /api/test/simulate-message, add the same two command behaviors:
+
+if input is “menu” → return menu text
+
+else run routeFlowFromText() and store __router in answers
+
+You don’t need to fully replicate menu state in simulate mode unless you want it.
+
+Telegram vs Apple messaging
+Telegram
+
+Easy. Telegram bots support inline buttons (keyboards) and callback handlers. It’s straightforward to add a clinician-only Telegram bot for “Approve / ED / Call patient,” or to send physician alerts. Even easier than WhatsApp in some ways.
+
+For patients: Telegram is fine, but since you’ve committed to WhatsApp + web grid, I’d keep Telegram as clinician-only if you add it.
+
+Apple Messages / iPhone messaging (iMessage/SMS)
+
+SMS is plain text, no buttons/grids.
+
+iMessage does not have a universal public bot API like Telegram.
+
+Apple does have Apple Messages for Business, but it’s a separate onboarding process and not as simple as “add a token.”
+
+So: Telegram is easy, Apple messaging is not (compared to WhatsApp).
+
+If you want, I can also give you a tiny “rate limit friendly” import runner next (retries + sleeps), but you’re already flying.
