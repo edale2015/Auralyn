@@ -199,30 +199,35 @@ export function buildRouterAudit(
   };
 }
 
+export type RouterAuditInput = {
+  routerReason: "menu" | "keyword" | "other_text";
+  routerPickedFlowId: string;
+  routerPickedSystem?: string;
+  routerTextSnippet: string;
+};
+
 // Sets both __routerAudit and __router alias on answers object
-export function setRouterAudit(
-  answersObj: any,
-  flowId: string,
-  reason: "menu" | "keyword" | "default" | "other_text",
-  text: string
-): any {
+export function setRouterAudit(answersObj: any, audit: RouterAuditInput): any {
+  const a = answersObj || {};
   const ts = Date.now();
-  const snippet = (text || "").substring(0, 60);
-  
-  answersObj.__routerAudit = {
-    routerPickedFlowId: flowId,
-    routerReason: reason,
-    routerTextSnippet: snippet,
-    routerPickedAt: new Date().toISOString(),
-  };
-  
-  // Alias for future tools
-  answersObj.__router = {
-    source: reason,
-    pickedFlowId: flowId,
-    snippet,
+
+  // Canonical schema
+  a.__routerAudit = {
+    routerReason: audit.routerReason,
+    routerPickedFlowId: audit.routerPickedFlowId,
+    routerPickedSystem: audit.routerPickedSystem || "",
+    routerTextSnippet: audit.routerTextSnippet,
     ts,
   };
-  
-  return answersObj;
+
+  // Compatibility alias
+  a.__router = {
+    source: audit.routerReason,
+    pickedFlowId: audit.routerPickedFlowId,
+    pickedSystem: audit.routerPickedSystem || "",
+    snippet: audit.routerTextSnippet,
+    ts,
+  };
+
+  return a;
 }

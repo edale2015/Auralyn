@@ -1,0 +1,119 @@
+1) Add a single helper: setRouterAudit(...)
+
+Put this in server/flows/whatsappFlowRouter.ts (or wherever your menu helpers live).
+
+export type RouterAuditInput = {
+  routerReason: "menu" | "keyword" | "other_text";
+  routerPickedFlowId: string;
+  routerPickedSystem?: string;
+  routerTextSnippet: string;
+};
+
+export function setRouterAudit(answersObj: any, audit: RouterAuditInput) {
+  const a = answersObj || {};
+  const ts = Date.now();
+
+  // Keep your canonical schema
+  a.__routerAudit = {
+    routerReason: audit.routerReason,
+    routerPickedFlowId: audit.routerPickedFlowId,
+    routerPickedSystem: audit.routerPickedSystem || "",
+    routerTextSnippet: audit.routerTextSnippet,
+    ts,
+  };
+
+  // Add compatibility alias (my earlier schema)
+  a.__router = {
+    source: audit.routerReason,
+    pickedFlowId: audit.routerPickedFlowId,
+    pickedSystem: audit.routerPickedSystem || "",
+    snippet: audit.routerTextSnippet,
+    ts,
+  };
+
+  return a;
+}
+
+Why this is safe
+
+Doesn’t rename anything
+
+Adds alias every time you set audit
+
+Works on old encounters (they just won’t have __router until next update)
+
+2) Update webhook: replace manual assignment with setRouterAudit
+
+Anywhere you currently do something like:
+
+answersObj.__routerAudit = { ... }
+
+
+Replace with:
+
+A) Menu selection (source = menu)
+const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
+setRouterAudit(cleared, {
+  routerReason: "menu",
+  routerPickedFlowId: pick.flowId,
+  routerPickedSystem: pick.system,
+  routerTextSnippet: msg.slice(0, 60),
+});
+
+B) Keyword routing (source = keyword)
+const updated = getAnswersObj(encounter.answers);
+setRouterAudit(updated, {
+  routerReason: "keyword",
+  routerPickedFlowId: pick.flowId,
+  routerPickedSystem: pick.system,
+  routerTextSnippet: msg.slice(0, 60),
+});
+
+C) “Other text” routing (source = other_text)
+const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
+setRouterAudit(cleared, {
+  routerReason: "other_text",
+  routerPickedFlowId: pick.flowId,
+  routerPickedSystem: pick.system,
+  routerTextSnippet: msg.slice(0, 60),
+});
+
+
+Then you store answers: JSON.stringify(updatedOrCleared) as usual.
+
+3) Update simulate-message endpoint the same way
+
+Anywhere it routes flow based on text, call:
+
+setRouterAudit(updatedAnswers, {
+  routerReason: "keyword",
+  routerPickedFlowId: pick.flowId,
+  routerPickedSystem: pick.system,
+  routerTextSnippet: simulatedMessage.slice(0, 60),
+});
+
+4) Quick test checklist (2 minutes)
+
+Text WhatsApp:
+
+hi → menu
+
+1 → link/code sent
+
+Confirm in Firestore encounter answers includes:
+
+__routerAudit.routerPickedFlowId == "CARDIO_CHEST_PAIN_V1"
+
+__router.pickedFlowId == "CARDIO_CHEST_PAIN_V1"
+
+menu → menu appears again
+
+6 then burned my hand → routed + link/code
+
+Confirm:
+
+__routerAudit.routerReason == "other_text"
+
+__router.source == "other_text"
+
+If those pass, you’re done.

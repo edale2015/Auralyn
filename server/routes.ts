@@ -778,7 +778,12 @@ export async function registerRoutes(
       if (isAwaitingOtherText(answersObj)) {
         const pick = routeFlowFromText(msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
-        setRouterAudit(cleared, pick.flowId, "other_text", msg);
+        setRouterAudit(cleared, {
+          routerReason: "other_text",
+          routerPickedFlowId: pick.flowId,
+          routerPickedSystem: pick.system,
+          routerTextSnippet: msg.slice(0, 60),
+        });
 
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
@@ -807,9 +812,13 @@ export async function registerRoutes(
         }
 
         // Set chosen flow on encounter with router audit
-        const audit = buildRouterAudit(pick.flowId, "menu", msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false });
-        cleared.__routerAudit = audit;
+        setRouterAudit(cleared, {
+          routerReason: "menu",
+          routerPickedFlowId: pick.flowId,
+          routerPickedSystem: pick.system,
+          routerTextSnippet: msg.slice(0, 60),
+        });
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
           complaint: pick.complaint,
@@ -837,9 +846,12 @@ export async function registerRoutes(
       // If we still have default ENT flow OR no system, try keyword routing from free text
       if (!encounter.system || !encounter.flowId || (encounter.flowId === "ENT_FLU_LIKE_V1" && encounter.flowIndex === 0)) {
         const pick = routeFlowFromText(msg);
-        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
-        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
-        answersObj.__routerAudit = audit;
+        setRouterAudit(answersObj, {
+          routerReason: "keyword",
+          routerPickedFlowId: pick.flowId,
+          routerPickedSystem: pick.system,
+          routerTextSnippet: msg.slice(0, 60),
+        });
 
         // If router picks EMERG or TRAUMA, we still use the web intake link, but send immediate warning
         await storage.updateEncounter(encounter.id, {
@@ -1141,7 +1153,12 @@ export async function registerRoutes(
       if (isAwaitingOtherText(answersObj)) {
         const pick = routeFlowFromText(msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
-        setRouterAudit(cleared, pick.flowId, "other_text", msg);
+        setRouterAudit(cleared, {
+          routerReason: "other_text",
+          routerPickedFlowId: pick.flowId,
+          routerPickedSystem: pick.system,
+          routerTextSnippet: msg.slice(0, 60),
+        });
 
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
@@ -1173,9 +1190,13 @@ export async function registerRoutes(
         }
 
         // Set chosen flow on encounter with router audit
-        const audit = buildRouterAudit(pick.flowId, "menu", msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false });
-        cleared.__routerAudit = audit;
+        setRouterAudit(cleared, {
+          routerReason: "menu",
+          routerPickedFlowId: pick.flowId,
+          routerPickedSystem: pick.system,
+          routerTextSnippet: msg.slice(0, 60),
+        });
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
           complaint: pick.complaint,
@@ -1205,9 +1226,12 @@ export async function registerRoutes(
       // Keyword routing from free text
       if (!encounter.system || !encounter.flowId || (encounter.flowId === "ENT_FLU_LIKE_V1" && encounter.flowIndex === 0)) {
         const pick = routeFlowFromText(msg);
-        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
-        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
-        answersObj.__routerAudit = audit;
+        setRouterAudit(answersObj, {
+          routerReason: "keyword",
+          routerPickedFlowId: pick.flowId,
+          routerPickedSystem: pick.system,
+          routerTextSnippet: msg.slice(0, 60),
+        });
 
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
