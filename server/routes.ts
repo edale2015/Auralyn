@@ -19,6 +19,7 @@ import {
   isMenuResetCommand,
   isStatusCommand,
   buildRouterAudit,
+  setRouterAudit,
   type RouterAudit,
 } from "./flows/whatsappFlowRouter";
 
@@ -776,10 +777,8 @@ export async function registerRoutes(
       // If awaiting "Other" description (option 6), route using keyword
       if (isAwaitingOtherText(answersObj)) {
         const pick = routeFlowFromText(msg);
-        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
-        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
-        cleared.__routerAudit = audit;
+        setRouterAudit(cleared, pick.flowId, "other_text", msg);
 
         await storage.updateEncounter(encounter.id, {
           system: pick.system,
@@ -1141,10 +1140,8 @@ export async function registerRoutes(
       // If awaiting "Other" description (option 6), route using keyword
       if (isAwaitingOtherText(answersObj)) {
         const pick = routeFlowFromText(msg);
-        const isDefault = pick.flowId === "ENT_FLU_LIKE_V1";
-        const audit = buildRouterAudit(pick.flowId, isDefault ? "default" : "keyword", msg);
         const cleared = setMenuState(answersObj, { awaitingChoice: false, awaitingOtherText: false });
-        cleared.__routerAudit = audit;
+        setRouterAudit(cleared, pick.flowId, "other_text", msg);
 
         await storage.updateEncounter(encounter.id, {
           system: pick.system,

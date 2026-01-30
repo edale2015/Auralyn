@@ -188,7 +188,7 @@ export function isStatusCommand(msg: string): boolean {
 
 export function buildRouterAudit(
   flowId: string,
-  reason: "menu" | "keyword" | "default",
+  reason: "menu" | "keyword" | "default" | "other_text",
   text: string
 ): RouterAudit {
   return {
@@ -197,4 +197,32 @@ export function buildRouterAudit(
     routerTextSnippet: (text || "").substring(0, 60),
     routerPickedAt: new Date().toISOString(),
   };
+}
+
+// Sets both __routerAudit and __router alias on answers object
+export function setRouterAudit(
+  answersObj: any,
+  flowId: string,
+  reason: "menu" | "keyword" | "default" | "other_text",
+  text: string
+): any {
+  const ts = Date.now();
+  const snippet = (text || "").substring(0, 60);
+  
+  answersObj.__routerAudit = {
+    routerPickedFlowId: flowId,
+    routerReason: reason,
+    routerTextSnippet: snippet,
+    routerPickedAt: new Date().toISOString(),
+  };
+  
+  // Alias for future tools
+  answersObj.__router = {
+    source: reason,
+    pickedFlowId: flowId,
+    snippet,
+    ts,
+  };
+  
+  return answersObj;
 }
