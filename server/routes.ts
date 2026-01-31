@@ -1664,6 +1664,35 @@ export async function registerRoutes(
     }
   });
 
+  // Test execution endpoint for automated testing
+  app.post("/api/test/execute", async (req: Request, res: Response) => {
+    try {
+      const token = req.header("x-test-token") || "";
+      if (!process.env.TEST_EXEC_TOKEN || token !== process.env.TEST_EXEC_TOKEN) {
+        return res.status(401).json({ ok: false, error: "Unauthorized" });
+      }
+
+      const { flowId, answers, modifiers, routerText } = req.body || {};
+      if (!flowId || !answers) {
+        return res.status(400).json({ ok: false, error: "Missing flowId or answers" });
+      }
+
+      const parsedAnswers = typeof answers === "string" ? JSON.parse(answers) : answers;
+      const proposal = await computeProposal(parsedAnswers);
+
+      return res.json({
+        ok: true,
+        flowId,
+        routerText: routerText || "",
+        proposal,
+        modifiers: modifiers || null,
+      });
+    } catch (e: any) {
+      console.error("test execute error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
   // Admin routes - simple token-based auth for now
   const requireAdmin = (req: Request, res: Response, next: any) => {
     const token = req.headers["x-admin-token"];

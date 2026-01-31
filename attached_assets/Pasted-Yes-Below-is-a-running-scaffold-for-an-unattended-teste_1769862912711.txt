@@ -1,0 +1,526 @@
+Yes. Below is a running scaffold for an unattended tester + orchestrator with:
+
+✅ Both outputs: (1) Firestore and (2) Google Sheets
+
+✅ Minimal scoring/evaluation (disposition + red-flag sanity + med contraindication hooks)
+
+✅ A single nightly runner that:
+
+generates scenarios per flow (weighted + edge cases)
+
+executes them through your app (via a new internal test endpoint)
+
+evaluates them
+
+writes results to both sinks
+
+This is designed to be safe: it produces patch suggestions, but does not auto-edit your clinical tabs.
+
+0) One small server addition: a test execution endpoint
+
+Add this to server/routes.ts (near your existing test routes). It lets the test runner execute scenarios without needing a token/code.
+
+POST /api/test/execute
+
+protected by TEST_EXEC_TOKEN header
+
+runs computeProposal(parsedAnswers) and returns disposition/redFlag output
+
+// routes.ts (add somewhere in your test routes)
+app.post("/api/test/execute", async (req: Request, res: Response) => {
+  try {
+    const token = req.header("x-test-token") || "";
+    if (!process.env.TEST_EXEC_TOKEN || token !== process.env.TEST_EXEC_TOKEN) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
+    const { flowId, answers, modifiers, routerText } = req.body || {};
+    if (!flowId || !answers) {
+      return res.status(400).json({ ok: false, error: "Missing flowId or answers" });
+    }
+
+    const parsedAnswers = typeof answers === "string" ? JSON.parse(answers) : answers;
+
+    // Use your existing logic (same as intake submit)
+    const proposal = await computeProposal(parsedAnswers);
+
+    return res.json({
+      ok: true,
+      flowId,
+      routerText: routerText || "",
+      proposal,
+      modifiers: modifiers || null,
+    });
+  } catch (e: any) {
+    console.error("test execute error:", e);
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+
+Env var needed
+
+TEST_EXEC_TOKEN (any long random string)
+
+1) Files to add (TypeScript)
+
+Create folder:
+
+server/testing/
+server/testing/sinks/
+server/scripts/
+
+1.1 server/testing/types.ts
+export type Tri = "Yes" | "No" | "Not sure";
+
+export type Scenario = {
+  runId: string;
+  ts: number;
+  system: string;
+  flowId: string;
+  chiefComplaint: string;
+  routerText: string;
+  answers: Record<string, Tri>;
+  modifiers?: Record<string, any>;
+  tags?: string[];
+};
+
+export type SystemOutput = {
+  disposition: string;
+  redFlag: boolean;
+  raw: any; // full response payload for debugging
+};
+
+export type Expected = {
+  expectedDisposition: "urgent_or_ed" | "routine_or_supportive";
+  reasons: string[];
+};
+
+export type Score = {
+  pass: boolean;
+  severity: number; // 0 = perfect, higher = worse
+  issues: { code: string; message: string }[];
+};
+
+export type TestRunRecord = {
+  runId: string;
+  ts: number;
+  system: string;
+  flowId: string;
+  chiefComplaint: string;
+  routerText: string;
+  answers: Record<string, Tri>;
+  modifiers?: Record<string, any>;
+  expected: Expected;
+  output: SystemOutput;
+  score: Score;
+  tags?: string[];
+};
+
+1.2 server/testing/specs.ts
+
+This defines flows to test + “red flag triggers” per flow. Start with a small set, then expand.
+
+export type FlowSpec = {
+  system: string;
+  flowId: string;
+  chiefComplaint: string;
+  // If any of these question_ids == "Yes", we expect urgent_or_ed
+  redFlagYesQuestionIds: string[];
+  // Optional extra tags
+  tags?: string[];
+};
+
+export const FLOW_SPECS: FlowSpec[] = [
+  // Examples (add as many as you want)
+  { system: "CARDIO", flowId: "CARDIO_CHEST_PAIN_V1", chiefComplaint: "CHEST_PAIN", redFlagYesQuestionIds: ["CARD_CP_03", "CARD_CP_06", "CARD_CP_13"] },
+  { system: "UROGYN", flowId: "UROGYN_TESTICULAR_PAIN_V1", chiefComplaint: "TESTICULAR_PAIN", redFlagYesQuestionIds: ["URO_TEST_01"] , tags: ["torsion"]},
+  { system: "EMERG", flowId: "EMERG_CRITICAL_V1", chiefComplaint: "CRITICAL_EMERGENCY", redFlagYesQuestionIds: ["EMERG_01", "EMERG_02", "EMERG_04"] , tags: ["hard_stop"]},
+  { system: "TRAUMA", flowId: "TRAUMA_MAJOR_V1", chiefComplaint: "MAJOR_TRAUMA", redFlagYesQuestionIds: ["TRM_02", "TRM_09", "TRM_17"], tags: ["major_trauma"]},
+];
+
+
+You can add more flow specs gradually (recommended) or auto-generate them later from rules.
+
+1.3 server/testing/generator.ts
+
+Weighted scenario generator:
+
+generates mostly “routine” cases
+
+injects some red-flag cases
+
+supports pairwise-ish coverage by rotating which questions are Yes
+
+import crypto from "crypto";
+import { Scenario, Tri } from "./types";
+import { FlowSpec } from "./specs";
+import { getFlowQuestions } from "../flows/sheetFlowLoader"; // adjust import path if different
+
+function rid() {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+function pickTri(pYes: number, pNo: number): Tri {
+  const r = Math.random();
+  if (r < pYes) return "Yes";
+  if (r < pYes + pNo) return "No";
+  return "Not sure";
+}
+
+export async function generateScenariosForFlow(spec: FlowSpec, n: number): Promise<Scenario[]> {
+  const qs: any[] = await getFlowQuestions(spec.flowId);
+  const qids = qs.map(q => String(q.questionId || q.question_id || q.id).trim()).filter(Boolean);
+
+  // Safety: if sheet returns different key, fall back
+  if (!qids.length) throw new Error(`No question IDs found for flow ${spec.flowId}`);
+
+  const scenarios: Scenario[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const runId = `${spec.flowId}-${rid()}`;
+    const ts = Date.now();
+
+    // Most cases routine: mostly No, some Not sure, rare Yes
+    const baseAnswers: Record<string, Tri> = {};
+    for (const qid of qids) baseAnswers[qid] = pickTri(0.06, 0.78);
+
+    // Inject red-flag cases ~20%
+    const redCase = Math.random() < 0.2;
+    const reasons: string[] = [];
+
+    if (redCase && spec.redFlagYesQuestionIds.length) {
+      // Turn on 1–2 red flag question IDs to Yes
+      const rf = [...spec.redFlagYesQuestionIds].sort(() => Math.random() - 0.5);
+      const k = Math.random() < 0.6 ? 1 : 2;
+      for (const qid of rf.slice(0, k)) {
+        baseAnswers[qid] = "Yes";
+        reasons.push(`rf_yes:${qid}`);
+      }
+    }
+
+    // Simple routerText to test keyword routing heuristics
+    const routerText = redCase
+      ? `${spec.chiefComplaint} severe`
+      : `${spec.chiefComplaint} mild`;
+
+    scenarios.push({
+      runId,
+      ts,
+      system: spec.system,
+      flowId: spec.flowId,
+      chiefComplaint: spec.chiefComplaint,
+      routerText,
+      answers: baseAnswers,
+      modifiers: {},
+      tags: [...(spec.tags || []), ...(redCase ? ["red_case"] : ["routine_case"]), ...reasons],
+    });
+  }
+
+  return scenarios;
+}
+
+1.4 server/testing/executor.ts
+
+Calls your new endpoint /api/test/execute.
+
+import { Scenario, SystemOutput } from "./types";
+
+const BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+const TEST_EXEC_TOKEN = process.env.TEST_EXEC_TOKEN || "";
+
+export async function executeScenario(s: Scenario): Promise<SystemOutput> {
+  if (!BASE_URL) throw new Error("Missing PUBLIC_BASE_URL");
+  if (!TEST_EXEC_TOKEN) throw new Error("Missing TEST_EXEC_TOKEN");
+
+  const resp = await fetch(`${BASE_URL}/api/test/execute`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-test-token": TEST_EXEC_TOKEN,
+    },
+    body: JSON.stringify({
+      flowId: s.flowId,
+      answers: s.answers,
+      modifiers: s.modifiers || {},
+      routerText: s.routerText,
+    }),
+  });
+
+  const json: any = await resp.json();
+  if (!json.ok) throw new Error(`execute failed: ${json.error || resp.status}`);
+
+  const proposal = json.proposal || {};
+  return {
+    disposition: String(proposal.disposition || ""),
+    redFlag: Boolean(proposal.redFlag),
+    raw: json,
+  };
+}
+
+1.5 server/testing/evaluator.ts
+
+Simple scoring:
+
+If any redFlag question is Yes → expected urgent_or_ed
+
+Otherwise routine_or_supportive
+
+Score mismatch severity high
+
+Also checks “redFlag flag” consistency
+
+import { Expected, Score, Scenario, SystemOutput } from "./types";
+import { FlowSpec } from "./specs";
+
+export function expectedFromRules(spec: FlowSpec, s: Scenario): Expected {
+  const yesRf = spec.redFlagYesQuestionIds.filter(qid => s.answers[qid] === "Yes");
+  if (yesRf.length) {
+    return { expectedDisposition: "urgent_or_ed", reasons: yesRf.map(q => `rf_yes:${q}`) };
+  }
+  return { expectedDisposition: "routine_or_supportive", reasons: ["no_rf_yes"] };
+}
+
+export function scoreRun(expected: Expected, out: SystemOutput): Score {
+  const issues: { code: string; message: string }[] = [];
+  let severity = 0;
+
+  const disp = (out.disposition || "").toLowerCase();
+  const isUrgent = disp.includes("urgent") || disp.includes("ed");
+  const isRoutine = disp.includes("routine") || disp.includes("support") || disp.includes("self");
+
+  if (expected.expectedDisposition === "urgent_or_ed" && !isUrgent) {
+    severity += 10;
+    issues.push({ code: "DISPOSITION_UNDERSHOOT", message: `Expected urgent/ED, got disposition="${out.disposition}"` });
+  }
+  if (expected.expectedDisposition === "routine_or_supportive" && isUrgent) {
+    severity += 4;
+    issues.push({ code: "DISPOSITION_OVERSHOOT", message: `Expected routine/supportive, got disposition="${out.disposition}"` });
+  }
+
+  // RedFlag signal should align when expected urgent
+  if (expected.expectedDisposition === "urgent_or_ed" && out.redFlag !== true) {
+    severity += 3;
+    issues.push({ code: "REDFLAG_FALSE", message: "Expected redFlag=true for urgent case but got false" });
+  }
+
+  const pass = severity === 0;
+  return { pass, severity, issues };
+}
+
+2) Dual sinks: Firestore + Google Sheets
+2.1 server/testing/sinks/firestoreSink.ts
+import { db } from "../firebase";
+import { TestRunRecord } from "../types";
+
+export async function writeToFirestore(record: TestRunRecord) {
+  await db.collection("test_runs").doc(record.runId).set(record, { merge: true });
+}
+
+2.2 server/testing/sinks/sheetsSink.ts
+
+Uses the same Sheets auth pattern you already have (service account JSON). Writes one row per test run.
+
+import { google } from "googleapis";
+import { TestRunRecord } from "../types";
+
+function envOrThrow(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+export async function appendToSheets(record: TestRunRecord) {
+  const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
+  const tab = process.env.TEST_RUNS_SHEET_TAB || "TEST_RUNS";
+
+  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const auth = credsJson
+    ? new google.auth.GoogleAuth({
+        credentials: JSON.parse(credsJson),
+        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      })
+    : new google.auth.GoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      });
+
+  const sheets = google.sheets({ version: "v4", auth });
+
+  const row = [
+    record.ts,
+    record.system,
+    record.flowId,
+    record.chiefComplaint,
+    record.score.pass ? "PASS" : "FAIL",
+    record.score.severity,
+    record.expected.expectedDisposition,
+    record.output.disposition,
+    record.output.redFlag ? "Y" : "N",
+    record.expected.reasons.join(";"),
+    record.score.issues.map(i => i.code).join(";"),
+    (record.routerText || "").slice(0, 120),
+    JSON.stringify(record.tags || []),
+  ];
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${tab}!A1`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: [row] },
+  });
+}
+
+
+Create the sheet tab TEST_RUNS with headers (row 1):
+
+ts, system, flowId, complaint, pass, severity, expectedDisposition, actualDisposition, redFlag, expectedReasons, issueCodes, routerText, tags
+
+2.3 server/testing/sinks/index.ts
+import { TestRunRecord } from "../types";
+import { writeToFirestore } from "./firestoreSink";
+import { appendToSheets } from "./sheetsSink";
+
+export async function writeRun(record: TestRunRecord) {
+  // Always try both; failure in one shouldn't block the other
+  const errs: string[] = [];
+
+  try { await writeToFirestore(record); } catch (e: any) { errs.push(`firestore:${e?.message || e}`); }
+  try { await appendToSheets(record); } catch (e: any) { errs.push(`sheets:${e?.message || e}`); }
+
+  if (errs.length) {
+    console.warn("writeRun partial failures:", errs.join(" | "));
+  }
+}
+
+3) Orchestrator: nightly test runner
+server/scripts/runNightlyTests.ts
+import { FLOW_SPECS } from "../testing/specs";
+import { generateScenariosForFlow } from "../testing/generator";
+import { executeScenario } from "../testing/executor";
+import { expectedFromRules, scoreRun } from "../testing/evaluator";
+import { writeRun } from "../testing/sinks";
+import { TestRunRecord } from "../testing/types";
+
+async function main() {
+  const PER_FLOW = Number(process.env.TESTS_PER_FLOW || 25);
+
+  console.log(`Nightly tests starting. PER_FLOW=${PER_FLOW} flows=${FLOW_SPECS.length}`);
+
+  let total = 0;
+  let fails = 0;
+
+  for (const spec of FLOW_SPECS) {
+    const scenarios = await generateScenariosForFlow(spec, PER_FLOW);
+
+    for (const s of scenarios) {
+      total++;
+
+      let out;
+      try {
+        out = await executeScenario(s);
+      } catch (e: any) {
+        fails++;
+        const record: TestRunRecord = {
+          runId: s.runId,
+          ts: s.ts,
+          system: s.system,
+          flowId: s.flowId,
+          chiefComplaint: s.chiefComplaint,
+          routerText: s.routerText,
+          answers: s.answers,
+          modifiers: s.modifiers,
+          expected: { expectedDisposition: "routine_or_supportive", reasons: ["EXECUTION_ERROR"] },
+          output: { disposition: "ERROR", redFlag: false, raw: { error: e?.message || String(e) } },
+          score: { pass: false, severity: 20, issues: [{ code: "EXECUTION_ERROR", message: e?.message || String(e) }] },
+          tags: s.tags,
+        };
+        await writeRun(record);
+        continue;
+      }
+
+      const expected = expectedFromRules(spec, s);
+      const score = scoreRun(expected, out);
+
+      if (!score.pass) fails++;
+
+      const record: TestRunRecord = {
+        runId: s.runId,
+        ts: s.ts,
+        system: s.system,
+        flowId: s.flowId,
+        chiefComplaint: s.chiefComplaint,
+        routerText: s.routerText,
+        answers: s.answers,
+        modifiers: s.modifiers,
+        expected,
+        output: out,
+        score,
+        tags: s.tags,
+      };
+
+      await writeRun(record);
+    }
+
+    console.log(`Done flow ${spec.flowId}: ran ${PER_FLOW}`);
+  }
+
+  console.log(`Nightly tests complete. total=${total} fails=${fails}`);
+}
+
+main().catch((e) => {
+  console.error("runNightlyTests failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+TESTS_PER_FLOW=25 npx tsx server/scripts/runNightlyTests.ts
+
+4) Simple scoring rubric (what you just implemented)
+
+Severity points
+
++10: expected urgent/ED but got routine (dangerous under-triage)
+
++4: expected routine but got urgent (over-triage)
+
++3: expected urgent but redFlag=false
+
++20: execution error
+
+That’s enough to start unattended regression detection.
+
+5) Make it “unattended” safely
+Schedule it
+
+Run nightly (e.g., 2am):
+
+runNightlyTests.ts
+
+optionally routerScorecard.ts and intakeCompletionScorecard.ts
+
+Don’t auto-edit clinical tabs
+
+Instead:
+
+Let evaluator output “failures”
+
+You review top severity items
+
+You apply patches via your UPSERT importer
+
+Environment checklist
+
+Required:
+
+PUBLIC_BASE_URL
+
+TEST_EXEC_TOKEN (matches your new endpoint)
+
+SHEETS_SPREADSHEET_ID
+
+GOOGLE_SERVICE_ACCOUNT_JSON
+
+TEST_RUNS_SHEET_TAB=TEST_RUNS (optional)
