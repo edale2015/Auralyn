@@ -1,0 +1,397 @@
+1) Router scorecard script (weekly QA)
+What it produces
+
+Top flows by volume
+
+Menu vs keyword vs other_text distribution
+
+“High-risk ED warnings” frequency (based on routed flowIds)
+
+Override usage (proxy: __routerAudit.routerPickedSystem === "STAFF_OVERRIDE" or your own marker)
+
+Top snippets for overrides (most useful thing)
+
+Add: server/scripts/routerScorecard.ts
+import { firestoreDb } from "../firebase"; // adjust if your firebase export differs
+
+type RouterAudit = {
+  routerReason?: string;
+  routerPickedFlowId?: string;
+  routerPickedSystem?: string;
+  routerTextSnippet?: string;
+  ts?: number;
+  confidence?: string;
+};
+
+function norm(x: any) {
+  return String(x ?? "").trim();
+}
+
+function inc(map: Map<string, number>, key: string, by = 1) {
+  map.set(key, (map.get(key) || 0) + by);
+}
+
+function topN(map: Map<string, number>, n = 10) {
+  return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+
+async function main() {
+  const DAYS = Number(process.env.SCORECARD_DAYS || 14);
+  const sinceMs = Date.now() - DAYS * 24 * 60 * 60 * 1000;
+
+  const flowCounts = new Map<string, number>();
+  const reasonCounts = new Map<string, number>();
+  const overrideFlowCounts = new Map<string, number>();
+  const overrideSnippets = new Map<string, number>();
+  const confidenceCounts = new Map<string, number>();
+
+  // "ED warning" proxy: flows you warn on
+  const ED_WARN_FLOWIDS = new Set([
+    "EMERG_CRITICAL_V1",
+    "TRAUMA_MAJOR_V1",
+    "UROGYN_VAGINAL_BLEEDING_V1",
+    "UROGYN_TESTICULAR_PAIN_V1",
+    "OPHTH_VISION_LOSS_V1",
+    "NEURO_WEAKNESS_V1",
+  ]);
+  let edWarnHits = 0;
+
+  const snap = await firestoreDb.collection("encounters")
+    .where("updatedAt", ">=", new Date(sinceMs))
+    .limit(3000)
+    .get();
+
+  let total = 0;
+  for (const doc of snap.docs) {
+    total++;
+    const data = doc.data() as any;
+
+    const flowId = norm(data.flowId);
+    if (flowId) inc(flowCounts, flowId);
+
+    if (ED_WARN_FLOWIDS.has(flowId)) edWarnHits++;
+
+    let answersObj: any = {};
+    try {
+      answersObj = data.answers ? JSON.parse(data.answers) : {};
+    } catch {
+      answersObj = {};
+    }
+
+    const ra: RouterAudit = answersObj.__routerAudit || {};
+    const reason = norm(ra.routerReason) || "unknown";
+    inc(reasonCounts, reason);
+
+    const conf = norm(ra.confidence);
+    if (conf) inc(confidenceCounts, conf);
+
+    // Override detection:
+    // If you used routerPickedSystem="STAFF_OVERRIDE", count it
+    const pickedSystem = norm(ra.routerPickedSystem);
+    if (pickedSystem === "STAFF_OVERRIDE") {
+      const pickedFlow = norm(ra.routerPickedFlowId);
+      if (pickedFlow) inc(overrideFlowCounts, pickedFlow);
+
+      const snip = norm(ra.routerTextSnippet);
+      if (snip) inc(overrideSnippets, snip);
+    }
+  }
+
+  console.log(`\n=== ROUTER SCORECARD (last ${DAYS} days) ===`);
+  console.log(`Encounters scanned: ${total}`);
+  console.log(`ED-warning flow hits (proxy): ${edWarnHits}`);
+
+  console.log(`\nTop flows:`);
+  for (const [k, v] of topN(flowCounts, 15)) console.log(`  ${k}: ${v}`);
+
+  console.log(`\nRouting reason distribution:`);
+  for (const [k, v] of topN(reasonCounts, 10)) console.log(`  ${k}: ${v}`);
+
+  if (confidenceCounts.size) {
+    console.log(`\nRouting confidence distribution:`);
+    for (const [k, v] of topN(confidenceCounts, 10)) console.log(`  ${k}: ${v}`);
+  }
+
+  if (overrideFlowCounts.size) {
+    console.log(`\nTop staff overrides by flow:`);
+    for (const [k, v] of topN(overrideFlowCounts, 10)) console.log(`  ${k}: ${v}`);
+  }
+
+  if (overrideSnippets.size) {
+    console.log(`\nTop override snippets:`);
+    for (const [k, v] of topN(overrideSnippets, 15)) console.log(`  "${k}"  (${v})`);
+  } else {
+    console.log(`\n(No staff overrides detected in this window.)`);
+  }
+
+  console.log("\nDone.");
+}
+
+main().catch((e) => {
+  console.error("routerScorecard failed:", e);
+  process.exit(1);
+});
+
+Run it
+SCORECARD_DAYS=14 npx tsx server/scripts/routerScorecard.ts
+
+2) Stuck intake reminder (10–15 min follow-up)
+What it does
+
+Find encounters where:
+
+intakeToken + intakeCode exist
+
+status != pending_review
+
+token not expired yet
+
+created/updated > N minutes ago
+Then sends:
+
+“Reply LINK to resend your form.”
+
+Add: server/scripts/stuckIntakeReminder.ts
+import { firestoreDb } from "../firebase";
+import { BASE_URL } from "../intake/intakeAuth"; // adjust path
+import { sendWhatsAppMessage } from "../twilio";  // adjust to wherever your sendWhatsAppMessage lives
+
+function norm(x: any) {
+  return String(x ?? "").trim();
+}
+
+async function main() {
+  const MINUTES = Number(process.env.REMINDER_MINUTES || 12);
+  const sinceMs = Date.now() - MINUTES * 60 * 1000;
+
+  // Scan recent in-progress encounters that still have a valid intake token
+  const snap = await firestoreDb.collection("encounters")
+    .where("status", "==", "in_progress")
+    .limit(500)
+    .get();
+
+  let sent = 0;
+  for (const doc of snap.docs) {
+    const e = doc.data() as any;
+
+    const intakeToken = norm(e.intakeToken);
+    const intakeCode = norm(e.intakeCode);
+    const exp = Number(e.intakeExpiresAt || 0);
+    if (!intakeToken || !intakeCode || !exp) continue;
+    if (Date.now() > exp) continue;
+
+    const updatedAtMs = e.updatedAt?.toMillis?.() ?? (e.updatedAt ? new Date(e.updatedAt).getTime() : 0);
+    const createdAtMs = e.createdAt?.toMillis?.() ?? (e.createdAt ? new Date(e.createdAt).getTime() : 0);
+    const ts = Math.max(updatedAtMs, createdAtMs);
+
+    // Only remind if it's been sitting for MINUTES, and we haven't reminded yet
+    if (!ts || ts > sinceMs) continue;
+
+    // Use answers blob to prevent repeated reminders
+    let answersObj: any = {};
+    try { answersObj = e.answers ? JSON.parse(e.answers) : {}; } catch { answersObj = {}; }
+    if (answersObj.__remindedAt && Number(answersObj.__remindedAt) > sinceMs) continue;
+
+    // Look up patient phone number
+    const patientId = norm(e.patientId);
+    if (!patientId) continue;
+
+    const pdoc = await firestoreDb.collection("patients").doc(patientId).get();
+    const phoneNumber = norm(pdoc.data()?.phoneNumber);
+    if (!phoneNumber.startsWith("whatsapp:")) continue;
+
+    // Send reminder
+    const link = `${BASE_URL}/intake/${intakeToken}`;
+    await sendWhatsAppMessage(
+      phoneNumber,
+      `Quick check-in: if you still want to complete the form, here’s your secure link:\n${link}\nCode: ${intakeCode}\nReply LINK anytime to resend.`
+    );
+
+    // Mark reminder sent
+    answersObj.__remindedAt = Date.now();
+    await doc.ref.update({ answers: JSON.stringify(answersObj), updatedAt: new Date() });
+
+    sent++;
+  }
+
+  console.log(`Stuck intake reminders sent: ${sent}`);
+}
+
+main().catch((e) => {
+  console.error("stuckIntakeReminder failed:", e);
+  process.exit(1);
+});
+
+Run it
+REMINDER_MINUTES=12 npx tsx server/scripts/stuckIntakeReminder.ts
+
+
+Scheduling: On Replit, you can run this on a schedule (every 5–10 minutes) via the platform’s scheduler/cron equivalent. It’s safe to run repeatedly because it stamps __remindedAt.
+
+3) Physician quick actions (minimal API endpoints)
+
+You already have /flow FLOW_ID over WhatsApp for staff. This adds web dashboard actions so staff can do it from the review queue without typing.
+
+Add 3 endpoints to server/routes.ts
+
+These assume:
+
+storage.getEncounter(id) exists
+
+storage.updateEncounter(id, patch) exists
+
+you already have sendWhatsAppMessage
+
+your encounters store patientId, and patient has phoneNumber
+
+3.1 Resend link
+app.post("/api/review/:encounterId/resend-link", async (req, res) => {
+  try {
+    const { encounterId } = req.params;
+    const enc: any = await storage.getEncounter(encounterId);
+    if (!enc) return res.status(404).json({ ok: false, error: "Encounter not found" });
+
+    const patient = await storage.getPatient(enc.patientId);
+    const phone = patient?.phoneNumber;
+    if (!phone) return res.status(400).json({ ok: false, error: "Missing patient phone" });
+
+    const token = enc.intakeToken;
+    const code = enc.intakeCode;
+    const exp = enc.intakeExpiresAt || 0;
+
+    if (!token || !code || Date.now() > exp) {
+      return res.status(400).json({ ok: false, error: "No valid intake link/code to resend" });
+    }
+
+    const link = `${BASE_URL}/intake/${token}`;
+    await sendWhatsAppMessage(phone, `Resending your secure intake link:\n${link}\nCode: ${code}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+3.2 Change flow (same as staff /flow but via dashboard)
+app.post("/api/review/:encounterId/set-flow", async (req, res) => {
+  try {
+    const { encounterId } = req.params;
+    const { flowId } = req.body || {};
+    if (!flowId) return res.status(400).json({ ok: false, error: "Missing flowId" });
+
+    // validate flowId exists by loading questions
+    const qs = await getFlowQuestions(flowId);
+    if (!qs || qs.length === 0) return res.status(400).json({ ok: false, error: "Unknown flowId (no questions)" });
+
+    const enc: any = await storage.getEncounter(encounterId);
+    if (!enc) return res.status(404).json({ ok: false, error: "Encounter not found" });
+
+    // Update audit in answers
+    let answersObj: any = {};
+    try { answersObj = enc.answers ? JSON.parse(enc.answers) : {}; } catch { answersObj = {}; }
+    setRouterAudit(answersObj, {
+      routerReason: "keyword",
+      routerPickedFlowId: flowId,
+      routerPickedSystem: "STAFF_OVERRIDE",
+      routerTextSnippet: `/api/review set-flow ${flowId}`.slice(0, 60),
+    });
+
+    await storage.updateEncounter(encounterId, { flowId, flowIndex: 0, answers: JSON.stringify(answersObj) } as any);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+3.3 Request clarification
+app.post("/api/review/:encounterId/request-clarification", async (req, res) => {
+  try {
+    const { encounterId } = req.params;
+    const { message } = req.body || {};
+    if (!message) return res.status(400).json({ ok: false, error: "Missing message" });
+
+    const enc: any = await storage.getEncounter(encounterId);
+    if (!enc) return res.status(404).json({ ok: false, error: "Encounter not found" });
+
+    const patient = await storage.getPatient(enc.patientId);
+    const phone = patient?.phoneNumber;
+    if (!phone) return res.status(400).json({ ok: false, error: "Missing patient phone" });
+
+    await sendWhatsAppMessage(phone, message);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+4) Flow confidence (cheap heuristic + queue sorting)
+4.1 Add confidence to router audit
+
+In your router helper (setRouterAudit), add a confidence field.
+
+Suggested heuristic:
+
+menu → high
+
+keyword + high-risk flow picked → high
+
+keyword generic → medium
+
+other_text → medium or low depending on text length
+
+Patch your setRouterAudit
+const highRisk = new Set([
+  "EMERG_CRITICAL_V1",
+  "TRAUMA_MAJOR_V1",
+  "UROGYN_VAGINAL_BLEEDING_V1",
+  "UROGYN_TESTICULAR_PAIN_V1",
+  "OPHTH_VISION_LOSS_V1",
+  "NEURO_WEAKNESS_V1",
+]);
+
+const confidence =
+  audit.routerReason === "menu" ? "high" :
+  (highRisk.has(audit.routerPickedFlowId) ? "high" :
+   (audit.routerReason === "other_text" ? "medium" : "medium"));
+
+
+Store it in both __routerAudit and __router:
+
+a.__routerAudit.confidence = confidence;
+a.__router.confidence = confidence;
+
+4.2 Queue sorting: redFlag, urgency, then low-confidence
+
+In your queue endpoint sorting, insert confidence as a tie-breaker:
+
+redFlag true first
+
+urgencyLevel urgent first
+
+then confidence low first (so staff can correct early)
+
+then newest
+
+Pseudo-sort:
+
+const confRank = (c: string) => (c === "low" ? 0 : c === "medium" ? 1 : 2);
+
+items.sort((a,b) => {
+  if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
+  if (a.urgencyLevel !== b.urgencyLevel) return a.urgencyLevel === "urgent" ? -1 : 1;
+  if (confRank(a.confidence) !== confRank(b.confidence)) return confRank(a.confidence) - confRank(b.confidence);
+  return (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0);
+});
+
+Quick run order
+
+Add confidence into setRouterAudit (tiny)
+
+Update queue response to return confidence and sort accordingly
+
+Add quick action endpoints
+
+Add reminder script and schedule it
+
+Run scorecard weekly
+
+Telegram / Apple messagin
