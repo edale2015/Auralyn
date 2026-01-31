@@ -1,0 +1,82 @@
+1–3 (A/B variants, reminder wording, clarification templates)
+
+I’ll give you paste-ready options for each, then answer the “unattended bots” question with a concrete architecture.
+
+1) A/B test message variants (3 options)
+
+Use the same variables ${intakeLink} and ${intakeCode}.
+
+Variant A (baseline, very short)
+Med Scribe Triage
+
+Tap this secure link to answer a few quick questions:
+${intakeLink}
+
+Code: ${intakeCode}
+
+Reply LINK to resend.
+Reply QUESTIONS to answer here.
+
+⚠️ Trouble breathing, chest pain, confusion, severe bleeding, or can’t keep fluids down → ER now.
+
+Variant B (time promise increases completion)
+Med Scribe Triage
+
+Most people finish in under 2 minutes:
+${intakeLink}
+
+Code: ${intakeCode}
+
+Reply LINK to resend • Reply QUESTIONS for chat mode
+
+⚠️ Trouble breathing, chest pain, confusion, severe bleeding, or can’t keep fluids down → ER now.
+
+Variant C (reassuring + minimal)
+Med Scribe Triage
+
+Please complete the secure form here:
+${intakeLink}
+
+Code: ${intakeCode}
+
+LINK = resend • QUESTIONS = chat mode
+
+⚠️ Trouble breathing, chest pain, confusion, severe bleeding, or can’t keep fluids down → ER now.
+
+
+How to A/B in practice: alternate by day (Mon/Wed/Fri = A, Tue/Thu = B, weekend = C) and compare:
+
+completion rate (submitted / link sent)
+
+time-to-submit
+
+number of LINK resends
+
+2) Stuck-intake reminder wording (2 options)
+Reminder A (gentle)
+Quick check-in: if you still want to finish, reply LINK to resend your secure form.
+If symptoms are worsening, please go to urgent care or the ER.
+
+Reminder B (direct + helpful)
+Your secure form is still waiting. Reply LINK to resend it.
+If you’re having trouble breathing, chest pain, confusion, severe bleeding, or can’t keep fluids down → ER now.
+
+3) Physician “request clarification” templates (copy/paste)
+
+These work with your /api/review/:encounterId/request-clarification.
+
+Template 1 (single missing detail)
+Thanks — one quick question so we can advise safely:
+1) When did this start?
+Reply with a short answer (e.g., “today 2pm”).
+
+Template 2 (severity + red flags)
+To guide next steps, please reply:
+1) Any trouble breathing, chest pain, fainting, severe weakness/confusion, or severe bleeding? (Yes/No)
+2) Rate your worst symptom 0–10.
+
+Template 3 (meds/allergies checkpoint)
+Before we advise, please reply with:
+1) Any medication allergies?
+2) Current medicines (or “none”).
+3) Are you pregnant or could you be pregnant? (Yes/No/Not sure)
