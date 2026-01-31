@@ -2,6 +2,8 @@ import { FLOW_SPECS } from "../testing/specs";
 import { generateScenariosForFlow } from "../testing/generator";
 import { executeScenario } from "../testing/executor";
 import { expectedFromRules, scoreRun } from "../testing/evaluator";
+import { applyMedicationContraindicationChecks } from "../testing/evaluatorMedChecks";
+import { applyDxSanityChecks } from "../testing/evaluatorDxChecks";
 import { writeRun } from "../testing/sinks";
 import { TestRunRecord } from "../testing/types";
 
@@ -49,7 +51,9 @@ async function main() {
       }
 
       const expected = expectedFromRules(spec, s);
-      const score = scoreRun(expected, out);
+      let score = scoreRun(expected, out);
+      score = await applyMedicationContraindicationChecks(s, out, score);
+      score = await applyDxSanityChecks(s, out, score);
 
       if (!score.pass) fails++;
 

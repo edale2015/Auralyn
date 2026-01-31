@@ -25,15 +25,21 @@ export async function computeProposalGeneric(
 
   const flowId = ctx?.flowId || "ENT_FLU_LIKE_V1";
 
-  const redFlagQids = RED_FLAG_MAP[flowId] || [];
-  const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");
-
   let rules: Record<string, string> = {};
   try {
     rules = await getRulesForFlow(flowId);
   } catch (e) {
     console.warn(`[computeProposalGeneric] getRulesForFlow(${flowId}) failed:`, e);
   }
+
+  // Prefer sheet-based RED_FLAG_QIDS, fall back to code-based RED_FLAG_MAP
+  const sheetQids = (rules["RED_FLAG_QIDS"] || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const redFlagQids = sheetQids.length ? sheetQids : (RED_FLAG_MAP[flowId] || []);
+  const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");
 
   const redDisp =
     rules[`${flowId}_RED_FLAG_DISPOSITION`] ||

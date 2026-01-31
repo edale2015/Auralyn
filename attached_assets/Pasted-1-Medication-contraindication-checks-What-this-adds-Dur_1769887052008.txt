@@ -1,0 +1,417 @@
+1) Medication contraindication checks
+What this adds
+
+During evaluation, if the system output suggests meds (either a list OR a medPack string OR ROW_KEY references), we verify:
+
+Pregnancy contraindications (if modifier indicates pregnancy)
+
+Bariatric “avoid NSAIDs” warning (if modifier indicates post-bariatric)
+
+Allergy checks (if modifier indicates penicillin/sulfa allergy)
+
+Renal impairment caution (if modifier indicates renal impairment)
+
+Assumption
+
+Your CLINICAL_MEDICATIONS sheet already has these columns (you do):
+
+Pregnancy_Considerations
+
+Contraindications
+
+Renal_Adjust?
+
+Medication_Name
+
+Notes containing ROW_KEY=...
+
+Add: server/testing/meds/medCatalogLoader.ts
+import { getSheetRows } from "../../sheets/sheetHelper";
+
+export type MedRow = Record<string, any>;
+
+function norm(x: any) {
+  return String(x ?? "").trim();
+}
+
+function extractRowKey(notes: string): string | null {
+  const m = (notes || "").match(/ROW_KEY=([^\s;]+)/);
+  return m ? m[1].trim() : null;
+}
+
+export async function loadMedCatalogByRowKey(): Promise<Map<string, MedRow>> {
+  const { rowsAsObjects } = await getSheetRows("CLINICAL_MEDICATIONS");
+  const m = new Map<string, MedRow>();
+
+  for (const r of rowsAsObjects) {
+    const notes = norm((r as any).Notes);
+    const rk = extractRowKey(notes);
+    if (rk) m.set(rk, r as any);
+  }
+  return m;
+}
+
+Add: server/testing/evaluatorMedChecks.ts
+import { Scenario, SystemOutput, Score } from "./types";
+import { loadMedCatalogByRowKey } from "./meds/medCatalogLoader";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+function yn(x: any) { return norm(x).toUpperCase(); }
+
+function extractRowKeysFromAnything(out: any): string[] {
+  const keys: string[] = [];
+
+  // Common places you might store meds
+  const proposal = out?.raw?.proposal || out?.raw?.proposal || out?.raw?.proposal;
+  const medPack = proposal?.rulePacks?.medPack || proposal?.medPack || proposal?.med_pack;
+
+  // If medPack is a string containing ROW_KEY=...;ROW_KEY=...
+  if (typeof medPack === "string" && medPack.includes("ROW_KEY=")) {
+    const parts = medPack.split(/[;,]+/).map(s => s.trim());
+    for (const p of parts) {
+      const m = p.match(/ROW_KEY=([^|]+?\|[^"'\s]+)/) || p.match(/ROW_KEY=([^\s]+)/);
+      if (m) keys.push(m[1].trim());
+    }
+  }
+
+  // If proposal has medIds array or target IDs
+  const arrs = [
+    proposal?.medIds,
+    proposal?.med_ids,
+    proposal?.medications,
+    proposal?.meds,
+  ].filter(Boolean);
+
+  for (const a of arrs) {
+    if (Array.isArray(a)) {
+      for (const item of a) {
+        const s = norm(item);
+        if (s.includes("ROW_KEY=")) {
+          const m = s.match(/ROW_KEY=([^\s;]+)/);
+          if (m) keys.push(m[1].trim());
+        }
+      }
+    }
+  }
+
+  // De-dup
+  return Array.from(new Set(keys));
+}
+
+export async function applyMedicationContraindicationChecks(
+  scenario: Scenario,
+  out: SystemOutput,
+  score: Score
+): Promise<Score> {
+  const modifiers = scenario.modifiers || {};
+  const pregnant = Boolean(modifiers.pregnant || modifiers.pregnancy_possible || modifiers.pregnancy === true);
+  const postBari = Boolean(modifiers.post_bariatric_surgery);
+  const renal = Boolean(modifiers.renal_impairment || modifiers.ckd);
+
+  // Allergies: customize to your modifier keys
+  const penAllergy = Boolean(modifiers.penicillin_allergy);
+  const sulfaAllergy = Boolean(modifiers.sulfa_allergy);
+
+  const rowKeyMap = await loadMedCatalogByRowKey();
+  const rowKeys = extractRowKeysFromAnything(out);
+
+  // If no meds referenced, skip silently
+  if (!rowKeys.length) return score;
+
+  const issues = [...score.issues];
+  let severity = score.severity;
+
+  for (const rk of rowKeys) {
+    const row = rowKeyMap.get(rk);
+    if (!row) continue;
+
+    const medName = norm((row as any).Medication_Name) || rk;
+    const pregNotes = norm((row as any).Pregnancy_Considerations);
+    const contra = norm((row as any).Contraindications);
+    const renalAdj = yn((row as any)["Renal_Adjust?"]);
+
+    // Pregnancy hard stops: conservative string match
+    if (pregnant && (pregNotes.toLowerCase().includes("avoid") || contra.toLowerCase().includes("preg"))) {
+      severity += 6;
+      issues.push({
+        code: "MED_PREGNANCY_CONTRA",
+        message: `Pregnancy modifier set but med may be contraindicated: ${medName} (${rk})`,
+      });
+    }
+
+    // Post-bariatric NSAID caution (string match)
+    if (postBari && medName.toLowerCase().includes("ibuprofen")) {
+      severity += 4;
+      issues.push({
+        code: "MED_BARIATRIC_NSAID",
+        message: `Post-bariatric modifier set; avoid NSAIDs (detected ${medName})`,
+      });
+    }
+
+    // Renal impairment caution
+    if (renal && renalAdj === "YES") {
+      severity += 2;
+      issues.push({
+        code: "MED_RENAL_ADJUST",
+        message: `Renal impairment set; med notes renal adjust: ${medName}`,
+      });
+    }
+
+    // Allergy checks (very simple string match; expand later)
+    if (penAllergy && medName.toLowerCase().includes("amoxicillin")) {
+      severity += 5;
+      issues.push({ code: "MED_ALLERGY_PEN", message: `Penicillin allergy set; med includes penicillin class: ${medName}` });
+    }
+    if (sulfaAllergy && medName.toLowerCase().includes("trimethoprim")) {
+      severity += 5;
+      issues.push({ code: "MED_ALLERGY_SULFA", message: `Sulfa allergy set; med may be sulfa: ${medName}` });
+    }
+  }
+
+  return { ...score, pass: severity === 0, severity, issues };
+}
+
+Wire it into your evaluator
+
+In server/testing/evaluator.ts, after you compute the base score, apply med checks:
+
+import { applyMedicationContraindicationChecks } from "./evaluatorMedChecks";
+
+// inside orchestrator loop, after scoreRun(...)
+let score = scoreRun(expected, out);
+score = await applyMedicationContraindicationChecks(s, out, score);
+
+2) Expected diagnosis sanity checks
+
+This will only run if your proposal output contains diagnoses. If not, it skips.
+
+Add: server/testing/dx/dxLoader.ts
+import { getSheetRows } from "../../sheets/sheetHelper";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+
+export async function loadAllowedDiagnosisIdsBySystem(system: string): Promise<Set<string>> {
+  const { rowsAsObjects } = await getSheetRows("CLINICAL_DIAGNOSES");
+  const out = new Set<string>();
+
+  for (const r of rowsAsObjects) {
+    if (norm((r as any).System).toUpperCase() !== system.toUpperCase()) continue;
+    const id = norm((r as any)["Diagnosis ID"]);
+    if (id) out.add(id);
+  }
+  return out;
+}
+
+Add: server/testing/evaluatorDxChecks.ts
+import { Scenario, SystemOutput, Score } from "./types";
+import { loadAllowedDiagnosisIdsBySystem } from "./dx/dxLoader";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+
+function extractDxIds(out: SystemOutput): string[] {
+  const proposal = out?.raw?.proposal || out?.raw?.proposal || out?.raw?.proposal;
+  const arr = proposal?.diagnoses || proposal?.dxIds || proposal?.dx_ids;
+  if (!arr || !Array.isArray(arr)) return [];
+  return arr.map((x: any) => norm(x)).filter(Boolean);
+}
+
+export async function applyDxSanityChecks(s: Scenario, out: SystemOutput, score: Score): Promise<Score> {
+  const dx = extractDxIds(out);
+  if (!dx.length) return score; // skip if your proposal doesn't output dx yet
+
+  const allowed = await loadAllowedDiagnosisIdsBySystem(s.system);
+  const issues = [...score.issues];
+  let severity = score.severity;
+
+  // Unknown dx IDs
+  const unknown = dx.filter(id => !allowed.has(id));
+  if (unknown.length) {
+    severity += 3;
+    issues.push({ code: "DX_UNKNOWN", message: `Proposal contains dx not in CLINICAL_DIAGNOSES for system=${s.system}: ${unknown.join(", ")}` });
+  }
+
+  // Empty dx on routine case could be a weak output (optional)
+  // (If you want strictness, change skip behavior)
+  return { ...score, pass: severity === 0, severity, issues };
+}
+
+
+Wire into orchestrator right after med checks:
+
+import { applyDxSanityChecks } from "../testing/evaluatorDxChecks";
+
+score = await applyDxSanityChecks(s, out, score);
+
+3) Visualize failures from test_runs
+
+You already log to Firestore + Sheets. Here’s a simple visual report generator:
+
+Add: server/scripts/testRunReport.ts
+
+Creates:
+
+console summary
+
+optional CSV file (local) you can open
+
+optional HTML report with a few tables (no fancy deps)
+
+import fs from "fs";
+import path from "path";
+import { db } from "../firebase";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+function inc(m: Map<string, number>, k: string, by = 1) { m.set(k, (m.get(k) || 0) + by); }
+function topN(m: Map<string, number>, n = 15) {
+  return Array.from(m.entries()).sort((a,b) => b[1]-a[1]).slice(0,n);
+}
+
+async function main() {
+  const DAYS = Number(process.env.REPORT_DAYS || 7);
+  const sinceMs = Date.now() - DAYS * 86400000;
+
+  const snap = await db.collection("test_runs")
+    .where("ts", ">=", sinceMs)
+    .limit(5000)
+    .get();
+
+  let total = 0, fails = 0;
+  const byFlowFail = new Map<string, number>();
+  const byIssue = new Map<string, number>();
+
+  const rows: any[] = [];
+
+  for (const doc of snap.docs) {
+    const r: any = doc.data();
+    total++;
+
+    const pass = Boolean(r?.score?.pass);
+    if (!pass) {
+      fails++;
+      inc(byFlowFail, norm(r.flowId) || "UNKNOWN");
+      const codes = (r?.score?.issues || []).map((i: any) => norm(i.code)).filter(Boolean);
+      for (const c of codes) inc(byIssue, c);
+    }
+
+    rows.push({
+      ts: r.ts,
+      flowId: r.flowId,
+      system: r.system,
+      pass: pass ? "PASS" : "FAIL",
+      severity: r?.score?.severity ?? "",
+      expected: r?.expected?.expectedDisposition ?? "",
+      actual: r?.output?.disposition ?? "",
+      redFlag: r?.output?.redFlag ? "Y" : "N",
+      issues: (r?.score?.issues || []).map((i:any)=>i.code).join(";"),
+      routerText: (r?.routerText || "").slice(0, 120),
+    });
+  }
+
+  console.log(`\n=== TEST RUN REPORT (last ${DAYS} days) ===`);
+  console.log(`Total runs: ${total}`);
+  console.log(`Fails: ${fails}`);
+
+  console.log(`\nTop failing flows:`);
+  for (const [k,v] of topN(byFlowFail, 10)) console.log(`  ${k}: ${v}`);
+
+  console.log(`\nTop issue codes:`);
+  for (const [k,v] of topN(byIssue, 15)) console.log(`  ${k}: ${v}`);
+
+  // Write CSV
+  const outDir = "/mnt/data";
+  const csvPath = path.join(outDir, `test_run_report_${DAYS}d.csv`);
+  const headers = Object.keys(rows[0] || {});
+  const csv = [headers.join(",")]
+    .concat(rows.map(r => headers.map(h => JSON.stringify(r[h] ?? "")).join(",")))
+    .join("\n");
+  fs.writeFileSync(csvPath, csv, "utf8");
+  console.log(`\nWrote CSV: ${csvPath}`);
+
+  // Write simple HTML
+  const htmlPath = path.join(outDir, `test_run_report_${DAYS}d.html`);
+  const topFlowsHtml = topN(byFlowFail, 15).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  const topIssuesHtml = topN(byIssue, 25).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  const sampleFails = rows.filter(r => r.pass === "FAIL").slice(0, 30)
+    .map(r => `<tr><td>${r.flowId}</td><td>${r.severity}</td><td>${r.expected}</td><td>${r.actual}</td><td>${r.issues}</td><td>${r.routerText}</td></tr>`)
+    .join("");
+
+  fs.writeFileSync(htmlPath, `
+  <html><head><meta charset="utf-8"><title>Test Run Report</title></head>
+  <body>
+    <h2>Test Run Report (${DAYS} days)</h2>
+    <p>Total: ${total} | Fails: ${fails}</p>
+
+    <h3>Top failing flows</h3>
+    <table border="1" cellpadding="4"><tr><th>Flow</th><th>Fails</th></tr>${topFlowsHtml}</table>
+
+    <h3>Top issue codes</h3>
+    <table border="1" cellpadding="4"><tr><th>Issue</th><th>Count</th></tr>${topIssuesHtml}</table>
+
+    <h3>Sample failures (first 30)</h3>
+    <table border="1" cellpadding="4">
+      <tr><th>Flow</th><th>Severity</th><th>Expected</th><th>Actual</th><th>Issues</th><th>Router text</th></tr>
+      ${sampleFails}
+    </table>
+  </body></html>
+  `, "utf8");
+
+  console.log(`Wrote HTML: ${htmlPath}`);
+}
+
+main().catch(e => {
+  console.error("testRunReport failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+REPORT_DAYS=7 npx tsx server/scripts/testRunReport.ts
+
+
+This generates local files you can download from Replit’s filesystem.
+
+4) Optional: Move RED_FLAG_MAP into CLINICAL_RULES (recommended)
+
+This removes the code dependency on FLOW_SPECS for production.
+
+Approach
+
+For each flow, add a rule row:
+
+rule_key = RED_FLAG_QIDS
+
+value = qid1,qid2,qid3 (comma-separated)
+
+active = Y
+
+Example row:
+
+flow_id: UROGYN_TESTICULAR_PAIN_V1
+
+rule_key: RED_FLAG_QIDS
+
+value: URO_TEST_01,URO_TEST_02
+
+active: Y
+
+Patch computeProposalGeneric to use sheet first
+
+In your computeProposalGeneric, replace redFlagQids selection with:
+
+const rules = await getRulesForFlow(flowId);
+
+const sheetQids = (rules["RED_FLAG_QIDS"] || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const redFlagQids = sheetQids.length ? sheetQids : (RED_FLAG_MAP[flowId] || []);
+const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");
+
+Why this is good
+
+Keeps production fully sheet-driven
+
+Your unattended tests can still use FLOW_SPECS as the expected set (or you can migrate them too)
