@@ -66,6 +66,41 @@ export function routeFlowFromText(raw: string): FlowPick {
     return { system: "TRAUMA", specialty: "TRAUMA", complaint: "MAJOR_TRAUMA", flowId: "TRAUMA_MAJOR_V1" };
   }
 
+  // --- HIGH RISK ROUTES (before general symptom routing) ---
+
+  // Pregnancy bleeding / possible ectopic
+  if (
+    containsAny(t, ["pregnan", "positive test", "postpartum"]) &&
+    containsAny(t, ["bleed", "spot", "clot"])
+  ) {
+    return { system: "UROGYN", specialty: "UROGYN", complaint: "VAGINAL_BLEEDING", flowId: "UROGYN_VAGINAL_BLEEDING_V1" };
+  }
+
+  // Sudden severe testicular pain (torsion until proven otherwise)
+  if (
+    containsAny(t, ["testicle", "testicular", "scrot", "ball pain"]) &&
+    containsAny(t, ["sudden", "suddenly", "severe", "worst"])
+  ) {
+    return { system: "UROGYN", specialty: "UROGYN", complaint: "TESTICULAR_PAIN", flowId: "UROGYN_TESTICULAR_PAIN_V1" };
+  }
+
+  // Vision loss (emergency ophth)
+  if (containsAny(t, ["vision loss", "lost vision", "can't see", "cant see", "blind", "curtain", "floaters", "flashes"])) {
+    return { system: "OPHTH", specialty: "OPHTH", complaint: "VISION_LOSS", flowId: "OPHTH_VISION_LOSS_V1" };
+  }
+
+  // Worst headache / thunderclap (possible SAH)
+  if (containsAny(t, ["worst headache", "thunderclap", "sudden severe headache"])) {
+    return { system: "NEURO", specialty: "NEURO", complaint: "HEADACHE", flowId: "NEURO_HEADACHE_V1" };
+  }
+
+  // Stroke symptoms
+  if (containsAny(t, ["face droop", "slurred", "can't speak", "cant speak", "one sided", "weakness", "numbness", "stroke"])) {
+    return { system: "NEURO", specialty: "NEURO", complaint: "WEAKNESS_NEURO", flowId: "NEURO_WEAKNESS_V1" };
+  }
+
+  // --- END HIGH RISK ROUTES ---
+
   // Cardio
   if (containsAny(t, ["chest pain", "chest pressure", "tightness", "pain in chest", "radiat"])) {
     return { system: "CARDIO", specialty: "CARDIO", complaint: "CHEST_PAIN", flowId: "CARDIO_CHEST_PAIN_V1" };
@@ -86,7 +121,7 @@ export function routeFlowFromText(raw: string): FlowPick {
   }
 
   // UROGYN
-  if (containsAny(t, ["uti", "burning pee", "burning when i pee", "dysuria", "urination pain"])) {
+  if (containsAny(t, ["uti", "burning pee", "burning when i pee", "dysuria", "urination pain", "frequency", "urgency", "peeing a lot"])) {
     return { system: "UROGYN", specialty: "UROGYN", complaint: "UTI_DYSURIA", flowId: "UROGYN_DYSURIA_UTI_V1" };
   }
   if (containsAny(t, ["vaginal bleeding", "bleeding", "spotting"]) && containsAny(t, ["vag", "period", "preg"])) {
@@ -97,10 +132,10 @@ export function routeFlowFromText(raw: string): FlowPick {
   }
 
   // Derm/Env quick hits
-  if (containsAny(t, ["rash", "hives", "itch"])) {
+  if (containsAny(t, ["rash", "hives", "itch", "welts"])) {
     return { system: "DERM", specialty: "DERM", complaint: "RASH", flowId: "DERM_RASH_V1" };
   }
-  if (containsAny(t, ["burn", "scald"])) {
+  if (containsAny(t, ["burn", "scald", "scalded"])) {
     return { system: "DERM", specialty: "DERM", complaint: "BURNS", flowId: "DERM_BURNS_V1" };
   }
   if (containsAny(t, ["bite", "sting"])) {

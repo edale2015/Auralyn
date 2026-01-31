@@ -1,0 +1,252 @@
+A) Routing safety bundle
+A1) Add high-risk phrase routing (router file)
+
+Open server/flows/whatsappFlowRouter.ts and add these high-priority routes near the top (right after EMERG + TRAUMA, before other routing). This avoids “chest pain” stealing “pregnant bleeding” etc.
+
+  // --- HIGH RISK ROUTES (put near top) ---
+
+  // Pregnancy bleeding / possible ectopic
+  if (
+    containsAny(t, ["pregnan", "positive test", "postpartum"]) &&
+    containsAny(t, ["bleed", "spot", "clot"])
+  ) {
+    return { system: "UROGYN", specialty: "UROGYN", complaint: "VAGINAL_BLEEDING", flowId: "UROGYN_VAGINAL_BLEEDING_V1" };
+  }
+
+  // Sudden severe testicular pain (torsion until proven otherwise)
+  if (
+    containsAny(t, ["testicle", "testicular", "scrot", "ball pain"]) &&
+    containsAny(t, ["sudden", "suddenly", "severe", "worst"])
+  ) {
+    return { system: "UROGYN", specialty: "UROGYN", complaint: "TESTICULAR_PAIN", flowId: "UROGYN_TESTICULAR_PAIN_V1" };
+  }
+
+  // Vision loss
+  if (containsAny(t, ["vision loss", "lost vision", "can't see", "cant see", "blind", "curtain", "floaters", "flashes"])) {
+    return { system: "OPHTH", specialty: "OPHTH", complaint: "VISION_LOSS", flowId: "OPHTH_VISION_LOSS_V1" };
+  }
+
+  // Worst headache / thunderclap
+  if (containsAny(t, ["worst headache", "thunderclap", "sudden severe headache"])) {
+    return { system: "NEURO", specialty: "NEURO", complaint: "HEADACHE", flowId: "NEURO_HEADACHE_V1" };
+  }
+
+  // Stroke symptoms
+  if (containsAny(t, ["face droop", "slurred", "can't speak", "cant speak", "one sided", "weakness", "numbness", "stroke"])) {
+    return { system: "NEURO", specialty: "NEURO", complaint: "WEAKNESS_NEURO", flowId: "NEURO_WEAKNESS_V1" };
+  }
+
+Why this matters
+
+These are the most common “don’t miss” misroutes in real life.
+
+A2) Add ED warnings for high-risk flows
+
+In your webhook, you already send ED warnings for EMERG and TRAUMA. Add these right after you set encounter.flowId (after routing or menu selection, before sending link+code):
+
+const fid = encounter.flowId;
+
+// High-risk route warnings (still send link+code)
+if (fid === "UROGYN_VAGINAL_BLEEDING_V1") {
+  await sendWhatsAppMessage(phoneNumber, "If you may be pregnant and have bleeding with pain, dizziness, or heavy bleeding, go to the ER now.");
+}
+if (fid === "UROGYN_TESTICULAR_PAIN_V1") {
+  await sendWhatsAppMessage(phoneNumber, "Sudden severe testicular pain can be an emergency (torsion). If severe/sudden, go to the ER now.");
+}
+if (fid === "OPHTH_VISION_LOSS_V1") {
+  await sendWhatsAppMessage(phoneNumber, "Sudden vision loss can be an emergency. If sudden or worsening, go to the ER now.");
+}
+if (fid === "NEURO_HEADACHE_V1") {
+  // Only if the message itself implied worst/sudden; optional conservative warning:
+  // await sendWhatsAppMessage(phoneNumber, "If this is the worst sudden headache of your life, or with weakness/confusion, go to the ER now.");
+}
+if (fid === "NEURO_WEAKNESS_V1") {
+  await sendWhatsAppMessage(phoneNumber, "New weakness, facial droop, or trouble speaking can be a stroke. Call 911 or go to the ER now.");
+}
+
+
+Tip: For headache you can warn only if the original text matched worst/sudden keywords (you have the snippet in __routerAudit.routerTextSnippet).
+
+A3) Add keyword synonyms (small improvements)
+
+In the router, these tiny additions help:
+
+UTI: add “frequency”, “urgency”
+
+rash: add “welts”
+
+burns: add “scald”
+
+Not necessary, but nice.
+
+B) Physician workflow bundle
+
+This bundle includes:
+
+Staff-only flow override command
+
+Review queue sort fields
+
+(optional) Resend link after override
+
+B1) Staff-only flow override command
+Goal
+
+If your clinic/staff phone texts WhatsApp:
+
+/flow CARDIO_CHEST_PAIN_V1
+or
+
+/flow UROGYN_VAGINAL_BLEEDING_V1
+
+…it updates the active encounter flow and resends link+code.
+
+Add these helpers near the top of webhook
+const STAFF_NUMBERS = (process.env.STAFF_WHATSAPP_NUMBERS || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+// phoneNumber is the inbound From (whatsapp:+123)
+const isStaff = STAFF_NUMBERS.includes(phoneNumber);
+
+// Simple command parse: "/flow FLOW_ID"
+const isFlowCmd = msg.trim().toLowerCase().startsWith("/flow ");
+const requestedFlowId = isFlowCmd ? msg.trim().split(/\s+/)[1] : null;
+
+Handle the command early (after encounter retrieval, before menu logic)
+if (isStaff && requestedFlowId) {
+  // Validate the flow exists by attempting to load questions
+  try {
+    const q = await getFlowQuestions(requestedFlowId);
+    if (!q || (Array.isArray(q) && q.length === 0)) {
+      await sendWhatsAppMessage(phoneNumber, `Unknown flowId or no questions found: ${requestedFlowId}`);
+      return res.status(200).send("ok");
+    }
+
+    // Update flow on encounter
+    const answersObj = getAnswersObj(encounter.answers);
+    setRouterAudit(answersObj, {
+      routerReason: "keyword", // or "menu"; here it's staff override
+      routerPickedFlowId: requestedFlowId,
+      routerPickedSystem: "STAFF_OVERRIDE",
+      routerTextSnippet: msg.slice(0, 60),
+    });
+
+    await storage.updateEncounter(encounter.id, {
+      flowId: requestedFlowId,
+      flowIndex: 0,
+      answers: JSON.stringify(answersObj),
+      status: "in_progress",
+    } as any);
+
+    // Resend link if valid; otherwise generate a new token/code (your existing logic probably does this later)
+    const refreshed = await storage.getEncounter(encounter.id) as typeof encounter;
+
+    const hasToken = Boolean((refreshed as any).intakeToken);
+    const hasCode = Boolean((refreshed as any).intakeCode);
+    const exp = Number((refreshed as any).intakeExpiresAt || 0);
+
+    if (hasToken && hasCode && exp && Date.now() < exp) {
+      const link = `${BASE_URL}/intake/${(refreshed as any).intakeToken}`;
+      await sendWhatsAppMessage(phoneNumber, `Flow overridden to ${requestedFlowId}. Resending link:\n${link}\nCode: ${(refreshed as any).intakeCode}`);
+      return res.status(200).send("ok");
+    }
+
+    await sendWhatsAppMessage(phoneNumber, `Flow overridden to ${requestedFlowId}. Patient should text LINK to resend intake link/code if needed.`);
+    return res.status(200).send("ok");
+
+  } catch (e: any) {
+    await sendWhatsAppMessage(phoneNumber, `Could not set flow to ${requestedFlowId}: ${e?.message || String(e)}`);
+    return res.status(200).send("ok");
+  }
+}
+
+Add env var in Replit
+
+Set:
+
+STAFF_WHATSAPP_NUMBERS=whatsapp:+1YOURNUMBER,whatsapp:+1STAFFNUMBER
+
+
+This keeps the override capability out of patient hands.
+
+B2) Review queue: include routing + urgency fields (API)
+
+Wherever your physician queue endpoint is (or wherever you load pending_review encounters), enrich the response with:
+
+flowId
+
+system
+
+urgencyLevel
+
+proposal.redFlag (if stored)
+
+routerReason, routerPickedFlowId, routerTextSnippet from answers.__routerAudit
+
+Example mapping when building list items:
+
+const answersObj = getAnswersObj(enc.answers);
+const ra = answersObj.__routerAudit || {};
+return {
+  id: enc.id,
+  createdAt: enc.createdAt || enc.updatedAt,
+  status: enc.status,
+  system: enc.system,
+  flowId: enc.flowId,
+  urgencyLevel: enc.urgencyLevel || "routine",
+  redFlag: (() => {
+    try { return Boolean(JSON.parse(enc.proposal || "{}")?.redFlag); } catch { return false; }
+  })(),
+  routerReason: ra.routerReason || "",
+  routerPickedFlowId: ra.routerPickedFlowId || "",
+  routerTextSnippet: ra.routerTextSnippet || "",
+};
+
+Sorting suggestion
+
+Sort by:
+
+redFlag desc
+
+urgencyLevel urgent first
+
+newest first
+
+Even if your UI isn’t built yet, returning these fields makes it plug-and-play.
+
+B3) (Optional) Staff “re-menu” command
+
+For staff-only: /menu to force the patient back to menu next time they text.
+You can do this by setting answers.__menu.awaitingChoice = true.
+
+Telegram / Apple messaging (quick)
+
+Telegram clinician bot (approve/revise buttons) is easy, but you chose WhatsApp-only for patients. I’d keep Telegram for clinician alerts only, later.
+
+Apple Messages is not “easy” unless you use Apple Messages for Business (onboarding + constraints). Not worth it now.
+
+Quick test plan
+
+A tests
+
+“pregnant bleeding” routes to UROGYN bleed + ED warning
+
+“sudden testicle pain” routes torsion + ED warning
+
+“vision loss curtain” routes OPHTH vision loss + ED warning
+
+“worst headache thunderclap” routes NEURO headache
+
+“face droop” routes NEURO weakness + ED warning
+
+B tests
+
+From staff number: /flow OPHTH_VISION_LOSS_V1 updates encounter and responds
+
+Review queue shows routerReason/routerPickedFlowId/routerTextSnippet fields
+
+If you paste the name/path of your physician queue endpoint (or the function that fetches pending_review encounters), I can give you an exact copy-paste patch for B2 that matches your codebase.
+
+ChatGPT can mak

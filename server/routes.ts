@@ -480,6 +480,7 @@ export async function registerRoutes(
           const patient = enc.patientId ? await storage.getPatient(enc.patientId) : null;
           const proposal = enc.proposal ? (typeof enc.proposal === "string" ? JSON.parse(enc.proposal) : enc.proposal) : null;
           const answers = enc.answers ? (typeof enc.answers === "string" ? JSON.parse(enc.answers) : enc.answers) : {};
+          const ra = answers?.__routerAudit || {};
           
           return {
             ...enc,
@@ -487,13 +488,23 @@ export async function registerRoutes(
             redFlag: proposal?.redFlag ?? false,
             urgencyLevel: enc.urgencyLevel || (proposal?.redFlag ? "urgent" : "routine"),
             routerAudit: answers?.__routerAudit || null,
+            routerReason: ra.routerReason || "",
+            routerPickedFlowId: ra.routerPickedFlowId || "",
+            routerTextSnippet: ra.routerTextSnippet || "",
             timestamp: enc.createdAt,
           };
         })
       );
       
-      // Sort by timestamp descending (newest first)
-      enhanced.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      // Sort by redFlag desc, urgencyLevel urgent first, then newest first
+      enhanced.sort((a, b) => {
+        if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
+        if (a.urgencyLevel !== b.urgencyLevel) {
+          if (a.urgencyLevel === "urgent") return -1;
+          if (b.urgencyLevel === "urgent") return 1;
+        }
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      });
       
       res.json(enhanced);
     } catch (error) {
@@ -522,6 +533,7 @@ export async function registerRoutes(
           const patient = enc.patientId ? await storage.getPatient(enc.patientId) : null;
           const proposal = enc.proposal ? (typeof enc.proposal === "string" ? JSON.parse(enc.proposal) : enc.proposal) : null;
           const answers = enc.answers ? (typeof enc.answers === "string" ? JSON.parse(enc.answers) : enc.answers) : {};
+          const ra = answers?.__routerAudit || {};
           
           return {
             ...enc,
@@ -529,13 +541,23 @@ export async function registerRoutes(
             redFlag: proposal?.redFlag ?? false,
             urgencyLevel: enc.urgencyLevel || (proposal?.redFlag ? "urgent" : "routine"),
             routerAudit: answers?.__routerAudit || null,
+            routerReason: ra.routerReason || "",
+            routerPickedFlowId: ra.routerPickedFlowId || "",
+            routerTextSnippet: ra.routerTextSnippet || "",
             timestamp: enc.createdAt,
           };
         })
       );
       
-      // Sort by timestamp descending (newest first)
-      enhanced.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      // Sort by redFlag desc, urgencyLevel urgent first, then newest first
+      enhanced.sort((a, b) => {
+        if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
+        if (a.urgencyLevel !== b.urgencyLevel) {
+          if (a.urgencyLevel === "urgent") return -1;
+          if (b.urgencyLevel === "urgent") return 1;
+        }
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      });
       
       res.json(enhanced);
     } catch (error) {
@@ -769,6 +791,59 @@ export async function registerRoutes(
         return res.status(200).send("ok");
       }
 
+      // Staff-only /flow override command
+      const STAFF_NUMBERS = (process.env.STAFF_WHATSAPP_NUMBERS || "")
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      const isStaff = STAFF_NUMBERS.includes(phoneNumber);
+      const isFlowCmd = msg.trim().toLowerCase().startsWith("/flow ");
+      const requestedFlowId = isFlowCmd ? msg.trim().split(/\s+/)[1]?.toUpperCase() : null;
+
+      if (isStaff && requestedFlowId) {
+        try {
+          const flowQuestions = await getFlowQuestions(requestedFlowId);
+          if (!flowQuestions || (Array.isArray(flowQuestions) && flowQuestions.length === 0)) {
+            await sendWhatsAppMessage(phoneNumber, `Unknown flowId or no questions found: ${requestedFlowId}`);
+            return res.status(200).send("ok");
+          }
+
+          // Update flow on encounter with staff override audit
+          setRouterAudit(answersObj, {
+            routerReason: "keyword",
+            routerPickedFlowId: requestedFlowId,
+            routerPickedSystem: "STAFF_OVERRIDE",
+            routerTextSnippet: msg.slice(0, 60),
+          });
+
+          await storage.updateEncounter(encounter.id, {
+            flowId: requestedFlowId,
+            flowIndex: 0,
+            answers: JSON.stringify(answersObj),
+            status: "in_progress",
+          } as any);
+
+          // Resend link if still valid
+          const refreshed = await storage.getEncounter(encounter.id) as typeof encounter;
+          const hasToken = Boolean(refreshed.intakeToken);
+          const hasCode = Boolean(refreshed.intakeCode);
+          const exp = refreshed.intakeExpiresAt ? new Date(refreshed.intakeExpiresAt).getTime() : 0;
+
+          if (hasToken && hasCode && exp && Date.now() < exp) {
+            const link = `${BASE_URL}/intake/${refreshed.intakeToken}`;
+            await sendWhatsAppMessage(phoneNumber, `Flow overridden to ${requestedFlowId}. Resending link:\n${link}\nCode: ${refreshed.intakeCode}`);
+            return res.status(200).send("ok");
+          }
+
+          await sendWhatsAppMessage(phoneNumber, `Flow overridden to ${requestedFlowId}. Patient should text LINK to resend intake link/code if needed.`);
+          return res.status(200).send("ok");
+
+        } catch (e: any) {
+          await sendWhatsAppMessage(phoneNumber, `Could not set flow to ${requestedFlowId}: ${e?.message || String(e)}`);
+          return res.status(200).send("ok");
+        }
+      }
+
       // Handle "hi/start/help" with menu (if not already selected)
       const lower = msg.toLowerCase();
       const isGreeting =
@@ -873,6 +948,20 @@ export async function registerRoutes(
       }
       if (encounter.flowId === "TRAUMA_MAJOR_V1") {
         await sendWhatsAppMessage(phoneNumber, "This may require urgent emergency evaluation. If severe pain, head injury, bleeding, or confusion, go to the ER now.");
+      }
+
+      // High-risk flow ED warnings
+      if (encounter.flowId === "UROGYN_VAGINAL_BLEEDING_V1") {
+        await sendWhatsAppMessage(phoneNumber, "If you may be pregnant and have bleeding with pain, dizziness, or heavy bleeding, go to the ER now.");
+      }
+      if (encounter.flowId === "UROGYN_TESTICULAR_PAIN_V1") {
+        await sendWhatsAppMessage(phoneNumber, "Sudden severe testicular pain can be an emergency (torsion). If severe/sudden, go to the ER now.");
+      }
+      if (encounter.flowId === "OPHTH_VISION_LOSS_V1") {
+        await sendWhatsAppMessage(phoneNumber, "Sudden vision loss can be an emergency. If sudden or worsening, go to the ER now.");
+      }
+      if (encounter.flowId === "NEURO_WEAKNESS_V1") {
+        await sendWhatsAppMessage(phoneNumber, "New weakness, facial droop, or trouble speaking can be a stroke. Call 911 or go to the ER now.");
       }
       
       // Save incoming message
