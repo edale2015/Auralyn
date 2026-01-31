@@ -22,6 +22,7 @@ import {
   type RouterAudit,
 } from "./flows/whatsappFlowRouter";
 import { sendWhatsAppMessage } from "./whatsapp/send";
+import { computeProposalGeneric } from "./rules/computeProposalGeneric";
 
 // Get flow questions - tries Google Sheets first, falls back to hardcoded
 async function getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
@@ -1678,7 +1679,7 @@ export async function registerRoutes(
       }
 
       const parsedAnswers = typeof answers === "string" ? JSON.parse(answers) : answers;
-      const proposal = await computeProposal(parsedAnswers);
+      const proposal = await computeProposalGeneric(parsedAnswers, { flowId });
 
       return res.json({
         ok: true,

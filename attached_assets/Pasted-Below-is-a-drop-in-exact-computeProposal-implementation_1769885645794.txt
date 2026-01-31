@@ -1,0 +1,195 @@
+Below is a drop-in, exact computeProposal implementation that is:
+
+✅ Flow-aware
+
+✅ Uses your existing CLINICAL_RULES (KV) sheet
+
+✅ Uses a red-flag map (from your FLOW_SPECS) so unattended tests are accurate now
+
+✅ Backward-compatible with existing callers
+
+✅ Safe for production (no auto-edits, no new tabs)
+
+You can paste this in place of (or alongside) your current function and update call sites minimally.
+
+1) New helper imports (add once)
+// server/logic/computeProposal.ts (or wherever this lives)
+
+import { getRulesForFlow } from "../rules/kvRuleLoader";
+import { RED_FLAG_MAP } from "../rules/redFlagMap";
+
+
+If your paths differ, adjust accordingly.
+
+2) Exact computeProposal (paste-ready)
+type ComputeCtx = {
+  flowId?: string;
+  system?: string;
+  complaint?: string;
+};
+
+type Proposal = {
+  disposition: string;
+  redFlag: boolean;
+  rulePacks: {
+    testPack?: string;
+    medPack?: string;
+    referralPack?: string;
+  };
+  reasoning: string[];
+};
+
+export async function computeProposal(
+  answers: Record<string, any>,
+  ctx?: ComputeCtx
+): Promise<Proposal> {
+
+  // ---------- 0) Resolve flow context ----------
+  const flowId = ctx?.flowId || "ENT_FLU_LIKE_V1";
+
+  // ---------- 1) Determine redFlag (flow-aware) ----------
+  const redFlagQids = RED_FLAG_MAP[flowId] || [];
+  const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");
+
+  // ---------- 2) Load KV rules for this flow ----------
+  const rules = await getRulesForFlow(flowId);
+
+  // ---------- 3) Resolve disposition ----------
+  // Try flow-specific keys first, then fallbacks
+  const redDisp =
+    rules[`${flowId}_RED_FLAG_DISPOSITION`] ||
+    rules["RED_FLAG_DISPOSITION"] ||
+    "urgent_or_ed";
+
+  const nonRedDisp =
+    rules[`${flowId}_NON_RED_FLAG_DISPOSITION`] ||
+    rules["NON_RED_FLAG_DISPOSITION"] ||
+    "routine_or_supportive";
+
+  const disposition = redFlag ? redDisp : nonRedDisp;
+
+  // ---------- 4) Resolve rule packs (optional, non-breaking) ----------
+  const testPack =
+    rules[`${flowId}_TEST_PACK`] ||
+    rules["TEST_PACK"] ||
+    undefined;
+
+  const medPack =
+    rules[`${flowId}_MED_PACK`] ||
+    rules["MED_PACK"] ||
+    undefined;
+
+  const referralPack =
+    rules[`${flowId}_REFERRAL_PACK`] ||
+    rules["REFERRAL_PACK"] ||
+    undefined;
+
+  // ---------- 5) Build reasoning (human-readable + audit-safe) ----------
+  const reasoning: string[] = [];
+
+  if (redFlag) {
+    reasoning.push(
+      `Red flag triggered by answers: ${redFlagQids.filter(q => answers[q] === "Yes").join(", ")}`
+    );
+    reasoning.push(`Disposition set to "${disposition}" per red-flag rules`);
+  } else {
+    reasoning.push("No red-flag answers detected");
+    reasoning.push(`Disposition set to "${disposition}" per non-red-flag rules`);
+  }
+
+  if (testPack) reasoning.push(`Test pack suggested: ${testPack}`);
+  if (medPack) reasoning.push(`Medication pack suggested: ${medPack}`);
+  if (referralPack) reasoning.push(`Referral pack suggested: ${referralPack}`);
+
+  // ---------- 6) Return normalized proposal ----------
+  return {
+    disposition,
+    redFlag,
+    rulePacks: {
+      testPack,
+      medPack,
+      referralPack,
+    },
+    reasoning,
+  };
+}
+
+3) Required supporting file: redFlagMap.ts
+
+You already effectively built this via your test specs. This keeps runtime and testing aligned.
+
+// server/rules/redFlagMap.ts
+
+import { FLOW_SPECS } from "../testing/specs";
+
+// Maps flowId -> array of question_ids that imply red flag when "Yes"
+export const RED_FLAG_MAP: Record<string, string[]> = Object.fromEntries(
+  FLOW_SPECS.map(s => [s.flowId, s.redFlagYesQuestionIds])
+);
+
+
+This is intentionally simple.
+Later, you can migrate red-flag question IDs into CLINICAL_RULES (still no new tabs).
+
+4) Required supporting file: kvRuleLoader.ts
+
+If you haven’t added it yet, here it is again (paste-ready):
+
+// server/rules/kvRuleLoader.ts
+
+import { getSheetRows } from "../sheets/sheetHelper";
+
+export async function getRulesForFlow(flowId: string): Promise<Record<string, string>> {
+  const { rowsAsObjects } = await getSheetRows("CLINICAL_RULES");
+
+  const out: Record<string, string> = {};
+
+  for (const r of rowsAsObjects) {
+    const fid = String(r.flow_id || "").trim();
+    if (fid !== flowId) continue;
+
+    const active = String(r.active || "Y").trim().toUpperCase();
+    if (active === "N") continue;
+
+    const key = String(r.rule_key || "").trim();
+    if (!key) continue;
+
+    out[key] = String(r.value ?? "").trim();
+  }
+
+  return out;
+}
+
+5) Update the test endpoint (1-line change)
+
+In /api/test/execute, change:
+
+const proposal = await computeProposal(parsedAnswers);
+
+
+to:
+
+const proposal = await computeProposal(parsedAnswers, { flowId });
+
+
+That’s it.
+
+6) Why this is the right implementation
+
+🔒 Safe: no auto-mutation of sheets
+
+🔁 Deterministic: same inputs → same outputs
+
+🧪 Testable: aligns with your unattended test runner
+
+🧠 Explainable: reasoning array shows why
+
+📈 Extensible:
+
+add new rule packs
+
+migrate red flags into sheets later
+
+add severity tiers later
+
+This closes the loop so your nightly bots now test the real system, not a placeholder.
