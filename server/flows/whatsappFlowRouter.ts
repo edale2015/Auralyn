@@ -9,9 +9,10 @@ export type FlowPick = {
 
 export type RouterAudit = {
   routerPickedFlowId: string;
-  routerReason: "menu" | "keyword" | "default";
+  routerReason: "menu" | "keyword" | "other_text";
   routerTextSnippet: string;
   routerPickedAt: string;
+  confidence?: "high" | "medium" | "low";
 };
 
 const DEFAULT_FLOW: FlowPick = {
@@ -226,11 +227,18 @@ export function buildRouterAudit(
   reason: "menu" | "keyword" | "default" | "other_text",
   text: string
 ): RouterAudit {
+  const normalizedReason = reason === "default" ? "other_text" : reason;
+  const confidence = computeConfidence({
+    routerReason: normalizedReason as "menu" | "keyword" | "other_text",
+    routerPickedFlowId: flowId,
+    routerTextSnippet: (text || "").substring(0, 60),
+  });
   return {
     routerPickedFlowId: flowId,
-    routerReason: reason,
+    routerReason: normalizedReason,
     routerTextSnippet: (text || "").substring(0, 60),
     routerPickedAt: new Date().toISOString(),
+    confidence,
   };
 }
 
