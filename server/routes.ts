@@ -1092,7 +1092,7 @@ export async function registerRoutes(
         
         const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
         
-        responseMessage = `Welcome to Med Scribe ENT Triage.\n\nTap to answer quickly:\n${intakeLink}\n\nCode: ${intakeCode}\n\n⚠️ If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.\n\nCan't open the link? Reply "questions" to answer here instead.`;
+        responseMessage = `Welcome to Med Scribe Triage.\n\nTap the secure link to answer a few quick questions:\n${intakeLink}\n\nAccess code: ${intakeCode}\n\nIf you can't open the link, reply QUESTIONS to answer here.\nTo resend the link, reply LINK.\n\n⚠️ If you develop trouble breathing, chest pain, confusion, severe bleeding, or can't keep fluids down, seek urgent care or go to the ER now.`;
       } else if (msg.toLowerCase() === "questions" || msg.toLowerCase() === "question") {
         // Patient requested fallback to WhatsApp Q&A
         const firstQuestion = flow[0];
@@ -1464,7 +1464,7 @@ export async function registerRoutes(
         
         const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
         
-        responseMessage = `Welcome to Med Scribe ENT Triage.\n\nTap to answer quickly:\n${intakeLink}\n\nCode: ${intakeCode}\n\n⚠️ If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.\n\nCan't open the link? Reply "questions" to answer here instead.`;
+        responseMessage = `Welcome to Med Scribe Triage.\n\nTap the secure link to answer a few quick questions:\n${intakeLink}\n\nAccess code: ${intakeCode}\n\nIf you can't open the link, reply QUESTIONS to answer here.\nTo resend the link, reply LINK.\n\n⚠️ If you develop trouble breathing, chest pain, confusion, severe bleeding, or can't keep fluids down, seek urgent care or go to the ER now.`;
       } else if (msg.toLowerCase() === "questions" || msg.toLowerCase() === "question") {
         // Patient requested fallback to WhatsApp Q&A
         const firstQuestion = flow[0];
