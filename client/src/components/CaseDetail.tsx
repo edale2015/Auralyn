@@ -38,8 +38,26 @@ import {
   Clock,
   User,
   Activity,
-  ArrowRight
+  ArrowRight,
+  ChevronDown,
+  Send
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { useState } from "react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { Encounter, WhatsappMessage, Order } from "@shared/schema";
 
@@ -62,8 +80,28 @@ interface EncounterWithDetails extends Encounter {
   orders?: Order[];
 }
 
+const CLARIFICATION_TEMPLATES = [
+  {
+    id: "onset",
+    label: "When did this start?",
+    message: `Thanks — one quick question so we can advise safely:\n1) When did this start?\nReply with a short answer (e.g., "today 2pm").`,
+  },
+  {
+    id: "severity",
+    label: "Severity + red flags",
+    message: `To guide next steps, please reply:\n1) Any trouble breathing, chest pain, fainting, severe weakness/confusion, or severe bleeding? (Yes/No)\n2) Rate your worst symptom 0–10.`,
+  },
+  {
+    id: "meds",
+    label: "Meds & allergies",
+    message: `Before we advise, please reply with:\n1) Any medication allergies?\n2) Current medicines (or "none").\n3) Are you pregnant or could you be pregnant? (Yes/No/Not sure)`,
+  },
+];
+
 export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDetailProps) {
   const { toast } = useToast();
+  const [clarifyDialogOpen, setClarifyDialogOpen] = useState(false);
+  const [customMessage, setCustomMessage] = useState("");
 
   const { data: encounter, isLoading } = useQuery<EncounterWithDetails>({
     queryKey: ["/api/encounters", encounterId],
@@ -112,27 +150,34 @@ export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDe
     },
   });
 
-  const requestInfoMutation = useMutation({
-    mutationFn: async () => {
-      return apiRequest("POST", `/api/encounters/${encounterId}/request-info`, {
-        physicianId,
+  const requestClarificationMutation = useMutation({
+    mutationFn: async (message: string) => {
+      return apiRequest("POST", `/api/review/${encounterId}/request-clarification`, {
+        message,
       });
     },
     onSuccess: () => {
       toast({
-        title: "Request Sent",
-        description: "A message has been sent to the patient for more information.",
+        title: "Clarification Sent",
+        description: "A message has been sent to the patient.",
       });
+      setClarifyDialogOpen(false);
+      setCustomMessage("");
       queryClient.invalidateQueries({ queryKey: ["/api/encounters", encounterId] });
     },
     onError: (error: Error) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to send request",
+        description: error.message || "Failed to send clarification",
         variant: "destructive",
       });
     },
   });
+
+  const sendClarification = (message: string) => {
+    if (!message.trim()) return;
+    requestClarificationMutation.mutate(message);
+  };
 
   if (isLoading) {
     return (
@@ -390,15 +435,38 @@ export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDe
                     <Separator />
 
                     <div className="flex gap-3">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => requestInfoMutation.mutate()}
-                        disabled={requestInfoMutation.isPending}
-                        data-testid="button-request-info"
-                      >
-                        Request More Info
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={requestClarificationMutation.isPending}
+                            data-testid="button-request-clarification"
+                          >
+                            Request Clarification
+                            <ChevronDown className="w-4 h-4 ml-2" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-56">
+                          <DropdownMenuLabel>Quick Templates</DropdownMenuLabel>
+                          {CLARIFICATION_TEMPLATES.map((t) => (
+                            <DropdownMenuItem
+                              key={t.id}
+                              onClick={() => sendClarification(t.message)}
+                              data-testid={`template-${t.id}`}
+                            >
+                              {t.label}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setClarifyDialogOpen(true)}
+                            data-testid="template-custom"
+                          >
+                            Custom message...
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <Button
                         type="submit"
                         className="flex-1"
@@ -463,6 +531,38 @@ export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDe
           )}
         </div>
       </ScrollArea>
+
+      <Dialog open={clarifyDialogOpen} onOpenChange={setClarifyDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send Custom Clarification</DialogTitle>
+          </DialogHeader>
+          <Textarea
+            placeholder="Type your message to the patient..."
+            value={customMessage}
+            onChange={(e) => setCustomMessage(e.target.value)}
+            className="min-h-[120px]"
+            data-testid="input-custom-clarification"
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setClarifyDialogOpen(false)}
+              data-testid="button-cancel-clarification"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => sendClarification(customMessage)}
+              disabled={!customMessage.trim() || requestClarificationMutation.isPending}
+              data-testid="button-send-clarification"
+            >
+              {requestClarificationMutation.isPending ? "Sending..." : "Send"}
+              <Send className="w-4 h-4 ml-2" />
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
