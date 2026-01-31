@@ -1,7 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage, type FlowQuestion } from "./storage";
-import twilio from "twilio";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { generateToken, generateCode, expiresAtMinutes, INTAKE_EXPIRY_MINUTES, BASE_URL } from "./intake/intakeAuth";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
@@ -22,16 +21,7 @@ import {
   setRouterAudit,
   type RouterAudit,
 } from "./flows/whatsappFlowRouter";
-
-// Initialize Twilio client
-const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER || "whatsapp:+14155238886";
-
-// Log credential info for debugging (masked for security)
-console.log(`Twilio Config: SID=${TWILIO_SID?.substring(0, 8)}..., Token=${TWILIO_TOKEN ? `${TWILIO_TOKEN.substring(0, 4)}...` : 'NOT SET'}, WhatsApp=${TWILIO_WHATSAPP_NUMBER}`);
-
-const twilioClient = twilio(TWILIO_SID, TWILIO_TOKEN);
+import { sendWhatsAppMessage } from "./whatsapp/send";
 
 // Get flow questions - tries Google Sheets first, falls back to hardcoded
 async function getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
@@ -1693,29 +1683,3 @@ export async function registerRoutes(
   return httpServer;
 }
 
-// Helper function to send WhatsApp message
-async function sendWhatsAppMessage(to: string, body: string): Promise<void> {
-  // Ensure proper WhatsApp phone number format: whatsapp:+1234567890
-  let formattedTo = to;
-  
-  // Remove "whatsapp:" prefix if present to normalize
-  if (formattedTo.startsWith("whatsapp:")) {
-    formattedTo = formattedTo.replace("whatsapp:", "").trim();
-  }
-  
-  // Ensure + prefix for E.164 format
-  if (!formattedTo.startsWith("+")) {
-    formattedTo = "+" + formattedTo;
-  }
-  
-  // Add whatsapp: prefix back
-  formattedTo = "whatsapp:" + formattedTo;
-  
-  console.log(`Sending WhatsApp message to: ${formattedTo}`);
-  
-  await twilioClient.messages.create({
-    from: TWILIO_WHATSAPP_NUMBER,
-    to: formattedTo,
-    body: body,
-  });
-}

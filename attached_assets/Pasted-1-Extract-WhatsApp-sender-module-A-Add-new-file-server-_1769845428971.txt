@@ -1,0 +1,231 @@
+1) Extract WhatsApp sender module
+A) Add new file: server/whatsapp/send.ts
+// server/whatsapp/send.ts
+import twilio from "twilio";
+
+function envOrThrow(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+function normalizeWhatsAppTo(to: string): string {
+  const t = String(to || "").trim();
+  if (!t) throw new Error("Missing 'to' phone number");
+  return t.startsWith("whatsapp:") ? t : `whatsapp:${t}`;
+}
+
+const accountSid = envOrThrow("TWILIO_ACCOUNT_SID");
+const authToken = envOrThrow("TWILIO_AUTH_TOKEN");
+
+// Recommended: set this env var to your Twilio WhatsApp-enabled number, e.g. whatsapp:+1XXXXXXXXXX
+const fromWhatsApp = envOrThrow("TWILIO_WHATSAPP_FROM");
+
+const client = twilio(accountSid, authToken);
+
+/**
+ * Send a WhatsApp message via Twilio.
+ * Keeps signature compatible with your existing routes.ts local helper.
+ */
+export async function sendWhatsAppMessage(to: string, body: string): Promise<void> {
+  const formattedTo = normalizeWhatsAppTo(to);
+  const text = String(body ?? "").trim();
+  if (!text) throw new Error("Missing message body");
+
+  await client.messages.create({
+    from: fromWhatsApp,
+    to: formattedTo,
+    body: text,
+  });
+}
+
+Required env var (add in Replit Secrets)
+
+TWILIO_WHATSAPP_FROM=whatsapp:+1YOUR_TWILIO_NUMBER
+
+You likely already have the SID/token.
+
+B) Update server/routes.ts
+1) Import the shared sender
+
+At top of routes.ts add:
+
+import { sendWhatsAppMessage } from "./whatsapp/send";
+
+2) Remove or rename the local function
+
+You currently have a local:
+
+async function sendWhatsAppMessage(to: string, body: string): Promise<void>
+
+
+Do one of these:
+
+Option 1 (recommended): delete the local function and use the imported one everywhere.
+
+Option 2 (safe transitional): rename local one to avoid name collision:
+
+async function sendWhatsAppMessageLocal(...) { ... }
+
+
+Then replace calls with the imported sendWhatsAppMessage.
+
+Given you already have it working, Option 1 is cleaner.
+
+C) Update server/scripts/stuckIntakeReminder.ts
+
+Replace your custom Twilio send logic with:
+
+import { sendWhatsAppMessage } from "../whatsapp/send";
+
+
+And remove any duplicated Twilio client setup from the script.
+
+Everything else stays the same.
+
+D) Smoke test after extraction (2 minutes)
+
+Run a quick dev test:
+
+Trigger any webhook that sends a message (menu, link resend, ED warning)
+
+Run reminder script in dry conditions (or with a test encounter):
+
+REMINDER_MINUTES=0 npx tsx server/scripts/stuckIntakeReminder.ts
+
+
+(Then undo the test encounter’s timestamp or just use a test patient.)
+
+If both send WhatsApp successfully, extraction is done.
+
+2) Pilot loop
+
+Now that your system is stable and auditable, the pilot loop is about measuring real behavior and tuning.
+
+A) Define the pilot metrics
+
+You already have everything needed:
+
+Routing quality
+
+Override rate
+
+count encounters where __routerAudit.routerPickedSystem === "STAFF_OVERRIDE" or routerReason === "staff_override"
+
+Low confidence share
+
+Top 20 snippets causing overrides
+
+Intake completion
+
+completion rate = submitted / link sent
+
+median time-to-submit
+
+ED warnings
+
+count ED-warning flow hits
+
+count ED warnings followed by completed intake (interesting)
+
+B) Add one more script: “completion metrics”
+
+Create: server/scripts/intakeCompletionScorecard.ts
+
+import { db } from "../firebase";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+function inc(m: Map<string, number>, k: string, by = 1) { m.set(k, (m.get(k) || 0) + by); }
+
+async function main() {
+  const DAYS = Number(process.env.SCORECARD_DAYS || 14);
+  const sinceMs = Date.now() - DAYS * 24 * 60 * 60 * 1000;
+
+  const snap = await db.collection("encounters")
+    .where("updatedAt", ">=", new Date(sinceMs))
+    .limit(5000)
+    .get();
+
+  let total = 0;
+  let hasLink = 0;
+  let submitted = 0;
+  let pendingReview = 0;
+
+  const byFlow = new Map<string, { hasLink: number; submitted: number }>();
+
+  for (const doc of snap.docs) {
+    total++;
+    const e: any = doc.data();
+    const flowId = norm(e.flowId) || "UNKNOWN";
+
+    const token = norm(e.intakeToken);
+    const code = norm(e.intakeCode);
+    const has = Boolean(token && code);
+    if (has) hasLink++;
+
+    const status = norm(e.status);
+    if (status === "pending_review") pendingReview++;
+    if (status === "pending_review") submitted++;
+
+    if (!byFlow.has(flowId)) byFlow.set(flowId, { hasLink: 0, submitted: 0 });
+    const row = byFlow.get(flowId)!;
+    if (has) row.hasLink++;
+    if (status === "pending_review") row.submitted++;
+  }
+
+  console.log(`\n=== INTAKE COMPLETION SCORECARD (last ${DAYS} days) ===`);
+  console.log(`Encounters scanned: ${total}`);
+  console.log(`Has link+code: ${hasLink}`);
+  console.log(`Submitted (pending_review): ${submitted}`);
+  console.log(`Completion rate (submitted / hasLink): ${(hasLink ? (submitted / hasLink) : 0).toFixed(3)}`);
+
+  console.log(`\nTop flows by submissions:`);
+  const flows = Array.from(byFlow.entries())
+    .sort((a, b) => b[1].submitted - a[1].submitted)
+    .slice(0, 15);
+
+  for (const [flow, s] of flows) {
+    const rate = s.hasLink ? (s.submitted / s.hasLink) : 0;
+    console.log(`  ${flow}: submitted=${s.submitted}, hasLink=${s.hasLink}, rate=${rate.toFixed(3)}`);
+  }
+
+  console.log("\nDone.");
+}
+
+main().catch(e => {
+  console.error("intakeCompletionScorecard failed:", e);
+  process.exit(1);
+});
+
+
+Run it:
+
+SCORECARD_DAYS=7 npx tsx server/scripts/intakeCompletionScorecard.ts
+
+C) Pilot runbook (simple)
+
+During the pilot week:
+
+Use WhatsApp intake normally
+
+Once per day (or every couple days), run:
+
+routerScorecard.ts
+
+intakeCompletionScorecard.ts
+
+Tune:
+
+keywords that misroute
+
+ED warning copy (if patients ignore it)
+
+menu wording (if too many choose “Other”)
+
+D) One safety tweak for reminders (recommended)
+
+Skip reminders for ED-warning flows:
+
+Add to reminder script:
+
+if flowId in {EMERG_CRITICAL_V1, TRAUMA_MAJOR_V1, UROGYN_TESTICULAR_PAIN_V1, UROGYN_VAGINAL_BLEEDING_V1, OPHTH_VISION_LOSS_V1, NEURO_WEAKNESS_V1} then do not send “finish form” reminder.

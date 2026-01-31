@@ -1,33 +1,18 @@
 import { db } from "../firebase";
 import { BASE_URL } from "../intake/intakeAuth";
-import twilio from "twilio";
+import { sendWhatsAppMessage } from "../whatsapp/send";
 
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
-const TWILIO_WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER || "";
-
-const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+const ED_WARNING_FLOWS = new Set([
+  "EMERG_CRITICAL_V1",
+  "TRAUMA_MAJOR_V1",
+  "UROGYN_TESTICULAR_PAIN_V1",
+  "UROGYN_VAGINAL_BLEEDING_V1",
+  "OPHTH_VISION_LOSS_V1",
+  "NEURO_WEAKNESS_V1",
+]);
 
 function norm(x: any) {
   return String(x ?? "").trim();
-}
-
-async function sendWhatsAppMessage(to: string, body: string): Promise<void> {
-  let formattedTo = to;
-  if (formattedTo.startsWith("whatsapp:")) {
-    formattedTo = formattedTo.replace("whatsapp:", "").trim();
-  }
-  if (!formattedTo.startsWith("+")) {
-    formattedTo = "+" + formattedTo;
-  }
-  formattedTo = "whatsapp:" + formattedTo;
-
-  console.log(`Sending reminder to: ${formattedTo}`);
-  await twilioClient.messages.create({
-    from: TWILIO_WHATSAPP_NUMBER,
-    to: formattedTo,
-    body: body,
-  });
 }
 
 async function main() {
@@ -40,8 +25,16 @@ async function main() {
     .get();
 
   let sent = 0;
+  let skippedEdWarning = 0;
+
   for (const doc of snap.docs) {
     const e = doc.data() as any;
+
+    const flowId = norm(e.flowId);
+    if (ED_WARNING_FLOWS.has(flowId)) {
+      skippedEdWarning++;
+      continue;
+    }
 
     const intakeToken = norm(e.intakeToken);
     const intakeCode = norm(e.intakeCode);
@@ -79,6 +72,9 @@ async function main() {
   }
 
   console.log(`Stuck intake reminders sent: ${sent}`);
+  if (skippedEdWarning > 0) {
+    console.log(`Skipped ED-warning flows: ${skippedEdWarning}`);
+  }
 }
 
 main().catch((e) => {
