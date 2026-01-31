@@ -241,10 +241,30 @@ export type RouterAuditInput = {
   routerTextSnippet: string;
 };
 
+const HIGH_RISK_FLOWIDS = new Set([
+  "EMERG_CRITICAL_V1",
+  "TRAUMA_MAJOR_V1",
+  "UROGYN_VAGINAL_BLEEDING_V1",
+  "UROGYN_TESTICULAR_PAIN_V1",
+  "OPHTH_VISION_LOSS_V1",
+  "NEURO_WEAKNESS_V1",
+]);
+
+function computeConfidence(audit: RouterAuditInput): "high" | "medium" | "low" {
+  if (audit.routerReason === "menu") return "high";
+  if (HIGH_RISK_FLOWIDS.has(audit.routerPickedFlowId)) return "high";
+  if (audit.routerReason === "keyword") return "medium";
+  if (audit.routerReason === "other_text") {
+    return (audit.routerTextSnippet?.length || 0) > 20 ? "medium" : "low";
+  }
+  return "medium";
+}
+
 // Sets both __routerAudit and __router alias on answers object
 export function setRouterAudit(answersObj: any, audit: RouterAuditInput): any {
   const a = answersObj || {};
   const ts = Date.now();
+  const confidence = computeConfidence(audit);
 
   // Canonical schema
   a.__routerAudit = {
@@ -252,6 +272,7 @@ export function setRouterAudit(answersObj: any, audit: RouterAuditInput): any {
     routerPickedFlowId: audit.routerPickedFlowId,
     routerPickedSystem: audit.routerPickedSystem || "",
     routerTextSnippet: audit.routerTextSnippet,
+    confidence,
     ts,
   };
 
@@ -261,6 +282,7 @@ export function setRouterAudit(answersObj: any, audit: RouterAuditInput): any {
     pickedFlowId: audit.routerPickedFlowId,
     pickedSystem: audit.routerPickedSystem || "",
     snippet: audit.routerTextSnippet,
+    confidence,
     ts,
   };
 

@@ -491,18 +491,24 @@ export async function registerRoutes(
             routerReason: ra.routerReason || "",
             routerPickedFlowId: ra.routerPickedFlowId || "",
             routerTextSnippet: ra.routerTextSnippet || "",
+            confidence: ra.confidence || "medium",
             timestamp: enc.createdAt,
           };
         })
       );
       
-      // Sort by redFlag desc, urgencyLevel urgent first, then newest first
+      // Confidence rank helper: low=0, medium=1, high=2 (low first for staff review)
+      const confRank = (c: string) => (c === "low" ? 0 : c === "medium" ? 1 : 2);
+      
+      // Sort by redFlag desc, urgencyLevel urgent first, low confidence first, then newest
       enhanced.sort((a, b) => {
         if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
         if (a.urgencyLevel !== b.urgencyLevel) {
           if (a.urgencyLevel === "urgent") return -1;
           if (b.urgencyLevel === "urgent") return 1;
         }
+        const confDiff = confRank(a.confidence) - confRank(b.confidence);
+        if (confDiff !== 0) return confDiff;
         return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
       });
       
@@ -544,18 +550,24 @@ export async function registerRoutes(
             routerReason: ra.routerReason || "",
             routerPickedFlowId: ra.routerPickedFlowId || "",
             routerTextSnippet: ra.routerTextSnippet || "",
+            confidence: ra.confidence || "medium",
             timestamp: enc.createdAt,
           };
         })
       );
       
-      // Sort by redFlag desc, urgencyLevel urgent first, then newest first
+      // Confidence rank helper: low=0, medium=1, high=2 (low first for staff review)
+      const confRank = (c: string) => (c === "low" ? 0 : c === "medium" ? 1 : 2);
+      
+      // Sort by redFlag desc, urgencyLevel urgent first, low confidence first, then newest
       enhanced.sort((a, b) => {
         if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
         if (a.urgencyLevel !== b.urgencyLevel) {
           if (a.urgencyLevel === "urgent") return -1;
           if (b.urgencyLevel === "urgent") return 1;
         }
+        const confDiff = confRank(a.confidence) - confRank(b.confidence);
+        if (confDiff !== 0) return confDiff;
         return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
       });
       
@@ -711,6 +723,94 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error requesting info:", error);
       res.status(500).json({ error: "Failed to request info" });
+    }
+  });
+
+  // === Physician Quick Actions ===
+  
+  // Resend intake link to patient
+  app.post("/api/review/:encounterId/resend-link", async (req: Request, res: Response) => {
+    try {
+      const encounterId = parseInt(req.params.encounterId);
+      const enc = await storage.getEncounter(encounterId);
+      if (!enc) return res.status(404).json({ ok: false, error: "Encounter not found" });
+
+      const patient = await storage.getPatient(enc.patientId);
+      const phone = patient?.phoneNumber;
+      if (!phone) return res.status(400).json({ ok: false, error: "Missing patient phone" });
+
+      const token = enc.intakeToken;
+      const code = enc.intakeCode;
+      const exp = enc.intakeExpiresAt ? Number(enc.intakeExpiresAt) : 0;
+
+      if (!token || !code || Date.now() > exp) {
+        return res.status(400).json({ ok: false, error: "No valid intake link/code to resend" });
+      }
+
+      const link = `${BASE_URL}/intake/${token}`;
+      await sendWhatsAppMessage(phone, `Resending your secure intake link:\n${link}\nCode: ${code}`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Error resending link:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Change encounter flow (staff override via dashboard)
+  app.post("/api/review/:encounterId/set-flow", async (req: Request, res: Response) => {
+    try {
+      const encounterId = parseInt(req.params.encounterId);
+      const { flowId } = req.body || {};
+      if (!flowId) return res.status(400).json({ ok: false, error: "Missing flowId" });
+
+      const qs = await getFlowQuestions(flowId);
+      if (!qs || qs.length === 0) return res.status(400).json({ ok: false, error: "Unknown flowId (no questions)" });
+
+      const enc = await storage.getEncounter(encounterId);
+      if (!enc) return res.status(404).json({ ok: false, error: "Encounter not found" });
+
+      let answersObj: any = {};
+      try { answersObj = enc.answers ? JSON.parse(enc.answers as string) : {}; } catch { answersObj = {}; }
+      setRouterAudit(answersObj, {
+        routerReason: "keyword",
+        routerPickedFlowId: flowId,
+        routerPickedSystem: "STAFF_OVERRIDE",
+        routerTextSnippet: `/api/review set-flow ${flowId}`.slice(0, 60),
+      });
+
+      await storage.updateEncounter(encounterId, { flowId, flowIndex: 0, answers: JSON.stringify(answersObj) } as any);
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Error setting flow:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Send clarification request to patient
+  app.post("/api/review/:encounterId/request-clarification", async (req: Request, res: Response) => {
+    try {
+      const encounterId = parseInt(req.params.encounterId);
+      const { message } = req.body || {};
+      if (!message) return res.status(400).json({ ok: false, error: "Missing message" });
+
+      const enc = await storage.getEncounter(encounterId);
+      if (!enc) return res.status(404).json({ ok: false, error: "Encounter not found" });
+
+      const patient = await storage.getPatient(enc.patientId);
+      const phone = patient?.phoneNumber;
+      if (!phone) return res.status(400).json({ ok: false, error: "Missing patient phone" });
+
+      await sendWhatsAppMessage(phone, message);
+      await storage.createMessage({
+        patientId: patient.id,
+        encounterId: encounterId,
+        direction: "outbound",
+        messageBody: message,
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Error requesting clarification:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
     }
   });
 
