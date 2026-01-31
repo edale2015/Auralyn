@@ -1,0 +1,153 @@
+Pilot Loop Runbook (7 days)
+Day 0 setup (once)
+1) Create a simple “pilot cohort”
+Use 2–5 test numbers (friends/family or your own alternate numbers) and do:
+
+
+1 menu-driven intake
+
+
+1 keyword-driven intake
+
+
+1 “Other → free text” intake
+
+
+1 link resend (link)
+
+
+1 menu reset (menu)
+
+
+1 ED-warning flow test (should skip reminder later)
+
+
+2) Decide the “default physician actions”
+When a case hits pending_review, pick one of:
+
+
+Approve and close
+
+
+Request clarification
+
+
+Switch flow
+
+
+ED recommended
+
+
+This ensures you’re evaluating the queue + actions too.
+
+Daily cadence (10 minutes)
+Run these two scripts once per day:
+A) Routing scorecard
+SCORECARD_DAYS=7 npx tsx server/scripts/routerScorecard.ts
+
+B) Intake completion
+SCORECARD_DAYS=7 npx tsx server/scripts/intakeCompletionScorecard.ts
+
+Record just 5 numbers somewhere (not in sheets necessarily, even a note is fine):
+
+
+Completion rate
+
+
+Top 5 flows by submissions
+
+
+Router reason distribution (menu/keyword/other)
+
+
+Overrides count + top override snippets
+
+
+Reminder sent count + ED-warning skips count
+
+
+
+What “good” looks like after a week
+You’ll know the front door is solid if:
+
+
+Completion rate: ≥ 0.60 initially is fine; ≥ 0.75 is great
+
+
+Overrides: < 10% of encounters needing staff flow changes
+
+
+Menu usage: high at first is fine; keyword should rise over time
+
+
+Other_text: should drop as synonyms improve
+
+
+ED-warning flows: rare, but handled appropriately (no reminders)
+
+
+
+How to improve based on metrics (simple tuning rules)
+If completion rate is low
+
+
+shorten the first WhatsApp message (reduce friction)
+
+
+add one reminder at 8–12 min (you did)
+
+
+make “LINK” and “CODE” more discoverable:
+
+
+include: “Reply LINK to resend” in the initial link message
+
+
+
+
+If “Other” is high
+
+
+add 5–10 more keywords for the most common “Other” snippets
+
+
+add one more menu option if needed (but don’t bloat it)
+
+
+If overrides are high for one flow
+
+
+add a new keyword route before generic matches
+
+
+bump confidence to low for that trigger so it floats up in queue
+
+
+
+The next upgrade after the pilot week (only if needed)
+If you see repeated patterns:
+1) Add “Top 20 unmatched keywords” logging
+When router falls back to default ENT flow, log snippet to a __routerAudit.fallback = true.
+Then scorecard can show “top fallbacks” = what to add next.
+2) Add “flow correctness feedback”
+In physician review, when staff changes flow, stamp:
+
+
+__routerAudit.correctedToFlowId
+
+
+__routerAudit.correctedBy
+
+
+__routerAudit.correctedAt
+That makes your routerScorecard show true misroutes, not just overrides.
+
+
+
+One quick question (optional, but helpful)
+In your initial link+code WhatsApp message, do you currently include the line:
+
+“Reply LINK to resend at any time”?
+
+If not, add it. That alone bumps completion.
+If you paste that message template (the one you send after selecting a flow), I’ll rewrite it to be shorter and higher conversion while keeping the tone professional.
