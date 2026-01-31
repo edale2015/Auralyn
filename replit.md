@@ -161,6 +161,13 @@ Expected: 14/14 tests passing (encounter creation, questionnaire, proposal, appr
 
 ## Recent Changes
 
+- 2026-01-31: High-risk routing and physician workflow enhancements
+  - High-risk phrase routing: pregnancy bleeding, testicular torsion, vision loss, thunderclap headache, stroke symptoms
+  - ED warnings auto-sent for high-risk flows: UROGYN vaginal bleeding, testicular pain, vision loss, neuro weakness
+  - Enhanced keyword synonyms: UTI (frequency/urgency), rash (welts), burns (scald/scalded)
+  - Staff-only /flow FLOW_ID command for manual override (gated by STAFF_WHATSAPP_NUMBERS env var)
+  - Physician queue enriched with routerReason, routerPickedFlowId, routerTextSnippet individual fields
+  - Priority sorting: redFlag → urgencyLevel → timestamp (newest first)
 - 2026-01-30: WhatsApp commands and router audit tracking
   - "Change my topic" command: menu/change/restart/switch/topic → resets menu selection
   - "Status" command: link/code/status/resend → resends intake link (reuses unexpired token or generates fresh)
