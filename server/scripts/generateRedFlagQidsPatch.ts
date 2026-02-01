@@ -12,9 +12,10 @@ async function main() {
   for (const spec of FLOW_SPECS) {
     if (!spec.redFlagYesQuestionIds.length) continue;
 
+    const compositeKey = `${spec.flowId}::RED_FLAG_QIDS`;
     rows.push([
       spec.flowId,
-      "RED_FLAG_QIDS",
+      compositeKey,
       spec.redFlagYesQuestionIds.join(","),
       "Y",
     ]);

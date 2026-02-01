@@ -15,7 +15,10 @@ export async function getRulesForFlow(flowId: string): Promise<Record<string, st
     const key = String(r.rule_key || "").trim();
     if (!key) continue;
 
-    out[key] = String(r.value ?? "").trim();
+    // First wins - prevent later duplicate rows from silently overriding
+    if (!(key in out)) {
+      out[key] = String(r.value ?? "").trim();
+    }
   }
 
   return out;

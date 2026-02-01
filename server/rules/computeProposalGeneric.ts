@@ -32,11 +32,13 @@ export async function computeProposalGeneric(
     console.warn(`[computeProposalGeneric] getRulesForFlow(${flowId}) failed:`, e);
   }
 
-  // Prefer sheet-based RED_FLAG_QIDS, fall back to code-based RED_FLAG_MAP
-  const sheetQids = (rules["RED_FLAG_QIDS"] || "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
+  // Prefer UPSERT-safe composite key, then plain RED_FLAG_QIDS (backwards compat), then code fallback
+  const compositeKey = `${flowId}::RED_FLAG_QIDS`;
+  const sheetQidsRaw = (rules[compositeKey] || rules["RED_FLAG_QIDS"] || "").trim();
+
+  const sheetQids = sheetQidsRaw
+    ? sheetQidsRaw.split(",").map(s => s.trim()).filter(Boolean)
+    : [];
 
   const redFlagQids = sheetQids.length ? sheetQids : (RED_FLAG_MAP[flowId] || []);
   const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");

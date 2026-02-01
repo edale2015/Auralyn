@@ -1,0 +1,97 @@
+1) Patch computeProposalGeneric to read composite key first
+
+In server/rules/computeProposalGeneric.ts (or wherever it now lives), update the red-flag-qids extraction block to:
+
+const rules = await getRulesForFlow(flowId);
+
+// Prefer UPSERT-safe composite key, then plain RED_FLAG_QIDS (backwards), then code fallback
+const compositeKey = `${flowId}::RED_FLAG_QIDS`;
+
+const sheetQidsRaw =
+  (rules[compositeKey] || rules["RED_FLAG_QIDS"] || "")
+    .trim();
+
+const sheetQids = sheetQidsRaw
+  ? sheetQidsRaw.split(",").map(s => s.trim()).filter(Boolean)
+  : [];
+
+const redFlagQids = sheetQids.length ? sheetQids : (RED_FLAG_MAP[flowId] || []);
+
+const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");
+
+
+✅ This keeps backward compatibility with any existing RED_FLAG_QIDS rows you already imported.
+
+2) Patch generateRedFlagQidsPatch.ts to output composite rule_key
+
+In server/scripts/generateRedFlagQidsPatch.ts, change the output row builder to set:
+
+rule_key = ${flowId}::RED_FLAG_QIDS
+
+Example patch logic:
+
+// generateRedFlagQidsPatch.ts (inside loop over FLOW_SPECS)
+const rule_key = `${spec.flowId}::RED_FLAG_QIDS`;
+const value = spec.redFlagYesQuestionIds.join(",");
+rows.push([spec.flowId, rule_key, value, "Y"]);
+
+
+And ensure your CSV header remains your existing rules schema, e.g.:
+
+flow_id,rule_key,value,active
+
+
+(If your file includes system/chief_complaint/module/value_type, keep them too, but not required if your loader only needs these columns.)
+
+3) Import safely using UPSERT by rule_key
+
+Now you can import the generated patch with:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES ./reports/CLINICAL_RULES_RED_FLAG_QIDS_PATCH.csv upsert rule_key
+
+
+Because rule_key is unique per flow, this will update instead of duplicate.
+
+4) Small improvement: make kvRuleLoader deterministic
+
+If you ever do end up with duplicates, you want a predictable rule resolution. Add a “first wins” or “last wins” comment and implement “first wins” by not overwriting.
+
+In server/rules/kvRuleLoader.ts, change:
+
+out[key] = String(r.value ?? "").trim();
+
+
+to:
+
+if (!(key in out)) out[key] = String(r.value ?? "").trim();
+
+
+This prevents later duplicate rows from silently overriding earlier ones. With UPSERT, you shouldn’t have duplicates anyway, but this keeps things robust.
+
+5) Optional: also convert dispositions to composite keys
+
+Same logic can make your other rule keys UPSERT-safe too:
+
+${flowId}::RED_FLAG_DISPOSITION
+
+${flowId}::NON_RED_FLAG_DISPOSITION
+
+${flowId}::TEST_PACK
+
+${flowId}::MED_PACK
+
+You don’t need this right now because your loader filters by flow_id so collisions are less likely, but it becomes very nice once you start mass patch generation.
+
+Quick sanity test after patch
+
+Generate patch CSV
+
+Import with UPSERT
+
+In Sheets, confirm one row per flow with composite key
+
+Run nightly tests
+
+Confirm computeProposal is picking the sheet-based red flags by temporarily changing one flow’s qids and seeing tests react
+
+If you paste your current generateRedFlagQidsPatch.ts
