@@ -1,10 +1,25 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { db } from "./db";
 import type { CaseRow } from "./types";
 
 export const summaryRouter = Router();
 
-summaryRouter.get("/api/provider/case/:caseId", (req: Request, res: Response) => {
+function requireProviderAuth(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers["x-provider-key"];
+  const providerKey = process.env.PROVIDER_API_KEY;
+  
+  if (!providerKey) {
+    return res.status(503).json({ ok: false, error: "Provider API not configured." });
+  }
+  
+  if (authHeader !== providerKey) {
+    return res.status(401).json({ ok: false, error: "Unauthorized. Invalid provider key." });
+  }
+  
+  next();
+}
+
+summaryRouter.get("/api/provider/case/:caseId", requireProviderAuth, (req: Request, res: Response) => {
   const caseId = req.params.caseId;
   const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId) as CaseRow | undefined;
   if (!row) return res.status(404).json({ ok: false });
@@ -19,7 +34,7 @@ summaryRouter.get("/api/provider/case/:caseId", (req: Request, res: Response) =>
   });
 });
 
-summaryRouter.get("/api/provider/cases", (req: Request, res: Response) => {
+summaryRouter.get("/api/provider/cases", requireProviderAuth, (req: Request, res: Response) => {
   const status = req.query.status as string | undefined;
   
   let query = `SELECT case_id, token, status, created_at, updated_at FROM cases`;

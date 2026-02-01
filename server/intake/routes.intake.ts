@@ -1,10 +1,13 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { db } from "./db";
 import type { DraftPayload, SubmitPayload, VerifyPayload, CaseStatus, CaseRow, IntakeSession } from "./types";
 import { renderSummaryHtml, saveSummaryHtml } from "./pdf";
 
 export const intakeRouter = Router();
+
+const SESSION_EXPIRY_MS = 30 * 60 * 1000;
+export const verifiedSessions = new Map<string, { expiresAt: number; caseId: string }>();
 
 function nowMs() { return Date.now(); }
 
@@ -14,6 +17,23 @@ function sha256(s: string) {
 
 function newId(prefix: string) {
   return `${prefix}_${new Date().toISOString().slice(0,10).replace(/-/g,"")}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function requireVerifiedSession(req: Request, res: Response, next: NextFunction) {
+  const token = req.params.token;
+  const sessionData = verifiedSessions.get(token);
+  
+  if (!sessionData) {
+    return res.status(401).json({ ok: false, error: "Session not verified. Please enter your code first." });
+  }
+  
+  if (sessionData.expiresAt < nowMs()) {
+    verifiedSessions.delete(token);
+    return res.status(401).json({ ok: false, error: "Session expired. Please verify again." });
+  }
+  
+  (req as any).verifiedCaseId = sessionData.caseId;
+  next();
 }
 
 function getOrCreateCase(token: string): CaseRow {
@@ -49,6 +69,11 @@ intakeRouter.post("/api/intake/:token/verify", (req: Request, res: Response) => 
 
   const c = getOrCreateCase(token);
 
+  verifiedSessions.set(token, {
+    expiresAt: nowMs() + SESSION_EXPIRY_MS,
+    caseId: c.case_id
+  });
+
   let savedDraft: Record<string, any> | null = null;
   try {
     const parsed = JSON.parse(c.draft_json || "{}");
@@ -65,7 +90,7 @@ intakeRouter.post("/api/intake/:token/verify", (req: Request, res: Response) => 
   });
 });
 
-intakeRouter.post("/api/intake/:token/save_draft", (req: Request, res: Response) => {
+intakeRouter.post("/api/intake/:token/save_draft", requireVerifiedSession, (req: Request, res: Response) => {
   const token = req.params.token;
   const body = req.body as DraftPayload;
 
@@ -84,7 +109,7 @@ intakeRouter.post("/api/intake/:token/save_draft", (req: Request, res: Response)
   return res.json({ ok: true });
 });
 
-intakeRouter.post("/api/intake/:token/submit", (req: Request, res: Response) => {
+intakeRouter.post("/api/intake/:token/submit", requireVerifiedSession, (req: Request, res: Response) => {
   const token = req.params.token;
   const body = req.body as SubmitPayload;
 
@@ -108,11 +133,13 @@ intakeRouter.post("/api/intake/:token/submit", (req: Request, res: Response) => 
   `).run(JSON.stringify(body), JSON.stringify(assistant), "submitted", ts, c.case_id);
 
   db.prepare(`UPDATE intake_sessions SET used_at = ? WHERE token = ?`).run(ts, token);
+  
+  verifiedSessions.delete(token);
 
   return res.json({ ok: true, caseId: c.case_id });
 });
 
-intakeRouter.get("/api/intake/:token/status", (req: Request, res: Response) => {
+intakeRouter.get("/api/intake/:token/status", requireVerifiedSession, (req: Request, res: Response) => {
   const token = req.params.token;
   const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token) as CaseRow | undefined;
   if (!row) return res.status(404).json({ ok: false, error: "Not found." });
@@ -126,7 +153,7 @@ intakeRouter.get("/api/intake/:token/status", (req: Request, res: Response) => {
   });
 });
 
-intakeRouter.get("/api/intake/:token/summary", (req: Request, res: Response) => {
+intakeRouter.get("/api/intake/:token/summary", requireVerifiedSession, (req: Request, res: Response) => {
   const token = req.params.token;
   const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token) as CaseRow | undefined;
   if (!row) return res.status(404).send("Not found.");
