@@ -243,10 +243,11 @@ export function buildRouterAudit(
 }
 
 export type RouterAuditInput = {
-  routerReason: "menu" | "keyword" | "other_text";
+  routerReason: "menu" | "keyword" | "other_text" | "staff_override";
   routerPickedFlowId: string;
   routerPickedSystem?: string;
   routerTextSnippet: string;
+  confidence?: "high" | "medium" | "low";
 };
 
 const HIGH_RISK_FLOWIDS = new Set([
@@ -268,30 +269,42 @@ function computeConfidence(audit: RouterAuditInput): "high" | "medium" | "low" {
   return "medium";
 }
 
-// Sets both __routerAudit and __router alias on answers object
+// Sets __routerAudit, __router alias, and appends to __routerAuditHistory
 export function setRouterAudit(answersObj: any, audit: RouterAuditInput): any {
   const a = answersObj || {};
   const ts = Date.now();
-  const confidence = computeConfidence(audit);
 
-  // Canonical schema
-  a.__routerAudit = {
+  const routerPickedSystem = audit.routerPickedSystem || "";
+  const confidence = audit.confidence || computeConfidence(audit);
+
+  const entry = {
     routerReason: audit.routerReason,
     routerPickedFlowId: audit.routerPickedFlowId,
-    routerPickedSystem: audit.routerPickedSystem || "",
+    routerPickedSystem,
     routerTextSnippet: audit.routerTextSnippet,
     confidence,
     ts,
   };
 
-  // Compatibility alias
+  // 1) Append to history (bounded)
+  const hist: any[] = Array.isArray(a.__routerAuditHistory) ? a.__routerAuditHistory : [];
+  hist.push(entry);
+
+  // Keep only last N events
+  const MAX = Number(process.env.ROUTER_AUDIT_HISTORY_MAX || 20);
+  a.__routerAuditHistory = hist.slice(Math.max(0, hist.length - MAX));
+
+  // 2) Keep latest snapshot (canonical schema)
+  a.__routerAudit = entry;
+
+  // 3) Compatibility alias (short schema)
   a.__router = {
-    source: audit.routerReason,
-    pickedFlowId: audit.routerPickedFlowId,
-    pickedSystem: audit.routerPickedSystem || "",
-    snippet: audit.routerTextSnippet,
-    confidence,
-    ts,
+    source: entry.routerReason,
+    pickedFlowId: entry.routerPickedFlowId,
+    pickedSystem: entry.routerPickedSystem,
+    snippet: entry.routerTextSnippet,
+    confidence: entry.confidence,
+    ts: entry.ts,
   };
 
   return a;

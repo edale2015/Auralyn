@@ -1,0 +1,104 @@
+Patch: update setRouterAudit helper
+
+In your helper (where you currently set both __routerAudit and __router), replace/extend it with this logic:
+
+// In whatever file your helper lives (e.g., server/flows/whatsappFlowRouter.ts)
+
+export type RouterAuditInput = {
+  routerReason: "menu" | "keyword" | "other_text" | "staff_override";
+  routerPickedFlowId: string;
+  routerPickedSystem?: string;
+  routerTextSnippet: string;
+  confidence?: "high" | "medium" | "low";
+};
+
+export function setRouterAudit(answersObj: any, audit: RouterAuditInput) {
+  const a = answersObj || {};
+  const ts = Date.now();
+
+  const routerPickedSystem = audit.routerPickedSystem || "";
+  const confidence = audit.confidence || a.__routerAudit?.confidence || "medium";
+
+  const entry = {
+    routerReason: audit.routerReason,
+    routerPickedFlowId: audit.routerPickedFlowId,
+    routerPickedSystem,
+    routerTextSnippet: audit.routerTextSnippet,
+    confidence,
+    ts,
+  };
+
+  // 1) Append to history (bounded)
+  const hist: any[] = Array.isArray(a.__routerAuditHistory) ? a.__routerAuditHistory : [];
+  hist.push(entry);
+
+  // Keep only last 20 events
+  const MAX = Number(process.env.ROUTER_AUDIT_HISTORY_MAX || 20);
+  a.__routerAuditHistory = hist.slice(Math.max(0, hist.length - MAX));
+
+  // 2) Keep latest snapshot (your canonical schema)
+  a.__routerAudit = entry;
+
+  // 3) Compatibility alias (short schema)
+  a.__router = {
+    source: entry.routerReason,
+    pickedFlowId: entry.routerPickedFlowId,
+    pickedSystem: entry.routerPickedSystem,
+    snippet: entry.routerTextSnippet,
+    confidence: entry.confidence,
+    ts: entry.ts,
+  };
+
+  return a;
+}
+
+What changes in behavior?
+
+Nothing user-visible.
+
+Your existing analytics using __routerAudit still work.
+
+You now also have __routerAuditHistory for more powerful analytics.
+
+Patch: ensure staff overrides use routerReason="staff_override"
+
+You already set something like routerPickedSystem: "STAFF_OVERRIDE".
+
+Update staff override calls to:
+
+setRouterAudit(answersObj, {
+  routerReason: "staff_override",
+  routerPickedFlowId: flowId,
+  routerPickedSystem: "STAFF_OVERRIDE",
+  routerTextSnippet: msg.slice(0, 60),
+  confidence: "high",
+});
+
+
+This makes overrides unambiguous.
+
+Optional: update router scorecard to use history
+
+Right now, overrides might be “lost” if later routing overwrites the latest audit.
+
+In routerScorecard.ts, if history exists, count overrides from history:
+
+const hist = Array.isArray(answersObj.__routerAuditHistory) ? answersObj.__routerAuditHistory : [];
+for (const h of hist) {
+  if (String(h.routerReason) === "staff_override") {
+    inc(overrideFlowCounts, String(h.routerPickedFlowId));
+    const snip = String(h.routerTextSnippet || "").trim();
+    if (snip) inc(overrideSnippets, snip);
+  }
+}
+
+
+This makes override analytics correct even if multiple events happen.
+
+Quick test (1 minute)
+
+Patient says “hi” → menu selection → check encounter answers.__routerAuditHistory.length == 1
+
+Staff uses /flow SOME_FLOW → history length increments to 2 and latest reason is staff_override
+
+Patient then says “rash” → history length increments again, latest reason is keyword

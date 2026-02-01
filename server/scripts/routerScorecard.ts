@@ -70,8 +70,24 @@ async function main() {
     const conf = norm(ra.confidence);
     if (conf) inc(confidenceCounts, conf);
 
+    // Check history for all staff overrides (overrides can be overwritten by later routing)
+    const hist = Array.isArray(answersObj.__routerAuditHistory) ? answersObj.__routerAuditHistory : [];
+    for (const h of hist) {
+      const hReason = String(h?.routerReason || "");
+      const hSystem = String(h?.routerPickedSystem || "");
+      if (hReason === "staff_override" || hSystem === "STAFF_OVERRIDE") {
+        const pickedFlow = norm(h.routerPickedFlowId);
+        if (pickedFlow) inc(overrideFlowCounts, pickedFlow);
+
+        const snip = norm(h.routerTextSnippet);
+        if (snip) inc(overrideSnippets, snip);
+      }
+    }
+
+    // Fallback: also check latest audit for backwards compatibility
     const pickedSystem = norm(ra.routerPickedSystem);
-    if (pickedSystem === "STAFF_OVERRIDE") {
+    const latestReason = norm(ra.routerReason);
+    if ((pickedSystem === "STAFF_OVERRIDE" || latestReason === "staff_override") && !hist.length) {
       const pickedFlow = norm(ra.routerPickedFlowId);
       if (pickedFlow) inc(overrideFlowCounts, pickedFlow);
 
