@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 
 function run(cmd: string, args: string[], env: Record<string,string>) {
   return new Promise<void>((resolve, reject) => {
@@ -20,6 +21,20 @@ function hasNonEmptyCsv(csvPath: string): boolean {
   // If file only contains header row, it has no proposals
   const lines = txt.split(/\r?\n/).filter(Boolean);
   return lines.length > 1;
+}
+
+function hashFile(filePath: string): string {
+  const buf = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
+function readLastHash(hashPath: string): string | null {
+  if (!fs.existsSync(hashPath)) return null;
+  return fs.readFileSync(hashPath, "utf8").trim() || null;
+}
+
+function writeLastHash(hashPath: string, hash: string) {
+  fs.writeFileSync(hashPath, hash, "utf8");
 }
 
 async function main() {
@@ -54,12 +69,14 @@ async function main() {
   // 6) Digest
   await run("npx", ["tsx", "server/scripts/generateDailyDigest.ts"], env);
 
-  // 7) Auto-promote patches to STAGING (optional, safe)
+  // 7) Auto-promote patches to STAGING (optional, safe, hash-guarded)
   const autoPromote = (process.env.AUTO_PROMOTE_TO_STAGING || "").trim() === "1";
   const stagingId = process.env.SHEETS_SPREADSHEET_ID_STAGING || "";
 
   const patchCsv = path.join(OUT, "CLINICAL_RULES_PATCH_PROPOSED.csv");
   const patchExists = hasNonEmptyCsv(patchCsv);
+
+  const hashPath = path.join(OUT, ".last_patch_hash");
 
   if (!autoPromote) {
     console.log("=== Auto-promote to STAGING skipped (AUTO_PROMOTE_TO_STAGING != 1) ===");
@@ -68,9 +85,17 @@ async function main() {
   } else if (!patchExists) {
     console.log(`=== Auto-promote to STAGING skipped (no proposed rule patches at ${patchCsv}) ===`);
   } else {
-    console.log("=== Auto-promote to STAGING starting ===");
-    await run("npx", ["tsx", "server/scripts/promoteRulePatchesToStaging.ts"], env);
-    console.log("=== Auto-promote to STAGING finished ===");
+    const currentHash = hashFile(patchCsv);
+    const lastHash = readLastHash(hashPath);
+
+    if (lastHash && lastHash === currentHash) {
+      console.log("=== Auto-promote to STAGING skipped (patch unchanged since last run) ===");
+    } else {
+      console.log("=== Auto-promote to STAGING starting (new patch detected) ===");
+      await run("npx", ["tsx", "server/scripts/promoteRulePatchesToStaging.ts"], env);
+      writeLastHash(hashPath, currentHash);
+      console.log("=== Auto-promote to STAGING finished; hash updated ===");
+    }
   }
 
   console.log("=== Nightly Pipeline complete ===");
