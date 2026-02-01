@@ -140,19 +140,40 @@ Outputs:
 - Default: `./reports/`
 - Configurable: `REPORT_OUTPUT_DIR` env var
 
-## SQLite Intake System
+## Intake Storage Abstraction
 
 ### Architecture
+The intake system uses a storage abstraction layer that supports both SQLite and Firestore backends.
+
+Located in `server/intakeStorage/`:
+- `index.ts` - Driver selector (based on STORAGE_DRIVER env var)
+- `store.ts` - StorageDriver interface definition
+- `types.ts` - Shared types for storage operations
+- `crypto.ts` - Hash and ID generation utilities
+- `sqliteStore.ts` - SQLite implementation
+- `firestoreStore.ts` - Firestore implementation
+
+### Environment Variables
+```
+STORAGE_DRIVER=sqlite   # or "firestore"
+
+# SQLite (default)
+DB_PATH=./data.sqlite
+
+# Firestore
+FIREBASE_PROJECT_ID=your-project-id
+GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
+```
+
+### Routes (Storage-Agnostic)
 Located in `server/intake/`:
-- `db.ts` - SQLite database with better-sqlite3
-- `types.ts` - TypeScript types for cases, sessions, files
-- `storage.ts` - File upload directory management
-- `pdf.ts` - HTML summary rendering
 - `routes.intake.ts` - Verify, save_draft, submit, status, summary endpoints
 - `routes.files.ts` - File upload/download endpoints
 - `routes.summary.ts` - Provider case view endpoints
+- `storage.ts` - File upload directory management
+- `pdf.ts` - HTML summary rendering
 
-### Database Tables (SQLite)
+### Database Tables
 - `intake_sessions` - Token-based session management with code verification
 - `cases` - Case workflow (draft → submitted → in_review → signed → closed)
 - `files` - Uploaded file metadata
@@ -185,3 +206,5 @@ Create test token: `npx tsx server/scripts/createTestToken.ts [token] [code] [ex
 - Added database-persisted session verification (verified_at, session_expires_at)
 - Added provider authentication (PROVIDER_API_KEY env var required for /api/admin/* endpoints)
 - Added automatic DB migrations for existing deployments
+- Implemented storage abstraction layer (server/intakeStorage/) supporting SQLite and Firestore
+- Refactored intake routes to be storage-driver agnostic (STORAGE_DRIVER env var switches drivers)
