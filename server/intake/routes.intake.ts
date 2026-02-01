@@ -5,7 +5,18 @@ import type { DraftPayload, SubmitPayload } from "../intakeStorage/types";
 export const intakeRouter = Router();
 
 intakeRouter.get("/api/intake/_driver", (_req: Request, res: Response) => {
-  res.json({ driver: getActiveDriver() });
+  const driver = getActiveDriver();
+  const response: Record<string, any> = {
+    ok: true,
+    driver,
+    uploadsMode: "local_disk"
+  };
+  
+  if (driver === "firestore") {
+    response.firestoreProjectId = process.env.FIREBASE_PROJECT_ID || null;
+  }
+  
+  res.json(response);
 });
 const store = getStore();
 
