@@ -1,0 +1,1170 @@
+0) File tree to create
+project/
+  server/
+    app.ts
+    db.ts
+    storage.ts
+    pdf.ts
+    routes.intake.ts
+    routes.files.ts
+    routes.summary.ts
+    types.ts
+  web/
+    index.html
+    vite.config.ts
+    src/
+      main.tsx
+      api.ts
+      router.tsx
+      styles.css
+      pages/
+        Home.tsx
+        Intake.tsx
+        Status.tsx
+        Summary.tsx
+      components/
+        VerifyCard.tsx
+        SymptomGrid.tsx
+        UploadPanel.tsx
+        ConsentPanel.tsx
+        ReviewSubmit.tsx
+  package.json
+  tsconfig.json
+  .env.example
+
+1) Server code (Node/Express + SQLite + file upload)
+server/db.ts
+import Database from "better-sqlite3";
+import path from "path";
+
+const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
+export const db = new Database(DB_PATH);
+
+export function initDb() {
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+
+    CREATE TABLE IF NOT EXISTS intake_sessions (
+      token TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS cases (
+      case_id TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      current_step INTEGER DEFAULT 0,
+      draft_json TEXT DEFAULT '{}',
+      intake_json TEXT DEFAULT '{}',
+      assistant_json TEXT DEFAULT '{}',
+      summary_html TEXT,
+      summary_pdf_path TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS files (
+      file_id TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cases_token ON cases(token);
+    CREATE INDEX IF NOT EXISTS idx_files_token ON files(token);
+  `);
+}
+
+server/types.ts
+export type CaseStatus = "draft" | "submitted" | "in_review" | "signed" | "closed";
+
+export type DraftPayload = {
+  currentStep: number;
+  draft: Record<string, any>;
+};
+
+export type VerifyPayload = {
+  code: string;
+  dob?: string; // optional
+};
+
+export type SubmitPayload = {
+  chiefComplaint: string;
+  freeText?: string;
+  symptoms: Record<string, "yes" | "no" | "ns">;
+  modifiers?: Record<string, any>;
+  meds?: any[];
+  allergies?: any[];
+  pmh?: any;
+  pharmacy?: any;
+  attachments?: string[]; // file_ids
+  consent: {
+    telehealth: boolean;
+    privacy: boolean;
+    signatureName: string;
+    signedAt: string;
+  };
+};
+
+server/storage.ts
+import fs from "fs";
+import path from "path";
+
+export const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+
+export function ensureDirs() {
+  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+export function safeJoinUpload(fileId: string, ext: string) {
+  return path.join(UPLOAD_DIR, `${fileId}${ext}`);
+}
+
+server/pdf.ts
+import fs from "fs";
+import path from "path";
+
+// Minimal placeholder.
+// Later you can replace with reportlab/weasyprint equivalent in Python,
+// or Node html-pdf. For now we store HTML; PDF path can be generated later.
+export function renderSummaryHtml(caseId: string, intake: any, assistant: any) {
+  const cc = intake?.chiefComplaint || "Visit";
+  const redFlags: string[] = assistant?.redFlags || [];
+  const triage = assistant?.triageLevel || "Routine";
+
+  return `
+  <html>
+    <head>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <title>Visit Summary</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 16px; }
+        .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+        h1 { margin: 0 0 8px 0; font-size: 20px; }
+        h2 { margin: 0 0 8px 0; font-size: 16px; }
+        .muted { color: #555; }
+        ul { margin: 8px 0 0 20px; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Visit Summary</h1>
+        <div class="muted">Case ID: ${caseId}</div>
+      </div>
+
+      <div class="card">
+        <h2>Chief complaint</h2>
+        <div>${escapeHtml(cc)}</div>
+      </div>
+
+      <div class="card">
+        <h2>Triage</h2>
+        <div>${escapeHtml(triage)}</div>
+        ${redFlags.length ? `<div class="muted">Red flags:</div><ul>${redFlags.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">No red flags recorded.</div>`}
+      </div>
+
+      <div class="card">
+        <h2>Next steps</h2>
+        <div class="muted">This summary becomes available after provider sign-off.</div>
+      </div>
+    </body>
+  </html>
+  `;
+}
+
+function escapeHtml(s: string) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+export function saveSummaryHtml(caseId: string, html: string) {
+  const dir = process.env.SUMMARY_DIR || path.join(process.cwd(), "summaries");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, `${caseId}.html`);
+  fs.writeFileSync(p, html, "utf8");
+  return p;
+}
+
+server/routes.intake.ts
+import { Router } from "express";
+import crypto from "crypto";
+import { db } from "./db";
+import type { DraftPayload, SubmitPayload, VerifyPayload, CaseStatus } from "./types";
+import { renderSummaryHtml, saveSummaryHtml } from "./pdf";
+
+export const intakeRouter = Router();
+
+function nowMs() { return Date.now(); }
+
+function sha256(s: string) {
+  return crypto.createHash("sha256").update(s).digest("hex");
+}
+
+function newId(prefix: string) {
+  return `${prefix}_${new Date().toISOString().slice(0,10).replaceAll("-","")}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function getOrCreateCase(token: string) {
+  const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+  if (row) return row;
+
+  const caseId = newId("CASE");
+  const ts = nowMs();
+  db.prepare(`
+    INSERT INTO cases (case_id, token, status, created_at, updated_at, current_step, draft_json, intake_json, assistant_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(caseId, token, "draft", ts, ts, 0, "{}", "{}", "{}");
+
+  return db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId);
+}
+
+// 1) VERIFY
+intakeRouter.post("/api/intake/:token/verify", (req, res) => {
+  const token = req.params.token;
+  const body = req.body as VerifyPayload;
+
+  if (!body?.code || String(body.code).trim().length < 4) {
+    return res.status(400).json({ ok: false, error: "Missing code." });
+  }
+
+  const session = db.prepare(`SELECT * FROM intake_sessions WHERE token = ?`).get(token);
+  if (!session) return res.status(404).json({ ok: false, error: "Invalid link." });
+
+  if (session.used_at) return res.status(410).json({ ok: false, error: "This link has already been used." });
+  if (Number(session.expires_at) < nowMs()) return res.status(410).json({ ok: false, error: "This link has expired." });
+
+  const codeHash = sha256(String(body.code).trim());
+  if (codeHash !== session.code_hash) return res.status(401).json({ ok: false, error: "Incorrect code." });
+
+  // Create a case if none exists
+  const c = getOrCreateCase(token);
+
+  return res.json({
+    ok: true,
+    caseId: c.case_id,
+    status: c.status,
+    currentStep: c.current_step,
+    // flowId can be added here when you plug in your Google Sheets flow system
+    flowId: "DEFAULT_FLOW"
+  });
+});
+
+// 2) SAVE DRAFT
+intakeRouter.post("/api/intake/:token/save_draft", (req, res) => {
+  const token = req.params.token;
+  const body = req.body as DraftPayload;
+
+  const c = getOrCreateCase(token);
+  const ts = nowMs();
+
+  const mergedDraft = safeMergeJson(c.draft_json, body?.draft || {});
+  const step = Number.isFinite(body?.currentStep) ? body.currentStep : c.current_step;
+
+  db.prepare(`
+    UPDATE cases
+    SET draft_json = ?, current_step = ?, updated_at = ?, status = ?
+    WHERE case_id = ?
+  `).run(JSON.stringify(mergedDraft), step, ts, "draft", c.case_id);
+
+  return res.json({ ok: true });
+});
+
+// 3) SUBMIT
+intakeRouter.post("/api/intake/:token/submit", (req, res) => {
+  const token = req.params.token;
+  const body = req.body as SubmitPayload;
+
+  if (!body?.consent?.telehealth || !body?.consent?.privacy || !body?.consent?.signatureName) {
+    return res.status(400).json({ ok: false, error: "Consent is required." });
+  }
+
+  const c = getOrCreateCase(token);
+  const ts = nowMs();
+
+  // Here you would run your triage/assistant pipeline.
+  // Minimal placeholder:
+  const assistant = {
+    triageLevel: computeTriage(body),
+    redFlags: computeRedFlags(body),
+    draftNote: `HPI: ${body.chiefComplaint}\n\nPatient-reported symptoms recorded via portal.`
+  };
+
+  db.prepare(`
+    UPDATE cases
+    SET intake_json = ?, assistant_json = ?, status = ?, updated_at = ?
+    WHERE case_id = ?
+  `).run(JSON.stringify(body), JSON.stringify(assistant), "submitted", ts, c.case_id);
+
+  // Mark session used (optional now; you might prefer "used on signed")
+  db.prepare(`UPDATE intake_sessions SET used_at = ? WHERE token = ?`).run(ts, token);
+
+  return res.json({ ok: true, caseId: c.case_id });
+});
+
+// 4) STATUS
+intakeRouter.get("/api/intake/:token/status", (req, res) => {
+  const token = req.params.token;
+  const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+  if (!row) return res.status(404).json({ ok: false, error: "Not found." });
+
+  return res.json({
+    ok: true,
+    caseId: row.case_id,
+    status: row.status,
+    updatedAt: row.updated_at,
+    nextActionText: statusText(row.status as CaseStatus)
+  });
+});
+
+// 5) SUMMARY (only when signed)
+intakeRouter.get("/api/intake/:token/summary", (req, res) => {
+  const token = req.params.token;
+  const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+  if (!row) return res.status(404).send("Not found.");
+
+  if (row.status !== "signed") return res.status(403).send("Summary not available yet.");
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(row.summary_html || "<html><body>No summary.</body></html>");
+});
+
+// ADMIN helper to mark signed (temporary for testing)
+// POST /api/admin/case/:caseId/sign
+intakeRouter.post("/api/admin/case/:caseId/sign", (req, res) => {
+  const caseId = req.params.caseId;
+  const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId);
+  if (!row) return res.status(404).json({ ok: false });
+
+  const intake = JSON.parse(row.intake_json || "{}");
+  const assistant = JSON.parse(row.assistant_json || "{}");
+
+  const html = renderSummaryHtml(caseId, intake, assistant);
+  const htmlPath = saveSummaryHtml(caseId, html);
+
+  db.prepare(`
+    UPDATE cases
+    SET status = ?, summary_html = ?, updated_at = ?
+    WHERE case_id = ?
+  `).run("signed", html, Date.now(), caseId);
+
+  return res.json({ ok: true, htmlPath });
+});
+
+function safeMergeJson(existingJson: string, incoming: Record<string, any>) {
+  let existing: any = {};
+  try { existing = JSON.parse(existingJson || "{}"); } catch {}
+  return { ...existing, ...incoming };
+}
+
+function statusText(s: CaseStatus) {
+  if (s === "draft") return "Continue your intake.";
+  if (s === "submitted") return "Submitted. Provider review pending.";
+  if (s === "in_review") return "In review.";
+  if (s === "signed") return "Complete. Summary available.";
+  if (s === "closed") return "Closed.";
+  return "Unknown.";
+}
+
+function computeRedFlags(body: SubmitPayload): string[] {
+  const flags: string[] = [];
+  const s = body.symptoms || {};
+  if (s["chest_pain"] === "yes") flags.push("Chest pain");
+  if (s["shortness_of_breath"] === "yes") flags.push("Shortness of breath");
+  if (s["confusion"] === "yes") flags.push("Confusion");
+  return flags;
+}
+
+function computeTriage(body: SubmitPayload): string {
+  const flags = computeRedFlags(body);
+  if (flags.length) return "Urgent screen: needs clinician review now";
+  return "Routine";
+}
+
+server/routes.files.ts
+import { Router } from "express";
+import multer from "multer";
+import path from "path";
+import crypto from "crypto";
+import { db } from "./db";
+import { UPLOAD_DIR } from "./storage";
+import fs from "fs";
+
+export const filesRouter = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 } // 8MB
+});
+
+function newFileId() {
+  return `FILE_${crypto.randomBytes(10).toString("hex")}`;
+}
+
+filesRouter.post("/api/intake/:token/upload", upload.single("file"), (req, res) => {
+  const token = req.params.token;
+  const file = req.file;
+  if (!file) return res.status(400).json({ ok: false, error: "No file." });
+
+  const fileId = newFileId();
+  const ext = safeExt(file.mimetype, file.originalname);
+  const storagePath = path.join(UPLOAD_DIR, `${fileId}${ext}`);
+
+  fs.writeFileSync(storagePath, file.buffer);
+
+  db.prepare(`
+    INSERT INTO files (file_id, token, original_name, mime_type, storage_path, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(fileId, token, file.originalname, file.mimetype, storagePath, Date.now());
+
+  return res.json({ ok: true, fileId, mimeType: file.mimetype, name: file.originalname });
+});
+
+filesRouter.get("/api/file/:fileId", (req, res) => {
+  const fileId = req.params.fileId;
+  const row = db.prepare(`SELECT * FROM files WHERE file_id = ?`).get(fileId);
+  if (!row) return res.status(404).send("Not found");
+
+  res.setHeader("Content-Type", row.mime_type);
+  return res.sendFile(row.storage_path);
+});
+
+function safeExt(mime: string, name: string) {
+  const byName = path.extname(name || "").slice(0, 10);
+  if (byName) return byName;
+  if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/png") return ".png";
+  if (mime === "application/pdf") return ".pdf";
+  return "";
+}
+
+server/routes.summary.ts
+import { Router } from "express";
+import { db } from "./db";
+
+export const summaryRouter = Router();
+
+// Optional: provider endpoint to get case details for review
+summaryRouter.get("/api/provider/case/:caseId", (req, res) => {
+  const caseId = req.params.caseId;
+  const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId);
+  if (!row) return res.status(404).json({ ok: false });
+
+  return res.json({
+    ok: true,
+    caseId: row.case_id,
+    status: row.status,
+    intake: JSON.parse(row.intake_json || "{}"),
+    assistant: JSON.parse(row.assistant_json || "{}"),
+    updatedAt: row.updated_at
+  });
+});
+
+server/app.ts
+import express from "express";
+import cors from "cors";
+import morgan from "morgan";
+import { initDb } from "./db";
+import { ensureDirs } from "./storage";
+import { intakeRouter } from "./routes.intake";
+import { filesRouter } from "./routes.files";
+import { summaryRouter } from "./routes.summary";
+
+const app = express();
+
+initDb();
+ensureDirs();
+
+app.use(cors());
+app.use(express.json({ limit: "2mb" }));
+app.use(morgan("dev"));
+
+app.use(intakeRouter);
+app.use(filesRouter);
+app.use(summaryRouter);
+
+app.get("/health", (_, res) => res.json({ ok: true }));
+
+const port = Number(process.env.PORT || 3001);
+app.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
+});
+
+2) Web app (React/Vite)
+web/src/api.ts
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001";
+
+export async function postJson<T>(path: string, body: any): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data as T;
+}
+
+export async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data as T;
+}
+
+export async function uploadFile(token: string, file: File) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${API_BASE}/api/intake/${token}/upload`, { method: "POST", body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`);
+  return data as { ok: true; fileId: string; name: string; mimeType: string };
+}
+
+web/src/router.tsx
+import { createBrowserRouter } from "react-router-dom";
+import Home from "./pages/Home";
+import Intake from "./pages/Intake";
+import Status from "./pages/Status";
+import Summary from "./pages/Summary";
+
+export const router = createBrowserRouter([
+  { path: "/", element: <Home /> },
+  { path: "/intake/:token", element: <Intake /> },
+  { path: "/intake/:token/status", element: <Status /> },
+  { path: "/intake/:token/summary", element: <Summary /> }
+]);
+
+web/src/main.tsx
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { RouterProvider } from "react-router-dom";
+import { router } from "./router";
+import "./styles.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <RouterProvider router={router} />
+  </React.StrictMode>
+);
+
+web/src/pages/Home.tsx
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+export default function Home() {
+  const nav = useNavigate();
+  const [token, setToken] = useState("");
+
+  return (
+    <div className="container">
+      <div className="card">
+        <h1>Patient Check-in</h1>
+        <p className="muted">
+          If you received a link by WhatsApp, open it directly. If you have a token, paste it below.
+        </p>
+
+        <div className="row">
+          <input
+            value={token}
+            onChange={(e) => setToken(e.target.value.trim())}
+            placeholder="Paste intake token"
+          />
+          <button onClick={() => token && nav(`/intake/${token}`)}>Continue</button>
+        </div>
+
+        <div className="divider" />
+
+        <p className="muted small">
+          Privacy note: this portal is intended for secure intake and visit summaries.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+web/src/components/VerifyCard.tsx
+import { useState } from "react";
+import { postJson } from "../api";
+
+export default function VerifyCard({ token, onVerified }: { token: string; onVerified: (caseId: string) => void }) {
+  const [code, setCode] = useState("");
+  const [dob, setDob] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function verify() {
+    setErr(null);
+    setBusy(true);
+    try {
+      const data = await postJson<{ ok: true; caseId: string }>(`/api/intake/${token}/verify`, { code, dob: dob || undefined });
+      onVerified(data.caseId);
+    } catch (e: any) {
+      setErr(e?.message || "Verification failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Verify your secure link</h2>
+      <p className="muted">Enter the 6-digit code you received.</p>
+
+      <div className="row">
+        <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="6-digit code" />
+        <button disabled={busy || code.length < 4} onClick={verify}>{busy ? "Checking..." : "Verify"}</button>
+      </div>
+
+      <div className="row">
+        <input value={dob} onChange={(e) => setDob(e.target.value)} placeholder="DOB (optional) e.g. 1980-01-31" />
+      </div>
+
+      {err && <div className="error">{err}</div>}
+    </div>
+  );
+}
+
+web/src/components/SymptomGrid.tsx
+const QUESTIONS: { key: string; label: string }[] = [
+  { key: "fever", label: "Fever" },
+  { key: "chest_pain", label: "Chest pain" },
+  { key: "shortness_of_breath", label: "Shortness of breath" },
+  { key: "confusion", label: "Confusion" },
+  { key: "vomiting", label: "Vomiting" },
+  { key: "diarrhea", label: "Diarrhea" },
+  { key: "rash", label: "Rash" },
+  { key: "sore_throat", label: "Sore throat" },
+  { key: "cough", label: "Cough" },
+  // Add/replace with your actual 19 keys
+];
+
+export type Tri = "yes" | "no" | "ns";
+
+export default function SymptomGrid({
+  value,
+  onChange
+}: {
+  value: Record<string, Tri>;
+  onChange: (next: Record<string, Tri>) => void;
+}) {
+  function set(key: string, tri: Tri) {
+    onChange({ ...value, [key]: tri });
+  }
+
+  return (
+    <div className="card">
+      <h2>Symptoms</h2>
+      <p className="muted">Tap Yes / No / Not sure.</p>
+
+      <div className="grid">
+        {QUESTIONS.map((q) => (
+          <div className="qcard" key={q.key}>
+            <div className="qlabel">{q.label}</div>
+            <div className="tri">
+              <button className={value[q.key] === "yes" ? "active" : ""} onClick={() => set(q.key, "yes")}>Yes</button>
+              <button className={value[q.key] === "no" ? "active" : ""} onClick={() => set(q.key, "no")}>No</button>
+              <button className={value[q.key] === "ns" ? "active" : ""} onClick={() => set(q.key, "ns")}>Not sure</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+web/src/components/UploadPanel.tsx
+import { useState } from "react";
+import { uploadFile } from "../api";
+
+export default function UploadPanel({
+  token,
+  attachments,
+  setAttachments
+}: {
+  token: string;
+  attachments: string[];
+  setAttachments: (ids: string[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function onPick(file: File | null) {
+    if (!file) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const r = await uploadFile(token, file);
+      setAttachments([...attachments, r.fileId]);
+    } catch (e: any) {
+      setErr(e?.message || "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Upload photos or documents</h2>
+      <p className="muted">Examples: rash photo, throat photo, test result.</p>
+      <input
+        type="file"
+        accept="image/*,application/pdf"
+        disabled={busy}
+        onChange={(e) => onPick(e.target.files?.[0] || null)}
+      />
+      {busy && <div className="muted">Uploading...</div>}
+      {err && <div className="error">{err}</div>}
+
+      {!!attachments.length && (
+        <div className="muted small">Attached: {attachments.length} file(s)</div>
+      )}
+    </div>
+  );
+}
+
+web/src/components/ConsentPanel.tsx
+export default function ConsentPanel({
+  consent,
+  setConsent
+}: {
+  consent: any;
+  setConsent: (c: any) => void;
+}) {
+  return (
+    <div className="card">
+      <h2>Consent</h2>
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={!!consent.telehealth}
+          onChange={(e) => setConsent({ ...consent, telehealth: e.target.checked })}
+        />
+        I consent to telehealth evaluation and understand emergency guidance may be provided.
+      </label>
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={!!consent.privacy}
+          onChange={(e) => setConsent({ ...consent, privacy: e.target.checked })}
+        />
+        I acknowledge the privacy notice and consent to collection of health information for care.
+      </label>
+
+      <div className="row">
+        <input
+          value={consent.signatureName || ""}
+          onChange={(e) => setConsent({ ...consent, signatureName: e.target.value })}
+          placeholder="Type your name as signature"
+        />
+      </div>
+    </div>
+  );
+}
+
+web/src/components/ReviewSubmit.tsx
+export default function ReviewSubmit({
+  chiefComplaint,
+  canSubmit,
+  onSubmit,
+  busy,
+  error
+}: {
+  chiefComplaint: string;
+  canSubmit: boolean;
+  onSubmit: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="card">
+      <h2>Review & submit</h2>
+      <p className="muted">Please confirm everything looks right.</p>
+      <div className="muted small">Chief complaint: {chiefComplaint || "—"}</div>
+
+      <button disabled={!canSubmit || busy} onClick={onSubmit}>
+        {busy ? "Submitting..." : "Submit"}
+      </button>
+
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+web/src/pages/Intake.tsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import VerifyCard from "../components/VerifyCard";
+import SymptomGrid, { Tri } from "../components/SymptomGrid";
+import UploadPanel from "../components/UploadPanel";
+import ConsentPanel from "../components/ConsentPanel";
+import ReviewSubmit from "../components/ReviewSubmit";
+import { postJson } from "../api";
+
+type Step = 0 | 1 | 2 | 3 | 4;
+
+export default function Intake() {
+  const { token = "" } = useParams();
+  const nav = useNavigate();
+
+  const [verifiedCaseId, setVerifiedCaseId] = useState<string | null>(null);
+  const [step, setStep] = useState<Step>(0);
+
+  const [chiefComplaint, setChiefComplaint] = useState("");
+  const [freeText, setFreeText] = useState("");
+  const [symptoms, setSymptoms] = useState<Record<string, Tri>>({});
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [consent, setConsent] = useState<any>({
+    telehealth: false,
+    privacy: false,
+    signatureName: "",
+    signedAt: ""
+  });
+
+  const [submitBusy, setSubmitBusy] = useState(false);
+  const [submitErr, setSubmitErr] = useState<string | null>(null);
+
+  // Autosave draft
+  const autosaveTimer = useRef<number | null>(null);
+  const draftPayload = useMemo(() => ({
+    currentStep: step,
+    draft: { chiefComplaint, freeText, symptoms, attachments, consent }
+  }), [step, chiefComplaint, freeText, symptoms, attachments, consent]);
+
+  useEffect(() => {
+    if (!verifiedCaseId) return;
+    if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = window.setTimeout(async () => {
+      try {
+        await postJson(`/api/intake/${token}/save_draft`, draftPayload);
+      } catch {
+        // Silent draft save failure (patient can still submit)
+      }
+    }, 900);
+  }, [draftPayload, verifiedCaseId, token]);
+
+  async function submit() {
+    setSubmitErr(null);
+    setSubmitBusy(true);
+    try {
+      const payload = {
+        chiefComplaint,
+        freeText,
+        symptoms,
+        attachments,
+        consent: { ...consent, signedAt: new Date().toISOString() }
+      };
+      await postJson(`/api/intake/${token}/submit`, payload);
+      nav(`/intake/${token}/status`);
+    } catch (e: any) {
+      setSubmitErr(e?.message || "Submit failed");
+    } finally {
+      setSubmitBusy(false);
+    }
+  }
+
+  if (!token) return <div className="container"><div className="card">Missing token.</div></div>;
+
+  return (
+    <div className="container">
+      {!verifiedCaseId ? (
+        <VerifyCard token={token} onVerified={(caseId) => { setVerifiedCaseId(caseId); setStep(1); }} />
+      ) : (
+        <>
+          <div className="card">
+            <h1>Visit Intake</h1>
+            <div className="muted small">Step {step} of 4</div>
+            <div className="row">
+              <button disabled={step <= 1} onClick={() => setStep((step - 1) as Step)}>Back</button>
+              <button disabled={step >= 4} onClick={() => setStep((step + 1) as Step)}>Next</button>
+            </div>
+          </div>
+
+          {step === 1 && (
+            <div className="card">
+              <h2>Reason for visit</h2>
+              <div className="row">
+                <input value={chiefComplaint} onChange={(e) => setChiefComplaint(e.target.value)} placeholder="Chief complaint (e.g., sore throat)" />
+              </div>
+              <div className="row">
+                <textarea value={freeText} onChange={(e) => setFreeText(e.target.value)} placeholder="Anything else you'd like us to know?" />
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <SymptomGrid value={symptoms} onChange={setSymptoms} />
+          )}
+
+          {step === 3 && (
+            <UploadPanel token={token} attachments={attachments} setAttachments={setAttachments} />
+          )}
+
+          {step === 4 && (
+            <>
+              <ConsentPanel consent={consent} setConsent={setConsent} />
+              <ReviewSubmit
+                chiefComplaint={chiefComplaint}
+                busy={submitBusy}
+                error={submitErr}
+                canSubmit={!!chiefComplaint && !!consent.telehealth && !!consent.privacy && !!consent.signatureName}
+                onSubmit={submit}
+              />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+web/src/pages/Status.tsx
+import { useEffect, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import { getJson } from "../api";
+
+export default function Status() {
+  const { token = "" } = useParams();
+  const [data, setData] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      setErr(null);
+      const r = await getJson(`/api/intake/${token}/status`);
+      setData(r);
+    } catch (e: any) {
+      setErr(e?.message || "Failed to load");
+    }
+  }
+
+  useEffect(() => { load(); }, [token]);
+
+  return (
+    <div className="container">
+      <div className="card">
+        <h1>Status</h1>
+        {err && <div className="error">{err}</div>}
+        {data && (
+          <>
+            <div className="muted">Case ID: {data.caseId}</div>
+            <div className="statusPill">{data.status}</div>
+            <p className="muted">{data.nextActionText}</p>
+
+            <div className="row">
+              <button onClick={load}>Refresh</button>
+              <Link to={`/intake/${token}`}>Return to intake</Link>
+            </div>
+
+            {data.status === "signed" && (
+              <div className="row">
+                <Link to={`/intake/${token}/summary`}>View summary</Link>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+web/src/pages/Summary.tsx
+import { useEffect, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001";
+
+export default function Summary() {
+  const { token = "" } = useParams();
+  const [html, setHtml] = useState<string>("");
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      setErr(null);
+      try {
+        const res = await fetch(`${API_BASE}/api/intake/${token}/summary`);
+        if (!res.ok) throw new Error(`Not available (${res.status})`);
+        setHtml(await res.text());
+      } catch (e: any) {
+        setErr(e?.message || "Failed to load summary");
+      }
+    }
+    load();
+  }, [token]);
+
+  return (
+    <div className="container">
+      <div className="card">
+        <h1>Visit Summary</h1>
+        <div className="row">
+          <Link to={`/intake/${token}/status`}>Back to status</Link>
+        </div>
+        {err && <div className="error">{err}</div>}
+      </div>
+
+      {!err && (
+        <div className="card">
+          <div dangerouslySetInnerHTML={{ __html: html }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+web/src/styles.css (simple mobile-friendly styling)
+:root { font-family: Arial, sans-serif; }
+body { margin: 0; background: #f6f7fb; }
+.container { max-width: 720px; margin: 0 auto; padding: 16px; }
+.card { background: white; border-radius: 14px; padding: 16px; box-shadow: 0 1px 8px rgba(0,0,0,.06); margin-bottom: 12px; }
+h1 { font-size: 20px; margin: 0 0 10px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+.row { display: flex; gap: 10px; margin-top: 10px; align-items: center; }
+.row input, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 10px; }
+textarea { min-height: 90px; resize: vertical; }
+button { padding: 10px 12px; border: 0; border-radius: 10px; background: #2c5cff; color: white; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.muted { color: #555; }
+.small { font-size: 12px; }
+.error { margin-top: 10px; color: #b00020; }
+.divider { height: 1px; background: #eee; margin: 14px 0; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.qcard { border: 1px solid #eee; border-radius: 12px; padding: 10px; }
+.qlabel { font-size: 14px; margin-bottom: 8px; }
+.tri { display: flex; gap: 6px; }
+.tri button { background: #f0f2ff; color: #223; }
+.tri button.active { background: #2c5cff; color: #fff; }
+.check { display: flex; gap: 10px; margin-top: 8px; align-items: flex-start; }
+.statusPill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #eef1ff; color: #223; margin-top: 10px; }
+@media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+
+3) Package + run scripts
+package.json (root)
+{
+  "name": "whatsapp-medical-assistant-portal",
+  "private": true,
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "concurrently -n server,web \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
+
+server/package.json
+{
+  "name": "server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch app.ts",
+    "start": "node dist/app.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
+
+web/package.json
+{
+  "name": "web",
+  "private": true,
+  "scripts": {
+    "dev": "vite --port 3000",
+    "build": "vite build",
+    "preview": "vite preview --port 3000"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.2"
+  }
+}
+
+web/vite.config.ts
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()]
+});
+
+.env.example
+# server
+PORT=3001
+DB_PATH=./data.sqlite
+UPLOAD_DIR=./uploads
+SUMMARY_DIR=./summaries
+
+# web
+VITE_API_BASE=http://localhost:3001
+
+4) How to test end-to-end right now
+Step A: create a test token+code in DB
+
+Add this tiny helper one-off (or run in a node REPL) to insert a session:
+
+// quick_insert.ts (run with: npx tsx quick_insert.ts)
+import crypto from "crypto";
+import { db, initDb } from "./server/db";
+
+initDb();
+const token = "TEST_TOKEN_123";
+const code = "123456";
+const expiresAt = Date.now() + 30 * 60 * 1000;
+
+const hash = crypto.createHash("sha256").update(code).digest("hex");
+db.prepare(`
+  INSERT OR REPLACE INTO intake_sessions (token, code_hash, expires_at, used_at, created_at)
+  VALUES (?, ?, ?, NULL, ?)
+`).run(token, hash, expiresAt, Date.now());
+
+console.log({ token, code, expiresAt });
+
+
+Then open:
+http://localhost:3000/intake/TEST_TOKEN_123
+Enter code 123456, fill intake, submit.
+
+Step B: simulate provider sign-off
+
+After you submit you’ll get a caseId in the response; or check the status page.
+Then call:
+
+POST http://localhost:3001/api/admin/case/<CASE_ID>/sign
+
+Now the summary becomes available at:
+/intake/:token/summary

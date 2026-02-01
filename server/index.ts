@@ -4,6 +4,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { storage } from "./storage";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
+import { initIntakeDb, intakeRouter, filesRouter, summaryRouter, ensureDirs as ensureIntakeDirs } from "./intake";
 
 const app = express();
 const httpServer = createServer(app);
@@ -23,6 +24,13 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+initIntakeDb();
+ensureIntakeDirs();
+
+app.use(intakeRouter);
+app.use(filesRouter);
+app.use(summaryRouter);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
