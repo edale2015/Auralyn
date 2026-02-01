@@ -125,6 +125,17 @@ Steps:
 - `TEST_SHEET_ENV=staging` - Target staging for tests
 - `AUTO_PROMOTE_TO_STAGING=1` - Enable auto-promotion in pipeline
 
+### Regression Gate
+Compares before/after test digests and flags regressions:
+- `GATE_MAX_FAIL_INCREASE=1` - Max allowed fail count increase
+- `GATE_MAX_FAILRATE_INCREASE=0.02` - Max fail rate increase (2%)
+- `GATE_MAX_AVGSEV_INCREASE=0.5` - Max avg severity increase
+- `GATE_FAIL_ON_REGRESSION=1` - Fail script on regression (for CI alerts)
+
+Outputs:
+- `staging_gate.json` - Gate decision with metrics
+- Gate result appended to `staging_promotion_report.md`
+
 ### Report Output
 - Default: `./reports/`
 - Configurable: `REPORT_OUTPUT_DIR` env var

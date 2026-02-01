@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
+import { gateFromDigests, writeGateArtifacts } from "./stagingGate";
 
 function run(cmd: string, args: string[], env: Record<string, string>) {
   return new Promise<void>((resolve, reject) => {
@@ -75,6 +76,33 @@ async function main() {
 
   fs.writeFileSync(reportPath, lines.join("\n"), "utf8");
   console.log(`Wrote: ${reportPath}`);
+
+  // --- Regression gate ---
+  const beforeDigest = path.join(beforeDir, "daily_digest.md");
+  const afterDigest = path.join(afterDir, "daily_digest.md");
+
+  const decision = gateFromDigests(beforeDigest, afterDigest);
+  const { jsonPath } = writeGateArtifacts(OUT, decision);
+
+  // Append gate result to promotion report
+  const gateHeader = [
+    "",
+    "## Staging Regression Gate",
+    `**RESULT:** ${decision.result}`,
+    decision.reasons.length ? `**Reasons:** ${decision.reasons.join(" | ")}` : "**Reasons:** none",
+    `Gate JSON: \`${jsonPath}\``,
+    "",
+  ].join("\n");
+
+  fs.appendFileSync(reportPath, gateHeader, "utf8");
+  console.log(`Gate result: ${decision.result}`);
+  if (decision.reasons.length) console.log(`Gate reasons: ${decision.reasons.join(" | ")}`);
+
+  // Optional: fail the script on regression so schedulers can alert
+  const failOnRegression = (process.env.GATE_FAIL_ON_REGRESSION || "0").trim() === "1";
+  if (failOnRegression && decision.result === "REGRESSION") {
+    throw new Error("Staging regression gate failed");
+  }
 }
 
 main().catch((e) => {

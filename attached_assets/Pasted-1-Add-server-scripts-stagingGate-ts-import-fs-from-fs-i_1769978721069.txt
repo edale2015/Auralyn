@@ -1,0 +1,155 @@
+1) Add: server/scripts/stagingGate.ts
+import fs from "fs";
+import path from "path";
+
+export type GateMetrics = {
+  runs: number;
+  fails: number;
+  failRate: number;      // 0..1
+  avgSeverity: number;
+};
+
+export type GateDecision = {
+  result: "OK" | "REGRESSION";
+  reasons: string[];
+  before: GateMetrics;
+  after: GateMetrics;
+  thresholds: {
+    maxFailIncrease: number;
+    maxFailRateIncrease: number;    // absolute (e.g., 0.02 = +2%)
+    maxAvgSeverityIncrease: number; // absolute
+  };
+};
+
+function readFile(p: string): string {
+  return fs.readFileSync(p, "utf8");
+}
+
+function parseDigest(mdPath: string): GateMetrics {
+  const txt = readFile(mdPath);
+
+  // Expect lines like:
+  // **Runs:** 123
+  // **Fails:** 10  (**Fail rate:** 8.1%)
+  // **Avg severity:** 0.42
+
+  const runs = Number((txt.match(/\*\*Runs:\*\*\s+(\d+)/) || [])[1] || 0);
+  const fails = Number((txt.match(/\*\*Fails:\*\*\s+(\d+)/) || [])[1] || 0);
+
+  // Fail rate in percent in markdown
+  const frPct = Number((txt.match(/\*\*Fail rate:\*\*\s+([0-9.]+)%/) || [])[1] || 0);
+  const failRate = frPct / 100;
+
+  const avgSeverity = Number((txt.match(/\*\*Avg severity:\*\*\s+([0-9.]+)/) || [])[1] || 0);
+
+  if (!runs) {
+    throw new Error(`Could not parse runs from digest: ${mdPath}`);
+  }
+
+  return { runs, fails, failRate, avgSeverity };
+}
+
+export function gateFromDigests(beforeMd: string, afterMd: string): GateDecision {
+  const before = parseDigest(beforeMd);
+  const after = parseDigest(afterMd);
+
+  const thresholds = {
+    maxFailIncrease: Number(process.env.GATE_MAX_FAIL_INCREASE || 1),
+    maxFailRateIncrease: Number(process.env.GATE_MAX_FAILRATE_INCREASE || 0.02),
+    maxAvgSeverityIncrease: Number(process.env.GATE_MAX_AVGSEV_INCREASE || 0.5),
+  };
+
+  const reasons: string[] = [];
+
+  const failInc = after.fails - before.fails;
+  const frInc = after.failRate - before.failRate;
+  const sevInc = after.avgSeverity - before.avgSeverity;
+
+  if (failInc > thresholds.maxFailIncrease) {
+    reasons.push(`Fails increased by ${failInc} (threshold ${thresholds.maxFailIncrease})`);
+  }
+  if (frInc > thresholds.maxFailRateIncrease) {
+    reasons.push(`Fail rate increased by ${(frInc * 100).toFixed(2)}% (threshold ${(thresholds.maxFailRateIncrease * 100).toFixed(2)}%)`);
+  }
+  if (sevInc > thresholds.maxAvgSeverityIncrease) {
+    reasons.push(`Avg severity increased by ${sevInc.toFixed(2)} (threshold ${thresholds.maxAvgSeverityIncrease})`);
+  }
+
+  const result: "OK" | "REGRESSION" = reasons.length ? "REGRESSION" : "OK";
+
+  return { result, reasons, before, after, thresholds };
+}
+
+export function writeGateArtifacts(outDir: string, decision: GateDecision) {
+  const jsonPath = path.join(outDir, "staging_gate.json");
+  fs.writeFileSync(jsonPath, JSON.stringify(decision, null, 2), "utf8");
+  return { jsonPath };
+}
+
+2) Integrate into server/scripts/promoteRulePatchesToStaging.ts
+
+Add this import at the top:
+
+import { gateFromDigests, writeGateArtifacts } from "./stagingGate";
+
+
+Then at the end of the script (after you write staging_promotion_report.md), add:
+
+  // --- Regression gate ---
+  const beforeDigest = path.join(beforeDir, "daily_digest.md");
+  const afterDigest = path.join(afterDir, "daily_digest.md");
+
+  const decision = gateFromDigests(beforeDigest, afterDigest);
+  const { jsonPath } = writeGateArtifacts(OUT, decision);
+
+  // Append gate result to promotion report
+  const gateHeader = [
+    "",
+    "## Staging Regression Gate",
+    `**RESULT:** ${decision.result}`,
+    decision.reasons.length ? `**Reasons:** ${decision.reasons.join(" | ")}` : "**Reasons:** none",
+    `Gate JSON: \`${jsonPath}\``,
+    "",
+  ].join("\n");
+
+  fs.appendFileSync(reportPath, gateHeader, "utf8");
+  console.log(`Gate result: ${decision.result}`);
+  if (decision.reasons.length) console.log(`Gate reasons: ${decision.reasons.join(" | ")}`);
+
+  // Optional: fail the script on regression so schedulers can alert
+  const failOnRegression = (process.env.GATE_FAIL_ON_REGRESSION || "0").trim() === "1";
+  if (failOnRegression && decision.result === "REGRESSION") {
+    throw new Error("Staging regression gate failed");
+  }
+
+
+Make sure promoteRulePatchesToStaging.ts already imports fs and path (it does).
+
+3) How to use it
+
+Default thresholds:
+
+fails can increase by 1
+
+fail rate can increase by 2%
+
+avg severity can increase by 0.5
+
+Override with env vars:
+
+GATE_MAX_FAIL_INCREASE=1
+GATE_MAX_FAILRATE_INCREASE=0.02
+GATE_MAX_AVGSEV_INCREASE=0.5
+GATE_FAIL_ON_REGRESSION=1
+
+
+Run staging promotion as usual:
+
+REPORT_DAYS=7 TESTS_PER_FLOW=25 REPORT_OUTPUT_DIR=./reports npx tsx server/scripts/promoteRulePatchesToStaging.ts
+
+
+Outputs:
+
+./reports/staging_gate.json
+
+gate result appended to ./reports/staging_promotion_report.md
