@@ -1,0 +1,428 @@
+✅ A) Router synonym suggestion generator
+What it does (practical + safe)
+
+Because staff overrides overwrite __routerAudit on the encounter (so the original patient snippet can be lost), this script focuses on what you do reliably have:
+
+All keyword / other_text routed messages that reached the system
+
+Their picked flowId
+
+Their snippet tokens (top words + bigrams)
+
+It outputs:
+
+./reports/router_synonyms.md (human review)
+
+./reports/router_synonyms_seed.json (for future automated router enrichment)
+
+Add: server/scripts/generateRouterSynonymSuggestions.ts
+import fs from "fs";
+import path from "path";
+import { db } from "../firebase";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+function ensureDir(p: string) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+
+function tokenize(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map(t => t.trim())
+    .filter(t => t.length >= 3 && !STOP.has(t));
+}
+
+function bigrams(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length - 1; i++) out.push(tokens[i] + " " + tokens[i + 1]);
+  return out;
+}
+
+const STOP = new Set([
+  "the","and","for","with","that","this","have","been","your","you","are","was","were","not","can",
+  "cant","could","would","should","from","into","just","like","need","feel","felt","pain","help",
+  "please","today","now","very","really","when","then","than","over","under","after","before",
+]);
+
+function inc(m: Map<string, number>, k: string, by = 1) {
+  m.set(k, (m.get(k) || 0) + by);
+}
+
+function topN(m: Map<string, number>, n = 20) {
+  return Array.from(m.entries()).sort((a,b) => b[1] - a[1]).slice(0, n);
+}
+
+async function main() {
+  const DAYS = Number(process.env.REPORT_DAYS || 7);
+  const OUTPUT_DIR = process.env.REPORT_OUTPUT_DIR || "./reports";
+  ensureDir(OUTPUT_DIR);
+
+  const sinceMs = Date.now() - DAYS * 86400000;
+
+  // Scan recent encounters (limit for safety)
+  const snap = await db.collection("encounters")
+    .where("updatedAt", ">=", new Date(sinceMs))
+    .limit(5000)
+    .get();
+
+  // flowId -> token counts
+  const tokenByFlow = new Map<string, Map<string, number>>();
+  const bigramByFlow = new Map<string, Map<string, number>>();
+  const sampleByFlow = new Map<string, string[]>();
+
+  let total = 0;
+  let used = 0;
+
+  for (const doc of snap.docs) {
+    total++;
+    const e: any = doc.data();
+    const flowId = norm(e.flowId) || "UNKNOWN";
+
+    let answersObj: any = {};
+    try { answersObj = e.answers ? JSON.parse(e.answers) : {}; } catch { answersObj = {}; }
+
+    // Prefer __router (compat alias), else __routerAudit
+    const r = answersObj.__router || {};
+    const ra = answersObj.__routerAudit || {};
+
+    const source = norm(r.source || ra.routerReason).toLowerCase();
+    if (!(source === "keyword" || source === "other_text")) continue;
+
+    const snippet = norm(r.snippet || ra.routerTextSnippet);
+    if (!snippet) continue;
+
+    // Ignore staff/system command snippets
+    if (snippet.startsWith("/flow") || snippet.startsWith("/api/") || snippet.includes("set-flow")) continue;
+
+    used++;
+
+    const tokens = tokenize(snippet);
+    if (!tokens.length) continue;
+
+    if (!tokenByFlow.has(flowId)) tokenByFlow.set(flowId, new Map());
+    if (!bigramByFlow.has(flowId)) bigramByFlow.set(flowId, new Map());
+    if (!sampleByFlow.has(flowId)) sampleByFlow.set(flowId, []);
+
+    const tm = tokenByFlow.get(flowId)!;
+    const bm = bigramByFlow.get(flowId)!;
+
+    for (const t of tokens) inc(tm, t);
+    for (const b of bigrams(tokens)) inc(bm, b);
+
+    const samples = sampleByFlow.get(flowId)!;
+    if (samples.length < 8) samples.push(snippet.slice(0, 140));
+  }
+
+  // Write MD report
+  const mdPath = path.join(OUTPUT_DIR, "router_synonyms.md");
+  const lines: string[] = [];
+  lines.push(`# Router Synonym Suggestions (last ${DAYS} days)`);
+  lines.push(`Scanned encounters: **${total}**`);
+  lines.push(`Included keyword/other_text routed: **${used}**`);
+  lines.push(``);
+  lines.push(`## Top tokens/bigrams by flow`);
+  lines.push(`These are **candidates** to add as synonyms to improve routing precision.`);
+  lines.push(``);
+
+  const flows = Array.from(tokenByFlow.keys()).sort();
+  for (const flowId of flows) {
+    const topTok = topN(tokenByFlow.get(flowId)!, 15);
+    const topBi = topN(bigramByFlow.get(flowId)!, 10);
+    lines.push(`### ${flowId}`);
+    lines.push(`**Top tokens:** ${topTok.map(([k,v]) => `${k}(${v})`).join(", ")}`);
+    lines.push(`**Top bigrams:** ${topBi.map(([k,v]) => `${k}(${v})`).join(", ")}`);
+    lines.push(`**Samples:**`);
+    for (const s of (sampleByFlow.get(flowId) || [])) lines.push(`- "${s}"`);
+    lines.push(``);
+  }
+
+  fs.writeFileSync(mdPath, lines.join("\n"), "utf8");
+
+  // Write JSON seed (for future automated router improvements)
+  const jsonPath = path.join(OUTPUT_DIR, "router_synonyms_seed.json");
+  const seed: any = {};
+  for (const flowId of flows) {
+    seed[flowId] = {
+      tokens: topN(tokenByFlow.get(flowId)!, 50),
+      bigrams: topN(bigramByFlow.get(flowId)!, 30),
+    };
+  }
+  fs.writeFileSync(jsonPath, JSON.stringify(seed, null, 2), "utf8");
+
+  console.log(`Wrote: ${mdPath}`);
+  console.log(`Wrote: ${jsonPath}`);
+}
+
+main().catch((e) => {
+  console.error("generateRouterSynonymSuggestions failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+REPORT_DAYS=7 npx tsx server/scripts/generateRouterSynonymSuggestions.ts
+
+✅ B) Medication data-cleanup suggestion generator (+ optional UPSERT meds CSV)
+What it does
+
+Reads Firestore test_runs and looks for repeated issue codes:
+
+MED_PREGNANCY_CONTRA
+
+MED_BARIATRIC_NSAID
+
+MED_ALLERGY_PEN
+
+MED_ALLERGY_SULFA
+
+MED_RENAL_ADJUST
+
+For each implicated med ROW_KEY, it:
+
+loads the med row from CLINICAL_MEDICATIONS
+
+checks whether the relevant fields are missing obvious flags
+
+writes:
+
+./reports/med_cleanup_suggestions.md
+
+./reports/CLINICAL_MEDICATIONS_PATCH_PROPOSED.csv (optional UPSERT-safe; full headers, keyed by Notes)
+
+Add: server/scripts/generateMedCleanupProposals.ts
+import fs from "fs";
+import path from "path";
+import { db } from "../firebase";
+import { getSheetRows } from "../sheets/sheetHelper";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+function ensureDir(p: string) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+
+function extractRowKey(notes: string): string | null {
+  const m = (notes || "").match(/ROW_KEY=([^\s;]+)/);
+  return m ? m[1].trim() : null;
+}
+
+type MedRow = Record<string, any>;
+
+async function loadMedRowsByRowKey(): Promise<Map<string, MedRow>> {
+  const { rowsAsObjects } = await getSheetRows("CLINICAL_MEDICATIONS");
+  const map = new Map<string, MedRow>();
+
+  for (const r of rowsAsObjects) {
+    const notes = norm((r as any).Notes);
+    const rk = extractRowKey(notes);
+    if (rk) map.set(rk, r as any);
+  }
+  return map;
+}
+
+function issueCodes(issues: any): string[] {
+  const arr = Array.isArray(issues) ? issues : [];
+  return arr.map((i: any) => norm(i.code)).filter(Boolean);
+}
+
+function extractMedRowKeysFromTestRun(r: any): string[] {
+  // Best-effort: pull row keys out of output raw
+  const out = r?.output?.raw || {};
+  const proposal = out?.proposal || out?.proposal || out?.proposal || {};
+  const keys: string[] = [];
+
+  // Check known structures
+  const pack = proposal?.rulePacks?.medPack || proposal?.medPack || proposal?.med_pack;
+  if (typeof pack === "string" && pack.includes("ROW_KEY=")) {
+    const parts = pack.split(/[;,]+/).map((s: string) => s.trim());
+    for (const p of parts) {
+      const m = p.match(/ROW_KEY=([^\s;]+)/);
+      if (m) keys.push(m[1].trim());
+    }
+  }
+
+  // Check arrays
+  const arrs = [proposal?.medIds, proposal?.med_ids, proposal?.medications, proposal?.meds].filter(Boolean);
+  for (const a of arrs) {
+    if (Array.isArray(a)) {
+      for (const item of a) {
+        const s = norm(item);
+        const m = s.match(/ROW_KEY=([^\s;]+)/);
+        if (m) keys.push(m[1].trim());
+      }
+    }
+  }
+
+  return Array.from(new Set(keys));
+}
+
+function addSuggestion(md: string[], title: string, lines: string[]) {
+  md.push(`### ${title}`);
+  for (const l of lines) md.push(`- ${l}`);
+  md.push("");
+}
+
+async function main() {
+  const DAYS = Number(process.env.REPORT_DAYS || 7);
+  const OUTPUT_DIR = process.env.REPORT_OUTPUT_DIR || "./reports";
+  ensureDir(OUTPUT_DIR);
+
+  const sinceMs = Date.now() - DAYS * 86400000;
+
+  const medsByKey = await loadMedRowsByRowKey();
+
+  const snap = await db.collection("test_runs")
+    .where("ts", ">=", sinceMs)
+    .limit(8000)
+    .get();
+
+  // Track issues per rowKey
+  const keyIssueCount = new Map<string, Map<string, number>>();
+  const keySamples = new Map<string, string[]>();
+
+  let scanned = 0;
+  let failures = 0;
+
+  for (const doc of snap.docs) {
+    const r: any = doc.data();
+    scanned++;
+
+    if (r?.score?.pass) continue;
+    failures++;
+
+    const codes = issueCodes(r?.score?.issues);
+    const medRelevant = codes.filter(c => c.startsWith("MED_"));
+    if (!medRelevant.length) continue;
+
+    const rowKeys = extractMedRowKeysFromTestRun(r);
+    if (!rowKeys.length) continue;
+
+    for (const rk of rowKeys) {
+      if (!keyIssueCount.has(rk)) keyIssueCount.set(rk, new Map());
+      const m = keyIssueCount.get(rk)!;
+      for (const c of medRelevant) m.set(c, (m.get(c) || 0) + 1);
+
+      if (!keySamples.has(rk)) keySamples.set(rk, []);
+      const samples = keySamples.get(rk)!;
+      if (samples.length < 6) {
+        const rt = norm(r?.routerText).slice(0, 120);
+        samples.push(`flow=${r.flowId} issues=${medRelevant.join(";")} text="${rt}"`);
+      }
+    }
+  }
+
+  // Sort by total med issues
+  const ranked = Array.from(keyIssueCount.entries()).map(([rk, m]) => {
+    const total = Array.from(m.values()).reduce((a,b)=>a+b,0);
+    return { rk, m, total };
+  }).sort((a,b)=>b.total-a.total);
+
+  // Build MD report + optional CSV patch
+  const md: string[] = [];
+  md.push(`# Medication Data Cleanup Suggestions (last ${DAYS} days)`);
+  md.push(`Scanned test_runs: **${scanned}**`);
+  md.push(`Failing runs: **${failures}**`);
+  md.push(`Meds implicated: **${ranked.length}**`);
+  md.push("");
+
+  // Prepare CSV patch: must match full meds sheet headers
+  const { header } = await getSheetRows("CLINICAL_MEDICATIONS");
+  const csvRows: string[][] = [header];
+
+  for (const item of ranked.slice(0, 50)) {
+    const row = medsByKey.get(item.rk);
+    if (!row) continue;
+
+    const medName = norm(row.Medication_Name) || item.rk;
+    const group = norm(row.Medication_Group);
+    const preg = norm(row.Pregnancy_Considerations);
+    const contra = norm(row.Contraindications);
+
+    const issues = Array.from(item.m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}:${v}`).join(", ");
+
+    const suggestions: string[] = [];
+    let changed = false;
+
+    // If bariatric NSAID issues and group doesn't say NSAID, append it
+    if (item.m.has("MED_BARIATRIC_NSAID") && !group.toUpperCase().includes("NSAID")) {
+      suggestions.push(`Consider setting Medication_Group to include "NSAID" (currently "${group}")`);
+      row.Medication_Group = group ? `${group}; NSAID` : "NSAID";
+      changed = true;
+    }
+
+    // Pregnancy contraindication: ensure notes contain "avoid" if you intend to flag
+    if (item.m.has("MED_PREGNANCY_CONTRA") && !preg.toLowerCase().includes("avoid") && !contra.toLowerCase().includes("preg")) {
+      suggestions.push(`Add clear pregnancy guidance (e.g., "avoid in pregnancy" or specific trimester caution).`);
+      row.Pregnancy_Considerations = preg ? `${preg} | avoid in pregnancy (flag)` : "avoid in pregnancy (flag)";
+      changed = true;
+    }
+
+    // Allergy issues: add class note (non-binding, but helps)
+    if (item.m.has("MED_ALLERGY_PEN") && !contra.toLowerCase().includes("penicillin")) {
+      suggestions.push(`Add contraindication note: "penicillin allergy".`);
+      row.Contraindications = contra ? `${contra} | penicillin allergy` : "penicillin allergy";
+      changed = true;
+    }
+    if (item.m.has("MED_ALLERGY_SULFA") && !contra.toLowerCase().includes("sulfa")) {
+      suggestions.push(`Add contraindication note: "sulfa allergy".`);
+      row.Contraindications = contra ? `${contra} | sulfa allergy` : "sulfa allergy";
+      changed = true;
+    }
+
+    addSuggestion(md, `${medName} (${item.rk})`, [
+      `Issue counts: ${issues}`,
+      ...suggestions,
+      ...(keySamples.get(item.rk) || []).map(s => `Sample: ${s}`),
+    ]);
+
+    // Only include in CSV patch if we actually changed fields
+    if (changed) {
+      const outRow = header.map((h: string) => norm((row as any)[h]));
+      csvRows.push(outRow);
+    }
+  }
+
+  const mdPath = path.join(OUTPUT_DIR, "med_cleanup_suggestions.md");
+  fs.writeFileSync(mdPath, md.join("\n"), "utf8");
+
+  const csvPath = path.join(OUTPUT_DIR, "CLINICAL_MEDICATIONS_PATCH_PROPOSED.csv");
+  const csv = csvRows.map(r => r.map(v => JSON.stringify(v)).join(",")).join("\n");
+  fs.writeFileSync(csvPath, csv, "utf8");
+
+  console.log(`Wrote: ${mdPath}`);
+  console.log(`Wrote: ${csvPath}`);
+  console.log(`Note: import meds patch with UPSERT by Notes (ROW_KEY).`);
+}
+
+main().catch(e => {
+  console.error("generateMedCleanupProposals failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+REPORT_DAYS=7 npx tsx server/scripts/generateMedCleanupProposals.ts
+
+
+Apply meds patch (after review):
+
+npx tsx server/scripts/sheetImport.ts CLINICAL_MEDICATIONS ./reports/CLINICAL_MEDICATIONS_PATCH_PROPOSED.csv upsert Notes
+
+✅ What you now have (full unattended loop)
+
+Nightly:
+
+runNightlyTests.ts
+
+testRunReport.ts
+
+generatePatchProposals.ts (RED_FLAG_QIDS)
+
+generateRouterSynonymSuggestions.ts (router vocabulary growth)
+
+generateMedCleanupProposals.ts (med data hygiene)
+
+Human-in-the-loop:
+
+Review ./reports/*.md
+
+Apply CSV patches with UPSERT
