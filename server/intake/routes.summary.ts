@@ -1,8 +1,8 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { db } from "./db";
-import type { CaseRow } from "./types";
+import { getStore } from "../intakeStorage";
 
 export const summaryRouter = Router();
+const store = getStore();
 
 function requireProviderAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers["x-provider-key"];
@@ -19,34 +19,18 @@ function requireProviderAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-summaryRouter.get("/api/provider/case/:caseId", requireProviderAuth, (req: Request, res: Response) => {
-  const caseId = req.params.caseId;
-  const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId) as CaseRow | undefined;
-  if (!row) return res.status(404).json({ ok: false });
-
-  return res.json({
-    ok: true,
-    caseId: row.case_id,
-    status: row.status,
-    intake: JSON.parse(row.intake_json || "{}"),
-    assistant: JSON.parse(row.assistant_json || "{}"),
-    updatedAt: row.updated_at
-  });
-});
-
-summaryRouter.get("/api/provider/cases", requireProviderAuth, (req: Request, res: Response) => {
-  const status = req.query.status as string | undefined;
-  
-  let query = `SELECT case_id, token, status, created_at, updated_at FROM cases`;
-  const params: any[] = [];
-  
-  if (status) {
-    query += ` WHERE status = ?`;
-    params.push(status);
+summaryRouter.get("/api/provider/case/:caseId", requireProviderAuth, async (req: Request, res: Response) => {
+  try {
+    const c = await store.getCase(req.params.caseId);
+    return res.json({
+      ok: true,
+      caseId: c.caseId,
+      status: c.status,
+      intake: c.intake,
+      assistant: c.assistant,
+      updatedAt: c.updatedAt
+    });
+  } catch (e: any) {
+    return res.status(404).json({ ok: false, error: e?.message || "Not found" });
   }
-  
-  query += ` ORDER BY updated_at DESC LIMIT 100`;
-  
-  const rows = db.prepare(query).all(...params) as CaseRow[];
-  return res.json({ ok: true, cases: rows });
 });
