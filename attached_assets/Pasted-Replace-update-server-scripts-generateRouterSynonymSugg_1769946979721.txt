@@ -1,3 +1,11 @@
+Replace/update: server/scripts/generateRouterSynonymSuggestions.ts
+
+This version outputs:
+
+./reports/router_misroute_synonyms.md
+
+./reports/router_misroute_synonyms_seed.json
+
 import fs from "fs";
 import path from "path";
 import { db } from "../firebase";
@@ -43,7 +51,7 @@ type HistEvent = {
   ts?: number;
 };
 
-type MisrouteKey = string;
+type MisrouteKey = string; // `${fromFlowId} -> ${toFlowId}`
 
 async function main() {
   const DAYS = Number(process.env.REPORT_DAYS || 7);
@@ -57,6 +65,7 @@ async function main() {
     .limit(6000)
     .get();
 
+  // Aggregates
   const misrouteCounts = new Map<MisrouteKey, number>();
   const snippetCountsByToFlow = new Map<string, Map<string, number>>();
   const tokenCountsByToFlow = new Map<string, Map<string, number>>();
@@ -79,8 +88,11 @@ async function main() {
 
     withHistory++;
 
+    // We care about sequences: keyword/other_text -> staff_override
+    // Sort by ts just in case
     const sorted = hist.slice().sort((a,b) => Number(a.ts||0) - Number(b.ts||0));
 
+    // Find the last staff_override (most recent correction)
     const overrideIdx = [...sorted].reverse().findIndex(ev => norm(ev.routerReason) === "staff_override");
     if (overrideIdx < 0) continue;
     const idxFromEnd = overrideIdx;
@@ -90,6 +102,7 @@ async function main() {
     const toFlow = norm(override.routerPickedFlowId);
     if (!toFlow) continue;
 
+    // Find the nearest preceding keyword/other_text event (what router originally did)
     let pre: HistEvent | null = null;
     for (let j = idx - 1; j >= 0; j--) {
       const rr = norm(sorted[j].routerReason);
@@ -104,15 +117,19 @@ async function main() {
     const snippet = norm(pre.routerTextSnippet);
     if (!snippet) continue;
 
+    // Ignore if "override" did not actually change flow
     if (fromFlow === toFlow) continue;
 
     misrouteEvents++;
 
+    // Misroute pair count
     inc(misrouteCounts, `${fromFlow} -> ${toFlow}`);
 
+    // Count snippets attributed to corrected flow
     if (!snippetCountsByToFlow.has(toFlow)) snippetCountsByToFlow.set(toFlow, new Map());
     inc(snippetCountsByToFlow.get(toFlow)!, snippet);
 
+    // Token/bigram counts attributed to corrected flow
     const tokens = tokenize(snippet);
     if (tokens.length) {
       if (!tokenCountsByToFlow.has(toFlow)) tokenCountsByToFlow.set(toFlow, new Map());
@@ -124,11 +141,13 @@ async function main() {
       for (const b of bigrams(tokens)) inc(bm, b);
     }
 
+    // Samples
     if (!sampleSnipsByToFlow.has(toFlow)) sampleSnipsByToFlow.set(toFlow, []);
     const arr = sampleSnipsByToFlow.get(toFlow)!;
     if (arr.length < 10) arr.push(`from=${fromFlow} text="${snippet.slice(0,140)}"`);
   }
 
+  // Write report
   const mdPath = path.join(OUTPUT_DIR, "router_misroute_synonyms.md");
   const lines: string[] = [];
 
@@ -151,7 +170,7 @@ async function main() {
 
     lines.push(`### ${toFlow}`);
     lines.push(`**Top tokens (candidates):** ${topTok.map(([k,v]) => `${k}(${v})`).join(", ")}`);
-    lines.push(`**Top bigrams (candidates):** ${topBi.map(([k,v]) => `${k}(${v})`).join(", ")}`);
+    lines.push(`**Top bigrams (candidates):** ${topBi.map(([k,v]) => `${k}(${v})(${v})`).join(", ").replace(/\)\(/g, ")(")}`);
     lines.push(`**Top misrouted snippets:**`);
     for (const [s,v] of topSnips) lines.push(`- (${v}) "${s}"`);
     lines.push(`**Samples:**`);
@@ -161,6 +180,7 @@ async function main() {
 
   fs.writeFileSync(mdPath, lines.join("\n"), "utf8");
 
+  // JSON seed
   const jsonPath = path.join(OUTPUT_DIR, "router_misroute_synonyms_seed.json");
   const seed: any = {};
   for (const toFlow of toFlows) {
@@ -184,3 +204,15 @@ main().catch(e => {
   console.error("generateRouterSynonymSuggestions failed:", e);
   process.exit(1);
 });
+
+
+Run:
+
+REPORT_DAYS=7 REPORT_OUTPUT_DIR=./reports npx tsx server/scripts/generateRouterSynonymSuggestions.ts
+
+
+Outputs:
+
+./reports/router_misroute_synonyms.md
+
+./reports/router_misroute_synonyms_seed.json
