@@ -59,7 +59,9 @@ async function main() {
   console.log(`\nTop issue codes:`);
   for (const [k,v] of topN(byIssue, 15)) console.log(`  ${k}: ${v}`);
 
-  const outDir = "/tmp";
+  const outDir = process.env.REPORT_OUTPUT_DIR || "./reports";
+  fs.mkdirSync(outDir, { recursive: true });
+
   const csvPath = path.join(outDir, `test_run_report_${DAYS}d.csv`);
   const headers = Object.keys(rows[0] || {});
   const csv = [headers.join(",")]

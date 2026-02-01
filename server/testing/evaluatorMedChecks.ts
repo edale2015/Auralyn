@@ -78,11 +78,14 @@ export async function applyMedicationContraindicationChecks(
       });
     }
 
-    if (postBari && medName.toLowerCase().includes("ibuprofen")) {
+    const medGroup = norm((row as any).Medication_Group).toLowerCase();
+    const isNsaid = medGroup.includes("nsaid") || medName.toLowerCase().includes("ibuprofen") || medName.toLowerCase().includes("naproxen") || medName.toLowerCase().includes("aspirin");
+
+    if (postBari && isNsaid) {
       severity += 4;
       issues.push({
         code: "MED_BARIATRIC_NSAID",
-        message: `Post-bariatric modifier set; avoid NSAIDs (detected ${medName})`,
+        message: `Post-bariatric modifier set; avoid NSAIDs (detected ${medName}, group: ${medGroup})`,
       });
     }
 

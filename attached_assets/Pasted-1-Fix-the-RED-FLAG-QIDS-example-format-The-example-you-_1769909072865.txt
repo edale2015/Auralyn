@@ -1,0 +1,109 @@
+1) Fix the RED_FLAG_QIDS example format
+
+The example you wrote:
+
+ENT_FLU_LIKE_V1  RED_FLAG_QIDS  RF_SOB,RF_CP,RF_NEURO,RF_DEHY
+
+
+…only works if your answers object actually has keys named RF_SOB, etc.
+
+But your actual answers are keyed by question_id (e.g., ENT_URI_05, CARD_CP_03, URO_VB_05, etc.). So RED_FLAG_QIDS should list real question_id values.
+
+Correct format
+
+Example for ENT flu-like (illustrative, adjust to your actual qids):
+
+ENT_FLU_LIKE_V1  RED_FLAG_QIDS  ENT_URI_05,ENT_URI_06,ENT_URI_11,ENT_URI_08
+
+What to do now
+
+Ensure your migration to sheet uses question_id strings, not label aliases.
+
+If you want alias support (RF_SOB), I can help, but it’s extra complexity and not needed.
+
+2) Move report outputs to /mnt/data (so you can download easily)
+
+You currently write to /tmp/.... In Replit/sandbox environments, /tmp is often ephemeral and not presented for download.
+
+Change in testRunReport.ts:
+
+output directory: /mnt/data
+
+filenames unchanged
+
+This way you can download:
+
+/mnt/data/test_run_report_7d.csv
+
+/mnt/data/test_run_report_7d.html
+
+3) Add one more “clinically important” evaluator check: disposition vocabulary
+
+Right now, you infer urgent vs routine by string matching. That’s okay, but you’ll eventually get drift (ED, urgent_or_ed, ER, etc.).
+
+Add a normalization map:
+
+treat any of: urgent_or_ed, ed, er, emergency as urgent
+
+treat any of: routine, supportive, self_care as routine
+
+This makes your regression testing more robust.
+
+4) Improve contraindication checks using meds sheet fields (less string guessing)
+
+You’re doing string matching (fine for v1). The next improvement is very easy:
+
+Add “med class” heuristics
+
+If Medication_Group contains NSAID and post_bariatric_surgery==true → flag
+
+If Pregnancy_Considerations contains avoid and pregnant → flag
+This is more reliable than “ibuprofen” substring.
+
+5) Your bots can now “improve unattended” safely
+
+With these in place, your unattended improvement loop should be:
+
+Nightly tests run
+
+Report shows top failures
+
+“Patch generator bot” proposes:
+
+RED_FLAG_QIDS additions
+
+rule key updates for dispositions
+
+router synonyms
+
+med pack swaps
+
+You approve patches (UPSERT import)
+
+You now have the mechanics for that.
+
+Next high-value deliverable: automated RED_FLAG_QIDS migration CSV generator
+
+Since you already have FLOW_SPECS populated with correct red flag question_ids, we can generate a CSV patch that appends:
+
+one row per flow: flow_id, rule_key=RED_FLAG_QIDS, value=comma list, active=Y
+
+Add: server/scripts/generateRedFlagQidsPatch.ts
+
+It reads your FLOW_SPECS and outputs a CSV you can import with your existing sheet importer.
+
+If you want, I’ll paste that script next and you’ll run:
+
+npx tsx server/scripts/generateRedFlagQidsPatch.ts
+
+
+It will output:
+
+/mnt/data/CLINICAL_RULES_RED_FLAG_QIDS_PATCH.csv
+
+Then import with:
+
+ts-node server/scripts/sheetImport.ts CLINICAL_RULES /mnt/data/CLINICAL_RULES_RED_FLAG_QIDS_PATCH.csv append
+
+
+(Or upsert if you make rule_key unique per flow; we can set a composite rule_key if needed.)
