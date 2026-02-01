@@ -1,0 +1,122 @@
+1) Lock in the public API of server/intakeStorage/
+
+Make sure server/intakeStorage/index.ts exports only these two things:
+
+export { getIntakeStore } from "./index";
+export type { IntakeStore } from "./driver";
+
+
+And not a bunch of driver internals. This prevents accidental coupling.
+
+If you already did this, great.
+
+2) Ensure your Firestore driver won’t break on missing indexes
+
+Your E2E passed on SQLite. Firestore often “passes locally” until it hits the composite index requirement.
+
+If your Firestore driver uses:
+
+cases.where("token","==",token).orderBy("created_at","desc").limit(1)
+
+
+You will likely need a composite index:
+
+Collection: cases
+Fields: token (ASC), created_at (DESC)
+
+Firestore will throw an error containing a link to create it. Create it once and you’re done.
+
+3) Session verification semantics: pick one (and make it consistent)
+
+Right now, many systems do either:
+
+Option A (recommended)
+
+Session becomes “verified” at verify time
+
+Session expires 30 minutes after verification
+
+Token is not “used” until submit
+
+Why this is best:
+
+If patient verifies and then needs 10 minutes to answer questions, they aren’t punished.
+
+You can still block replay.
+
+In DB terms, it’s:
+
+verified_at, session_expires_at
+
+used_at on submit
+
+If you haven’t already, adopt that model for both drivers.
+
+4) Make files require ownership check (especially with Firestore)
+
+You mentioned file downloads validate token ownership. Keep this invariant:
+
+file metadata includes token
+
+download route requires either:
+
+patient session for that token is verified and not expired, or
+
+provider API key
+
+If you currently allow anyone with fileId to download, that’s a PHI leak vector.
+
+The correct check is:
+
+Patient request:
+
+must provide token (or be in a token-scoped route)
+
+must be verified and within session_expires_at
+
+file’s token must match
+
+Provider request:
+
+allow with provider API key
+
+5) Keep the current import paths exactly as you have them
+
+Your imports:
+
+import { db } from "../intake/db";
+import { renderSummaryHtml } from "../intake/pdf";
+
+
+These are good. No need to move anything.
+
+The only import “rule” I’d enforce:
+
+✅ Routes import store only via:
+
+import { getIntakeStore } from "../intakeStorage";
+
+
+and never from ../storage (because of the existing server/storage.ts).
+
+6) Quick ready-for-prod suggestion (without changing behavior)
+
+Add a tiny “adapter health” endpoint so you can confirm which driver is active:
+
+GET /api/intake/_driver
+
+Response:
+
+{ "driver": "sqlite" }
+
+
+or
+
+{ "driver": "firestore" }
+
+
+This saves you a lot of “why is it still writing to sqlite” confusion later.
+
+7) Answer to your question: reorganize?
+
+No. Your current structure is better:

@@ -54,10 +54,19 @@ filesRouter.get("/api/file/:fileId", async (req: Request, res: Response) => {
   try {
     const fileId = req.params.fileId;
     const token = req.query.token as string | undefined;
+    const providerKey = req.headers["x-provider-key"] as string | undefined;
+    const configuredProviderKey = process.env.PROVIDER_API_KEY;
     
     const meta = await store.getFileMeta(fileId);
     if (!meta) return res.status(404).send("Not found");
     
+    // Provider access: valid provider key allows access to any file
+    if (providerKey && configuredProviderKey && providerKey === configuredProviderKey) {
+      res.setHeader("Content-Type", meta.mimeType);
+      return res.sendFile(meta.storagePath);
+    }
+    
+    // Patient access: requires verified session with matching token
     if (!token) {
       return res.status(401).send("Token required");
     }

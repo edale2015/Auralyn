@@ -1,8 +1,12 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getStore } from "../intakeStorage";
+import { getStore, getActiveDriver } from "../intakeStorage";
 import type { DraftPayload, SubmitPayload } from "../intakeStorage/types";
 
 export const intakeRouter = Router();
+
+intakeRouter.get("/api/intake/_driver", (_req: Request, res: Response) => {
+  res.json({ driver: getActiveDriver() });
+});
 const store = getStore();
 
 function computeRedFlags(body: SubmitPayload): string[] {
