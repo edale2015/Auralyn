@@ -24,6 +24,26 @@ function initFirebase() {
   });
 }
 
+async function latestCaseByToken(
+  cases: FirebaseFirestore.CollectionReference,
+  token: string
+): Promise<FirebaseFirestore.QueryDocumentSnapshot | null> {
+  try {
+    const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
+    return q.empty ? null : q.docs[0];
+  } catch (err: any) {
+    const msg = err?.message || "";
+    if (msg.includes("requires an index") || msg.includes("index")) {
+      console.error("[Firestore] Missing index error:", msg);
+      throw new Error(
+        "Firestore index missing for cases(token ASC, created_at DESC). " +
+        "Create it using the link in server logs or deploy firestore.indexes.json with: firebase deploy --only firestore:indexes"
+      );
+    }
+    throw err;
+  }
+}
+
 export function makeFirestoreStore(): StorageDriver {
   initFirebase();
   const db = admin.firestore();
@@ -75,9 +95,8 @@ export function makeFirestoreStore(): StorageDriver {
     },
 
     async getOrCreateCaseForToken(token) {
-      const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
-      if (!q.empty) {
-        const doc = q.docs[0];
+      const doc = await latestCaseByToken(cases, token);
+      if (doc) {
         const d: any = doc.data();
         return { caseId: d.case_id, status: d.status, currentStep: d.current_step ?? 0 };
       }
@@ -133,9 +152,9 @@ export function makeFirestoreStore(): StorageDriver {
     },
 
     async getStatus(token): Promise<StatusResult> {
-      const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
-      if (q.empty) throw new Error("Not found.");
-      const d: any = q.docs[0].data();
+      const doc = await latestCaseByToken(cases, token);
+      if (!doc) throw new Error("Not found.");
+      const d: any = doc.data();
       return {
         ok: true,
         caseId: d.case_id,
@@ -146,9 +165,9 @@ export function makeFirestoreStore(): StorageDriver {
     },
 
     async getSummaryHtml(token) {
-      const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
-      if (q.empty) throw new Error("Not found.");
-      const d: any = q.docs[0].data();
+      const doc = await latestCaseByToken(cases, token);
+      if (!doc) throw new Error("Not found.");
+      const d: any = doc.data();
       if (d.status !== "signed") throw new Error("Summary not available yet.");
       return d.summary_html || "<html><body>No summary.</body></html>";
     },

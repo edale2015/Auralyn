@@ -165,6 +165,24 @@ FIREBASE_PROJECT_ID=your-project-id
 GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
 ```
 
+### Firestore Index Required
+When using Firestore driver, you must create a composite index:
+
+**Collection:** `cases`
+**Fields:**
+- `token` Ascending
+- `created_at` Descending
+
+**Query that requires it:** Latest case lookup by token.
+
+**Option 1:** If the index is missing, Firestore returns an error containing a direct link to create it in the Firebase Console.
+
+**Option 2:** Deploy using Firebase CLI:
+```bash
+firebase deploy --only firestore:indexes
+```
+The index definition is in `firestore.indexes.json` at the project root.
+
 ### Routes (Storage-Agnostic)
 Located in `server/intake/`:
 - `routes.intake.ts` - Verify, save_draft, submit, status, summary endpoints
