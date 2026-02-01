@@ -140,9 +140,45 @@ Outputs:
 - Default: `./reports/`
 - Configurable: `REPORT_OUTPUT_DIR` env var
 
+## SQLite Intake System
+
+### Architecture
+Located in `server/intake/`:
+- `db.ts` - SQLite database with better-sqlite3
+- `types.ts` - TypeScript types for cases, sessions, files
+- `storage.ts` - File upload directory management
+- `pdf.ts` - HTML summary rendering
+- `routes.intake.ts` - Verify, save_draft, submit, status, summary endpoints
+- `routes.files.ts` - File upload/download endpoints
+- `routes.summary.ts` - Provider case view endpoints
+
+### Database Tables (SQLite)
+- `intake_sessions` - Token-based session management with code verification
+- `cases` - Case workflow (draft → submitted → in_review → signed → closed)
+- `files` - Uploaded file metadata
+
+### Frontend Components
+Located in `client/src/components/intake/`:
+- `VerifyCard` - Code verification
+- `SymptomGrid` - Yes/No/Not sure symptom grid
+- `UploadPanel` - File upload with preview
+- `ConsentPanel` - Telehealth + privacy consent
+- `ReviewSubmit` - Final review and submission
+
+### Routes
+- `/simple/:token` - Simple 5-step intake (SQLite-based)
+- `/intake/:token` - Full questionnaire intake (Firestore/Sheets-based)
+
+### Test Helper
+Create test token: `npx tsx server/scripts/createTestToken.ts [token] [code] [expiry_minutes]`
+
 ## Recent Changes (2026-02-01)
+- Added SQLite-based intake system with modular routes
+- Created intake frontend components (VerifyCard, SymptomGrid, etc.)
+- Added file upload capability with multer
 - Added patient website with intake flow, status, and summary pages
 - Implemented autosave for intake form (15-second interval)
 - Created EHR integration scaffolding for eCW/FHIR
 - Added Case data model in Firestore
 - Enhanced intake API with save_draft, status, summary, upload endpoints
+- Added staging regression gate to QA pipeline

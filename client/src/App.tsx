@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import PatientIntake from "@/pages/PatientIntake";
+import SimpleIntake from "@/pages/SimpleIntake";
 import IntakeStatus from "@/pages/IntakeStatus";
 import IntakeSummary from "@/pages/IntakeSummary";
 import StartVisit from "@/pages/StartVisit";
@@ -18,6 +19,7 @@ function Router() {
       <Route path="/start" component={StartVisit} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/intake/:token" component={PatientIntake} />
+      <Route path="/simple/:token" component={SimpleIntake} />
       <Route path="/intake/:token/status" component={IntakeStatus} />
       <Route path="/intake/:token/summary" component={IntakeSummary} />
       <Route component={NotFound} />
