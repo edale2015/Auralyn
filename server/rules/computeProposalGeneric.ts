@@ -5,6 +5,7 @@ type ComputeCtx = {
   flowId?: string;
   system?: string;
   complaint?: string;
+  spreadsheetIdOverride?: string;
 };
 
 type Proposal = {
@@ -27,7 +28,7 @@ export async function computeProposalGeneric(
 
   let rules: Record<string, string> = {};
   try {
-    rules = await getRulesForFlow(flowId);
+    rules = await getRulesForFlow(flowId, ctx?.spreadsheetIdOverride);
   } catch (e) {
     console.warn(`[computeProposalGeneric] getRulesForFlow(${flowId}) failed:`, e);
   }

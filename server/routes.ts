@@ -1679,7 +1679,13 @@ export async function registerRoutes(
       }
 
       const parsedAnswers = typeof answers === "string" ? JSON.parse(answers) : answers;
-      const proposal = await computeProposalGeneric(parsedAnswers, { flowId });
+
+      // Staging selector via x-sheet-env header
+      const sheetEnv = (req.header("x-sheet-env") || "").toLowerCase().trim();
+      const spreadsheetIdOverride =
+        sheetEnv === "staging" ? process.env.SHEETS_SPREADSHEET_ID_STAGING : undefined;
+
+      const proposal = await computeProposalGeneric(parsedAnswers, { flowId, spreadsheetIdOverride });
 
       return res.json({
         ok: true,

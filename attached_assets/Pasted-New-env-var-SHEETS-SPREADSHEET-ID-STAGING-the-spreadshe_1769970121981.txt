@@ -1,0 +1,320 @@
+New env var
+
+SHEETS_SPREADSHEET_ID_STAGING = the spreadsheet ID of your staging copy
+
+New behavior
+
+/api/test/execute supports header: x-sheet-env: staging
+
+test runner can target staging by setting: TEST_SHEET_ENV=staging
+
+new script: server/scripts/promoteRulePatchesToStaging.ts
+
+1) Make CLINICAL_RULES loading staging-aware
+A) Add a spreadsheetId override sheet reader
+
+Create: server/sheets/getSheetRowsWithSpreadsheetId.ts
+
+import { google } from "googleapis";
+
+function envOrThrow(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+function getAuth() {
+  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  return credsJson
+    ? new google.auth.GoogleAuth({
+        credentials: JSON.parse(credsJson),
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      })
+    : new google.auth.GoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      });
+}
+
+export async function getSheetRowsWithSpreadsheetId(tabName: string, spreadsheetId: string) {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tabName}!A1:Z5000`,
+    valueRenderOption: "UNFORMATTED_VALUE",
+  });
+
+  const values = resp.data.values || [];
+  if (!values.length) return { header: [], rows: [], rowsAsObjects: [] as any[] };
+
+  const header = values[0].map((h) => String(h ?? "").trim());
+  const rows = values.slice(1);
+
+  const rowsAsObjects = rows.map((r) => {
+    const obj: any = {};
+    header.forEach((h, i) => (obj[h] = r[i] ?? ""));
+    return obj;
+  });
+
+  return { header, rows, rowsAsObjects };
+}
+
+B) Patch your KV rule loader to accept optional spreadsheetIdOverride
+
+Update: server/rules/kvRuleLoader.ts
+
+import { getSheetRows } from "../sheets/sheetHelper";
+import { getSheetRowsWithSpreadsheetId } from "../sheets/getSheetRowsWithSpreadsheetId";
+
+export async function getRulesForFlow(
+  flowId: string,
+  spreadsheetIdOverride?: string
+): Promise<Record<string, string>> {
+
+  const loader = spreadsheetIdOverride
+    ? await getSheetRowsWithSpreadsheetId("CLINICAL_RULES", spreadsheetIdOverride)
+    : await getSheetRows("CLINICAL_RULES");
+
+  const { rowsAsObjects } = loader;
+
+  const out: Record<string, string> = {};
+
+  for (const r of rowsAsObjects) {
+    const fid = String((r as any).flow_id || "").trim();
+    if (fid !== flowId) continue;
+
+    const active = String((r as any).active || "Y").trim().toUpperCase();
+    if (active === "N") continue;
+
+    const key = String((r as any).rule_key || "").trim();
+    if (!key) continue;
+
+    // deterministic "first wins" (you already did this)
+    if (!(key in out)) out[key] = String((r as any).value ?? "").trim();
+  }
+
+  return out;
+}
+
+C) Patch computeProposalGeneric to pass the override through
+
+Update: server/rules/computeProposalGeneric.ts (or your compute file)
+
+Change signature to:
+
+type ComputeCtx = { flowId?: string; spreadsheetIdOverride?: string };
+
+export async function computeProposalGeneric(answers: Record<string, any>, ctx?: ComputeCtx) {
+  const flowId = ctx?.flowId || "ENT_FLU_LIKE_V1";
+  const rules = await getRulesForFlow(flowId, ctx?.spreadsheetIdOverride);
+
+  const compositeKey = `${flowId}::RED_FLAG_QIDS`;
+  const sheetQidsRaw = (rules[compositeKey] || rules["RED_FLAG_QIDS"] || "").trim();
+  const sheetQids = sheetQidsRaw ? sheetQidsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+
+  const redFlagQids = sheetQids.length ? sheetQids : (RED_FLAG_MAP[flowId] || []);
+  const redFlag = redFlagQids.some(qid => answers[qid] === "Yes");
+
+  const redDisp =
+    rules[`${flowId}_RED_FLAG_DISPOSITION`] ||
+    rules["RED_FLAG_DISPOSITION"] ||
+    "urgent_or_ed";
+
+  const nonRedDisp =
+    rules[`${flowId}_NON_RED_FLAG_DISPOSITION`] ||
+    rules["NON_RED_FLAG_DISPOSITION"] ||
+    "routine_or_supportive";
+
+  const disposition = redFlag ? redDisp : nonRedDisp;
+
+  const testPack = rules[`${flowId}_TEST_PACK`] || rules["TEST_PACK"] || undefined;
+  const medPack  = rules[`${flowId}_MED_PACK`]  || rules["MED_PACK"]  || undefined;
+
+  return {
+    disposition,
+    redFlag,
+    rulePacks: { testPack, medPack },
+    reasoning: [
+      redFlag ? `Red flag via: ${redFlagQids.filter(q => answers[q] === "Yes").join(", ")}` : "No red-flag answers detected",
+      `Disposition="${disposition}"`,
+      testPack ? `Test pack=${testPack}` : "",
+      medPack ? `Med pack=${medPack}` : "",
+    ].filter(Boolean),
+  };
+}
+
+2) Make /api/test/execute staging-aware
+
+Update your test endpoint:
+
+app.post("/api/test/execute", async (req: Request, res: Response) => {
+  try {
+    const token = req.header("x-test-token") || "";
+    if (!process.env.TEST_EXEC_TOKEN || token !== process.env.TEST_EXEC_TOKEN) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
+    const { flowId, answers, modifiers, routerText } = req.body || {};
+    if (!flowId || !answers) return res.status(400).json({ ok: false, error: "Missing flowId or answers" });
+
+    const parsedAnswers = typeof answers === "string" ? JSON.parse(answers) : answers;
+
+    // NEW: staging selector
+    const sheetEnv = (req.header("x-sheet-env") || "").toLowerCase().trim();
+    const spreadsheetIdOverride =
+      sheetEnv === "staging" ? process.env.SHEETS_SPREADSHEET_ID_STAGING : undefined;
+
+    const proposal = await computeProposalGeneric(parsedAnswers, { flowId, spreadsheetIdOverride });
+
+    return res.json({ ok: true, flowId, routerText: routerText || "", proposal, modifiers: modifiers || null });
+  } catch (e: any) {
+    console.error("test execute error:", e);
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+3) Make executor target staging (one env var)
+
+Update: server/testing/executor.ts
+
+Add:
+
+const TEST_SHEET_ENV = process.env.TEST_SHEET_ENV || "";
+
+
+Then include header conditionally:
+
+const headers: any = {
+  "content-type": "application/json",
+  "x-test-token": TEST_EXEC_TOKEN,
+};
+if (TEST_SHEET_ENV) headers["x-sheet-env"] = TEST_SHEET_ENV;
+
+
+Now:
+
+prod tests: (default) TEST_SHEET_ENV unset
+
+staging tests: TEST_SHEET_ENV=staging
+
+4) The staging promotion script
+Create: server/scripts/promoteRulePatchesToStaging.ts
+
+This does:
+
+run staging tests before
+
+apply rule patch CSV to staging (UPSERT)
+
+run staging tests after
+
+generate a markdown “before vs after” summary
+
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+
+function run(cmd: string, args: string[], env: Record<string, string>) {
+  return new Promise<void>((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: "inherit", env: { ...process.env, ...env } });
+    p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(" ")} failed (${code})`))));
+  });
+}
+
+function ensureDir(p: string) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+
+async function main() {
+  const OUT = process.env.REPORT_OUTPUT_DIR || "./reports";
+  const patchCsv = path.join(OUT, "CLINICAL_RULES_PATCH_PROPOSED.csv");
+
+  const stagingId = process.env.SHEETS_SPREADSHEET_ID_STAGING;
+  if (!stagingId) throw new Error("Missing SHEETS_SPREADSHEET_ID_STAGING");
+  if (!fs.existsSync(patchCsv)) throw new Error(`Patch CSV not found: ${patchCsv}`);
+
+  const beforeDir = path.join(OUT, "staging_before");
+  const afterDir = path.join(OUT, "staging_after");
+  ensureDir(beforeDir);
+  ensureDir(afterDir);
+
+  const common = {
+    REPORT_DAYS: process.env.REPORT_DAYS || "7",
+    TESTS_PER_FLOW: process.env.TESTS_PER_FLOW || "25",
+    TEST_SHEET_ENV: "staging",
+  };
+
+  console.log("=== STAGING: baseline tests (before) ===");
+  await run("npx", ["tsx", "server/scripts/runNightlyTests.ts"], { ...common, REPORT_OUTPUT_DIR: beforeDir });
+  await run("npx", ["tsx", "server/scripts/testRunReport.ts"],   { ...common, REPORT_OUTPUT_DIR: beforeDir });
+  await run("npx", ["tsx", "server/scripts/generateDailyDigest.ts"], { ...common, REPORT_OUTPUT_DIR: beforeDir });
+
+  console.log("=== Applying rule patch to STAGING spreadsheet ===");
+  // Apply patch to staging by temporarily overriding SHEETS_SPREADSHEET_ID for the import process
+  await run("npx", [
+    "tsx",
+    "server/scripts/sheetImport.ts",
+    "CLINICAL_RULES",
+    patchCsv,
+    "upsert",
+    "rule_key",
+  ], { ...process.env, SHEETS_SPREADSHEET_ID: stagingId } as any);
+
+  console.log("=== STAGING: tests (after) ===");
+  await run("npx", ["tsx", "server/scripts/runNightlyTests.ts"], { ...common, REPORT_OUTPUT_DIR: afterDir });
+  await run("npx", ["tsx", "server/scripts/testRunReport.ts"],   { ...common, REPORT_OUTPUT_DIR: afterDir });
+  await run("npx", ["tsx", "server/scripts/generateDailyDigest.ts"], { ...common, REPORT_OUTPUT_DIR: afterDir });
+
+  // Create simple promotion report
+  const reportPath = path.join(OUT, "staging_promotion_report.md");
+  const lines: string[] = [];
+  lines.push(`# Staging Promotion Report`);
+  lines.push(``);
+  lines.push(`Patch applied to staging: \`${patchCsv}\``);
+  lines.push(``);
+  lines.push(`## Before`);
+  lines.push(`- Digest: \`${path.join(beforeDir, "daily_digest.md")}\``);
+  lines.push(`- HTML: \`${path.join(beforeDir, "daily_digest.html")}\``);
+  lines.push(``);
+  lines.push(`## After`);
+  lines.push(`- Digest: \`${path.join(afterDir, "daily_digest.md")}\``);
+  lines.push(`- HTML: \`${path.join(afterDir, "daily_digest.html")}\``);
+  lines.push(``);
+  lines.push(`## Next`);
+  lines.push(`Review the BEFORE vs AFTER digests. If improved, promote the same CSV to PROD by running:`);
+  lines.push("");
+  lines.push("```bash");
+  lines.push(`npx tsx server/scripts/sheetImport.ts CLINICAL_RULES ${patchCsv} upsert rule_key`);
+  lines.push("```");
+
+  fs.writeFileSync(reportPath, lines.join("\n"), "utf8");
+  console.log(`Wrote: ${reportPath}`);
+}
+
+main().catch((e) => {
+  console.error("promoteRulePatchesToStaging failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+REPORT_DAYS=7 TESTS_PER_FLOW=25 REPORT_OUTPUT_DIR=./reports npx tsx server/scripts/promoteRulePatchesToStaging.ts
+
+
+This will generate:
+
+./reports/staging_before/*
+
+./reports/staging_after/*
+
+./reports/staging_promotion_report.md
+
+5) What you need to do once: create the staging spreadsheet
+
+Make a copy of your production clinical spreadsheet
+
+Set env var:
+
+SHEETS_SPREADSHEET_ID_STAGING=<staging id>
+
+You can keep staging private and reset it anytime by copying prod again.
