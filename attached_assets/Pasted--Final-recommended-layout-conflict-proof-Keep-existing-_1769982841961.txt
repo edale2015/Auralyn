@@ -1,0 +1,137 @@
+✅ Final recommended layout (conflict-proof)
+Keep existing
+
+server/storage.ts (UPLOAD_DIR etc.) stays as-is
+
+server/intake/* stays modular
+
+Add new abstraction here (no name collision)
+server/intakeStorage/
+  index.ts                 // driver selector
+  driver.ts                // interface types
+  sqliteDriver.ts          // wraps existing db.ts
+  firestoreDriver.ts       // new
+  util.ts                  // sha256, nowMs, statusText
+
+
+This avoids:
+
+server/storage.ts vs server/storage/ collision
+
+server/intake/storage.ts vs server/intake/storage/ collision
+
+✅ Import rules (so you never hit the conflict again)
+
+From inside server/intake/routes.*.ts, always import:
+
+import { getIntakeStore } from "../intakeStorage";
+
+
+Never import from ../storage for the store, because server/storage.ts exists.
+
+✅ What “done” looks like (verification checklist)
+A) There is exactly one store selector
+
+server/intakeStorage/index.ts exports:
+
+getIntakeStore()
+
+B) Route handlers have zero direct DB calls
+
+Search for:
+
+db.prepare(
+
+SELECT
+
+INSERT
+
+UPDATE
+inside server/intake/routes.*.ts
+
+They should be gone (except perhaps in internal helpers).
+
+C) Switching databases is only env vars
+
+SQLite:
+
+STORAGE_DRIVER=sqlite
+
+DB_PATH=...
+
+Firestore:
+
+STORAGE_DRIVER=firestore
+
+FIREBASE_PROJECT_ID=...
+
+GOOGLE_APPLICATION_CREDENTIALS=... (dev only)
+
+D) You can run E2E test against both drivers
+
+STORAGE_DRIVER=sqlite npm test
+
+STORAGE_DRIVER=firestore npm test
+
+🔥 Two important “gotchas” to fix now (even if tests pass)
+1) Firestore requires a composite index for your “latest case by token” query
+
+If your Firestore driver does:
+
+cases.where("token","==",token).orderBy("created_at","desc").limit(1)
+
+
+Firestore will likely require a composite index. When it fails, Firestore returns a console link to create it.
+
+Create index:
+
+Collection: cases
+
+Fields:
+
+token Asc
+
+created_at Desc
+
+If your code doesn’t handle the missing-index error gracefully, you’ll get a runtime failure in production.
+
+2) Your file storage is still local disk
+
+Even if metadata is Firestore, the actual uploads are in UPLOAD_DIR.
+That’s okay for now, but in prod this becomes:
+
+ephemeral disk risk
+
+PHI handling risk
+
+multi-instance risk
+
+Your “next upgrade” should be:
+
+Firestore metadata + Cloud Storage blobs
+
+But you don’t need to block on that.
+
+✅ Provider authentication: make it unskippable
+
+You mentioned provider auth using PROVIDER_API_KEY. Keep it, and make sure:
+
+All provider endpoints require it
+
+All admin endpoints require it
+
+It’s validated before any store calls that disclose PHI
+
+Header pattern:
+
+x-provider-api-key: <key>
+
+✅ Firestore security posture (important)
+
+You are using firebase-admin on the server, which bypasses Security Rules. That’s fine, but it means:
+
+Your server must enforce all auth/authorization correctly.
+
+Patients should not call Firestore directly from browser for PHI unless you implement Rules + auth.
+
+Given your current design: good. Keep all PHI behind server APIs.
