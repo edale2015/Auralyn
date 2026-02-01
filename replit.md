@@ -182,3 +182,6 @@ Create test token: `npx tsx server/scripts/createTestToken.ts [token] [code] [ex
 - Added Case data model in Firestore
 - Enhanced intake API with save_draft, status, summary, upload endpoints
 - Added staging regression gate to QA pipeline
+- Added database-persisted session verification (verified_at, session_expires_at)
+- Added provider authentication (PROVIDER_API_KEY env var required for /api/admin/* endpoints)
+- Added automatic DB migrations for existing deployments
