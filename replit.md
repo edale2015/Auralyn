@@ -27,10 +27,12 @@ Preferred communication style: Simple, everyday language.
 - **Database**: Firebase Firestore
 - **Admin SDK**: `firebase-admin`
 - **Schema**: Defined in `shared/schema.ts` (physicians, patients, encounters, orders, whatsapp_messages)
+- **Cases Collection**: `cases` in Firestore for patient intake workflow
 
 ### Authentication
 - Simple username/password login for physicians.
 - Client-side session storage in localStorage.
+- Token-based intake access for patients (6-digit code verification).
 
 ### Key Data Models
 - **Physicians**: Medical staff for case review.
@@ -38,6 +40,54 @@ Preferred communication style: Simple, everyday language.
 - **Encounters**: Medical cases with AI diagnosis, urgency, and status.
 - **Orders**: Follow-up actions.
 - **WhatsApp Messages**: Conversation history.
+- **Cases**: Patient intake workflow with draft/submitted/signed status.
+
+## Patient Website
+
+### Pages
+- `/` - Physician login
+- `/start` - Patient entry point (enter code or WhatsApp link)
+- `/intake/:token` - Code verification + intake form
+- `/intake/:token/status` - Case status page (polling for updates)
+- `/intake/:token/summary` - Signed visit summary (HTML)
+- `/dashboard` - Physician dashboard for case review
+
+### Intake API Endpoints
+- `POST /api/intake/:token/verify` - Verify 6-digit code
+- `POST /api/intake/:token/save_draft` - Autosave draft answers
+- `POST /api/intake/:token/submit` - Submit completed intake
+- `GET /api/intake/:token/status` - Get case status
+- `GET /api/intake/:token/summary` - Get signed visit summary
+- `POST /api/intake/:token/upload` - Upload attachments
+
+### Autosave
+- Saves draft every 15 seconds while patient is on form
+- Shows save indicator in UI
+
+## EHR Integration (Scaffolding)
+
+### Architecture
+Located in `server/integrations/ehr/`:
+- `ehrConnector.ts` - Vendor-neutral interface
+- `smartDiscovery.ts` - SMART on FHIR discovery
+- `fhirClient.ts` - FHIR GET/POST helpers
+- `ecwConnector.ts` - eClinicalWorks connector (credential-ready)
+- `ehrRegistry.ts` - Vendor registry with env config loader
+
+### Supported Vendors
+- eClinicalWorks (ecw) - Ready for credentials
+- Athena - Stub (not wired)
+
+### Environment Variables (when ready)
+```
+EHR_VENDOR=ecw
+EHR_FHIR_BASE_URL=https://...
+EHR_CLIENT_ID=...
+EHR_CLIENT_SECRET=...
+EHR_REDIRECT_URI=https://...
+EHR_SCOPES=launch/patient openid fhirUser patient/*.read
+EHR_ALLOW_WRITES=false
+```
 
 ## External Dependencies
 
@@ -52,10 +102,36 @@ Preferred communication style: Simple, everyday language.
 
 ### Google Sheets Integration
 - **Flow Questions**: Dynamically loads questionnaire questions from the `ENT_FLU_QUESTIONS` tab.
-- **Clinical Rules**: Dynamically loads clinical decision rules from the `ENT_FLU_RULES` tab.
+- **Clinical Rules**: Dynamically loads clinical decision rules from the `CLINICAL_RULES` tab.
+- **Medications**: `CLINICAL_MEDICATIONS` tab
+- **Diagnoses**: `CLINICAL_DIAGNOSES` tab
 
-### Replit Integrations
-- **Audio**: Voice chat with speech-to-text and text-to-speech.
-- **Chat**: Conversation management with streaming responses.
-- **Image**: Image generation via OpenAI.
-- **Batch**: Rate-limited batch processing utilities.
+## QA & Testing Pipeline
+
+### Nightly Pipeline
+Run: `npx tsx server/scripts/runNightlyPipeline.ts`
+
+Steps:
+1. `runNightlyTests.ts` - Generate test scenarios
+2. `testRunReport.ts` - Report failures (CSV/HTML)
+3. `generatePatchProposals.ts` - Suggest RED_FLAG_QIDS patches
+4. `generateMedCleanupProposals.ts` - Medication data cleanup
+5. `generateRouterSynonymSuggestions.ts` - Router misroute analysis
+6. `generateDailyDigest.ts` - Summary digest
+7. (Optional) Auto-promote patches to staging
+
+### Staging Environment
+- `SHEETS_SPREADSHEET_ID_STAGING` - Staging spreadsheet ID
+- `TEST_SHEET_ENV=staging` - Target staging for tests
+- `AUTO_PROMOTE_TO_STAGING=1` - Enable auto-promotion in pipeline
+
+### Report Output
+- Default: `./reports/`
+- Configurable: `REPORT_OUTPUT_DIR` env var
+
+## Recent Changes (2026-02-01)
+- Added patient website with intake flow, status, and summary pages
+- Implemented autosave for intake form (15-second interval)
+- Created EHR integration scaffolding for eCW/FHIR
+- Added Case data model in Firestore
+- Enhanced intake API with save_draft, status, summary, upload endpoints

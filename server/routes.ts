@@ -1597,7 +1597,24 @@ export async function registerRoutes(
         return res.status(401).json({ ok: false, error: "Code expired. Please text 'hi' to start again." });
       }
 
-      return res.json({ ok: true, encounterId: encounter.id, flowId: encounter.flowId || "ENT_FLU_LIKE_V1" });
+      // Retrieve saved draft if exists
+      let savedDraft: Record<string, any> | null = null;
+      if (encounter.answers) {
+        try {
+          const parsed = JSON.parse(encounter.answers);
+          if (parsed.__draft) {
+            savedDraft = parsed.__draft;
+          }
+        } catch {}
+      }
+
+      return res.json({
+        ok: true,
+        encounterId: encounter.id,
+        flowId: encounter.flowId || "ENT_FLU_LIKE_V1",
+        savedDraft,
+        status: encounter.status || "pending_intake"
+      });
     } catch (e: any) {
       console.error("Intake verify error:", e);
       res.status(500).json({ ok: false, error: e?.message || String(e) });
@@ -1661,6 +1678,140 @@ export async function registerRoutes(
       res.json({ ok: true, encounterId: encounter.id, redFlag: proposal.redFlag });
     } catch (e: any) {
       console.error("Intake submit error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Save draft (autosave)
+  app.post("/api/intake/:token/save_draft", async (req: Request, res: Response) => {
+    try {
+      const token = req.params.token;
+      const { draft, currentStep } = req.body || {};
+      if (!draft || currentStep === undefined) {
+        return res.status(400).json({ ok: false, error: "Missing draft or currentStep" });
+      }
+
+      const encounter = await storage.getEncounterByIntakeToken(token);
+      if (!encounter) return res.status(404).json({ ok: false, error: "Invalid or expired link" });
+
+      // Store draft in encounter answers (prefixed to avoid collision)
+      const existingAnswers = encounter.answers ? JSON.parse(encounter.answers) : {};
+      existingAnswers.__draft = draft;
+      existingAnswers.__draftStep = currentStep;
+      existingAnswers.__draftSavedAt = Date.now();
+
+      await storage.updateEncounter(encounter.id, {
+        answers: JSON.stringify(existingAnswers),
+      } as any);
+
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Intake save_draft error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Get intake status
+  app.get("/api/intake/:token/status", async (req: Request, res: Response) => {
+    try {
+      const token = req.params.token;
+      const encounter = await storage.getEncounterByIntakeToken(token);
+      if (!encounter) return res.status(404).json({ ok: false, error: "Invalid link" });
+
+      const statusMap: Record<string, string> = {
+        "pending_intake": "Continue your intake form",
+        "pending_review": "Waiting for provider review",
+        "in_review": "Provider is reviewing your case",
+        "approved": "Visit complete - view your summary",
+        "closed": "This visit has been closed"
+      };
+
+      return res.json({
+        ok: true,
+        status: encounter.status || "pending_intake",
+        encounterId: encounter.id,
+        lastUpdatedAt: encounter.updatedAt ? new Date(encounter.updatedAt).getTime() : Date.now(),
+        nextActionText: statusMap[encounter.status || "pending_intake"] || "Status unknown"
+      });
+    } catch (e: any) {
+      console.error("Intake status error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Get signed visit summary
+  app.get("/api/intake/:token/summary", async (req: Request, res: Response) => {
+    try {
+      const token = req.params.token;
+      const encounter = await storage.getEncounterByIntakeToken(token);
+      if (!encounter) return res.status(404).json({ ok: false, error: "Invalid link" });
+
+      if (encounter.status !== "approved") {
+        return res.status(400).json({ ok: false, error: "Visit summary not yet available" });
+      }
+
+      const proposal = encounter.proposal ? JSON.parse(encounter.proposal) : {};
+      const summary = encounter.physicianSummary ? JSON.parse(encounter.physicianSummary) : {};
+
+      // Sanitize text to prevent XSS
+      const esc = (s: string) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+      const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Visit Summary</title></head>
+<body style="font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 1rem;">
+  <h1>Visit Summary</h1>
+  <p><strong>Date:</strong> ${encounter.updatedAt ? new Date(encounter.updatedAt).toLocaleDateString() : "N/A"}</p>
+  
+  <h2>Chief Complaint</h2>
+  <p>${esc(encounter.chiefComplaint || "Flu-like symptoms")}</p>
+  
+  <h2>Assessment</h2>
+  <p>${esc(summary.hpi || encounter.aiDiagnosis || "See provider notes")}</p>
+  
+  <h2>Disposition</h2>
+  <p>${esc(encounter.aiDisposition || proposal.disposition || "Pending")}</p>
+  
+  <h2>Instructions</h2>
+  <p>${esc(summary.plan || "Follow up with your provider as directed.")}</p>
+  
+  <hr>
+  <p style="color: #666; font-size: 0.9rem;">This is an automated summary. Follow up with your provider for any questions.</p>
+</body>
+</html>
+      `.trim();
+
+      res.setHeader("Content-Type", "text/html");
+      return res.send(html);
+    } catch (e: any) {
+      console.error("Intake summary error:", e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  // Upload attachment
+  app.post("/api/intake/:token/upload", async (req: Request, res: Response) => {
+    try {
+      const token = req.params.token;
+      const encounter = await storage.getEncounterByIntakeToken(token);
+      if (!encounter) return res.status(404).json({ ok: false, error: "Invalid link" });
+
+      const fileId = `FILE_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      // Store file reference in encounter answers
+      const existingAnswers = encounter.answers ? JSON.parse(encounter.answers) : {};
+      const attachments = existingAnswers.__attachments || [];
+      attachments.push(fileId);
+      existingAnswers.__attachments = attachments;
+
+      await storage.updateEncounter(encounter.id, {
+        answers: JSON.stringify(existingAnswers),
+      } as any);
+
+      return res.json({ ok: true, fileId });
+    } catch (e: any) {
+      console.error("Intake upload error:", e);
       res.status(500).json({ ok: false, error: e?.message || String(e) });
     }
   });

@@ -1,0 +1,437 @@
+1) Patient website first: what we will build now
+Patient flow
+
+Patient gets WhatsApp link: /intake/{token} + 6-digit code
+
+Website verifies code (optionally add DOB)
+
+Patient completes intake (autosave + uploads)
+
+On submit: case is created, triage runs, provider review queue updated
+
+Patient sees status page + later a signed visit summary (PDF/HTML)
+
+Pages (minimum viable, production-shaped)
+
+/ (Start Visit, “I have a code”)
+
+/intake/:token (Verify + Intake form)
+
+/intake/:token/status (draft/submitted/in review/signed)
+
+/intake/:token/summary (signed visit summary)
+
+2) Repo layout (clean + reusable)
+
+Assuming your existing stack is Node/Express + a web front end:
+
+/server
+  /routes
+    intake.routes.ts
+    files.routes.ts
+    ehr.routes.ts
+  /services
+    intake.service.ts
+    triage.service.ts
+    pdf.service.ts
+  /storage
+    db.ts
+    fileStore.ts
+  /integrations
+    /ehr
+      ehrConnector.ts
+      smartDiscovery.ts
+      fhirClient.ts
+      athenaConnector.ts        (wrap what you already have)
+      ecwConnector.ts           (new, credential-ready)
+      ehrRegistry.ts
+  app.ts
+
+/web
+  /src
+    /pages
+      Home.tsx
+      Intake.tsx
+      Status.tsx
+      Summary.tsx
+    /components
+      VerifyCard.tsx
+      SymptomGrid.tsx
+      ModifierForm.tsx
+      MedsAllergiesForm.tsx
+      UploadPanel.tsx
+      ConsentPanel.tsx
+    api.ts
+    router.tsx
+
+
+If you already have a web folder, we’ll slot these routes into it.
+
+3) Backend API: what to implement now (patient website)
+
+You already have verify + submit. We keep those and add draft + upload + status + summary.
+
+Intake
+
+POST /api/intake/:token/verify
+
+input: { code, dob? }
+
+output: { ok: true, flowId, patientDisplayName? }
+
+POST /api/intake/:token/save_draft
+
+input: { draft: {...}, currentStep, lastTouchedAt }
+
+output: { ok: true }
+
+POST /api/intake/:token/submit
+
+input: { answers, modifiers, meds, allergies, pmh, pharmacy, attachments, consent }
+
+output: { ok: true, caseId }
+
+GET /api/intake/:token/status
+
+output: { status, caseId?, lastUpdatedAt, nextActionText }
+
+GET /api/intake/:token/summary
+
+output: signed summary HTML or PDF (only when status === "signed")
+
+Files
+
+POST /api/intake/:token/upload
+
+multipart upload: image/pdf
+
+output: { ok: true, fileId, url? } (url optional; can be proxied)
+
+4) Data model (simple and future-proof)
+
+A single “Case” object that’s compatible with EHR syncing later:
+
+{
+  "caseId": "CASE_2026_02_01_0001",
+  "token": "48char",
+  "status": "draft|submitted|in_review|signed|closed",
+  "createdAt": "...",
+  "updatedAt": "...",
+  "patient": {
+    "name": "optional",
+    "dob": "optional",
+    "phone": "whatsapp number"
+  },
+  "flowId": "FLOW_...",
+  "draft": {
+    "currentStep": 2,
+    "data": {}
+  },
+  "intake": {
+    "chiefComplaint": "",
+    "answers": [],
+    "modifiers": {},
+    "pmh": {},
+    "meds": [],
+    "allergies": [],
+    "pharmacy": {},
+    "attachments": ["FILE_..."],
+    "consent": {
+      "telehealth": true,
+      "privacy": true,
+      "signatureName": "..."
+    }
+  },
+  "assistant": {
+    "triageLevel": "",
+    "redFlags": [],
+    "draftNote": "",
+    "draftDx": [],
+    "draftOrders": [],
+    "draftCoding": {
+      "icd10": [],
+      "cpt": []
+    }
+  },
+  "external_ehr": {
+    "vendor": "none|athena|ecw",
+    "fhirBaseUrl": "",
+    "patientId": "",
+    "encounterId": "",
+    "lastSyncAt": null,
+    "syncStatus": "not_linked|ready|synced|error",
+    "lastSyncError": ""
+  }
+}
+
+5) EHR integration scaffold: ready for eCW later
+
+You don’t need eCW credentials to build the connector “shell.” We’ll implement:
+
+a standard EHR connector interface
+
+SMART discovery support
+
+a FHIR client wrapper
+
+a vendor registry that can switch between Athena/eCW based on config
+
+feature flags for “writes allowed”
+
+5.1 EHR connector interface (vendor-neutral)
+// server/integrations/ehr/ehrConnector.ts
+export type EhrVendor = "athena" | "ecw";
+
+export type EhrConfig = {
+  vendor: EhrVendor;
+  fhirBaseUrl: string;           // tenant-specific
+  clientId: string;
+  clientSecret?: string;
+  redirectUri: string;
+  scopes: string;                // SMART scopes string
+  allowWrites: boolean;          // feature flag
+};
+
+export interface EhrConnector {
+  vendor: EhrVendor;
+
+  // SMART discovery
+  getSmartConfiguration(): Promise<{
+    authorization_endpoint: string;
+    token_endpoint: string;
+    scopes_supported?: string[];
+  }>;
+
+  // OAuth helpers
+  buildAuthorizeUrl(state: string, launch?: string): Promise<string>;
+  exchangeCodeForToken(code: string): Promise<any>;
+
+  // FHIR reads
+  getPatient(patientId: string, accessToken: string): Promise<any>;
+  getClinicalSnapshot(patientId: string, accessToken: string): Promise<{
+    meds: any[];
+    allergies: any[];
+    problems: any[];
+  }>;
+
+  // FHIR writes (feature-flagged)
+  postDocumentReference(
+    patientId: string,
+    encounterId: string | null,
+    accessToken: string,
+    doc: { title: string; contentType: string; dataBase64: string }
+  ): Promise<any>;
+
+  postNoteDraft(
+    patientId: string,
+    encounterId: string | null,
+    accessToken: string,
+    noteText: string
+  ): Promise<any>;
+}
+
+5.2 SMART discovery (works for any vendor that supports it)
+// server/integrations/ehr/smartDiscovery.ts
+export async function fetchSmartConfig(fhirBaseUrl: string) {
+  const url = `${fhirBaseUrl.replace(/\/$/, "")}/.well-known/smart-configuration`;
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new Error(`SMART discovery failed: ${res.status}`);
+  return await res.json();
+}
+
+5.3 FHIR client wrapper (shared)
+// server/integrations/ehr/fhirClient.ts
+export async function fhirGet(url: string, accessToken: string) {
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/fhir+json" }
+  });
+  if (!res.ok) throw new Error(`FHIR GET failed ${res.status}`);
+  return await res.json();
+}
+
+export async function fhirPost(url: string, accessToken: string, body: any) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/fhir+json",
+      Accept: "application/fhir+json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`FHIR POST failed ${res.status}`);
+  return await res.json();
+}
+
+5.4 eCW connector placeholder (credential-ready)
+
+This doesn’t require any real eCW values yet. It just reads env config.
+
+// server/integrations/ehr/ecwConnector.ts
+import { fetchSmartConfig } from "./smartDiscovery";
+import { fhirGet, fhirPost } from "./fhirClient";
+import type { EhrConnector, EhrConfig } from "./ehrConnector";
+
+export function makeEcwConnector(config: EhrConfig): EhrConnector {
+  return {
+    vendor: "ecw",
+
+    async getSmartConfiguration() {
+      return await fetchSmartConfig(config.fhirBaseUrl);
+    },
+
+    async buildAuthorizeUrl(state: string, launch?: string) {
+      const smart = await fetchSmartConfig(config.fhirBaseUrl);
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: config.clientId,
+        redirect_uri: config.redirectUri,
+        scope: config.scopes,
+        state
+      });
+      if (launch) params.set("launch", launch);
+      // aud is sometimes required in SMART flows
+      params.set("aud", config.fhirBaseUrl);
+
+      return `${smart.authorization_endpoint}?${params.toString()}`;
+    },
+
+    async exchangeCodeForToken(code: string) {
+      const smart = await fetchSmartConfig(config.fhirBaseUrl);
+      // Token exchange often uses x-www-form-urlencoded
+      const body = new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: config.redirectUri,
+        client_id: config.clientId
+      });
+      // Some vendors require client_secret. Keep optional.
+      if (config.clientSecret) body.set("client_secret", config.clientSecret);
+
+      const res = await fetch(smart.token_endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString()
+      });
+      if (!res.ok) throw new Error(`Token exchange failed: ${res.status}`);
+      return await res.json();
+    },
+
+    async getPatient(patientId: string, accessToken: string) {
+      const url = `${config.fhirBaseUrl.replace(/\/$/, "")}/Patient/${patientId}`;
+      return await fhirGet(url, accessToken);
+    },
+
+    async getClinicalSnapshot(patientId: string, accessToken: string) {
+      const base = config.fhirBaseUrl.replace(/\/$/, "");
+      const [meds, allergies, problems] = await Promise.all([
+        fhirGet(`${base}/MedicationRequest?patient=${patientId}`, accessToken).catch(() => ({ entry: [] })),
+        fhirGet(`${base}/AllergyIntolerance?patient=${patientId}`, accessToken).catch(() => ({ entry: [] })),
+        fhirGet(`${base}/Condition?patient=${patientId}`, accessToken).catch(() => ({ entry: [] }))
+      ]);
+
+      return {
+        meds: (meds.entry ?? []).map((e: any) => e.resource),
+        allergies: (allergies.entry ?? []).map((e: any) => e.resource),
+        problems: (problems.entry ?? []).map((e: any) => e.resource)
+      };
+    },
+
+    async postDocumentReference(patientId, encounterId, accessToken, doc) {
+      if (!config.allowWrites) throw new Error("EHR writes disabled by config");
+      const base = config.fhirBaseUrl.replace(/\/$/, "");
+
+      const resource = {
+        resourceType: "DocumentReference",
+        status: "current",
+        subject: { reference: `Patient/${patientId}` },
+        context: encounterId ? { encounter: [{ reference: `Encounter/${encounterId}` }] } : undefined,
+        type: { text: doc.title },
+        content: [{
+          attachment: {
+            contentType: doc.contentType,
+            data: doc.dataBase64,
+            title: doc.title
+          }
+        }]
+      };
+
+      return await fhirPost(`${base}/DocumentReference`, accessToken, resource);
+    },
+
+    async postNoteDraft(patientId, encounterId, accessToken, noteText) {
+      // Many EHRs store notes differently; DocumentReference is the safest generic sink.
+      const dataBase64 = Buffer.from(noteText, "utf8").toString("base64");
+      return await this.postDocumentReference(patientId, encounterId, accessToken, {
+        title: "AI Draft Note",
+        contentType: "text/plain",
+        dataBase64
+      });
+    }
+  };
+}
+
+5.5 EHR registry (switch vendors cleanly)
+// server/integrations/ehr/ehrRegistry.ts
+import type { EhrConfig, EhrConnector, EhrVendor } from "./ehrConnector";
+import { makeEcwConnector } from "./ecwConnector";
+// import { makeAthenaConnector } from "./athenaConnector";
+
+export function getEhrConnector(config: EhrConfig): EhrConnector {
+  if (config.vendor === "ecw") return makeEcwConnector(config);
+  if (config.vendor === "athena") {
+    // return makeAthenaConnector(config);
+    throw new Error("Athena connector not wired in this stub");
+  }
+  throw new Error("Unknown EHR vendor");
+}
+
+5.6 Env config placeholders (ready when eCW replies)
+
+.env template:
+
+EHR_VENDOR=ecw
+EHR_FHIR_BASE_URL=https://YOUR_ECW_FHIR_BASE_URL
+EHR_CLIENT_ID=YOUR_CLIENT_ID
+EHR_CLIENT_SECRET=YOUR_CLIENT_SECRET_OPTIONAL
+EHR_REDIRECT_URI=https://YOURDOMAIN.com/ehr/oauth/callback
+EHR_SCOPES=launch/patient openid fhirUser patient/*.read
+EHR_ALLOW_WRITES=false
+
+
+When you get eCW details, you fill these in, flip EHR_ALLOW_WRITES=true only after confirming write permissions.
+
+6) Website UI details: what to build first (fastest value)
+Intake sections (what patients actually fill)
+
+Chief complaint + free text
+
+Symptom grid (your 19 questions)
+
+Modifiers (onset/duration/severity/associated symptoms)
+
+Meds + Allergies
+
+PMH
+
+Pharmacy
+
+Upload photos
+
+Consent
+
+Submit
+
+Autosave
+
+Save draft on:
+
+every page change
+
+every 10–20 seconds
+
+on blur for key fields
+
+If the token expires, show: “Your secure session expired, reply ‘LINK’ on WhatsApp for a new one.”
+
+7) How Ath

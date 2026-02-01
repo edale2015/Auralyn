@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
-import { useParams } from "wouter";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useParams, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Check, AlertTriangle, X } from "lucide-react";
+import { Loader2, Check, AlertTriangle, X, Save } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -29,6 +29,7 @@ export default function PatientIntake() {
   const params = useParams<{ token: string }>();
   const token = params.token || "";
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   const [step, setStep] = useState<IntakeStep>("code");
   const [code, setCode] = useState("");
@@ -38,6 +39,45 @@ export default function PatientIntake() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [redFlag, setRedFlag] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+
+  const saveDraft = useCallback(async () => {
+    if (step !== "form" || !token) return;
+    setSaving(true);
+    try {
+      await apiRequest("POST", `/api/intake/${token}/save_draft`, {
+        draft: answersRef.current,
+        currentStep: 0
+      });
+      setLastSaved(new Date());
+    } catch (e) {
+      console.warn("Autosave failed:", e);
+    } finally {
+      setSaving(false);
+    }
+  }, [token, step]);
+
+  useEffect(() => {
+    if (step !== "form") return;
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveDraft();
+    }, 15000);
+
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [answers, step, saveDraft]);
 
   const verifyCode = async () => {
     if (!code.trim()) {
@@ -51,7 +91,7 @@ export default function PatientIntake() {
       const data = await res.json();
       if (data.ok) {
         setFlowId(data.flowId);
-        await loadQuestions(data.flowId);
+        await loadQuestions(data.flowId, data.savedDraft);
         setStep("form");
       } else {
         setErrorMsg(data.error || "Invalid code");
@@ -65,7 +105,7 @@ export default function PatientIntake() {
     }
   };
 
-  const loadQuestions = async (fId: string) => {
+  const loadQuestions = async (fId: string, savedDraft?: Record<string, any> | null) => {
     try {
       const res = await fetch(`/api/flows/${fId}/questions`);
       const data = await res.json();
@@ -73,12 +113,23 @@ export default function PatientIntake() {
         setQuestions(data.questions);
         const initial: Record<string, any> = {};
         data.questions.forEach((q: FlowQuestion) => {
-          if (isYesNoType(q.type)) initial[q.id] = null;
-          else if (q.type === "number") initial[q.id] = "";
-          else if (q.type === "choice" || q.type === "multi_select") initial[q.id] = null;
-          else initial[q.id] = "";
+          // Use saved draft value if available
+          if (savedDraft && savedDraft[q.id] !== undefined) {
+            initial[q.id] = savedDraft[q.id];
+          } else if (isYesNoType(q.type)) {
+            initial[q.id] = null;
+          } else if (q.type === "number") {
+            initial[q.id] = "";
+          } else if (q.type === "choice" || q.type === "multi_select") {
+            initial[q.id] = null;
+          } else {
+            initial[q.id] = "";
+          }
         });
         setAnswers(initial);
+        if (savedDraft) {
+          toast({ title: "Draft restored", description: "Your previous answers have been loaded." });
+        }
       }
     } catch {
       toast({ title: "Failed to load questions", variant: "destructive" });
@@ -193,8 +244,25 @@ export default function PatientIntake() {
         <div className="max-w-2xl mx-auto space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle data-testid="text-form-title">Symptom Questionnaire</CardTitle>
-              <CardDescription>Please answer the following questions about your symptoms.</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle data-testid="text-form-title">Symptom Questionnaire</CardTitle>
+                  <CardDescription>Please answer the following questions about your symptoms.</CardDescription>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {saving ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : lastSaved ? (
+                    <>
+                      <Save className="h-3 w-3" />
+                      <span>Saved {lastSaved.toLocaleTimeString()}</span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
             </CardHeader>
           </Card>
 
@@ -343,6 +411,14 @@ export default function PatientIntake() {
                 Your answers have been sent to a physician for review. You'll receive a message on WhatsApp once they've reviewed your case.
               </p>
             )}
+            <Button
+              data-testid="button-check-status"
+              variant="outline"
+              className="w-full"
+              onClick={() => setLocation(`/intake/${token}/status`)}
+            >
+              Check Status
+            </Button>
           </CardContent>
         </Card>
       </div>
