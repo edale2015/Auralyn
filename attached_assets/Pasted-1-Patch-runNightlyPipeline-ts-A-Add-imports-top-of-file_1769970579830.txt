@@ -1,0 +1,57 @@
+1) Patch runNightlyPipeline.ts
+A) Add imports (top of file)
+import crypto from "crypto";
+
+
+(You already imported fs and path.)
+
+B) Add helper functions
+
+Paste these below hasNonEmptyCsv():
+
+function hashFile(filePath: string): string {
+  const buf = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
+function readLastHash(hashPath: string): string | null {
+  if (!fs.existsSync(hashPath)) return null;
+  return fs.readFileSync(hashPath, "utf8").trim() || null;
+}
+
+function writeLastHash(hashPath: string, hash: string) {
+  fs.writeFileSync(hashPath, hash, "utf8");
+}
+
+C) Modify the auto-promote block
+
+Replace only the auto-promote section you added earlier with this version:
+
+  // 7) Auto-promote patches to STAGING (optional, safe, hash-guarded)
+  const autoPromote = (process.env.AUTO_PROMOTE_TO_STAGING || "").trim() === "1";
+  const stagingId = process.env.SHEETS_SPREADSHEET_ID_STAGING || "";
+
+  const patchCsv = path.join(OUT, "CLINICAL_RULES_PATCH_PROPOSED.csv");
+  const patchExists = hasNonEmptyCsv(patchCsv);
+
+  const hashPath = path.join(OUT, ".last_patch_hash");
+
+  if (!autoPromote) {
+    console.log("=== Auto-promote to STAGING skipped (AUTO_PROMOTE_TO_STAGING != 1) ===");
+  } else if (!stagingId) {
+    console.log("=== Auto-promote to STAGING skipped (missing SHEETS_SPREADSHEET_ID_STAGING) ===");
+  } else if (!patchExists) {
+    console.log(`=== Auto-promote to STAGING skipped (no proposed rule patches at ${patchCsv}) ===`);
+  } else {
+    const currentHash = hashFile(patchCsv);
+    const lastHash = readLastHash(hashPath);
+
+    if (lastHash && lastHash === currentHash) {
+      console.log("=== Auto-promote to STAGING skipped (patch unchanged since last run) ===");
+    } else {
+      console.log("=== Auto-promote to STAGING starting (new patch detected) ===");
+      await run("npx", ["tsx", "server/scripts/promoteRulePatchesToStaging.ts"], env);
+      writeLastHash(hashPath, currentHash);
+      console.log("=== Auto-promote to STAGING finished; hash updated ===");
+    }
+  }

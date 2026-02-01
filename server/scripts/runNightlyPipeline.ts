@@ -1,4 +1,6 @@
 import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
 
 function run(cmd: string, args: string[], env: Record<string,string>) {
   return new Promise<void>((resolve, reject) => {
@@ -8,6 +10,16 @@ function run(cmd: string, args: string[], env: Record<string,string>) {
       else reject(new Error(`${cmd} ${args.join(" ")} failed with code ${code}`));
     });
   });
+}
+
+function hasNonEmptyCsv(csvPath: string): boolean {
+  if (!fs.existsSync(csvPath)) return false;
+  const txt = fs.readFileSync(csvPath, "utf8").trim();
+  if (!txt) return false;
+
+  // If file only contains header row, it has no proposals
+  const lines = txt.split(/\r?\n/).filter(Boolean);
+  return lines.length > 1;
 }
 
 async function main() {
@@ -41,6 +53,25 @@ async function main() {
 
   // 6) Digest
   await run("npx", ["tsx", "server/scripts/generateDailyDigest.ts"], env);
+
+  // 7) Auto-promote patches to STAGING (optional, safe)
+  const autoPromote = (process.env.AUTO_PROMOTE_TO_STAGING || "").trim() === "1";
+  const stagingId = process.env.SHEETS_SPREADSHEET_ID_STAGING || "";
+
+  const patchCsv = path.join(OUT, "CLINICAL_RULES_PATCH_PROPOSED.csv");
+  const patchExists = hasNonEmptyCsv(patchCsv);
+
+  if (!autoPromote) {
+    console.log("=== Auto-promote to STAGING skipped (AUTO_PROMOTE_TO_STAGING != 1) ===");
+  } else if (!stagingId) {
+    console.log("=== Auto-promote to STAGING skipped (missing SHEETS_SPREADSHEET_ID_STAGING) ===");
+  } else if (!patchExists) {
+    console.log(`=== Auto-promote to STAGING skipped (no proposed rule patches at ${patchCsv}) ===`);
+  } else {
+    console.log("=== Auto-promote to STAGING starting ===");
+    await run("npx", ["tsx", "server/scripts/promoteRulePatchesToStaging.ts"], env);
+    console.log("=== Auto-promote to STAGING finished ===");
+  }
 
   console.log("=== Nightly Pipeline complete ===");
 }
