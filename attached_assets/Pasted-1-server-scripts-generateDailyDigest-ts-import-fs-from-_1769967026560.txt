@@ -1,0 +1,252 @@
+1) server/scripts/generateDailyDigest.ts
+import fs from "fs";
+import path from "path";
+import { db } from "../firebase";
+
+function norm(x: any) { return String(x ?? "").trim(); }
+function ensureDir(p: string) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+function inc(m: Map<string, number>, k: string, by = 1) { m.set(k, (m.get(k) || 0) + by); }
+function topN(m: Map<string, number>, n = 15) {
+  return Array.from(m.entries()).sort((a,b) => b[1]-a[1]).slice(0, n);
+}
+
+type RunRow = {
+  flowId: string;
+  system: string;
+  pass: boolean;
+  severity: number;
+  expected: string;
+  actual: string;
+  issues: string[];
+  routerText: string;
+};
+
+function issueCodes(issues: any): string[] {
+  const arr = Array.isArray(issues) ? issues : [];
+  return arr.map((i: any) => norm(i.code)).filter(Boolean);
+}
+
+async function main() {
+  const DAYS = Number(process.env.REPORT_DAYS || 7);
+  const OUTPUT_DIR = process.env.REPORT_OUTPUT_DIR || "./reports";
+  ensureDir(OUTPUT_DIR);
+
+  const sinceMs = Date.now() - DAYS * 86400000;
+
+  const snap = await db.collection("test_runs")
+    .where("ts", ">=", sinceMs)
+    .limit(8000)
+    .get();
+
+  let total = 0;
+  let fails = 0;
+  let sumSeverity = 0;
+
+  const byFlowFail = new Map<string, number>();
+  const byIssue = new Map<string, number>();
+  const bySystemFail = new Map<string, number>();
+  const sampleFails: RunRow[] = [];
+
+  for (const doc of snap.docs) {
+    const r: any = doc.data();
+    total++;
+
+    const pass = Boolean(r?.score?.pass);
+    const severity = Number(r?.score?.severity || 0);
+    sumSeverity += severity;
+
+    if (!pass) {
+      fails++;
+      const flowId = norm(r.flowId) || "UNKNOWN";
+      const system = norm(r.system) || "UNKNOWN";
+      inc(byFlowFail, flowId);
+      inc(bySystemFail, system);
+
+      const codes = issueCodes(r?.score?.issues);
+      for (const c of codes) inc(byIssue, c);
+
+      if (sampleFails.length < 30) {
+        sampleFails.push({
+          flowId,
+          system,
+          pass,
+          severity,
+          expected: norm(r?.expected?.expectedDisposition),
+          actual: norm(r?.output?.disposition),
+          issues: codes,
+          routerText: norm(r?.routerText).slice(0, 140),
+        });
+      }
+    }
+  }
+
+  const failRate = total ? (fails / total) : 0;
+  const avgSeverity = total ? (sumSeverity / total) : 0;
+
+  // Linkable artifacts (produced by other scripts)
+  const paths = {
+    testRunReportHtml: path.join(OUTPUT_DIR, `test_run_report_${DAYS}d.html`),
+    testRunReportCsv: path.join(OUTPUT_DIR, `test_run_report_${DAYS}d.csv`),
+    rulePatchCsv: path.join(OUTPUT_DIR, "CLINICAL_RULES_PATCH_PROPOSED.csv"),
+    rulePatchMd: path.join(OUTPUT_DIR, "patch_proposals.md"),
+    medPatchCsv: path.join(OUTPUT_DIR, "CLINICAL_MEDICATIONS_PATCH_PROPOSED.csv"),
+    medPatchMd: path.join(OUTPUT_DIR, "med_cleanup_suggestions.md"),
+    routerMd: path.join(OUTPUT_DIR, "router_misroute_synonyms.md"),
+    routerJson: path.join(OUTPUT_DIR, "router_misroute_synonyms_seed.json"),
+  };
+
+  const md: string[] = [];
+  md.push(`# Daily Digest (last ${DAYS} days)`);
+  md.push(``);
+  md.push(`**Runs:** ${total}`);
+  md.push(`**Fails:** ${fails}  (**Fail rate:** ${(failRate*100).toFixed(1)}%)`);
+  md.push(`**Avg severity:** ${avgSeverity.toFixed(2)}`);
+  md.push(``);
+
+  md.push(`## Top failing flows`);
+  for (const [k,v] of topN(byFlowFail, 15)) md.push(`- ${k}: ${v}`);
+  md.push(``);
+
+  md.push(`## Top failing systems`);
+  for (const [k,v] of topN(bySystemFail, 12)) md.push(`- ${k}: ${v}`);
+  md.push(``);
+
+  md.push(`## Top issue codes`);
+  for (const [k,v] of topN(byIssue, 20)) md.push(`- ${k}: ${v}`);
+  md.push(``);
+
+  md.push(`## Sample failures (first 30)`);
+  for (const s of sampleFails) {
+    md.push(`- **${s.flowId}** (sev=${s.severity}) exp=${s.expected} got=${s.actual} issues=${s.issues.join(";")} text="${s.routerText}"`);
+  }
+  md.push(``);
+
+  md.push(`## Artifacts`);
+  const listArtifact = (label: string, p: string) => {
+    md.push(`- ${label}: \`${p}\`${fs.existsSync(p) ? "" : " *(missing)*"}`);
+  };
+
+  listArtifact("Test run report HTML", paths.testRunReportHtml);
+  listArtifact("Test run report CSV", paths.testRunReportCsv);
+  listArtifact("Rule patch proposals (md)", paths.rulePatchMd);
+  listArtifact("Rule patch proposals (csv)", paths.rulePatchCsv);
+  listArtifact("Med cleanup suggestions (md)", paths.medPatchMd);
+  listArtifact("Med cleanup patch (csv)", paths.medPatchCsv);
+  listArtifact("Router misroute synonyms (md)", paths.routerMd);
+  listArtifact("Router misroute seed (json)", paths.routerJson);
+
+  const mdPath = path.join(OUTPUT_DIR, "daily_digest.md");
+  fs.writeFileSync(mdPath, md.join("\n"), "utf8");
+
+  // HTML (simple)
+  const htmlPath = path.join(OUTPUT_DIR, "daily_digest.html");
+  const topFlowsHtml = topN(byFlowFail, 15).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  const topIssuesHtml = topN(byIssue, 20).map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  const samplesHtml = sampleFails.map(s =>
+    `<tr><td>${s.flowId}</td><td>${s.severity}</td><td>${s.expected}</td><td>${s.actual}</td><td>${s.issues.join(";")}</td><td>${s.routerText}</td></tr>`
+  ).join("");
+
+  const artifactsHtml = Object.entries(paths).map(([k,p]) =>
+    `<li><b>${k}</b>: <code>${p}</code>${fs.existsSync(p) ? "" : " <i>(missing)</i>"}</li>`
+  ).join("");
+
+  fs.writeFileSync(htmlPath, `
+  <html><head><meta charset="utf-8"><title>Daily Digest</title></head>
+  <body>
+    <h2>Daily Digest (last ${DAYS} days)</h2>
+    <p><b>Runs:</b> ${total} | <b>Fails:</b> ${fails} (${(failRate*100).toFixed(1)}%) | <b>Avg severity:</b> ${avgSeverity.toFixed(2)}</p>
+
+    <h3>Top failing flows</h3>
+    <table border="1" cellpadding="4"><tr><th>Flow</th><th>Fails</th></tr>${topFlowsHtml}</table>
+
+    <h3>Top issue codes</h3>
+    <table border="1" cellpadding="4"><tr><th>Issue</th><th>Count</th></tr>${topIssuesHtml}</table>
+
+    <h3>Sample failures</h3>
+    <table border="1" cellpadding="4">
+      <tr><th>Flow</th><th>Severity</th><th>Expected</th><th>Actual</th><th>Issues</th><th>Router text</th></tr>
+      ${samplesHtml}
+    </table>
+
+    <h3>Artifacts</h3>
+    <ul>${artifactsHtml}</ul>
+  </body></html>
+  `, "utf8");
+
+  console.log(`Wrote: ${mdPath}`);
+  console.log(`Wrote: ${htmlPath}`);
+}
+
+main().catch((e) => {
+  console.error("generateDailyDigest failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+REPORT_DAYS=7 REPORT_OUTPUT_DIR=./reports npx tsx server/scripts/generateDailyDigest.ts
+
+2) server/scripts/runNightlyPipeline.ts
+
+This runs everything in order with consistent env vars. It stops on failure (so you notice breakage).
+
+import { spawn } from "child_process";
+
+function run(cmd: string, args: string[], env: Record<string,string>) {
+  return new Promise<void>((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: "inherit", env: { ...process.env, ...env } });
+    p.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${cmd} ${args.join(" ")} failed with code ${code}`));
+    });
+  });
+}
+
+async function main() {
+  const DAYS = process.env.REPORT_DAYS || "7";
+  const OUT = process.env.REPORT_OUTPUT_DIR || "./reports";
+  const PER_FLOW = process.env.TESTS_PER_FLOW || "25";
+
+  const env = {
+    REPORT_DAYS: DAYS,
+    REPORT_OUTPUT_DIR: OUT,
+    TESTS_PER_FLOW: PER_FLOW,
+  };
+
+  console.log("=== Nightly Pipeline شروع ===");
+  console.log(`REPORT_DAYS=${DAYS} REPORT_OUTPUT_DIR=${OUT} TESTS_PER_FLOW=${PER_FLOW}`);
+
+  // 1) Run tests
+  await run("npx", ["tsx", "server/scripts/runNightlyTests.ts"], env);
+
+  // 2) Report failures
+  await run("npx", ["tsx", "server/scripts/testRunReport.ts"], env);
+
+  // 3) Rule patch proposals (RED_FLAG_QIDS)
+  await run("npx", ["tsx", "server/scripts/generatePatchProposals.ts"], env);
+
+  // 4) Med cleanup suggestions + patch CSV
+  await run("npx", ["tsx", "server/scripts/generateMedCleanupProposals.ts"], env);
+
+  // 5) Router misroute synonyms
+  await run("npx", ["tsx", "server/scripts/generateRouterSynonymSuggestions.ts"], env);
+
+  // 6) Digest
+  await run("npx", ["tsx", "server/scripts/generateDailyDigest.ts"], env);
+
+  console.log("=== Nightly Pipeline complete ===");
+}
+
+main().catch((e) => {
+  console.error("runNightlyPipeline failed:", e);
+  process.exit(1);
+});
+
+
+Run:
+
+REPORT_DAYS=7 REPORT_OUTPUT_DIR=./reports TESTS_PER_FLOW=25 npx tsx server/scripts/runNightlyPipeline.ts
+
+
+Schedule this one command nightly in Replit.
