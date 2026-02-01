@@ -1,0 +1,758 @@
+1) What changes
+Before
+
+Routes call SQLite directly:
+
+db.prepare(...).run(...)
+
+SELECT ...
+
+After
+
+Routes call a storage adapter:
+
+store.verifySession(token, code)
+
+store.saveDraft(token, draft, step)
+
+store.submit(token, payload)
+
+store.uploadMeta(token, fileMeta)
+
+store.getStatus(token)
+
+store.getSummary(token)
+
+SQLite and Firestore both implement the same interface.
+
+2) New files to add
+
+Add this folder:
+
+server/storage/
+  index.ts
+  types.ts
+  store.ts
+  sqliteStore.ts
+  firestoreStore.ts
+  crypto.ts
+
+
+Your routes become storage-driver agnostic.
+
+3) Env config
+
+.env.example add:
+
+# Choose storage driver:
+STORAGE_DRIVER=sqlite   # or firestore
+
+# SQLite
+DB_PATH=./data.sqlite
+
+# Firestore (Admin SDK)
+GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
+FIREBASE_PROJECT_ID=your-project-id
+
+# Common
+UPLOAD_DIR=./uploads
+PROVIDER_API_KEY=change_me
+
+
+Notes:
+
+For Firestore in prod (GCP), you often don’t need GOOGLE_APPLICATION_CREDENTIALS.
+
+In dev, easiest is a service account key JSON.
+
+4) Storage interface (the contract)
+server/storage/types.ts
+export type CaseStatus = "draft" | "submitted" | "in_review" | "signed" | "closed";
+
+export type VerifyResult = {
+  ok: true;
+  caseId: string;
+  status: CaseStatus;
+  currentStep: number;
+  flowId: string;
+};
+
+export type StatusResult = {
+  ok: true;
+  caseId: string;
+  status: CaseStatus;
+  updatedAt: number;
+  nextActionText: string;
+};
+
+export type DraftPayload = {
+  currentStep: number;
+  draft: Record<string, any>;
+};
+
+export type SubmitPayload = {
+  chiefComplaint: string;
+  freeText?: string;
+  symptoms: Record<string, "yes" | "no" | "ns">;
+  modifiers?: Record<string, any>;
+  meds?: any[];
+  allergies?: any[];
+  pmh?: any;
+  pharmacy?: any;
+  attachments?: string[];
+  consent: {
+    telehealth: boolean;
+    privacy: boolean;
+    signatureName: string;
+    signedAt: string;
+  };
+};
+
+export type FileMeta = {
+  fileId: string;
+  token: string;
+  originalName: string;
+  mimeType: string;
+  storagePath: string;
+  createdAt: number;
+};
+
+server/storage/store.ts
+import type { DraftPayload, SubmitPayload, VerifyResult, StatusResult, FileMeta } from "./types";
+
+export interface StorageDriver {
+  // session tokens
+  createSession(token: string, code: string, expiresAtMs: number): Promise<void>;
+  verifySession(token: string, code: string): Promise<void>; // throws on failure
+
+  // cases
+  getOrCreateCaseForToken(token: string): Promise<{
+    caseId: string;
+    status: string;
+    currentStep: number;
+  }>;
+
+  setCaseDraft(token: string, draft: DraftPayload): Promise<void>;
+  setCaseSubmitted(token: string, intake: SubmitPayload, assistant: any): Promise<{ caseId: string }>;
+  getStatus(token: string): Promise<StatusResult>;
+  getSummaryHtml(token: string): Promise<string>; // throws if not available
+
+  // provider/admin
+  signCase(caseId: string): Promise<void>;
+  getCase(caseId: string): Promise<any>;
+
+  // files
+  addFileMeta(meta: FileMeta): Promise<void>;
+  getFileMeta(fileId: string): Promise<FileMeta | null>;
+}
+
+5) Shared crypto helpers (same logic both drivers)
+server/storage/crypto.ts
+import crypto from "crypto";
+
+export function sha256(s: string) {
+  return crypto.createHash("sha256").update(s).digest("hex");
+}
+
+export function newId(prefix: string) {
+  return `${prefix}_${crypto.randomBytes(10).toString("hex")}`;
+}
+
+6) Driver selector (one import everywhere)
+server/storage/index.ts
+import type { StorageDriver } from "./store";
+import { makeSqliteStore } from "./sqliteStore";
+import { makeFirestoreStore } from "./firestoreStore";
+
+export function getStore(): StorageDriver {
+  const driver = (process.env.STORAGE_DRIVER || "sqlite").toLowerCase();
+  if (driver === "firestore") return makeFirestoreStore();
+  return makeSqliteStore();
+}
+
+7) SQLite driver (adapter around your current code)
+server/storage/sqliteStore.ts
+import Database from "better-sqlite3";
+import path from "path";
+import type { StorageDriver } from "./store";
+import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
+import { sha256 } from "./crypto";
+import { renderSummaryHtml } from "../pdf";
+
+function nowMs() { return Date.now(); }
+
+function statusText(s: string) {
+  if (s === "draft") return "Continue your intake.";
+  if (s === "submitted") return "Submitted. Provider review pending.";
+  if (s === "in_review") return "In review.";
+  if (s === "signed") return "Complete. Summary available.";
+  if (s === "closed") return "Closed.";
+  return "Unknown.";
+}
+
+export function makeSqliteStore(): StorageDriver {
+  const dbPath = process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
+  const db = new Database(dbPath);
+
+  // init tables (same as before)
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+
+    CREATE TABLE IF NOT EXISTS intake_sessions (
+      token TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS cases (
+      case_id TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      current_step INTEGER DEFAULT 0,
+      draft_json TEXT DEFAULT '{}',
+      intake_json TEXT DEFAULT '{}',
+      assistant_json TEXT DEFAULT '{}',
+      summary_html TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS files (
+      file_id TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cases_token ON cases(token);
+    CREATE INDEX IF NOT EXISTS idx_files_token ON files(token);
+  `);
+
+  return {
+    async createSession(token, code, expiresAtMs) {
+      const hash = sha256(code.trim());
+      db.prepare(`
+        INSERT OR REPLACE INTO intake_sessions (token, code_hash, expires_at, used_at, created_at)
+        VALUES (?, ?, ?, NULL, ?)
+      `).run(token, hash, expiresAtMs, nowMs());
+    },
+
+    async verifySession(token, code) {
+      const session = db.prepare(`SELECT * FROM intake_sessions WHERE token = ?`).get(token);
+      if (!session) throw new Error("Invalid link.");
+      if (session.used_at) throw new Error("This link has already been used.");
+      if (Number(session.expires_at) < nowMs()) throw new Error("This link has expired.");
+      const codeHash = sha256(code.trim());
+      if (codeHash !== session.code_hash) throw new Error("Incorrect code.");
+    },
+
+    async getOrCreateCaseForToken(token) {
+      const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+      if (row) return { caseId: row.case_id, status: row.status, currentStep: row.current_step };
+
+      const caseId = `CASE_${nowMs()}_${Math.random().toString(16).slice(2)}`;
+      const ts = nowMs();
+      db.prepare(`
+        INSERT INTO cases (case_id, token, status, created_at, updated_at, current_step, draft_json, intake_json, assistant_json)
+        VALUES (?, ?, ?, ?, ?, 0, '{}', '{}', '{}')
+      `).run(caseId, token, "draft", ts, ts);
+
+      return { caseId, status: "draft", currentStep: 0 };
+    },
+
+    async setCaseDraft(token, draft) {
+      const existing = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+      if (!existing) await this.getOrCreateCaseForToken(token);
+
+      const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+      let currentDraft: any = {};
+      try { currentDraft = JSON.parse(row.draft_json || "{}"); } catch {}
+      const merged = { ...currentDraft, ...draft.draft };
+
+      db.prepare(`
+        UPDATE cases SET draft_json=?, current_step=?, updated_at=?, status='draft'
+        WHERE case_id=?
+      `).run(JSON.stringify(merged), draft.currentStep, nowMs(), row.case_id);
+    },
+
+    async setCaseSubmitted(token, intake, assistant) {
+      const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+      const caseId = row?.case_id || (await this.getOrCreateCaseForToken(token)).caseId;
+
+      db.prepare(`
+        UPDATE cases SET intake_json=?, assistant_json=?, status='submitted', updated_at=?
+        WHERE case_id=?
+      `).run(JSON.stringify(intake), JSON.stringify(assistant), nowMs(), caseId);
+
+      db.prepare(`UPDATE intake_sessions SET used_at=? WHERE token=?`).run(nowMs(), token);
+
+      return { caseId };
+    },
+
+    async getStatus(token): Promise<StatusResult> {
+      const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+      if (!row) throw new Error("Not found.");
+      return {
+        ok: true,
+        caseId: row.case_id,
+        status: row.status,
+        updatedAt: row.updated_at,
+        nextActionText: statusText(row.status)
+      };
+    },
+
+    async getSummaryHtml(token) {
+      const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token);
+      if (!row) throw new Error("Not found.");
+      if (row.status !== "signed") throw new Error("Summary not available yet.");
+      return row.summary_html || "<html><body>No summary.</body></html>";
+    },
+
+    async signCase(caseId: string) {
+      const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId);
+      if (!row) throw new Error("Not found.");
+      const intake = JSON.parse(row.intake_json || "{}");
+      const assistant = JSON.parse(row.assistant_json || "{}");
+      const html = renderSummaryHtml(caseId, intake, assistant);
+      db.prepare(`UPDATE cases SET status='signed', summary_html=?, updated_at=? WHERE case_id=?`)
+        .run(html, nowMs(), caseId);
+    },
+
+    async getCase(caseId: string) {
+      const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId);
+      if (!row) throw new Error("Not found.");
+      return {
+        caseId: row.case_id,
+        status: row.status,
+        intake: JSON.parse(row.intake_json || "{}"),
+        assistant: JSON.parse(row.assistant_json || "{}"),
+        updatedAt: row.updated_at
+      };
+    },
+
+    async addFileMeta(meta: FileMeta) {
+      db.prepare(`
+        INSERT INTO files (file_id, token, original_name, mime_type, storage_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(meta.fileId, meta.token, meta.originalName, meta.mimeType, meta.storagePath, meta.createdAt);
+    },
+
+    async getFileMeta(fileId: string) {
+      const row = db.prepare(`SELECT * FROM files WHERE file_id = ?`).get(fileId);
+      if (!row) return null;
+      return {
+        fileId: row.file_id,
+        token: row.token,
+        originalName: row.original_name,
+        mimeType: row.mime_type,
+        storagePath: row.storage_path,
+        createdAt: row.created_at
+      };
+    }
+  };
+}
+
+8) Firestore driver (direct translation)
+Install (server)
+npm i firebase-admin
+
+server/storage/firestoreStore.ts
+import admin from "firebase-admin";
+import type { StorageDriver } from "./store";
+import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
+import { sha256 } from "./crypto";
+import { renderSummaryHtml } from "../pdf";
+
+function nowMs() { return Date.now(); }
+
+function statusText(s: string) {
+  if (s === "draft") return "Continue your intake.";
+  if (s === "submitted") return "Submitted. Provider review pending.";
+  if (s === "in_review") return "In review.";
+  if (s === "signed") return "Complete. Summary available.";
+  if (s === "closed") return "Closed.";
+  return "Unknown.";
+}
+
+function initFirebase() {
+  if (admin.apps.length) return;
+  // Uses GOOGLE_APPLICATION_CREDENTIALS if set, or default credentials in GCP
+  admin.initializeApp({
+    projectId: process.env.FIREBASE_PROJECT_ID
+  });
+}
+
+export function makeFirestoreStore(): StorageDriver {
+  initFirebase();
+  const db = admin.firestore();
+
+  const sessions = db.collection("intake_sessions");
+  const cases = db.collection("cases");
+  const files = db.collection("files");
+
+  return {
+    async createSession(token, code, expiresAtMs) {
+      await sessions.doc(token).set({
+        token,
+        code_hash: sha256(code.trim()),
+        expires_at: expiresAtMs,
+        used_at: null,
+        created_at: nowMs()
+      }, { merge: true });
+    },
+
+    async verifySession(token, code) {
+      const snap = await sessions.doc(token).get();
+      if (!snap.exists) throw new Error("Invalid link.");
+      const s: any = snap.data();
+      if (s.used_at) throw new Error("This link has already been used.");
+      if (Number(s.expires_at) < nowMs()) throw new Error("This link has expired.");
+      if (sha256(code.trim()) !== s.code_hash) throw new Error("Incorrect code.");
+    },
+
+    async getOrCreateCaseForToken(token) {
+      // Firestore: query by token ordered by created_at desc limit 1
+      const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
+      if (!q.empty) {
+        const doc = q.docs[0];
+        const d: any = doc.data();
+        return { caseId: d.case_id, status: d.status, currentStep: d.current_step ?? 0 };
+      }
+
+      const caseId = `CASE_${nowMs()}_${Math.random().toString(16).slice(2)}`;
+      const ts = nowMs();
+      await cases.doc(caseId).set({
+        case_id: caseId,
+        token,
+        status: "draft",
+        created_at: ts,
+        updated_at: ts,
+        current_step: 0,
+        draft_json: {},
+        intake_json: {},
+        assistant_json: {},
+        summary_html: null
+      });
+
+      return { caseId, status: "draft", currentStep: 0 };
+    },
+
+    async setCaseDraft(token, draft: DraftPayload) {
+      const { caseId } = await this.getOrCreateCaseForToken(token);
+      const ref = cases.doc(caseId);
+
+      // merge draft_json shallowly
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const data: any = snap.exists ? snap.data() : {};
+        const existingDraft = data?.draft_json || {};
+        const merged = { ...existingDraft, ...draft.draft };
+
+        tx.set(ref, {
+          draft_json: merged,
+          current_step: draft.currentStep,
+          status: "draft",
+          updated_at: nowMs()
+        }, { merge: true });
+      });
+    },
+
+    async setCaseSubmitted(token, intake: SubmitPayload, assistant: any) {
+      const { caseId } = await this.getOrCreateCaseForToken(token);
+      await cases.doc(caseId).set({
+        intake_json: intake,
+        assistant_json: assistant,
+        status: "submitted",
+        updated_at: nowMs()
+      }, { merge: true });
+
+      await sessions.doc(token).set({ used_at: nowMs() }, { merge: true });
+      return { caseId };
+    },
+
+    async getStatus(token): Promise<StatusResult> {
+      const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
+      if (q.empty) throw new Error("Not found.");
+      const d: any = q.docs[0].data();
+      return {
+        ok: true,
+        caseId: d.case_id,
+        status: d.status,
+        updatedAt: d.updated_at,
+        nextActionText: statusText(d.status)
+      };
+    },
+
+    async getSummaryHtml(token) {
+      const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
+      if (q.empty) throw new Error("Not found.");
+      const d: any = q.docs[0].data();
+      if (d.status !== "signed") throw new Error("Summary not available yet.");
+      return d.summary_html || "<html><body>No summary.</body></html>";
+    },
+
+    async signCase(caseId: string) {
+      const ref = cases.doc(caseId);
+      const snap = await ref.get();
+      if (!snap.exists) throw new Error("Not found.");
+      const d: any = snap.data();
+
+      const html = renderSummaryHtml(caseId, d.intake_json || {}, d.assistant_json || {});
+      await ref.set({
+        status: "signed",
+        summary_html: html,
+        updated_at: nowMs()
+      }, { merge: true });
+    },
+
+    async getCase(caseId: string) {
+      const snap = await cases.doc(caseId).get();
+      if (!snap.exists) throw new Error("Not found.");
+      const d: any = snap.data();
+      return {
+        caseId: d.case_id,
+        status: d.status,
+        intake: d.intake_json || {},
+        assistant: d.assistant_json || {},
+        updatedAt: d.updated_at
+      };
+    },
+
+    async addFileMeta(meta: FileMeta) {
+      await files.doc(meta.fileId).set(meta, { merge: true });
+    },
+
+    async getFileMeta(fileId: string) {
+      const snap = await files.doc(fileId).get();
+      if (!snap.exists) return null;
+      const d: any = snap.data();
+      return d as FileMeta;
+    }
+  };
+}
+
+9) Update your routes to use the store (one-time refactor)
+
+Here’s the direct translation for your intake routes: swap DB calls for store calls.
+
+server/routes.intake.ts (storage-backed)
+import { Router } from "express";
+import { getStore } from "./storage";
+import type { DraftPayload, SubmitPayload } from "./storage/types";
+
+export const intakeRouter = Router();
+const store = getStore();
+
+function computeAssistant(intake: SubmitPayload) {
+  // Plug in your real triage engine here
+  const redFlags: string[] = [];
+  if (intake.symptoms?.chest_pain === "yes") redFlags.push("Chest pain");
+  if (intake.symptoms?.shortness_of_breath === "yes") redFlags.push("Shortness of breath");
+  const triageLevel = redFlags.length ? "Urgent screen: needs clinician review now" : "Routine";
+  return { triageLevel, redFlags, draftNote: `HPI: ${intake.chiefComplaint}` };
+}
+
+intakeRouter.post("/api/intake/:token/verify", async (req, res) => {
+  try {
+    const token = req.params.token;
+    const code = String(req.body?.code || "").trim();
+    if (!code) return res.status(400).json({ ok: false, error: "Missing code." });
+
+    await store.verifySession(token, code);
+    const c = await store.getOrCreateCaseForToken(token);
+
+    return res.json({ ok: true, caseId: c.caseId, status: c.status, currentStep: c.currentStep, flowId: "DEFAULT_FLOW" });
+  } catch (e: any) {
+    return res.status(401).json({ ok: false, error: e?.message || "Verify failed" });
+  }
+});
+
+intakeRouter.post("/api/intake/:token/save_draft", async (req, res) => {
+  try {
+    const token = req.params.token;
+    const body = req.body as DraftPayload;
+    await store.setCaseDraft(token, body);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: e?.message || "Draft save failed" });
+  }
+});
+
+intakeRouter.post("/api/intake/:token/submit", async (req, res) => {
+  try {
+    const token = req.params.token;
+    const intake = req.body as SubmitPayload;
+
+    if (!intake?.consent?.telehealth || !intake?.consent?.privacy || !intake?.consent?.signatureName) {
+      return res.status(400).json({ ok: false, error: "Consent is required." });
+    }
+
+    const assistant = computeAssistant(intake);
+    const { caseId } = await store.setCaseSubmitted(token, intake, assistant);
+    return res.json({ ok: true, caseId });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: e?.message || "Submit failed" });
+  }
+});
+
+intakeRouter.get("/api/intake/:token/status", async (req, res) => {
+  try {
+    const token = req.params.token;
+    const s = await store.getStatus(token);
+    return res.json(s);
+  } catch (e: any) {
+    return res.status(404).json({ ok: false, error: e?.message || "Not found" });
+  }
+});
+
+intakeRouter.get("/api/intake/:token/summary", async (req, res) => {
+  try {
+    const token = req.params.token;
+    const html = await store.getSummaryHtml(token);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(html);
+  } catch (e: any) {
+    return res.status(403).send(e?.message || "Summary not available");
+  }
+});
+
+10) Provider sign endpoint with API key (works in both drivers)
+server/routes.provider.ts
+import { Router } from "express";
+import { getStore } from "./storage";
+
+export const providerRouter = Router();
+const store = getStore();
+
+function requireProvider(req: any, res: any, next: any) {
+  const key = req.headers["x-provider-api-key"];
+  if (!process.env.PROVIDER_API_KEY) return res.status(500).json({ ok: false, error: "Missing PROVIDER_API_KEY" });
+  if (key !== process.env.PROVIDER_API_KEY) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  next();
+}
+
+providerRouter.post("/api/provider/case/:caseId/sign", requireProvider, async (req, res) => {
+  try {
+    await store.signCase(req.params.caseId);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: e?.message || "Sign failed" });
+  }
+});
+
+providerRouter.get("/api/provider/case/:caseId", requireProvider, async (req, res) => {
+  try {
+    const c = await store.getCase(req.params.caseId);
+    res.json({ ok: true, ...c });
+  } catch (e: any) {
+    res.status(404).json({ ok: false, error: e?.message || "Not found" });
+  }
+});
+
+11) File uploads: store metadata in either SQLite or Firestore
+
+Your existing multer upload stays the same, only metadata persistence changes.
+
+server/routes.files.ts (storage-backed)
+import { Router } from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import { getStore } from "./storage";
+import { newId } from "./storage/crypto";
+
+export const filesRouter = Router();
+const store = getStore();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+filesRouter.post("/api/intake/:token/upload", upload.single("file"), async (req, res) => {
+  try {
+    const token = req.params.token;
+    const file = req.file;
+    if (!file) return res.status(400).json({ ok: false, error: "No file." });
+
+    const fileId = newId("FILE");
+    const ext = safeExt(file.mimetype, file.originalname);
+    const storagePath = path.join(UPLOAD_DIR, `${fileId}${ext}`);
+    fs.writeFileSync(storagePath, file.buffer);
+
+    await store.addFileMeta({
+      fileId,
+      token,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      storagePath,
+      createdAt: Date.now()
+    });
+
+    res.json({ ok: true, fileId, name: file.originalname, mimeType: file.mimetype });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: e?.message || "Upload failed" });
+  }
+});
+
+filesRouter.get("/api/file/:fileId", async (req, res) => {
+  const fileId = req.params.fileId;
+  const meta = await store.getFileMeta(fileId);
+  if (!meta) return res.status(404).send("Not found");
+  res.setHeader("Content-Type", meta.mimeType);
+  return res.sendFile(meta.storagePath);
+});
+
+function safeExt(mime: string, name: string) {
+  const byName = path.extname(name || "").slice(0, 10);
+  if (byName) return byName;
+  if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/png") return ".png";
+  if (mime === "application/pdf") return ".pdf";
+  return "";
+}
+
+12) How you switch between SQLite and Firestore
+Use SQLite now
+STORAGE_DRIVER=sqlite
+
+Use Firestore now
+STORAGE_DRIVER=firestore
+FIREBASE_PROJECT_ID=your-project-id
+GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
+
+
+No route changes. No frontend changes.
+
+13) What I’d do next (high value, minimal effort)
+
+If you want the “Firestore feels magical” experience:
+
+Put case status updates in Firestore and have the status page refresh every 5 seconds (or use a websocket later).
+
+Add cases/{caseId}/events subcollection:
+
+verified
+
+draft_saved
+
+submitted
+
+triage_completed
+
+provider_signed
+
+Start logging your assistant’s reasoning trace and which sheet cells were used (your audit trail dream).
+
+Quick sanity check question (I’ll assume “yes” if you don’t answer)
+
+Do you want to keep uploads on local disk for now, or switch uploads to Firebase Storage / GCS immediately?
+
+Local disk now = fastest; good for Replit demos
+
+Firebase Storage now = better for real deployment; less PHI risk on ephemeral disks
+
+If you say nothing, I’ll assume local disk now + metadata in Firestore, and we’ll migrate file storage next.
