@@ -7,7 +7,6 @@ import { renderSummaryHtml, saveSummaryHtml } from "./pdf";
 export const intakeRouter = Router();
 
 const SESSION_EXPIRY_MS = 30 * 60 * 1000;
-export const verifiedSessions = new Map<string, { expiresAt: number; caseId: string }>();
 
 function nowMs() { return Date.now(); }
 
@@ -19,20 +18,36 @@ function newId(prefix: string) {
   return `${prefix}_${new Date().toISOString().slice(0,10).replace(/-/g,"")}_${crypto.randomBytes(6).toString("hex")}`;
 }
 
-function requireVerifiedSession(req: Request, res: Response, next: NextFunction) {
+export function isSessionVerified(token: string): boolean {
+  const session = db.prepare(`SELECT * FROM intake_sessions WHERE token = ?`).get(token) as IntakeSession | undefined;
+  if (!session) return false;
+  if (session.used_at) return false;
+  if (!session.verified_at) return false;
+  if (Number(session.session_expires_at) < nowMs()) return false;
+  return true;
+}
+
+export function requireVerifiedSession(req: Request, res: Response, next: NextFunction) {
   const token = req.params.token;
-  const sessionData = verifiedSessions.get(token);
   
-  if (!sessionData) {
+  const session = db.prepare(`SELECT * FROM intake_sessions WHERE token = ?`).get(token) as IntakeSession | undefined;
+  
+  if (!session) {
+    return res.status(404).json({ ok: false, error: "Invalid link." });
+  }
+  
+  if (session.used_at) {
+    return res.status(410).json({ ok: false, error: "This link has already been used." });
+  }
+  
+  if (!session.verified_at) {
     return res.status(401).json({ ok: false, error: "Session not verified. Please enter your code first." });
   }
   
-  if (sessionData.expiresAt < nowMs()) {
-    verifiedSessions.delete(token);
+  if (Number(session.session_expires_at) < nowMs()) {
     return res.status(401).json({ ok: false, error: "Session expired. Please verify again." });
   }
   
-  (req as any).verifiedCaseId = sessionData.caseId;
   next();
 }
 
@@ -68,11 +83,13 @@ intakeRouter.post("/api/intake/:token/verify", (req: Request, res: Response) => 
   if (codeHash !== session.code_hash) return res.status(401).json({ ok: false, error: "Incorrect code." });
 
   const c = getOrCreateCase(token);
-
-  verifiedSessions.set(token, {
-    expiresAt: nowMs() + SESSION_EXPIRY_MS,
-    caseId: c.case_id
-  });
+  
+  const sessionExpiresAt = nowMs() + SESSION_EXPIRY_MS;
+  db.prepare(`
+    UPDATE intake_sessions 
+    SET verified_at = ?, session_expires_at = ? 
+    WHERE token = ?
+  `).run(nowMs(), sessionExpiresAt, token);
 
   let savedDraft: Record<string, any> | null = null;
   try {
@@ -133,8 +150,6 @@ intakeRouter.post("/api/intake/:token/submit", requireVerifiedSession, (req: Req
   `).run(JSON.stringify(body), JSON.stringify(assistant), "submitted", ts, c.case_id);
 
   db.prepare(`UPDATE intake_sessions SET used_at = ? WHERE token = ?`).run(ts, token);
-  
-  verifiedSessions.delete(token);
 
   return res.json({ ok: true, caseId: c.case_id });
 });
@@ -164,7 +179,22 @@ intakeRouter.get("/api/intake/:token/summary", requireVerifiedSession, (req: Req
   return res.send(row.summary_html || "<html><body>No summary.</body></html>");
 });
 
-intakeRouter.post("/api/admin/case/:caseId/sign", (req: Request, res: Response) => {
+function requireProviderAuth(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers["x-provider-key"];
+  const providerKey = process.env.PROVIDER_API_KEY;
+  
+  if (!providerKey) {
+    return res.status(503).json({ ok: false, error: "Provider API not configured." });
+  }
+  
+  if (authHeader !== providerKey) {
+    return res.status(401).json({ ok: false, error: "Unauthorized. Invalid provider key." });
+  }
+  
+  next();
+}
+
+intakeRouter.post("/api/admin/case/:caseId/sign", requireProviderAuth, (req: Request, res: Response) => {
   const caseId = req.params.caseId;
   const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId) as CaseRow | undefined;
   if (!row) return res.status(404).json({ ok: false });

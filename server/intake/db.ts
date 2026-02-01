@@ -13,8 +13,20 @@ export function initIntakeDb() {
       code_hash TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
       used_at INTEGER,
+      verified_at INTEGER,
+      session_expires_at INTEGER,
       created_at INTEGER NOT NULL
     );
+  `);
+  
+  try {
+    db.exec(`ALTER TABLE intake_sessions ADD COLUMN verified_at INTEGER`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE intake_sessions ADD COLUMN session_expires_at INTEGER`);
+  } catch {}
+  
+  db.exec(`
 
     CREATE TABLE IF NOT EXISTS cases (
       case_id TEXT PRIMARY KEY,

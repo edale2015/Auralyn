@@ -33,6 +33,8 @@ export interface IntakeSession {
   code_hash: string;
   expires_at: number;
   used_at: number | null;
+  verified_at: number | null;
+  session_expires_at: number | null;
   created_at: number;
 }
 

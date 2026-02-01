@@ -1,12 +1,12 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router, Request, Response } from "express";
 import multer from "multer";
 import * as path from "path";
 import crypto from "crypto";
 import * as fs from "fs";
 import { db } from "./db";
 import { UPLOAD_DIR } from "./storage";
-import type { FileRow, CaseRow } from "./types";
-import { verifiedSessions } from "./routes.intake";
+import type { FileRow } from "./types";
+import { requireVerifiedSession, isSessionVerified } from "./routes.intake";
 
 export const filesRouter = Router();
 
@@ -14,25 +14,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 }
 });
-
-function nowMs() { return Date.now(); }
-
-function requireVerifiedSession(req: Request, res: Response, next: NextFunction) {
-  const token = req.params.token;
-  const sessionData = verifiedSessions.get(token);
-  
-  if (!sessionData) {
-    return res.status(401).json({ ok: false, error: "Session not verified. Please enter your code first." });
-  }
-  
-  if (sessionData.expiresAt < nowMs()) {
-    verifiedSessions.delete(token);
-    return res.status(401).json({ ok: false, error: "Session expired. Please verify again." });
-  }
-  
-  (req as any).verifiedCaseId = sessionData.caseId;
-  next();
-}
 
 function newFileId() {
   return `FILE_${crypto.randomBytes(10).toString("hex")}`;
@@ -73,16 +54,16 @@ filesRouter.get("/api/file/:fileId", (req: Request, res: Response) => {
   const row = db.prepare(`SELECT * FROM files WHERE file_id = ?`).get(fileId) as FileRow | undefined;
   if (!row) return res.status(404).send("Not found");
   
-  if (token) {
-    const sessionData = verifiedSessions.get(token);
-    if (!sessionData || sessionData.expiresAt < nowMs()) {
-      return res.status(401).send("Unauthorized");
-    }
-    if (row.token !== token) {
-      return res.status(403).send("Forbidden");
-    }
-  } else {
+  if (!token) {
     return res.status(401).send("Token required");
+  }
+  
+  if (!isSessionVerified(token)) {
+    return res.status(401).send("Unauthorized");
+  }
+  
+  if (row.token !== token) {
+    return res.status(403).send("Forbidden");
   }
 
   res.setHeader("Content-Type", row.mime_type);
