@@ -1,0 +1,87 @@
+Two things I’d do next (they’re optional, but they’re the next clean stepping stones for your roadmap: patient portal polish + future eCW):
+
+1) Make the portal feel like a real “patient website” (without changing the working flow)
+
+Right now /simple/:token works. Keep it. Add a friendly front door:
+
+Add these routes (web)
+
+/ → “Enter code / open link”
+
+/check-in → explains how the WhatsApp link works + has a token field
+
+/simple/:token stays the same (so old links still work)
+
+Small UX wins
+
+Show a “Saved” indicator when autosave succeeds
+
+Add a “Session expires in: 18:42” countdown after verification
+
+Add a “Need a new link? Reply LINK on WhatsApp” hint when expired
+
+None of this touches storage or EHR.
+
+2) Next infrastructure upgrade: move files to Cloud Storage (when you’re ready)
+
+You already documented the risk. When you’re ready, the migration is tiny:
+
+Keep the same API contract
+
+POST /api/intake/:token/upload returns { fileId, ... }
+
+GET /api/file/:fileId still works
+
+Only change the backend storage implementation
+
+Write uploaded bytes to Cloud Storage
+
+Store metadata:
+
+storageMode: "gcs"
+
+gcsPath: "gs://bucket/..."
+
+contentType
+
+For downloads:
+
+either stream from Cloud Storage through your server
+
+or generate signed URLs (short-lived) if you want to offload bandwidth
+
+This is the one change that makes Firestore + multi-instance truly production-safe.
+
+3) eCW readiness: keep what you have, add a “connector slot”
+
+You don’t have eCW details yet, so don’t overbuild. Just scaffold a folder so you can plug in later:
+
+server/ehr/
+  index.ts
+  types.ts
+  smartDiscovery.ts
+  fhirClient.ts
+  ecw.ts   (placeholder)
+
+
+And add one field to cases:
+
+external_ehr: { vendor: "none" | "athena" | "ecw", patientId?, encounterId? }
+
+That way, when eCW replies, you’re not redesigning the data model.
+
+One last quick sanity check (worth doing once)
+
+When you flip to Firestore, confirm:
+
+STORAGE_DRIVER=firestore
+
+firestore.indexes.json deployed
+
+_driver endpoint returns driver: firestore
+
+Create a token, run an intake, upload a file, sign case, view summary
+
+If all that passes, you’re fully “dual-stack” and safe.
+
+If you want, paste the current patient landing page copy (or tell me what you want it to say), and I’ll write you a clean, patient-friendly front door page that fits your tone and reduces drop-off.
