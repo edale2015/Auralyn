@@ -1,7 +1,16 @@
-import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
+import type { DraftPayload, SubmitPayload, StatusResult, FileMeta, ExternalEhr } from "./types";
 
 export interface VerifySessionResult {
   sessionExpiresAtMs: number;
+}
+
+export interface CaseData {
+  caseId: string;
+  status: string;
+  intake: SubmitPayload;
+  assistant: any;
+  updatedAt: number;
+  externalEhr?: ExternalEhr;
 }
 
 export interface StorageDriver {
@@ -22,7 +31,10 @@ export interface StorageDriver {
   getSummaryHtml(token: string): Promise<string>;
 
   signCase(caseId: string): Promise<void>;
-  getCase(caseId: string): Promise<any>;
+  getCase(caseId: string): Promise<CaseData>;
+
+  setExternalEhr(caseId: string, ehr: ExternalEhr): Promise<void>;
+  getExternalEhr(caseId: string): Promise<ExternalEhr | null>;
 
   addFileMeta(meta: FileMeta): Promise<void>;
   getFileMeta(fileId: string): Promise<FileMeta | null>;

@@ -1,0 +1,307 @@
+A) Firestore index deploy + dual-stack confirmation
+A1) What to deploy
+
+You already created firestore.indexes.json with:
+
+cases: token ASC, created_at DESC
+
+That’s the one you need.
+
+A2) Deploy it (two ways)
+Option 1: Firebase CLI (recommended)
+
+From project root:
+
+firebase login
+firebase use <your-project-id>
+firebase deploy --only firestore:indexes
+
+
+If you haven’t got firebase.json yet, create a minimal one:
+
+{
+  "firestore": {
+    "indexes": "firestore.indexes.json"
+  }
+}
+
+Option 2: Console link
+
+When your app throws the missing-index error, Firestore includes a console link to “Create Index.” Click it once.
+
+A3) Flip driver + run your E2E “golden path”
+
+Set env:
+
+STORAGE_DRIVER=firestore
+FIREBASE_PROJECT_ID=<your-project-id>
+# if local dev:
+GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
+
+
+Restart server and confirm:
+
+GET /api/intake/_driver → driver: firestore
+
+Then run your existing E2E:
+
+Create token
+
+Verify
+
+Autosave draft
+
+Upload file
+
+Submit
+
+Provider sign
+
+Summary loads
+
+✅ Pass condition: no missing-index error anywhere; latest-case lookup works.
+
+Keep SQLite as a “portable test mode” forever. Firestore becomes the default once this passes.
+
+B) Cloud Storage migration (keep API contract identical)
+
+Right now: files go to local disk. That’s fine for single instance, but not for production multi-instance. We’ll change only the storage backend in routes.files.ts and the file metadata store.
+
+B1) Decide: Firebase Storage or direct GCS?
+
+Since you’re already using Firestore, go with Firebase Storage (it is Google Cloud Storage under the hood, with nicer Firebase tooling). Use the Firebase Admin SDK.
+
+B2) Metadata schema (minimal change)
+
+Your current files record probably has:
+
+fileId
+
+token
+
+mimeType
+
+storagePath (local)
+
+Change to:
+
+storageMode: "local_disk" | "firebase_storage"
+
+bucket
+
+objectPath
+
+keep mimeType, originalName, createdAt
+
+keep token for ownership checks
+
+Example metadata for cloud:
+
+{
+  fileId,
+  token,
+  originalName,
+  mimeType,
+  createdAt,
+  storageMode: "firebase_storage",
+  bucket: "your-bucket.appspot.com",
+  objectPath: `intake_uploads/${token}/${fileId}`
+}
+
+B3) Upload implementation (server)
+
+In your server/firebase.ts (or shared init), ensure you initialize admin storage too:
+
+import admin from "firebase-admin";
+
+admin.initializeApp({
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET // optional; else default
+});
+
+
+Set env (recommended explicitly):
+
+FIREBASE_STORAGE_BUCKET=<your-bucket>.appspot.com
+UPLOADS_MODE=firebase_storage
+
+Upload route change (core idea)
+
+Instead of writing to UPLOAD_DIR, do:
+
+const bucket = admin.storage().bucket();
+const objectPath = `intake_uploads/${token}/${fileId}${ext}`;
+
+await bucket.file(objectPath).save(file.buffer, {
+  contentType: file.mimetype,
+  resumable: false,
+  metadata: {
+    cacheControl: "private, max-age=0"
+  }
+});
+
+
+Then write file metadata via your store (Firestore or SQLite). Same response to the client.
+
+B4) Download implementation (keep PHI access server-controlled)
+
+Two safe patterns:
+
+Pattern 1: Stream through your server (simplest + safest)
+
+Check ownership (token verified OR provider key)
+
+Fetch object from bucket
+
+Pipe to response
+
+const f = bucket.file(objectPath);
+res.setHeader("Content-Type", meta.mimeType);
+f.createReadStream().pipe(res);
+
+Pattern 2: Signed URL (scales better, still safe)
+
+Validate ownership first
+
+Then generate a signed URL valid for ~60 seconds
+
+Redirect client to it or return it
+
+For PHI, Pattern 1 is often cleaner because your server remains the gate.
+
+B5) Backward compatibility
+
+Keep supporting old local-disk uploads for any existing records:
+
+if storageMode === "local_disk" → serve from filesystem
+
+else → stream from bucket
+
+This lets you migrate gradually.
+
+C) eClinicalWorks integration next (staged, sane, and useful immediately)
+
+You already have server/integrations/ehr/ scaffolding. Great. Here’s the staged plan that delivers value even before eCW credentials.
+
+C1) Stage 1: “EHR Export Pack” (no credentials needed)
+
+Add a provider dashboard action on each case:
+
+Buttons
+
+Copy “Visit Note Draft” (HPI/ROS/MDM)
+
+Copy “Billing Suggestions” (ICD-10/CPT suggestions)
+
+Download “Intake Packet PDF/HTML”
+
+Download “Attachments ZIP” (optional)
+
+This gives you immediate eCW workflow support:
+
+open patient in eCW
+
+paste note draft
+
+billing/prescribing stays in eCW
+
+C2) Stage 2: EHR linking fields in your Case
+
+Add (or confirm) in case record:
+
+external_ehr: {
+  vendor: "none" | "athena" | "ecw",
+  patientId?: string,
+  encounterId?: string,
+  lastSyncAt?: number,
+  syncStatus?: "not_linked" | "ready" | "synced" | "error",
+  lastError?: string
+}
+
+
+This is the anchor for future automation.
+
+C3) Stage 3: SMART on FHIR “credential-ready” connector
+
+When eCW responds with:
+
+FHIR base URL
+
+client_id
+
+redirect URI registration details
+
+scopes
+
+You’ll enable:
+
+SMART discovery (/.well-known/smart-configuration)
+
+OAuth callback
+
+Read: meds/allergies/problems/demographics
+
+Write (if allowed): DocumentReference (intake + draft note)
+
+Your existing scaffolding can follow this consistent interface:
+
+getSmartConfig()
+
+buildAuthorizeUrl(state, launch?)
+
+exchangeCodeForToken(code)
+
+getClinicalSnapshot(patientId)
+
+postDocumentReference(encounterId, doc)
+
+C4) Stage 4: Provider “Link to eCW” UI
+
+On the dashboard case view:
+
+“Connect to eCW” → starts OAuth flow
+
+“Match Patient”:
+
+search by DOB/last name/phone (if permitted)
+
+or manual ID entry
+
+“Attach Intake Packet to Encounter” (DocumentReference)
+
+“Pull meds/allergies” → re-run safety checks
+
+This is when your assistant becomes a real copilot.
+
+Your exact next actions (so this moves today)
+Step 1 (A): Deploy Firestore index
+
+Deploy via CLI or console
+
+Flip to Firestore
+
+Run E2E “golden path” again
+
+Step 2 (B): Add Cloud Storage mode
+
+Implement upload to Firebase Storage
+
+Store metadata storageMode/bucket/objectPath
+
+Stream downloads through server
+
+Keep local-disk backward compatibility
+
+Step 3 (C): Add eCW Stage 1 + case export pack
+
+Dashboard: copy/paste note + download intake packet + attachments
+
+Add external_ehr fields to case schema (if not present)
+
+If you want the fastest path, tell me which upload approach you prefer for B:
+
+Stream through server (simplest, PHI gate stays with you)
+
+Signed URLs (more scalable, still secure if you validate first)
+
+If you don’t answer, I’d choose stream through server as the default for a medical intake system.

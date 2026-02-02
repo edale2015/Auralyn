@@ -1,6 +1,6 @@
 import { db as firestoreDb, admin } from "../firebase";
-import type { StorageDriver } from "./store";
-import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
+import type { StorageDriver, CaseData } from "./store";
+import type { DraftPayload, SubmitPayload, StatusResult, FileMeta, ExternalEhr } from "./types";
 import { sha256 } from "./crypto";
 import { renderSummaryHtml, saveSummaryHtml } from "../intake/pdf";
 
@@ -186,17 +186,39 @@ export function makeFirestoreStore(): StorageDriver {
       }, { merge: true });
     },
 
-    async getCase(caseId: string) {
+    async getCase(caseId: string): Promise<CaseData> {
       const snap = await cases.doc(caseId).get();
       if (!snap.exists) throw new Error("Not found.");
       const d: any = snap.data();
+      let externalEhr: ExternalEhr | undefined;
+      if (d.external_ehr && d.external_ehr.vendor && d.external_ehr.vendor !== "none") {
+        externalEhr = d.external_ehr;
+      }
       return {
         caseId: d.case_id,
         status: d.status,
         intake: d.intake_json || {},
         assistant: d.assistant_json || {},
-        updatedAt: d.updated_at
+        updatedAt: d.updated_at,
+        externalEhr
       };
+    },
+
+    async setExternalEhr(caseId: string, ehr: ExternalEhr) {
+      await cases.doc(caseId).set({
+        external_ehr: ehr,
+        updated_at: nowMs()
+      }, { merge: true });
+    },
+
+    async getExternalEhr(caseId: string): Promise<ExternalEhr | null> {
+      const snap = await cases.doc(caseId).get();
+      if (!snap.exists) return null;
+      const d: any = snap.data();
+      if (!d.external_ehr || !d.external_ehr.vendor || d.external_ehr.vendor === "none") {
+        return null;
+      }
+      return d.external_ehr;
     },
 
     async addFileMeta(meta: FileMeta) {

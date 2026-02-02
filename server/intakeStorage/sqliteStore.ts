@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
-import type { StorageDriver } from "./store";
-import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
+import type { StorageDriver, CaseData } from "./store";
+import type { DraftPayload, SubmitPayload, StatusResult, FileMeta, ExternalEhr } from "./types";
 import { sha256 } from "./crypto";
 import { renderSummaryHtml, saveSummaryHtml } from "../intake/pdf";
 
@@ -45,7 +45,8 @@ export function makeSqliteStore(): StorageDriver {
       draft_json TEXT DEFAULT '{}',
       intake_json TEXT DEFAULT '{}',
       assistant_json TEXT DEFAULT '{}',
-      summary_html TEXT
+      summary_html TEXT,
+      external_ehr_json TEXT DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS files (
@@ -53,7 +54,10 @@ export function makeSqliteStore(): StorageDriver {
       token TEXT NOT NULL,
       original_name TEXT NOT NULL,
       mime_type TEXT NOT NULL,
+      storage_mode TEXT NOT NULL DEFAULT 'local_disk',
       storage_path TEXT NOT NULL,
+      bucket TEXT,
+      object_path TEXT,
       created_at INTEGER NOT NULL
     );
 
@@ -66,6 +70,18 @@ export function makeSqliteStore(): StorageDriver {
   } catch {}
   try {
     db.exec(`ALTER TABLE intake_sessions ADD COLUMN session_expires_at INTEGER`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE files ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'local_disk'`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE files ADD COLUMN bucket TEXT`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE files ADD COLUMN object_path TEXT`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE cases ADD COLUMN external_ehr_json TEXT DEFAULT '{}'`);
   } catch {}
 
   return {
@@ -181,23 +197,54 @@ export function makeSqliteStore(): StorageDriver {
         .run(html, nowMs(), caseId);
     },
 
-    async getCase(caseId: string) {
+    async getCase(caseId: string): Promise<CaseData> {
       const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId) as any;
       if (!row) throw new Error("Not found.");
+      let externalEhr: ExternalEhr | undefined;
+      try { externalEhr = JSON.parse(row.external_ehr_json || "{}"); } catch {}
+      if (externalEhr && (!externalEhr.vendor || externalEhr.vendor === "none")) {
+        externalEhr = undefined;
+      }
       return {
         caseId: row.case_id,
         status: row.status,
         intake: JSON.parse(row.intake_json || "{}"),
         assistant: JSON.parse(row.assistant_json || "{}"),
-        updatedAt: row.updated_at
+        updatedAt: row.updated_at,
+        externalEhr
       };
+    },
+
+    async setExternalEhr(caseId: string, ehr: ExternalEhr) {
+      db.prepare(`UPDATE cases SET external_ehr_json=?, updated_at=? WHERE case_id=?`)
+        .run(JSON.stringify(ehr), nowMs(), caseId);
+    },
+
+    async getExternalEhr(caseId: string): Promise<ExternalEhr | null> {
+      const row = db.prepare(`SELECT external_ehr_json FROM cases WHERE case_id = ?`).get(caseId) as any;
+      if (!row) return null;
+      try { 
+        const ehr = JSON.parse(row.external_ehr_json || "{}"); 
+        if (!ehr.vendor || ehr.vendor === "none") return null;
+        return ehr;
+      } catch { return null; }
     },
 
     async addFileMeta(meta: FileMeta) {
       db.prepare(`
-        INSERT INTO files (file_id, token, original_name, mime_type, storage_path, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(meta.fileId, meta.token, meta.originalName, meta.mimeType, meta.storagePath, meta.createdAt);
+        INSERT INTO files (file_id, token, original_name, mime_type, storage_mode, storage_path, bucket, object_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        meta.fileId, 
+        meta.token, 
+        meta.originalName, 
+        meta.mimeType, 
+        meta.storageMode || "local_disk",
+        meta.storagePath, 
+        meta.bucket || null,
+        meta.objectPath || null,
+        meta.createdAt
+      );
     },
 
     async getFileMeta(fileId: string) {
@@ -208,9 +255,12 @@ export function makeSqliteStore(): StorageDriver {
         token: row.token,
         originalName: row.original_name,
         mimeType: row.mime_type,
+        storageMode: row.storage_mode || "local_disk",
         storagePath: row.storage_path,
+        bucket: row.bucket,
+        objectPath: row.object_path,
         createdAt: row.created_at
-      };
+      } as FileMeta;
     },
 
     async getFileMetaByToken(token: string) {
@@ -220,9 +270,12 @@ export function makeSqliteStore(): StorageDriver {
         token: row.token,
         originalName: row.original_name,
         mimeType: row.mime_type,
+        storageMode: row.storage_mode || "local_disk",
         storagePath: row.storage_path,
+        bucket: row.bucket,
+        objectPath: row.object_path,
         createdAt: row.created_at
-      }));
+      } as FileMeta));
     }
   };
 }

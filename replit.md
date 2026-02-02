@@ -235,6 +235,32 @@ Create test token: `npx tsx server/scripts/createTestToken.ts [token] [code] [ex
 - Session expiry disables form inputs with clear warning
 - All intake components support disabled state
 - Backend verify endpoint returns sessionExpiresAtMs
+- Added firebase.json for Firestore index deployment via CLI
+- Added Firebase Storage support (UPLOADS_MODE=firebase_storage env var)
+- File uploads now support dual mode: local_disk (default) and firebase_storage
+- Server-streamed downloads with backward compatibility for legacy local_disk files
+- Added EHR Export Pack API endpoints:
+  - GET /api/provider/case/:caseId/note - Visit note draft (HPI/ROS/MDM)
+  - GET /api/provider/case/:caseId/billing - Billing suggestions (ICD-10/CPT codes)
+  - GET /api/provider/case/:caseId/packet - Full intake packet HTML
+  - GET /api/provider/case/:caseId/files - List of uploaded attachments
+- Added external_ehr schema fields for future EHR linking:
+  - vendor: "none" | "athena" | "ecw"
+  - patientId, encounterId, lastSyncAt, syncStatus, lastError
+- GET /api/intake/_driver returns current storage driver and uploads mode
+
+## Cloud Storage Configuration
+```
+UPLOADS_MODE=firebase_storage
+FIREBASE_STORAGE_BUCKET=your-bucket.appspot.com
+```
+
+## EHR Export Pack (Stage 1)
+Provider endpoints require X-Provider-Key header matching PROVIDER_API_KEY env var.
+Use for copy/paste workflow into eClinicalWorks:
+- Copy visit note draft
+- Copy billing suggestions
+- Download intake packet HTML
 
 ## Recent Changes (2026-02-01)
 - Added SQLite-based intake system with modular routes

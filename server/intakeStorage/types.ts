@@ -39,12 +39,17 @@ export type SubmitPayload = {
   };
 };
 
+export type StorageMode = "local_disk" | "firebase_storage";
+
 export type FileMeta = {
   fileId: string;
   token: string;
   originalName: string;
   mimeType: string;
+  storageMode: StorageMode;
   storagePath: string;
+  bucket?: string;
+  objectPath?: string;
   createdAt: number;
 };
 
@@ -56,4 +61,16 @@ export type SessionData = {
   verifiedAt: number | null;
   sessionExpiresAt: number | null;
   createdAt: number;
+};
+
+export type EhrVendor = "none" | "athena" | "ecw";
+export type EhrSyncStatus = "not_linked" | "ready" | "synced" | "error";
+
+export type ExternalEhr = {
+  vendor: EhrVendor;
+  patientId?: string;
+  encounterId?: string;
+  lastSyncAt?: number;
+  syncStatus?: EhrSyncStatus;
+  lastError?: string;
 };
