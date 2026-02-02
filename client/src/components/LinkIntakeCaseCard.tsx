@@ -39,7 +39,10 @@ export default function LinkIntakeCaseCard({ encounterId, intakeCaseId, onLinked
         toast({ title: "Error", description: data.error || "Failed to link", variant: "destructive" });
         return;
       }
-      toast({ title: "Linked", description: "Intake case linked successfully." });
+      const desc = data.status === "already_linked" 
+        ? "Intake case was already linked." 
+        : `Intake case linked${data.linkedAt ? ` at ${new Date(data.linkedAt).toLocaleTimeString()}` : ""}.`;
+      toast({ title: "Linked", description: desc });
       setInputCaseId("");
       queryClient.invalidateQueries({ queryKey: ["/api/encounters", encounterId] });
       onLinked?.();
@@ -62,7 +65,10 @@ export default function LinkIntakeCaseCard({ encounterId, intakeCaseId, onLinked
         toast({ title: "Error", description: data.error || "Failed to unlink", variant: "destructive" });
         return;
       }
-      toast({ title: "Unlinked", description: "Intake case unlinked." });
+      const desc = data.status === "already_unlinked" 
+        ? "Intake case was already unlinked." 
+        : "Intake case unlinked.";
+      toast({ title: "Unlinked", description: desc });
       queryClient.invalidateQueries({ queryKey: ["/api/encounters", encounterId] });
     } catch (e: any) {
       toast({ title: "Error", description: e?.message || "Failed to unlink", variant: "destructive" });

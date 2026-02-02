@@ -40,7 +40,9 @@ import {
   Activity,
   ArrowRight,
   ChevronDown,
-  Send
+  Send,
+  Link2,
+  ExternalLink
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -81,6 +83,7 @@ interface EncounterWithDetails extends Encounter {
   messages?: WhatsappMessage[];
   orders?: Order[];
   intakeCaseId?: string;
+  intakeLinkedAt?: string;
 }
 
 const CLARIFICATION_TEMPLATES = [
@@ -535,7 +538,42 @@ export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDe
 
           {/* Intake Case Linking / EHR Export Pack */}
           {encounter.intakeCaseId ? (
-            <EhrExportPack caseId={encounter.intakeCaseId} />
+            <>
+              {/* Linked Case Header with Open Packet button */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Link2 className="w-4 h-4 text-primary flex-shrink-0" />
+                      <span className="text-sm font-medium">Linked to Intake Case</span>
+                      <Badge variant="secondary" className="font-mono text-xs">
+                        {encounter.intakeCaseId.slice(0, 12)}...
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {encounter.intakeLinkedAt && (
+                        <span className="text-xs text-muted-foreground">
+                          Linked {format(new Date(encounter.intakeLinkedAt), "MMM d, h:mm a")}
+                        </span>
+                      )}
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => {
+                          const providerKey = localStorage.getItem("providerKey") || "";
+                          window.open(`/api/provider/case/${encounter.intakeCaseId}/packet?key=${encodeURIComponent(providerKey)}`, "_blank");
+                        }}
+                        data-testid="button-open-packet-quick"
+                      >
+                        <ExternalLink className="h-4 w-4 mr-1" />
+                        Open Packet
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+              </Card>
+              <EhrExportPack caseId={encounter.intakeCaseId} />
+            </>
           ) : (
             <LinkIntakeCaseCard encounterId={encounter.id} />
           )}

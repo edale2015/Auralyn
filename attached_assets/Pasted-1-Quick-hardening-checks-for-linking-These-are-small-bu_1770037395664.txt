@@ -1,0 +1,137 @@
+1) Quick hardening checks for linking
+
+These are small, but they prevent the weird edge cases that show up in real usage.
+
+A) Authorization checks
+
+Make sure the link/unlink endpoints:
+
+require provider auth (you already do)
+
+do not leak whether a case exists to non-auth requests (return 401 before 404)
+
+B) Idempotency
+
+If you POST link-intake with the same case ID:
+
+return { ok: true, status: "already_linked" }
+
+don’t error
+
+If you DELETE when it’s already unlinked:
+
+return { ok: true, status: "already_unlinked" }
+
+This keeps UI clicks from causing “why is this erroring” confusion.
+
+C) Audit events (super helpful)
+
+Log a small event:
+
+ENCOUNTER_LINKED_TO_INTAKE
+
+ENCOUNTER_UNLINKED_FROM_INTAKE
+
+Even if it’s just in your case/encounter record as an array, it’s priceless for debugging.
+
+2) Tiny UX polish (high payoff)
+A) Show “Linked” badge + timestamp
+
+In CaseDetail, show:
+
+Linked to Intake Case: CASE_...
+
+Linked at: timestamp
+
+B) One-click “Open Intake Packet” inside CaseDetail
+
+Even with the Export Pack, make one “Open Packet” button always visible at top of the panel.
+
+C) Better linking flow (optional)
+
+Instead of pasting a case ID, allow:
+
+dropdown of “recent unlinked cases”
+
+filtered by last 24h, or by patient phone (if stored)
+
+You can add this later; your current paste-from-clipboard is already excellent.
+
+3) The big unlock: you’re now ready for eCW Stage 2 without changing UI
+
+Because Export Pack is now on the encounter, when eCW comes online the same panel can gain two new sections:
+
+“EHR Sync”
+
+Connect to eCW (SMART OAuth)
+
+Match patient
+
+Attach intake packet to the encounter
+
+Attach note draft to the encounter
+
+Pull meds/allergies/problems
+
+You won’t need to rebuild workflow. You’ll just add buttons that replace copy/paste with “Send to eCW.”
+
+4) Recommended next step (now that linking is done)
+
+If you haven’t already flipped these in a real environment, do:
+
+A) Firestore as default
+
+STORAGE_DRIVER=firestore
+
+index deployed
+
+golden path passes
+
+B) Firebase Storage as default uploads
+
+UPLOADS_MODE=firebase_storage
+
+confirm attachments view works for new uploads
+
+confirm backward compatibility still works for any legacy local files
+
+Once those are on, you’re production-shaped.
+
+5) One small security reminder
+
+You currently use:
+
+localStorage.setItem("providerKey", "provider-secret-key-2026")
+
+
+That’s fine for dev. Before real use:
+
+swap providerKey for a real login token (JWT / session cookie)
+
+keep provider endpoints protected properly
+
+Not urgent today, but it’s the obvious next hardening milestone.
+
+“Victory lap” test you should run once
+
+Create test intake → submit → upload file
+
+Link case to encounter
+
+Confirm Export Pack appears
+
+Click:
+
+Copy Note
+
+Copy Billing
+
+Open Packet
+
+View Attachments
+
+Unlink → confirm Export Pack disappears and Link card returns
+
+If that’s green, you’ve nailed the workflow.
+
+If you tell me what your encounter datastore is (Firestore collection name / SQL table name) and whether encounters already have a “notes” field, I can suggest the cleanest place to store the intake case reference + link audit events so it stays consistent with your longer-term eCW sync plan.

@@ -303,7 +303,11 @@ summaryRouter.post("/api/provider/encounter/:encounterId/link-intake", requirePr
       return res.status(400).json({ ok: false, error: "intakeCaseId is required" });
     }
 
-    const [existingEncounter] = await db.select({ id: encounters.id })
+    const [existingEncounter] = await db.select({ 
+      id: encounters.id,
+      intakeCaseId: encounters.intakeCaseId,
+      intakeLinkEvents: encounters.intakeLinkEvents 
+    })
       .from(encounters)
       .where(eq(encounters.id, encounterId))
       .limit(1);
@@ -312,16 +316,37 @@ summaryRouter.post("/api/provider/encounter/:encounterId/link-intake", requirePr
       return res.status(404).json({ ok: false, error: "Encounter not found" });
     }
 
+    // Idempotency: if already linked to the same case, return success
+    if (existingEncounter.intakeCaseId === intakeCaseId) {
+      return res.json({ ok: true, status: "already_linked", encounterId, intakeCaseId });
+    }
+
     const caseData = await store.getCase(intakeCaseId);
     if (!caseData) {
       return res.status(404).json({ ok: false, error: "Intake case not found" });
     }
 
+    // Build audit event
+    const now = new Date();
+    const linkEvent = {
+      action: "ENCOUNTER_LINKED_TO_INTAKE",
+      intakeCaseId,
+      timestamp: now.toISOString(),
+    };
+    const existingEvents = existingEncounter.intakeLinkEvents 
+      ? JSON.parse(existingEncounter.intakeLinkEvents) 
+      : [];
+    existingEvents.push(linkEvent);
+
     await db.update(encounters)
-      .set({ intakeCaseId })
+      .set({ 
+        intakeCaseId,
+        intakeLinkedAt: now,
+        intakeLinkEvents: JSON.stringify(existingEvents)
+      })
       .where(eq(encounters.id, encounterId));
 
-    return res.json({ ok: true, encounterId, intakeCaseId });
+    return res.json({ ok: true, status: "linked", encounterId, intakeCaseId, linkedAt: now.toISOString() });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: e?.message || "Failed to link intake case" });
   }
@@ -334,7 +359,11 @@ summaryRouter.delete("/api/provider/encounter/:encounterId/link-intake", require
       return res.status(400).json({ ok: false, error: "Invalid encounter ID" });
     }
 
-    const [existingEncounter] = await db.select({ id: encounters.id })
+    const [existingEncounter] = await db.select({ 
+      id: encounters.id,
+      intakeCaseId: encounters.intakeCaseId,
+      intakeLinkEvents: encounters.intakeLinkEvents 
+    })
       .from(encounters)
       .where(eq(encounters.id, encounterId))
       .limit(1);
@@ -343,11 +372,32 @@ summaryRouter.delete("/api/provider/encounter/:encounterId/link-intake", require
       return res.status(404).json({ ok: false, error: "Encounter not found" });
     }
 
+    // Idempotency: if already unlinked, return success
+    if (!existingEncounter.intakeCaseId) {
+      return res.json({ ok: true, status: "already_unlinked", encounterId, intakeCaseId: null });
+    }
+
+    // Build audit event
+    const now = new Date();
+    const unlinkEvent = {
+      action: "ENCOUNTER_UNLINKED_FROM_INTAKE",
+      previousIntakeCaseId: existingEncounter.intakeCaseId,
+      timestamp: now.toISOString(),
+    };
+    const existingEvents = existingEncounter.intakeLinkEvents 
+      ? JSON.parse(existingEncounter.intakeLinkEvents) 
+      : [];
+    existingEvents.push(unlinkEvent);
+
     await db.update(encounters)
-      .set({ intakeCaseId: null })
+      .set({ 
+        intakeCaseId: null,
+        intakeLinkedAt: null,
+        intakeLinkEvents: JSON.stringify(existingEvents)
+      })
       .where(eq(encounters.id, encounterId));
 
-    return res.json({ ok: true, encounterId, intakeCaseId: null });
+    return res.json({ ok: true, status: "unlinked", encounterId, intakeCaseId: null });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: e?.message || "Failed to unlink intake case" });
   }

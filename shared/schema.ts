@@ -66,6 +66,8 @@ export const encounters = pgTable("encounters", {
   physicianSummary: text("physician_summary"), // JSON string of summary for physician
   // Intake case linking
   intakeCaseId: text("intake_case_id"), // links to intake case from portal workflow
+  intakeLinkEvents: text("intake_link_events"), // JSON array of link/unlink audit events
+  intakeLinkedAt: timestamp("intake_linked_at"), // when the intake case was last linked
 });
 
 export const insertEncounterSchema = createInsertSchema(encounters).omit({
