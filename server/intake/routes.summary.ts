@@ -1,7 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
+import { eq } from "drizzle-orm";
 import { getStore } from "../intakeStorage";
 import type { SubmitPayload } from "../intakeStorage/types";
+import { db } from "../db";
+import { encounters } from "@shared/schema";
 
 export const summaryRouter = Router();
 const store = getStore();
@@ -285,5 +288,67 @@ summaryRouter.post("/api/provider/intake/test-token", requireProviderAuth, async
     return res.json({ ok: true, token, code, expiresAtMs, url: `/simple/${token}` });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: e?.message || "Failed to create token" });
+  }
+});
+
+summaryRouter.post("/api/provider/encounter/:encounterId/link-intake", requireProviderAuth, async (req: Request, res: Response) => {
+  try {
+    const encounterId = parseInt(req.params.encounterId, 10);
+    if (isNaN(encounterId)) {
+      return res.status(400).json({ ok: false, error: "Invalid encounter ID" });
+    }
+
+    const { intakeCaseId } = req.body;
+    if (!intakeCaseId || typeof intakeCaseId !== "string") {
+      return res.status(400).json({ ok: false, error: "intakeCaseId is required" });
+    }
+
+    const [existingEncounter] = await db.select({ id: encounters.id })
+      .from(encounters)
+      .where(eq(encounters.id, encounterId))
+      .limit(1);
+
+    if (!existingEncounter) {
+      return res.status(404).json({ ok: false, error: "Encounter not found" });
+    }
+
+    const caseData = await store.getCase(intakeCaseId);
+    if (!caseData) {
+      return res.status(404).json({ ok: false, error: "Intake case not found" });
+    }
+
+    await db.update(encounters)
+      .set({ intakeCaseId })
+      .where(eq(encounters.id, encounterId));
+
+    return res.json({ ok: true, encounterId, intakeCaseId });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: e?.message || "Failed to link intake case" });
+  }
+});
+
+summaryRouter.delete("/api/provider/encounter/:encounterId/link-intake", requireProviderAuth, async (req: Request, res: Response) => {
+  try {
+    const encounterId = parseInt(req.params.encounterId, 10);
+    if (isNaN(encounterId)) {
+      return res.status(400).json({ ok: false, error: "Invalid encounter ID" });
+    }
+
+    const [existingEncounter] = await db.select({ id: encounters.id })
+      .from(encounters)
+      .where(eq(encounters.id, encounterId))
+      .limit(1);
+
+    if (!existingEncounter) {
+      return res.status(404).json({ ok: false, error: "Encounter not found" });
+    }
+
+    await db.update(encounters)
+      .set({ intakeCaseId: null })
+      .where(eq(encounters.id, encounterId));
+
+    return res.json({ ok: true, encounterId, intakeCaseId: null });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: e?.message || "Failed to unlink intake case" });
   }
 });

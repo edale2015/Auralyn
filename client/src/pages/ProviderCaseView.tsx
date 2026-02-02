@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, AlertCircle, ArrowLeft, Search, Stethoscope, CheckCircle, Plus, ExternalLink } from "lucide-react";
+import { Loader2, AlertCircle, ArrowLeft, Search, Stethoscope, CheckCircle, Plus, ExternalLink, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import EhrExportPack from "@/components/EhrExportPack";
 import { getProviderKey, providerHeaders } from "@/lib/providerAuth";
@@ -216,14 +216,28 @@ export default function ProviderCaseView() {
           <>
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <CheckCircle className="h-5 w-5 text-primary" />
-                    Case: {caseInfo.caseId}
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle className="text-base flex items-center gap-2 min-w-0">
+                    <CheckCircle className="h-5 w-5 text-primary flex-shrink-0" />
+                    <span className="truncate">Case: {caseInfo.caseId}</span>
                   </CardTitle>
-                  <Badge variant={statusBadgeVariant(caseInfo.status)}>
-                    {caseInfo.status}
-                  </Badge>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        navigator.clipboard.writeText(caseInfo.caseId);
+                        toast({ title: "Copied", description: "Case ID copied to clipboard." });
+                      }}
+                      data-testid="button-copy-case-id"
+                    >
+                      <Copy className="h-4 w-4 mr-1" />
+                      Copy ID
+                    </Button>
+                    <Badge variant={statusBadgeVariant(caseInfo.status)}>
+                      {caseInfo.status}
+                    </Badge>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>

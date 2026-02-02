@@ -61,6 +61,7 @@ import { useState } from "react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { Encounter, WhatsappMessage, Order } from "@shared/schema";
 import EhrExportPack from "@/components/EhrExportPack";
+import LinkIntakeCaseCard from "@/components/LinkIntakeCaseCard";
 
 interface CaseDetailProps {
   encounterId: number;
@@ -532,9 +533,11 @@ export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDe
             </Card>
           )}
 
-          {/* EHR Export Pack - shown for approved cases with linked intake */}
-          {isApproved && encounter.intakeCaseId && (
+          {/* Intake Case Linking / EHR Export Pack */}
+          {encounter.intakeCaseId ? (
             <EhrExportPack caseId={encounter.intakeCaseId} />
+          ) : (
+            <LinkIntakeCaseCard encounterId={encounter.id} />
           )}
         </div>
       </ScrollArea>

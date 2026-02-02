@@ -266,6 +266,14 @@ Use for copy/paste workflow into eClinicalWorks:
 - Copy billing suggestions
 - Download intake packet HTML
 
+## Encounter-Intake Case Linking
+Encounters can be linked to intake cases for unified workflow:
+- Schema: `encounters.intakeCaseId` field links encounter to intake case
+- API: `POST /api/provider/encounter/:encounterId/link-intake` with body `{ intakeCaseId: "..." }`
+- API: `DELETE /api/provider/encounter/:encounterId/link-intake` to unlink
+- UI: CaseDetail shows LinkIntakeCaseCard when no case linked, EhrExportPack when linked
+- ProviderCaseView has "Copy ID" button for easy case ID copying
+
 ## Recent Changes (2026-02-01)
 - Added SQLite-based intake system with modular routes
 - Created intake frontend components (VerifyCard, SymptomGrid, etc.)
