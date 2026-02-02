@@ -24,6 +24,12 @@ function initFirebase() {
   });
 }
 
+function isMissingIndexError(e: any): boolean {
+  const msg = String(e?.message || "");
+  const low = msg.toLowerCase();
+  return low.includes("requires an index") || msg.includes("FAILED_PRECONDITION");
+}
+
 async function latestCaseByToken(
   cases: FirebaseFirestore.CollectionReference,
   token: string
@@ -32,12 +38,11 @@ async function latestCaseByToken(
     const q = await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
     return q.empty ? null : q.docs[0];
   } catch (err: any) {
-    const msg = err?.message || "";
-    if (msg.includes("requires an index") || msg.includes("index")) {
-      console.error("[Firestore] Missing index error:", msg);
+    if (isMissingIndexError(err)) {
+      console.error("[Firestore] Missing index error:", err?.message || err);
       throw new Error(
-        "Firestore index missing for cases(token ASC, created_at DESC). " +
-        "Create it using the link in server logs or deploy firestore.indexes.json with: firebase deploy --only firestore:indexes"
+        "Firestore index missing: create composite index for collection 'cases' on (token ASC, created_at DESC). " +
+        "Use firestore.indexes.json and deploy with 'firebase deploy --only firestore:indexes' (or create in console using link in server logs)."
       );
     }
     throw err;

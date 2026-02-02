@@ -183,6 +183,14 @@ firebase deploy --only firestore:indexes
 ```
 The index definition is in `firestore.indexes.json` at the project root.
 
+### Latest Case Tie-Breaker
+Cases are retrieved by `token` ordered by `created_at DESC`. If two cases have the same `created_at` (rare but possible under load), the result is non-deterministic. This is acceptable for the current token-per-intake-link design.
+
+### File Uploads (Production Note)
+File uploads are stored on local disk (`UPLOAD_DIR`). This works for single-instance deployments.
+
+**Important:** If `STORAGE_DRIVER=firestore` and you deploy multiple instances, local disk files won't be shared. For production multi-instance deployments, migrate to Cloud Storage (Firebase Storage or GCS).
+
 ### Routes (Storage-Agnostic)
 Located in `server/intake/`:
 - `routes.intake.ts` - Verify, save_draft, submit, status, summary endpoints

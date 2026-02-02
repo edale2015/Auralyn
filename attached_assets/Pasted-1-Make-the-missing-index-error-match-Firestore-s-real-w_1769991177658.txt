@@ -1,0 +1,84 @@
+1) Make the “missing index” error match Firestore’s real wording
+
+Firestore’s error text varies a little, but it almost always includes one of these phrases:
+
+"The query requires an index"
+
+"FAILED_PRECONDITION"
+
+"requires an index"
+
+sometimes a console URL
+
+So in your latestCaseByToken() helper, do a match like:
+
+msg.toLowerCase().includes("requires an index")
+
+OR msg.includes("FAILED_PRECONDITION")
+
+Then throw a custom error that:
+
+tells exactly what index is required (token asc, created_at desc)
+
+points to firestore.indexes.json
+
+suggests firebase deploy --only firestore:indexes (if you have CLI)
+
+Also: log the original error once so you keep the URL if it’s present.
+
+If you want a concrete snippet, use this:
+
+function isMissingIndexError(e: any) {
+  const msg = String(e?.message || "");
+  const low = msg.toLowerCase();
+  return low.includes("requires an index") || msg.includes("FAILED_PRECONDITION");
+}
+
+async function latestCaseByToken(token: string) {
+  try {
+    return await cases.where("token", "==", token).orderBy("created_at", "desc").limit(1).get();
+  } catch (e: any) {
+    if (isMissingIndexError(e)) {
+      console.error("Firestore missing index error:", e?.message || e);
+      throw new Error(
+        "Firestore index missing: create composite index for collection 'cases' on (token ASC, created_at DESC). " +
+        "Use firestore.indexes.json and deploy with 'firebase deploy --only firestore:indexes' (or create in console)."
+      );
+    }
+    throw e;
+  }
+}
+
+
+That’s the “no surprises” version.
+
+2) Decide (and document) your “latest case” tie-breaker
+
+Right now you use created_at desc. If two cases are created at the same millisecond (rare but possible under load), “latest” can be ambiguous.
+
+Two easy options:
+
+Option A (simple)
+
+Keep it as-is. Document: “latest by created_at; ties are acceptable.”
+Probably fine.
+
+Option B (stronger)
+
+Add a second orderBy on a monotonic field (e.g., case_id if it embeds a timestamp), but Firestore compound ordering can require more indexing and careful design.
+
+Given you’re using token-per-intake-link, Option A is totally fine.
+
+3) One more “production reality” note: local disk uploads + Firestore
+
+Your _driver endpoint exposing uploadsMode: local_disk is perfect.
+
+Just add one more line to docs:
+
+If STORAGE_DRIVER=firestore and you deploy multiple instances, local disk files won’t be shared. For production, switch to Cloud Storage.
+
+That’s it.
+
+4) About your “phase complete” statement
+
+Your storage abstraction layer is now genuinely solid for the current scope (portal intake, status, provider view, signing). The only caveat is: Firestore needs the index deployed before you flip the env var in a real environment. With your docs + JSON + friendly error, you’ve already handled that.
