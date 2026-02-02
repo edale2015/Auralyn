@@ -1,0 +1,101 @@
+1) Do a full “golden path” test in 3 minutes
+
+Using the response you got:
+
+Open: /simple/ehr_08dd95b4ab1b
+
+Verify with code: 456843
+
+Fill a short intake + upload one file + submit
+
+Go to /provider/case
+
+Find the case (by token, time, or newest)
+
+In Export Pack:
+
+Copy Note
+
+Copy Billing
+
+Open Packet
+
+View Attachments
+
+If all four actions work, your “copy/paste into eCW” workflow is operational.
+
+2) Add one tiny UI button to make this even smoother
+
+On /provider/case add:
+
+“Create Test Intake + Open”
+
+calls POST /api/provider/intake/test-token
+
+opens the returned url in a new tab
+
+shows token/code in a toast (so you can paste it into a test script or send to WhatsApp)
+
+That turns testing into one click.
+
+3) Link intake cases to encounters (so Export Pack can live in CaseDetail later)
+
+Right now you correctly split:
+
+encounters (clinical workflow)
+
+intake cases (portal workflow)
+
+To unify them, add one field:
+
+encounter.intakeCaseId
+
+Then in CaseDetail:
+
+if intakeCaseId exists → render Export Pack directly
+
+Minimal linking flow
+
+In your provider intake case view:
+
+Button: “Attach to Encounter”
+
+provider selects encounter (or enters encounter ID)
+
+server sets encounter.intakeCaseId = caseId
+
+This is the clean bridge that makes “portal → EHR charting” feel seamless.
+
+4) Security quick note about the provider key
+
+provider-secret-key-2026 is fine for dev, but for anything beyond dev:
+
+Don’t bake it into client bundles (avoid VITE_PROVIDER_KEY in production)
+
+Store it server-side and issue a real session token after login
+
+Rotate the provider key regularly (monthly is plenty)
+
+If you keep it simple for now: at least gate provider endpoints by both:
+
+X-Provider-Key
+
+and IP allowlist (optional, if you have stable office IP)
+
+5) Next phase choices
+
+Now that Export Pack works, your next best ROI is:
+
+A) Firestore index deploy + flip STORAGE_DRIVER=firestore
+
+So cases are cloud-native, multi-instance safe.
+
+B) Flip uploads to Firebase Storage in production
+
+You already have UPLOADS_MODE=firebase_storage, so once you go multi-instance, you’re protected.
+
+C) eCW Stage 2 scaffolding (SMART handshake routes)
+
+No credentials needed to scaffold the endpoints and UI hooks.
+
+If you want, paste one screenshot or the JSON shape of an “intake case” returned on /provider/case (just the top-level keys, redact PHI), and I’ll suggest the most useful sorting/filtering controls for PatientQueue so you can find cases instantly (newest, submitted, urgent flags, has attachments, etc.).

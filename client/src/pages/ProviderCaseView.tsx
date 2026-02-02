@@ -4,9 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, AlertCircle, ArrowLeft, Search, Stethoscope, CheckCircle } from "lucide-react";
+import { Loader2, AlertCircle, ArrowLeft, Search, Stethoscope, CheckCircle, Plus, ExternalLink } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import EhrExportPack from "@/components/EhrExportPack";
-import { getProviderKey } from "@/lib/providerAuth";
+import { getProviderKey, providerHeaders } from "@/lib/providerAuth";
 
 interface CaseInfo {
   caseId: string;
@@ -26,12 +27,39 @@ export default function ProviderCaseView() {
   const [inputCaseId, setInputCaseId] = useState("");
 
   const hasKey = !!getProviderKey();
+  const { toast } = useToast();
+  const [creatingToken, setCreatingToken] = useState(false);
 
   useEffect(() => {
     if (caseId) {
       loadCase(caseId);
     }
   }, [caseId]);
+
+  const createTestIntake = async () => {
+    setCreatingToken(true);
+    try {
+      const res = await fetch("/api/provider/intake/test-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...providerHeaders() },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        toast({ title: "Error", description: data.error || "Failed to create token", variant: "destructive" });
+        return;
+      }
+      toast({
+        title: "Test Intake Created",
+        description: `Token: ${data.token} | Code: ${data.code}`,
+      });
+      window.open(data.url, "_blank");
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.message || "Failed to create token", variant: "destructive" });
+    } finally {
+      setCreatingToken(false);
+    }
+  };
 
   const loadCase = async (id: string) => {
     setLoading(true);
@@ -127,8 +155,22 @@ export default function ProviderCaseView() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Find Case</CardTitle>
-            <CardDescription>Enter a case ID to view the EHR export pack</CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Find Case</CardTitle>
+                <CardDescription>Enter a case ID to view the EHR export pack</CardDescription>
+              </div>
+              <Button 
+                variant="outline" 
+                onClick={createTestIntake} 
+                disabled={creatingToken}
+                data-testid="button-create-test-intake"
+              >
+                {creatingToken ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                Create Test Intake
+                <ExternalLink className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="flex gap-2">
