@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import crypto from "crypto";
 import { getStore } from "../intakeStorage";
 import type { SubmitPayload } from "../intakeStorage/types";
 
@@ -261,5 +262,28 @@ summaryRouter.get("/api/provider/case/:caseId/files", requireProviderAuth, async
     return res.json({ ok: true, files: [] });
   } catch (e: any) {
     return res.status(404).json({ ok: false, error: e?.message || "Not found" });
+  }
+});
+
+function randToken(prefix = "test") {
+  return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function randCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+summaryRouter.post("/api/provider/intake/test-token", requireProviderAuth, async (req: Request, res: Response) => {
+  try {
+    const token = (req.body?.token || randToken("ehr")).toString();
+    const code = (req.body?.code || randCode()).toString();
+    const expiryMinutes = Number(req.body?.expiryMinutes || 60);
+    const expiresAtMs = Date.now() + expiryMinutes * 60 * 1000;
+
+    await store.createSession(token, code, expiresAtMs);
+
+    return res.json({ ok: true, token, code, expiresAtMs, url: `/simple/${token}` });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: e?.message || "Failed to create token" });
   }
 });

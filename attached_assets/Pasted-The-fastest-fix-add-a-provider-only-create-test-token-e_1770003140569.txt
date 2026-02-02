@@ -1,0 +1,106 @@
+The fastest fix: add a provider-only “create test token” endpoint
+
+This avoids terminal commands entirely and makes testing instant.
+
+Add endpoint
+
+POST /api/provider/intake/test-token
+
+Requires X-Provider-Key
+
+Body (optional): { token?: string, code?: string, expiryMinutes?: number }
+
+Returns: { token, code, expiresAtMs }
+
+Then you can click a button in your provider UI: “Create Test Token” and jump straight to /simple/:token.
+
+Minimal Express handler (drop-in)
+
+Put this in your existing server/intake/routes.summary.ts (or wherever provider routes live):
+
+import crypto from "crypto";
+import { getIntakeStore } from "../intakeStorage"; // adjust path to your store selector
+
+const store = getIntakeStore();
+
+function requireProvider(req: any, res: any, next: any) {
+  const key = req.headers["x-provider-key"];
+  if (!process.env.PROVIDER_API_KEY) return res.status(500).json({ ok: false, error: "Missing PROVIDER_API_KEY" });
+  if (key !== process.env.PROVIDER_API_KEY) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  next();
+}
+
+function randToken(prefix = "test") {
+  return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function randCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+router.post("/api/provider/intake/test-token", requireProvider, async (req, res) => {
+  try {
+    const token = (req.body?.token || randToken("ehr")).toString();
+    const code = (req.body?.code || randCode()).toString();
+    const expiryMinutes = Number(req.body?.expiryMinutes || 60);
+    const expiresAtMs = Date.now() + expiryMinutes * 60 * 1000;
+
+    await store.createSession(token, code, expiresAtMs);
+
+    return res.json({ ok: true, token, code, expiresAtMs });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: e?.message || "Failed to create token" });
+  }
+});
+
+
+Now you can create unlimited fresh tokens without touching the terminal.
+
+If you don’t want to add an endpoint: here’s the quick manual workaround
+
+Run exactly this (you already have the script):
+
+npx tsx server/scripts/createTestToken.ts ehr_export_fresh 123456 60
+
+
+Then open:
+
+/simple/ehr_export_fresh
+
+enter code 123456
+
+But the endpoint is better because you’ll hit this problem repeatedly.
+
+The other issue you hit: Export Pack not showing in CaseDetail
+
+You discovered something important: encounters and intake cases are different entities. So adding the Export Pack to CaseDetail won’t work unless you have a link like:
+
+encounter.intakeCaseId
+
+Two clean options:
+
+Option A (best for now)
+
+Add a dedicated provider page for intake cases (not encounters)
+
+List cases
+
+Click case → Case view shows Export Pack
+
+Option B (best long-term)
+
+Link them:
+
+When an intake becomes a real encounter, store intakeCaseId on the encounter record
+
+Then CaseDetail can show Export Pack conditionally when linked
+
+Given you want eCW workflow soon, Option B is where you’ll end up, but Option A gets you unblocked immediately.
+
+Answer to your question, plainly
+
+Nothing is “taking long.” You’re blocked by:
+
+a one-time token that was already used (expected)
+
+lack of an easy way to generate a fresh token from the UI (easy to add)
