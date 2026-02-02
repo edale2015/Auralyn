@@ -10,6 +10,7 @@ import SimpleIntake from "@/pages/SimpleIntake";
 import IntakeStatus from "@/pages/IntakeStatus";
 import IntakeSummary from "@/pages/IntakeSummary";
 import StartVisit from "@/pages/StartVisit";
+import ProviderCaseView from "@/pages/ProviderCaseView";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -22,6 +23,8 @@ function Router() {
       <Route path="/simple/:token" component={SimpleIntake} />
       <Route path="/intake/:token/status" component={IntakeStatus} />
       <Route path="/intake/:token/summary" component={IntakeSummary} />
+      <Route path="/provider/case" component={ProviderCaseView} />
+      <Route path="/provider/case/:caseId" component={ProviderCaseView} />
       <Route component={NotFound} />
     </Switch>
   );

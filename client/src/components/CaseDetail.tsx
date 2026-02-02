@@ -60,6 +60,7 @@ import {
 import { useState } from "react";
 import { formatDistanceToNow, format } from "date-fns";
 import type { Encounter, WhatsappMessage, Order } from "@shared/schema";
+import EhrExportPack from "@/components/EhrExportPack";
 
 interface CaseDetailProps {
   encounterId: number;
@@ -78,6 +79,7 @@ type ApprovalForm = z.infer<typeof approvalSchema>;
 interface EncounterWithDetails extends Encounter {
   messages?: WhatsappMessage[];
   orders?: Order[];
+  intakeCaseId?: string;
 }
 
 const CLARIFICATION_TEMPLATES = [
@@ -528,6 +530,11 @@ export default function CaseDetail({ encounterId, physicianId, onClose }: CaseDe
                 )}
               </CardContent>
             </Card>
+          )}
+
+          {/* EHR Export Pack - shown for approved cases with linked intake */}
+          {isApproved && encounter.intakeCaseId && (
+            <EhrExportPack caseId={encounter.intakeCaseId} />
           )}
         </div>
       </ScrollArea>

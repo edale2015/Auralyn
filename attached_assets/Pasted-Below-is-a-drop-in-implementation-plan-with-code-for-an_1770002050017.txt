@@ -1,0 +1,362 @@
+Below is a drop-in implementation plan with code for:
+
+an EHR Export Pack panel component (shadcn/ui)
+
+TanStack Query hooks to call your new endpoints
+
+“Copy Note”, “Copy Billing”, “Open Packet”, “Attachments list” actions
+
+provider-key auth header handling
+
+nice UX: skeletons, toasts, disabled states, one-click copy
+
+I’ll keep it modular so you can paste with minimal disruption.
+
+0) Assumptions (safe defaults)
+
+Provider key is available to the dashboard (either via env var at build time or via a login exchange). For now, we’ll support:
+
+localStorage.getItem("providerKey") (simple)
+
+or import.meta.env.VITE_PROVIDER_KEY (dev only)
+
+You have a base API URL in VITE_API_BASE_URL (or similar).
+
+If your project already has an apiClient.ts, plug these functions into it.
+
+1) Add a small provider auth helper
+client/src/lib/providerAuth.ts
+export function getProviderKey(): string | null {
+  // Prefer stored key (after login)
+  const k = localStorage.getItem("providerKey");
+  if (k && k.trim()) return k.trim();
+
+  // Dev fallback (avoid using in production)
+  const envKey = (import.meta as any).env?.VITE_PROVIDER_KEY as string | undefined;
+  return envKey?.trim() || null;
+}
+
+export function providerHeaders(): Record<string, string> {
+  const key = getProviderKey();
+  return key ? { "X-Provider-Key": key } : {};
+}
+
+2) Add TanStack Query fetchers for the export pack
+client/src/lib/ehrexportApi.ts
+import { providerHeaders } from "./providerAuth";
+
+const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "";
+
+async function fetchText(url: string): Promise<string> {
+  const res = await fetch(`${API_BASE}${url}`, { headers: { ...providerHeaders() } });
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return await res.text();
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, { headers: { ...providerHeaders() } });
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return await res.json();
+}
+
+export function getNote(caseId: string) {
+  return fetchText(`/api/provider/case/${caseId}/note`);
+}
+
+export function getBilling(caseId: string) {
+  return fetchJson<{ icd10: string[]; cpt: string[]; notes?: string }>(`/api/provider/case/${caseId}/billing`);
+}
+
+export function getPacketHtml(caseId: string) {
+  return fetchText(`/api/provider/case/${caseId}/packet`);
+}
+
+export function getFiles(caseId: string) {
+  return fetchJson<{
+    files: Array<{
+      fileId: string;
+      originalName: string;
+      mimeType: string;
+      createdAt: number;
+    }>;
+  }>(`/api/provider/case/${caseId}/files`);
+}
+
+
+If your /billing endpoint returns plain text instead of JSON, adjust accordingly. This version assumes a clean JSON payload.
+
+3) Add the Export Pack panel component (shadcn/ui)
+client/src/components/EhrExportPack.tsx
+import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Copy, FileText, Receipt, Paperclip, ExternalLink, RefreshCw } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/components/ui/use-toast";
+
+import { getNote, getBilling, getPacketHtml, getFiles } from "@/lib/ehrexportApi";
+import { getProviderKey } from "@/lib/providerAuth";
+
+function fmtTs(ms: number) {
+  try { return new Date(ms).toLocaleString(); } catch { return ""; }
+}
+
+async function copyToClipboard(text: string) {
+  await navigator.clipboard.writeText(text);
+}
+
+export default function EhrExportPack({ caseId }: { caseId: string }) {
+  const { toast } = useToast();
+  const hasKey = !!getProviderKey();
+
+  const noteQ = useQuery({
+    queryKey: ["ehrpack", "note", caseId],
+    queryFn: () => getNote(caseId),
+    enabled: !!caseId && hasKey,
+    staleTime: 30_000
+  });
+
+  const billingQ = useQuery({
+    queryKey: ["ehrpack", "billing", caseId],
+    queryFn: () => getBilling(caseId),
+    enabled: !!caseId && hasKey,
+    staleTime: 30_000
+  });
+
+  const filesQ = useQuery({
+    queryKey: ["ehrpack", "files", caseId],
+    queryFn: () => getFiles(caseId),
+    enabled: !!caseId && hasKey,
+    staleTime: 15_000
+  });
+
+  const packetQ = useQuery({
+    queryKey: ["ehrpack", "packet", caseId],
+    queryFn: () => getPacketHtml(caseId),
+    enabled: false // fetch on demand
+  });
+
+  const anyLoading = noteQ.isLoading || billingQ.isLoading || filesQ.isLoading;
+
+  function needKeyToast() {
+    toast({
+      title: "Provider access required",
+      description: "No provider key found. Log in or set the provider key for dashboard access.",
+      variant: "destructive"
+    });
+  }
+
+  async function onCopyNote() {
+    if (!hasKey) return needKeyToast();
+    const text = noteQ.data ?? (await noteQ.refetch()).data;
+    if (!text) return;
+    await copyToClipboard(text);
+    toast({ title: "Copied", description: "Visit note draft copied to clipboard." });
+  }
+
+  async function onCopyBilling() {
+    if (!hasKey) return needKeyToast();
+    const data = billingQ.data ?? (await billingQ.refetch()).data;
+    if (!data) return;
+
+    const icd = (data.icd10 || []).join(", ");
+    const cpt = (data.cpt || []).join(", ");
+
+    const text =
+`Billing suggestions
+ICD-10: ${icd || "—"}
+CPT: ${cpt || "—"}
+${data.notes ? `Notes: ${data.notes}` : ""}`.trim();
+
+    await copyToClipboard(text);
+    toast({ title: "Copied", description: "Billing suggestions copied to clipboard." });
+  }
+
+  async function onOpenPacket() {
+    if (!hasKey) return needKeyToast();
+    const html = packetQ.data ?? (await packetQ.refetch()).data;
+    if (!html) return;
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      toast({ title: "Popup blocked", description: "Allow popups to open the intake packet.", variant: "destructive" });
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  const refreshAll = () => {
+    noteQ.refetch();
+    billingQ.refetch();
+    filesQ.refetch();
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="space-y-1">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              EHR Export Pack
+              <Badge variant="secondary">Copy/Paste</Badge>
+            </CardTitle>
+            <CardDescription>
+              One-click exports for eCW workflow. (Provider-only)
+            </CardDescription>
+          </div>
+
+          <Button variant="outline" size="sm" onClick={refreshAll} disabled={!hasKey || anyLoading}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
+
+        {!hasKey && (
+          <div className="text-sm text-red-600">
+            No provider key detected. Log in to enable exports.
+          </div>
+        )}
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={onCopyNote} disabled={!hasKey || noteQ.isFetching}>
+            <Copy className="h-4 w-4 mr-2" />
+            Copy Note
+          </Button>
+
+          <Button variant="secondary" onClick={onCopyBilling} disabled={!hasKey || billingQ.isFetching}>
+            <Receipt className="h-4 w-4 mr-2" />
+            Copy Billing
+          </Button>
+
+          <Button variant="outline" onClick={onOpenPacket} disabled={!hasKey || packetQ.isFetching}>
+            <FileText className="h-4 w-4 mr-2" />
+            Open Packet
+            <ExternalLink className="h-4 w-4 ml-2" />
+          </Button>
+        </div>
+
+        <Separator />
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Paperclip className="h-4 w-4" />
+            <div className="font-medium">Attachments</div>
+            {filesQ.data?.files?.length ? (
+              <Badge variant="secondary">{filesQ.data.files.length}</Badge>
+            ) : null}
+          </div>
+
+          {filesQ.isLoading && (
+            <div className="space-y-2">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-3/4" />
+            </div>
+          )}
+
+          {filesQ.isError && (
+            <div className="text-sm text-red-600">
+              Failed to load attachments.
+            </div>
+          )}
+
+          {!filesQ.isLoading && !filesQ.isError && (
+            <div className="space-y-2">
+              {(filesQ.data?.files || []).length === 0 ? (
+                <div className="text-sm text-muted-foreground">No attachments uploaded.</div>
+              ) : (
+                (filesQ.data!.files).map((f) => (
+                  <div key={f.fileId} className="flex items-center justify-between gap-3 rounded-xl border p-3">
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{f.originalName}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {f.mimeType} · {fmtTs(f.createdAt)}
+                      </div>
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.open(`${(import.meta as any).env?.VITE_API_BASE_URL || ""}/api/file/${f.fileId}`, "_blank")}
+                      disabled={!hasKey}
+                    >
+                      View
+                      <ExternalLink className="h-4 w-4 ml-2" />
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        <Separator />
+
+        <div className="text-xs text-muted-foreground">
+          Tip: paste the note into eCW’s encounter note, paste billing into charge capture, and attach packet/attachments as needed.
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+4) Mount the panel inside CaseDetail.tsx
+
+In your client/src/components/CaseDetail.tsx, wherever you render case info (and you have caseId), add:
+
+import EhrExportPack from "@/components/EhrExportPack";
+
+// inside component render:
+{selectedCaseId && <EhrExportPack caseId={selectedCaseId} />}
+
+
+If you have the whole case object but not the ID, use case.caseId.
+
+5) Make sure TanStack Query is set up once
+
+You already use TanStack Query, so you likely have a QueryClientProvider in App.tsx. If not, you’ll need it (but you said you already use it).
+
+6) One important backend detail for attachments viewing
+
+Your “View” button opens:
+
+/api/file/:fileId
+
+Make sure the backend enforces one of:
+
+provider key for provider-side downloads, OR
+
+patient verified token ownership
+
+Since this is the provider dashboard, simplest is:
+
+allow provider key access to any file for that case.
+
+If your /api/file/:fileId endpoint doesn’t accept provider auth, add a provider-auth option (you already have that in the backend plan).
+
+7) Firestore + Firebase Storage modes (how you run production)
+
+Once the Firestore index is deployed, your production env should be:
+
+STORAGE_DRIVER=firestore
+UPLOADS_MODE=firebase_storage
+
+
+SQLite + local_disk remains great for dev and fast testing.
+
+Tiny polish ideas (optional, but high joy-per-line)
+
+Add a “Copy Packet (Text)” button: convert HTML → plaintext and copy
+
+Add “Download all attachments as ZIP” (server endpoint)
+
+Add badges like “Urgent flags” from assistant triage on the case detail header
+
+If you paste the prop sha
