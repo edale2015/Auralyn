@@ -64,6 +64,8 @@ export const encounters = pgTable("encounters", {
   answers: text("answers"), // JSON string of collected answers
   proposal: text("proposal"), // JSON string of computed proposal
   physicianSummary: text("physician_summary"), // JSON string of summary for physician
+  // Intake case linking
+  intakeCaseId: text("intake_case_id"), // links to intake case from portal workflow
 });
 
 export const insertEncounterSchema = createInsertSchema(encounters).omit({
