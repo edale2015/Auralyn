@@ -12,9 +12,10 @@ export interface ConsentData {
 interface ConsentPanelProps {
   value: ConsentData;
   onChange: (next: ConsentData) => void;
+  disabled?: boolean;
 }
 
-export default function ConsentPanel({ value, onChange }: ConsentPanelProps) {
+export default function ConsentPanel({ value, onChange, disabled }: ConsentPanelProps) {
   return (
     <Card>
       <CardHeader>
@@ -28,6 +29,7 @@ export default function ConsentPanel({ value, onChange }: ConsentPanelProps) {
             checked={value.telehealth}
             onCheckedChange={(checked) => onChange({ ...value, telehealth: checked as boolean })}
             data-testid="checkbox-consent-telehealth"
+            disabled={disabled}
           />
           <Label htmlFor="telehealth" className="text-sm leading-relaxed">
             I consent to receive telehealth services and understand that this is not a substitute for in-person emergency care.
@@ -40,6 +42,7 @@ export default function ConsentPanel({ value, onChange }: ConsentPanelProps) {
             checked={value.privacy}
             onCheckedChange={(checked) => onChange({ ...value, privacy: checked as boolean })}
             data-testid="checkbox-consent-privacy"
+            disabled={disabled}
           />
           <Label htmlFor="privacy" className="text-sm leading-relaxed">
             I have read and agree to the Privacy Policy and Terms of Service.
@@ -54,6 +57,7 @@ export default function ConsentPanel({ value, onChange }: ConsentPanelProps) {
             onChange={(e) => onChange({ ...value, signatureName: e.target.value })}
             placeholder="John Doe"
             data-testid="input-consent-signature"
+            disabled={disabled}
           />
         </div>
       </CardContent>

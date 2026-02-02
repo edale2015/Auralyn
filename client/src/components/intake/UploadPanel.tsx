@@ -14,9 +14,10 @@ interface UploadPanelProps {
   token: string;
   attachments: UploadedFile[];
   setAttachments: (files: UploadedFile[]) => void;
+  disabled?: boolean;
 }
 
-export default function UploadPanel({ token, attachments, setAttachments }: UploadPanelProps) {
+export default function UploadPanel({ token, attachments, setAttachments, disabled }: UploadPanelProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -53,7 +54,7 @@ export default function UploadPanel({ token, attachments, setAttachments }: Uplo
           <Input
             type="file"
             accept="image/*,application/pdf"
-            disabled={busy}
+            disabled={busy || disabled}
             onChange={(e) => onPick(e.target.files?.[0] || null)}
             className="flex-1"
             data-testid="input-upload-file"
@@ -85,6 +86,7 @@ export default function UploadPanel({ token, attachments, setAttachments }: Uplo
                   variant="ghost"
                   onClick={() => removeFile(file.fileId)}
                   data-testid={`button-remove-file-${file.fileId}`}
+                  disabled={disabled}
                 >
                   <X className="h-4 w-4" />
                 </Button>

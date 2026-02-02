@@ -14,6 +14,7 @@ interface ReviewSubmitProps {
   attachments: { fileId: string; name: string }[];
   consent: ConsentData;
   onSubmitted: (caseId: string) => void;
+  disabled?: boolean;
 }
 
 export default function ReviewSubmit({
@@ -24,6 +25,7 @@ export default function ReviewSubmit({
   attachments,
   consent,
   onSubmitted,
+  disabled,
 }: ReviewSubmitProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -109,7 +111,7 @@ export default function ReviewSubmit({
 
         <Button
           onClick={submit}
-          disabled={busy || !isValid}
+          disabled={busy || !isValid || disabled}
           className="w-full"
           data-testid="button-submit-intake"
         >

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Loader2, Save, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, Save, ChevronLeft, ChevronRight, Clock, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -14,11 +14,19 @@ import type { Tri } from "@/components/intake";
 import type { ConsentData } from "@/components/intake/ConsentPanel";
 
 type IntakeStep = "verify" | "chief_complaint" | "symptoms" | "uploads" | "consent" | "review" | "success";
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 interface UploadedFile {
   fileId: string;
   name: string;
   mimeType: string;
+}
+
+function formatTimeLeft(totalSec: number): string {
+  const s = Math.max(0, totalSec);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
 }
 
 export default function SimpleIntake() {
@@ -40,26 +48,43 @@ export default function SimpleIntake() {
     signatureName: "",
   });
 
-  const [saving, setSaving] = useState(false);
-  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [sessionExpiresAtMs, setSessionExpiresAtMs] = useState<number | null>(null);
+  const [timeLeftSec, setTimeLeftSec] = useState<number>(0);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const dataRef = useRef({ chiefComplaint, freeText, symptoms });
   dataRef.current = { chiefComplaint, freeText, symptoms };
 
+  useEffect(() => {
+    if (!sessionExpiresAtMs) return;
+
+    const tick = () => {
+      const left = Math.floor((sessionExpiresAtMs - Date.now()) / 1000);
+      setTimeLeftSec(left);
+    };
+
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [sessionExpiresAtMs]);
+
   const saveDraft = useCallback(async () => {
     if (step === "verify" || !token) return;
-    setSaving(true);
+    
     try {
+      setSaveState("saving");
       await apiRequest("POST", `/api/intake/${token}/save_draft`, {
         draft: dataRef.current,
         currentStep: getStepIndex(step),
       });
-      setLastSaved(new Date());
+      setSaveState("saved");
+      setLastSavedAt(Date.now());
+      window.setTimeout(() => setSaveState("idle"), 1500);
     } catch (e) {
       console.warn("Autosave failed:", e);
-    } finally {
-      setSaving(false);
+      setSaveState("error");
     }
   }, [token, step]);
 
@@ -85,8 +110,11 @@ export default function SimpleIntake() {
     return steps.indexOf(s);
   }
 
-  function handleVerified(data: { caseId: string; savedDraft?: Record<string, any> | null; currentStep?: number }) {
+  function handleVerified(data: { caseId: string; savedDraft?: Record<string, any> | null; currentStep?: number; sessionExpiresAtMs?: number }) {
     setCaseId(data.caseId);
+    if (data.sessionExpiresAtMs) {
+      setSessionExpiresAtMs(data.sessionExpiresAtMs);
+    }
     if (data.savedDraft) {
       if (data.savedDraft.chiefComplaint) setChiefComplaint(data.savedDraft.chiefComplaint);
       if (data.savedDraft.freeText) setFreeText(data.savedDraft.freeText);
@@ -117,6 +145,8 @@ export default function SimpleIntake() {
     }
   }
 
+  const isExpired = sessionExpiresAtMs !== null && timeLeftSec <= 0;
+
   if (step === "verify") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4" data-testid="simple-intake-verify">
@@ -127,20 +157,53 @@ export default function SimpleIntake() {
     );
   }
 
-  const SaveIndicator = () => (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      {saving ? (
-        <>
-          <Loader2 className="h-3 w-3 animate-spin" />
-          <span>Saving...</span>
-        </>
-      ) : lastSaved ? (
-        <>
-          <Save className="h-3 w-3" />
-          <span>Saved {lastSaved.toLocaleTimeString()}</span>
-        </>
-      ) : null}
-    </div>
+  const SessionStatusBar = () => (
+    <>
+      {sessionExpiresAtMs && (
+        <div className="flex flex-wrap justify-between gap-3 items-center bg-muted/50 border rounded-lg px-3 py-2 mb-4" data-testid="session-status-bar">
+          <div className="flex items-center gap-2 text-sm">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <span className={timeLeftSec <= 60 ? "text-destructive font-medium" : "text-muted-foreground"}>
+              {timeLeftSec > 0 ? `Session expires in ${formatTimeLeft(timeLeftSec)}` : "Session expired"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            {saveState === "saving" && (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>Saving...</span>
+              </>
+            )}
+            {saveState === "saved" && (
+              <>
+                <Save className="h-3 w-3 text-green-600" />
+                <span className="text-green-600">Saved</span>
+              </>
+            )}
+            {saveState === "error" && (
+              <span className="text-destructive">Save failed</span>
+            )}
+            {saveState === "idle" && lastSavedAt && (
+              <>
+                <Save className="h-3 w-3" />
+                <span>Saved {new Date(lastSavedAt).toLocaleTimeString()}</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isExpired && (
+        <div className="flex items-center gap-3 bg-destructive/10 border border-destructive/30 text-destructive rounded-lg px-4 py-3 mb-4" data-testid="session-expired-warning">
+          <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+          <div>
+            <p className="font-medium">This session has expired</p>
+            <p className="text-sm">Reply <strong>LINK</strong> on WhatsApp to get a new secure link.</p>
+          </div>
+        </div>
+      )}
+    </>
   );
 
   const Navigation = ({ canNext = true }: { canNext?: boolean }) => (
@@ -148,7 +211,7 @@ export default function SimpleIntake() {
       <Button variant="outline" onClick={prevStep} data-testid="button-prev-step">
         <ChevronLeft className="h-4 w-4 mr-1" /> Back
       </Button>
-      <Button onClick={nextStep} disabled={!canNext} data-testid="button-next-step">
+      <Button onClick={nextStep} disabled={!canNext || isExpired} data-testid="button-next-step">
         Next <ChevronRight className="h-4 w-4 ml-1" />
       </Button>
     </div>
@@ -158,9 +221,9 @@ export default function SimpleIntake() {
     return (
       <div className="min-h-screen bg-background p-4" data-testid="simple-intake-complaint">
         <div className="max-w-2xl mx-auto space-y-4">
+          <SessionStatusBar />
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Step 1 of 5</h1>
-            <SaveIndicator />
           </div>
           <Card>
             <CardHeader>
@@ -176,6 +239,7 @@ export default function SimpleIntake() {
                   onChange={(e) => setChiefComplaint(e.target.value)}
                   placeholder="e.g., Sore throat and fever for 3 days"
                   data-testid="input-chief-complaint"
+                  disabled={isExpired}
                 />
               </div>
               <div className="space-y-2">
@@ -186,6 +250,7 @@ export default function SimpleIntake() {
                   onChange={(e) => setFreeText(e.target.value)}
                   placeholder="Any other information you'd like to share..."
                   data-testid="input-free-text"
+                  disabled={isExpired}
                 />
               </div>
             </CardContent>
@@ -200,11 +265,11 @@ export default function SimpleIntake() {
     return (
       <div className="min-h-screen bg-background p-4" data-testid="simple-intake-symptoms">
         <div className="max-w-2xl mx-auto space-y-4">
+          <SessionStatusBar />
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Step 2 of 5</h1>
-            <SaveIndicator />
           </div>
-          <SymptomGrid value={symptoms} onChange={setSymptoms} />
+          <SymptomGrid value={symptoms} onChange={setSymptoms} disabled={isExpired} />
           <Navigation />
         </div>
       </div>
@@ -215,11 +280,11 @@ export default function SimpleIntake() {
     return (
       <div className="min-h-screen bg-background p-4" data-testid="simple-intake-uploads">
         <div className="max-w-2xl mx-auto space-y-4">
+          <SessionStatusBar />
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Step 3 of 5</h1>
-            <SaveIndicator />
           </div>
-          <UploadPanel token={token} attachments={attachments} setAttachments={setAttachments} />
+          <UploadPanel token={token} attachments={attachments} setAttachments={setAttachments} disabled={isExpired} />
           <Navigation />
         </div>
       </div>
@@ -230,11 +295,11 @@ export default function SimpleIntake() {
     return (
       <div className="min-h-screen bg-background p-4" data-testid="simple-intake-consent">
         <div className="max-w-2xl mx-auto space-y-4">
+          <SessionStatusBar />
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Step 4 of 5</h1>
-            <SaveIndicator />
           </div>
-          <ConsentPanel value={consent} onChange={setConsent} />
+          <ConsentPanel value={consent} onChange={setConsent} disabled={isExpired} />
           <Navigation canNext={consent.telehealth && consent.privacy && consent.signatureName.trim().length > 2} />
         </div>
       </div>
@@ -245,9 +310,9 @@ export default function SimpleIntake() {
     return (
       <div className="min-h-screen bg-background p-4" data-testid="simple-intake-review">
         <div className="max-w-2xl mx-auto space-y-4">
+          <SessionStatusBar />
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Step 5 of 5</h1>
-            <SaveIndicator />
           </div>
           <ReviewSubmit
             token={token}
@@ -257,6 +322,7 @@ export default function SimpleIntake() {
             attachments={attachments}
             consent={consent}
             onSubmitted={handleSubmitted}
+            disabled={isExpired}
           />
           <Button variant="outline" onClick={prevStep} className="w-full" data-testid="button-back-review">
             <ChevronLeft className="h-4 w-4 mr-1" /> Back to Edit

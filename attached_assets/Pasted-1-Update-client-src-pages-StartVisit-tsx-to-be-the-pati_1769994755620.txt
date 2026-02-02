@@ -1,0 +1,254 @@
+1) Update client/src/pages/StartVisit.tsx to be the patient-friendly landing page
+What it will do
+
+One input: token or full URL
+
+Extract token automatically
+
+Button: “Continue”
+
+Small help text: “Open the WhatsApp link directly if you have it”
+
+Optional link: “I’m a clinician” → / (your existing Login)
+
+Code: StartVisit.tsx
+import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+function extractToken(input: string): string {
+  const s = (input || "").trim();
+  if (!s) return "";
+
+  // If they pasted a full URL, try to parse it.
+  try {
+    const url = new URL(s);
+    const path = url.pathname || "";
+    const m =
+      path.match(/\/simple\/([^/]+)/) ||
+      path.match(/\/intake\/([^/]+)/);
+
+    if (m?.[1]) return decodeURIComponent(m[1]);
+  } catch {
+    // Not a URL, continue
+  }
+
+  // If they pasted a path like /simple/TOKEN
+  const m2 =
+    s.match(/\/simple\/([^/]+)/) ||
+    s.match(/\/intake\/([^/]+)/);
+  if (m2?.[1]) return decodeURIComponent(m2[1]);
+
+  // Otherwise treat the whole thing as a token
+  return s;
+}
+
+export default function StartVisit() {
+  const nav = useNavigate();
+  const [raw, setRaw] = useState("");
+
+  const token = useMemo(() => extractToken(raw), [raw]);
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.card}>
+        <h1 style={styles.h1}>Secure Check-in</h1>
+        <p style={styles.muted}>
+          Paste your secure link token (or paste the full WhatsApp link).
+        </p>
+
+        <input
+          style={styles.input}
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          placeholder="Paste token or link"
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+
+        <button
+          style={{ ...styles.button, opacity: token ? 1 : 0.5 }}
+          disabled={!token}
+          onClick={() => nav(`/simple/${encodeURIComponent(token)}`)}
+        >
+          Continue
+        </button>
+
+        <div style={styles.hr} />
+
+        <p style={styles.smallMuted}>
+          If your link expired, reply <b>LINK</b> on WhatsApp to get a new one.
+        </p>
+
+        <p style={styles.smallMuted}>
+          Clinician? <a href="/" style={styles.link}>Log in</a>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, background: "#f6f7fb" },
+  card: { width: "100%", maxWidth: 520, background: "white", borderRadius: 14, padding: 18, boxShadow: "0 1px 10px rgba(0,0,0,.06)" },
+  h1: { margin: 0, fontSize: 22 },
+  muted: { marginTop: 10, color: "#555" },
+  smallMuted: { marginTop: 10, color: "#666", fontSize: 13, lineHeight: 1.4 },
+  input: { width: "100%", marginTop: 12, padding: 12, borderRadius: 10, border: "1px solid #ddd", fontSize: 14 },
+  button: { width: "100%", marginTop: 12, padding: 12, borderRadius: 10, border: "none", background: "#2c5cff", color: "white", fontSize: 15, cursor: "pointer" },
+  hr: { height: 1, background: "#eee", marginTop: 14 },
+  link: { color: "#2c5cff", textDecoration: "none" }
+};
+
+
+✅ This keeps / as physician login, uses /start as patient entry, and sends them into /simple/:token (your working flow).
+
+2) Add session countdown + autosave “Saved” indicator in SimpleIntake.tsx
+Backend requirement (tiny)
+
+Your verify endpoint should return sessionExpiresAtMs (number).
+
+Example response:
+
+{ "ok": true, "caseId": "...", "sessionExpiresAtMs": 1700000000000 }
+
+
+If you don’t have that yet, add it. For SQLite it’s easy (you already store expires_at). For Firestore it’s also easy.
+
+Frontend state we’ll add
+
+sessionExpiresAtMs
+
+timeLeftSec
+
+saveState: "idle" | "saving" | "saved" | "error"
+
+A small banner at top after verification:
+
+“Session expires in 24:58”
+
+“Saved” indicator near it
+
+Drop-in helper: countdown + formatting
+
+Add at top of SimpleIntake.tsx (or in a small hooks file):
+
+function formatTimeLeft(totalSec: number) {
+  const s = Math.max(0, totalSec);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+Countdown effect snippet
+
+Inside SimpleIntake.tsx, after verification succeeds and you set sessionExpiresAtMs:
+
+const [sessionExpiresAtMs, setSessionExpiresAtMs] = useState<number | null>(null);
+const [timeLeftSec, setTimeLeftSec] = useState<number>(0);
+
+useEffect(() => {
+  if (!sessionExpiresAtMs) return;
+
+  const tick = () => {
+    const left = Math.floor((sessionExpiresAtMs - Date.now()) / 1000);
+    setTimeLeftSec(left);
+  };
+
+  tick();
+  const id = window.setInterval(tick, 1000);
+  return () => window.clearInterval(id);
+}, [sessionExpiresAtMs]);
+
+Autosave status snippet
+
+Assuming you already autosave drafts: wrap it with save state:
+
+type SaveState = "idle" | "saving" | "saved" | "error";
+const [saveState, setSaveState] = useState<SaveState>("idle");
+const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+
+// In your autosave function:
+async function autosave(payload: any) {
+  try {
+    setSaveState("saving");
+    await apiSaveDraft(payload); // your existing call
+    setSaveState("saved");
+    setLastSavedAt(Date.now());
+    window.setTimeout(() => setSaveState("idle"), 1500);
+  } catch {
+    setSaveState("error");
+  }
+}
+
+Expiry behavior
+
+If timeLeftSec <= 0:
+
+disable “Next” and “Submit”
+
+show message: “This secure session expired. Reply LINK on WhatsApp for a new one.”
+
+UI: top “status bar”
+
+Place this near the top of the verified intake UI:
+
+{sessionExpiresAtMs && (
+  <div style={{
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    background: "#eef1ff",
+    padding: "10px 12px",
+    borderRadius: 12,
+    marginBottom: 12
+  }}>
+    <div style={{ fontSize: 13 }}>
+      <b>Session</b>: {timeLeftSec > 0 ? `expires in ${formatTimeLeft(timeLeftSec)}` : "expired"}
+    </div>
+
+    <div style={{ fontSize: 13 }}>
+      {saveState === "saving" && "Saving..."}
+      {saveState === "saved" && "Saved ✓"}
+      {saveState === "error" && "Save failed"}
+      {saveState === "idle" && lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : ""}
+    </div>
+  </div>
+)}
+
+
+That gives you the “calm cockpit” feel.
+
+3) App routes: confirm /start already points to StartVisit
+
+You already have:
+
+/start → StartVisit ✅
+
+/ → Login ✅
+
+So no changes needed in App.tsx besides ensuring /start is reachable and maybe adding a patient link on the Login page:
+
+Optional: on Login.tsx, add:
+
+“Patient? Go to /start”
+
+4) Backend tweak: include sessionExpiresAtMs in verify response
+
+You already have session expiry stored. Just return it on verify.
+
+SQLite: it’s the expires_at value in intake_sessions
+
+Firestore: expires_at field in intake_sessions/{token}
+
+Return it as:
+
+res.json({ ok: true, caseId, sessionExpiresAtMs: session.expires_at, ... });
+
+5) Firestore sanity check sequencing
+
+You already proved Firestore works until the index is needed. So:
+
+Don’t flip to Firestore again until the index is deployed.
+
+Once deployed, run your E2E again and you’ll be fully dual-stack.

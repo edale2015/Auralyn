@@ -75,6 +75,8 @@ export function makeFirestoreStore(): StorageDriver {
         verified_at: nowMs(),
         session_expires_at: sessionExpiresAt
       }, { merge: true });
+
+      return { sessionExpiresAtMs: sessionExpiresAt };
     },
 
     async isSessionVerified(token) {

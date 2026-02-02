@@ -25,9 +25,10 @@ const QUESTIONS: { key: string; label: string }[] = [
 interface SymptomGridProps {
   value: Record<string, Tri>;
   onChange: (next: Record<string, Tri>) => void;
+  disabled?: boolean;
 }
 
-export default function SymptomGrid({ value, onChange }: SymptomGridProps) {
+export default function SymptomGrid({ value, onChange, disabled }: SymptomGridProps) {
   function set(key: string, tri: Tri) {
     onChange({ ...value, [key]: tri });
   }
@@ -54,6 +55,7 @@ export default function SymptomGrid({ value, onChange }: SymptomGridProps) {
                   className={cn("flex-1", value[q.key] === "yes" && "bg-green-600 hover:bg-green-700")}
                   onClick={() => set(q.key, "yes")}
                   data-testid={`button-symptom-${q.key}-yes`}
+                  disabled={disabled}
                 >
                   Yes
                 </Button>
@@ -63,6 +65,7 @@ export default function SymptomGrid({ value, onChange }: SymptomGridProps) {
                   className={cn("flex-1", value[q.key] === "no" && "bg-red-600 hover:bg-red-700")}
                   onClick={() => set(q.key, "no")}
                   data-testid={`button-symptom-${q.key}-no`}
+                  disabled={disabled}
                 >
                   No
                 </Button>
@@ -72,6 +75,7 @@ export default function SymptomGrid({ value, onChange }: SymptomGridProps) {
                   className={cn("flex-1", value[q.key] === "ns" && "bg-gray-600 hover:bg-gray-700")}
                   onClick={() => set(q.key, "ns")}
                   data-testid={`button-symptom-${q.key}-ns`}
+                  disabled={disabled}
                 >
                   ?
                 </Button>

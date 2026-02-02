@@ -1,8 +1,12 @@
 import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
 
+export interface VerifySessionResult {
+  sessionExpiresAtMs: number;
+}
+
 export interface StorageDriver {
   createSession(token: string, code: string, expiresAtMs: number): Promise<void>;
-  verifySession(token: string, code: string): Promise<void>;
+  verifySession(token: string, code: string): Promise<VerifySessionResult>;
   isSessionVerified(token: string): Promise<boolean>;
   markSessionUsed(token: string): Promise<void>;
 

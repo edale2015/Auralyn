@@ -89,6 +89,8 @@ export function makeSqliteStore(): StorageDriver {
       db.prepare(`
         UPDATE intake_sessions SET verified_at = ?, session_expires_at = ? WHERE token = ?
       `).run(nowMs(), sessionExpiresAt, token);
+
+      return { sessionExpiresAtMs: sessionExpiresAt };
     },
 
     async isSessionVerified(token) {

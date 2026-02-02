@@ -212,12 +212,29 @@ Located in `client/src/components/intake/`:
 - `ConsentPanel` - Telehealth + privacy consent
 - `ReviewSubmit` - Final review and submission
 
-### Routes
-- `/simple/:token` - Simple 5-step intake (SQLite-based)
+### Patient Portal Routes
+- `/start` - Patient landing page (paste token or link)
+- `/simple/:token` - Simple 5-step intake (storage-agnostic)
 - `/intake/:token` - Full questionnaire intake (Firestore/Sheets-based)
+- `/intake/:token/status` - Case status page
+- `/intake/:token/summary` - Signed visit summary
+
+### Session Management
+- Sessions expire 30 minutes after verification
+- Countdown timer displayed in status bar
+- Expired sessions disable form inputs with warning message
+- Autosave every 15 seconds with status indicator
 
 ### Test Helper
 Create test token: `npx tsx server/scripts/createTestToken.ts [token] [code] [expiry_minutes]`
+
+## Recent Changes (2026-02-02)
+- Updated patient landing page (/start) with token/URL extraction
+- Added session countdown timer after verification
+- Added "Saved" indicator for autosave status
+- Session expiry disables form inputs with clear warning
+- All intake components support disabled state
+- Backend verify endpoint returns sessionExpiresAtMs
 
 ## Recent Changes (2026-02-01)
 - Added SQLite-based intake system with modular routes

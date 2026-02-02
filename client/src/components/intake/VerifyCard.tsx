@@ -8,7 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface VerifyCardProps {
   token: string;
-  onVerified: (data: { caseId: string; savedDraft?: Record<string, any> | null; currentStep?: number }) => void;
+  onVerified: (data: { caseId: string; savedDraft?: Record<string, any> | null; currentStep?: number; sessionExpiresAtMs?: number }) => void;
 }
 
 export default function VerifyCard({ token, onVerified }: VerifyCardProps) {
@@ -24,7 +24,7 @@ export default function VerifyCard({ token, onVerified }: VerifyCardProps) {
       const res = await apiRequest("POST", `/api/intake/${token}/verify`, { code, dob: dob || undefined });
       const data = await res.json();
       if (data.ok) {
-        onVerified({ caseId: data.caseId, savedDraft: data.savedDraft, currentStep: data.currentStep });
+        onVerified({ caseId: data.caseId, savedDraft: data.savedDraft, currentStep: data.currentStep, sessionExpiresAtMs: data.sessionExpiresAtMs });
       } else {
         setErr(data.error || "Verification failed");
       }

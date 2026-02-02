@@ -72,7 +72,7 @@ intakeRouter.post("/api/intake/:token/verify", async (req: Request, res: Respons
       return res.status(400).json({ ok: false, error: "Missing code." });
     }
 
-    await store.verifySession(token, code);
+    const session = await store.verifySession(token, code);
     const c = await store.getOrCreateCaseForToken(token);
 
     return res.json({
@@ -80,7 +80,8 @@ intakeRouter.post("/api/intake/:token/verify", async (req: Request, res: Respons
       caseId: c.caseId,
       status: c.status,
       currentStep: c.currentStep,
-      flowId: "DEFAULT_FLOW"
+      flowId: "DEFAULT_FLOW",
+      sessionExpiresAtMs: session?.sessionExpiresAtMs || null
     });
   } catch (e: any) {
     return res.status(401).json({ ok: false, error: e?.message || "Verify failed" });
