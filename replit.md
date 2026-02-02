@@ -248,6 +248,10 @@ Create test token: `npx tsx server/scripts/createTestToken.ts [token] [code] [ex
   - vendor: "none" | "athena" | "ecw"
   - patientId, encounterId, lastSyncAt, syncStatus, lastError
 - GET /api/intake/_driver returns current storage driver and uploads mode
+- Added POST /api/provider/intake/test-token endpoint for one-click test token creation
+- Added "Create Test Intake" button to /provider/case page (opens intake in new tab, shows token/code in toast)
+- Fixed EHR Export Pack Copy Billing to handle plain text response from backend
+- Golden path E2E tested: Create test intake → Complete form → Use Export Pack (Copy Note, Copy Billing, Open Packet, Attachments)
 
 ## Cloud Storage Configuration
 ```

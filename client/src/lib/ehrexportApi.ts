@@ -17,7 +17,7 @@ export function getNote(caseId: string) {
 }
 
 export function getBilling(caseId: string) {
-  return fetchJson<{ icd10: string[]; cpt: string[]; notes?: string }>(`/api/provider/case/${caseId}/billing`);
+  return fetchText(`/api/provider/case/${caseId}/billing`);
 }
 
 export function getPacketHtml(caseId: string) {

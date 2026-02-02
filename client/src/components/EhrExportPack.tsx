@@ -76,21 +76,11 @@ export default function EhrExportPack({ caseId }: { caseId: string }) {
     if (!hasKey) return needKeyToast();
     try {
       const result = await billingQ.refetch();
-      const data = result.data;
-      if (!data) {
+      const text = result.data;
+      if (!text) {
         toast({ title: "Error", description: "Failed to load billing. Please try again.", variant: "destructive" });
         return;
       }
-
-      const icd = (data.icd10 || []).join(", ");
-      const cpt = (data.cpt || []).join(", ");
-
-      const text =
-`Billing suggestions
-ICD-10: ${icd || "—"}
-CPT: ${cpt || "—"}
-${data.notes ? `Notes: ${data.notes}` : ""}`.trim();
-
       await copyToClipboard(text);
       toast({ title: "Copied", description: "Billing suggestions copied to clipboard." });
     } catch (e) {
