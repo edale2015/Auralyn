@@ -1,4 +1,4 @@
-import admin from "firebase-admin";
+import { db as firestoreDb, admin } from "../firebase";
 import type { StorageDriver } from "./store";
 import type { DraftPayload, SubmitPayload, StatusResult, FileMeta } from "./types";
 import { sha256 } from "./crypto";
@@ -16,13 +16,6 @@ function statusText(s: string) {
 }
 
 const SESSION_DURATION_MS = 30 * 60 * 1000;
-
-function initFirebase() {
-  if (admin.apps.length) return;
-  admin.initializeApp({
-    projectId: process.env.FIREBASE_PROJECT_ID
-  });
-}
 
 function isMissingIndexError(e: any): boolean {
   const msg = String(e?.message || "");
@@ -50,8 +43,7 @@ async function latestCaseByToken(
 }
 
 export function makeFirestoreStore(): StorageDriver {
-  initFirebase();
-  const db = admin.firestore();
+  const db = firestoreDb;
 
   const sessions = db.collection("intake_sessions");
   const cases = db.collection("cases");

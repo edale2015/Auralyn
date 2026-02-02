@@ -1,3 +1,13 @@
+import * as fs from "fs";
+
+// Initialize Firebase credentials before importing store
+const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+if (serviceAccountJson) {
+  const tempPath = "/tmp/service_account.json";
+  fs.writeFileSync(tempPath, serviceAccountJson);
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = tempPath;
+}
+
 import { getStore } from "../intakeStorage";
 
 const store = getStore();
