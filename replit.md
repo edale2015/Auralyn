@@ -269,9 +269,16 @@ Use for copy/paste workflow into eClinicalWorks:
 ## Encounter-Intake Case Linking
 Encounters can be linked to intake cases for unified workflow:
 - Schema: `encounters.intakeCaseId` field links encounter to intake case
+- Schema: `encounters.intakeLinkedAt` timestamp when linked
+- Schema: `encounters.intakeLinkEvents` JSON array of audit events (ENCOUNTER_LINKED_TO_INTAKE, ENCOUNTER_UNLINKED_FROM_INTAKE)
 - API: `POST /api/provider/encounter/:encounterId/link-intake` with body `{ intakeCaseId: "..." }`
+  - Returns `status: "linked"` or `status: "already_linked"` (idempotent)
+  - Includes `linkedAt` timestamp in response
 - API: `DELETE /api/provider/encounter/:encounterId/link-intake` to unlink
-- UI: CaseDetail shows LinkIntakeCaseCard when no case linked, EhrExportPack when linked
+  - Returns `status: "unlinked"` or `status: "already_unlinked"` (idempotent)
+- UI: CaseDetail shows:
+  - "Linked to Intake Case" card with badge, timestamp, and prominent "Open Packet" button when linked
+  - LinkIntakeCaseCard when not linked
 - ProviderCaseView has "Copy ID" button for easy case ID copying
 
 ## Recent Changes (2026-02-01)
