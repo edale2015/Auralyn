@@ -1,0 +1,177 @@
+A) Flip to Firestore and confirm green
+A1) Deploy Firestore indexes
+
+From project root:
+
+firebase deploy --only firestore:indexes
+
+
+If you haven’t initialized Firebase CLI for this project yet:
+
+firebase login
+firebase use <your-project-id>
+firebase deploy --only firestore:indexes
+
+
+✅ Success sign: deploy finishes without errors.
+
+A2) Switch env and restart
+
+Set:
+
+STORAGE_DRIVER=firestore
+FIREBASE_PROJECT_ID=<your-project-id>
+
+
+Restart server.
+
+A3) Confirm driver
+
+Hit:
+
+GET /api/intake/_driver
+
+Expect:
+
+{ "ok": true, "driver": "firestore", ... }
+
+A4) Run the golden path once
+
+/provider/case → “Create Test Intake”
+
+Fill intake + submit + upload a file
+
+Use export pack actions:
+
+Copy Note
+
+Copy Billing
+
+Open Packet
+
+View Attachments
+
+✅ If all work, Firestore is now your default.
+
+B) Flip uploads to Firebase Storage in production mode
+B1) Set env
+UPLOADS_MODE=firebase_storage
+FIREBASE_STORAGE_BUCKET=<your-bucket>.appspot.com
+
+
+Restart server.
+
+B2) Upload test
+
+Create Test Intake
+
+Upload 1–2 attachments
+
+Submit
+
+In export pack → View Attachments
+
+✅ Confirm:
+
+New files stream correctly from Firebase Storage
+
+The “View” button works in a new tab
+
+Any old disk files (if present) still work (backward compatibility)
+
+Tip: In your file metadata, make sure you store:
+
+storageMode: firebase_storage
+
+bucket
+
+objectPath
+
+C) Encounter linking: add encounter.intakeCaseId and embed export pack in CaseDetail
+
+This is the “workflow unification” step.
+
+C1) Data model change
+
+Wherever encounters are stored (Firestore/SQLite/etc), add:
+
+intakeCaseId?: string
+
+You don’t need migrations immediately if schema is flexible.
+
+C2) Add server endpoint to link an intake case to an encounter
+
+Add provider-only endpoint:
+
+POST /api/provider/encounter/:encounterId/link-intake
+
+Body:
+
+{ "intakeCaseId": "CASE_..." }
+
+
+Auth:
+
+X-Provider-Key
+
+Server behavior:
+
+update encounter record:
+
+intakeCaseId = body.intakeCaseId
+
+optionally also update the case:
+
+external_ehr.encounterId = encounterId
+
+external_ehr.syncStatus = "ready"
+
+Return:
+
+{ "ok": true }
+
+C3) Add UI control to link
+
+Best place: CaseDetail (since that’s where the provider lives).
+
+Add a small “Intake Case” card:
+
+If encounter already has intakeCaseId:
+
+show badge “Linked”
+
+show the Export Pack panel using that case id
+
+If not linked:
+
+input field: paste intakeCaseId (or select from a dropdown later)
+
+button: “Link Intake Case”
+
+UX option (easy, very useful)
+
+In /provider/case, add a “Copy Case ID” button next to each case so linking is easy.
+
+C4) Render EhrExportPack in CaseDetail
+
+In CaseDetail.tsx:
+
+{encounter.intakeCaseId ? (
+  <EhrExportPack caseId={encounter.intakeCaseId} />
+) : (
+  <LinkIntakeCaseCard encounterId={encounter.id} />
+)}
+
+
+Where LinkIntakeCaseCard calls your new link endpoint.
+
+✅ End result: providers don’t have to bounce between “encounters” and “intake cases.” It’s one screen.
+
+“Done” definition for A+B+C
+
+You’re finished when:
+
+✅ STORAGE_DRIVER=firestore stays on and golden path passes
+✅ UPLOADS_MODE=firebase_storage streams attachments correctly
+✅ In CaseDetail, linking an intake case makes Export Pack appear and function
+✅ A linked encounter now has intakeCaseId persisted and survives refresh
