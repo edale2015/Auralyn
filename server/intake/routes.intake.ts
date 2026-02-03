@@ -6,10 +6,11 @@ export const intakeRouter = Router();
 
 intakeRouter.get("/api/intake/_driver", (_req: Request, res: Response) => {
   const driver = getActiveDriver();
+  const uploadsMode = process.env.UPLOADS_MODE === "firebase_storage" ? "firebase_storage" : "local_disk";
   const response: Record<string, any> = {
     ok: true,
     driver,
-    uploadsMode: "local_disk"
+    uploadsMode
   };
   
   if (driver === "firestore") {
