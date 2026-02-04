@@ -50,6 +50,44 @@ Preferred communication style: Simple, everyday language.
 - **Connectors**: eClinicalWorks (ecw) is credential-ready; Athena is a stub.
 - **Registry**: Vendor registry with environment configuration loading.
 
+## Regression Testing Gate
+
+### Test Endpoints
+- `GET /api/test/rules/snapshot?sheetEnv=staging` - Returns ruleset hash, tab metadata (row counts, hashes) for reproducible test runs
+- `POST /api/test/agent-run` - Runs agentic loop for synthetic case payloads with normalized output and execution trace
+- `POST /api/test/compare` - Compares baseline vs candidate runs with hard/soft failure classification
+
+### Auth for Test Endpoints
+- Requires `x-test-token` header (matches `TEST_EXEC_TOKEN` env var) OR valid provider session cookie
+
+### Test Case Schema
+Golden test cases stored in `server/testcases/*.json` using `TestCaseV1` schema with:
+- `id`, `label`, `chiefComplaint`
+- `case.demographics`, `case.modifiers`, `case.answers`
+- `expected` (optional): disposition, redFlagsPresent, scores
+- `tags` for filtering
+
+### Hard vs Soft Failures
+**Hard Fails (block promotion):**
+- DISPOSITION_CHANGED_UP (less safe)
+- RED_FLAG_REMOVED
+- SCORE_CHANGED
+- UNKNOWN_DISPOSITION
+
+**Soft Fails (flag for review):**
+- DISPOSITION_CHANGED_DOWN (more conservative)
+- DX_CHANGED
+- RED_FLAG_ADDED
+- TRACE_STEP_COUNT_CHANGED
+
+### Normalized Output
+Agent run returns `normalized.final` with:
+- `disposition`: final disposition string
+- `dx`: array of diagnosis cluster IDs
+- `scores`: record of computed scores (e.g., centor)
+- `redFlags`: array of triggered red flag QIDs
+- `hash`: SHA256 of normalized output for strict comparison
+
 ## External Dependencies
 
 - **AI Integration**: OpenAI API for medical triage AI conversations.
