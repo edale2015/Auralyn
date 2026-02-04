@@ -30,9 +30,20 @@ Preferred communication style: Simple, everyday language.
 - **Cases Collection**: `cases` in Firestore for patient intake workflow
 
 ### Authentication
-- Simple username/password login for physicians.
-- Client-side session storage in localStorage.
+- **Provider Login**: Password-only session-based auth with httpOnly cookies
+  - POST /api/auth/login - Password login (default: "clinic2026")
+  - POST /api/auth/logout - Destroy session
+  - GET /api/auth/me - Check auth status (returns { authenticated, email })
+- **Session**: 8-hour httpOnly cookie named "provider_session"
+- **API Key Fallback**: X-Provider-Key header still works for scripts/dev (set via PROVIDER_API_KEY env var)
 - Token-based intake access for patients (6-digit code verification).
+
+#### Authentication Environment Variables
+```
+SESSION_SECRET=<strong-random-secret>  # Required for sessions (falls back to API-key only if not set)
+PROVIDER_PASSWORD=<clinic-password>     # Default: "clinic2026" - change in production!
+PROVIDER_API_KEY=<api-key>              # Fallback for scripts and dev tools
+```
 
 ### Key Data Models
 - **Physicians**: Medical staff for case review.
