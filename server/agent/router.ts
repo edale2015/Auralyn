@@ -2,42 +2,55 @@ import type { AgentAction, CaseState, NextActionResponse, AgentRunConfig } from 
 import { CENTOR_REQUIRED_QS } from "./scoring/centor";
 import { detectRedFlags } from "./safety/redFlags";
 
-function missingRequiredCentorQs(state: CaseState): string[] {
+function missingRequiredCentorQs(state: CaseState, cfg: AgentRunConfig): string[] {
   const missing: string[] = [];
   for (const q of CENTOR_REQUIRED_QS) {
     if (!(q in state.answers)) missing.push(q);
-    else if (state.answers[q] === null || state.answers[q] === "not_sure") {
-      missing.push(q);
-    }
+    else if (state.answers[q] === null) missing.push(q);
+    else if (cfg.mode === "LIVE" && state.answers[q] === "not_sure") missing.push(q);
   }
   return missing;
 }
 
 function normalizeChiefComplaint(cc: string): string {
-  const s = cc.toLowerCase().trim().replace(/[\s_-]+/g, "_");
-  if (s.includes("sore") && s.includes("throat")) return "sore_throat";
-  if (s.includes("throat") && s.includes("pain")) return "sore_throat";
-  if (s.includes("pharyngitis")) return "sore_throat";
-  return s;
+  const s = cc.toLowerCase().trim();
+  const compact = s.replace(/[\s_-]+/g, " ");
+
+  const synonyms = ["sore throat", "throat pain", "painful throat", "pharyngitis"];
+  if (synonyms.some(x => compact.includes(x))) return "sore_throat";
+
+  return compact.replace(/[\s_-]+/g, "_");
+}
+
+function terminalStopReason(
+  st: CaseState["routing"]["state"]
+): "EMERGENT" | "REVIEW_READY" | null {
+  if (st === "EMERGENT_ESCALATION") return "EMERGENT";
+  if (st === "REVIEW_REQUIRED") return "REVIEW_READY";
+  return null;
 }
 
 export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActionResponse {
-  if (state.routing.state === "EMERGENT_ESCALATION") {
+  // Terminal state stop
+  const terminal = terminalStopReason(state.routing.state);
+  if (terminal) {
     return {
-      action: { type: "STOP", stopReason: "EMERGENT" },
-      rationale: "Already escalated",
-      requiredInputsMissing: [],
-    };
-  }
-  
-  if (state.routing.state === "REVIEW_REQUIRED") {
-    return {
-      action: { type: "STOP", stopReason: "REVIEW_READY" },
-      rationale: "Review already required",
+      action: { type: "STOP", stopReason: terminal },
+      rationale: `Already in terminal state: ${state.routing.state}`,
       requiredInputsMissing: [],
     };
   }
 
+  // If we are explicitly waiting on more info, do not churn.
+  if (state.routing.state === "MORE_INFO_NEEDED") {
+    return {
+      action: { type: "STOP", stopReason: "NEEDS_MORE_INFO" },
+      rationale: "Waiting on missing patient input",
+      requiredInputsMissing: state.requiredQuestionIdsMissing ?? [],
+    };
+  }
+
+  // Red flag detection (router chooses meaning; supervisor must also hard-gate)
   const flags = detectRedFlags(state);
   if (flags.length > 0) {
     const action: AgentAction = {
@@ -50,9 +63,10 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
   }
 
   const normalizedCC = normalizeChiefComplaint(state.chiefComplaint);
-  
+
+  // Sore throat flow → Centor scoring
   if (normalizedCC === "sore_throat") {
-    const missing = missingRequiredCentorQs(state);
+    const missing = missingRequiredCentorQs(state, cfg);
     if (missing.length > 0) {
       return {
         action: { type: "ASK_QUESTION", questionId: missing[0] },
@@ -70,6 +84,31 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
     }
 
     const centor = state.scores["centor"];
+
+    // Add dx cluster if missing
+    const hasDx = state.diagnosisClusterIds?.includes("ENT_PHARYNGITIS");
+    if (!hasDx) {
+      return {
+        action: { type: "ADD_DX", clusterIds: ["ENT_PHARYNGITIS"] },
+        rationale: "Attach likely cluster for sore throat pathway",
+        requiredInputsMissing: [],
+      };
+    }
+
+    // Recommend actions if missing
+    const hasActions = (state.recommendedActions?.length ?? 0) > 0;
+    if (!hasActions) {
+      const actions = centor >= 3
+        ? [{ type: "STREP_TEST", priority: "high" as const }, { type: "SAFETY_NET", priority: "high" as const }]
+        : [{ type: "SUPPORTIVE_CARE", priority: "medium" as const }];
+      return {
+        action: { type: "RECOMMEND_ACTIONS", actions },
+        rationale: centor >= 3 ? "Recommend strep test + safety netting" : "Recommend supportive care",
+        requiredInputsMissing: [],
+      };
+    }
+
+    // Set disposition
     if (centor >= 3) {
       return {
         action: {
@@ -93,6 +132,7 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
     };
   }
 
+  // Fallback for unsupported complaints
   return {
     action: { type: "ESCALATE_TO_CLINICIAN", reason: "No complaint router implemented yet" },
     rationale: "Unsupported chief complaint in router v1",

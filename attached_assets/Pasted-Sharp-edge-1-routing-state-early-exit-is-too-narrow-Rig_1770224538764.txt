@@ -1,0 +1,320 @@
+Sharp edge 1: routing-state early exit is too narrow
+
+Right now you early-exit only on EMERGENT_ESCALATION and REVIEW_REQUIRED. But your CaseState schema also includes states like MORE_INFO_REQUIRED, PLAN_DRAFTED, etc. Without guarding those, a resume run can keep re-asking the same question or recomputing scores.
+
+Fix
+
+Treat any terminal-ish state as a stop, and also stop if we are already waiting on a question.
+
+Add a minimal helper:
+
+function isTerminalState(s: CaseState["routing"]["state"]): "EMERGENT" | "REVIEW_READY" | null {
+  if (s === "EMERGENT_ESCALATION") return "EMERGENT";
+  if (s === "REVIEW_REQUIRED") return "REVIEW_READY";
+  return null;
+}
+
+
+And update early exit:
+
+  const terminal = isTerminalState(state.routing.state);
+  if (terminal) {
+    return {
+      action: { type: "STOP", stopReason: terminal },
+      rationale: `Already in terminal state: ${state.routing.state}`,
+      requiredInputsMissing: [],
+    };
+  }
+
+  // If the system is waiting for more info, do not pick a new question or compute again.
+  if (state.routing.state === "MORE_INFO_REQUIRED") {
+    return {
+      action: { type: "STOP", stopReason: "NEEDS_MORE_INFO" },
+      rationale: "Waiting on missing patient input",
+      requiredInputsMissing: state.requiredQuestionIdsMissing ?? [],
+    };
+  }
+
+
+Why: prevents “agent churn” while awaiting patient response.
+
+Sharp edge 2: You’re not updating state.chiefComplaint (normalization mismatch)
+
+You normalize into normalizedCC but leave state.chiefComplaint unchanged. That’s fine for routing, but it makes your downstream trace and persistence inconsistent (“sore throat” vs “sore_throat”).
+
+Fix (lightweight)
+
+Record normalization as a routing output, not overwriting the raw input.
+
+Add to CaseState routing (if you have room) or just set flowId:
+
+If you already use routing.flowId, set it:
+
+  const normalizedCC = normalizeChiefComplaint(state.chiefComplaint);
+  // You can use routing.flowId as a simple traceable “flow key”
+  // (executor/runtime can persist this)
+
+
+Then in executor when you see action ROUTE_FLOW (if you have it) or on first step, set it. If you don’t have ROUTE_FLOW anymore, simplest is to set it in router via an event, but router currently can’t emit events. So: add a small “implicit flowId” action:
+
+Best v1 change: add a new action type SET_FLOW (or reuse ADD_DX style) and make router return it on step 1. If you don’t want that, ignore for now, but expect messy analytics later.
+
+Sharp edge 3: Missing answers logic treats not_sure as missing even in regression
+
+That’s good for LIVE (ask again), but in regression you often want “not_sure” to be a stable input value, not an instruction to ask again forever.
+
+Fix
+
+Condition missing logic on cfg.mode:
+
+function missingRequiredCentorQs(state: CaseState, cfg: AgentRunConfig): string[] {
+  const missing: string[] = [];
+  for (const q of CENTOR_REQUIRED_QS) {
+    if (!(q in state.answers)) missing.push(q);
+    else if (state.answers[q] === null) missing.push(q);
+    else if (cfg.mode === "LIVE" && state.answers[q] === "not_sure") missing.push(q);
+  }
+  return missing;
+}
+
+
+Then call:
+
+const missing = missingRequiredCentorQs(state, cfg);
+
+
+Why: avoids “NEEDS_MORE_INFO” loops in regression runs when “not_sure” is intentionally part of the test.
+
+Sharp edge 4: Red flag authority is in router only, but you must still hard-gate in supervisor/executor
+
+You said you removed duplicate red-flag detection from executor (good for avoiding divergence), but do not rely solely on router to prevent unsafe outputs because:
+
+state can be mutated by other endpoints
+
+answers can be updated asynchronously
+
+an action may be executed that becomes unsafe mid-run
+
+Fix (best practice)
+
+Keep router as “single authority for deciding what red flags mean,” but still enforce hard safety invariants in the supervisor (or executor) before patient-visible output and before finalizing disposition.
+
+If your executor truly has zero red flag checks now, put this minimal guard in supervisorGate (you said it exists):
+
+// supervisor.ts
+if (detectRedFlags(state).length > 0) {
+  return { allow: false, reason: "Red flags present", forceState: "EMERGENT_ESCALATION" };
+}
+
+
+That way your “authority” stays in one function (detectRedFlags) while both router and supervisor use it.
+
+Sharp edge 5: “Centor >= 3 => urgent_care” is okay, but you should return dx + actions too
+
+Right now you only set disposition. For stability and trace usefulness, router should set:
+
+dx cluster IDs (even coarse)
+
+recommended actions (strep test, safety net, etc.)
+
+Fix
+
+Return a small multi-step plan, still constrained:
+
+ADD_DX
+
+RECOMMEND_ACTIONS
+
+SET_DISPOSITION
+
+But router only returns one action at a time. So implement a simple “if dx missing, add dx; else if actions missing, recommend; else set disposition”.
+
+Example:
+
+    const hasDx = state.diagnosisClusterIds?.includes("ENT_PHARYNGITIS");
+    if (!hasDx) {
+      return {
+        action: { type: "ADD_DX", clusterIds: ["ENT_PHARYNGITIS"] },
+        rationale: "Attach likely cluster for sore throat pathway",
+        requiredInputsMissing: [],
+      };
+    }
+
+    const hasActions = (state.recommendedActions?.length ?? 0) > 0;
+    if (!hasActions) {
+      return {
+        action: {
+          type: "RECOMMEND_ACTIONS",
+          actions: [{ type: "STREP_TEST", priority: "high" }, { type: "SAFETY_NET", priority: "high" }],
+        },
+        rationale: "Recommend test + safety netting",
+        requiredInputsMissing: [],
+      };
+    }
+
+
+Then disposition logic as you already do.
+
+This makes outputs more clinically useful and makes regression diffs less trivial.
+
+Sharp edge 6: Normalization could accidentally map unrelated complaints
+
+if (s.includes("throat") && s.includes("pain")) will map “pain in throat after pill stuck” or “foreign body throat pain” into sore_throat.
+
+Fix (still simple)
+
+Prefer exact tokens and/or whitelist synonyms:
+
+function normalizeChiefComplaint(cc: string): string {
+  const s = cc.toLowerCase().trim();
+  const compact = s.replace(/[\s_-]+/g, " ");
+
+  const synonyms = [
+    "sore throat",
+    "throat pain",
+    "painful throat",
+    "pharyngitis",
+  ];
+
+  if (synonyms.some(x => compact.includes(x))) return "sore_throat";
+
+  return compact.replace(/[\s_-]+/g, "_");
+}
+
+
+And later, move this mapping table into Sheets.
+
+Proposed patched router.ts (drop-in)
+
+Here’s your router with only the “must do now” changes (terminal guard + cfg-aware missing + safer normalization). Paste-replace.
+
+import type { AgentAction, CaseState, NextActionResponse, AgentRunConfig } from "../../shared/agentTypes";
+import { CENTOR_REQUIRED_QS } from "./scoring/centor";
+import { detectRedFlags } from "./safety/redFlags";
+
+function missingRequiredCentorQs(state: CaseState, cfg: AgentRunConfig): string[] {
+  const missing: string[] = [];
+  for (const q of CENTOR_REQUIRED_QS) {
+    if (!(q in state.answers)) missing.push(q);
+    else if (state.answers[q] === null) missing.push(q);
+    else if (cfg.mode === "LIVE" && state.answers[q] === "not_sure") missing.push(q);
+  }
+  return missing;
+}
+
+function normalizeChiefComplaint(cc: string): string {
+  const s = cc.toLowerCase().trim();
+  const compact = s.replace(/[\s_-]+/g, " ");
+
+  const synonyms = ["sore throat", "throat pain", "painful throat", "pharyngitis"];
+  if (synonyms.some(x => compact.includes(x))) return "sore_throat";
+
+  return compact.replace(/[\s_-]+/g, "_");
+}
+
+function terminalStopReason(
+  st: CaseState["routing"]["state"]
+): "EMERGENT" | "REVIEW_READY" | null {
+  if (st === "EMERGENT_ESCALATION") return "EMERGENT";
+  if (st === "REVIEW_REQUIRED") return "REVIEW_READY";
+  return null;
+}
+
+export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActionResponse {
+  // Terminal state stop
+  const terminal = terminalStopReason(state.routing.state);
+  if (terminal) {
+    return {
+      action: { type: "STOP", stopReason: terminal },
+      rationale: `Already in terminal state: ${state.routing.state}`,
+      requiredInputsMissing: [],
+    };
+  }
+
+  // If we are explicitly waiting on more info, do not churn.
+  if (state.routing.state === "MORE_INFO_REQUIRED") {
+    return {
+      action: { type: "STOP", stopReason: "NEEDS_MORE_INFO" },
+      rationale: "Waiting on missing patient input",
+      requiredInputsMissing: state.requiredQuestionIdsMissing ?? [],
+    };
+  }
+
+  // Red flag detection (router chooses meaning; supervisor must also hard-gate)
+  const flags = detectRedFlags(state);
+  if (flags.length > 0) {
+    const action: AgentAction = {
+      type: "FLAG_RED_FLAG",
+      flagId: flags[0],
+      severity: "hard",
+      message: "Hard red flag detected; escalate.",
+    };
+    return { action, rationale: "Red flag present", requiredInputsMissing: [] };
+  }
+
+  const normalizedCC = normalizeChiefComplaint(state.chiefComplaint);
+
+  // Sore throat flow → Centor scoring
+  if (normalizedCC === "sore_throat") {
+    const missing = missingRequiredCentorQs(state, cfg);
+    if (missing.length > 0) {
+      return {
+        action: { type: "ASK_QUESTION", questionId: missing[0] },
+        rationale: "Missing Centor inputs",
+        requiredInputsMissing: missing,
+      };
+    }
+
+    if (typeof state.scores["centor"] !== "number") {
+      return {
+        action: { type: "COMPUTE_SCORE", scoreType: "centor" },
+        rationale: "Compute Centor score",
+        requiredInputsMissing: [],
+      };
+    }
+
+    const centor = state.scores["centor"];
+    if (centor >= 3) {
+      return {
+        action: {
+          type: "SET_DISPOSITION",
+          disposition: "urgent_care",
+          reasonCodes: ["HIGH_CENTOR_SCORE"],
+        },
+        rationale: "Centor >= 3",
+        requiredInputsMissing: [],
+      };
+    }
+
+    return {
+      action: {
+        type: "SET_DISPOSITION",
+        disposition: "routine",
+        reasonCodes: ["LOW_CENTOR_SCORE"],
+      },
+      rationale: "Centor < 3",
+      requiredInputsMissing: [],
+    };
+  }
+
+  // Fallback for unsupported complaints
+  return {
+    action: { type: "ESCALATE_TO_CLINICIAN", reason: "No complaint router implemented yet" },
+    rationale: "Unsupported chief complaint in router v1",
+    requiredInputsMissing: [],
+  };
+}
+
+Quick tests to run (fast, worth it)
+
+Regression not_sure doesn’t loop
+
+In REGRESSION, set Q_FEVER=not_sure and ensure it doesn’t keep asking Q_FEVER forever.
+
+MORE_INFO_REQUIRED stops churn
+
+Set state.routing.state="MORE_INFO_REQUIRED" and verify /api/agent/run stops quickly.
+
+Red flags still block patient output
+
+Ensure supervisor checks detectRedFlags(state) before sending any Twilio message or generating patient instructions.
