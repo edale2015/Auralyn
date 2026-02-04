@@ -1,0 +1,241 @@
+Replace:
+
+localStorage.providerKey
+
+X-Provider-Key header
+
+With:
+
+POST /api/auth/login → sets httpOnly cookie
+
+POST /api/auth/logout → clears cookie
+
+requireProviderSession middleware on /api/provider/*
+
+1) Add env vars (Replit Secrets)
+
+Add these:
+
+CLINICIAN_PASSWORD=choose-a-strong-password
+SESSION_SECRET=already set (you said it is)
+SESSION_COOKIE_NAME=medsess
+
+
+Optional but recommended:
+
+SESSION_TTL_HOURS=12
+
+2) Backend implementation (Express)
+2.1 Install dependencies
+
+If not already present:
+
+npm i cookie-parser
+
+
+(If you want signed/rotating sessions later, we can add express-session, but you don’t need it for this minimal approach.)
+
+2.2 Add cookie parsing + helper
+
+In your server entry (server/index.ts), add:
+
+import cookieParser from "cookie-parser";
+
+app.use(cookieParser());
+
+2.3 Create server/auth.ts (minimal session cookie)
+import crypto from "crypto";
+import type { Request, Response, NextFunction } from "express";
+
+const COOKIE_NAME = process.env.SESSION_COOKIE_NAME || "medsess";
+const TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 12);
+
+function sign(payload: string, secret: string) {
+  return crypto.createHmac("sha256", secret).update(payload).digest("hex");
+}
+
+function makeToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+export function setProviderSession(res: Response) {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error("Missing SESSION_SECRET");
+
+  const issuedAt = Date.now();
+  const expiresAt = issuedAt + TTL_HOURS * 60 * 60 * 1000;
+  const token = makeToken();
+
+  // Cookie value is: token.issuedAt.expiresAt.sig
+  const body = `${token}.${issuedAt}.${expiresAt}`;
+  const sig = sign(body, secret);
+  const value = `${body}.${sig}`;
+
+  const isProd = process.env.NODE_ENV === "production";
+
+  res.cookie(COOKIE_NAME, value, {
+    httpOnly: true,
+    secure: isProd,      // Replit deployments are https; for dev http this may be false
+    sameSite: "lax",
+    expires: new Date(expiresAt),
+    path: "/"
+  });
+}
+
+export function clearProviderSession(res: Response) {
+  res.clearCookie(COOKIE_NAME, { path: "/" });
+}
+
+export function requireProviderSession(req: Request, res: Response, next: NextFunction) {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) return res.status(500).json({ ok: false, error: "Missing SESSION_SECRET" });
+
+  const raw = req.cookies?.[COOKIE_NAME];
+  if (!raw) return res.status(401).json({ ok: false, error: "Not authenticated" });
+
+  const parts = String(raw).split(".");
+  if (parts.length !== 4) return res.status(401).json({ ok: false, error: "Invalid session" });
+
+  const [token, issuedAtStr, expiresAtStr, sig] = parts;
+  const body = `${token}.${issuedAtStr}.${expiresAtStr}`;
+  const expected = sign(body, secret);
+
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+    return res.status(401).json({ ok: false, error: "Invalid session" });
+  }
+
+  const expiresAt = Number(expiresAtStr);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    return res.status(401).json({ ok: false, error: "Session expired" });
+  }
+
+  // Optionally attach provider identity (single provider)
+  (req as any).provider = { role: "provider" };
+
+  next();
+}
+
+2.4 Add login/logout endpoints
+
+Create server/routes.auth.ts:
+
+import { Router } from "express";
+import { setProviderSession, clearProviderSession } from "./auth";
+
+export const authRouter = Router();
+
+authRouter.post("/api/auth/login", (req, res) => {
+  const pw = String(req.body?.password || "");
+  const expected = process.env.CLINICIAN_PASSWORD;
+
+  if (!expected) return res.status(500).json({ ok: false, error: "Missing CLINICIAN_PASSWORD" });
+  if (pw !== expected) return res.status(401).json({ ok: false, error: "Invalid password" });
+
+  setProviderSession(res);
+  return res.json({ ok: true });
+});
+
+authRouter.post("/api/auth/logout", (_req, res) => {
+  clearProviderSession(res);
+  return res.json({ ok: true });
+});
+
+authRouter.get("/api/auth/me", (req, res) => {
+  // Optional: light check for UI
+  const hasCookie = !!req.cookies?.[process.env.SESSION_COOKIE_NAME || "medsess"];
+  return res.json({ ok: true, authenticated: hasCookie });
+});
+
+
+Then register it in server/index.ts:
+
+import { authRouter } from "./routes.auth";
+app.use(authRouter);
+
+2.5 Protect provider routes
+
+Wherever you currently protect provider endpoints via X-Provider-Key, replace that middleware with:
+
+import { requireProviderSession } from "../auth";
+router.use("/api/provider", requireProviderSession);
+
+
+If your provider routes are split across multiple routers, just wrap each router’s provider endpoints with requireProviderSession.
+
+Tip: keep X-Provider-Key temporarily as a dev fallback behind an env flag like ALLOW_PROVIDER_KEY_FALLBACK=1, then remove it later.
+
+3) Frontend changes (React)
+3.1 Login page: post password and allow cookies
+
+In client/src/pages/Login.tsx:
+
+on submit:
+
+fetch("/api/auth/login", { method: "POST", credentials: "include", ... })
+
+on success: navigate to /dashboard
+
+Example:
+
+async function login(password: string) {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ password })
+  });
+  if (!res.ok) throw new Error("Login failed");
+}
+
+3.2 TanStack Query fetchers: include cookies
+
+In your API client / fetch wrapper, add:
+
+credentials: "include"
+
+Example:
+
+const res = await fetch(url, {
+  method: "GET",
+  credentials: "include"
+});
+
+
+Do this for all provider endpoints (the patient endpoints can remain as-is, but it’s fine to include globally).
+
+3.3 Remove providerKey usage
+
+Remove localStorage.setItem("providerKey", ...)
+
+Remove X-Provider-Key headers from provider fetchers
+
+Now the browser automatically sends the session cookie.
+
+4) Quick test checklist
+
+Open / (Login)
+
+Enter password → login
+
+Go to /provider/case and /dashboard → should load
+
+Open an endpoint in devtools Network:
+
+confirm request contains Cookie: medsess=...
+
+Logout
+
+Confirm provider pages now return 401 until logged in again
+
+5) One Replit nuance
+
+If you are using a Replit public URL over HTTPS, cookies with secure: true will work. If you run locally over HTTP, secure cookies won’t set. That’s why I used:
+
+secure: process.env.NODE_ENV === "production"
+
+
+If Replit sets NODE_ENV differently, you can force:
+
+COOKIE_SECURE=1 on Replit deployments
+
+and set secure: process.env.COOKIE_SECURE === "1"

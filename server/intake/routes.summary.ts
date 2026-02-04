@@ -5,7 +5,7 @@ import { getStore } from "../intakeStorage";
 import type { SubmitPayload } from "../intakeStorage/types";
 import { db } from "../db";
 import { encounters } from "@shared/schema";
-import { requireProviderAuth } from "../auth/providerAuth";
+import { requireProviderAuth } from "../auth";
 
 export const summaryRouter = Router();
 const store = getStore();

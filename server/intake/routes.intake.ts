@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getStore, getActiveDriver } from "../intakeStorage";
 import type { DraftPayload, SubmitPayload } from "../intakeStorage/types";
-import { requireProviderAuth } from "../auth/providerAuth";
+import { requireProviderAuth } from "../auth";
 
 export const intakeRouter = Router();
 

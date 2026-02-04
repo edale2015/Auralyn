@@ -31,18 +31,26 @@ Preferred communication style: Simple, everyday language.
 
 ### Authentication
 - **Provider Login**: Password-only session-based auth with httpOnly cookies
-  - POST /api/auth/login - Password login (default: "clinic2026")
-  - POST /api/auth/logout - Destroy session
-  - GET /api/auth/me - Check auth status (returns { authenticated, email })
-- **Session**: 8-hour httpOnly cookie named "provider_session"
+  - POST /api/auth/login - Password login
+  - POST /api/auth/logout - Clear session cookie
+  - GET /api/auth/me - Check auth status (returns { ok, authenticated })
+- **Session Cookie**: HMAC-signed cookie named "medsess" (configurable via SESSION_COOKIE_NAME)
+  - Format: token.issuedAt.expiresAt.signature
+  - 12-hour TTL by default (configurable via SESSION_TTL_HOURS)
+  - httpOnly, sameSite=lax, secure in production
 - **API Key Fallback**: X-Provider-Key header still works for scripts/dev (set via PROVIDER_API_KEY env var)
+  - Can be disabled by setting ALLOW_PROVIDER_KEY_FALLBACK=0
 - Token-based intake access for patients (6-digit code verification).
 
 #### Authentication Environment Variables
 ```
-SESSION_SECRET=<strong-random-secret>  # Required for sessions (falls back to API-key only if not set)
-PROVIDER_PASSWORD=<clinic-password>     # Default: "clinic2026" - change in production!
+SESSION_SECRET=<strong-random-secret>  # Required for sessions
+CLINICIAN_PASSWORD=<clinic-password>    # Default: "clinic2026" - change in production!
+SESSION_COOKIE_NAME=medsess             # Cookie name (optional, default: medsess)
+SESSION_TTL_HOURS=12                    # Session TTL in hours (optional, default: 12)
 PROVIDER_API_KEY=<api-key>              # Fallback for scripts and dev tools
+ALLOW_PROVIDER_KEY_FALLBACK=1           # Set to 0 to disable API key fallback in production
+COOKIE_SECURE=1                         # Force secure cookies even if NODE_ENV != production
 ```
 
 ### Key Data Models

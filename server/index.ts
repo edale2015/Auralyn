@@ -1,11 +1,12 @@
 import express, { type Request, Response, NextFunction } from "express";
+import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { storage } from "./storage";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { initIntakeDb, intakeRouter, filesRouter, summaryRouter, ensureDirs as ensureIntakeDirs } from "./intake";
-import { authRouter, setupSession } from "./auth/providerAuth";
+import { authRouter } from "./routes.auth";
 
 const app = express();
 const httpServer = createServer(app);
@@ -15,6 +16,8 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+app.use(cookieParser());
 
 app.use(
   express.json({
@@ -26,17 +29,9 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-// Session middleware for provider auth
-const sessionSecret = process.env.SESSION_SECRET;
-if (sessionSecret) {
-  app.use(setupSession(sessionSecret));
-  console.log("[Auth] Session middleware enabled");
-} else {
-  console.warn("[Auth] SESSION_SECRET not set - session auth disabled, API key only");
-}
-
 // Auth routes
 app.use(authRouter);
+console.log("[Auth] Session cookie auth enabled");
 
 initIntakeDb();
 ensureIntakeDirs();
