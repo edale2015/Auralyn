@@ -11,10 +11,9 @@ import { Label } from "@/components/ui/label";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Stethoscope, Lock, User } from "lucide-react";
+import { Stethoscope, Lock } from "lucide-react";
 
 const loginSchema = z.object({
-  username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -27,24 +26,33 @@ export default function Login() {
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      username: "",
       password: "",
     },
   });
 
   const loginMutation = useMutation({
     mutationFn: async (data: LoginForm) => {
-      const response = await apiRequest("POST", "/api/auth/login", data);
+      const response = await apiRequest("POST", "/api/auth/login", {
+        password: data.password,
+        email: "provider@clinic.local"
+      });
       return response.json();
     },
-    onSuccess: (physician) => {
-      localStorage.setItem("physician", JSON.stringify(physician));
-      setLocation("/dashboard");
+    onSuccess: (result) => {
+      if (result.ok) {
+        toast({
+          title: "Login Successful",
+          description: "Welcome back!",
+        });
+        setLocation("/dashboard");
+      } else {
+        throw new Error(result.error || "Login failed");
+      }
     },
     onError: (error: Error) => {
       toast({
         title: "Login Failed",
-        description: error.message || "Invalid credentials",
+        description: error.message || "Invalid password",
         variant: "destructive",
       });
     },
@@ -73,38 +81,17 @@ export default function Login() {
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField
                 control={form.control}
-                name="username"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Username</FormLabel>
-                    <FormControl>
-                      <div className="relative">
-                        <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                        <Input 
-                          {...field} 
-                          placeholder="Enter your username"
-                          className="pl-10"
-                          data-testid="input-username"
-                        />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password</FormLabel>
+                    <FormLabel>Clinic Password</FormLabel>
                     <FormControl>
                       <div className="relative">
                         <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                         <Input 
                           {...field} 
                           type="password" 
-                          placeholder="Enter your password"
+                          placeholder="Enter clinic password"
                           className="pl-10"
                           data-testid="input-password"
                         />

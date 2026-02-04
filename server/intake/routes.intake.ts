@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getStore, getActiveDriver } from "../intakeStorage";
 import type { DraftPayload, SubmitPayload } from "../intakeStorage/types";
+import { requireProviderAuth } from "../auth/providerAuth";
 
 export const intakeRouter = Router();
 
@@ -48,21 +49,6 @@ export async function requireVerifiedSession(req: Request, res: Response, next: 
   } catch (e: any) {
     return res.status(401).json({ ok: false, error: e?.message || "Session verification failed." });
   }
-}
-
-function requireProviderAuth(req: Request, res: Response, next: NextFunction) {
-  const authHeader = req.headers["x-provider-key"];
-  const providerKey = process.env.PROVIDER_API_KEY;
-  
-  if (!providerKey) {
-    return res.status(503).json({ ok: false, error: "Provider API not configured." });
-  }
-  
-  if (authHeader !== providerKey) {
-    return res.status(401).json({ ok: false, error: "Unauthorized. Invalid provider key." });
-  }
-  
-  next();
 }
 
 intakeRouter.post("/api/intake/:token/verify", async (req: Request, res: Response) => {

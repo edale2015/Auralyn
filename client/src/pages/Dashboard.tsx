@@ -31,7 +31,8 @@ import {
 } from "lucide-react";
 import PatientQueue from "@/components/PatientQueue";
 import CaseDetail from "@/components/CaseDetail";
-import type { Encounter, Physician } from "@shared/schema";
+import { useAuth } from "@/lib/providerAuth";
+import type { Encounter } from "@shared/schema";
 
 type FilterType = "pending" | "approved" | "all";
 
@@ -39,31 +40,25 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const [selectedEncounterId, setSelectedEncounterId] = useState<number | null>(null);
   const [filter, setFilter] = useState<FilterType>("pending");
-  const [physician, setPhysician] = useState<Physician | null>(null);
+  const { isAuthenticated, email, isLoading: authLoading, logout, isLoggingOut } = useAuth();
 
   useEffect(() => {
-    const stored = localStorage.getItem("physician");
-    if (!stored) {
-      setLocation("/");
-      return;
-    }
-    try {
-      setPhysician(JSON.parse(stored));
-    } catch {
+    if (!authLoading && !isAuthenticated) {
       setLocation("/");
     }
-  }, [setLocation]);
+  }, [authLoading, isAuthenticated, setLocation]);
 
   const { data: encounters = [], isLoading } = useQuery<Encounter[]>({
     queryKey: ["/api/encounters", filter],
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 10000,
+    enabled: isAuthenticated,
   });
 
   const pendingCount = encounters.filter(e => e.status === "pending_review").length;
   const urgentCount = encounters.filter(e => e.urgencyLevel === "emergent" || e.urgencyLevel === "urgent").length;
 
   const handleLogout = () => {
-    localStorage.removeItem("physician");
+    logout();
     setLocation("/");
   };
 
@@ -91,7 +86,7 @@ export default function Dashboard() {
     },
   ];
 
-  if (!physician) {
+  if (authLoading || !isAuthenticated) {
     return null;
   }
 
@@ -160,10 +155,10 @@ export default function Dashboard() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate" data-testid="text-physician-name">
-                  {physician.name || "Dr. Unknown"}
+                  Provider
                 </p>
                 <p className="text-xs text-muted-foreground truncate" data-testid="text-physician-specialty">
-                  {physician.specialty || "Physician"}
+                  {email || "Authenticated"}
                 </p>
               </div>
             </div>
@@ -172,10 +167,11 @@ export default function Dashboard() {
               size="sm" 
               className="w-full justify-start"
               onClick={handleLogout}
+              disabled={isLoggingOut}
               data-testid="button-logout"
             >
               <LogOut className="w-4 h-4 mr-2" />
-              Sign Out
+              {isLoggingOut ? "Signing out..." : "Sign Out"}
             </Button>
           </SidebarFooter>
         </Sidebar>
@@ -222,7 +218,7 @@ export default function Dashboard() {
               <div className="flex-1 lg:w-1/2 overflow-auto">
                 <CaseDetail 
                   encounterId={selectedEncounterId} 
-                  physicianId={physician.id}
+                  physicianId={1}
                   onClose={() => setSelectedEncounterId(null)}
                 />
               </div>

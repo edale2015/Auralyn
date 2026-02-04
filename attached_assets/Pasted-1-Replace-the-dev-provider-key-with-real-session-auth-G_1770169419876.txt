@@ -1,0 +1,82 @@
+1) Replace the dev provider key with real session auth
+
+Goal: no secrets in localStorage, no static header keys. You want:
+
+Login → server issues session (cookie)
+
+All provider endpoints check session
+
+Optional: keep provider key as emergency fallback (feature-flagged)
+
+Recommended approach for Replit: httpOnly cookie sessions
+
+Why: easiest, secure against XSS token theft, no JWT plumbing needed.
+
+Backend
+
+Add /api/auth/login (email/password or one shared clinician password to start)
+
+On success, set cookie:
+
+Set-Cookie: session=...; HttpOnly; Secure; SameSite=Lax
+
+Middleware requireProviderSession checks cookie.
+
+If you already have SESSION_SECRET set, you’re basically ready.
+
+Frontend
+
+Login form posts to /api/auth/login
+
+After login success, navigate to /dashboard
+
+TanStack Query calls don’t need special headers anymore.
+
+Keep your life easy: minimal roles for now
+
+1 clinician user (you)
+
+Later: add roles, multiple users, audit log.
+
+Bonus: Your provider endpoints (/api/provider/*) become immediately safer.
+
+2) Publish the app live on a stable public URL (Replit)
+
+Replit gives you a public URL already, but to make it reliable:
+
+Options
+Option A: Replit “Deployments” (recommended)
+
+stable URL
+
+better uptime behavior
+
+easier env management
+
+Option B: Always-on repl
+
+works, but can sleep depending on plan/settings
+
+Since you’re already paying Blaze on Firebase, it’s worth using the most stable Replit hosting option you have access to.
+
+3) Quick safety settings now that you’re fully cloud-based
+
+Since this handles patient medical data, I’d add these three low-effort safeguards:
+
+Rate limit verify + upload endpoints
+
+Max upload size + count per token (e.g., 8MB/file, 10 files)
+
+Log PHI-safe: never log full request bodies
+
+These reduce both cost surprises and risk.
+
+4) Your “done done” checklist
+
+You’re “production-ready” when:
+
+✅ Provider login uses session cookie
+✅ Provider APIs work without X-Provider-Key
+✅ /provider/case and /dashboard are reachable via your public URL
+✅ Patient portal /start and /simple/:token work on public URL
+✅ Upload/view attachments works on public URL
