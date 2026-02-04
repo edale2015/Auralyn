@@ -15,25 +15,36 @@ function initializeFirebase(): void {
   }
 
   const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+  
+  let credential: admin.credential.Credential;
+  let clientEmail: string | undefined;
   
   if (serviceAccountJson) {
-    const tempPath = "/tmp/service_account.json";
-    fs.writeFileSync(tempPath, serviceAccountJson);
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = tempPath;
-    console.log("Service account credentials written to temp file");
+    try {
+      const serviceAccount = JSON.parse(serviceAccountJson);
+      credential = admin.credential.cert(serviceAccount);
+      clientEmail = serviceAccount.client_email;
+      console.log("Using service account credentials from secret");
+    } catch (e) {
+      console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:", e);
+      throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_JSON");
+    }
+  } else {
+    credential = admin.credential.applicationDefault();
+    console.log("Using Application Default Credentials");
   }
-
-  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
 
   try {
     admin.initializeApp({
-      credential: admin.credential.applicationDefault(),
+      credential,
       projectId: projectId,
       storageBucket: storageBucket,
     });
     
     initialized = true;
     console.log(`Firebase Admin SDK initialized for project: ${projectId}`);
+    console.log(`Firebase Admin clientEmail: ${clientEmail || 'ADC'}`);
     if (storageBucket) {
       console.log(`Firebase Storage bucket: ${storageBucket}`);
     }
