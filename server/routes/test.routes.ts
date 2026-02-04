@@ -8,14 +8,12 @@ import {
   type AgentRunResponse,
   type RulesSnapshotResponse,
   type CompareResponse,
-  type TraceStep,
-  type TraceEvent,
   type NormalizedResult,
   type CompareFailure,
 } from "../../shared/testingTypes";
-import { computeProposalGeneric } from "../rules/computeProposalGeneric";
-import { getFlowQuestionsFromSheet } from "../flows/sheetFlowLoader";
-import { getEntFluRules } from "../rules/entFluRuleLoader";
+import { CaseStateSchema, AgentRunConfigSchema } from "../../shared/agentTypes";
+import { normalizeAnswer } from "../agent/normalize";
+import { runAgentLoop, buildAgentRunResponse } from "../agent/runtime";
 import { isSessionValid } from "../auth";
 
 const GIT_COMMIT = process.env.REPL_ID?.slice(0, 7) || "local";
@@ -167,117 +165,41 @@ export function registerTestRoutes(router: Router): void {
       const runId = run.runId;
       const sheetEnv = run.rules?.sheetEnv || "staging";
       
-      const trace: { steps: TraceStep[]; events: TraceEvent[] } = { steps: [], events: [] };
-      let stepNum = 0;
-      
-      const addStep = (actor: string, actionType: string, inputs: string[], outputs: Record<string, unknown>, ruleRefs: string[] = []) => {
-        stepNum++;
-        trace.steps.push({
-          step: stepNum,
-          actor,
-          action: { type: actionType },
-          inputsUsed: inputs,
-          outputs,
-          ruleRefs,
-        });
-      };
-      
-      const addEvent = (type: string, ruleId: string | undefined, severity: "info" | "warn" | "error", message?: string) => {
-        trace.events.push({ type, ruleId, severity, message });
-      };
-      
-      const flowId = "ENT_FLU_LIKE_V1";
-      
-      addStep("router", "ROUTE_FLOW", ["chiefComplaint"], { flowId }, ["ROUTER_V1"]);
-      
-      const rawAnswers = testCase.answers;
-      const modifiers = testCase.modifiers || {};
-      
-      const answers: Record<string, unknown> = {};
-      for (const [key, val] of Object.entries(rawAnswers)) {
-        answers[key] = normalizeAnswerValue(val);
+      const normalizedAnswers: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(testCase.answers)) {
+        normalizedAnswers[key] = normalizeAnswer(val);
       }
       
-      let rules: Record<string, any> = {};
-      try {
-        rules = await getEntFluRules();
-        addEvent("RULES_LOADED", undefined, "info", `Loaded ${Object.keys(rules).length} rules`);
-      } catch (e) {
-        addEvent("RULES_LOAD_FAILED", undefined, "warn", "Using defaults");
-      }
+      const nowISO = new Date().toISOString();
+      const caseState = CaseStateSchema.parse({
+        caseId: `test-${runId}`,
+        createdAt: nowISO,
+        updatedAt: nowISO,
+        chiefComplaint: testCase.chiefComplaint,
+        demographics: testCase.demographics,
+        modifiers: testCase.modifiers,
+        answers: normalizedAnswers,
+        scores: {},
+        diagnosisClusterIds: [],
+        dispositionReasonCodes: [],
+        redFlags: [],
+        requiredQuestionIdsMissing: [],
+        recommendedActions: [],
+        routing: { state: "CORE_QS_PENDING" },
+        audit: { steps: [], events: [] },
+      });
       
-      const scores: Record<string, number> = {};
+      const config = AgentRunConfigSchema.parse({
+        runId,
+        mode: run.mode,
+        maxSteps: run.maxSteps,
+        llm: run.llm,
+        rules: run.rules,
+        options: run.options || { disableWrites: true, disableTwilio: true, disableFileUploads: true },
+      });
       
-      const hasFever = answers.Q_FEVER === "Yes" || answers.FEVER === "Yes";
-      const hasCough = answers.Q_COUGH === "No" || answers.COUGH === "No";
-      const hasTonsillarExudate = answers.Q_TONSILLAR_EXUDATE === "Yes" || answers.TH_EXUDATE === "Yes";
-      const hasTenderNodes = answers.Q_TENDER_ANT_CERV_NODES === "Yes" || answers.TH_TENDER_NODES === "Yes";
+      const agentOut = runAgentLoop(caseState, config);
       
-      let centorScore = 0;
-      if (hasFever) centorScore++;
-      if (hasCough) centorScore++;
-      if (hasTonsillarExudate) centorScore++;
-      if (hasTenderNodes) centorScore++;
-      
-      const demographics = testCase.demographics || {};
-      if (demographics.age !== undefined && demographics.age < 15) {
-        centorScore++;
-      } else if (demographics.age !== undefined && demographics.age >= 45) {
-        centorScore--;
-      }
-      
-      scores.centor = Math.max(0, Math.min(5, centorScore));
-      
-      addStep("scorer", "COMPUTE_SCORE", ["Q_FEVER", "Q_COUGH", "Q_TONSILLAR_EXUDATE", "Q_TENDER_ANT_CERV_NODES"], { centor: scores.centor }, ["SCORES!CENTOR_v1"]);
-      
-      if (scores.centor >= 3) {
-        addEvent("RULE_FIRED", "CENTOR_HIGH_SCORE", "info", `Centor score ${scores.centor} >= 3, high strep probability`);
-      }
-      
-      const answersForProposal: Record<string, any> = {};
-      for (const [key, val] of Object.entries(answers)) {
-        if (val === "Yes" || val === "yes") answersForProposal[key] = true;
-        else if (val === "No" || val === "no") answersForProposal[key] = false;
-        else answersForProposal[key] = val;
-      }
-      
-      Object.assign(answersForProposal, modifiers);
-      
-      const proposal = await computeProposalGeneric(answersForProposal, { flowId });
-      
-      addStep("engine", "COMPUTE_PROPOSAL", Object.keys(answers), {
-        disposition: proposal.disposition,
-        redFlag: proposal.redFlag,
-      }, proposal.reasoning.map((r) => `RULE:${r.slice(0, 30)}`));
-      
-      const redFlagQids = ["RF_SOB", "RF_CP", "RF_NEURO", "RF_DEHY", "RF_SEPSIS"];
-      const triggeredRedFlags = redFlagQids.filter((qid) => answers[qid] === "Yes");
-      
-      if (triggeredRedFlags.length > 0) {
-        addEvent("RED_FLAG_TRIGGERED", triggeredRedFlags.join(","), "warn");
-      }
-      
-      const diagnosisClusterIds: string[] = [];
-      if (proposal.redFlag) {
-        diagnosisClusterIds.push("ENT_RED_FLAG");
-      }
-      if (testCase.chiefComplaint.toLowerCase().includes("throat")) {
-        diagnosisClusterIds.push("ENT_PHARYNGITIS");
-      }
-      if (testCase.chiefComplaint.toLowerCase().includes("flu")) {
-        diagnosisClusterIds.push("ENT_FLU_LIKE");
-      }
-      
-      const recommendedActions: Array<{ type: string; priority: string }> = [];
-      if (scores.centor >= 3) {
-        recommendedActions.push({ type: "TEST_STREP", priority: "high" });
-      }
-      if (proposal.redFlag) {
-        recommendedActions.push({ type: "URGENT_EVAL", priority: "high" });
-      }
-      recommendedActions.push({ type: "SAFETY_NET", priority: "medium" });
-      
-      let spreadsheetId = process.env.SHEETS_SPREADSHEET_ID || "";
       let rulesetHash = "unknown";
       try {
         const sheets = await getSheetsClient();
@@ -285,6 +207,7 @@ export function registerTestRoutes(router: Router): void {
         const allData: string[] = [];
         for (const tabName of tabNames) {
           try {
+            const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID || "";
             const resp = await sheets.spreadsheets.values.get({
               spreadsheetId,
               range: `${tabName}!A1:Z500`,
@@ -296,35 +219,14 @@ export function registerTestRoutes(router: Router): void {
         rulesetHash = sha256(allData.join("::")).slice(0, 32);
       } catch {}
       
-      const normalized: NormalizedResult = {
-        disposition: proposal.disposition,
-        dx: diagnosisClusterIds,
-        scores,
-        redFlags: triggeredRedFlags,
-      };
-      
-      const normalizedHash = sha256(JSON.stringify(normalized));
-      
-      const response: AgentRunResponse = {
+      const response = buildAgentRunResponse(
         runId,
-        env: {
-          sheetEnv,
-          commit: GIT_COMMIT,
-          rulesetHash,
-        },
-        result: {
-          disposition: proposal.disposition,
-          dispositionReasonCodes: proposal.reasoning,
-          diagnosisClusterIds,
-          scores,
-          recommendedActions,
-        },
-        trace,
-        normalized: {
-          final: normalized,
-          hash: normalizedHash,
-        },
-      };
+        sheetEnv,
+        rulesetHash,
+        agentOut.finalState,
+        agentOut.steps,
+        agentOut.events
+      );
       
       res.json(response);
     } catch (error: any) {

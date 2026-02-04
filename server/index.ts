@@ -8,6 +8,7 @@ import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { initIntakeDb, intakeRouter, filesRouter, summaryRouter, ensureDirs as ensureIntakeDirs } from "./intake";
 import { authRouter } from "./routes.auth";
 import { registerTestRoutes } from "./routes/test.routes";
+import agentRoutes from "./routes/agent.routes";
 
 const app = express();
 const httpServer = createServer(app);
@@ -39,6 +40,10 @@ const testRouter = Router();
 registerTestRoutes(testRouter);
 app.use(testRouter);
 console.log("[Test] Regression gate endpoints registered");
+
+// Agent routes (LIVE + REGRESSION agentic endpoints)
+app.use("/api/agent", agentRoutes);
+console.log("[Agent] Agentic endpoints registered at /api/agent/*");
 
 initIntakeDb();
 ensureIntakeDirs();
