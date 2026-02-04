@@ -6,13 +6,21 @@ import { getStore, newId } from "../intakeStorage";
 import { UPLOAD_DIR } from "./storage";
 import { requireVerifiedSession } from "./routes.intake";
 import type { StorageMode } from "../intakeStorage/types";
+import { uploadLimiter, isAllowedMimeType } from "../rateLimit";
 
 export const filesRouter = Router();
 const store = getStore();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (isAllowedMimeType(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type not allowed: ${file.mimetype}. Allowed: jpeg, png, webp, pdf`));
+    }
+  }
 });
 
 function getUploadsMode(): StorageMode {
@@ -55,7 +63,7 @@ async function uploadToFirebaseStorage(
   };
 }
 
-filesRouter.post("/api/intake/:token/upload", upload.single("file"), requireVerifiedSession, async (req: Request, res: Response) => {
+filesRouter.post("/api/intake/:token/upload", uploadLimiter, upload.single("file"), requireVerifiedSession, async (req: Request, res: Response) => {
   try {
     const token = req.params.token;
     const file = req.file;

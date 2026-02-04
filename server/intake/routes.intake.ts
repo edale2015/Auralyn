@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { getStore, getActiveDriver } from "../intakeStorage";
 import type { DraftPayload, SubmitPayload } from "../intakeStorage/types";
 import { requireProviderAuth } from "../auth";
+import { verifyCodeLimiter } from "../rateLimit";
 
 export const intakeRouter = Router();
 
@@ -51,7 +52,7 @@ export async function requireVerifiedSession(req: Request, res: Response, next: 
   }
 }
 
-intakeRouter.post("/api/intake/:token/verify", async (req: Request, res: Response) => {
+intakeRouter.post("/api/intake/:token/verify", verifyCodeLimiter, async (req: Request, res: Response) => {
   try {
     const token = req.params.token;
     const code = String(req.body?.code || "").trim();

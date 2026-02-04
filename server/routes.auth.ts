@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { setProviderSession, clearProviderSession, isSessionValid } from "./auth";
+import { loginLimiter } from "./rateLimit";
 
 export const authRouter = Router();
 
-authRouter.post("/api/auth/login", (req, res) => {
+authRouter.post("/api/auth/login", loginLimiter, (req, res) => {
   const pw = String(req.body?.password || "");
   const expected = process.env.CLINICIAN_PASSWORD;
 
