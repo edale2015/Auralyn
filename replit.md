@@ -88,6 +88,37 @@ Agent run returns `normalized.final` with:
 - `redFlags`: array of triggered red flag QIDs
 - `hash`: SHA256 of normalized output for strict comparison
 
+## Agentic Spine Architecture
+
+The system uses a constrained agent architecture for deterministic medical triage decisions.
+
+### Core Components
+- **shared/agentTypes.ts**: CaseState (single source of truth), AgentAction discriminated union (10 action types), AgentRunConfig schemas
+- **server/agent/router.ts**: Constrained next-action picker with chiefComplaint normalization (handles "sore throat", "sore_throat", "pharyngitis")
+- **server/agent/executors.ts**: Action execution with trace capture
+- **server/agent/runtime.ts**: Agent loop (plan/act/observe) with max step guard
+- **server/agent/scoring/centor.ts**: Centor score calculation (fever + no cough + exudate + tender nodes + age adjustment)
+- **server/agent/safety/redFlags.ts**: Red flag detection (single authority)
+- **server/agent/safety/supervisor.ts**: Gate for patient-visible outputs
+
+### CaseState Routing States
+- `INTAKE_PENDING` → `MODIFIERS_PENDING` → `CORE_QS_PENDING` → `SCORING_PENDING` → `REVIEW_REQUIRED`
+- Emergency path: `EMERGENT_ESCALATION`
+- More info path: `MORE_INFO_NEEDED`
+
+### AgentAction Types
+NOOP, ASK_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSITION, ADD_DX, RECOMMEND_ACTIONS, DRAFT_SUMMARY, ESCALATE_TO_CLINICIAN, STOP
+
+### Agent Endpoints
+- `POST /api/agent/next` - Plan next action (provider auth required)
+- `POST /api/agent/execute` - Execute single action (provider auth required)
+- `POST /api/agent/run` - Full agent loop (provider auth required)
+
+### Design Decisions
+- Router is single source for red flag detection (executor removed duplicate checks)
+- Supervisor gate blocks patient-visible outputs if red flags present or no disposition set
+- ChiefComplaint normalization handles synonyms (sore throat/pharyngitis → sore_throat)
+
 ## External Dependencies
 
 - **AI Integration**: OpenAI API for medical triage AI conversations.
