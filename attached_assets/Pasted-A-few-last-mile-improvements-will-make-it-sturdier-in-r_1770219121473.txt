@@ -1,0 +1,130 @@
+A few “last-mile” improvements will make it sturdier in real-world use on Replit (and reduce the chance of mysterious auth bugs).
+
+1) Make the cookie “Secure” behave correctly on Replit
+
+On Replit you’ll usually be on HTTPS when using the public URL. If NODE_ENV isn’t reliably "production", secure cookies can be mis-set.
+
+Recommended tweak
+
+Add explicit env:
+
+COOKIE_SECURE=1 (on Replit deployment)
+
+COOKIE_SAMESITE=lax (default)
+
+Then in setProviderSession():
+
+secure: process.env.COOKIE_SECURE === "1"
+
+This avoids the “why is cookie not sticking?” issue that happens when NODE_ENV differs.
+
+2) Add CSRF protection for provider POST/DELETE endpoints (lightweight)
+
+SameSite=Lax helps, but for endpoints like:
+
+link/unlink
+
+sign
+
+test-token creation
+
+Add a simple CSRF token header check (very small effort):
+
+On /api/auth/login, also set a non-httpOnly cookie: csrf=<random>
+
+For state-changing provider requests, require:
+
+header X-CSRF: <value> matches cookie csrf
+
+This is optional but recommended once you go beyond dev.
+
+3) Lock down the “fallback key” in one place
+
+You did ALLOW_PROVIDER_KEY_FALLBACK=0 for production. Perfect.
+
+Make sure:
+
+requireProviderAuth() checks fallback only if flag is enabled
+
+and scripts that still need key access run with the flag enabled in their environment, not in production.
+
+Good pattern:
+
+default fallback OFF
+
+enable only in dev.
+
+4) Add a /api/auth/refresh endpoint (optional)
+
+If you want the dashboard to stay alive during longer sessions:
+
+refresh the cookie TTL on activity
+
+or have the client call /api/auth/me periodically and re-issue cookie if near expiry
+
+Not necessary now, but nice.
+
+5) Don’t ship CLINICIAN_PASSWORD="clinic2026" long-term
+
+For now it’s fine, but:
+
+rotate it regularly
+
+keep it only in Replit secrets
+
+don’t ever write it in docs or client code
+
+When you’re ready, upgrade to:
+
+username + password hash
+
+or a magic link
+
+or Google login
+
+But your “single password” is a good launch mode.
+
+6) Final go-live checklist (Replit)
+Secrets / env
+
+STORAGE_DRIVER=firestore
+
+UPLOADS_MODE=firebase_storage
+
+FIREBASE_PROJECT_ID=medicalm-dec9d
+
+FIREBASE_STORAGE_BUCKET=medicalm-dec9d.firebasestorage.app
+
+GOOGLE_SERVICE_ACCOUNT_JSON set
+
+SESSION_SECRET set
+
+CLINICIAN_PASSWORD set
+
+ALLOW_PROVIDER_KEY_FALLBACK=0
+
+COOKIE_SECURE=1
+
+Confirm
+
+login works on the public URL (cookie sticks)
+
+provider pages load
+
+patient /start and /simple/:token work
+
+upload + view attachment works
+
+provider export pack works
+
+What you can do next (if you want the “publish” step)
+
+If you tell me your Replit setup (single repl serving both client+server vs separate ports/proxy), I can give you:
+
+the cleanest routing (so / serves the React app and API is /api)
+
+the correct CORS + cookie settings (especially if you use different origins)
+
+a short “deployment checklist” you can paste into replit.md as the official ops guide
+
+Also: do you want the app publicly accessible for patients without login, while the dashboard stays protected (likely yes)?
