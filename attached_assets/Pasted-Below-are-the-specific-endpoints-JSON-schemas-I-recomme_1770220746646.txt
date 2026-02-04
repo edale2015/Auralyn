@@ -1,0 +1,289 @@
+Below are the specific endpoints + JSON schemas I recommend adding (or standardizing) to make that gate rock-solid and automatable with your existing Node/Express + TS setup and your pipeline scripts.
+
+1) Add a deterministic “agent run” test endpoint
+Endpoint
+
+POST /api/test/agent-run
+
+Auth
+
+Provider session only (or allow ALLOW_PROVIDER_KEY_FALLBACK=1 in non-prod)
+
+Purpose
+
+Runs the full agentic loop (or a bounded subset) for a synthetic case payload, using a specified rules snapshot and LLM mode, returning a normalized trace.
+
+Request JSON (schema)
+{
+  "case": {
+    "chiefComplaint": "sore_throat",
+    "demographics": { "age": 11, "sex": "female", "pregnant": false },
+    "modifiers": {
+      "allergies": ["penicillin"],
+      "pmh": ["asthma"],
+      "meds": ["albuterol"],
+      "immunocompromised": false
+    },
+    "answers": {
+      "Q_FEVER": "yes",
+      "Q_COUGH": "no",
+      "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes",
+      "Q_DURATION_DAYS": 2
+    },
+    "files": []
+  },
+  "run": {
+    "runId": "uuid",
+    "mode": "REGRESSION",
+    "maxSteps": 20,
+    "llm": {
+      "enabled": true,
+      "temperature": 0,
+      "seed": 12345,
+      "model": "gpt-5.2-thinking"
+    },
+    "rules": {
+      "spreadsheetIdOverride": null,
+      "sheetEnv": "staging",
+      "rulesetHash": "sha256:..."
+    },
+    "options": {
+      "disableWrites": true,
+      "disableTwilio": true,
+      "disableFileUploads": true
+    }
+  }
+}
+
+Response JSON (schema)
+
+This is what the gate compares. Keep it stable.
+
+{
+  "runId": "uuid",
+  "env": { "sheetEnv": "staging", "commit": "gitsha", "rulesetHash": "sha256:..." },
+  "result": {
+    "disposition": "urgent_care",
+    "dispositionReasonCodes": ["RF_NONE", "CENTOR_4"],
+    "diagnosisClusterIds": ["ENT_PHARYNGITIS"],
+    "scores": { "centor": 4 },
+    "recommendedActions": [
+      { "type": "TEST_STREP", "priority": "high" },
+      { "type": "SAFETY_NET", "priority": "high" }
+    ]
+  },
+  "trace": {
+    "steps": [
+      {
+        "step": 1,
+        "actor": "router",
+        "action": { "type": "COMPUTE_SCORE", "scoreType": "centor" },
+        "inputsUsed": ["Q_FEVER", "Q_COUGH", "Q_TONSILLAR_EXUDATE", "Q_TENDER_ANT_CERV_NODES"],
+        "outputs": { "centor": 4 },
+        "ruleRefs": ["SCORES!CENTOR_v1"]
+      }
+    ],
+    "events": [
+      { "type": "RULE_FIRED", "ruleId": "ENT_PHARYNGITIS_CLUSTER", "severity": "info" }
+    ]
+  },
+  "normalized": {
+    "final": {
+      "disposition": "urgent_care",
+      "dx": ["ENT_PHARYNGITIS"],
+      "scores": { "centor": 4 },
+      "redFlags": []
+    },
+    "hash": "sha256:..."
+  }
+}
+
+
+Why this matters: your regression gate should compare normalized.final (strict) and optionally trace (soft diffs).
+
+2) Add a “compare runs” endpoint (optional but nice)
+Endpoint
+
+POST /api/test/compare
+
+Purpose
+
+Given two run outputs (baseline vs candidate), return a structured diff with severity scoring.
+
+Request
+{
+  "baseline": { "...agentRunResponse" : true },
+  "candidate": { "...agentRunResponse" : true },
+  "policy": {
+    "hardFails": ["DISPOSITION_CHANGED_UP", "RED_FLAG_REMOVED", "ANTIBIOTIC_RECOMMENDATION_CHANGED"],
+    "softFails": ["DX_CHANGED", "QUESTION_ORDER_CHANGED"],
+    "allowLists": {
+      "dxReorderOk": true,
+      "traceStepCountDeltaMax": 3
+    }
+  }
+}
+
+Response
+{
+  "pass": false,
+  "hardFailures": [
+    { "code": "RED_FLAG_REMOVED", "path": "normalized.final.redFlags", "details": "RF_SEPSIS removed" }
+  ],
+  "softFailures": [
+    { "code": "DX_CHANGED", "path": "normalized.final.dx", "baseline": ["A"], "candidate": ["B"] }
+  ],
+  "summary": { "hard": 1, "soft": 1 }
+}
+
+3) Add a “rules snapshot” endpoint so runs are reproducible
+Endpoint
+
+GET /api/test/rules/snapshot?sheetEnv=staging
+
+Purpose
+
+Return:
+
+ruleset hash
+
+last modified timestamps (per tab)
+
+optionally a small “manifest” of row counts / header hashes
+
+Response
+{
+  "sheetEnv": "staging",
+  "spreadsheetId": "....",
+  "rulesetHash": "sha256:...",
+  "tabs": [
+    { "name": "CORE_QUESTIONS", "rows": 812, "hash": "sha256:..." },
+    { "name": "DISPOSITION_RULES", "rows": 144, "hash": "sha256:..." }
+  ]
+}
+
+
+This lets your pipeline say: “I tested exactly this ruleset.”
+
+4) A canonical “golden test case” schema (stored in repo)
+
+Put these in server/testcases/*.json.
+
+TestCaseV1
+export type TestCaseV1 = {
+  id: string;
+  label: string;
+  chiefComplaint: string;
+  case: {
+    demographics: { age: number; sex: "male"|"female"|"other"; pregnant?: boolean };
+    modifiers: Record<string, unknown>;
+    answers: Record<string, "yes"|"no"|"not_sure"|number|string|null>;
+    files?: Array<{ name: string; mime: string; size: number }>;
+  };
+  expected?: {
+    disposition?: string;
+    redFlagsPresent?: string[];
+    scores?: Record<string, number>;
+  };
+  tags?: string[];
+};
+
+
+Your gate can run 50–500 of these and produce a CSV/JSON diff report.
+
+5) Gate logic: what is a hard fail vs soft fail
+
+Here’s a sane default policy for your world:
+
+Hard fail (block promotion)
+
+Disposition becomes less safe (ED → UC, UC → home)
+
+Any red flag previously present is removed
+
+A required “must-ask” question is skipped
+
+Score calculation changes for same inputs
+
+Antibiotic recommendation changes category (if you expose it)
+
+Any run errors / timeouts / missing sheet loads
+
+Soft fail (flag for review)
+
+Differential order changes
+
+Question order changes
+
+Additional questions asked (if still within max)
+
+More conservative disposition (home → UC) (might be acceptable)
+
+6) Minimal additions to your existing endpoints
+
+You already have /api/test/execute and x-sheet-env. You can keep that and simply standardize outputs.
+
+If you don’t want new endpoints, then upgrade /api/test/execute to:
+
+accept the run object (seed, rulesetHash, disableWrites)
+
+return the agentRunResponse shape above
+
+That alone unlocks the gate.
+
+7) Where this plugs into your nightly pipeline (exactly)
+
+Your pipeline steps become:
+
+Get baseline snapshot (prod rulesetHash)
+
+Get staging snapshot (staging rulesetHash)
+
+Run all testcases/*.json against baseline (or last known good)
+
+Run all against staging
+
+Compare per-case normalized outputs → write:
+
+REGRESSION_RESULTS.json
+
+REGRESSION_DIFF.csv
+
+REGRESSION_SUMMARY.json
+
+Gate:
+
+if any hard fail → exit non-zero, skip auto-promote
+
+else if soft fails → require manual approval (or allow promote with warning)
+
+If pass, then run your promoteRulePatchesToStaging.ts or next stage.
+
+8) One subtle but crucial detail: LLM determinism
+
+For regression runs:
+
+temperature: 0
+
+fixed seed (where supported)
+
+or set llm.enabled=false and only use deterministic question selection for gate
+
+I recommend: two suites
+
+deterministic_suite (LLM off) must always pass
+
+llm_suite (LLM on) can be soft-gated and monitored
+
+If you want my “do this now” recommendation
+
+Implement just these 3 first:
+
+POST /api/test/agent-run returning normalized.final + hash
+
+GET /api/test/rules/snapshot
+
+A diff function that classifies hard/soft failures and writes the CSV
+
+That’s enough to make staging regression gating real, not vibes-based.

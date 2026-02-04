@@ -1,4 +1,4 @@
-import express, { type Request, Response, NextFunction } from "express";
+import express, { type Request, Response, NextFunction, Router } from "express";
 import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -7,6 +7,7 @@ import { storage } from "./storage";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { initIntakeDb, intakeRouter, filesRouter, summaryRouter, ensureDirs as ensureIntakeDirs } from "./intake";
 import { authRouter } from "./routes.auth";
+import { registerTestRoutes } from "./routes/test.routes";
 
 const app = express();
 const httpServer = createServer(app);
@@ -32,6 +33,12 @@ app.use(express.urlencoded({ extended: false }));
 // Auth routes
 app.use(authRouter);
 console.log("[Auth] Session cookie auth enabled");
+
+// Test/regression routes
+const testRouter = Router();
+registerTestRoutes(testRouter);
+app.use(testRouter);
+console.log("[Test] Regression gate endpoints registered");
 
 initIntakeDb();
 ensureIntakeDirs();
