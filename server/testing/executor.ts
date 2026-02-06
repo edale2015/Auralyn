@@ -1,6 +1,13 @@
 import { Scenario, SystemOutput } from "./types";
 
-const BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+function resolveBaseUrl(): string {
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL;
+  const domains = process.env.REPLIT_DOMAINS || process.env.REPLIT_DEV_DOMAIN || "";
+  const first = domains.split(",")[0]?.trim();
+  if (first) return `https://${first}`;
+  return "";
+}
+const BASE_URL = resolveBaseUrl().replace(/\/+$/, "");
 const TEST_EXEC_TOKEN = process.env.TEST_EXEC_TOKEN || "";
 const TEST_SHEET_ENV = process.env.TEST_SHEET_ENV || "";
 
