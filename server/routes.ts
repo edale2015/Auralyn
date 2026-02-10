@@ -874,13 +874,20 @@ export async function registerRoutes(
       
       console.log(`Received WhatsApp message from ${phoneNumber}: ${msg}`);
       
-      // Staff-only test commands (!scenario, !trace, !case)
+      // Staff-only test commands (!scenario, !trace, !case, !explain)
       const normalizePhone = (p: string) => p.replace(/^whatsapp:/, "").replace(/\s+/g, "").trim();
       const STAFF_NUMS = (process.env.STAFF_WHATSAPP_NUMBERS || "")
         .split(",").map(s => normalizePhone(s)).filter(Boolean);
       const isStaff = STAFF_NUMS.includes(normalizePhone(phoneNumber));
       if (isStaff && isStaffCommand(msg)) {
-        const reply = await handleStaffCommand(msg);
+        const { checkStaffCommandAccess } = await import("./whatsapp/staffGate");
+        const access = checkStaffCommandAccess(normalizePhone(phoneNumber));
+        let reply: string;
+        if (!access.allowed) {
+          reply = access.reason || "Command not available.";
+        } else {
+          reply = await handleStaffCommand(msg);
+        }
         await sendWhatsAppMessage(phoneNumber, reply);
         res.set("Content-Type", "text/xml");
         return res.send("<Response></Response>");

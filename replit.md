@@ -186,12 +186,19 @@ EHR/FHIR integration is scaffolded but not functional in v1:
 ## Agent Trace & Testing Infrastructure
 
 ### WhatsApp Staff Commands
-Staff-only commands recognized in the WhatsApp webhook (gated to `STAFF_WHATSAPP_NUMBERS` env var):
-- `!scenario list` - List available golden test cases
-- `!scenario run <id>` - Run a test scenario through the agent loop, persist trace, return results
-- `!trace last` - View the most recent trace summary
-- `!trace <runId>` - View a specific trace by run ID
+Staff-only commands recognized in the WhatsApp webhook (gated to `STAFF_WHATSAPP_NUMBERS` env var, `ENABLE_TEST_CONSOLE` env var, and per-phone rate limiting at 10/min):
+- `!scenario list` - List available golden test cases with tags
+- `!scenario run <id> [--llm=on|off] [--seed=N]` - Run a test scenario with optional LLM toggle and deterministic seed
+- `!trace last` - View the most recent run receipt (compact format with trace URL)
+- `!trace <runId>` - View a specific trace run receipt
+- `!explain <runId> step <n>` - View single step detail: action, inputs, rules, outputs
 - `!case <caseId>` - List all traces for a case
+
+### Staff Command Safety Hardening
+- **Gate**: `ENABLE_TEST_CONSOLE=1` required to enable (auto-disabled in production unless set)
+- **Rate Limiting**: 10 commands per minute per phone number, sliding window
+- **Phone Normalization**: Strips `whatsapp:` prefix and whitespace before comparison
+- **Production**: Requires `ADMIN_TOKEN` env var when `NODE_ENV=production`
 
 ### Trace Storage
 - **Collection**: `agentTraces` (Firestore) / in-memory (dev)
@@ -206,7 +213,15 @@ Staff-only commands recognized in the WhatsApp webhook (gated to `STAFF_WHATSAPP
 ### Trace Viewer UI
 - Route: `/debug/traces` (provider auth required via API)
 - Features: List view with search/filter, detail view with step-by-step timeline, scores, red flags, events
+- **Trace Diff Mode**: Compare two traces side-by-side with hard/soft failure detection and step-by-step diff
+- **Compare API**: `GET /api/traces/compare/:baseRunId/:candRunId` returns diff results with step alignment
 - Component: `client/src/pages/TraceViewer.tsx`
+
+### LLM Call Log
+- **Collection**: `llmCallLogs` (Firestore) / in-memory (dev)
+- **Fields**: id, runId, caseId, channel, purpose, model, temperature, seed, promptTemplateId, inputHash, outputHash, outputText, latencyMs, tokensIn/Out, linkedActionStep, timestamp, metadata
+- **Helper**: `buildLlmCallLogEntry()` for constructing log entries with auto-hashing
+- **Backend**: `server/traces/llmCallLog.ts` with Firestore and in-memory implementations
 
 ### ConversationTurnLog
 - **Collection**: `conversationTurnLogs` (Firestore) / in-memory (dev)

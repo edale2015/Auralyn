@@ -1,0 +1,151 @@
+Here’s what I’d recommend as the next iteration to make this maximally testable and to answer your second question about ChatGPT engagement logging.
+
+1) Make WhatsApp scenario testing feel like a control panel
+
+Right now you can run scenarios and view traces. The next upgrade is “operator ergonomics.”
+
+A) Add these staff commands (minimal, high value)
+
+!scenario list
+returns available JSON testcases + tags
+
+!scenario run <id> [--llm=off|on] [--seed=123]
+runs deterministic or LLM-assisted
+
+!trace last
+shows last run summary + link to trace viewer
+
+!trace <runId>
+fetches and summarizes a specific run
+
+!explain <runId> step <n>
+returns only step n: action + inputsUsed + ruleRefs + outputs
+(keeps WhatsApp readable)
+
+B) Return a compact “Run Receipt” in WhatsApp
+
+Example format (fits in one screen):
+
+Disposition + reason codes
+
+Scores
+
+Red flags
+
+Missing required question IDs (if stopped for info)
+
+Stop reason
+
+Trace URL
+
+This makes it fast to iterate without opening the UI every time.
+
+2) Add “Trace Diff” in the UI (this is where learning happens)
+
+You already have /api/test/compare. Put it in the Trace Viewer:
+
+Select baseline run vs candidate run
+
+Show:
+
+hard fails
+
+soft fails
+
+step-by-step diff (which ruleRefs changed)
+
+This becomes your “why did the agent behave differently” microscope.
+
+3) Answering your ChatGPT question: yes, connect it and log it
+
+You can absolutely connect ChatGPT for:
+
+better phrasing
+
+rapport/empathy
+
+handling tangential/problem patients
+
+concise summaries
+
+And yes: you can log it so you can prove it’s better (or not).
+
+The right architecture: “LLM as a tool called by actions”
+
+Add two action types (if you haven’t):
+
+REFRAME_QUESTION(questionId, toneProfile)
+
+DRAFT_SUMMARY(style)
+
+The router decides when to call these actions. The executor performs the LLM call.
+
+Logging: what to store for every LLM call (so it’s measurable)
+
+Create an llm_call_log record per call:
+
+runId, caseId, channel (whatsapp/web)
+
+purpose (“rephrase_question”, “summarize”, “deescalate”)
+
+model, temperature, seed
+
+promptTemplateId (so you know which prompt version)
+
+inputHash + (optionally) redacted prompt content
+
+outputHash + output text
+
+latencyMs, token counts if available
+
+linkedActionStep (trace step number)
+
+Metrics to prove “more engaging / efficient”
+
+Now you can compute:
+
+time-to-answer per question
+
+completion rate of required questions
+
+turns-to-completion
+
+staff escalation rate
+
+patient sentiment (simple classifier or heuristic)
+
+refusal rate / topic drift rate (problem patient signals)
+
+Then run A/B:
+
+same scenarios, LLM off vs on
+
+compare the above metrics
+
+That’s how you turn “it feels nicer” into “it measurably improves completion.”
+
+4) One more safety hardening (worth doing next)
+
+Since you’re using WhatsApp as a test console:
+
+Add a “test mode allowlist” + “rate guard”
+
+only allow commands from staff numbers and only when ENABLE_TEST_CONSOLE=1
+
+if NODE_ENV=production, require ADMIN_TOKEN too
+
+add a simple per-number command rate limit (even 10/min)
+
+This prevents accidental misuse if a staff number is compromised.
+
+5) What I’d do next, in order (tight list)
+
+Add command set: list, run --llm, trace, explain step
+
+Add trace diff UI using /api/test/compare
+
+Add LLM action REFRAME_QUESTION + logging table/collection
+
+Add A/B toggles in scenario runner (--llm=on|off) and compute metrics
+
+If you paste your WhatsApp webhook command handler (just the command parsing function and how it dispatches scenario run), I’ll tell you the exact next 30–60 lines to add to support !scenario list, --llm=on/off, and !explain step n cleanly.
