@@ -5,10 +5,11 @@ import { formatRunReceipt, formatScenarioList, formatStepExplain } from "../trac
 import { runAgentLoop, buildAgentRunResponse } from "../agent/runtime";
 import { CaseStateSchema, AgentRunConfigSchema } from "../../shared/agentTypes";
 import { normalizeAnswer } from "../agent/normalize";
+import { runRcSuite, formatRcReport } from "../rc/rcRunner";
 
 export function isStaffCommand(msg: string): boolean {
   const lower = msg.trim().toLowerCase();
-  return lower.startsWith("!scenario") || lower.startsWith("!trace") || lower.startsWith("!case") || lower.startsWith("!explain");
+  return lower.startsWith("!scenario") || lower.startsWith("!trace") || lower.startsWith("!case") || lower.startsWith("!explain") || lower.startsWith("!rc");
 }
 
 export async function handleStaffCommand(msg: string): Promise<string> {
@@ -20,11 +21,21 @@ export async function handleStaffCommand(msg: string): Promise<string> {
     if (cmd === "!trace") return await handleTraceCommand(parts.slice(1));
     if (cmd === "!case") return await handleCaseCommand(parts.slice(1));
     if (cmd === "!explain") return await handleExplainCommand(parts.slice(1));
-    return `Unknown command: ${cmd}\n\nAvailable:\n!scenario list|run <id> [--llm=on|off] [--tone=empathetic|concise|pediatric|elderly] [--seed=N]\n!trace last|<runId>\n!case <caseId>\n!explain <runId> step <n>`;
+    if (cmd === "!rc") return await handleRcCommand(parts.slice(1));
+    return `Unknown command: ${cmd}\n\nAvailable:\n!scenario list|run <id> [--llm=on|off] [--tone=empathetic|concise|pediatric|elderly] [--seed=N]\n!rc run\n!trace last|<runId>\n!case <caseId>\n!explain <runId> step <n>`;
   } catch (err: any) {
     console.error("[StaffCmd] Error:", err);
     return `Command error: ${err?.message || String(err)}`;
   }
+}
+
+async function handleRcCommand(args: string[]): Promise<string> {
+  const sub = args[0]?.toLowerCase();
+  if (!sub || sub === "run") {
+    const report = await runRcSuite();
+    return formatRcReport(report);
+  }
+  return "Usage: !rc run\n\nRuns all golden scenarios across LLM variants and produces a pass/fail report.";
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string> } {

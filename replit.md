@@ -37,6 +37,7 @@ Preferred communication style: Simple, everyday language.
 - **Endpoints**: `/api/test/rules/snapshot`, `/api/test/agent-run`, `/api/test/compare`.
 - **Test Cases**: Golden test cases stored in `server/testcases/*.json` with expected outcomes.
 - **Normalized Output**: Agent runs return normalized `final` output including disposition, diagnosis, scores, and red flags.
+- **Production Safety**: Test routes disabled in production unless `ENABLE_TEST_ROUTES=1` is set.
 
 ### Configuration
 - **Validation**: Zod-based environment variable validation at startup.
@@ -79,6 +80,28 @@ NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSIT
 - Router never emits REFRAME_QUESTION unless questionId is in ALLOWED_QUESTION_IDS set
 - LLM log outputText is redacted in production (only hashes stored)
 - Provider auth required on all agent, trace, analytics, and LLM log endpoints
+- Test routes disabled in production unless ENABLE_TEST_ROUTES=1
+
+## Release Candidate (RC) System
+
+### RC Run (`server/rc/rcRunner.ts`)
+- **WhatsApp Command**: `!rc run` — runs all golden scenarios across 3 LLM variants (off, empathetic, concise)
+- **API**: `POST /api/rc/run` — returns full RC report
+- **Report Contents**: pass/fail summary, top 10 diffs, latency stats (mean/median/p95), token totals + cost estimate, friction rate
+- **Cross-variant Comparison**: LLM variants compared against LLM-off baseline for safety regressions
+
+### Replay Mode (`server/rc/replayRunner.ts`)
+- **API**: `POST /api/replay/:runId` — replays an existing trace through new config
+- **Config Options**: toneProfile, llmEnabled, model, temperature, seed
+- **Output**: New trace + diff against original (hard/soft failures)
+- **Use Case**: Test ruleset/tone/model changes against real conversation data without messaging patients
+
+### Quality Review (`server/analytics/qualityReview.ts`)
+- **API**: `POST /api/traces/:runId/review` — tag run as great/ok/bad with optional reason
+- **API**: `GET /api/traces/:runId/review` — get existing review
+- **API**: `GET /api/analytics/quality-reviews` — summary with ratings distribution and top reasons
+- **UI**: Quality Review panel in Trace Detail view with rating buttons and reason selector
+- **Predefined Reasons**: "too many questions", "missed key question", "tone annoyed patient", "premature escalation", "not empathic enough", "incorrect disposition", "excellent flow", "other"
 
 ## Analytics
 

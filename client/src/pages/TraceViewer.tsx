@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Activity, AlertTriangle, CheckCircle, Clock, GitCompare, Hash, Minus, Plus, RefreshCw, Search, X } from "lucide-react";
+import { ArrowLeft, Activity, AlertTriangle, CheckCircle, Clock, GitCompare, Hash, Minus, Plus, RefreshCw, Search, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 
 type TraceSummary = {
   runId: string;
@@ -299,6 +300,145 @@ function TraceDiffView({ baseRunId, candRunId, onBack }: { baseRunId: string; ca
   );
 }
 
+const REVIEW_REASONS = [
+  "too many questions",
+  "missed key question",
+  "tone annoyed patient",
+  "premature escalation",
+  "not empathic enough",
+  "incorrect disposition",
+  "excellent flow",
+  "other",
+];
+
+function QualityReviewPanel({ runId }: { runId: string }) {
+  const [selectedReason, setSelectedReason] = useState<string>("");
+
+  const { data: reviewData, isLoading } = useQuery<{ ok: boolean; review: { rating: string; reason?: string; reviewedAt: string } | null }>({
+    queryKey: ["/api/traces", runId, "review"],
+  });
+
+  const submitReview = useMutation({
+    mutationFn: async (rating: string) => {
+      const body: Record<string, string> = { rating };
+      if (selectedReason) body.reason = selectedReason;
+      return apiRequest("POST", `/api/traces/${runId}/review`, body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/traces", runId, "review"] });
+    },
+  });
+
+  const existing = reviewData?.review;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Star className="w-4 h-4" />
+          Quality Review
+        </CardTitle>
+        {existing && (
+          <Badge
+            variant={existing.rating === "great" ? "default" : existing.rating === "bad" ? "destructive" : "secondary"}
+            data-testid="badge-existing-review"
+          >
+            {existing.rating.toUpperCase()}
+          </Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-8 w-full" />
+        ) : existing ? (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground" data-testid="text-review-info">
+              Reviewed {new Date(existing.reviewedAt).toLocaleString()}
+              {existing.reason && ` — "${existing.reason}"`}
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant={existing.rating === "great" ? "default" : "outline"}
+                onClick={() => submitReview.mutate("great")}
+                disabled={submitReview.isPending}
+                data-testid="button-review-great"
+              >
+                <ThumbsUp className="w-3.5 h-3.5 mr-1" />
+                Great
+              </Button>
+              <Button
+                size="sm"
+                variant={existing.rating === "ok" ? "default" : "outline"}
+                onClick={() => submitReview.mutate("ok")}
+                disabled={submitReview.isPending}
+                data-testid="button-review-ok"
+              >
+                OK
+              </Button>
+              <Button
+                size="sm"
+                variant={existing.rating === "bad" ? "destructive" : "outline"}
+                onClick={() => submitReview.mutate("bad")}
+                disabled={submitReview.isPending}
+                data-testid="button-review-bad"
+              >
+                <ThumbsDown className="w-3.5 h-3.5 mr-1" />
+                Bad
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">How was this run?</p>
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => submitReview.mutate("great")}
+                disabled={submitReview.isPending}
+                data-testid="button-review-great"
+              >
+                <ThumbsUp className="w-3.5 h-3.5 mr-1" />
+                Great
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => submitReview.mutate("ok")}
+                disabled={submitReview.isPending}
+                data-testid="button-review-ok"
+              >
+                OK
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => submitReview.mutate("bad")}
+                disabled={submitReview.isPending}
+                data-testid="button-review-bad"
+              >
+                <ThumbsDown className="w-3.5 h-3.5 mr-1" />
+                Bad
+              </Button>
+            </div>
+            <Select value={selectedReason} onValueChange={setSelectedReason}>
+              <SelectTrigger className="w-[250px]" data-testid="select-review-reason">
+                <SelectValue placeholder="Optional: add a reason" />
+              </SelectTrigger>
+              <SelectContent>
+                {REVIEW_REASONS.map(r => (
+                  <SelectItem key={r} value={r}>{r}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function TraceDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
   const { data, isLoading, error } = useQuery<{ ok: boolean; trace: FullTrace }>({
     queryKey: ["/api/traces", runId],
@@ -475,6 +615,8 @@ function TraceDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
           </CardContent>
         </Card>
       )}
+
+      <QualityReviewPanel runId={trace.runId} />
 
       <div className="text-xs text-muted-foreground flex gap-4 flex-wrap">
         <span>Created: {new Date(trace.createdAt).toLocaleString()}</span>

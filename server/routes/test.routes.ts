@@ -23,17 +23,22 @@ function sha256(data: string): string {
 }
 
 function requireTestAuth(req: Request, res: Response): boolean {
+  if (process.env.NODE_ENV === "production" && process.env.ENABLE_TEST_ROUTES !== "1") {
+    res.status(403).json({ ok: false, error: "Test routes disabled in production" });
+    return false;
+  }
+
   const testToken = req.header("x-test-token") || "";
   const envToken = process.env.TEST_EXEC_TOKEN || "";
-  
+
   if (envToken && testToken === envToken) {
     return true;
   }
-  
+
   if (isSessionValid(req)) {
     return true;
   }
-  
+
   res.status(401).json({ ok: false, error: "Unauthorized" });
   return false;
 }

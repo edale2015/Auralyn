@@ -1,0 +1,194 @@
+This is genuinely “production-shaped” now. With those six items, you’ve built the exact loop you wanted:
+
+
+Test through WhatsApp (scenario runner)
+
+
+See what fired and why (trace + diff UI)
+
+
+Turn ChatGPT into a measurable module (A/B + metrics)
+
+
+Handle problem patients (friction signals)
+
+
+Keep it safe and bounded (supervisor + questionId validation + LLM budgets + cooldown)
+
+
+Make logs usable without leaking PHI (hash-only in prod)
+
+
+At this point, your next work isn’t “more features,” it’s operationalizing: making the system easy to run, diagnose, and improve week over week.
+What I’d recommend next (the “now we ship and learn” set)
+1) Add a “Release Candidate” test pack and promotion gate
+You already have regression compare. Make one command that runs your canonical suite:
+
+
+WhatsApp staff command: !rc run
+
+
+Runs 20–50 golden scenarios across:
+
+
+LLM off
+
+
+LLM on, empathetic
+
+
+LLM on, concise
+
+
+
+
+Produces:
+
+
+pass/fail summary
+
+
+top diffs
+
+
+cost and latency summary
+
+
+
+
+This becomes your “green button” before any prod change.
+2) Add “Replay mode” from real conversations (de-identified)
+The best training set is your real edge cases. Create a provider-only tool:
+
+
+POST /api/replay/:runId
+replays the conversation through:
+
+
+new ruleset
+
+
+new tone profile
+
+
+new model version
+without messaging the patient, just producing a trace diff.
+
+
+
+
+This is how you safely improve behavior using real “problem patient” transcripts.
+3) Add a lightweight “Quality Review” rubric in the dashboard
+For each run, let a provider tag:
+
+
+“Great”
+
+
+“OK”
+
+
+“Bad”
+and optionally a reason:
+
+
+“too many questions”
+
+
+“missed key question”
+
+
+“tone annoyed patient”
+
+
+“premature escalation”
+
+
+“not empathic enough”
+
+
+Then correlate these labels with your metrics. That’s your human feedback loop (mini-RLHF without the drama).
+4) Telegram integration (only if you still want it)
+WhatsApp already works. Telegram is now just an adapter:
+
+
+POST /api/webhooks/telegram
+
+
+map into the same internal MessageEvent
+
+
+reuse scenario commands and trace logging
+
+
+Do it only if it helps your testing speed or staff preference.
+5) Deployment hygiene
+Before pushing live:
+
+
+ensure TEST_EXEC_TOKEN + scenario console are disabled unless explicitly enabled
+
+
+ensure guardrails dashboards are provider-only
+
+
+set log retention policy (e.g., keep hashes forever, keep redacted text for 7–30 days in non-prod)
+
+
+
+Quick reality-check: are we beyond Claude’s concerns?
+Yes. Claude was worried about:
+
+
+missing integration glue
+
+
+env/config chaos
+
+
+inconsistent data flow and auth
+
+
+not being able to validate behavior changes
+
+
+You now have:
+
+
+a spine
+
+
+a messaging harness
+
+
+a trace flight recorder
+
+
+a regression gate
+
+
+analytics
+
+
+and safety/cost guardrails
+
+
+That’s the complete answer to “make it agentic, testable, and improvable.”
+
+If you want the single best “next artifact” to create:
+an RC run report that prints:
+
+
+suite pass/fail
+
+
+top 10 hard/soft diffs
+
+
+median latency + p95
+
+
+total LLM tokens + cost estimate
+
+
+friction rate

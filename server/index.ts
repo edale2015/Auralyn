@@ -13,6 +13,7 @@ import { registerTestRoutes } from "./routes/test.routes";
 import agentRoutes from "./routes/agent.routes";
 import { registerTraceRoutes } from "./routes/trace.routes";
 import { registerAnalyticsRoutes } from "./routes/analytics.routes";
+import { registerRcRoutes } from "./routes/rc.routes";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 
@@ -111,9 +112,11 @@ initConversationLog();
 const traceRouter = Router();
 registerTraceRoutes(traceRouter);
 registerAnalyticsRoutes(traceRouter);
+registerRcRoutes(traceRouter);
 app.use(traceRouter);
 console.log("[Traces] Trace viewer endpoints registered at /api/traces/*");
 console.log("[Analytics] Analytics endpoints registered at /api/analytics/*");
+console.log("[RC] Release candidate + replay + review endpoints registered");
 
 initIntakeDb();
 ensureIntakeDirs();
