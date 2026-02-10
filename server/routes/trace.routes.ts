@@ -1,6 +1,7 @@
 import type { Router, Request, Response } from "express";
 import { getTraceStore } from "../traces/traceStore";
 import { compareTraces } from "../traces/traceCompare";
+import { getLlmCallLog } from "../traces/llmCallLog";
 import { requireProviderAuth } from "../auth";
 
 export function registerTraceRoutes(router: Router) {
@@ -65,6 +66,28 @@ export function registerTraceRoutes(router: Router) {
       res.json({ ok: true, trace });
     } catch (err: any) {
       console.error("[Traces] Get error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/llm-logs", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 50, 100);
+      const runId = req.query.runId ? String(req.query.runId) : undefined;
+      const caseId = req.query.caseId ? String(req.query.caseId) : undefined;
+
+      let logs;
+      if (runId) {
+        logs = await getLlmCallLog().getByRunId(runId, limit);
+      } else if (caseId) {
+        logs = await getLlmCallLog().getByCaseId(caseId, limit);
+      } else {
+        logs = await getLlmCallLog().getRecent(limit);
+      }
+
+      res.json({ ok: true, logs, count: logs.length });
+    } catch (err: any) {
+      console.error("[LlmLogs] List error:", err);
       res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });

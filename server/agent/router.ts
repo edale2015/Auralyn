@@ -2,6 +2,40 @@ import type { AgentAction, CaseState, NextActionResponse, AgentRunConfig } from 
 import { CENTOR_REQUIRED_QS } from "./scoring/centor";
 import { detectRedFlags } from "./safety/redFlags";
 
+const QUESTION_PROMPTS: Record<string, string> = {
+  Q_FEVER: "Have you had a fever or felt feverish recently?",
+  Q_COUGH: "Do you currently have a cough?",
+  Q_TONSILLAR_EXUDATE: "Have you noticed any white patches or pus on your tonsils?",
+  Q_TENDER_ANT_CERV_NODES: "Do you have tender or swollen glands in the front of your neck?",
+  Q_SHORTNESS_OF_BREATH: "Are you experiencing any difficulty breathing or shortness of breath?",
+  Q_CHEST_PAIN: "Are you having any chest pain?",
+  Q_STRIDOR: "Do you hear a high-pitched noise when you breathe?",
+  Q_UNABLE_TO_SWALLOW_SALIVA: "Are you unable to swallow your own saliva?",
+};
+
+function shouldReframe(cfg: AgentRunConfig): boolean {
+  return cfg.llm?.enabled !== false;
+}
+
+function buildQuestionAction(questionId: string, cfg: AgentRunConfig): AgentAction {
+  const originalPrompt = QUESTION_PROMPTS[questionId] ?? questionId;
+
+  if (shouldReframe(cfg)) {
+    return {
+      type: "REFRAME_QUESTION",
+      questionId,
+      toneProfile: "empathetic",
+      originalPrompt,
+    };
+  }
+
+  return {
+    type: "ASK_QUESTION",
+    questionId,
+    prompt: originalPrompt,
+  };
+}
+
 function missingRequiredCentorQs(state: CaseState, cfg: AgentRunConfig): string[] {
   const missing: string[] = [];
   for (const q of CENTOR_REQUIRED_QS) {
@@ -42,7 +76,7 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
   }
 
   // If we are explicitly waiting on more info, do not churn.
-  if (state.routing.state === "MORE_INFO_NEEDED") {
+  if (state.routing.state === "MORE_INFO_REQUIRED") {
     return {
       action: { type: "STOP", stopReason: "NEEDS_MORE_INFO" },
       rationale: "Waiting on missing patient input",
@@ -69,7 +103,7 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
     const missing = missingRequiredCentorQs(state, cfg);
     if (missing.length > 0) {
       return {
-        action: { type: "ASK_QUESTION", questionId: missing[0] },
+        action: buildQuestionAction(missing[0], cfg),
         rationale: "Missing Centor inputs",
         requiredInputsMissing: missing,
       };

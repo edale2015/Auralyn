@@ -47,17 +47,12 @@ export function buildAgentRunResponse(
   };
 }
 
-/**
- * Core agent loop. Use in:
- * - /api/test/agent-run (REGRESSION)
- * - /api/agent/run (LIVE or REGRESSION)
- */
-export function runAgentLoop(initial: CaseState, cfg: AgentRunConfig): {
+export async function runAgentLoop(initial: CaseState, cfg: AgentRunConfig): Promise<{
   finalState: CaseState;
   steps: TraceStep[];
   events: TraceEvent[];
   stopReason: string;
-} {
+}> {
   let state = { ...initial, updatedAt: nowISO() };
   const steps: TraceStep[] = [];
   const events: TraceEvent[] = [];
@@ -66,7 +61,7 @@ export function runAgentLoop(initial: CaseState, cfg: AgentRunConfig): {
 
   for (let i = 1; i <= cfg.maxSteps; i++) {
     const next = routeNextAction(state, cfg);
-    const exec = executeAction(state, next.action, cfg, i);
+    const exec = await executeAction(state, next.action, cfg, i);
 
     state = exec.state;
     if (exec.step) steps.push(exec.step);

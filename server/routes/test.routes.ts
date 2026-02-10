@@ -197,7 +197,7 @@ export function registerTestRoutes(router: Router): void {
         options: run.options || { disableWrites: true, disableTwilio: true, disableFileUploads: true },
       });
       
-      const agentOut = runAgentLoop(caseState, config);
+      const agentOut = await runAgentLoop(caseState, config);
       
       let rulesetHash = "unknown";
       try {

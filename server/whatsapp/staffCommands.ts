@@ -95,7 +95,7 @@ async function handleScenarioCommand(args: string[]): Promise<string> {
       },
     });
 
-    const { finalState, steps, events, stopReason } = runAgentLoop(initialState, cfg);
+    const { finalState, steps, events, stopReason } = await runAgentLoop(initialState, cfg);
     const response = buildAgentRunResponse(runId, "staging", "whatsapp_test", finalState, steps, events);
 
     const stored = agentRunResponseToStoredTrace(response, {

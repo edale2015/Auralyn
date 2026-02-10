@@ -120,6 +120,13 @@ export const AgentActionSchema = z.discriminatedUnion("type", [
   }),
 
   z.object({
+    type: z.literal("REFRAME_QUESTION"),
+    questionId: z.string(),
+    toneProfile: z.enum(["empathetic", "concise", "pediatric", "elderly"]).default("empathetic"),
+    originalPrompt: z.string().optional(),
+  }),
+
+  z.object({
     type: z.literal("DRAFT_SUMMARY"),
     style: z.enum(["clinician", "patient"]).default("clinician"),
   }),

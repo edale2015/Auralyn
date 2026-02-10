@@ -29,12 +29,12 @@ const ExecReqSchema = z.object({
   stepNo: z.number().default(1),
 });
 
-router.post("/execute", requireProviderAuth, (req, res) => {
+router.post("/execute", requireProviderAuth, async (req, res) => {
   const parsed = ExecReqSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const { state, config, action, stepNo } = parsed.data;
-  const exec = executeAction(state, action, config, stepNo);
+  const exec = await executeAction(state, action, config, stepNo);
 
   return res.json({
     state: exec.state,
@@ -53,12 +53,12 @@ const RunReqSchema = z.object({
   }).default({ sheetEnv: "staging", rulesetHash: "unknown" }),
 });
 
-router.post("/run", requireProviderAuth, (req, res) => {
+router.post("/run", requireProviderAuth, async (req, res) => {
   const parsed = RunReqSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const { state, config, env } = parsed.data;
-  const out = runAgentLoop(state, config);
+  const out = await runAgentLoop(state, config);
 
   const response = buildAgentRunResponse(
     config.runId,
