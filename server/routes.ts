@@ -868,6 +868,37 @@ export async function registerRoutes(
   // Twilio WhatsApp Webhook - Deterministic ENT Flu Triage Flow
   app.post("/api/webhooks/whatsapp", validateTwilioSignature, async (req: Request, res: Response) => {
     try {
+      // If USE_ORCHESTRATOR_WHATSAPP=1, delegate to unified orchestrator
+      if (process.env.USE_ORCHESTRATOR_WHATSAPP === "1") {
+        const { From, Body, MessageSid } = req.body;
+        res.set("Content-Type", "text/xml");
+        res.send("<Response></Response>");
+
+        try {
+          const { processMessage, sendReply, buildConversationId } = await import("./channels");
+          const event = {
+            channel: "whatsapp" as const,
+            externalUserId: From,
+            chatId: From,
+            text: Body.trim(),
+            timestamp: new Date().toISOString(),
+            messageId: MessageSid || `wa_${Date.now()}`,
+            rawSignatureVerified: true,
+            media: [] as Array<{ url: string; mimeType?: string; filename?: string }>,
+          };
+          const result = await processMessage(event);
+          if (!result.dedupSkipped) {
+            const convId = buildConversationId("whatsapp", From);
+            for (const reply of result.replies) {
+              await sendReply(convId, reply);
+            }
+          }
+        } catch (orchErr: any) {
+          console.error("[WhatsApp] Orchestrator processing error:", orchErr?.message || orchErr);
+        }
+        return;
+      }
+
       const { From, Body, MessageSid } = req.body;
       const phoneNumber = From; // Format: whatsapp:+1234567890
       const msg = Body.trim();

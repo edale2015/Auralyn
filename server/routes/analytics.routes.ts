@@ -5,6 +5,7 @@ import { computeConversationMetrics } from "../analytics/conversationMetrics";
 import { detectFrictionInConversation, type FrictionSignal } from "../analytics/frictionDetector";
 import { getCircuitStatus, getRunBudgetStatus, getGuardrailConfig } from "../agent/llm/llmGuardrails";
 import { computeSlaStatus } from "../analytics/slaAlerts";
+import { getChannelOpsTracker } from "../channels/channelOps";
 
 export function registerAnalyticsRoutes(router: Router) {
   router.get("/api/analytics/conversation-metrics", requireProviderAuth, async (req: Request, res: Response) => {
@@ -104,6 +105,16 @@ export function registerAnalyticsRoutes(router: Router) {
       res.json({ ok: true, ...status });
     } catch (err: any) {
       console.error("[Analytics] SLA status error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/analytics/channel-ops", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      const report = getChannelOpsTracker().getReport();
+      res.json({ ok: true, ...report });
+    } catch (err: any) {
+      console.error("[Analytics] Channel ops error:", err);
       res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });

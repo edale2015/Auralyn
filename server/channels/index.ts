@@ -3,9 +3,12 @@ import { registerWhatsAppSender } from "./whatsappSender";
 import { registerTelegramSender } from "./telegramSender";
 import { registerTelegramWebhook } from "./telegramWebhook";
 import { getChannelFlags } from "./featureFlags";
+import { initConversationStateStore } from "./conversationState";
 
 export function initChannels(router: Router) {
   const flags = getChannelFlags();
+
+  initConversationStateStore();
 
   registerWhatsAppSender();
   console.log(`[Channels] WhatsApp sender registered (intake ${flags.whatsappIntakeEnabled ? "enabled" : "disabled"})`);
@@ -16,6 +19,10 @@ export function initChannels(router: Router) {
     console.log(`[Channels] Telegram sender registered (intake ${flags.telegramIntakeEnabled ? "enabled" : "disabled"})`);
   } else {
     console.log("[Channels] Telegram skipped (TELEGRAM_BOT_TOKEN not set)");
+  }
+
+  if (flags.useOrchestratorWhatsApp) {
+    console.log("[Channels] USE_ORCHESTRATOR_WHATSAPP=1: WhatsApp messages will route through unified orchestrator");
   }
 }
 

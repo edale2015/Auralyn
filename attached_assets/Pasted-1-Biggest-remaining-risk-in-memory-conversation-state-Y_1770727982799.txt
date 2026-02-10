@@ -1,0 +1,136 @@
+1) Biggest remaining risk: in-memory conversation state
+
+Your conversationState.ts is great for v1, but in-memory stores have two predictable failure modes:
+
+Deploy/restart wipes state mid-conversation
+
+Horizontal scaling (2 instances) splits state (message goes to instance B, state is on instance A)
+
+Minimal upgrade (recommended)
+
+Keep the in-memory cache for speed, but add persistence fallback:
+
+On every message: write conversationState snapshot to Firestore with TTL (or your sqlite driver)
+
+On cache miss: load last snapshot
+
+Keep only the last ~20 messages and required fields to reduce PHI footprint
+
+This makes Telegram/WhatsApp testing far less “fragile.”
+
+2) Idempotency: dedupe needs to be channel-specific
+
+You have 5-min TTL dedupe, good. Make sure the key includes:
+
+channel
+
+externalUserId/chatId
+
+messageId
+
+(optional) body hash
+
+Why: Telegram message IDs are only unique within a chat; Twilio has its own message SIDs.
+
+3) Webhook response semantics
+
+WhatsApp/Twilio: always fast 200 with correct TwiML
+Telegram: always fast 200 JSON OK
+
+If your orchestrator can take longer (LLM calls), do:
+
+enqueue work (even a simple in-process queue)
+
+respond immediately
+
+send reply async
+
+Otherwise Telegram and Twilio can retry, causing duplicates.
+
+4) Observability: add one “channel ops dashboard”
+
+You already have analytics endpoints. Add a single provider-only endpoint:
+GET /api/analytics/channel-ops
+Return by channel:
+
+inbound count
+
+dedupe hits
+
+avg + p95 processing time
+
+LLM budget hits
+
+circuit breaker activations
+
+friction escalations
+
+stops due to policy
+
+This makes it obvious when Telegram is failing silently (common).
+
+5) Safety: emergency warnings should be templated and versioned
+
+You mentioned “emergency warnings.” Great. Make them:
+
+template-driven (no freeform)
+
+versioned (EMERG_WARN_v3)
+
+logged with ruleRef
+
+always pass supervisor gate
+
+That keeps the riskiest messages controlled.
+
+6) Migration strategy: “orchestrator is available for gradual migration”
+
+Good call. Two sanity tips:
+
+Ensure WhatsApp route and orchestrator don’t double-handle the same message.
+
+Add a feature flag like USE_ORCHESTRATOR_WHATSAPP=1 so you can flip cleanly and rollback.
+
+7) Telegram secret-token validation
+
+Using X-Telegram-Bot-Api-Secret-Token is the correct modern approach. Two details:
+
+Reject if missing or mismatched (401)
+
+Rate-limit the endpoint anyway (basic abuse protection)
+
+8) Testing: add a unified “golden conversation” suite
+
+You already have RC runs for agent scenarios. Add 5–10 multi-turn chat scripts that simulate:
+
+cooperative patient
+
+terse patient
+
+rambling patient
+
+refusal
+
+profanity
+
+red flag emergence mid-chat
+
+Run the same scripts through:
+
+WhatsApp (simulated)
+
+Telegram (simulated)
+
+Web/test channel
+
+Compare traces and metrics.
+
+The one question that decides your next step
+
+Are you deploying single-instance (one server) or multi-instance (autoscaling / multiple workers)?
+
+Single-instance: your in-memory store is fine for now.
+
+Multi-instance: you should add Firestore-backed conversation snapshots before going live with patient traffic.
+
+If you tell me which one, I’ll give you the exact minimal persistence design (collection schema + TTL index + read/write points) that won’t slow the system down and will keep PHI exposure minimal.

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { storage, type FlowQuestion } from "../storage";
 import { type MessageEvent, buildConversationId, type Channel } from "./messageEvent";
-import { getConversationStateStore, type ConversationState } from "./conversationState";
+import { getConversationStateStore, type ConversationState, hashBody } from "./conversationState";
 import { sendReply } from "./channelAdapter";
 import { getConversationLog, detectFrictionSignals } from "../traces/conversationLog";
 import { isStaffCommand, handleStaffCommand } from "../whatsapp/staffCommands";
@@ -19,6 +19,8 @@ import {
   setRouterAudit,
 } from "../flows/whatsappFlowRouter";
 import { generateToken, generateCode, expiresAtMinutes, INTAKE_EXPIRY_MINUTES, BASE_URL } from "../intake/intakeAuth";
+import { getEmergencyWarning, buildWarningLogEntry } from "./emergencyWarnings";
+import { getChannelOpsTracker } from "./channelOps";
 
 const FRICTION_TONE_SWITCH_THRESHOLD = 5;
 const FRICTION_NARROW_THRESHOLD = 8;
@@ -97,13 +99,19 @@ export interface OrchestratorResult {
 export async function processMessage(event: MessageEvent): Promise<OrchestratorResult> {
   const convId = buildConversationId(event.channel, event.externalUserId);
   const store = getConversationStateStore();
+  const ops = getChannelOpsTracker();
+  const startMs = Date.now();
 
-  const dedupe = await store.checkDedupe(event.channel, event.messageId);
+  ops.recordInbound(event.channel);
+
+  const bodyH = hashBody(event.text);
+  const dedupe = await store.checkDedupe(event.channel, event.messageId, bodyH);
   if (dedupe.seen) {
+    ops.recordDedupeHit(event.channel);
     const state = await store.getOrCreate(convId, event.channel, event.externalUserId);
     return { replies: [], conversationState: state, isStaffCommand: false, dedupSkipped: true };
   }
-  await store.markSeen(event.channel, event.messageId);
+  await store.markSeen(event.channel, event.messageId, bodyH);
 
   const convState = await store.getOrCreate(convId, event.channel, event.externalUserId);
   const isStaff = isStaffUser(event.channel, event.externalUserId);
@@ -122,6 +130,7 @@ export async function processMessage(event: MessageEvent): Promise<OrchestratorR
 
   if (frictionState.isStopped) {
     const reply = "This conversation has been paused. A staff member will follow up with you. If this is an emergency, call 911.";
+    ops.recordProcessingTime(event.channel, Date.now() - startMs);
     return { replies: [reply], conversationState: frictionState, isStaffCommand: false, dedupSkipped: false };
   }
 
@@ -130,12 +139,15 @@ export async function processMessage(event: MessageEvent): Promise<OrchestratorR
       isStopped: true,
       stopReason: "FRICTION_THRESHOLD_EXCEEDED",
     });
+    ops.recordFrictionStop(event.channel);
     const reply = "We're going to pause here and have a staff member follow up with you directly to make sure we can help. If this is an emergency, call 911.";
+    ops.recordProcessingTime(event.channel, Date.now() - startMs);
     return { replies: [reply], conversationState: frictionState, isStaffCommand: false, dedupSkipped: false };
   }
 
   if (frictionState.frictionScore >= FRICTION_TONE_SWITCH_THRESHOLD && frictionState.toneProfile !== "concise") {
     await store.update(convId, { toneProfile: "concise" });
+    ops.recordFrictionEscalation(event.channel);
   }
 
   if (isStaff && isStaffCommand(event.text)) {
@@ -278,18 +290,22 @@ export async function processMessage(event: MessageEvent): Promise<OrchestratorR
     encounter = await storage.getEncounter(encounter.id) as typeof encounter;
   }
 
-  const emergWarnings: Record<string, string> = {
-    "EMERG_CRITICAL_V1": "This may be an emergency. If someone is unresponsive, not breathing, or bleeding heavily, call 911 now.",
-    "TRAUMA_MAJOR_V1": "This may require urgent emergency evaluation. If severe pain, head injury, bleeding, or confusion, go to the ER now.",
-    "UROGYN_VAGINAL_BLEEDING_V1": "If you may be pregnant and have bleeding with pain, dizziness, or heavy bleeding, go to the ER now.",
-    "UROGYN_TESTICULAR_PAIN_V1": "Sudden severe testicular pain can be an emergency (torsion). If severe/sudden, go to the ER now.",
-    "OPHTH_VISION_LOSS_V1": "Sudden vision loss can be an emergency. If sudden or worsening, go to the ER now.",
-    "NEURO_WEAKNESS_V1": "New weakness, facial droop, or trouble speaking can be a stroke. Call 911 or go to the ER now.",
-  };
-
-  const warning = emergWarnings[encounter.flowId || ""];
-  if (warning) {
-    replies.push(warning);
+  const warningTemplate = getEmergencyWarning(encounter.flowId || "");
+  if (warningTemplate) {
+    replies.push(warningTemplate.text);
+    ops.recordEmergencyWarning(event.channel);
+    const logEntry = buildWarningLogEntry(warningTemplate, convId);
+    getConversationLog().log({
+      id: randomUUID(),
+      caseId: String(encounter.id),
+      encounterId: String(encounter.id),
+      channel: event.channel,
+      sender: "system",
+      messageText: `[EMERGENCY_WARNING:${warningTemplate.id}@${warningTemplate.version}] ${warningTemplate.text}`,
+      timestamp: logEntry.timestamp,
+      llmUsed: false,
+      frictionSignals: [],
+    }).catch(err => console.warn("[ConvLog] Failed to log emergency warning:", err?.message));
   }
 
   await storage.createMessage({
@@ -360,6 +376,7 @@ export async function processMessage(event: MessageEvent): Promise<OrchestratorR
 
   replies.push(responseMessage);
   await logTurns(event, encounter.id, msg, replies);
+  ops.recordProcessingTime(event.channel, Date.now() - startMs);
   return { replies, conversationState: convState, isStaffCommand: false, dedupSkipped: false };
 }
 

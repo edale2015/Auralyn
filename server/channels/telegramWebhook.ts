@@ -1,5 +1,4 @@
 import type { Router, Request, Response } from "express";
-import { randomUUID } from "crypto";
 import { type MessageEvent } from "./messageEvent";
 import { processMessage } from "./messageOrchestrator";
 import { sendReply } from "./channelAdapter";
@@ -11,6 +10,21 @@ function validateTelegramSecret(req: Request): boolean {
   if (!secret) return true;
   const header = req.headers["x-telegram-bot-api-secret-token"];
   return header === secret;
+}
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 120;
+const rateLimitWindow = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitWindow.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitWindow.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= RATE_LIMIT_MAX_REQUESTS;
 }
 
 interface TelegramUpdate {
@@ -53,6 +67,12 @@ export function registerTelegramWebhook(router: Router) {
     const flags = getChannelFlags();
     if (!flags.telegramIntakeEnabled) {
       return res.status(200).json({ ok: true, skipped: "telegram_disabled" });
+    }
+
+    const clientIp = req.ip || req.socket.remoteAddress || "unknown";
+    if (!checkRateLimit(clientIp)) {
+      console.warn(`[Telegram] Rate limit exceeded for ${clientIp}`);
+      return res.status(429).json({ error: "Too many requests" });
     }
 
     if (!validateTelegramSecret(req)) {
