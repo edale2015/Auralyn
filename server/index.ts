@@ -16,6 +16,7 @@ import { registerAnalyticsRoutes } from "./routes/analytics.routes";
 import { registerRcRoutes } from "./routes/rc.routes";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
+import { initChannels } from "./channels";
 
 const config = loadConfig();
 
@@ -117,6 +118,11 @@ app.use(traceRouter);
 console.log("[Traces] Trace viewer endpoints registered at /api/traces/*");
 console.log("[Analytics] Analytics endpoints registered at /api/analytics/*");
 console.log("[RC] Release candidate + replay + review endpoints registered");
+
+// Channel adapters (WhatsApp + Telegram senders + Telegram webhook)
+const channelRouter = Router();
+initChannels(channelRouter);
+app.use(channelRouter);
 
 initIntakeDb();
 ensureIntakeDirs();

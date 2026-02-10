@@ -157,10 +157,40 @@ NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSIT
 - **Metrics**: p95 latency, avg tokens/run, avg cost/run, circuit breaker triggers today
 - **Use Case**: Dashboard banner for providers to monitor spend and UX health
 
+## Unified Multi-Channel Messaging (`server/channels/`)
+
+### Architecture
+- **Message Event**: Unified `MessageEvent` type with channel abstraction (whatsapp/telegram/web/test) and `conversationId` keying as `channel:externalUserId`
+- **Conversation State**: In-memory store with message deduplication (TTL-based, 5min window, 10K max), friction tracking, tone profile management, and `lastNMessages` buffer
+- **Channel Adapters**: `sendReply()` routes to WhatsApp/Twilio or Telegram API based on conversationId prefix
+- **Message Orchestrator**: Shared processing logic (staff commands, menu/flow routing, answer parsing, emergency warnings) extracted from WhatsApp webhook
+- **Feature Flags**: `ENABLE_WHATSAPP_INTAKE`, `ENABLE_TELEGRAM_INTAKE`, `ENABLE_TEST_CONSOLE` for channel-level toggles
+
+### Telegram Integration
+- **Webhook**: `POST /api/webhooks/telegram` with secret-token header validation
+- **Restrictions**: Only private (1:1) chats; group messages rejected with informational reply
+- **Env Vars**: `TELEGRAM_BOT_TOKEN` (required), `TELEGRAM_WEBHOOK_SECRET` (optional), `STAFF_TELEGRAM_IDS` (comma-separated)
+
+### Friction Policy
+- Score 5: Tone switches to "concise"
+- Score 8: Narrow questions (reduce branching)
+- Score 12: Stop agent, escalation message sent, conversation paused for staff follow-up
+
+### Key Files
+- `server/channels/messageEvent.ts` — MessageEvent type, conversationId helpers
+- `server/channels/conversationState.ts` — ConversationState store with dedup + friction
+- `server/channels/messageOrchestrator.ts` — Shared message processing logic
+- `server/channels/channelAdapter.ts` — Channel-agnostic sendReply()
+- `server/channels/telegramWebhook.ts` — Telegram webhook handler
+- `server/channels/telegramSender.ts` — Telegram Bot API sender
+- `server/channels/whatsappSender.ts` — WhatsApp/Twilio sender adapter
+- `server/channels/featureFlags.ts` — Channel feature flags
+- `server/channels/index.ts` — Channel initialization and re-exports
+
 ## External Dependencies
 
 - **AI Integration**: OpenAI API (via Replit AI Integrations) for medical triage AI conversations.
-- **Messaging Integration**: Twilio for WhatsApp patient communication.
+- **Messaging Integration**: Twilio for WhatsApp patient communication; Telegram Bot API for Telegram channel.
 - **Database**: Firebase Firestore.
 - **Google Sheets Integration**: Dynamically loads questionnaire questions, clinical decision rules, medications, and diagnoses.
 - **Cloud Storage**: Firebase Storage for file uploads (configurable).
