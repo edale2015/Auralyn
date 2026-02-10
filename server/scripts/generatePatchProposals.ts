@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
+const db = getFirestore();
 import { getSheetRows } from "../sheets/sheetHelper";
 
 function norm(x: any) { return String(x ?? "").trim(); }

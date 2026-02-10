@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { getSheetsClient } from "./sheetsClient";
 
 export type SheetRow = Record<string, any>;
 
@@ -12,25 +12,6 @@ function envOrThrow(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
-}
-
-let sheetsClient: ReturnType<typeof google.sheets> | null = null;
-
-function getSheetsClient() {
-  if (sheetsClient) return sheetsClient;
-
-  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  const auth = credsJson
-    ? new google.auth.GoogleAuth({
-        credentials: JSON.parse(credsJson),
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-      })
-    : new google.auth.GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-      });
-
-  sheetsClient = google.sheets({ version: "v4", auth });
-  return sheetsClient;
 }
 
 export async function getSheetRows(

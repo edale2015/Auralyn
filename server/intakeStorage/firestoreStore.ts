@@ -1,4 +1,4 @@
-import { db as firestoreDb, admin } from "../firebase";
+import { getFirestore, admin } from "../firebase";
 import type { StorageDriver, CaseData } from "./store";
 import type { DraftPayload, SubmitPayload, StatusResult, FileMeta, ExternalEhr } from "./types";
 import { sha256 } from "./crypto";
@@ -43,7 +43,7 @@ async function latestCaseByToken(
 }
 
 export function makeFirestoreStore(): StorageDriver {
-  const db = firestoreDb;
+  const db = getFirestore();
 
   const sessions = db.collection("intake_sessions");
   const cases = db.collection("cases");

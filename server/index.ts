@@ -3,12 +3,21 @@ import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { loadConfig } from "./config";
+import { initFirebase } from "./firebase";
 import { storage } from "./storage";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { initIntakeDb, intakeRouter, filesRouter, summaryRouter, ensureDirs as ensureIntakeDirs } from "./intake";
 import { authRouter } from "./routes.auth";
 import { registerTestRoutes } from "./routes/test.routes";
 import agentRoutes from "./routes/agent.routes";
+
+const config = loadConfig();
+
+if (config.STORAGE_DRIVER === "firestore") {
+  initFirebase();
+  console.log("[Startup] Firebase initialized (STORAGE_DRIVER=firestore)");
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -30,6 +39,48 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+app.get("/api/healthz", (_req, res) => {
+  res.json({ ok: true, ts: Date.now(), uptime: process.uptime() });
+});
+
+app.get("/api/healthz/deps", async (_req, res) => {
+  const checks: Record<string, { ok: boolean; ms?: number; error?: string }> = {};
+
+  if (config.STORAGE_DRIVER === "firestore") {
+    const t0 = Date.now();
+    try {
+      const { getFirestore } = await import("./firebase");
+      const snap = await getFirestore().collection("_healthcheck").limit(1).get();
+      checks.firestore = { ok: true, ms: Date.now() - t0 };
+    } catch (e: any) {
+      checks.firestore = { ok: false, ms: Date.now() - t0, error: e?.message };
+    }
+  }
+
+  if (config.SHEETS_SPREADSHEET_ID) {
+    const t0 = Date.now();
+    try {
+      const { getSheetsClient } = await import("./sheets/sheetsClient");
+      const sheets = getSheetsClient();
+      await sheets.spreadsheets.values.get({
+        spreadsheetId: config.SHEETS_SPREADSHEET_ID,
+        range: "CLINICAL_QUESTIONS!A1:A1",
+      });
+      checks.sheets = { ok: true, ms: Date.now() - t0 };
+    } catch (e: any) {
+      checks.sheets = { ok: false, ms: Date.now() - t0, error: e?.message };
+    }
+  }
+
+  checks.twilio = {
+    ok: config.ENABLE_TWILIO === "1" && !!config.TWILIO_ACCOUNT_SID,
+    ...(config.ENABLE_TWILIO === "0" ? { error: "disabled" } : {}),
+  };
+
+  const allOk = Object.values(checks).every(c => c.ok);
+  res.status(allOk ? 200 : 503).json({ ok: allOk, checks, ts: Date.now() });
+});
 
 // Auth routes
 app.use(authRouter);

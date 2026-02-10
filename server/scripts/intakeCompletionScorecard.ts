@@ -1,4 +1,5 @@
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
+const db = getFirestore();
 
 function norm(x: any) { return String(x ?? "").trim(); }
 

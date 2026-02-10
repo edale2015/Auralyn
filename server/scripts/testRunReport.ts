@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
+const db = getFirestore();
 
 function norm(x: any) { return String(x ?? "").trim(); }
 function inc(m: Map<string, number>, k: string, by = 1) { m.set(k, (m.get(k) || 0) + by); }

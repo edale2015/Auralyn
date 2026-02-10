@@ -1,0 +1,159 @@
+1) Don’t auto-initialize Firebase on import (this is the big one)
+
+Right now initializeFirebase() runs at import time. That means:
+
+Any route importing db will crash the process if FIREBASE_PROJECT_ID is missing (even when you’re running in sqlite mode or during unit tests).
+
+It makes “optional integrations” hard (which you explicitly want: STORAGE_DRIVER switch).
+
+Fix: export an initializer and lazily init on first use, or call init explicitly from server/index.ts only when needed.
+
+Drop-in pattern:
+
+// server/firebase.ts
+import admin from "firebase-admin";
+
+let app: admin.app.App | null = null;
+
+export function initFirebase(): admin.app.App {
+  if (app) return app;
+
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!projectId) throw new Error("FIREBASE_PROJECT_ID is required");
+
+  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+
+  const credential = serviceAccountJson
+    ? admin.credential.cert(JSON.parse(serviceAccountJson))
+    : admin.credential.applicationDefault();
+
+  app = admin.initializeApp({ credential, projectId, storageBucket });
+  return app;
+}
+
+export function getFirestore() {
+  initFirebase();
+  return admin.firestore();
+}
+
+export { admin };
+
+
+Then replace direct export const db = admin.firestore() usage with getFirestore().
+
+In server/index.ts, you can do:
+
+if (process.env.STORAGE_DRIVER === "firestore") {
+  initFirebase();
+}
+
+
+This single change removes a huge category of “it doesn’t start” failures.
+
+2) Centralize GoogleAuth + Sheets client (avoid “fresh auth per miss”)
+
+You currently have two modules independently creating auth objects. That’s not wrong, but:
+
+One creates a new auth per cache miss (wasteful, potential rate weirdness).
+
+It increases drift (scopes differ, retries differ, caching differs).
+
+Fix: one shared module that returns a singleton Sheets client and exposes helper methods.
+
+// server/sheets/sheetsClient.ts
+import { google } from "googleapis";
+
+let sheets: ReturnType<typeof google.sheets> | null = null;
+
+export function getSheetsClient() {
+  if (sheets) return sheets;
+
+  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const auth = credsJson
+    ? new google.auth.GoogleAuth({
+        credentials: JSON.parse(credsJson),
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      })
+    : new google.auth.GoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      });
+
+  sheets = google.sheets({ version: "v4", auth });
+  return sheets;
+}
+
+
+Then both sheetFlowLoader.ts and sheetHelper.ts call getSheetsClient().
+
+This eliminates subtle differences and stabilizes performance.
+
+3) Startup validation should be feature-gated
+
+Claude was right about env vars, but the nuance is: not all env vars should be required all the time.
+
+Fix: validate env based on what’s enabled:
+
+If STORAGE_DRIVER=firestore → require Firebase vars
+
+If any Sheets endpoints / flows are enabled → require Sheets vars (or allow explicit “no Sheets mode”)
+
+If WhatsApp enabled → require Twilio vars
+
+Make a tiny server/config.ts with Zod:
+
+import { z } from "zod";
+
+const Base = z.object({
+  NODE_ENV: z.string().optional(),
+  STORAGE_DRIVER: z.enum(["sqlite", "firestore"]).default("firestore"),
+  SHEETS_SPREADSHEET_ID: z.string().optional(),
+  GOOGLE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+  FIREBASE_PROJECT_ID: z.string().optional(),
+  FIREBASE_STORAGE_BUCKET: z.string().optional(),
+  ENABLE_TWILIO: z.enum(["0","1"]).default("0"),
+});
+
+export function loadConfig() {
+  const cfg = Base.parse(process.env);
+
+  if (cfg.STORAGE_DRIVER === "firestore" && !cfg.FIREBASE_PROJECT_ID) {
+    throw new Error("FIREBASE_PROJECT_ID required when STORAGE_DRIVER=firestore");
+  }
+
+  // Only require Sheets if you actually use it in this env:
+  // (or require it always in prod if Sheets is core)
+  return cfg;
+}
+
+4) Add a health endpoint that proves integrations are alive
+
+You already have /api/test/rules/snapshot which is great. Add one general:
+
+/api/healthz (always available)
+
+/api/healthz/deps (provider-only) that actually checks:
+
+Firestore read/write (or sqlite)
+
+Sheets read a tiny range from a known tab
+
+Twilio configured (not necessarily sending)
+
+This prevents “works on my machine” drift.
+
+What I don’t think you need right now 🚫
+
+“Migrate everything to SQLite” as a priority. You already have a storage abstraction and Firestore as primary. Keep that.
+
+A massive rewrite to unify Firebase + Sheets auth. They can remain separate libraries; just unify your configuration and client creation.
+
+Direct answers to “does anything need fixing?”
+
+Yes, two things are worth fixing immediately:
+
+Firebase init-on-import → change to explicit/lazy init gated by STORAGE_DRIVER.
+
+Duplicate Sheets auth/client creation → centralize in one getSheetsClient() module.
+
+Everything else is optimization and operational polish.

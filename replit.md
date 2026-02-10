@@ -119,6 +119,28 @@ NOOP, ASK_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSITION, ADD_DX, RECOM
 - Supervisor gate blocks patient-visible outputs if red flags present or no disposition set
 - ChiefComplaint normalization handles synonyms (sore throat/pharyngitis → sore_throat)
 
+## Initialization & Configuration
+
+### Config Validation (`server/config.ts`)
+- Zod-based env var validation at startup, feature-gated:
+  - `STORAGE_DRIVER=firestore` → requires `FIREBASE_PROJECT_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`
+  - `ENABLE_TWILIO=1` → requires `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`
+  - `SHEETS_SPREADSHEET_ID` → optional, enables Sheets integration
+
+### Firebase Admin (`server/firebase.ts`)
+- Lazy initialization: `initFirebase()` called explicitly in `server/index.ts` only when `STORAGE_DRIVER=firestore`
+- Consumers use `getFirestore()` (lazy getter) instead of importing `db` directly
+- Service account loaded from `GOOGLE_SERVICE_ACCOUNT_JSON` secret (JSON string, not file path)
+
+### Google Sheets Client (`server/sheets/sheetsClient.ts`)
+- Centralized singleton: `getSheetsClient()` (read-only) and `getSheetsClientRW()` (read-write)
+- All loaders (`sheetFlowLoader`, `entFluRuleLoader`, `medCatalog`, `diagnosisCatalog`, `sheetHelper`, `sheetsAgent`) use this singleton
+- Auth from `GOOGLE_SERVICE_ACCOUNT_JSON` secret with ADC fallback
+
+### Health Endpoints
+- `GET /api/healthz` — always available, returns `{ok, ts, uptime}`
+- `GET /api/healthz/deps` — checks Firestore connectivity, Sheets read, Twilio config; returns latency per dependency
+
 ## External Dependencies
 
 - **AI Integration**: OpenAI API for medical triage AI conversations.

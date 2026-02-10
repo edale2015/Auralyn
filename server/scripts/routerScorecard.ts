@@ -1,4 +1,5 @@
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
+const db = getFirestore();
 
 type RouterAudit = {
   routerReason?: string;

@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { getSheetsClient } from "../sheets/sheetsClient";
 
 type CacheEntry = { expiresAt: number; value: Record<string, any> };
 let CACHE: CacheEntry = { expiresAt: 0, value: {} };
@@ -76,14 +76,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   console.log(`[EntFluRules] Cache MISS, loading from Sheets...`);
 
   const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
-  const credsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-  const auth = new google.auth.GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    keyFile: credsPath || undefined,
-  });
-
-  const sheets = google.sheets({ version: "v4", auth });
+  const sheets = getSheetsClient();
   const range = `CLINICAL_RULES!A1:H500`;
 
   const resp = await sheets.spreadsheets.values.get({

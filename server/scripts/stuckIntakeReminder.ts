@@ -1,4 +1,5 @@
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
+const db = getFirestore();
 import { BASE_URL } from "../intake/intakeAuth";
 import { sendWhatsAppMessage } from "../whatsapp/send";
 

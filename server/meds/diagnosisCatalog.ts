@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { getSheetsClient } from "../sheets/sheetsClient";
 
 export type DiagnosisRow = {
   Diagnosis_ID: string;
@@ -28,11 +28,7 @@ function norm(s: any): string {
 }
 
 function authSheets() {
-  const auth = new google.auth.GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-  });
-  return google.sheets({ version: "v4", auth });
+  return getSheetsClient();
 }
 
 function rowToObj(headers: string[], row: any[]): DiagnosisRow {

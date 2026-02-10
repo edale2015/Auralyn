@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
+const db = getFirestore();
 
 function norm(x: any) { return String(x ?? "").trim(); }
 function ensureDir(p: string) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }

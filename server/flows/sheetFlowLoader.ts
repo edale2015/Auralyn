@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { getSheetsClient } from "../sheets/sheetsClient";
 
 export type FlowQuestion = {
   id: string;
@@ -58,24 +58,7 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
   console.log(`[SheetFlowLoader] Cache MISS for ${flowId}, loading from Sheets...`);
 
   const spreadsheetId = envOrThrow("SHEETS_SPREADSHEET_ID");
-  
-  // Use service account credentials from the existing GOOGLE_SERVICE_ACCOUNT_JSON secret
-  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  let auth;
-  
-  if (credsJson) {
-    const credentials = JSON.parse(credsJson);
-    auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-  } else {
-    auth = new google.auth.GoogleAuth({
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-  }
-
-  const sheets = google.sheets({ version: "v4", auth });
+  const sheets = getSheetsClient();
   const range = `CLINICAL_QUESTIONS!A1:N1000`;
 
   const resp = await sheets.spreadsheets.values.get({

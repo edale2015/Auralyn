@@ -1,20 +1,7 @@
-import { google } from "googleapis";
-
-function getAuth() {
-  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  return credsJson
-    ? new google.auth.GoogleAuth({
-        credentials: JSON.parse(credsJson),
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-      })
-    : new google.auth.GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-      });
-}
+import { getSheetsClient } from "./sheetsClient";
 
 export async function getSheetRowsWithSpreadsheetId(tabName: string, spreadsheetId: string) {
-  const auth = getAuth();
-  const sheets = google.sheets({ version: "v4", auth });
+  const sheets = getSheetsClient();
 
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId,

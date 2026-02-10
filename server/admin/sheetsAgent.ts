@@ -1,5 +1,5 @@
-import { google } from "googleapis";
 import { Request, Response } from "express";
+import { getSheetsClientRW } from "../sheets/sheetsClient";
 
 const REQUIRED_QUESTION_HEADERS = [
   "flow_id","system","chief_complaint","module","order",
@@ -13,11 +13,7 @@ const REQUIRED_RULE_HEADERS = [
 ];
 
 function authSheets() {
-  const auth = new google.auth.GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-  });
-  return google.sheets({ version: "v4", auth });
+  return getSheetsClientRW();
 }
 
 async function ensureTab(

@@ -1,11 +1,13 @@
-import { db } from "../firebase";
+import { getFirestore } from "../firebase";
 import { Case, CaseStatus, createEmptyCase, generateCaseId } from "./caseModel";
 import { computeProposalGeneric } from "../rules/computeProposalGeneric";
 
 const CASES_COLLECTION = "cases";
 
+function db() { return getFirestore(); }
+
 export async function getCaseByToken(token: string): Promise<Case | null> {
-  const snap = await db.collection(CASES_COLLECTION)
+  const snap = await db().collection(CASES_COLLECTION)
     .where("token", "==", token)
     .limit(1)
     .get();
@@ -15,14 +17,14 @@ export async function getCaseByToken(token: string): Promise<Case | null> {
 }
 
 export async function getCaseByCaseId(caseId: string): Promise<Case | null> {
-  const doc = await db.collection(CASES_COLLECTION).doc(caseId).get();
+  const doc = await db().collection(CASES_COLLECTION).doc(caseId).get();
   if (!doc.exists) return null;
   return doc.data() as Case;
 }
 
 export async function createCase(token: string, phone: string, flowId: string): Promise<Case> {
   const c = createEmptyCase(token, phone, flowId);
-  await db.collection(CASES_COLLECTION).doc(c.caseId).set(c);
+  await db().collection(CASES_COLLECTION).doc(c.caseId).set(c);
   return c;
 }
 
@@ -36,7 +38,7 @@ export async function saveDraft(
   if (c.status !== "draft") return { ok: false, error: "Case already submitted" };
 
   const now = Date.now();
-  await db.collection(CASES_COLLECTION).doc(c.caseId).update({
+  await db().collection(CASES_COLLECTION).doc(c.caseId).update({
     "draft.data": draft,
     "draft.currentStep": currentStep,
     "draft.lastTouchedAt": now,
@@ -83,7 +85,7 @@ export async function submitIntake(
     ? Object.keys(input.answers).filter(k => input.answers[k] === "Yes" || input.answers[k] === true)
     : [];
 
-  await db.collection(CASES_COLLECTION).doc(c.caseId).update({
+  await db().collection(CASES_COLLECTION).doc(c.caseId).update({
     status: "submitted",
     updatedAt: now,
     intake: {
@@ -187,7 +189,7 @@ export async function addAttachment(
   const attachments = c.intake?.attachments || [];
   attachments.push(fileId);
 
-  await db.collection(CASES_COLLECTION).doc(c.caseId).update({
+  await db().collection(CASES_COLLECTION).doc(c.caseId).update({
     "intake.attachments": attachments,
     updatedAt: Date.now()
   });
