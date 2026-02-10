@@ -10,7 +10,8 @@ export const LlmCallLogSchema = z.object({
   model: z.string(),
   temperature: z.number().optional(),
   seed: z.number().optional(),
-  promptTemplateId: z.string().optional(),
+  promptTemplateId: z.string(),
+  promptTemplateVersion: z.string(),
   inputHash: z.string(),
   outputHash: z.string(),
   outputText: z.string().optional(),
@@ -124,7 +125,8 @@ export function buildLlmCallLogEntry(opts: {
   channel?: LlmCallLog["channel"];
   temperature?: number;
   seed?: number;
-  promptTemplateId?: string;
+  promptTemplateId: string;
+  promptTemplateVersion: string;
   tokensIn?: number;
   tokensOut?: number;
   linkedActionStep?: number;
@@ -141,6 +143,7 @@ export function buildLlmCallLogEntry(opts: {
     temperature: opts.temperature,
     seed: opts.seed,
     promptTemplateId: opts.promptTemplateId,
+    promptTemplateVersion: opts.promptTemplateVersion,
     inputHash: hashContent(opts.inputText),
     outputHash: hashContent(opts.outputText),
     outputText: REDACT_LLM_LOGS ? undefined : opts.outputText,

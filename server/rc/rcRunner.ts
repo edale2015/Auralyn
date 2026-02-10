@@ -6,6 +6,7 @@ import { CaseStateSchema, AgentRunConfigSchema } from "../../shared/agentTypes";
 import { normalizeAnswer } from "../agent/normalize";
 import { getLlmCallLog } from "../traces/llmCallLog";
 import { detectFrictionInConversation } from "../analytics/frictionDetector";
+import { validateMinimumDataSet } from "../rules/minimumDataSet";
 import type { CompareFailure, NormalizedResult } from "../../shared/testingTypes";
 
 export interface RcVariant {
@@ -37,6 +38,15 @@ export interface RcScenarioResult {
   frictionCount: number;
 }
 
+export interface TemplateVersionDelta {
+  templateId: string;
+  version: string;
+  callCount: number;
+  avgLatencyMs: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+}
+
 export interface RcReport {
   id: string;
   startedAt: string;
@@ -52,6 +62,7 @@ export interface RcReport {
   latency: { mean: number; median: number; p95: number };
   tokens: { totalIn: number; totalOut: number; estimatedCostUsd: number };
   frictionRate: number;
+  templateVersionDeltas: TemplateVersionDelta[];
 }
 
 const DISPOSITION_SAFETY_ORDER = [
@@ -285,6 +296,27 @@ export async function runRcSuite(variants?: RcVariant[]): Promise<RcReport> {
         baselineNorm = stored.normalized;
       }
 
+      const isEmergent = stored.normalized.disposition?.includes("ed") ||
+        stored.stopReason === "EMERGENT";
+      const answeredQIds = new Set<string>();
+      for (const step of stored.steps) {
+        const action = step.action as Record<string, unknown>;
+        if ((action.type === "ASK_QUESTION" || action.type === "REFRAME_QUESTION") && action.questionId) {
+          const outputs = step.outputs as Record<string, unknown>;
+          if (outputs?.answer !== undefined) {
+            answeredQIds.add(action.questionId as string);
+          }
+        }
+      }
+      const mdsResult = validateMinimumDataSet(tc.chiefComplaint, answeredQIds, isEmergent);
+      if (mdsResult && !mdsResult.pass) {
+        hardFailures.push({
+          code: "MDS_INCOMPLETE",
+          path: "minimumDataSet",
+          details: `Required questions missing: ${mdsResult.requiredMissing.join(", ")} (${mdsResult.completionPct}% complete)`,
+        });
+      }
+
       pass = hardFailures.length === 0;
       const frictionCount = extractFrictionFromTrace(stored);
 
@@ -324,6 +356,33 @@ export async function runRcSuite(variants?: RcVariant[]): Promise<RcReport> {
   const frictionRuns = results.filter(r => r.frictionCount > 0).length;
   const frictionRate = results.length > 0 ? Number((frictionRuns / results.length).toFixed(3)) : 0;
 
+  const allRunIds = results.map(r => r.runId);
+  const templateAgg = new Map<string, { callCount: number; totalLatency: number; tokensIn: number; tokensOut: number }>();
+  for (const rid of allRunIds) {
+    const logs = await getLlmCallLog().getByRunId(rid, 100);
+    for (const log of logs) {
+      const key = `${log.promptTemplateId}@${log.promptTemplateVersion ?? "unknown"}`;
+      const existing = templateAgg.get(key) ?? { callCount: 0, totalLatency: 0, tokensIn: 0, tokensOut: 0 };
+      existing.callCount++;
+      existing.totalLatency += log.latencyMs;
+      existing.tokensIn += log.tokensIn ?? 0;
+      existing.tokensOut += log.tokensOut ?? 0;
+      templateAgg.set(key, existing);
+    }
+  }
+
+  const templateVersionDeltas: TemplateVersionDelta[] = [...templateAgg.entries()].map(([key, agg]) => {
+    const [templateId, version] = key.split("@");
+    return {
+      templateId,
+      version,
+      callCount: agg.callCount,
+      avgLatencyMs: agg.callCount > 0 ? Math.round(agg.totalLatency / agg.callCount) : 0,
+      totalTokensIn: agg.tokensIn,
+      totalTokensOut: agg.tokensOut,
+    };
+  });
+
   return {
     id: reportId,
     startedAt,
@@ -343,6 +402,7 @@ export async function runRcSuite(variants?: RcVariant[]): Promise<RcReport> {
     },
     tokens: { totalIn: totalTokensIn, totalOut: totalTokensOut, estimatedCostUsd },
     frictionRate,
+    templateVersionDeltas,
   };
 }
 
@@ -373,6 +433,14 @@ export function formatRcReport(report: RcReport): string {
     lines.push(`*Top Diffs (${report.topDiffs.length})*`);
     for (const d of report.topDiffs.slice(0, 5)) {
       lines.push(`  [${d.code}] ${d.details}`);
+    }
+    lines.push("");
+  }
+
+  if (report.templateVersionDeltas && report.templateVersionDeltas.length > 0) {
+    lines.push("*Template Versions*");
+    for (const tv of report.templateVersionDeltas) {
+      lines.push(`  ${tv.templateId}@${tv.version}: ${tv.callCount} calls, avg ${tv.avgLatencyMs}ms, ${tv.totalTokensIn}/${tv.totalTokensOut} tokens`);
     }
     lines.push("");
   }

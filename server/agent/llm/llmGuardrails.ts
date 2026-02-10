@@ -89,11 +89,28 @@ export function recordCircuitError(config?: Partial<LlmGuardrailConfig>) {
     circuitOpenUntil = now + cfg.circuitBreakerCooldownMs;
     console.warn(`[LLM-CircuitBreaker] Circuit OPEN: ${circuitErrors.length} errors in ${cfg.circuitBreakerWindowMs}ms window. Cooldown until ${new Date(circuitOpenUntil).toISOString()}`);
     circuitErrors = [];
+    recordCircuitBreakerTrigger();
   }
 }
 
 export function recordCircuitSuccess() {
   // no-op for now; half-open probing can be added later
+}
+
+const circuitBreakerTriggers: number[] = [];
+
+export function recordCircuitBreakerTrigger() {
+  circuitBreakerTriggers.push(Date.now());
+  if (circuitBreakerTriggers.length > 1000) {
+    circuitBreakerTriggers.splice(0, circuitBreakerTriggers.length - 500);
+  }
+}
+
+export function getCircuitBreakerTriggersToday(): number {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const cutoff = startOfDay.getTime();
+  return circuitBreakerTriggers.filter(t => t >= cutoff).length;
 }
 
 export function getCircuitStatus(): { open: boolean; errorCount: number; cooldownUntil: string | null } {

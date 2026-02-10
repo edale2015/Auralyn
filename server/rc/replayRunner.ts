@@ -84,6 +84,87 @@ function compareNormalized(baseline: NormalizedResult, candidate: NormalizedResu
   return { hard, soft };
 }
 
+export interface ReplayPackData {
+  packId: string;
+  sourceRunId: string;
+  chiefComplaint: string;
+  answers: Record<string, unknown>;
+  scenarioId?: string;
+  originalNormalized: NormalizedResult;
+}
+
+export async function replayFromPack(packData: ReplayPackData, replayConfig: ReplayConfig): Promise<ReplayResult> {
+  const replayRunId = randomUUID();
+  const now = new Date().toISOString();
+
+  const stateData: Record<string, unknown> = {
+    caseId: `replay_pack_${replayRunId}`,
+    createdAt: now,
+    updatedAt: now,
+    chiefComplaint: packData.chiefComplaint,
+    answers: packData.answers,
+    routing: { state: "INTAKE_PENDING" },
+  };
+
+  const initialState = CaseStateSchema.parse(stateData);
+
+  const cfg = AgentRunConfigSchema.parse({
+    runId: replayRunId,
+    mode: "REGRESSION",
+    maxSteps: 20,
+    llm: {
+      enabled: replayConfig.llmEnabled ?? true,
+      temperature: replayConfig.temperature ?? 0,
+      ...(replayConfig.toneProfile ? { toneProfile: replayConfig.toneProfile } : {}),
+      ...(replayConfig.seed !== undefined ? { seed: replayConfig.seed } : {}),
+      ...(replayConfig.model ? { model: replayConfig.model } : {}),
+    },
+    options: { disableWrites: true, disableTwilio: true, disableFileUploads: true },
+  });
+
+  const t0 = Date.now();
+  const { finalState, steps, events, stopReason } = await runAgentLoop(initialState, cfg);
+  const latencyMs = Date.now() - t0;
+
+  const response = buildAgentRunResponse(replayRunId, "staging", "replay_pack", finalState, steps, events);
+  const stored = agentRunResponseToStoredTrace(response, {
+    caseId: `replay_pack_${replayRunId}`,
+    scenarioId: packData.scenarioId,
+    isTest: true,
+    chiefComplaint: packData.chiefComplaint,
+  });
+  stored.stopReason = stopReason;
+  stored.metadata = {
+    replayOf: packData.sourceRunId,
+    replayPackId: packData.packId,
+    replayConfig,
+    llmConfig: {
+      enabled: replayConfig.llmEnabled ?? true,
+      toneProfile: replayConfig.toneProfile ?? null,
+      temperature: replayConfig.temperature ?? 0,
+      seed: replayConfig.seed ?? null,
+      model: replayConfig.model ?? null,
+    },
+  };
+
+  await getTraceStore().save(stored);
+
+  const { hard: hardFailures, soft: softFailures } = compareNormalized(packData.originalNormalized, stored.normalized);
+
+  return {
+    originalRunId: packData.sourceRunId,
+    replayRunId,
+    originalDisposition: packData.originalNormalized.disposition,
+    replayDisposition: stored.normalized.disposition,
+    pass: hardFailures.length === 0,
+    hardFailures,
+    softFailures,
+    latencyMs,
+    stepCount: stored.steps.length,
+    replayConfig,
+  };
+}
+
 export async function replayRun(originalRunId: string, replayConfig: ReplayConfig): Promise<ReplayResult> {
   const original = await getTraceStore().getByRunId(originalRunId);
   if (!original) {

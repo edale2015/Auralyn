@@ -1,0 +1,202 @@
+Day 0: Unify both channels behind one internal message format
+1) Create a single MessageEvent shape
+
+Both WhatsApp and Telegram handlers should emit the same object:
+
+channel: "whatsapp" | "telegram"
+
+externalUserId (whatsapp number or telegram user id)
+
+chatId (telegram chat id; whatsapp can mirror number)
+
+text
+
+timestamp
+
+messageId
+
+rawSignatureVerified: boolean
+
+optional: media[]
+
+This is what drives your orchestrator and makes logs comparable.
+
+2) One “conversation key”
+
+Define conversationId = channel + ":" + externalUserId (or chatId for Telegram groups if you ever allow them).
+
+Store:
+
+conversationId
+
+caseId/encounterId
+
+routingState
+
+lastQuestionIdAsked
+
+requiredMissing[]
+
+toneProfile
+
+lastNMessages[] (redacted if needed)
+
+Day 1: WhatsApp intake production checklist
+3) Webhook correctness and stability
+
+You already fixed the big 3:
+
+staff gating normalization
+
+TwiML response correctness
+
+full UUID runId
+
+Now confirm these production behaviors:
+
+Always return 200 quickly (even if processing continues async)
+
+If processing takes time, queue it and reply after (Twilio retries are ruthless)
+
+Idempotency: dedupe inbound messages by (channel, messageId) to avoid double-processing on retries
+
+4) Safety gates before sending any reply
+
+Before sending any outbound WhatsApp message:
+
+run supervisor gate
+
+ensure your response content is allowed for patient-facing output
+
+if emergent red flags: send a safe escalation message, stop the agent
+
+5) Observability for WhatsApp
+
+Minimum dashboards you want Day 1:
+
+messages/hour
+
+p95 agent latency
+
+LLM calls/run + token budget hits
+
+circuit breaker activations
+
+dropout rate
+
+friction rate
+
+Day 2: Telegram intake (recommended “right” way)
+
+Telegram is easy to wire, but there are two common footguns: signature/auth and chat context.
+
+6) Telegram bot setup
+
+Create a bot via BotFather, get TELEGRAM_BOT_TOKEN
+
+Set webhook to: POST /api/webhooks/telegram
+
+Validate inbound requests:
+
+Telegram doesn’t give you a Twilio-style signature by default
+
+Best practice: validate by checking webhook secret token (Telegram supports this) or verify requests come from Telegram IP ranges (less ideal)
+
+At minimum: require a secret header like X-Telegram-Bot-Api-Secret-Token
+
+7) Normalize Telegram updates into MessageEvent
+
+externalUserId = update.message.from.id
+
+chatId = update.message.chat.id
+
+messageId = update.message.message_id
+
+text = update.message.text || caption || ""
+
+Important: Telegram can be group chats. For intake, I’d recommend:
+
+only allow 1:1 chats with the bot, reject groups with a friendly message.
+
+8) Telegram outbound replies
+
+Telegram expects JSON sendMessage calls. Add a channel adapter:
+
+sendReply(conversationId, text)
+that routes to Twilio for WhatsApp and to Telegram API for Telegram.
+
+Make it testable exactly how you want: “see what triggered and why”
+9) Add the same scenario commands to Telegram (staff-only)
+
+Since you already have WhatsApp commands:
+
+implement the same command parser for Telegram messages from allowlisted staff Telegram IDs:
+
+!scenario run <id> --llm=on --tone=pediatric
+
+!trace last
+
+!rc run
+
+Same output format, same trace viewer URL.
+
+10) One “Trace Viewer link strategy”
+
+Because WhatsApp/Telegram are chat UIs, keep replies short:
+
+“Run complete: urgent_care, Centor=4, stop=REVIEW_READY”
+
+“Top rules: HIGH_CENTOR_SCORE”
+
+“Trace: https://YOUR_APP/debug/traces/<runId>”
+
+Deployment flags I’d set (sane defaults)
+
+ENABLE_WHATSAPP_INTAKE=1
+
+ENABLE_TELEGRAM_INTAKE=1
+
+ENABLE_TEST_ROUTES=0 (prod)
+
+ENABLE_TEST_CONSOLE=1 (prod, but staff-only + admin token)
+
+LLM_ENABLED_DEFAULT=1 (but keep tone configurable per conversation)
+
+LLM_MAX_CALLS_PER_RUN=10, LLM_MAX_TOKENS_PER_RUN=4000
+
+CIRCUIT_BREAKER_THRESHOLD=5/60s, cooldown 120s (you already did)
+
+“Problem patient” handling in chat channels
+
+You’re already detecting friction. For WhatsApp/Telegram intake, add a policy:
+
+If friction signals hit threshold (e.g., profanity + refusals + off-topic):
+
+switch tone to “concise”
+
+ask a single narrow question
+
+after N failures, escalate to staff with a clean summary + transcript hash
+
+stop the agent for that conversation
+
+This prevents infinite loops and keeps staff workload bounded.
+
+The one thing I’d do before going live: a live-fire RC run in both channels
+
+Run:
+
+!rc run in WhatsApp from a staff phone
+
+!rc run in Telegram from a staff Telegram account
+Confirm:
+
+the same suite executes
+
+traces show correct channel metadata
+
+logs and metrics endpoints reflect both channels
+
+If those pass, you’re ready.
+
+If you paste your current WhatsApp webhook handler signature (function signature + how you dispatch to orchestrator), I’ll give you a Telegram webhook handler skeleton that matches your style exactly (Express 5 + TS), including secret-token validation, message normalization, idempotency keying, and reusing your scenario/trace commands.

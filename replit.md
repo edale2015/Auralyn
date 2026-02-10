@@ -58,7 +58,13 @@ NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSIT
 - **REFRAME_QUESTION**: Router selects this instead of ASK_QUESTION when `cfg.llm.enabled` is true. Calls OpenAI to rephrase clinical questions with tone profiles. Falls back to original prompt on LLM error or guardrail violation.
 - **DRAFT_SUMMARY**: When LLM is enabled, generates actual clinical or patient-facing summaries via OpenAI. Falls back to placeholder when LLM is off.
 - **LLM Client**: `server/agent/llm/agentLlm.ts` — uses Replit AI Integrations (OpenAI-compatible, no API key needed). Model: gpt-5-mini.
-- **Logging**: Every LLM call is logged via `buildLlmCallLogEntry()` → `getLlmCallLog().log()` with input/output hashes, token counts, latency, and step linking. OutputText is redacted in production (REDACT_LLM_LOGS=true or NODE_ENV=production).
+- **Logging**: Every LLM call is logged via `buildLlmCallLogEntry()` → `getLlmCallLog().log()` with mandatory `promptTemplateId` + `promptTemplateVersion`, input/output hashes, token counts, latency, and step linking. OutputText is redacted in production (REDACT_LLM_LOGS=true or NODE_ENV=production).
+
+### Prompt Template Versioning
+- **Mandatory Fields**: Every LLM call must include `promptTemplateId` and `promptTemplateVersion` in the log entry
+- **Current Templates**: `reframe_question@v1`, `draft_summary_clinician@v1`, `draft_summary_patient@v1`
+- **RC Report Integration**: RC reports include `templateVersionDeltas` showing call counts, avg latency, and token usage per template version
+- **Schema Enforcement**: `buildLlmCallLogEntry()` requires both fields at compile time
 
 ### LLM A/B Testing
 - **Tone Profiles**: empathetic, concise, pediatric, elderly — configurable via `cfg.llm.toneProfile`
@@ -87,8 +93,9 @@ NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSIT
 ### RC Run (`server/rc/rcRunner.ts`)
 - **WhatsApp Command**: `!rc run` — runs all golden scenarios across 3 LLM variants (off, empathetic, concise)
 - **API**: `POST /api/rc/run` — returns full RC report
-- **Report Contents**: pass/fail summary, top 10 diffs, latency stats (mean/median/p95), token totals + cost estimate, friction rate
+- **Report Contents**: pass/fail summary, top 10 diffs, latency stats (mean/median/p95), token totals + cost estimate, friction rate, template version deltas
 - **Cross-variant Comparison**: LLM variants compared against LLM-off baseline for safety regressions
+- **MDS Enforcement**: RC suite validates Minimum Data Set completion per complaint, hard-fails if required questions missing (unless emergent)
 
 ### Replay Mode (`server/rc/replayRunner.ts`)
 - **API**: `POST /api/replay/:runId` — replays an existing trace through new config
@@ -96,12 +103,35 @@ NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSIT
 - **Output**: New trace + diff against original (hard/soft failures)
 - **Use Case**: Test ruleset/tone/model changes against real conversation data without messaging patients
 
+### PHI-Safe Replay Packs (`server/rc/replayPacks.ts`)
+- **API**: `POST /api/replay-packs/export/:runId` — exports redacted replay bundle from trace
+- **API**: `GET /api/replay-packs/:packId` — retrieve a stored replay pack
+- **API**: `GET /api/replay-packs` — list all replay packs
+- **API**: `POST /api/replay-packs/:packId/run` — rerun a pack through new config
+- **PHI Redaction**: Strips phone numbers, emails, SSNs, addresses, dates, and name prefixes from transcripts
+- **Contents**: redacted transcript, case state snapshot, extracted answers, demographics, rulesetHash
+- **Use Case**: Safe QA and future training without accessing original patient messages
+
 ### Quality Review (`server/analytics/qualityReview.ts`)
-- **API**: `POST /api/traces/:runId/review` — tag run as great/ok/bad with optional reason
+- **API**: `POST /api/traces/:runId/review` — tag run as great/ok/bad with validated reason
 - **API**: `GET /api/traces/:runId/review` — get existing review
 - **API**: `GET /api/analytics/quality-reviews` — summary with ratings distribution and top reasons
 - **UI**: Quality Review panel in Trace Detail view with rating buttons and reason selector
 - **Predefined Reasons**: "too many questions", "missed key question", "tone annoyed patient", "premature escalation", "not empathic enough", "incorrect disposition", "excellent flow", "other"
+
+### Weekly Improvement Loop (`server/rc/weeklyImprovement.ts`)
+- **API**: `POST /api/rc/weekly-improvement` — runs full weekly improvement cycle
+- **Process**: Pull top 20 "bad" quality reviews → cluster by reason + chief complaint + friction → replay each cluster with 2-3 alternative configs → run RC gate → compute metric deltas
+- **Report Contents**: Week N number, clusters analyzed, replay results per config, RC gate pass/fail, metric deltas (turns-to-completion, escalation, friction, dropout), promotion decision
+- **Promotion Gate**: Changes only promoted if RC suite passes after replaying improvements
+
+## Minimum Data Set (MDS) Contract (`server/rules/minimumDataSet.ts`)
+- **Registry**: Complaint → required questions + nice-to-have questions mapping
+- **Supported Complaints**: sore_throat, ear_pain, nasal_congestion, cough
+- **Validation**: `validateMinimumDataSet()` checks answered questions against required set
+- **Emergency Bypass**: MDS check passes automatically for emergent cases
+- **API**: `GET /api/mds/registry` — view all complaint data sets
+- **RC Integration**: RC suite hard-fails if required questions not collected before disposition (unless emergent)
 
 ## Analytics
 
@@ -119,6 +149,13 @@ NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSIT
   - refusal phrases ("not answering", "stop asking")
   - off-topic replies
   - very long rambling messages (>500 chars)
+
+### Cost/Latency SLA Alerts (`server/analytics/slaAlerts.ts`)
+- **API**: `GET /api/analytics/sla-status` — provider-only SLA health check
+- **Thresholds**: p95 latency > 15s, avg tokens/run > 2000, circuit breaker > 3/day, cost/run > $0.05
+- **Alert Severities**: warning (1x threshold), critical (2x threshold)
+- **Metrics**: p95 latency, avg tokens/run, avg cost/run, circuit breaker triggers today
+- **Use Case**: Dashboard banner for providers to monitor spend and UX health
 
 ## External Dependencies
 

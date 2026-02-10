@@ -4,6 +4,7 @@ import { getTraceStore } from "../traces/traceStore";
 import { computeConversationMetrics } from "../analytics/conversationMetrics";
 import { detectFrictionInConversation, type FrictionSignal } from "../analytics/frictionDetector";
 import { getCircuitStatus, getRunBudgetStatus, getGuardrailConfig } from "../agent/llm/llmGuardrails";
+import { computeSlaStatus } from "../analytics/slaAlerts";
 
 export function registerAnalyticsRoutes(router: Router) {
   router.get("/api/analytics/conversation-metrics", requireProviderAuth, async (req: Request, res: Response) => {
@@ -93,6 +94,16 @@ export function registerAnalyticsRoutes(router: Router) {
       res.json({ ok: true, runId: req.params.runId, budget });
     } catch (err: any) {
       console.error("[Analytics] Run budget error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/analytics/sla-status", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      const status = await computeSlaStatus();
+      res.json({ ok: true, ...status });
+    } catch (err: any) {
+      console.error("[Analytics] SLA status error:", err);
       res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });
