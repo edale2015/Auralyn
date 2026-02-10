@@ -3,7 +3,8 @@ import type { AgentAction, CaseState, AgentRunConfig } from "../../shared/agentT
 import type { TraceStep, TraceEvent } from "../../shared/testingTypes";
 import { computeCentor } from "./scoring/centor";
 import { detectRedFlags } from "./safety/redFlags";
-import { reframeQuestion, draftSummary, type LlmCallContext } from "./llm/agentLlm";
+import { reframeQuestion, draftSummary, type LlmCallContext, LlmGuardrailError } from "./llm/agentLlm";
+import { recordCircuitError } from "./llm/llmGuardrails";
 
 function nowISO() {
   return new Date().toISOString();
@@ -124,6 +125,9 @@ export async function executeAction(
         };
       } catch (err: any) {
         console.error("[Executor] REFRAME_QUESTION LLM error:", err?.message);
+        if (!(err instanceof LlmGuardrailError)) {
+          recordCircuitError();
+        }
         events.push({
           type: "LLM_ERROR",
           severity: "warn",
@@ -283,6 +287,9 @@ export async function executeAction(
         };
       } catch (err: any) {
         console.error("[Executor] DRAFT_SUMMARY LLM error:", err?.message);
+        if (!(err instanceof LlmGuardrailError)) {
+          recordCircuitError();
+        }
         events.push({
           type: "LLM_ERROR",
           severity: "warn",

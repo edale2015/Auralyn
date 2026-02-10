@@ -25,6 +25,7 @@ type TraceSummary = {
   eventCount: number;
   normalizedHash: string;
   createdAt: string;
+  llmConfig?: { enabled?: boolean; toneProfile?: string };
 };
 
 type TraceStep = {
@@ -489,6 +490,7 @@ export default function TraceViewer() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [complaintFilter, setComplaintFilter] = useState<string>("all");
+  const [llmFilter, setLlmFilter] = useState<string>("all");
   const [compareMode, setCompareMode] = useState(false);
   const [baselineRunId, setBaselineRunId] = useState<string | null>(null);
   const [candidateRunId, setCandidateRunId] = useState<string | null>(null);
@@ -521,6 +523,14 @@ export default function TraceViewer() {
   const complaints = [...new Set(traces.map(t => t.chiefComplaint))];
   const filtered = traces.filter(t => {
     if (complaintFilter !== "all" && t.chiefComplaint !== complaintFilter) return false;
+    if (llmFilter !== "all") {
+      if (llmFilter === "llm_on" && t.llmConfig?.enabled !== true) return false;
+      if (llmFilter === "llm_off" && t.llmConfig?.enabled !== false) return false;
+      if (llmFilter.startsWith("tone_")) {
+        const tone = llmFilter.replace("tone_", "");
+        if (t.llmConfig?.toneProfile !== tone) return false;
+      }
+    }
     if (searchText) {
       const s = searchText.toLowerCase();
       return (
@@ -637,6 +647,20 @@ export default function TraceViewer() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={llmFilter} onValueChange={setLlmFilter}>
+          <SelectTrigger className="w-[160px]" data-testid="select-llm-filter">
+            <SelectValue placeholder="LLM variant" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All variants</SelectItem>
+            <SelectItem value="llm_on">LLM on</SelectItem>
+            <SelectItem value="llm_off">LLM off</SelectItem>
+            <SelectItem value="tone_empathetic">Empathetic</SelectItem>
+            <SelectItem value="tone_concise">Concise</SelectItem>
+            <SelectItem value="tone_pediatric">Pediatric</SelectItem>
+            <SelectItem value="tone_elderly">Elderly</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {isLoading && (
@@ -698,6 +722,15 @@ export default function TraceViewer() {
                     {trace.isTest && <Badge variant="secondary">Test</Badge>}
                     {trace.scenarioId && <Badge variant="outline">{trace.scenarioId}</Badge>}
                     <Badge variant="outline">{trace.chiefComplaint}</Badge>
+                    {trace.llmConfig?.enabled === true && (
+                      <Badge variant="secondary" className="text-xs">LLM on</Badge>
+                    )}
+                    {trace.llmConfig?.enabled === false && (
+                      <Badge variant="outline" className="text-xs">LLM off</Badge>
+                    )}
+                    {trace.llmConfig?.toneProfile && (
+                      <Badge variant="outline" className="text-xs">{trace.llmConfig.toneProfile}</Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`font-medium text-sm ${dispositionColor(trace.disposition)}`}>

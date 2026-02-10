@@ -158,7 +158,7 @@ export function formatScenarioList(scenarios: Array<{ id: string; label: string;
     lines.push(`  ${s.label}`);
   }
   lines.push("");
-  lines.push("Run: !scenario run <id> [--llm=on|off] [--seed=N]");
+  lines.push("Run: !scenario run <id> [--llm=on|off] [--tone=empathetic|concise|pediatric|elderly] [--seed=N]");
   return lines.join("\n");
 }
 

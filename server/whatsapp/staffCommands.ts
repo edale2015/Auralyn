@@ -20,7 +20,7 @@ export async function handleStaffCommand(msg: string): Promise<string> {
     if (cmd === "!trace") return await handleTraceCommand(parts.slice(1));
     if (cmd === "!case") return await handleCaseCommand(parts.slice(1));
     if (cmd === "!explain") return await handleExplainCommand(parts.slice(1));
-    return `Unknown command: ${cmd}\n\nAvailable:\n!scenario list|run <id> [--llm=on|off] [--seed=N]\n!trace last|<runId>\n!case <caseId>\n!explain <runId> step <n>`;
+    return `Unknown command: ${cmd}\n\nAvailable:\n!scenario list|run <id> [--llm=on|off] [--tone=empathetic|concise|pediatric|elderly] [--seed=N]\n!trace last|<runId>\n!case <caseId>\n!explain <runId> step <n>`;
   } catch (err: any) {
     console.error("[StaffCmd] Error:", err);
     return `Command error: ${err?.message || String(err)}`;
@@ -52,7 +52,7 @@ async function handleScenarioCommand(args: string[]): Promise<string> {
 
   if (sub === "run") {
     const scenarioId = positional[1];
-    if (!scenarioId) return "Usage: !scenario run <id> [--llm=on|off] [--seed=N]\n\nRun !scenario list to see available scenarios.";
+    if (!scenarioId) return "Usage: !scenario run <id> [--llm=on|off] [--tone=empathetic|concise|pediatric|elderly] [--seed=N]\n\nRun !scenario list to see available scenarios.";
 
     const testCase = getTestCaseById(scenarioId) || getTestCaseByFilename(scenarioId);
     if (!testCase) return `Scenario not found: ${scenarioId}\n\nRun !scenario list to see available scenarios.`;
@@ -78,15 +78,21 @@ async function handleScenarioCommand(args: string[]): Promise<string> {
 
     const llmEnabled = flags.llm ? flags.llm.toLowerCase() === "on" : undefined;
     const seed = flags.seed ? parseInt(flags.seed, 10) : undefined;
+    const toneProfile = flags.tone as "empathetic" | "concise" | "pediatric" | "elderly" | undefined;
+    const validTones = ["empathetic", "concise", "pediatric", "elderly"];
+    if (toneProfile && !validTones.includes(toneProfile)) {
+      return `Invalid tone: ${toneProfile}\n\nValid tones: ${validTones.join(", ")}`;
+    }
 
     const cfg = AgentRunConfigSchema.parse({
       runId,
       mode: "REGRESSION",
       maxSteps: 20,
-      llm: llmEnabled !== undefined || seed !== undefined ? {
+      llm: llmEnabled !== undefined || seed !== undefined || toneProfile ? {
         enabled: llmEnabled ?? true,
         temperature: 0,
         ...(seed !== undefined && !isNaN(seed) ? { seed } : {}),
+        ...(toneProfile ? { toneProfile } : {}),
       } : undefined,
       options: {
         disableWrites: true,
@@ -105,6 +111,16 @@ async function handleScenarioCommand(args: string[]): Promise<string> {
       chiefComplaint: testCase.chiefComplaint,
     });
     stored.stopReason = stopReason;
+    stored.metadata = {
+      ...stored.metadata,
+      llmConfig: {
+        enabled: cfg.llm?.enabled ?? false,
+        toneProfile: cfg.llm?.toneProfile ?? null,
+        temperature: cfg.llm?.temperature ?? 0,
+        seed: cfg.llm?.seed ?? null,
+        model: cfg.llm?.model ?? null,
+      },
+    };
 
     await getTraceStore().save(stored);
 
@@ -138,15 +154,16 @@ async function handleScenarioCommand(args: string[]): Promise<string> {
     }
 
     const llmNote = llmEnabled === false ? " (LLM off)" : llmEnabled === true ? " (LLM on)" : "";
+    const toneNote = toneProfile ? ` tone=${toneProfile}` : "";
     const seedNote = seed !== undefined && !isNaN(seed) ? ` seed=${seed}` : "";
-    if (llmNote || seedNote) {
-      result += `\nConfig:${llmNote}${seedNote}`;
+    if (llmNote || toneNote || seedNote) {
+      result += `\nConfig:${llmNote}${toneNote}${seedNote}`;
     }
 
     return result;
   }
 
-  return `Unknown subcommand: ${sub}\n\nUsage: !scenario list | !scenario run <id> [--llm=on|off] [--seed=N]`;
+  return `Unknown subcommand: ${sub}\n\nUsage: !scenario list | !scenario run <id> [--llm=on|off] [--tone=empathetic|concise|pediatric|elderly] [--seed=N]`;
 }
 
 async function handleTraceCommand(args: string[]): Promise<string> {

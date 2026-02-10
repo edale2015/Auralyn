@@ -157,6 +157,7 @@ export const AgentRunConfigSchema = z.object({
     temperature: z.number().default(0),
     seed: z.number().optional(),
     model: z.string().optional(),
+    toneProfile: z.enum(["empathetic", "concise", "pediatric", "elderly"]).optional(),
   }).optional(),
 
   rules: z.object({

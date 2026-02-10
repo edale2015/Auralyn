@@ -111,6 +111,8 @@ export function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
+const REDACT_LLM_LOGS = process.env.REDACT_LLM_LOGS === "true" || process.env.NODE_ENV === "production";
+
 export function buildLlmCallLogEntry(opts: {
   purpose: string;
   model: string;
@@ -141,7 +143,7 @@ export function buildLlmCallLogEntry(opts: {
     promptTemplateId: opts.promptTemplateId,
     inputHash: hashContent(opts.inputText),
     outputHash: hashContent(opts.outputText),
-    outputText: opts.outputText,
+    outputText: REDACT_LLM_LOGS ? undefined : opts.outputText,
     latencyMs: opts.latencyMs,
     tokensIn: opts.tokensIn,
     tokensOut: opts.tokensOut,

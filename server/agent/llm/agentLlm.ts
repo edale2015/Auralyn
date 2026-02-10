@@ -1,6 +1,13 @@
 import OpenAI from "openai";
 import type { AgentRunConfig, CaseState } from "../../../shared/agentTypes";
 import { buildLlmCallLogEntry, getLlmCallLog } from "../../traces/llmCallLog";
+import {
+  checkRunBudget,
+  recordLlmCall,
+  isCircuitOpen,
+  recordCircuitError,
+  recordCircuitSuccess,
+} from "./llmGuardrails";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -16,6 +23,26 @@ export interface LlmCallContext {
   stepNo?: number;
 }
 
+export class LlmGuardrailError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LlmGuardrailError";
+  }
+}
+
+function enforceGuardrails(ctx: LlmCallContext): void {
+  if (isCircuitOpen()) {
+    throw new LlmGuardrailError("LLM circuit breaker is open — automatic fallback active");
+  }
+
+  if (ctx.runId) {
+    const check = checkRunBudget(ctx.runId);
+    if (!check.allowed) {
+      throw new LlmGuardrailError(check.reason!);
+    }
+  }
+}
+
 export async function reframeQuestion(
   questionId: string,
   originalPrompt: string,
@@ -24,6 +51,8 @@ export async function reframeQuestion(
   cfg: AgentRunConfig,
   ctx: LlmCallContext
 ): Promise<{ reframedText: string; model: string; tokensIn?: number; tokensOut?: number }> {
+  enforceGuardrails(ctx);
+
   const systemPrompt = `You are a medical intake assistant. Your task is to rephrase clinical questions for patients in a warm, clear way.
 Tone profile: ${toneProfile}
 - empathetic: gentle, caring, acknowledging discomfort
@@ -67,6 +96,11 @@ Rephrase this question for the patient using the "${toneProfile}" tone.`;
   const tokensIn = response.usage?.prompt_tokens;
   const tokensOut = response.usage?.completion_tokens;
 
+  recordCircuitSuccess();
+  if (ctx.runId) {
+    recordLlmCall(ctx.runId, tokensIn ?? 0, tokensOut ?? 0);
+  }
+
   const logEntry = buildLlmCallLogEntry({
     purpose: "reframe_question",
     model,
@@ -98,6 +132,8 @@ export async function draftSummary(
   cfg: AgentRunConfig,
   ctx: LlmCallContext
 ): Promise<{ summaryText: string; model: string; tokensIn?: number; tokensOut?: number }> {
+  enforceGuardrails(ctx);
+
   const answersText = Object.entries(state.answers)
     .map(([k, v]) => `${k}: ${v}`)
     .join("\n");
@@ -149,6 +185,11 @@ Generate a ${style === "clinician" ? "clinical" : "patient-friendly"} summary.`;
   const outputText = response.choices[0]?.message?.content?.trim() ?? "[summary generation failed]";
   const tokensIn = response.usage?.prompt_tokens;
   const tokensOut = response.usage?.completion_tokens;
+
+  recordCircuitSuccess();
+  if (ctx.runId) {
+    recordLlmCall(ctx.runId, tokensIn ?? 0, tokensOut ?? 0);
+  }
 
   const logEntry = buildLlmCallLogEntry({
     purpose: "draft_summary",

@@ -11,13 +11,13 @@ Preferred communication style: Simple, everyday language.
 ### Frontend
 - **Framework**: React 18 with TypeScript
 - **UI/UX**: shadcn/ui (built on Radix UI) with Tailwind CSS and custom healthcare design tokens.
-- **Key Pages**: Physician login, patient entry, intake form, case status, signed visit summary, and physician dashboard. Autosave is implemented for patient intake drafts.
+- **Key Pages**: Physician login, patient entry, intake form, case status, signed visit summary, physician dashboard, and Trace Viewer with LLM variant filtering.
 
 ### Backend
 - **Framework**: Express 5 on Node.js with TypeScript.
 - **API Pattern**: REST endpoints (`/api/*`).
 - **Agentic Spine**: Uses a constrained agent architecture for deterministic medical triage decisions, including a next-action picker, action execution with trace capture, and a plan/act/observe agent loop. It incorporates Centor score calculation, red flag detection, and a supervisor gate for patient-visible outputs.
-- **LLM Integration**: Supports LLM-powered actions for rephrasing questions and drafting summaries, using Replit AI Integrations (OpenAI-compatible) with model `gpt-5-mini`.
+- **LLM Integration**: Supports LLM-powered actions for rephrasing questions and drafting summaries, using Replit AI Integrations (OpenAI-compatible) with model `gpt-5-mini`. Includes rate limiting, per-run budgets, and circuit breaker for resilience.
 
 ### Data Storage
 - **Database**: Firebase Firestore (primary) and SQLite (for intake storage abstraction, configurable).
@@ -42,6 +42,60 @@ Preferred communication style: Simple, everyday language.
 - **Validation**: Zod-based environment variable validation at startup.
 - **Firebase**: Lazy initialization, consumers use `getFirestore()`.
 - **Google Sheets**: Centralized singleton client for loading rules, medications, and diagnoses.
+
+## Agent System
+
+### Routing States
+- `INTAKE_PENDING` → `MODIFIERS_PENDING` → `CORE_QS_PENDING` → `SCORING_PENDING` → `REVIEW_REQUIRED`
+- Emergency path: `EMERGENT_ESCALATION`
+- More info path: `MORE_INFO_REQUIRED`
+
+### AgentAction Types
+NOOP, ASK_QUESTION, REFRAME_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSITION, ADD_DX, RECOMMEND_ACTIONS, DRAFT_SUMMARY, ESCALATE_TO_CLINICIAN, STOP
+
+### LLM-Powered Actions
+- **REFRAME_QUESTION**: Router selects this instead of ASK_QUESTION when `cfg.llm.enabled` is true. Calls OpenAI to rephrase clinical questions with tone profiles. Falls back to original prompt on LLM error or guardrail violation.
+- **DRAFT_SUMMARY**: When LLM is enabled, generates actual clinical or patient-facing summaries via OpenAI. Falls back to placeholder when LLM is off.
+- **LLM Client**: `server/agent/llm/agentLlm.ts` — uses Replit AI Integrations (OpenAI-compatible, no API key needed). Model: gpt-5-mini.
+- **Logging**: Every LLM call is logged via `buildLlmCallLogEntry()` → `getLlmCallLog().log()` with input/output hashes, token counts, latency, and step linking. OutputText is redacted in production (REDACT_LLM_LOGS=true or NODE_ENV=production).
+
+### LLM A/B Testing
+- **Tone Profiles**: empathetic, concise, pediatric, elderly — configurable via `cfg.llm.toneProfile`
+- **WhatsApp Commands**: `!scenario run <id> --llm=on|off --tone=empathetic|concise|pediatric|elderly --seed=N`
+- **Trace Metadata**: Each run stores `llmConfig` in `StoredTrace.metadata` for comparison
+- **UI Filtering**: Trace Viewer has LLM variant filter dropdown to compare LLM on/off and tone variants
+
+### LLM Guardrails (`server/agent/llm/llmGuardrails.ts`)
+- **Per-run budget**: Max 10 LLM calls and 4000 tokens per agent run
+- **Circuit breaker**: If 5+ LLM errors in 60s, disables LLM calls for 120s with automatic fallback
+- **Monitoring**: `GET /api/analytics/llm-guardrails` returns circuit status and config
+
+### Agent Endpoints
+- `POST /api/agent/next` - Plan next action (provider auth required)
+- `POST /api/agent/execute` - Execute single action (provider auth required)
+- `POST /api/agent/run` - Full agent loop (provider auth required)
+
+### Security Invariants
+- Router never emits REFRAME_QUESTION unless questionId is in ALLOWED_QUESTION_IDS set
+- LLM log outputText is redacted in production (only hashes stored)
+- Provider auth required on all agent, trace, analytics, and LLM log endpoints
+
+## Analytics
+
+### Conversation Metrics (`server/analytics/conversationMetrics.ts`)
+- `GET /api/analytics/conversation-metrics?from=...&to=...` — returns:
+  - turns-to-completion (mean, median, p90)
+  - required-Q completion %
+  - escalation-to-staff rate
+  - re-ask rate (same question asked twice)
+  - dropout rate (conversation ended before completion)
+
+### Friction Detection (`server/analytics/frictionDetector.ts`)
+- `GET /api/analytics/friction/:runId` — heuristic-based friction signals per conversation:
+  - profanity/insults detection
+  - refusal phrases ("not answering", "stop asking")
+  - off-topic replies
+  - very long rambling messages (>500 chars)
 
 ## External Dependencies
 

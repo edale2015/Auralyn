@@ -12,6 +12,7 @@ import { authRouter } from "./routes.auth";
 import { registerTestRoutes } from "./routes/test.routes";
 import agentRoutes from "./routes/agent.routes";
 import { registerTraceRoutes } from "./routes/trace.routes";
+import { registerAnalyticsRoutes } from "./routes/analytics.routes";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 
@@ -109,8 +110,10 @@ initTraceStore();
 initConversationLog();
 const traceRouter = Router();
 registerTraceRoutes(traceRouter);
+registerAnalyticsRoutes(traceRouter);
 app.use(traceRouter);
 console.log("[Traces] Trace viewer endpoints registered at /api/traces/*");
+console.log("[Analytics] Analytics endpoints registered at /api/analytics/*");
 
 initIntakeDb();
 ensureIntakeDirs();

@@ -13,18 +13,33 @@ const QUESTION_PROMPTS: Record<string, string> = {
   Q_UNABLE_TO_SWALLOW_SALIVA: "Are you unable to swallow your own saliva?",
 };
 
+const ALLOWED_QUESTION_IDS = new Set(Object.keys(QUESTION_PROMPTS));
+
+export function isValidQuestionId(questionId: string): boolean {
+  return ALLOWED_QUESTION_IDS.has(questionId);
+}
+
 function shouldReframe(cfg: AgentRunConfig): boolean {
   return cfg.llm?.enabled !== false;
 }
 
 function buildQuestionAction(questionId: string, cfg: AgentRunConfig): AgentAction {
+  if (!isValidQuestionId(questionId)) {
+    console.warn(`[Router] Attempted to ask unknown questionId: ${questionId}, falling back to ASK_QUESTION`);
+    return {
+      type: "ASK_QUESTION",
+      questionId,
+      prompt: questionId,
+    };
+  }
+
   const originalPrompt = QUESTION_PROMPTS[questionId] ?? questionId;
 
   if (shouldReframe(cfg)) {
     return {
       type: "REFRAME_QUESTION",
       questionId,
-      toneProfile: "empathetic",
+      toneProfile: cfg.llm?.toneProfile ?? "empathetic",
       originalPrompt,
     };
   }

@@ -29,6 +29,7 @@ export function registerTraceRoutes(router: Router) {
         eventCount: t.events.length,
         normalizedHash: t.normalizedHash,
         createdAt: t.createdAt,
+        llmConfig: t.metadata?.llmConfig as { enabled?: boolean; toneProfile?: string } | undefined,
       }));
 
       res.json({ ok: true, traces: summaries, count: summaries.length });
