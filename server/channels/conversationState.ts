@@ -225,9 +225,13 @@ class FirestoreCachedConversationStateStore implements ConversationStateBackend 
     }
 
     try {
-      const doc = await this.getDedupeCollection().doc(key).get();
-      if (doc.exists) {
-        const data = doc.data();
+      const snapshot = await this.getDedupeCollection()
+        .where("dedupeKey", "==", key)
+        .limit(1)
+        .get();
+
+      if (!snapshot.empty) {
+        const data = snapshot.docs[0].data();
         if (data && data.seenAt && Date.now() - data.seenAt < DEDUPE_TTL_MS) {
           this.seenMessages.set(key, data.seenAt);
           return { seen: true };
@@ -244,10 +248,10 @@ class FirestoreCachedConversationStateStore implements ConversationStateBackend 
     const now = Date.now();
     this.seenMessages.set(key, now);
 
-    this.getDedupeCollection().doc(key).set({
+    this.getDedupeCollection().add({
+      dedupeKey: key,
       channel,
       messageId,
-      bodyHash: bodyHash || null,
       seenAt: now,
       expiresAt: new Date(now + DEDUPE_TTL_MS).toISOString(),
     }).catch(err => console.warn("[ConvState] Dedupe persist failed:", err?.message));

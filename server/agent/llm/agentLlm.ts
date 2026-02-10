@@ -8,6 +8,7 @@ import {
   recordCircuitError,
   recordCircuitSuccess,
 } from "./llmGuardrails";
+import { getChannelOpsTracker } from "../../channels/channelOps";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -19,7 +20,7 @@ const AGENT_MODEL = "gpt-5-mini";
 export interface LlmCallContext {
   runId?: string;
   caseId?: string;
-  channel?: "whatsapp" | "web" | "test" | "api";
+  channel?: "whatsapp" | "web" | "test" | "api" | "telegram";
   stepNo?: number;
 }
 
@@ -30,13 +31,24 @@ export class LlmGuardrailError extends Error {
   }
 }
 
+function resolveOpsChannel(ctx: LlmCallContext): "whatsapp" | "telegram" | "web" | "test" | null {
+  const ch = ctx.channel;
+  if (ch === "whatsapp" || ch === "telegram" || ch === "web" || ch === "test") return ch;
+  return null;
+}
+
 function enforceGuardrails(ctx: LlmCallContext): void {
+  const opsCh = resolveOpsChannel(ctx);
+
   if (isCircuitOpen()) {
+    if (opsCh) {
+      getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "circuit_breaker_block" });
+    }
     throw new LlmGuardrailError("LLM circuit breaker is open — automatic fallback active");
   }
 
   if (ctx.runId) {
-    const check = checkRunBudget(ctx.runId);
+    const check = checkRunBudget(ctx.runId, undefined, opsCh ?? undefined);
     if (!check.allowed) {
       throw new LlmGuardrailError(check.reason!);
     }
@@ -74,31 +86,45 @@ Patient age: ${state.demographics?.age ?? "unknown"}
 Rephrase this question for the patient using the "${toneProfile}" tone.`;
 
   const startMs = Date.now();
+  const opsCh = resolveOpsChannel(ctx);
 
   const llmConfig = cfg.llm ?? { enabled: true };
   const temperature = llmConfig.temperature ?? 0;
   const seed = llmConfig.seed;
   const model = llmConfig.model ?? AGENT_MODEL;
 
-  const response = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature,
-    ...(seed !== undefined ? { seed } : {}),
-    max_completion_tokens: 256,
-  });
+  if (opsCh) getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "call_start" });
+
+  let response: any;
+  try {
+    response = await openai.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature,
+      ...(seed !== undefined ? { seed } : {}),
+      max_completion_tokens: 256,
+    });
+  } catch (err) {
+    recordCircuitError();
+    if (opsCh) getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "fallback" });
+    throw err;
+  }
 
   const latencyMs = Date.now() - startMs;
   const outputText = response.choices[0]?.message?.content?.trim() ?? originalPrompt;
   const tokensIn = response.usage?.prompt_tokens;
   const tokensOut = response.usage?.completion_tokens;
+  const totalTokens = (tokensIn ?? 0) + (tokensOut ?? 0);
 
   recordCircuitSuccess();
   if (ctx.runId) {
     recordLlmCall(ctx.runId, tokensIn ?? 0, tokensOut ?? 0);
+  }
+  if (opsCh) {
+    getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "call_complete", tokens: totalTokens, latencyMs });
   }
 
   const logEntry = buildLlmCallLogEntry({
@@ -165,31 +191,45 @@ Diagnoses: ${state.diagnosisClusterIds.join(", ") || "none"}
 Generate a ${style === "clinician" ? "clinical" : "patient-friendly"} summary.`;
 
   const startMs = Date.now();
+  const opsCh = resolveOpsChannel(ctx);
 
   const llmConfig = cfg.llm ?? { enabled: true };
   const temperature = llmConfig.temperature ?? 0;
   const seed = llmConfig.seed;
   const model = llmConfig.model ?? AGENT_MODEL;
 
-  const response = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature,
-    ...(seed !== undefined ? { seed } : {}),
-    max_completion_tokens: 512,
-  });
+  if (opsCh) getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "call_start" });
+
+  let response: any;
+  try {
+    response = await openai.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature,
+      ...(seed !== undefined ? { seed } : {}),
+      max_completion_tokens: 512,
+    });
+  } catch (err) {
+    recordCircuitError();
+    if (opsCh) getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "fallback" });
+    throw err;
+  }
 
   const latencyMs = Date.now() - startMs;
   const outputText = response.choices[0]?.message?.content?.trim() ?? "[summary generation failed]";
   const tokensIn = response.usage?.prompt_tokens;
   const tokensOut = response.usage?.completion_tokens;
+  const totalTokens = (tokensIn ?? 0) + (tokensOut ?? 0);
 
   recordCircuitSuccess();
   if (ctx.runId) {
     recordLlmCall(ctx.runId, tokensIn ?? 0, tokensOut ?? 0);
+  }
+  if (opsCh) {
+    getChannelOpsTracker().recordLLMEvent({ channel: opsCh, type: "call_complete", tokens: totalTokens, latencyMs });
   }
 
   const logEntry = buildLlmCallLogEntry({

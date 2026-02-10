@@ -29,7 +29,7 @@ export function getGuardrailConfig(): LlmGuardrailConfig {
   return { ...DEFAULT_CONFIG };
 }
 
-export function checkRunBudget(runId: string, config?: Partial<LlmGuardrailConfig>): {
+export function checkRunBudget(runId: string, config?: Partial<LlmGuardrailConfig>, channel?: string): {
   allowed: boolean;
   reason?: string;
   budget: RunBudget;
@@ -38,6 +38,12 @@ export function checkRunBudget(runId: string, config?: Partial<LlmGuardrailConfi
   const budget = runBudgets.get(runId) ?? { calls: 0, tokensIn: 0, tokensOut: 0 };
 
   if (budget.calls >= cfg.maxCallsPerRun) {
+    if (channel) {
+      try {
+        const { getChannelOpsTracker } = require("../../channels/channelOps");
+        getChannelOpsTracker().recordLLMEvent({ channel, type: "budget_exceeded" });
+      } catch {}
+    }
     return {
       allowed: false,
       reason: `Max LLM calls per run exceeded (${budget.calls}/${cfg.maxCallsPerRun})`,
@@ -47,6 +53,12 @@ export function checkRunBudget(runId: string, config?: Partial<LlmGuardrailConfi
 
   const totalTokens = budget.tokensIn + budget.tokensOut;
   if (totalTokens >= cfg.maxTokensPerRun) {
+    if (channel) {
+      try {
+        const { getChannelOpsTracker } = require("../../channels/channelOps");
+        getChannelOpsTracker().recordLLMEvent({ channel, type: "budget_exceeded" });
+      } catch {}
+    }
     return {
       allowed: false,
       reason: `Max tokens per run exceeded (${totalTokens}/${cfg.maxTokensPerRun})`,
@@ -74,6 +86,12 @@ export function isCircuitOpen(): boolean {
   if (circuitOpenUntil > 0 && Date.now() >= circuitOpenUntil) {
     circuitOpenUntil = 0;
     circuitErrors = [];
+    try {
+      const { getChannelOpsTracker } = require("../../channels/channelOps");
+      for (const ch of ["whatsapp", "telegram", "web"] as const) {
+        getChannelOpsTracker().setCooldownActive(ch, false);
+      }
+    } catch {}
   }
   return false;
 }
@@ -90,6 +108,13 @@ export function recordCircuitError(config?: Partial<LlmGuardrailConfig>) {
     console.warn(`[LLM-CircuitBreaker] Circuit OPEN: ${circuitErrors.length} errors in ${cfg.circuitBreakerWindowMs}ms window. Cooldown until ${new Date(circuitOpenUntil).toISOString()}`);
     circuitErrors = [];
     recordCircuitBreakerTrigger();
+    try {
+      const { getChannelOpsTracker } = require("../../channels/channelOps");
+      for (const ch of ["whatsapp", "telegram", "web"] as const) {
+        getChannelOpsTracker().recordLLMEvent({ channel: ch, type: "circuit_breaker_trip" });
+        getChannelOpsTracker().setCooldownActive(ch, true);
+      }
+    } catch {}
   }
 }
 

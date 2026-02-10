@@ -59,14 +59,41 @@ Preferred communication style: Simple, everyday language.
 - **Friction Detection**: Identifies potential friction signals in conversations (e.g., profanity, refusals, off-topic replies).
 - **Cost/Latency SLA Alerts**: Monitors p95 latency, average tokens/run, circuit breaker triggers, and cost/run, providing warnings or critical alerts.
 
-### Unified Multi-Channel Messaging
-- **Architecture**: Unified `MessageEvent` type with channel abstraction (whatsapp/telegram/web/test) and `conversationId` keying.
-- **Conversation State**: In-memory store with message deduplication, friction tracking, tone profile management, and `lastNMessages` buffer, with optional Firestore caching.
-- **Channel Adapters**: Routes replies to WhatsApp/Twilio or Telegram API based on conversationId.
-- **Message Orchestrator**: Handles shared processing logic like staff commands, menu/flow routing, answer parsing, and emergency warnings.
-- **Telegram Integration**: Webhook with secret-token validation and rate limiting.
-- **Friction Policy**: Implements rules to adapt conversation tone and branching based on friction scores, escalating to staff if necessary.
-- **Emergency Warnings**: Uses versioned, template-driven warnings with immutable text.
+### Unified Multi-Channel Messaging (`server/channels/`)
+- **Architecture**: Unified `MessageEvent` type with channel abstraction (whatsapp/telegram/web/test) and `conversationId` keying as `channel:externalUserId`.
+- **Conversation State**: Firestore-cached (in-memory cache + async Firestore snapshots) when `STORAGE_DRIVER=firestore`, otherwise pure in-memory. Last 20 messages cap per conversation. Dedupe keys stored as fields (not doc IDs) for PHI compliance.
+- **Dedupe**: Composite keys `channel:messageId:bodyHash` (SHA-256 truncated) with Firestore persistence for cross-restart idempotency. Random Firestore doc IDs with `dedupeKey` as a queryable field.
+- **Channel Adapters**: Routes replies to WhatsApp/Twilio or Telegram API based on conversationId prefix.
+- **Message Orchestrator**: Shared processing logic (staff commands, menu/flow routing, answer parsing, emergency warnings) extracted from WhatsApp webhook.
+- **Feature Flags**: `ENABLE_WHATSAPP_INTAKE`, `ENABLE_TELEGRAM_INTAKE`, `ENABLE_TEST_CONSOLE`, `USE_ORCHESTRATOR_WHATSAPP` for channel-level toggles and migration control.
+- **Telegram Integration**: Webhook with secret-token validation and rate limiting (120 req/min per IP).
+- **Friction Policy**: Score 5 = concise tone, Score 8 = narrow questions, Score 12 = stop + escalate.
+- **Emergency Warnings**: Versioned templates (e.g., `EMERG_WARN_CRITICAL@v3`) with `ruleRef`, severity, and immutable text. Logged with templateId/version/ruleRef/severity/conversationId.
+- **Channel Ops Dashboard**: `GET /api/analytics/channel-ops` with per-channel metrics: inbound count, dedupe hits, avg/p95 processing time, friction escalations/stops, circuit breaker activations, LLM budget hits, emergency warnings, plus detailed LLM sub-metrics (callsUsed, tokensUsed, budgetExceededCount, circuitBreakerTrips, fallbackCount, cooldownActive, avg/p95 LLM latency).
+- **LLM Ops Wiring**: `recordLLMEvent()` called from `agentLlm.ts` on call_start, call_complete, fallback; from `llmGuardrails.ts` on budget_exceeded, circuit_breaker_trip, circuit_breaker_block. Ops dashboard now reflects actual agent behavior stats.
+- **Migration Flag**: `USE_ORCHESTRATOR_WHATSAPP=1` routes WhatsApp messages through unified orchestrator, bypassing legacy handler entirely (early return, no double-handling).
+
+### PHI Retention Policy (`server/channels/retentionPolicy.ts`)
+- **Split Storage**: Clinical record (canonical answers, disposition, scores, red flags, traces) retained long-term. Debug telemetry (raw message text in `lastNMessages`, dedupe docs) subject to TTL sweep.
+- **TTL Configuration**: `RETENTION_TTL_DAYS` env var (default 7). `ENABLE_MESSAGE_RETENTION=1` to keep raw messages past TTL.
+- **Sweep Endpoint**: `POST /api/admin/retention/sweep` (provider auth) — redacts `lastNMessages` from old conversation states and deletes expired dedupe docs. Supports `?dryRun=1` for preview.
+- **Config Endpoint**: `GET /api/admin/retention/config` — returns current retention configuration.
+- **Dedupe Doc IDs**: Random Firestore doc IDs with `dedupeKey` stored as a queryable field (not doc ID), avoiding PHI-derived identifiers.
+
+### Key Files
+- `server/channels/messageEvent.ts` — MessageEvent type, conversationId helpers
+- `server/channels/conversationState.ts` — ConversationState store with dedup + friction (Firestore-cached or in-memory)
+- `server/channels/messageOrchestrator.ts` — Shared message processing logic
+- `server/channels/channelAdapter.ts` — Channel-agnostic sendReply()
+- `server/channels/telegramWebhook.ts` — Telegram webhook handler with rate limiting
+- `server/channels/telegramSender.ts` — Telegram Bot API sender
+- `server/channels/whatsappSender.ts` — WhatsApp/Twilio sender adapter
+- `server/channels/featureFlags.ts` — Channel feature flags including USE_ORCHESTRATOR_WHATSAPP
+- `server/channels/emergencyWarnings.ts` — Versioned emergency warning templates
+- `server/channels/channelOps.ts` — Per-channel ops metrics tracker with LLM sub-metrics
+- `server/channels/retentionPolicy.ts` — PHI retention config, TTL sweep logic
+- `server/channels/index.ts` — Channel initialization and re-exports
+- `server/routes/admin.routes.ts` — Admin retention sweep + config endpoints
 
 ## External Dependencies
 

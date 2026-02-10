@@ -1,0 +1,102 @@
+1) Wire circuit breaker + LLM budget metrics into Channel Ops (fast, high value)
+
+Right now /api/analytics/channel-ops will underreport “why things feel slow / why replies got blunt,” because the most important pressure valves (budget + breaker) aren’t showing up.
+
+What to add to the ops tracker (minimum useful set)
+
+Per channel (and optionally per conversationId):
+
+llm.callsUsed
+
+llm.tokensUsed
+
+llm.budgetExceededCount
+
+llm.circuitBreakerTrips
+
+llm.cooldownActive (boolean at time of request)
+
+llm.fallbackCount (LLM failed and you used canonical prompt)
+
+Where to increment (exact points)
+
+When an LLM call starts: increment callsUsed
+
+After completion: add tokensUsed, record latency bucket
+
+When budget is hit: increment budgetExceededCount
+
+When breaker trips: increment circuitBreakerTrips
+
+When breaker blocks a call: increment fallbackCount
+
+This turns channel ops from “message plumbing stats” into “agent behavior stats.”
+
+If you want the simplest implementation: create one opsTracker.recordLLMEvent({ channel, type, tokens, latencyMs }) function and call it from the LLM wrapper and circuit breaker module. One place, no drift.
+
+2) PHI/compliance: decide what you must retain, for how long, and in what form
+
+Your note is correct: storing raw messages in Firestore (even capped at 20) is PHI exposure. It may still be acceptable depending on your compliance posture, but you need explicit policy.
+
+Two good options (pick one, both are viable)
+Option A (recommended): Split storage into “clinical record” vs “debug telemetry”
+
+Clinical record (retained):
+
+canonical answers (questionId → normalized answer)
+
+summary (clinician + patient-facing)
+
+disposition + reason codes
+
+red flag flags
+
+trace without raw message text
+
+Debug telemetry (short-lived):
+
+raw message text
+
+LLM prompt/output text (already redacted in prod, good)
+
+free-text transcripts
+
+Then put a TTL policy on telemetry:
+
+7 days (common)
+
+30 days (if you need longer for QA)
+
+or “off in production” unless ENABLE_MESSAGE_RETENTION=1
+
+Option B: Store transcripts, but encrypt and TTL
+
+Encrypt message bodies before storing (KMS or at least app-level AES)
+
+Keep TTL short
+
+Audit access (provider-only, logged)
+
+This is heavier, but keeps more replay/debug power.
+
+About body hashes in doc IDs
+
+A SHA-256 body hash isn’t readable PHI, but it can be treated as sensitive metadata because it’s derived from PHI. It’s usually fine technically, but compliance folks may prefer:
+
+store dedupe keys as fields, not doc IDs, or
+
+use random doc IDs and store dedupeKeyHash as a field
+
+Not required for correctness, but it makes reviews smoother.
+
+3) One more “production sanity” recommendation
+
+Add a single endpoint to enforce retention and let you prove compliance:
+
+POST /api/admin/retention/sweep (admin dual-auth)
+
+deletes telemetry older than TTL
+
+returns counts by collection/channel
+
+And add a nightly automation (cron) to run it.
