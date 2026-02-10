@@ -23,6 +23,8 @@ import {
 } from "./flows/whatsappFlowRouter";
 import { sendWhatsAppMessage } from "./whatsapp/send";
 import { computeProposalGeneric } from "./rules/computeProposalGeneric";
+import { requireProviderAuth } from "./auth";
+import { validateTwilioSignature } from "./whatsapp/twilioValidation";
 
 // Get flow questions - tries Google Sheets first, falls back to hardcoded
 async function getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
@@ -460,8 +462,8 @@ export async function registerRoutes(
     }
   });
 
-  // Encounters API - List by filter
-  app.get("/api/encounters/pending", async (req: Request, res: Response) => {
+  // Encounters API - List by filter (provider-only)
+  app.get("/api/encounters/pending", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const encounters = await storage.getEncountersByStatus("pending_review");
       
@@ -510,7 +512,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/encounters/approved", async (req: Request, res: Response) => {
+  app.get("/api/encounters/approved", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const encounters = await storage.getEncountersByStatus("approved");
       res.json(encounters);
@@ -520,7 +522,17 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/encounters/all", async (req: Request, res: Response) => {
+  app.get("/api/encounters/rejected", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const encounters = await storage.getEncountersByStatus("rejected");
+      res.json(encounters);
+    } catch (error) {
+      console.error("Error fetching rejected encounters:", error);
+      res.status(500).json({ error: "Failed to fetch encounters" });
+    }
+  });
+
+  app.get("/api/encounters/all", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const encounters = await storage.getEncountersByStatus(undefined);
       
@@ -569,7 +581,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/encounters/:id", async (req: Request, res: Response) => {
+  app.get("/api/encounters/:id", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const idParam = req.params.id;
       const id = parseInt(typeof idParam === "string" ? idParam : "0");
@@ -622,7 +634,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/encounters/:id/approve", async (req: Request, res: Response) => {
+  app.post("/api/encounters/:id/approve", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const idParam = req.params.id;
       const id = parseInt(typeof idParam === "string" ? idParam : "0");
@@ -680,7 +692,52 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/encounters/:id/request-info", async (req: Request, res: Response) => {
+  app.post("/api/encounters/:id/reject", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const idParam = req.params.id;
+      const id = parseInt(typeof idParam === "string" ? idParam : "0");
+      const { physicianId, reasonCode, note } = req.body;
+
+      if (!reasonCode) {
+        return res.status(400).json({ error: "Missing reasonCode" });
+      }
+
+      const encounter = await storage.updateEncounter(id, {
+        status: "rejected",
+        physicianId,
+        physicianNotes: `[Rejected: ${reasonCode}] ${note || ""}`.trim(),
+        approvedAt: new Date(),
+      });
+
+      if (!encounter) {
+        return res.status(404).json({ error: "Encounter not found" });
+      }
+
+      const patient = await storage.getPatient(encounter.patientId);
+      if (patient) {
+        const message = `Your case has been reviewed by a physician. Unfortunately, this case could not be approved at this time. Reason: ${reasonCode}.${note ? ` ${note}` : ""} Please follow up with your primary care provider.`;
+
+        try {
+          await sendWhatsAppMessage(patient.phoneNumber, message);
+          await storage.createMessage({
+            patientId: patient.id,
+            encounterId: id,
+            direction: "outbound",
+            messageBody: message,
+          });
+        } catch (twilioError) {
+          console.error("Failed to send WhatsApp rejection message:", twilioError);
+        }
+      }
+
+      res.json(encounter);
+    } catch (error) {
+      console.error("Error rejecting encounter:", error);
+      res.status(500).json({ error: "Failed to reject encounter" });
+    }
+  });
+
+  app.post("/api/encounters/:id/request-info", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const idParam = req.params.id;
       const id = parseInt(typeof idParam === "string" ? idParam : "0");
@@ -720,7 +777,7 @@ export async function registerRoutes(
   // === Physician Quick Actions ===
   
   // Resend intake link to patient
-  app.post("/api/review/:encounterId/resend-link", async (req: Request, res: Response) => {
+  app.post("/api/review/:encounterId/resend-link", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const encounterId = parseInt(req.params.encounterId);
       const enc = await storage.getEncounter(encounterId);
@@ -748,7 +805,7 @@ export async function registerRoutes(
   });
 
   // Change encounter flow (staff override via dashboard)
-  app.post("/api/review/:encounterId/set-flow", async (req: Request, res: Response) => {
+  app.post("/api/review/:encounterId/set-flow", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const encounterId = parseInt(req.params.encounterId);
       const { flowId } = req.body || {};
@@ -778,7 +835,7 @@ export async function registerRoutes(
   });
 
   // Send clarification request to patient
-  app.post("/api/review/:encounterId/request-clarification", async (req: Request, res: Response) => {
+  app.post("/api/review/:encounterId/request-clarification", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       const encounterId = parseInt(req.params.encounterId);
       const { message } = req.body || {};
@@ -806,7 +863,7 @@ export async function registerRoutes(
   });
 
   // Twilio WhatsApp Webhook - Deterministic ENT Flu Triage Flow
-  app.post("/api/webhooks/whatsapp", async (req: Request, res: Response) => {
+  app.post("/api/webhooks/whatsapp", validateTwilioSignature, async (req: Request, res: Response) => {
     try {
       const { From, Body, MessageSid } = req.body;
       const phoneNumber = From; // Format: whatsapp:+1234567890
@@ -1228,8 +1285,8 @@ export async function registerRoutes(
     }
   });
 
-  // Test endpoint to simulate WhatsApp message using deterministic flow
-  app.post("/api/test/simulate-message", async (req: Request, res: Response) => {
+  // Test endpoint to simulate WhatsApp message using deterministic flow (provider-only)
+  app.post("/api/test/simulate-message", requireProviderAuth, async (req: Request, res: Response) => {
     try {
       // Accept both "from"/"body" (WhatsApp style) or "phoneNumber"/"message" (legacy)
       const phoneNumber = req.body.from || req.body.phoneNumber;
@@ -1851,21 +1908,24 @@ export async function registerRoutes(
     }
   });
 
-  // Admin routes - simple token-based auth for now
+  // Admin routes - require provider session + admin token
   const requireAdmin = (req: Request, res: Response, next: any) => {
     const token = req.headers["x-admin-token"];
-    const adminToken = process.env.ADMIN_TOKEN || "admin-secret";
+    const adminToken = process.env.ADMIN_TOKEN;
+    if (!adminToken) {
+      return res.status(503).json({ error: "Admin access not configured" });
+    }
     if (token !== adminToken) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     next();
   };
 
-  app.post("/api/admin/sheets/sync", requireAdmin, syncClinicalSheets);
-  app.post("/api/admin/sheets/import-medications", requireAdmin, importEntMedications);
-  app.post("/api/admin/sheets/import-diagnoses", requireAdmin, importEntDiagnoses);
-  app.post("/api/admin/dev/run-tests", requireAdmin, runTests);
-  app.post("/api/admin/dev/apply-patch", requireAdmin, applyPatch);
+  app.post("/api/admin/sheets/sync", requireProviderAuth, requireAdmin, syncClinicalSheets);
+  app.post("/api/admin/sheets/import-medications", requireProviderAuth, requireAdmin, importEntMedications);
+  app.post("/api/admin/sheets/import-diagnoses", requireProviderAuth, requireAdmin, importEntDiagnoses);
+  app.post("/api/admin/dev/run-tests", requireProviderAuth, requireAdmin, runTests);
+  app.post("/api/admin/dev/apply-patch", requireProviderAuth, requireAdmin, applyPatch);
 
   return httpServer;
 }

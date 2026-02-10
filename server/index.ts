@@ -38,7 +38,12 @@ app.use(
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({
+  extended: false,
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 
 app.get("/api/healthz", (_req, res) => {
   res.json({ ok: true, ts: Date.now(), uptime: process.uptime() });

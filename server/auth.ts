@@ -129,8 +129,9 @@ export function requireProviderAuth(req: Request, res: Response, next: NextFunct
     }
   }
 
-  // Fallback: X-Provider-Key header for scripts/dev
-  const allowFallback = process.env.ALLOW_PROVIDER_KEY_FALLBACK !== "0";
+  // Fallback: X-Provider-Key header for scripts/dev (disabled in production)
+  const isProd = process.env.NODE_ENV === "production";
+  const allowFallback = !isProd && process.env.ALLOW_PROVIDER_KEY_FALLBACK !== "0";
   if (allowFallback) {
     const apiKey = req.headers["x-provider-key"];
     const expectedKey = process.env.PROVIDER_API_KEY;

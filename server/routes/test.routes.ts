@@ -30,8 +30,7 @@ function requireTestAuth(req: Request, res: Response): boolean {
     return true;
   }
   
-  const cookie = req.cookies?.medsess;
-  if (cookie && isSessionValid(cookie)) {
+  if (isSessionValid(req)) {
     return true;
   }
   

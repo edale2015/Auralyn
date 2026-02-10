@@ -141,6 +141,46 @@ NOOP, ASK_QUESTION, COMPUTE_SCORE, FLAG_RED_FLAG, SET_DISPOSITION, ADD_DX, RECOM
 - `GET /api/healthz` — always available, returns `{ok, ts, uptime}`
 - `GET /api/healthz/deps` — checks Firestore connectivity, Sheets read, Twilio config; returns latency per dependency
 
+## Route Authentication Matrix
+
+All routes are protected with appropriate middleware:
+
+| Route Pattern | Auth Middleware | Notes |
+|---|---|---|
+| `GET /api/healthz` | None (public) | Basic health check |
+| `GET /api/healthz/deps` | None (public) | Dependency health check |
+| `POST /api/auth/login` | None (public) | Login endpoint |
+| `GET/POST /api/encounters/*` | `requireProviderAuth` | Provider session or API key (dev only) |
+| `POST /api/review/*` | `requireProviderAuth` | Provider session or API key (dev only) |
+| `POST /api/agent/*` | `requireProviderAuth` | Provider session required |
+| `POST /api/webhooks/whatsapp` | `validateTwilioSignature` | Twilio HMAC-SHA1 signature validation |
+| `POST /api/test/simulate-message` | `requireProviderAuth` | Provider session or API key (dev only) |
+| `GET/POST /api/test/*` (regression) | `requireTestAuth` | `x-test-token` header or provider session |
+| `POST /api/admin/*` | `requireAdmin` | `x-admin-token` header required, no default fallback |
+| `GET/POST /api/intake/:token/*` | Token + 6-digit code | Patient session verification |
+| `GET /api/flows/:flowId/questions` | None (public) | Flow question definitions |
+
+### API Key Fallback
+- `X-Provider-Key` header accepted in development only
+- Automatically disabled when `NODE_ENV=production`
+- Can be force-disabled with `ALLOW_PROVIDER_KEY_FALLBACK=0`
+
+## Storage Architecture
+
+- **Primary**: Firebase Firestore (`STORAGE_DRIVER=firestore`)
+- **Dev/test alternative**: SQLite (`STORAGE_DRIVER=sqlite`)
+- **Decision**: Firestore is the production storage layer; SQLite exists for local development and testing without cloud dependencies
+- **Note**: The codebase contains a Drizzle/Postgres schema (`shared/schema.ts`) used for type definitions and insert schemas; it is not an active storage backend
+
+## EHR Integration (Phase 4 — Not in v1)
+
+EHR/FHIR integration is scaffolded but not functional in v1:
+- **Architecture**: Vendor-neutral interface (`ehrConnector.ts`) with SMART on FHIR discovery and FHIR client helpers
+- **Connectors**: eClinicalWorks (ecw) is credential-ready; Athena is a stub
+- **Registry**: Vendor registry with environment configuration loading
+- **Status**: No EHR routes are exposed. This is intentionally deferred to Phase 4 to focus v1 on WhatsApp intake, triage, and physician review workflows
+- **Phase 4 scope**: Expose FHIR patient search, encounter push, order sync endpoints; complete Athena connector; add SMART on FHIR launch flow
+
 ## External Dependencies
 
 - **AI Integration**: OpenAI API for medical triage AI conversations.
