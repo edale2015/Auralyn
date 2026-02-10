@@ -11,6 +11,9 @@ import { initIntakeDb, intakeRouter, filesRouter, summaryRouter, ensureDirs as e
 import { authRouter } from "./routes.auth";
 import { registerTestRoutes } from "./routes/test.routes";
 import agentRoutes from "./routes/agent.routes";
+import { registerTraceRoutes } from "./routes/trace.routes";
+import { initTraceStore } from "./traces/traceStore";
+import { initConversationLog } from "./traces/conversationLog";
 
 const config = loadConfig();
 
@@ -100,6 +103,14 @@ console.log("[Test] Regression gate endpoints registered");
 // Agent routes (LIVE + REGRESSION agentic endpoints)
 app.use("/api/agent", agentRoutes);
 console.log("[Agent] Agentic endpoints registered at /api/agent/*");
+
+// Trace viewer routes (provider auth required)
+initTraceStore();
+initConversationLog();
+const traceRouter = Router();
+registerTraceRoutes(traceRouter);
+app.use(traceRouter);
+console.log("[Traces] Trace viewer endpoints registered at /api/traces/*");
 
 initIntakeDb();
 ensureIntakeDirs();

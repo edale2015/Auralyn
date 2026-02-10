@@ -159,6 +159,8 @@ All routes are protected with appropriate middleware:
 | `POST /api/admin/*` | `requireAdmin` | `x-admin-token` header required, no default fallback |
 | `GET/POST /api/intake/:token/*` | Token + 6-digit code | Patient session verification |
 | `GET /api/flows/:flowId/questions` | None (public) | Flow question definitions |
+| `GET /api/traces` | `requireProviderAuth` | List agent traces with filters |
+| `GET /api/traces/:runId` | `requireProviderAuth` | Get full trace detail |
 
 ### API Key Fallback
 - `X-Provider-Key` header accepted in development only
@@ -180,6 +182,37 @@ EHR/FHIR integration is scaffolded but not functional in v1:
 - **Registry**: Vendor registry with environment configuration loading
 - **Status**: No EHR routes are exposed. This is intentionally deferred to Phase 4 to focus v1 on WhatsApp intake, triage, and physician review workflows
 - **Phase 4 scope**: Expose FHIR patient search, encounter push, order sync endpoints; complete Athena connector; add SMART on FHIR launch flow
+
+## Agent Trace & Testing Infrastructure
+
+### WhatsApp Staff Commands
+Staff-only commands recognized in the WhatsApp webhook (gated to `STAFF_WHATSAPP_NUMBERS` env var):
+- `!scenario list` - List available golden test cases
+- `!scenario run <id>` - Run a test scenario through the agent loop, persist trace, return results
+- `!trace last` - View the most recent trace summary
+- `!trace <runId>` - View a specific trace by run ID
+- `!case <caseId>` - List all traces for a case
+
+### Trace Storage
+- **Collection**: `agentTraces` (Firestore) / in-memory (dev)
+- **Fields**: runId, caseId, scenarioId, isTest, chiefComplaint, steps[], events[], normalized (disposition/dx/scores/redFlags), normalizedHash, stopReason, sheetEnv, rulesetHash, commitSha, createdAt
+- **Backend**: `server/traces/traceStore.ts` with Firestore and in-memory implementations
+
+### Test Cases
+- Located in `server/testcases/*.json` following `TestCaseV1` schema
+- Loader: `server/testcases/loader.ts` with caching and ID/filename lookup
+- Golden cases: centor_high_score, red_flag_sob, routine_uri
+
+### Trace Viewer UI
+- Route: `/debug/traces` (provider auth required via API)
+- Features: List view with search/filter, detail view with step-by-step timeline, scores, red flags, events
+- Component: `client/src/pages/TraceViewer.tsx`
+
+### ConversationTurnLog
+- **Collection**: `conversationTurnLogs` (Firestore) / in-memory (dev)
+- **Fields**: id, caseId, encounterId, channel, sender, messageText, timestamp, agentActionId, questionId, llmUsed, llmModel, latencyMs, tokensIn/Out, patientResponseTimeMs, frictionSignals
+- **Friction detection**: profanity, very_short, long_rant, refusal
+- **Backend**: `server/traces/conversationLog.ts`
 
 ## External Dependencies
 

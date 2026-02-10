@@ -25,6 +25,9 @@ import { sendWhatsAppMessage } from "./whatsapp/send";
 import { computeProposalGeneric } from "./rules/computeProposalGeneric";
 import { requireProviderAuth } from "./auth";
 import { validateTwilioSignature } from "./whatsapp/twilioValidation";
+import { isStaffCommand, handleStaffCommand } from "./whatsapp/staffCommands";
+import { getConversationLog, detectFrictionSignals } from "./traces/conversationLog";
+import { randomUUID } from "crypto";
 
 // Get flow questions - tries Google Sheets first, falls back to hardcoded
 async function getFlowQuestions(flowId: string): Promise<FlowQuestion[]> {
@@ -871,6 +874,18 @@ export async function registerRoutes(
       
       console.log(`Received WhatsApp message from ${phoneNumber}: ${msg}`);
       
+      // Staff-only test commands (!scenario, !trace, !case)
+      const normalizePhone = (p: string) => p.replace(/^whatsapp:/, "").replace(/\s+/g, "").trim();
+      const STAFF_NUMS = (process.env.STAFF_WHATSAPP_NUMBERS || "")
+        .split(",").map(s => normalizePhone(s)).filter(Boolean);
+      const isStaff = STAFF_NUMS.includes(normalizePhone(phoneNumber));
+      if (isStaff && isStaffCommand(msg)) {
+        const reply = await handleStaffCommand(msg);
+        await sendWhatsAppMessage(phoneNumber, reply);
+        res.set("Content-Type", "text/xml");
+        return res.send("<Response></Response>");
+      }
+      
       // Get or create patient
       let patient = await storage.getPatientByPhone(phoneNumber);
       if (!patient) {
@@ -939,12 +954,7 @@ export async function registerRoutes(
         return res.status(200).send("ok");
       }
 
-      // Staff-only /flow override command
-      const STAFF_NUMBERS = (process.env.STAFF_WHATSAPP_NUMBERS || "")
-        .split(",")
-        .map(s => s.trim())
-        .filter(Boolean);
-      const isStaff = STAFF_NUMBERS.includes(phoneNumber);
+      // Staff-only /flow override command (reuses isStaff from above)
       const isFlowCmd = msg.trim().toLowerCase().startsWith("/flow ");
       const requestedFlowId = isFlowCmd ? msg.trim().split(/\s+/)[1]?.toUpperCase() : null;
 
@@ -1121,6 +1131,19 @@ export async function registerRoutes(
         messageSid: MessageSid,
       });
       
+      // Log inbound conversation turn
+      const turnTimestamp = new Date().toISOString();
+      getConversationLog().log({
+        id: randomUUID(),
+        caseId: encounter.id?.toString(),
+        encounterId: encounter.id?.toString(),
+        channel: "whatsapp",
+        sender: "patient",
+        messageText: msg,
+        timestamp: turnTimestamp,
+        frictionSignals: detectFrictionSignals(msg),
+      }).catch(err => console.warn("[ConvLog] Failed to log inbound:", err?.message));
+      
       // Get current flow state
       const flowIndex = encounter.flowIndex ?? 0;
       const answers: Record<string, any> = encounter.answers ? JSON.parse(encounter.answers) : {};
@@ -1268,6 +1291,19 @@ export async function registerRoutes(
         direction: "outbound",
         messageBody: responseMessage,
       });
+      
+      // Log outbound conversation turn
+      getConversationLog().log({
+        id: randomUUID(),
+        caseId: encounter.id?.toString(),
+        encounterId: encounter.id?.toString(),
+        channel: "whatsapp",
+        sender: "agent",
+        messageText: responseMessage,
+        timestamp: new Date().toISOString(),
+        llmUsed: false,
+        frictionSignals: [],
+      }).catch(err => console.warn("[ConvLog] Failed to log outbound:", err?.message));
       
       try {
         await sendWhatsAppMessage(phoneNumber, responseMessage);
