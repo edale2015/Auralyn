@@ -1,8 +1,37 @@
 import type { Router, Request, Response } from "express";
 import { requireProviderAuth } from "../auth";
 import { runRetentionSweep, getRetentionConfig } from "../channels/retentionPolicy";
+import { invalidateAll, invalidateTable, getCacheStatus, getRegisteredTables } from "../data/registry";
+import { invalidateRouterCache } from "../services/complaintRouter";
 
 export function registerAdminRoutes(router: Router) {
+  router.post("/api/admin/registry/reload", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const table = req.query.table as string | undefined;
+      if (table) {
+        invalidateTable(table);
+        res.json({ ok: true, message: `Invalidated cache for ${table}` });
+      } else {
+        invalidateAll();
+        invalidateRouterCache();
+        res.json({ ok: true, message: "Invalidated all registry caches" });
+      }
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/registry/status", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      res.json({
+        ok: true,
+        registeredTables: getRegisteredTables(),
+        cacheStatus: getCacheStatus(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
   router.get("/api/admin/retention/config", requireProviderAuth, async (_req: Request, res: Response) => {
     try {
       const config = getRetentionConfig();

@@ -1,6 +1,7 @@
 import type { AgentAction, CaseState, NextActionResponse, AgentRunConfig } from "../../shared/agentTypes";
 import { CENTOR_REQUIRED_QS } from "./scoring/centor";
 import { detectRedFlags } from "./safety/redFlags";
+import { normalizeChiefComplaint as normalizeCC } from "../data/canonicalKeys";
 
 const QUESTION_PROMPTS: Record<string, string> = {
   Q_FEVER: "Have you had a fever or felt feverish recently?",
@@ -19,21 +20,17 @@ export function isValidQuestionId(questionId: string): boolean {
   return ALLOWED_QUESTION_IDS.has(questionId);
 }
 
+export function registerDynamicQuestion(questionId: string, prompt: string): void {
+  QUESTION_PROMPTS[questionId] = prompt;
+  ALLOWED_QUESTION_IDS.add(questionId);
+}
+
 function shouldReframe(cfg: AgentRunConfig): boolean {
   return cfg.llm?.enabled !== false;
 }
 
-function buildQuestionAction(questionId: string, cfg: AgentRunConfig): AgentAction {
-  if (!isValidQuestionId(questionId)) {
-    console.warn(`[Router] Attempted to ask unknown questionId: ${questionId}, falling back to ASK_QUESTION`);
-    return {
-      type: "ASK_QUESTION",
-      questionId,
-      prompt: questionId,
-    };
-  }
-
-  const originalPrompt = QUESTION_PROMPTS[questionId] ?? questionId;
+export function buildQuestionAction(questionId: string, cfg: AgentRunConfig, customPrompt?: string): AgentAction {
+  const originalPrompt = customPrompt ?? QUESTION_PROMPTS[questionId] ?? questionId;
 
   if (shouldReframe(cfg)) {
     return {
@@ -62,12 +59,12 @@ function missingRequiredCentorQs(state: CaseState, cfg: AgentRunConfig): string[
 }
 
 function normalizeChiefComplaint(cc: string): string {
+  const canonical = normalizeCC(cc);
+  if (canonical) return canonical;
   const s = cc.toLowerCase().trim();
   const compact = s.replace(/[\s_-]+/g, " ");
-
   const synonyms = ["sore throat", "throat pain", "painful throat", "pharyngitis"];
   if (synonyms.some(x => compact.includes(x))) return "sore_throat";
-
   return compact.replace(/[\s_-]+/g, "_");
 }
 
@@ -79,8 +76,47 @@ function terminalStopReason(
   return null;
 }
 
+function routeGenericComplaint(state: CaseState, cfg: AgentRunConfig, normalizedCC: string): NextActionResponse | null {
+  const queue = state.questionQueue ?? [];
+  if (queue.length > 0) {
+    const nextQ = queue.find(q => !q.answered);
+    if (nextQ) {
+      return {
+        action: buildQuestionAction(nextQ.questionId, cfg),
+        rationale: `Next question in queue (bundle: ${nextQ.bundleId})`,
+        requiredInputsMissing: queue.filter(q => !q.answered).map(q => q.questionId),
+      };
+    }
+  }
+
+  if (state.activeClusters.length > 0 && !state.disposition) {
+    return {
+      action: {
+        type: "SET_DISPOSITION",
+        disposition: "routine",
+        reasonCodes: ["GENERIC_ROUTING"],
+      },
+      rationale: "Generic routing: clusters resolved, setting disposition",
+      requiredInputsMissing: [],
+    };
+  }
+
+  if (state.candidateDiagnoses.length > 0 && state.diagnosisClusterIds.length === 0) {
+    const topDx = state.candidateDiagnoses[0];
+    return {
+      action: {
+        type: "ADD_DX",
+        clusterIds: [topDx.cluster ?? topDx.diagnosisId],
+      },
+      rationale: `Add top diagnosis: ${topDx.diagnosisName}`,
+      requiredInputsMissing: [],
+    };
+  }
+
+  return null;
+}
+
 export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActionResponse {
-  // Terminal state stop
   const terminal = terminalStopReason(state.routing.state);
   if (terminal) {
     return {
@@ -90,7 +126,6 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
     };
   }
 
-  // If we are explicitly waiting on more info, do not churn.
   if (state.routing.state === "MORE_INFO_REQUIRED") {
     return {
       action: { type: "STOP", stopReason: "NEEDS_MORE_INFO" },
@@ -99,7 +134,6 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
     };
   }
 
-  // Red flag detection (router chooses meaning; supervisor must also hard-gate)
   const flags = detectRedFlags(state);
   if (flags.length > 0) {
     const action: AgentAction = {
@@ -113,7 +147,6 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
 
   const normalizedCC = normalizeChiefComplaint(state.chiefComplaint);
 
-  // Sore throat flow → Centor scoring
   if (normalizedCC === "sore_throat") {
     const missing = missingRequiredCentorQs(state, cfg);
     if (missing.length > 0) {
@@ -134,7 +167,6 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
 
     const centor = state.scores["centor"];
 
-    // Add dx cluster if missing
     const hasDx = state.diagnosisClusterIds?.includes("ENT_PHARYNGITIS");
     if (!hasDx) {
       return {
@@ -144,7 +176,6 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
       };
     }
 
-    // Recommend actions if missing
     const hasActions = (state.recommendedActions?.length ?? 0) > 0;
     if (!hasActions) {
       const actions = centor >= 3
@@ -157,7 +188,6 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
       };
     }
 
-    // Set disposition
     if (centor >= 3) {
       return {
         action: {
@@ -181,10 +211,12 @@ export function routeNextAction(state: CaseState, cfg: AgentRunConfig): NextActi
     };
   }
 
-  // Fallback for unsupported complaints
+  const genericResult = routeGenericComplaint(state, cfg, normalizedCC);
+  if (genericResult) return genericResult;
+
   return {
     action: { type: "ESCALATE_TO_CLINICIAN", reason: "No complaint router implemented yet" },
-    rationale: "Unsupported chief complaint in router v1",
+    rationale: `Generic routing for: ${normalizedCC}`,
     requiredInputsMissing: [],
   };
 }

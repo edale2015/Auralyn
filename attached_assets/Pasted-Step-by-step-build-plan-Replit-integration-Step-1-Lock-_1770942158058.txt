@@ -1,0 +1,456 @@
+Step-by-step build plan (Replit integration)
+Step 1) Lock canonical keys (so joins never break)
+
+Pick one canonical naming scheme and enforce it everywhere:
+
+SystemKey: ENT, PULM, CARD, GI, GU, DERM, MSK, NEURO, OPHTH, GEN
+
+ChiefComplaintKey: sore_throat, cough, fever, abdominal_pain, uti_symptoms, rash, back_pain, headache, ankle_injury, chest_pain, shortness_of_breath, sinus_congestion, eye_red_discharge, std_exposure, nausea, diarrhea, vaginal_discharge, ear_pain_muffled, joint_pain
+
+ClusterKey: canonical like ENT_PHARYNGITIS, CARD_CHESTPAIN, GU_VAGDISCH, etc.
+
+You already have the columns to store these. The only “work” is standardizing the strings.
+
+✅ Output: normalize.ts utility that maps synonyms (“SOB”, “short of breath”) → shortness_of_breath.
+
+Step 2) Add a single conductor sheet: CHIEF_COMPLAINT_ROUTER
+
+This is the only new sheet I recommend. It’s tiny, and it keeps logic out of code.
+
+Columns:
+
+System
+
+Chief_Complaint
+
+Default_Cluster
+
+Primary_Secondary_Bundle_ID (points to GLOBAL_SECONDARY.Bundle_ID)
+
+Modifier_Set_ID (e.g., MODSET_URGENTCARE_CORE_v1)
+
+FHIR_Core (TRUE/FALSE)
+
+FHIR_Optional (comma list)
+
+Notes
+
+✅ Output: one row for each urgent-care complaint you listed.
+
+Step 3) Create INTEGRATION_MAP (your “plug in anything later” layer)
+
+This is your future-proof wiring harness.
+
+INTEGRATION_MAP schema (paste into a sheet)
+
+Map_ID
+
+From_Table
+
+From_Key_Fields (comma list)
+
+From_Value_Field
+
+To_Table
+
+To_Key_Fields (comma list)
+
+Join_Type (contains, equals, regex, lookup)
+
+Transform (optional: normalize_cluster, split_csv, upper)
+
+Output_Field (what your engine should produce)
+
+Notes
+
+Starter mappings (core)
+
+Clusters → MedGroups
+
+From: ActiveClusters (engine state)
+
+To: GLOBAL_STANDARDIZED_MEDGROUPS.Primary_Indications_Clusters via contains
+
+Output: CandidateMedicationGroups
+
+MedGroups → Meds
+
+From: CandidateMedicationGroups
+
+To: ID_MEDICATIONS_MASTER.Medication_Group via equals
+
+Output: CandidateMedicationOptions
+
+Complaint → Secondary Questions
+
+From: System+Chief_Complaint
+
+To: GLOBAL_SECONDARY.System+Chief_Complaint plus Bundle_ID via equals
+
+Output: QuestionQueue
+
+Complaint/Cluster → Diagnosis
+
+From: System+Chief_Complaint+Cluster
+
+To: *_DIAGNOSIS_MASTER.System+Chief Complaint+Cluster
+
+Output: CandidateDiagnoses
+
+Modifiers → RuleTriggers
+
+From: Modifier_ID + answer
+
+To: RULESTRIGGERS.Trigger_Modifier + Condition_Expression
+
+Output: Actions (add bundle, triage upgrade, set cluster, flag dx)
+
+✅ Output: a single loader reads this map and builds “join plans” used by your runtime.
+
+Step 4) Build a single “Sheets Registry Loader” in Replit
+
+You already have many tabs. You need one consistent loader:
+
+loadTable(tableName) → returns array of rows
+
+typed adapters for each table:
+
+GLOBAL_SECONDARY
+
+CARDS_MODIFIER_MASTER
+
+RULESTRIGGERS
+
+GLOBAL_STANDARDIZED_MEDGROUPS
+
+ID_MEDICATIONS_MASTER
+
+each diagnosis master tab (ENT_DIAGNOSIS_MASTER, etc.)
+
+optional triage maps (NEURO_GLOBAL_TRIAGE, NEURO_CLUSTER_TRIAGE, etc.)
+
+CHIEF_COMPLAINT_ROUTER
+
+INTEGRATION_MAP
+
+Cache these in memory with:
+
+TTL (e.g., 5–15 min)
+
+“reload” endpoint button in your ops dashboard
+
+✅ Output: data/registry.ts that exposes getTable("GLOBAL_SECONDARY").
+
+Step 5) Add the FHIR client as a prefill service (not your brain)
+
+Create module: services/fhirPrefill.ts
+
+Inputs:
+
+patient token/context
+
+System+ChiefComplaintKey
+
+Outputs:
+
+prefill: meds, allergies, problems, vitals summary
+
+derivedFlags: onAnticoagulant, hasAsthmaCOPD, immunosuppressed, etc.
+
+provenance: resource ids + lastUpdated for audit
+
+Rules:
+
+FHIR is never “final truth,” it’s prefill → confirm.
+
+✅ Output: PrefillResult object stored in your CaseState.
+
+Step 6) Modifiers engine (using CARDS_MODIFIER_MASTER)
+
+Module: services/modifiers.ts
+
+Inputs:
+
+Modifier_Set_ID from router (e.g., MODSET_URGENTCARE_CORE_v1)
+
+FHIR prefill + derived flags
+
+Logic:
+
+pull modifiers (by set)
+
+for each modifier:
+
+if prefilled: ask as confirmation
+
+if missing: ask normally
+
+write answers to CaseState.modifiers
+
+Also compute:
+
+RiskScore from Severity_Weight
+
+TriageUpgradeTarget from modifiers that demand it
+
+✅ Output: consistent modifier answers + risk flags for downstream rules.
+
+Step 7) RULESTRIGGERS execution engine (this is the key glue)
+
+Module: services/rulesEngine.ts
+
+Inputs:
+
+current CaseState (complaint, modifiers, answered secondary questions so far)
+
+RULESTRIGGERS rows filtered by System+Chief_Complaint (+ optional cluster)
+
+Outputs:
+
+actions[] in priority order:
+
+ADD_BUNDLE (adds a GLOBAL_SECONDARY.Bundle_ID to question queue)
+
+SET_CLUSTER (adds/sets candidate cluster)
+
+TRIAGE_UPGRADE (ER/UC/PC)
+
+FLAG_DX (Diagnosis_ID / Dx_Key candidates)
+
+MED_CONTRA_FLAG (tag a med group as blocked)
+
+This engine runs:
+
+after modifiers (Trigger_Level = MODIFIER_GATE)
+
+during question flow (Trigger_Level = SYMPTOM_GATE)
+
+immediately on red flags (Trigger_Level = RED_FLAG_GATE)
+
+✅ Output: dynamic question branching + triage escalation without hardcoding.
+
+Step 8) Secondary question queue builder (GLOBAL_SECONDARY)
+
+Module: services/questionQueue.ts
+
+Inputs:
+
+Router Primary_Secondary_Bundle_ID
+
+any bundles added by rules (ADD_BUNDLE)
+
+GLOBAL_SECONDARY rows
+
+Logic:
+
+gather rows by matching Bundle_ID
+
+sort by Ask_Order
+
+dedupe by Question_ID / SEC_ID
+
+mark red-flag questions (Is_Red_Flag=TRUE) for supervisor gate
+
+✅ Output: deterministic question order with branching.
+
+Step 9) Red flag supervisor gate (your “hard safety shell”)
+
+Module: services/supervisor.ts
+
+Inputs:
+
+answers to red-flag questions
+
+your RedFlag registry rows (the Red_Flag_ID... Recommended_Immediate_Actions table) and/or GLOBAL_SECONDARY.Recommended_Disposition
+
+Logic:
+
+If any red flag positive:
+
+set disposition to escalation target
+
+generate required immediate actions + warning template
+
+block “routine” advice
+
+✅ Output: safe outputs and audit trail.
+
+Step 10) Cluster selection + disposition engine
+
+This is where you asked for “cluster_selection_disposition.”
+
+Module: services/clusterDisposition.ts
+
+Inputs:
+
+CaseState
+
+Candidate clusters from:
+
+router default cluster
+
+NEURO_GLOBAL_TRIAGE (when System=NEURO)
+
+RULESTRIGGERS SET_CLUSTER
+
+dx master matching (optional)
+
+Algorithm (simple but powerful):
+
+Start with ActiveClusters = {Default_Cluster}
+
+Add clusters from triage maps + rules
+
+Score clusters:
+
+points for matching symptom patterns (you already store diagnosis patterns and criteria)
+
+points for matching modifiers (Key Modifiers)
+
+points for red-flag coherence
+
+Choose top 1–3 clusters
+
+Set default disposition:
+
+from cluster triage map if available
+
+else from diagnosis master thresholds
+
+overridden by supervisor
+
+✅ Output: ActiveClusters, DispositionCandidate, WorkupSuggestions.
+
+Step 11) Medication suggestion engine (the 2-join pipeline)
+
+Module: services/medSuggestions.ts
+
+Join A: Clusters → MedGroups
+
+Use GLOBAL_STANDARDIZED_MEDGROUPS:
+
+filter med groups where Primary_Indications_Clusters contains any ActiveCluster
+
+keep first-line groups first
+
+Apply constraints
+
+From modifiers + FHIR:
+
+pregnancy-related flags
+
+CKD/hepatic flags
+
+allergy class flags
+
+interaction flags (e.g., anticoag + NSAIDs caution)
+
+Use:
+
+GLOBAL_STANDARDIZED_MEDGROUPS.Key_Contraindications
+
+Key_Interactions
+
+renal/hepatic adjust flags
+
+Join B: MedGroups → specific meds
+
+Use ID_MEDICATIONS_MASTER:
+
+join by Medication_Group
+
+filter contraindications + pregnancy + interactions
+
+pick top 1–3 meds
+
+output dose suggestions
+
+✅ Output: “Top options” + “why safe/unsafe” + “what to monitor.”
+
+Step 12) Diagnosis inclusion (all diagnosis tabs)
+
+Module: services/diagnosisResolver.ts
+
+Inputs:
+
+System+Chief_Complaint
+
+ActiveClusters
+
+all diagnosis masters you want enabled (ENT, DERM, etc.)
+
+Logic:
+
+filter diagnosis rows by system/cc
+
+prioritize rows where Cluster in ActiveClusters
+
+apply Modifier Rule + ER/UC/PC Threshold gates
+
+return top candidates and disposition rationale
+
+attach:
+
+recommended testing (imaging/labs)
+
+exam findings prompts (optional)
+
+✅ Output: a ranked diagnosis shortlist and the clinical “why.”
+
+What I can do to “make it all work together”
+
+Here’s what I can generate for you next, paste-ready, in your exact column formats:
+
+A) INTEGRATION_MAP starter sheet (complete)
+
+all the joins above as rows
+
+plus transforms (split_csv, normalize_cluster) you’ll use repeatedly
+
+B) RULESTRIGGERS starter pack (urgent care)
+
+A focused set that covers:
+
+pregnancy gates (abd pain, vag discharge, nausea)
+
+anticoag gates (headache, trauma, chest pain)
+
+immunosuppression gates (fever, rash, ear pain)
+
+SOB hypoxia gate
+
+eye pain/contact lens gate
+
+mastoid/facial palsy gate
+
+septic joint gate (joint pain)
+
+chest pain ACS/PE gates
+
+neuro thunderclap gate
+
+C) CHIEF_COMPLAINT_ROUTER filled rows
+
+For every complaint you listed, with:
+
+default cluster
+
+primary secondary bundle id naming
+
+modifier set id
+
+fhir optional hints
+
+D) Bundle skeletons for GLOBAL_SECONDARY
+
+If you want, I can generate the bundle headers (the Bundle_IDs and the “core questions list”) for each complaint, even before you fill the question text.
+
+E) Replit code scaffold (TypeScript)
+
+I can outline the exact file tree and interfaces:
+
+CaseState schema additions (clusters, med suggestions, provenance)
+
+service modules listed above
+
+router endpoint integration (/api/agent/run or your orchestrator)

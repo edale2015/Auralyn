@@ -31,6 +31,9 @@ export const CaseStateSchema = z.object({
     pregnant: z.boolean().optional(),
   }).optional(),
 
+  system: z.string().optional(),
+  normalizedComplaint: z.string().optional(),
+
   modifiers: z.object({
     allergies: z.array(z.string()).optional(),
     pmh: z.array(z.string()).optional(),
@@ -38,18 +41,76 @@ export const CaseStateSchema = z.object({
     immunocompromised: z.boolean().optional(),
   }).optional(),
 
+  modifierAnswers: z.record(z.union([z.string(), z.boolean(), z.number(), z.null()])).default({}),
+
+  fhirPrefill: z.object({
+    meds: z.array(z.string()).default([]),
+    allergies: z.array(z.string()).default([]),
+    problems: z.array(z.string()).default([]),
+    vitalsSummary: z.string().optional(),
+    derivedFlags: z.object({
+      onAnticoagulant: z.boolean().default(false),
+      hasAsthmaCOPD: z.boolean().default(false),
+      immunosuppressed: z.boolean().default(false),
+      pregnant: z.boolean().default(false),
+      ckd: z.boolean().default(false),
+      hepatic: z.boolean().default(false),
+    }).default({}),
+    provenance: z.array(z.object({
+      resourceId: z.string(),
+      resourceType: z.string(),
+      lastUpdated: z.string().optional(),
+    })).default([]),
+  }).optional(),
+
   answers: z.record(AnswerValueSchema),
 
   scores: z.record(z.number()).default({}),
+  activeClusters: z.array(z.string()).default([]),
   diagnosisClusterIds: z.array(z.string()).default([]),
   disposition: z.string().optional(),
   dispositionReasonCodes: z.array(z.string()).default([]),
+
+  candidateMeds: z.array(z.object({
+    medicationName: z.string(),
+    medicationGroup: z.string().optional(),
+    dose: z.string().optional(),
+    route: z.string().optional(),
+    reason: z.string().optional(),
+    safetyNote: z.string().optional(),
+    blocked: z.boolean().default(false),
+    blockReason: z.string().optional(),
+  })).default([]),
+
+  candidateDiagnoses: z.array(z.object({
+    diagnosisId: z.string(),
+    diagnosisName: z.string().optional(),
+    cluster: z.string().optional(),
+    confidence: z.enum(["high", "medium", "low"]).default("medium"),
+    dispositionSuggestion: z.string().optional(),
+    reasoning: z.string().optional(),
+  })).default([]),
+
+  ruleTrace: z.array(z.object({
+    ruleId: z.string(),
+    triggerLevel: z.string(),
+    action: z.string(),
+    detail: z.string().optional(),
+  })).default([]),
 
   redFlags: z.array(z.string()).default([]),
   requiredQuestionIdsMissing: z.array(z.string()).default([]),
   recommendedActions: z.array(z.object({
     type: z.string(),
     priority: z.enum(["low", "medium", "high"]).default("medium"),
+  })).default([]),
+
+  questionQueue: z.array(z.object({
+    questionId: z.string(),
+    bundleId: z.string().optional(),
+    askOrder: z.number().default(0),
+    isRedFlag: z.boolean().default(false),
+    answered: z.boolean().default(false),
   })).default([]),
 
   routing: z.object({
@@ -65,6 +126,8 @@ export const CaseStateSchema = z.object({
       "MORE_INFO_REQUIRED",
     ]).default("INTAKE_PENDING"),
     flowId: z.string().optional(),
+    modifierSetId: z.string().optional(),
+    primaryBundleId: z.string().optional(),
   }).default({ state: "INTAKE_PENDING" }),
 
   audit: z.object({
