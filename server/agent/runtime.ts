@@ -2,6 +2,7 @@ import type { AgentRunConfig, CaseState } from "../../shared/agentTypes";
 import type { AgentRunResponse, NormalizedResult, TraceEvent, TraceStep } from "../../shared/testingTypes";
 import { routeNextAction } from "./router";
 import { executeAction, hashNormalized } from "./executors";
+import { initializePipeline } from "./pipeline";
 
 function nowISO() {
   return new Date().toISOString();
@@ -56,6 +57,10 @@ export async function runAgentLoop(initial: CaseState, cfg: AgentRunConfig): Pro
   let state = { ...initial, updatedAt: nowISO() };
   const steps: TraceStep[] = [];
   const events: TraceEvent[] = [];
+
+  const pipelineResult = await initializePipeline(state, cfg);
+  state = pipelineResult.state;
+  events.push(...pipelineResult.events);
 
   let stopReason = "MAX_STEPS";
 

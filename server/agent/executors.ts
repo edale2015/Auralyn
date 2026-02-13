@@ -5,6 +5,9 @@ import { computeCentor } from "./scoring/centor";
 import { detectRedFlags } from "./safety/redFlags";
 import { reframeQuestion, draftSummary, type LlmCallContext, LlmGuardrailError } from "./llm/agentLlm";
 import { recordCircuitError } from "./llm/llmGuardrails";
+import { resolveDiagnoses } from "../services/diagnosisResolver";
+import { getMedSuggestions } from "../services/medSuggestions";
+import { resolveClusterDisposition } from "../services/clusterDisposition";
 
 function nowISO() {
   return new Date().toISOString();
@@ -180,6 +183,112 @@ export async function executeAction(
         };
       }
       return { state: updated };
+    }
+
+    case "RESOLVE_DIAGNOSTICS": {
+      try {
+        const system = action.system || updated.system || "";
+        const cc = action.chiefComplaint || updated.normalizedComplaint || updated.chiefComplaint;
+
+        const diagnoses = await resolveDiagnoses(
+          system,
+          cc,
+          updated.activeClusters,
+          updated.modifierAnswers,
+          updated.answers
+        );
+
+        updated.candidateDiagnoses = diagnoses.map(d => ({
+          diagnosisId: d.diagnosisId,
+          diagnosisName: d.diagnosisName,
+          cluster: d.cluster,
+          confidence: d.confidence,
+          dispositionSuggestion: d.dispositionSuggestion,
+          reasoning: d.reasoning,
+        }));
+
+        if (diagnoses.length > 0) {
+          const topClusters = diagnoses
+            .filter(d => d.confidence === "high")
+            .map(d => d.cluster)
+            .filter(Boolean);
+          for (const c of topClusters) {
+            if (!updated.diagnosisClusterIds.includes(c)) {
+              updated.diagnosisClusterIds = [...updated.diagnosisClusterIds, c];
+            }
+          }
+        }
+
+        const derivedFlags = updated.fhirPrefill?.derivedFlags ?? {
+          onAnticoagulant: false,
+          hasAsthmaCOPD: false,
+          immunosuppressed: false,
+          pregnant: updated.demographics?.pregnant ?? false,
+          ckd: false,
+          hepatic: false,
+        };
+
+        const allergies = updated.modifiers?.allergies ?? updated.fhirPrefill?.allergies ?? [];
+        const medContraFlags = updated.ruleTrace
+          .filter(r => r.action === "MED_CONTRA_FLAG")
+          .map(r => r.detail?.match(/MED_CONTRA_FLAG\(([^)]+)\)/)?.[1] ?? "")
+          .filter(Boolean);
+
+        const meds = await getMedSuggestions(
+          updated.activeClusters,
+          derivedFlags,
+          allergies,
+          medContraFlags
+        );
+
+        updated.candidateMeds = meds.map(m => ({
+          medicationName: m.medicationName,
+          medicationGroup: m.medicationGroup,
+          dose: m.dose,
+          route: m.route,
+          reason: m.reason,
+          safetyNote: m.safetyNote,
+          blocked: m.blocked,
+          blockReason: m.blockReason,
+        }));
+
+        const dispositionResult = await resolveClusterDisposition(
+          updated,
+          updated.activeClusters[0] ?? "",
+          updated.ruleTrace.find(r => r.action === "TRIAGE_UPGRADE")?.detail
+        );
+
+        events.push({
+          type: "DIAGNOSTICS_RESOLVED",
+          severity: "info",
+          message: `${diagnoses.length} dx, ${meds.filter(m => !m.blocked).length} meds, disposition=${dispositionResult.dispositionCandidate}`,
+        });
+
+        return {
+          state: updated,
+          step: {
+            step: stepNo,
+            actor: "engine",
+            action,
+            inputsUsed: ["activeClusters", "answers", "modifierAnswers", "fhirPrefill"],
+            outputs: {
+              diagnosisCount: diagnoses.length,
+              medCount: meds.length,
+              dispositionCandidate: dispositionResult.dispositionCandidate,
+            },
+            ruleRefs: ["DIAGNOSTICS_V1"],
+          },
+          events,
+        };
+      } catch (err: any) {
+        console.error("[Executor] RESOLVE_DIAGNOSTICS error:", err?.message);
+        events.push({
+          type: "DIAGNOSTICS_ERROR",
+          severity: "warn",
+          message: `Diagnostics resolution failed: ${err?.message}`,
+        });
+        return { state: updated, events };
+      }
     }
 
     case "SET_DISPOSITION": {

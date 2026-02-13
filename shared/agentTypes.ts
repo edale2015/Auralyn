@@ -110,6 +110,7 @@ export const CaseStateSchema = z.object({
     bundleId: z.string().optional(),
     askOrder: z.number().default(0),
     isRedFlag: z.boolean().default(false),
+    questionText: z.string().optional(),
     answered: z.boolean().default(false),
   })).default([]),
 
@@ -154,6 +155,12 @@ export const AgentActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("COMPUTE_SCORE"),
     scoreType: z.enum(["centor"]),
+  }),
+
+  z.object({
+    type: z.literal("RESOLVE_DIAGNOSTICS"),
+    system: z.string(),
+    chiefComplaint: z.string(),
   }),
 
   z.object({

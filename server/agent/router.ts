@@ -82,21 +82,24 @@ function routeGenericComplaint(state: CaseState, cfg: AgentRunConfig, normalized
     const nextQ = queue.find(q => !q.answered);
     if (nextQ) {
       return {
-        action: buildQuestionAction(nextQ.questionId, cfg),
+        action: buildQuestionAction(nextQ.questionId, cfg, nextQ.questionText),
         rationale: `Next question in queue (bundle: ${nextQ.bundleId})`,
         requiredInputsMissing: queue.filter(q => !q.answered).map(q => q.questionId),
       };
     }
   }
 
-  if (state.activeClusters.length > 0 && !state.disposition) {
+  const allQsAnswered = queue.length === 0 || queue.every(q => q.answered);
+  const system = state.system ?? "";
+
+  if (allQsAnswered && state.candidateDiagnoses.length === 0 && system) {
     return {
       action: {
-        type: "SET_DISPOSITION",
-        disposition: "routine",
-        reasonCodes: ["GENERIC_ROUTING"],
+        type: "RESOLVE_DIAGNOSTICS",
+        system,
+        chiefComplaint: state.normalizedComplaint ?? normalizedCC,
       },
-      rationale: "Generic routing: clusters resolved, setting disposition",
+      rationale: "All questions answered — resolve diagnoses + meds",
       requiredInputsMissing: [],
     };
   }
@@ -109,6 +112,23 @@ function routeGenericComplaint(state: CaseState, cfg: AgentRunConfig, normalized
         clusterIds: [topDx.cluster ?? topDx.diagnosisId],
       },
       rationale: `Add top diagnosis: ${topDx.diagnosisName}`,
+      requiredInputsMissing: [],
+    };
+  }
+
+  if (state.activeClusters.length > 0 && !state.disposition) {
+    const topDx = state.candidateDiagnoses[0];
+    const dispositionSuggestion = topDx?.dispositionSuggestion ?? "routine";
+    const reasonCodes = topDx
+      ? [`DX_${topDx.confidence.toUpperCase()}`, `CLUSTER_${topDx.cluster}`]
+      : ["GENERIC_ROUTING"];
+    return {
+      action: {
+        type: "SET_DISPOSITION",
+        disposition: dispositionSuggestion,
+        reasonCodes,
+      },
+      rationale: `Setting disposition from ${topDx ? `dx: ${topDx.diagnosisName}` : "generic routing"}`,
       requiredInputsMissing: [],
     };
   }
