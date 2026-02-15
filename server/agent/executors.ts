@@ -6,7 +6,7 @@ import { detectRedFlags } from "./safety/redFlags";
 import { reframeQuestion, draftSummary, type LlmCallContext, LlmGuardrailError } from "./llm/agentLlm";
 import { recordCircuitError } from "./llm/llmGuardrails";
 import { resolveDiagnoses } from "../services/diagnosisResolver";
-import { getMedSuggestions } from "../services/medSuggestions";
+import { getMedSuggestions, CARE_SETTING_PRESETS, type CareSetting } from "../services/medSuggestions";
 import { resolveClusterDisposition } from "../services/clusterDisposition";
 
 function nowISO() {
@@ -236,12 +236,19 @@ export async function executeAction(
 
         const resolvedDiagnosisIds = diagnoses.map(d => d.diagnosisId).filter(Boolean);
 
+        const careSettingKey = updated.routing?.careSetting;
+        const allowedCareSettings = careSettingKey
+          ? CARE_SETTING_PRESETS[careSettingKey] ?? careSettingKey.split(",").map(s => s.trim()) as CareSetting[]
+          : undefined;
+
         const meds = await getMedSuggestions(
           updated.activeClusters,
           derivedFlags,
           allergies,
           medContraFlags,
-          resolvedDiagnosisIds
+          resolvedDiagnosisIds,
+          undefined,
+          allowedCareSettings
         );
 
         updated.candidateMeds = meds.map(m => ({

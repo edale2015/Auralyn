@@ -129,6 +129,7 @@ export const CaseStateSchema = z.object({
     flowId: z.string().optional(),
     modifierSetId: z.string().optional(),
     primaryBundleId: z.string().optional(),
+    careSetting: z.string().optional(),
   }).default({ state: "INTAKE_PENDING" }),
 
   audit: z.object({

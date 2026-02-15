@@ -5,7 +5,7 @@ import { invalidateAll, invalidateTable, getCacheStatus, getRegisteredTables, ge
 import { invalidateRouterCache } from "../services/complaintRouter";
 import { initializePipeline } from "../agent/pipeline";
 import { resolveDiagnoses } from "../services/diagnosisResolver";
-import { getMedSuggestions } from "../services/medSuggestions";
+import { getMedSuggestions, CARE_SETTING_PRESETS, type CareSetting } from "../services/medSuggestions";
 import { resolveClusterDisposition } from "../services/clusterDisposition";
 import type { CaseState } from "../../shared/agentTypes";
 
@@ -227,6 +227,7 @@ export function registerAdminRoutes(router: Router) {
         allergies = [],
         meds = [],
         pmh = [],
+        careSetting,
       } = req.body;
 
       if (!complaint) {
@@ -261,7 +262,7 @@ export function registerAdminRoutes(router: Router) {
         requiredQuestionIdsMissing: [],
         recommendedActions: [],
         questionQueue: [],
-        routing: { state: "INTAKE_PENDING" },
+        routing: { state: "INTAKE_PENDING", careSetting: careSetting || undefined },
         audit: { steps: [], events: [] },
       };
 
@@ -348,8 +349,14 @@ export function registerAdminRoutes(router: Router) {
             ? dxResult.map((d: any) => d.diagnosisId).filter(Boolean)
             : [];
 
+          const careSettingKey = pState.routing?.careSetting;
+          const allowedCareSettings = careSettingKey
+            ? CARE_SETTING_PRESETS[careSettingKey] ?? careSettingKey.split(",").map(s => s.trim()) as CareSetting[]
+            : undefined;
+
           medsResult = await getMedSuggestions(
-            pState.activeClusters, derivedFlags, patientAllergies, medContraFlags, resolvedDxIds
+            pState.activeClusters, derivedFlags, patientAllergies, medContraFlags, resolvedDxIds,
+            undefined, allowedCareSettings
           );
         } catch (err: any) {
           medsResult = { error: err.message };

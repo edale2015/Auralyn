@@ -33,10 +33,13 @@ Three global tables replace per-system diagnosis/medication sheets:
 - **CLUSTER_PRIMARY_DIAGNOSIS** (1,258 mappings): Links Cluster_ID to Primary_Diagnosis_ID for medication matching
 
 Key design notes:
-- Medication_Link_Type column not yet populated (all 548 meds currently UNTYPED, defaulting to CLUSTER_BASED behavior)
-- Cluster naming conventions differ between tables: CHIEF_COMPLAINT_ROUTER uses `ENT_PHARYNGITIS`, GLOBAL_CLUSTER_MASTER uses `ENT_STREP_PHARYNGITIS`, GLOBAL_MEDICATIONS_MASTER uses `Strep pharyngitis cluster`. Fuzzy cross-mapping handles system prefix stripping and `_CLUSTER` suffix removal.
+- Medication_Link_Type column NOW POPULATED (PRIMARY_DIAGNOSIS: 332, COMBINATION: 127, CLUSTER_BASED: 82, SYMPTOMATIC: 7)
+- Matching priority: 1) Direct resolvedDiagnosisIds match, 2) CLUSTER_PRIMARY_DIAGNOSIS table lookup via matched active cluster, 3) Cluster fallback (Indications_Cluster fuzzy-matches activeClusters)
+- CLUSTER_PRIMARY_DIAGNOSIS table has 1,258 rows but Primary_Diagnosis_ID is mostly empty — system falls back to cluster-based matching for PRIMARY_DIAGNOSIS meds
+- Cluster naming conventions differ between tables: CHIEF_COMPLAINT_ROUTER uses `ENT_PHARYNGITIS`, GLOBAL_CLUSTER_MASTER uses `ENT_STREP_PHARYNGITIS`, GLOBAL_MEDICATIONS_MASTER uses `Strep pharyngitis cluster`. Fuzzy cross-mapping handles system prefix stripping and `_CLUSTER` suffix removal via `findMatchingActiveCluster()`.
 - Indications_Cluster uses semicolon delimiters for multi-cluster entries
 - Safety checks: allergy blocking (penicillin family), pregnancy contraindication detection, renal/hepatic adjustment flags, anticoagulant interaction warnings
+- Care_Setting filter with presets: urgent_care=[urgent_care,symptomatic], family_med=[urgent_care,symptomatic,chronic_management], obesity_dm_htn=[chronic_management,symptomatic]
 - Admin endpoints: GET /api/admin/data/validate (integrity checks), GET /api/admin/data/clusters?search=X (cluster browser), POST /api/admin/test/runScenario (end-to-end pipeline test)
 
 ### Multi-Channel Messaging

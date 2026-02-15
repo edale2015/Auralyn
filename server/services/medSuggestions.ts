@@ -25,6 +25,14 @@ interface DerivedFlags {
   hepatic?: boolean;
 }
 
+export type CareSetting = "urgent_care" | "symptomatic" | "chronic_management";
+
+export const CARE_SETTING_PRESETS: Record<string, CareSetting[]> = {
+  urgent_care: ["urgent_care", "symptomatic"],
+  family_med: ["urgent_care", "symptomatic", "chronic_management"],
+  obesity_dm_htn: ["chronic_management", "symptomatic"],
+};
+
 interface MedContext {
   activeClusters: string[];
   derivedFlags: DerivedFlags;
@@ -32,6 +40,7 @@ interface MedContext {
   medContraFlags: string[];
   resolvedDiagnosisIds?: string[];
   symptomSeverityFlags?: string[];
+  allowedCareSettings?: CareSetting[];
 }
 
 function norm(s: any): string {
@@ -80,6 +89,23 @@ function clusterMatch(indicationsCluster: string, activeClusters: string[]): boo
   });
 }
 
+function findMatchingActiveCluster(indicationsCluster: string, activeClusters: string[]): string | null {
+  const indClusters = parseClusterList(indicationsCluster);
+  const normActive = activeClusters.map(normalizeClusterId);
+  const normActiveStripped = activeClusters.map(normalizeForComparison);
+
+  for (const ic of indClusters) {
+    const idx = normActive.indexOf(ic);
+    if (idx >= 0) return normActive[idx];
+    const icStripped = normalizeForComparison(ic);
+    for (let i = 0; i < normActiveStripped.length; i++) {
+      if (normActiveStripped[i] === icStripped) return normActive[i];
+      if (normActiveStripped[i].includes(icStripped) || icStripped.includes(normActiveStripped[i])) return normActive[i];
+    }
+  }
+  return null;
+}
+
 async function getPrimaryDiagnosisForCluster(clusterId: string): Promise<string | null> {
   const rows = await getTable("CLUSTER_PRIMARY_DIAGNOSIS");
   const normId = normalizeClusterId(clusterId);
@@ -111,11 +137,8 @@ function shouldIncludeMed(
 
     case "PRIMARY_DIAGNOSIS": {
       const effectiveDxId = diagnosisId || diagnosisIdSafeFill;
-      if (!effectiveDxId) {
-        return { include: false, reason: "" };
-      }
 
-      if (ctx.resolvedDiagnosisIds && ctx.resolvedDiagnosisIds.length > 0) {
+      if (ctx.resolvedDiagnosisIds && ctx.resolvedDiagnosisIds.length > 0 && effectiveDxId) {
         const matchesDx = ctx.resolvedDiagnosisIds.some(
           dx => dx.toUpperCase() === effectiveDxId.toUpperCase()
         );
@@ -127,14 +150,25 @@ function shouldIncludeMed(
         }
       }
 
-      if (clusterMatch(indicationsCluster, ctx.activeClusters)) {
-        const clusterPrimaryDx = clusterPrimaryDxMap.get(normalizeClusterId(indicationsCluster));
-        if (clusterPrimaryDx && clusterPrimaryDx.toUpperCase() === effectiveDxId.toUpperCase()) {
-          return {
-            include: true,
-            reason: `Primary dx via CLUSTER_PRIMARY_DIAGNOSIS: ${indicationsCluster} → ${clusterPrimaryDx}`,
-          };
+      if (effectiveDxId) {
+        const matchedActiveCluster = findMatchingActiveCluster(indicationsCluster, ctx.activeClusters);
+        if (matchedActiveCluster) {
+          const clusterPrimaryDx = clusterPrimaryDxMap.get(matchedActiveCluster)
+            || clusterPrimaryDxMap.get(normalizeClusterId(indicationsCluster));
+          if (clusterPrimaryDx && clusterPrimaryDx.toUpperCase() === effectiveDxId.toUpperCase()) {
+            return {
+              include: true,
+              reason: `Primary dx via CLUSTER_PRIMARY_DIAGNOSIS: ${matchedActiveCluster} → ${clusterPrimaryDx}`,
+            };
+          }
         }
+      }
+
+      if (clusterMatch(indicationsCluster, ctx.activeClusters)) {
+        return {
+          include: true,
+          reason: `Primary dx via cluster fallback: ${indicationsCluster}`,
+        };
       }
 
       return { include: false, reason: "" };
@@ -240,13 +274,27 @@ function applySafetyChecks(
   return { blocked, blockReason, safetyNote };
 }
 
+function matchesCareSetting(
+  rowCareSetting: string,
+  allowed: CareSetting[] | undefined
+): boolean {
+  if (!allowed || allowed.length === 0) return true;
+
+  const raw = rowCareSetting.toLowerCase().replace(/[\s-]+/g, "_");
+  if (!raw) return true;
+
+  const settings = raw.split(/[;,|]/).map(s => s.trim()).filter(Boolean);
+  return settings.some(s => allowed.includes(s as CareSetting));
+}
+
 export async function getMedSuggestions(
   activeClusters: string[],
   derivedFlags: DerivedFlags,
   allergies: string[],
   medContraFlags: string[],
   resolvedDiagnosisIds?: string[],
-  symptomSeverityFlags?: string[]
+  symptomSeverityFlags?: string[],
+  allowedCareSettings?: CareSetting[]
 ): Promise<MedCandidate[]> {
   const ctx: MedContext = {
     activeClusters,
@@ -255,6 +303,7 @@ export async function getMedSuggestions(
     medContraFlags,
     resolvedDiagnosisIds,
     symptomSeverityFlags,
+    allowedCareSettings,
   };
 
   const medRows = await getTable("GLOBAL_MEDICATIONS_MASTER");
@@ -266,10 +315,11 @@ export async function getMedSuggestions(
     const dxId = norm(r.Primary_Diagnosis_ID);
     if (cid && dxId) clusterPrimaryDxMap.set(cid, dxId);
   }
-
   const candidates: MedCandidate[] = [];
 
   for (const row of medRows) {
+    if (!matchesCareSetting(norm(row.Care_Setting), ctx.allowedCareSettings)) continue;
+
     const { include, reason } = shouldIncludeMed(row, ctx, clusterPrimaryDxMap);
     if (!include) continue;
 
