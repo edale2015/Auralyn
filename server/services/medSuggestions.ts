@@ -1,16 +1,6 @@
 import { getTable } from "../data/registry";
 
-export interface MedGroupCandidate {
-  medicationGroup: string;
-  primaryIndications: string;
-  firstLine: boolean;
-  contraindications: string;
-  keyInteractions: string;
-  renalAdjust: boolean;
-  hepaticAdjust: boolean;
-  blocked: boolean;
-  blockReason?: string;
-}
+export type MedicationLinkType = "PRIMARY_DIAGNOSIS" | "CLUSTER_BASED" | "SYMPTOMATIC" | "COMBINATION";
 
 export interface MedCandidate {
   medicationName: string;
@@ -18,6 +8,9 @@ export interface MedCandidate {
   dose: string;
   route: string;
   reason: string;
+  linkType: MedicationLinkType;
+  indicationsCluster: string;
+  diagnosisId: string;
   safetyNote?: string;
   blocked: boolean;
   blockReason?: string;
@@ -32,6 +25,15 @@ interface DerivedFlags {
   hepatic?: boolean;
 }
 
+interface MedContext {
+  activeClusters: string[];
+  derivedFlags: DerivedFlags;
+  allergies: string[];
+  medContraFlags: string[];
+  resolvedDiagnosisIds?: string[];
+  symptomSeverityFlags?: string[];
+}
+
 function norm(s: any): string {
   return String(s ?? "").trim();
 }
@@ -41,164 +43,263 @@ function parseBoolean(s: any): boolean {
   return v === "TRUE" || v === "YES" || v === "1";
 }
 
-function containsCluster(indicationStr: string, clusters: string[]): boolean {
-  const lower = indicationStr.toLowerCase();
-  return clusters.some(c => lower.includes(c.toLowerCase()));
+function normalizeClusterId(s: string): string {
+  return s.toUpperCase().replace(/[\s-]+/g, "_");
 }
 
-export async function joinClustersToMedGroups(
-  activeClusters: string[],
-  derivedFlags: DerivedFlags,
-  allergies: string[],
-  medContraFlags: string[]
-): Promise<MedGroupCandidate[]> {
-  const rows = await getTable("GLOBAL_STANDARDIZED_MEDGROUPS");
-  const candidates: MedGroupCandidate[] = [];
+function parseClusterList(indicationsCluster: string): string[] {
+  return indicationsCluster
+    .split(/[;,]/)
+    .map(s => normalizeClusterId(s.replace(/^_/, "")))
+    .filter(Boolean);
+}
 
-  for (const row of rows) {
-    const indications = norm(row.Primary_Indications_Clusters);
-    if (!containsCluster(indications, activeClusters)) continue;
+function stripSystemPrefix(id: string): string {
+  return id.replace(/^(ENT|CARDIO|PULM|GI|NEURO|DERM|MSK|GU|HEME|ENDO|PSYCH|OB|PEDS|ID)_/, "");
+}
 
-    const group = norm(row.Medication_Group);
-    const contras = norm(row.Key_Contraindications).toLowerCase();
-    const interactions = norm(row.Key_Interactions).toLowerCase();
+function stripClusterSuffix(id: string): string {
+  return id.replace(/_CLUSTER$/, "");
+}
 
-    let blocked = false;
-    let blockReason: string | undefined;
+function normalizeForComparison(id: string): string {
+  return stripClusterSuffix(stripSystemPrefix(normalizeClusterId(id)));
+}
 
-    if (derivedFlags.pregnant) {
-      if (contras.includes("pregnancy") || contras.includes("pregnant")) {
-        blocked = true;
-        blockReason = "Contraindicated in pregnancy";
+function clusterMatch(indicationsCluster: string, activeClusters: string[]): boolean {
+  const indClusters = parseClusterList(indicationsCluster);
+  const normActive = activeClusters.map(normalizeClusterId);
+  const normActiveStripped = activeClusters.map(normalizeForComparison);
+
+  return indClusters.some(ic => {
+    if (normActive.includes(ic)) return true;
+    const icStripped = normalizeForComparison(ic);
+    if (normActiveStripped.some(na => na === icStripped)) return true;
+    if (normActiveStripped.some(na => na.includes(icStripped) || icStripped.includes(na))) return true;
+    return false;
+  });
+}
+
+async function getPrimaryDiagnosisForCluster(clusterId: string): Promise<string | null> {
+  const rows = await getTable("CLUSTER_PRIMARY_DIAGNOSIS");
+  const normId = normalizeClusterId(clusterId);
+  const match = rows.find(r => normalizeClusterId(norm(r.Cluster_ID)) === normId);
+  return match ? norm(match.Primary_Diagnosis_ID) : null;
+}
+
+function shouldIncludeMed(
+  row: Record<string, any>,
+  ctx: MedContext,
+  clusterPrimaryDxMap: Map<string, string>
+): { include: boolean; reason: string } {
+  const rawLinkType = norm(row.Medication_Link_Type).toUpperCase();
+  const linkType = (rawLinkType || "CLUSTER_BASED") as MedicationLinkType;
+  const indicationsCluster = norm(row.Indications_Cluster);
+  const diagnosisId = norm(row.DIAGNOSIS_ID);
+  const diagnosisIdSafeFill = norm(row.DIAGNOSIS_ID_SafeFill);
+
+  switch (linkType) {
+    case "CLUSTER_BASED": {
+      if (!clusterMatch(indicationsCluster, ctx.activeClusters)) {
+        return { include: false, reason: "" };
       }
+      return {
+        include: true,
+        reason: `Cluster-based: active cluster ${indicationsCluster}`,
+      };
     }
 
-    if (derivedFlags.onAnticoagulant) {
-      if (interactions.includes("anticoag") || interactions.includes("warfarin") || interactions.includes("nsaid")) {
-        blocked = true;
-        blockReason = "Interaction with anticoagulant";
+    case "PRIMARY_DIAGNOSIS": {
+      const effectiveDxId = diagnosisId || diagnosisIdSafeFill;
+      if (!effectiveDxId) {
+        return { include: false, reason: "" };
       }
+
+      if (ctx.resolvedDiagnosisIds && ctx.resolvedDiagnosisIds.length > 0) {
+        const matchesDx = ctx.resolvedDiagnosisIds.some(
+          dx => dx.toUpperCase() === effectiveDxId.toUpperCase()
+        );
+        if (matchesDx) {
+          return {
+            include: true,
+            reason: `Primary diagnosis match: ${effectiveDxId}`,
+          };
+        }
+      }
+
+      if (clusterMatch(indicationsCluster, ctx.activeClusters)) {
+        const clusterPrimaryDx = clusterPrimaryDxMap.get(normalizeClusterId(indicationsCluster));
+        if (clusterPrimaryDx && clusterPrimaryDx.toUpperCase() === effectiveDxId.toUpperCase()) {
+          return {
+            include: true,
+            reason: `Primary dx via CLUSTER_PRIMARY_DIAGNOSIS: ${indicationsCluster} → ${clusterPrimaryDx}`,
+          };
+        }
+      }
+
+      return { include: false, reason: "" };
     }
 
-    if (derivedFlags.ckd) {
-      if (parseBoolean(row.Renal_Adjust_Flag)) {
-        // not blocked but flagged
+    case "SYMPTOMATIC": {
+      if (ctx.symptomSeverityFlags && ctx.symptomSeverityFlags.length > 0) {
+        return {
+          include: true,
+          reason: `Symptomatic: severity flags active`,
+        };
       }
+      if (clusterMatch(indicationsCluster, ctx.activeClusters)) {
+        return {
+          include: true,
+          reason: `Symptomatic: cluster ${indicationsCluster} active`,
+        };
+      }
+      return { include: false, reason: "" };
     }
 
-    if (medContraFlags.includes(group.toLowerCase())) {
+    case "COMBINATION": {
+      if (clusterMatch(indicationsCluster, ctx.activeClusters)) {
+        return {
+          include: true,
+          reason: `Combination bundle: cluster ${indicationsCluster} active`,
+        };
+      }
+      return { include: false, reason: "" };
+    }
+
+    default: {
+      if (clusterMatch(indicationsCluster, ctx.activeClusters)) {
+        return {
+          include: true,
+          reason: `Cluster match (untyped): ${indicationsCluster}`,
+        };
+      }
+      return { include: false, reason: "" };
+    }
+  }
+}
+
+function applySafetyChecks(
+  row: Record<string, any>,
+  ctx: MedContext
+): { blocked: boolean; blockReason?: string; safetyNote?: string } {
+  const medName = norm(row.Medication_Name);
+  const contras = (norm(row.Contraindications) || norm(row.Key_Contraindications)).toLowerCase();
+  const interactions = norm(row.Key_Interactions).toLowerCase();
+  const group = norm(row.Medication_Group).toLowerCase();
+
+  let blocked = false;
+  let blockReason: string | undefined;
+  let safetyNote: string | undefined;
+
+  const lowerName = medName.toLowerCase();
+  for (const allergy of ctx.allergies) {
+    const la = allergy.toLowerCase();
+    if (lowerName.includes(la) || la.includes(lowerName) || contras.includes(la)) {
       blocked = true;
-      blockReason = `Med group blocked by rule: ${group}`;
+      blockReason = `Allergy: ${allergy}`;
+      break;
     }
-
-    candidates.push({
-      medicationGroup: group,
-      primaryIndications: indications,
-      firstLine: parseBoolean(row.First_Line),
-      contraindications: norm(row.Key_Contraindications),
-      keyInteractions: norm(row.Key_Interactions),
-      renalAdjust: parseBoolean(row.Renal_Adjust_Flag),
-      hepaticAdjust: parseBoolean(row.Hepatic_Adjust_Flag),
-      blocked,
-      blockReason,
-    });
   }
 
-  candidates.sort((a, b) => {
-    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
-    if (a.firstLine !== b.firstLine) return a.firstLine ? -1 : 1;
-    return 0;
-  });
-
-  return candidates;
-}
-
-export async function joinMedGroupsToMeds(
-  medGroups: MedGroupCandidate[],
-  derivedFlags: DerivedFlags,
-  allergies: string[]
-): Promise<MedCandidate[]> {
-  const rows = await getTable("ID_MEDICATIONS_MASTER");
-  const candidates: MedCandidate[] = [];
-
-  const activeGroups = medGroups
-    .filter(g => !g.blocked)
-    .map(g => g.medicationGroup.toLowerCase());
-
-  for (const row of rows) {
-    const group = norm(row.Medication_Group).toLowerCase();
-    if (!activeGroups.includes(group)) continue;
-
-    const medName = norm(row.Medication_Name);
-    const contras = norm(row.Contraindications).toLowerCase();
-
-    let blocked = false;
-    let blockReason: string | undefined;
-
-    const lowerName = medName.toLowerCase();
-    for (const allergy of allergies) {
-      if (lowerName.includes(allergy.toLowerCase()) || allergy.toLowerCase().includes(lowerName)) {
-        blocked = true;
-        blockReason = `Allergy: ${allergy}`;
-        break;
-      }
+  if (ctx.derivedFlags.pregnant) {
+    const pregField = norm(row.Pregnancy_Considerations).toLowerCase();
+    if (
+      pregField.includes("avoid") ||
+      pregField.includes("contraindicated") ||
+      contras.includes("pregnancy") ||
+      contras.includes("pregnant")
+    ) {
+      blocked = true;
+      blockReason = "Contraindicated in pregnancy";
     }
-
-    if (derivedFlags.pregnant) {
-      const pregConsider = norm(row.Pregnancy_Considerations).toLowerCase();
-      if (pregConsider.includes("avoid") || pregConsider.includes("contraindicated")) {
-        blocked = true;
-        blockReason = "Avoid in pregnancy";
-      }
-    }
-
-    if (derivedFlags.onAnticoagulant) {
-      const interactions = norm(row.Key_Interactions).toLowerCase();
-      if (interactions.includes("anticoag") || interactions.includes("warfarin")) {
-        blocked = true;
-        blockReason = "Interaction with anticoagulant";
-      }
-    }
-
-    const parentGroup = medGroups.find(g => g.medicationGroup.toLowerCase() === group);
-    const reason = parentGroup
-      ? `Indicated for ${parentGroup.primaryIndications}`
-      : `Group: ${group}`;
-
-    let safetyNote: string | undefined;
-    if (derivedFlags.ckd && parseBoolean(row.Renal_Adjust)) {
-      safetyNote = "Renal dose adjustment needed";
-    }
-    if (derivedFlags.hepatic && parseBoolean(row.Hepatic_Adjust)) {
-      safetyNote = (safetyNote ? safetyNote + "; " : "") + "Hepatic dose adjustment needed";
-    }
-
-    candidates.push({
-      medicationName: medName,
-      medicationGroup: norm(row.Medication_Group),
-      dose: norm(row.Adult_Dose),
-      route: norm(row.Route),
-      reason,
-      safetyNote,
-      blocked,
-      blockReason,
-    });
   }
 
-  candidates.sort((a, b) => {
-    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
-    return 0;
-  });
+  if (ctx.derivedFlags.onAnticoagulant) {
+    if (
+      interactions.includes("anticoag") ||
+      interactions.includes("warfarin") ||
+      interactions.includes("nsaid")
+    ) {
+      blocked = true;
+      blockReason = "Interaction with anticoagulant";
+    }
+  }
 
-  return candidates.slice(0, 10);
+  if (ctx.medContraFlags.includes(group)) {
+    blocked = true;
+    blockReason = `Med group blocked by rule: ${group}`;
+  }
+
+  if (ctx.derivedFlags.ckd && (parseBoolean(row["Renal_Adjust?"]) || parseBoolean(row.Renal_Adjust))) {
+    safetyNote = "Renal dose adjustment needed";
+  }
+  if (ctx.derivedFlags.hepatic && (parseBoolean(row["Hepatic_Adjust?"]) || parseBoolean(row.Hepatic_Adjust))) {
+    safetyNote = (safetyNote ? safetyNote + "; " : "") + "Hepatic dose adjustment needed";
+  }
+
+  return { blocked, blockReason, safetyNote };
 }
 
 export async function getMedSuggestions(
   activeClusters: string[],
   derivedFlags: DerivedFlags,
   allergies: string[],
-  medContraFlags: string[]
+  medContraFlags: string[],
+  resolvedDiagnosisIds?: string[],
+  symptomSeverityFlags?: string[]
 ): Promise<MedCandidate[]> {
-  const medGroups = await joinClustersToMedGroups(activeClusters, derivedFlags, allergies, medContraFlags);
-  return joinMedGroupsToMeds(medGroups, derivedFlags, allergies);
+  const ctx: MedContext = {
+    activeClusters,
+    derivedFlags,
+    allergies,
+    medContraFlags,
+    resolvedDiagnosisIds,
+    symptomSeverityFlags,
+  };
+
+  const medRows = await getTable("GLOBAL_MEDICATIONS_MASTER");
+
+  const clusterPrimaryDxRows = await getTable("CLUSTER_PRIMARY_DIAGNOSIS");
+  const clusterPrimaryDxMap = new Map<string, string>();
+  for (const r of clusterPrimaryDxRows) {
+    const cid = normalizeClusterId(norm(r.Cluster_ID));
+    const dxId = norm(r.Primary_Diagnosis_ID);
+    if (cid && dxId) clusterPrimaryDxMap.set(cid, dxId);
+  }
+
+  const candidates: MedCandidate[] = [];
+
+  for (const row of medRows) {
+    const { include, reason } = shouldIncludeMed(row, ctx, clusterPrimaryDxMap);
+    if (!include) continue;
+
+    const safety = applySafetyChecks(row, ctx);
+
+    candidates.push({
+      medicationName: norm(row.Medication_Name),
+      medicationGroup: norm(row.Medication_Group),
+      dose: norm(row.Adult_Dose),
+      route: norm(row.Route),
+      reason,
+      linkType: (norm(row.Medication_Link_Type).toUpperCase() || "CLUSTER_BASED") as MedicationLinkType,
+      indicationsCluster: norm(row.Indications_Cluster),
+      diagnosisId: norm(row.DIAGNOSIS_ID) || norm(row.DIAGNOSIS_ID_SafeFill),
+      safetyNote: safety.safetyNote,
+      blocked: safety.blocked,
+      blockReason: safety.blockReason,
+    });
+  }
+
+  candidates.sort((a, b) => {
+    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
+    const linkOrder: Record<string, number> = {
+      PRIMARY_DIAGNOSIS: 0,
+      CLUSTER_BASED: 1,
+      SYMPTOMATIC: 2,
+      COMBINATION: 3,
+    };
+    return (linkOrder[a.linkType] ?? 4) - (linkOrder[b.linkType] ?? 4);
+  });
+
+  return candidates.slice(0, 20);
 }

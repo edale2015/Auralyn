@@ -1,0 +1,115 @@
+2) Tell Replit to switch to consolidated global tables
+
+Send Replit this checklist (copy/paste):
+
+✅ A) Update server/data/registry.ts
+
+Add/replace table configs to point to these exact tabs:
+
+GLOBAL_CLUSTER_MASTER → source of truth for cluster disposition + thresholds + red flags summary fields
+
+GLOBAL_MEDICATIONS_MASTER → source of truth for meds
+
+CLUSTER_PRIMARY_DIAGNOSIS → source of truth mapping cluster → primary diagnosis ID (deterministic)
+
+Disable legacy sources for these concepts:
+
+per-system cluster triage tabs
+
+per-system medication tabs
+
+✅ B) Update clusterDisposition.ts
+
+Replace any lookup against old cluster triage tabs with GLOBAL_CLUSTER_MASTER.
+
+Use Cluster_ID as the join key everywhere (not human names).
+
+✅ C) Update medSuggestions.ts
+
+Use GLOBAL_MEDICATIONS_MASTER and respect:
+
+Medication_Link_Type
+
+PRIMARY_DIAGNOSIS: only include when final diagnosis chosen (or strong dx candidate)
+
+CLUSTER_BASED: include when cluster active
+
+SYMPTOMATIC: include when symptom triggers/severity screen active
+
+COMBINATION: include only when relevant (or treat as protocol bundles)
+
+Use:
+
+DIAGNOSIS_ID_SafeFill when DIAGNOSIS_ID missing and you need a pointer
+
+CLUSTER_PRIMARY_DIAGNOSIS.Primary_Diagnosis_ID as deterministic fallback when needed
+
+✅ D) Update “integrity/validate” endpoint
+
+Add /api/admin/data/validate (or extend your existing status endpoint) to check:
+
+Every Indications_Cluster in meds exists in GLOBAL_CLUSTER_MASTER.Cluster_ID
+
+Every CLUSTER_PRIMARY_DIAGNOSIS.Cluster_ID exists in GLOBAL_CLUSTER_MASTER
+
+Any med row with Medication_Link_Type=PRIMARY_DIAGNOSIS must have DIAGNOSIS_ID present
+
+Count of meds by link type (so you spot drift fast)
+
+3) What you should test immediately (5-minute smoke test)
+
+Run your dev scenario endpoint:
+
+Test 1: cluster-only meds
+
+Force ActiveClusters=["ENT_PHARYNGITIS"]
+Expected:
+
+meds appear from GLOBAL_MEDICATIONS_MASTER where Medication_Link_Type=CLUSTER_BASED and cluster matches
+
+Test 2: symptom meds
+
+Set a nausea complaint + high symptom severity (or add a “severity screen” flag)
+Expected:
+
+meds with Medication_Link_Type=SYMPTOMATIC (e.g., antiemetics) show up
+
+Test 3: primary diagnosis meds
+
+Force a diagnosis ID (any you have that’s used by a med row)
+Expected:
+
+meds with PRIMARY_DIAGNOSIS appear
+
+Test 4: combo bundles
+
+Activate clusters matching a combination med row
+Expected:
+
+combo rows included only when their logic is satisfied (or excluded until you implement the stricter “all required clusters” logic)
+
+4) Do you need to consolidate anything else right now?
+
+Not to “go live” with the agentic workflow.
+
+The next consolidation that actually improves safety is:
+
+GLOBAL_DIAGNOSIS_MASTER
+
+You already have diagnoses staging, but if you haven’t yet uploaded a final GLOBAL_DIAGNOSIS_MASTER tab, that’s the next “big three + one.”
+
+Why:
+
+Diagnosis resolver becomes deterministic
+
+Your physician approval screen can show consistent dx candidates
+
+Cluster → dx becomes stable (especially when clusters have multiple diagnoses)
+
+But you can still run cluster-driven triage + symptom meds without it.
+
+5) What I’d tell Replit in one paragraph
+
+If you want a single message to send:
+
+“Please switch the pipeline to use the consolidated Google Sheet tabs GLOBAL_CLUSTER_MASTER, GLOBAL_MEDICATIONS_MASTER, and CLUSTER_PRIMARY_DIAGNOSIS as the only sources of truth. Update registry.ts to point to these tabs, update clusterDisposition.ts to read dispositions/thresholds from GLOBAL_CLUSTER_MASTER keyed by Cluster_ID, and update medSuggestions.ts to read from GLOBAL_MEDICATIONS_MASTER and respect Medication_Link_Type (PRIMARY_DIAGNOSIS/CLUSTER_BASED/SYMPTOMATIC/COMBINATION). Use CLUSTER_PRIMARY_DIAGNOSIS as deterministic fallback when a med needs a diagnosis pointer. Disable legacy per-system cluster/med tabs in the active registry and add an admin validation endpoint that checks cluster/diagnosis key integrity.”

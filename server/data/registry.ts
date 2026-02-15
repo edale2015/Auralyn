@@ -16,8 +16,12 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   GLOBAL_SECONDARY: { tab: "GLOBAL_SECONDARY", range: "A1:Z5000" },
   CARDS_MODIFIER_MASTER: { tab: "CARDS_MODIFIER_MASTER", range: "A1:Z5000" },
   RULESTRIGGERS: { tab: "RULESTRIGGERS", range: "A1:Z5000" },
-  GLOBAL_STANDARDIZED_MEDGROUPS: { tab: "GLOBAL_STANDARDIZED_MEDGROUPS", range: "A1:Z5000" },
-  ID_MEDICATIONS_MASTER: { tab: "ID_MEDICATIONS_MASTER", range: "A1:Z5000" },
+
+  GLOBAL_CLUSTER_MASTER: { tab: "GLOBAL_CLUSTER_MASTER", range: "A1:Z5000" },
+  GLOBAL_MEDICATIONS_MASTER: { tab: "GLOBAL_MEDICATIONS_MASTER", range: "A1:Z5000" },
+  CLUSTER_PRIMARY_DIAGNOSIS: { tab: "CLUSTER_PRIMARY_DIAGNOSIS", range: "A1:Z2000" },
+
+  // Legacy per-system tabs kept for diagnosis resolver fallback (read-only)
   ENT_DIAGNOSIS_MASTER: { tab: "ENT_DIAGNOSIS_MASTER", range: "A1:Z5000" },
   CARD_DIAGNOSIS_MASTER: { tab: "CARD_DIAGNOSIS_MASTER", range: "A1:Z5000" },
   PULM_DIAGNOSIS_MASTER: { tab: "PULM_DIAGNOSIS_MASTER", range: "A1:Z5000" },
@@ -28,8 +32,6 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   NEURO_DIAGNOSIS_MASTER: { tab: "NEURO_DIAGNOSIS_MASTER", range: "A1:Z5000" },
   OPHTH_DIAGNOSIS_MASTER: { tab: "OPHTH_DIAGNOSIS_MASTER", range: "A1:Z5000" },
   GEN_DIAGNOSIS_MASTER: { tab: "GEN_DIAGNOSIS_MASTER", range: "A1:Z5000" },
-  NEURO_GLOBAL_TRIAGE: { tab: "NEURO_GLOBAL_TRIAGE" },
-  NEURO_CLUSTER_TRIAGE: { tab: "NEURO_CLUSTER_TRIAGE" },
 };
 
 export async function loadTable(tableName: string): Promise<SheetRow[]> {

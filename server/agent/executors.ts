@@ -234,11 +234,14 @@ export async function executeAction(
           .map(r => r.detail?.match(/MED_CONTRA_FLAG\(([^)]+)\)/)?.[1] ?? "")
           .filter(Boolean);
 
+        const resolvedDiagnosisIds = diagnoses.map(d => d.diagnosisId).filter(Boolean);
+
         const meds = await getMedSuggestions(
           updated.activeClusters,
           derivedFlags,
           allergies,
-          medContraFlags
+          medContraFlags,
+          resolvedDiagnosisIds
         );
 
         updated.candidateMeds = meds.map(m => ({

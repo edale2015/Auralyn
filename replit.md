@@ -26,6 +26,19 @@ The agent system manages a flow through various routing states (e.g., `INTAKE_PE
 ### Multi-System Triage Pipeline
 A robust multi-system triage pipeline relies on canonical keys for medical systems, chief complaints, and clusters. A unified sheets registry, loaded from Google Sheets, provides dynamically configured data for complaint routing, integration maps, FHIR prefill, modifiers, and rules engines. A question queue dynamically builds ordered questions, and an enhanced supervisor manages red flags and triage upgrades. The cluster/disposition engine resolves dispositions, and medication suggestions are generated with safety checks. A diagnosis resolver provides confidence-scored diagnostic candidates across multiple medical domains.
 
+### Consolidated Global Tables (Feb 2026)
+Three global tables replace per-system diagnosis/medication sheets:
+- **GLOBAL_CLUSTER_MASTER** (1,258 rows): Cluster_ID, System, Default_Disposition, ER_Threshold/UC_Threshold/PC_Threshold score thresholds, Escalation_Target, Red_Flag_Criteria, Base_Risk_Level, Followup_Plan
+- **GLOBAL_MEDICATIONS_MASTER** (548 rows): DIAGNOSIS_ID, System, Medication_Name, Medication_Group, Indications_Cluster (semicolon-delimited multi-cluster), First_Line?, Adult_Dose, Pediatric_Dose, Pregnancy_Considerations, Contraindications, Key_Interactions, Renal_Adjust?, Hepatic_Adjust?, Route
+- **CLUSTER_PRIMARY_DIAGNOSIS** (1,258 mappings): Links Cluster_ID to Primary_Diagnosis_ID for medication matching
+
+Key design notes:
+- Medication_Link_Type column not yet populated (all 548 meds currently UNTYPED, defaulting to CLUSTER_BASED behavior)
+- Cluster naming conventions differ between tables: CHIEF_COMPLAINT_ROUTER uses `ENT_PHARYNGITIS`, GLOBAL_CLUSTER_MASTER uses `ENT_STREP_PHARYNGITIS`, GLOBAL_MEDICATIONS_MASTER uses `Strep pharyngitis cluster`. Fuzzy cross-mapping handles system prefix stripping and `_CLUSTER` suffix removal.
+- Indications_Cluster uses semicolon delimiters for multi-cluster entries
+- Safety checks: allergy blocking (penicillin family), pregnancy contraindication detection, renal/hepatic adjustment flags, anticoagulant interaction warnings
+- Admin endpoints: GET /api/admin/data/validate (integrity checks), GET /api/admin/data/clusters?search=X (cluster browser), POST /api/admin/test/runScenario (end-to-end pipeline test)
+
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached, with deduplication mechanisms ensuring idempotency. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags enable granular control over channel activation. Channel operations are monitored via a dashboard that tracks key metrics including LLM performance and friction escalations.
 
