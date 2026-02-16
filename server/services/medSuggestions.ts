@@ -29,7 +29,10 @@ export type CareSetting = "urgent_care" | "symptomatic" | "chronic_management";
 
 export const CARE_SETTING_PRESETS: Record<string, CareSetting[]> = {
   urgent_care: ["urgent_care", "symptomatic"],
+  family_medicine: ["urgent_care", "symptomatic", "chronic_management"],
   family_med: ["urgent_care", "symptomatic", "chronic_management"],
+  chronic_management: ["chronic_management", "symptomatic"],
+  specialty_program: ["chronic_management", "symptomatic"],
   obesity_dm_htn: ["chronic_management", "symptomatic"],
 };
 

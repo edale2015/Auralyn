@@ -7,6 +7,7 @@ import { getRulesForContext, executeRules, applyRuleActions, type RuleAction } f
 import { getModifiersForSet, applyFhirPrefill, computeModifierSummary } from "../services/modifiers";
 import { enhancedSupervisorGate } from "../services/supervisorEnhanced";
 import { fetchFhirPrefill, buildPrefillFromManualEntry } from "../services/fhirPrefill";
+import { runMedicationTriggeredQuestions } from "../services/medicationTriggeredQuestions";
 import { registerDynamicQuestion } from "./router";
 
 export interface PipelineResult {
@@ -171,6 +172,52 @@ export async function initializePipeline(
     });
   }
 
+  try {
+    const medTriggerResult = await runMedicationTriggeredQuestions(updated);
+    if (medTriggerResult.actions.length > 0) {
+      for (const action of medTriggerResult.actions) {
+        if (action.type === "ADD_INLINE_QUESTION") {
+          registerDynamicQuestion(action.questionId, action.text);
+          updated.questionQueue = [
+            ...updated.questionQueue,
+            {
+              questionId: action.questionId,
+              bundleId: action.bundleId,
+              askOrder: action.askOrder,
+              isRedFlag: false,
+              questionText: action.text,
+              answered: Object.keys(updated.answers).includes(action.questionId),
+            },
+          ];
+        } else if (action.type === "ADD_BUNDLE") {
+          if (!bundleIds.includes(action.bundleId)) {
+            bundleIds.push(action.bundleId);
+          }
+          updated.ruleTrace = [
+            ...updated.ruleTrace,
+            {
+              ruleId: "MED_TRIGGER",
+              triggerLevel: "MED_RECONCILE",
+              action: "ADD_BUNDLE",
+              detail: action.bundleId,
+            },
+          ];
+        }
+      }
+      events.push({
+        type: "MED_TRIGGERS_MATCHED",
+        severity: "info",
+        message: `${medTriggerResult.matchedTriggers.length} med triggers matched, ${medTriggerResult.actions.length} actions`,
+      });
+    }
+  } catch (err: any) {
+    events.push({
+      type: "MED_TRIGGERS_ERROR",
+      severity: "warn",
+      message: `Med trigger check failed: ${err.message}`,
+    });
+  }
+
   if (bundleIds.length > 0) {
     try {
       const secondaryQs = await getQuestionsForBundles(bundleIds);
@@ -181,7 +228,10 @@ export async function initializePipeline(
         registerDynamicQuestion(qEntry.questionId, qEntry.questionText);
       }
 
-      updated.questionQueue = queue.map(q => ({
+      const existingInlineQs = updated.questionQueue.filter(
+        q => q.bundleId === "BUNDLE_MED_CONFIRM"
+      );
+      const bundleQs = queue.map(q => ({
         questionId: q.questionId,
         bundleId: q.bundleId,
         askOrder: q.askOrder,
@@ -189,6 +239,7 @@ export async function initializePipeline(
         questionText: q.questionText,
         answered: q.answered,
       }));
+      updated.questionQueue = [...bundleQs, ...existingInlineQs];
 
       const unansweredCount = queue.filter(q => !q.answered).length;
       events.push({

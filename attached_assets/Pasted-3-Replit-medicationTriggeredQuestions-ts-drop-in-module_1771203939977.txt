@@ -1,0 +1,176 @@
+3) Replit: medicationTriggeredQuestions.ts (drop-in module)
+
+This version:
+
+pulls reconciled meds (FHIR + patient reported)
+
+matches triggers
+
+injects the Confirm_Question (as one question) and the bundle
+
+adds followup bundle immediately OR (better) waits for confirm answer
+
+Since your engine is already queue-based, the cleanest is:
+
+add confirm question as a synthetic question
+
+if answer indicates “yes / relevant”, then ADD_BUNDLE
+
+Here’s a practical implementation that works today:
+
+// server/services/medicationTriggeredQuestions.ts
+import { registry } from "../data/registry";
+import { CaseState } from "../../shared/agentTypes";
+
+type TriggerRow = {
+  Trigger_Value: string;
+  Trigger_Type: "med_name" | "med_group" | "substring" | "tag";
+  Likely_Conditions: string;
+  Confidence: "high" | "medium" | "low";
+  Confirm_Question: string;
+  Followup_Bundle_ID: string;
+};
+
+export type MedTriggerAction =
+  | { type: "ADD_INLINE_QUESTION"; questionId: string; text: string; qType: "multi_choice" | "yes_no" | "free_text"; bundleId: string; askOrder: number }
+  | { type: "ADD_BUNDLE"; bundleId: string };
+
+function norm(s: string) {
+  return (s || "").trim().toLowerCase();
+}
+
+function containsAny(hay: string, needles: string[]) {
+  const h = norm(hay);
+  return needles.some(n => h.includes(norm(n)));
+}
+
+export async function runMedicationTriggeredQuestions(state: CaseState): Promise<{
+  actions: MedTriggerAction[];
+  matchedTriggers: Array<{ trigger: string; bundleId: string }>;
+}> {
+  const triggers = registry.getTable<TriggerRow>("MED_TO_CONDITION_TRIGGERS") || [];
+
+  // Pull meds from state (FHIR + patient confirmed/reported)
+  const medNames: string[] = [
+    ...(state.fhirPrefill?.medicationNames || []),
+    ...(state.modifierAnswers?.currentMedsList || []), // if you store it
+  ].filter(Boolean);
+
+  const medGroups: string[] = [
+    ...(state.fhirPrefill?.medicationGroups || []), // optional derived groups
+  ].filter(Boolean);
+
+  // Optional tags if you compute them (QT risk, serotonergic, anticoag, etc.)
+  const tags: string[] = [
+    ...(state.fhirPrefill?.medicationTags || []),
+  ].filter(Boolean);
+
+  const actions: MedTriggerAction[] = [];
+  const matchedTriggers: Array<{ trigger: string; bundleId: string }> = [];
+
+  // Dedup by bundle
+  const addedBundles = new Set<string>();
+  const addedInline = new Set<string>();
+
+  // Create a synthetic bundle to hold confirm questions
+  const confirmBundleId = "BUNDLE_MED_CONFIRM";
+  let confirmOrder = 5;
+
+  for (const t of triggers) {
+    const val = t.Trigger_Value;
+    const bundleId = t.Followup_Bundle_ID;
+
+    let hit = false;
+    if (t.Trigger_Type === "med_name") hit = medNames.some(m => norm(m) === norm(val));
+    if (t.Trigger_Type === "substring") hit = medNames.some(m => norm(m).includes(norm(val)));
+    if (t.Trigger_Type === "med_group") hit = medGroups.some(g => norm(g) === norm(val));
+    if (t.Trigger_Type === "tag") hit = tags.some(tag => norm(tag) === norm(val));
+
+    if (!hit) continue;
+
+    matchedTriggers.push({ trigger: val, bundleId });
+
+    // Inline confirm question (always added)
+    const qId = `MEDTRIG_CONFIRM_${norm(val).replace(/[^a-z0-9]+/g, "_").toUpperCase()}`;
+    if (!addedInline.has(qId)) {
+      actions.push({
+        type: "ADD_INLINE_QUESTION",
+        questionId: qId,
+        text: t.Confirm_Question,
+        qType: "multi_choice",
+        bundleId: confirmBundleId,
+        askOrder: confirmOrder,
+      });
+      addedInline.add(qId);
+      confirmOrder += 5;
+    }
+
+    // Add follow-up bundle now (simple MVP) OR gate it on answer later
+    if (!addedBundles.has(bundleId)) {
+      actions.push({ type: "ADD_BUNDLE", bundleId });
+      addedBundles.add(bundleId);
+    }
+  }
+
+  return { actions, matchedTriggers };
+}
+
+
+Where to plug it into your pipeline:
+
+Right after meds are reconciled (after FHIR prefill + meds confirmation)
+
+Before questionQueue.ts finalizes the queue
+So it can “inject” bundles.
+
+If you want true gating (only add follow-up bundle after confirm answer), we can do that too (you already track answered questions).
+
+4) Chronic-care mode toggle architecture (urgent care ↔ family med ↔ chronic programs)
+The right model
+
+Use Care Mode as a single switch in CaseState, and filter meds/questions based on it.
+
+Add to CaseState:
+
+careMode: "urgent_care" | "family_medicine" | "chronic_management" | "specialty_program";
+
+
+Care mode controls:
+
+which Care_Setting meds can be suggested
+
+whether PROTOCOL meds appear as “suggestions” or only as “context”
+
+how many “chronic follow-up questions” are allowed
+
+Suggested defaults
+
+urgent_care:
+
+show meds with Care_Setting in {urgent_care, symptomatic}
+
+use chronic meds only as triggers, not suggestions
+
+family_medicine:
+
+include chronic_management meds in suggestion list (still behind physician approval)
+
+chronic_management:
+
+prioritize chronic meds, adherence, monitoring, titration prompts
+
+still use red flags to escalate
+
+Implementation in medSuggestions.ts:
+
+const allowedCare = state.careMode === "urgent_care"
+  ? new Set(["urgent_care","symptomatic"])
+  : state.careMode === "family_medicine"
+    ? new Set(["urgent_care","symptomatic","chronic_management"])
+    : new Set(["chronic_management","symptomatic"]);
+
+candidates = candidates.filter(m => allowedCare.has((m.Care_Setting || "urgent_care").toLowerCase()));
+
+
+Physician approval stays the same across modes
+Only the suggestions and question depth change.

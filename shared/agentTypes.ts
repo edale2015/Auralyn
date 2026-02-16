@@ -114,6 +114,13 @@ export const CaseStateSchema = z.object({
     answered: z.boolean().default(false),
   })).default([]),
 
+  careMode: z.enum([
+    "urgent_care",
+    "family_medicine",
+    "chronic_management",
+    "specialty_program",
+  ]).optional(),
+
   routing: z.object({
     state: z.enum([
       "INTAKE_PENDING",

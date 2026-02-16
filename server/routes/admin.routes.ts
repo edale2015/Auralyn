@@ -228,6 +228,7 @@ export function registerAdminRoutes(router: Router) {
         meds = [],
         pmh = [],
         careSetting,
+        careMode,
       } = req.body;
 
       if (!complaint) {
@@ -262,7 +263,8 @@ export function registerAdminRoutes(router: Router) {
         requiredQuestionIdsMissing: [],
         recommendedActions: [],
         questionQueue: [],
-        routing: { state: "INTAKE_PENDING", careSetting: careSetting || undefined },
+        careMode: careMode || undefined,
+        routing: { state: "INTAKE_PENDING", careSetting: careSetting || careMode || undefined },
         audit: { steps: [], events: [] },
       };
 
@@ -296,10 +298,14 @@ export function registerAdminRoutes(router: Router) {
           questionText: q.questionText,
           answered: q.answered,
         })),
+        careMode: pState.careMode,
         bundlesAdded: [
           pipelineResult.routerEntry?.primarySecondaryBundleId,
           ...pState.ruleTrace.filter(r => r.action === "ADD_BUNDLE").map(r => r.detail),
         ].filter(Boolean),
+        medTriggersMatched: pipelineResult.events
+          .filter(e => e.type === "MED_TRIGGERS_MATCHED")
+          .map(e => e.message),
         rulesFired: pState.ruleTrace.map(r => ({
           ruleId: r.ruleId,
           triggerLevel: r.triggerLevel,
@@ -349,7 +355,7 @@ export function registerAdminRoutes(router: Router) {
             ? dxResult.map((d: any) => d.diagnosisId).filter(Boolean)
             : [];
 
-          const careSettingKey = pState.routing?.careSetting;
+          const careSettingKey = pState.careMode || pState.routing?.careSetting;
           const allowedCareSettings = careSettingKey
             ? CARE_SETTING_PRESETS[careSettingKey] ?? careSettingKey.split(",").map(s => s.trim()) as CareSetting[]
             : undefined;

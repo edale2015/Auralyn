@@ -236,7 +236,7 @@ export async function executeAction(
 
         const resolvedDiagnosisIds = diagnoses.map(d => d.diagnosisId).filter(Boolean);
 
-        const careSettingKey = updated.routing?.careSetting;
+        const careSettingKey = updated.careMode || updated.routing?.careSetting;
         const allowedCareSettings = careSettingKey
           ? CARE_SETTING_PRESETS[careSettingKey] ?? careSettingKey.split(",").map(s => s.trim()) as CareSetting[]
           : undefined;

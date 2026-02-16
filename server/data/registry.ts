@@ -20,6 +20,7 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   GLOBAL_CLUSTER_MASTER: { tab: "GLOBAL_CLUSTER_MASTER", range: "A1:Z5000" },
   GLOBAL_MEDICATIONS_MASTER: { tab: "GLOBAL_MEDICATIONS_MASTER", range: "A1:Z5000" },
   CLUSTER_PRIMARY_DIAGNOSIS: { tab: "CLUSTER_PRIMARY_DIAGNOSIS", range: "A1:Z2000" },
+  MED_TO_CONDITION_TRIGGERS: { tab: "MED_TO_CONDITION_TRIGGERS", range: "A1:Z2000" },
 
   // Legacy per-system tabs kept for diagnosis resolver fallback (read-only)
   ENT_DIAGNOSIS_MASTER: { tab: "ENT_DIAGNOSIS_MASTER", range: "A1:Z5000" },

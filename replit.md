@@ -40,6 +40,8 @@ Key design notes:
 - Indications_Cluster uses semicolon delimiters for multi-cluster entries
 - Safety checks: allergy blocking (penicillin family), pregnancy contraindication detection, renal/hepatic adjustment flags, anticoagulant interaction warnings
 - Care_Setting filter with presets: urgent_care=[urgent_care,symptomatic], family_med=[urgent_care,symptomatic,chronic_management], obesity_dm_htn=[chronic_management,symptomatic]
+- **careMode** field on CaseState: `urgent_care | family_medicine | chronic_management | specialty_program` — controls which Care_Setting meds are suggested. Falls back to `routing.careSetting` for backward compat.
+- **MED_TO_CONDITION_TRIGGERS** table (Google Sheet): Trigger_Value, Trigger_Type (med_name/substring/med_group/tag), Likely_Conditions, Confidence, Confirm_Question, Followup_Bundle_ID. Runs after FHIR prefill, injects inline confirm questions into questionQueue and adds follow-up bundles.
 - Admin endpoints: GET /api/admin/data/validate (integrity checks), GET /api/admin/data/clusters?search=X (cluster browser), POST /api/admin/test/runScenario (end-to-end pipeline test)
 
 ### Multi-Channel Messaging
