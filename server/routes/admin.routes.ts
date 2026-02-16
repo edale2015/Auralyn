@@ -229,6 +229,12 @@ export function registerAdminRoutes(router: Router) {
         pmh = [],
         careSetting,
         careMode,
+        metabolic,
+        dm,
+        htn,
+        bariatric,
+        glp1,
+        social,
       } = req.body;
 
       if (!complaint) {
@@ -263,6 +269,13 @@ export function registerAdminRoutes(router: Router) {
         requiredQuestionIdsMissing: [],
         recommendedActions: [],
         questionQueue: [],
+        metabolic: metabolic || undefined,
+        dm: dm || undefined,
+        htn: htn || undefined,
+        bariatric: bariatric || undefined,
+        glp1: glp1 || undefined,
+        social: social || undefined,
+        spotInterventions: [],
         careMode: careMode || undefined,
         routing: { state: "INTAKE_PENDING", careSetting: careSetting || careMode || undefined },
         audit: { steps: [], events: [] },
@@ -270,7 +283,7 @@ export function registerAdminRoutes(router: Router) {
 
       const debug: Record<string, any> = {
         scenarioId,
-        input: { complaint, answers, modifierAnswers: seedState.modifierAnswers, forcedClusters, demographics, allergies, meds, pmh },
+        input: { complaint, answers, modifierAnswers: seedState.modifierAnswers, forcedClusters, demographics, allergies, meds, pmh, metabolic, dm, htn, bariatric, glp1, social },
       };
 
       const pipelineResult = await initializePipeline(seedState, {
@@ -306,6 +319,20 @@ export function registerAdminRoutes(router: Router) {
         medTriggersMatched: pipelineResult.events
           .filter(e => e.type === "MED_TRIGGERS_MATCHED")
           .map(e => e.message),
+        obesityAgent: {
+          triggered: pipelineResult.events.some(e => e.type === "OBESITY_AGENT_TRIGGERED"),
+          entryReasons: pipelineResult.events
+            .filter(e => e.type === "OBESITY_AGENT_TRIGGERED")
+            .map(e => e.message),
+          dm: pState.dm,
+          htn: pState.htn,
+          glp1: pState.glp1,
+          metabolic: pState.metabolic,
+          spotInterventions: pState.spotInterventions,
+          completeSummary: pipelineResult.events
+            .filter(e => e.type === "OBESITY_AGENT_COMPLETE")
+            .map(e => e.message),
+        },
         rulesFired: pState.ruleTrace.map(r => ({
           ruleId: r.ruleId,
           triggerLevel: r.triggerLevel,

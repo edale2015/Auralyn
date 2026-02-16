@@ -430,6 +430,107 @@ export async function executeAction(
       }
     }
 
+    case "ASK_CLUSTER": {
+      if (!updated.activeClusters.includes(action.clusterId)) {
+        updated.activeClusters = [...updated.activeClusters, action.clusterId];
+      }
+      const maxOrder = updated.questionQueue.reduce((mx, q) => Math.max(mx, q.askOrder ?? 0), 0);
+      let nextOrder = maxOrder + 1;
+      for (const qId of action.questions ?? []) {
+        if (!updated.questionQueue.some(q => q.questionId === qId)) {
+          updated.questionQueue = [
+            ...updated.questionQueue,
+            { questionId: qId, bundleId: action.clusterId, askOrder: nextOrder++, isRedFlag: false, answered: Object.keys(updated.answers).includes(qId) },
+          ];
+        }
+      }
+      events.push({ type: "CLUSTER_ADDED", severity: "info", message: `Cluster ${action.clusterId} added with ${(action.questions ?? []).length} questions` });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { clusterId: action.clusterId }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+      };
+    }
+
+    case "EDUCATION_BLOCK": {
+      events.push({ type: "EDUCATION_DELIVERED", severity: "info", message: `${action.topic} (${action.safetyClass})` });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { topic: action.topic, safetyClass: action.safetyClass }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+      };
+    }
+
+    case "TEST_SUGGESTION": {
+      updated.recommendedActions = [
+        ...(updated.recommendedActions || []),
+        ...action.tests.map(t => ({ type: `TEST_${t}`, priority: action.urgency === "stat" ? "high" as const : "medium" as const })),
+      ];
+      events.push({ type: "TESTS_SUGGESTED", severity: "info", message: `${action.tests.join(", ")} (${action.urgency})` });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { tests: action.tests, urgency: action.urgency }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+      };
+    }
+
+    case "SAFETY_NET": {
+      events.push({ type: "SAFETY_NET_SET", severity: "info", message: `${action.returnTriggers.length} triggers, timeframe=${action.timeframe ?? "unspecified"}` });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { returnTriggers: action.returnTriggers, timeframe: action.timeframe }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+      };
+    }
+
+    case "REFERRAL_SUGGESTION": {
+      updated.recommendedActions = [
+        ...(updated.recommendedActions || []),
+        { type: `REFER_${action.specialty.toUpperCase()}`, priority: action.urgency === "emergent" ? "high" as const : action.urgency === "urgent" ? "high" as const : "medium" as const },
+      ];
+      events.push({ type: "REFERRAL_SUGGESTED", severity: "info", message: `${action.specialty} (${action.urgency}): ${action.reason}` });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { specialty: action.specialty, urgency: action.urgency }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+      };
+    }
+
+    case "ER_SEND_RECOMMENDATION": {
+      updated.routing = { ...updated.routing, state: "EMERGENT_ESCALATION" };
+      updated.redFlags = [...new Set([...updated.redFlags, "RF_ER_SEND_METABOLIC"])];
+      events.push({ type: "ER_SEND", severity: "error", message: action.reason });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { reason: action.reason, callEmergencyServices: action.callEmergencyServices }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+        stop: { reason: "EMERGENT" },
+      };
+    }
+
+    case "URGENT_CARE_SPOT_INTERVENTION": {
+      updated.spotInterventions = [
+        ...(updated.spotInterventions || []),
+        {
+          interventionId: action.interventionId,
+          contextCondition: action.contextCondition,
+          actions: action.actions ?? [],
+          testsIfAvailable: action.testsIfAvailable ?? [],
+          doNotDo: action.doNotDo ?? [],
+          referralWindow: action.referralWindow,
+          erTriggers: [],
+          source: "OBESITY_AGENT",
+          safetyClass: action.safetyClass ?? "spot_intervention",
+        },
+      ];
+      events.push({ type: "SPOT_INTERVENTION", severity: "info", message: `${action.interventionId}: ${action.contextCondition}` });
+      return {
+        state: updated,
+        step: { step: stepNo, actor: "obesity_agent", action, inputsUsed: [], outputs: { interventionId: action.interventionId, safetyClass: action.safetyClass }, ruleRefs: ["OBESITY_AGENT_V1"] },
+        events,
+      };
+    }
+
     case "ESCALATE_TO_CLINICIAN": {
       updated.routing = { ...updated.routing, state: "REVIEW_REQUIRED" };
       events.push({ type: "ESCALATE", severity: "warn", message: action.reason });

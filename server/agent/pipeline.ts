@@ -6,8 +6,10 @@ import { getQuestionsForBundles, buildQuestionQueue, type QueueEntry } from "../
 import { getRulesForContext, executeRules, applyRuleActions, type RuleAction } from "../services/rulesEngine";
 import { getModifiersForSet, applyFhirPrefill, computeModifierSummary } from "../services/modifiers";
 import { enhancedSupervisorGate } from "../services/supervisorEnhanced";
+import { detectRedFlags } from "./safety/redFlags";
 import { fetchFhirPrefill, buildPrefillFromManualEntry } from "../services/fhirPrefill";
 import { runMedicationTriggeredQuestions } from "../services/medicationTriggeredQuestions";
+import { runObesityAgent } from "../agents/obesity/obesityAgent";
 import { registerDynamicQuestion } from "./router";
 
 export interface PipelineResult {
@@ -36,6 +38,38 @@ export async function initializePipeline(
       severity: "info",
       message: `No router entry for "${state.chiefComplaint}" — using legacy path`,
     });
+
+    if (updated.modifiers?.allergies || updated.modifiers?.meds || updated.modifiers?.pmh) {
+      const prefill = buildPrefillFromManualEntry(
+        updated.modifiers?.allergies ?? [],
+        updated.modifiers?.meds ?? [],
+        updated.modifiers?.pmh ?? [],
+        updated.demographics?.pregnant ?? false
+      );
+      updated.fhirPrefill = prefill;
+    }
+
+    try {
+      const obesityResult = await runObesityAgent(updated);
+      if (obesityResult.triggered) {
+        updated = obesityResult.state;
+        events.push(...obesityResult.events);
+      }
+    } catch (err: any) {
+      events.push({ type: "OBESITY_AGENT_ERROR", severity: "warn", message: `Obesity agent failed: ${err.message}` });
+    }
+
+    const liveFlags = detectRedFlags(updated);
+    if (liveFlags.length > 0) {
+      updated.redFlags = [...new Set([...updated.redFlags, ...liveFlags])];
+    }
+
+    const supervisorDecision = enhancedSupervisorGate(updated);
+    if (!supervisorDecision.allow && supervisorDecision.forceState === "EMERGENT_ESCALATION") {
+      updated.routing = { ...updated.routing, state: "EMERGENT_ESCALATION" };
+      events.push({ type: "SUPERVISOR_BLOCK", severity: "error", message: supervisorDecision.reason });
+    }
+
     return { state: updated, events, routerEntry: null };
   }
 
@@ -218,6 +252,25 @@ export async function initializePipeline(
     });
   }
 
+  try {
+    const obesityResult = await runObesityAgent(updated);
+    if (obesityResult.triggered) {
+      updated = obesityResult.state;
+      events.push(...obesityResult.events);
+      for (const bundle of obesityResult.bundlesAdded) {
+        if (!bundleIds.includes(bundle)) {
+          bundleIds.push(bundle);
+        }
+      }
+    }
+  } catch (err: any) {
+    events.push({
+      type: "OBESITY_AGENT_ERROR",
+      severity: "warn",
+      message: `Obesity agent failed: ${err.message}`,
+    });
+  }
+
   if (bundleIds.length > 0) {
     try {
       const secondaryQs = await getQuestionsForBundles(bundleIds);
@@ -258,6 +311,11 @@ export async function initializePipeline(
         message: `Failed to build question queue: ${err.message}`,
       });
     }
+  }
+
+  const liveFlags2 = detectRedFlags(updated);
+  if (liveFlags2.length > 0) {
+    updated.redFlags = [...new Set([...updated.redFlags, ...liveFlags2])];
   }
 
   const supervisorDecision = enhancedSupervisorGate(updated);

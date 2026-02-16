@@ -81,6 +81,62 @@ const RED_FLAG_REGISTRY: RedFlagEntry[] = [
     recommendedDisposition: "ED",
     immediateActions: ["Call 911 if SpO2 < 92%", "Supplemental oxygen if available"],
   },
+  {
+    flagId: "RF_HTN_EMERGENCY",
+    label: "Hypertensive Emergency",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Do not take extra BP medication without medical supervision", "Sit upright and remain calm"],
+  },
+  {
+    flagId: "RF_HTN_EMERGENCY_NEURO",
+    label: "Hypertensive Emergency with Neurological Deficit",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Note time of onset of symptoms", "Do not eat or drink"],
+  },
+  {
+    flagId: "RF_HTN_EMERGENCY_VISION",
+    label: "Hypertensive Emergency with Vision Loss",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Urgent ophthalmology and BP evaluation needed"],
+  },
+  {
+    flagId: "RF_HTN_EMERGENCY_MULTI",
+    label: "Hypertensive Emergency with Multiple Symptoms",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Chew aspirin 325mg if chest pain present", "Do not drive yourself"],
+  },
+  {
+    flagId: "RF_HTN_PREGNANCY_EMERGENCY",
+    label: "Severe HTN in Pregnancy",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Eclampsia/preeclampsia risk", "Urgent OB evaluation needed"],
+  },
+  {
+    flagId: "RF_DKA_HHS",
+    label: "Diabetic Ketoacidosis / Hyperosmolar Hyperglycemic State",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Do not take insulin without medical supervision", "Nothing by mouth", "Maintain hydration if alert"],
+  },
+  {
+    flagId: "RF_SEVERE_HYPOGLYCEMIA",
+    label: "Severe Hypoglycemia",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Give fast-acting glucose if conscious (juice, glucose tabs)", "Call 911 if unresponsive or seizure", "Do not give food/drink if unconscious", "Administer glucagon if available"],
+  },
+  {
+    flagId: "RF_ER_SEND_METABOLIC",
+    label: "Metabolic Emergency",
+    severity: "critical",
+    recommendedDisposition: "ED",
+    immediateActions: ["Call 911 immediately", "Urgent metabolic evaluation needed"],
+  },
 ];
 
 export function getRedFlagEntry(flagId: string): RedFlagEntry | undefined {

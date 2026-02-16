@@ -44,6 +44,29 @@ Key design notes:
 - **MED_TO_CONDITION_TRIGGERS** table (Google Sheet): Trigger_Value, Trigger_Type (med_name/substring/med_group/tag), Likely_Conditions, Confidence, Confirm_Question, Followup_Bundle_ID. Runs after FHIR prefill, injects inline confirm questions into questionQueue and adds follow-up bundles.
 - Admin endpoints: GET /api/admin/data/validate (integrity checks), GET /api/admin/data/clusters?search=X (cluster browser), POST /api/admin/test/runScenario (end-to-end pipeline test)
 
+### Obesity Agent & Metabolic Triage (Feb 2026)
+A secondary-track ObesityAgent (`server/agents/obesity/obesityAgent.ts`) runs in parallel with primary complaint routing. It triggers when BMI/weight indicators, metabolic meds (GLP-1, metformin, insulin, antihypertensives), or relevant PMH entries are detected — even if the chief complaint is unrelated (e.g., "cough").
+
+**CaseState extensions**: `metabolic` (bmi, waist, eossStage, weightTrend, goalType), `dm` (hasDM, type, lastA1c, meds, hypoHistory, ketoneRisk), `htn` (hasHTN, homeBP, meds, bpToday, endOrganSymptoms), `bariatric` (surgeryType, date, complicationsFlags), `glp1` (agent, dose, escalationStage, sideEffects), `social` (insuranceGap, pcpAccessDelay, pharmacyAccess), `spotInterventions[]`.
+
+**New AgentAction types**: ASK_CLUSTER, EDUCATION_BLOCK, TEST_SUGGESTION, SAFETY_NET, REFERRAL_SUGGESTION, ER_SEND_RECOMMENDATION, URGENT_CARE_SPOT_INTERVENTION. Each has execution handlers in `executors.ts`.
+
+**HTN Escalation Rules** (HTN_ESC_001–005): BP confirmation + red flag screen, med-gap detection (on 1 agent), resistant HTN screen (3+ meds), OSA contributor flag, UC bridge plan with labs/refill/follow-up.
+
+**DM Escalation Rules** (DM_ESC_001–005): DKA/HHS/hypo danger screen, care gap prompts (A1c, eye exam, microalbumin), med class fit (CHF/CKD → SGLT2), GLP-1 side effects routing, UC bridge/refill plan.
+
+**Obesity Entry Rules** (OBESITY_ENTRY_001–002): Metabolic gaps bundle for BMI>=30, no-PCP-access plan for insurance/access gaps.
+
+**Built-in Spot Interventions**: SI_HTN_UNCONTROLLED_1_AGENT, SI_OSA_AFFECTING_HTN, SI_DM2_HYPERGLYCEMIA_MILD, SI_HYPOGLYCEMIA_EDUCATION, SI_GLP1_DEHYDRATION, SI_BARIATRIC_ABDO_PAIN. Each has structured actions, tests, do-not-do lists, referral windows, and ER triggers.
+
+**Red Flags**: HTN emergency (neuro deficit, vision loss, multi-symptom, pregnancy), DKA/HHS (altered mental status, persistent vomiting + dehydration, Kussmaul breathing), severe hypoglycemia. All registered in supervisor gate with immediate actions.
+
+**Google Sheets tables**: MED_CONDITION_INTELLIGENCE_RULES (domain-specific rules), URGENT_CARE_SPOT_INTERVENTIONS (structured interventions). Both override/extend built-in rules when populated.
+
+**Follow-up Bundles**: BUNDLE_UC_HTN_BRIDGE, BUNDLE_UC_DM_BRIDGE, BUNDLE_UC_OSA_SCREEN, BUNDLE_UC_METABOLIC_GAPS, BUNDLE_UC_NO_PCP_PLAN, BUNDLE_UC_GLP1_SIDE_EFFECTS.
+
+**State inference**: DM/HTN/GLP-1 states auto-inferred from medication lists and PMH when not explicitly provided. Med detection covers: GLP-1 agents (semaglutide, tirzepatide, etc.), metformin, insulin, sulfonylureas, SGLT2i, HTN meds (ACE/ARB/CCB/diuretics/beta-blockers).
+
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached, with deduplication mechanisms ensuring idempotency. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags enable granular control over channel activation. Channel operations are monitored via a dashboard that tracks key metrics including LLM performance and friction escalations.
 

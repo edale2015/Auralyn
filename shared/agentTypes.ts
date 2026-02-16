@@ -114,6 +114,62 @@ export const CaseStateSchema = z.object({
     answered: z.boolean().default(false),
   })).default([]),
 
+  metabolic: z.object({
+    bmi: z.number().optional(),
+    waist: z.number().optional(),
+    eossStage: z.enum(["0", "1", "2", "3"]).optional(),
+    weightTrend: z.enum(["gaining", "stable", "losing"]).optional(),
+    goalType: z.enum(["weight_loss", "maintenance", "metabolic_health"]).optional(),
+  }).optional(),
+
+  dm: z.object({
+    hasDM: z.boolean().optional(),
+    type: z.enum(["type1", "type2", "gestational", "prediabetes"]).optional(),
+    lastA1c: z.number().optional(),
+    meds: z.array(z.string()).default([]),
+    hypoHistory: z.boolean().optional(),
+    ketoneRisk: z.boolean().optional(),
+  }).optional(),
+
+  htn: z.object({
+    hasHTN: z.boolean().optional(),
+    homeBP: z.string().optional(),
+    meds: z.array(z.string()).default([]),
+    bpToday: z.string().optional(),
+    endOrganSymptoms: z.array(z.string()).default([]),
+  }).optional(),
+
+  bariatric: z.object({
+    surgeryType: z.string().optional(),
+    date: z.string().optional(),
+    complicationsFlags: z.array(z.string()).default([]),
+  }).optional(),
+
+  glp1: z.object({
+    agent: z.string().optional(),
+    dose: z.string().optional(),
+    escalationStage: z.number().optional(),
+    sideEffects: z.array(z.string()).default([]),
+  }).optional(),
+
+  social: z.object({
+    insuranceGap: z.boolean().optional(),
+    pcpAccessDelay: z.boolean().optional(),
+    pharmacyAccess: z.boolean().optional(),
+  }).optional(),
+
+  spotInterventions: z.array(z.object({
+    interventionId: z.string(),
+    contextCondition: z.string(),
+    actions: z.array(z.string()).default([]),
+    testsIfAvailable: z.array(z.string()).default([]),
+    doNotDo: z.array(z.string()).default([]),
+    referralWindow: z.string().optional(),
+    erTriggers: z.array(z.string()).default([]),
+    source: z.string().default("OBESITY_AGENT"),
+    safetyClass: z.enum(["education", "test_suggestion", "spot_intervention", "er_send"]).default("education"),
+  })).default([]),
+
   careMode: z.enum([
     "urgent_care",
     "family_medicine",
@@ -207,6 +263,59 @@ export const AgentActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("DRAFT_SUMMARY"),
     style: z.enum(["clinician", "patient"]).default("clinician"),
+  }),
+
+  z.object({
+    type: z.literal("ASK_CLUSTER"),
+    clusterId: z.string(),
+    questions: z.array(z.string()).default([]),
+  }),
+
+  z.object({
+    type: z.literal("EDUCATION_BLOCK"),
+    topic: z.string(),
+    content: z.string(),
+    safetyClass: z.enum(["education", "test_suggestion", "spot_intervention", "er_send"]).default("education"),
+  }),
+
+  z.object({
+    type: z.literal("TEST_SUGGESTION"),
+    tests: z.array(z.string()),
+    rationale: z.string(),
+    urgency: z.enum(["stat", "routine", "if_available"]).default("routine"),
+  }),
+
+  z.object({
+    type: z.literal("SAFETY_NET"),
+    returnTriggers: z.array(z.string()),
+    timeframe: z.string().optional(),
+    instructions: z.array(z.string()).default([]),
+  }),
+
+  z.object({
+    type: z.literal("REFERRAL_SUGGESTION"),
+    specialty: z.string(),
+    urgency: z.enum(["emergent", "urgent", "routine"]).default("routine"),
+    reason: z.string(),
+    timeframe: z.string().optional(),
+  }),
+
+  z.object({
+    type: z.literal("ER_SEND_RECOMMENDATION"),
+    reason: z.string(),
+    immediateActions: z.array(z.string()).default([]),
+    callEmergencyServices: z.boolean().default(false),
+  }),
+
+  z.object({
+    type: z.literal("URGENT_CARE_SPOT_INTERVENTION"),
+    interventionId: z.string(),
+    contextCondition: z.string(),
+    actions: z.array(z.string()).default([]),
+    testsIfAvailable: z.array(z.string()).default([]),
+    doNotDo: z.array(z.string()).default([]),
+    referralWindow: z.string().optional(),
+    safetyClass: z.enum(["education", "test_suggestion", "spot_intervention", "er_send"]).default("spot_intervention"),
   }),
 
   z.object({

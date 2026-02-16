@@ -1,0 +1,329 @@
+Architecture integration (agents, router, shared schema, bundles)
+
+Channel behaviors (ChatGPT vs WhatsApp vs Telegram vs eCW)
+
+Urgent-care safe HTN escalation basics (what you can reasonably do)
+
+Urgent-care safe DM escalation basics (same)
+
+Concrete tables/rules to add (drop-in design)
+
+1) Integrate OBESITY_AGENT into the Master Multi-Agent Spine
+A. Where it sits
+
+Add a new domain module:
+
+agents/obesity/ObesityAgent.ts
+
+agents/obesity/rules/ (your MED_CONDITION_INTELLIGENCE_RULES + AOM selection matrix)
+
+agents/shared/comorbidity/ (HTN + DM + OSA + MAFLD + CKD + CAD crossover rules)
+
+B. Router change (high-level)
+
+Your existing router likely picks the next action based on:
+
+chief complaint
+
+meds
+
+red flags
+
+channel constraints
+
+Add a parallel trigger path:
+
+If BMI/weight/GLP-1/bariatric is detected OR meds suggest it (GLP-1, metformin, insulin, antihypertensives), route into OBESITY_AGENT as a secondary track even if chief complaint is something else.
+
+Result: patient comes in for cough, but your system still catches:
+
+uncontrolled asthma + obesity + OSA risk
+
+GLP-1 nausea/dehydration
+
+HTN meds without BP control
+
+diabetes med gaps
+
+C. Shared “CaseState” fields to add (minimal + powerful)
+
+Add to your canonical schema:
+
+metabolic: { bmi?, waist?, eossStage?, weightTrend?, goalType? }
+
+dm: { hasDM?, type?, lastA1c?, meds[], hypoHistory?, ketoneRisk? }
+
+htn: { hasHTN?, homeBP?, meds[], bpToday?, endOrganSymptoms? }
+
+bariatric: { surgeryType?, date?, complicationsFlags[] }
+
+glp1: { agent?, dose?, escalationStage?, sideEffects[] }
+
+social: { insuranceGap?, pcpAccessDelay?, pharmacyAccess? }
+
+D. Action types (keep constrained)
+
+Have ObesityAgent emit only these “safe” actions:
+
+ASK_CLUSTER
+
+EDUCATION_BLOCK
+
+TEST_SUGGESTION
+
+SAFETY_NET
+
+REFERRAL_SUGGESTION
+
+ER_SEND_RECOMMENDATION
+
+URGENT_CARE_SPOT_INTERVENTION ✅ (new, structured)
+
+That last one is key: it allows you to generate low-risk, guideline-consistent spot actions without turning the system into a freeform prescriber.
+
+2) Channel integration behavior (ChatGPT / WhatsApp / Telegram / eCW)
+ChatGPT (rich)
+
+full counseling blocks (diet patterns, barriers, exercise safety, AOM selection)
+
+generate “plan card” summary for clinician + patient
+
+WhatsApp/Telegram (low friction)
+
+Use “2-tap” flows:
+
+quick screens (OSA, BED, HTN red flags, DM red flags)
+
+“Today’s 3 priorities” micro-plan
+
+follow-up prompts + “bring these numbers next visit”
+
+ultra-short safety-net and referral guidance
+
+eCW integration (clinical record mode)
+
+Outputs should be structured as:
+
+Problem list suggestions
+
+Orders suggestions (tests)
+
+Counseling codes/phrases
+
+A/P snippet (very short)
+
+“Why this matters” note
+
+follow-up interval / referral
+
+And crucially: tag everything with:
+
+source=OBESITY_AGENT
+
+confidence
+
+safety_class (education vs test suggestion vs ER send)
+
+3) Urgent-care HTN “spot intervention” layer (safe escalation basics)
+
+You want: catch bad patterns, do minimal safe actions, bridge until PCP.
+
+A. Triage first (always)
+
+Your rules should separate:
+
+Possible hypertensive emergency → ER
+
+neuro deficits, chest pain, acute SOB/pulm edema, vision loss, confusion, seizure
+
+pregnancy with severe HTN symptoms
+
+suspected aortic catastrophe
+
+Severe asymptomatic HTN → urgent follow-up + limited workup + cautious approach
+(UC practice varies; keep your system conservative.)
+
+B. UC-friendly HTN interventions you can safely standardize
+
+Your “spot intervention” output can include:
+
+Confirm correct BP technique (repeat BP, cuff size, rest)
+
+Assess meds + adherence (missed doses, affordability, side effects)
+
+Check for secondary contributors
+
+NSAIDs, decongestants, stimulants, steroids, cocaine, heavy alcohol, OSA risk
+
+Basic labs only when appropriate (especially if adding/adjusting meds)
+
+BMP/CMP (K/Cr), urine albumin/Cr if possible
+
+Medication fill-gap (only if clinician chooses)
+
+common “tripod” concept: ACE/ARB + CCB + thiazide
+
+Home BP plan
+
+2 readings AM/PM for 3–7 days, average, bring log
+
+Clear safety net
+
+return/ER triggers
+
+C. Add these HTN escalation rules (table-style)
+
+You can implement as MED_CONDITION_INTELLIGENCE_RULES rows like:
+
+HTN_ESC_001 (BP confirmation + red flag screen)
+
+HTN_ESC_002 (med-gap detection: on 1 agent only, uncontrolled)
+
+HTN_ESC_003 (resistant HTN screen: 3 meds including diuretic and still high)
+
+HTN_ESC_004 (OSA contributor flag)
+
+HTN_ESC_005 (UC bridge plan: labs + short refill + follow-up)
+
+And for meds, add adjacency triggers:
+
+valsartan/losartan/olmesartan
+
+lisinopril
+
+amlodipine
+
+HCTZ/chlorthalidone (if you want)
+
+spironolactone (resistant HTN context)
+
+4) Urgent-care DM “spot intervention” layer (safe escalation basics)
+
+Goal: detect danger, prevent complications, bridge access gaps.
+
+A. Triage first
+
+Send to ER if you suspect:
+
+DKA/HHS features: altered mental status, severe dehydration, Kussmaul, persistent vomiting, severe abdominal pain
+
+very high glucose with symptoms (you define threshold in your clinic protocols)
+
+severe hypoglycemia not quickly reversible
+
+infection + unstable vitals in DM/immunosuppressed
+
+B. UC-friendly DM interventions you can standardize
+
+Identify DM type and meds
+
+Check “crisis questions”
+
+polyuria/polydipsia, vomiting, abdominal pain, confusion, fruity breath
+
+Basic point-of-care options (if available)
+
+fingerstick glucose
+
+urine ketones (especially if symptomatic or type 1)
+
+Bridge plan
+
+refill essential meds when safe
+
+sick-day rules education
+
+hypoglycemia plan
+
+Care gap prompts
+
+last A1c, eye exam, microalbumin, statin eligibility, ACE/ARB if albuminuria/HTN
+
+Medication selection guidance (non-prescriptive)
+
+weight/CHF/CKD favor GLP-1/SGLT2 (if eligible and accessible)
+
+hypoglycemia risk meds flagged (sulfonylureas, insulin)
+
+C. Add DM escalation “regimen logic” rules (UC-safe)
+
+Rather than trying to prescribe full algorithms, your system should output:
+
+“If uncontrolled on X, consider adding Y” as a clinician suggestion
+
+“If hypoglycemia on sulfonylurea, consider switching strategy”
+
+“If CHF/CKD, consider SGLT2 class discussion”
+
+Add rules:
+
+DM_ESC_001 (danger screen: DKA/HHS/hypo)
+
+DM_ESC_002 (care gaps + essential labs)
+
+DM_ESC_003 (med class fit: weight/CHF/CKD)
+
+DM_ESC_004 (GLP-1 side effects routing already built)
+
+DM_ESC_005 (UC bridge/refill plan + follow-up)
+
+5) Concrete integration artifacts to add now
+A. New table: URGENT_CARE_SPOT_INTERVENTIONS
+
+This keeps your system disciplined.
+
+Columns:
+
+Intervention_ID
+
+Context_Condition
+
+Eligibility_Criteria
+
+Actions (structured bullets)
+
+Tests_If_Available
+
+Contraindications/Do_Not_Do
+
+Referral_Window (24–72h, 1–2w, etc.)
+
+ER_Triggers
+
+Examples rows:
+
+HTN uncontrolled on 1 agent, asymptomatic
+
+Suspected OSA affecting HTN
+
+DM2 with hyperglycemia symptoms mild, no red flags
+
+Hypoglycemia education bundle
+
+GLP-1 dehydration risk
+
+Bariatric abdominal pain rule-out emergency
+
+B. Update: MED_CONDITION_INTELLIGENCE_RULES
+
+Add new rule blocks:
+
+HTN_ESC_*
+
+DM_ESC_*
+
+OBESITY_AGENT_ENTRYPOINT_* (routes from UC complaints into metabolic evaluation)
+
+C. Update: Followup_Bundle_ID library
+
+Add:
+
+BUNDLE_UC_HTN_BRIDGE
+
+BUNDLE_UC_DM_BRIDGE
+
+BUNDLE_UC_OSA_SCREEN
+
+BUNDLE_UC_METABOLIC_GAPS
+
+BUNDLE_UC_NO_PCP_PLAN (insurance/access constraints pathway)
