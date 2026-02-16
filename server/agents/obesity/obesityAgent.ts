@@ -223,6 +223,15 @@ function evaluateIntelligenceCondition(
     return state.social?.pcpAccessDelay === true || state.social?.insuranceGap === true;
   }
 
+  if (trigger === "abd_pain_bari_or_glp1") {
+    const cc = norm(state.chiefComplaint);
+    const hasAbdPain = cc.includes("abdominal pain") || cc.includes("abd pain") || cc.includes("stomach pain") || cc.includes("belly pain");
+    if (!hasAbdPain) return false;
+    const isBariatric = entryReasons.includes("BARIATRIC_HISTORY");
+    const isGlp1 = !!state.glp1?.agent || entryReasons.includes("GLP1_MED_DETECTED");
+    return isBariatric || isGlp1;
+  }
+
   if (rule.conditionExpression) {
     return entryReasons.some(r => norm(r) === norm(rule.conditionExpression));
   }
@@ -306,6 +315,15 @@ const DM_ESC_RULES: IntelligenceRule[] = [
     conditionExpression: "", actionType: "spot_intervention", actionValue: "DM_UC_BRIDGE",
     priority: 50, safetyClass: "spot_intervention",
     notes: "UC bridge/refill plan + follow-up"
+  },
+];
+
+const ABD_PAIN_RULES: IntelligenceRule[] = [
+  {
+    ruleId: "ABD_PAIN_BARI_GLP1_001", domain: "gi_metabolic", triggerCondition: "abd_pain_bari_or_glp1",
+    conditionExpression: "", actionType: "er_send", actionValue: "ER evaluation for abdominal pain in bariatric/GLP-1 patient",
+    priority: 1, safetyClass: "er_send",
+    notes: "Routes both bariatric and GLP-1 abdominal pain red flags to ER — highest priority"
   },
 ];
 
@@ -446,6 +464,7 @@ export async function runObesityAgent(state: CaseState): Promise<ObesityAgentRes
   }
 
   const allRules = [
+    ...ABD_PAIN_RULES,
     ...OBESITY_ENTRY_RULES,
     ...HTN_ESC_RULES,
     ...DM_ESC_RULES,
@@ -517,6 +536,21 @@ export async function runObesityAgent(state: CaseState): Promise<ObesityAgentRes
         if (!updated.activeClusters.includes(rule.actionValue)) {
           updated.activeClusters = [...updated.activeClusters, rule.actionValue];
         }
+        break;
+      }
+      case "er_send": {
+        updated.routing = { ...updated.routing, state: "EMERGENT_ESCALATION" };
+        updated.redFlags = [...new Set([...updated.redFlags, `RF_${rule.ruleId}`])];
+        updated.recommendedActions = [
+          ...(updated.recommendedActions || []),
+          { type: "ER_SEND", priority: "critical" as const },
+        ];
+        events.push({
+          type: "ER_SEND_TRIGGERED",
+          severity: "error",
+          ruleId: rule.ruleId,
+          message: rule.actionValue,
+        });
         break;
       }
     }

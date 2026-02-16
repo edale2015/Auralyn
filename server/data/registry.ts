@@ -1,4 +1,5 @@
 import { getSheetRows } from "../sheets/sheetHelper";
+import { loadCsvTable } from "./csvLoader";
 
 type SheetRow = Record<string, any>;
 
@@ -37,6 +38,11 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   GEN_DIAGNOSIS_MASTER: { tab: "GEN_DIAGNOSIS_MASTER", range: "A1:Z5000" },
 };
 
+const CSV_ENABLED_TABLES = new Set([
+  "MED_CONDITION_INTELLIGENCE_RULES",
+  "URGENT_CARE_SPOT_INTERVENTIONS",
+]);
+
 export async function loadTable(tableName: string): Promise<SheetRow[]> {
   const now = Date.now();
   const cached = TABLE_CACHE.get(tableName);
@@ -52,6 +58,14 @@ export async function loadTable(tableName: string): Promise<SheetRow[]> {
   const tab = config?.tab ?? tableName;
   const range = config?.range ?? "A1:Z2000";
   const ttl = config?.ttlMs ?? DEFAULT_TTL_MS;
+
+  if (CSV_ENABLED_TABLES.has(tableName)) {
+    const csvRows = loadCsvTable(tableName);
+    if (csvRows && csvRows.length > 0) {
+      TABLE_CACHE.set(tableName, { expiresAt: now + ttl, rows: csvRows });
+      return csvRows;
+    }
+  }
 
   try {
     const { rowsAsObjects } = await getSheetRows(tab, range);

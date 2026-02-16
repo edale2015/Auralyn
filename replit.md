@@ -61,11 +61,21 @@ A secondary-track ObesityAgent (`server/agents/obesity/obesityAgent.ts`) runs in
 
 **Red Flags**: HTN emergency (neuro deficit, vision loss, multi-symptom, pregnancy), DKA/HHS (altered mental status, persistent vomiting + dehydration, Kussmaul breathing), severe hypoglycemia. All registered in supervisor gate with immediate actions.
 
+**ABD_PAIN_BARI_GLP1_001**: Priority-1 rule that fires when chief complaint is abdominal pain AND patient has bariatric history OR is on GLP-1 medication. Routes to ER_SEND with EMERGENT_ESCALATION. Adds `RF_ABD_PAIN_BARI_GLP1_001` to redFlags.
+
 **Google Sheets tables**: MED_CONDITION_INTELLIGENCE_RULES (domain-specific rules), URGENT_CARE_SPOT_INTERVENTIONS (structured interventions). Both override/extend built-in rules when populated.
+
+**CSV fallback**: Rule tables (MED_CONDITION_INTELLIGENCE_RULES, URGENT_CARE_SPOT_INTERVENTIONS) support CSV loading from `server/data/csv/` as first priority, falling back to Google Sheets, then built-in defaults. CSV loader: `server/data/csvLoader.ts`.
 
 **Follow-up Bundles**: BUNDLE_UC_HTN_BRIDGE, BUNDLE_UC_DM_BRIDGE, BUNDLE_UC_OSA_SCREEN, BUNDLE_UC_METABOLIC_GAPS, BUNDLE_UC_NO_PCP_PLAN, BUNDLE_UC_GLP1_SIDE_EFFECTS.
 
 **State inference**: DM/HTN/GLP-1 states auto-inferred from medication lists and PMH when not explicitly provided. Med detection covers: GLP-1 agents (semaglutide, tirzepatide, etc.), metformin, insulin, sulfonylureas, SGLT2i, HTN meds (ACE/ARB/CCB/diuretics/beta-blockers).
+
+**Multi-channel output formatter** (`server/agents/obesity/outputFormatter.ts`): Renders obesity agent outputs per channel:
+- **web** (ChatGPT/rich): Full spot intervention cards with actions, tests, do-not-do, ER triggers, referral windows
+- **whatsapp/telegram**: Short numbered cards (top 3 actions), ER triggers, follow-up window
+- **ecw**: A/P snippet (Assessment/Plan — Metabolic) + Suggested Orders section with checkboxes for labs, referrals, follow-up plans, and ER transfer
+- Use via `?channel=web|whatsapp|telegram|ecw` on runScenario endpoint
 
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached, with deduplication mechanisms ensuring idempotency. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags enable granular control over channel activation. Channel operations are monitored via a dashboard that tracks key metrics including LLM performance and friction escalations.

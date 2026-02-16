@@ -8,6 +8,12 @@ import { resolveDiagnoses } from "../services/diagnosisResolver";
 import { getMedSuggestions, CARE_SETTING_PRESETS, type CareSetting } from "../services/medSuggestions";
 import { resolveClusterDisposition } from "../services/clusterDisposition";
 import type { CaseState } from "../../shared/agentTypes";
+import {
+  extractObesityOutputData,
+  formatObesityOutput,
+  renderSectionsAsText,
+  type OutputChannel,
+} from "../agents/obesity/outputFormatter";
 
 export function registerAdminRoutes(router: Router) {
   router.post("/api/admin/registry/reload", requireProviderAuth, async (req: Request, res: Response) => {
@@ -429,6 +435,17 @@ export function registerAdminRoutes(router: Router) {
         finalDisposition: dispositionResult && !("error" in dispositionResult) ? dispositionResult.dispositionCandidate : null,
         redFlags: pState.redFlags,
       };
+
+      if (debug.pipeline?.obesityAgent?.triggered) {
+        const obesityData = extractObesityOutputData(pState, debug.pipeline.obesityAgent.bundlesAdded || []);
+        const channel = (req.query.channel as OutputChannel) || "web";
+        const formatted = formatObesityOutput(obesityData, channel);
+        debug.formattedOutput = {
+          channel,
+          sections: formatted.sections,
+          text: renderSectionsAsText(formatted),
+        };
+      }
 
       res.json({ ok: true, ...debug });
     } catch (err: any) {
