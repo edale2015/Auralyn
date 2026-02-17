@@ -14,6 +14,8 @@ import {
   renderSectionsAsText,
   type OutputChannel,
 } from "../agents/obesity/outputFormatter";
+import { formatRedFlagOutput } from "../services/redFlagsMaster";
+import { formatUCSpotOutput } from "../services/urgentCareSpotInterventions";
 
 export function registerAdminRoutes(router: Router) {
   router.post("/api/admin/registry/reload", requireProviderAuth, async (req: Request, res: Response) => {
@@ -416,6 +418,9 @@ export function registerAdminRoutes(router: Router) {
         disposition: dispositionResult,
       };
 
+      debug.clinicalStateTrace = pState.clinicalStateTrace || null;
+      debug.redFlagGate = pState.redFlagGate || null;
+
       debug.summary = {
         complaint,
         system: pState.system ?? "(no router entry)",
@@ -434,11 +439,28 @@ export function registerAdminRoutes(router: Router) {
         }, {}) : {},
         finalDisposition: dispositionResult && !("error" in dispositionResult) ? dispositionResult.dispositionCandidate : null,
         redFlags: pState.redFlags,
+        redFlagGateResult: pState.redFlagGate?.gateResult ?? "NOT_EVALUATED",
+        clinicalStateMedCount: pState.clinicalStateTrace?.normalizedMeds?.length ?? 0,
+        clinicalStateConditionCount: pState.clinicalStateTrace?.inferredConditions?.length ?? 0,
+        clinicalStateRiskFlagCount: pState.clinicalStateTrace?.riskFlags?.length ?? 0,
+        clinicalStateBuildMs: pState.clinicalStateTrace?.buildDurationMs ?? null,
       };
+
+      const channel = (req.query.channel as OutputChannel) || "web";
+
+      if (pState.redFlagGate && pState.redFlagGate.flagsFound.length > 0) {
+        debug.formattedRedFlagOutput = formatRedFlagOutput(pState.redFlagGate as any, channel as any);
+      }
+
+      if (pState.spotInterventions.length > 0) {
+        debug.formattedUCSpotOutput = formatUCSpotOutput(
+          { selected: pState.spotInterventions.map(si => ({ ...si, safetyClass: si.safetyClass || "spot_intervention" })) as any, skipped: [], source: "pipeline" },
+          channel as any
+        );
+      }
 
       if (debug.pipeline?.obesityAgent?.triggered) {
         const obesityData = extractObesityOutputData(pState, debug.pipeline.obesityAgent.bundlesAdded || []);
-        const channel = (req.query.channel as OutputChannel) || "web";
         const formatted = formatObesityOutput(obesityData, channel);
         debug.formattedOutput = {
           channel,

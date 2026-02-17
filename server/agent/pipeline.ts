@@ -11,6 +11,8 @@ import { fetchFhirPrefill, buildPrefillFromManualEntry } from "../services/fhirP
 import { runMedicationTriggeredQuestions } from "../services/medicationTriggeredQuestions";
 import { runObesityAgent } from "../agents/obesity/obesityAgent";
 import { registerDynamicQuestion } from "./router";
+import { buildClinicalState } from "../services/clinicalStateBuilder";
+import { runCrossoverHooks } from "../agents/crossoverHooks";
 
 export interface PipelineResult {
   state: CaseState;
@@ -50,19 +52,20 @@ export async function initializePipeline(
     }
 
     try {
-      const obesityResult = await runObesityAgent(updated);
-      if (obesityResult.triggered) {
-        updated = obesityResult.state;
-        events.push(...obesityResult.events);
-      }
+      const clinicalTrace = await buildClinicalState(updated);
+      updated.clinicalStateTrace = clinicalTrace;
+      events.push({
+        type: "CLINICAL_STATE_BUILT",
+        severity: "info",
+        message: `Clinical state: ${clinicalTrace.normalizedMeds.length} meds, ${clinicalTrace.inferredConditions.length} conditions, ${clinicalTrace.riskFlags.length} risk flags (${clinicalTrace.buildDurationMs}ms)`,
+      });
     } catch (err: any) {
-      events.push({ type: "OBESITY_AGENT_ERROR", severity: "warn", message: `Obesity agent failed: ${err.message}` });
+      events.push({ type: "CLINICAL_STATE_ERROR", severity: "warn", message: `Clinical state builder failed: ${err.message}` });
     }
 
-    const liveFlags = detectRedFlags(updated);
-    if (liveFlags.length > 0) {
-      updated.redFlags = [...new Set([...updated.redFlags, ...liveFlags])];
-    }
+    const crossoverResult = await runCrossoverHooks(updated);
+    updated = crossoverResult.state;
+    events.push(...crossoverResult.events);
 
     const supervisorDecision = enhancedSupervisorGate(updated);
     if (!supervisorDecision.allow && supervisorDecision.forceState === "EMERGENT_ESCALATION") {
@@ -253,22 +256,24 @@ export async function initializePipeline(
   }
 
   try {
-    const obesityResult = await runObesityAgent(updated);
-    if (obesityResult.triggered) {
-      updated = obesityResult.state;
-      events.push(...obesityResult.events);
-      for (const bundle of obesityResult.bundlesAdded) {
-        if (!bundleIds.includes(bundle)) {
-          bundleIds.push(bundle);
-        }
-      }
-    }
-  } catch (err: any) {
+    const clinicalTrace = await buildClinicalState(updated);
+    updated.clinicalStateTrace = clinicalTrace;
     events.push({
-      type: "OBESITY_AGENT_ERROR",
-      severity: "warn",
-      message: `Obesity agent failed: ${err.message}`,
+      type: "CLINICAL_STATE_BUILT",
+      severity: "info",
+      message: `Clinical state: ${clinicalTrace.normalizedMeds.length} meds, ${clinicalTrace.inferredConditions.length} conditions, ${clinicalTrace.riskFlags.length} risk flags (${clinicalTrace.buildDurationMs}ms)`,
     });
+  } catch (err: any) {
+    events.push({ type: "CLINICAL_STATE_ERROR", severity: "warn", message: `Clinical state builder failed: ${err.message}` });
+  }
+
+  const crossoverResult = await runCrossoverHooks(updated);
+  updated = crossoverResult.state;
+  events.push(...crossoverResult.events);
+  for (const bundle of crossoverResult.bundlesAdded) {
+    if (!bundleIds.includes(bundle)) {
+      bundleIds.push(bundle);
+    }
   }
 
   if (bundleIds.length > 0) {
@@ -313,9 +318,11 @@ export async function initializePipeline(
     }
   }
 
-  const liveFlags2 = detectRedFlags(updated);
-  if (liveFlags2.length > 0) {
-    updated.redFlags = [...new Set([...updated.redFlags, ...liveFlags2])];
+  if (!updated.redFlagGate || !updated.redFlagGate.evaluated) {
+    const liveFlags2 = detectRedFlags(updated);
+    if (liveFlags2.length > 0) {
+      updated.redFlags = [...new Set([...updated.redFlags, ...liveFlags2])];
+    }
   }
 
   const supervisorDecision = enhancedSupervisorGate(updated);

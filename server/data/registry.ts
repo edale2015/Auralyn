@@ -25,6 +25,12 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   MED_CONDITION_INTELLIGENCE_RULES: { tab: "MED_CONDITION_INTELLIGENCE_RULES", range: "A1:Z5000" },
   URGENT_CARE_SPOT_INTERVENTIONS: { tab: "URGENT_CARE_SPOT_INTERVENTIONS", range: "A1:Z2000" },
 
+  RED_FLAGS_MASTER: { tab: "RED_FLAGS_MASTER", range: "A1:Z2000" },
+  GLOBAL_STANDARDIZED_MEDGROUPS: { tab: "GLOBAL_STANDARDIZED_MEDGROUPS", range: "A1:Z5000" },
+  GLOBAL_CLUSTER_TRIAGE_EXTENDED: { tab: "GLOBAL_CLUSTER_TRIAGE_EXTENDED", range: "A1:Z5000" },
+  GLOBAL_MODIFIERS_CLEAN: { tab: "GLOBAL_MODIFIERS_CLEAN", range: "A1:Z5000" },
+  SECONDARY_QUESTIONS_GLOBAL: { tab: "SECONDARY_QUESTIONS_GLOBAL", range: "A1:Z5000" },
+
   // Legacy per-system tabs kept for diagnosis resolver fallback (read-only)
   ENT_DIAGNOSIS_MASTER: { tab: "ENT_DIAGNOSIS_MASTER", range: "A1:Z5000" },
   CARD_DIAGNOSIS_MASTER: { tab: "CARD_DIAGNOSIS_MASTER", range: "A1:Z5000" },
@@ -41,6 +47,7 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
 const CSV_ENABLED_TABLES = new Set([
   "MED_CONDITION_INTELLIGENCE_RULES",
   "URGENT_CARE_SPOT_INTERVENTIONS",
+  "RED_FLAGS_MASTER",
 ]);
 
 export async function loadTable(tableName: string): Promise<SheetRow[]> {

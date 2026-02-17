@@ -1,0 +1,215 @@
+RF_SEVERE_RESP_DISTRESS (O2 <92%, can’t speak full sentences, cyanosis, severe WOB, AMS from resp)
+
+RF_COPD_EXAC_SEVERE (severe COPD exacerbation, hypoxia, AMS, hemodynamic instability)
+
+RF_PE_HIGH_SUSPICION (moderate/high suspicion PE, hypoxia, syncope, hemodynamic instability)
+
+RF_ACS_SUSPECTED (chest pain/ACS concern requiring ED)
+
+RF_CHF_DECOMP (resting dyspnea/pulm edema signs, O2 low, ACS concern)
+
+RF_HYPERKA_SYMPTOMS (weakness/arrhythmia/syncope with hyperK concern)
+
+RF_DKA_HHS (vomiting/abd pain/rapid breathing/AMS with hyperglycemia/ketones concern)
+
+RF_SEVERE_HYPO (severe hypoglycemia: seizure/unconscious/unable to take PO or not resolving)
+
+RF_HTN_EMERGENCY (end-organ symptoms: neuro deficits, chest pain, severe SOB, vision loss, confusion, pregnancy severe HA)
+
+RF_GI_BLEED (melena/hematemesis/hemodynamic instability)
+
+RF_OBSTRUCTION (severe pain + vomiting + no gas/obstruction concern)
+
+RF_PANCREATITIS (severe epigastric pain ± radiating to back)
+
+RF_CHOLANGITIS (fever + RUQ pain + jaundice)
+
+RF_BARI_OBSTRUCTION (post-bariatric internal hernia/obstruction concern)
+
+RF_ANGIOEDEMA (lip/tongue swelling, airway symptoms)
+
+RF_DEHYDRATION_HYPOTENSION (persistent vomiting/diarrhea with hypotension/AMS)
+
+If you want to keep it even tighter, you can merge a couple (e.g., COPD severe into severe resp distress), but this set maps cleanly to your phrases.
+
+2) Replace each ER trigger entry with the correct ID(s)
+
+Below I’m mapping every distinct entry you listed. Copy/paste the right-hand side into your new Related_RedFlag_IDs column.
+
+Respiratory
+
+“ER if O2 sat <92%, cannot speak full sentences, severe work of breathing, altered mental status, cyanosis”
+→ RF_SEVERE_RESP_DISTRESS
+
+“ER if severe exacerbation signs (see AIRWAY_ALB_001)”
+→ RF_SEVERE_RESP_DISTRESS
+(because AIRWAY_ALB_001’s ER criteria are exactly that pattern)
+
+“ER if severe exacerbation signs”
+→ RF_SEVERE_RESP_DISTRESS
+
+“ER if severe asthma signs”
+→ RF_SEVERE_RESP_DISTRESS
+
+“ER if severe exacerbation/O2 low/AMS”
+→ RF_SEVERE_RESP_DISTRESS
+(optional add) RF_COPD_EXAC_SEVERE if you want COPD-specific tagging
+
+“ER if severe distress or O2 <92%”
+→ RF_SEVERE_RESP_DISTRESS
+
+“ER if hypoxia”
+→ RF_SEVERE_RESP_DISTRESS
+
+PE / chest pain / cardio-pulm overlap
+
+“ER if O2 <92%, severe distress, hypotension, confusion, suspected PE/ACS”
+→ RF_SEVERE_RESP_DISTRESS;RF_PE_HIGH_SUSPICION;RF_ACS_SUSPECTED
+
+“ER send if moderate/high suspicion PE, hypoxia, syncope, hemodynamic instability”
+→ RF_PE_HIGH_SUSPICION
+
+“ER if resting dyspnea, O2 low, pulmonary edema signs, chest pain/ACS concern”
+→ RF_CHF_DECOMP;RF_ACS_SUSPECTED
+
+“Cardiology if symptomatic or rate uncontrolled”
+→ NOT an ER red flag (leave blank here; belongs in referral column)
+(If you truly want ER for syncope/unstable vitals you’d map separately, but that text doesn’t say ER.)
+
+Electrolytes
+
+“ER if severe hyperkalemia symptoms (weakness, arrhythmia) or syncope/palpitations with risk”
+→ RF_HYPERKA_SYMPTOMS
+
+“ER if hyperkalemia symptoms arrhythmia weakness”
+→ RF_HYPERKA_SYMPTOMS
+
+“ER if severe weakness/confusion”
+→ RF_DEHYDRATION_HYPOTENSION or RF_HTN_EMERGENCY depending on context, but as written it’s ambiguous.
+Best practice: leave blank and let RED_FLAGS_MASTER handle AMS with context (vitals, glucose, etc.).
+→ (recommended) blank
+
+Diabetes
+
+“ER if severe hypoglycemia, DKA symptoms, altered mental status”
+→ RF_SEVERE_HYPO;RF_DKA_HHS
+
+“ER if severe symptoms of hyperglycemia/DKA”
+→ RF_DKA_HHS
+
+“ER if severe hypoglycemia/unresponsive”
+→ RF_SEVERE_HYPO
+
+“ER if DKA/HHS suspected, AMS, persistent vomiting, ketones + symptoms”
+→ RF_DKA_HHS
+
+“ER if severe hypoglycemia not resolving, seizure, unconsciousness”
+→ RF_SEVERE_HYPO
+
+“ER if danger screen positive”
+→ Too vague → blank (danger screen itself should map to specific RF IDs)
+
+“ER if ketones + vomiting, AMS, severe dehydration”
+→ RF_DKA_HHS;RF_DEHYDRATION_HYPOTENSION
+
+“ER only if danger symptoms”
+→ blank (handled by RF gate)
+
+“ER only if danger screen positive”
+→ blank
+
+“On Jardiance/Farxiga?”
+→ not an ER trigger; leave blank
+
+HTN
+
+“ER if BP emergency symptoms (neuro deficits, chest pain, severe SOB)”
+→ RF_HTN_EMERGENCY
+
+“ER if any end-organ symptoms, suspected emergency, unstable vitals”
+→ RF_HTN_EMERGENCY
+
+“ER if symptoms of emergency”
+→ blank (too vague; use RF_HTN_EMERGENCY if you can’t be more specific)
+
+“ER only if red flags”
+→ blank
+
+“ER only if symptoms appear”
+→ blank
+
+“ER if severe BP symptoms”
+→ RF_HTN_EMERGENCY (if you mean neuro/CP/SOB/vision loss)
+If not specified, better to blank.
+
+GI / dehydration / obstruction
+
+“ER if GI bleed or severe dehydration”
+→ RF_GI_BLEED;RF_DEHYDRATION_HYPOTENSION
+
+“ER if GI bleed”
+→ RF_GI_BLEED
+
+“ER if bleed signs”
+→ RF_GI_BLEED (if you mean melena/hematemesis) otherwise blank
+
+“ER immediately if GI bleed suspected”
+→ RF_GI_BLEED
+
+“ER if persistent vomiting/dehydration”
+→ RF_DEHYDRATION_HYPOTENSION (only if hypotension/AMS/inability to keep fluids; otherwise urgent eval but not always ER)
+If you want strict ER for “unable to tolerate PO” then keep this mapping.
+
+“ER if obstruction signs (severe pain, vomiting, no gas)”
+→ RF_OBSTRUCTION
+
+“ER if obstruction signs”
+→ RF_OBSTRUCTION
+
+“ER if severe pain, persistent vomiting, GI bleed, suspected obstruction/internal hernia, pancreatitis, cholangitis, unstable vitals”
+→ RF_BARI_OBSTRUCTION;RF_OBSTRUCTION;RF_PANCREATITIS;RF_CHOLANGITIS;RF_GI_BLEED;RF_DEHYDRATION_HYPOTENSION
+
+Angioedema
+
+“ER if angioedema or airway symptoms”
+→ RF_ANGIOEDEMA
+
+“N/A” / “Route based on context”
+
+“N/A” → blank
+
+“Route based on context; ensure correct duration” → blank
+
+“Community clinic referral; care navigation” → blank
+
+“ER if emergency symptoms” → blank (replace with specific RF if possible)
+
+3) What to do inside MED_CONDITION_INTELLIGENCE_RULES
+
+Rename ER_Send_Triggers → Related_RedFlag_IDs
+
+Replace each cell using the mapping above
+
+For cells that become blank, that is OK because RED_FLAGS_MASTER is the gatekeeper.
+
+4) Quick sanity rule
+
+If a cell says:
+
+“ER if severe exacerbation signs”
+
+“ER if danger screen positive”
+
+“ER if symptoms”
+
+That language is too vague. It should either become:
+
+a specific ID (preferred), or
+
+blank (and RED_FLAGS_MASTER handles it)
+
+If you want, paste the actual list of unique ER_Send_Triggers values exactly as they appear in your sheet (including duplicates and capitalization), and I’ll return a two-column CSV mapping:
+
+Old_ER_Send_Triggers,New_Related_RedFlag_IDs
+
+so you can do a bulk replace or VLOOKUP in Sheets.

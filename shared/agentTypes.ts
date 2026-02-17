@@ -170,6 +170,72 @@ export const CaseStateSchema = z.object({
     safetyClass: z.enum(["education", "test_suggestion", "spot_intervention", "er_send"]).default("education"),
   })).default([]),
 
+  clinicalStateTrace: z.object({
+    normalizedMeds: z.array(z.object({
+      name: z.string(),
+      source: z.string(),
+    })).default([]),
+    medGroups: z.array(z.object({
+      group: z.string(),
+      meds: z.array(z.string()),
+      tableRowId: z.string().optional(),
+    })).default([]),
+    inferredConditions: z.array(z.object({
+      condition: z.string(),
+      confidence: z.string(),
+      evidence: z.array(z.string()),
+      triggerId: z.string().optional(),
+    })).default([]),
+    confirmedProblems: z.array(z.object({
+      problem: z.string(),
+      source: z.string(),
+    })).default([]),
+    riskFlags: z.array(z.object({
+      flagId: z.string(),
+      reason: z.string(),
+      source: z.string(),
+      severity: z.string().optional(),
+    })).default([]),
+    suggestedBundles: z.array(z.object({
+      bundleId: z.string(),
+      reason: z.string(),
+      source: z.string(),
+    })).default([]),
+    triageHints: z.array(z.object({
+      hint: z.string(),
+      source: z.string(),
+      clusterId: z.string().optional(),
+    })).default([]),
+    missingModifiers: z.array(z.object({
+      modifierId: z.string(),
+      label: z.string(),
+      modifierSetId: z.string(),
+    })).default([]),
+    suggestedQuestions: z.array(z.object({
+      questionId: z.string(),
+      questionText: z.string(),
+      bundleId: z.string().optional(),
+      source: z.string(),
+    })).default([]),
+    tablesQueried: z.array(z.string()).default([]),
+    buildDurationMs: z.number().optional(),
+  }).optional(),
+
+  redFlagGate: z.object({
+    evaluated: z.boolean().default(false),
+    flagsFound: z.array(z.object({
+      flagId: z.string(),
+      label: z.string(),
+      severity: z.string(),
+      action: z.string(),
+      reasons: z.array(z.string()),
+      immediateActions: z.array(z.string()),
+      source: z.string(),
+    })).default([]),
+    gateResult: z.enum(["PASS", "ER_SEND", "ESCALATE"]).optional(),
+    formattedOutput: z.record(z.any()).optional(),
+  }).optional(),
+
   careMode: z.enum([
     "urgent_care",
     "family_medicine",
