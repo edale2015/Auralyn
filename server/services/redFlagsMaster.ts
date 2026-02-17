@@ -56,7 +56,7 @@ function parseRedFlagRow(row: Record<string, any>): RedFlagMasterRow | null {
   };
 }
 
-const DEFAULT_RED_FLAG_ROWS: RedFlagMasterRow[] = [
+export const DEFAULT_RED_FLAG_ROWS: RedFlagMasterRow[] = [
   {
     flagId: "RF_SOB", label: "Shortness of Breath", system: "", triggerType: "answer",
     triggerCondition: "Q_SHORTNESS_OF_BREATH==yes", severity: "critical", action: "er_send",

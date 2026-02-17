@@ -3,6 +3,9 @@ import type { TraceEvent } from "../../shared/testingTypes";
 import { runObesityAgent, type ObesityAgentResult } from "./obesity/obesityAgent";
 import { selectSpotInterventions, type UCSpotResult } from "../services/urgentCareSpotInterventions";
 import { evaluateRedFlagsMaster, type RedFlagGateResult } from "../services/redFlagsMaster";
+import { computeConfidence } from "../services/confidenceScoring";
+import { evaluateCareGaps } from "../services/careGapEngine";
+import { evaluateSandboxEligibility, type SandboxResult } from "../services/safeFreeformSandbox";
 
 export interface CrossoverResult {
   state: CaseState;
@@ -10,6 +13,7 @@ export interface CrossoverResult {
   redFlagGate: RedFlagGateResult;
   ucSpotResult: UCSpotResult;
   obesityResult: ObesityAgentResult | null;
+  sandboxResult: SandboxResult;
   bundlesAdded: string[];
   mergeOrder: string[];
 }
@@ -50,6 +54,14 @@ export async function runCrossoverHooks(
     });
   }
 
+  const confidence = computeConfidence(updated);
+  updated.confidence = confidence;
+  events.push({
+    type: "CONFIDENCE_SCORED",
+    severity: "info",
+    message: `Confidence: ${confidence.global} (${confidence.by_inference.length} inferences)`,
+  });
+
   if (redFlagGate.gateResult === "ER_SEND") {
     updated.routing = { ...updated.routing, state: "EMERGENT_ESCALATION" };
     events.push({
@@ -58,12 +70,15 @@ export async function runCrossoverHooks(
       message: "Red flag gate forced EMERGENT_ESCALATION — skipping counseling agents",
     });
 
+    const sandboxResult = evaluateSandboxEligibility(updated);
+
     return {
       state: updated,
       events,
       redFlagGate,
       ucSpotResult: { selected: [], skipped: [], source: "skipped_due_to_er_send" },
       obesityResult: null,
+      sandboxResult,
       bundlesAdded,
       mergeOrder,
     };
@@ -133,6 +148,26 @@ export async function runCrossoverHooks(
     });
   }
 
+  const careGaps = evaluateCareGaps(updated);
+  if (careGaps.length > 0) {
+    updated.careGaps = careGaps;
+    events.push({
+      type: "CARE_GAPS_EVALUATED",
+      severity: "info",
+      message: `${careGaps.length} care gaps identified: ${careGaps.map(g => g.gap_id).join(", ")}`,
+    });
+  }
+
+  const sandboxResult = evaluateSandboxEligibility(updated);
+  if (sandboxResult.allowed && sandboxResult.educationBlocks.length > 0) {
+    mergeOrder.push("SANDBOX_EDUCATION");
+    events.push({
+      type: "SANDBOX_EDUCATION",
+      severity: "info",
+      message: `Sandbox produced ${sandboxResult.educationBlocks.length} education blocks`,
+    });
+  }
+
   mergeOrder.push("EDUCATION");
 
   return {
@@ -141,6 +176,7 @@ export async function runCrossoverHooks(
     redFlagGate,
     ucSpotResult,
     obesityResult,
+    sandboxResult,
     bundlesAdded,
     mergeOrder,
   };

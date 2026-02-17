@@ -16,6 +16,8 @@ import {
 } from "../agents/obesity/outputFormatter";
 import { formatRedFlagOutput } from "../services/redFlagsMaster";
 import { formatUCSpotOutput } from "../services/urgentCareSpotInterventions";
+import { runRedFlagAudit } from "../services/redFlagAudit";
+import { storeTrace, buildTraceTimeline, getStoredTraceIds } from "../services/traceViewer";
 
 export function registerAdminRoutes(router: Router) {
   router.post("/api/admin/registry/reload", requireProviderAuth, async (req: Request, res: Response) => {
@@ -420,6 +422,12 @@ export function registerAdminRoutes(router: Router) {
 
       debug.clinicalStateTrace = pState.clinicalStateTrace || null;
       debug.redFlagGate = pState.redFlagGate || null;
+      debug.confidence = pState.confidence || null;
+      debug.careGaps = pState.careGaps || [];
+
+      const traceScenarioId = `scenario_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      storeTrace(traceScenarioId, pState, pipelineResult.events, debug.pipeline);
+      debug.traceId = traceScenarioId;
 
       debug.summary = {
         complaint,
@@ -440,6 +448,8 @@ export function registerAdminRoutes(router: Router) {
         finalDisposition: dispositionResult && !("error" in dispositionResult) ? dispositionResult.dispositionCandidate : null,
         redFlags: pState.redFlags,
         redFlagGateResult: pState.redFlagGate?.gateResult ?? "NOT_EVALUATED",
+        confidenceGlobal: pState.confidence?.global ?? "NOT_EVALUATED",
+        careGapCount: (pState.careGaps ?? []).length,
         clinicalStateMedCount: pState.clinicalStateTrace?.normalizedMeds?.length ?? 0,
         clinicalStateConditionCount: pState.clinicalStateTrace?.inferredConditions?.length ?? 0,
         clinicalStateRiskFlagCount: pState.clinicalStateTrace?.riskFlags?.length ?? 0,
@@ -472,6 +482,242 @@ export function registerAdminRoutes(router: Router) {
       res.json({ ok: true, ...debug });
     } catch (err: any) {
       console.error("[TestScenario] Error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/audit/redflags", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      const report = await runRedFlagAudit();
+      res.json({ ok: true, ...report });
+    } catch (err: any) {
+      console.error("[RedFlagAudit] Error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/trace", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      const ids = getStoredTraceIds();
+      res.json({ ok: true, count: ids.length, traceIds: ids.slice(-50) });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/trace/:scenarioId", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const timeline = buildTraceTimeline(req.params.scenarioId);
+      if (!timeline) {
+        res.status(404).json({ ok: false, error: "Trace not found" });
+        return;
+      }
+      res.json({ ok: true, ...timeline });
+    } catch (err: any) {
+      console.error("[TraceViewer] Error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.post("/api/admin/stress-test", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const { scenarios } = req.body;
+      if (!Array.isArray(scenarios) || scenarios.length === 0) {
+        res.status(400).json({ ok: false, error: "scenarios array required" });
+        return;
+      }
+
+      const results: any[] = [];
+      const startTime = Date.now();
+
+      for (const scenario of scenarios) {
+        const scenarioStart = Date.now();
+        try {
+          const {
+            complaint = "",
+            meds = [],
+            allergies = [],
+            pmh = [],
+            answers = {},
+            demographics = {},
+            dm,
+            htn,
+            glp1,
+            bariatric,
+            social,
+            forcedClusters = [],
+            assertions = {},
+          } = scenario;
+
+          const now = new Date().toISOString();
+          const stressId = `stress_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+          const seedState: CaseState = {
+            caseId: stressId,
+            createdAt: now,
+            updatedAt: now,
+            chiefComplaint: complaint,
+            demographics: demographics || undefined,
+            modifiers: {
+              allergies: allergies.length > 0 ? allergies : undefined,
+              meds: meds.length > 0 ? meds : undefined,
+              pmh: pmh.length > 0 ? pmh : undefined,
+            },
+            modifierAnswers: {},
+            answers: answers,
+            scores: {},
+            activeClusters: [...forcedClusters],
+            diagnosisClusterIds: [],
+            disposition: undefined,
+            dispositionReasonCodes: [],
+            candidateMeds: [],
+            candidateDiagnoses: [],
+            ruleTrace: [],
+            redFlags: [],
+            requiredQuestionIdsMissing: [],
+            recommendedActions: [],
+            questionQueue: [],
+            dm: dm || undefined,
+            htn: htn || undefined,
+            bariatric: bariatric || undefined,
+            glp1: glp1 || undefined,
+            social: social || undefined,
+            spotInterventions: [],
+            routing: { state: "INTAKE_PENDING" },
+            audit: { steps: [], events: [] },
+          };
+
+          const pipelineResult = await initializePipeline(seedState, {
+            maxSteps: 1,
+            runId: stressId,
+            promptVersion: "v1",
+          });
+
+          const pState = pipelineResult.state;
+          const elapsed = Date.now() - scenarioStart;
+
+          const assertionResults: Record<string, { pass: boolean; expected: any; actual: any }> = {};
+
+          if (assertions.expectRedFlagGate !== undefined) {
+            assertionResults["expectRedFlagGate"] = {
+              pass: pState.redFlagGate?.gateResult === assertions.expectRedFlagGate,
+              expected: assertions.expectRedFlagGate,
+              actual: pState.redFlagGate?.gateResult ?? "NOT_EVALUATED",
+            };
+          }
+
+          if (assertions.expectConfidence !== undefined) {
+            assertionResults["expectConfidence"] = {
+              pass: pState.confidence?.global === assertions.expectConfidence,
+              expected: assertions.expectConfidence,
+              actual: pState.confidence?.global ?? "NOT_EVALUATED",
+            };
+          }
+
+          if (assertions.expectMinCareGaps !== undefined) {
+            assertionResults["expectMinCareGaps"] = {
+              pass: (pState.careGaps ?? []).length >= assertions.expectMinCareGaps,
+              expected: `>= ${assertions.expectMinCareGaps}`,
+              actual: (pState.careGaps ?? []).length,
+            };
+          }
+
+          if (assertions.expectCareGapIds !== undefined && Array.isArray(assertions.expectCareGapIds)) {
+            const gapIds = (pState.careGaps ?? []).map(g => g.gap_id);
+            assertionResults["expectCareGapIds"] = {
+              pass: assertions.expectCareGapIds.every((id: string) => gapIds.includes(id)),
+              expected: assertions.expectCareGapIds,
+              actual: gapIds,
+            };
+          }
+
+          if (assertions.expectMinRedFlags !== undefined) {
+            assertionResults["expectMinRedFlags"] = {
+              pass: pState.redFlags.length >= assertions.expectMinRedFlags,
+              expected: `>= ${assertions.expectMinRedFlags}`,
+              actual: pState.redFlags.length,
+            };
+          }
+
+          if (assertions.expectRoutingState !== undefined) {
+            assertionResults["expectRoutingState"] = {
+              pass: pState.routing.state === assertions.expectRoutingState,
+              expected: assertions.expectRoutingState,
+              actual: pState.routing.state,
+            };
+          }
+
+          if (assertions.expectSystem !== undefined) {
+            assertionResults["expectSystem"] = {
+              pass: pState.system === assertions.expectSystem,
+              expected: assertions.expectSystem,
+              actual: pState.system,
+            };
+          }
+
+          if (assertions.expectMinSpotInterventions !== undefined) {
+            assertionResults["expectMinSpotInterventions"] = {
+              pass: pState.spotInterventions.length >= assertions.expectMinSpotInterventions,
+              expected: `>= ${assertions.expectMinSpotInterventions}`,
+              actual: pState.spotInterventions.length,
+            };
+          }
+
+          if (assertions.expectNoEmergent !== undefined && assertions.expectNoEmergent) {
+            assertionResults["expectNoEmergent"] = {
+              pass: pState.routing.state !== "EMERGENT_ESCALATION",
+              expected: "NOT EMERGENT_ESCALATION",
+              actual: pState.routing.state,
+            };
+          }
+
+          const allPassed = Object.values(assertionResults).every(r => r.pass);
+
+          const traceId = `stress_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+          storeTrace(traceId, pState, pipelineResult.events);
+
+          results.push({
+            id: scenario.id || results.length,
+            label: scenario.label || complaint,
+            pass: allPassed,
+            assertions: assertionResults,
+            elapsedMs: elapsed,
+            traceId,
+            summary: {
+              system: pState.system,
+              redFlagGate: pState.redFlagGate?.gateResult,
+              confidence: pState.confidence?.global,
+              careGapCount: (pState.careGaps ?? []).length,
+              redFlagCount: pState.redFlags.length,
+              spotInterventionCount: pState.spotInterventions.length,
+            },
+          });
+        } catch (err: any) {
+          results.push({
+            id: scenario.id || results.length,
+            label: scenario.label || scenario.complaint || "(unknown)",
+            pass: false,
+            error: err?.message || String(err),
+            elapsedMs: Date.now() - scenarioStart,
+          });
+        }
+      }
+
+      const totalElapsed = Date.now() - startTime;
+      const passCount = results.filter(r => r.pass).length;
+      const failCount = results.filter(r => !r.pass).length;
+
+      res.json({
+        ok: true,
+        totalScenarios: results.length,
+        passed: passCount,
+        failed: failCount,
+        elapsedMs: totalElapsed,
+        avgMs: Math.round(totalElapsed / results.length),
+        results,
+      });
+    } catch (err: any) {
+      console.error("[StressTest] Error:", err);
       res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });

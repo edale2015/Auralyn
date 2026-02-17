@@ -170,6 +170,24 @@ export const CaseStateSchema = z.object({
     safetyClass: z.enum(["education", "test_suggestion", "spot_intervention", "er_send"]).default("education"),
   })).default([]),
 
+  confidence: z.object({
+    global: z.enum(["HIGH", "MODERATE", "LOW"]).default("MODERATE"),
+    by_inference: z.array(z.object({
+      itemType: z.string(),
+      item: z.string(),
+      confidence: z.enum(["HIGH", "MODERATE", "LOW"]),
+      evidence: z.array(z.string()),
+    })).default([]),
+  }).optional(),
+
+  careGaps: z.array(z.object({
+    gap_id: z.string(),
+    domain: z.string(),
+    severity: z.enum(["INFO", "IMPORTANT", "URGENT_SOON"]),
+    recommended_action: z.string(),
+    evidence: z.array(z.string()),
+  })).default([]),
+
   clinicalStateTrace: z.object({
     normalizedMeds: z.array(z.object({
       name: z.string(),
@@ -382,6 +400,14 @@ export const AgentActionSchema = z.discriminatedUnion("type", [
     doNotDo: z.array(z.string()).default([]),
     referralWindow: z.string().optional(),
     safetyClass: z.enum(["education", "test_suggestion", "spot_intervention", "er_send"]).default("spot_intervention"),
+  }),
+
+  z.object({
+    type: z.literal("SAFE_FREEFORM_EDUCATION"),
+    topic: z.string(),
+    content: z.string(),
+    citedRecommendation: z.string(),
+    safetyClass: z.literal("education").default("education"),
   }),
 
   z.object({
