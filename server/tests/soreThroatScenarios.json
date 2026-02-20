@@ -1,0 +1,738 @@
+[
+  {
+    "id": 1,
+    "label": "Classic viral - low Centor, young adult",
+    "complaint": "sore throat",
+    "demographics": {"age": 25, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "self_care",
+      "expectRedFlagGate": "PASS",
+      "expectDone": true,
+      "expectNoPendingAction": true
+    }
+  },
+  {
+    "id": 2,
+    "label": "Classic strep - high Centor, child",
+    "complaint": "sore throat",
+    "demographics": {"age": 10, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "urgent_care",
+      "expectRedFlagGate": "PASS",
+      "expectMinCentorScore": 3,
+      "expectDone": true
+    }
+  },
+  {
+    "id": 3,
+    "label": "Airway compromise - stridor",
+    "complaint": "sore throat",
+    "demographics": {"age": 35, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 1,
+      "Q_SHORTNESS_OF_BREATH": "yes", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "yes", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "er_send",
+      "expectRedFlagGate": "ER_SEND",
+      "expectMinRedFlags": 1,
+      "expectRedFlagIds": ["RF_ST_AIRWAY"],
+      "expectRoutingState": "EMERGENT_ESCALATION"
+    }
+  },
+  {
+    "id": 4,
+    "label": "Drooling - airway compromise",
+    "complaint": "sore throat",
+    "demographics": {"age": 4, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 1,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "yes", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "er_send",
+      "expectRedFlagGate": "ER_SEND",
+      "expectRedFlagIds": ["RF_ST_AIRWAY"]
+    }
+  },
+  {
+    "id": 5,
+    "label": "Peritonsillar abscess - muffled voice + trismus",
+    "complaint": "sore throat",
+    "demographics": {"age": 28, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 4,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "yes", "Q_TRISMUS": "yes",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "er_send",
+      "expectRedFlagGate": "ER_SEND",
+      "expectRedFlagIds": ["RF_ST_PERITONSILLAR"]
+    }
+  },
+  {
+    "id": 6,
+    "label": "Deep space infection - neck swelling + fever",
+    "complaint": "sore throat",
+    "demographics": {"age": 45, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 5,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "yes", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectMinRedFlags": 1,
+      "expectRedFlagIds": ["RF_ST_NECK_SWELLING"]
+    }
+  },
+  {
+    "id": 7,
+    "label": "Persistent > 10 days",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 14,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no",
+      "Q_WEIGHT_LOSS": "no", "Q_NIGHT_SWEATS": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectRedFlagIds": ["RF_ST_PERSISTENT"]
+    }
+  },
+  {
+    "id": 8,
+    "label": "Immunocompromised patient",
+    "complaint": "sore throat",
+    "demographics": {"age": 55, "sex": "male"},
+    "immunocompromised": true,
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectRedFlagIds": ["RF_ST_IMMUNOCOMP"]
+    }
+  },
+  {
+    "id": 9,
+    "label": "Scarlet fever - rash + fever",
+    "complaint": "sore throat",
+    "demographics": {"age": 8, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "yes",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectRedFlagIds": ["RF_ST_SCARLET"],
+      "expectMinCentorScore": 3
+    }
+  },
+  {
+    "id": 10,
+    "label": "Moderate Centor = 2, adult",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 2,
+      "expectDisposition": "routine_urgent",
+      "expectRedFlagGate": "PASS",
+      "expectDone": true
+    }
+  },
+  {
+    "id": 11,
+    "label": "Elderly patient - Centor age penalty",
+    "complaint": "sore throat",
+    "demographics": {"age": 65, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 4,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 2,
+      "expectRedFlagGate": "PASS",
+      "expectDone": true
+    }
+  },
+  {
+    "id": 12,
+    "label": "No answers - should ask first question",
+    "complaint": "sore throat",
+    "demographics": {"age": 25, "sex": "male"},
+    "answers": {},
+    "assertions": {
+      "expectDone": false,
+      "expectPendingQuestion": "Q_FEVER"
+    }
+  },
+  {
+    "id": 13,
+    "label": "Partial answers - should ask next missing",
+    "complaint": "sore throat",
+    "demographics": {"age": 25, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no"
+    },
+    "assertions": {
+      "expectDone": false,
+      "expectPendingQuestion": "Q_TONSILLAR_EXUDATE"
+    }
+  },
+  {
+    "id": 14,
+    "label": "Unable to swallow saliva alone",
+    "complaint": "sore throat",
+    "demographics": {"age": 40, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "yes",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "er_send",
+      "expectRedFlagGate": "ER_SEND",
+      "expectRedFlagIds": ["RF_ST_AIRWAY"]
+    }
+  },
+  {
+    "id": 15,
+    "label": "Dyspnea soft flag",
+    "complaint": "sore throat",
+    "demographics": {"age": 50, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 5,
+      "Q_SHORTNESS_OF_BREATH": "yes", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectRedFlagIds": ["RF_ST_DYSPNEA"]
+    }
+  },
+  {
+    "id": 16,
+    "label": "Recurrent strep",
+    "complaint": "sore throat",
+    "demographics": {"age": 15, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "yes"
+    },
+    "assertions": {
+      "expectDisposition": "routine",
+      "expectRedFlagGate": "PASS",
+      "expectDone": true
+    }
+  },
+  {
+    "id": 17,
+    "label": "Multiple red flags - airway + peritonsillar",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "yes", "Q_UNABLE_TO_SWALLOW_SALIVA": "yes",
+      "Q_STRIDOR": "yes", "Q_MUFFLED_VOICE": "yes", "Q_TRISMUS": "yes",
+      "Q_DROOLING": "yes", "Q_NECK_SWELLING": "yes", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "er_send",
+      "expectRedFlagGate": "ER_SEND",
+      "expectMinRedFlags": 3,
+      "expectRoutingState": "EMERGENT_ESCALATION"
+    }
+  },
+  {
+    "id": 18,
+    "label": "Centor 0 - all negative, older adult",
+    "complaint": "sore throat",
+    "demographics": {"age": 50, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 0,
+      "expectDisposition": "self_care",
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 19,
+    "label": "Centor 5 - max score, pediatric",
+    "complaint": "sore throat",
+    "demographics": {"age": 7, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 1,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 5,
+      "expectDisposition": "urgent_care",
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 20,
+    "label": "Muffled voice only - no trismus, no abscess flag",
+    "complaint": "sore throat",
+    "demographics": {"age": 35, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "yes", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "PASS",
+      "expectDisposition": "urgent_care",
+      "expectDone": true
+    }
+  },
+  {
+    "id": 21,
+    "label": "Trismus only - no muffled voice, no abscess flag",
+    "complaint": "sore throat",
+    "demographics": {"age": 35, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "yes",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "PASS",
+      "expectDisposition": "self_care"
+    }
+  },
+  {
+    "id": 22,
+    "label": "Neck swelling without fever - no deep space flag",
+    "complaint": "sore throat",
+    "demographics": {"age": 40, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 5,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "yes", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 23,
+    "label": "Rash without fever - no scarlet fever flag",
+    "complaint": "sore throat",
+    "demographics": {"age": 12, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "yes",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 24,
+    "label": "Persistent 10 days exactly",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 10,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectRedFlagIds": ["RF_ST_PERSISTENT"]
+    }
+  },
+  {
+    "id": 25,
+    "label": "Duration 9 days - below persistent threshold",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 9,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "PASS",
+      "expectDisposition": "self_care"
+    }
+  },
+  {
+    "id": 26,
+    "label": "Centor 1 - fever only, older",
+    "complaint": "sore throat",
+    "demographics": {"age": 55, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 0,
+      "expectDisposition": "self_care",
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 27,
+    "label": "Centor 3 - no exudate, young adult",
+    "complaint": "sore throat",
+    "demographics": {"age": 20, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 3,
+      "expectDisposition": "urgent_care",
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 28,
+    "label": "Recent antibiotics with low Centor",
+    "complaint": "sore throat",
+    "demographics": {"age": 35, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 5,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "yes", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDisposition": "self_care",
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 29,
+    "label": "Female pediatric, Centor age bonus",
+    "complaint": "sore throat",
+    "demographics": {"age": 5, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 3,
+      "expectDisposition": "urgent_care",
+      "expectRedFlagGate": "PASS"
+    }
+  },
+  {
+    "id": 30,
+    "label": "All not_sure answers",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "not_sure", "Q_COUGH": "not_sure", "Q_TONSILLAR_EXUDATE": "not_sure",
+      "Q_TENDER_ANT_CERV_NODES": "not_sure", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "not_sure", "Q_UNABLE_TO_SWALLOW_SALIVA": "not_sure",
+      "Q_STRIDOR": "not_sure", "Q_MUFFLED_VOICE": "not_sure", "Q_TRISMUS": "not_sure",
+      "Q_DROOLING": "not_sure", "Q_NECK_SWELLING": "not_sure", "Q_RASH": "not_sure",
+      "Q_RECENT_ANTIBIOTICS": "not_sure", "Q_RECURRENT_STREP": "not_sure"
+    },
+    "assertions": {
+      "expectCentorScore": 0,
+      "expectRedFlagGate": "PASS",
+      "expectDisposition": "self_care"
+    }
+  },
+  {
+    "id": 31,
+    "label": "Alternative complaint text 'throat pain'",
+    "complaint": "throat pain",
+    "demographics": {"age": 25, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDone": true,
+      "expectDisposition": "urgent_care"
+    }
+  },
+  {
+    "id": 32,
+    "label": "Pharyngitis complaint text",
+    "complaint": "pharyngitis",
+    "demographics": {"age": 30, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectDone": true,
+      "expectDisposition": "self_care"
+    }
+  },
+  {
+    "id": 33,
+    "label": "Toddler with drooling - ER send",
+    "complaint": "sore throat",
+    "demographics": {"age": 3, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 1,
+      "Q_SHORTNESS_OF_BREATH": "yes", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "yes", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ER_SEND",
+      "expectDisposition": "er_send",
+      "expectRoutingState": "EMERGENT_ESCALATION"
+    }
+  },
+  {
+    "id": 34,
+    "label": "Centor 4 - all positive, 15-44 adult",
+    "complaint": "sore throat",
+    "demographics": {"age": 25, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 4,
+      "expectDisposition": "urgent_care"
+    }
+  },
+  {
+    "id": 35,
+    "label": "Persistent + immunocompromised - double escalation",
+    "complaint": "sore throat",
+    "demographics": {"age": 60, "sex": "male"},
+    "immunocompromised": true,
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "yes", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 14,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no",
+      "Q_WEIGHT_LOSS": "no", "Q_NIGHT_SWEATS": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectMinRedFlags": 2
+    }
+  },
+  {
+    "id": 36,
+    "label": "Centor 1 - only cough absent",
+    "complaint": "sore throat",
+    "demographics": {"age": 30, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "no", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 1,
+      "expectDisposition": "self_care"
+    }
+  },
+  {
+    "id": 37,
+    "label": "Scarlet fever + high Centor - child",
+    "complaint": "sore throat",
+    "demographics": {"age": 6, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "yes",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectRedFlagGate": "ESCALATE",
+      "expectRedFlagIds": ["RF_ST_SCARLET"],
+      "expectCentorScore": 5
+    }
+  },
+  {
+    "id": 38,
+    "label": "Unanswered optional Qs - should pause for them",
+    "complaint": "sore throat",
+    "demographics": {"age": 25, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "yes",
+      "Q_TENDER_ANT_CERV_NODES": "yes", "Q_DURATION_DAYS": 3,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no"
+    },
+    "assertions": {
+      "expectDone": false,
+      "expectPendingQuestion": "Q_RASH"
+    }
+  },
+  {
+    "id": 39,
+    "label": "Teenager Centor boundary - age 14",
+    "complaint": "sore throat",
+    "demographics": {"age": 14, "sex": "male"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 3,
+      "expectDisposition": "urgent_care"
+    }
+  },
+  {
+    "id": 40,
+    "label": "Age 15 - no pediatric bonus",
+    "complaint": "sore throat",
+    "demographics": {"age": 15, "sex": "female"},
+    "answers": {
+      "Q_FEVER": "yes", "Q_COUGH": "no", "Q_TONSILLAR_EXUDATE": "no",
+      "Q_TENDER_ANT_CERV_NODES": "no", "Q_DURATION_DAYS": 2,
+      "Q_SHORTNESS_OF_BREATH": "no", "Q_UNABLE_TO_SWALLOW_SALIVA": "no",
+      "Q_STRIDOR": "no", "Q_MUFFLED_VOICE": "no", "Q_TRISMUS": "no",
+      "Q_DROOLING": "no", "Q_NECK_SWELLING": "no", "Q_RASH": "no",
+      "Q_RECENT_ANTIBIOTICS": "no", "Q_RECURRENT_STREP": "no"
+    },
+    "assertions": {
+      "expectCentorScore": 2,
+      "expectDisposition": "routine_urgent"
+    }
+  }
+]

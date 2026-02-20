@@ -1,0 +1,183 @@
+Step 1: Create the new sheet tabs + paste data
+
+Add tabs listed above
+
+Paste the CSV blocks into each tab
+
+Verify CC_ID = sore_throat is consistent everywhere
+
+Step 2: Add a complaint loader
+
+Backend function:
+
+loadComplaintConfig(cc_id)
+returns:
+
+registry row
+
+core questions for version
+
+red flag rules set
+
+scoring defs
+
+disposition rules
+
+output templates
+
+Cache it in memory with TTL (e.g., 60s) so you don’t hit Sheets constantly.
+
+Step 3: Add a generic “question renderer”
+
+Given:
+
+CORE_QUESTIONS rows
+
+current CaseState
+Return:
+
+next unanswered required question (respecting ASK_IF)
+
+enforce required questions for this complaint
+
+This becomes reusable for every complaint.
+
+Step 4: Implement a tiny expression evaluator
+
+You need to evaluate ASK_IF, TRIGGER_EXPR, WHEN_EXPR.
+
+Keep it minimal:
+
+boolean ops &&, ||
+
+comparisons ==, !=, >, <, >=, <=
+
+membership in ['a','b']
+
+path lookup symptoms.fever
+
+special helpers: true, false
+
+(If you want, you can switch to JSONLogic later, but don’t block on it.)
+
+Step 5: Build the LangGraph-style node runner (even if you don’t use LangGraph library)
+
+You already have /api/agent/next, /api/agent/execute, /api/agent/run.
+
+Add a per-complaint graph definition that is mostly the same skeleton:
+
+Nodes for sore throat:
+
+INIT_CASE
+
+MODIFIERS_INTAKE
+
+CC_NORMALIZE
+
+ST_CORE_QUESTIONS
+
+ST_RED_FLAG_GATE
+
+ST_CENTOR_SCORE
+
+ST_TESTING_DECISION
+
+ST_DIFF_AND_CONFIDENCE (LLM constrained)
+
+ST_DISPOSITION_RULES
+
+OPTIONAL_SPECIALIST_COUNCIL
+
+ST_OUTPUT_COMPOSE + SUPERVISOR_GATE
+
+Step 6: Deterministic engines (no LLM)
+
+Implement these as pure functions:
+
+runRedFlags(caseState, redFlagRules)
+
+returns red_flags[] and any_severity
+
+runScoring(caseState, scoringDefs)
+
+returns {centor_points, components, missing_inputs}
+
+runDisposition(caseState, dispositionRules)
+
+picks the FIRST matching WHEN_EXPR by PRIORITY
+
+returns disposition_level, rationale_template_id, confidence_hint
+
+Step 7: Output composer uses templates
+
+Fetch OUTPUT_TEMPLATES by TEMPLATE_ID
+
+Render with small variable substitutions if you want (optional)
+
+Supervisor gate validates allowed templates only
+
+Step 8: Trace logging
+
+Each node appends:
+
+node_id
+
+inputs_used (fields touched)
+
+outputs
+
+rule_refs (RF_IDs, DISP_RULE_ID)
+
+llm_calls count
+
+confidence
+
+Write to:
+
+Firestore conversation trace
+
+and optionally append to TRACE_LOG tab in Sheets
+
+Step 9: Testing harness for this one complaint
+
+Create 30–50 scripted sore throat cases:
+
+viral
+
+strep-like
+
+drooling
+
+muffled voice + trismus
+
+persistent 10 days
+
+immunocompromised
+
+Each test asserts:
+
+which disposition level
+
+which red flags triggered
+
+which template ID returned
+
+Once this passes, you clone for cough, chest pain, dizziness, etc.
+
+3) The “clone to all complaints” rule
+
+After sore throat works, new complaint onboarding is:
+
+Add COMPLAINT_REGISTRY row
+
+Paste CORE_QUESTIONS rows
+
+Paste RED_FLAG_RULES rows
+
+Add scoring def rows if needed
+
+Add DISPOSITION_RULES
+
+Add templates
+
+No new backend code unless the complaint introduces a new scoring module.

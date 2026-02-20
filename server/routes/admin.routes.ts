@@ -18,6 +18,8 @@ import { formatRedFlagOutput } from "../services/redFlagsMaster";
 import { formatUCSpotOutput } from "../services/urgentCareSpotInterventions";
 import { runRedFlagAudit } from "../services/redFlagAudit";
 import { storeTrace, buildTraceTimeline, getStoredTraceIds } from "../services/traceViewer";
+import { runComplaintGraph } from "../services/complaintNodeRunner";
+import { loadComplaintConfig, listAvailableComplaints, invalidateComplaintConfigCache } from "../services/complaintConfigLoader";
 
 export function registerAdminRoutes(router: Router) {
   router.post("/api/admin/registry/reload", requireProviderAuth, async (req: Request, res: Response) => {
@@ -718,6 +720,327 @@ export function registerAdminRoutes(router: Router) {
       });
     } catch (err: any) {
       console.error("[StressTest] Error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/complaint/list", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      const complaints = await listAvailableComplaints();
+      res.json({ ok: true, complaints });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/complaint/config/:ccId", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const config = await loadComplaintConfig(req.params.ccId);
+      if (!config) {
+        res.status(404).json({ ok: false, error: `No config for complaint: ${req.params.ccId}` });
+        return;
+      }
+      res.json({ ok: true, config });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.post("/api/admin/complaint/reload", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const ccId = req.query.ccId as string | undefined;
+      invalidateComplaintConfigCache(ccId);
+      res.json({ ok: true, message: ccId ? `Invalidated config for ${ccId}` : "Invalidated all complaint configs" });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.post("/api/admin/complaint/run-graph", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const {
+        complaint,
+        answers = {},
+        demographics = {},
+        allergies = [],
+        meds = [],
+        pmh = [],
+        immunocompromised = false,
+      } = req.body;
+
+      if (!complaint) {
+        return res.status(400).json({ ok: false, error: "complaint is required" });
+      }
+
+      const now = new Date().toISOString();
+      const runId = `graph_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+      const seedState: CaseState = {
+        caseId: runId,
+        createdAt: now,
+        updatedAt: now,
+        chiefComplaint: complaint,
+        demographics: demographics || undefined,
+        modifiers: {
+          allergies: allergies.length > 0 ? allergies : undefined,
+          meds: meds.length > 0 ? meds : undefined,
+          pmh: pmh.length > 0 ? pmh : undefined,
+          immunocompromised: immunocompromised || undefined,
+        },
+        modifierAnswers: {},
+        answers,
+        scores: {},
+        activeClusters: [],
+        diagnosisClusterIds: [],
+        disposition: undefined,
+        dispositionReasonCodes: [],
+        candidateMeds: [],
+        candidateDiagnoses: [],
+        ruleTrace: [],
+        redFlags: [],
+        requiredQuestionIdsMissing: [],
+        recommendedActions: [],
+        questionQueue: [],
+        spotInterventions: [],
+        routing: { state: "INTAKE_PENDING" },
+        audit: { steps: [], events: [] },
+      };
+
+      const result = await runComplaintGraph(seedState, complaint);
+
+      storeTrace(runId, result.state, result.events);
+
+      res.json({
+        ok: true,
+        runId,
+        currentNode: result.currentNode,
+        done: result.done,
+        pendingAction: result.pendingAction ?? null,
+        nodeTraces: result.nodeTraces,
+        events: result.events,
+        state: {
+          system: result.state.system,
+          disposition: result.state.disposition,
+          dispositionReasonCodes: result.state.dispositionReasonCodes,
+          scores: result.state.scores,
+          redFlags: result.state.redFlags,
+          redFlagGate: result.state.redFlagGate,
+          routing: result.state.routing,
+          recommendedActions: result.state.recommendedActions,
+          questionQueue: result.state.questionQueue,
+          activeClusters: result.state.activeClusters,
+          audit: result.state.audit,
+        },
+      });
+    } catch (err: any) {
+      console.error("[ComplaintGraph] Error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.post("/api/admin/complaint/stress-test", requireProviderAuth, async (req: Request, res: Response) => {
+    try {
+      const { scenarios } = req.body;
+      if (!Array.isArray(scenarios) || scenarios.length === 0) {
+        res.status(400).json({ ok: false, error: "scenarios array required" });
+        return;
+      }
+
+      const results: any[] = [];
+      const startTime = Date.now();
+
+      for (const scenario of scenarios) {
+        const scenarioStart = Date.now();
+        try {
+          const {
+            complaint = "sore throat",
+            answers = {},
+            demographics = {},
+            allergies = [],
+            meds = [],
+            pmh = [],
+            immunocompromised = false,
+            assertions = {},
+          } = scenario;
+
+          const now = new Date().toISOString();
+          const runId = `cstress_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+          const seedState: CaseState = {
+            caseId: runId,
+            createdAt: now,
+            updatedAt: now,
+            chiefComplaint: complaint,
+            demographics: demographics || undefined,
+            modifiers: {
+              allergies: allergies.length > 0 ? allergies : undefined,
+              meds: meds.length > 0 ? meds : undefined,
+              pmh: pmh.length > 0 ? pmh : undefined,
+              immunocompromised: immunocompromised || undefined,
+            },
+            modifierAnswers: {},
+            answers,
+            scores: {},
+            activeClusters: [],
+            diagnosisClusterIds: [],
+            disposition: undefined,
+            dispositionReasonCodes: [],
+            candidateMeds: [],
+            candidateDiagnoses: [],
+            ruleTrace: [],
+            redFlags: [],
+            requiredQuestionIdsMissing: [],
+            recommendedActions: [],
+            questionQueue: [],
+            spotInterventions: [],
+            routing: { state: "INTAKE_PENDING" },
+            audit: { steps: [], events: [] },
+          };
+
+          const graphResult = await runComplaintGraph(seedState, complaint);
+          const pState = graphResult.state;
+          const elapsed = Date.now() - scenarioStart;
+
+          const assertionResults: Record<string, { pass: boolean; expected: any; actual: any }> = {};
+
+          if (assertions.expectDisposition !== undefined) {
+            assertionResults["expectDisposition"] = {
+              pass: pState.disposition === assertions.expectDisposition,
+              expected: assertions.expectDisposition,
+              actual: pState.disposition ?? "NOT_SET",
+            };
+          }
+
+          if (assertions.expectRedFlagGate !== undefined) {
+            assertionResults["expectRedFlagGate"] = {
+              pass: pState.redFlagGate?.gateResult === assertions.expectRedFlagGate,
+              expected: assertions.expectRedFlagGate,
+              actual: pState.redFlagGate?.gateResult ?? "NOT_EVALUATED",
+            };
+          }
+
+          if (assertions.expectMinRedFlags !== undefined) {
+            assertionResults["expectMinRedFlags"] = {
+              pass: pState.redFlags.length >= assertions.expectMinRedFlags,
+              expected: `>= ${assertions.expectMinRedFlags}`,
+              actual: pState.redFlags.length,
+            };
+          }
+
+          if (assertions.expectRedFlagIds !== undefined && Array.isArray(assertions.expectRedFlagIds)) {
+            assertionResults["expectRedFlagIds"] = {
+              pass: assertions.expectRedFlagIds.every((id: string) => pState.redFlags.includes(id)),
+              expected: assertions.expectRedFlagIds,
+              actual: pState.redFlags,
+            };
+          }
+
+          if (assertions.expectCentorScore !== undefined) {
+            assertionResults["expectCentorScore"] = {
+              pass: pState.scores?.centor === assertions.expectCentorScore,
+              expected: assertions.expectCentorScore,
+              actual: pState.scores?.centor ?? "NOT_COMPUTED",
+            };
+          }
+
+          if (assertions.expectMinCentorScore !== undefined) {
+            assertionResults["expectMinCentorScore"] = {
+              pass: (pState.scores?.centor ?? 0) >= assertions.expectMinCentorScore,
+              expected: `>= ${assertions.expectMinCentorScore}`,
+              actual: pState.scores?.centor ?? 0,
+            };
+          }
+
+          if (assertions.expectTemplateId !== undefined) {
+            const matchedRule = pState.dispositionReasonCodes[pState.dispositionReasonCodes.length - 1];
+            assertionResults["expectTemplateId"] = {
+              pass: pState.dispositionReasonCodes.includes(assertions.expectTemplateId) || matchedRule === assertions.expectTemplateId,
+              expected: assertions.expectTemplateId,
+              actual: pState.dispositionReasonCodes,
+            };
+          }
+
+          if (assertions.expectRoutingState !== undefined) {
+            assertionResults["expectRoutingState"] = {
+              pass: pState.routing.state === assertions.expectRoutingState,
+              expected: assertions.expectRoutingState,
+              actual: pState.routing.state,
+            };
+          }
+
+          if (assertions.expectDone !== undefined) {
+            assertionResults["expectDone"] = {
+              pass: graphResult.done === assertions.expectDone,
+              expected: assertions.expectDone,
+              actual: graphResult.done,
+            };
+          }
+
+          if (assertions.expectPendingQuestion !== undefined) {
+            const pendingQId = graphResult.pendingAction?.type === "ASK_QUESTION"
+              ? (graphResult.pendingAction as any).questionId
+              : null;
+            assertionResults["expectPendingQuestion"] = {
+              pass: pendingQId === assertions.expectPendingQuestion,
+              expected: assertions.expectPendingQuestion,
+              actual: pendingQId,
+            };
+          }
+
+          if (assertions.expectNoPendingAction !== undefined && assertions.expectNoPendingAction) {
+            assertionResults["expectNoPendingAction"] = {
+              pass: !graphResult.pendingAction,
+              expected: "no pending action",
+              actual: graphResult.pendingAction ? graphResult.pendingAction.type : "none",
+            };
+          }
+
+          const allPassed = Object.values(assertionResults).every(r => r.pass);
+
+          results.push({
+            id: scenario.id || results.length,
+            label: scenario.label || complaint,
+            pass: allPassed,
+            assertions: assertionResults,
+            elapsedMs: elapsed,
+            currentNode: graphResult.currentNode,
+            done: graphResult.done,
+            summary: {
+              disposition: pState.disposition,
+              redFlagGate: pState.redFlagGate?.gateResult,
+              centorScore: pState.scores?.centor,
+              redFlagCount: pState.redFlags.length,
+              redFlagIds: pState.redFlags,
+              routingState: pState.routing.state,
+              nodeCount: graphResult.nodeTraces.length,
+            },
+          });
+        } catch (err: any) {
+          results.push({
+            id: scenario.id || results.length,
+            label: scenario.label || scenario.complaint || "(unknown)",
+            pass: false,
+            error: err?.message || String(err),
+            elapsedMs: Date.now() - scenarioStart,
+          });
+        }
+      }
+
+      const totalElapsed = Date.now() - startTime;
+      const passCount = results.filter(r => r.pass).length;
+      const failCount = results.filter(r => !r.pass).length;
+
+      res.json({
+        ok: true,
+        totalScenarios: results.length,
+        passed: passCount,
+        failed: failCount,
+        elapsedMs: totalElapsed,
+        avgMs: Math.round(totalElapsed / results.length),
+        results,
+      });
+    } catch (err: any) {
+      console.error("[ComplaintStressTest] Error:", err);
       res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });

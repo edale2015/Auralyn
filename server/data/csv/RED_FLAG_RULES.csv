@@ -1,0 +1,8 @@
+CC_ID,RF_ID,LABEL,TRIGGER_EXPR,SEVERITY,ACTION,IMMEDIATE_ACTIONS,RATIONALE
+sore_throat,RF_ST_AIRWAY,Airway compromise,"answers.Q_STRIDOR == 'yes' || answers.Q_UNABLE_TO_SWALLOW_SALIVA == 'yes' || answers.Q_DROOLING == 'yes'",HARD,ER_SEND,"Call 911 if stridor present; Do not lay patient flat; NPO","Stridor or inability to swallow saliva suggests epiglottitis or deep space infection"
+sore_throat,RF_ST_PERITONSILLAR,Peritonsillar abscess signs,"answers.Q_MUFFLED_VOICE == 'yes' && answers.Q_TRISMUS == 'yes'",HARD,ER_SEND,"Urgent ENT evaluation; CT neck with contrast; IV antibiotics","Muffled voice + trismus strongly suggests peritonsillar abscess"
+sore_throat,RF_ST_NECK_SWELLING,Significant neck swelling,"answers.Q_NECK_SWELLING == 'yes' && answers.Q_FEVER == 'yes'",HARD,ESCALATE,"Urgent evaluation for deep space infection; CT neck","Neck swelling with fever suggests deep space infection"
+sore_throat,RF_ST_DYSPNEA,Respiratory distress,"answers.Q_SHORTNESS_OF_BREATH == 'yes'",SOFT,ESCALATE,"Assess oxygen saturation; Consider chest X-ray","Dyspnea with pharyngitis needs workup"
+sore_throat,RF_ST_IMMUNOCOMP,Immunocompromised patient,"modifiers.immunocompromised == true",SOFT,ESCALATE,"Lower threshold for testing and antibiotics; Consider broader differential","Immunocompromised patients need more aggressive workup"
+sore_throat,RF_ST_PERSISTENT,Persistent symptoms > 10 days,"answers.Q_DURATION_DAYS >= 10",SOFT,ESCALATE,"Consider mono test; CBC; Consider ENT referral","Persistent pharyngitis beyond viral window needs evaluation"
+sore_throat,RF_ST_SCARLET,Possible scarlet fever,"answers.Q_RASH == 'yes' && answers.Q_FEVER == 'yes'",SOFT,ESCALATE,"Rapid strep test; Consider scarlet fever treatment","Rash + fever + sore throat = possible scarlet fever"

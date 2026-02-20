@@ -1,0 +1,9 @@
+CC_ID,DISP_RULE_ID,PRIORITY,WHEN_EXPR,DISPOSITION_LEVEL,RATIONALE_TEMPLATE_ID,CONFIDENCE_HINT
+sore_throat,DISP_ST_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_ST_ER_SEND,HIGH
+sore_throat,DISP_ST_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_ST_ESCALATE,HIGH
+sore_throat,DISP_ST_HIGH_CENTOR,3,"scores.centor >= 3",urgent_care,TPL_ST_HIGH_CENTOR,HIGH
+sore_throat,DISP_ST_MOD_CENTOR,4,"scores.centor == 2",routine_urgent,TPL_ST_MOD_CENTOR,MODERATE
+sore_throat,DISP_ST_PERSISTENT,5,"answers.Q_DURATION_DAYS >= 10",routine_urgent,TPL_ST_PERSISTENT,MODERATE
+sore_throat,DISP_ST_RECURRENT,6,"answers.Q_RECURRENT_STREP == 'yes'",routine,TPL_ST_RECURRENT,MODERATE
+sore_throat,DISP_ST_LOW_CENTOR,7,"scores.centor <= 1",self_care,TPL_ST_LOW_CENTOR,HIGH
+sore_throat,DISP_ST_DEFAULT,99,true,routine,TPL_ST_DEFAULT,LOW

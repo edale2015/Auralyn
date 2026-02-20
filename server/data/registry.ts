@@ -31,6 +31,13 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   GLOBAL_MODIFIERS_CLEAN: { tab: "GLOBAL_MODIFIERS_CLEAN", range: "A1:Z5000" },
   SECONDARY_QUESTIONS_GLOBAL: { tab: "SECONDARY_QUESTIONS_GLOBAL", range: "A1:Z5000" },
 
+  COMPLAINT_REGISTRY: { tab: "COMPLAINT_REGISTRY", range: "A1:Z500", ttlMs: 60_000 },
+  CORE_QUESTIONS: { tab: "CORE_QUESTIONS", range: "A1:Z5000", ttlMs: 60_000 },
+  RED_FLAG_RULES: { tab: "RED_FLAG_RULES", range: "A1:Z2000", ttlMs: 60_000 },
+  SCORING_DEFS: { tab: "SCORING_DEFS", range: "A1:Z500", ttlMs: 60_000 },
+  DISPOSITION_RULES: { tab: "DISPOSITION_RULES", range: "A1:Z2000", ttlMs: 60_000 },
+  OUTPUT_TEMPLATES: { tab: "OUTPUT_TEMPLATES", range: "A1:Z2000", ttlMs: 60_000 },
+
   // Legacy per-system tabs kept for diagnosis resolver fallback (read-only)
   ENT_DIAGNOSIS_MASTER: { tab: "ENT_DIAGNOSIS_MASTER", range: "A1:Z5000" },
   CARD_DIAGNOSIS_MASTER: { tab: "CARD_DIAGNOSIS_MASTER", range: "A1:Z5000" },
@@ -48,6 +55,12 @@ const CSV_ENABLED_TABLES = new Set([
   "MED_CONDITION_INTELLIGENCE_RULES",
   "URGENT_CARE_SPOT_INTERVENTIONS",
   "RED_FLAGS_MASTER",
+  "COMPLAINT_REGISTRY",
+  "CORE_QUESTIONS",
+  "RED_FLAG_RULES",
+  "SCORING_DEFS",
+  "DISPOSITION_RULES",
+  "OUTPUT_TEMPLATES",
 ]);
 
 export async function loadTable(tableName: string): Promise<SheetRow[]> {
