@@ -1,0 +1,1173 @@
+2) WHAT TO TELL REPLIT TO DO (Implementation checklist)
+
+Copy this into Replit as your build instruction for the next increment.
+
+Step 1: Create the new sheet tabs + paste data
+
+Add tabs listed above
+
+Paste the CSV blocks into each tab
+
+Verify CC_ID = sore_throat is consistent everywhere
+
+Step 2: Add a complaint loader
+
+Backend function:
+
+loadComplaintConfig(cc_id)
+returns:
+
+registry row
+
+core questions for version
+
+red flag rules set
+
+scoring defs
+
+disposition rules
+
+output templates
+
+Cache it in memory with TTL (e.g., 60s) so you don’t hit Sheets constantly.
+
+Step 3: Add a generic “question renderer”
+
+Given:
+
+CORE_QUESTIONS rows
+
+current CaseState
+Return:
+
+next unanswered required question (respecting ASK_IF)
+
+enforce required questions for this complaint
+
+This becomes reusable for every complaint.
+
+Step 4: Implement a tiny expression evaluator
+
+You need to evaluate ASK_IF, TRIGGER_EXPR, WHEN_EXPR.
+
+Keep it minimal:
+
+boolean ops &&, ||
+
+comparisons ==, !=, >, <, >=, <=
+
+membership in ['a','b']
+
+path lookup symptoms.fever
+
+special helpers: true, false
+
+(If you want, you can switch to JSONLogic later, but don’t block on it.)
+
+Step 5: Build the LangGraph-style node runner (even if you don’t use LangGraph library)
+
+You already have /api/agent/next, /api/agent/execute, /api/agent/run.
+
+Add a per-complaint graph definition that is mostly the same skeleton:
+
+Nodes for sore throat:
+
+INIT_CASE
+
+MODIFIERS_INTAKE
+
+CC_NORMALIZE
+
+ST_CORE_QUESTIONS
+
+ST_RED_FLAG_GATE
+
+ST_CENTOR_SCORE
+
+ST_TESTING_DECISION
+
+ST_DIFF_AND_CONFIDENCE (LLM constrained)
+
+ST_DISPOSITION_RULES
+
+OPTIONAL_SPECIALIST_COUNCIL
+
+ST_OUTPUT_COMPOSE + SUPERVISOR_GATE
+
+Step 6: Deterministic engines (no LLM)
+
+Implement these as pure functions:
+
+runRedFlags(caseState, redFlagRules)
+
+returns red_flags[] and any_severity
+
+runScoring(caseState, scoringDefs)
+
+returns {centor_points, components, missing_inputs}
+
+runDisposition(caseState, dispositionRules)
+
+picks the FIRST matching WHEN_EXPR by PRIORITY
+
+returns disposition_level, rationale_template_id, confidence_hint
+
+Step 7: Output composer uses templates
+
+Fetch OUTPUT_TEMPLATES by TEMPLATE_ID
+
+Render with small variable substitutions if you want (optional)
+
+Supervisor gate validates allowed templates only
+
+Step 8: Trace logging
+
+Each node appends:
+
+node_id
+
+inputs_used (fields touched)
+
+outputs
+
+rule_refs (RF_IDs, DISP_RULE_ID)
+
+llm_calls count
+
+confidence
+
+Write to:
+
+Firestore conversation trace
+
+and optionally append to TRACE_LOG tab in Sheets
+
+Step 9: Testing harness for this one complaint
+
+Create 30–50 scripted sore throat cases:
+
+viral
+
+strep-like
+
+drooling
+
+muffled voice + trismus
+
+persistent 10 days
+
+immunocompromised
+
+Each test asserts:
+
+which disposition level
+
+which red flags triggered
+
+which template ID returned
+
+Once this passes, you clone for cough, chest pain, dizziness, etc.
+
+3) The “clone to all complaints” rule
+
+After sore throat works, new complaint onboarding is:
+
+Add COMPLAINT_REGISTRY row
+
+Paste CORE_QUESTIONS rows
+
+Paste RED_FLAG_RULES rows
+
+Add scoring def rows if needed
+
+Add DISPOSITION_RULES
+
+Add templates
+
+No new backend code unless the complaint introduces a new scoring module.
+
+Quick question (I’ll assume if you don’t answer):
+
+Do you want Centor to include exam elements (exudate, tender nodes) as patient-reported questions for now, or do you want Centor to run as “partial” until an exam step exists?
+
+If you don’t answer, I’ll default to patient-reported questions (fastest path to a working score).
+
+If you want, next message I can give you the exact Replit code scaffolding for:
+
+expression evaluator
+
+rules runner (red flags, scoring, disposition)
+
+complaint config loader from Sheets
+
+the sore throat graph node map
+
+PATIENT REPORTED THAT CAN BE OVER RIDDEN BY EXAM IF DONE.  YES GIVE ME EXACT REPLIT CODE SCAFFOLDING.
+
+Got it: patient-reported by default, but exam can override. ✅
+Below is drop-in Replit scaffolding (Node/TypeScript/Express) that:
+
+Loads the complaint config from Google Sheets (tabs you created)
+
+Renders CORE_QUESTIONS with ASK_IF
+
+Runs deterministic:
+
+RED_FLAG_RULES
+
+SCORING_DEFS (Centor with patient + exam override)
+
+DISPOSITION_RULES
+
+Produces an output via OUTPUT_TEMPLATES
+
+Logs a trace entry per node
+
+Runs a Sore Throat graph end-to-end (your “golden complaint”)
+
+I’m keeping it simple, strict, auditable, and easy to clone to other complaints.
+
+File tree to add
+server/
+  agent/
+    soreThroatGraph.ts
+  engine/
+    caseState.ts
+    complaintConfig.ts
+    expr.ts
+    rules.ts
+    templates.ts
+    trace.ts
+  routes/
+    agentIntake.ts
+
+You can rename folders to match your project, but keep module boundaries.
+
+1) server/engine/caseState.ts
+// server/engine/caseState.ts
+
+export type Severity = "CRITICAL" | "HIGH" | "MODERATE" | "LOW";
+
+export interface PatientProfile {
+  ageYears?: number;
+  sex?: "female" | "male" | "intersex" | "unknown";
+  pregnancyPossible?: boolean;
+  immunocompromised?: boolean;
+  meds?: string[];
+  pmh?: string[];
+  allergies?: string[];
+}
+
+export interface Symptoms {
+  duration_days?: number;
+  onset_pattern?: "sudden" | "gradual" | "not_sure";
+  fever?: boolean;
+  cough?: boolean;
+  coryza?: boolean;
+  hoarseness?: boolean;
+  dysphagia_liquids?: boolean;
+  drooling?: boolean;
+  breathing_severity?: "no" | "mild" | "moderate" | "severe";
+  trismus?: "normal" | "a_little_hard" | "very_hard";
+  unilateral_pain?: boolean;
+  muffled_voice?: boolean;
+  neck_swelling?: boolean;
+  rash?: boolean;
+  conjunctivitis?: boolean;
+  mono_suspicion?: boolean;
+  sick_contacts?: boolean;
+}
+
+export interface Exam {
+  // patient-reported defaults can be stored in symptoms.*;
+  // exam overrides can be stored here.
+  tonsillar_exudate?: boolean;
+  tender_ant_cerv_nodes?: boolean;
+  uvula_deviation?: boolean;
+}
+
+export interface Vitals {
+  temp_c?: number;
+  hr?: number;
+  rr?: number;
+  spo2?: number;
+  bp_sys?: number;
+  bp_dia?: number;
+}
+
+export interface RedFlagHit {
+  rf_id: string;
+  severity: Severity;
+  action: string;
+  output_template_id: string;
+  why?: string;
+}
+
+export interface Scores {
+  centor_points?: number;
+  centor_components?: Record<string, { points: number; hit: boolean; source?: "patient" | "exam" }>;
+  centor_missing?: string[];
+}
+
+export interface Disposition {
+  level?: string; // ED_NOW | URGENT_CARE_TODAY | HOME_CARE | etc
+  rule_id?: string;
+  rationale_template_id?: string;
+  confidence_hint?: "HIGH" | "MODERATE" | "LOW";
+}
+
+export interface TraceEntry {
+  ts: string;
+  conversation_id: string;
+  cc_id: string;
+  node_id: string;
+  inputs_used: string[];
+  outputs: Record<string, any>;
+  rule_refs: string[];
+  llm_calls: number;
+  latency_ms: number;
+  confidence?: string;
+  notes?: string;
+}
+
+export interface CaseState {
+  conversation_id: string;
+  cc_id: string;
+
+  patient_profile: PatientProfile;
+  symptoms: Symptoms;
+  exam: Exam;
+  vitals: Vitals;
+
+  red_flags: RedFlagHit[];
+  scores: Scores;
+  disposition: Disposition;
+
+  // question answering
+  answers: Record<string, any>; // QUESTION_ID -> answer
+
+  // control
+  next_question?: {
+    question_id: string;
+    question_text: string;
+    answer_type: string;
+    choices?: string[];
+    maps_to_field?: string;
+  } | null;
+
+  case_confidence?: "HIGH" | "MODERATE" | "LOW";
+
+  trace: TraceEntry[];
+}
+2) server/engine/complaintConfig.ts
+// server/engine/complaintConfig.ts
+
+import type { Severity } from "./caseState";
+
+export interface ComplaintRegistryRow {
+  CC_ID: string;
+  CC_LABEL: string;
+  ENABLED: string; // TRUE/FALSE
+  CORE_QUESTIONS_VERSION: string;
+  RED_FLAG_SET_ID: string;
+  SCORING_ID: string;
+  DISPOSITION_SET_ID: string;
+  OUTPUT_TEMPLATE_SET_ID: string;
+}
+
+export interface CoreQuestionRow {
+  CC_ID: string;
+  VERSION: string;
+  ORDER: string;
+  QUESTION_ID: string;
+  QUESTION_TEXT: string;
+  ANSWER_TYPE: string;
+  CHOICES: string; // "a|b|c"
+  REQUIRED: string; // TRUE/FALSE
+  MAPS_TO_FIELD: string; // e.g. symptoms.fever
+  ASK_IF: string; // expression
+  NOTES: string;
+}
+
+export interface RedFlagRuleRow {
+  RF_SET_ID: string;
+  RF_ID: string;
+  CC_ID: string;
+  SEVERITY: Severity;
+  TRIGGER_EXPR: string;
+  ACTION: string;
+  OUTPUT_TEMPLATE_ID: string;
+  WHY: string;
+}
+
+export interface ScoringDefRow {
+  SCORING_ID: string;
+  SCORE_NAME: string;
+  VERSION: string;
+  COMPONENT_ID: string;
+  POINTS: string;
+  WHEN_EXPR: string;
+  NOTES: string;
+}
+
+export interface DispositionRuleRow {
+  DISP_SET_ID: string;
+  DISP_RULE_ID: string;
+  CC_ID: string;
+  PRIORITY: string;
+  WHEN_EXPR: string;
+  DISPOSITION_LEVEL: string;
+  RATIONALE_TEMPLATE_ID: string;
+  CONFIDENCE_HINT: "HIGH" | "MODERATE" | "LOW";
+}
+
+export interface OutputTemplateRow {
+  TEMPLATE_SET_ID: string;
+  TEMPLATE_ID: string;
+  TITLE: string;
+  BODY: string;
+  SAFETY_NET: string;
+  CHANNEL_CONSTRAINTS: string;
+}
+
+export interface ComplaintConfig {
+  registry: ComplaintRegistryRow;
+  coreQuestions: CoreQuestionRow[];
+  redFlagRules: RedFlagRuleRow[];
+  scoringDefs: ScoringDefRow[];
+  dispositionRules: DispositionRuleRow[];
+  templates: OutputTemplateRow[];
+}
+3) server/engine/expr.ts (tiny expression evaluator)
+
+Supports:
+
+==, !=, >, >=, <, <=
+
+&&, ||
+
+in ['a','b']
+
+true/false
+
+path lookup like symptoms.fever
+
+// server/engine/expr.ts
+import type { CaseState } from "./caseState";
+
+function getPath(obj: any, path: string): any {
+  const parts = path.split(".");
+  let cur = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+function stripQuotes(s: string): string {
+  const t = s.trim();
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"'))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function parseLiteral(tok: string): any {
+  const t = tok.trim();
+  if (t === "true") return true;
+  if (t === "false") return false;
+  if (t === "null") return null;
+  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"'))) return stripQuotes(t);
+  return undefined; // not a literal
+}
+
+// Very small parser: split OR then AND then evaluate atomic conditions
+export function evalExpr(expr: string, state: CaseState): boolean {
+  const e = (expr || "").trim();
+  if (!e || e === "true") return true;
+  if (e === "false") return false;
+
+  // OR
+  const orParts = splitTopLevel(e, "||");
+  if (orParts.length > 1) return orParts.some(p => evalExpr(p, state));
+
+  // AND
+  const andParts = splitTopLevel(e, "&&");
+  if (andParts.length > 1) return andParts.every(p => evalExpr(p, state));
+
+  // Atomic: "a in ['x','y']"
+  const inMatch = e.match(/^\s*([A-Za-z0-9_.]+)\s+in\s+\[(.*)\]\s*$/);
+  if (inMatch) {
+    const leftPath = inMatch[1].trim();
+    const listRaw = inMatch[2].trim();
+    const items = splitCSVLike(listRaw).map(x => stripQuotes(x.trim()));
+    const val = getPath(state as any, leftPath);
+    return items.includes(String(val));
+  }
+
+  // Comparisons
+  const ops = ["==", "!=", ">=", "<=", ">", "<"] as const;
+  for (const op of ops) {
+    const idx = indexOfOp(e, op);
+    if (idx >= 0) {
+      const left = e.slice(0, idx).trim();
+      const right = e.slice(idx + op.length).trim();
+      const leftVal = getPath(state as any, left);
+      const lit = parseLiteral(right);
+      const rightVal = lit !== undefined ? lit : getPath(state as any, right);
+
+      switch (op) {
+        case "==": return leftVal === rightVal;
+        case "!=": return leftVal !== rightVal;
+        case ">=": return Number(leftVal) >= Number(rightVal);
+        case "<=": return Number(leftVal) <= Number(rightVal);
+        case ">": return Number(leftVal) > Number(rightVal);
+        case "<": return Number(leftVal) < Number(rightVal);
+      }
+    }
+  }
+
+  // Fallback: treat as truthy path lookup
+  const v = getPath(state as any, e);
+  return Boolean(v);
+}
+
+function indexOfOp(s: string, op: string): number {
+  // ensure we match the operator not inside quotes (simple scan)
+  let inQ: "'" | '"' | null = null;
+  for (let i = 0; i <= s.length - op.length; i++) {
+    const ch = s[i];
+    if ((ch === "'" || ch === '"') && (i === 0 || s[i - 1] !== "\\")) {
+      inQ = inQ === ch ? null : (ch as any);
+    }
+    if (!inQ && s.slice(i, i + op.length) === op) return i;
+  }
+  return -1;
+}
+
+function splitTopLevel(s: string, sep: "||" | "&&"): string[] {
+  const out: string[] = [];
+  let buf = "";
+  let inQ: "'" | '"' | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if ((ch === "'" || ch === '"') && (i === 0 || s[i - 1] !== "\\")) {
+      inQ = inQ === ch ? null : (ch as any);
+    }
+    if (!inQ && s.slice(i, i + sep.length) === sep) {
+      out.push(buf.trim());
+      buf = "";
+      i += sep.length - 1;
+      continue;
+    }
+    buf += ch;
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+function splitCSVLike(s: string): string[] {
+  // split on commas not inside quotes
+  const out: string[] = [];
+  let buf = "";
+  let inQ: "'" | '"' | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if ((ch === "'" || ch === '"') && (i === 0 || s[i - 1] !== "\\")) {
+      inQ = inQ === ch ? null : (ch as any);
+    }
+    if (!inQ && ch === ",") {
+      out.push(buf);
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  if (buf.length) out.push(buf);
+  return out;
+}
+4) server/engine/rules.ts (red flags, scoring, disposition)
+
+Includes your requirement: patient-reported can be overridden by exam.
+
+// server/engine/rules.ts
+import type { CaseState, RedFlagHit } from "./caseState";
+import type { RedFlagRuleRow, ScoringDefRow, DispositionRuleRow } from "./complaintConfig";
+import { evalExpr } from "./expr";
+
+function severityRank(s: string): number {
+  switch (s) {
+    case "CRITICAL": return 4;
+    case "HIGH": return 3;
+    case "MODERATE": return 2;
+    case "LOW": return 1;
+    default: return 0;
+  }
+}
+
+export function runRedFlags(state: CaseState, rules: RedFlagRuleRow[]): { hits: RedFlagHit[]; anySeverity?: string } {
+  const hits: RedFlagHit[] = [];
+  for (const r of rules) {
+    if (r.CC_ID !== state.cc_id) continue;
+    if (evalExpr(r.TRIGGER_EXPR, state)) {
+      hits.push({
+        rf_id: r.RF_ID,
+        severity: r.SEVERITY,
+        action: r.ACTION,
+        output_template_id: r.OUTPUT_TEMPLATE_ID,
+        why: r.WHY || undefined,
+      });
+    }
+  }
+  let max: string | undefined;
+  for (const h of hits) {
+    if (!max || severityRank(h.severity) > severityRank(max)) max = h.severity;
+  }
+  return { hits, anySeverity: max };
+}
+
+/**
+ * Scoring: supports "patient-reported default overridden by exam".
+ * Strategy:
+ * - You can define patient-reported fields in symptoms.* (e.g., symptoms.exudate_reported).
+ * - Exam values live in exam.*; if exam value is set, prefer it.
+ *
+ * For Centor components in WHEN_EXPR, you can reference either:
+ * - exam.tonsillar_exudate == true
+ * - OR symptoms.tonsillar_exudate_reported == true
+ *
+ * We'll set a convenience overlay in state before eval:
+ * - if exam.X is defined, set derived field overlay.exam_or_patient_X
+ * - else derived uses symptoms reported fields.
+ *
+ * For v1, simplest is: store patient-reported into exam.*? No.
+ * We'll add "derived" keys onto state at runtime.
+ */
+export function runCentor(state: CaseState, defs: ScoringDefRow[]): void {
+  const components: Record<string, { points: number; hit: boolean; source?: "patient" | "exam" }> = {};
+  const missing: string[] = [];
+
+  // derived overlay: prefer exam if present
+  const derived: any = (state as any).__derived || {};
+  derived.exudate = state.exam.tonsillar_exudate ?? (state as any).symptoms?.tonsillar_exudate_reported;
+  derived.tender_nodes = state.exam.tender_ant_cerv_nodes ?? (state as any).symptoms?.tender_ant_cerv_nodes_reported;
+
+  (state as any).__derived = derived;
+
+  let total = 0;
+  for (const d of defs) {
+    if (d.SCORING_ID !== "CENTOR_v1") continue; // or match config.registry.SCORING_ID upstream
+    const pts = Number(d.POINTS || 0);
+
+    // Detect missing fields for audit: if expression references exam.* or symptoms.* fields that are undefined
+    const hit = evalExpr(
+      d.WHEN_EXPR
+        .replaceAll("exam.tonsillar_exudate", "__derived.exudate")
+        .replaceAll("exam.tender_ant_cerv_nodes", "__derived.tender_nodes"),
+      state as any
+    );
+
+    // Determine source if relevant
+    let source: "patient" | "exam" | undefined;
+    if (d.COMPONENT_ID === "EXUDATE") {
+      source = state.exam.tonsillar_exudate != null ? "exam" : "patient";
+      if (derived.exudate == null) missing.push("exudate");
+    }
+    if (d.COMPONENT_ID === "TENDER_ANT_CERV") {
+      source = state.exam.tender_ant_cerv_nodes != null ? "exam" : "patient";
+      if (derived.tender_nodes == null) missing.push("tender_ant_cerv_nodes");
+    }
+    if (d.COMPONENT_ID === "FEVER") {
+      if (state.symptoms.fever == null) missing.push("fever");
+      source = "patient";
+    }
+    if (d.COMPONENT_ID === "NO_Cough") {
+      if (state.symptoms.cough == null) missing.push("cough");
+      source = "patient";
+    }
+
+    components[d.COMPONENT_ID] = { points: pts, hit, source };
+    if (hit) total += pts;
+  }
+
+  state.scores.centor_points = total;
+  state.scores.centor_components = components;
+  state.scores.centor_missing = Array.from(new Set(missing));
+}
+
+export function runDisposition(state: CaseState, rules: DispositionRuleRow[], anySeverity?: string): void {
+  // Provide helper fields for expressions
+  (state as any).red_flags_any_severity = anySeverity || null;
+  (state as any).scores_centor_points = state.scores.centor_points ?? 0;
+
+  const sorted = [...rules]
+    .filter(r => r.CC_ID === state.cc_id)
+    .sort((a, b) => Number(a.PRIORITY) - Number(b.PRIORITY));
+
+  for (const r of sorted) {
+    const expr = (r.WHEN_EXPR || "")
+      .replaceAll("red_flags.any_severity", "red_flags_any_severity")
+      .replaceAll("scores.centor_points", "scores_centor_points");
+
+    if (evalExpr(expr, state)) {
+      state.disposition = {
+        level: r.DISPOSITION_LEVEL,
+        rule_id: r.DISP_RULE_ID,
+        rationale_template_id: r.RATIONALE_TEMPLATE_ID,
+        confidence_hint: r.CONFIDENCE_HINT,
+      };
+      return;
+    }
+  }
+
+  // fallback
+  state.disposition = { level: "PCP_OR_UC", rule_id: "NONE", rationale_template_id: "OUT_DISP_DEFAULT", confidence_hint: "LOW" };
+}
+5) server/engine/templates.ts
+// server/engine/templates.ts
+import type { OutputTemplateRow } from "./complaintConfig";
+
+export function getTemplateById(templates: OutputTemplateRow[], templateId: string): OutputTemplateRow | null {
+  return templates.find(t => t.TEMPLATE_ID === templateId) || null;
+}
+
+export function renderTemplate(t: OutputTemplateRow, vars: Record<string, any> = {}): { title: string; body: string; safetyNet: string } {
+  // very small templating: {{var}}
+  const sub = (s: string) =>
+    (s || "").replace(/\{\{(\w+)\}\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : ""));
+  return {
+    title: sub(t.TITLE),
+    body: sub(t.BODY),
+    safetyNet: sub(t.SAFETY_NET),
+  };
+}
+6) server/engine/trace.ts
+// server/engine/trace.ts
+import type { CaseState, TraceEntry } from "./caseState";
+
+export function tracePush(state: CaseState, entry: Omit<TraceEntry, "ts" | "conversation_id" | "cc_id">) {
+  const e: TraceEntry = {
+    ts: new Date().toISOString(),
+    conversation_id: state.conversation_id,
+    cc_id: state.cc_id,
+    ...entry,
+  };
+  state.trace.push(e);
+}
+7) server/agent/soreThroatGraph.ts (the “golden complaint” runner)
+
+This is your LangGraph-style flow implemented as plain code. Later you can swap to LangGraph library, but you don’t need to.
+
+// server/agent/soreThroatGraph.ts
+import type { CaseState } from "../engine/caseState";
+import type { ComplaintConfig, CoreQuestionRow } from "../engine/complaintConfig";
+import { evalExpr } from "../engine/expr";
+import { runRedFlags, runCentor, runDisposition } from "../engine/rules";
+import { getTemplateById, renderTemplate } from "../engine/templates";
+import { tracePush } from "../engine/trace";
+
+function parseChoices(raw: string): string[] | undefined {
+  const s = (raw || "").trim();
+  if (!s) return undefined;
+  return s.split("|").map(x => x.trim()).filter(Boolean);
+}
+
+function coerceAnswer(answerType: string, raw: any): any {
+  if (raw == null) return raw;
+  const t = (answerType || "").toLowerCase();
+  if (t === "yesno") return raw === true || raw === "true" || raw === "yes" || raw === 1 || raw === "1";
+  if (t === "number") return typeof raw === "number" ? raw : Number(String(raw));
+  if (t === "choice") return String(raw);
+  return raw;
+}
+
+function setByPath(state: any, path: string, value: any) {
+  if (!path) return;
+  const parts = path.split(".");
+  let cur = state;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (cur[p] == null || typeof cur[p] !== "object") cur[p] = {};
+    cur = cur[p];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+function firstUnansweredQuestion(state: CaseState, questions: CoreQuestionRow[]): CoreQuestionRow | null {
+  const sorted = [...questions].sort((a, b) => Number(a.ORDER) - Number(b.ORDER));
+  for (const q of sorted) {
+    if (q.CC_ID !== state.cc_id) continue;
+
+    // ASK_IF condition
+    const askIf = (q.ASK_IF || "").trim();
+    if (askIf && !evalExpr(askIf, state)) continue;
+
+    const required = (q.REQUIRED || "").toUpperCase() === "TRUE";
+    const answered = Object.prototype.hasOwnProperty.call(state.answers, q.QUESTION_ID);
+
+    if (!answered && (required || true)) {
+      // We return next question regardless; the UI can keep going until required done.
+      return q;
+    }
+  }
+  return null;
+}
+
+function computeConfidence(state: CaseState): "HIGH" | "MODERATE" | "LOW" {
+  // Simple v1: low if any critical missing or score missing key inputs
+  const requiredCore = ["ST_DUR", "ST_FEVER", "ST_COUGH", "ST_SWALLOW", "ST_DROOL", "ST_BREATH", "ST_TRISMUS"];
+  const missingRequired = requiredCore.filter(id => !Object.prototype.hasOwnProperty.call(state.answers, id));
+  if (missingRequired.length > 0) return "LOW";
+  if ((state.scores.centor_missing || []).length > 0) return "MODERATE";
+  return "HIGH";
+}
+
+export interface RunResult {
+  done: boolean;
+  state: CaseState;
+  output?: { title: string; body: string; safetyNet: string; templateId: string; dispositionLevel?: string };
+}
+
+export function applyAnswer(state: CaseState, q: CoreQuestionRow, rawAnswer: any) {
+  const answer = coerceAnswer(q.ANSWER_TYPE, rawAnswer);
+  state.answers[q.QUESTION_ID] = answer;
+
+  // Map into state
+  if (q.MAPS_TO_FIELD) {
+    setByPath(state, q.MAPS_TO_FIELD, answer);
+  }
+
+  // Special: support patient-reported exam features by storing into symptoms.*_reported
+  // You can add these questions later; example mapping:
+  // symptoms.tonsillar_exudate_reported, symptoms.tender_ant_cerv_nodes_reported
+}
+
+export function runSoreThroatGraph(config: ComplaintConfig, state: CaseState): RunResult {
+  const t0 = Date.now();
+
+  // Node: CORE QUESTIONS (ask next)
+  const q = firstUnansweredQuestion(state, config.coreQuestions);
+  if (q) {
+    state.next_question = {
+      question_id: q.QUESTION_ID,
+      question_text: q.QUESTION_TEXT,
+      answer_type: q.ANSWER_TYPE,
+      choices: parseChoices(q.CHOICES),
+      maps_to_field: q.MAPS_TO_FIELD || undefined,
+    };
+
+    tracePush(state, {
+      node_id: "ST_CORE_QUESTIONS",
+      inputs_used: ["answers", "CORE_QUESTIONS"],
+      outputs: { next_question_id: q.QUESTION_ID },
+      rule_refs: [],
+      llm_calls: 0,
+      latency_ms: Date.now() - t0,
+      confidence: state.case_confidence,
+    });
+
+    return { done: false, state };
+  }
+
+  state.next_question = null;
+
+  // Node: RED FLAGS
+  const rf0 = Date.now();
+  const { hits, anySeverity } = runRedFlags(state, config.redFlagRules);
+  state.red_flags = hits;
+
+  tracePush(state, {
+    node_id: "ST_RED_FLAG_GATE",
+    inputs_used: ["symptoms", "vitals", "patient_profile"],
+    outputs: { hit_count: hits.length, any_severity: anySeverity || null },
+    rule_refs: hits.map(h => h.rf_id),
+    llm_calls: 0,
+    latency_ms: Date.now() - rf0,
+  });
+
+  // If critical, output immediately
+  if (anySeverity === "CRITICAL") {
+    const templateId = hits[0]?.output_template_id || "OUT_EMERGENT_AIRWAY";
+    const tpl = getTemplateById(config.templates, templateId) || getTemplateById(config.templates, "OUT_EMERGENT_AIRWAY");
+    if (!tpl) throw new Error(`Missing template ${templateId}`);
+
+    const rendered = renderTemplate(tpl, {});
+    state.disposition = { level: "ED_NOW", rule_id: hits[0]?.rf_id, rationale_template_id: templateId, confidence_hint: "HIGH" };
+    state.case_confidence = "HIGH";
+
+    tracePush(state, {
+      node_id: "ST_OUTPUT_COMPOSE",
+      inputs_used: ["red_flags", "OUTPUT_TEMPLATES"],
+      outputs: { template_id: templateId, disposition: state.disposition.level },
+      rule_refs: [templateId],
+      llm_calls: 0,
+      latency_ms: Date.now() - t0,
+      confidence: "HIGH",
+      notes: "Critical red flag short-circuit",
+    });
+
+    return { done: true, state, output: { ...rendered, templateId, dispositionLevel: state.disposition.level } };
+  }
+
+  // Node: SCORING (Centor)
+  const sc0 = Date.now();
+  runCentor(state, config.scoringDefs);
+  tracePush(state, {
+    node_id: "ST_CENTOR_SCORE",
+    inputs_used: ["symptoms", "exam", "SCORING_DEFS"],
+    outputs: { centor_points: state.scores.centor_points, missing: state.scores.centor_missing || [] },
+    rule_refs: ["CENTOR_v1"],
+    llm_calls: 0,
+    latency_ms: Date.now() - sc0,
+  });
+
+  // Node: DISPOSITION
+  const d0 = Date.now();
+  runDisposition(state, config.dispositionRules, anySeverity);
+  state.case_confidence = computeConfidence(state);
+
+  tracePush(state, {
+    node_id: "ST_DISPOSITION_RULES",
+    inputs_used: ["red_flags", "scores", "DISPOSITION_RULES"],
+    outputs: { disposition: state.disposition.level, rule_id: state.disposition.rule_id },
+    rule_refs: [state.disposition.rule_id || "NONE"],
+    llm_calls: 0,
+    latency_ms: Date.now() - d0,
+    confidence: state.case_confidence,
+  });
+
+  // Node: OUTPUT COMPOSE (template-based; LLM can be added later for nicer phrasing)
+  const templateId = state.disposition.rationale_template_id || "OUT_DISP_DEFAULT";
+  const tpl = getTemplateById(config.templates, templateId) || getTemplateById(config.templates, "OUT_DISP_DEFAULT");
+  if (!tpl) throw new Error(`Missing template ${templateId}`);
+
+  const rendered = renderTemplate(tpl, {
+    centor_points: state.scores.centor_points ?? 0,
+    duration_days: state.symptoms.duration_days ?? "",
+  });
+
+  tracePush(state, {
+    node_id: "ST_OUTPUT_COMPOSE",
+    inputs_used: ["disposition", "OUTPUT_TEMPLATES"],
+    outputs: { template_id: templateId, disposition: state.disposition.level },
+    rule_refs: [templateId],
+    llm_calls: 0,
+    latency_ms: Date.now() - t0,
+    confidence: state.case_confidence,
+  });
+
+  return { done: true, state, output: { ...rendered, templateId, dispositionLevel: state.disposition.level } };
+}
+8) server/routes/agentIntake.ts (Express route)
+
+This provides a clean API:
+
+POST /api/intake/start → creates case for complaint
+
+POST /api/intake/answer → submit answer, returns next question or final output
+
+You’ll need to wire loadConfigFromSheets() (next section).
+
+// server/routes/agentIntake.ts
+import { Router } from "express";
+import type { CaseState } from "../engine/caseState";
+import type { ComplaintConfig } from "../engine/complaintConfig";
+import { runSoreThroatGraph, applyAnswer } from "../agent/soreThroatGraph";
+import { loadComplaintConfigCached } from "../engine/complaintConfigLoader"; // you will add below
+
+const router = Router();
+
+// naive in-memory store for MVP; swap with Firestore persistence
+const CASES = new Map<string, CaseState>();
+
+function newCase(conversation_id: string, cc_id: string): CaseState {
+  return {
+    conversation_id,
+    cc_id,
+    patient_profile: { meds: [], pmh: [], allergies: [] },
+    symptoms: {},
+    exam: {},
+    vitals: {},
+    red_flags: [],
+    scores: {},
+    disposition: {},
+    answers: {},
+    next_question: null,
+    case_confidence: "LOW",
+    trace: [],
+  };
+}
+
+router.post("/start", async (req, res) => {
+  const conversation_id = String(req.body.conversation_id || "");
+  const cc_id = String(req.body.cc_id || "");
+  if (!conversation_id || !cc_id) return res.status(400).json({ error: "conversation_id and cc_id required" });
+
+  const state = newCase(conversation_id, cc_id);
+  CASES.set(conversation_id, state);
+
+  const config: ComplaintConfig = await loadComplaintConfigCached(cc_id);
+  if (cc_id !== "sore_throat") return res.status(400).json({ error: "Only sore_throat wired in v1" });
+
+  const result = runSoreThroatGraph(config, state);
+  CASES.set(conversation_id, result.state);
+
+  return res.json({
+    done: result.done,
+    next_question: result.state.next_question,
+    output: result.output || null,
+    state_meta: { cc_id, confidence: result.state.case_confidence, disposition: result.state.disposition.level || null },
+  });
+});
+
+router.post("/answer", async (req, res) => {
+  const conversation_id = String(req.body.conversation_id || "");
+  const question_id = String(req.body.question_id || "");
+  const answer = req.body.answer;
+
+  const state = CASES.get(conversation_id);
+  if (!state) return res.status(404).json({ error: "case not found" });
+
+  const config: ComplaintConfig = await loadComplaintConfigCached(state.cc_id);
+
+  // find question row
+  const q = config.coreQuestions.find(x => x.QUESTION_ID === question_id && x.CC_ID === state.cc_id);
+  if (!q) return res.status(400).json({ error: "unknown question_id" });
+
+  applyAnswer(state, q, answer);
+
+  const result = runSoreThroatGraph(config, state);
+  CASES.set(conversation_id, result.state);
+
+  return res.json({
+    done: result.done,
+    next_question: result.state.next_question,
+    output: result.output || null,
+    state_meta: { cc_id: state.cc_id, confidence: result.state.case_confidence, disposition: result.state.disposition.level || null },
+  });
+});
+
+export default router;
+
+Then wire in Express (somewhere in server/index.ts):
+
+import agentIntakeRouter from "./routes/agentIntake";
+app.use("/api/intake", agentIntakeRouter);
+9) server/engine/complaintConfigLoader.ts (Google Sheets loader + cache)
+
+This is the only part that depends on your existing Sheets integration.
+
+If you already have a Sheets client:
+
+Plug your own readTab(tabName) function that returns rows as objects.
+
+Here’s the scaffold with a placeholder.
+
+// server/engine/complaintConfigLoader.ts
+import type {
+  ComplaintConfig,
+  ComplaintRegistryRow,
+  CoreQuestionRow,
+  RedFlagRuleRow,
+  ScoringDefRow,
+  DispositionRuleRow,
+  OutputTemplateRow
+} from "./complaintConfig";
+
+type CacheEntry = { ts: number; config: ComplaintConfig };
+const CACHE = new Map<string, CacheEntry>();
+const TTL_MS = 60_000;
+
+// ---- Replace this with your real Sheets reader ----
+// Must return rows as objects with keys exactly matching headers.
+async function readSheetTab(tabName: string): Promise<Record<string, string>[]> {
+  throw new Error(`readSheetTab not implemented for tab ${tabName}. Plug in your Sheets reader.`);
+}
+
+export async function loadComplaintConfigCached(cc_id: string): Promise<ComplaintConfig> {
+  const now = Date.now();
+  const hit = CACHE.get(cc_id);
+  if (hit && now - hit.ts < TTL_MS) return hit.config;
+
+  const config = await loadComplaintConfig(cc_id);
+  CACHE.set(cc_id, { ts: now, config });
+  return config;
+}
+
+export async function loadComplaintConfig(cc_id: string): Promise<ComplaintConfig> {
+  const registryRows = (await readSheetTab("COMPLAINT_REGISTRY")) as any as ComplaintRegistryRow[];
+  const registry = registryRows.find(r => r.CC_ID === cc_id);
+  if (!registry) throw new Error(`No COMPLAINT_REGISTRY row for ${cc_id}`);
+  if ((registry.ENABLED || "").toUpperCase() !== "TRUE") throw new Error(`Complaint ${cc_id} not enabled`);
+
+  const coreAll = (await readSheetTab("CORE_QUESTIONS")) as any as CoreQuestionRow[];
+  const redAll = (await readSheetTab("RED_FLAG_RULES")) as any as RedFlagRuleRow[];
+  const scoreAll = (await readSheetTab("SCORING_DEFS")) as any as ScoringDefRow[];
+  const dispAll = (await readSheetTab("DISPOSITION_RULES")) as any as DispositionRuleRow[];
+  const tmplAll = (await readSheetTab("OUTPUT_TEMPLATES")) as any as OutputTemplateRow[];
+
+  const coreQuestions = coreAll.filter(r => r.CC_ID === cc_id && r.VERSION === registry.CORE_QUESTIONS_VERSION);
+  const redFlagRules = redAll.filter(r => r.CC_ID === cc_id && r.RF_SET_ID === registry.RED_FLAG_SET_ID);
+  const scoringDefs = scoreAll.filter(r => r.SCORING_ID === registry.SCORING_ID);
+  const dispositionRules = dispAll.filter(r => r.CC_ID === cc_id && r.DISP_SET_ID === registry.DISPOSITION_SET_ID);
+
+  // templates: include both the complaint set + shared templates
+  const templates = tmplAll.filter(
+    r => r.TEMPLATE_SET_ID === registry.OUTPUT_TEMPLATE_SET_ID || r.TEMPLATE_SET_ID === "OUT_SHARED"
+  );
+
+  return { registry, coreQuestions, redFlagRules, scoringDefs, dispositionRules, templates };
+}
+How to hook your Sheets reader
+
+Where it throws “not implemented”, connect your existing Google Sheets integration. Typically you already have something like:
+
+getSheetRows(tabName) returning array of objects keyed by header row
+
+or sheets.spreadsheets.values.get() + transform
+
+Just make readSheetTab(tabName) return the rows.
+
+10) Add the two patient-reported exam questions (so Centor is “real” day 1)
+
+Add these rows to CORE_QUESTIONS (sore throat v1) so patient can answer, then exam can override later.
+
+sore_throat,v1,185,ST_EXUDATE,Do you see white patches or pus on the tonsils?,yesno,,FALSE,symptoms.tonsillar_exudate_reported,,Patient-reported exudate; exam overrides if available
+sore_throat,v1,186,ST_TENDER_NODES,Do you have tender swollen glands in the front of the neck?,yesno,,FALSE,symptoms.tender_ant_cerv_nodes_reported,,Patient-reported nodes; exam overrides if available
+
+Now your runCentor() will use exam.* if present, otherwise symptoms.*_reported.
+
+What to tell Replit to do (copy/paste checklist)
+
+Create the files above in your repo.
+
+Wire the router: app.use("/api/intake", agentIntakeRouter)
+
+Connect Sheets: implement readSheetTab(tabName) to return object rows from each tab.
+
+Paste the sore_throat rows into the sheet tabs (COMPLAINT_REGISTRY, CORE_QUESTIONS, RED_FLAG_RULES, SCORING_DEFS, DISPOSITION_RULES, OUTPUT_TEMPLATES).
+
+Run locally and test:
+
+Example request sequence
+curl -X POST http://localhost:3000/api/intake/start \
+  -H "Content-Type: application/json" \
+  -d '{"conversation_id":"c1","cc_id":"sore_throat"}'
+
+Then answer questions one by one:
+
+curl -X POST http://localhost:3000/api/intake/answer \
+  -H "Content-Type: application/json" \
+  -d '{"conversation_id":"c1","question_id":"ST_DUR","answer":2}'
+
+You’ll get either next_question or final output.
+
+Next (I’ll do it in your next message automatically if you want)
+
+Add the optional Specialist Council hook (hybrid AutoGen style) triggered when case_confidence == LOW or rules conflict.
+
+Add TRACE_LOG append-to-Sheets so your dashboard lights up.
+
+Add 30 test cases for sore throat (viral, strep-like, drooling, PTA pat
