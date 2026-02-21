@@ -1,0 +1,519 @@
+Perfect. With getTable() as the universal accessor, we can wire the bridge nodes without introducing any new storage layer and without touching your CSV vs Sheets policy.
+
+Below is a drop-in patch set that:
+
+Turns DIFF_AND_CONFIDENCE into the cluster + dx candidate bridge using:
+
+GLOBAL_CLUSTER_MASTER
+
+CLUSTER_PRIMARY_DIAGNOSIS
+
+Upgrades RED_FLAG_GATE to join to RED_FLAGS_MASTER (canonical templates / severity) without changing your existing RF rules format (just adds a join step).
+
+Implements exam override for Centor while keeping your flat answers model.
+
+Implements SPECIALIST_COUNCIL as an AutoGen-style consult node behind ENABLE_COUNCIL=1, escalation-only, using your existing AgentAction model (it can emit ASK_QUESTION actions).
+
+Adds patient-facing intake routes that drive WhatsApp: /api/intake/start and /api/intake/answer, returning your AgentAction + done.
+
+I’ll write this in a way that matches your architecture: node runner while-loop, node switch, getTable() registry, and rows as Record<string, any>[].
+
+0) Assumptions (minimal, and safe)
+
+runComplaintGraph(state) returns something like:
+
+{ state, done: boolean, pendingAction?: AgentAction, output?: any }
+
+Your AgentAction union includes a variant for asking a question (you said ASK_QUESTION exists), and your CORE_QUESTIONS node already uses it.
+
+Your case has: normalizedComplaint, answers, scores, activeClusters, audit.steps/events, questionQueue, disposition, dispositionReasonCodes, recommendedActions, routing.
+
+If any field name differs, you’ll only need tiny rename edits.
+
+1) DIFF_AND_CONFIDENCE node implementation (Sheets-backed)
+
+Create:
+
+server/complaints/nodes/diffAndConfidenceNode.ts
+import { getTable } from "../../data/registry";
+
+type Row = Record<string, any>;
+
+function boolish(v: any): boolean | null {
+  if (v === true || v === "true" || v === "yes" || v === 1 || v === "1") return true;
+  if (v === false || v === "false" || v === "no" || v === 0 || v === "0") return false;
+  return null;
+}
+
+function numish(v: any): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export async function runDiffAndConfidenceNode(state: any) {
+  const cc = String(state.normalizedComplaint || "");
+  const A: Record<string, any> = state.answers || {};
+  const centor = numish(state.scores?.centor ?? state.scores?.CENTOR) ?? 0;
+
+  const clusterRows: Row[] = await getTable("GLOBAL_CLUSTER_MASTER");
+  const dxRows: Row[] = await getTable("CLUSTER_PRIMARY_DIAGNOSIS");
+
+  // Expect headers like Cluster_ID, System, Primary_Chief_Complaints, Default_Disposition
+  const validClusters = new Set(clusterRows.map(r => String(r.Cluster_ID || r.CLUSTER_ID || r.cluster_id)));
+
+  // Build dx index: Cluster_ID -> [{Diagnosis_ID, Diagnosis_Name}]
+  const dxByCluster = new Map<string, Array<{ diagnosisId: string; diagnosisName: string }>>();
+  for (const r of dxRows) {
+    const clusterId = String(r.Cluster_ID || r.CLUSTER_ID || r.cluster_id);
+    const diagnosisId = String(r.Diagnosis_ID || r.DIAGNOSIS_ID || r.diagnosis_id);
+    const diagnosisName = String(r.Diagnosis_Name || r.DIAGNOSIS_NAME || r.Diagnosis || r.DIAGNOSIS || "");
+    if (!clusterId || !diagnosisId) continue;
+    if (!dxByCluster.has(clusterId)) dxByCluster.set(clusterId, []);
+    dxByCluster.get(clusterId)!.push({ diagnosisId, diagnosisName });
+  }
+
+  // Deterministic scoring for pilot: sore_throat.
+  // These cluster IDs must exist in GLOBAL_CLUSTER_MASTER to be used.
+  const score: Record<string, { points: number; evidence: string[] }> = {};
+
+  function bump(clusterId: string, pts: number, evidenceField: string) {
+    if (!validClusters.has(clusterId)) return;
+    if (!score[clusterId]) score[clusterId] = { points: 0, evidence: [] };
+    score[clusterId].points += pts;
+    score[clusterId].evidence.push(evidenceField);
+  }
+
+  if (cc === "sore_throat") {
+    // Viral URI / viral pharyngitis cluster
+    if (boolish(A.ST_COUGH) === true) bump("CL_ST_VIRAL_URI", 2, "answers.ST_COUGH");
+    if (boolish(A.ST_RUNNY) === true) bump("CL_ST_VIRAL_URI", 2, "answers.ST_RUNNY");
+    if (boolish(A.ST_HOARSE) === true) bump("CL_ST_VIRAL_URI", 1, "answers.ST_HOARSE");
+
+    // GAS cluster
+    if (boolish(A.ST_FEVER) === true) bump("CL_ST_GAS", 1, "answers.ST_FEVER");
+    if (boolish(A.ST_COUGH) === false) bump("CL_ST_GAS", 1, "answers.ST_COUGH");
+    if (centor >= 2) bump("CL_ST_GAS", 2, "scores.centor");
+
+    // Mono cluster (simple v1)
+    if (boolish(A.ST_MONO) === true) bump("CL_ST_MONO", 2, "answers.ST_MONO");
+  }
+
+  const ranked = Object.entries(score)
+    .filter(([, v]) => v.points > 0)
+    .map(([clusterId, v]) => ({ clusterId, points: v.points, evidence: v.evidence }))
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 3);
+
+  state.clusterScores = Object.fromEntries(ranked.map(r => [r.clusterId, r.points]));
+  state.clusterEvidence = Object.fromEntries(ranked.map(r => [r.clusterId, r.evidence]));
+  state.activeClusters = ranked.map(r => r.clusterId);
+
+  // Primary dx candidates (top 2 per cluster, top 3 clusters)
+  const diagnosisCandidates: Array<{ diagnosisId: string; diagnosisName: string; clusterId: string; confidence: "MODERATE" | "LOW" }> = [];
+  ranked.forEach((r, idx) => {
+    const dxs = (dxByCluster.get(r.clusterId) || []).slice(0, 2);
+    const conf: "MODERATE" | "LOW" = idx === 0 ? "MODERATE" : "LOW";
+    for (const d of dxs) diagnosisCandidates.push({ ...d, clusterId: r.clusterId, confidence: conf });
+  });
+  state.diagnosisCandidates = diagnosisCandidates.slice(0, 6);
+
+  // Confidence heuristic (non-breaking; you can store however you already do it)
+  const missingRequired = (state.questionQueue || []).some((q: any) => q.required && !q.answered);
+  const conf = missingRequired ? "LOW" : (ranked.length ? "MODERATE" : "LOW");
+  state.caseConfidence = conf;
+
+  return {
+    rankedClusters: ranked,
+    dxCount: state.diagnosisCandidates.length,
+    confidence: conf,
+    ruleRefs: [
+      ...ranked.map(r => r.clusterId),
+      ...state.diagnosisCandidates.map((d: any) => d.diagnosisId),
+    ],
+  };
+}
+
+✅ This uses your existing “old tables” (clusters + dx) and fills your already-present activeClusters. No new tables.
+
+2) RED_FLAG_GATE upgrade: join to RED_FLAGS_MASTER
+
+This avoids duplication: rules decide triggers; master decides canonical template/severity.
+
+Create:
+
+server/complaints/nodes/redFlagMasterJoin.ts
+import { getTable } from "../../data/registry";
+
+type Row = Record<string, any>;
+
+export async function joinRedFlagsToMaster(flagIds: string[]) {
+  const masterRows: Row[] = await getTable("RED_FLAGS_MASTER");
+
+  // RF_MASTER_ID expected in master. If your triggered IDs already match master IDs, great.
+  // If not, add mapping in RED_FLAG_RULES later; for now, attempt direct match.
+  const byId = new Map<string, Row>();
+  for (const r of masterRows) {
+    const id = String(r.RF_MASTER_ID || r.RF_ID || r.Id || r.ID);
+    if (id) byId.set(id, r);
+  }
+
+  return flagIds.map(id => {
+    const m = byId.get(id);
+    return {
+      rfId: id,
+      severity: String(m?.SEVERITY || "UNKNOWN"),
+      templateId: String(m?.TEMPLATE_ID || m?.TEMPLATE || ""),
+      title: String(m?.TITLE || "Safety concern"),
+    };
+  });
+}
+
+Then inside your existing RED_FLAG_GATE node (right after you compute flagsFound[] / redFlags[]), add:
+
+state.redFlagMaster = await joinRedFlagsToMaster(state.redFlags)
+
+Use templateId from master in OUTPUT_COMPOSE if present.
+
+This keeps one canonical dictionary.
+
+3) Exam override for Centor (flat answers model)
+
+In your runScoring() (Centor), add “effective keys” before evaluating expressions.
+
+Create:
+
+server/complaints/scoring/examOverride.ts
+export function coerceBool(v: any): boolean | null {
+  if (v === true || v === "true" || v === "yes" || v === 1 || v === "1") return true;
+  if (v === false || v === "false" || v === "no" || v === 0 || v === "0") return false;
+  return null;
+}
+
+export function effectiveExamOrPatient(answers: Record<string, any>, examKey: string, patientKey: string): boolean | null {
+  const ex = coerceBool(answers[examKey]);
+  if (ex !== null) return ex;
+  const pt = coerceBool(answers[patientKey]);
+  if (pt !== null) return pt;
+  return null;
+}
+
+Then in Centor scoring:
+
+import { effectiveExamOrPatient } from "./examOverride";
+
+// before scoring:
+state.answers.__EXUDATE_EFFECTIVE = effectiveExamOrPatient(state.answers, "EXAM_TONSILLAR_EXUDATE", "ST_EXUDATE");
+state.answers.__TENDER_NODES_EFFECTIVE = effectiveExamOrPatient(state.answers, "EXAM_TENDER_ANT_CERV_NODES", "ST_TENDER_NODES");
+
+// optional event:
+if (state.answers.EXAM_TONSILLAR_EXUDATE != null || state.answers.EXAM_TENDER_ANT_CERV_NODES != null) {
+  state.audit?.events?.push({ type: "EXAM_OVERRIDE", severity: "info", message: "Centor exam override applied" });
+}
+
+Update your SCORING_DEFS expressions for Centor to use:
+
+answers.__EXUDATE_EFFECTIVE == true
+
+answers.__TENDER_NODES_EFFECTIVE == true
+
+That’s the whole override mechanism, consistent with your evaluator.
+
+4) SPECIALIST_COUNCIL node (AutoGen-like consult, feature flag)
+
+This plugs into your existing placeholder SPECIALIST_COUNCIL node ID. It returns no-op unless enabled and needed.
+
+Create:
+
+server/complaints/nodes/specialistCouncilNode.ts
+type AgentAction = any; // import your real union type from shared/agentTypes
+
+export interface CouncilLLM {
+  callJson(system: string, payload: any): Promise<any>;
+}
+
+function shouldInvoke(state: any): boolean {
+  if (state.routing?.state === "EMERGENT_ESCALATION") return false;
+  if (state.redFlagGate?.gateResult === "ER_SEND") return false;
+
+  const low = state.caseConfidence === "LOW";
+  const missingRequired = (state.questionQueue || []).some((q: any) => q.required && !q.answered);
+  const conflict = state.__conflictFlag === true;
+  return low || missingRequired || conflict;
+}
+
+function rank(level: string): number {
+  // align with your disposition strings
+  const r: Record<string, number> = {
+    self_care: 1,
+    pcp: 2,
+    urgent_care: 3,
+    er_send: 4,
+  };
+  return r[level] ?? 2;
+}
+
+function pickKeyAnswers(state: any) {
+  const A = state.answers || {};
+  return {
+    ST_DUR: A.ST_DUR,
+    ST_FEVER: A.ST_FEVER,
+    ST_COUGH: A.ST_COUGH,
+    ST_RUNNY: A.ST_RUNNY,
+    ST_HOARSE: A.ST_HOARSE,
+    ST_SWALLOW: A.ST_SWALLOW,
+    ST_DROOL: A.ST_DROOL,
+    ST_BREATH: A.ST_BREATH,
+    ST_TRISMUS: A.ST_TRISMUS,
+    ST_ONE_SIDE: A.ST_ONE_SIDE,
+    ST_MUFFLED: A.ST_MUFFLED,
+    ST_EXUDATE: A.ST_EXUDATE,
+    ST_TENDER_NODES: A.ST_TENDER_NODES,
+    EXAM_TONSILLAR_EXUDATE: A.EXAM_TONSILLAR_EXUDATE,
+    EXAM_TENDER_ANT_CERV_NODES: A.EXAM_TENDER_ANT_CERV_NODES,
+  };
+}
+
+function missingRequiredIds(state: any): string[] {
+  return (state.questionQueue || [])
+    .filter((q: any) => q.required && !q.answered)
+    .map((q: any) => String(q.questionId));
+}
+
+export async function runSpecialistCouncilNode(state: any, llm: CouncilLLM): Promise<{ pendingActions?: AgentAction[]; ruleRefs: string[]; llmCalls: number; invoked?: boolean }> {
+  if (process.env.ENABLE_COUNCIL !== "1") return { ruleRefs: [], llmCalls: 0 };
+  if (!shouldInvoke(state)) return { ruleRefs: [], llmCalls: 0 };
+
+  const snapshot = {
+    cc: state.normalizedComplaint,
+    disposition: state.disposition,
+    dispositionReasonCodes: state.dispositionReasonCodes || [],
+    scores: state.scores || {},
+    redFlagGate: state.redFlagGate || {},
+    activeClusters: state.activeClusters || [],
+    dxCandidates: (state.diagnosisCandidates || []).slice(0, 4),
+    keyAnswers: pickKeyAnswers(state),
+    missingRequired: missingRequiredIds(state),
+  };
+
+  const system = [
+    "You are a clinical safety council with strict rules:",
+    "1) Output STRICT JSON only.",
+    "2) You may only escalate disposition, never de-escalate.",
+    "3) You may propose missing question IDs and safety-net additions.",
+    "Return keys: finalDisposition, why, mustAskQuestionIds, safetyNetAdds."
+  ].join("\n");
+
+  const clinician = await llm.callJson(system, { role: "clinician", snapshot });
+  const critic = await llm.callJson(system, { role: "safety_critic", snapshot, clinician });
+  const arbiter = await llm.callJson(system, { role: "rules_arbiter", snapshot, clinician, critic });
+
+  const proposed = String(arbiter?.finalDisposition || critic?.finalDisposition || clinician?.finalDisposition || state.disposition);
+  const finalDisp = rank(proposed) >= rank(state.disposition) ? proposed : state.disposition;
+
+  if (finalDisp !== state.disposition) {
+    state.disposition = finalDisp;
+    state.dispositionReasonCodes = [...(state.dispositionReasonCodes || []), "COUNCIL_ESCALATION"];
+    state.audit?.events?.push({ type: "COUNCIL", severity: "warn", message: String(arbiter?.why || "Escalated by safety council") });
+  }
+
+  const mustAsk: string[] = Array.isArray(arbiter?.mustAskQuestionIds) ? arbiter.mustAskQuestionIds.map(String) : [];
+  const pendingActions: AgentAction[] = mustAsk.slice(0, 3).map(qid => ({
+    type: "ASK_QUESTION",
+    questionId: qid,
+    // include any other fields your AgentAction requires; your CORE_QUESTIONS runner already knows how to load question text
+  }));
+
+  const safetyAdds: string[] = Array.isArray(arbiter?.safetyNetAdds) ? arbiter.safetyNetAdds.map(String) : [];
+  if (safetyAdds.length) state.__councilSafetyNetAdds = safetyAdds;
+
+  return { invoked: true, pendingActions, ruleRefs: ["COUNCIL"], llmCalls: 3 };
+}
+
+Key point: This doesn’t need dx→med mapping CSV, because your meds are already keyed by Indications_Cluster / DIAGNOSIS_ID in GLOBAL_MEDICATIONS_MASTER.
+
+5) Patch complaint graph transitions (Sore throat)
+
+Update ST_GRAPH_V1 to include DIFF_AND_CONFIDENCE and SPECIALIST_COUNCIL.
+
+Example (pseudo):
+
+INIT_CASE -> MODIFIERS_INTAKE
+MODIFIERS_INTAKE -> CC_NORMALIZE
+CC_NORMALIZE -> CORE_QUESTIONS
+CORE_QUESTIONS -> RED_FLAG_GATE
+RED_FLAG_GATE -> SCORING
+SCORING -> TESTING_DECISION
+TESTING_DECISION -> DISPOSITION_RULES
+DISPOSITION_RULES -> DIFF_AND_CONFIDENCE
+DIFF_AND_CONFIDENCE -> SPECIALIST_COUNCIL
+SPECIALIST_COUNCIL -> OUTPUT_COMPOSE
+OUTPUT_COMPOSE -> DONE
+
+No new NodeIds.
+
+6) Wire DIFF_AND_CONFIDENCE + SPECIALIST_COUNCIL in the node switch
+
+Inside complaintNodeRunner.ts switch:
+
+Add case: "DIFF_AND_CONFIDENCE"
+import { runDiffAndConfidenceNode } from "./nodes/diffAndConfidenceNode";
+
+case "DIFF_AND_CONFIDENCE": {
+  const start = Date.now();
+  const out = await runDiffAndConfidenceNode(state);
+
+  state.audit.steps.push({
+    nodeId: "DIFF_AND_CONFIDENCE",
+    inputsUsed: ["answers", "scores", "GLOBAL_CLUSTER_MASTER", "CLUSTER_PRIMARY_DIAGNOSIS"],
+    outputs: { rankedClusters: out.rankedClusters, dxCount: out.dxCount, confidence: out.confidence },
+    ruleRefs: out.ruleRefs,
+    llmCalls: 0,
+    confidence: out.confidence,
+    durationMs: Date.now() - start,
+  });
+
+  nextNode = graph["DIFF_AND_CONFIDENCE"]; // or however you advance
+  break;
+}
+Add case: "SPECIALIST_COUNCIL"
+import { runSpecialistCouncilNode } from "./nodes/specialistCouncilNode";
+import { yourLLMClient } from "../llm/yourClient"; // adapt to your implementation
+
+case "SPECIALIST_COUNCIL": {
+  const start = Date.now();
+
+  const out = await runSpecialistCouncilNode(state, {
+    callJson: async (system, payload) => yourLLMClient.callJson(system, payload)
+  });
+
+  state.audit.steps.push({
+    nodeId: "SPECIALIST_COUNCIL",
+    inputsUsed: ["answers", "scores", "disposition", "redFlagGate", "activeClusters"],
+    outputs: { invoked: Boolean(out.invoked), disposition: state.disposition },
+    ruleRefs: out.ruleRefs,
+    llmCalls: out.llmCalls,
+    confidence: state.caseConfidence || undefined,
+    durationMs: Date.now() - start,
+  });
+
+  // If council produced pendingActions (ASK_QUESTION), return early like CORE_QUESTIONS does
+  if (out.pendingActions && out.pendingActions.length) {
+    return {
+      done: false,
+      state,
+      pendingAction: out.pendingActions[0], // single action model; queue rest if you want
+    };
+  }
+
+  nextNode = graph["SPECIALIST_COUNCIL"];
+  break;
+}
+
+This makes council behave like AutoGen: it can ask follow-ups when uncertain.
+
+7) Patient-facing intake routes using your AgentAction return shape
+
+Create:
+
+server/routes/intake.ts
+import { Router } from "express";
+import { runComplaintGraph } from "../complaints/runComplaintGraph"; // your existing entrypoint
+import { loadCaseState, saveCaseState } from "../storage/caseStateStore"; // adapt to your persistence
+
+const router = Router();
+
+router.post("/start", async (req, res) => {
+  const { conversationId, chiefComplaintText, demographics, modifiers } = req.body;
+
+  const state = await loadCaseState(conversationId); // create if missing
+  state.chiefComplaint = chiefComplaintText;
+  if (demographics) state.demographics = { ...(state.demographics || {}), ...demographics };
+  if (modifiers) state.modifiers = { ...(state.modifiers || {}), ...modifiers };
+
+  const result = await runComplaintGraph(state);
+  await saveCaseState(conversationId, result.state);
+
+  res.json({
+    done: result.done,
+    pendingAction: result.pendingAction || null,
+    output: result.output || null,
+    routing: result.state.routing,
+  });
+});
+
+router.post("/answer", async (req, res) => {
+  const { conversationId, questionId, answer } = req.body;
+
+  const state = await loadCaseState(conversationId);
+  state.answers = state.answers || {};
+  state.answers[questionId] = answer;
+
+  const result = await runComplaintGraph(state);
+  await saveCaseState(conversationId, result.state);
+
+  res.json({
+    done: result.done,
+    pendingAction: result.pendingAction || null,
+    output: result.output || null,
+    routing: result.state.routing,
+  });
+});
+
+export default router;
+
+Then wire: app.use("/api/intake", intakeRouter);
+
+This is the WhatsApp driver.
+
+8) How meds/interventions plug in (without new nodes)
+
+Because your meds are already resolved via Sheets in medSuggestions.ts, you have two clean options:
+
+Option A (simplest): call meds after DIFF_AND_CONFIDENCE
+
+DIFF_AND_CONFIDENCE sets activeClusters and diagnosisCandidates
+
+then call medSuggestions.ts and append to recommendedActions
+
+no new node IDs required
+
+Option B: keep inside OUTPUT_COMPOSE
+
+OUTPUT_COMPOSE reads activeClusters and calls meds resolver
+
+fine, but council won’t see med suggestions
+
+I recommend Option A, so the council has full context.
+
+Similarly for URGENT_CARE_SPOT_INTERVENTIONS, you can attach “spot interventions” right after disposition or after DIFF node.
+
+If you want, I’ll provide the exact helper that does:
+
+const spotRows = await getTable("URGENT_CARE_SPOT_INTERVENTIONS");
+// filter by cc + disposition + topCluster
+// push into recommendedActions
+
+but it’s straightforward and you likely already have similar action builders.
+
+9) Update your sore throat tests (3 additions)
+
+Exam override
+
+patient exudate = no, exam exudate = yes
+
+assert centor increments accordingly and audit event added
+
+Cluster selection
+
+viral answers => activeClusters[0] === "CL_ST_VIRAL_URI"
+
+strep-like answers + centor>=2 => activeClusters[0] === "CL_ST_GAS"
+
+Council escalation (mock LLM)
+
+enable ENABLE_COUNCIL=1
+
+mock callJson to propose escalation
+
+assert disposition escalates only, never de-escalates

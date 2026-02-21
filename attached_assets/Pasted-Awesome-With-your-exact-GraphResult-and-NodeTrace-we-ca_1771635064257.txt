@@ -1,0 +1,463 @@
+Awesome. With your exact GraphResult and NodeTrace, we can make this 100% type-aligned and drop it into your runner with zero ambiguity.
+
+Below is a compile-ready implementation plan with code for:
+
+DIFF_AND_CONFIDENCE node that uses getTable() (Sheets) and updates CaseState + NodeTrace, no early return.
+
+SPECIALIST_COUNCIL node that can early-return a GraphResult with:
+
+pendingAction: ASK_QUESTION (preferred for “need more info”), or
+
+pendingAction: ESCALATE_TO_CLINICIAN (if truly uncertain), or
+
+no pendingAction (if it only escalates disposition and continues).
+
+A tiny helper makeNodeTrace() so every node logs consistently.
+
+Clear guidance for how to wire it into complaintNodeRunner.ts switch and graph transitions.
+
+I’ll keep it simple: council only asks one question at a time (like CORE_QUESTIONS), and only escalates disposition (never de-escalates).
+
+1) Shared helper: NodeTrace builder
+
+Create:
+
+server/services/nodeTrace.ts
+import type { NodeId, NodeTrace } from "./complaintNodeRunner"; // adjust relative path if needed
+
+export function makeNodeTrace(args: {
+  nodeId: NodeId;
+  inputsUsed: string[];
+  outputs: Record<string, any>;
+  ruleRefs?: string[];
+  llmCalls?: number;
+  confidence?: string;
+  durationMs: number;
+}): NodeTrace {
+  return {
+    nodeId: args.nodeId,
+    inputsUsed: args.inputsUsed,
+    outputs: args.outputs,
+    ruleRefs: args.ruleRefs ?? [],
+    llmCalls: args.llmCalls ?? 0,
+    confidence: args.confidence,
+    durationMs: args.durationMs,
+  };
+}
+2) DIFF_AND_CONFIDENCE node executor (Sheets-backed)
+
+Create:
+
+server/services/nodes/diffAndConfidenceNode.ts
+import { getTable } from "../../data/registry";
+import type { CaseState } from "../../../shared/agentTypes";
+
+type Row = Record<string, any>;
+
+const boolish = (v: any): boolean | null => {
+  if (v === true || v === "true" || v === "yes" || v === 1 || v === "1") return true;
+  if (v === false || v === "false" || v === "no" || v === 0 || v === "0") return false;
+  return null;
+};
+
+const numish = (v: any): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+export async function runDiffAndConfidenceNode(state: CaseState): Promise<{
+  updated: CaseState;
+  outputs: Record<string, any>;
+  ruleRefs: string[];
+  confidence: string;
+}> {
+  const cc = String((state as any).normalizedComplaint || "");
+  const A: Record<string, any> = (state as any).answers || {};
+  const centor = numish((state as any).scores?.centor);
+
+  const clusterRows: Row[] = await getTable("GLOBAL_CLUSTER_MASTER");
+  const dxRows: Row[] = await getTable("CLUSTER_PRIMARY_DIAGNOSIS");
+
+  const validClusters = new Set(clusterRows.map(r => String(r.Cluster_ID || r.CLUSTER_ID)));
+
+  const dxByCluster = new Map<string, Array<{ diagnosisId: string; diagnosisName: string }>>();
+  for (const r of dxRows) {
+    const clusterId = String(r.Cluster_ID || r.CLUSTER_ID);
+    const diagnosisId = String(r.Diagnosis_ID || r.DIAGNOSIS_ID);
+    const diagnosisName = String(r.Diagnosis_Name || r.DIAGNOSIS_NAME || r.DIAGNOSIS_ID_SafeFill || "");
+    if (!clusterId || !diagnosisId) continue;
+    if (!dxByCluster.has(clusterId)) dxByCluster.set(clusterId, []);
+    dxByCluster.get(clusterId)!.push({ diagnosisId, diagnosisName });
+  }
+
+  const score: Record<string, { points: number; evidence: string[] }> = {};
+  const bump = (clusterId: string, pts: number, evidence: string) => {
+    if (!validClusters.has(clusterId) || pts <= 0) return;
+    if (!score[clusterId]) score[clusterId] = { points: 0, evidence: [] };
+    score[clusterId].points += pts;
+    score[clusterId].evidence.push(evidence);
+  };
+
+  if (cc === "sore_throat") {
+    // Viral URI
+    if (boolish(A.ST_COUGH) === true) bump("CL_ST_VIRAL_URI", 2, "answers.ST_COUGH");
+    if (boolish(A.ST_RUNNY) === true) bump("CL_ST_VIRAL_URI", 2, "answers.ST_RUNNY");
+    if (boolish(A.ST_HOARSE) === true) bump("CL_ST_VIRAL_URI", 1, "answers.ST_HOARSE");
+
+    // GAS
+    if (boolish(A.ST_FEVER) === true) bump("CL_ST_GAS", 1, "answers.ST_FEVER");
+    if (boolish(A.ST_COUGH) === false) bump("CL_ST_GAS", 1, "answers.ST_COUGH");
+    if (centor >= 2) bump("CL_ST_GAS", 2, "scores.centor");
+
+    // Mono (simple v1)
+    if (boolish(A.ST_MONO) === true) bump("CL_ST_MONO", 2, "answers.ST_MONO");
+  }
+
+  const ranked = Object.entries(score)
+    .map(([clusterId, v]) => ({ clusterId, points: v.points, evidence: v.evidence }))
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 3);
+
+  (state as any).clusterScores = Object.fromEntries(ranked.map(r => [r.clusterId, r.points]));
+  (state as any).clusterEvidence = Object.fromEntries(ranked.map(r => [r.clusterId, r.evidence]));
+  (state as any).activeClusters = ranked.map(r => r.clusterId);
+
+  const dxCandidates: any[] = [];
+  ranked.forEach((r, idx) => {
+    const dxs = (dxByCluster.get(r.clusterId) || []).slice(0, 2);
+    const conf = idx === 0 ? "MODERATE" : "LOW";
+    dxs.forEach(d => dxCandidates.push({ ...d, clusterId: r.clusterId, confidence: conf }));
+  });
+  (state as any).diagnosisCandidates = dxCandidates.slice(0, 6);
+
+  // Confidence heuristic
+  const missingRequired = ((state as any).questionQueue || []).some((q: any) => q.required && !q.answered);
+  const confidence = missingRequired ? "LOW" : (ranked.length ? "MODERATE" : "LOW");
+  (state as any).caseConfidence = confidence;
+
+  const ruleRefs = [
+    ...(state as any).activeClusters,
+    ...((state as any).diagnosisCandidates || []).map((d: any) => d.diagnosisId),
+  ];
+
+  return {
+    updated: state,
+    confidence,
+    ruleRefs,
+    outputs: {
+      rankedClusters: ranked,
+      activeClusters: (state as any).activeClusters,
+      dxCount: ((state as any).diagnosisCandidates || []).length,
+    },
+  };
+}
+
+✅ This uses your old master tables via getTable() and produces activeClusters for downstream meds. No new tables.
+
+3) SPECIALIST_COUNCIL node executor (early-return ready)
+
+This one must integrate with GraphResult and can early-return exactly like CORE_QUESTIONS.
+
+Create:
+
+server/services/nodes/specialistCouncilNode.ts
+import type { CaseState, AgentAction } from "../../../shared/agentTypes";
+import type { TraceEvent } from "../../../shared/testingTypes";
+
+export interface CouncilLLM {
+  callJson(system: string, payload: any): Promise<any>;
+}
+
+function shouldInvoke(state: CaseState): boolean {
+  const s: any = state as any;
+  if (s.routing?.state === "EMERGENT_ESCALATION") return false;
+  if (s.redFlagGate?.gateResult === "ER_SEND") return false;
+
+  const low = s.caseConfidence === "LOW";
+  const missingRequired = (s.questionQueue || []).some((q: any) => q.required && !q.answered);
+  const conflict = s.__conflictFlag === true;
+  return low || missingRequired || conflict;
+}
+
+function rankDisp(d: string): number {
+  const r: Record<string, number> = { self_care: 1, pcp: 2, urgent_care: 3, er_send: 4 };
+  return r[d] ?? 2;
+}
+
+function pickKeyAnswers(state: CaseState) {
+  const s: any = state as any;
+  const A = s.answers || {};
+  return {
+    ST_DUR: A.ST_DUR,
+    ST_FEVER: A.ST_FEVER,
+    ST_COUGH: A.ST_COUGH,
+    ST_RUNNY: A.ST_RUNNY,
+    ST_HOARSE: A.ST_HOARSE,
+    ST_SWALLOW: A.ST_SWALLOW,
+    ST_DROOL: A.ST_DROOL,
+    ST_BREATH: A.ST_BREATH,
+    ST_TRISMUS: A.ST_TRISMUS,
+    ST_ONE_SIDE: A.ST_ONE_SIDE,
+    ST_MUFFLED: A.ST_MUFFLED,
+    ST_EXUDATE: A.ST_EXUDATE,
+    ST_TENDER_NODES: A.ST_TENDER_NODES,
+    EXAM_TONSILLAR_EXUDATE: A.EXAM_TONSILLAR_EXUDATE,
+    EXAM_TENDER_ANT_CERV_NODES: A.EXAM_TENDER_ANT_CERV_NODES,
+  };
+}
+
+function missingRequiredIds(state: CaseState): string[] {
+  const s: any = state as any;
+  return (s.questionQueue || []).filter((q: any) => q.required && !q.answered).map((q: any) => String(q.questionId));
+}
+
+function findQuestionPrompt(state: CaseState, qid: string): string | undefined {
+  const s: any = state as any;
+  const q = (s.questionQueue || []).find((x: any) => String(x.questionId) === String(qid));
+  return q?.questionText ? String(q.questionText) : undefined;
+}
+
+export async function runSpecialistCouncilNode(args: {
+  state: CaseState;
+  llm: CouncilLLM;
+}): Promise<{
+  updated: CaseState;
+  eventsToAdd: TraceEvent[];
+  llmCalls: number;
+  ruleRefs: string[];
+  pendingAction?: AgentAction;
+  outputs: Record<string, any>;
+}> {
+  const { state, llm } = args;
+  const s: any = state as any;
+
+  if (process.env.ENABLE_COUNCIL !== "1" || !shouldInvoke(state)) {
+    return { updated: state, eventsToAdd: [], llmCalls: 0, ruleRefs: [], outputs: { skipped: true } };
+  }
+
+  const snapshot = {
+    cc: s.normalizedComplaint,
+    system: s.system,
+    disposition: s.disposition,
+    dispositionReasonCodes: s.dispositionReasonCodes || [],
+    scores: s.scores || {},
+    redFlagGate: s.redFlagGate || {},
+    activeClusters: s.activeClusters || [],
+    dxCandidates: (s.diagnosisCandidates || []).slice(0, 4),
+    keyAnswers: pickKeyAnswers(state),
+    missingRequired: missingRequiredIds(state),
+  };
+
+  const systemPrompt = [
+    "You are a clinical safety council.",
+    "Constraints:",
+    "1) Output STRICT JSON only.",
+    "2) You may only escalate disposition (never de-escalate).",
+    "3) If more info is needed, choose ONE questionId to ask next.",
+    "4) You may add safety-net return precautions.",
+    "Return keys: finalDisposition (optional), why (optional), askNextQuestionId (optional), safetyNetAdds (optional array).",
+  ].join("\n");
+
+  // AutoGen-like: 3 roles, one round
+  const clinician = await llm.callJson(systemPrompt, { role: "clinician", snapshot });
+  const critic = await llm.callJson(systemPrompt, { role: "safety_critic", snapshot, clinician });
+  const arbiter = await llm.callJson(systemPrompt, { role: "rules_arbiter", snapshot, clinician, critic });
+
+  const decided = arbiter || critic || clinician || {};
+  const proposedDisp = decided.finalDisposition ? String(decided.finalDisposition) : undefined;
+  const askNext = decided.askNextQuestionId ? String(decided.askNextQuestionId) : undefined;
+  const why = decided.why ? String(decided.why) : "";
+  const safetyAdds: string[] = Array.isArray(decided.safetyNetAdds) ? decided.safetyNetAdds.map(String) : [];
+
+  const newEvents: TraceEvent[] = [];
+  let pendingAction: AgentAction | undefined;
+
+  // If council wants one more question, early-return with ASK_QUESTION
+  if (askNext) {
+    const prompt = findQuestionPrompt(state, askNext);
+    pendingAction = { type: "ASK_QUESTION", questionId: askNext, ...(prompt ? { prompt } : {}) };
+
+    if (safetyAdds.length) s.__councilSafetyNetAdds = safetyAdds;
+
+    newEvents.push({
+      type: "COUNCIL_NEEDS_MORE_INFO",
+      severity: "info",
+      message: why || `Council requested more info: ${askNext}`,
+    });
+
+    return {
+      updated: state,
+      eventsToAdd: newEvents,
+      llmCalls: 3,
+      ruleRefs: ["COUNCIL"],
+      pendingAction,
+      outputs: { askNextQuestionId: askNext, safetyNetAddsCount: safetyAdds.length },
+    };
+  }
+
+  // Otherwise disposition escalation only
+  if (proposedDisp) {
+    const current = String(s.disposition || "");
+    const finalDisp = rankDisp(proposedDisp) >= rankDisp(current) ? proposedDisp : current;
+    if (finalDisp !== current) {
+      s.disposition = finalDisp;
+      s.dispositionReasonCodes = [...(s.dispositionReasonCodes || []), "COUNCIL_ESCALATION"];
+      newEvents.push({
+        type: "COUNCIL_ESCALATION",
+        severity: "warn",
+        message: why || `Council escalated disposition ${current} -> ${finalDisp}`,
+      });
+    } else if (why) {
+      newEvents.push({ type: "COUNCIL_NOTE", severity: "info", message: why });
+    }
+  }
+
+  if (safetyAdds.length) s.__councilSafetyNetAdds = safetyAdds;
+
+  return {
+    updated: state,
+    eventsToAdd: newEvents,
+    llmCalls: 3,
+    ruleRefs: ["COUNCIL"],
+    outputs: { finalDisposition: s.disposition, safetyNetAddsCount: safetyAdds.length },
+  };
+}
+
+✅ This returns pendingAction in exactly your format when it needs more info.
+✅ It can also just modify state and continue if it escalates disposition.
+✅ It emits TraceEvent[] additions so your runner can append to events.
+
+4) Exact integration into complaintNodeRunner.ts
+4.1 Add DIFF and COUNCIL to the sore throat graph transitions
+
+Update ST_GRAPH_V1 to include these nodes:
+
+DISPOSITION_RULES -> DIFF_AND_CONFIDENCE
+
+DIFF_AND_CONFIDENCE -> SPECIALIST_COUNCIL
+
+SPECIALIST_COUNCIL -> OUTPUT_COMPOSE
+
+Council will usually be a fast skip unless enabled.
+
+4.2 Add node switch cases
+
+In your node switch, add:
+
+DIFF_AND_CONFIDENCE
+import { runDiffAndConfidenceNode } from "./nodes/diffAndConfidenceNode";
+import { makeNodeTrace } from "./nodeTrace";
+
+case "DIFF_AND_CONFIDENCE": {
+  const start = Date.now();
+  const out = await runDiffAndConfidenceNode(state);
+
+  nodeTraces.push(makeNodeTrace({
+    nodeId: "DIFF_AND_CONFIDENCE",
+    inputsUsed: ["answers", "scores", "GLOBAL_CLUSTER_MASTER", "CLUSTER_PRIMARY_DIAGNOSIS"],
+    outputs: out.outputs,
+    ruleRefs: out.ruleRefs,
+    llmCalls: 0,
+    confidence: out.confidence,
+    durationMs: Date.now() - start,
+  }));
+
+  currentNode = "DIFF_AND_CONFIDENCE";
+  nextNode = graph["DIFF_AND_CONFIDENCE"];
+  state = out.updated;
+  break;
+}
+SPECIALIST_COUNCIL with early-return GraphResult
+import { runSpecialistCouncilNode } from "./nodes/specialistCouncilNode";
+import { makeNodeTrace } from "./nodeTrace";
+import { llmCouncilClient } from "../llm/llmCouncilClient"; // your adapter to callJson()
+
+case "SPECIALIST_COUNCIL": {
+  const start = Date.now();
+  const out = await runSpecialistCouncilNode({ state, llm: llmCouncilClient });
+
+  // append events
+  events.push(...out.eventsToAdd);
+
+  nodeTraces.push(makeNodeTrace({
+    nodeId: "SPECIALIST_COUNCIL",
+    inputsUsed: ["answers", "scores", "disposition", "redFlagGate", "activeClusters"],
+    outputs: out.outputs,
+    ruleRefs: out.ruleRefs,
+    llmCalls: out.llmCalls,
+    confidence: (state as any).caseConfidence,
+    durationMs: Date.now() - start,
+  }));
+
+  currentNode = "SPECIALIST_COUNCIL";
+  state = out.updated;
+
+  if (out.pendingAction) {
+    // EARLY RETURN - matches GraphResult exactly
+    return {
+      state,
+      events,
+      nodeTraces,
+      currentNode,
+      pendingAction: out.pendingAction,
+      done: false,
+    };
+  }
+
+  nextNode = graph["SPECIALIST_COUNCIL"];
+  break;
+}
+
+That is exactly your required early-return shape.
+
+5) Optional: Council early-return using STOP or ESCALATE_TO_CLINICIAN
+
+You can do that, but the best UX for WhatsApp is still ASK_QUESTION when it needs info. If you want the alternative behavior:
+
+If the council thinks it’s unsafe to proceed without clinician review:
+
+return { type: "ESCALATE_TO_CLINICIAN", reason }
+
+If you want the agent to stop instead:
+
+return { type: "STOP", stopReason: "NEEDS_MORE_INFO" }
+
+You can easily swap the pendingAction block in the node.
+
+6) Where to put “spot interventions” and meds suggestions
+
+Since you already have medSuggestions.ts and diagnosisResolver.ts, the cleanest contract is:
+
+After DIFF_AND_CONFIDENCE, call:
+
+diagnosisResolver (if it uses activeClusters)
+
+medSuggestions (uses GLOBAL_MEDICATIONS_MASTER + cluster IDs)
+
+add spot interventions if disposition is urgent
+
+You can do this:
+
+inside DIFF_AND_CONFIDENCE (single combined “bridge” node)
+
+or inside OUTPUT_COMPOSE
+
+If you want council to see meds and interventions, do it before council (recommended):
+
+Minimal add (inside DIFF_AND_CONFIDENCE case after out.updated):
+await addSpotInterventionsIfNeeded(state); // uses getTable("URGENT_CARE_SPOT_INTERVENTIONS")
+await addMedSuggestionsIfAppropriate(state); // your existing medSuggestions.ts
+
+If you paste your medSuggestions.ts exported function signature, I’ll write the exact call and the exact recommendedActions shape it expects.
+
+7) Exam override: where it belongs in your flow
+
+Add it in SCORING right before evaluating scoring expressions, by injecting:
+
+answers.__EXUDATE_EFFECTIVE
+
+answers.__TENDER_NODES_EFFECTIVE
+
+Then update the scoring defs rows to use those effective keys.
+
+That stays fully auditable and deterministic.

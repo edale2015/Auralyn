@@ -995,6 +995,42 @@ export function registerAdminRoutes(router: Router) {
             };
           }
 
+          if (assertions.expectMinScores !== undefined && typeof assertions.expectMinScores === "object") {
+            for (const [scoreKey, minVal] of Object.entries(assertions.expectMinScores)) {
+              const actual = pState.scores?.[scoreKey.toLowerCase()] ?? pState.scores?.[scoreKey] ?? 0;
+              assertionResults[`expectMinScore_${scoreKey}`] = {
+                pass: (actual as number) >= (minVal as number),
+                expected: `>= ${minVal}`,
+                actual,
+              };
+            }
+          }
+
+          if (assertions.expectMinActiveClusters !== undefined) {
+            assertionResults["expectMinActiveClusters"] = {
+              pass: (pState.activeClusters ?? []).length >= assertions.expectMinActiveClusters,
+              expected: `>= ${assertions.expectMinActiveClusters}`,
+              actual: (pState.activeClusters ?? []).length,
+            };
+          }
+
+          if (assertions.expectMinDiagnosisCandidates !== undefined) {
+            assertionResults["expectMinDiagnosisCandidates"] = {
+              pass: (pState.candidateDiagnoses ?? []).length >= assertions.expectMinDiagnosisCandidates,
+              expected: `>= ${assertions.expectMinDiagnosisCandidates}`,
+              actual: (pState.candidateDiagnoses ?? []).length,
+            };
+          }
+
+          if (assertions.expectNoCouncilRun !== undefined && assertions.expectNoCouncilRun) {
+            const councilTrace = graphResult.nodeTraces.find((t: any) => t.node === "SPECIALIST_COUNCIL" && t.skipped !== true);
+            assertionResults["expectNoCouncilRun"] = {
+              pass: !councilTrace || councilTrace.skipped === true,
+              expected: "council not executed",
+              actual: councilTrace ? "council ran" : "council skipped/absent",
+            };
+          }
+
           const allPassed = Object.values(assertionResults).every(r => r.pass);
 
           results.push({
@@ -1013,6 +1049,8 @@ export function registerAdminRoutes(router: Router) {
               redFlagIds: pState.redFlags,
               routingState: pState.routing.state,
               nodeCount: graphResult.nodeTraces.length,
+              activeClusters: pState.activeClusters ?? [],
+              diagnosisCandidateCount: (pState.candidateDiagnoses ?? []).length,
             },
           });
         } catch (err: any) {

@@ -1,0 +1,717 @@
+1) Node contracts in YOUR CaseState (no new object trees required)
+
+I’ll define 4 additions:
+
+EXAM_CAPTURE (optional node or just a merge function)
+
+CLUSTER_SELECT (bridge to GLOBAL_CLUSTER_MASTER + CLUSTER_PRIMARY_DIAGNOSIS)
+
+SPOT_INTERVENTIONS (bridge to URGENT_CARE_SPOT_INTERVENTION)
+
+MED_SUGGEST (bridge to GLOBAL_MEDICATIONS_MASTER + dx/cluster mappings)
+
+SPECIALIST_COUNCIL (AutoGen consult when needed)
+
+Plus one integration upgrade:
+
+RED_FLAG_GATE joins to RED_FLAGS_MASTER for canonical templates/actions
+
+A) EXAM_OVERRIDE (implemented inside SCORING, no new node required)
+
+Purpose: allow clinician exam findings to override patient-reported Centor inputs.
+
+Inputs (read)
+
+Patient-reported (existing):
+
+answers.ST_EXUDATE (yes/no)
+
+answers.ST_TENDER_NODES (yes/no)
+
+Exam overrides (new optional answers keys):
+
+answers.EXAM_TONSILLAR_EXUDATE (yes/no)
+
+answers.EXAM_TENDER_ANT_CERV_NODES (yes/no)
+
+Tables read
+
+none (uses scoring defs)
+
+Outputs (write)
+
+scores.centor (or scores["centor"]) updated using override-preferred values
+
+Add audit.events note if override applied
+
+Rule
+
+EXAM_* wins if present; else use patient answer.
+
+B) CLUSTER_SELECT
+
+Purpose: take the intake result and select clusters + primary dx candidates.
+
+Inputs (read)
+
+normalizedComplaint / ccId
+
+answers.* relevant to complaint (e.g., ST_FEVER, ST_COUGH, ST_CORYZA, ST_MONO)
+
+scores.centor
+
+redFlagGate.gateResult and routing.state
+
+modifiers.immunocompromised
+
+demographics.age
+
+Tables read
+
+GLOBAL_CLUSTER_MASTER
+
+CLUSTER_PRIMARY_DIAGNOSIS
+
+(optional) any existing “complaint → cluster” or “cluster rules” tables if you have them
+
+Outputs (write)
+
+Add to CaseState (minimal new fields):
+
+activeClusters (you already have this) becomes the ranked list
+
+New optional:
+
+diagnosisCandidates: array of {diagnosisId, label, clusterId, confidence}
+
+clusterScores: record {clusterId: number}
+
+clusterEvidence: record {clusterId: string[]} (fields used)
+
+Trace:
+
+outputs: {clusters: [...], dxCandidatesCount}
+
+ruleRefs: [clusterIds, diagnosisIds]
+
+Determinism
+
+Deterministic scoring rules for sore throat v1. LLM assist optional later.
+
+C) SPOT_INTERVENTIONS
+
+Purpose: if disposition is UC/ED, attach “what to do there” content.
+
+Inputs (read)
+
+disposition
+
+normalizedComplaint
+
+activeClusters (top cluster)
+
+routing.state (if emergent escalation, prefer ED interventions)
+
+Tables read
+
+URGENT_CARE_SPOT_INTERVENTION
+
+Outputs (write)
+
+append to recommendedActions[] as structured actions:
+
+{type: "SPOT_INTERVENTION", priority, interventionId, title, details}
+
+optionally store:
+
+spotInterventions[] in state for UI rendering
+
+trace: intervention IDs used
+
+D) MED_SUGGEST
+
+Purpose: pull med suggestions from your master med tables, gated by safety.
+
+Inputs (read)
+
+diagnosisCandidates (or top cluster)
+
+modifiers.allergies, demographics.pregnant
+
+modifiers.meds (interactions)
+
+routing.state and redFlagGate.gateResult (do not suggest meds if emergent)
+
+scores.centor (strep policy gating)
+
+Tables read
+
+GLOBAL_MEDICATIONS_MASTER
+
+(whatever table you use to map dx→meds; if none, create a small mapping within your existing diagnosis cluster tables)
+
+Outputs (write)
+
+recommendedActions[] add:
+
+{type: "MED_SUGGESTION", priority, medId, name, rationale, safetyNotes[]}
+
+trace: med IDs + mapping IDs
+
+Safety gates (must)
+
+if routing.state == EMERGENT_ESCALATION or redFlagGate.gateResult == ER_SEND → no med suggestions
+
+if allergy conflict → filter out
+
+if pregnancy flag conflict → filter out
+
+E) SPECIALIST_COUNCIL (AutoGen consult, conditional)
+
+Purpose: only for low-confidence or conflict cases; can escalate disposition or request missing questions.
+
+Trigger
+
+routing.state not emergent AND
+
+(confidence == LOW OR conflict flag OR missing required questions that block safe routing)
+
+Inputs (read)
+
+A compact snapshot:
+
+ccId
+
+a handful of key answers
+
+centor score
+
+disposition + matched rule IDs
+
+red flags summary
+
+missing required questions list
+
+Outputs (write)
+
+may update:
+
+disposition (escalate only)
+
+recommendedActions[] (add “ASK_MORE” question IDs)
+
+audit.events with council rationale
+
+trace: llmCalls increments, ruleRefs includes “COUNCIL”
+
+Hard rule
+
+Council may escalate only, never de-escalate below deterministic.
+
+2) Exactly what code to add (patch-style scaffolding)
+
+You asked for code needed to make this work well using both LangGraph and AutoGen:
+Your runner is already “LangGraph-like.” We’ll add bridge node functions + a council hook. If you later import actual LangGraph, these node functions remain the same.
+
+2.1 Add new nodes to the runner sequence
+
+Current nodes:
+INIT_CASE → MODIFIERS_INTAKE → CC_NORMALIZE → CORE_QUESTIONS → RED_FLAG_GATE → SCORING → TESTING_DECISION → DISPOSITION_RULES → OUTPUT_COMPOSE
+
+Update to:
+INIT_CASE → MODIFIERS_INTAKE → CC_NORMALIZE → CORE_QUESTIONS → RED_FLAG_GATE → SCORING → TESTING_DECISION → DISPOSITION_RULES → CLUSTER_SELECT → SPOT_INTERVENTIONS → MED_SUGGEST → SPECIALIST_COUNCIL (optional) → OUTPUT_COMPOSE
+
+Minimal change:
+
+insert nodes after DISPOSITION_RULES, before OUTPUT_COMPOSE
+
+SPECIALIST_COUNCIL can be skipped quickly if not triggered
+
+2.2 Add exam override inside runScoring() (Centor)
+Drop-in helper (TypeScript)
+// server/complaints/scoringOverrides.ts
+export function pickOverrideBool(answers: Record<string, any>, examKey: string, patientKey: string): boolean | null {
+  const ex = answers[examKey];
+  if (ex === true || ex === "true" || ex === "yes" || ex === 1 || ex === "1") return true;
+  if (ex === false || ex === "false" || ex === "no" || ex === 0 || ex === "0") return false;
+
+  const pt = answers[patientKey];
+  if (pt === true || pt === "true" || pt === "yes" || pt === 1 || pt === "1") return true;
+  if (pt === false || pt === "false" || pt === "no" || pt === 0 || pt === "0") return false;
+
+  return null;
+}
+
+Then in your Centor scoring function:
+
+import { pickOverrideBool } from "./scoringOverrides";
+
+const exudate = pickOverrideBool(state.answers, "EXAM_TONSILLAR_EXUDATE", "ST_EXUDATE");
+const tenderNodes = pickOverrideBool(state.answers, "EXAM_TENDER_ANT_CERV_NODES", "ST_TENDER_NODES");
+
+// When your scoring defs refer to answers.ST_EXUDATE / answers.ST_TENDER_NODES,
+// create derived answer keys that reflect override preference:
+(state.answers as any).__EXUDATE_EFFECTIVE = exudate;
+(state.answers as any).__TENDER_NODES_EFFECTIVE = tenderNodes;
+
+// Then update your scoring WHEN_EXPR for Centor to use these effective keys:
+ // EXUDATE: answers.__EXUDATE_EFFECTIVE == true
+ // TENDER:  answers.__TENDER_NODES_EFFECTIVE == true
+
+Why this is clean: you keep your flat answers structure, and your expression evaluator still works.
+
+Update your SCORING_DEFS rows for Centor components:
+
+Replace answers.ST_EXUDATE == true with answers.__EXUDATE_EFFECTIVE == true
+
+Replace answers.ST_TENDER_NODES == true with answers.__TENDER_NODES_EFFECTIVE == true
+
+No other complaints affected.
+
+3) Bridge node implementations (using your CSV-backed “master tables”)
+
+You said you have CSV files in server/data/csv/. Perfect. Add a small “master table access” module that reads once and provides lookups.
+
+3.1 masterTables.ts (loader + indexed lookups)
+// server/knowledge/masterTables.ts
+import fs from "fs";
+import path from "path";
+
+type Row = Record<string, string>;
+
+function parseCSV(filePath: string): Row[] {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(l => l.trim().length > 0);
+  const header = lines[0].split(",").map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const cols = splitCSV(line);
+    const row: Row = {};
+    header.forEach((h, i) => (row[h] = (cols[i] ?? "").trim()));
+    return row;
+  });
+}
+
+function splitCSV(line: string): string[] {
+  // minimal CSV splitter (no multiline). If you already have one, use it.
+  const out: string[] = [];
+  let buf = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i - 1] !== "\\") inQ = !inQ;
+    if (ch === "," && !inQ) {
+      out.push(buf);
+      buf = "";
+    } else buf += ch;
+  }
+  out.push(buf);
+  return out.map(s => s.replace(/^"|"$/g, ""));
+}
+
+export class MasterTables {
+  clusters: Row[];
+  clusterPrimaryDx: Row[];
+  urgentCareInterventions: Row[];
+  medsMaster: Row[];
+  redFlagsMaster: Row[];
+  medToCondition: Row[];
+
+  private idxClustersByComplaint = new Map<string, Row[]>();
+  private idxDxByCluster = new Map<string, Row[]>();
+  private idxInterventionsByKey = new Map<string, Row[]>();
+  private idxMedById = new Map<string, Row>();
+  private idxRedFlagById = new Map<string, Row[]>();
+
+  constructor(csvDir: string) {
+    this.clusters = parseCSV(path.join(csvDir, "GLOBAL_CLUSTER_MASTER.csv"));
+    this.clusterPrimaryDx = parseCSV(path.join(csvDir, "CLUSTER_PRIMARY_DIAGNOSIS.csv"));
+    this.urgentCareInterventions = parseCSV(path.join(csvDir, "URGENT_CARE_SPOT_INTERVENTION.csv"));
+    this.medsMaster = parseCSV(path.join(csvDir, "GLOBAL_MEDICATIONS_MASTER.csv"));
+    this.redFlagsMaster = parseCSV(path.join(csvDir, "RED_FLAGS_MASTER.csv"));
+    this.medToCondition = parseCSV(path.join(csvDir, "MED_TO_CONDITION_TRIGGERS.csv"));
+
+    this.buildIndexes();
+  }
+
+  private buildIndexes() {
+    for (const r of this.clusters) {
+      const cc = r.CC_ID;
+      if (!this.idxClustersByComplaint.has(cc)) this.idxClustersByComplaint.set(cc, []);
+      this.idxClustersByComplaint.get(cc)!.push(r);
+    }
+    for (const r of this.clusterPrimaryDx) {
+      const cid = r.CLUSTER_ID;
+      if (!this.idxDxByCluster.has(cid)) this.idxDxByCluster.set(cid, []);
+      this.idxDxByCluster.get(cid)!.push(r);
+    }
+    for (const r of this.urgentCareInterventions) {
+      const key = `${r.CC_ID}::${r.DISPOSITION_LEVEL}::${r.CLUSTER_ID || ""}`;
+      if (!this.idxInterventionsByKey.has(key)) this.idxInterventionsByKey.set(key, []);
+      this.idxInterventionsByKey.get(key)!.push(r);
+    }
+    for (const r of this.medsMaster) {
+      const id = r.MED_ID || r.med_id || r.ID;
+      if (id) this.idxMedById.set(id, r);
+    }
+    for (const r of this.redFlagsMaster) {
+      const id = r.RF_MASTER_ID;
+      if (!this.idxRedFlagById.has(id)) this.idxRedFlagById.set(id, []);
+      this.idxRedFlagById.get(id)!.push(r);
+    }
+  }
+
+  getClustersForComplaint(ccId: string) {
+    return this.idxClustersByComplaint.get(ccId) || [];
+  }
+
+  getPrimaryDxForCluster(clusterId: string) {
+    return this.idxDxByCluster.get(clusterId) || [];
+  }
+
+  getSpotInterventions(ccId: string, disposition: string, clusterId?: string) {
+    const exact = `${ccId}::${disposition}::${clusterId || ""}`;
+    const fallback = `${ccId}::${disposition}::`;
+    return (this.idxInterventionsByKey.get(exact) || this.idxInterventionsByKey.get(fallback) || []);
+  }
+
+  getMedById(medId: string) {
+    return this.idxMedById.get(medId) || null;
+  }
+
+  getRedFlagMaster(rfMasterId: string) {
+    const arr = this.idxRedFlagById.get(rfMasterId) || [];
+    return arr[0] || null;
+  }
+}
+3.2 clusterSelectNode.ts (sore throat deterministic cluster logic)
+// server/complaints/nodes/clusterSelectNode.ts
+import { MasterTables } from "../../knowledge/masterTables";
+
+export function runClusterSelect(state: any, tables: MasterTables) {
+  const cc = state.normalizedComplaint;
+  const clusters = tables.getClustersForComplaint(cc);
+
+  // For pilot, we score clusters by simple rules keyed on cluster IDs.
+  // You can move rules into tables later.
+  const scoreByCluster: Record<string, { score: number; evidence: string[] }> = {};
+
+  const A = state.answers || {};
+  const centor = Number(state.scores?.centor ?? state.scores?.CENTOR ?? 0);
+
+  function bump(clusterId: string, points: number, evidenceField: string) {
+    if (!scoreByCluster[clusterId]) scoreByCluster[clusterId] = { score: 0, evidence: [] };
+    scoreByCluster[clusterId].score += points;
+    scoreByCluster[clusterId].evidence.push(evidenceField);
+  }
+
+  if (cc === "sore_throat") {
+    // Viral cluster
+    if (A.ST_COUGH === true) bump("CL_ST_VIRAL_URI", 2, "answers.ST_COUGH");
+    if (A.ST_RUNNY === true) bump("CL_ST_VIRAL_URI", 2, "answers.ST_RUNNY");
+    if (A.ST_HOARSE === true) bump("CL_ST_VIRAL_URI", 1, "answers.ST_HOARSE");
+
+    // GAS cluster
+    if (A.ST_FEVER === true) bump("CL_ST_GAS", 1, "answers.ST_FEVER");
+    if (A.ST_COUGH === false) bump("CL_ST_GAS", 1, "answers.ST_COUGH");
+    if (centor >= 2) bump("CL_ST_GAS", 2, "scores.centor");
+
+    // Mono cluster
+    if (A.ST_MONO === true) bump("CL_ST_MONO", 2, "answers.ST_MONO");
+  }
+
+  // Rank cluster candidates that exist in master
+  const present = new Set(clusters.map(c => c.CLUSTER_ID));
+  const ranked = Object.entries(scoreByCluster)
+    .filter(([cid]) => present.has(cid))
+    .map(([cid, v]) => ({ clusterId: cid, score: v.score, evidence: v.evidence }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+
+  state.clusterScores = Object.fromEntries(ranked.map(r => [r.clusterId, r.score]));
+  state.clusterEvidence = Object.fromEntries(ranked.map(r => [r.clusterId, r.evidence]));
+  state.activeClusters = ranked.map(r => r.clusterId);
+
+  // Dx candidates from cluster-primary mapping
+  const dxCandidates: any[] = [];
+  for (const r of ranked) {
+    const dxs = tables.getPrimaryDxForCluster(r.clusterId).slice(0, 2);
+    for (const d of dxs) {
+      dxCandidates.push({
+        diagnosisId: d.DIAGNOSIS_ID,
+        label: d.DIAGNOSIS_LABEL || d.LABEL || d.DIAGNOSIS_NAME,
+        clusterId: r.clusterId,
+        confidence: r === ranked[0] ? "MODERATE" : "LOW",
+      });
+    }
+  }
+  state.diagnosisCandidates = dxCandidates.slice(0, 6);
+
+  return { rankedClusters: ranked, dxCandidatesCount: state.diagnosisCandidates.length };
+}
+3.3 spotInterventionsNode.ts
+// server/complaints/nodes/spotInterventionsNode.ts
+import { MasterTables } from "../../knowledge/masterTables";
+
+export function runSpotInterventions(state: any, tables: MasterTables) {
+  const cc = state.normalizedComplaint;
+  const disp = state.disposition;
+  const topCluster = (state.activeClusters && state.activeClusters[0]) || "";
+
+  const rows = tables.getSpotInterventions(cc, disp, topCluster).slice(0, 8);
+
+  state.spotInterventions = rows.map(r => ({
+    interventionId: r.INTERVENTION_ID,
+    title: r.TITLE,
+    why: r.WHY,
+    where: r.WHERE,
+    urgency: r.URGENCY,
+  }));
+
+  // also attach as recommendedActions (keeps your existing UI/flow)
+  for (const s of state.spotInterventions) {
+    state.recommendedActions.push({ type: "SPOT_INTERVENTION", priority: 50, ...s });
+  }
+
+  return { count: state.spotInterventions.length, interventionIds: state.spotInterventions.map((x:any)=>x.interventionId) };
+}
+3.4 medSuggestNode.ts (safely gated)
+// server/complaints/nodes/medSuggestNode.ts
+import { MasterTables } from "../../knowledge/masterTables";
+
+export function runMedSuggest(state: any, tables: MasterTables) {
+  // Hard gate: no med suggestions if emergent or ER_SEND
+  if (state.routing?.state === "EMERGENT_ESCALATION" || state.redFlagGate?.gateResult === "ER_SEND") {
+    state.medSuggestions = [];
+    return { skipped: true, reason: "emergent" };
+  }
+
+  const allergies: string[] = state.modifiers?.allergies || [];
+  const pregnant = Boolean(state.demographics?.pregnant);
+
+  // You need a dx→med mapping. If you already have it, wire it here.
+  // For now, we’ll assume diagnosisCandidates contain diagnosisId and you have a CSV mapping:
+  // DIAGNOSIS_TO_MED.csv with columns: DIAGNOSIS_ID, MED_ID, REASON, PRIORITY
+  // If you don’t have it, tell me your existing mapping table name and columns, and I’ll adapt.
+
+  const map = state.__dxToMedMap as Array<any> | undefined;
+  if (!map) {
+    state.medSuggestions = [];
+    return { skipped: true, reason: "no_dx_to_med_map_loaded" };
+  }
+
+  const dxIds = (state.diagnosisCandidates || []).map((d: any) => d.diagnosisId);
+  const candidates = map
+    .filter(r => dxIds.includes(r.DIAGNOSIS_ID))
+    .sort((a, b) => Number(a.PRIORITY || 999) - Number(b.PRIORITY || 999))
+    .slice(0, 6);
+
+  const out: any[] = [];
+  for (const c of candidates) {
+    const med = tables.getMedById(c.MED_ID);
+    if (!med) continue;
+
+    // Simple allergy gate example: beta-lactam class check
+    const medClass = (med.CLASS || "").toLowerCase();
+    const betaLactamAllergy = allergies.some(a => String(a).toLowerCase().includes("penicillin") || String(a).toLowerCase().includes("beta"));
+
+    if (betaLactamAllergy && (medClass.includes("penicillin") || medClass.includes("ceph"))) {
+      continue;
+    }
+
+    // Pregnancy gate (if your med master has flags)
+    const pregFlag = String(med.PREGNANCY_FLAG || "").toUpperCase();
+    if (pregnant && pregFlag === "AVOID") continue;
+
+    out.push({
+      medId: c.MED_ID,
+      name: med.NAME,
+      rationale: c.REASON || "",
+      safetyNotes: [],
+    });
+  }
+
+  state.medSuggestions = out;
+  for (const m of out) {
+    state.recommendedActions.push({ type: "MED_SUGGESTION", priority: 60, ...m });
+  }
+
+  return { count: out.length, medIds: out.map(x => x.medId) };
+}
+4) Wire nodes into complaintNodeRunner.ts switch
+
+Add imports and the MasterTables singleton at startup.
+
+At module top (runner file)
+import { MasterTables } from "../knowledge/masterTables";
+import { runClusterSelect } from "./nodes/clusterSelectNode";
+import { runSpotInterventions } from "./nodes/spotInterventionsNode";
+import { runMedSuggest } from "./nodes/medSuggestNode";
+import { runSpecialistCouncilIfNeeded } from "./nodes/specialistCouncilNode";
+
+const tables = new MasterTables("server/data/csv"); // adjust path
+Add node cases after DISPOSITION_RULES
+case "CLUSTER_SELECT": {
+  const start = Date.now();
+  const out = runClusterSelect(state, tables);
+  auditStep("CLUSTER_SELECT", ["answers", "scores", "GLOBAL_CLUSTER_MASTER", "CLUSTER_PRIMARY_DIAGNOSIS"], out, [...(state.activeClusters||[])], 0, Date.now()-start);
+  nextNode = "SPOT_INTERVENTIONS";
+  break;
+}
+
+case "SPOT_INTERVENTIONS": {
+  const start = Date.now();
+  const out = runSpotInterventions(state, tables);
+  auditStep("SPOT_INTERVENTIONS", ["disposition", "URGENT_CARE_SPOT_INTERVENTION"], out, out.interventionIds || [], 0, Date.now()-start);
+  nextNode = "MED_SUGGEST";
+  break;
+}
+
+case "MED_SUGGEST": {
+  const start = Date.now();
+  const out = runMedSuggest(state, tables);
+  auditStep("MED_SUGGEST", ["diagnosisCandidates", "GLOBAL_MEDICATIONS_MASTER"], out, out.medIds || [], 0, Date.now()-start);
+  nextNode = "SPECIALIST_COUNCIL";
+  break;
+}
+
+case "SPECIALIST_COUNCIL": {
+  const start = Date.now();
+  const out = await runSpecialistCouncilIfNeeded(state);
+  auditStep("SPECIALIST_COUNCIL", ["answers", "scores", "disposition"], out, out.ruleRefs || ["COUNCIL"], out.llmCalls || 0, Date.now()-start, out.confidence);
+  nextNode = "OUTPUT_COMPOSE";
+  break;
+}
+
+(Use your actual auditStep helper signature; you already have NodeTrace. If you paste it later, I’ll tailor exact calls.)
+
+5) AutoGen-style council node (compatible with your architecture)
+
+Create:
+
+server/complaints/nodes/specialistCouncilNode.ts
+// server/complaints/nodes/specialistCouncilNode.ts
+import { callLLMJson } from "../../llm/callLLMJson"; // adapt to your LLM util
+
+function shouldInvokeCouncil(state: any): boolean {
+  const low = state.audit?.steps?.some((s:any)=>s.confidence==="LOW") || state.caseConfidence === "LOW";
+  const missingReq = (state.questionQueue || []).some((q:any)=>q.required && !q.answered);
+  const conflict = state.__conflictFlag === true; // set this if you detect mismatch
+  return (low || missingReq || conflict) && state.routing?.state !== "EMERGENT_ESCALATION";
+}
+
+function rank(level: string): number {
+  const r: Record<string, number> = { self_care: 1, pcp: 2, urgent_care: 3, er_send: 4 };
+  return r[level] ?? 2;
+}
+
+export async function runSpecialistCouncilIfNeeded(state: any) {
+  if (!process.env.ENABLE_COUNCIL || process.env.ENABLE_COUNCIL !== "1") {
+    return { skipped: true };
+  }
+  if (!shouldInvokeCouncil(state)) return { skipped: true };
+
+  const snapshot = {
+    cc: state.normalizedComplaint,
+    disposition: state.disposition,
+    dispositionReasonCodes: state.dispositionReasonCodes,
+    scores: state.scores,
+    redFlagGate: state.redFlagGate,
+    keyAnswers: pickKeyAnswers(state),
+    missingRequired: missingRequiredQuestions(state),
+  };
+
+  const system = "You are a cautious clinical safety council. Output STRICT JSON only.";
+  const clinician = await callLLMJson(system, { role: "clinician", snapshot });
+  const critic = await callLLMJson(system, { role: "safety_critic", snapshot, clinician });
+  const arbiter = await callLLMJson(system, { role: "rules_arbiter", snapshot, clinician, critic });
+
+  const proposed = arbiter?.final_disposition || critic?.final_disposition || clinician?.final_disposition || state.disposition;
+
+  // Escalation-only enforcement
+  const finalDisp = rank(proposed) >= rank(state.disposition) ? proposed : state.disposition;
+
+  if (finalDisp !== state.disposition) {
+    state.disposition = finalDisp;
+    state.dispositionReasonCodes = [...(state.dispositionReasonCodes || []), "COUNCIL_ESCALATION"];
+  }
+
+  // Add must-ask questions as recommended actions (optional)
+  const mustAsk: string[] = arbiter?.must_ask || [];
+  for (const qid of mustAsk.slice(0, 5)) {
+    state.recommendedActions.push({ type: "ASK_MORE", priority: 20, questionId: qid });
+  }
+
+  // Safety net additions
+  const safetyAdds: string[] = arbiter?.safety_net_additions || [];
+  state.__councilSafetyNet = safetyAdds;
+
+  return {
+    invoked: true,
+    finalDisposition: finalDisp,
+    llmCalls: 3,
+    ruleRefs: ["COUNCIL"],
+    confidence: "MODERATE",
+  };
+}
+
+function pickKeyAnswers(state: any) {
+  const A = state.answers || {};
+  // complaint-specific minimal set; expand per complaint
+  return {
+    ST_DUR: A.ST_DUR,
+    ST_FEVER: A.ST_FEVER,
+    ST_COUGH: A.ST_COUGH,
+    ST_DROOL: A.ST_DROOL,
+    ST_BREATH: A.ST_BREATH,
+    ST_TRISMUS: A.ST_TRISMUS,
+    ST_ONE_SIDE: A.ST_ONE_SIDE,
+    ST_MUFFLED: A.ST_MUFFLED,
+  };
+}
+
+function missingRequiredQuestions(state: any): string[] {
+  return (state.questionQueue || [])
+    .filter((q:any)=>q.required && !q.answered)
+    .map((q:any)=>q.questionId);
+}
+
+This gives you the AutoGen behavior without refactoring your system.
+
+6) The one missing piece: dx→med mapping
+
+You likely already have it somewhere, but I need the name.
+
+If you already map diagnoses/clusters to meds, we wire to that.
+
+If not, create one small table (not seven) called DIAGNOSIS_TO_MED (or CLUSTER_TO_MED) and keep it tiny for v1.
+
+I won’t invent it unless you say you don’t have a mapping yet.
+
+7) Patient-facing intake routes (WhatsApp driver)
+
+You said you don’t have /api/intake/start and /api/intake/answer.
+Given your existing runner returns pendingAction: ASK_QUESTION and done: false, these routes are straightforward glue:
+
+start: create CaseState, run runner until it returns question or output
+
+answer: set answers[qid]=value, rerun runner
+
+If you want, paste your existing admin/test route signature and I’ll match your conventions exactly, but architecturally it’s the same.
+
+8) How this uses both “LangGraph and AutoGen” without chaos
+
+Your while-loop runner = LangGraph-style deterministic orchestrator
+
+SPECIALIST_COUNCIL = AutoGen-like multi-agent consult, feature-flagged and rare
+
+Master tables remain authoritative:
+
+clusters/dx: GLOBAL_CLUSTER_MASTER, CLUSTER_PRIMARY_DIAGNOSIS
+
+meds: GLOBAL_MEDICATIONS_MASTER
+
+red flags: RED_FLAGS_MASTER
+
+interventions: URGENT_CARE_SPOT_INTERVENTION
+
+The “new orchestration tables” simply decide how to drive them.
