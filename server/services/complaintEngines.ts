@@ -2,6 +2,7 @@ import type { CaseState } from "../../shared/agentTypes";
 import type { ComplaintConfig, CoreQuestion, RedFlagRule, DispositionRule, OutputTemplate } from "./complaintConfigLoader";
 import { evaluateExpr } from "./exprEval";
 import { computeCentor } from "../agent/scoring/centor";
+import { computeEaracheScore } from "../agent/scoring/earacheScore";
 
 export interface QuestionResult {
   nextQuestion: CoreQuestion | null;
@@ -108,6 +109,29 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
       scores[def.scoreId.toLowerCase()] = result.centor;
       components[def.scoreId] = {
         score: result.centor,
+        inputsUsed: result.inputsUsed,
+      };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "EARACHE_SCORE") {
+      const result = computeEaracheScore(state);
+      scores[def.scoreId.toLowerCase()] = result.earache_score;
+      scores["oe_score"] = result.oe_score;
+      scores["aom_score"] = result.aom_score;
+      scores["tmj_score"] = result.tmj_score;
+      scores["etd_score"] = result.etd_score;
+      components[def.scoreId] = {
+        earache_score: result.earache_score,
+        oe_score: result.oe_score,
+        aom_score: result.aom_score,
+        tmj_score: result.tmj_score,
+        etd_score: result.etd_score,
+        cluster: result.cluster,
         inputsUsed: result.inputsUsed,
       };
 

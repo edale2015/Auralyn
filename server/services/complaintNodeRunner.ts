@@ -86,8 +86,39 @@ const SORE_THROAT_GRAPH: GraphDefinition = {
   },
 };
 
+const EARACHE_GRAPH: GraphDefinition = {
+  nodes: [
+    "INIT_CASE",
+    "MODIFIERS_INTAKE",
+    "CC_NORMALIZE",
+    "CORE_QUESTIONS",
+    "RED_FLAG_GATE",
+    "SCORING",
+    "TESTING_DECISION",
+    "DISPOSITION_RULES",
+    "DIFF_AND_CONFIDENCE",
+    "SPECIALIST_COUNCIL",
+    "OUTPUT_COMPOSE",
+    "DONE",
+  ],
+  transitions: {
+    INIT_CASE: "MODIFIERS_INTAKE",
+    MODIFIERS_INTAKE: "CC_NORMALIZE",
+    CC_NORMALIZE: "CORE_QUESTIONS",
+    CORE_QUESTIONS: "RED_FLAG_GATE",
+    RED_FLAG_GATE: "SCORING",
+    SCORING: "TESTING_DECISION",
+    TESTING_DECISION: "DISPOSITION_RULES",
+    DISPOSITION_RULES: "DIFF_AND_CONFIDENCE",
+    DIFF_AND_CONFIDENCE: "SPECIALIST_COUNCIL",
+    SPECIALIST_COUNCIL: "OUTPUT_COMPOSE",
+    OUTPUT_COMPOSE: "DONE",
+  },
+};
+
 const GRAPH_REGISTRY: Record<string, GraphDefinition> = {
   ST_GRAPH_V1: SORE_THROAT_GRAPH,
+  EA_GRAPH_V1: EARACHE_GRAPH,
 };
 
 function getNextNode(graphId: string, current: NodeId): NodeId {
@@ -322,22 +353,40 @@ export async function runComplaintGraph(
       }
 
       case "TESTING_DECISION": {
-        const centor = updated.scores?.centor;
         const actions: CaseState["recommendedActions"] = [];
+        const cc = updated.normalizedComplaint || "";
 
-        if (typeof centor === "number") {
-          if (centor >= 3) {
-            actions.push({ type: "RAPID_STREP_TEST", priority: "high" });
-            actions.push({ type: "SAFETY_NET", priority: "high" });
-          } else if (centor === 2) {
-            actions.push({ type: "RAPID_STREP_TEST", priority: "medium" });
+        if (cc === "sore_throat") {
+          const centor = updated.scores?.centor;
+          if (typeof centor === "number") {
+            if (centor >= 3) {
+              actions.push({ type: "RAPID_STREP_TEST", priority: "high" });
+              actions.push({ type: "SAFETY_NET", priority: "high" });
+            } else if (centor === 2) {
+              actions.push({ type: "RAPID_STREP_TEST", priority: "medium" });
+            } else {
+              actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
+            }
+          }
+          trace.inputsUsed = ["scores.centor"];
+        } else if (cc === "earache") {
+          const oeScore = updated.scores?.oe_score ?? 0;
+          const aomScore = updated.scores?.aom_score ?? 0;
+          if (aomScore >= 4) {
+            actions.push({ type: "OTOSCOPIC_EXAM", priority: "high" });
+            actions.push({ type: "TYMPANOMETRY", priority: "medium" });
+          } else if (oeScore >= 4) {
+            actions.push({ type: "EAR_CANAL_EXAM", priority: "high" });
           } else {
             actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
           }
+          trace.inputsUsed = ["scores.oe_score", "scores.aom_score"];
+        } else {
+          actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
+          trace.inputsUsed = ["scores"];
         }
 
         updated.recommendedActions = [...updated.recommendedActions, ...actions];
-        trace.inputsUsed = ["scores.centor"];
         trace.outputs = { actions: actions.map(a => a.type) };
         events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[TESTING_DECISION] ${actions.map(a => a.type).join(", ")}` });
         break;

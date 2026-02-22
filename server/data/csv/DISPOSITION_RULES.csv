@@ -7,3 +7,13 @@ sore_throat,DISP_ST_PERSISTENT,5,"answers.Q_DURATION_DAYS >= 10",routine_urgent,
 sore_throat,DISP_ST_RECURRENT,6,"answers.Q_RECURRENT_STREP == 'yes'",routine,TPL_ST_RECURRENT,MODERATE
 sore_throat,DISP_ST_LOW_CENTOR,7,"scores.centor <= 1",self_care,TPL_ST_LOW_CENTOR,HIGH
 sore_throat,DISP_ST_DEFAULT,99,true,routine,TPL_ST_DEFAULT,LOW
+earache,DISP_EA_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_EA_ER_SEND,HIGH
+earache,DISP_EA_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_EA_ESCALATE,HIGH
+earache,DISP_EA_OE,3,"answers.Q_EA_TRAGUS_TENDER == 'yes' && answers.Q_EA_FEVER != 'yes'",pcp,TPL_EA_OE,HIGH
+earache,DISP_EA_AOM_FEVER,4,"answers.Q_EA_FEVER == 'yes' && answers.Q_EA_URI == 'yes'",pcp,TPL_EA_AOM,HIGH
+earache,DISP_EA_AOM_HEARING,5,"answers.Q_EA_FEVER == 'yes' && answers.Q_EA_HEARING_LOSS == 'yes'",pcp,TPL_EA_AOM,HIGH
+earache,DISP_EA_TMJ,6,"answers.Q_EA_JAW_PAIN == 'yes' && answers.Q_EA_CHEWING_WORSE == 'yes' && answers.Q_EA_FEVER != 'yes' && answers.Q_EA_TRAGUS_TENDER != 'yes'",self_care,TPL_EA_TMJ,HIGH
+earache,DISP_EA_ETD,7,"answers.Q_EA_BLOCKED_EAR == 'yes' && answers.Q_EA_FEVER != 'yes' && answers.Q_EA_TRAGUS_TENDER != 'yes'",self_care,TPL_EA_ETD,MODERATE
+earache,DISP_EA_SALIVARY,8,"answers.Q_EA_NECK_SWELLING == 'yes' && answers.Q_EA_FEVER == 'yes'",urgent_care,TPL_EA_SALIVARY,MODERATE
+earache,DISP_EA_TRAUMA,9,"answers.Q_EA_TRAUMA == 'yes' && answers.Q_EA_DRAINAGE == 'yes'",urgent_care,TPL_EA_TRAUMA,MODERATE
+earache,DISP_EA_DEFAULT,99,true,routine,TPL_EA_DEFAULT,LOW

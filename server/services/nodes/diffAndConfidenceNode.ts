@@ -62,6 +62,22 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
     if (centor >= 2) bump("CL_ST_GAS", 2, "scores.centor");
 
     if (boolish(A.ST_MONO) === true) bump("CL_ST_MONO", 2, "answers.ST_MONO");
+  } else if (cc === "earache") {
+    const oeScore = numish(s.scores?.oe_score);
+    const aomScore = numish(s.scores?.aom_score);
+    const tmjScore = numish(s.scores?.tmj_score);
+    const etdScore = numish(s.scores?.etd_score);
+
+    if (oeScore > 0) bump("CL_EA_OE", oeScore, "scores.oe_score");
+    if (aomScore > 0) bump("CL_EA_AOM", aomScore, "scores.aom_score");
+    if (tmjScore > 0) bump("CL_EA_TMJ", tmjScore, "scores.tmj_score");
+    if (etdScore > 0) bump("CL_EA_ETD", etdScore, "scores.etd_score");
+
+    if (boolish(A.Q_EA_NECK_SWELLING) === true && boolish(A.Q_EA_SOUR_PAIN) === true) {
+      bump("CL_EA_SALIVARY", 4, "answers.Q_EA_NECK_SWELLING+Q_EA_SOUR_PAIN");
+    } else if (boolish(A.Q_EA_NECK_SWELLING) === true) {
+      bump("CL_EA_SALIVARY", 2, "answers.Q_EA_NECK_SWELLING");
+    }
   }
 
   const ranked = Object.entries(score)
