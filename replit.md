@@ -50,6 +50,17 @@ This system deterministically assembles an auditable clinical state from multipl
 ### Stress Test Harness
 `POST /api/admin/stress-test` accepts an array of scenarios with assertions (expectRedFlagGate, expectConfidence, expectMinCareGaps, expectCareGapIds, expectMinRedFlags, expectRoutingState, expectSystem, expectMinSpotInterventions, expectNoEmergent). 100 pre-built scenarios in `server/tests/stressScenarios.json` cover healthy adults, DM/HTN/GLP-1/bariatric patients, anticoagulation, ER_SEND triggers, vague complaints, and complex multi-comorbidity cases. A standalone runner script at `server/tests/runStressTest.ts` can execute all scenarios via CLI.
 
+### Complaint Golden Test Harness
+`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Three tiers:
+- **Tier A (Golden)**: 15 cases in `tests/cases/pulm_cough/` covering all cough dispositions and clusters
+- **Tier B (Fuzz)**: 30 cases in `tests/cases/pulm_cough_fuzz/` with anchor removal, severity escalation, and condition overlay patterns (3 per golden)
+- **Tier C (Invariants)**: 10 property assertions built into the harness runner (INV-1 through INV-10) covering CP→ER_SEND/ESCALATE, O2LOW→ER_SEND, gate↔disposition consistency, duration-based disposition rules, cluster correctness for wheeze+asthma and COPD, hemoptysis gate, and monotonicity (adding O2LOW never reduces gate severity)
+
+Run with: `npx tsx scripts/run_harness.ts [directory]`
+
+### Persistent Cough Pipeline
+13 core questions (Q_COUGH_DUR through Q_COUGH_GERD), 6 red flag rules, 8 scoring clusters (PE_OVERLAP, PNEUMONIA, ASTHMA_EXAC, COPD_EXAC, VIRAL_URI, INFECTION, UACS_PND, GERD_COUGH). Viral URI cluster is suppressed in diffAndConfidenceNode when danger signals or specific conditions (asthma, COPD, PND, GERD, infection) are present. ER_SEND cases still compute clusters for audit/training (no short-circuit). Scoring module in `server/agent/scoring/coughScore.ts`, graph registered as PC_GRAPH_V1.
+
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags control channel activation, and a dashboard monitors channel operations.
 

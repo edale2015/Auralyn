@@ -154,6 +154,8 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
       scores["copd_exac_score"] = result.copd_exac_score;
       scores["viral_uri_score"] = result.viral_uri_score;
       scores["infection_score"] = result.infection_score;
+      scores["pnd_score"] = result.pnd_score;
+      scores["gerd_score"] = result.gerd_score;
       components[def.scoreId] = {
         cough_score: result.cough_score,
         pe_score: result.pe_score,
@@ -162,6 +164,8 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
         copd_exac_score: result.copd_exac_score,
         viral_uri_score: result.viral_uri_score,
         infection_score: result.infection_score,
+        pnd_score: result.pnd_score,
+        gerd_score: result.gerd_score,
         cluster: result.cluster,
         inputsUsed: result.inputsUsed,
       };

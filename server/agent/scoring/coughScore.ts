@@ -15,6 +15,8 @@ export interface CoughScoringResult {
   copd_exac_score: number;
   viral_uri_score: number;
   infection_score: number;
+  pnd_score: number;
+  gerd_score: number;
   inputsUsed: string[];
   cluster: string;
 }
@@ -32,12 +34,15 @@ export function computeCoughScore(state: CaseState): CoughScoringResult {
   const wheeze = tri(a["Q_COUGH_WHEEZE"]);
   const asthma = tri(a["Q_COUGH_ASTHMA"]);
   const copd = tri(a["Q_COUGH_COPD"]);
+  const pnd = tri(a["Q_COUGH_PND"]);
+  const gerd = tri(a["Q_COUGH_GERD"]);
   const dur = Number(a["Q_COUGH_DUR"]) || 0;
 
   const used = [
     "Q_COUGH_CP", "Q_COUGH_SOB", "Q_COUGH_LEG_SWELL", "Q_COUGH_RECENT_SX",
     "Q_COUGH_O2LOW", "Q_COUGH_HEMOP", "Q_COUGH_FEVER", "Q_COUGH_WHEEZE",
-    "Q_COUGH_ASTHMA", "Q_COUGH_COPD", "Q_COUGH_DUR",
+    "Q_COUGH_ASTHMA", "Q_COUGH_COPD", "Q_COUGH_PND", "Q_COUGH_GERD",
+    "Q_COUGH_DUR",
   ];
 
   let pe = 0;
@@ -76,12 +81,26 @@ export function computeCoughScore(state: CaseState): CoughScoringResult {
   if (wheeze === "yes") viralUri -= 3;
   if (asthma === "yes") viralUri -= 2;
   if (copd === "yes") viralUri -= 2;
+  if (hemop === "yes") viralUri -= 4;
+  if (cp === "yes") viralUri -= 3;
   if (viralUri < 0) viralUri = 0;
 
   let infection = 0;
   if (fever === "yes") infection += 3;
   if (dur >= 2 && dur <= 4) infection += 2;
   if (sob === "yes") infection += 1;
+
+  let pndScore = 0;
+  if (pnd === "yes") pndScore += 4;
+  if (fever === "no") pndScore += 1;
+  if (sob === "no") pndScore += 1;
+  if (pnd !== "yes") pndScore = 0;
+
+  let gerdCough = 0;
+  if (gerd === "yes") gerdCough += 4;
+  if (fever === "no") gerdCough += 1;
+  if (sob === "no") gerdCough += 1;
+  if (gerd !== "yes") gerdCough = 0;
 
   const allScores: Record<string, number> = {
     CL_PULM_PE_OVERLAP: pe,
@@ -90,14 +109,17 @@ export function computeCoughScore(state: CaseState): CoughScoringResult {
     CL_PULM_COPD_EXAC: copdExac,
     CL_PULM_VIRAL_URI: viralUri,
     CL_PULM_INFECTION: infection,
+    CL_PULM_UACS_PND: pndScore,
+    CL_PULM_GERD_COUGH: gerdCough,
   };
 
   const noRedFlagInputs = cp !== "yes" && sob !== "yes" && hemop !== "yes" && o2low !== "yes";
+  const noSpecificFindings = fever !== "yes" && asthma !== "yes" && copd !== "yes" && wheeze !== "yes" && pnd !== "yes" && gerd !== "yes";
 
   let cluster = "UNCLASSIFIED";
   let maxScore = 0;
 
-  if (noRedFlagInputs && fever !== "yes" && asthma !== "yes" && copd !== "yes" && wheeze !== "yes") {
+  if (noRedFlagInputs && noSpecificFindings) {
     cluster = "CL_PULM_VIRAL_URI";
     maxScore = viralUri;
   } else {
@@ -110,7 +132,7 @@ export function computeCoughScore(state: CaseState): CoughScoringResult {
     }
   }
 
-  const composite = Math.max(pe, pneumonia, asthmaExac, copdExac, viralUri, infection);
+  const composite = Math.max(pe, pneumonia, asthmaExac, copdExac, viralUri, infection, pndScore, gerdCough);
 
   return {
     cough_score: composite,
@@ -120,6 +142,8 @@ export function computeCoughScore(state: CaseState): CoughScoringResult {
     copd_exac_score: copdExac,
     viral_uri_score: viralUri,
     infection_score: infection,
+    pnd_score: pndScore,
+    gerd_score: gerdCough,
     inputsUsed: used,
     cluster,
   };

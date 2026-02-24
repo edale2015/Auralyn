@@ -175,8 +175,6 @@ function determineCurrentNode(state: CaseState): NodeId {
     return "CORE_QUESTIONS";
   }
 
-  if (state.redFlagGate?.gateResult === "ER_SEND") return "DISPOSITION_RULES";
-
   const hasScores = Object.keys(state.scores).length > 0;
   if (!hasScores) return "SCORING";
 
@@ -348,10 +346,6 @@ export async function runComplaintGraph(
 
         if (rfResult.gateResult === "ER_SEND") {
           updated.routing = { ...updated.routing, state: "EMERGENT_ESCALATION" };
-          currentNode = "DISPOSITION_RULES";
-          trace.durationMs = Date.now() - nodeStart;
-          nodeTraces.push(trace);
-          continue;
         }
         break;
       }

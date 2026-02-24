@@ -45,8 +45,9 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
   }
 
   const score: Record<string, { points: number; evidence: string[] }> = {};
-  const bump = (clusterId: string, pts: number, evidence: string) => {
-    if (!validClusters.has(clusterId) || pts <= 0) return;
+  const bump = (clusterId: string, pts: number, evidence: string, skipValidation = false) => {
+    if (!skipValidation && !validClusters.has(clusterId)) return;
+    if (pts <= 0) return;
     if (!score[clusterId]) score[clusterId] = { points: 0, evidence: [] };
     score[clusterId].points += pts;
     score[clusterId].evidence.push(evidence);
@@ -85,13 +86,23 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
     const copdExac = numish(s.scores?.copd_exac_score);
     const viralUri = numish(s.scores?.viral_uri_score);
     const infectionScore = numish(s.scores?.infection_score);
+    const pndScore = numish(s.scores?.pnd_score);
+    const gerdScore = numish(s.scores?.gerd_score);
 
-    if (peScore > 0) bump("CL_PULM_PE_OVERLAP", peScore, "scores.pe_score");
-    if (pneumoniaScore > 0) bump("CL_PULM_PNEUMONIA", pneumoniaScore, "scores.pneumonia_score");
-    if (asthmaExac > 0) bump("CL_PULM_ASTHMA_EXAC", asthmaExac, "scores.asthma_exac_score");
-    if (copdExac > 0) bump("CL_PULM_COPD_EXAC", copdExac, "scores.copd_exac_score");
-    if (viralUri > 0) bump("CL_PULM_VIRAL_URI", viralUri, "scores.viral_uri_score");
-    if (infectionScore > 0) bump("CL_PULM_INFECTION", infectionScore, "scores.infection_score");
+    if (peScore > 0) bump("CL_PULM_PE_OVERLAP", peScore, "scores.pe_score", true);
+    if (pneumoniaScore > 0) bump("CL_PULM_PNEUMONIA", pneumoniaScore, "scores.pneumonia_score", true);
+    if (asthmaExac > 0) bump("CL_PULM_ASTHMA_EXAC", asthmaExac, "scores.asthma_exac_score", true);
+    if (copdExac > 0) bump("CL_PULM_COPD_EXAC", copdExac, "scores.copd_exac_score", true);
+    if (infectionScore > 0) bump("CL_PULM_INFECTION", infectionScore, "scores.infection_score", true);
+    if (pndScore > 0) bump("CL_PULM_UACS_PND", pndScore, "scores.pnd_score", true);
+    if (gerdScore > 0) bump("CL_PULM_GERD_COUGH", gerdScore, "scores.gerd_score", true);
+
+    const gateResult = s.redFlagGate?.gateResult;
+    const hasDangerSignals = gateResult === "ER_SEND" || gateResult === "ESCALATE";
+    const hasSpecificCondition = asthmaExac >= 3 || copdExac >= 4 || pndScore >= 4 || gerdScore >= 4 || infectionScore >= 3;
+    if (!hasDangerSignals && !hasSpecificCondition && viralUri > 0) {
+      bump("CL_PULM_VIRAL_URI", viralUri, "scores.viral_uri_score", true);
+    }
   }
 
   const ranked = Object.entries(score)

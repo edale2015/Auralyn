@@ -1,0 +1,116 @@
+1) Lock in the next harness tier (so changes don’t regress quietly)
+
+Golden 10 proves the rails exist. Now we add Tier B fuzz + Tier C invariants for cough.
+
+Tier B: 30 fuzz cases (3 per golden)
+
+Make a generator script (or just add JSONs) that produces:
+
+Anchor removal (drop 1 key signal)
+
+Severity dial (flip O2LOW true, or add CP)
+
+Contradiction injection (FEVER=false but “feverish” free text, or SOB=false with O2LOW=true)
+
+Mechanical requirement: risk and gate behavior must be monotonic when severity increases.
+
+If you want the simplest path: add a tests/cases/pulm_cough_fuzz/ folder and generate 30 JSON files named G01_A.json, etc. Then run:
+
+npx tsx scripts/run_harness.ts tests/cases/pulm_cough_fuzz
+
+2) Add 10 invariants (Tier C) as assertions inside the harness
+
+Since your harness already asserts dispo/cluster/RFs, we add property assertions that don’t depend on one scenario.
+
+Add these checks to the harness runner (they’re cheap and brutal in a good way):
+
+If Q_COUGH_CP=true → gateResult must be ER_SEND (given your RF set)
+
+If Q_COUGH_O2LOW=true → gateResult must be ER_SEND
+
+If gateResult==ER_SEND → disposition must be er_send
+
+If gateResult!=ER_SEND and pneumonia-rule true → disposition must be urgent_care (your refined logic)
+
+If DUR<=10 and all danger false → disposition must be self_care
+
+If DUR>=21 and danger false → disposition must be pcp
+
+If wheeze+asthma and danger false → top cluster must be CL_PULM_ASTHMA_EXAC
+
+If COPD true and danger false → top cluster must be CL_PULM_COPD_EXAC
+
+Increasing severity (same case + O2LOW toggled true) must not reduce gate severity (PASS→ESCALATE→ER_SEND)
+
+If hemoptysis true → must be ER_SEND (you’ve implemented this, keep it)
+
+These make cough a permanent “tripwire complaint” that catches engine regressions early.
+
+3) Stop wildcarding ER_SEND cluster assertions (small refactor, big payoff)
+
+Right now ER_SEND short-circuits before differential. That’s clinically fine, but it blocks your ability to learn cluster weighting under danger.
+
+Two options:
+
+Option A (best): Always compute clusters, even if disposition is ER_SEND
+
+Keep dispo short-circuit for output, but still run the cluster node for audit/training.
+
+Store it in trace, don’t show it to patient if you don’t want.
+
+Option B: Run clusters only when ER_SEND was triggered by CP (since that’s where “PE vs ACS vs pneumonia” matters)
+
+Either way, you’ll be able to assert:
+
+G07 PE → PE cluster top
+even though dispo is already ER.
+
+This helps your “audit confidence + cluster weighting” loop.
+
+4) Now expand cough in the “safe way”
+
+You’re missing the most common outpatient buckets that will otherwise funnel into “infection/viral”:
+
+Add two question IDs + two clusters:
+
+New questions (optional, not required)
+
+Q_COUGH_PND (post-nasal drip / throat clearing)
+
+Q_COUGH_GERD (heartburn / worse lying down / after meals)
+
+New clusters
+
+CL_PULM_UACS_PND
+
+CL_PULM_GERD_COUGH
+
+Add 2–3 scoring rows each and add 5 new golden cases:
+
+GERD cough, PND cough, ACEI cough, “cough variant asthma” (no wheeze), smoker chronic cough
+
+That’s the next clean expansion.
+
+5) What to do next across systems (your ask)
+
+Now that cough is fully harnessed, the expansion order that benefits most from this framework:
+
+Sore throat (Centor scoring fits your confidence/risk model)
+
+Chest pain (PE/ACS/risk gating will reuse your redFlagGate patterns)
+
+Dizziness (stroke red flags + dehydration vs BPPV)
+
+Abdominal pain (needs invariants badly)
+
+Each new complaint gets:
+
+10 golden
+
+30 fuzz
+
+10 invariants
+
+required question coverage asserts
+
+If you want, paste your current CL_PULM_INFECTION definition and the new “urgent_care vs pcp” disposition rule row(s). I’ll suggest 3 high-yield tweaks so G02 pneumonia possible doesn’t over-escalate mild cases and so your cluster suppression logic stays clean (no unintended “viral suppression” when both asthma + fever exist).

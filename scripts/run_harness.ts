@@ -21,11 +21,13 @@ interface TestResult {
   label: string;
   pass: boolean;
   failures: string[];
+  invariantFailures: string[];
   actual: {
     disposition?: string;
     cluster?: string;
     rf_fired: string[];
     rf_gate?: string;
+    answers?: Record<string, any>;
   };
 }
 
@@ -62,6 +64,114 @@ function buildCaseState(tc: TestCase): CaseState {
   } as unknown as CaseState;
 }
 
+const SEVERITY_ORDER: Record<string, number> = { PASS: 0, ESCALATE: 1, ER_SEND: 2 };
+
+function checkCoughInvariants(
+  tc: TestCase,
+  actualDisp: string,
+  actualGate: string,
+  actualCluster: string,
+  answers: Record<string, any>,
+): string[] {
+  const violations: string[] = [];
+  const a = answers;
+
+  if (a["Q_COUGH_CP"] === "yes") {
+    if (actualGate !== "ER_SEND" && actualGate !== "ESCALATE") {
+      violations.push(`INV-1: Q_COUGH_CP=yes → gate must be ER_SEND|ESCALATE, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_COUGH_O2LOW"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`INV-2: Q_COUGH_O2LOW=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (actualGate === "ER_SEND") {
+    if (actualDisp !== "er_send") {
+      violations.push(`INV-3: gateResult=ER_SEND → disposition must be er_send, got '${actualDisp}'`);
+    }
+  }
+
+  if (actualGate === "ESCALATE") {
+    if (actualDisp !== "urgent_care") {
+      violations.push(`INV-4: gateResult=ESCALATE → disposition must be urgent_care, got '${actualDisp}'`);
+    }
+  }
+
+  const noDanger = a["Q_COUGH_CP"] !== "yes" && a["Q_COUGH_SOB"] !== "yes" &&
+    a["Q_COUGH_HEMOP"] !== "yes" && a["Q_COUGH_O2LOW"] !== "yes";
+  const dur = Number(a["Q_COUGH_DUR"]) || 0;
+
+  if (dur > 0 && dur <= 7 && noDanger && a["Q_COUGH_FEVER"] !== "yes" &&
+    a["Q_COUGH_ASTHMA"] !== "yes" && a["Q_COUGH_COPD"] !== "yes" &&
+    a["Q_COUGH_WHEEZE"] !== "yes" && a["Q_COUGH_PND"] !== "yes" &&
+    a["Q_COUGH_GERD"] !== "yes") {
+    if (actualDisp !== "self_care") {
+      violations.push(`INV-5: DUR<=7 + all danger false + no specific findings → disposition must be self_care, got '${actualDisp}'`);
+    }
+  }
+
+  if (dur >= 8 && noDanger && a["Q_COUGH_FEVER"] !== "yes" && actualGate === "PASS") {
+    if (actualDisp !== "pcp") {
+      violations.push(`INV-6: DUR>=8 + no danger + no fever → disposition must be pcp, got '${actualDisp}'`);
+    }
+  }
+
+  if (a["Q_COUGH_WHEEZE"] === "yes" && a["Q_COUGH_ASTHMA"] === "yes" && noDanger) {
+    if (actualCluster !== "CL_PULM_ASTHMA_EXAC") {
+      violations.push(`INV-7: wheeze+asthma + no danger → cluster must be CL_PULM_ASTHMA_EXAC, got '${actualCluster}'`);
+    }
+  }
+
+  if (a["Q_COUGH_COPD"] === "yes" && noDanger && a["Q_COUGH_ASTHMA"] !== "yes") {
+    if (actualCluster !== "CL_PULM_COPD_EXAC") {
+      violations.push(`INV-8: COPD + no danger → cluster must be CL_PULM_COPD_EXAC, got '${actualCluster}'`);
+    }
+  }
+
+  if (a["Q_COUGH_HEMOP"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`INV-10: hemoptysis=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  return violations;
+}
+
+async function runMonotonicityCheck(tc: TestCase): Promise<string[]> {
+  const violations: string[] = [];
+  const answers = { ...tc.answers };
+
+  if (answers["Q_COUGH_O2LOW"] === "yes" || answers["Q_COUGH_O2LOW"] === true) {
+    return [];
+  }
+
+  const baseState = buildCaseState(tc);
+  const baseResult = await runComplaintGraph(baseState, tc.cc_id);
+  const baseGate = (baseResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const escalatedTc: TestCase = {
+    ...tc,
+    id: `${tc.id}_mono`,
+    answers: { ...answers, Q_COUGH_O2LOW: "yes" },
+    expect: tc.expect,
+  };
+  const escalatedState = buildCaseState(escalatedTc);
+  const escalatedResult = await runComplaintGraph(escalatedState, tc.cc_id);
+  const escalatedGate = (escalatedResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const baseSev = SEVERITY_ORDER[baseGate] ?? 0;
+  const escalatedSev = SEVERITY_ORDER[escalatedGate] ?? 0;
+
+  if (escalatedSev < baseSev) {
+    violations.push(`INV-9 MONOTONICITY: adding O2LOW should not reduce severity. base=${baseGate}(${baseSev}), escalated=${escalatedGate}(${escalatedSev})`);
+  }
+
+  return violations;
+}
+
 async function runSingleTest(tc: TestCase): Promise<TestResult> {
   const state = buildCaseState(tc);
   const result = await runComplaintGraph(state, tc.cc_id);
@@ -94,16 +204,26 @@ async function runSingleTest(tc: TestCase): Promise<TestResult> {
     failures.push(`rf_gate: expected '${tc.expect.rf_gate}' got '${rfGate}'`);
   }
 
+  let invariantFailures: string[] = [];
+  if (tc.cc_id === "persistent_cough") {
+    invariantFailures = checkCoughInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
+
+    const monoViolations = await runMonotonicityCheck(tc);
+    invariantFailures.push(...monoViolations);
+  }
+
   return {
     id: tc.id,
     label: tc.label,
-    pass: failures.length === 0,
+    pass: failures.length === 0 && invariantFailures.length === 0,
     failures,
+    invariantFailures,
     actual: {
       disposition: actualDisp,
       cluster: topCluster,
       rf_fired: firedRFs,
       rf_gate: rfGate,
+      answers: state.answers,
     },
   };
 }
@@ -130,6 +250,7 @@ async function main() {
   const results: TestResult[] = [];
   let passed = 0;
   let failed = 0;
+  let invariantViolations = 0;
 
   for (const file of files) {
     const raw = fs.readFileSync(path.join(fullDir, file), "utf-8");
@@ -148,6 +269,10 @@ async function main() {
         for (const f of res.failures) {
           console.log(`      -> ${f}`);
         }
+        for (const inv of res.invariantFailures) {
+          console.log(`      -> ${inv}`);
+          invariantViolations++;
+        }
         console.log(`      actual: disp=${res.actual.disposition}, cluster=${res.actual.cluster}, rf_gate=${res.actual.rf_gate}, rf_fired=[${res.actual.rf_fired.join(",")}]`);
       }
     } catch (err: any) {
@@ -159,6 +284,9 @@ async function main() {
 
   console.log(`\n--- Summary ---`);
   console.log(`Total: ${files.length}  |  PASS: ${passed}  |  FAIL: ${failed}`);
+  if (invariantViolations > 0) {
+    console.log(`Invariant violations: ${invariantViolations}`);
+  }
   console.log(failed === 0 ? "All tests passed!" : "Some tests failed.");
 
   process.exit(failed > 0 ? 1 : 0);
