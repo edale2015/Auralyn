@@ -116,9 +116,40 @@ const EARACHE_GRAPH: GraphDefinition = {
   },
 };
 
+const PERSISTENT_COUGH_GRAPH: GraphDefinition = {
+  nodes: [
+    "INIT_CASE",
+    "MODIFIERS_INTAKE",
+    "CC_NORMALIZE",
+    "CORE_QUESTIONS",
+    "RED_FLAG_GATE",
+    "SCORING",
+    "TESTING_DECISION",
+    "DISPOSITION_RULES",
+    "DIFF_AND_CONFIDENCE",
+    "SPECIALIST_COUNCIL",
+    "OUTPUT_COMPOSE",
+    "DONE",
+  ],
+  transitions: {
+    INIT_CASE: "MODIFIERS_INTAKE",
+    MODIFIERS_INTAKE: "CC_NORMALIZE",
+    CC_NORMALIZE: "CORE_QUESTIONS",
+    CORE_QUESTIONS: "RED_FLAG_GATE",
+    RED_FLAG_GATE: "SCORING",
+    SCORING: "TESTING_DECISION",
+    TESTING_DECISION: "DISPOSITION_RULES",
+    DISPOSITION_RULES: "DIFF_AND_CONFIDENCE",
+    DIFF_AND_CONFIDENCE: "SPECIALIST_COUNCIL",
+    SPECIALIST_COUNCIL: "OUTPUT_COMPOSE",
+    OUTPUT_COMPOSE: "DONE",
+  },
+};
+
 const GRAPH_REGISTRY: Record<string, GraphDefinition> = {
   ST_GRAPH_V1: SORE_THROAT_GRAPH,
   EA_GRAPH_V1: EARACHE_GRAPH,
+  PC_GRAPH_V1: PERSISTENT_COUGH_GRAPH,
 };
 
 function getNextNode(graphId: string, current: NodeId): NodeId {
@@ -381,6 +412,24 @@ export async function runComplaintGraph(
             actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
           }
           trace.inputsUsed = ["scores.oe_score", "scores.aom_score"];
+        } else if (cc === "persistent_cough") {
+          const peScore = updated.scores?.pe_score ?? 0;
+          const asthmaCopd = updated.scores?.asthma_copd_score ?? 0;
+          if (peScore >= 5) {
+            actions.push({ type: "CTA_PULMONARY", priority: "high" });
+            actions.push({ type: "D_DIMER", priority: "high" });
+            actions.push({ type: "OXYGEN_MONITORING", priority: "high" });
+          } else if (peScore >= 3) {
+            actions.push({ type: "D_DIMER", priority: "high" });
+            actions.push({ type: "CHEST_XRAY", priority: "medium" });
+          } else if (asthmaCopd >= 4) {
+            actions.push({ type: "PFTS", priority: "medium" });
+            actions.push({ type: "CHEST_XRAY", priority: "medium" });
+          } else {
+            actions.push({ type: "CHEST_XRAY", priority: "medium" });
+            actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
+          }
+          trace.inputsUsed = ["scores.pe_score", "scores.asthma_copd_score"];
         } else {
           actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
           trace.inputsUsed = ["scores"];

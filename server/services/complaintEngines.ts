@@ -3,6 +3,7 @@ import type { ComplaintConfig, CoreQuestion, RedFlagRule, DispositionRule, Outpu
 import { evaluateExpr } from "./exprEval";
 import { computeCentor } from "../agent/scoring/centor";
 import { computeEaracheScore } from "../agent/scoring/earacheScore";
+import { computeCoughScore } from "../agent/scoring/coughScore";
 
 export interface QuestionResult {
   nextQuestion: CoreQuestion | null;
@@ -144,6 +145,27 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
           missingInputs.push(input);
         }
       }
+    } else if (def.module === "COUGH_SCORE") {
+      const result = computeCoughScore(state);
+      scores[def.scoreId.toLowerCase()] = result.cough_score;
+      scores["pe_score"] = result.pe_score;
+      scores["asthma_copd_score"] = result.asthma_copd_score;
+      scores["infection_score"] = result.infection_score;
+      components[def.scoreId] = {
+        cough_score: result.cough_score,
+        pe_score: result.pe_score,
+        asthma_copd_score: result.asthma_copd_score,
+        infection_score: result.infection_score,
+        cluster: result.cluster,
+        inputsUsed: result.inputsUsed,
+      };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
     }
   }
 
@@ -201,6 +223,7 @@ export function renderTemplate(
   const vars: Record<string, string> = {
     centor_score: String(state.scores?.centor ?? "N/A"),
     duration_days: String(state.answers?.Q_DURATION_DAYS ?? "N/A"),
+    cough_duration: String(state.answers?.Q_COUGH_DUR ?? "N/A"),
     age: String(state.demographics?.age ?? "N/A"),
     sex: state.demographics?.sex ?? "N/A",
     chief_complaint: state.chiefComplaint ?? "N/A",

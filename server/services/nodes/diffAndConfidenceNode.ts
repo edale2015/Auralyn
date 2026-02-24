@@ -78,6 +78,14 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
     } else if (boolish(A.Q_EA_NECK_SWELLING) === true) {
       bump("CL_EA_SALIVARY", 2, "answers.Q_EA_NECK_SWELLING");
     }
+  } else if (cc === "persistent_cough") {
+    const peScore = numish(s.scores?.pe_score);
+    const asthmaCopd = numish(s.scores?.asthma_copd_score);
+    const infectionScore = numish(s.scores?.infection_score);
+
+    if (peScore > 0) bump("CL_PULM_PE_OVERLAP", peScore, "scores.pe_score");
+    if (asthmaCopd > 0) bump("CL_PULM_ASTHMA_COPD", asthmaCopd, "scores.asthma_copd_score");
+    if (infectionScore > 0) bump("CL_PULM_INFECTION", infectionScore, "scores.infection_score");
   }
 
   const ranked = Object.entries(score)

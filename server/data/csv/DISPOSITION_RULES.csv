@@ -17,3 +17,11 @@ earache,DISP_EA_ETD,7,"answers.Q_EA_BLOCKED_EAR == 'yes' && answers.Q_EA_FEVER !
 earache,DISP_EA_SALIVARY,8,"answers.Q_EA_NECK_SWELLING == 'yes' && answers.Q_EA_FEVER == 'yes'",urgent_care,TPL_EA_SALIVARY,MODERATE
 earache,DISP_EA_TRAUMA,9,"answers.Q_EA_TRAUMA == 'yes' && answers.Q_EA_DRAINAGE == 'yes'",urgent_care,TPL_EA_TRAUMA,MODERATE
 earache,DISP_EA_DEFAULT,99,true,routine,TPL_EA_DEFAULT,LOW
+persistent_cough,DISP_PCOUGH_001,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_PC_ER_SEND,HIGH
+persistent_cough,DISP_PCOUGH_002,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_PC_ESCALATE,HIGH
+persistent_cough,DISP_PCOUGH_003,3,"answers.Q_COUGH_HEMOP == 'yes'",er_send,TPL_PC_HEMOP,HIGH
+persistent_cough,DISP_PCOUGH_004,4,"answers.Q_COUGH_WHEEZE == 'yes' && answers.Q_COUGH_ASTHMA == 'yes'",pcp,TPL_PC_ASTHMA,HIGH
+persistent_cough,DISP_PCOUGH_005,5,"answers.Q_COUGH_COPD == 'yes'",pcp,TPL_PC_COPD,HIGH
+persistent_cough,DISP_PCOUGH_006,6,"answers.Q_COUGH_FEVER == 'yes' && answers.Q_COUGH_DUR >= 2",pcp,TPL_PC_INFECTION,MODERATE
+persistent_cough,DISP_PCOUGH_007,7,"answers.Q_COUGH_DUR >= 8",routine_urgent,TPL_PC_CHRONIC,MODERATE
+persistent_cough,DISP_PCOUGH_008,99,true,routine,TPL_PC_DEFAULT,LOW
