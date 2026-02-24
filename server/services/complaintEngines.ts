@@ -57,7 +57,10 @@ export function runRedFlagsComplaint(state: CaseState, rules: RedFlagRule[]): Re
 
   for (const rule of rules) {
     const fires = evaluateExpr(rule.triggerExpr, state);
+    console.log("RF CHECK:", rule.rfId, "=>", fires);
     if (!fires) continue;
+
+    console.log("RF FIRED:", rule.rfId);
 
     const immediateActions = rule.immediateActions
       .split(";")
