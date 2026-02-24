@@ -414,7 +414,9 @@ export async function runComplaintGraph(
           trace.inputsUsed = ["scores.oe_score", "scores.aom_score"];
         } else if (cc === "persistent_cough") {
           const peScore = updated.scores?.pe_score ?? 0;
-          const asthmaCopd = updated.scores?.asthma_copd_score ?? 0;
+          const asthmaExac = updated.scores?.asthma_exac_score ?? 0;
+          const copdExac = updated.scores?.copd_exac_score ?? 0;
+          const pneumonia = updated.scores?.pneumonia_score ?? 0;
           if (peScore >= 5) {
             actions.push({ type: "CTA_PULMONARY", priority: "high" });
             actions.push({ type: "D_DIMER", priority: "high" });
@@ -422,14 +424,20 @@ export async function runComplaintGraph(
           } else if (peScore >= 3) {
             actions.push({ type: "D_DIMER", priority: "high" });
             actions.push({ type: "CHEST_XRAY", priority: "medium" });
-          } else if (asthmaCopd >= 4) {
-            actions.push({ type: "PFTS", priority: "medium" });
+          } else if (copdExac >= 4) {
+            actions.push({ type: "PFTS", priority: "high" });
             actions.push({ type: "CHEST_XRAY", priority: "medium" });
+          } else if (asthmaExac >= 4) {
+            actions.push({ type: "PFTS", priority: "medium" });
+            actions.push({ type: "PEAK_FLOW", priority: "medium" });
+          } else if (pneumonia >= 4) {
+            actions.push({ type: "CHEST_XRAY", priority: "high" });
+            actions.push({ type: "CBC", priority: "medium" });
           } else {
             actions.push({ type: "CHEST_XRAY", priority: "medium" });
             actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
           }
-          trace.inputsUsed = ["scores.pe_score", "scores.asthma_copd_score"];
+          trace.inputsUsed = ["scores.pe_score", "scores.asthma_exac_score", "scores.copd_exac_score", "scores.pneumonia_score"];
         } else {
           actions.push({ type: "SUPPORTIVE_CARE", priority: "medium" });
           trace.inputsUsed = ["scores"];

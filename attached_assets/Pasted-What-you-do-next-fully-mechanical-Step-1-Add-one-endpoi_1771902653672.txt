@@ -1,0 +1,259 @@
+What you do next (fully mechanical)
+Step 1) Add one endpoint or script that runs test cases
+
+Pick whichever is easiest in your repo:
+
+Option A (best): a Node script scripts/run_harness.ts
+
+Reads JSON files from tests/cases/pulm_cough/*.json
+
+Calls your internal pipeline function directly (not HTTP)
+
+Captures:
+
+disposition
+
+triggered RF IDs
+
+top cluster
+
+any “asked question IDs” list (if available)
+
+Prints a single report JSON
+
+Option B (quick): a dev API route POST /api/dev/harness/run
+
+Accepts a test payload { cc_id, answers }
+
+Returns { dispo, rfTriggered, clusterTop, gateResult }
+
+Then your harness script just hits the endpoint 10 times.
+
+Since you already have console logs, Option A is cleaner and faster long-term.
+
+Step 2) Create the Golden 10 JSON files (copy/paste)
+
+Create folder:
+
+tests/cases/pulm_cough/
+
+Create these 10 files. Each file is minimal: case_id, cc_id, and answers.
+
+1) COUGH_G01_URI_BASELINE.json
+{
+  "case_id": "COUGH_G01_URI_BASELINE",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 3,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": false,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": false
+  },
+  "expect": {
+    "disposition": "self_care",
+    "rf_must_fire": [],
+    "cluster_top": "CL_PULM_VIRAL_URI"
+  }
+}
+2) COUGH_G02_PNEUMONIA_POSSIBLE.json
+{
+  "case_id": "COUGH_G02_PNEUMONIA_POSSIBLE",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 5,
+    "Q_COUGH_FEVER": true,
+    "Q_COUGH_SOB": true,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": false
+  },
+  "expect": {
+    "disposition": "pcp",
+    "rf_must_fire": [],
+    "cluster_top": "CL_PULM_PNEUMONIA"
+  }
+}
+3) COUGH_G03_RESP_DISTRESS.json
+{
+  "case_id": "COUGH_G03_RESP_DISTRESS",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 2,
+    "Q_COUGH_FEVER": true,
+    "Q_COUGH_SOB": true,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": true
+  },
+  "expect": {
+    "disposition": "er_send",
+    "rf_must_fire": ["RF_PCOUGH_001"],
+    "cluster_top": "CL_PULM_PNEUMONIA"
+  }
+}
+4) COUGH_G04_ASTHMA_MILD.json
+{
+  "case_id": "COUGH_G04_ASTHMA_MILD",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 7,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": true,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": false,
+    "Q_COUGH_WHEEZE": true,
+    "Q_COUGH_ASTHMA": true
+  },
+  "expect": {
+    "disposition": "self_care",
+    "rf_must_fire": [],
+    "cluster_top": "CL_PULM_ASTHMA_EXAC"
+  }
+}
+5) COUGH_G05_COPD_HYPOXIA.json
+{
+  "case_id": "COUGH_G05_COPD_HYPOXIA",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 5,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": true,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": true,
+    "Q_COUGH_COPD": true
+  },
+  "expect": {
+    "disposition": "er_send",
+    "rf_must_fire": ["RF_PCOUGH_001"],
+    "cluster_top": "CL_PULM_COPD_EXAC"
+  }
+}
+6) COUGH_G06_CHF_OVERLAP_HYPOXIA.json
+
+(If CHF needs PMH modifiers, leave cluster expectation loose for now.)
+
+{
+  "case_id": "COUGH_G06_CHF_OVERLAP_HYPOXIA",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 7,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": true,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": true
+  },
+  "expect": {
+    "disposition": "er_send",
+    "rf_must_fire": ["RF_PCOUGH_001"]
+  }
+}
+7) COUGH_G07_PE_CLASSIC.json
+{
+  "case_id": "COUGH_G07_PE_CLASSIC",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 2,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": true,
+    "Q_COUGH_CP": true,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": false,
+    "Q_COUGH_LEG_SWELL": true,
+    "Q_COUGH_RECENT_SX": true
+  },
+  "expect": {
+    "disposition": "er_send",
+    "rf_must_fire": ["RF_PCOUGH_001", "RF_PCOUGH_002"],
+    "cluster_top": "CL_PULM_PE_OVERLAP"
+  }
+}
+8) COUGH_G08_HEMOPTYSIS.json
+
+(Depends on whether you added RF_PCOUGH_004.)
+
+{
+  "case_id": "COUGH_G08_HEMOPTYSIS",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 21,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": false,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": true,
+    "Q_COUGH_O2LOW": false
+  },
+  "expect": {
+    "disposition": "er_send",
+    "rf_must_fire": ["RF_PCOUGH_004"]
+  }
+}
+9) COUGH_G09_CHRONIC_DRY.json
+{
+  "case_id": "COUGH_G09_CHRONIC_DRY",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 42,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": false,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": false
+  },
+  "expect": {
+    "disposition": "pcp",
+    "rf_must_fire": []
+  }
+}
+10) COUGH_G10_SUBACUTE_AFEBRILE.json
+{
+  "case_id": "COUGH_G10_SUBACUTE_AFEBRILE",
+  "cc_id": "pulm_cough",
+  "answers": {
+    "Q_COUGH_DUR": 21,
+    "Q_COUGH_FEVER": false,
+    "Q_COUGH_SOB": false,
+    "Q_COUGH_CP": false,
+    "Q_COUGH_HEMOP": false,
+    "Q_COUGH_O2LOW": false
+  },
+  "expect": {
+    "disposition": "pcp",
+    "rf_must_fire": []
+  }
+}
+
+That’s your Golden 10. Simple. Deterministic. No vibes.
+
+Step 3) What “Scroll to latest” means
+
+That’s just Replit’s console UI being Replit. It’s telling you the newest logs are below.
+
+To keep harness runs readable, do this:
+
+Print one-line summaries per case:
+
+case_id | dispo | gateResult | rf=[...] | cluster=... | PASS/FAIL
+
+Save the full trace to a file only if FAIL.
+
+Step 4) What I need from you to wire the harness in one shot
+
+Paste (just one line each is fine):
+
+The function you call to run a complaint pipeline in code
+Example: runComplaintPipeline(ccId, answers, context) (whatever yours is called)
+
+Where the red flag engine returns triggered flags
+Example: redFlagGate.triggeredFlags (you mentioned this array exists)
+
+Where the cluster result is stored
+Example: clusterResult.topClusterId
+
+If you paste those names, I’ll give you an exact scripts/run_harness.ts that fits your repo, and a single command like:
+
+npm run harness:cough

@@ -80,11 +80,17 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
     }
   } else if (cc === "persistent_cough") {
     const peScore = numish(s.scores?.pe_score);
-    const asthmaCopd = numish(s.scores?.asthma_copd_score);
+    const pneumoniaScore = numish(s.scores?.pneumonia_score);
+    const asthmaExac = numish(s.scores?.asthma_exac_score);
+    const copdExac = numish(s.scores?.copd_exac_score);
+    const viralUri = numish(s.scores?.viral_uri_score);
     const infectionScore = numish(s.scores?.infection_score);
 
     if (peScore > 0) bump("CL_PULM_PE_OVERLAP", peScore, "scores.pe_score");
-    if (asthmaCopd > 0) bump("CL_PULM_ASTHMA_COPD", asthmaCopd, "scores.asthma_copd_score");
+    if (pneumoniaScore > 0) bump("CL_PULM_PNEUMONIA", pneumoniaScore, "scores.pneumonia_score");
+    if (asthmaExac > 0) bump("CL_PULM_ASTHMA_EXAC", asthmaExac, "scores.asthma_exac_score");
+    if (copdExac > 0) bump("CL_PULM_COPD_EXAC", copdExac, "scores.copd_exac_score");
+    if (viralUri > 0) bump("CL_PULM_VIRAL_URI", viralUri, "scores.viral_uri_score");
     if (infectionScore > 0) bump("CL_PULM_INFECTION", infectionScore, "scores.infection_score");
   }
 

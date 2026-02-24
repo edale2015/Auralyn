@@ -149,12 +149,18 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
       const result = computeCoughScore(state);
       scores[def.scoreId.toLowerCase()] = result.cough_score;
       scores["pe_score"] = result.pe_score;
-      scores["asthma_copd_score"] = result.asthma_copd_score;
+      scores["pneumonia_score"] = result.pneumonia_score;
+      scores["asthma_exac_score"] = result.asthma_exac_score;
+      scores["copd_exac_score"] = result.copd_exac_score;
+      scores["viral_uri_score"] = result.viral_uri_score;
       scores["infection_score"] = result.infection_score;
       components[def.scoreId] = {
         cough_score: result.cough_score,
         pe_score: result.pe_score,
-        asthma_copd_score: result.asthma_copd_score,
+        pneumonia_score: result.pneumonia_score,
+        asthma_exac_score: result.asthma_exac_score,
+        copd_exac_score: result.copd_exac_score,
+        viral_uri_score: result.viral_uri_score,
         infection_score: result.infection_score,
         cluster: result.cluster,
         inputsUsed: result.inputsUsed,
