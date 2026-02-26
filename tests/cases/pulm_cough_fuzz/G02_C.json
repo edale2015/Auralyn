@@ -1,11 +1,11 @@
 {
   "id": "G02_C",
-  "label": "Fuzz: fever only no SOB",
+  "label": "G02 edge: remove fever, keep SOB → ESCALATE, different cluster",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 5,
-    "Q_COUGH_FEVER": "yes",
-    "Q_COUGH_SOB": "no",
+    "Q_COUGH_FEVER": "no",
+    "Q_COUGH_SOB": "yes",
     "Q_COUGH_CP": "no",
     "Q_COUGH_HEMOP": "no",
     "Q_COUGH_O2LOW": "no",
@@ -18,9 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [],
-    "disposition": "pcp",
+    "disposition": "urgent_care",
     "cluster": "CL_PULM_PNEUMONIA",
-    "rf_gate": "PASS"
+    "rf_must_fire": [
+      "RF_PCOUGH_006"
+    ],
+    "rf_gate": "ESCALATE"
   }
 }

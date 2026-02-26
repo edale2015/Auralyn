@@ -1,6 +1,6 @@
 {
   "id": "G02_B",
-  "label": "Fuzz: pneumonia + add O2LOW",
+  "label": "G02 severity: add O2LOW → ER_SEND",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 5,
@@ -18,11 +18,12 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [
-      "RF_PCOUGH_005"
-    ],
     "disposition": "er_send",
     "cluster": "CL_PULM_PNEUMONIA",
+    "rf_must_fire": [
+      "RF_PCOUGH_005",
+      "RF_PCOUGH_006"
+    ],
     "rf_gate": "ER_SEND"
   }
 }

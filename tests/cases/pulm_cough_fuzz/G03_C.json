@@ -1,11 +1,11 @@
 {
   "id": "G03_C",
-  "label": "Fuzz: hypoxemia without fever",
+  "label": "G03 edge: remove SOB, keep fever+O2LOW → ER_SEND (O2LOW still fires)",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 5,
-    "Q_COUGH_FEVER": "no",
-    "Q_COUGH_SOB": "yes",
+    "Q_COUGH_FEVER": "yes",
+    "Q_COUGH_SOB": "no",
     "Q_COUGH_CP": "no",
     "Q_COUGH_HEMOP": "no",
     "Q_COUGH_O2LOW": "yes",
@@ -18,11 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
+    "disposition": "er_send",
+    "cluster": "CL_PULM_PNEUMONIA",
     "rf_must_fire": [
       "RF_PCOUGH_005"
     ],
-    "disposition": "er_send",
-    "cluster": "CL_PULM_PNEUMONIA",
     "rf_gate": "ER_SEND"
   }
 }

@@ -1,12 +1,12 @@
 {
   "id": "G08_C",
-  "label": "Fuzz: hemoptysis+CP",
+  "label": "G08 edge: hemop + fever → ER_SEND, pneumonia vs PE cluster race",
   "cc_id": "persistent_cough",
   "answers": {
-    "Q_COUGH_DUR": 2,
-    "Q_COUGH_FEVER": "no",
+    "Q_COUGH_DUR": 3,
+    "Q_COUGH_FEVER": "yes",
     "Q_COUGH_SOB": "no",
-    "Q_COUGH_CP": "yes",
+    "Q_COUGH_CP": "no",
     "Q_COUGH_HEMOP": "yes",
     "Q_COUGH_O2LOW": "no",
     "Q_COUGH_LEG_SWELL": "no",
@@ -18,11 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
+    "disposition": "er_send",
+    "cluster": "CL_PULM_PNEUMONIA",
     "rf_must_fire": [
       "RF_PCOUGH_004"
     ],
-    "disposition": "er_send",
-    "cluster": "CL_PULM_PE_OVERLAP",
     "rf_gate": "ER_SEND"
   }
 }

@@ -1,6 +1,6 @@
 {
   "id": "G03_B",
-  "label": "Fuzz: pneumonia+hypoxemia+CP",
+  "label": "G03 severity: add CP → ER_SEND with more flags",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 5,
@@ -18,12 +18,13 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [
-      "RF_PCOUGH_001",
-      "RF_PCOUGH_005"
-    ],
     "disposition": "er_send",
     "cluster": "CL_PULM_PNEUMONIA",
+    "rf_must_fire": [
+      "RF_PCOUGH_001",
+      "RF_PCOUGH_003",
+      "RF_PCOUGH_005"
+    ],
     "rf_gate": "ER_SEND"
   }
 }

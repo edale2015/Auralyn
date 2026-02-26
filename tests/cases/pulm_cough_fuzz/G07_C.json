@@ -1,6 +1,6 @@
 {
   "id": "G07_C",
-  "label": "Fuzz: DVT signs without SOB",
+  "label": "G07 edge: CP alone without SOB → ESCALATE (RF_PCOUGH_003)",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 1,
@@ -9,8 +9,8 @@
     "Q_COUGH_CP": "yes",
     "Q_COUGH_HEMOP": "no",
     "Q_COUGH_O2LOW": "no",
-    "Q_COUGH_LEG_SWELL": "yes",
-    "Q_COUGH_RECENT_SX": "yes",
+    "Q_COUGH_LEG_SWELL": "no",
+    "Q_COUGH_RECENT_SX": "no",
     "Q_COUGH_WHEEZE": "no",
     "Q_COUGH_ASTHMA": "no",
     "Q_COUGH_COPD": "no",
@@ -18,11 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [
-      "RF_PCOUGH_002"
-    ],
-    "disposition": "er_send",
+    "disposition": "urgent_care",
     "cluster": "CL_PULM_PE_OVERLAP",
-    "rf_gate": "ER_SEND"
+    "rf_must_fire": [
+      "RF_PCOUGH_003"
+    ],
+    "rf_gate": "ESCALATE"
   }
 }

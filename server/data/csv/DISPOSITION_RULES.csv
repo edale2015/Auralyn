@@ -28,3 +28,26 @@ persistent_cough,DISP_PCOUGH_PND,7,"answers.Q_COUGH_PND == 'yes' && answers.Q_CO
 persistent_cough,DISP_PCOUGH_GERD,7,"answers.Q_COUGH_GERD == 'yes' && answers.Q_COUGH_FEVER != 'yes' && answers.Q_COUGH_SOB != 'yes' && answers.Q_COUGH_CP != 'yes' && answers.Q_COUGH_HEMOP != 'yes' && answers.Q_COUGH_O2LOW != 'yes'",self_care,TPL_PC_GERD,HIGH
 persistent_cough,DISP_PCOUGH_008,8,"answers.Q_COUGH_FEVER != 'yes' && answers.Q_COUGH_SOB != 'yes' && answers.Q_COUGH_CP != 'yes' && answers.Q_COUGH_HEMOP != 'yes' && answers.Q_COUGH_O2LOW != 'yes'",self_care,TPL_PC_DEFAULT,LOW
 persistent_cough,DISP_PCOUGH_099,99,true,routine,TPL_PC_DEFAULT,LOW
+chest_pain,DISP_CP_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_CP_ER_SEND,HIGH
+chest_pain,DISP_CP_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_CP_ESCALATE,HIGH
+chest_pain,DISP_CP_PERICARDITIS,3,"answers.Q_CP_WORSE_FLAT == 'yes' && answers.Q_CP_RECENT_VIRAL == 'yes'",urgent_care,TPL_CP_PERICARDITIS,HIGH
+chest_pain,DISP_CP_PNEUMONIA,4,"answers.Q_CP_FEVER == 'yes' && answers.Q_CP_COUGH == 'yes'",urgent_care,TPL_CP_PNEUMONIA,MODERATE
+chest_pain,DISP_CP_GERD,5,"answers.Q_CP_BURNING == 'yes' && answers.Q_CP_ANTACID_RELIEF == 'yes'",pcp,TPL_CP_GERD,HIGH
+chest_pain,DISP_CP_ANXIETY,6,"answers.Q_CP_STRESS_TRIGGER == 'yes' && answers.Q_CP_TINGLING == 'yes'",pcp,TPL_CP_ANXIETY,MODERATE
+chest_pain,DISP_CP_MSK,7,"answers.Q_CP_REPRODUCIBLE == 'yes' && answers.Q_CP_SOB != 'yes' && answers.Q_CP_DIAPHORESIS != 'yes' && answers.Q_CP_SYNCOPE != 'yes'",self_care,TPL_CP_MSK,HIGH
+chest_pain,DISP_CP_DEFAULT,99,true,routine,TPL_CP_DEFAULT,LOW
+dizziness,DISP_DZ_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_DZ_ER_SEND,HIGH
+dizziness,DISP_DZ_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_DZ_ESCALATE,HIGH
+dizziness,DISP_DZ_HYPOGLYCEMIA,3,"answers.Q_DZ_DIABETIC == 'yes' && answers.Q_DZ_SWEATING == 'yes'",urgent_care,TPL_DZ_HYPOGLYCEMIA,MODERATE
+dizziness,DISP_DZ_ORTHOSTATIC,4,"answers.Q_DZ_STANDS_WORSE == 'yes' && answers.Q_DZ_POOR_INTAKE == 'yes'",pcp,TPL_DZ_ORTHOSTATIC,MODERATE
+dizziness,DISP_DZ_MEDICATION,5,"answers.Q_DZ_NEW_MED == 'yes' && answers.Q_DZ_FOCAL_NEURO != 'yes'",pcp,TPL_DZ_MEDICATION,MODERATE
+dizziness,DISP_DZ_VEST_NEURITIS,6,"answers.Q_DZ_SPINNING == 'yes' && answers.Q_DZ_PROLONGED == 'yes' && answers.Q_DZ_RECENT_VIRAL == 'yes'",pcp,TPL_DZ_VEST_NEURITIS,HIGH
+dizziness,DISP_DZ_BPPV,7,"answers.Q_DZ_SPINNING == 'yes' && answers.Q_DZ_POSITIONAL == 'yes' && answers.Q_DZ_BRIEF == 'yes'",self_care,TPL_DZ_BPPV,HIGH
+dizziness,DISP_DZ_DEFAULT,99,true,routine,TPL_DZ_DEFAULT,LOW
+abdominal_pain,DISP_AP_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_AP_ER_SEND,HIGH
+abdominal_pain,DISP_AP_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_AP_ESCALATE,HIGH
+abdominal_pain,DISP_AP_DIVERTICULITIS,3,"answers.Q_AP_LLQ == 'yes' && answers.Q_AP_FEVER == 'yes'",urgent_care,TPL_AP_DIVERTICULITIS,HIGH
+abdominal_pain,DISP_AP_RENAL,4,"answers.Q_AP_FLANK_GROIN == 'yes' && answers.Q_AP_HEMATURIA == 'yes'",urgent_care,TPL_AP_RENAL,HIGH
+abdominal_pain,DISP_AP_RENAL_PAIN,5,"answers.Q_AP_FLANK_GROIN == 'yes'",urgent_care,TPL_AP_RENAL,MODERATE
+abdominal_pain,DISP_AP_GASTRO,6,"answers.Q_AP_DIARRHEA == 'yes' && answers.Q_AP_FEVER != 'yes' && answers.Q_AP_BLOODY_STOOL != 'yes'",self_care,TPL_AP_GASTRO,HIGH
+abdominal_pain,DISP_AP_DEFAULT,99,true,routine,TPL_AP_DEFAULT,LOW

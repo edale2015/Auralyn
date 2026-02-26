@@ -1,11 +1,11 @@
 {
   "id": "G02_A",
-  "label": "Fuzz: drop fever from pneumonia",
+  "label": "G02 anchor: remove SOB → fever only, no red flag",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 5,
-    "Q_COUGH_FEVER": "no",
-    "Q_COUGH_SOB": "yes",
+    "Q_COUGH_FEVER": "yes",
+    "Q_COUGH_SOB": "no",
     "Q_COUGH_CP": "no",
     "Q_COUGH_HEMOP": "no",
     "Q_COUGH_O2LOW": "no",
@@ -18,11 +18,9 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [
-      "RF_PCOUGH_006"
-    ],
-    "disposition": "urgent_care",
+    "disposition": "pcp",
     "cluster": "CL_PULM_PNEUMONIA",
-    "rf_gate": "ESCALATE"
+    "rf_must_fire": [],
+    "rf_gate": "PASS"
   }
 }

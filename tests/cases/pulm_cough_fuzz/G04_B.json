@@ -1,6 +1,6 @@
 {
   "id": "G04_B",
-  "label": "Fuzz: asthma+wheeze+SOB",
+  "label": "G04 severity: add SOB → ESCALATE",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 7,
@@ -18,11 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
+    "disposition": "urgent_care",
+    "cluster": "CL_PULM_ASTHMA_EXAC",
     "rf_must_fire": [
       "RF_PCOUGH_006"
     ],
-    "disposition": "urgent_care",
-    "cluster": "CL_PULM_ASTHMA_EXAC",
     "rf_gate": "ESCALATE"
   }
 }

@@ -51,12 +51,13 @@ This system deterministically assembles an auditable clinical state from multipl
 `POST /api/admin/stress-test` accepts an array of scenarios with assertions (expectRedFlagGate, expectConfidence, expectMinCareGaps, expectCareGapIds, expectMinRedFlags, expectRoutingState, expectSystem, expectMinSpotInterventions, expectNoEmergent). 100 pre-built scenarios in `server/tests/stressScenarios.json` cover healthy adults, DM/HTN/GLP-1/bariatric patients, anticoagulation, ER_SEND triggers, vague complaints, and complex multi-comorbidity cases. A standalone runner script at `server/tests/runStressTest.ts` can execute all scenarios via CLI.
 
 ### Complaint Golden Test Harness
-`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Three tiers:
-- **Tier A (Golden)**: 15 cases in `tests/cases/pulm_cough/` covering all cough dispositions and clusters
-- **Tier B (Fuzz)**: 30 cases in `tests/cases/pulm_cough_fuzz/` with anchor removal, severity escalation, and condition overlay patterns (3 per golden)
-- **Tier C (Invariants)**: 10 property assertions built into the harness runner (INV-1 through INV-10) covering CP→ER_SEND/ESCALATE, O2LOW→ER_SEND, gate↔disposition consistency, duration-based disposition rules, cluster correctness for wheeze+asthma and COPD, hemoptysis gate, and monotonicity (adding O2LOW never reduces gate severity)
+`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all` to sweep all complaint directories.
 
-Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all` to sweep all complaint directories.
+**Persistent Cough 4-Tier Harness (45 total tests):**
+- **Tier A (Golden)**: 15 cases in `tests/cases/pulm_cough/` — G01-G10 original golden set + G11 GERD, G12 PND, G13 ACE-I, G14 cough-variant asthma, G15 smoker chronic. Covers all dispositions (self_care, pcp, urgent_care, er_send), all 8 clusters, and all 6 red flag rules.
+- **Tier B (Fuzz)**: 30 cases in `tests/cases/pulm_cough_fuzz/` — 3 per golden (G01-G10): Pattern A (anchor removal), Pattern B (severity escalation via O2LOW/CP/hemop), Pattern C (edge/contradiction/boundary). Tests cluster ranking stability, gate severity transitions, and disposition priority ordering.
+- **Tier C (Invariants)**: 10 property assertions in `scripts/run_harness.ts` `checkCoughInvariants()` — INV-1 (CP→ESCALATE|ER_SEND), INV-2 (O2LOW→ER_SEND), INV-3 (ER_SEND→er_send), INV-4 (ESCALATE→urgent_care), INV-5 (short DUR+no danger→self_care), INV-6 (DUR≥8+no danger→pcp), INV-7 (wheeze+asthma→ASTHMA_EXAC), INV-8 (COPD→COPD_EXAC), INV-9 (monotonicity: O2LOW never reduces severity), INV-10 (hemoptysis→ER_SEND).
+- **Tier D (Monotonicity)**: `runMonotonicityCheck()` in harness runner — for each non-O2LOW test, re-runs with O2LOW toggled true and verifies gate severity never decreases (PASS→ESCALATE→ER_SEND).
 
 ### Data Corruption Guard
 `server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, and OUTPUT_TEMPLATES on every config load. Checks for: pasted-row corruption (tabs/multi-space in CC_ID), whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies. Cross-table checks verify template references from disposition rules exist, and question references in trigger expressions exist. Hard-fails on corruption to prevent silent rule poisoning. Integrated into `complaintConfigLoader.ts` — runs on every `loadComplaintConfig()` call. Admin endpoint: `GET /api/admin/validate/tabs` runs all validators and returns per-complaint coverage stats.

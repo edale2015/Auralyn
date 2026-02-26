@@ -1,9 +1,9 @@
 {
   "id": "G05_A",
-  "label": "Fuzz: COPD exac without O2LOW",
+  "label": "G05 anchor: remove O2LOW → ESCALATE (SOB fires RF_PCOUGH_006)",
   "cc_id": "persistent_cough",
   "answers": {
-    "Q_COUGH_DUR": 2,
+    "Q_COUGH_DUR": 4,
     "Q_COUGH_FEVER": "no",
     "Q_COUGH_SOB": "yes",
     "Q_COUGH_CP": "no",
@@ -18,11 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
+    "disposition": "urgent_care",
+    "cluster": "CL_PULM_COPD_EXAC",
     "rf_must_fire": [
       "RF_PCOUGH_006"
     ],
-    "disposition": "urgent_care",
-    "cluster": "CL_PULM_COPD_EXAC",
     "rf_gate": "ESCALATE"
   }
 }

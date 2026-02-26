@@ -1,13 +1,13 @@
 {
   "id": "G06_B",
-  "label": "Fuzz: hypoxemia+hemoptysis",
+  "label": "G06 severity: add CP → ER_SEND with PE flags",
   "cc_id": "persistent_cough",
   "answers": {
-    "Q_COUGH_DUR": 1,
+    "Q_COUGH_DUR": 2,
     "Q_COUGH_FEVER": "no",
     "Q_COUGH_SOB": "yes",
-    "Q_COUGH_CP": "no",
-    "Q_COUGH_HEMOP": "yes",
+    "Q_COUGH_CP": "yes",
+    "Q_COUGH_HEMOP": "no",
     "Q_COUGH_O2LOW": "yes",
     "Q_COUGH_LEG_SWELL": "no",
     "Q_COUGH_RECENT_SX": "no",
@@ -18,12 +18,13 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [
-      "RF_PCOUGH_004",
-      "RF_PCOUGH_005"
-    ],
     "disposition": "er_send",
     "cluster": "CL_PULM_PE_OVERLAP",
+    "rf_must_fire": [
+      "RF_PCOUGH_001",
+      "RF_PCOUGH_003",
+      "RF_PCOUGH_005"
+    ],
     "rf_gate": "ER_SEND"
   }
 }

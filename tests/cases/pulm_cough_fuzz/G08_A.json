@@ -1,13 +1,13 @@
 {
   "id": "G08_A",
-  "label": "Fuzz: hemoptysis+fever",
+  "label": "G08 anchor: remove hemop → PASS, self_care (DUR=10 >= 8 → pcp)",
   "cc_id": "persistent_cough",
   "answers": {
-    "Q_COUGH_DUR": 2,
-    "Q_COUGH_FEVER": "yes",
+    "Q_COUGH_DUR": 10,
+    "Q_COUGH_FEVER": "no",
     "Q_COUGH_SOB": "no",
     "Q_COUGH_CP": "no",
-    "Q_COUGH_HEMOP": "yes",
+    "Q_COUGH_HEMOP": "no",
     "Q_COUGH_O2LOW": "no",
     "Q_COUGH_LEG_SWELL": "no",
     "Q_COUGH_RECENT_SX": "no",
@@ -18,11 +18,9 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
-    "rf_must_fire": [
-      "RF_PCOUGH_004"
-    ],
-    "disposition": "er_send",
-    "cluster": "CL_PULM_INFECTION",
-    "rf_gate": "ER_SEND"
+    "disposition": "pcp",
+    "cluster": "CL_PULM_VIRAL_URI",
+    "rf_must_fire": [],
+    "rf_gate": "PASS"
   }
 }

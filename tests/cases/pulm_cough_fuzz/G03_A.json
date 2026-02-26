@@ -1,6 +1,6 @@
 {
   "id": "G03_A",
-  "label": "Fuzz: drop O2LOW from pneumonia",
+  "label": "G03 anchor: remove O2LOW → ESCALATE (SOB still fires RF_PCOUGH_006)",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 5,
@@ -18,11 +18,11 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
+    "disposition": "urgent_care",
+    "cluster": "CL_PULM_PNEUMONIA",
     "rf_must_fire": [
       "RF_PCOUGH_006"
     ],
-    "disposition": "urgent_care",
-    "cluster": "CL_PULM_PNEUMONIA",
     "rf_gate": "ESCALATE"
   }
 }

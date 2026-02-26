@@ -1,14 +1,14 @@
 {
   "id": "G07_B",
-  "label": "Fuzz: PE+O2LOW",
+  "label": "G07 severity: add hemoptysis → even more ER flags",
   "cc_id": "persistent_cough",
   "answers": {
     "Q_COUGH_DUR": 1,
     "Q_COUGH_FEVER": "no",
     "Q_COUGH_SOB": "yes",
     "Q_COUGH_CP": "yes",
-    "Q_COUGH_HEMOP": "no",
-    "Q_COUGH_O2LOW": "yes",
+    "Q_COUGH_HEMOP": "yes",
+    "Q_COUGH_O2LOW": "no",
     "Q_COUGH_LEG_SWELL": "yes",
     "Q_COUGH_RECENT_SX": "yes",
     "Q_COUGH_WHEEZE": "no",
@@ -18,13 +18,14 @@
     "Q_COUGH_GERD": "no"
   },
   "expect": {
+    "disposition": "er_send",
+    "cluster": "CL_PULM_PE_OVERLAP",
     "rf_must_fire": [
       "RF_PCOUGH_001",
       "RF_PCOUGH_002",
-      "RF_PCOUGH_005"
+      "RF_PCOUGH_003",
+      "RF_PCOUGH_004"
     ],
-    "disposition": "er_send",
-    "cluster": "CL_PULM_PE_OVERLAP",
     "rf_gate": "ER_SEND"
   }
 }
