@@ -1,0 +1,110 @@
+The “corruption block” to add in Replit
+
+Drop this into your sheet-loader right after you load CORE_QUESTIONS (before you build indexes). It hard-fails on the exact corruption you hit: “someone pasted a whole TSV row into CC_ID”.
+
+TypeScript (server-side) corruption guard
+// corruption_guard.ts
+type CoreQuestionRow = {
+  CC_ID: string;
+  VERSION: string;
+  ORDER: number | string;
+  QUESTION_ID: string;
+  QUESTION_TEXT: string;
+  ANSWER_TYPE: string;
+  CHOICES?: string;
+  REQUIRED: string;
+  MAPS_TO_FIELD: string;
+  ASK_IF?: string;
+  NOTES?: string;
+};
+
+const CC_ID_PATTERN = /^[a-z0-9_]+$/; // strict: e.g., sore_throat, pulm_cough
+
+export function assertCoreQuestionsNotCorrupt(rows: CoreQuestionRow[]) {
+  const bad: { idx: number; CC_ID: string; QUESTION_ID?: string }[] = [];
+
+  rows.forEach((r, idx) => {
+    const cc = String(r.CC_ID ?? "").trim();
+
+    // Empty CC_ID
+    if (!cc) {
+      bad.push({ idx, CC_ID: cc, QUESTION_ID: r.QUESTION_ID });
+      return;
+    }
+
+    // The exact corruption signature: tabs/multi-spaces + "v1" + "Q_" inside CC_ID
+    const looksLikePastedRow =
+      /\bv\d+\b/.test(cc) && /\bQ_[A-Z0-9_]+\b/.test(cc) && (cc.includes("\t") || /\s{2,}/.test(cc));
+
+    // Any whitespace in CC_ID is suspicious for your schema
+    const hasWhitespace = /\s/.test(cc);
+
+    // Not a normal cc id (only [a-z0-9_])
+    const invalidFormat = !CC_ID_PATTERN.test(cc);
+
+    if (looksLikePastedRow || hasWhitespace || invalidFormat) {
+      bad.push({ idx, CC_ID: cc, QUESTION_ID: r.QUESTION_ID });
+    }
+  });
+
+  if (bad.length) {
+    const sample = bad.slice(0, 10).map(b => `#${b.idx} CC_ID="${b.CC_ID}" Q="${b.QUESTION_ID ?? ""}"`).join("\n");
+    throw new Error(
+      [
+        "CORE_QUESTIONS CORRUPTION DETECTED.",
+        "Refusing to start to prevent silent bad rules.",
+        "Sample bad rows:",
+        sample,
+        "Fix: re-export CORE_QUESTIONS and re-run validator; ensure CC_ID contains only lowercase letters, numbers, underscores.",
+      ].join("\n")
+    );
+  }
+}
+
+Call it wherever you load core questions:
+
+import { assertCoreQuestionsNotCorrupt } from "./corruption_guard";
+
+const coreRows = await loadCoreQuestionsFromSheets();
+assertCoreQuestionsNotCorrupt(coreRows);
+
+That’s the “tripwire”. If corruption reappears, Replit refuses to boot instead of quietly poisoning your rules.
+
+Validator: where to put it + how to run it
+
+Put tools/validate_tabs.py in your repo (or wherever you keep scripts), then run:
+
+python tools/validate_tabs.py \
+  --core CORE_QUESTIONS.csv \
+  --rf RED_FLAG_RULES.csv \
+  --disp DISPOSITION_RULES.csv \
+  --cluster CLUSTER_SCORING_RULES.csv \
+  --templates OUTPUT_TEMPLATES.csv \
+  --fail-on-issues
+
+(If your Replit pulls tabs live from Sheets rather than CSV, the validator is still useful if you keep an export step, or if you add a “download latest to tmp + validate” admin script. If you want that, tell me how you fetch Sheets now and I’ll match it.)
+
+What’s next
+
+Now we flip from “cleanup” to “factory mode”:
+
+Step 1: Run validator (you just did the equivalent by updating all tabs)
+
+✅ Confirm Replit boots with corruption guard enabled
+
+Step 2: Harness sweep across all complaints
+
+Run your harness per complaint directory (like cough), or add a “run all” mode.
+
+Goal: every complaint has at least Tier A (10 goldens). Cough already has A/B/C.
+
+Step 3: Upgrade complaints in batches
+
+You asked: system-by-system or 4 at a time?
+
+Best answer: do 4 at a time, but only if you follow this rule:
+
+For each system in the batch: add/confirm Tier A (10 goldens) first.
+Only after Tier A is green do you add Tier B fuzz + Tier C invariants.
+
+That way you don’t multiply debugging.
