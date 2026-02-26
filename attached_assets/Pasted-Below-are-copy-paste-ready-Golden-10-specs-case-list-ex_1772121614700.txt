@@ -1,0 +1,282 @@
+Below are copy/paste-ready Golden 10 specs (case list + expected assertions). If your harness expects a specific JSON schema, you can keep your existing keys and just paste the answers/expect blocks.
+
+0) Folder layout
+
+Create 4 folders:
+
+tests/cases/card_chest_pain/
+
+tests/cases/neuro_dizziness/
+
+tests/cases/gi_abdominal_pain/
+
+tests/cases/ent_sore_throat/
+
+Run:
+
+npx tsx scripts/run_harness.ts tests/cases/<folder>
+1) CHEST PAIN (card_chest_pain) Golden 10
+CP_G01 MSK reproducible
+
+Expect: self_care or pcp (depending on your rules), no ER gate
+
+answers: chest pain reproducible with palpation, no SOB, no diaphoresis, no exertional component, no syncope
+
+must NOT fire ACS/PE/aortic RFs
+
+CP_G02 Typical ACS pattern
+
+Expect: er_send, RF includes ACS master
+
+exertional pressure, radiates arm/jaw, diaphoresis/nausea, risk factors
+
+CP_G03 PE pattern
+
+Expect: er_send, RF includes PE
+
+pleuritic CP + SOB + VTE risk (travel/surgery) ± calf swelling
+
+CP_G04 Aortic dissection pattern
+
+Expect: er_send, RF includes dissection
+
+sudden tearing pain to back, neuro symptoms or BP differential (if you ask)
+
+CP_G05 Pericarditis-ish
+
+Expect: urgent_care or er_send depending on your gates
+
+worse lying flat, better leaning forward, recent viral symptoms
+
+CP_G06 Pneumonia/pleurisy overlap
+
+Expect: urgent_care (or ER if hypoxic)
+
+fever + cough + pleuritic pain, no VTE risk
+
+CP_G07 GERD/esophagitis
+
+Expect: self_care or pcp, no gate
+
+burning after meals, sour taste, improves with antacids, no SOB/exertional
+
+CP_G08 Panic/anxiety style (diagnosis of exclusion)
+
+Expect: pcp, no ER gate if no danger signals
+
+palpitations/tingling + stress trigger, normal danger screen negative
+
+CP_G09 Hypertensive emergency symptoms (uses your Q_CP_HTN_SYMPTOMS)
+
+Expect: er_send
+
+CP + neuro/vision symptoms + very high BP if you track it
+
+CP_G10 “Can’t rule out” chest pain
+
+Expect: urgent_care or er_send (your policy)
+
+unclear story but age/risk factors present
+
+What I need from you to finalize exact answer keys: the actual question IDs used by card_chest_pain in CORE_QUESTIONS (you now have clean tabs, so we can do exact IDs next).
+
+2) DIZZINESS (neuro_dizziness) Golden 10
+DZ_G01 BPPV classic
+
+Expect: self_care/pcp, no neuro RF
+
+room spinning with head turns, brief episodes, no neuro deficits
+
+DZ_G02 Vestibular neuritis/labyrinthitis
+
+Expect: urgent_care/pcp
+
+prolonged vertigo, nausea, gait unsteady but no focal neuro, recent viral
+
+DZ_G03 Stroke/TIA red flag
+
+Expect: er_send
+
+dizziness + unilateral weakness/numbness, facial droop, speech trouble, severe ataxia
+
+DZ_G04 Posterior circulation stroke style
+
+Expect: er_send
+
+dizziness + diplopia/vision change + severe gait instability
+
+DZ_G05 Orthostatic hypotension/dehydration
+
+Expect: pcp/urgent_care
+
+lightheaded on standing, diarrhea/poor intake, improves sitting
+
+DZ_G06 Arrhythmia/syncope-adjacent
+
+Expect: er_send
+
+dizziness + near-syncope + palpitations/chest pain
+
+DZ_G07 Hypoglycemia (if asked)
+
+Expect: urgent_care
+
+diaphoresis, tremor, improves with sugar, diabetic meds
+
+DZ_G08 Anemia/bleeding
+
+Expect: urgent_care or er_send
+
+lightheaded + melena/bleeding + tachycardia (if present)
+
+DZ_G09 Medication side effect
+
+Expect: pcp
+
+new BP med, sedatives, etc.
+
+DZ_G10 Severe headache/neck stiffness with dizziness
+
+Expect: er_send
+
+meningitis/SAH style gate
+
+3) ABDOMINAL PAIN (gi_abdominal_pain) Golden 10
+AP_G01 Simple gastroenteritis-ish
+
+Expect: self_care/pcp
+
+crampy diffuse pain + diarrhea, no peritoneal signs, no blood
+
+AP_G02 Appendicitis pattern
+
+Expect: er_send
+
+migrating RLQ pain + fever/anorexia (if asked)
+
+AP_G03 Cholecystitis pattern
+
+Expect: urgent_care or er_send
+
+RUQ pain after fatty meals + fever, ± Murphy (if asked)
+
+AP_G04 Pancreatitis pattern
+
+Expect: er_send
+
+epigastric radiating to back + vomiting, alcohol/GLP-1/gallstones
+
+AP_G05 GI bleed
+
+Expect: er_send
+
+black stool or vomiting blood + dizziness/weakness
+
+AP_G06 AAA warning (esp age/risk)
+
+Expect: er_send
+
+severe back/abd pain + hypotension/syncope or pulsatile mass (if asked)
+
+AP_G07 Diverticulitis
+
+Expect: urgent_care
+
+LLQ pain + fever, constipation
+
+AP_G08 Kidney stone overlap (even if GU)
+
+Expect: urgent_care/er_send
+
+flank to groin pain + hematuria, severe colic
+
+AP_G09 Ectopic pregnancy/pelvic emergency (female)
+
+Expect: er_send
+
+pelvic pain + missed period/bleeding (if your GI system screens pregnancy)
+
+AP_G10 Mesenteric ischemia
+
+Expect: er_send
+
+severe pain out of proportion, AFib/risk factors, postprandial pain (if asked)
+
+4) SORE THROAT (ent_sore_throat) Golden 10 (now that core questions are clean)
+ST_G01 Viral baseline
+
+Expect: self_care, cluster viral, no RF
+
+cough yes, fever no, exudate no
+
+ST_G02 Strep-likely (Centor-ish)
+
+Expect: urgent_care
+
+fever yes, cough no, exudate yes, tender nodes yes
+
+ST_G03 PTA classic
+
+Expect: er_send
+
+trismus yes + muffled voice yes + unilateral pain yes
+
+ST_G04 Drooling
+
+Expect: er_send
+
+drooling yes
+
+ST_G05 Stridor
+
+Expect: er_send
+
+stridor yes
+
+ST_G06 Mono-ish
+
+Expect: pcp
+
+fatigue/mono signs yes + exudate maybe yes
+
+ST_G07 Scarlet fever clue
+
+Expect: urgent_care
+
+rash yes + strep features
+
+ST_G08 Immunocompromised + fever
+
+Expect: er_send
+
+immuno yes + fever yes
+
+ST_G09 Subacute duration
+
+Expect: pcp
+
+duration ≥ 8 days, no RF
+
+ST_G10 Neck stiffness
+
+Expect: er_send
+
+neck stiffness yes
+
+What’s next, exactly
+
+You paste me the CORE_QUESTIONS rows for these 3 CC_IDs (just chest pain, dizziness, abdominal pain). Sore throat we already cleaned.
+
+I will return exact JSON files (with your real question IDs) for all 30 cases (10×3 systems), matching your harness schema precisely.
+
+You drop them into the folders and run:
+
+npx tsx scripts/run_harness.ts tests/cases/card_chest_pain
+
+.../neuro_dizziness
+
+.../gi_abdominal_pain
+
+Once Tier A passes for all four: we do Tier B fuzz + Tier C invariants for each (still in Batch A).
+
+If you paste the chest pain/dizziness/abdominal pain core question rows (like you did for sore throat earlier), I’ll immediately output the full Golden 10 JSON packs with the right IDs and expected outcomes.

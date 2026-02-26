@@ -1,4 +1,10 @@
 import { getTable, getTableFiltered } from "../data/registry";
+import {
+  assertCoreQuestionsNotCorrupt,
+  assertRedFlagRulesNotCorrupt,
+  assertDispositionRulesNotCorrupt,
+  assertOutputTemplatesNotCorrupt,
+} from "../data/corruptionGuard";
 
 type SheetRow = Record<string, any>;
 
@@ -230,6 +236,11 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     getTable("DISPOSITION_RULES"),
     getTable("OUTPUT_TEMPLATES"),
   ]);
+
+  assertCoreQuestionsNotCorrupt(qRows);
+  assertRedFlagRulesNotCorrupt(rfRows);
+  assertDispositionRulesNotCorrupt(dRows);
+  assertOutputTemplatesNotCorrupt(tRows);
 
   const version = regEntry.version;
 

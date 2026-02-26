@@ -20,6 +20,7 @@ import { runRedFlagAudit } from "../services/redFlagAudit";
 import { storeTrace, buildTraceTimeline, getStoredTraceIds } from "../services/traceViewer";
 import { runComplaintGraph } from "../services/complaintNodeRunner";
 import { loadComplaintConfig, listAvailableComplaints, invalidateComplaintConfigCache } from "../services/complaintConfigLoader";
+import { validateAllTabs, runCrossTableChecks } from "../data/corruptionGuard";
 
 export function registerAdminRoutes(router: Router) {
   router.post("/api/admin/registry/reload", requireProviderAuth, async (req: Request, res: Response) => {
@@ -1079,6 +1080,59 @@ export function registerAdminRoutes(router: Router) {
       });
     } catch (err: any) {
       console.error("[ComplaintStressTest] Error:", err);
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  router.get("/api/admin/validate/tabs", requireProviderAuth, async (_req: Request, res: Response) => {
+    try {
+      const tableNames = ["CORE_QUESTIONS", "RED_FLAG_RULES", "SCORING_DEFS", "DISPOSITION_RULES", "OUTPUT_TEMPLATES"];
+      const tables: Record<string, any[]> = {};
+
+      for (const name of tableNames) {
+        try {
+          tables[name] = await getTable(name);
+        } catch (err: any) {
+          tables[name] = [];
+        }
+      }
+
+      const tabResults = validateAllTabs(tables);
+      const crossTableWarnings = runCrossTableChecks(tables);
+
+      const allPass = tabResults.every(r => r.pass) && crossTableWarnings.length === 0;
+      const errorCount = tabResults.filter(r => !r.pass).length;
+
+      const ccIds = new Set<string>();
+      for (const row of tables.CORE_QUESTIONS ?? []) {
+        const cc = String(row.CC_ID ?? "").trim().toLowerCase();
+        if (cc) ccIds.add(cc);
+      }
+
+      const perComplaint: Record<string, { questions: number; rfRules: number; dispRules: number; templates: number }> = {};
+      for (const cc of ccIds) {
+        perComplaint[cc] = {
+          questions: (tables.CORE_QUESTIONS ?? []).filter(r => String(r.CC_ID ?? "").trim().toLowerCase() === cc).length,
+          rfRules: (tables.RED_FLAG_RULES ?? []).filter(r => String(r.CC_ID ?? "").trim().toLowerCase() === cc).length,
+          dispRules: (tables.DISPOSITION_RULES ?? []).filter(r => String(r.CC_ID ?? "").trim().toLowerCase() === cc).length,
+          templates: (tables.OUTPUT_TEMPLATES ?? []).filter(r => String(r.CC_ID ?? "").trim().toLowerCase() === cc).length,
+        };
+      }
+
+      res.json({
+        ok: allPass,
+        summary: {
+          tablesChecked: tableNames.length,
+          errors: errorCount,
+          crossTableWarnings: crossTableWarnings.length,
+          complaintIds: Array.from(ccIds).sort(),
+        },
+        tabResults,
+        crossTableWarnings,
+        perComplaint,
+      });
+    } catch (err: any) {
+      console.error("[ValidateTabs] Error:", err);
       res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });

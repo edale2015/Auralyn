@@ -228,26 +228,22 @@ async function runSingleTest(tc: TestCase): Promise<TestResult> {
   };
 }
 
-async function main() {
-  const dir = process.argv[2] || "tests/cases/pulm_cough";
+async function runDirectory(dir: string): Promise<{ passed: number; failed: number; invariantViolations: number; total: number }> {
   const fullDir = path.resolve(dir);
 
   if (!fs.existsSync(fullDir)) {
     console.error(`Directory not found: ${fullDir}`);
-    process.exit(1);
+    return { passed: 0, failed: 0, invariantViolations: 0, total: 0 };
   }
 
   const files = fs.readdirSync(fullDir).filter(f => f.endsWith(".json")).sort();
   if (files.length === 0) {
-    console.error("No test case JSON files found in", fullDir);
-    process.exit(1);
+    console.log(`  (no test cases in ${dir})`);
+    return { passed: 0, failed: 0, invariantViolations: 0, total: 0 };
   }
 
-  console.log(`\n=== Golden Test Harness ===`);
-  console.log(`Directory: ${dir}`);
-  console.log(`Found ${files.length} test case(s)\n`);
+  console.log(`\n--- ${dir} (${files.length} cases) ---`);
 
-  const results: TestResult[] = [];
   let passed = 0;
   let failed = 0;
   let invariantViolations = 0;
@@ -258,7 +254,6 @@ async function main() {
 
     try {
       const res = await runSingleTest(tc);
-      results.push(res);
 
       if (res.pass) {
         passed++;
@@ -282,14 +277,66 @@ async function main() {
     }
   }
 
-  console.log(`\n--- Summary ---`);
-  console.log(`Total: ${files.length}  |  PASS: ${passed}  |  FAIL: ${failed}`);
-  if (invariantViolations > 0) {
-    console.log(`Invariant violations: ${invariantViolations}`);
-  }
-  console.log(failed === 0 ? "All tests passed!" : "Some tests failed.");
+  return { passed, failed, invariantViolations, total: files.length };
+}
 
-  process.exit(failed > 0 ? 1 : 0);
+function discoverTestDirs(root: string): string[] {
+  const rootDir = path.resolve(root);
+  if (!fs.existsSync(rootDir)) return [];
+
+  const dirs: string[] = [];
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const subDir = path.join(root, entry.name);
+      const hasJson = fs.readdirSync(path.resolve(subDir)).some(f => f.endsWith(".json"));
+      if (hasJson) dirs.push(subDir);
+    }
+  }
+
+  return dirs.sort();
+}
+
+async function main() {
+  const arg = process.argv[2] || "tests/cases/pulm_cough";
+
+  let dirs: string[];
+
+  if (arg === "--all" || arg === "all") {
+    dirs = discoverTestDirs("tests/cases");
+    if (dirs.length === 0) {
+      console.error("No test case directories found in tests/cases/");
+      process.exit(1);
+    }
+  } else {
+    dirs = [arg];
+  }
+
+  console.log(`\n=== Golden Test Harness ===`);
+  console.log(`Directories: ${dirs.join(", ")}`);
+
+  let totalPassed = 0;
+  let totalFailed = 0;
+  let totalInvariants = 0;
+  let totalCases = 0;
+
+  for (const dir of dirs) {
+    const result = await runDirectory(dir);
+    totalPassed += result.passed;
+    totalFailed += result.failed;
+    totalInvariants += result.invariantViolations;
+    totalCases += result.total;
+  }
+
+  console.log(`\n=== Summary ===`);
+  console.log(`Directories: ${dirs.length}  |  Total: ${totalCases}  |  PASS: ${totalPassed}  |  FAIL: ${totalFailed}`);
+  if (totalInvariants > 0) {
+    console.log(`Invariant violations: ${totalInvariants}`);
+  }
+  console.log(totalFailed === 0 ? "All tests passed!" : "Some tests failed.");
+
+  process.exit(totalFailed > 0 ? 1 : 0);
 }
 
 main().catch(err => {

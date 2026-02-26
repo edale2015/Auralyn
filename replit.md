@@ -56,7 +56,10 @@ This system deterministically assembles an auditable clinical state from multipl
 - **Tier B (Fuzz)**: 30 cases in `tests/cases/pulm_cough_fuzz/` with anchor removal, severity escalation, and condition overlay patterns (3 per golden)
 - **Tier C (Invariants)**: 10 property assertions built into the harness runner (INV-1 through INV-10) covering CP→ER_SEND/ESCALATE, O2LOW→ER_SEND, gate↔disposition consistency, duration-based disposition rules, cluster correctness for wheeze+asthma and COPD, hemoptysis gate, and monotonicity (adding O2LOW never reduces gate severity)
 
-Run with: `npx tsx scripts/run_harness.ts [directory]`
+Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all` to sweep all complaint directories.
+
+### Data Corruption Guard
+`server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, and OUTPUT_TEMPLATES on every config load. Checks for: pasted-row corruption (tabs/multi-space in CC_ID), whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies. Cross-table checks verify template references from disposition rules exist, and question references in trigger expressions exist. Hard-fails on corruption to prevent silent rule poisoning. Integrated into `complaintConfigLoader.ts` — runs on every `loadComplaintConfig()` call. Admin endpoint: `GET /api/admin/validate/tabs` runs all validators and returns per-complaint coverage stats.
 
 ### Persistent Cough Pipeline
 13 core questions (Q_COUGH_DUR through Q_COUGH_GERD), 6 red flag rules, 8 scoring clusters (PE_OVERLAP, PNEUMONIA, ASTHMA_EXAC, COPD_EXAC, VIRAL_URI, INFECTION, UACS_PND, GERD_COUGH). Viral URI cluster is suppressed in diffAndConfidenceNode when danger signals or specific conditions (asthma, COPD, PND, GERD, infection) are present. ER_SEND cases still compute clusters for audit/training (no short-circuit). Scoring module in `server/agent/scoring/coughScore.ts`, graph registered as PC_GRAPH_V1.
