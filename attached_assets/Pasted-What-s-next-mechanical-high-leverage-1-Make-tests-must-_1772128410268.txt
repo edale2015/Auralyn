@@ -1,0 +1,108 @@
+What’s next (mechanical, high-leverage)
+1) Make “tests must pass” a hard rule in Replit
+
+Add a single command that runs everything:
+
+npx tsx scripts/run_harness.ts tests/cases/pulm_cough
+npx tsx scripts/run_harness.ts tests/cases/pulm_cough_fuzz
+npx tsx scripts/run_harness.ts tests/cases/card_chest_pain
+npx tsx scripts/run_harness.ts tests/cases/neuro_dizziness
+npx tsx scripts/run_harness.ts tests/cases/gi_abdominal_pain
+npx tsx scripts/run_harness.ts tests/cases/ent_sore_throat
+
+Then create:
+
+npm run test:harness:all
+
+Goal: every rules edit becomes “green or no merge”.
+
+2) Add Tier B + Tier C to the 3 new systems (Batch A completion)
+
+Right now cough is “4-tier complete”; the other three have Tier A only (10 goldens each, 30 total). Next is to copy your cough template:
+
+For each of:
+
+chest_pain
+
+dizziness
+
+abdominal_pain
+Add:
+
+30 fuzz (3×10)
+
+10 invariants
+
+Tier D monotonicity toggles (or equivalent)
+
+This is fast because the harness framework already exists.
+
+3) Upgrade cluster weighting + confidence with “delta logs”
+
+You now have a lab. Turn on the microscope.
+
+On every test run, write one JSONL line:
+
+case_id
+
+cc_id
+
+sheet_hash
+
+gateResult
+
+disposition
+
+top_cluster
+
+top3_clusters
+
+confidence_overall + confidence_by_cluster (if available)
+
+triggered_rf_ids
+
+This gives you:
+
+drift tracking after Sheet edits
+
+calibration later
+
+instant “what broke” diff when a regression happens
+
+4) Expand systems in batches of 4 (your speed question)
+
+Yes, you can do 4 systems at a time now, with one constraint:
+
+Each system must have Tier A (10 goldens) before you move on.
+Then you can add Tier B/C/D after all four have Tier A.
+
+That’s the fastest safe cadence.
+
+Recommended next batch of 4 (after Batch A)
+
+Given what you’ve been building and what’s high-risk clinically:
+
+Batch B
+
+gu_uti_symptoms
+
+gu_testicular_pain_prostatitis
+
+gyn_pelvic_pain
+
+neuro_headache
+
+These reuse patterns you already have (red flags, duration gates, severity monotonicity), and they close big safety holes.
+
+One thing I want you to add right now (takes 5 minutes)
+
+A Sheet hash stamp in every harness report.
+
+If you’re already computing it, print:
+
+sheet_hash
+
+ruleset_versions (tabs included)
+at the top of every run output.
+
+That makes debugging future “why did this change?” painless.

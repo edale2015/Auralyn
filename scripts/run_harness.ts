@@ -2,6 +2,7 @@ import { runComplaintGraph } from "../server/services/complaintNodeRunner";
 import type { CaseState } from "../shared/agentTypes";
 import * as fs from "fs";
 import * as path from "path";
+import * as crypto from "crypto";
 
 interface TestCase {
   id: string;
@@ -65,6 +66,55 @@ function buildCaseState(tc: TestCase): CaseState {
 }
 
 const SEVERITY_ORDER: Record<string, number> = { PASS: 0, ESCALATE: 1, ER_SEND: 2 };
+
+const CSV_FILES = [
+  "server/data/csv/CORE_QUESTIONS.csv",
+  "server/data/csv/RED_FLAG_RULES.csv",
+  "server/data/csv/DISPOSITION_RULES.csv",
+  "server/data/csv/OUTPUT_TEMPLATES.csv",
+  "server/data/csv/SCORING_DEFS.csv",
+  "server/data/csv/COMPLAINT_REGISTRY.csv",
+];
+
+function computeSheetHash(): { hash: string; tabs: string[] } {
+  const hasher = crypto.createHash("sha256");
+  const tabs: string[] = [];
+  for (const f of CSV_FILES) {
+    const full = path.resolve(f);
+    if (fs.existsSync(full)) {
+      hasher.update(fs.readFileSync(full));
+      tabs.push(path.basename(f, ".csv"));
+    }
+  }
+  return { hash: hasher.digest("hex").slice(0, 16), tabs };
+}
+
+let GLOBAL_SHEET_HASH = "";
+
+function writeDeltaLog(
+  caseId: string,
+  ccId: string,
+  gateResult: string,
+  disposition: string,
+  topCluster: string,
+  top3: string[],
+  rfIds: string[],
+) {
+  const logDir = path.resolve("tests/logs");
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const line = JSON.stringify({
+    case_id: caseId,
+    cc_id: ccId,
+    sheet_hash: GLOBAL_SHEET_HASH,
+    gateResult,
+    disposition,
+    top_cluster: topCluster,
+    top3_clusters: top3,
+    triggered_rf_ids: rfIds,
+    timestamp: new Date().toISOString(),
+  });
+  fs.appendFileSync(path.join(logDir, "harness_delta.jsonl"), line + "\n");
+}
 
 function checkCoughInvariants(
   tc: TestCase,
@@ -172,6 +222,234 @@ async function runMonotonicityCheck(tc: TestCase): Promise<string[]> {
   return violations;
 }
 
+function checkChestPainInvariants(
+  tc: TestCase,
+  actualDisp: string,
+  actualGate: string,
+  _actualCluster: string,
+  answers: Record<string, any>,
+): string[] {
+  const violations: string[] = [];
+  const a = answers;
+
+  if (a["Q_CP_EXERTIONAL"] === "yes" && (a["Q_CP_RADIATES"] === "yes" || a["Q_CP_DIAPHORESIS"] === "yes")) {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`CP-INV-1: exertional+(radiates|diaphoresis) → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_CP_SYNCOPE"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`CP-INV-2: syncope=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_CP_TEARING"] === "yes" && (a["Q_CP_NEURO"] === "yes" || a["Q_CP_RADIATES"] === "yes")) {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`CP-INV-3: tearing+(neuro|radiates) → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_CP_HTN_SYMPTOMS"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`CP-INV-4: htnSymptoms=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (actualGate === "ER_SEND" && actualDisp !== "er_send") {
+    violations.push(`CP-INV-5: gate=ER_SEND → disposition must be er_send, got '${actualDisp}'`);
+  }
+
+  if (actualGate === "ESCALATE" && actualDisp !== "urgent_care") {
+    violations.push(`CP-INV-6: gate=ESCALATE → disposition must be urgent_care, got '${actualDisp}'`);
+  }
+
+  return violations;
+}
+
+async function runChestPainMonotonicity(tc: TestCase): Promise<string[]> {
+  if (tc.answers["Q_CP_SYNCOPE"] === "yes" || tc.answers["Q_CP_SYNCOPE"] === true) return [];
+
+  const baseState = buildCaseState(tc);
+  const baseResult = await runComplaintGraph(baseState, tc.cc_id);
+  const baseGate = (baseResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const escalatedTc: TestCase = {
+    ...tc, id: `${tc.id}_mono`,
+    answers: { ...tc.answers, Q_CP_SYNCOPE: "yes" },
+    expect: tc.expect,
+  };
+  const escalatedState = buildCaseState(escalatedTc);
+  const escalatedResult = await runComplaintGraph(escalatedState, tc.cc_id);
+  const escalatedGate = (escalatedResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const baseSev = SEVERITY_ORDER[baseGate] ?? 0;
+  const escalatedSev = SEVERITY_ORDER[escalatedGate] ?? 0;
+
+  if (escalatedSev < baseSev) {
+    return [`CP-MONO: adding syncope should not reduce severity. base=${baseGate}(${baseSev}), escalated=${escalatedGate}(${escalatedSev})`];
+  }
+  return [];
+}
+
+function checkDizzinessInvariants(
+  tc: TestCase,
+  actualDisp: string,
+  actualGate: string,
+  _actualCluster: string,
+  answers: Record<string, any>,
+): string[] {
+  const violations: string[] = [];
+  const a = answers;
+
+  if (a["Q_DZ_FOCAL_NEURO"] === "yes" || a["Q_DZ_FACIAL_DROOP"] === "yes" || a["Q_DZ_SPEECH"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`DZ-INV-1: focalNeuro|facialDroop|speech=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_DZ_DIPLOPIA"] === "yes" && a["Q_DZ_GAIT"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`DZ-INV-2: diplopia+gait → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_DZ_SYNCOPE"] === "yes" && a["Q_DZ_PALPITATIONS"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`DZ-INV-3: syncope+palpitations → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_DZ_HEADACHE"] === "yes" && a["Q_DZ_NECK_STIFF"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`DZ-INV-4: headache+neckStiff → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_DZ_MELENA"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`DZ-INV-5: melena=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (actualGate === "ER_SEND" && actualDisp !== "er_send") {
+    violations.push(`DZ-INV-6: gate=ER_SEND → disposition must be er_send, got '${actualDisp}'`);
+  }
+
+  if (actualGate === "ESCALATE" && actualDisp !== "urgent_care") {
+    violations.push(`DZ-INV-7: gate=ESCALATE → disposition must be urgent_care, got '${actualDisp}'`);
+  }
+
+  return violations;
+}
+
+async function runDizzinessMonotonicity(tc: TestCase): Promise<string[]> {
+  if (tc.answers["Q_DZ_FOCAL_NEURO"] === "yes" || tc.answers["Q_DZ_FOCAL_NEURO"] === true) return [];
+
+  const baseState = buildCaseState(tc);
+  const baseResult = await runComplaintGraph(baseState, tc.cc_id);
+  const baseGate = (baseResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const escalatedTc: TestCase = {
+    ...tc, id: `${tc.id}_mono`,
+    answers: { ...tc.answers, Q_DZ_FOCAL_NEURO: "yes" },
+    expect: tc.expect,
+  };
+  const escalatedState = buildCaseState(escalatedTc);
+  const escalatedResult = await runComplaintGraph(escalatedState, tc.cc_id);
+  const escalatedGate = (escalatedResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const baseSev = SEVERITY_ORDER[baseGate] ?? 0;
+  const escalatedSev = SEVERITY_ORDER[escalatedGate] ?? 0;
+
+  if (escalatedSev < baseSev) {
+    return [`DZ-MONO: adding focalNeuro should not reduce severity. base=${baseGate}(${baseSev}), escalated=${escalatedGate}(${escalatedSev})`];
+  }
+  return [];
+}
+
+function checkAbdPainInvariants(
+  tc: TestCase,
+  actualDisp: string,
+  actualGate: string,
+  _actualCluster: string,
+  answers: Record<string, any>,
+): string[] {
+  const violations: string[] = [];
+  const a = answers;
+
+  if (a["Q_AP_RLQ"] === "yes" && a["Q_AP_FEVER"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`AP-INV-1: RLQ+fever → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_AP_BLOODY_STOOL"] === "yes" || a["Q_AP_HEMATEMESIS"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`AP-INV-2: bloodyStool|hematemesis → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_AP_HYPOTENSION"] === "yes" && a["Q_AP_BACK_RADIATION"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`AP-INV-3: hypotension+backRadiation → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_AP_EPIGASTRIC"] === "yes" && a["Q_AP_BACK_RADIATION"] === "yes" && a["Q_AP_VOMITING"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`AP-INV-4: epigastric+backRadiation+vomiting → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_AP_MISSED_PERIOD"] === "yes" && a["Q_AP_HYPOTENSION"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`AP-INV-5: missedPeriod+hypotension → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_AP_AFIB"] === "yes" && a["Q_AP_POSTPRANDIAL"] === "yes" && a["Q_AP_HYPOTENSION"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`AP-INV-6: afib+postprandial+hypotension → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (actualGate === "ER_SEND" && actualDisp !== "er_send") {
+    violations.push(`AP-INV-7: gate=ER_SEND → disposition must be er_send, got '${actualDisp}'`);
+  }
+
+  if (actualGate === "ESCALATE" && actualDisp !== "urgent_care") {
+    violations.push(`AP-INV-8: gate=ESCALATE → disposition must be urgent_care, got '${actualDisp}'`);
+  }
+
+  return violations;
+}
+
+async function runAbdPainMonotonicity(tc: TestCase): Promise<string[]> {
+  if (tc.answers["Q_AP_HYPOTENSION"] === "yes" || tc.answers["Q_AP_HYPOTENSION"] === true) return [];
+
+  const baseState = buildCaseState(tc);
+  const baseResult = await runComplaintGraph(baseState, tc.cc_id);
+  const baseGate = (baseResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const escalatedTc: TestCase = {
+    ...tc, id: `${tc.id}_mono`,
+    answers: { ...tc.answers, Q_AP_HYPOTENSION: "yes" },
+    expect: tc.expect,
+  };
+  const escalatedState = buildCaseState(escalatedTc);
+  const escalatedResult = await runComplaintGraph(escalatedState, tc.cc_id);
+  const escalatedGate = (escalatedResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const baseSev = SEVERITY_ORDER[baseGate] ?? 0;
+  const escalatedSev = SEVERITY_ORDER[escalatedGate] ?? 0;
+
+  if (escalatedSev < baseSev) {
+    return [`AP-MONO: adding hypotension should not reduce severity. base=${baseGate}(${baseSev}), escalated=${escalatedGate}(${escalatedSev})`];
+  }
+  return [];
+}
+
 async function runSingleTest(tc: TestCase): Promise<TestResult> {
   const state = buildCaseState(tc);
   const result = await runComplaintGraph(state, tc.cc_id);
@@ -207,10 +485,25 @@ async function runSingleTest(tc: TestCase): Promise<TestResult> {
   let invariantFailures: string[] = [];
   if (tc.cc_id === "persistent_cough") {
     invariantFailures = checkCoughInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
-
     const monoViolations = await runMonotonicityCheck(tc);
     invariantFailures.push(...monoViolations);
+  } else if (tc.cc_id === "chest_pain") {
+    invariantFailures = checkChestPainInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
+    const monoViolations = await runChestPainMonotonicity(tc);
+    invariantFailures.push(...monoViolations);
+  } else if (tc.cc_id === "dizziness") {
+    invariantFailures = checkDizzinessInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
+    const monoViolations = await runDizzinessMonotonicity(tc);
+    invariantFailures.push(...monoViolations);
+  } else if (tc.cc_id === "abdominal_pain") {
+    invariantFailures = checkAbdPainInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
+    const monoViolations = await runAbdPainMonotonicity(tc);
+    invariantFailures.push(...monoViolations);
   }
+
+  const allClusters: string[] = s.activeClusters ?? [];
+  const top3 = allClusters.slice(0, 3);
+  writeDeltaLog(tc.id, tc.cc_id, rfGate, actualDisp, topCluster, top3, firedRFs);
 
   return {
     id: tc.id,
@@ -313,7 +606,12 @@ async function main() {
     dirs = [arg];
   }
 
+  const { hash, tabs } = computeSheetHash();
+  GLOBAL_SHEET_HASH = hash;
+
   console.log(`\n=== Golden Test Harness ===`);
+  console.log(`sheet_hash: ${hash}`);
+  console.log(`ruleset_versions: [${tabs.join(", ")}]`);
   console.log(`Directories: ${dirs.join(", ")}`);
 
   let totalPassed = 0;

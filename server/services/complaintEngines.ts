@@ -4,6 +4,9 @@ import { evaluateExpr } from "./exprEval";
 import { computeCentor } from "../agent/scoring/centor";
 import { computeEaracheScore } from "../agent/scoring/earacheScore";
 import { computeCoughScore } from "../agent/scoring/coughScore";
+import { computeChestPainScore } from "../agent/scoring/chestPainScore";
+import { computeDizzinessScore } from "../agent/scoring/dizzinessScore";
+import { computeAbdPainScore } from "../agent/scoring/abdPainScore";
 
 export interface QuestionResult {
   nextQuestion: CoreQuestion | null;
@@ -168,6 +171,71 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
         gerd_score: result.gerd_score,
         cluster: result.cluster,
         inputsUsed: result.inputsUsed,
+      };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "CHEST_PAIN_SCORE") {
+      const result = computeChestPainScore(state);
+      scores[def.scoreId.toLowerCase()] = result.chest_pain_score;
+      scores["acs_score"] = result.acs_score;
+      scores["pe_cp_score"] = result.pe_score;
+      scores["dissection_score"] = result.dissection_score;
+      scores["pericarditis_score"] = result.pericarditis_score;
+      scores["pneumonia_cp_score"] = result.pneumonia_score;
+      scores["gerd_cp_score"] = result.gerd_score;
+      scores["msk_score"] = result.msk_score;
+      scores["anxiety_score"] = result.anxiety_score;
+      components[def.scoreId] = {
+        ...result,
+      };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "DIZZINESS_SCORE") {
+      const result = computeDizzinessScore(state);
+      scores[def.scoreId.toLowerCase()] = result.dizziness_score;
+      scores["bppv_score"] = result.bppv_score;
+      scores["vest_neuritis_score"] = result.vest_neuritis_score;
+      scores["stroke_score"] = result.stroke_score;
+      scores["orthostatic_score"] = result.orthostatic_score;
+      scores["cardiac_score"] = result.cardiac_score;
+      scores["hypoglycemia_score"] = result.hypoglycemia_score;
+      scores["anemia_score"] = result.anemia_score;
+      scores["medication_score"] = result.medication_score;
+      components[def.scoreId] = {
+        ...result,
+      };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "ABD_PAIN_SCORE") {
+      const result = computeAbdPainScore(state);
+      scores[def.scoreId.toLowerCase()] = result.abd_pain_score;
+      scores["gastroenteritis_score"] = result.gastroenteritis_score;
+      scores["appendicitis_score"] = result.appendicitis_score;
+      scores["cholecystitis_score"] = result.cholecystitis_score;
+      scores["pancreatitis_score"] = result.pancreatitis_score;
+      scores["gi_bleed_score"] = result.gi_bleed_score;
+      scores["aaa_score"] = result.aaa_score;
+      scores["diverticulitis_score"] = result.diverticulitis_score;
+      scores["renal_colic_score"] = result.renal_colic_score;
+      scores["ectopic_score"] = result.ectopic_score;
+      scores["mesenteric_score"] = result.mesenteric_score;
+      components[def.scoreId] = {
+        ...result,
       };
 
       for (const input of def.inputs) {

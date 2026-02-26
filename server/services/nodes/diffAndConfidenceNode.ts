@@ -103,6 +103,64 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
     if (!hasDangerSignals && !hasSpecificCondition && viralUri > 0) {
       bump("CL_PULM_VIRAL_URI", viralUri, "scores.viral_uri_score", true);
     }
+  } else if (cc === "chest_pain") {
+    const acsScore = numish(s.scores?.acs_score);
+    const peCpScore = numish(s.scores?.pe_cp_score);
+    const dissectionScore = numish(s.scores?.dissection_score);
+    const pericarditisScore = numish(s.scores?.pericarditis_score);
+    const pneumoniaCpScore = numish(s.scores?.pneumonia_cp_score);
+    const gerdCpScore = numish(s.scores?.gerd_cp_score);
+    const mskScore = numish(s.scores?.msk_score);
+    const anxietyScore = numish(s.scores?.anxiety_score);
+
+    if (acsScore > 0) bump("CL_CARD_ACS", acsScore, "scores.acs_score", true);
+    if (peCpScore > 0) bump("CL_CARD_PE", peCpScore, "scores.pe_cp_score", true);
+    if (dissectionScore > 0) bump("CL_CARD_DISSECTION", dissectionScore, "scores.dissection_score", true);
+    if (pericarditisScore > 0) bump("CL_CARD_PERICARDITIS", pericarditisScore, "scores.pericarditis_score", true);
+    if (pneumoniaCpScore > 0) bump("CL_CARD_PNEUMONIA", pneumoniaCpScore, "scores.pneumonia_cp_score", true);
+    if (gerdCpScore > 0) bump("CL_CARD_GERD", gerdCpScore, "scores.gerd_cp_score", true);
+    if (mskScore > 0) bump("CL_CARD_MSK", mskScore, "scores.msk_score", true);
+    if (anxietyScore > 0) bump("CL_CARD_ANXIETY", anxietyScore, "scores.anxiety_score", true);
+  } else if (cc === "dizziness") {
+    const bppvScore = numish(s.scores?.bppv_score);
+    const vestNeuritisScore = numish(s.scores?.vest_neuritis_score);
+    const strokeScore = numish(s.scores?.stroke_score);
+    const orthostaticScore = numish(s.scores?.orthostatic_score);
+    const cardiacScore = numish(s.scores?.cardiac_score);
+    const hypoglycemiaScore = numish(s.scores?.hypoglycemia_score);
+    const anemiaScore = numish(s.scores?.anemia_score);
+    const medicationScore = numish(s.scores?.medication_score);
+
+    if (bppvScore > 0) bump("CL_NEURO_BPPV", bppvScore, "scores.bppv_score", true);
+    if (vestNeuritisScore > 0) bump("CL_NEURO_VEST_NEURITIS", vestNeuritisScore, "scores.vest_neuritis_score", true);
+    if (strokeScore > 0) bump("CL_NEURO_STROKE", strokeScore, "scores.stroke_score", true);
+    if (orthostaticScore > 0) bump("CL_NEURO_ORTHOSTATIC", orthostaticScore, "scores.orthostatic_score", true);
+    if (cardiacScore > 0) bump("CL_NEURO_CARDIAC", cardiacScore, "scores.cardiac_score", true);
+    if (hypoglycemiaScore > 0) bump("CL_NEURO_HYPOGLYCEMIA", hypoglycemiaScore, "scores.hypoglycemia_score", true);
+    if (anemiaScore > 0) bump("CL_NEURO_ANEMIA", anemiaScore, "scores.anemia_score", true);
+    if (medicationScore > 0) bump("CL_NEURO_MEDICATION", medicationScore, "scores.medication_score", true);
+  } else if (cc === "abdominal_pain") {
+    const gastroenteritisScore = numish(s.scores?.gastroenteritis_score);
+    const appendicitisScore = numish(s.scores?.appendicitis_score);
+    const cholecystitisScore = numish(s.scores?.cholecystitis_score);
+    const pancreatitisScore = numish(s.scores?.pancreatitis_score);
+    const giBleedScore = numish(s.scores?.gi_bleed_score);
+    const aaaScore = numish(s.scores?.aaa_score);
+    const diverticulitisScore = numish(s.scores?.diverticulitis_score);
+    const renalColicScore = numish(s.scores?.renal_colic_score);
+    const ectopicScore = numish(s.scores?.ectopic_score);
+    const mesentericScore = numish(s.scores?.mesenteric_score);
+
+    if (gastroenteritisScore > 0) bump("CL_GI_GASTROENTERITIS", gastroenteritisScore, "scores.gastroenteritis_score", true);
+    if (appendicitisScore > 0) bump("CL_GI_APPENDICITIS", appendicitisScore, "scores.appendicitis_score", true);
+    if (cholecystitisScore > 0) bump("CL_GI_CHOLECYSTITIS", cholecystitisScore, "scores.cholecystitis_score", true);
+    if (pancreatitisScore > 0) bump("CL_GI_PANCREATITIS", pancreatitisScore, "scores.pancreatitis_score", true);
+    if (giBleedScore > 0) bump("CL_GI_GI_BLEED", giBleedScore, "scores.gi_bleed_score", true);
+    if (aaaScore > 0) bump("CL_GI_AAA", aaaScore, "scores.aaa_score", true);
+    if (diverticulitisScore > 0) bump("CL_GI_DIVERTICULITIS", diverticulitisScore, "scores.diverticulitis_score", true);
+    if (renalColicScore > 0) bump("CL_GI_RENAL_COLIC", renalColicScore, "scores.renal_colic_score", true);
+    if (ectopicScore > 0) bump("CL_GI_ECTOPIC", ectopicScore, "scores.ectopic_score", true);
+    if (mesentericScore > 0) bump("CL_GI_MESENTERIC", mesentericScore, "scores.mesenteric_score", true);
   }
 
   const ranked = Object.entries(score)

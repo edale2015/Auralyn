@@ -53,17 +53,48 @@ This system deterministically assembles an auditable clinical state from multipl
 ### Complaint Golden Test Harness
 `scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all` to sweep all complaint directories.
 
-**Persistent Cough 4-Tier Harness (45 total tests):**
-- **Tier A (Golden)**: 15 cases in `tests/cases/pulm_cough/` — G01-G10 original golden set + G11 GERD, G12 PND, G13 ACE-I, G14 cough-variant asthma, G15 smoker chronic. Covers all dispositions (self_care, pcp, urgent_care, er_send), all 8 clusters, and all 6 red flag rules.
-- **Tier B (Fuzz)**: 30 cases in `tests/cases/pulm_cough_fuzz/` — 3 per golden (G01-G10): Pattern A (anchor removal), Pattern B (severity escalation via O2LOW/CP/hemop), Pattern C (edge/contradiction/boundary). Tests cluster ranking stability, gate severity transitions, and disposition priority ordering.
-- **Tier C (Invariants)**: 10 property assertions in `scripts/run_harness.ts` `checkCoughInvariants()` — INV-1 (CP→ESCALATE|ER_SEND), INV-2 (O2LOW→ER_SEND), INV-3 (ER_SEND→er_send), INV-4 (ESCALATE→urgent_care), INV-5 (short DUR+no danger→self_care), INV-6 (DUR≥8+no danger→pcp), INV-7 (wheeze+asthma→ASTHMA_EXAC), INV-8 (COPD→COPD_EXAC), INV-9 (monotonicity: O2LOW never reduces severity), INV-10 (hemoptysis→ER_SEND).
-- **Tier D (Monotonicity)**: `runMonotonicityCheck()` in harness runner — for each non-O2LOW test, re-runs with O2LOW toggled true and verifies gate severity never decreases (PASS→ESCALATE→ER_SEND).
+**Multi-Complaint 4-Tier Test Harness (175 total tests):**
+Run all: `npx tsx scripts/run_harness.ts --all` or per-directory: `npx tsx scripts/run_harness.ts tests/cases/<dir>`
+Sheet hash (SHA-256 of 6 CSVs) + delta log JSONL (`tests/logs/harness_delta.jsonl`) output on every run.
+
+**Persistent Cough (45 tests):**
+- **Tier A**: 15 golden in `tests/cases/pulm_cough/` (G01-G15). All dispositions, 8 clusters, 6 RF rules.
+- **Tier B**: 30 fuzz in `tests/cases/pulm_cough_fuzz/` (3 per G01-G10). Pattern A/B/C.
+- **Tier C**: `checkCoughInvariants()` — 10 invariants (INV-1 through INV-10).
+- **Tier D**: `runMonotonicityCheck()` — O2LOW toggle monotonicity.
+
+**Chest Pain (40 tests):**
+- **Tier A**: 10 golden in `tests/cases/card_chest_pain/` (G01-G10). Covers all 8 clusters, 6 RF rules, ACS/PE/dissection/pericarditis/pneumonia/GERD/MSK/anxiety.
+- **Tier B**: 30 fuzz in `tests/cases/card_chest_pain_fuzz/` (3 per golden). Pattern A/B/C.
+- **Tier C**: `checkChestPainInvariants()` — 6 invariants (CP-INV-1 through CP-INV-6).
+- **Tier D**: `runChestPainMonotonicity()` — syncope toggle monotonicity.
+
+**Dizziness (40 tests):**
+- **Tier A**: 10 golden in `tests/cases/neuro_dizziness/` (G01-G10). Covers all 8 clusters, 6 RF rules, BPPV/vestibular neuritis/stroke/orthostatic/cardiac/hypoglycemia/anemia/medication.
+- **Tier B**: 30 fuzz in `tests/cases/neuro_dizziness_fuzz/` (3 per golden). Pattern A/B/C.
+- **Tier C**: `checkDizzinessInvariants()` — 7 invariants (DZ-INV-1 through DZ-INV-7).
+- **Tier D**: `runDizzinessMonotonicity()` — focalNeuro toggle monotonicity.
+
+**Abdominal Pain (40 tests):**
+- **Tier A**: 10 golden in `tests/cases/gi_abdominal_pain/` (G01-G10). Covers all 10 clusters, 8 RF rules, appendicitis/cholecystitis/pancreatitis/GI bleed/AAA/diverticulitis/renal/ectopic/mesenteric.
+- **Tier B**: 30 fuzz in `tests/cases/gi_abdominal_pain_fuzz/` (3 per golden). Pattern A/B/C.
+- **Tier C**: `checkAbdPainInvariants()` — 8 invariants (AP-INV-1 through AP-INV-8).
+- **Tier D**: `runAbdPainMonotonicity()` — hypotension toggle monotonicity.
+
+**Sore Throat (10 tests):**
+- **Tier A**: 10 golden in `tests/cases/ent_sore_throat/` (G01-G10). Centor-based scoring, 6 RF rules, cluster="*" (wildcard).
 
 ### Data Corruption Guard
 `server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, and OUTPUT_TEMPLATES on every config load. Checks for: pasted-row corruption (tabs/multi-space in CC_ID), whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies. Cross-table checks verify template references from disposition rules exist, and question references in trigger expressions exist. Hard-fails on corruption to prevent silent rule poisoning. Integrated into `complaintConfigLoader.ts` — runs on every `loadComplaintConfig()` call. Admin endpoint: `GET /api/admin/validate/tabs` runs all validators and returns per-complaint coverage stats.
 
-### Persistent Cough Pipeline
-13 core questions (Q_COUGH_DUR through Q_COUGH_GERD), 6 red flag rules, 8 scoring clusters (PE_OVERLAP, PNEUMONIA, ASTHMA_EXAC, COPD_EXAC, VIRAL_URI, INFECTION, UACS_PND, GERD_COUGH). Viral URI cluster is suppressed in diffAndConfidenceNode when danger signals or specific conditions (asthma, COPD, PND, GERD, infection) are present. ER_SEND cases still compute clusters for audit/training (no short-circuit). Scoring module in `server/agent/scoring/coughScore.ts`, graph registered as PC_GRAPH_V1.
+### Complaint Pipelines
+Six complaint pipelines are implemented, each with core questions, red flag rules, scoring modules, disposition rules, and output templates:
+- **Persistent Cough** (`persistent_cough`): 13 core questions, 6 red flag rules, 8 clusters (PE_OVERLAP, PNEUMONIA, ASTHMA_EXAC, COPD_EXAC, VIRAL_URI, INFECTION, UACS_PND, GERD_COUGH). Scoring: `coughScore.ts`, graph: PC_GRAPH_V1.
+- **Chest Pain** (`chest_pain`): 21 core questions (Q_CP_*), 6 red flag rules (RF_CP_ACS, RF_CP_PE, RF_CP_DISSECTION, RF_CP_SYNCOPE, RF_CP_HTN_EMERGENCY, RF_CP_SOB_ALONE), 8 clusters (CL_CARD_ACS, CL_CARD_PE, CL_CARD_DISSECTION, CL_CARD_PERICARDITIS, CL_CARD_PNEUMONIA, CL_CARD_GERD, CL_CARD_MSK, CL_CARD_ANXIETY). Scoring: `chestPainScore.ts`, graph: CP_GRAPH_V1.
+- **Dizziness** (`dizziness`): 20 core questions (Q_DZ_*), 6 red flag rules (RF_DZ_STROKE, RF_DZ_POSTERIOR_STROKE, RF_DZ_CARDIAC_SYNCOPE, RF_DZ_MENINGITIS, RF_DZ_GI_BLEED, RF_DZ_SYNCOPE_ALONE), 8 clusters (CL_NEURO_BPPV, CL_NEURO_VEST_NEURITIS, CL_NEURO_STROKE, CL_NEURO_ORTHOSTATIC, CL_NEURO_CARDIAC, CL_NEURO_HYPOGLYCEMIA, CL_NEURO_ANEMIA, CL_NEURO_MEDICATION). Scoring: `dizzinessScore.ts`, graph: DZ_GRAPH_V1.
+- **Abdominal Pain** (`abdominal_pain`): 19 core questions (Q_AP_*), 8 red flag rules (RF_AP_APPENDICITIS, RF_AP_GI_BLEED, RF_AP_AAA, RF_AP_PANCREATITIS, RF_AP_ECTOPIC, RF_AP_MESENTERIC, RF_AP_CHOLECYSTITIS, RF_AP_ECTOPIC_STABLE), 10 clusters (CL_GI_GASTROENTERITIS, CL_GI_APPENDICITIS, CL_GI_CHOLECYSTITIS, CL_GI_PANCREATITIS, CL_GI_GI_BLEED, CL_GI_AAA, CL_GI_DIVERTICULITIS, CL_GI_RENAL_COLIC, CL_GI_ECTOPIC, CL_GI_MESENTERIC). Scoring: `abdPainScore.ts`, graph: AP_GRAPH_V1.
+- **Sore Throat** (`sore_throat`): 15 core questions (Q_FEVER, Q_COUGH, etc.), 6 red flag rules (RF_ST_AIRWAY, RF_ST_PERITONSILLAR, RF_ST_NECK_SWELLING, RF_ST_DYSPNEA, RF_ST_PERSISTENT, RF_ST_SCARLET). Centor-score based, graph: ST_GRAPH_V1.
+- **Earache** (`earache`): Basic pipeline.
 
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags control channel activation, and a dashboard monitors channel operations.
