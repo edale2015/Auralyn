@@ -51,3 +51,38 @@ abdominal_pain,DISP_AP_RENAL,4,"answers.Q_AP_FLANK_GROIN == 'yes' && answers.Q_A
 abdominal_pain,DISP_AP_RENAL_PAIN,5,"answers.Q_AP_FLANK_GROIN == 'yes'",urgent_care,TPL_AP_RENAL,MODERATE
 abdominal_pain,DISP_AP_GASTRO,6,"answers.Q_AP_DIARRHEA == 'yes' && answers.Q_AP_FEVER != 'yes' && answers.Q_AP_BLOODY_STOOL != 'yes'",self_care,TPL_AP_GASTRO,HIGH
 abdominal_pain,DISP_AP_DEFAULT,99,true,routine,TPL_AP_DEFAULT,LOW
+gu_uti_symptoms,DISP_UTI_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_UTI_ER_SEND,HIGH
+gu_uti_symptoms,DISP_UTI_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_UTI_ESCALATE,HIGH
+gu_uti_symptoms,DISP_UTI_PYELO,3,"answers.Q_UTI_FLANK_PAIN == 'yes' && answers.Q_UTI_FEVER == 'yes'",urgent_care,TPL_UTI_PYELO,HIGH
+gu_uti_symptoms,DISP_UTI_PREGNANCY,4,"answers.Q_UTI_PREGNANT == 'yes' && answers.Q_UTI_DYSURIA == 'yes'",urgent_care,TPL_UTI_PREGNANCY,HIGH
+gu_uti_symptoms,DISP_UTI_MALE,5,"answers.Q_UTI_MALE == 'yes' && answers.Q_UTI_DYSURIA == 'yes'",pcp,TPL_UTI_MALE,MODERATE
+gu_uti_symptoms,DISP_UTI_RENAL_STONE,6,"answers.Q_UTI_COLICKY_PAIN == 'yes' && answers.Q_UTI_GROIN_RADIATION == 'yes'",urgent_care,TPL_UTI_RENAL_STONE,HIGH
+gu_uti_symptoms,DISP_UTI_STI,7,"answers.Q_UTI_DISCHARGE == 'yes' && answers.Q_UTI_NEW_PARTNER == 'yes'",pcp,TPL_UTI_STI,MODERATE
+gu_uti_symptoms,DISP_UTI_CYSTITIS,8,"answers.Q_UTI_DYSURIA == 'yes' && answers.Q_UTI_FREQUENCY == 'yes' && answers.Q_UTI_FEVER != 'yes'",self_care,TPL_UTI_CYSTITIS,HIGH
+gu_uti_symptoms,DISP_UTI_DEFAULT,99,true,routine,TPL_UTI_DEFAULT,LOW
+gu_testicular_pain_prostatitis,DISP_TP_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_TP_ER_SEND,HIGH
+gu_testicular_pain_prostatitis,DISP_TP_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_TP_ESCALATE,HIGH
+gu_testicular_pain_prostatitis,DISP_TP_PROSTATITIS,3,"answers.Q_TP_FEVER == 'yes' && answers.Q_TP_PERINEAL_PAIN == 'yes'",urgent_care,TPL_TP_PROSTATITIS,HIGH
+gu_testicular_pain_prostatitis,DISP_TP_EPID_STI,4,"answers.Q_TP_DYSURIA == 'yes' && answers.Q_TP_DISCHARGE == 'yes'",urgent_care,TPL_TP_EPID_STI,HIGH
+gu_testicular_pain_prostatitis,DISP_TP_EPID_ENTERIC,5,"answers.Q_TP_OLDER_AGE == 'yes' && answers.Q_TP_URINARY_SX == 'yes'",urgent_care,TPL_TP_EPID_ENTERIC,MODERATE
+gu_testicular_pain_prostatitis,DISP_TP_STONE,6,"answers.Q_TP_FLANK_GROIN == 'yes' && answers.Q_TP_HEMATURIA == 'yes'",urgent_care,TPL_TP_STONE,HIGH
+gu_testicular_pain_prostatitis,DISP_TP_TRAUMA,7,"answers.Q_TP_TRAUMA == 'yes' && answers.Q_TP_SWELLING == 'yes'",urgent_care,TPL_TP_TRAUMA,MODERATE
+gu_testicular_pain_prostatitis,DISP_TP_VARICOCELE,8,"answers.Q_TP_CHRONIC == 'yes' && answers.Q_TP_WORSE_STANDING == 'yes' && answers.Q_TP_FEVER != 'yes'",pcp,TPL_TP_VARICOCELE,HIGH
+gu_testicular_pain_prostatitis,DISP_TP_DEFAULT,99,true,routine,TPL_TP_DEFAULT,LOW
+gyn_pelvic_pain,DISP_PP_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_PP_ER_SEND,HIGH
+gyn_pelvic_pain,DISP_PP_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_PP_ESCALATE,HIGH
+gyn_pelvic_pain,DISP_PP_PID,3,"answers.Q_PP_FEVER == 'yes' && answers.Q_PP_DISCHARGE == 'yes'",urgent_care,TPL_PP_PID,HIGH
+gyn_pelvic_pain,DISP_PP_CYST,4,"answers.Q_PP_SUDDEN_ONSET == 'yes' && answers.Q_PP_AFTER_ACTIVITY == 'yes' && answers.Q_PP_RESOLVING == 'yes'",urgent_care,TPL_PP_CYST,MODERATE
+gyn_pelvic_pain,DISP_PP_UTI_MIMIC,5,"answers.Q_PP_DYSURIA == 'yes' && answers.Q_PP_FREQUENCY == 'yes'",pcp,TPL_PP_UTI_MIMIC,MODERATE
+gyn_pelvic_pain,DISP_PP_FIBROIDS,6,"answers.Q_PP_HEAVY_BLEEDING == 'yes' && answers.Q_PP_PELVIC_PRESSURE == 'yes'",pcp,TPL_PP_FIBROIDS,HIGH
+gyn_pelvic_pain,DISP_PP_ENDOMETRIOSIS,7,"answers.Q_PP_CYCLICAL == 'yes' && answers.Q_PP_MENSES_RELATED == 'yes'",pcp,TPL_PP_ENDOMETRIOSIS,HIGH
+gyn_pelvic_pain,DISP_PP_BENIGN,8,"answers.Q_PP_PELVIC_PAIN == 'yes' && answers.Q_PP_FEVER != 'yes' && answers.Q_PP_PREGNANT != 'yes' && answers.Q_PP_SUDDEN_ONSET != 'yes'",self_care,TPL_PP_BENIGN,MODERATE
+gyn_pelvic_pain,DISP_PP_DEFAULT,99,true,routine,TPL_PP_DEFAULT,LOW
+neuro_headache,DISP_HA_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_HA_ER_SEND,HIGH
+neuro_headache,DISP_HA_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_HA_ESCALATE,HIGH
+neuro_headache,DISP_HA_GCA,3,"answers.Q_HA_AGE_OVER_50 == 'yes' && answers.Q_HA_NEW_HEADACHE == 'yes' && answers.Q_HA_JAW_CLAUDICATION == 'yes'",urgent_care,TPL_HA_GCA,HIGH
+neuro_headache,DISP_HA_CO,4,"answers.Q_HA_HOUSEHOLD_SICK == 'yes' && answers.Q_HA_NAUSEA == 'yes'",er_send,TPL_HA_CO,HIGH
+neuro_headache,DISP_HA_MIGRAINE,5,"answers.Q_HA_UNILATERAL == 'yes' && answers.Q_HA_THROBBING == 'yes' && answers.Q_HA_PHOTOPHOBIA == 'yes'",pcp,TPL_HA_MIGRAINE,HIGH
+neuro_headache,DISP_HA_CLUSTER,6,"answers.Q_HA_ORBITAL == 'yes' && answers.Q_HA_TEARING == 'yes' && answers.Q_HA_RESTLESS == 'yes'",pcp,TPL_HA_CLUSTER,HIGH
+neuro_headache,DISP_HA_TENSION,7,"answers.Q_HA_BILATERAL == 'yes' && answers.Q_HA_BAND_LIKE == 'yes' && answers.Q_HA_STRESS == 'yes'",self_care,TPL_HA_TENSION,HIGH
+neuro_headache,DISP_HA_DEFAULT,99,true,routine,TPL_HA_DEFAULT,LOW

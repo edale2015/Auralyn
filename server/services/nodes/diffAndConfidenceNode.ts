@@ -161,6 +161,94 @@ export async function runDiffAndConfidenceNode(state: CaseState): Promise<DiffRe
     if (renalColicScore > 0) bump("CL_GI_RENAL_COLIC", renalColicScore, "scores.renal_colic_score", true);
     if (ectopicScore > 0) bump("CL_GI_ECTOPIC", ectopicScore, "scores.ectopic_score", true);
     if (mesentericScore > 0) bump("CL_GI_MESENTERIC", mesentericScore, "scores.mesenteric_score", true);
+  } else if (cc === "gu_uti_symptoms") {
+    const cystitisScore = numish(s.scores?.cystitis_score);
+    const pyeloScore = numish(s.scores?.pyelo_score);
+    const urosepsisScore = numish(s.scores?.urosepsis_score);
+    const pregnancyUtiScore = numish(s.scores?.pregnancy_uti_score);
+    const maleUtiScore = numish(s.scores?.male_uti_score);
+    const utiImmunoScore = numish(s.scores?.uti_immuno_score);
+    const hematuriaScore = numish(s.scores?.hematuria_score);
+    const utiRenalStoneScore = numish(s.scores?.uti_renal_stone_score);
+    const stiMimicScore = numish(s.scores?.sti_mimic_score);
+    const noUtiScore = numish(s.scores?.no_uti_score);
+
+    if (cystitisScore > 0) bump("CL_GU_CYSTITIS", cystitisScore, "scores.cystitis_score", true);
+    if (pyeloScore > 0) bump("CL_GU_PYELO", pyeloScore, "scores.pyelo_score", true);
+    if (urosepsisScore > 0) bump("CL_GU_UROSEPSIS", urosepsisScore, "scores.urosepsis_score", true);
+    if (pregnancyUtiScore > 0) bump("CL_GU_PREGNANCY_UTI", pregnancyUtiScore, "scores.pregnancy_uti_score", true);
+    if (maleUtiScore > 0) bump("CL_GU_MALE_UTI", maleUtiScore, "scores.male_uti_score", true);
+    if (utiImmunoScore > 0) bump("CL_GU_IMMUNO", utiImmunoScore, "scores.uti_immuno_score", true);
+    if (hematuriaScore > 0) bump("CL_GU_HEMATURIA", hematuriaScore, "scores.hematuria_score", true);
+    if (utiRenalStoneScore > 0) bump("CL_GU_RENAL_STONE", utiRenalStoneScore, "scores.uti_renal_stone_score", true);
+    if (stiMimicScore > 0) bump("CL_GU_STI_MIMIC", stiMimicScore, "scores.sti_mimic_score", true);
+    if (noUtiScore > 0) bump("CL_GU_NO_UTI", noUtiScore, "scores.no_uti_score", true);
+  } else if (cc === "gu_testicular_pain_prostatitis") {
+    const torsionScore = numish(s.scores?.torsion_score);
+    const epidStiScore = numish(s.scores?.epid_sti_score);
+    const epidEntericScore = numish(s.scores?.epid_enteric_score);
+    const fournierScore = numish(s.scores?.fournier_score);
+    const herniaScore = numish(s.scores?.hernia_score);
+    const prostatitisScore = numish(s.scores?.prostatitis_score);
+    const tpTraumaScore = numish(s.scores?.tp_trauma_score);
+    const varicoceleScore = numish(s.scores?.varicocele_score);
+    const stoneRefScore = numish(s.scores?.stone_ref_score);
+    const benignTpScore = numish(s.scores?.benign_tp_score);
+
+    if (torsionScore > 0) bump("CL_GU_TORSION", torsionScore, "scores.torsion_score", true);
+    if (epidStiScore > 0) bump("CL_GU_EPID_STI", epidStiScore, "scores.epid_sti_score", true);
+    if (epidEntericScore > 0) bump("CL_GU_EPID_ENTERIC", epidEntericScore, "scores.epid_enteric_score", true);
+    if (fournierScore > 0) bump("CL_GU_FOURNIER", fournierScore, "scores.fournier_score", true);
+    if (herniaScore > 0) bump("CL_GU_HERNIA", herniaScore, "scores.hernia_score", true);
+    if (prostatitisScore > 0) bump("CL_GU_PROSTATITIS", prostatitisScore, "scores.prostatitis_score", true);
+    if (tpTraumaScore > 0) bump("CL_GU_TRAUMA", tpTraumaScore, "scores.tp_trauma_score", true);
+    if (varicoceleScore > 0) bump("CL_GU_VARICOCELE", varicoceleScore, "scores.varicocele_score", true);
+    if (stoneRefScore > 0) bump("CL_GU_STONE_REF", stoneRefScore, "scores.stone_ref_score", true);
+    if (benignTpScore > 0) bump("CL_GU_BENIGN_TP", benignTpScore, "scores.benign_tp_score", true);
+  } else if (cc === "gyn_pelvic_pain") {
+    const ppEctopicScore = numish(s.scores?.pp_ectopic_score);
+    const ppTorsionScore = numish(s.scores?.pp_torsion_score);
+    const pidScore = numish(s.scores?.pid_score);
+    const rupturedCystScore = numish(s.scores?.ruptured_cyst_score);
+    const endometriosisScore = numish(s.scores?.endometriosis_score);
+    const fibroidsScore = numish(s.scores?.fibroids_score);
+    const ppUtiMimicScore = numish(s.scores?.pp_uti_mimic_score);
+    const ppAppendicitisScore = numish(s.scores?.pp_appendicitis_score);
+    const ppSepsisScore = numish(s.scores?.pp_sepsis_score);
+    const benignPpScore = numish(s.scores?.benign_pp_score);
+
+    if (ppEctopicScore > 0) bump("CL_GYN_ECTOPIC", ppEctopicScore, "scores.pp_ectopic_score", true);
+    if (ppTorsionScore > 0) bump("CL_GYN_TORSION", ppTorsionScore, "scores.pp_torsion_score", true);
+    if (pidScore > 0) bump("CL_GYN_PID", pidScore, "scores.pid_score", true);
+    if (rupturedCystScore > 0) bump("CL_GYN_RUPTURED_CYST", rupturedCystScore, "scores.ruptured_cyst_score", true);
+    if (endometriosisScore > 0) bump("CL_GYN_ENDOMETRIOSIS", endometriosisScore, "scores.endometriosis_score", true);
+    if (fibroidsScore > 0) bump("CL_GYN_FIBROIDS", fibroidsScore, "scores.fibroids_score", true);
+    if (ppUtiMimicScore > 0) bump("CL_GYN_UTI_MIMIC", ppUtiMimicScore, "scores.pp_uti_mimic_score", true);
+    if (ppAppendicitisScore > 0) bump("CL_GYN_APPENDICITIS", ppAppendicitisScore, "scores.pp_appendicitis_score", true);
+    if (ppSepsisScore > 0) bump("CL_GYN_SEPSIS", ppSepsisScore, "scores.pp_sepsis_score", true);
+    if (benignPpScore > 0) bump("CL_GYN_BENIGN", benignPpScore, "scores.benign_pp_score", true);
+  } else if (cc === "neuro_headache") {
+    const tensionScore = numish(s.scores?.tension_score);
+    const migraineScore = numish(s.scores?.migraine_score);
+    const sahScore = numish(s.scores?.sah_score);
+    const meningitisHaScore = numish(s.scores?.meningitis_ha_score);
+    const strokeHaScore = numish(s.scores?.stroke_ha_score);
+    const gcaScore = numish(s.scores?.gca_score);
+    const coToxinScore = numish(s.scores?.co_toxin_score);
+    const traumaHaScore = numish(s.scores?.trauma_ha_score);
+    const htnHaScore = numish(s.scores?.htn_ha_score);
+    const clusterHaScore = numish(s.scores?.cluster_ha_score);
+
+    if (tensionScore > 0) bump("CL_NEURO_TENSION", tensionScore, "scores.tension_score", true);
+    if (migraineScore > 0) bump("CL_NEURO_MIGRAINE", migraineScore, "scores.migraine_score", true);
+    if (sahScore > 0) bump("CL_NEURO_SAH", sahScore, "scores.sah_score", true);
+    if (meningitisHaScore > 0) bump("CL_NEURO_MENINGITIS_HA", meningitisHaScore, "scores.meningitis_ha_score", true);
+    if (strokeHaScore > 0) bump("CL_NEURO_STROKE_HA", strokeHaScore, "scores.stroke_ha_score", true);
+    if (gcaScore > 0) bump("CL_NEURO_GCA", gcaScore, "scores.gca_score", true);
+    if (coToxinScore > 0) bump("CL_NEURO_CO_TOXIN", coToxinScore, "scores.co_toxin_score", true);
+    if (traumaHaScore > 0) bump("CL_NEURO_TRAUMA_HA", traumaHaScore, "scores.trauma_ha_score", true);
+    if (htnHaScore > 0) bump("CL_NEURO_HTN_HA", htnHaScore, "scores.htn_ha_score", true);
+    if (clusterHaScore > 0) bump("CL_NEURO_CLUSTER_HA", clusterHaScore, "scores.cluster_ha_score", true);
   }
 
   const ranked = Object.entries(score)

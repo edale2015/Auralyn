@@ -9,7 +9,7 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 
 ### Frontend
-The frontend is built with React 18 and TypeScript, using `shadcn/ui` (Radix UI based) with Tailwind CSS. It includes physician login, patient intake forms, case status views, a signed visit summary, a physician dashboard, and a Trace Viewer with LLM variant filtering.
+The frontend is built with React 18 and TypeScript, utilizing `shadcn/ui` (Radix UI based) with Tailwind CSS. It supports physician login, patient intake, case status views, a signed visit summary, a physician dashboard, and a Trace Viewer.
 
 ### Backend
 The backend uses Express 5 on Node.js with TypeScript, exposing REST API endpoints. It features a constrained agent architecture for deterministic medical triage, including a next-action picker, action execution with trace capture, and a plan/act/observe agent loop. Key functionalities include Centor score calculation, red flag detection, and a supervisor gate for patient-facing outputs. LLM integrations utilize Replit AI Integrations (OpenAI-compatible) with `gpt-5-mini`, incorporating rate limiting, per-run budgets, and a circuit breaker.
@@ -21,10 +21,10 @@ Primary data storage is Firebase Firestore, with SQLite used as an abstraction f
 Physician authentication uses password-only, session-based HMAC-signed httpOnly cookies. Patient access is token-based for intake, requiring a 6-digit code verification.
 
 ### Agent System
-The agent system manages patient flow through various routing states (e.g., `INTAKE_PENDING` to `REVIEW_REQUIRED`) using `AgentAction` types (e.g., `ASK_QUESTION`, `RESOLVE_DIAGNOSTICS`, `SET_DISPOSITION`). A pipeline orchestrator handles complaint routing, FHIR prefill, modifiers, rules evaluation, question queue generation, and a supervisor gate. LLM-powered actions like `REFRAME_QUESTION` and `DRAFT_SUMMARY` are used. The system supports prompt template versioning and LLM A/B testing with guardrails.
+The agent system manages patient flow through various routing states using `AgentAction` types. A pipeline orchestrator handles complaint routing, FHIR prefill, modifiers, rules evaluation, question queue generation, and a supervisor gate. LLM-powered actions like `REFRAME_QUESTION` and `DRAFT_SUMMARY` are used. The system supports prompt template versioning and LLM A/B testing with guardrails.
 
 ### Multi-System Triage Pipeline
-A robust triage pipeline uses canonical keys for medical systems, chief complaints, and clusters. A unified sheets registry, loaded from Google Sheets, provides dynamically configured data for complaint routing, integration maps, FHIR prefill, modifiers, and rules engines. A question queue dynamically builds ordered questions, and an enhanced supervisor manages red flags and triage upgrades. A cluster/disposition engine resolves dispositions, and a diagnosis resolver provides confidence-scored diagnostic candidates. Medication suggestions are generated with safety checks, including allergy blocking, pregnancy contraindication detection, and renal/hepatic adjustment flags.
+A robust triage pipeline uses canonical keys for medical systems, chief complaints, and clusters. A unified sheets registry, loaded from Google Sheets, provides dynamically configured data for complaint routing, integration maps, FHIR prefill, modifiers, and rules engines. A question queue dynamically builds ordered questions, and an enhanced supervisor manages red flags and triage upgrades. A cluster/disposition engine resolves dispositions, and a diagnosis resolver provides confidence-scored diagnostic candidates. Medication suggestions are generated with safety checks.
 
 ### Obesity Agent & Metabolic Triage
 A secondary-track ObesityAgent runs in parallel with primary complaint routing, triggering on BMI/weight indicators or metabolic medications. It extends `CaseState` with metabolic, DM, HTN, bariatric, GLP-1, and social details. New `AgentAction` types support specific interventions, such as `ASK_CLUSTER`, `EDUCATION_BLOCK`, and `ER_SEND_RECOMMENDATION`. The agent includes detailed HTN, DM, and Obesity Entry escalation rules, along with built-in spot interventions for common metabolic issues. Red flags like HTN emergency, DKA/HHS, and severe hypoglycemia are integrated with the supervisor gate for immediate action.
@@ -33,68 +33,42 @@ A secondary-track ObesityAgent runs in parallel with primary complaint routing, 
 This system deterministically assembles an auditable clinical state from multiple data tables, capturing evidence traces. It integrates `buildClinicalState()`, `evaluateRedFlagsMaster()`, and `selectSpotInterventions()`. A `runCrossoverHooks()` orchestrates parallel execution of red flag evaluation, urgent care spot interventions, the obesity agent, confidence scoring, care gap evaluation, and the education sandbox, with a priority merge order and ER_SEND short-circuiting. State inference for DM/HTN/GLP-1 conditions is automated based on medication lists and PMH. A multi-channel output formatter renders agent outputs for web, WhatsApp/Telegram, and eCW formats.
 
 ### Clinical State Confidence Scoring
-`computeConfidence()` in `server/services/confidenceScoring.ts` assigns HIGH/MODERATE/LOW confidence to each inferred condition (DM, HTN, GLP-1, bariatric, anticoagulation) based on evidence strength (medication + PMH match = HIGH, single source = MODERATE, vague complaints with no context = LOW). Global confidence is the maximum of all inferences. Integrated into `runCrossoverHooks()` before red flag gate.
+`computeConfidence()` assigns HIGH/MODERATE/LOW confidence to each inferred condition (DM, HTN, GLP-1, bariatric, anticoagulation) based on evidence strength. Global confidence is the maximum of all inferences. Integrated into `runCrossoverHooks()` before the red flag gate.
 
 ### Care Gap Engine
-`evaluateCareGaps()` in `server/services/careGapEngine.ts` evaluates gaps across DM (A1c, UACR, eye exam, statin eligibility, hypo education), HTN (home BP, labs monitoring, OSA screening), bariatric (micronutrient panel, thiamine risk), GLP-1 (lean mass preservation, gallbladder/pancreatitis education), anticoagulation monitoring, and PCP access navigation. Gaps are severity-boosted when `social.pcpAccessDelay=true`. Only runs when redFlagGate=PASS and not EMERGENT_ESCALATION.
+`evaluateCareGaps()` evaluates gaps across various conditions (DM, HTN, bariatric, GLP-1, anticoagulation monitoring, and PCP access navigation). Gaps are severity-boosted when `social.pcpAccessDelay=true`. Only runs when redFlagGate=PASS and not EMERGENT_ESCALATION.
 
 ### Red Flag Audit & Consistency Checker
-`runRedFlagAudit()` in `server/services/redFlagAudit.ts` validates RF references across RED_FLAGS_MASTER, MED_CONDITION_INTELLIGENCE_RULES, and URGENT_CARE_SPOT_INTERVENTIONS. Checks for duplicate/conflicting IDs, overlapping rules, unreachable triggers (references to nonexistent CaseState fields), and channel rendering completeness (ER_SEND flags without immediateActions text). Exposed via `GET /api/admin/audit/redflags`.
+`runRedFlagAudit()` validates RF references across RED_FLAGS_MASTER, MED_CONDITION_INTELLIGENCE_RULES, and URGENT_CARE_SPOT_INTERVENTIONS. It checks for duplicate/conflicting IDs, overlapping rules, unreachable triggers, and channel rendering completeness.
 
 ### Agent Trace Viewer
-`server/services/traceViewer.ts` provides an in-memory 200-entry LRU trace store. `buildTraceTimeline()` constructs ordered evidence chains: INPUT → CLINICAL_STATE (med normalization, condition inference, confirmed problems, risk flags, tables queried) → CONFIDENCE → RED_FLAG_GATE → UC_INTERVENTIONS → OBESITY_AGENT → CARE_GAPS → FINAL_OUTPUT. Each step includes evidence arrays. Exposed via `GET /api/admin/trace` (list) and `GET /api/admin/trace/:scenarioId` (detail).
+`server/services/traceViewer.ts` provides an in-memory 200-entry LRU trace store. `buildTraceTimeline()` constructs ordered evidence chains: INPUT → CLINICAL_STATE (med normalization, condition inference, confirmed problems, risk flags, tables queried) → CONFIDENCE → RED_FLAG_GATE → UC_INTERVENTIONS → OBESITY_AGENT → CARE_GAPS → FINAL_OUTPUT. Each step includes evidence arrays.
 
 ### Safe Freeform Education Sandbox
-`evaluateSandboxEligibility()` in `server/services/safeFreeformSandbox.ts` gates education-only content. Disabled if ER_SEND active or confidence=LOW. Never produces prescriptions/orders — only educational template content citing deterministic care gap and spot intervention recommendations. `SAFE_FREEFORM_EDUCATION` action type added to `AgentAction` union.
+`evaluateSandboxEligibility()` gates education-only content. Disabled if ER_SEND active or confidence=LOW. Never produces prescriptions/orders — only educational template content citing deterministic care gap and spot intervention recommendations. `SAFE_FREEFORM_EDUCATION` action type added to `AgentAction` union.
 
 ### Stress Test Harness
-`POST /api/admin/stress-test` accepts an array of scenarios with assertions (expectRedFlagGate, expectConfidence, expectMinCareGaps, expectCareGapIds, expectMinRedFlags, expectRoutingState, expectSystem, expectMinSpotInterventions, expectNoEmergent). 100 pre-built scenarios in `server/tests/stressScenarios.json` cover healthy adults, DM/HTN/GLP-1/bariatric patients, anticoagulation, ER_SEND triggers, vague complaints, and complex multi-comorbidity cases. A standalone runner script at `server/tests/runStressTest.ts` can execute all scenarios via CLI.
+`POST /api/admin/stress-test` accepts an array of scenarios with assertions. 100 pre-built scenarios in `server/tests/stressScenarios.json` cover various patient types and conditions, including ER_SEND triggers. A standalone runner script at `server/tests/runStressTest.ts` can execute all scenarios via CLI.
 
 ### Complaint Golden Test Harness
-`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all` to sweep all complaint directories.
+`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all`.
 
-**Multi-Complaint 4-Tier Test Harness (175 total tests):**
-Run all: `npx tsx scripts/run_harness.ts --all` or per-directory: `npx tsx scripts/run_harness.ts tests/cases/<dir>`
-Sheet hash (SHA-256 of 6 CSVs) + delta log JSONL (`tests/logs/harness_delta.jsonl`) output on every run.
-
-**Persistent Cough (45 tests):**
-- **Tier A**: 15 golden in `tests/cases/pulm_cough/` (G01-G15). All dispositions, 8 clusters, 6 RF rules.
-- **Tier B**: 30 fuzz in `tests/cases/pulm_cough_fuzz/` (3 per G01-G10). Pattern A/B/C.
-- **Tier C**: `checkCoughInvariants()` — 10 invariants (INV-1 through INV-10).
-- **Tier D**: `runMonotonicityCheck()` — O2LOW toggle monotonicity.
-
-**Chest Pain (40 tests):**
-- **Tier A**: 10 golden in `tests/cases/card_chest_pain/` (G01-G10). Covers all 8 clusters, 6 RF rules, ACS/PE/dissection/pericarditis/pneumonia/GERD/MSK/anxiety.
-- **Tier B**: 30 fuzz in `tests/cases/card_chest_pain_fuzz/` (3 per golden). Pattern A/B/C.
-- **Tier C**: `checkChestPainInvariants()` — 6 invariants (CP-INV-1 through CP-INV-6).
-- **Tier D**: `runChestPainMonotonicity()` — syncope toggle monotonicity.
-
-**Dizziness (40 tests):**
-- **Tier A**: 10 golden in `tests/cases/neuro_dizziness/` (G01-G10). Covers all 8 clusters, 6 RF rules, BPPV/vestibular neuritis/stroke/orthostatic/cardiac/hypoglycemia/anemia/medication.
-- **Tier B**: 30 fuzz in `tests/cases/neuro_dizziness_fuzz/` (3 per golden). Pattern A/B/C.
-- **Tier C**: `checkDizzinessInvariants()` — 7 invariants (DZ-INV-1 through DZ-INV-7).
-- **Tier D**: `runDizzinessMonotonicity()` — focalNeuro toggle monotonicity.
-
-**Abdominal Pain (40 tests):**
-- **Tier A**: 10 golden in `tests/cases/gi_abdominal_pain/` (G01-G10). Covers all 10 clusters, 8 RF rules, appendicitis/cholecystitis/pancreatitis/GI bleed/AAA/diverticulitis/renal/ectopic/mesenteric.
-- **Tier B**: 30 fuzz in `tests/cases/gi_abdominal_pain_fuzz/` (3 per golden). Pattern A/B/C.
-- **Tier C**: `checkAbdPainInvariants()` — 8 invariants (AP-INV-1 through AP-INV-8).
-- **Tier D**: `runAbdPainMonotonicity()` — hypotension toggle monotonicity.
-
-**Sore Throat (10 tests):**
-- **Tier A**: 10 golden in `tests/cases/ent_sore_throat/` (G01-G10). Centor-based scoring, 6 RF rules, cluster="*" (wildcard).
+**215+ total tests across 13 directories:**
+- Persistent Cough (45 tests): 15 golden + 30 fuzz + invariants + monotonicity
+- Chest Pain (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
+- Dizziness (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
+- Abdominal Pain (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
+- Sore Throat (10 tests): 10 golden
+- UTI / Urinary Symptoms (10 tests): 10 golden in `tests/cases/gu_uti_symptoms/`
+- Testicular Pain / Prostatitis (10 tests): 10 golden in `tests/cases/gu_testicular_pain_prostatitis/`
+- Pelvic Pain (10 tests): 10 golden in `tests/cases/gyn_pelvic_pain/`
+- Headache (10 tests): 10 golden in `tests/cases/neuro_headache/`
 
 ### Data Corruption Guard
-`server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, and OUTPUT_TEMPLATES on every config load. Checks for: pasted-row corruption (tabs/multi-space in CC_ID), whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies. Cross-table checks verify template references from disposition rules exist, and question references in trigger expressions exist. Hard-fails on corruption to prevent silent rule poisoning. Integrated into `complaintConfigLoader.ts` — runs on every `loadComplaintConfig()` call. Admin endpoint: `GET /api/admin/validate/tabs` runs all validators and returns per-complaint coverage stats.
+`server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, and OUTPUT_TEMPLATES on every config load. It checks for pasted-row corruption, whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, and empty template bodies. Cross-table checks verify template references and question references in trigger expressions. It hard-fails on corruption to prevent silent rule poisoning.
 
 ### Complaint Pipelines
-Six complaint pipelines are implemented, each with core questions, red flag rules, scoring modules, disposition rules, and output templates:
-- **Persistent Cough** (`persistent_cough`): 13 core questions, 6 red flag rules, 8 clusters (PE_OVERLAP, PNEUMONIA, ASTHMA_EXAC, COPD_EXAC, VIRAL_URI, INFECTION, UACS_PND, GERD_COUGH). Scoring: `coughScore.ts`, graph: PC_GRAPH_V1.
-- **Chest Pain** (`chest_pain`): 21 core questions (Q_CP_*), 6 red flag rules (RF_CP_ACS, RF_CP_PE, RF_CP_DISSECTION, RF_CP_SYNCOPE, RF_CP_HTN_EMERGENCY, RF_CP_SOB_ALONE), 8 clusters (CL_CARD_ACS, CL_CARD_PE, CL_CARD_DISSECTION, CL_CARD_PERICARDITIS, CL_CARD_PNEUMONIA, CL_CARD_GERD, CL_CARD_MSK, CL_CARD_ANXIETY). Scoring: `chestPainScore.ts`, graph: CP_GRAPH_V1.
-- **Dizziness** (`dizziness`): 20 core questions (Q_DZ_*), 6 red flag rules (RF_DZ_STROKE, RF_DZ_POSTERIOR_STROKE, RF_DZ_CARDIAC_SYNCOPE, RF_DZ_MENINGITIS, RF_DZ_GI_BLEED, RF_DZ_SYNCOPE_ALONE), 8 clusters (CL_NEURO_BPPV, CL_NEURO_VEST_NEURITIS, CL_NEURO_STROKE, CL_NEURO_ORTHOSTATIC, CL_NEURO_CARDIAC, CL_NEURO_HYPOGLYCEMIA, CL_NEURO_ANEMIA, CL_NEURO_MEDICATION). Scoring: `dizzinessScore.ts`, graph: DZ_GRAPH_V1.
-- **Abdominal Pain** (`abdominal_pain`): 19 core questions (Q_AP_*), 8 red flag rules (RF_AP_APPENDICITIS, RF_AP_GI_BLEED, RF_AP_AAA, RF_AP_PANCREATITIS, RF_AP_ECTOPIC, RF_AP_MESENTERIC, RF_AP_CHOLECYSTITIS, RF_AP_ECTOPIC_STABLE), 10 clusters (CL_GI_GASTROENTERITIS, CL_GI_APPENDICITIS, CL_GI_CHOLECYSTITIS, CL_GI_PANCREATITIS, CL_GI_GI_BLEED, CL_GI_AAA, CL_GI_DIVERTICULITIS, CL_GI_RENAL_COLIC, CL_GI_ECTOPIC, CL_GI_MESENTERIC). Scoring: `abdPainScore.ts`, graph: AP_GRAPH_V1.
-- **Sore Throat** (`sore_throat`): 15 core questions (Q_FEVER, Q_COUGH, etc.), 6 red flag rules (RF_ST_AIRWAY, RF_ST_PERITONSILLAR, RF_ST_NECK_SWELLING, RF_ST_DYSPNEA, RF_ST_PERSISTENT, RF_ST_SCARLET). Centor-score based, graph: ST_GRAPH_V1.
-- **Earache** (`earache`): Basic pipeline.
+Ten complaint pipelines are implemented, each with core questions, red flag rules, scoring modules, disposition rules, and output templates: Persistent Cough, Chest Pain, Dizziness, Abdominal Pain, Sore Throat, Earache, UTI / Urinary Symptoms, Testicular Pain / Prostatitis, Pelvic Pain, and Headache. Each pipeline incorporates specific scoring logic and graph configurations.
 
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags control channel activation, and a dashboard monitors channel operations.

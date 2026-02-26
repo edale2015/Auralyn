@@ -1,0 +1,304 @@
+Because I don’t have your exact question IDs for these four in this chat, I’m giving you the mechanical spec in semantic keys (the same way you reason about rules). When you create the JSONs, you’ll map each semantic key to your real answers.Q_* fields (you already did this successfully for Batch A).
+
+Folder layout
+
+tests/cases/gu_uti_symptoms/
+
+tests/cases/gu_testicular_pain_prostatitis/
+
+tests/cases/gyn_pelvic_pain/
+
+tests/cases/neuro_headache/
+
+Each system: 10 goldens. Once these pass, we add fuzz + invariants.
+
+1) GU UTI (gu_uti_symptoms) Golden 10
+UTI_G01 Simple cystitis (female)
+
+Expect: pcp or self_care (your policy), no ER gate
+Signals: dysuria + frequency/urgency, no flank pain, no fever, stable.
+
+UTI_G02 Pyelonephritis pattern
+
+Expect: urgent_care or er_send (if severe), gate ESCALATE/ER
+Signals: flank pain + fever/chills ± nausea/vomiting.
+
+UTI_G03 Urosepsis risk
+
+Expect: er_send
+Signals: fever + rigors + confusion/weakness, hypotension/tachy if you track.
+
+UTI_G04 Pregnancy + UTI symptoms
+
+Expect: urgent_care (at least)
+Signals: UTI symptoms + pregnant/possible pregnancy.
+
+UTI_G05 Male UTI (complicated)
+
+Expect: urgent_care or pcp depending on your rules
+Signals: dysuria/frequency in male; consider prostatitis.
+
+UTI_G06 Immunocompromised + fever
+
+Expect: er_send or urgent_care
+Signals: immuno + fever.
+
+UTI_G07 Hematuria severe / clots
+
+Expect: urgent_care or er_send
+Signals: gross hematuria, urinary retention.
+
+UTI_G08 Kidney stone overlap (colicky flank pain + hematuria, no fever)
+
+Expect: urgent_care (or ER if uncontrolled pain)
+Signals: severe colicky flank pain radiating groin.
+
+UTI_G09 STI mimic (dysuria + discharge)
+
+Expect: pcp/urgent_care and STI cluster wins
+Signals: discharge, new partner, genital lesions.
+
+UTI_G10 “No UTI features” control
+
+Expect: default disposition, viral/other bucket
+Signals: no dysuria, no frequency, no fever, no flank.
+
+UTI invariants (Tier C)
+
+Fever + flank pain ⇒ gate ≥ ESCALATE
+
+Gate ER_SEND ⇒ dispo er_send
+
+Pregnancy + urinary symptoms ⇒ dispo not self_care
+
+Immuno + fever ⇒ gate ≥ ESCALATE
+
+Severe weakness/confusion ⇒ ER_SEND
+
+If no UTI symptoms, UTI cluster cannot be top-1
+
+Adding fever to a cystitis case cannot reduce gate severity (monotonicity)
+
+Flank pain with fever cannot route to routine-only output
+
+2) Testicular pain / prostatitis (gu_testicular_pain_prostatitis) Golden 10
+TP_G01 Testicular torsion (classic)
+
+Expect: er_send, torsion RF fires
+Signals: sudden severe unilateral testicular pain, high-riding testis, nausea/vomiting.
+
+TP_G02 Epididymitis (STI)
+
+Expect: urgent_care
+Signals: gradual pain + dysuria + discharge/new partner, relief with elevation (if asked).
+
+TP_G03 Epididymitis (enteric/older)
+
+Expect: urgent_care
+Signals: older age, urinary symptoms, no STI risk.
+
+TP_G04 Fournier’s / nec fasc risk
+
+Expect: er_send
+Signals: severe perineal/scrotal pain + fever + crepitus/skin discoloration (if asked).
+
+TP_G05 Incarcerated hernia
+
+Expect: er_send
+Signals: groin bulge + severe pain + vomiting/obstruction symptoms.
+
+TP_G06 Prostatitis (acute bacterial)
+
+Expect: urgent_care (or ER if septic)
+Signals: fever, pelvic/perineal pain, urinary retention, painful ejaculation (if asked).
+
+TP_G07 Testicular trauma
+
+Expect: urgent_care or er_send if severe
+Signals: direct blow, swelling, severe persistent pain.
+
+TP_G08 Varicocele/hydrocele benign
+
+Expect: pcp
+Signals: chronic, mild ache, worse standing, no fever.
+
+TP_G09 Kidney stone referred pain
+
+Expect: urgent_care
+Signals: flank to groin pain + hematuria.
+
+TP_G10 “Red flag absent control”
+
+Expect: default pathway, no ER gate
+Signals: mild discomfort, normal vitals, no acute features.
+
+TP invariants
+
+Sudden severe unilateral testicular pain ⇒ ER_SEND (torsion cannot be missed)
+
+Gate ER_SEND ⇒ dispo er_send
+
+Fever + perineal pain + urinary retention ⇒ gate ≥ ESCALATE
+
+Scrotal skin changes + fever ⇒ ER_SEND
+
+Adding nausea/vomiting to torsion-like case cannot reduce severity (monotonicity)
+
+Chronic mild ache without fever cannot become torsion cluster top-1
+
+Trauma + severe swelling ⇒ gate ≥ ESCALATE
+
+Hernia obstruction symptoms ⇒ ER_SEND
+
+3) Pelvic pain (gyn_pelvic_pain) Golden 10
+PP_G01 Ectopic pregnancy concern
+
+Expect: er_send
+Signals: pelvic pain + positive pregnancy / missed period + bleeding/dizziness.
+
+PP_G02 Ovarian torsion
+
+Expect: er_send
+Signals: sudden severe unilateral pelvic pain + nausea/vomiting.
+
+PP_G03 PID (classic)
+
+Expect: urgent_care
+Signals: pelvic pain + fever + discharge + cervical motion tenderness proxy (if asked) / STI risk.
+
+PP_G04 Ruptured ovarian cyst
+
+Expect: urgent_care (or ER if unstable)
+Signals: sudden pain after activity/sex, improves, no fever.
+
+PP_G05 Endometriosis
+
+Expect: pcp
+Signals: chronic cyclical pain with menses.
+
+PP_G06 Fibroids
+
+Expect: pcp
+Signals: heavy bleeding + pelvic pressure.
+
+PP_G07 UTI mimic
+
+Expect: route to UTI cluster/dispo
+Signals: dysuria/frequency dominates.
+
+PP_G08 Appendicitis overlap (RLQ)
+
+Expect: er_send
+Signals: migrating RLQ pain + fever/anorexia.
+
+PP_G09 Sepsis/toxic appearance
+
+Expect: er_send
+Signals: fever + hypotension/confusion (if tracked).
+
+PP_G10 Control benign cramps
+
+Expect: self_care/pcp
+Signals: mild bilateral cramps, stable, no pregnancy risk.
+
+Pelvic pain invariants
+
+Pregnancy + pelvic pain + bleeding ⇒ ER_SEND
+
+Sudden severe unilateral + N/V ⇒ ER_SEND (torsion)
+
+Fever + discharge/STI risk ⇒ gate ≥ ESCALATE
+
+Gate ER_SEND ⇒ dispo er_send
+
+Cyclical chronic pain cannot route to ER_SEND without new danger signals
+
+Adding pregnancy-positive to any pelvic pain case cannot reduce severity
+
+Appendicitis pattern ⇒ ER_SEND
+
+If pregnancy is unknown, system must ask/flag pregnancy risk (property test)
+
+4) Headache (neuro_headache) Golden 10
+HA_G01 Tension headache
+
+Expect: self_care/pcp, no RF
+Signals: bilateral band-like, stress, no neuro deficits.
+
+HA_G02 Migraine
+
+Expect: pcp/urgent_care depending on severity
+Signals: unilateral throbbing + photophobia + nausea, prior history.
+
+HA_G03 SAH “thunderclap”
+
+Expect: er_send
+Signals: sudden worst headache of life, peak instantly.
+
+HA_G04 Meningitis
+
+Expect: er_send
+Signals: fever + neck stiffness + photophobia/confusion.
+
+HA_G05 Stroke symptoms with headache
+
+Expect: er_send
+Signals: headache + weakness/numbness/speech changes.
+
+HA_G06 Giant cell arteritis (age >50)
+
+Expect: urgent_care or er_send depending on your rules
+Signals: age >50 + new headache + jaw claudication/vision change (if asked).
+
+HA_G07 Carbon monoxide/toxin concern
+
+Expect: er_send or urgent_care
+Signals: headache + multiple household members + nausea.
+
+HA_G08 Head trauma + headache
+
+Expect: er_send if red flags
+Signals: trauma + vomiting/AMS/anticoag.
+
+HA_G09 Hypertensive emergency
+
+Expect: er_send
+Signals: severe headache + vision/neuro symptoms + very high BP (if tracked).
+
+HA_G10 Cluster headache
+
+Expect: pcp/urgent_care
+Signals: unilateral orbital pain + tearing + restlessness, recurrent pattern.
+
+Headache invariants
+
+Thunderclap ⇒ ER_SEND
+
+Fever + neck stiffness ⇒ ER_SEND
+
+Focal neuro deficits ⇒ ER_SEND
+
+Head trauma + anticoag/AMS ⇒ ER_SEND
+
+Gate ER_SEND ⇒ dispo er_send
+
+Adding neck stiffness to a benign headache cannot reduce severity
+
+Age >50 + new headache + vision changes ⇒ gate ≥ ESCALATE
+
+If no danger signals, tension/migraine should not route to ER_SEND
+
+What I want you to do next (fast, clean)
+
+Since your pipeline is already humming:
+
+Step 1: Generate Tier A cases (10×4 = 40)
+
+Create the JSONs using your real question IDs.
+
+Step 2: Run:
+npx tsx scripts/run_harness.ts tests/cases/gu_uti_symptoms
+npx tsx scripts/run_harness.ts tests/cases/gu_testicular_pain_prostatitis
+npx tsx scripts/run_harness.ts tests/cases/gyn_pelvic_pain
+npx tsx scripts/run_harness.ts tests/cases/neuro_headache
+Step 3: Once Tier A passes, I’ll give you the exact Tier B fuzz patterns + Tier C invariant code blocks for all four (same structure as cough).

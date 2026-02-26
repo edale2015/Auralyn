@@ -7,6 +7,10 @@ import { computeCoughScore } from "../agent/scoring/coughScore";
 import { computeChestPainScore } from "../agent/scoring/chestPainScore";
 import { computeDizzinessScore } from "../agent/scoring/dizzinessScore";
 import { computeAbdPainScore } from "../agent/scoring/abdPainScore";
+import { computeUtiScore } from "../agent/scoring/utiScore";
+import { computeTesticularPainScore } from "../agent/scoring/testicularPainScore";
+import { computePelvicPainScore } from "../agent/scoring/pelvicPainScore";
+import { computeHeadacheScore } from "../agent/scoring/headacheScore";
 
 export interface QuestionResult {
   nextQuestion: CoreQuestion | null;
@@ -237,6 +241,90 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
       components[def.scoreId] = {
         ...result,
       };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "UTI_SCORE") {
+      const result = computeUtiScore(state);
+      scores[def.scoreId.toLowerCase()] = result.uti_score;
+      scores["cystitis_score"] = result.cystitis_score;
+      scores["pyelo_score"] = result.pyelo_score;
+      scores["urosepsis_score"] = result.urosepsis_score;
+      scores["pregnancy_uti_score"] = result.pregnancy_uti_score;
+      scores["male_uti_score"] = result.male_uti_score;
+      scores["uti_immuno_score"] = result.immuno_score;
+      scores["hematuria_score"] = result.hematuria_score;
+      scores["uti_renal_stone_score"] = result.renal_stone_score;
+      scores["sti_mimic_score"] = result.sti_mimic_score;
+      scores["no_uti_score"] = result.no_uti_score;
+      components[def.scoreId] = { ...result };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "TESTICULAR_PAIN_SCORE") {
+      const result = computeTesticularPainScore(state);
+      scores[def.scoreId.toLowerCase()] = result.testicular_pain_score;
+      scores["torsion_score"] = result.torsion_score;
+      scores["epid_sti_score"] = result.epid_sti_score;
+      scores["epid_enteric_score"] = result.epid_enteric_score;
+      scores["fournier_score"] = result.fournier_score;
+      scores["hernia_score"] = result.hernia_score;
+      scores["prostatitis_score"] = result.prostatitis_score;
+      scores["tp_trauma_score"] = result.trauma_score;
+      scores["varicocele_score"] = result.varicocele_score;
+      scores["stone_ref_score"] = result.stone_ref_score;
+      scores["benign_tp_score"] = result.benign_tp_score;
+      components[def.scoreId] = { ...result };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "PELVIC_PAIN_SCORE") {
+      const result = computePelvicPainScore(state);
+      scores[def.scoreId.toLowerCase()] = result.pelvic_pain_score;
+      scores["pp_ectopic_score"] = result.ectopic_score;
+      scores["pp_torsion_score"] = result.pp_torsion_score;
+      scores["pid_score"] = result.pid_score;
+      scores["ruptured_cyst_score"] = result.ruptured_cyst_score;
+      scores["endometriosis_score"] = result.endometriosis_score;
+      scores["fibroids_score"] = result.fibroids_score;
+      scores["pp_uti_mimic_score"] = result.uti_mimic_score;
+      scores["pp_appendicitis_score"] = result.pp_appendicitis_score;
+      scores["pp_sepsis_score"] = result.pp_sepsis_score;
+      scores["benign_pp_score"] = result.benign_pp_score;
+      components[def.scoreId] = { ...result };
+
+      for (const input of def.inputs) {
+        if (input.startsWith("demographics.")) continue;
+        if (!(input in state.answers) || state.answers[input] === null) {
+          missingInputs.push(input);
+        }
+      }
+    } else if (def.module === "HEADACHE_SCORE") {
+      const result = computeHeadacheScore(state);
+      scores[def.scoreId.toLowerCase()] = result.headache_score;
+      scores["tension_score"] = result.tension_score;
+      scores["migraine_score"] = result.migraine_score;
+      scores["sah_score"] = result.sah_score;
+      scores["meningitis_ha_score"] = result.meningitis_ha_score;
+      scores["stroke_ha_score"] = result.stroke_ha_score;
+      scores["gca_score"] = result.gca_score;
+      scores["co_toxin_score"] = result.co_toxin_score;
+      scores["trauma_ha_score"] = result.trauma_ha_score;
+      scores["htn_ha_score"] = result.htn_ha_score;
+      scores["cluster_ha_score"] = result.cluster_ha_score;
+      components[def.scoreId] = { ...result };
 
       for (const input of def.inputs) {
         if (input.startsWith("demographics.")) continue;
