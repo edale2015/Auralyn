@@ -17,6 +17,7 @@ export interface ComplaintRegistryEntry {
   scoringModule: string;
   graphId: string;
   enabled: boolean;
+  engineType: "LEGACY" | "GENERIC_V1";
 }
 
 export interface CoreQuestion {
@@ -70,6 +71,15 @@ export interface OutputTemplate {
   body: string;
 }
 
+export interface ClusterScoringRule {
+  ccId: string;
+  clusterId: string;
+  ruleId: string;
+  points: number;
+  whenExpr: string;
+  evidenceLabel: string;
+}
+
 export interface ComplaintConfig {
   registry: ComplaintRegistryEntry;
   coreQuestions: CoreQuestion[];
@@ -77,6 +87,7 @@ export interface ComplaintConfig {
   scoringDefs: ScoringDef[];
   dispositionRules: DispositionRule[];
   outputTemplates: OutputTemplate[];
+  clusterScoringRules: ClusterScoringRule[];
 }
 
 interface CachedConfig {
@@ -132,6 +143,7 @@ function rowToRegistry(row: SheetRow): ComplaintRegistryEntry & { aliases: strin
     scoringModule: norm(row.SCORING_MODULE),
     graphId: norm(row.GRAPH_ID),
     enabled: parseBoolean(row.ENABLED),
+    engineType: norm(row.ENGINE_TYPE).toUpperCase() === "GENERIC_V1" ? "GENERIC_V1" : "LEGACY",
     aliases,
   };
 }
@@ -212,6 +224,21 @@ function rowToOutputTemplate(row: SheetRow): OutputTemplate | null {
   };
 }
 
+function rowToClusterScoringRule(row: SheetRow): ClusterScoringRule | null {
+  const ccId = normLower(row.CC_ID);
+  const clusterId = norm(row.CLUSTER_ID);
+  const ruleId = norm(row.RULE_ID);
+  if (!ccId || !clusterId || !ruleId) return null;
+  return {
+    ccId,
+    clusterId,
+    ruleId,
+    points: parseNumber(row.POINTS, 0),
+    whenExpr: norm(row.WHEN_EXPR) || "false",
+    evidenceLabel: norm(row.EVIDENCE_LABEL) || ruleId,
+  };
+}
+
 export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig | null> {
   const key = ccId.toLowerCase().trim().replace(/[\s-]+/g, "_");
   const now = Date.now();
@@ -229,12 +256,13 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
   if (!regEntry) return null;
   const canonicalKey = regEntry.ccId;
 
-  const [qRows, rfRows, sRows, dRows, tRows] = await Promise.all([
+  const [qRows, rfRows, sRows, dRows, tRows, csrRows] = await Promise.all([
     getTable("CORE_QUESTIONS"),
     getTable("RED_FLAG_RULES"),
     getTable("SCORING_DEFS"),
     getTable("DISPOSITION_RULES"),
     getTable("OUTPUT_TEMPLATES"),
+    getTable("CLUSTER_SCORING_RULES"),
   ]);
 
   assertCoreQuestionsNotCorrupt(qRows);
@@ -266,6 +294,10 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     .map(rowToOutputTemplate)
     .filter((t): t is OutputTemplate => t !== null && t.ccId === canonicalKey);
 
+  const clusterScoringRules = csrRows
+    .map(rowToClusterScoringRule)
+    .filter((r): r is ClusterScoringRule => r !== null && r.ccId === canonicalKey);
+
   const config: ComplaintConfig = {
     registry: regEntry,
     coreQuestions,
@@ -273,6 +305,7 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     scoringDefs,
     dispositionRules,
     outputTemplates,
+    clusterScoringRules,
   };
 
   CONFIG_CACHE.set(key, { config, expiresAt: now + CONFIG_TTL_MS });

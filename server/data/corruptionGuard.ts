@@ -172,6 +172,44 @@ export function assertOutputTemplatesNotCorrupt(rows: SheetRow[]): void {
   }
 }
 
+export function assertClusterScoringRulesNotCorrupt(rows: SheetRow[]): void {
+  const bad: BadRow[] = [];
+
+  rows.forEach((r, idx) => {
+    const ccCheck = checkFieldFormat(r.CC_ID, CC_ID_PATTERN, "CC_ID", "CLUSTER_SCORING_RULES", idx);
+    if (ccCheck) bad.push(ccCheck);
+
+    const clusterId = String(r.CLUSTER_ID ?? "").trim();
+    if (clusterId && !/^CL_[A-Z0-9_]+$/.test(clusterId)) {
+      bad.push({ idx, table: "CLUSTER_SCORING_RULES", field: "CLUSTER_ID", value: clusterId.substring(0, 80), reason: "invalid_format" });
+    }
+
+    const ruleId = String(r.RULE_ID ?? "").trim();
+    if (ruleId && !/^CSR_[A-Z0-9_]+$/.test(ruleId)) {
+      bad.push({ idx, table: "CLUSTER_SCORING_RULES", field: "RULE_ID", value: ruleId.substring(0, 80), reason: "invalid_format" });
+    }
+
+    const points = String(r.POINTS ?? "").trim();
+    if (points && isNaN(Number(points))) {
+      bad.push({ idx, table: "CLUSTER_SCORING_RULES", field: "POINTS", value: points, reason: "not_a_number" });
+    }
+  });
+
+  if (bad.length) {
+    const sample = bad
+      .slice(0, 10)
+      .map(b => `  #${b.idx} ${b.field}="${b.value}" (${b.reason})`)
+      .join("\n");
+    throw new Error(
+      [
+        "[CORRUPTION GUARD] CLUSTER_SCORING_RULES CORRUPTION DETECTED.",
+        `Found ${bad.length} bad row(s). Sample:`,
+        sample,
+      ].join("\n")
+    );
+  }
+}
+
 export interface ValidationResult {
   table: string;
   rowCount: number;
@@ -187,6 +225,7 @@ export function validateAllTabs(tables: Record<string, SheetRow[]>): ValidationR
     RED_FLAG_RULES: assertRedFlagRulesNotCorrupt,
     DISPOSITION_RULES: assertDispositionRulesNotCorrupt,
     OUTPUT_TEMPLATES: assertOutputTemplatesNotCorrupt,
+    CLUSTER_SCORING_RULES: assertClusterScoringRulesNotCorrupt,
   };
 
   for (const [table, rows] of Object.entries(tables)) {
@@ -243,6 +282,18 @@ export function runCrossTableChecks(tables: Record<string, SheetRow[]>): string[
       const qId = ref.replace("answers.", "");
       if (!qIds.has(qId)) {
         warnings.push(`DISPOSITION_RULES '${dr.DISP_RULE_ID}' refs '${qId}' not found in CORE_QUESTIONS`);
+      }
+    }
+  }
+
+  const csrRows = tables.CLUSTER_SCORING_RULES ?? [];
+  for (const cr of csrRows) {
+    const expr = String(cr.WHEN_EXPR ?? "");
+    const refs = expr.match(/answers\.(Q_[A-Z0-9_]+)/g) ?? [];
+    for (const ref of refs) {
+      const qId = ref.replace("answers.", "");
+      if (!qIds.has(qId)) {
+        warnings.push(`CLUSTER_SCORING_RULES '${cr.RULE_ID}' refs '${qId}' not found in CORE_QUESTIONS`);
       }
     }
   }

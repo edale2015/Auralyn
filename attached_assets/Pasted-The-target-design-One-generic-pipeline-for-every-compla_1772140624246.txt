@@ -1,0 +1,205 @@
+The target design
+One generic pipeline for every complaint
+
+Every complaint runs the same stages:
+
+Core questions already define answers.*
+
+ScoreDefs computes scores.* (Centor, Wells-ish, CURB-65, etc.)
+
+Red flags compute redFlagGate (PASS/ESCALATE/ER_SEND + triggered list)
+
+Disposition rules pick disposition_level + template_id
+
+Cluster scoring rules pick ranked clusters (top1/top3)
+
+Diff/Confidence (generic): uses evidence hits + contradictions + missing anchors
+
+Render output templates
+
+Everything above is driven by Sheets/CSVs you already have.
+
+What changes in code (once)
+
+You implement one engine and stop adding per-complaint modules.
+
+New file: server/engines/genericComplaintEngineV1.ts
+
+Signature:
+
+export async function runGenericComplaintV1(ctx: {
+  ccId: string
+  answers: Record<string, any>
+  modifiers?: Record<string, any>
+  nowIso?: string
+  harnessMode?: boolean
+}): Promise<{
+  gate: { gateResult: "PASS"|"ESCALATE"|"ER_SEND", triggeredFlags: any[] }
+  scores: Record<string, number>
+  disposition: { level: string, ruleId: string, templateId: string }
+  clusters: { top: string, ranked: Array<{clusterId: string, score: number}> }
+  confidence: { overall: string, byCluster: Record<string,string> }
+  output: { templateIds: string[], rendered: any[] }
+  trace: any
+}>
+Update: complaintNodeRunner.ts (or your router)
+
+Instead of:
+
+hardcoded graph mapping per complaint
+
+Do:
+
+if registry says engine_type = "GENERIC_V1" → run generic engine
+
+else fall back to legacy graphs (until migrated)
+
+So you can migrate complaint-by-complaint with zero risk.
+
+The missing piece: ScoreDefs (so you never write another scoring module)
+
+You already mentioned SCORING_DEFS. Make it real and universal.
+
+Add / standardize SCORING_DEFS tab
+
+Columns (example):
+
+CC_ID
+
+VERSION
+
+SCORE_ID (e.g., centor)
+
+RULE_ID
+
+POINTS
+
+WHEN_EXPR
+
+EVIDENCE_FIELDS
+
+NOTES
+
+Generic engine computes:
+
+scores[scoreId] = Σ(points where WHEN_EXPR true)
+
+Then rules can reference it:
+
+scores.centor >= 3
+
+scores.wells_pe >= 4
+
+scores.curb65 >= 2
+
+No custom TS logic per complaint.
+
+“Add rows + add tests” workflow (your new normal)
+
+To add a new complaint:
+
+Add rows to:
+
+CORE_QUESTIONS
+
+SCORING_DEFS (optional)
+
+RED_FLAG_RULES
+
+DISPOSITION_RULES
+
+CLUSTER_SCORING_RULES
+
+OUTPUT_TEMPLATES
+
+COMPLAINT_REGISTRY: set engine_type = GENERIC_V1
+
+Add:
+
+tests/cases/<cc_id>/*.json (10 goldens)
+
+Run harness.
+
+That’s it.
+
+Migration plan (fast + safe)
+
+You already have 13 working complaints. Don’t rewrite everything at once.
+
+Phase 1: Add the generic engine (no migrations yet)
+
+Implement runGenericComplaintV1
+
+Implement computeScoresFromScoreDefs()
+
+Implement evalRulesForCC() (RF/Disp/Cluster)
+
+Add corruption guard + validator (already done)
+
+Phase 2: Migrate one “easy” complaint
+
+Pick one with minimal bespoke logic (UTI is a good candidate).
+
+Flip registry engine_type to GENERIC_V1
+
+Run its harness
+
+Fix any gaps by adding ScoreDefs rows or adjusting rules (not code)
+
+Phase 3: Migrate the rest in batches
+
+Now “Batch B” becomes:
+
+flip 4 complaints to generic engine
+
+run harness
+
+any failures get fixed in Sheets rows
+
+You’ll feel the cost drop immediately.
+
+Make it even easier: new_complaint_kit generator
+
+Add a scaffolder script:
+
+npx tsx scripts/new_complaint_kit.ts gu_uti_symptoms
+
+It outputs:
+
+rulesets/gu_uti_symptoms/*.tsv (core/rf/disp/cluster/templates/scoredefs)
+
+tests/cases/gu_uti_symptoms/ (10 JSONs)
+
+optional invariants stub
+
+Then you paste TSV into Sheets (or import automatically).
+
+Fix the harness hang (do this now)
+
+Your harness “hang” at the end is an external fetch that shouldn’t run in test mode.
+
+Add:
+
+HARNESS_MODE=1
+
+And in any code that fetches external Sheets data that isn’t needed for complaint logic:
+
+if (process.env.HARNESS_MODE === "1") {
+  return cachedOrEmpty();
+}
+
+Better: dependency-inject a RuleStore into the engine and give harness a local cached store.
+
+What I need from you (small, specific)
+
+Paste just the filenames (or snippets) where these live so I can give you exact patch diffs:
+
+Where complaint graphs are currently selected (often complaintEngines.ts or complaintNodeRunner.ts)
+
+Your expression evaluator function (the one that runs WHEN_EXPR)
+
+Your Sheets/CSV rule loader module (RuleStore)
+
+With those 3 anchors, I’ll give you a precise “drop-in” generic engine plan (file-by-file), not just architecture.
+
+But yes: we can absolutely make this mostly “add rows + add tests” going forward, and stop paying the “new pipeline tax” every complaint.

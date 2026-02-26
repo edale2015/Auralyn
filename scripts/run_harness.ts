@@ -1,3 +1,5 @@
+process.env.HARNESS_MODE = "1";
+
 import { runComplaintGraph } from "../server/services/complaintNodeRunner";
 import type { CaseState } from "../shared/agentTypes";
 import * as fs from "fs";

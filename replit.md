@@ -65,10 +65,26 @@ This system deterministically assembles an auditable clinical state from multipl
 - Headache (10 tests): 10 golden in `tests/cases/neuro_headache/`
 
 ### Data Corruption Guard
-`server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, and OUTPUT_TEMPLATES on every config load. It checks for pasted-row corruption, whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, and empty template bodies. Cross-table checks verify template references and question references in trigger expressions. It hard-fails on corruption to prevent silent rule poisoning.
+`server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, OUTPUT_TEMPLATES, and CLUSTER_SCORING_RULES on every config load. It checks for pasted-row corruption, whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies, and invalid cluster scoring rule formats. Cross-table checks verify template references, question references in trigger expressions, and question references in cluster scoring rule expressions. It hard-fails on corruption to prevent silent rule poisoning.
 
 ### Complaint Pipelines
-Ten complaint pipelines are implemented, each with core questions, red flag rules, scoring modules, disposition rules, and output templates: Persistent Cough, Chest Pain, Dizziness, Abdominal Pain, Sore Throat, Earache, UTI / Urinary Symptoms, Testicular Pain / Prostatitis, Pelvic Pain, and Headache. Each pipeline incorporates specific scoring logic and graph configurations.
+Ten complaint pipelines are implemented, each with core questions, red flag rules, scoring modules, disposition rules, and output templates: Persistent Cough, Chest Pain, Dizziness, Abdominal Pain, Sore Throat, Earache, UTI / Urinary Symptoms, Testicular Pain / Prostatitis, Pelvic Pain, and Headache.
+
+### Generic Data-Driven Engine (GENERIC_V1)
+`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Instead of writing custom `*Score.ts` files and hardcoded graph branches, complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic.
+
+**Architecture:**
+- `COMPLAINT_REGISTRY.csv` has an `ENGINE_TYPE` column (`LEGACY` or `GENERIC_V1`) that routes complaints to the appropriate engine
+- `CLUSTER_SCORING_RULES.csv` defines scoring rules with columns: `CC_ID, CLUSTER_ID, RULE_ID, POINTS, WHEN_EXPR, EVIDENCE_LABEL`
+- `computeScoresFromRules()` groups rules by cluster, evaluates `WHEN_EXPR` via `evaluateExpr()`, and sums points per cluster
+- The generic engine reuses existing `runCoreQuestions()`, `runRedFlagsComplaint()`, and `runDisposition()` from the shared engines
+- UTI (`gu_uti_symptoms`) is the first complaint migrated to GENERIC_V1, all others remain on LEGACY
+
+**Adding a new complaint (zero TypeScript):**
+1. Run `npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>` to scaffold stub rows + golden tests
+2. Edit CSV rows: CORE_QUESTIONS, RED_FLAG_RULES, CLUSTER_SCORING_RULES, DISPOSITION_RULES, OUTPUT_TEMPLATES
+3. Update golden tests in `tests/cases/<cc_id>/`
+4. Run `npx tsx scripts/run_harness.ts tests/cases/<cc_id>` to validate
 
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags control channel activation, and a dashboard monitors channel operations.

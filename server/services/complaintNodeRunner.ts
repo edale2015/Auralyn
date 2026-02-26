@@ -10,6 +10,7 @@ import {
   renderTemplate,
   findTemplate,
 } from "./complaintEngines";
+import { runGenericComplaintV1 } from "../engines/genericComplaintEngineV1";
 import { enhancedSupervisorGate } from "./supervisorEnhanced";
 import { applyExamOverrides } from "./nodes/examOverride";
 import { runDiffAndConfidenceNode } from "./nodes/diffAndConfidenceNode";
@@ -326,6 +327,10 @@ export async function runComplaintGraph(
       currentNode: "INIT_CASE",
       done: false,
     };
+  }
+
+  if (config.registry.engineType === "GENERIC_V1") {
+    return runGenericComplaintV1(state, ccId, maxNodes);
   }
 
   const graphId = config.registry.graphId;
