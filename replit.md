@@ -79,6 +79,8 @@ Ten complaint pipelines are implemented, each with core questions, red flag rule
 - `computeScoresFromRules()` groups rules by cluster, evaluates `WHEN_EXPR` via `evaluateExpr()`, and sums points per cluster
 - The generic engine reuses existing `runCoreQuestions()`, `runRedFlagsComplaint()`, and `runDisposition()` from the shared engines
 - UTI (`gu_uti_symptoms`) is the first complaint migrated to GENERIC_V1, all others remain on LEGACY
+- Batch B migrated: `gu_testicular_pain_prostatitis`, `gyn_pelvic_pain`, `neuro_headache` — all on GENERIC_V1
+- 4/10 complaints now on GENERIC_V1; 6 remain LEGACY (sore_throat, earache, persistent_cough, chest_pain, dizziness, abdominal_pain)
 
 **Adding a new complaint (zero TypeScript):**
 1. Run `npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>` to scaffold stub rows + golden tests

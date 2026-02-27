@@ -1,0 +1,109 @@
+1) Migrate Batch B to GENERIC_V1 (now that UTI is proven)
+
+Do these one at a time with the harness as the gate:
+
+Step sequence per complaint
+
+Set ENGINE_TYPE = GENERIC_V1 in COMPLAINT_REGISTRY.csv
+
+Run only that complaint’s tests
+
+If green, keep it and move to the next
+
+Batch B recommended migration order
+
+gu_testicular_pain_prostatitis
+
+gyn_pelvic_pain
+
+neuro_headache
+
+neuro_dizziness (if it exists as separate CC)
+
+Why this order: torsion/PTA-style gating is simplest; headache tends to have special scoredefs (GCA/SAH) but your ScoreDefs layer will handle it; dizziness often has more overlap and needs tight invariants.
+
+2) Add SCORING_DEFS and migrate Centor/Wells/CURB gradually
+
+Right now you proved generic cluster scoring. Next is generic scoring systems so you don’t drift back into code modules.
+
+Minimal scoring defs to add first
+
+Centor/McIsaac (sore throat)
+
+Wells PE (chest pain/SOB overlap)
+
+CURB-65 (pneumonia if you want)
+
+Even if the legacy complaints stay legacy, moving scoring into ScoreDefs makes them easier to migrate later.
+
+3) Promote “new_complaint_kit” from scaffold to importable pack
+
+You already generate stub CSV rows + 10 goldens. The last mile is to remove manual copy/paste.
+
+Add: scripts/import_ruleset.ts
+
+Input: rulesets/<cc_id>/*.csv (or .tsv)
+
+Output: append/merge into your master CSVs in repo (or push to Sheets if you later wire that)
+
+Includes validation script run automatically
+
+So your new workflow becomes:
+
+npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>
+npx tsx scripts/import_ruleset.ts rulesets/<cc_id>
+npm run test:harness:<cc_id>
+
+No spreadsheets required during development unless you want them.
+
+4) Add Tier B/C/D generators to the kit (big speed boost)
+
+Right now kit makes 10 goldens. Make it generate:
+
+30 fuzz (3 per golden: anchor removal, severity dial, contradiction)
+
+10 invariants template file
+
+Tier D monotonicity toggles (auto based on known danger questions, e.g. O2LOW, CP, weakness)
+
+Once this exists, each new complaint becomes:
+
+write 10 goldens (or even generate + edit)
+
+let the kit produce fuzz/invariants automatically
+
+5) Make “generic engine parity” measurable (so you know when legacy can die)
+
+Add a harness mode that runs the same case through both engines (when both exist) and compares:
+
+gateResult
+
+disposition
+
+top cluster
+
+template IDs
+
+This lets you migrate a legacy complaint safely by:
+
+running dual-engine diff
+
+adjusting data rules until parity
+
+flipping ENGINE_TYPE
+
+6) The next 4 complaints to add using only kit + rules (no TS)
+
+Now that you have GENERIC_V1 proven, your highest ROI new additions are ones you’ve repeatedly needed:
+
+Next batch to create (not migrate):
+
+ent_sinus_pressure (you already have RFs referenced; now make the full pipeline)
+
+gu_flank_pain (stones vs pyelo)
+
+gyn_vaginal_bleeding (ectopic/hemorrhage gates)
+
+derm_allergic_reaction (anaphylaxis gating)
+
+These are classic “rules + tests” wins.
