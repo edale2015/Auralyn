@@ -92,3 +92,37 @@ ent_sinus_pressure,DISP_SIN_BAC_DOUBLE,3,"answers.Q_SINUS_WORSE_AFTER_IMPROVE ==
 ent_sinus_pressure,DISP_SIN_BAC_SEVERE,4,"answers.Q_SINUS_FEVER == 'yes' && answers.Q_SINUS_SEVERE_FACIAL == 'yes'",urgent_care,TPL_SIN_BACTERIAL,MODERATE
 ent_sinus_pressure,DISP_SIN_PCP,5,"answers.Q_SINUS_DUR >= 7",pcp,TPL_SIN_PCP,LOW
 ent_sinus_pressure,DISP_SIN_VIRAL,99,true,self_care,TPL_SIN_VIRAL,LOW
+ent_sore_throat,DISP_ST_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_ST_ER_SEND,HIGH
+ent_sore_throat,DISP_ST_STREP,2,"answers.Q_ST_FEVER == 'yes' && answers.Q_ST_EXUDATE == 'yes'",urgent_care,TPL_ST_STREP,MODERATE
+ent_sore_throat,DISP_ST_MONO,3,"answers.Q_ST_MONO == 'yes'",urgent_care,TPL_ST_MONO,MODERATE
+ent_sore_throat,DISP_ST_ROUTINE,4,"answers.Q_ST_DUR >= 5",pcp,TPL_ST_ROUTINE,LOW
+ent_sore_throat,DISP_ST_VIRAL,99,"true",self_care,TPL_ST_VIRAL,LOW
+ent_ear_pain,DISP_EAR_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_EAR_ER_SEND,HIGH
+ent_ear_pain,DISP_EAR_ESC,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_EAR_URGENT,HIGH
+ent_ear_pain,DISP_EAR_DRAIN,3,"answers.Q_EAR_DRAIN == 'yes' || answers.Q_EAR_FEVER == 'yes'",urgent_care,TPL_EAR_URGENT,MODERATE
+ent_ear_pain,DISP_EAR_ROUTINE,99,"true",pcp,TPL_EAR_ROUTINE,LOW
+ent_nasal_congestion,DISP_NC_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_NC_ER_SEND,HIGH
+ent_nasal_congestion,DISP_NC_SINUS,2,"answers.Q_NC_DUR >= 10 && answers.Q_NC_FACIAL == 'yes'",urgent_care,TPL_NC_SINUS,MODERATE
+ent_nasal_congestion,DISP_NC_ROUTINE,3,"answers.Q_NC_DUR >= 7",pcp,TPL_NC_PCP,LOW
+ent_nasal_congestion,DISP_NC_VIRAL,99,"true",self_care,TPL_NC_VIRAL,LOW
+ent_epistaxis,DISP_EPIX_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_EPIX_ER_SEND,HIGH
+ent_epistaxis,DISP_EPIX_ESC,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_EPIX_URGENT,HIGH
+ent_epistaxis,DISP_EPIX_TRAUMA,3,"answers.Q_EPIX_TRAUMA == 'yes'",urgent_care,TPL_EPIX_URGENT,MODERATE
+ent_epistaxis,DISP_EPIX_ROUTINE,99,"true",self_care,TPL_EPIX_SELF,LOW
+pulm_cough,DISP_PCO_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_PCO_ER_SEND,HIGH
+pulm_cough,DISP_PCO_ESC,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_PCO_URGENT,HIGH
+pulm_cough,DISP_PCO_FEVER_CP,3,"answers.Q_PCO_FEVER == 'yes' || answers.Q_PCO_CP == 'yes' || answers.Q_PCO_WHEEZE == 'yes'",urgent_care,TPL_PCO_URGENT,MODERATE
+pulm_cough,DISP_PCO_ROUTINE,4,"answers.Q_PCO_DUR >= 14",pcp,TPL_PCO_PCP,LOW
+pulm_cough,DISP_PCO_VIRAL,99,"true",self_care,TPL_PCO_VIRAL,LOW
+pulm_shortness_of_breath,DISP_SOB_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_SOB_ER_SEND,HIGH
+pulm_shortness_of_breath,DISP_SOB_WHEEZE_FEVER,2,"answers.Q_SOB_WHEEZE == 'yes' || answers.Q_SOB_FEVER == 'yes'",urgent_care,TPL_SOB_URGENT,MODERATE
+pulm_shortness_of_breath,DISP_SOB_ROUTINE,99,"true",pcp,TPL_SOB_ROUTINE,LOW
+pulm_wheezing,DISP_WHZ_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_WHZ_ER_SEND,HIGH
+pulm_wheezing,DISP_WHZ_SOB_FEVER,2,"answers.Q_WHZ_SOB == 'yes' || answers.Q_WHZ_FEVER == 'yes'",urgent_care,TPL_WHZ_URGENT,MODERATE
+pulm_wheezing,DISP_WHZ_ROUTINE,99,"true",self_care,TPL_WHZ_SELF,LOW
+pulm_chest_tightness,DISP_PCT_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_PCT_ER_SEND,HIGH
+pulm_chest_tightness,DISP_PCT_SOB_FEVER,2,"answers.Q_PCT_SOB == 'yes' || answers.Q_PCT_FEVER == 'yes'",urgent_care,TPL_PCT_URGENT,MODERATE
+pulm_chest_tightness,DISP_PCT_ROUTINE,99,"true",self_care,TPL_PCT_SELF,LOW
+pulm_hemoptysis,DISP_HEMO_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_HEMO_ER_SEND,HIGH
+pulm_hemoptysis,DISP_HEMO_URGENT,2,"answers.Q_HEMO_BLOOD_THINNER == 'yes' || answers.Q_HEMO_FEVER == 'yes' || answers.Q_HEMO_CP == 'yes'",urgent_care,TPL_HEMO_URGENT,MODERATE
+pulm_hemoptysis,DISP_HEMO_ROUTINE,99,"true",urgent_care,TPL_HEMO_URGENT,LOW

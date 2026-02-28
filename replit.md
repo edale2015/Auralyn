@@ -53,7 +53,7 @@ This system deterministically assembles an auditable clinical state from multipl
 ### Complaint Golden Test Harness
 `scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all`.
 
-**225+ total tests across 14 directories:**
+**315 total tests across 21 directories:**
 - Persistent Cough (45 tests): 15 golden + 30 fuzz + invariants + monotonicity
 - Chest Pain (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
 - Dizziness (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
@@ -64,12 +64,28 @@ This system deterministically assembles an auditable clinical state from multipl
 - Pelvic Pain (10 tests): 10 golden in `tests/cases/gyn_pelvic_pain/`
 - Headache (10 tests): 10 golden in `tests/cases/neuro_headache/`
 - Sinus Pressure (10 tests): 10 golden + invariants + monotonicity in `tests/cases/ent_sinus_pressure/`
+- Sore Throat ENT (10 tests): 10 golden in `tests/cases/ent_sore_throat/`
+- Ear Pain (10 tests): 10 golden in `tests/cases/ent_ear_pain/`
+- Nasal Congestion (10 tests): 10 golden in `tests/cases/ent_nasal_congestion/`
+- Epistaxis (10 tests): 10 golden in `tests/cases/ent_epistaxis/`
+- Pulmonary Cough (25 tests): 10 golden + 15 legacy in `tests/cases/pulm_cough/`
+- Shortness of Breath (10 tests): 10 golden in `tests/cases/pulm_shortness_of_breath/`
+- Wheezing (10 tests): 10 golden in `tests/cases/pulm_wheezing/`
+- Chest Tightness (10 tests): 10 golden in `tests/cases/pulm_chest_tightness/`
+- Hemoptysis (10 tests): 10 golden in `tests/cases/pulm_hemoptysis/`
 
 ### Data Corruption Guard
 `server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, OUTPUT_TEMPLATES, and CLUSTER_SCORING_RULES on every config load. It checks for pasted-row corruption, whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies, and invalid cluster scoring rule formats. Cross-table checks verify template references, question references in trigger expressions, and question references in cluster scoring rule expressions. It hard-fails on corruption to prevent silent rule poisoning.
 
 ### Complaint Pipelines
-Eleven complaint pipelines are implemented, each with core questions, red flag rules, scoring modules, disposition rules, and output templates: Persistent Cough, Chest Pain, Dizziness, Abdominal Pain, Sore Throat, Earache, UTI / Urinary Symptoms, Testicular Pain / Prostatitis, Pelvic Pain, Headache, and Sinus Pressure / Sinusitis.
+Twenty complaint pipelines are implemented across 5 medical systems, each with core questions, red flag rules, cluster scoring rules, disposition rules, and output templates:
+- **ENT** (6): Sore Throat (legacy), Earache (legacy), Sinus Pressure, Sore Throat ENT, Ear Pain, Nasal Congestion, Epistaxis
+- **PULM** (5): Persistent Cough (legacy), Pulmonary Cough, Shortness of Breath, Wheezing, Chest Tightness, Hemoptysis
+- **GU** (2): UTI / Urinary Symptoms, Testicular Pain / Prostatitis
+- **GYN** (1): Pelvic Pain
+- **NEURO** (1): Headache
+- **GI** (2): Chest Pain (legacy), Abdominal Pain (legacy)
+- **General** (2): Dizziness (legacy)
 
 ### Generic Data-Driven Engine (GENERIC_V1)
 `server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Instead of writing custom `*Score.ts` files and hardcoded graph branches, complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic.
@@ -82,7 +98,8 @@ Eleven complaint pipelines are implemented, each with core questions, red flag r
 - UTI (`gu_uti_symptoms`) is the first complaint migrated to GENERIC_V1, all others remain on LEGACY
 - Batch B migrated: `gu_testicular_pain_prostatitis`, `gyn_pelvic_pain`, `neuro_headache` — all on GENERIC_V1
 - `ent_sinus_pressure` built natively on GENERIC_V1 (first complaint with zero legacy code)
-- 5/11 complaints now on GENERIC_V1; 6 remain LEGACY (sore_throat, earache, persistent_cough, chest_pain, dizziness, abdominal_pain)
+- Batch C (9 new complaints): `ent_sore_throat`, `ent_ear_pain`, `ent_nasal_congestion`, `ent_epistaxis`, `pulm_cough`, `pulm_shortness_of_breath`, `pulm_wheezing`, `pulm_chest_tightness`, `pulm_hemoptysis` — all on GENERIC_V1
+- 14/20 complaints now on GENERIC_V1; 6 remain LEGACY (sore_throat, earache, persistent_cough, chest_pain, dizziness, abdominal_pain)
 
 **Adding a new complaint (zero TypeScript):**
 1. Run `npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>` to scaffold stub rows + golden tests

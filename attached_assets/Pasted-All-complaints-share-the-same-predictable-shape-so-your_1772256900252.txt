@@ -1,0 +1,760 @@
+All complaints share the same predictable shape so your validator + importer + harness can treat them uniformly.
+
+If your validator expects different key names, the fastest move is to adjust your validator’s mapping layer once, not the packs.
+
+ENT system pack
+rulesets/
+  ent/
+    _system.json
+    ent_sinus_pressure/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    ent_sore_throat/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    ent_ear_pain/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    ent_nasal_congestion/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    ent_epistaxis/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+rulesets/ent/_system.json
+{
+  "system": "ent",
+  "complaints": [
+    "ent_sinus_pressure",
+    "ent_sore_throat",
+    "ent_ear_pain",
+    "ent_nasal_congestion",
+    "ent_epistaxis"
+  ]
+}
+ENT common template notes (embedded in each ruleset)
+
+Severity gates: emergent red flags are explicit and high-signal
+
+Disposition: EMERG / URGENT (same-day) / ROUTINE / SELF-CARE
+
+Differentials: scored via “signals” (symptom/features) with weights
+
+Outputs: stable keys for your renderer and audit trail
+
+rulesets/ent/ent_sinus_pressure/ruleset.json
+{
+  "meta": {
+    "system": "ENT",
+    "complaint_slug": "ent_sinus_pressure",
+    "complaint_name": "Sinus pressure / facial pain",
+    "version": "1.0.0"
+  },
+  "core_questions": [
+    {"id": "dur", "q": "How many days has this been going on?", "type": "duration_days"},
+    {"id": "fever", "q": "Any fever (measured) or chills?", "type": "boolean"},
+    {"id": "purulent", "q": "Thick yellow/green discharge?", "type": "boolean"},
+    {"id": "unilateral", "q": "Mostly one-sided facial pain/pressure?", "type": "boolean"},
+    {"id": "tooth", "q": "Upper tooth pain?", "type": "boolean"},
+    {"id": "worse_bend", "q": "Worse when bending forward?", "type": "boolean"},
+    {"id": "severe", "q": "Severe facial pain?", "type": "boolean"},
+    {"id": "vision", "q": "Any vision changes, double vision, pain with eye movement?", "type": "boolean"},
+    {"id": "swelling", "q": "Swelling/redness around the eye or forehead?", "type": "boolean"},
+    {"id": "neck", "q": "Stiff neck, confusion, or severe headache unlike usual?", "type": "boolean"},
+    {"id": "immuno", "q": "Immunocompromised (chemo, transplant, high-dose steroids)?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "orbital", "if_any": ["vision=true", "swelling=true"], "disposition": "EMERG", "reason": "Possible orbital complication"},
+    {"id": "cns", "if_any": ["neck=true"], "disposition": "EMERG", "reason": "Possible CNS complication"},
+    {"id": "immuno_severe", "if_all": ["immuno=true", "severe=true"], "disposition": "EMERG", "reason": "High-risk host + severe symptoms"}
+  ],
+  "differentials": [
+    {
+      "id": "viral_rhinosinusitis",
+      "name": "Viral rhinosinusitis",
+      "signals": [
+        {"if": "dur<=10", "w": 2},
+        {"if": "fever=false", "w": 1},
+        {"if": "purulent=false", "w": 1}
+      ]
+    },
+    {
+      "id": "abrs",
+      "name": "Acute bacterial rhinosinusitis (ABRS)",
+      "signals": [
+        {"if": "dur>=10", "w": 2},
+        {"if": "severe=true", "w": 2},
+        {"if": "fever=true", "w": 1},
+        {"if": "purulent=true", "w": 1},
+        {"if": "unilateral=true", "w": 1},
+        {"if": "tooth=true", "w": 1}
+      ]
+    },
+    {
+      "id": "allergic_rhinitis",
+      "name": "Allergic rhinitis with sinus pressure",
+      "signals": [
+        {"if": "fever=false", "w": 1},
+        {"if": "purulent=false", "w": 1}
+      ]
+    },
+    {
+      "id": "dental_source",
+      "name": "Odontogenic sinusitis / dental source",
+      "signals": [
+        {"if": "tooth=true", "w": 3},
+        {"if": "unilateral=true", "w": 1}
+      ]
+    }
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "abrs_urgent", "if": "dur>=10 OR severe=true", "then": "URGENT"},
+    {"id": "routine", "if": "dur>0", "then": "ROUTINE"}
+  ],
+  "outputs": {
+    "summary_template_id": "cc_summary_v1",
+    "home_care_template_id": "homecare_ent_sinus_v1",
+    "return_precautions_template_id": "return_precautions_ent_v1"
+  }
+}
+rulesets/ent/ent_sinus_pressure/disp_rules.json
+{
+  "complaint_slug": "ent_sinus_pressure",
+  "rules": [
+    {"id": "rf_emerg", "priority": 100, "when": {"any_red_flag": true}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_abrs", "priority": 50, "when": {"expr": "dur>=10 OR severe=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "dur>0"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/ent/ent_sinus_pressure/cluster_scoring_rules.json
+{
+  "complaint_slug": "ent_sinus_pressure",
+  "differentials": [
+    {"id": "viral_rhinosinusitis", "min_score": 2},
+    {"id": "abrs", "min_score": 3},
+    {"id": "allergic_rhinitis", "min_score": 1},
+    {"id": "dental_source", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "tooth=true", "prefer": "dental_source"},
+    {"prefer_if": "dur>=10", "prefer": "abrs"}
+  ]
+}
+rulesets/ent/ent_sinus_pressure/output_templates.json
+{
+  "templates": [
+    {
+      "id": "cc_summary_v1",
+      "type": "summary",
+      "text": "Sinus/facial pressure with key features captured (duration, fever, discharge, laterality, severity)."
+    },
+    {
+      "id": "homecare_ent_sinus_v1",
+      "type": "homecare",
+      "text": "Supportive care: hydration, rest, saline irrigation, humidifier. Consider OTC pain reliever if safe. Avoid decongestants if contraindicated."
+    },
+    {
+      "id": "return_precautions_ent_v1",
+      "type": "precautions",
+      "text": "Seek urgent care now for eye swelling, vision changes, severe headache/neck stiffness, confusion, or rapidly worsening symptoms."
+    }
+  ]
+}
+rulesets/ent/ent_sore_throat/ruleset.json
+{
+  "meta": {"system": "ENT", "complaint_slug": "ent_sore_throat", "complaint_name": "Sore throat", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "dur", "q": "How many days?", "type": "duration_days"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "cough", "q": "Cough present?", "type": "boolean"},
+    {"id": "exudate", "q": "White spots/exudate on tonsils?", "type": "boolean"},
+    {"id": "tender_nodes", "q": "Tender neck nodes?", "type": "boolean"},
+    {"id": "trismus", "q": "Trouble opening mouth (trismus) or muffled 'hot potato' voice?", "type": "boolean"},
+    {"id": "drool", "q": "Drooling or trouble swallowing saliva?", "type": "boolean"},
+    {"id": "sob", "q": "Shortness of breath/stridor?", "type": "boolean"},
+    {"id": "rash", "q": "Rash (sandpaper-like) or strawberry tongue?", "type": "boolean"},
+    {"id": "mono", "q": "Extreme fatigue or enlarged spleen history?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "airway", "if_any": ["sob=true", "drool=true"], "disposition": "EMERG", "reason": "Airway risk"},
+    {"id": "pta", "if_any": ["trismus=true"], "disposition": "URGENT", "reason": "Possible peritonsillar abscess"}
+  ],
+  "differentials": [
+    {"id": "viral_pharyngitis", "name": "Viral pharyngitis", "signals": [{"if": "cough=true", "w": 2}, {"if": "fever=false", "w": 1}]},
+    {"id": "strep_pharyngitis", "name": "Strep pharyngitis", "signals": [{"if": "fever=true", "w": 1}, {"if": "cough=false", "w": 1}, {"if": "exudate=true", "w": 1}, {"if": "tender_nodes=true", "w": 1}, {"if": "rash=true", "w": 2}]},
+    {"id": "mono", "name": "Infectious mononucleosis", "signals": [{"if": "mono=true", "w": 3}, {"if": "exudate=true", "w": 1}, {"if": "dur>=7", "w": 1}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_pta", "if": "trismus=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "dur>0", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_ent_throat_v1", "return_precautions_template_id": "return_precautions_ent_v1"}
+}
+rulesets/ent/ent_sore_throat/disp_rules.json
+{
+  "complaint_slug": "ent_sore_throat",
+  "rules": [
+    {"id": "rf_emerg", "priority": 100, "when": {"expr": "sob=true OR drool=true"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_pta", "priority": 50, "when": {"expr": "trismus=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "dur>0"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/ent/ent_sore_throat/cluster_scoring_rules.json
+{
+  "complaint_slug": "ent_sore_throat",
+  "differentials": [
+    {"id": "viral_pharyngitis", "min_score": 2},
+    {"id": "strep_pharyngitis", "min_score": 3},
+    {"id": "mono", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "cough=true", "prefer": "viral_pharyngitis"},
+    {"prefer_if": "rash=true", "prefer": "strep_pharyngitis"}
+  ]
+}
+rulesets/ent/ent_sore_throat/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Sore throat with key strep/viral features captured (fever, cough, exudate, nodes, airway signs)."},
+    {"id": "homecare_ent_throat_v1", "type": "homecare", "text": "Supportive care: fluids, warm tea/soup, salt-water gargles, lozenges if age-appropriate, OTC pain reliever if safe."},
+    {"id": "return_precautions_ent_v1", "type": "precautions", "text": "Seek urgent care for trouble breathing, drooling, inability to swallow, worsening neck swelling, or dehydration."}
+  ]
+}
+rulesets/ent/ent_ear_pain/ruleset.json
+{
+  "meta": {"system": "ENT", "complaint_slug": "ent_ear_pain", "complaint_name": "Ear pain", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "dur", "q": "How many days?", "type": "duration_days"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "drain", "q": "Drainage from ear?", "type": "boolean"},
+    {"id": "hearing", "q": "Hearing loss or fullness?", "type": "boolean"},
+    {"id": "swim", "q": "Recent swimming or water exposure?", "type": "boolean"},
+    {"id": "pain_pinna", "q": "Pain when pulling the outer ear or pressing tragus?", "type": "boolean"},
+    {"id": "mastoid", "q": "Pain/redness/swelling behind the ear (mastoid area)?", "type": "boolean"},
+    {"id": "vertigo", "q": "Severe vertigo or neurologic symptoms?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "mastoiditis", "if_any": ["mastoid=true"], "disposition": "EMERG", "reason": "Possible mastoiditis"},
+    {"id": "neuro", "if_any": ["vertigo=true"], "disposition": "URGENT", "reason": "Severe vertigo/neuro symptoms"}
+  ],
+  "differentials": [
+    {"id": "otitis_externa", "name": "Otitis externa", "signals": [{"if": "swim=true", "w": 1}, {"if": "pain_pinna=true", "w": 3}]},
+    {"id": "aom", "name": "Acute otitis media", "signals": [{"if": "fever=true", "w": 1}, {"if": "hearing=true", "w": 1}, {"if": "dur<=7", "w": 1}]},
+    {"id": "perforation", "name": "TM perforation", "signals": [{"if": "drain=true", "w": 3}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_drain", "if": "drain=true OR fever=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "dur>0", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_ent_ear_v1", "return_precautions_template_id": "return_precautions_ent_v1"}
+}
+rulesets/ent/ent_ear_pain/disp_rules.json
+{
+  "complaint_slug": "ent_ear_pain",
+  "rules": [
+    {"id": "emerg_mastoid", "priority": 100, "when": {"expr": "mastoid=true"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_drain_or_fever", "priority": 50, "when": {"expr": "drain=true OR fever=true OR vertigo=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "dur>0"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/ent/ent_ear_pain/cluster_scoring_rules.json
+{
+  "complaint_slug": "ent_ear_pain",
+  "differentials": [
+    {"id": "otitis_externa", "min_score": 3},
+    {"id": "aom", "min_score": 2},
+    {"id": "perforation", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "pain_pinna=true", "prefer": "otitis_externa"},
+    {"prefer_if": "drain=true", "prefer": "perforation"}
+  ]
+}
+rulesets/ent/ent_ear_pain/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Ear pain assessed with fever, drainage, water exposure, tragus/pinna pain, mastoid signs, and neuro symptoms."},
+    {"id": "homecare_ent_ear_v1", "type": "homecare", "text": "If mild: OTC pain relief if safe, avoid water in ear, don’t insert objects/Q-tips. Seek care if worsening or drainage."},
+    {"id": "return_precautions_ent_v1", "type": "precautions", "text": "Go now for swelling/redness behind ear, severe headache, neuro symptoms, high fever, or rapid worsening."}
+  ]
+}
+rulesets/ent/ent_nasal_congestion/ruleset.json
+{
+  "meta": {"system": "ENT", "complaint_slug": "ent_nasal_congestion", "complaint_name": "Nasal congestion", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "dur", "q": "How many days?", "type": "duration_days"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "itch", "q": "Itchy eyes/nose or sneezing fits?", "type": "boolean"},
+    {"id": "watery", "q": "Clear watery runny nose?", "type": "boolean"},
+    {"id": "purulent", "q": "Thick colored discharge?", "type": "boolean"},
+    {"id": "facial", "q": "Facial pain/pressure?", "type": "boolean"},
+    {"id": "sob", "q": "Trouble breathing (not just stuffy nose)?", "type": "boolean"},
+    {"id": "infant", "q": "Age under 3 months?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "infant_fever", "if_all": ["infant=true", "fever=true"], "disposition": "EMERG", "reason": "Young infant with fever"},
+    {"id": "resp", "if_any": ["sob=true"], "disposition": "EMERG", "reason": "Breathing difficulty"}
+  ],
+  "differentials": [
+    {"id": "viral_uri", "name": "Viral URI", "signals": [{"if": "dur<=10", "w": 2}, {"if": "fever=true", "w": 1}]},
+    {"id": "allergic_rhinitis", "name": "Allergic rhinitis", "signals": [{"if": "itch=true", "w": 2}, {"if": "watery=true", "w": 2}, {"if": "fever=false", "w": 1}]},
+    {"id": "abrs", "name": "Possible bacterial sinusitis", "signals": [{"if": "dur>=10", "w": 2}, {"if": "purulent=true", "w": 1}, {"if": "facial=true", "w": 1}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_sinus", "if": "dur>=10 AND facial=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "dur>0", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_ent_congestion_v1", "return_precautions_template_id": "return_precautions_ent_v1"}
+}
+rulesets/ent/ent_nasal_congestion/disp_rules.json
+{
+  "complaint_slug": "ent_nasal_congestion",
+  "rules": [
+    {"id": "emerg_infant_fever_or_sob", "priority": 100, "when": {"expr": "sob=true OR (infant=true AND fever=true)"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_sinus", "priority": 50, "when": {"expr": "dur>=10 AND facial=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "dur>0"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/ent/ent_nasal_congestion/cluster_scoring_rules.json
+{
+  "complaint_slug": "ent_nasal_congestion",
+  "differentials": [
+    {"id": "viral_uri", "min_score": 2},
+    {"id": "allergic_rhinitis", "min_score": 3},
+    {"id": "abrs", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "itch=true", "prefer": "allergic_rhinitis"},
+    {"prefer_if": "dur>=10", "prefer": "abrs"}
+  ]
+}
+rulesets/ent/ent_nasal_congestion/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Nasal congestion evaluated with duration, fever, allergic features, discharge quality, facial pressure, and breathing status."},
+    {"id": "homecare_ent_congestion_v1", "type": "homecare", "text": "Supportive care: saline spray/irrigation, humidifier, fluids, rest. Consider allergy measures if itchy/sneezy pattern."},
+    {"id": "return_precautions_ent_v1", "type": "precautions", "text": "Go now for breathing trouble, young infant with fever, severe facial swelling, or rapidly worsening symptoms."}
+  ]
+}
+rulesets/ent/ent_epistaxis/ruleset.json
+{
+  "meta": {"system": "ENT", "complaint_slug": "ent_epistaxis", "complaint_name": "Nosebleed", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "active", "q": "Is it actively bleeding right now?", "type": "boolean"},
+    {"id": "duration", "q": "How long has this bleeding episode lasted (minutes)?", "type": "number"},
+    {"id": "heavy", "q": "Heavy bleeding (soaking tissues rapidly) or feeling faint?", "type": "boolean"},
+    {"id": "trauma", "q": "Any recent trauma to nose/face?", "type": "boolean"},
+    {"id": "blood_thinner", "q": "On blood thinners (warfarin/DOAC) or bleeding disorder?", "type": "boolean"},
+    {"id": "recurrent", "q": "Recurrent episodes recently?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "shock", "if_any": ["heavy=true"], "disposition": "EMERG", "reason": "Possible significant blood loss"},
+    {"id": "persistent", "if_all": ["active=true", "duration>=20"], "disposition": "URGENT", "reason": "Persistent bleeding"},
+    {"id": "anticoag", "if_all": ["active=true", "blood_thinner=true"], "disposition": "URGENT", "reason": "Bleeding on anticoagulation"},
+    {"id": "trauma", "if_any": ["trauma=true"], "disposition": "URGENT", "reason": "Post-trauma bleeding"}
+  ],
+  "differentials": [
+    {"id": "anterior_epistaxis", "name": "Anterior epistaxis", "signals": [{"if": "active=true", "w": 1}]},
+    {"id": "posterior_epistaxis", "name": "Possible posterior epistaxis", "signals": [{"if": "heavy=true", "w": 2}, {"if": "duration>=20", "w": 2}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if": "heavy=true", "then": "EMERG"},
+    {"id": "urgent_persist_or_risk", "if": "(active=true AND duration>=20) OR (active=true AND blood_thinner=true) OR trauma=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "recurrent=true OR active=false", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_ent_epistaxis_v1", "return_precautions_template_id": "return_precautions_ent_epistaxis_v1"}
+}
+rulesets/ent/ent_epistaxis/disp_rules.json
+{
+  "complaint_slug": "ent_epistaxis",
+  "rules": [
+    {"id": "emerg_heavy", "priority": 100, "when": {"expr": "heavy=true"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_persist_or_risk", "priority": 50, "when": {"expr": "(active=true AND duration>=20) OR (active=true AND blood_thinner=true) OR trauma=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "recurrent=true OR active=false"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/ent/ent_epistaxis/cluster_scoring_rules.json
+{
+  "complaint_slug": "ent_epistaxis",
+  "differentials": [
+    {"id": "anterior_epistaxis", "min_score": 1},
+    {"id": "posterior_epistaxis", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "heavy=true OR duration>=20", "prefer": "posterior_epistaxis"}
+  ]
+}
+rulesets/ent/ent_epistaxis/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Nosebleed assessed with duration, severity, anticoagulation risk, and trauma history."},
+    {"id": "homecare_ent_epistaxis_v1", "type": "homecare", "text": "Lean forward, pinch soft part of nose continuously for 10–15 minutes, avoid nose picking/blowing, humidify. If bleeding restarts, repeat pressure."},
+    {"id": "return_precautions_ent_epistaxis_v1", "type": "precautions", "text": "Go now for heavy bleeding, fainting, bleeding >20 minutes despite pressure, or bleeding while on blood thinners."
+    }
+  ]
+}
+PULM system pack
+rulesets/
+  pulm/
+    _system.json
+    pulm_cough/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    pulm_shortness_of_breath/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    pulm_wheezing/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    pulm_chest_tightness/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+    pulm_hemoptysis/
+      ruleset.json
+      disp_rules.json
+      cluster_scoring_rules.json
+      output_templates.json
+rulesets/pulm/_system.json
+{
+  "system": "pulm",
+  "complaints": [
+    "pulm_cough",
+    "pulm_shortness_of_breath",
+    "pulm_wheezing",
+    "pulm_chest_tightness",
+    "pulm_hemoptysis"
+  ]
+}
+rulesets/pulm/pulm_cough/ruleset.json
+{
+  "meta": {"system": "PULM", "complaint_slug": "pulm_cough", "complaint_name": "Cough", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "dur", "q": "How long has the cough been present (days)?", "type": "duration_days"},
+    {"id": "fever", "q": "Fever or chills?", "type": "boolean"},
+    {"id": "sob", "q": "Shortness of breath?", "type": "boolean"},
+    {"id": "cp", "q": "Chest pain (especially with breathing) or tightness?", "type": "boolean"},
+    {"id": "wheeze", "q": "Wheezing?", "type": "boolean"},
+    {"id": "blood", "q": "Coughing up blood?", "type": "boolean"},
+    {"id": "leg_swelling", "q": "New leg swelling/pain or recent immobilization/long travel?", "type": "boolean"},
+    {"id": "immuno", "q": "Immunocompromised?", "type": "boolean"},
+    {"id": "smoke", "q": "Smoker or vaping?", "type": "boolean"},
+    {"id": "night", "q": "Worse at night or with exercise?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "resp_distress", "if_any": ["sob=true"], "disposition": "EMERG", "reason": "Respiratory distress risk"},
+    {"id": "hemoptysis", "if_any": ["blood=true"], "disposition": "URGENT", "reason": "Hemoptysis"},
+    {"id": "pe_risk", "if_all": ["sob=true", "leg_swelling=true"], "disposition": "EMERG", "reason": "Possible PE"}
+  ],
+  "differentials": [
+    {"id": "viral_bronchitis", "name": "Viral bronchitis/URI", "signals": [{"if": "dur<=14", "w": 2}, {"if": "fever=false", "w": 1}]},
+    {"id": "pneumonia", "name": "Pneumonia", "signals": [{"if": "fever=true", "w": 2}, {"if": "sob=true", "w": 1}, {"if": "cp=true", "w": 1}]},
+    {"id": "asthma_reactive", "name": "Asthma/reactive airway", "signals": [{"if": "wheeze=true", "w": 2}, {"if": "night=true", "w": 1}]},
+    {"id": "postnasal_drip", "name": "Upper airway cough syndrome", "signals": [{"if": "dur>=7", "w": 1}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_fever_cp", "if": "fever=true OR cp=true OR wheeze=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "dur>0", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_pulm_cough_v1", "return_precautions_template_id": "return_precautions_pulm_v1"}
+}
+rulesets/pulm/pulm_cough/disp_rules.json
+{
+  "complaint_slug": "pulm_cough",
+  "rules": [
+    {"id": "emerg_pe_or_distress", "priority": 100, "when": {"expr": "sob=true AND leg_swelling=true"}, "then": {"disposition": "EMERG"}},
+    {"id": "emerg_sob", "priority": 90, "when": {"expr": "sob=true"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_redflags_soft", "priority": 50, "when": {"expr": "blood=true OR fever=true OR cp=true OR wheeze=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "dur>0"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/pulm/pulm_cough/cluster_scoring_rules.json
+{
+  "complaint_slug": "pulm_cough",
+  "differentials": [
+    {"id": "viral_bronchitis", "min_score": 2},
+    {"id": "pneumonia", "min_score": 3},
+    {"id": "asthma_reactive", "min_score": 2},
+    {"id": "postnasal_drip", "min_score": 1}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "fever=true AND cp=true", "prefer": "pneumonia"},
+    {"prefer_if": "wheeze=true", "prefer": "asthma_reactive"}
+  ]
+}
+rulesets/pulm/pulm_cough/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Cough evaluated with duration, fever, SOB, chest pain, wheeze, hemoptysis, and PE risk features."},
+    {"id": "homecare_pulm_cough_v1", "type": "homecare", "text": "Hydration, rest, honey if age-appropriate, humidifier. Avoid smoking/vaping exposure. OTC cough remedies only if safe for age/conditions."},
+    {"id": "return_precautions_pulm_v1", "type": "precautions", "text": "Go now for worsening shortness of breath, chest pain, coughing blood, confusion, or dehydration."
+    }
+  ]
+}
+rulesets/pulm/pulm_shortness_of_breath/ruleset.json
+{
+  "meta": {"system": "PULM", "complaint_slug": "pulm_shortness_of_breath", "complaint_name": "Shortness of breath", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "onset", "q": "Sudden onset or gradual?", "type": "enum", "options": ["sudden", "gradual"]},
+    {"id": "rest", "q": "Shortness of breath at rest?", "type": "boolean"},
+    {"id": "cp", "q": "Chest pain or pressure?", "type": "boolean"},
+    {"id": "wheeze", "q": "Wheezing?", "type": "boolean"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "cyanosis", "q": "Blue lips or severe difficulty speaking full sentences?", "type": "boolean"},
+    {"id": "leg_swelling", "q": "Leg swelling/pain or recent immobilization/travel?", "type": "boolean"},
+    {"id": "heart", "q": "History of heart failure/MI?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "severe", "if_any": ["cyanosis=true", "rest=true"], "disposition": "EMERG", "reason": "Severe dyspnea"},
+    {"id": "acs", "if_any": ["cp=true"], "disposition": "EMERG", "reason": "Possible ACS"},
+    {"id": "pe", "if_all": ["onset=sudden", "leg_swelling=true"], "disposition": "EMERG", "reason": "Possible PE"}
+  ],
+  "differentials": [
+    {"id": "asthma_copd", "name": "Asthma/COPD exacerbation", "signals": [{"if": "wheeze=true", "w": 2}]},
+    {"id": "pneumonia", "name": "Pneumonia", "signals": [{"if": "fever=true", "w": 2}]},
+    {"id": "chf", "name": "Heart failure", "signals": [{"if": "heart=true", "w": 2}, {"if": "rest=true", "w": 1}]},
+    {"id": "pe", "name": "Pulmonary embolism", "signals": [{"if": "onset=sudden", "w": 2}, {"if": "leg_swelling=true", "w": 2}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_moderate", "if": "wheeze=true OR fever=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "rest=false", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_pulm_sob_v1", "return_precautions_template_id": "return_precautions_pulm_v1"}
+}
+rulesets/pulm/pulm_shortness_of_breath/disp_rules.json
+{
+  "complaint_slug": "pulm_shortness_of_breath",
+  "rules": [
+    {"id": "emerg_severe_or_cp_or_pe", "priority": 100, "when": {"expr": "cyanosis=true OR rest=true OR cp=true OR (onset=sudden AND leg_swelling=true)"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_wheeze_or_fever", "priority": 50, "when": {"expr": "wheeze=true OR fever=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "rest=false"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/pulm/pulm_shortness_of_breath/cluster_scoring_rules.json
+{
+  "complaint_slug": "pulm_shortness_of_breath",
+  "differentials": [
+    {"id": "asthma_copd", "min_score": 2},
+    {"id": "pneumonia", "min_score": 2},
+    {"id": "chf", "min_score": 2},
+    {"id": "pe", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "onset=sudden AND leg_swelling=true", "prefer": "pe"},
+    {"prefer_if": "wheeze=true", "prefer": "asthma_copd"}
+  ]
+}
+rulesets/pulm/pulm_shortness_of_breath/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Dyspnea evaluated with onset, rest symptoms, chest pain, wheeze, fever, severe signs, and PE risk."},
+    {"id": "homecare_pulm_sob_v1", "type": "homecare", "text": "If mild and stable: rest, avoid triggers, follow existing inhaler plan if prescribed. If worsening, do not delay evaluation."},
+    {"id": "return_precautions_pulm_v1", "type": "precautions", "text": "Go now for SOB at rest, blue lips, chest pain/pressure, fainting, or rapid worsening."
+    }
+  ]
+}
+rulesets/pulm/pulm_wheezing/ruleset.json
+{
+  "meta": {"system": "PULM", "complaint_slug": "pulm_wheezing", "complaint_name": "Wheezing", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "sob", "q": "Shortness of breath?", "type": "boolean"},
+    {"id": "speaking", "q": "Trouble speaking full sentences?", "type": "boolean"},
+    {"id": "inhaler", "q": "Do you have a rescue inhaler and is it helping?", "type": "boolean"},
+    {"id": "trigger", "q": "Trigger (cold, exercise, allergens, smoke)?", "type": "boolean"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "allergy", "q": "Hives, lip/tongue swelling, or throat tightness?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "anaphylaxis", "if_any": ["allergy=true"], "disposition": "EMERG", "reason": "Possible anaphylaxis"},
+    {"id": "severe_asthma", "if_any": ["sob=true", "speaking=true"], "disposition": "EMERG", "reason": "Severe exacerbation"}
+  ],
+  "differentials": [
+    {"id": "asthma_exacerbation", "name": "Asthma exacerbation", "signals": [{"if": "trigger=true", "w": 1}, {"if": "inhaler=true", "w": 1}]},
+    {"id": "viral_trigger", "name": "Viral-triggered wheeze", "signals": [{"if": "fever=true", "w": 1}]},
+    {"id": "allergic_reaction", "name": "Allergic reaction", "signals": [{"if": "allergy=true", "w": 3}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_moderate", "if": "sob=true OR fever=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "sob=false", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_pulm_wheeze_v1", "return_precautions_template_id": "return_precautions_pulm_v1"}
+}
+rulesets/pulm/pulm_wheezing/disp_rules.json
+{
+  "complaint_slug": "pulm_wheezing",
+  "rules": [
+    {"id": "emerg_anaphylaxis_or_severe", "priority": 100, "when": {"expr": "allergy=true OR (sob=true AND speaking=true)"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_sob_or_fever", "priority": 50, "when": {"expr": "sob=true OR fever=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "sob=false"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/pulm/pulm_wheezing/cluster_scoring_rules.json
+{
+  "complaint_slug": "pulm_wheezing",
+  "differentials": [
+    {"id": "asthma_exacerbation", "min_score": 2},
+    {"id": "viral_trigger", "min_score": 1},
+    {"id": "allergic_reaction", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "allergy=true", "prefer": "allergic_reaction"}
+  ]
+}
+rulesets/pulm/pulm_wheezing/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Wheezing assessed with severity, inhaler response, triggers, fever, and allergic symptoms."},
+    {"id": "homecare_pulm_wheeze_v1", "type": "homecare", "text": "Avoid triggers, follow prescribed rescue inhaler plan. If needing frequent rescue doses or not improving, seek urgent evaluation."},
+    {"id": "return_precautions_pulm_v1", "type": "precautions", "text": "Go now for throat tightness/hives, blue lips, inability to speak full sentences, or worsening SOB."
+    }
+  ]
+}
+rulesets/pulm/pulm_chest_tightness/ruleset.json
+{
+  "meta": {"system": "PULM", "complaint_slug": "pulm_chest_tightness", "complaint_name": "Chest tightness (breathing-related)", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "pressure", "q": "Pressure/heaviness like a weight, or sharp with breathing?", "type": "enum", "options": ["pressure", "pleuritic", "other"]},
+    {"id": "sob", "q": "Shortness of breath?", "type": "boolean"},
+    {"id": "wheeze", "q": "Wheezing?", "type": "boolean"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "exert", "q": "Worse with exertion?", "type": "boolean"},
+    {"id": "risk", "q": "PE risk (leg swelling, travel, immobilization)?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "acs_like", "if_all": ["pressure=pressure", "exert=true"], "disposition": "EMERG", "reason": "Possible cardiac ischemia pattern"},
+    {"id": "pe_like", "if_all": ["pressure=pleuritic", "risk=true", "sob=true"], "disposition": "EMERG", "reason": "Possible PE"}
+  ],
+  "differentials": [
+    {"id": "asthma", "name": "Asthma/reactive airway", "signals": [{"if": "wheeze=true", "w": 2}, {"if": "sob=true", "w": 1}]},
+    {"id": "pleurisy", "name": "Pleurisy/viral inflammation", "signals": [{"if": "pressure=pleuritic", "w": 2}, {"if": "fever=false", "w": 1}]},
+    {"id": "pneumonia", "name": "Pneumonia", "signals": [{"if": "fever=true", "w": 2}, {"if": "pressure=pleuritic", "w": 1}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_sob_or_fever", "if": "sob=true OR fever=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "sob=false", "then": "ROUTINE"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_pulm_tight_v1", "return_precautions_template_id": "return_precautions_pulm_v1"}
+}
+rulesets/pulm/pulm_chest_tightness/disp_rules.json
+{
+  "complaint_slug": "pulm_chest_tightness",
+  "rules": [
+    {"id": "emerg_acs_or_pe", "priority": 100, "when": {"expr": "(pressure=pressure AND exert=true) OR (pressure=pleuritic AND risk=true AND sob=true)"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_sob_or_fever", "priority": 50, "when": {"expr": "sob=true OR fever=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "routine_default", "priority": 1, "when": {"expr": "sob=false"}, "then": {"disposition": "ROUTINE"}}
+  ]
+}
+rulesets/pulm/pulm_chest_tightness/cluster_scoring_rules.json
+{
+  "complaint_slug": "pulm_chest_tightness",
+  "differentials": [
+    {"id": "asthma", "min_score": 2},
+    {"id": "pleurisy", "min_score": 2},
+    {"id": "pneumonia", "min_score": 3}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "wheeze=true", "prefer": "asthma"},
+    {"prefer_if": "fever=true", "prefer": "pneumonia"}
+  ]
+}
+rulesets/pulm/pulm_chest_tightness/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Chest tightness evaluated for pleuritic vs pressure pattern, SOB, wheeze, fever, exertional triggers, and PE risk."},
+    {"id": "homecare_pulm_tight_v1", "type": "homecare", "text": "If mild and stable: rest, avoid exertion, follow asthma plan if applicable. If persistent or worsening, seek evaluation."},
+    {"id": "return_precautions_pulm_v1", "type": "precautions", "text": "Go now for chest pressure with exertion, fainting, severe SOB, or signs of PE risk with pleuritic pain."
+    }
+  ]
+}
+rulesets/pulm/pulm_hemoptysis/ruleset.json
+{
+  "meta": {"system": "PULM", "complaint_slug": "pulm_hemoptysis", "complaint_name": "Coughing up blood", "version": "1.0.0"},
+  "core_questions": [
+    {"id": "amount", "q": "Small streaks vs more than a few teaspoons?", "type": "enum", "options": ["streaks", "moderate", "large"]},
+    {"id": "sob", "q": "Shortness of breath?", "type": "boolean"},
+    {"id": "cp", "q": "Chest pain?", "type": "boolean"},
+    {"id": "fever", "q": "Fever?", "type": "boolean"},
+    {"id": "blood_thinner", "q": "On blood thinners or bleeding disorder?", "type": "boolean"},
+    {"id": "risk", "q": "PE risk (leg swelling, travel, immobilization)?", "type": "boolean"}
+  ],
+  "red_flags": [
+    {"id": "large", "if_any": ["amount=large"], "disposition": "EMERG", "reason": "Large-volume hemoptysis"},
+    {"id": "resp", "if_any": ["sob=true"], "disposition": "EMERG", "reason": "Respiratory compromise"},
+    {"id": "pe", "if_all": ["risk=true", "cp=true", "sob=true"], "disposition": "EMERG", "reason": "Possible PE"}
+  ],
+  "differentials": [
+    {"id": "bronchitis_minor", "name": "Minor airway irritation/bronchitis", "signals": [{"if": "amount=streaks", "w": 2}, {"if": "fever=false", "w": 1}]},
+    {"id": "pneumonia", "name": "Pneumonia", "signals": [{"if": "fever=true", "w": 2}]},
+    {"id": "pe", "name": "Pulmonary embolism", "signals": [{"if": "risk=true", "w": 2}, {"if": "cp=true", "w": 1}, {"if": "sob=true", "w": 2}]}
+  ],
+  "disposition_rules": [
+    {"id": "rf_emerg", "if_any_red_flag": true, "then": "EMERG"},
+    {"id": "urgent_moderate", "if": "amount=moderate OR blood_thinner=true OR fever=true OR cp=true", "then": "URGENT"},
+    {"id": "routine_default", "if": "amount=streaks AND sob=false", "then": "URGENT"}
+  ],
+  "outputs": {"summary_template_id": "cc_summary_v1", "home_care_template_id": "homecare_pulm_hemo_v1", "return_precautions_template_id": "return_precautions_pulm_v1"}
+}
+rulesets/pulm/pulm_hemoptysis/disp_rules.json
+{
+  "complaint_slug": "pulm_hemoptysis",
+  "rules": [
+    {"id": "emerg_large_or_sob_or_pe", "priority": 100, "when": {"expr": "amount=large OR sob=true OR (risk=true AND cp=true AND sob=true)"}, "then": {"disposition": "EMERG"}},
+    {"id": "urgent_moderate_or_risk", "priority": 50, "when": {"expr": "amount=moderate OR blood_thinner=true OR fever=true OR cp=true"}, "then": {"disposition": "URGENT"}},
+    {"id": "urgent_default", "priority": 1, "when": {"expr": "amount=streaks"}, "then": {"disposition": "URGENT"}}
+  ]
+}
+rulesets/pulm/pulm_hemoptysis/cluster_scoring_rules.json
+{
+  "complaint_slug": "pulm_hemoptysis",
+  "differentials": [
+    {"id": "bronchitis_minor", "min_score": 2},
+    {"id": "pneumonia", "min_score": 2},
+    {"id": "pe", "min_score": 4}
+  ],
+  "tie_breakers": [
+    {"prefer_if": "risk=true AND sob=true", "prefer": "pe"}
+  ]
+}
+rulesets/pulm/pulm_hemoptysis/output_templates.json
+{
+  "templates": [
+    {"id": "cc_summary_v1", "type": "summary", "text": "Hemoptysis assessed by amount, SOB, chest pain, fever, anticoagulation, and PE risk features."},
+    {"id": "homecare_pulm_hemo_v1", "type": "homecare", "text": "Avoid exertion and irritants; do not delay evaluation even for small-volume hemoptysis if recurrent or risk factors present."},
+    {"id": "return_precautions_pulm_v1", "type": "precautions", "text": "Go now for large amounts of blood, shortness of breath, chest pain, dizziness/fainting, or rapid worsening."
+    }
+  ]
+}
+Next move (no planning, just iteration)
+
+Run:
+
+npm run ship:system -- ent
+
+npm run ship:system -- pulm
+
+Paste the FAIL output blocks (just the failing cases). I’ll regenerate the exact complaint folders that failed until both systems go green.
