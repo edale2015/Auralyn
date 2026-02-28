@@ -1,0 +1,38 @@
+{
+  "id": "G10",
+  "label": "PCP default – subacute 8 days, no bacterial triggers → pcp",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 8,
+    "Q_SINUS_FEVER": "no",
+    "Q_SINUS_PURULENT": "no",
+    "Q_SINUS_WORSE_AFTER_IMPROVE": "no",
+    "Q_EYE_SWELL": "no",
+    "Q_VISION_CHANGES": "no",
+    "Q_SINUS_HEADACHE_SEVERE": "no",
+    "Q_SINUS_SEVERE_FACIAL": "no",
+    "Q_NECK_STIFF": "no",
+    "Q_CONFUSION": "no",
+    "Q_IMMUNO": "no"
+  },
+  "expect": {
+    "disposition": "pcp",
+    "cluster": "CL_SINUS_VIRAL",
+    "rf_must_fire": [],
+    "rf_gate": "PASS"
+  },
+  "meta": {
+    "anchors": [
+      "Q_SINUS_DUR"
+    ],
+    "dangerToggles": [
+      "Q_SINUS_WORSE_AFTER_IMPROVE"
+    ],
+    "contradictions": [
+      {
+        "key": "Q_SINUS_DUR",
+        "flipTo": 12
+      }
+    ]
+  }
+}

@@ -452,6 +452,91 @@ async function runAbdPainMonotonicity(tc: TestCase): Promise<string[]> {
   return [];
 }
 
+function checkSinusInvariants(
+  tc: TestCase,
+  actualDisp: string,
+  actualGate: string,
+  actualCluster: string,
+  answers: Record<string, any>,
+): string[] {
+  const violations: string[] = [];
+  const a = answers;
+
+  if (a["Q_EYE_SWELL"] === "yes" || a["Q_VISION_CHANGES"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`SIN-INV-1: Q_EYE_SWELL=yes OR Q_VISION_CHANGES=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_SINUS_HEADACHE_SEVERE"] === "yes" || a["Q_NECK_STIFF"] === "yes" || a["Q_CONFUSION"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`SIN-INV-2: Q_SINUS_HEADACHE_SEVERE|Q_NECK_STIFF|Q_CONFUSION=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (a["Q_IMMUNO"] === "yes" && a["Q_SINUS_FEVER"] === "yes") {
+    if (actualGate !== "ER_SEND") {
+      violations.push(`SIN-INV-3: Q_IMMUNO=yes && Q_SINUS_FEVER=yes → gate must be ER_SEND, got '${actualGate}'`);
+    }
+  }
+
+  if (actualGate === "ER_SEND") {
+    if (actualDisp !== "er_send") {
+      violations.push(`SIN-INV-4: gate=ER_SEND → disposition must be er_send, got '${actualDisp}'`);
+    }
+  }
+
+  const dangerKeys = ["Q_EYE_SWELL", "Q_VISION_CHANGES", "Q_SINUS_HEADACHE_SEVERE", "Q_NECK_STIFF", "Q_CONFUSION"];
+  const anyDanger = dangerKeys.some(k => a[k] === "yes");
+  const immunoFever = a["Q_IMMUNO"] === "yes" && a["Q_SINUS_FEVER"] === "yes";
+  if (anyDanger || immunoFever) {
+    if (actualCluster === "CL_SINUS_VIRAL") {
+      violations.push(`SIN-INV-7: danger/immuno active → CL_SINUS_VIRAL must not be top-1, got '${actualCluster}'`);
+    }
+  }
+
+  const dur = Number(a["Q_SINUS_DUR"]) || 0;
+  const doubleWorsening = a["Q_SINUS_WORSE_AFTER_IMPROVE"] === "yes";
+  const feverAndSevere = a["Q_SINUS_FEVER"] === "yes" && a["Q_SINUS_SEVERE_FACIAL"] === "yes";
+  if (actualGate === "PASS" && (dur >= 10 || doubleWorsening || feverAndSevere)) {
+    if (actualDisp !== "urgent_care") {
+      violations.push(`SIN-INV-5: DUR>=10 or double-worsening or (fever+severe facial) without ER gate → disposition must be urgent_care, got '${actualDisp}'`);
+    }
+  }
+
+  return violations;
+}
+
+async function runSinusMonotonicity(tc: TestCase): Promise<string[]> {
+  const answers = { ...tc.answers };
+
+  if (answers["Q_EYE_SWELL"] === "yes" || answers["Q_EYE_SWELL"] === true) {
+    return [];
+  }
+
+  const baseState = buildCaseState(tc);
+  const baseResult = await runComplaintGraph(baseState, tc.cc_id);
+  const baseGate = (baseResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const escalatedTc: TestCase = {
+    ...tc,
+    id: `${tc.id}_mono`,
+    answers: { ...answers, Q_EYE_SWELL: "yes" },
+    expect: tc.expect,
+  };
+  const escalatedState = buildCaseState(escalatedTc);
+  const escalatedResult = await runComplaintGraph(escalatedState, tc.cc_id);
+  const escalatedGate = (escalatedResult.state as any).redFlagGate?.gateResult ?? "PASS";
+
+  const baseSev = SEVERITY_ORDER[baseGate] ?? 0;
+  const escalatedSev = SEVERITY_ORDER[escalatedGate] ?? 0;
+
+  if (escalatedSev < baseSev) {
+    return [`SIN-MONO: adding Q_EYE_SWELL should not reduce severity. base=${baseGate}(${baseSev}), escalated=${escalatedGate}(${escalatedSev})`];
+  }
+  return [];
+}
+
 async function runSingleTest(tc: TestCase): Promise<TestResult> {
   const state = buildCaseState(tc);
   const result = await runComplaintGraph(state, tc.cc_id);
@@ -500,6 +585,10 @@ async function runSingleTest(tc: TestCase): Promise<TestResult> {
   } else if (tc.cc_id === "abdominal_pain") {
     invariantFailures = checkAbdPainInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
     const monoViolations = await runAbdPainMonotonicity(tc);
+    invariantFailures.push(...monoViolations);
+  } else if (tc.cc_id === "ent_sinus_pressure") {
+    invariantFailures = checkSinusInvariants(tc, actualDisp, rfGate, topCluster, state.answers);
+    const monoViolations = await runSinusMonotonicity(tc);
     invariantFailures.push(...monoViolations);
   }
 

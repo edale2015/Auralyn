@@ -1,0 +1,35 @@
+{
+  "id": "G06",
+  "label": "Vision changes – orbital risk → ER_SEND",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 5,
+    "Q_SINUS_FEVER": "no",
+    "Q_EYE_SWELL": "no",
+    "Q_VISION_CHANGES": "yes",
+    "Q_SINUS_HEADACHE_SEVERE": "no",
+    "Q_SINUS_PURULENT": "no",
+    "Q_SINUS_WORSE_AFTER_IMPROVE": "no",
+    "Q_SINUS_SEVERE_FACIAL": "no",
+    "Q_NECK_STIFF": "no",
+    "Q_CONFUSION": "no",
+    "Q_IMMUNO": "no"
+  },
+  "expect": {
+    "disposition": "er_send",
+    "cluster": "CL_SINUS_ORBITAL_RISK",
+    "rf_must_fire": [
+      "RF_SINUS_001"
+    ],
+    "rf_gate": "ER_SEND"
+  },
+  "meta": {
+    "anchors": [
+      "Q_VISION_CHANGES"
+    ],
+    "dangerToggles": [
+      "Q_EYE_SWELL"
+    ],
+    "contradictions": []
+  }
+}

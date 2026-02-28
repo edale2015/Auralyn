@@ -1,0 +1,271 @@
+7) Golden 10 test cases (tests/cases/ent_sinus_pressure/)
+
+Each file: include meta.anchors, meta.dangerToggles, meta.contradictions so your fuzz generator can work without thinking.
+
+SINUS_G01 Viral baseline (self-care)
+
+Expect: self_care, gate PASS, cluster top CL_SINUS_VIRAL
+
+{
+  "case_id": "SINUS_G01_VIRAL_BASELINE",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 3,
+    "Q_SINUS_FEVER": false,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "PASS",
+    "disposition": "self_care",
+    "cluster_top": "CL_SINUS_VIRAL",
+    "rf_must_fire": []
+  },
+  "meta": {
+    "anchors": ["Q_SINUS_DUR", "Q_SINUS_FEVER"],
+    "dangerToggles": ["Q_EYE_SWELL", "Q_VISION_CHANGES", "Q_SINUS_HEADACHE_SEVERE"],
+    "contradictions": [
+      { "key": "Q_SINUS_FEVER", "flipTo": true }
+    ]
+  }
+}
+SINUS_G02 Bacterial duration ≥10 (UC)
+
+Expect: urgent_care, cluster bacterial
+
+{
+  "case_id": "SINUS_G02_BACTERIAL_PERSISTENT",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 12,
+    "Q_SINUS_FEVER": false,
+    "Q_SINUS_PURULENT": true,
+    "Q_SINUS_WORSE_AFTER_IMPROVE": false,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "PASS",
+    "disposition": "urgent_care",
+    "cluster_top": "CL_SINUS_BACTERIAL",
+    "rf_must_fire": []
+  },
+  "meta": {
+    "anchors": ["Q_SINUS_DUR"],
+    "dangerToggles": ["Q_EYE_SWELL", "Q_SINUS_HEADACHE_SEVERE"],
+    "contradictions": [{ "key": "Q_SINUS_DUR", "flipTo": 3 }]
+  }
+}
+SINUS_G03 Double-worsening (UC)
+{
+  "case_id": "SINUS_G03_DOUBLE_WORSENING",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 8,
+    "Q_SINUS_FEVER": false,
+    "Q_SINUS_WORSE_AFTER_IMPROVE": true,
+    "Q_SINUS_PURULENT": true,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "PASS",
+    "disposition": "urgent_care",
+    "cluster_top": "CL_SINUS_BACTERIAL",
+    "rf_must_fire": []
+  },
+  "meta": {
+    "anchors": ["Q_SINUS_WORSE_AFTER_IMPROVE"],
+    "dangerToggles": ["Q_VISION_CHANGES"],
+    "contradictions": [{ "key": "Q_SINUS_WORSE_AFTER_IMPROVE", "flipTo": false }]
+  }
+}
+SINUS_G04 Severe symptoms (fever + severe facial)
+{
+  "case_id": "SINUS_G04_SEVERE_SYMPTOMS",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 4,
+    "Q_SINUS_FEVER": true,
+    "Q_SINUS_SEVERE_FACIAL": true,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "PASS",
+    "disposition": "urgent_care",
+    "cluster_top": "CL_SINUS_BACTERIAL",
+    "rf_must_fire": []
+  },
+  "meta": {
+    "anchors": ["Q_SINUS_FEVER", "Q_SINUS_SEVERE_FACIAL"],
+    "dangerToggles": ["Q_EYE_SWELL"],
+    "contradictions": [{ "key": "Q_SINUS_FEVER", "flipTo": false }]
+  }
+}
+SINUS_G05 Orbital warning (ER)
+
+Expect: ER_SEND, RF_SINUS_001 fires, cluster orbital
+
+{
+  "case_id": "SINUS_G05_ORBITAL_WARNING",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 5,
+    "Q_SINUS_FEVER": true,
+    "Q_EYE_SWELL": true,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "ER_SEND",
+    "disposition": "er_send",
+    "cluster_top": "CL_SINUS_ORBITAL_RISK",
+    "rf_must_fire": ["RF_SINUS_001"]
+  },
+  "meta": {
+    "anchors": ["Q_EYE_SWELL"],
+    "dangerToggles": ["Q_VISION_CHANGES"],
+    "contradictions": [{ "key": "Q_EYE_SWELL", "flipTo": false }]
+  }
+}
+SINUS_G06 Vision change (ER)
+{
+  "case_id": "SINUS_G06_VISION_CHANGES",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 5,
+    "Q_SINUS_FEVER": false,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": true,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "ER_SEND",
+    "disposition": "er_send",
+    "cluster_top": "CL_SINUS_ORBITAL_RISK",
+    "rf_must_fire": ["RF_SINUS_001"]
+  },
+  "meta": { "anchors": ["Q_VISION_CHANGES"], "dangerToggles": ["Q_EYE_SWELL"], "contradictions": [] }
+}
+SINUS_G07 Intracranial warning: severe headache (ER)
+{
+  "case_id": "SINUS_G07_INTRACRANIAL_SEVERE_HEADACHE",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 6,
+    "Q_SINUS_FEVER": true,
+    "Q_SINUS_HEADACHE_SEVERE": true,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_NECK_STIFF": false,
+    "Q_CONFUSION": false
+  },
+  "expect": {
+    "gateResult": "ER_SEND",
+    "disposition": "er_send",
+    "cluster_top": "CL_SINUS_INTRACRANIAL_RISK",
+    "rf_must_fire": ["RF_SINUS_002"]
+  },
+  "meta": { "anchors": ["Q_SINUS_HEADACHE_SEVERE"], "dangerToggles": ["Q_CONFUSION"], "contradictions": [] }
+}
+SINUS_G08 Intracranial warning: neck stiffness/confusion (ER)
+{
+  "case_id": "SINUS_G08_INTRACRANIAL_MENINGISMUS",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 4,
+    "Q_SINUS_FEVER": true,
+    "Q_SINUS_HEADACHE_SEVERE": false,
+    "Q_NECK_STIFF": true,
+    "Q_CONFUSION": true,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false
+  },
+  "expect": {
+    "gateResult": "ER_SEND",
+    "disposition": "er_send",
+    "cluster_top": "CL_SINUS_INTRACRANIAL_RISK",
+    "rf_must_fire": ["RF_SINUS_002"]
+  },
+  "meta": { "anchors": ["Q_NECK_STIFF"], "dangerToggles": ["Q_EYE_SWELL"], "contradictions": [] }
+}
+SINUS_G09 Immunocompromised + fever (ER)
+{
+  "case_id": "SINUS_G09_IMMUNO_FEVER",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 2,
+    "Q_SINUS_FEVER": true,
+    "Q_IMMUNO": true,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "ER_SEND",
+    "disposition": "er_send",
+    "cluster_top": "CL_SINUS_IMMUNO_HIGH_RISK",
+    "rf_must_fire": ["RF_SINUS_003"]
+  },
+  "meta": { "anchors": ["Q_IMMUNO"], "dangerToggles": ["Q_SINUS_HEADACHE_SEVERE"], "contradictions": [] }
+}
+SINUS_G10 “PCP default” subacute (8–9 days, no bacterial triggers)
+
+Expect: PCP default
+
+{
+  "case_id": "SINUS_G10_PCP_DEFAULT_SUBACUTE",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 8,
+    "Q_SINUS_FEVER": false,
+    "Q_SINUS_PURULENT": false,
+    "Q_SINUS_WORSE_AFTER_IMPROVE": false,
+    "Q_EYE_SWELL": false,
+    "Q_VISION_CHANGES": false,
+    "Q_SINUS_HEADACHE_SEVERE": false
+  },
+  "expect": {
+    "gateResult": "PASS",
+    "disposition": "pcp",
+    "cluster_top": "CL_SINUS_VIRAL",
+    "rf_must_fire": []
+  },
+  "meta": {
+    "anchors": ["Q_SINUS_DUR"],
+    "dangerToggles": ["Q_SINUS_WORSE_AFTER_IMPROVE"],
+    "contradictions": [{ "key": "Q_SINUS_DUR", "flipTo": 12 }]
+  }
+}
+8) Tier C invariants for sinus (auto-stub logic)
+
+Put in tests/invariants/ent_sinus_pressure.ts:
+
+Q_EYE_SWELL=true OR Q_VISION_CHANGES=true ⇒ gate ER_SEND and RF includes RF_SINUS_001
+
+Q_SINUS_HEADACHE_SEVERE=true OR Q_NECK_STIFF=true OR Q_CONFUSION=true ⇒ gate ER_SEND and RF includes RF_SINUS_002
+
+Q_IMMUNO=true && Q_SINUS_FEVER=true ⇒ gate ER_SEND and RF includes RF_SINUS_003
+
+gate ER_SEND ⇒ disposition er_send
+
+DUR>=10 OR double-worsening OR (fever && severe facial) ⇒ disposition urgent_care unless ER gated
+
+monotonicity: flipping Q_EYE_SWELL false→true never reduces gate severity
+
+danger suppresses viral: if any danger true, CL_SINUS_VIRAL must not be top-1
+
+Run sequence
+
+After import:
+
+HARNESS_MODE=1 npx tsx scripts/run_harness.ts tests/cases/ent_sinus_pressure
+
+Then once you add fuzz generation:
+
+HARNESS_MODE=1 npx tsx scripts/run_harness.ts tests/cases/ent_sinus_pressure_fuzz

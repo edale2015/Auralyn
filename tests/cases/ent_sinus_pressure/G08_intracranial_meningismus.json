@@ -1,0 +1,35 @@
+{
+  "id": "G08",
+  "label": "Intracranial warning – neck stiffness + confusion → ER_SEND",
+  "cc_id": "ent_sinus_pressure",
+  "answers": {
+    "Q_SINUS_DUR": 4,
+    "Q_SINUS_FEVER": "yes",
+    "Q_SINUS_HEADACHE_SEVERE": "no",
+    "Q_NECK_STIFF": "yes",
+    "Q_CONFUSION": "yes",
+    "Q_EYE_SWELL": "no",
+    "Q_VISION_CHANGES": "no",
+    "Q_SINUS_PURULENT": "no",
+    "Q_SINUS_WORSE_AFTER_IMPROVE": "no",
+    "Q_SINUS_SEVERE_FACIAL": "no",
+    "Q_IMMUNO": "no"
+  },
+  "expect": {
+    "disposition": "er_send",
+    "cluster": "CL_SINUS_INTRACRANIAL_RISK",
+    "rf_must_fire": [
+      "RF_SINUS_002"
+    ],
+    "rf_gate": "ER_SEND"
+  },
+  "meta": {
+    "anchors": [
+      "Q_NECK_STIFF"
+    ],
+    "dangerToggles": [
+      "Q_EYE_SWELL"
+    ],
+    "contradictions": []
+  }
+}

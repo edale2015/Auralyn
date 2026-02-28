@@ -100,6 +100,7 @@ function compositeScoreKey(ccId: string): string {
     gu_testicular_pain_prostatitis: "testicular_pain_score",
     gyn_pelvic_pain: "pelvic_pain_score",
     neuro_headache: "headache_score",
+    ent_sinus_pressure: "sinus_score",
     sore_throat: "centor",
     earache: "earache_score",
     persistent_cough: "cough_score",
