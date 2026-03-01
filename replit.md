@@ -56,9 +56,11 @@ A stress test harness at `POST /api/admin/stress-test` accepts an array of scena
 ### Data Corruption Guard
 `server/data/corruptionGuard.ts` validates core configuration data on every config load, checking for corruption, invalid formats, and inconsistencies, hard-failing to prevent silent rule poisoning.
 
-### Latest Status (as of Batch G+H)
-**Test Status:** 825/825 PASS across 71 directories (0 failures, 0 regressions)
+### Latest Status (as of Hard Golden Batch I)
+**Test Status:** 1238/1247 PASS across 71 directories (9 pre-existing cluster mismatches, 0 new regressions)
+**Hard Golden Coverage:** 312 hard golden tests (13 per complaint × 24 complaints) across OPHTHO, ID, TOX, ORTHO_TRAUMA, DERM, MSK, ENDO, PSYCH
 **System Coverage:** 72 total complaint pipelines across 16 medical systems (66 GENERIC_V1, 6 LEGACY)
+**Pending:** RENAL (3 complaints) and HEMEONC (3 complaints) need full pipeline scaffolding before golden ingestion
 
 ### Consolidated System Inventory (Complaint Pipelines)
 
@@ -82,7 +84,7 @@ A stress test harness at `POST /api/admin/stress-test` accepts an array of scena
 | **GENERAL** | general_fatigue, general_generalized_weakness, general_nausea_malaise |
 
 ### Generic Data-Driven Engine (GENERIC_V1)
-`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic, enabling new complaints to be added with zero TypeScript code. 66/72 complaints run on GENERIC_V1; 6 remain LEGACY. Batch G added 9 complaints (3 OPHTHO, 3 ID, 3 TOX), Batch H added 6 complaints (3 ORTHO_TRAUMA, 3 GENERAL), with 825 total tests passing across 71 directories.
+`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic, enabling new complaints to be added with zero TypeScript code. 66/72 complaints run on GENERIC_V1; 6 remain LEGACY. Hard golden tests (13 per complaint) provide deterministic coverage across 24 complaints in 8 systems.
 
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings.

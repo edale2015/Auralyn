@@ -1,0 +1,890 @@
+Next Phase 2A move: expand hard goldens to 2 more systems
+
+You’ve hardened CARDIO + GI.
+
+Now pick the next two systems that:
+
+are high-risk
+
+have lots of mimics
+
+benefit from suppressors
+
+My vote is:
+
+NEURO (stroke mimics, dizziness chaos, seizure/syncope overlap)
+
+PULM (SOB/cough/hemoptysis overlap with cardiac/PE)
+
+If you agree, I’ll generate:
+
+Hard Goldens v1 (10 per complaint) for NEURO + PULM
+
+then a Suppressor Sweep v1 for those two systems, tuned to the hard set
+
+No new code, same pipeline.
+
+One-line reply
+
+Say:
+“NEURO + PULM hard v1”
+(or name different systems if you prefer, like “GU + OPHTHO hard v1”).
+
+neuro + pulm hard v1 then move to all of the other systems 2 at a time
+Thought for 17s
+
+Locked. Here’s Hard Goldens v1 for NEURO + PULM: 10 confounder cases per complaint (110 total) in your harness-friendly CSV format.
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+neuro_headache,NHH1,"{""thunder"":true,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,migraine
+neuro_headache,NHH2,"{""thunder"":false,""neurodef"":true,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,migraine
+neuro_headache,NHH3,"{""thunder"":false,""neurodef"":false,""fever_neck"":true,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,tension
+neuro_headache,NHH4,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":true,""trauma"":false,""age50"":false,""eye"":false}",URGENT,migraine
+neuro_headache,NHH5,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":true,""age50"":false,""eye"":false}",EMERG,tension
+neuro_headache,NHH6,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":true,""eye"":false}",URGENT,migraine
+neuro_headache,NHH7,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":true}",EMERG,migraine
+neuro_headache,NHH8,"{""thunder"":true,""neurodef"":true,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,migraine
+neuro_headache,NHH9,"{""thunder"":false,""neurodef"":true,""fever_neck"":true,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,tension
+neuro_headache,NHH10,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",ROUTINE,tension
+
+neuro_dizziness_vertigo,NDH1,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":true,""ear"":false}",URGENT,vestibular_neuritis
+neuro_dizziness_vertigo,NDH2,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":true}",URGENT,meniere
+neuro_dizziness_vertigo,NDH3,"{""kind"":""off_balance"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,NDH4,"{""kind"":""spinning"",""neurodef"":true,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,NDH5,"{""kind"":""lightheaded"",""neurodef"":false,""headache"":false,""cardiac"":true,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,NDH6,"{""kind"":""spinning"",""neurodef"":false,""headache"":true,""cardiac"":false,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,NDH7,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",ROUTINE,bppv
+neuro_dizziness_vertigo,NDH8,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":true,""ear"":true}",URGENT,meniere
+neuro_dizziness_vertigo,NDH9,"{""kind"":""lightheaded"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":true,""ear"":false}",URGENT,vestibular_neuritis
+neuro_dizziness_vertigo,NDH10,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":true}",URGENT,meniere
+
+neuro_weakness_numbness,NWH1,"{""sudden"":true,""face_speech"":true,""one_side"":true,""vision"":false,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NWH2,"{""sudden"":true,""face_speech"":false,""one_side"":true,""vision"":true,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NWH3,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":true,""fever"":false}",EMERG,spinal
+neuro_weakness_numbness,NWH4,"{""sudden"":true,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":true,""fever"":false}",EMERG,spinal
+neuro_weakness_numbness,NWH5,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":false,""fever"":true}",URGENT,peripheral
+neuro_weakness_numbness,NWH6,"{""sudden"":false,""face_speech"":false,""one_side"":true,""vision"":false,""spinal"":false,""fever"":false}",URGENT,peripheral
+neuro_weakness_numbness,NWH7,"{""sudden"":true,""face_speech"":false,""one_side"":true,""vision"":false,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NWH8,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":false,""fever"":false}",URGENT,peripheral
+neuro_weakness_numbness,NWH9,"{""sudden"":true,""face_speech"":true,""one_side"":false,""vision"":false,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NWH10,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":false,""fever"":false}",URGENT,peripheral
+
+neuro_seizure,NSH1,"{""first"":true,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,first_time
+neuro_seizure,NSH2,"{""first"":false,""ongoing"":true,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,status
+neuro_seizure,NSH3,"{""first"":false,""ongoing"":false,""injury"":true,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,epilepsy_breakthrough
+neuro_seizure,NSH4,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":true,""fever"":false,""metabolic"":false}",EMERG,provoked
+neuro_seizure,NSH5,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":true,""metabolic"":false}",EMERG,provoked
+neuro_seizure,NSH6,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":true}",EMERG,provoked
+neuro_seizure,NSH7,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,epilepsy_breakthrough
+neuro_seizure,NSH8,"{""first"":true,""ongoing"":true,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,status
+neuro_seizure,NSH9,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":true,""metabolic"":true}",EMERG,provoked
+neuro_seizure,NSH10,"{""first"":true,""ongoing"":false,""injury"":true,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,first_time
+
+neuro_syncope,NYH1,"{""exert"":true,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+neuro_syncope,NYH2,"{""exert"":false,""cardiac"":true,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+neuro_syncope,NYH3,"{""exert"":false,""cardiac"":false,""injury"":true,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,vasovagal
+neuro_syncope,NYH4,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":true,""bleed"":false,""preg"":false}",EMERG,vasovagal
+neuro_syncope,NYH5,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":true,""preg"":false}",EMERG,bleed_related
+neuro_syncope,NYH6,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":true}",EMERG,vasovagal
+neuro_syncope,NYH7,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",URGENT,vasovagal
+neuro_syncope,NYH8,"{""exert"":true,""cardiac"":true,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+neuro_syncope,NYH9,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":true,""preg"":true}",EMERG,bleed_related
+neuro_syncope,NYH10,"{""exert"":false,""cardiac"":true,""injury"":true,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+
+neuro_confusion_ams,NAH1,"{""sudden"":true,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NAH2,"{""sudden"":false,""fever"":true,""headache"":true,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,infection
+neuro_confusion_ams,NAH3,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":true,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NAH4,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":true,""toxic"":false}",EMERG,metabolic_toxic
+neuro_confusion_ams,NAH5,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":false,""toxic"":true}",EMERG,metabolic_toxic
+neuro_confusion_ams,NAH6,"{""sudden"":false,""fever"":true,""headache"":false,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,infection
+neuro_confusion_ams,NAH7,"{""sudden"":true,""fever"":false,""headache"":false,""stroke_signs"":true,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NAH8,"{""sudden"":false,""fever"":false,""headache"":true,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NAH9,"{""sudden"":false,""fever"":true,""headache"":true,""stroke_signs"":true,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NAH10,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":true,""toxic"":true}",EMERG,metabolic_toxic
+
+pulm_cough,PCH1,"{""dur"":3,""fever"":false,""sob"":true,""cp"":true,""wheeze"":false,""blood"":false,""leg_swelling"":true,""immuno"":false,""smoke"":false,""night"":false}",EMERG,pneumonia
+pulm_cough,PCH2,"{""dur"":2,""fever"":false,""sob"":true,""cp"":false,""wheeze"":false,""blood"":false,""leg_swelling"":true,""immuno"":false,""smoke"":false,""night"":false}",EMERG,viral_bronchitis
+pulm_cough,PCH3,"{""dur"":5,""fever"":true,""sob"":false,""cp"":true,""wheeze"":false,""blood"":false,""leg_swelling"":false,""immuno"":false,""smoke"":false,""night"":false}",URGENT,pneumonia
+pulm_cough,PCH4,"{""dur"":7,""fever"":false,""sob"":false,""cp"":false,""wheeze"":true,""blood"":false,""leg_swelling"":false,""immuno"":false,""smoke"":false,""night"":true}",URGENT,asthma_reactive
+pulm_cough,PCH5,"{""dur"":14,""fever"":false,""sob"":false,""cp"":false,""wheeze"":false,""blood"":false,""leg_swelling"":false,""immuno"":false,""smoke"":true,""night"":false}",ROUTINE,viral_bronchitis
+pulm_cough,PCH6,"{""dur"":2,""fever"":false,""sob"":false,""cp"":false,""wheeze"":false,""blood"":true,""leg_swelling"":false,""immuno"":false,""smoke"":false,""night"":false}",EMERG,viral_bronchitis
+pulm_cough,PCH7,"{""dur"":21,""fever"":false,""sob"":true,""cp"":false,""wheeze"":false,""blood"":false,""leg_swelling"":false,""immuno"":true,""smoke"":false,""night"":false}",EMERG,viral_bronchitis
+pulm_cough,PCH8,"{""dur"":10,""fever"":true,""sob"":true,""cp"":false,""wheeze"":false,""blood"":false,""leg_swelling"":false,""immuno"":false,""smoke"":false,""night"":false}",EMERG,pneumonia
+pulm_cough,PCH9,"{""dur"":5,""fever"":false,""sob"":false,""cp"":false,""wheeze"":true,""blood"":false,""leg_swelling"":false,""immuno"":false,""smoke"":false,""night"":false}",URGENT,asthma_reactive
+pulm_cough,PCH10,"{""dur"":2,""fever"":false,""sob"":true,""cp"":false,""wheeze"":false,""blood"":false,""leg_swelling"":true,""immuno"":false,""smoke"":false,""night"":false}",EMERG,viral_bronchitis
+
+pulm_shortness_of_breath,PSH1,"{""onset"":""sudden"",""rest"":true,""cp"":true,""wheeze"":false,""fever"":false,""cyanosis"":false,""leg_swelling"":false,""heart"":false}",EMERG,pe
+pulm_shortness_of_breath,PSH2,"{""onset"":""sudden"",""rest"":true,""cp"":false,""wheeze"":false,""fever"":false,""cyanosis"":false,""leg_swelling"":true,""heart"":false}",EMERG,pe
+pulm_shortness_of_breath,PSH3,"{""onset"":""gradual"",""rest"":true,""cp"":false,""wheeze"":true,""fever"":false,""cyanosis"":false,""leg_swelling"":false,""heart"":false}",EMERG,asthma_copd
+pulm_shortness_of_breath,PSH4,"{""onset"":""gradual"",""rest"":true,""cp"":false,""wheeze"":false,""fever"":true,""cyanosis"":false,""leg_swelling"":false,""heart"":false}",EMERG,pneumonia
+pulm_shortness_of_breath,PSH5,"{""onset"":""gradual"",""rest"":true,""cp"":false,""wheeze"":false,""fever"":false,""cyanosis"":false,""leg_swelling"":false,""heart"":true}",EMERG,chf
+pulm_shortness_of_breath,PSH6,"{""onset"":""sudden"",""rest"":false,""cp"":false,""wheeze"":false,""fever"":false,""cyanosis"":false,""leg_swelling"":true,""heart"":false}",EMERG,pe
+pulm_shortness_of_breath,PSH7,"{""onset"":""gradual"",""rest"":false,""cp"":false,""wheeze"":true,""fever"":false,""cyanosis"":false,""leg_swelling"":false,""heart"":false}",URGENT,asthma_copd
+pulm_shortness_of_breath,PSH8,"{""onset"":""gradual"",""rest"":false,""cp"":false,""wheeze"":false,""fever"":true,""cyanosis"":false,""leg_swelling"":false,""heart"":false}",URGENT,pneumonia
+pulm_shortness_of_breath,PSH9,"{""onset"":""gradual"",""rest"":false,""cp"":false,""wheeze"":false,""fever"":false,""cyanosis"":false,""leg_swelling"":false,""heart"":true}",ROUTINE,chf
+pulm_shortness_of_breath,PSH10,"{""onset"":""sudden"",""rest"":true,""cp"":false,""wheeze"":false,""fever"":false,""cyanosis"":true,""leg_swelling"":false,""heart"":false}",EMERG,pe
+
+pulm_wheezing,PWH1,"{""sob"":true,""speaking"":true,""inhaler"":true,""trigger"":true,""fever"":false,""allergy"":false}",EMERG,asthma_exacerbation
+pulm_wheezing,PWH2,"{""sob"":true,""speaking"":false,""inhaler"":true,""trigger"":true,""fever"":false,""allergy"":false}",URGENT,asthma_exacerbation
+pulm_wheezing,PWH3,"{""sob"":false,""speaking"":false,""inhaler"":true,""trigger"":true,""fever"":true,""allergy"":false}",URGENT,viral_trigger
+pulm_wheezing,PWH4,"{""sob"":true,""speaking"":false,""inhaler"":false,""trigger"":false,""fever"":false,""allergy"":true}",EMERG,allergic_reaction
+pulm_wheezing,PWH5,"{""sob"":false,""speaking"":false,""inhaler"":false,""trigger"":false,""fever"":false,""allergy"":true}",EMERG,allergic_reaction
+pulm_wheezing,PWH6,"{""sob"":true,""speaking"":true,""inhaler"":false,""trigger"":false,""fever"":true,""allergy"":false}",EMERG,viral_trigger
+pulm_wheezing,PWH7,"{""sob"":false,""speaking"":false,""inhaler"":true,""trigger"":true,""fever"":false,""allergy"":false}",ROUTINE,asthma_exacerbation
+pulm_wheezing,PWH8,"{""sob"":true,""speaking"":false,""inhaler"":true,""trigger"":false,""fever"":true,""allergy"":false}",URGENT,viral_trigger
+pulm_wheezing,PWH9,"{""sob"":true,""speaking"":true,""inhaler"":true,""trigger"":true,""fever"":false,""allergy"":true}",EMERG,allergic_reaction
+pulm_wheezing,PWH10,"{""sob"":true,""speaking"":false,""inhaler"":true,""trigger"":true,""fever"":false,""allergy"":false}",URGENT,asthma_exacerbation
+
+pulm_chest_tightness,PTH1,"{""pressure"":""pressure"",""sob"":true,""wheeze"":false,""fever"":false,""exert"":true,""risk"":false}",EMERG,asthma
+pulm_chest_tightness,PTH2,"{""pressure"":""pleuritic"",""sob"":true,""wheeze"":false,""fever"":false,""exert"":false,""risk"":true}",EMERG,pleurisy
+pulm_chest_tightness,PTH3,"{""pressure"":""pleuritic"",""sob"":false,""wheeze"":false,""fever"":true,""exert"":false,""risk"":false}",URGENT,pneumonia
+pulm_chest_tightness,PTH4,"{""pressure"":""pressure"",""sob"":false,""wheeze"":true,""fever"":false,""exert"":false,""risk"":false}",URGENT,asthma
+pulm_chest_tightness,PTH5,"{""pressure"":""pleuritic"",""sob"":true,""wheeze"":false,""fever"":false,""exert"":false,""risk"":false}",URGENT,pleurisy
+pulm_chest_tightness,PTH6,"{""pressure"":""pressure"",""sob"":false,""wheeze"":false,""fever"":false,""exert"":true,""risk"":false}",EMERG,asthma
+pulm_chest_tightness,PTH7,"{""pressure"":""pleuritic"",""sob"":true,""wheeze"":false,""fever"":true,""exert"":false,""risk"":true}",EMERG,pneumonia
+pulm_chest_tightness,PTH8,"{""pressure"":""other"",""sob"":false,""wheeze"":false,""fever"":false,""exert"":false,""risk"":false}",ROUTINE,pleurisy
+pulm_chest_tightness,PTH9,"{""pressure"":""pleuritic"",""sob"":false,""wheeze"":false,""fever"":false,""exert"":false,""risk"":true}",URGENT,pleurisy
+pulm_chest_tightness,PTH10,"{""pressure"":""pressure"",""sob"":true,""wheeze"":false,""fever"":false,""exert"":true,""risk"":true}",EMERG,asthma
+
+pulm_hemoptysis,PHH1,"{""amount"":""streaks"",""sob"":false,""cp"":false,""fever"":false,""blood_thinner"":false,""risk"":false}",URGENT,bronchitis_minor
+pulm_hemoptysis,PHH2,"{""amount"":""moderate"",""sob"":false,""cp"":false,""fever"":false,""blood_thinner"":false,""risk"":false}",URGENT,bronchitis_minor
+pulm_hemoptysis,PHH3,"{""amount"":""large"",""sob"":false,""cp"":false,""fever"":false,""blood_thinner"":false,""risk"":false}",EMERG,bronchitis_minor
+pulm_hemoptysis,PHH4,"{""amount"":""streaks"",""sob"":true,""cp"":false,""fever"":false,""blood_thinner"":false,""risk"":false}",EMERG,bronchitis_minor
+pulm_hemoptysis,PHH5,"{""amount"":""streaks"",""sob"":true,""cp"":true,""fever"":false,""blood_thinner"":false,""risk"":true}",EMERG,pe
+pulm_hemoptysis,PHH6,"{""amount"":""streaks"",""sob"":false,""cp"":false,""fever"":true,""blood_thinner"":false,""risk"":false}",URGENT,pneumonia
+pulm_hemoptysis,PHH7,"{""amount"":""moderate"",""sob"":false,""cp"":true,""fever"":false,""blood_thinner"":true,""risk"":false}",URGENT,bronchitis_minor
+pulm_hemoptysis,PHH8,"{""amount"":""moderate"",""sob"":true,""cp"":false,""fever"":true,""blood_thinner"":false,""risk"":false}",EMERG,pneumonia
+pulm_hemoptysis,PHH9,"{""amount"":""streaks"",""sob"":false,""cp"":true,""fever"":false,""blood_thinner"":false,""risk"":true}",URGENT,pe
+pulm_hemoptysis,PHH10,"{""amount"":""streaks"",""sob"":false,""cp"":false,""fever"":false,""blood_thinner"":true,""risk"":false}",URGENT,bronchitis_minor
+Next systems, 2 at a time (default order)
+
+Unless you tell me otherwise, we’ll march through the remaining systems in this order:
+
+GU + OBGYN
+
+OPHTHO + ID
+
+TOX + ORTHO_TRAUMA
+
+DERM + MSK
+
+ENDO + PSYCH
+
+RENAL + HEMEONC
+
+RHEUM + ENVIRONMENTAL
+
+GENERAL + ENT
+
+When you’re ready, reply with just:
+“Next: GU + OBGYN hard v1”
+and I’ll generate the hard goldens pack for those two systems immediately.
+
+
+“Next: GU + OBGYN hard v
+
+Perfect. Here is Hard Goldens v1 for GU + OBGYN.
+Same harness-ready CSV format.
+10 confounder cases per complaint.
+
+GU — Hard Goldens v1
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+gu_dysuria_uti,GUH1,"{""dysuria"":true,""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""retention"":false}",URGENT,uti
+gu_dysuria_uti,GUH2,"{""dysuria"":true,""fever"":true,""flank"":true,""preg"":false,""male"":false,""discharge"":false,""retention"":false}",EMERG,pyelonephritis
+gu_dysuria_uti,GUH3,"{""dysuria"":true,""fever"":false,""flank"":false,""preg"":true,""male"":false,""discharge"":false,""retention"":false}",URGENT,uti
+gu_dysuria_uti,GUH4,"{""dysuria"":true,""fever"":false,""flank"":false,""preg"":false,""male"":true,""discharge"":false,""retention"":false}",URGENT,prostatitis
+gu_dysuria_uti,GUH5,"{""dysuria"":true,""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":true,""retention"":false}",URGENT,sti
+gu_dysuria_uti,GUH6,"{""dysuria"":false,""fever"":true,""flank"":true,""preg"":false,""male"":false,""discharge"":false,""retention"":false}",EMERG,pyelonephritis
+gu_dysuria_uti,GUH7,"{""dysuria"":true,""fever"":false,""flank"":true,""preg"":false,""male"":false,""discharge"":false,""retention"":false}",URGENT,uti
+gu_dysuria_uti,GUH8,"{""dysuria"":false,""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""retention"":false}",ROUTINE,uti
+gu_dysuria_uti,GUH9,"{""dysuria"":true,""fever"":true,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""retention"":false}",URGENT,uti
+gu_dysuria_uti,GUH10,"{""dysuria"":true,""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""retention"":true}",EMERG,retention
+
+gu_flank_pain,GUFH1,"{""sudden"":true,""fever"":false,""nausea"":true,""blood"":true,""preg"":false,""trauma"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUFH2,"{""sudden"":false,""fever"":true,""nausea"":true,""blood"":false,""preg"":false,""trauma"":false}",EMERG,pyelonephritis
+gu_flank_pain,GUFH3,"{""sudden"":true,""fever"":false,""nausea"":false,""blood"":false,""preg"":false,""trauma"":true}",URGENT,traumatic
+gu_flank_pain,GUFH4,"{""sudden"":true,""fever"":false,""nausea"":true,""blood"":false,""preg"":true,""trauma"":false}",EMERG,ectopic
+gu_flank_pain,GUFH5,"{""sudden"":false,""fever"":false,""nausea"":false,""blood"":false,""preg"":false,""trauma"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUFH6,"{""sudden"":false,""fever"":true,""nausea"":false,""blood"":false,""preg"":false,""trauma"":false}",EMERG,pyelonephritis
+gu_flank_pain,GUFH7,"{""sudden"":true,""fever"":false,""nausea"":true,""blood"":true,""preg"":true,""trauma"":false}",EMERG,ectopic
+gu_flank_pain,GUFH8,"{""sudden"":true,""fever"":false,""nausea"":false,""blood"":true,""preg"":false,""trauma"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUFH9,"{""sudden"":false,""fever"":false,""nausea"":true,""blood"":false,""preg"":false,""trauma"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUFH10,"{""sudden"":true,""fever"":true,""nausea"":true,""blood"":false,""preg"":false,""trauma"":false}",EMERG,pyelonephritis
+
+gu_testicular_pain,GUTH1,"{""sudden"":true,""severe"":true,""nausea"":true,""fever"":false,""trauma"":false,""urinary"":false}",EMERG,torsion
+gu_testicular_pain,GUTH2,"{""sudden"":false,""severe"":false,""nausea"":false,""fever"":true,""trauma"":false,""urinary"":true}",URGENT,epididymitis
+gu_testicular_pain,GUTH3,"{""sudden"":true,""severe"":true,""nausea"":false,""fever"":false,""trauma"":true,""urinary"":false}",URGENT,traumatic
+gu_testicular_pain,GUTH4,"{""sudden"":false,""severe"":false,""nausea"":false,""fever"":false,""trauma"":false,""urinary"":false}",URGENT,epididymitis
+gu_testicular_pain,GUTH5,"{""sudden"":true,""severe"":false,""nausea"":false,""fever"":false,""trauma"":false,""urinary"":false}",EMERG,torsion
+gu_testicular_pain,GUTH6,"{""sudden"":false,""severe"":true,""nausea"":false,""fever"":true,""trauma"":false,""urinary"":false}",URGENT,epididymitis
+gu_testicular_pain,GUTH7,"{""sudden"":true,""severe"":true,""nausea"":true,""fever"":true,""trauma"":false,""urinary"":false}",EMERG,torsion
+gu_testicular_pain,GUTH8,"{""sudden"":false,""severe"":false,""nausea"":false,""fever"":false,""trauma"":true,""urinary"":false}",URGENT,traumatic
+gu_testicular_pain,GUTH9,"{""sudden"":true,""severe"":true,""nausea"":false,""fever"":false,""trauma"":false,""urinary"":true}",EMERG,torsion
+gu_testicular_pain,GUTH10,"{""sudden"":false,""severe"":false,""nausea"":false,""fever"":false,""trauma"":false,""urinary"":true}",URGENT,epididymitis
+OBGYN — Hard Goldens v1
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+obgyn_pregnancy_bleeding,OBH1,"{""preg_confirmed"":true,""heavy"":false,""pain"":true,""faint"":false,""one_sided"":true,""shoulder"":false}",EMERG,ectopic_concern
+obgyn_pregnancy_bleeding,OBH2,"{""preg_confirmed"":true,""heavy"":true,""pain"":false,""faint"":true,""one_sided"":false,""shoulder"":false}",EMERG,postpartum_hemorrhage
+obgyn_pregnancy_bleeding,OBH3,"{""preg_confirmed"":true,""heavy"":false,""pain"":false,""faint"":false,""one_sided"":false,""shoulder"":false}",EMERG,miscarriage_threatened
+obgyn_pregnancy_bleeding,OBH4,"{""preg_confirmed"":false,""heavy"":true,""pain"":false,""faint"":false,""one_sided"":false,""shoulder"":false}",EMERG,hemorrhage_risk
+obgyn_pregnancy_bleeding,OBH5,"{""preg_confirmed"":true,""heavy"":false,""pain"":true,""faint"":true,""one_sided"":false,""shoulder"":true}",EMERG,ectopic_concern
+obgyn_pregnancy_bleeding,OBH6,"{""preg_confirmed"":true,""heavy"":false,""pain"":false,""faint"":false,""one_sided"":true,""shoulder"":false}",EMERG,ectopic_concern
+obgyn_pregnancy_bleeding,OBH7,"{""preg_confirmed"":true,""heavy"":true,""pain"":true,""faint"":false,""one_sided"":false,""shoulder"":false}",EMERG,hemorrhage_risk
+obgyn_pregnancy_bleeding,OBH8,"{""preg_confirmed"":false,""heavy"":false,""pain"":false,""faint"":false,""one_sided"":false,""shoulder"":false}",URGENT,miscarriage_threatened
+obgyn_pregnancy_bleeding,OBH9,"{""preg_confirmed"":true,""heavy"":false,""pain"":false,""faint"":true,""one_sided"":false,""shoulder"":false}",EMERG,ectopic_concern
+obgyn_pregnancy_bleeding,OBH10,"{""preg_confirmed"":true,""heavy"":false,""pain"":false,""faint"":false,""one_sided"":false,""shoulder"":true}",EMERG,ectopic_concern
+
+obgyn_pelvic_pain,OPH1,"{""sudden"":true,""one_sided"":true,""vomit"":true,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false}",EMERG,ovarian_torsion
+obgyn_pelvic_pain,OPH2,"{""sudden"":false,""one_sided"":false,""vomit"":false,""preg"":true,""bleed"":true,""fever"":false,""discharge"":false}",EMERG,ectopic_concern
+obgyn_pelvic_pain,OPH3,"{""sudden"":false,""one_sided"":false,""vomit"":false,""preg"":false,""bleed"":false,""fever"":true,""discharge"":true}",URGENT,pid
+obgyn_pelvic_pain,OPH4,"{""sudden"":true,""one_sided"":true,""vomit"":false,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false}",URGENT,cyst_pain
+obgyn_pelvic_pain,OPH5,"{""sudden"":false,""one_sided"":true,""vomit"":false,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false}",URGENT,cyst_pain
+obgyn_pelvic_pain,OPH6,"{""sudden"":false,""one_sided"":false,""vomit"":false,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false}",URGENT,cyst_pain
+obgyn_pelvic_pain,OPH7,"{""sudden"":true,""one_sided"":true,""vomit"":true,""preg"":true,""bleed"":true,""fever"":false,""discharge"":false}",EMERG,ectopic_concern
+obgyn_pelvic_pain,OPH8,"{""sudden"":false,""one_sided"":false,""vomit"":false,""preg"":false,""bleed"":false,""fever"":true,""discharge"":false}",URGENT,pid
+obgyn_pelvic_pain,OPH9,"{""sudden"":false,""one_sided"":false,""vomit"":false,""preg"":true,""bleed"":false,""fever"":false,""discharge"":false}",URGENT,ectopic_concern
+obgyn_pelvic_pain,OPH10,"{""sudden"":true,""one_sided"":true,""vomit"":false,""preg"":true,""bleed"":true,""fever"":false,""discharge"":false}",EMERG,ectopic_concern
+
+Next step per plan:
+
+After you run these, we move to:
+
+OPHTHO + ID hard v1
+
+Just say:
+
+“Next: OPHTHO + ID hard v1”
+
+And we continue the 2-at-a-time march.
+
+ophtho + ID hard v1
+please continue.  can we do 5 systems at a time?
+
+Yes. We can absolutely do 5 systems at a time now.
+
+At 72 pipelines and 935/935 green, the engine is stable enough that 5-system hardening batches won’t destabilize things. The machine is strong.
+
+So here’s the plan:
+
+Next Hardening Batch (5 Systems)
+
+We just completed:
+
+NEURO
+
+PULM
+
+GU
+
+OBGYN
+
+Next 5:
+
+OPHTHO
+
+ID
+
+TOX
+
+ORTHO_TRAUMA
+
+DERM
+
+That gives us:
+
+High-risk (OPHTHO, TOX)
+
+Infectious complexity (ID)
+
+Trauma decision trees (ORTHO)
+
+Mimic-heavy inflammatory overlap (DERM)
+
+After that batch, we’ll do:
+
+MSK
+
+ENDO
+
+PSYCH
+
+RENAL
+
+HEMEONC
+
+Then final batch:
+
+RHEUM
+
+ENVIRONMENTAL
+
+GENERAL
+
+ENT
+
+CARDIO refinement pass (since it’s highest liability)
+
+Important Structural Note
+
+Now that we’re scaling hard goldens:
+
+We should create a separate harness mode.
+
+Instead of replacing base goldens, add:
+
+/goldens_base
+/goldens_hard_v1
+/goldens_hard_v2
+
+And run:
+
+npm run ship:system -- ophtho --mode=hard_v1
+
+This prevents canonical drift between archetype tests and stress tests.
+
+Before I Generate 5 Systems
+
+Quick structural question (this matters):
+
+Do you want:
+A) 10 hard goldens per complaint (standard depth)
+B) 15 hard goldens per complaint (aggressive depth)
+
+Given stability, I recommend 10 to keep iteration fast.
+
+Reply:
+
+“10 per complaint”
+or
+
+“15 per complaint”
+
+Then I’ll generate:
+OPHTHO + ID + TOX + ORTHO_TRAUMA + DERM hard v1
+in one consolidated block, ready for harness ingestion.
+
+can we do 13?  ortherwise 10.
+
+Yes. We can absolutely do 13 per complaint.
+
+At this stage of the system, 13 is actually a smart number:
+
+It’s not bloated like 20.
+
+It forces us to include edge-edge cases (not just mild confounders).
+
+It increases signal diversity without slowing iteration too much.
+
+Given 5 systems × ~3 complaints each × 13 = ~195 hard goldens in one batch.
+
+That’s still totally manageable for your harness.
+
+What This Means Structurally
+
+We’ll do:
+
+Hard Goldens v1.1
+
+13 confounder cases per complaint
+
+Mix of:
+
+mimic cases
+
+missing-classic-sign cases
+
+mixed red flag + misleading cluster cases
+
+disposition override cases
+
+tie-break stress cases
+
+We will NOT touch base goldens.
+These will live in:
+
+/goldens_hard_v1_13
+Next Batch (5 Systems)
+
+We proceed with:
+
+OPHTHO
+
+ID
+
+TOX
+
+ORTHO_TRAUMA
+
+DERM
+
+Each complaint → 13 hard cases.
+
+Before I generate 195 test rows:
+
+Do you want:
+
+Strict cluster expectation (exact top_dx)
+or
+
+Safety-priority expectation (cluster flexible if disposition correct)
+
+Given your maturity level now, I recommend:
+Strict cluster expectation.
+
+Reply with:
+
+Strict
+
+or
+
+Safety-priority
+
+Then I generate the full 13-per-complaint hard set.
+
+strict
+
+Strict it is. Here’s Hard Goldens v1.1 (13 per complaint) for the next 5 systems:
+
+OPHTHO (3)
+
+ID (3)
+
+TOX (3)
+
+ORTHO_TRAUMA (3)
+
+DERM (3)
+
+Total: 15 complaints × 13 = 195 hard goldens.
+
+Format matches your harness CSV:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+ophtho_vision_loss,OVL_H1,"{""sudden"":true,""pain"":false,""neurodef"":false,""trauma"":false,""flashes_floaters"":false,""one_eye"":true,""headache"":false}",EMERG,vascular_event
+ophtho_vision_loss,OVL_H2,"{""sudden"":true,""pain"":false,""neurodef"":true,""trauma"":false,""flashes_floaters"":false,""one_eye"":false,""headache"":false}",EMERG,stroke_visual
+ophtho_vision_loss,OVL_H3,"{""sudden"":false,""pain"":false,""neurodef"":false,""trauma"":false,""flashes_floaters"":true,""one_eye"":true,""headache"":false}",EMERG,retinal_detachment
+ophtho_vision_loss,OVL_H4,"{""sudden"":false,""pain"":true,""neurodef"":false,""trauma"":false,""flashes_floaters"":false,""one_eye"":true,""headache"":true}",EMERG,acute_glaucoma
+ophtho_vision_loss,OVL_H5,"{""sudden"":false,""pain"":false,""neurodef"":false,""trauma"":true,""flashes_floaters"":false,""one_eye"":true,""headache"":false}",EMERG,traumatic_injury
+ophtho_vision_loss,OVL_H6,"{""sudden"":true,""pain"":false,""neurodef"":false,""trauma"":false,""flashes_floaters"":false,""one_eye"":false,""headache"":true}",EMERG,migraine_aura
+ophtho_vision_loss,OVL_H7,"{""sudden"":false,""pain"":true,""neurodef"":false,""trauma"":false,""flashes_floaters"":true,""one_eye"":true,""headache"":false}",EMERG,retinal_detachment
+ophtho_vision_loss,OVL_H8,"{""sudden"":true,""pain"":true,""neurodef"":false,""trauma"":false,""flashes_floaters"":false,""one_eye"":true,""headache"":true}",EMERG,acute_glaucoma
+ophtho_vision_loss,OVL_H9,"{""sudden"":false,""pain"":false,""neurodef"":false,""trauma"":false,""flashes_floaters"":false,""one_eye"":true,""headache"":false}",URGENT,migraine_aura
+ophtho_vision_loss,OVL_H10,"{""sudden"":true,""pain"":false,""neurodef"":false,""trauma"":false,""flashes_floaters"":true,""one_eye"":true,""headache"":false}",EMERG,retinal_detachment
+ophtho_vision_loss,OVL_H11,"{""sudden"":false,""pain"":true,""neurodef"":false,""trauma"":true,""flashes_floaters"":false,""one_eye"":true,""headache"":false}",EMERG,traumatic_injury
+ophtho_vision_loss,OVL_H12,"{""sudden"":true,""pain"":false,""neurodef"":true,""trauma"":false,""flashes_floaters"":false,""one_eye"":true,""headache"":true}",EMERG,stroke_visual
+ophtho_vision_loss,OVL_H13,"{""sudden"":false,""pain"":true,""neurodef"":false,""trauma"":false,""flashes_floaters"":false,""one_eye"":true,""headache"":false}",EMERG,acute_glaucoma
+
+ophtho_red_eye,ORE_H1,"{""pain"":false,""vision_change"":false,""photophobia"":false,""discharge_pus"":true,""contact"":false,""trauma"":false}",URGENT,conjunctivitis
+ophtho_red_eye,ORE_H2,"{""pain"":false,""vision_change"":false,""photophobia"":false,""discharge_pus"":false,""contact"":false,""trauma"":false}",ROUTINE,viral_conjunctivitis
+ophtho_red_eye,ORE_H3,"{""pain"":true,""vision_change"":true,""photophobia"":true,""discharge_pus"":false,""contact"":false,""trauma"":false}",EMERG,uveitis_glaucoma
+ophtho_red_eye,ORE_H4,"{""pain"":true,""vision_change"":false,""photophobia"":true,""discharge_pus"":false,""contact"":true,""trauma"":false}",EMERG,keratitis
+ophtho_red_eye,ORE_H5,"{""pain"":false,""vision_change"":false,""photophobia"":false,""discharge_pus"":true,""contact"":true,""trauma"":false}",URGENT,keratitis
+ophtho_red_eye,ORE_H6,"{""pain"":true,""vision_change"":false,""photophobia"":false,""discharge_pus"":false,""contact"":false,""trauma"":true}",EMERG,uveitis_glaucoma
+ophtho_red_eye,ORE_H7,"{""pain"":false,""vision_change"":true,""photophobia"":true,""discharge_pus"":false,""contact"":false,""trauma"":false}",EMERG,uveitis_glaucoma
+ophtho_red_eye,ORE_H8,"{""pain"":true,""vision_change"":true,""photophobia"":false,""discharge_pus"":true,""contact"":true,""trauma"":false}",EMERG,keratitis
+ophtho_red_eye,ORE_H9,"{""pain"":false,""vision_change"":false,""photophobia"":false,""discharge_pus"":false,""contact"":true,""trauma"":false}",URGENT,keratitis
+ophtho_red_eye,ORE_H10,"{""pain"":false,""vision_change"":false,""photophobia"":false,""discharge_pus"":false,""contact"":false,""trauma"":true}",EMERG,uveitis_glaucoma
+ophtho_red_eye,ORE_H11,"{""pain"":true,""vision_change"":true,""photophobia"":true,""discharge_pus"":true,""contact"":false,""trauma"":false}",EMERG,uveitis_glaucoma
+ophtho_red_eye,ORE_H12,"{""pain"":true,""vision_change"":false,""photophobia"":true,""discharge_pus"":false,""contact"":false,""trauma"":false}",EMERG,uveitis_glaucoma
+ophtho_red_eye,ORE_H13,"{""pain"":false,""vision_change"":false,""photophobia"":false,""discharge_pus"":true,""contact"":false,""trauma"":true}",EMERG,uveitis_glaucoma
+
+ophtho_eye_pain_foreign_body,OEP_H1,"{""chemical"":true,""metal_work"":false,""vision_change"":false,""severe_pain"":true,""contact"":false,""photophobia"":true}",EMERG,chemical_injury
+ophtho_eye_pain_foreign_body,OEP_H2,"{""chemical"":false,""metal_work"":true,""vision_change"":false,""severe_pain"":true,""contact"":false,""photophobia"":false}",EMERG,foreign_body
+ophtho_eye_pain_foreign_body,OEP_H3,"{""chemical"":false,""metal_work"":false,""vision_change"":true,""severe_pain"":true,""contact"":false,""photophobia"":true}",EMERG,abrasion
+ophtho_eye_pain_foreign_body,OEP_H4,"{""chemical"":false,""metal_work"":false,""vision_change"":false,""severe_pain"":true,""contact"":true,""photophobia"":true}",EMERG,keratitis
+ophtho_eye_pain_foreign_body,OEP_H5,"{""chemical"":false,""metal_work"":false,""vision_change"":false,""severe_pain"":false,""contact"":false,""photophobia"":false}",ROUTINE,abrasion
+ophtho_eye_pain_foreign_body,OEP_H6,"{""chemical"":false,""metal_work"":false,""vision_change"":false,""severe_pain"":true,""contact"":false,""photophobia"":true}",URGENT,abrasion
+ophtho_eye_pain_foreign_body,OEP_H7,"{""chemical"":false,""metal_work"":true,""vision_change"":true,""severe_pain"":true,""contact"":false,""photophobia"":true}",EMERG,foreign_body
+ophtho_eye_pain_foreign_body,OEP_H8,"{""chemical"":false,""metal_work"":false,""vision_change"":false,""severe_pain"":true,""contact"":true,""photophobia"":false}",EMERG,keratitis
+ophtho_eye_pain_foreign_body,OEP_H9,"{""chemical"":false,""metal_work"":false,""vision_change"":true,""severe_pain"":false,""contact"":false,""photophobia"":false}",EMERG,abrasion
+ophtho_eye_pain_foreign_body,OEP_H10,"{""chemical"":false,""metal_work"":false,""vision_change"":false,""severe_pain"":false,""contact"":true,""photophobia"":false}",URGENT,keratitis
+ophtho_eye_pain_foreign_body,OEP_H11,"{""chemical"":false,""metal_work"":true,""vision_change"":false,""severe_pain"":false,""contact"":false,""photophobia"":false}",EMERG,foreign_body
+ophtho_eye_pain_foreign_body,OEP_H12,"{""chemical"":false,""metal_work"":false,""vision_change"":false,""severe_pain"":true,""contact"":false,""photophobia"":false}",URGENT,abrasion
+ophtho_eye_pain_foreign_body,OEP_H13,"{""chemical"":false,""metal_work"":false,""vision_change"":true,""severe_pain"":true,""contact"":true,""photophobia"":true}",EMERG,keratitis
+
+id_fever,IDF_H1,"{""temp_high"":true,""sob"":false,""confusion"":false,""neck_stiff"":false,""rash_purple"":false,""immuno"":false}",URGENT,serious_infection
+id_fever,IDF_H2,"{""temp_high"":false,""sob"":true,""confusion"":false,""neck_stiff"":false,""rash_purple"":false,""immuno"":false}",EMERG,serious_infection
+id_fever,IDF_H3,"{""temp_high"":false,""sob"":false,""confusion"":true,""neck_stiff"":false,""rash_purple"":false,""immuno"":false}",EMERG,serious_infection
+id_fever,IDF_H4,"{""temp_high"":false,""sob"":false,""confusion"":false,""neck_stiff"":true,""rash_purple"":false,""immuno"":false}",EMERG,meningitis_like
+id_fever,IDF_H5,"{""temp_high"":false,""sob"":false,""confusion"":false,""neck_stiff"":false,""rash_purple"":true,""immuno"":false}",EMERG,serious_infection
+id_fever,IDF_H6,"{""temp_high"":true,""sob"":false,""confusion"":false,""neck_stiff"":false,""rash_purple"":false,""immuno"":true}",EMERG,serious_infection
+id_fever,IDF_H7,"{""temp_high"":false,""sob"":false,""confusion"":false,""neck_stiff"":false,""rash_purple"":false,""immuno"":true}",URGENT,serious_infection
+id_fever,IDF_H8,"{""temp_high"":false,""sob"":false,""confusion"":false,""neck_stiff"":false,""rash_purple"":false,""immuno"":false}",ROUTINE,viral_fever
+id_fever,IDF_H9,"{""temp_high"":true,""sob"":true,""confusion"":false,""neck_stiff"":false,""rash_purple"":false,""immuno"":false}",EMERG,serious_infection
+id_fever,IDF_H10,"{""temp_high"":true,""sob"":false,""confusion"":true,""neck_stiff"":false,""rash_purple"":false,""immuno"":true}",EMERG,serious_infection
+id_fever,IDF_H11,"{""temp_high"":false,""sob"":false,""confusion"":true,""neck_stiff"":true,""rash_purple"":false,""immuno"":false}",EMERG,meningitis_like
+id_fever,IDF_H12,"{""temp_high"":false,""sob"":true,""confusion"":true,""neck_stiff"":false,""rash_purple"":false,""immuno"":false}",EMERG,serious_infection
+id_fever,IDF_H13,"{""temp_high"":true,""sob"":false,""confusion"":false,""neck_stiff"":true,""rash_purple"":false,""immuno"":false}",EMERG,meningitis_like
+
+id_flu_like,IDFL_H1,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":false}",ROUTINE,influenza_like
+id_flu_like,IDFL_H2,"{""fever"":true,""sob"":true,""cp"":false,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":false}",EMERG,pneumonia_risk
+id_flu_like,IDFL_H3,"{""fever"":false,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":false}",ROUTINE,viral_uri
+id_flu_like,IDFL_H4,"{""fever"":true,""sob"":false,""cp"":true,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":false}",EMERG,pneumonia_risk
+id_flu_like,IDFL_H5,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":true,""high_risk"":false,""symptom_days_5plus"":false}",URGENT,influenza_like
+id_flu_like,IDFL_H6,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":true,""symptom_days_5plus"":false}",URGENT,complicated_flu
+id_flu_like,IDFL_H7,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":true}",URGENT,complicated_flu
+id_flu_like,IDFL_H8,"{""fever"":false,""sob"":true,""cp"":false,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":false}",EMERG,pneumonia_risk
+id_flu_like,IDFL_H9,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":true,""symptom_days_5plus"":true}",URGENT,complicated_flu
+id_flu_like,IDFL_H10,"{""fever"":false,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":true,""symptom_days_5plus"":false}",URGENT,viral_uri
+id_flu_like,IDFL_H11,"{""fever"":true,""sob"":true,""cp"":true,""dehyd"":false,""high_risk"":true,""symptom_days_5plus"":true}",EMERG,pneumonia_risk
+id_flu_like,IDFL_H12,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":true,""high_risk"":true,""symptom_days_5plus"":true}",URGENT,complicated_flu
+id_flu_like,IDFL_H13,"{""fever"":true,""sob"":false,""cp"":false,""dehyd"":false,""high_risk"":false,""symptom_days_5plus"":true}",URGENT,complicated_flu
+
+id_animal_bite_wound_infection,IDB_H1,"{""deep"":true,""spreading"":false,""fever"":false,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",URGENT,high_risk_bite
+id_animal_bite_wound_infection,IDB_H2,"{""deep"":false,""spreading"":true,""fever"":true,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",URGENT,cellulitis_bite
+id_animal_bite_wound_infection,IDB_H3,"{""deep"":false,""spreading"":true,""fever"":true,""pain_out"":true,""immuno"":false,""rabies_risk"":false}",EMERG,nec_fas
+id_animal_bite_wound_infection,IDB_H4,"{""deep"":false,""spreading"":false,""fever"":false,""pain_out"":false,""immuno"":false,""rabies_risk"":true}",URGENT,rabies_exposure
+id_animal_bite_wound_infection,IDB_H5,"{""deep"":true,""spreading"":true,""fever"":false,""pain_out"":false,""immuno"":true,""rabies_risk"":false}",URGENT,cellulitis_bite
+id_animal_bite_wound_infection,IDB_H6,"{""deep"":false,""spreading"":false,""fever"":false,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",ROUTINE,high_risk_bite
+id_animal_bite_wound_infection,IDB_H7,"{""deep"":false,""spreading"":true,""fever"":false,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",URGENT,cellulitis_bite
+id_animal_bite_wound_infection,IDB_H8,"{""deep"":true,""spreading"":false,""fever"":true,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",URGENT,high_risk_bite
+id_animal_bite_wound_infection,IDB_H9,"{""deep"":false,""spreading"":false,""fever"":true,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",URGENT,cellulitis_bite
+id_animal_bite_wound_infection,IDB_H10,"{""deep"":false,""spreading"":true,""fever"":false,""pain_out"":true,""immuno"":false,""rabies_risk"":false}",EMERG,nec_fas
+id_animal_bite_wound_infection,IDB_H11,"{""deep"":true,""spreading"":true,""fever"":true,""pain_out"":false,""immuno"":false,""rabies_risk"":false}",URGENT,cellulitis_bite
+id_animal_bite_wound_infection,IDB_H12,"{""deep"":true,""spreading"":false,""fever"":false,""pain_out"":true,""immuno"":false,""rabies_risk"":false}",EMERG,nec_fas
+id_animal_bite_wound_infection,IDB_H13,"{""deep"":false,""spreading"":false,""fever"":false,""pain_out"":false,""immuno"":true,""rabies_risk"":false}",URGENT,high_risk_bite
+
+tox_overdose_intoxication,TOD_H1,"{""ams"":true,""slow_breath"":true,""seizure"":false,""chest_pain"":false,""vomit"":false,""unknown"":true}",EMERG,sedative_opioid_like
+tox_overdose_intoxication,TOD_H2,"{""ams"":true,""slow_breath"":false,""seizure"":true,""chest_pain"":false,""vomit"":false,""unknown"":true}",EMERG,mixed_unknown
+tox_overdose_intoxication,TOD_H3,"{""ams"":false,""slow_breath"":false,""seizure"":false,""chest_pain"":true,""vomit"":false,""unknown"":false}",EMERG,stimulant_like
+tox_overdose_intoxication,TOD_H4,"{""ams"":false,""slow_breath"":false,""seizure"":false,""chest_pain"":false,""vomit"":true,""unknown"":true}",URGENT,mixed_unknown
+tox_overdose_intoxication,TOD_H5,"{""ams"":false,""slow_breath"":false,""seizure"":false,""chest_pain"":false,""vomit"":false,""unknown"":true}",URGENT,mixed_unknown
+tox_overdose_intoxication,TOD_H6,"{""ams"":true,""slow_breath"":false,""seizure"":false,""chest_pain"":false,""vomit"":true,""unknown"":false}",EMERG,gi_toxicity
+tox_overdose_intoxication,TOD_H7,"{""ams"":false,""slow_breath"":true,""seizure"":false,""chest_pain"":false,""vomit"":false,""unknown"":false}",EMERG,sedative_opioid_like
+tox_overdose_intoxication,TOD_H8,"{""ams"":false,""slow_breath"":false,""seizure"":false,""chest_pain"":false,""vomit"":true,""unknown"":false}",URGENT,gi_toxicity
+tox_overdose_intoxication,TOD_H9,"{""ams"":true,""slow_breath"":false,""seizure"":false,""chest_pain"":true,""vomit"":false,""unknown"":true}",EMERG,mixed_unknown
+tox_overdose_intoxication,TOD_H10,"{""ams"":false,""slow_breath"":false,""seizure"":false,""chest_pain"":false,""vomit"":false,""unknown"":false}",URGENT,mixed_unknown
+tox_overdose_intoxication,TOD_H11,"{""ams"":false,""slow_breath"":false,""seizure"":true,""chest_pain"":true,""vomit"":false,""unknown"":true}",EMERG,mixed_unknown
+tox_overdose_intoxication,TOD_H12,"{""ams"":true,""slow_breath"":true,""seizure"":false,""chest_pain"":true,""vomit"":true,""unknown"":true}",EMERG,sedative_opioid_like
+tox_overdose_intoxication,TOD_H13,"{""ams"":false,""slow_breath"":true,""seizure"":false,""chest_pain"":false,""vomit"":true,""unknown"":false}",EMERG,sedative_opioid_like
+
+tox_withdrawal,TWD_H1,"{""seizure"":true,""halluc"":false,""autonomic"":true,""vomit"":false,""chest_pain"":false,""high_risk"":true}",EMERG,severe_withdrawal
+tox_withdrawal,TWD_H2,"{""seizure"":false,""halluc"":true,""autonomic"":true,""vomit"":false,""chest_pain"":false,""high_risk"":false}",EMERG,severe_withdrawal
+tox_withdrawal,TWD_H3,"{""seizure"":false,""halluc"":false,""autonomic"":true,""vomit"":true,""chest_pain"":false,""high_risk"":false}",URGENT,moderate_withdrawal
+tox_withdrawal,TWD_H4,"{""seizure"":false,""halluc"":false,""autonomic"":false,""vomit"":false,""chest_pain"":true,""high_risk"":false}",EMERG,moderate_withdrawal
+tox_withdrawal,TWD_H5,"{""seizure"":false,""halluc"":false,""autonomic"":false,""vomit"":false,""chest_pain"":false,""high_risk"":true}",URGENT,moderate_withdrawal
+tox_withdrawal,TWD_H6,"{""seizure"":false,""halluc"":false,""autonomic"":true,""vomit"":false,""chest_pain"":false,""high_risk"":false}",URGENT,severe_withdrawal
+tox_withdrawal,TWD_H7,"{""seizure"":false,""halluc"":false,""autonomic"":false,""vomit"":true,""chest_pain"":false,""high_risk"":false}",URGENT,moderate_withdrawal
+tox_withdrawal,TWD_H8,"{""seizure"":false,""halluc"":false,""autonomic"":false,""vomit"":false,""chest_pain"":false,""high_risk"":false}",URGENT,moderate_withdrawal
+tox_withdrawal,TWD_H9,"{""seizure"":false,""halluc"":true,""autonomic"":false,""vomit"":true,""chest_pain"":false,""high_risk"":true}",EMERG,severe_withdrawal
+tox_withdrawal,TWD_H10,"{""seizure"":false,""halluc"":false,""autonomic"":true,""vomit"":false,""chest_pain"":false,""high_risk"":true}",URGENT,severe_withdrawal
+tox_withdrawal,TWD_H11,"{""seizure"":true,""halluc"":true,""autonomic"":true,""vomit"":true,""chest_pain"":false,""high_risk"":true}",EMERG,severe_withdrawal
+tox_withdrawal,TWD_H12,"{""seizure"":false,""halluc"":false,""autonomic"":true,""vomit"":false,""chest_pain"":true,""high_risk"":true}",EMERG,severe_withdrawal
+tox_withdrawal,TWD_H13,"{""seizure"":false,""halluc"":true,""autonomic"":true,""vomit"":false,""chest_pain"":true,""high_risk"":false}",EMERG,severe_withdrawal
+
+tox_poisoning_exposure,TPX_H1,"{""corrosive"":true,""inhalation"":false,""ams"":false,""vomit"":false,""chest_pain"":false,""unknown"":false}",EMERG,corrosive_injury
+tox_poisoning_exposure,TPX_H2,"{""corrosive"":false,""inhalation"":true,""ams"":false,""vomit"":false,""chest_pain"":false,""unknown"":false}",EMERG,inhalation_injury
+tox_poisoning_exposure,TPX_H3,"{""corrosive"":false,""inhalation"":false,""ams"":true,""vomit"":false,""chest_pain"":false,""unknown"":true}",EMERG,systemic_toxicity
+tox_poisoning_exposure,TPX_H4,"{""corrosive"":false,""inhalation"":false,""ams"":false,""vomit"":true,""chest_pain"":false,""unknown"":true}",URGENT,unknown_exposure
+tox_poisoning_exposure,TPX_H5,"{""corrosive"":false,""inhalation"":false,""ams"":false,""vomit"":false,""chest_pain"":true,""unknown"":false}",EMERG,unknown_exposure
+tox_poisoning_exposure,TPX_H6,"{""corrosive"":false,""inhalation"":false,""ams"":false,""vomit"":true,""chest_pain"":false,""unknown"":false}",URGENT,gi_toxicity
+tox_poisoning_exposure,TPX_H7,"{""corrosive"":false,""inhalation"":false,""ams"":false,""vomit"":false,""chest_pain"":false,""unknown"":true}",URGENT,unknown_exposure
+tox_poisoning_exposure,TPX_H8,"{""corrosive"":true,""inhalation"":true,""ams"":false,""vomit"":false,""chest_pain"":false,""unknown"":false}",EMERG,inhalation_injury
+tox_poisoning_exposure,TPX_H9,"{""corrosive"":false,""inhalation"":true,""ams"":true,""vomit"":false,""chest_pain"":false,""unknown"":false}",EMERG,systemic_toxicity
+tox_poisoning_exposure,TPX_H10,"{""corrosive"":false,""inhalation"":false,""ams"":false,""vomit"":false,""chest_pain"":false,""unknown"":false}",URGENT,unknown_exposure
+tox_poisoning_exposure,TPX_H11,"{""corrosive"":false,""inhalation"":true,""ams"":false,""vomit"":true,""chest_pain"":false,""unknown"":true}",EMERG,inhalation_injury
+tox_poisoning_exposure,TPX_H12,"{""corrosive"":true,""inhalation"":false,""ams"":true,""vomit"":true,""chest_pain"":false,""unknown"":true}",EMERG,corrosive_injury
+tox_poisoning_exposure,TPX_H13,"{""corrosive"":false,""inhalation"":false,""ams"":true,""vomit"":true,""chest_pain"":true,""unknown"":true}",EMERG,systemic_toxicity
+
+ortho_trauma_head_injury,OTHI_H1,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""danger_mech"":false}",ROUTINE,minor_head_injury
+ortho_trauma_head_injury,OTHI_H2,"{""loc"":true,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""danger_mech"":false}",URGENT,concussion
+ortho_trauma_head_injury,OTHI_H3,"{""loc"":false,""vomit"":true,""severe_headache"":true,""neurodef"":false,""blood_thinner"":false,""danger_mech"":false}",EMERG,ich_risk
+ortho_trauma_head_injury,OTHI_H4,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":true,""blood_thinner"":false,""danger_mech"":false}",EMERG,ich_risk
+ortho_trauma_head_injury,OTHI_H5,"{""loc"":false,""vomit"":true,""severe_headache"":false,""neurodef"":false,""blood_thinner"":true,""danger_mech"":false}",EMERG,ich_risk
+ortho_trauma_head_injury,OTHI_H6,"{""loc"":false,""vomit"":false,""severe_headache"":true,""neurodef"":false,""blood_thinner"":false,""danger_mech"":true}",URGENT,concussion
+ortho_trauma_head_injury,OTHI_H7,"{""loc"":true,""vomit"":true,""severe_headache"":true,""neurodef"":false,""blood_thinner"":false,""danger_mech"":false}",EMERG,ich_risk
+ortho_trauma_head_injury,OTHI_H8,"{""loc"":false,""vomit"":false,""severe_headache"":true,""neurodef"":false,""blood_thinner"":true,""danger_mech"":false}",URGENT,ich_risk
+ortho_trauma_head_injury,OTHI_H9,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":true,""danger_mech"":false}",URGENT,ich_risk
+ortho_trauma_head_injury,OTHI_H10,"{""loc"":false,""vomit"":true,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""danger_mech"":false}",URGENT,concussion
+ortho_trauma_head_injury,OTHI_H11,"{""loc"":true,""vomit"":false,""severe_headache"":true,""neurodef"":false,""blood_thinner"":true,""danger_mech"":true}",EMERG,ich_risk
+ortho_trauma_head_injury,OTHI_H12,"{""loc"":false,""vomit"":true,""severe_headache"":true,""neurodef"":true,""blood_thinner"":false,""danger_mech"":false}",EMERG,ich_risk
+ortho_trauma_head_injury,OTHI_H13,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""danger_mech"":true}",URGENT,concussion
+
+ortho_trauma_fracture_dislocation,OTFD_H1,"{""deform"":true,""open"":false,""unable_weight"":true,""neurovascular"":false,""severe"":false,""high_energy"":false}",URGENT,fracture_dislocation
+ortho_trauma_fracture_dislocation,OTFD_H2,"{""deform"":false,""open"":true,""unable_weight"":true,""neurovascular"":false,""severe"":true,""high_energy"":true}",EMERG,open_fracture
+ortho_trauma_fracture_dislocation,OTFD_H3,"{""deform"":false,""open"":false,""unable_weight"":true,""neurovascular"":true,""severe"":true,""high_energy"":true}",EMERG,nv_compromise
+ortho_trauma_fracture_dislocation,OTFD_H4,"{""deform"":false,""open"":false,""unable_weight"":false,""neurovascular"":false,""severe"":false,""high_energy"":false}",ROUTINE,sprain_strain
+ortho_trauma_fracture_dislocation,OTFD_H5,"{""deform"":false,""open"":false,""unable_weight"":true,""neurovascular"":false,""severe"":true,""high_energy"":false}",EMERG,fracture_dislocation
+ortho_trauma_fracture_dislocation,OTFD_H6,"{""deform"":true,""open"":false,""unable_weight"":false,""neurovascular"":false,""severe"":false,""high_energy"":true}",URGENT,fracture_dislocation
+ortho_trauma_fracture_dislocation,OTFD_H7,"{""deform"":false,""open"":false,""unable_weight"":true,""neurovascular"":false,""severe"":false,""high_energy"":true}",URGENT,fracture_dislocation
+ortho_trauma_fracture_dislocation,OTFD_H8,"{""deform"":false,""open"":false,""unable_weight"":false,""neurovascular"":true,""severe"":false,""high_energy"":false}",EMERG,nv_compromise
+ortho_trauma_fracture_dislocation,OTFD_H9,"{""deform"":false,""open"":true,""unable_weight"":false,""neurovascular"":false,""severe"":false,""high_energy"":false}",EMERG,open_fracture
+ortho_trauma_fracture_dislocation,OTFD_H10,"{""deform"":false,""open"":false,""unable_weight"":false,""neurovascular"":false,""severe"":true,""high_energy"":false}",URGENT,fracture_dislocation
+ortho_trauma_fracture_dislocation,OTFD_H11,"{""deform"":false,""open"":false,""unable_weight"":true,""neurovascular"":false,""severe"":false,""high_energy"":false}",URGENT,fracture_dislocation
+ortho_trauma_fracture_dislocation,OTFD_H12,"{""deform"":true,""open"":true,""unable_weight"":true,""neurovascular"":true,""severe"":true,""high_energy"":true}",EMERG,nv_compromise
+ortho_trauma_fracture_dislocation,OTFD_H13,"{""deform"":false,""open"":false,""unable_weight"":false,""neurovascular"":false,""severe"":false,""high_energy"":true}",URGENT,fracture_dislocation
+
+ortho_trauma_laceration,OTL_H1,"{""bleeding_uncontrolled"":true,""deep"":false,""tendon"":false,""numb"":false,""dirty"":false,""face_hand"":false}",EMERG,needs_repair
+ortho_trauma_laceration,OTL_H2,"{""bleeding_uncontrolled"":false,""deep"":true,""tendon"":false,""numb"":false,""dirty"":false,""face_hand"":true}",URGENT,needs_repair
+ortho_trauma_laceration,OTL_H3,"{""bleeding_uncontrolled"":false,""deep"":false,""tendon"":true,""numb"":false,""dirty"":false,""face_hand"":false}",URGENT,tendon_nerve_injury
+ortho_trauma_laceration,OTL_H4,"{""bleeding_uncontrolled"":false,""deep"":false,""tendon"":false,""numb"":true,""dirty"":false,""face_hand"":false}",URGENT,tendon_nerve_injury
+ortho_trauma_laceration,OTL_H5,"{""bleeding_uncontrolled"":false,""deep"":false,""tendon"":false,""numb"":false,""dirty"":true,""face_hand"":false}",URGENT,infection_risk
+ortho_trauma_laceration,OTL_H6,"{""bleeding_uncontrolled"":false,""deep"":false,""tendon"":false,""numb"":false,""dirty"":false,""face_hand"":false}",ROUTINE,simple_lac
+ortho_trauma_laceration,OTL_H7,"{""bleeding_uncontrolled"":false,""deep"":true,""tendon"":true,""numb"":true,""dirty"":false,""face_hand"":true}",URGENT,tendon_nerve_injury
+ortho_trauma_laceration,OTL_H8,"{""bleeding_uncontrolled"":false,""deep"":true,""tendon"":false,""numb"":false,""dirty"":true,""face_hand"":false}",URGENT,infection_risk
+ortho_trauma_laceration,OTL_H9,"{""bleeding_uncontrolled"":false,""deep"":false,""tendon"":false,""numb"":false,""dirty"":false,""face_hand"":true}",URGENT,cosmetic_risk
+ortho_trauma_laceration,OTL_H10,"{""bleeding_uncontrolled"":false,""deep"":true,""tendon"":false,""numb"":false,""dirty"":false,""face_hand"":false}",URGENT,needs_repair
+ortho_trauma_laceration,OTL_H11,"{""bleeding_uncontrolled"":true,""deep"":true,""tendon"":false,""numb"":false,""dirty"":false,""face_hand"":false}",EMERG,needs_repair
+ortho_trauma_laceration,OTL_H12,"{""bleeding_uncontrolled"":false,""deep"":false,""tendon"":false,""numb"":true,""dirty"":true,""face_hand"":false}",URGENT,tendon_nerve_injury
+ortho_trauma_laceration,OTL_H13,"{""bleeding_uncontrolled"":false,""deep"":true,""tendon"":false,""numb"":false,""dirty"":true,""face_hand"":true}",URGENT,infection_risk
+
+derm_rash,DRH_H1,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":false}",ROUTINE,urticaria
+derm_rash,DRH_H2,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":false}",URGENT,viral_exanthem
+derm_rash,DRH_H3,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":false}",EMERG,vasculitic
+derm_rash,DRH_H4,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":true}",URGENT,allergic_drug
+derm_rash,DRH_H5,"{""fever"":false,""mucosal"":true,""painful"":true,""blister"":true,""purple"":false,""new_med"":true}",EMERG,allergic_drug
+derm_rash,DRH_H6,"{""fever"":true,""mucosal"":true,""painful"":true,""blister"":true,""purple"":false,""new_med"":true}",EMERG,allergic_drug
+derm_rash,DRH_H7,"{""fever"":false,""mucosal"":false,""painful"":true,""blister"":false,""purple"":false,""new_med"":false}",ROUTINE,urticaria
+derm_rash,DRH_H8,"{""fever"":true,""mucosal"":false,""painful"":true,""blister"":false,""purple"":false,""new_med"":false}",URGENT,viral_exanthem
+derm_rash,DRH_H9,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":false}",URGENT,vasculitic
+derm_rash,DRH_H10,"{""fever"":false,""mucosal"":true,""painful"":false,""blister"":true,""purple"":false,""new_med"":true}",EMERG,allergic_drug
+derm_rash,DRH_H11,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":true}",URGENT,allergic_drug
+derm_rash,DRH_H12,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":true,""purple"":false,""new_med"":true}",URGENT,allergic_drug
+derm_rash,DRH_H13,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":false}",URGENT,viral_exanthem
+
+derm_cellulitis,DCH_H1,"{""fever"":false,""spreading"":true,""pain_out"":false,""pus"":false,""immuno"":false,""face_eye"":false}",ROUTINE,cellulitis
+derm_cellulitis,DCH_H2,"{""fever"":true,""spreading"":true,""pain_out"":false,""pus"":false,""immuno"":false,""face_eye"":false}",URGENT,cellulitis
+derm_cellulitis,DCH_H3,"{""fever"":true,""spreading"":true,""pain_out"":true,""pus"":false,""immuno"":false,""face_eye"":false}",EMERG,nec_fas
+derm_cellulitis,DCH_H4,"{""fever"":false,""spreading"":false,""pain_out"":false,""pus"":true,""immuno"":false,""face_eye"":false}",URGENT,abscess
+derm_cellulitis,DCH_H5,"{""fever"":true,""spreading"":false,""pain_out"":false,""pus"":true,""immuno"":true,""face_eye"":false}",URGENT,abscess
+derm_cellulitis,DCH_H6,"{""fever"":true,""spreading"":false,""pain_out"":true,""pus"":false,""immuno"":false,""face_eye"":false}",EMERG,nec_fas
+derm_cellulitis,DCH_H7,"{""fever"":true,""spreading"":true,""pain_out"":false,""pus"":false,""immuno"":true,""face_eye"":false}",URGENT,cellulitis
+derm_cellulitis,DCH_H8,"{""fever"":true,""spreading"":false,""pain_out"":false,""pus"":false,""immuno"":false,""face_eye"":true}",EMERG,cellulitis
+derm_cellulitis,DCH_H9,"{""fever"":false,""spreading"":false,""pain_out"":false,""pus"":false,""immuno"":false,""face_eye"":false}",ROUTINE,cellulitis
+derm_cellulitis,DCH_H10,"{""fever"":true,""spreading"":true,""pain_out"":false,""pus"":true,""immuno"":false,""face_eye"":false}",URGENT,abscess
+derm_cellulitis,DCH_H11,"{""fever"":false,""spreading"":true,""pain_out"":true,""pus"":false,""immuno"":false,""face_eye"":false}",EMERG,nec_fas
+derm_cellulitis,DCH_H12,"{""fever"":false,""spreading"":false,""pain_out"":false,""pus"":false,""immuno"":true,""face_eye"":false}",URGENT,cellulitis
+derm_cellulitis,DCH_H13,"{""fever"":true,""spreading"":true,""pain_out"":false,""pus"":false,""immuno"":false,""face_eye"":true}",EMERG,cellulitis
+
+derm_allergic_reaction,DAH_H1,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":false,""vomit"":false,""trigger"":true}",URGENT,urticaria
+derm_allergic_reaction,DAH_H2,"{""hives"":true,""lip_tongue"":true,""throat"":false,""sob"":false,""vomit"":false,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H3,"{""hives"":false,""lip_tongue"":false,""throat"":true,""sob"":false,""vomit"":false,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H4,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":true,""vomit"":false,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H5,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":false,""vomit"":true,""trigger"":true}",URGENT,urticaria
+derm_allergic_reaction,DAH_H6,"{""hives"":false,""lip_tongue"":false,""throat"":false,""sob"":false,""vomit"":false,""trigger"":false}",ROUTINE,urticaria
+derm_allergic_reaction,DAH_H7,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":false,""vomit"":false,""trigger"":false}",URGENT,urticaria
+derm_allergic_reaction,DAH_H8,"{""hives"":true,""lip_tongue"":true,""throat"":true,""sob"":true,""vomit"":true,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H9,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":false,""vomit"":false,""trigger"":true}",URGENT,urticaria
+derm_allergic_reaction,DAH_H10,"{""hives"":false,""lip_tongue"":true,""throat"":false,""sob"":false,""vomit"":false,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H11,"{""hives"":true,""lip_tongue"":false,""throat"":true,""sob"":false,""vomit"":false,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H12,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":true,""vomit"":true,""trigger"":true}",EMERG,anaphylaxis
+derm_allergic_reaction,DAH_H13,"{""hives"":true,""lip_tongue"":false,""throat"":false,""sob"":false,""vomit"":false,""trigger"":true}",URGENT,urticaria
+Next
+
+Yes, we can move in 5 systems at a time after this if you want to accelerate, or keep at 2 for safer iteration.
+
+Tell me which you want next:
+
+Option A (fast): TOX + ORTHO_TRAUMA + DERM + OPHTHO + ID (hard v1.1 all at once)
+Option B (steady): TOX + ORTHO_TRAUMA (hard v1.1)
+
+option A
+Thought for 22s
+
+Option A it is ✅ I packaged the full Hard Goldens v1.1 (13 per complaint) for OPHTHO + ID + TOX + ORTHO_TRAUMA + DERM into a single CSV (195 cases).
+
+Download hard_goldens_v1_13_ophtho_id_tox_ortho_derm.csv
+
+If you want, next I can generate the Phase 2A suppressor sweep for these same 5 systems (negative-point rules aimed specifically at the 195 hard cases), then we move to the next 5-system batch.
+
+yes phase 2A
+
+Great — here’s Phase 2A Suppressor Sweep v1 for the same 5 systems:
+
+OPHTHO
+
+ID
+
+TOX
+
+ORTHO_TRAUMA
+
+DERM
+
+Format matches your CLUSTER_SCORING_RULES.csv rows:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+
+These are negative-point suppressors only (plus a few “anti-false-winner” boosts as negatives elsewhere). They’re tuned to stop the most common hard-golden “wrong winner” patterns while preserving RF gating.
+
+OPHTHO suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ophtho_vision_loss,migraine_aura,NEG_MIG_SUDDEN_NO_HEADACHE,"sudden=true AND headache=false",-3
+ophtho_vision_loss,migraine_aura,NEG_MIG_NEURODEF,"neurodef=true",-6
+ophtho_vision_loss,migraine_aura,NEG_MIG_FLASHES,"flashes_floaters=true",-4
+ophtho_vision_loss,vascular_event,NEG_VASC_PAINFUL,"pain=true",-3
+ophtho_vision_loss,vascular_event,NEG_VASC_FLASHES,"flashes_floaters=true",-3
+ophtho_vision_loss,stroke_visual,NEG_STROKE_NO_NEURO,"neurodef=false",-4
+ophtho_vision_loss,retinal_detachment,NEG_RD_NO_FLASHES,"flashes_floaters=false",-6
+ophtho_vision_loss,acute_glaucoma,NEG_GLAU_NO_PAIN,"pain=false",-6
+ophtho_vision_loss,acute_glaucoma,NEG_GLAU_NO_HEADACHE,"headache=false",-2
+ophtho_vision_loss,traumatic_injury,NEG_TRAUMA_NO_TRAUMA,"trauma=false",-6
+
+ophtho_red_eye,keratitis,NEG_KER_NO_CONTACT,"contact=false",-6
+ophtho_red_eye,keratitis,NEG_KER_NO_PAIN_PHOTO_VIS,"contact=true AND pain=false AND photophobia=false AND vision_change=false",-3
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_NO_PAIN_PHOTO_VIS,"pain=false AND photophobia=false AND vision_change=false",-6
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_PUS_ONLY,"discharge_pus=true AND pain=false AND photophobia=false",-2
+ophtho_red_eye,conjunctivitis,NEG_CONJ_PAIN_PHOTO_VIS,"pain=true OR photophobia=true OR vision_change=true",-4
+ophtho_red_eye,conjunctivitis,NEG_CONJ_CONTACT,"contact=true",-3
+ophtho_red_eye,viral_conjunctivitis,NEG_VCONJ_PUS,"discharge_pus=true",-3
+ophtho_red_eye,viral_conjunctivitis,NEG_VCONJ_PAIN,"pain=true",-3
+ophtho_red_eye,keratitis,NEG_KER_TRAUMA,"trauma=true AND contact=false",-2
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_CONTACT_PAIN,"contact=true AND pain=true",-1
+
+ophtho_eye_pain_foreign_body,abrasion,NEG_ABR_METAL_WORK,"metal_work=true",-4
+ophtho_eye_pain_foreign_body,abrasion,NEG_ABR_CHEMICAL,"chemical=true",-6
+ophtho_eye_pain_foreign_body,abrasion,NEG_ABR_CONTACT,"contact=true",-4
+ophtho_eye_pain_foreign_body,foreign_body,NEG_FB_NO_METAL,"metal_work=false",-6
+ophtho_eye_pain_foreign_body,chemical_injury,NEG_CHEM_NO_CHEMICAL,"chemical=false",-6
+ophtho_eye_pain_foreign_body,keratitis,NEG_KER_NO_CONTACT2,"contact=false",-6
+ophtho_eye_pain_foreign_body,keratitis,NEG_KER_NO_PAIN_PHOTO_VIS,"contact=true AND severe_pain=false AND photophobia=false AND vision_change=false",-3
+ophtho_eye_pain_foreign_body,foreign_body,NEG_FB_CHEMICAL,"chemical=true",-4
+ophtho_eye_pain_foreign_body,chemical_injury,NEG_CHEM_METAL,"metal_work=true",-2
+ophtho_eye_pain_foreign_body,foreign_body,NEG_FB_LOW_SEV,"severe_pain=false AND vision_change=false",-1
+ID suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+id_fever,viral_fever,NEG_VIRAL_IMMUNO,"immuno=true",-4
+id_fever,viral_fever,NEG_VIRAL_TEMP_HIGH,"temp_high=true",-3
+id_fever,viral_fever,NEG_VIRAL_SOB_OR_CONF,"sob=true OR confusion=true",-6
+id_fever,viral_fever,NEG_VIRAL_NECK,"neck_stiff=true",-6
+id_fever,viral_fever,NEG_VIRAL_PURPURA,"rash_purple=true",-6
+id_fever,meningitis_like,NEG_MEN_NO_NECK,"neck_stiff=false",-6
+id_fever,meningitis_like,NEG_MEN_PURE_SOB,"sob=true AND neck_stiff=false",-2
+id_fever,serious_infection,NEG_SER_NO_SIGNS,"temp_high=false AND sob=false AND confusion=false AND neck_stiff=false AND rash_purple=false AND immuno=false",-4
+id_fever,serious_infection,NEG_SER_NECK_DOMINATES,"neck_stiff=true",-1
+id_fever,serious_infection,NEG_SER_PURPURA_DOMINATES,"rash_purple=true",-1
+
+id_flu_like,viral_uri,NEG_URI_FEVER,"fever=true",-3
+id_flu_like,viral_uri,NEG_URI_SOB_CP,"sob=true OR cp=true",-6
+id_flu_like,influenza_like,NEG_FLU_NO_FEVER,"fever=false",-6
+id_flu_like,influenza_like,NEG_FLU_SOB_CP,"sob=true OR cp=true",-2
+id_flu_like,complicated_flu,NEG_CFLU_LOW_RISK_SHORT,"high_risk=false AND symptom_days_5plus=false",-4
+id_flu_like,complicated_flu,NEG_CFLU_NO_FEVER_LOW_RISK,"fever=false AND high_risk=false",-3
+id_flu_like,pneumonia_risk,NEG_PNA_NO_SOB_CP,"sob=false AND cp=false",-6
+id_flu_like,pneumonia_risk,NEG_PNA_DEHYD_ONLY,"dehyd=true AND sob=false AND cp=false",-3
+id_flu_like,viral_uri,NEG_URI_HIGH_RISK_LONG,"high_risk=true OR symptom_days_5plus=true",-2
+id_flu_like,influenza_like,NEG_FLU_DEHYD_HIGH_RISK,"dehyd=true AND high_risk=true",-1
+
+id_animal_bite_wound_infection,nec_fas,NEG_NEC_NO_PAINOUT,"pain_out=false",-6
+id_animal_bite_wound_infection,rabies_exposure,NEG_RABIES_NO_RISK,"rabies_risk=false",-6
+id_animal_bite_wound_infection,high_risk_bite,NEG_HRB_NOT_DEEP_NOT_IMMUNO,"deep=false AND immuno=false",-3
+id_animal_bite_wound_infection,cellulitis_bite,NEG_CELL_NO_SPREAD_NO_FEVER,"spreading=false AND fever=false",-4
+id_animal_bite_wound_infection,cellulitis_bite,NEG_CELL_PAINOUT_DOMINATES,"pain_out=true",-2
+id_animal_bite_wound_infection,high_risk_bite,NEG_HRB_SPREAD_FEVER,"spreading=true AND fever=true",-2
+id_animal_bite_wound_infection,rabies_exposure,NEG_RABIES_SPREADING,"spreading=true",-2
+id_animal_bite_wound_infection,nec_fas,NEG_NEC_NO_FEVER_NO_SPREAD,"fever=false AND spreading=false",-4
+id_animal_bite_wound_infection,cellulitis_bite,NEG_CELL_RABIES_ONLY,"rabies_risk=true AND spreading=false AND fever=false",-3
+id_animal_bite_wound_infection,high_risk_bite,NEG_HRB_NEC,"pain_out=true",-3
+TOX suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+tox_overdose_intoxication,sedative_opioid_like,NEG_SED_NO_SLOWBREATH,"slow_breath=false",-6
+tox_overdose_intoxication,sedative_opioid_like,NEG_SED_STIM_CP,"chest_pain=true AND slow_breath=false",-3
+tox_overdose_intoxication,stimulant_like,NEG_STIM_NO_CP,"chest_pain=false",-6
+tox_overdose_intoxication,gi_toxicity,NEG_GI_NO_VOMIT,"vomit=false",-6
+tox_overdose_intoxication,gi_toxicity,NEG_GI_SLOWBREATH,"slow_breath=true",-3
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_KNOWN_NO_AMS,"unknown=false AND ams=false AND seizure=false AND chest_pain=false AND vomit=false",-4
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_SED_STRONG,"slow_breath=true",-3
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_STIM_STRONG,"chest_pain=true AND slow_breath=false",-2
+tox_overdose_intoxication,stimulant_like,NEG_STIM_SLOWBREATH,"slow_breath=true",-5
+
+tox_withdrawal,severe_withdrawal,NEG_SEV_NO_SEIZ_NO_HALLUC,"seizure=false AND halluc=false AND autonomic=false",-6
+tox_withdrawal,severe_withdrawal,NEG_SEV_VOMIT_ONLY,"vomit=true AND seizure=false AND halluc=false AND chest_pain=false",-3
+tox_withdrawal,moderate_withdrawal,NEG_MOD_SEIZURE,"seizure=true",-6
+tox_withdrawal,moderate_withdrawal,NEG_MOD_HALLUC,"halluc=true",-6
+tox_withdrawal,moderate_withdrawal,NEG_MOD_CHESTPAIN,"chest_pain=true",-4
+tox_withdrawal,moderate_withdrawal,NEG_MOD_AUTONOMIC_HIGH,"autonomic=true AND high_risk=true",-2
+tox_withdrawal,severe_withdrawal,NEG_SEV_CHESTPAIN_DOMINATES,"chest_pain=true",-1
+tox_withdrawal,severe_withdrawal,NEG_SEV_AUTONOMIC_FALSE,"autonomic=false AND (seizure=true OR halluc=true)",-1
+tox_withdrawal,moderate_withdrawal,NEG_MOD_HIGH_RISK_NO_SYMP,"high_risk=true AND autonomic=false AND vomit=false",-2
+tox_withdrawal,severe_withdrawal,NEG_SEV_HIGH_RISK_FALSE,"high_risk=false AND seizure=false AND halluc=false AND autonomic=true",-2
+
+tox_poisoning_exposure,corrosive_injury,NEG_CORR_NO_CORR,"corrosive=false",-6
+tox_poisoning_exposure,inhalation_injury,NEG_INH_NO_INH,"inhalation=false",-6
+tox_poisoning_exposure,systemic_toxicity,NEG_SYS_NO_AMS,"ams=false",-6
+tox_poisoning_exposure,gi_toxicity,NEG_GI2_NO_VOMIT,"vomit=false",-6
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_KNOWN_ALL_FALSE,"unknown=false AND corrosive=false AND inhalation=false AND ams=false AND chest_pain=false AND vomit=false",-3
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_CORR_DOM,"corrosive=true",-4
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_INH_DOM,"inhalation=true",-4
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_AMS_DOM,"ams=true",-4
+tox_poisoning_exposure,inhalation_injury,NEG_INH_CORR,"corrosive=true",-2
+tox_poisoning_exposure,corrosive_injury,NEG_CORR_INH,"inhalation=true",-2
+ORTHO_TRAUMA suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_LOC,"loc=true",-5
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_VOMIT,"vomit=true",-5
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_NEURO,"neurodef=true",-6
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_THINNER,"blood_thinner=true",-4
+ortho_trauma_head_injury,concussion,NEG_CONC_NEURODEF,"neurodef=true",-3
+ortho_trauma_head_injury,concussion,NEG_CONC_THINNER_VOMIT,"blood_thinner=true AND vomit=true",-3
+ortho_trauma_head_injury,ich_risk,NEG_ICH_NO_RF,"loc=false AND vomit=false AND severe_headache=false AND neurodef=false AND blood_thinner=false",-6
+ortho_trauma_head_injury,ich_risk,NEG_ICH_ONLY_MECH,"danger_mech=true AND loc=false AND vomit=false AND neurodef=false AND severe_headache=false AND blood_thinner=false",-4
+ortho_trauma_head_injury,concussion,NEG_CONC_NO_SIGNS,"loc=false AND severe_headache=false AND danger_mech=false",-2
+ortho_trauma_head_injury,concussion,NEG_CONC_VOMIT_SEV,"vomit=true AND severe_headache=true",-2
+
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_DEFORM,"deform=true",-6
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_OPEN,"open=true",-6
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_NV,"neurovascular=true",-6
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_UNABLE,"unable_weight=true",-4
+ortho_trauma_fracture_dislocation,open_fracture,NEG_OPEN_NO_OPEN,"open=false",-6
+ortho_trauma_fracture_dislocation,nv_compromise,NEG_NV_NO_NV,"neurovascular=false",-6
+ortho_trauma_fracture_dislocation,fracture_dislocation,NEG_FX_NO_DEFORM_NO_UNABLE,"deform=false AND unable_weight=false AND high_energy=false",-4
+ortho_trauma_fracture_dislocation,fracture_dislocation,NEG_FX_OPEN_DOM,"open=true",-2
+ortho_trauma_fracture_dislocation,fracture_dislocation,NEG_FX_NV_DOM,"neurovascular=true",-2
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_SEVERE,"severe=true AND unable_weight=true",-3
+
+ortho_trauma_laceration,simple_lac,NEG_SIMPLE_DEEP,"deep=true",-6
+ortho_trauma_laceration,simple_lac,NEG_SIMPLE_BLEED,"bleeding_uncontrolled=true",-6
+ortho_trauma_laceration,simple_lac,NEG_SIMPLE_TENDON,"tendon=true OR numb=true",-6
+ortho_trauma_laceration,needs_repair,NEG_REPAIR_NO_DEEP_NO_BLEED,"deep=false AND bleeding_uncontrolled=false",-3
+ortho_trauma_laceration,tendon_nerve_injury,NEG_TNI_NO_SIGNS,"tendon=false AND numb=false",-6
+ortho_trauma_laceration,infection_risk,NEG_INF_NOT_DIRTY,"dirty=false",-6
+ortho_trauma_laceration,cosmetic_risk,NEG_COS_NOT_FACEHAND,"face_hand=false",-6
+ortho_trauma_laceration,needs_repair,NEG_REPAIR_TENDON_DOM,"tendon=true OR numb=true",-2
+ortho_trauma_laceration,needs_repair,NEG_REPAIR_DIRTY_DOM,"dirty=true AND deep=false",-1
+ortho_trauma_laceration,infection_risk,NEG_INF_BLEED_ONLY,"bleeding_uncontrolled=true AND dirty=false",-2
+DERM suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+derm_rash,urticaria,NEG_URT_FEVER,"fever=true",-4
+derm_rash,urticaria,NEG_URT_MUCOSAL,"mucosal=true",-6
+derm_rash,urticaria,NEG_URT_BLISTER,"blister=true",-6
+derm_rash,urticaria,NEG_URT_PURPLE,"purple=true",-6
+derm_rash,viral_exanthem,NEG_VIR_NEW_MED,"new_med=true",-4
+derm_rash,viral_exanthem,NEG_VIR_MUCOSAL,"mucosal=true",-3
+derm_rash,vasculitic,NEG_VASC_NO_PURPLE,"purple=false",-6
+derm_rash,allergic_drug,NEG_DRUG_NO_NEWMED,"new_med=false",-6
+derm_rash,allergic_drug,NEG_DRUG_PURPLE_ONLY,"purple=true AND new_med=false",-2
+derm_rash,allergic_drug,NEG_DRUG_FEVER_NO_NEWMED,"fever=true AND new_med=false",-2
+
+derm_cellulitis,nec_fas,NEG_NEC_NO_PAINOUT,"pain_out=false",-6
+derm_cellulitis,abscess,NEG_ABS_NO_PUS,"pus=false",-6
+derm_cellulitis,cellulitis,NEG_CELL_NO_SPREAD_NO_SIGNS,"spreading=false AND fever=false AND pus=false",-3
+derm_cellulitis,cellulitis,NEG_CELL_PUS_DOM,"pus=true",-2
+derm_cellulitis,cellulitis,NEG_CELL_PAINOUT_DOM,"pain_out=true",-3
+derm_cellulitis,cellulitis,NEG_CELL_FACE_EYE_FEVER,"face_eye=true AND fever=true",-1
+derm_cellulitis,abscess,NEG_ABS_PAINOUT,"pain_out=true",-3
+derm_cellulitis,nec_fas,NEG_NEC_PUS_ONLY,"pus=true AND pain_out=false",-2
+derm_cellulitis,abscess,NEG_ABS_NO_LOCAL,"spreading=true AND pus=false",-2
+derm_cellulitis,cellulitis,NEG_CELL_IMMUNO_NO_SIGNS,"immuno=true AND spreading=false AND fever=false",-2
+
+derm_allergic_reaction,urticaria,NEG_URT_NO_HIVES,"hives=false",-6
+derm_allergic_reaction,urticaria,NEG_URT_AIRWAY,"lip_tongue=true OR throat=true OR sob=true",-6
+derm_allergic_reaction,anaphylaxis,NEG_ANA_NO_AIRWAY,"lip_tongue=false AND throat=false AND sob=false",-6
+derm_allergic_reaction,anaphylaxis,NEG_ANA_HIVES_ONLY,"hives=true AND lip_tongue=false AND throat=false AND sob=false AND vomit=false",-4
+derm_allergic_reaction,urticaria,NEG_URT_VOMIT_NO_HIVES,"vomit=true AND hives=false",-3
+derm_allergic_reaction,anaphylaxis,NEG_ANA_NO_TRIGGER,"trigger=false AND (lip_tongue=false AND throat=false AND sob=false)",-2
+derm_allergic_reaction,urticaria,NEG_URT_TRIGGER_FALSE,"trigger=false AND hives=true",-1
+derm_allergic_reaction,anaphylaxis,NEG_ANA_VOMIT_ONLY,"vomit=true AND lip_tongue=false AND throat=false AND sob=false",-3
+derm_allergic_reaction,urticaria,NEG_URT_LIPONLY,"lip_tongue=true AND hives=false",-3
+derm_allergic_reaction,anaphylaxis,NEG_ANA_THROAT_OR_SOB,"throat=true OR sob=true",-1
+Apply + run
+
+Paste these rows into CLUSTER_SCORING_RULES.csv
+
+Run the hard suite for this 5-system batch:
+
+npm run ship:system -- ophtho
+npm run ship:system -- id
+npm run ship:system -- tox
+npm run ship:system -- ortho_trauma
+npm run ship:system -- derm
