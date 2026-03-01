@@ -15,7 +15,7 @@ The frontend is built with React 18 and TypeScript, utilizing `shadcn/ui` (Radix
 The backend uses Express 5 on Node.js with TypeScript, exposing REST API endpoints. It features a constrained agent architecture for deterministic medical triage, including a next-action picker, action execution with trace capture, and a plan/act/observe agent loop. Key functionalities include Centor score calculation, red flag detection, and a supervisor gate for patient-facing outputs. LLM integrations utilize Replit AI Integrations (OpenAI-compatible) with `gpt-5-mini`, incorporating rate limiting, per-run budgets, and a circuit breaker.
 
 ### Data Storage
-Primary data storage is Firebase Firestore, with SQLite used as an abstraction for intake storage. Schemas are defined for physicians, patients, encounters, orders, WhatsApp messages, and cases. Agent traces and LLM call logs are collected in Firestore. PHI retention policies involve splitting storage for clinical records and debug telemetry.
+Primary data storage is Firebase Firestore, with SQLite used as an abstraction for intake storage. Schemas are defined for physicians, patients, encounters, orders, WhatsApp messages, and cases. PHI retention policies involve splitting storage for clinical records and debug telemetry.
 
 ### Authentication
 Physician authentication uses password-only, session-based HMAC-signed httpOnly cookies. Patient access is token-based for intake, requiring a 6-digit code verification.
@@ -27,88 +27,50 @@ The agent system manages patient flow through various routing states using `Agen
 A robust triage pipeline uses canonical keys for medical systems, chief complaints, and clusters. A unified sheets registry, loaded from Google Sheets, provides dynamically configured data for complaint routing, integration maps, FHIR prefill, modifiers, and rules engines. A question queue dynamically builds ordered questions, and an enhanced supervisor manages red flags and triage upgrades. A cluster/disposition engine resolves dispositions, and a diagnosis resolver provides confidence-scored diagnostic candidates. Medication suggestions are generated with safety checks.
 
 ### Obesity Agent & Metabolic Triage
-A secondary-track ObesityAgent runs in parallel with primary complaint routing, triggering on BMI/weight indicators or metabolic medications. It extends `CaseState` with metabolic, DM, HTN, bariatric, GLP-1, and social details. New `AgentAction` types support specific interventions, such as `ASK_CLUSTER`, `EDUCATION_BLOCK`, and `ER_SEND_RECOMMENDATION`. The agent includes detailed HTN, DM, and Obesity Entry escalation rules, along with built-in spot interventions for common metabolic issues. Red flags like HTN emergency, DKA/HHS, and severe hypoglycemia are integrated with the supervisor gate for immediate action.
+A secondary-track ObesityAgent runs in parallel with primary complaint routing, triggering on BMI/weight indicators or metabolic medications. It extends `CaseState` with metabolic, DM, HTN, bariatric, GLP-1, and social details. New `AgentAction` types support specific interventions.
 
 ### Clinical State Builder System
-This system deterministically assembles an auditable clinical state from multiple data tables, capturing evidence traces. It integrates `buildClinicalState()`, `evaluateRedFlagsMaster()`, and `selectSpotInterventions()`. A `runCrossoverHooks()` orchestrates parallel execution of red flag evaluation, urgent care spot interventions, the obesity agent, confidence scoring, care gap evaluation, and the education sandbox, with a priority merge order and ER_SEND short-circuiting. State inference for DM/HTN/GLP-1 conditions is automated based on medication lists and PMH. A multi-channel output formatter renders agent outputs for web, WhatsApp/Telegram, and eCW formats.
+This system deterministically assembles an auditable clinical state from multiple data tables, capturing evidence traces. It integrates `buildClinicalState()`, `evaluateRedFlagsMaster()`, and `selectSpotInterventions()`. A `runCrossoverHooks()` orchestrates parallel execution of red flag evaluation, urgent care spot interventions, the obesity agent, confidence scoring, care gap evaluation, and the education sandbox, with a priority merge order and ER_SEND short-circuiting.
 
 ### Clinical State Confidence Scoring
-`computeConfidence()` assigns HIGH/MODERATE/LOW confidence to each inferred condition (DM, HTN, GLP-1, bariatric, anticoagulation) based on evidence strength. Global confidence is the maximum of all inferences. Integrated into `runCrossoverHooks()` before the red flag gate.
+`computeConfidence()` assigns HIGH/MODERATE/LOW confidence to each inferred condition based on evidence strength.
 
 ### Care Gap Engine
-`evaluateCareGaps()` evaluates gaps across various conditions (DM, HTN, bariatric, GLP-1, anticoagulation monitoring, and PCP access navigation). Gaps are severity-boosted when `social.pcpAccessDelay=true`. Only runs when redFlagGate=PASS and not EMERGENT_ESCALATION.
+`evaluateCareGaps()` evaluates gaps across various conditions. Gaps are severity-boosted under certain conditions.
 
 ### Red Flag Audit & Consistency Checker
-`runRedFlagAudit()` validates RF references across RED_FLAGS_MASTER, MED_CONDITION_INTELLIGENCE_RULES, and URGENT_CARE_SPOT_INTERVENTIONS. It checks for duplicate/conflicting IDs, overlapping rules, unreachable triggers, and channel rendering completeness.
+`runRedFlagAudit()` validates RF references across key rule sets, checking for inconsistencies and preventing silent rule poisoning.
 
 ### Agent Trace Viewer
-`server/services/traceViewer.ts` provides an in-memory 200-entry LRU trace store. `buildTraceTimeline()` constructs ordered evidence chains: INPUT → CLINICAL_STATE (med normalization, condition inference, confirmed problems, risk flags, tables queried) → CONFIDENCE → RED_FLAG_GATE → UC_INTERVENTIONS → OBESITY_AGENT → CARE_GAPS → FINAL_OUTPUT. Each step includes evidence arrays.
+`server/services/traceViewer.ts` provides an in-memory LRU trace store. `buildTraceTimeline()` constructs ordered evidence chains from input to final output, with each step including evidence arrays.
 
 ### Safe Freeform Education Sandbox
-`evaluateSandboxEligibility()` gates education-only content. Disabled if ER_SEND active or confidence=LOW. Never produces prescriptions/orders — only educational template content citing deterministic care gap and spot intervention recommendations. `SAFE_FREEFORM_EDUCATION` action type added to `AgentAction` union.
+`evaluateSandboxEligibility()` gates education-only content. It is disabled if ER_SEND is active or confidence is LOW, and only produces educational template content.
 
 ### Stress Test Harness
-`POST /api/admin/stress-test` accepts an array of scenarios with assertions. 100 pre-built scenarios in `server/tests/stressScenarios.json` cover various patient types and conditions, including ER_SEND triggers. A standalone runner script at `server/tests/runStressTest.ts` can execute all scenarios via CLI.
+A stress test harness at `POST /api/admin/stress-test` accepts an array of scenarios with assertions, including 100 pre-built scenarios. A standalone runner script at `server/tests/runStressTest.ts` executes all scenarios via CLI.
 
 ### Complaint Golden Test Harness
-`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines. Run with: `npx tsx scripts/run_harness.ts [directory]` or `npx tsx scripts/run_harness.ts --all`.
-
-**315 total tests across 21 directories:**
-- Persistent Cough (45 tests): 15 golden + 30 fuzz + invariants + monotonicity
-- Chest Pain (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
-- Dizziness (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
-- Abdominal Pain (40 tests): 10 golden + 30 fuzz + invariants + monotonicity
-- Sore Throat (10 tests): 10 golden
-- UTI / Urinary Symptoms (10 tests): 10 golden in `tests/cases/gu_uti_symptoms/`
-- Testicular Pain / Prostatitis (10 tests): 10 golden in `tests/cases/gu_testicular_pain_prostatitis/`
-- Pelvic Pain (10 tests): 10 golden in `tests/cases/gyn_pelvic_pain/`
-- Headache (10 tests): 10 golden in `tests/cases/neuro_headache/`
-- Sinus Pressure (10 tests): 10 golden + invariants + monotonicity in `tests/cases/ent_sinus_pressure/`
-- Sore Throat ENT (10 tests): 10 golden in `tests/cases/ent_sore_throat/`
-- Ear Pain (10 tests): 10 golden in `tests/cases/ent_ear_pain/`
-- Nasal Congestion (10 tests): 10 golden in `tests/cases/ent_nasal_congestion/`
-- Epistaxis (10 tests): 10 golden in `tests/cases/ent_epistaxis/`
-- Pulmonary Cough (25 tests): 10 golden + 15 legacy in `tests/cases/pulm_cough/`
-- Shortness of Breath (10 tests): 10 golden in `tests/cases/pulm_shortness_of_breath/`
-- Wheezing (10 tests): 10 golden in `tests/cases/pulm_wheezing/`
-- Chest Tightness (10 tests): 10 golden in `tests/cases/pulm_chest_tightness/`
-- Hemoptysis (10 tests): 10 golden in `tests/cases/pulm_hemoptysis/`
+`scripts/run_harness.ts` runs deterministic golden/fuzz test suites for complaint pipelines, covering 525 tests across 41 directories.
 
 ### Data Corruption Guard
-`server/data/corruptionGuard.ts` validates CORE_QUESTIONS, RED_FLAG_RULES, DISPOSITION_RULES, OUTPUT_TEMPLATES, and CLUSTER_SCORING_RULES on every config load. It checks for pasted-row corruption, whitespace in IDs, invalid ID formats, unknown disposition levels, unknown red flag actions, empty template bodies, and invalid cluster scoring rule formats. Cross-table checks verify template references, question references in trigger expressions, and question references in cluster scoring rule expressions. It hard-fails on corruption to prevent silent rule poisoning.
+`server/data/corruptionGuard.ts` validates core configuration data on every config load, checking for corruption, invalid formats, and inconsistencies, hard-failing to prevent silent rule poisoning.
 
 ### Complaint Pipelines
-Twenty complaint pipelines are implemented across 5 medical systems, each with core questions, red flag rules, cluster scoring rules, disposition rules, and output templates:
-- **ENT** (6): Sore Throat (legacy), Earache (legacy), Sinus Pressure, Sore Throat ENT, Ear Pain, Nasal Congestion, Epistaxis
-- **PULM** (5): Persistent Cough (legacy), Pulmonary Cough, Shortness of Breath, Wheezing, Chest Tightness, Hemoptysis
-- **GU** (2): UTI / Urinary Symptoms, Testicular Pain / Prostatitis
+42 complaint pipelines implemented across 7 medical systems (6 legacy + 36 GENERIC_V1):
+- **ENT** (7): Sore Throat (legacy), Earache (legacy), Sinus Pressure, Sore Throat ENT, Ear Pain, Nasal Congestion, Epistaxis
+- **PULM** (6): Persistent Cough (legacy), Pulmonary Cough, Shortness of Breath, Wheezing, Chest Tightness, Hemoptysis
+- **GU** (10): UTI, Testicular Pain/Prostatitis, Dysuria/UTI, Flank Pain, Testicular Pain, Hematuria, Urinary Retention, STI Exposure/Discharge, Pelvic Pain/Torsion, Vaginal Bleeding
 - **GYN** (1): Pelvic Pain
-- **NEURO** (1): Headache
-- **GI** (2): Chest Pain (legacy), Abdominal Pain (legacy)
-- **General** (2): Dizziness (legacy)
+- **NEURO** (6): Headache, Dizziness/Vertigo, Weakness/Numbness, Seizure, Syncope, Confusion/AMS
+- **GI** (10): Chest Pain (legacy), Abdominal Pain (legacy+GENERIC_V1), Diarrhea, Vomiting, GI Bleeding, Constipation, Jaundice, Dysphagia, Acute Pancreatitis-like
+- **General** (1): Dizziness (legacy)
 
 ### Generic Data-Driven Engine (GENERIC_V1)
-`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Instead of writing custom `*Score.ts` files and hardcoded graph branches, complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic.
-
-**Architecture:**
-- `COMPLAINT_REGISTRY.csv` has an `ENGINE_TYPE` column (`LEGACY` or `GENERIC_V1`) that routes complaints to the appropriate engine
-- `CLUSTER_SCORING_RULES.csv` defines scoring rules with columns: `CC_ID, CLUSTER_ID, RULE_ID, POINTS, WHEN_EXPR, EVIDENCE_LABEL`
-- `computeScoresFromRules()` groups rules by cluster, evaluates `WHEN_EXPR` via `evaluateExpr()`, and sums points per cluster
-- The generic engine reuses existing `runCoreQuestions()`, `runRedFlagsComplaint()`, and `runDisposition()` from the shared engines
-- UTI (`gu_uti_symptoms`) is the first complaint migrated to GENERIC_V1, all others remain on LEGACY
-- Batch B migrated: `gu_testicular_pain_prostatitis`, `gyn_pelvic_pain`, `neuro_headache` — all on GENERIC_V1
-- `ent_sinus_pressure` built natively on GENERIC_V1 (first complaint with zero legacy code)
-- Batch C (9 new complaints): `ent_sore_throat`, `ent_ear_pain`, `ent_nasal_congestion`, `ent_epistaxis`, `pulm_cough`, `pulm_shortness_of_breath`, `pulm_wheezing`, `pulm_chest_tightness`, `pulm_hemoptysis` — all on GENERIC_V1
-- 14/20 complaints now on GENERIC_V1; 6 remain LEGACY (sore_throat, earache, persistent_cough, chest_pain, dizziness, abdominal_pain)
-
-**Adding a new complaint (zero TypeScript):**
-1. Run `npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>` to scaffold stub rows + golden tests
-2. Edit CSV rows: CORE_QUESTIONS, RED_FLAG_RULES, CLUSTER_SCORING_RULES, DISPOSITION_RULES, OUTPUT_TEMPLATES
-3. Update golden tests in `tests/cases/<cc_id>/`
-4. Run `npx tsx scripts/run_harness.ts tests/cases/<cc_id>` to validate
+`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic, enabling new complaints to be added with zero TypeScript code. 36/42 complaints run on GENERIC_V1; 6 remain LEGACY. Batch D added 22 new complaints (8 GI, 6 NEURO, 8 GU) with 525 total tests passing across 41 directories.
 
 ### Multi-Channel Messaging
-A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings. Feature flags control channel activation, and a dashboard monitors channel operations.
+A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings.
 
 ### Release Candidate (RC) System
 The RC system ensures consistent agent behavior through automated regression testing. It executes golden scenarios across LLM variants, generating reports with pass/fail summaries, diffs, latency, and token usage. A replay mode allows testing changes against existing traces, and PHI-safe replay packs enable secure QA.

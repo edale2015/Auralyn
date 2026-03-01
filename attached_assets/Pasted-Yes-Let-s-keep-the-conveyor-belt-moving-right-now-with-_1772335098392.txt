@@ -1,0 +1,902 @@
+Yes. Let’s keep the conveyor belt moving right now with the next batch.
+
+Below is Batch E (3 systems) in the same GENERIC_V1 “ruleset folder” format you’ve been shipping (single ruleset.json per complaint). It’s intentionally the minimum viable spine per system: high-yield, red-flag safe, and easy to expand later.
+
+Batch E: CARDIO + MSK + DERM
+Folder layout
+rulesets/
+  cardio/
+    _system.json
+    cardio_chest_pain/
+      ruleset.json
+    cardio_palpitations/
+      ruleset.json
+    cardio_leg_swelling/
+      ruleset.json
+
+  msk/
+    _system.json
+    msk_back_pain/
+      ruleset.json
+    msk_joint_pain/
+      ruleset.json
+    msk_sprain_injury/
+      ruleset.json
+
+  derm/
+    _system.json
+    derm_rash/
+      ruleset.json
+    derm_cellulitis/
+      ruleset.json
+    derm_allergic_reaction/
+      ruleset.json
+rulesets/cardio/_system.json
+{
+  "system": "cardio",
+  "complaints": [
+    "cardio_chest_pain",
+    "cardio_palpitations",
+    "cardio_leg_swelling"
+  ]
+}
+rulesets/cardio/cardio_chest_pain/ruleset.json
+{
+  "meta": {"system":"CARDIO","complaint_slug":"cardio_chest_pain","complaint_name":"Chest Pain","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"pressure","q":"Pressure/heaviness (vs sharp)?","type":"boolean"},
+    {"id":"exert","q":"Worse with exertion?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath?","type":"boolean"},
+    {"id":"sweat","q":"Sweating/nausea with pain?","type":"boolean"},
+    {"id":"pleuritic","q":"Worse with deep breath/cough?","type":"boolean"},
+    {"id":"radiate","q":"Radiates to arm/jaw/back?","type":"boolean"},
+    {"id":"risk","q":"PE risk (leg swelling, recent travel/immob, clot hx)?","type":"boolean"},
+    {"id":"tearing","q":"Sudden tearing pain to back?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"acs_like","logic":"pressure=true AND (exert=true OR radiate=true OR sweat=true)","disposition":"EMERG","reason":"Possible ACS"},
+    {"id":"pe_like","logic":"pleuritic=true AND sob=true AND risk=true","disposition":"EMERG","reason":"Possible PE"},
+    {"id":"dissection_like","logic":"tearing=true","disposition":"EMERG","reason":"Possible aortic dissection"}
+  ],
+  "dx_scoring": [
+    {"dx":"acs","rule":"pressure=true","pts":2},
+    {"dx":"acs","rule":"exert=true","pts":2},
+    {"dx":"acs","rule":"radiate=true","pts":2},
+    {"dx":"acs","rule":"sweat=true","pts":1},
+    {"dx":"pe","rule":"pleuritic=true","pts":2},
+    {"dx":"pe","rule":"sob=true","pts":2},
+    {"dx":"pe","rule":"risk=true","pts":2},
+    {"dx":"pleurisy","rule":"pleuritic=true","pts":2},
+    {"dx":"pleurisy","rule":"risk=false","pts":1},
+    {"dx":"msk","rule":"pressure=false AND pleuritic=false","pts":1},
+    {"dx":"acs","rule":"pleuritic=true","pts":-2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any_rf","priority":100,"logic":"acs_like OR pe_like OR dissection_like","disposition":"EMERG"},
+    {"id":"urgent_sob","priority":50,"logic":"sob=true","disposition":"URGENT"},
+    {"id":"urgent_default","priority":1,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"cardio_summary_v1","type":"summary","text":"Chest pain assessed for ACS pattern, PE pattern, dissection features, SOB, pleuritic quality, and radiation."},
+      {"id":"cardio_precautions_v1","type":"precautions","text":"Go now for chest pressure, SOB, sweating/nausea, radiation to arm/jaw, pleuritic pain with PE risk, or tearing pain to back."}
+    ]
+  },
+  "goldens": [
+    {"id":"CP1","in":{"pressure":true,"exert":true,"sob":true,"sweat":true,"pleuritic":false,"radiate":true,"risk":false,"tearing":false},"disp":"EMERG","top_dx":"acs"},
+    {"id":"CP2","in":{"pressure":false,"exert":false,"sob":true,"sweat":false,"pleuritic":true,"radiate":false,"risk":true,"tearing":false},"disp":"EMERG","top_dx":"pe"},
+    {"id":"CP3","in":{"pressure":false,"exert":false,"sob":false,"sweat":false,"pleuritic":true,"radiate":false,"risk":false,"tearing":false},"disp":"URGENT","top_dx":"pleurisy"},
+    {"id":"CP4","in":{"pressure":false,"exert":false,"sob":false,"sweat":false,"pleuritic":false,"radiate":false,"risk":false,"tearing":false},"disp":"URGENT","top_dx":"msk"},
+    {"id":"CP5","in":{"pressure":true,"exert":false,"sob":false,"sweat":true,"pleuritic":false,"radiate":false,"risk":false,"tearing":false},"disp":"EMERG","top_dx":"acs"},
+    {"id":"CP6","in":{"pressure":false,"exert":false,"sob":true,"sweat":false,"pleuritic":true,"radiate":false,"risk":false,"tearing":false},"disp":"URGENT","top_dx":"pleurisy"},
+    {"id":"CP7","in":{"pressure":false,"exert":false,"sob":false,"sweat":false,"pleuritic":false,"radiate":false,"risk":false,"tearing":true},"disp":"EMERG","top_dx":"acs"},
+    {"id":"CP8","in":{"pressure":true,"exert":true,"sob":false,"sweat":false,"pleuritic":false,"radiate":false,"risk":false,"tearing":false},"disp":"EMERG","top_dx":"acs"},
+    {"id":"CP9","in":{"pressure":false,"exert":false,"sob":true,"sweat":false,"pleuritic":true,"radiate":false,"risk":true,"tearing":false},"disp":"EMERG","top_dx":"pe"},
+    {"id":"CP10","in":{"pressure":true,"exert":false,"sob":true,"sweat":true,"pleuritic":false,"radiate":true,"risk":false,"tearing":false},"disp":"EMERG","top_dx":"acs"}
+  ]
+}
+rulesets/cardio/cardio_palpitations/ruleset.json
+{
+  "meta": {"system":"CARDIO","complaint_slug":"cardio_palpitations","complaint_name":"Palpitations","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"cp","q":"Chest pain/pressure?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath?","type":"boolean"},
+    {"id":"syncope","q":"Fainting or near-fainting?","type":"boolean"},
+    {"id":"hr_very_fast","q":"Very fast/irregular heartbeat sensation?","type":"boolean"},
+    {"id":"stimulant","q":"Caffeine/stimulants/cocaine?","type":"boolean"},
+    {"id":"thyroid","q":"Weight loss/tremor/heat intolerance?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"unstable","logic":"syncope=true OR (cp=true AND sob=true)","disposition":"EMERG","reason":"Possible unstable arrhythmia/ischemia"},
+    {"id":"high_risk","logic":"hr_very_fast=true AND sob=true","disposition":"EMERG","reason":"Possible SVT/AF with RVR and compromise"}
+  ],
+  "dx_scoring": [
+    {"dx":"svt_af","rule":"hr_very_fast=true","pts":3},
+    {"dx":"svt_af","rule":"sob=true","pts":1},
+    {"dx":"panic_stimulant","rule":"stimulant=true","pts":2},
+    {"dx":"thyroid_related","rule":"thyroid=true","pts":3},
+    {"dx":"benign","rule":"cp=false AND sob=false AND syncope=false","pts":2},
+    {"dx":"benign","rule":"hr_very_fast=true","pts":-1}
+  ],
+  "disp_rules": [
+    {"id":"emerg_rf","priority":100,"logic":"unstable OR high_risk","disposition":"EMERG"},
+    {"id":"urgent_fast","priority":50,"logic":"hr_very_fast=true OR cp=true OR sob=true","disposition":"URGENT"},
+    {"id":"routine","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"cardio_palps_summary_v1","type":"summary","text":"Palpitations assessed for syncope, chest pain/SOB, very fast/irregular rhythm, stimulant exposure, and thyroid symptoms."},
+      {"id":"cardio_palps_precautions_v1","type":"precautions","text":"Go now for fainting, chest pain, shortness of breath, or sustained very fast/irregular heartbeat."}
+    ]
+  },
+  "goldens": [
+    {"id":"P1","in":{"cp":false,"sob":false,"syncope":false,"hr_very_fast":true,"stimulant":true,"thyroid":false},"disp":"URGENT","top_dx":"panic_stimulant"},
+    {"id":"P2","in":{"cp":true,"sob":true,"syncope":false,"hr_very_fast":true,"stimulant":false,"thyroid":false},"disp":"EMERG","top_dx":"svt_af"},
+    {"id":"P3","in":{"cp":false,"sob":false,"syncope":true,"hr_very_fast":true,"stimulant":false,"thyroid":false},"disp":"EMERG","top_dx":"svt_af"},
+    {"id":"P4","in":{"cp":false,"sob":false,"syncope":false,"hr_very_fast":false,"stimulant":false,"thyroid":true},"disp":"URGENT","top_dx":"thyroid_related"},
+    {"id":"P5","in":{"cp":false,"sob":false,"syncope":false,"hr_very_fast":false,"stimulant":false,"thyroid":false},"disp":"ROUTINE","top_dx":"benign"},
+    {"id":"P6","in":{"cp":true,"sob":false,"syncope":false,"hr_very_fast":false,"stimulant":false,"thyroid":false},"disp":"URGENT","top_dx":"svt_af"},
+    {"id":"P7","in":{"cp":false,"sob":true,"syncope":false,"hr_very_fast":true,"stimulant":false,"thyroid":false},"disp":"EMERG","top_dx":"svt_af"},
+    {"id":"P8","in":{"cp":false,"sob":false,"syncope":false,"hr_very_fast":true,"stimulant":false,"thyroid":true},"disp":"URGENT","top_dx":"thyroid_related"},
+    {"id":"P9","in":{"cp":false,"sob":false,"syncope":false,"hr_very_fast":true,"stimulant":false,"thyroid":false},"disp":"URGENT","top_dx":"svt_af"},
+    {"id":"P10","in":{"cp":false,"sob":false,"syncope":false,"hr_very_fast":false,"stimulant":true,"thyroid":false},"disp":"ROUTINE","top_dx":"panic_stimulant"}
+  ]
+}
+rulesets/cardio/cardio_leg_swelling/ruleset.json
+{
+  "meta": {"system":"CARDIO","complaint_slug":"cardio_leg_swelling","complaint_name":"Leg Swelling","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"one_leg","q":"One leg more swollen than the other?","type":"boolean"},
+    {"id":"pain","q":"Calf pain/tenderness?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath or chest pain?","type":"boolean"},
+    {"id":"recent_travel","q":"Recent travel/immobilization/surgery?","type":"boolean"},
+    {"id":"fever_red","q":"Fever or redness/warmth of leg?","type":"boolean"},
+    {"id":"known_chf","q":"Known heart failure or orthopnea?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"possible_pe","logic":"sob=true AND (one_leg=true OR recent_travel=true)","disposition":"EMERG","reason":"Possible PE from DVT"},
+    {"id":"high_dvt","logic":"one_leg=true AND pain=true AND recent_travel=true","disposition":"URGENT","reason":"High DVT probability"},
+    {"id":"cellulitis_severe","logic":"fever_red=true AND one_leg=true","disposition":"URGENT","reason":"Possible cellulitis"}
+  ],
+  "dx_scoring": [
+    {"dx":"dvt","rule":"one_leg=true","pts":2},
+    {"dx":"dvt","rule":"pain=true","pts":2},
+    {"dx":"dvt","rule":"recent_travel=true","pts":2},
+    {"dx":"chf_volume","rule":"known_chf=true","pts":3},
+    {"dx":"cellulitis","rule":"fever_red=true","pts":3},
+    {"dx":"venous","rule":"one_leg=false AND known_chf=false","pts":1},
+    {"dx":"dvt","rule":"one_leg=false","pts":-3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_pe","priority":100,"logic":"possible_pe","disposition":"EMERG"},
+    {"id":"urgent_dvt_or_cell","priority":50,"logic":"high_dvt OR fever_red=true OR one_leg=true","disposition":"URGENT"},
+    {"id":"routine_bilat","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"cardio_swelling_summary_v1","type":"summary","text":"Leg swelling assessed for unilateral DVT features, cellulitis signs, CHF volume overload, and PE symptoms."},
+      {"id":"cardio_swelling_precautions_v1","type":"precautions","text":"Go now for leg swelling with shortness of breath/chest pain, or a hot red painful swollen leg."}
+    ]
+  },
+  "goldens": [
+    {"id":"LS1","in":{"one_leg":true,"pain":true,"sob":false,"recent_travel":true,"fever_red":false,"known_chf":false},"disp":"URGENT","top_dx":"dvt"},
+    {"id":"LS2","in":{"one_leg":true,"pain":true,"sob":true,"recent_travel":true,"fever_red":false,"known_chf":false},"disp":"EMERG","top_dx":"dvt"},
+    {"id":"LS3","in":{"one_leg":false,"pain":false,"sob":false,"recent_travel":false,"fever_red":false,"known_chf":true},"disp":"ROUTINE","top_dx":"chf_volume"},
+    {"id":"LS4","in":{"one_leg":true,"pain":false,"sob":false,"recent_travel":false,"fever_red":true,"known_chf":false},"disp":"URGENT","top_dx":"cellulitis"},
+    {"id":"LS5","in":{"one_leg":false,"pain":false,"sob":false,"recent_travel":false,"fever_red":false,"known_chf":false},"disp":"ROUTINE","top_dx":"venous"},
+    {"id":"LS6","in":{"one_leg":true,"pain":true,"sob":false,"recent_travel":false,"fever_red":false,"known_chf":false},"disp":"URGENT","top_dx":"dvt"},
+    {"id":"LS7","in":{"one_leg":true,"pain":false,"sob":true,"recent_travel":true,"fever_red":false,"known_chf":false},"disp":"EMERG","top_dx":"dvt"},
+    {"id":"LS8","in":{"one_leg":false,"pain":false,"sob":true,"recent_travel":false,"fever_red":false,"known_chf":true},"disp":"URGENT","top_dx":"chf_volume"},
+    {"id":"LS9","in":{"one_leg":true,"pain":false,"sob":false,"recent_travel":true,"fever_red":false,"known_chf":false},"disp":"URGENT","top_dx":"dvt"},
+    {"id":"LS10","in":{"one_leg":false,"pain":false,"sob":false,"recent_travel":false,"fever_red":true,"known_chf":false},"disp":"URGENT","top_dx":"cellulitis"}
+  ]
+}
+rulesets/msk/_system.json
+{
+  "system": "msk",
+  "complaints": [
+    "msk_back_pain",
+    "msk_joint_pain",
+    "msk_sprain_injury"
+  ]
+}
+rulesets/msk/msk_back_pain/ruleset.json
+{
+  "meta": {"system":"MSK","complaint_slug":"msk_back_pain","complaint_name":"Back Pain","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"trauma","q":"Recent trauma or fall?","type":"boolean"},
+    {"id":"weak","q":"New leg weakness/numbness?","type":"boolean"},
+    {"id":"saddle","q":"Saddle anesthesia or new bladder/bowel issues?","type":"boolean"},
+    {"id":"fever","q":"Fever or IV drug use?","type":"boolean"},
+    {"id":"cancer","q":"Cancer history/unexplained weight loss?","type":"boolean"},
+    {"id":"pain_severe","q":"Severe pain not improving at rest?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"ces","logic":"saddle=true","disposition":"EMERG","reason":"Possible cauda equina"},
+    {"id":"neuro","logic":"weak=true","disposition":"EMERG","reason":"Possible spinal cord/nerve compromise"},
+    {"id":"infection","logic":"fever=true AND pain_severe=true","disposition":"EMERG","reason":"Possible epidural abscess/osteomyelitis"},
+    {"id":"fracture","logic":"trauma=true AND pain_severe=true","disposition":"URGENT","reason":"Possible fracture"}
+  ],
+  "dx_scoring": [
+    {"dx":"mechanical","rule":"trauma=false AND fever=false AND cancer=false","pts":2},
+    {"dx":"radicular","rule":"weak=true","pts":2},
+    {"dx":"serious_spine","rule":"saddle=true","pts":4},
+    {"dx":"infection","rule":"fever=true","pts":3},
+    {"dx":"fracture","rule":"trauma=true","pts":3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_ces_neuro_infect","priority":100,"logic":"ces OR neuro OR infection","disposition":"EMERG"},
+    {"id":"urgent_trauma_cancer","priority":50,"logic":"fracture OR cancer=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"msk_back_summary_v1","type":"summary","text":"Back pain assessed for neurologic deficits, cauda equina signs, infection risk, trauma/fracture risk, and cancer red flags."},
+      {"id":"msk_back_precautions_v1","type":"precautions","text":"Go now for new weakness, saddle anesthesia, bladder/bowel changes, fever with severe back pain, or major trauma."}
+    ]
+  },
+  "goldens": [
+    {"id":"BP1","in":{"trauma":false,"weak":false,"saddle":false,"fever":false,"cancer":false,"pain_severe":false},"disp":"ROUTINE","top_dx":"mechanical"},
+    {"id":"BP2","in":{"trauma":false,"weak":true,"saddle":false,"fever":false,"cancer":false,"pain_severe":true},"disp":"EMERG","top_dx":"radicular"},
+    {"id":"BP3","in":{"trauma":false,"weak":false,"saddle":true,"fever":false,"cancer":false,"pain_severe":true},"disp":"EMERG","top_dx":"serious_spine"},
+    {"id":"BP4","in":{"trauma":false,"weak":false,"saddle":false,"fever":true,"cancer":false,"pain_severe":true},"disp":"EMERG","top_dx":"infection"},
+    {"id":"BP5","in":{"trauma":true,"weak":false,"saddle":false,"fever":false,"cancer":false,"pain_severe":true},"disp":"URGENT","top_dx":"fracture"},
+    {"id":"BP6","in":{"trauma":false,"weak":false,"saddle":false,"fever":false,"cancer":true,"pain_severe":true},"disp":"URGENT","top_dx":"mechanical"},
+    {"id":"BP7","in":{"trauma":false,"weak":false,"saddle":false,"fever":true,"cancer":false,"pain_severe":false},"disp":"URGENT","top_dx":"infection"},
+    {"id":"BP8","in":{"trauma":true,"weak":false,"saddle":false,"fever":false,"cancer":false,"pain_severe":false},"disp":"ROUTINE","top_dx":"fracture"},
+    {"id":"BP9","in":{"trauma":false,"weak":true,"saddle":true,"fever":false,"cancer":false,"pain_severe":true},"disp":"EMERG","top_dx":"serious_spine"},
+    {"id":"BP10","in":{"trauma":false,"weak":false,"saddle":false,"fever":false,"cancer":false,"pain_severe":true},"disp":"ROUTINE","top_dx":"mechanical"}
+  ]
+}
+rulesets/msk/msk_joint_pain/ruleset.json
+{
+  "meta": {"system":"MSK","complaint_slug":"msk_joint_pain","complaint_name":"Joint Pain","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"hot","q":"Hot, red, very swollen joint?","type":"boolean"},
+    {"id":"fever","q":"Fever?","type":"boolean"},
+    {"id":"trauma","q":"Trauma/injury?","type":"boolean"},
+    {"id":"unable_weight","q":"Unable to bear weight/use joint?","type":"boolean"},
+    {"id":"many_joints","q":"Multiple joints involved?","type":"boolean"},
+    {"id":"rash","q":"Rash or recent infection?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"septic","logic":"hot=true AND fever=true","disposition":"EMERG","reason":"Possible septic arthritis"},
+    {"id":"fracture","logic":"trauma=true AND unable_weight=true","disposition":"URGENT","reason":"Possible fracture/dislocation"}
+  ],
+  "dx_scoring": [
+    {"dx":"septic_arthritis","rule":"hot=true","pts":3},
+    {"dx":"septic_arthritis","rule":"fever=true","pts":2},
+    {"dx":"sprain_strain","rule":"trauma=true","pts":2},
+    {"dx":"inflammatory","rule":"many_joints=true","pts":2},
+    {"dx":"reactive","rule":"rash=true","pts":2},
+    {"dx":"degenerative","rule":"trauma=false AND fever=false AND hot=false","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_septic","priority":100,"logic":"septic","disposition":"EMERG"},
+    {"id":"urgent_trauma_or_unable","priority":50,"logic":"fracture OR unable_weight=true OR hot=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"msk_joint_summary_v1","type":"summary","text":"Joint pain assessed for hot swollen joint/septic arthritis risk, trauma/fracture risk, multi-joint inflammatory patterns, and systemic symptoms."},
+      {"id":"msk_joint_precautions_v1","type":"precautions","text":"Go now for a hot swollen joint with fever, inability to bear weight after injury, or rapidly worsening swelling/pain."}
+    ]
+  },
+  "goldens": [
+    {"id":"JP1","in":{"hot":true,"fever":true,"trauma":false,"unable_weight":true,"many_joints":false,"rash":false},"disp":"EMERG","top_dx":"septic_arthritis"},
+    {"id":"JP2","in":{"hot":true,"fever":false,"trauma":false,"unable_weight":false,"many_joints":false,"rash":false},"disp":"URGENT","top_dx":"septic_arthritis"},
+    {"id":"JP3","in":{"hot":false,"fever":false,"trauma":true,"unable_weight":true,"many_joints":false,"rash":false},"disp":"URGENT","top_dx":"sprain_strain"},
+    {"id":"JP4","in":{"hot":false,"fever":false,"trauma":false,"unable_weight":false,"many_joints":true,"rash":false},"disp":"ROUTINE","top_dx":"inflammatory"},
+    {"id":"JP5","in":{"hot":false,"fever":false,"trauma":false,"unable_weight":false,"many_joints":false,"rash":false},"disp":"ROUTINE","top_dx":"degenerative"},
+    {"id":"JP6","in":{"hot":false,"fever":true,"trauma":false,"unable_weight":false,"many_joints":true,"rash":true},"disp":"URGENT","top_dx":"reactive"},
+    {"id":"JP7","in":{"hot":true,"fever":true,"trauma":true,"unable_weight":true,"many_joints":false,"rash":false},"disp":"EMERG","top_dx":"septic_arthritis"},
+    {"id":"JP8","in":{"hot":false,"fever":false,"trauma":true,"unable_weight":false,"many_joints":false,"rash":false},"disp":"ROUTINE","top_dx":"sprain_strain"},
+    {"id":"JP9","in":{"hot":false,"fever":false,"trauma":false,"unable_weight":true,"many_joints":false,"rash":false},"disp":"URGENT","top_dx":"degenerative"},
+    {"id":"JP10","in":{"hot":false,"fever":false,"trauma":false,"unable_weight":false,"many_joints":true,"rash":true},"disp":"ROUTINE","top_dx":"reactive"}
+  ]
+}
+rulesets/msk/msk_sprain_injury/ruleset.json
+{
+  "meta": {"system":"MSK","complaint_slug":"msk_sprain_injury","complaint_name":"Sprain / Injury","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"deform","q":"Obvious deformity?","type":"boolean"},
+    {"id":"open","q":"Open wound/bone visible?","type":"boolean"},
+    {"id":"unable_weight","q":"Unable to bear weight/use limb?","type":"boolean"},
+    {"id":"neurovascular","q":"Numbness/weakness/cold limb or no pulse?","type":"boolean"},
+    {"id":"severe","q":"Severe pain out of proportion?","type":"boolean"},
+    {"id":"head_injury","q":"Head injury/LOC with fall?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"open_fx","logic":"open=true OR deform=true","disposition":"EMERG","reason":"Possible open fracture/dislocation"},
+    {"id":"nv_compromise","logic":"neurovascular=true","disposition":"EMERG","reason":"Neurovascular compromise"},
+    {"id":"compartment","logic":"severe=true AND unable_weight=true","disposition":"EMERG","reason":"Compartment syndrome concern"}
+  ],
+  "dx_scoring": [
+    {"dx":"fracture_dislocation","rule":"deform=true","pts":4},
+    {"dx":"fracture_dislocation","rule":"unable_weight=true","pts":2},
+    {"dx":"sprain_strain","rule":"unable_weight=false AND deform=false","pts":2},
+    {"dx":"nv_issue","rule":"neurovascular=true","pts":4}
+  ],
+  "disp_rules": [
+    {"id":"emerg_rf","priority":100,"logic":"open_fx OR nv_compromise OR compartment OR head_injury=true","disposition":"EMERG"},
+    {"id":"urgent_unable","priority":50,"logic":"unable_weight=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"msk_injury_summary_v1","type":"summary","text":"Injury assessed for deformity/open fracture, neurovascular compromise, compartment syndrome signs, and ability to bear weight."},
+      {"id":"msk_injury_precautions_v1","type":"precautions","text":"Go now for deformity, open wound, numb/cold limb, severe pain out of proportion, or inability to bear weight after significant injury."}
+    ]
+  },
+  "goldens": [
+    {"id":"INJ1","in":{"deform":true,"open":false,"unable_weight":true,"neurovascular":false,"severe":true,"head_injury":false},"disp":"EMERG","top_dx":"fracture_dislocation"},
+    {"id":"INJ2","in":{"deform":false,"open":true,"unable_weight":true,"neurovascular":false,"severe":true,"head_injury":false},"disp":"EMERG","top_dx":"fracture_dislocation"},
+    {"id":"INJ3","in":{"deform":false,"open":false,"unable_weight":true,"neurovascular":true,"severe":true,"head_injury":false},"disp":"EMERG","top_dx":"nv_issue"},
+    {"id":"INJ4","in":{"deform":false,"open":false,"unable_weight":true,"neurovascular":false,"severe":true,"head_injury":false},"disp":"EMERG","top_dx":"fracture_dislocation"},
+    {"id":"INJ5","in":{"deform":false,"open":false,"unable_weight":true,"neurovascular":false,"severe":false,"head_injury":false},"disp":"URGENT","top_dx":"fracture_dislocation"},
+    {"id":"INJ6","in":{"deform":false,"open":false,"unable_weight":false,"neurovascular":false,"severe":false,"head_injury":false},"disp":"ROUTINE","top_dx":"sprain_strain"},
+    {"id":"INJ7","in":{"deform":false,"open":false,"unable_weight":false,"neurovascular":false,"severe":true,"head_injury":false},"disp":"ROUTINE","top_dx":"sprain_strain"},
+    {"id":"INJ8","in":{"deform":false,"open":false,"unable_weight":false,"neurovascular":true,"severe":false,"head_injury":false},"disp":"EMERG","top_dx":"nv_issue"},
+    {"id":"INJ9","in":{"deform":false,"open":false,"unable_weight":true,"neurovascular":false,"severe":false,"head_injury":true},"disp":"EMERG","top_dx":"fracture_dislocation"},
+    {"id":"INJ10","in":{"deform":false,"open":false,"unable_weight":true,"neurovascular":false,"severe":true,"head_injury":false},"disp":"EMERG","top_dx":"fracture_dislocation"}
+  ]
+}
+rulesets/derm/_system.json
+{
+  "system": "derm",
+  "complaints": [
+    "derm_rash",
+    "derm_cellulitis",
+    "derm_allergic_reaction"
+  ]
+}
+rulesets/derm/derm_rash/ruleset.json
+{
+  "meta": {"system":"DERM","complaint_slug":"derm_rash","complaint_name":"Rash","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"fever","q":"Fever or very ill?","type":"boolean"},
+    {"id":"mucosal","q":"Mouth/eye/genital sores?","type":"boolean"},
+    {"id":"painful","q":"Rash is painful (not just itchy)?","type":"boolean"},
+    {"id":"blister","q":"Blisters/skin peeling?","type":"boolean"},
+    {"id":"purple","q":"Purple spots that don’t blanch?","type":"boolean"},
+    {"id":"new_med","q":"New medication in last 2–4 weeks?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"sjs_ten","logic":"mucosal=true AND blister=true AND new_med=true","disposition":"EMERG","reason":"Possible SJS/TEN"},
+    {"id":"meningococcemia","logic":"fever=true AND purple=true","disposition":"EMERG","reason":"Possible severe infection"},
+    {"id":"serious","logic":"fever=true AND painful=true","disposition":"URGENT","reason":"Systemic illness with rash"}
+  ],
+  "dx_scoring": [
+    {"dx":"viral_exanthem","rule":"fever=true AND new_med=false","pts":2},
+    {"dx":"allergic_drug","rule":"new_med=true","pts":3},
+    {"dx":"urticaria","rule":"painful=false AND blister=false","pts":1},
+    {"dx":"vasculitic","rule":"purple=true","pts":3},
+    {"dx":"allergic_drug","rule":"mucosal=true","pts":1}
+  ],
+  "disp_rules": [
+    {"id":"emerg_sjs_or_purpfever","priority":100,"logic":"sjs_ten OR meningococcemia","disposition":"EMERG"},
+    {"id":"urgent_fever_pain_newmed","priority":50,"logic":"serious OR new_med=true OR purple=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"derm_rash_summary_v1","type":"summary","text":"Rash assessed for systemic symptoms, mucosal involvement, blistering/peeling, purpura, and new medication exposure."},
+      {"id":"derm_rash_precautions_v1","type":"precautions","text":"Go now for fever with purple rash, blistering/peeling, mouth/eye/genital sores, or rapidly worsening painful rash."}
+    ]
+  },
+  "goldens": [
+    {"id":"R1","in":{"fever":false,"mucosal":false,"painful":false,"blister":false,"purple":false,"new_med":false},"disp":"ROUTINE","top_dx":"urticaria"},
+    {"id":"R2","in":{"fever":true,"mucosal":false,"painful":false,"blister":false,"purple":false,"new_med":false},"disp":"URGENT","top_dx":"viral_exanthem"},
+    {"id":"R3","in":{"fever":true,"mucosal":false,"painful":false,"blister":false,"purple":true,"new_med":false},"disp":"EMERG","top_dx":"vasculitic"},
+    {"id":"R4","in":{"fever":false,"mucosal":false,"painful":false,"blister":false,"purple":false,"new_med":true},"disp":"URGENT","top_dx":"allergic_drug"},
+    {"id":"R5","in":{"fever":false,"mucosal":true,"painful":true,"blister":true,"purple":false,"new_med":true},"disp":"EMERG","top_dx":"allergic_drug"},
+    {"id":"R6","in":{"fever":true,"mucosal":true,"painful":true,"blister":true,"purple":false,"new_med":true},"disp":"EMERG","top_dx":"allergic_drug"},
+    {"id":"R7","in":{"fever":false,"mucosal":false,"painful":true,"blister":false,"purple":false,"new_med":false},"disp":"ROUTINE","top_dx":"urticaria"},
+    {"id":"R8","in":{"fever":true,"mucosal":false,"painful":true,"blister":false,"purple":false,"new_med":false},"disp":"URGENT","top_dx":"viral_exanthem"},
+    {"id":"R9","in":{"fever":false,"mucosal":false,"painful":false,"blister":false,"purple":true,"new_med":false},"disp":"URGENT","top_dx":"vasculitic"},
+    {"id":"R10","in":{"fever":false,"mucosal":false,"painful":false,"blister":false,"purple":false,"new_med":false},"disp":"ROUTINE","top_dx":"urticaria"}
+  ]
+}
+rulesets/derm/derm_cellulitis/ruleset.json
+{
+  "meta": {"system":"DERM","complaint_slug":"derm_cellulitis","complaint_name":"Cellulitis / Skin Infection","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"fever","q":"Fever/chills?","type":"boolean"},
+    {"id":"spreading","q":"Rapidly spreading redness?","type":"boolean"},
+    {"id":"pain_out","q":"Severe pain out of proportion?","type":"boolean"},
+    {"id":"pus","q":"Pus/abscess/drainage?","type":"boolean"},
+    {"id":"immuno","q":"Immunocompromised/diabetes?","type":"boolean"},
+    {"id":"face_eye","q":"On face/around eye?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"nec_fas","logic":"pain_out=true AND (fever=true OR spreading=true)","disposition":"EMERG","reason":"Nec fasc concern"},
+    {"id":"orbital","logic":"face_eye=true AND fever=true","disposition":"EMERG","reason":"Periorbital/orbital risk"},
+    {"id":"severe_cell","logic":"fever=true AND spreading=true","disposition":"URGENT","reason":"Systemic cellulitis"}
+  ],
+  "dx_scoring": [
+    {"dx":"cellulitis","rule":"spreading=true","pts":2},
+    {"dx":"cellulitis","rule":"fever=true","pts":2},
+    {"dx":"abscess","rule":"pus=true","pts":3},
+    {"dx":"nec_fas","rule":"pain_out=true","pts":4},
+    {"dx":"cellulitis","rule":"immuno=true","pts":1},
+    {"dx":"abscess","rule":"spreading=false","pts":-1}
+  ],
+  "disp_rules": [
+    {"id":"emerg_nec_or_orbital","priority":100,"logic":"nec_fas OR orbital","disposition":"EMERG"},
+    {"id":"urgent_fever_spread_immuno","priority":50,"logic":"severe_cell OR immuno=true OR pus=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"derm_cell_summary_v1","type":"summary","text":"Skin infection assessed for fever, rapid spread, abscess/pus, immunocompromise, and nec fasc/orbital warning signs."},
+      {"id":"derm_cell_precautions_v1","type":"precautions","text":"Go now for rapidly spreading redness with fever, severe pain out of proportion, facial/eye involvement, or signs of systemic illness."}
+    ]
+  },
+  "goldens": [
+    {"id":"C1","in":{"fever":false,"spreading":true,"pain_out":false,"pus":false,"immuno":false,"face_eye":false},"disp":"ROUTINE","top_dx":"cellulitis"},
+    {"id":"C2","in":{"fever":true,"spreading":true,"pain_out":false,"pus":false,"immuno":false,"face_eye":false},"disp":"URGENT","top_dx":"cellulitis"},
+    {"id":"C3","in":{"fever":true,"spreading":true,"pain_out":true,"pus":false,"immuno":false,"face_eye":false},"disp":"EMERG","top_dx":"nec_fas"},
+    {"id":"C4","in":{"fever":false,"spreading":false,"pain_out":false,"pus":true,"immuno":false,"face_eye":false},"disp":"URGENT","top_dx":"abscess"},
+    {"id":"C5","in":{"fever":true,"spreading":false,"pain_out":false,"pus":true,"immuno":true,"face_eye":false},"disp":"URGENT","top_dx":"abscess"},
+    {"id":"C6","in":{"fever":true,"spreading":false,"pain_out":true,"pus":false,"immuno":false,"face_eye":false},"disp":"EMERG","top_dx":"nec_fas"},
+    {"id":"C7","in":{"fever":true,"spreading":true,"pain_out":false,"pus":false,"immuno":true,"face_eye":false},"disp":"URGENT","top_dx":"cellulitis"},
+    {"id":"C8","in":{"fever":true,"spreading":false,"pain_out":false,"pus":false,"immuno":false,"face_eye":true},"disp":"EMERG","top_dx":"cellulitis"},
+    {"id":"C9","in":{"fever":false,"spreading":false,"pain_out":false,"pus":false,"immuno":false,"face_eye":false},"disp":"ROUTINE","top_dx":"cellulitis"},
+    {"id":"C10","in":{"fever":true,"spreading":true,"pain_out":false,"pus":true,"immuno":false,"face_eye":false},"disp":"URGENT","top_dx":"abscess"}
+  ]
+}
+rulesets/derm/derm_allergic_reaction/ruleset.json
+{
+  "meta": {"system":"DERM","complaint_slug":"derm_allergic_reaction","complaint_name":"Allergic Reaction / Hives","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"hives","q":"Hives/itchy raised welts?","type":"boolean"},
+    {"id":"lip_tongue","q":"Lip/tongue swelling?","type":"boolean"},
+    {"id":"throat","q":"Throat tightness/hoarse voice?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath/wheezing?","type":"boolean"},
+    {"id":"vomit","q":"Vomiting or severe abdominal cramps?","type":"boolean"},
+    {"id":"trigger","q":"New food/med/sting exposure?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"anaphylaxis","logic":"(lip_tongue=true OR throat=true OR sob=true)","disposition":"EMERG","reason":"Possible anaphylaxis"},
+    {"id":"systemic","logic":"hives=true AND vomit=true","disposition":"URGENT","reason":"Systemic allergic reaction"}
+  ],
+  "dx_scoring": [
+    {"dx":"urticaria","rule":"hives=true","pts":3},
+    {"dx":"anaphylaxis","rule":"lip_tongue=true","pts":4},
+    {"dx":"anaphylaxis","rule":"throat=true","pts":4},
+    {"dx":"anaphylaxis","rule":"sob=true","pts":4},
+    {"dx":"urticaria","rule":"trigger=true","pts":1}
+  ],
+  "disp_rules": [
+    {"id":"emerg_anaphylaxis","priority":100,"logic":"anaphylaxis","disposition":"EMERG"},
+    {"id":"urgent_systemic","priority":50,"logic":"systemic OR hives=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"derm_allergy_summary_v1","type":"summary","text":"Allergic symptoms assessed for hives, facial/tongue swelling, throat tightness, wheeze/SOB, GI symptoms, and trigger exposure."},
+      {"id":"derm_allergy_precautions_v1","type":"precautions","text":"Go now for throat tightness, lip/tongue swelling, wheezing/SOB, or rapid progression of symptoms."}
+    ]
+  },
+  "goldens": [
+    {"id":"A1","in":{"hives":true,"lip_tongue":false,"throat":false,"sob":false,"vomit":false,"trigger":true},"disp":"URGENT","top_dx":"urticaria"},
+    {"id":"A2","in":{"hives":true,"lip_tongue":true,"throat":false,"sob":false,"vomit":false,"trigger":true},"disp":"EMERG","top_dx":"anaphylaxis"},
+    {"id":"A3","in":{"hives":false,"lip_tongue":false,"throat":true,"sob":false,"vomit":false,"trigger":true},"disp":"EMERG","top_dx":"anaphylaxis"},
+    {"id":"A4","in":{"hives":true,"lip_tongue":false,"throat":false,"sob":true,"vomit":false,"trigger":true},"disp":"EMERG","top_dx":"anaphylaxis"},
+    {"id":"A5","in":{"hives":true,"lip_tongue":false,"throat":false,"sob":false,"vomit":true,"trigger":true},"disp":"URGENT","top_dx":"urticaria"},
+    {"id":"A6","in":{"hives":false,"lip_tongue":false,"throat":false,"sob":false,"vomit":false,"trigger":false},"disp":"ROUTINE","top_dx":"urticaria"},
+    {"id":"A7","in":{"hives":true,"lip_tongue":false,"throat":false,"sob":false,"vomit":false,"trigger":false},"disp":"URGENT","top_dx":"urticaria"},
+    {"id":"A8","in":{"hives":true,"lip_tongue":true,"throat":true,"sob":true,"vomit":true,"trigger":true},"disp":"EMERG","top_dx":"anaphylaxis"},
+    {"id":"A9","in":{"hives":true,"lip_tongue":false,"throat":false,"sob":false,"vomit":false,"trigger":true},"disp":"URGENT","top_dx":"urticaria"},
+    {"id":"A10","in":{"hives":false,"lip_tongue":true,"throat":false,"sob":false,"vomit":false,"trigger":true},"disp":"EMERG","top_dx":"anaphylaxis"}
+  ]
+}
+Run it
+
+When you’re ready to ship these:
+
+npm run ship:system -- cardio
+npm run ship:system -- msk
+npm run ship:system -- derm
+
+If you want 5 systems instead of 3, say:
+“Add Endo + Psych”
+and I’ll generate Batch F immediately in the same format.
+
+add endo + psych
+
+Done. Here are ENDO + PSYCH as Batch F, same GENERIC_V1 / data-only pattern (one ruleset.json per complaint, 10 goldens each).
+
+Batch F: ENDO + PSYCH
+Folder layout
+rulesets/
+  endo/
+    _system.json
+    endo_hyperglycemia/
+      ruleset.json
+    endo_hypoglycemia/
+      ruleset.json
+    endo_thyroid_symptoms/
+      ruleset.json
+
+  psych/
+    _system.json
+    psych_anxiety_panic/
+      ruleset.json
+    psych_depression_suicidal_ideation/
+      ruleset.json
+    psych_agitation_psychosis/
+      ruleset.json
+ENDO
+rulesets/endo/_system.json
+{
+  "system": "endo",
+  "complaints": [
+    "endo_hyperglycemia",
+    "endo_hypoglycemia",
+    "endo_thyroid_symptoms"
+  ]
+}
+rulesets/endo/endo_hyperglycemia/ruleset.json
+{
+  "meta": {"system":"ENDO","complaint_slug":"endo_hyperglycemia","complaint_name":"High Blood Sugar / Hyperglycemia","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"known_dm","q":"Known diabetes?","type":"boolean"},
+    {"id":"polyuria","q":"Frequent urination?","type":"boolean"},
+    {"id":"polydipsia","q":"Very thirsty?","type":"boolean"},
+    {"id":"vomit","q":"Vomiting or unable to keep fluids?","type":"boolean"},
+    {"id":"abd_pain","q":"Severe abdominal pain?","type":"boolean"},
+    {"id":"confusion","q":"Confusion or very drowsy?","type":"boolean"},
+    {"id":"rapid_breath","q":"Deep/rapid breathing or fruity breath?","type":"boolean"},
+    {"id":"infection","q":"Fever or suspected infection?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"dka_hhs","logic":"(vomit=true AND (rapid_breath=true OR confusion=true)) OR (rapid_breath=true AND abd_pain=true)","disposition":"EMERG","reason":"Possible DKA/HHS"},
+    {"id":"ams","logic":"confusion=true","disposition":"EMERG","reason":"Altered mental status"},
+    {"id":"dehyd","logic":"vomit=true AND (polyuria=true OR polydipsia=true)","disposition":"URGENT","reason":"Dehydration risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"dka_hhs","rule":"rapid_breath=true","pts":4},
+    {"dx":"dka_hhs","rule":"vomit=true","pts":3},
+    {"dx":"dka_hhs","rule":"confusion=true","pts":3},
+    {"dx":"dka_hhs","rule":"abd_pain=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"known_dm=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"polyuria=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"polydipsia=true","pts":2},
+    {"dx":"stress_hyperglycemia","rule":"infection=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"rapid_breath=true","pts":-3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_dka","priority":100,"logic":"dka_hhs OR ams","disposition":"EMERG"},
+    {"id":"urgent_vomit_or_infect","priority":50,"logic":"vomit=true OR infection=true OR (polyuria=true AND polydipsia=true)","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"endo_hyper_summary_v1","type":"summary","text":"Hyperglycemia assessed for polyuria/polydipsia, vomiting/dehydration, infection trigger, and DKA/HHS warning signs (rapid breathing, confusion, severe abdominal pain)."},
+      {"id":"endo_hyper_precautions_v1","type":"precautions","text":"Go now for vomiting with rapid/deep breathing, confusion, severe abdominal pain, or inability to keep fluids."}
+    ]
+  },
+  "goldens": [
+    {"id":"HG1","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG2","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":true,"abd_pain":true,"confusion":false,"rapid_breath":true,"infection":false},"disp":"EMERG","top_dx":"dka_hhs"},
+    {"id":"HG3","in":{"known_dm":false,"polyuria":true,"polydipsia":true,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG4","in":{"known_dm":true,"polyuria":false,"polydipsia":false,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":true},"disp":"URGENT","top_dx":"stress_hyperglycemia"},
+    {"id":"HG5","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":true,"abd_pain":false,"confusion":true,"rapid_breath":false,"infection":false},"disp":"EMERG","top_dx":"dka_hhs"},
+    {"id":"HG6","in":{"known_dm":false,"polyuria":false,"polydipsia":false,"vomit":true,"abd_pain":false,"confusion":true,"rapid_breath":false,"infection":false},"disp":"EMERG","top_dx":"dka_hhs"},
+    {"id":"HG7","in":{"known_dm":true,"polyuria":true,"polydipsia":false,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG8","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":true},"disp":"URGENT","top_dx":"stress_hyperglycemia"},
+    {"id":"HG9","in":{"known_dm":true,"polyuria":false,"polydipsia":true,"vomit":true,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG10","in":{"known_dm":true,"polyuria":false,"polydipsia":false,"vomit":false
+please continue
+
+Yep. Continuing Batch F exactly where it cut off, then finishing ENDO (3) + PSYCH (3), each as a single ruleset.json with 10 goldens.
+
+rulesets/endo/endo_hyperglycemia/ruleset.json (continued + complete)
+{
+  "meta": {"system":"ENDO","complaint_slug":"endo_hyperglycemia","complaint_name":"High Blood Sugar / Hyperglycemia","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"known_dm","q":"Known diabetes?","type":"boolean"},
+    {"id":"polyuria","q":"Frequent urination?","type":"boolean"},
+    {"id":"polydipsia","q":"Very thirsty?","type":"boolean"},
+    {"id":"vomit","q":"Vomiting or unable to keep fluids?","type":"boolean"},
+    {"id":"abd_pain","q":"Severe abdominal pain?","type":"boolean"},
+    {"id":"confusion","q":"Confusion or very drowsy?","type":"boolean"},
+    {"id":"rapid_breath","q":"Deep/rapid breathing or fruity breath?","type":"boolean"},
+    {"id":"infection","q":"Fever or suspected infection?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"dka_hhs","logic":"(vomit=true AND (rapid_breath=true OR confusion=true)) OR (rapid_breath=true AND abd_pain=true)","disposition":"EMERG","reason":"Possible DKA/HHS"},
+    {"id":"ams","logic":"confusion=true","disposition":"EMERG","reason":"Altered mental status"},
+    {"id":"dehyd","logic":"vomit=true AND (polyuria=true OR polydipsia=true)","disposition":"URGENT","reason":"Dehydration risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"dka_hhs","rule":"rapid_breath=true","pts":4},
+    {"dx":"dka_hhs","rule":"vomit=true","pts":3},
+    {"dx":"dka_hhs","rule":"confusion=true","pts":3},
+    {"dx":"dka_hhs","rule":"abd_pain=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"known_dm=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"polyuria=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"polydipsia=true","pts":2},
+    {"dx":"stress_hyperglycemia","rule":"infection=true","pts":2},
+    {"dx":"uncontrolled_hyperglycemia","rule":"rapid_breath=true","pts":-3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_dka","priority":100,"logic":"dka_hhs OR ams","disposition":"EMERG"},
+    {"id":"urgent_vomit_or_infect","priority":50,"logic":"vomit=true OR infection=true OR (polyuria=true AND polydipsia=true)","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"endo_hyper_summary_v1","type":"summary","text":"Hyperglycemia assessed for polyuria/polydipsia, vomiting/dehydration, infection trigger, and DKA/HHS warning signs (rapid breathing, confusion, severe abdominal pain)."},
+      {"id":"endo_hyper_precautions_v1","type":"precautions","text":"Go now for vomiting with rapid/deep breathing, confusion, severe abdominal pain, or inability to keep fluids."}
+    ]
+  },
+  "goldens": [
+    {"id":"HG1","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG2","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":true,"abd_pain":true,"confusion":false,"rapid_breath":true,"infection":false},"disp":"EMERG","top_dx":"dka_hhs"},
+    {"id":"HG3","in":{"known_dm":false,"polyuria":true,"polydipsia":true,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG4","in":{"known_dm":true,"polyuria":false,"polydipsia":false,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":true},"disp":"URGENT","top_dx":"stress_hyperglycemia"},
+    {"id":"HG5","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":true,"abd_pain":false,"confusion":true,"rapid_breath":false,"infection":false},"disp":"EMERG","top_dx":"dka_hhs"},
+    {"id":"HG6","in":{"known_dm":false,"polyuria":false,"polydipsia":false,"vomit":true,"abd_pain":false,"confusion":true,"rapid_breath":false,"infection":false},"disp":"EMERG","top_dx":"dka_hhs"},
+    {"id":"HG7","in":{"known_dm":true,"polyuria":true,"polydipsia":false,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG8","in":{"known_dm":true,"polyuria":true,"polydipsia":true,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":true},"disp":"URGENT","top_dx":"stress_hyperglycemia"},
+    {"id":"HG9","in":{"known_dm":true,"polyuria":false,"polydipsia":true,"vomit":true,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"URGENT","top_dx":"uncontrolled_hyperglycemia"},
+    {"id":"HG10","in":{"known_dm":true,"polyuria":false,"polydipsia":false,"vomit":false,"abd_pain":false,"confusion":false,"rapid_breath":false,"infection":false},"disp":"ROUTINE","top_dx":"uncontrolled_hyperglycemia"}
+  ]
+}
+rulesets/endo/endo_hypoglycemia/ruleset.json
+{
+  "meta": {"system":"ENDO","complaint_slug":"endo_hypoglycemia","complaint_name":"Low Blood Sugar / Hypoglycemia","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"known_dm","q":"Known diabetes or on glucose-lowering meds?","type":"boolean"},
+    {"id":"confusion","q":"Confusion, unable to think clearly, or acting strange?","type":"boolean"},
+    {"id":"syncope","q":"Fainting or seizure?","type":"boolean"},
+    {"id":"sweat_shake","q":"Sweaty/shaky/palpitations?","type":"boolean"},
+    {"id":"unable_po","q":"Unable to safely eat/drink right now?","type":"boolean"},
+    {"id":"recurrent","q":"Repeated episodes today?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"severe_neuro","logic":"confusion=true OR syncope=true","disposition":"EMERG","reason":"Severe neuro hypoglycemia"},
+    {"id":"cannot_treat","logic":"unable_po=true","disposition":"EMERG","reason":"Cannot self-treat safely"},
+    {"id":"recurrent_risk","logic":"recurrent=true AND known_dm=true","disposition":"URGENT","reason":"Recurrent hypoglycemia risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"severe_hypoglycemia","rule":"syncope=true","pts":5},
+    {"dx":"severe_hypoglycemia","rule":"confusion=true","pts":4},
+    {"dx":"severe_hypoglycemia","rule":"unable_po=true","pts":4},
+    {"dx":"mild_hypoglycemia","rule":"sweat_shake=true","pts":3},
+    {"dx":"med_related","rule":"known_dm=true","pts":2},
+    {"dx":"mild_hypoglycemia","rule":"confusion=true","pts":-3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_severe_or_cannot_treat","priority":100,"logic":"severe_neuro OR cannot_treat OR syncope=true","disposition":"EMERG"},
+    {"id":"urgent_recurrent_or_dm","priority":50,"logic":"recurrent_risk OR known_dm=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"endo_hypo_summary_v1","type":"summary","text":"Hypoglycemia assessed for neuro impairment (confusion/syncope), ability to take oral intake, recurrent episodes, and diabetes medication risk."},
+      {"id":"endo_hypo_precautions_v1","type":"precautions","text":"Go now for confusion, fainting/seizure, inability to safely eat/drink, or repeated episodes."}
+    ]
+  },
+  "goldens": [
+    {"id":"HY1","in":{"known_dm":true,"confusion":false,"syncope":false,"sweat_shake":true,"unable_po":false,"recurrent":false},"disp":"URGENT","top_dx":"mild_hypoglycemia"},
+    {"id":"HY2","in":{"known_dm":true,"confusion":true,"syncope":false,"sweat_shake":true,"unable_po":false,"recurrent":false},"disp":"EMERG","top_dx":"severe_hypoglycemia"},
+    {"id":"HY3","in":{"known_dm":false,"confusion":false,"syncope":false,"sweat_shake":true,"unable_po":false,"recurrent":false},"disp":"ROUTINE","top_dx":"mild_hypoglycemia"},
+    {"id":"HY4","in":{"known_dm":true,"confusion":false,"syncope":true,"sweat_shake":false,"unable_po":false,"recurrent":false},"disp":"EMERG","top_dx":"severe_hypoglycemia"},
+    {"id":"HY5","in":{"known_dm":true,"confusion":false,"syncope":false,"sweat_shake":false,"unable_po":true,"recurrent":false},"disp":"EMERG","top_dx":"severe_hypoglycemia"},
+    {"id":"HY6","in":{"known_dm":true,"confusion":false,"syncope":false,"sweat_shake":true,"unable_po":false,"recurrent":true},"disp":"URGENT","top_dx":"med_related"},
+    {"id":"HY7","in":{"known_dm":false,"confusion":true,"syncope":false,"sweat_shake":false,"unable_po":false,"recurrent":false},"disp":"EMERG","top_dx":"severe_hypoglycemia"},
+    {"id":"HY8","in":{"known_dm":false,"confusion":false,"syncope":false,"sweat_shake":false,"unable_po":false,"recurrent":false},"disp":"ROUTINE","top_dx":"mild_hypoglycemia"},
+    {"id":"HY9","in":{"known_dm":true,"confusion":false,"syncope":false,"sweat_shake":true,"unable_po":false,"recurrent":false},"disp":"URGENT","top_dx":"med_related"},
+    {"id":"HY10","in":{"known_dm":true,"confusion":false,"syncope":false,"sweat_shake":false,"unable_po":false,"recurrent":true},"disp":"URGENT","top_dx":"med_related"}
+  ]
+}
+rulesets/endo/endo_thyroid_symptoms/ruleset.json
+{
+  "meta": {"system":"ENDO","complaint_slug":"endo_thyroid_symptoms","complaint_name":"Thyroid Symptoms (Hyper/Hypo)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"tachy","q":"Fast heart rate/palpitations?","type":"boolean"},
+    {"id":"weight_loss","q":"Unintentional weight loss or heat intolerance?","type":"boolean"},
+    {"id":"tremor","q":"Tremor/anxiety/insomnia?","type":"boolean"},
+    {"id":"weight_gain","q":"Weight gain/cold intolerance/constipation?","type":"boolean"},
+    {"id":"fatigue","q":"Severe fatigue or slowed thinking?","type":"boolean"},
+    {"id":"fever_delirium","q":"Fever with agitation/confusion?","type":"boolean"},
+    {"id":"cp_sob","q":"Chest pain or shortness of breath?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"thyroid_storm","logic":"fever_delirium=true AND tachy=true","disposition":"EMERG","reason":"Possible thyroid storm"},
+    {"id":"cardiac_complication","logic":"cp_sob=true AND tachy=true","disposition":"EMERG","reason":"Possible cardiac complication"},
+    {"id":"severe_ams","logic":"fever_delirium=true","disposition":"EMERG","reason":"Altered mental status with systemic signs"}
+  ],
+  "dx_scoring": [
+    {"dx":"hyperthyroid","rule":"tachy=true","pts":2},
+    {"dx":"hyperthyroid","rule":"weight_loss=true","pts":2},
+    {"dx":"hyperthyroid","rule":"tremor=true","pts":2},
+    {"dx":"hypothyroid","rule":"weight_gain=true","pts":3},
+    {"dx":"hypothyroid","rule":"fatigue=true","pts":2},
+    {"dx":"thyroid_storm","rule":"fever_delirium=true","pts":5},
+    {"dx":"hypothyroid","rule":"tachy=true","pts":-2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_storm_or_cardiac","priority":100,"logic":"thyroid_storm OR cardiac_complication OR severe_ams","disposition":"EMERG"},
+    {"id":"urgent_symptomatic","priority":50,"logic":"tachy=true OR weight_loss=true OR weight_gain=true OR fatigue=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"endo_thyroid_summary_v1","type":"summary","text":"Thyroid symptoms assessed for hyperthyroid features (tachy, weight loss, tremor) vs hypothyroid features (weight gain, fatigue), plus storm/cardiac warning signs."},
+      {"id":"endo_thyroid_precautions_v1","type":"precautions","text":"Go now for fever with agitation/confusion and rapid heartbeat, or chest pain/shortness of breath with palpitations."}
+    ]
+  },
+  "goldens": [
+    {"id":"TH1","in":{"tachy":true,"weight_loss":true,"tremor":true,"weight_gain":false,"fatigue":false,"fever_delirium":false,"cp_sob":false},"disp":"URGENT","top_dx":"hyperthyroid"},
+    {"id":"TH2","in":{"tachy":false,"weight_loss":false,"tremor":false,"weight_gain":true,"fatigue":true,"fever_delirium":false,"cp_sob":false},"disp":"URGENT","top_dx":"hypothyroid"},
+    {"id":"TH3","in":{"tachy":true,"weight_loss":false,"tremor":true,"weight_gain":false,"fatigue":false,"fever_delirium":true,"cp_sob":false},"disp":"EMERG","top_dx":"thyroid_storm"},
+    {"id":"TH4","in":{"tachy":true,"weight_loss":true,"tremor":false,"weight_gain":false,"fatigue":false,"fever_delirium":false,"cp_sob":true},"disp":"EMERG","top_dx":"hyperthyroid"},
+    {"id":"TH5","in":{"tachy":false,"weight_loss":false,"tremor":false,"weight_gain":true,"fatigue":false,"fever_delirium":false,"cp_sob":false},"disp":"URGENT","top_dx":"hypothyroid"},
+    {"id":"TH6","in":{"tachy":true,"weight_loss":true,"tremor":true,"weight_gain":false,"fatigue":false,"fever_delirium":false,"cp_sob":false},"disp":"URGENT","top_dx":"hyperthyroid"},
+    {"id":"TH7","in":{"tachy":false,"weight_loss":false,"tremor":false,"weight_gain":false,"fatigue":false,"fever_delirium":false,"cp_sob":false},"disp":"ROUTINE","top_dx":"hypothyroid"},
+    {"id":"TH8","in":{"tachy":true,"weight_loss":false,"tremor":false,"weight_gain":true,"fatigue":true,"fever_delirium":false,"cp_sob":false},"disp":"URGENT","top_dx":"hypothyroid"},
+    {"id":"TH9","in":{"tachy":true,"weight_loss":false,"tremor":false,"weight_gain":false,"fatigue":false,"fever_delirium":false,"cp_sob":false},"disp":"URGENT","top_dx":"hyperthyroid"},
+    {"id":"TH10","in":{"tachy":false,"weight_loss":false,"tremor":false,"weight_gain":true,"fatigue":true,"fever_delirium":false,"cp_sob":true},"disp":"URGENT","top_dx":"hypothyroid"}
+  ]
+}
+PSYCH
+rulesets/psych/_system.json
+{
+  "system": "psych",
+  "complaints": [
+    "psych_anxiety_panic",
+    "psych_depression_suicidal_ideation",
+    "psych_agitation_psychosis"
+  ]
+}
+rulesets/psych/psych_anxiety_panic/ruleset.json
+{
+  "meta": {"system":"PSYCH","complaint_slug":"psych_anxiety_panic","complaint_name":"Anxiety / Panic","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"cp","q":"Chest pain/pressure?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath?","type":"boolean"},
+    {"id":"syncope","q":"Fainting?","type":"boolean"},
+    {"id":"sudden","q":"Sudden peak within minutes (panic-like)?","type":"boolean"},
+    {"id":"substance","q":"Stimulants/cocaine/too much caffeine?","type":"boolean"},
+    {"id":"si","q":"Thoughts of self-harm or suicide?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"medical_mimic","logic":"cp=true OR sob=true OR syncope=true","disposition":"URGENT","reason":"Rule out medical cause"},
+    {"id":"suicide_risk","logic":"si=true","disposition":"EMERG","reason":"Safety risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"panic_attack","rule":"sudden=true","pts":3},
+    {"dx":"panic_attack","rule":"cp=false AND sob=false","pts":1},
+    {"dx":"substance_induced","rule":"substance=true","pts":3},
+    {"dx":"medical_mimic","rule":"cp=true","pts":3},
+    {"dx":"medical_mimic","rule":"sob=true","pts":3},
+    {"dx":"panic_attack","rule":"syncope=true","pts":-3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_si","priority":100,"logic":"suicide_risk","disposition":"EMERG"},
+    {"id":"urgent_medical_mimic","priority":50,"logic":"medical_mimic","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"psych_anxiety_summary_v1","type":"summary","text":"Anxiety/panic assessed for medical mimic symptoms (chest pain, SOB, syncope), panic features, substance triggers, and safety concerns."},
+      {"id":"psych_anxiety_precautions_v1","type":"precautions","text":"Seek urgent evaluation for chest pain, shortness of breath, fainting, or any thoughts of self-harm."}
+    ]
+  },
+  "goldens": [
+    {"id":"PA1","in":{"cp":false,"sob":false,"syncope":false,"sudden":true,"substance":false,"si":false},"disp":"ROUTINE","top_dx":"panic_attack"},
+    {"id":"PA2","in":{"cp":true,"sob":false,"syncope":false,"sudden":true,"substance":false,"si":false},"disp":"URGENT","top_dx":"medical_mimic"},
+    {"id":"PA3","in":{"cp":false,"sob":true,"syncope":false,"sudden":true,"substance":false,"si":false},"disp":"URGENT","top_dx":"medical_mimic"},
+    {"id":"PA4","in":{"cp":false,"sob":false,"syncope":true,"sudden":true,"substance":false,"si":false},"disp":"URGENT","top_dx":"medical_mimic"},
+    {"id":"PA5","in":{"cp":false,"sob":false,"syncope":false,"sudden":false,"substance":true,"si":false},"disp":"ROUTINE","top_dx":"substance_induced"},
+    {"id":"PA6","in":{"cp":false,"sob":false,"syncope":false,"sudden":true,"substance":true,"si":false},"disp":"ROUTINE","top_dx":"substance_induced"},
+    {"id":"PA7","in":{"cp":false,"sob":false,"syncope":false,"sudden":true,"substance":false,"si":true},"disp":"EMERG","top_dx":"panic_attack"},
+    {"id":"PA8","in":{"cp":true,"sob":true,"syncope":false,"sudden":true,"substance":false,"si":false},"disp":"URGENT","top_dx":"medical_mimic"},
+    {"id":"PA9","in":{"cp":false,"sob":false,"syncope":false,"sudden":false,"substance":false,"si":false},"disp":"ROUTINE","top_dx":"panic_attack"},
+    {"id":"PA10","in":{"cp":false,"sob":false,"syncope":false,"sudden":true,"substance":false,"si":false},"disp":"ROUTINE","top_dx":"panic_attack"}
+  ]
+}
+rulesets/psych/psych_depression_suicidal_ideation/ruleset.json
+{
+  "meta": {"system":"PSYCH","complaint_slug":"psych_depression_suicidal_ideation","complaint_name":"Depression / Suicidal Ideation","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"si","q":"Thoughts of self-harm or suicide?","type":"boolean"},
+    {"id":"intent","q":"Feeling unable to stay safe right now?","type":"boolean"},
+    {"id":"psychosis","q":"Hearing voices/seeing things others don’t?","type":"boolean"},
+    {"id":"substance","q":"Heavy alcohol/drug use today?","type":"boolean"},
+    {"id":"grave","q":"Not eating/drinking, unable to function, or severe agitation?","type":"boolean"},
+    {"id":"support","q":"Reliable support person with you now?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"immediate_safety","logic":"si=true AND intent=true","disposition":"EMERG","reason":"Immediate safety concern"},
+    {"id":"psychosis_risk","logic":"psychosis=true","disposition":"EMERG","reason":"Psychosis with safety risk"},
+    {"id":"intox_risk","logic":"substance=true AND si=true","disposition":"EMERG","reason":"Intoxication increases risk"},
+    {"id":"grave_disability","logic":"grave=true","disposition":"URGENT","reason":"Severe functional impairment"}
+  ],
+  "dx_scoring": [
+    {"dx":"suicide_risk","rule":"si=true","pts":4},
+    {"dx":"suicide_risk","rule":"intent=true","pts":4},
+    {"dx":"psychotic_depression","rule":"psychosis=true","pts":4},
+    {"dx":"substance_related","rule":"substance=true","pts":3},
+    {"dx":"major_depression","rule":"si=false AND grave=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_immediate","priority":100,"logic":"immediate_safety OR psychosis_risk OR intox_risk","disposition":"EMERG"},
+    {"id":"urgent_grave_or_si","priority":50,"logic":"grave_disability OR si=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"psych_dep_summary_v1","type":"summary","text":"Depression assessed for safety risk, inability to stay safe, psychosis, substance use, and severe functional impairment."},
+      {"id":"psych_dep_precautions_v1","type":"precautions","text":"If there are thoughts of self-harm or you feel unsafe, seek emergency help immediately. If you’re in the U.S., you can call or text 988 for the Suicide & Crisis Lifeline."}
+    ]
+  },
+  "goldens": [
+    {"id":"PD1","in":{"si":true,"intent":true,"psychosis":false,"substance":false,"grave":false,"support":false},"disp":"EMERG","top_dx":"suicide_risk"},
+    {"id":"PD2","in":{"si":true,"intent":false,"psychosis":false,"substance":false,"grave":false,"support":true},"disp":"URGENT","top_dx":"suicide_risk"},
+    {"id":"PD3","in":{"si":false,"intent":false,"psychosis":false,"substance":false,"grave":true,"support":true},"disp":"URGENT","top_dx":"major_depression"},
+    {"id":"PD4","in":{"si":true,"intent":false,"psychosis":true,"substance":false,"grave":false,"support":false},"disp":"EMERG","top_dx":"psychotic_depression"},
+    {"id":"PD5","in":{"si":true,"intent":false,"psychosis":false,"substance":true,"grave":false,"support":false},"disp":"EMERG","top_dx":"substance_related"},
+    {"id":"PD6","in":{"si":false,"intent":false,"psychosis":true,"substance":false,"grave":false,"support":false},"disp":"EMERG","top_dx":"psychotic_depression"},
+    {"id":"PD7","in":{"si":false,"intent":false,"psychosis":false,"substance":true,"grave":true,"support":false},"disp":"URGENT","top_dx":"substance_related"},
+    {"id":"PD8","in":{"si":false,"intent":false,"psychosis":false,"substance":false,"grave":false,"support":true},"disp":"ROUTINE","top_dx":"major_depression"},
+    {"id":"PD9","in":{"si":true,"intent":false,"psychosis":false,"substance":false,"grave":true,"support":false},"disp":"URGENT","top_dx":"suicide_risk"},
+    {"id":"PD10","in":{"si":true,"intent":true,"psychosis":true,"substance":true,"grave":true,"support":false},"disp":"EMERG","top_dx":"psychotic_depression"}
+  ]
+}
+rulesets/psych/psych_agitation_psychosis/ruleset.json
+{
+  "meta": {"system":"PSYCH","complaint_slug":"psych_agitation_psychosis","complaint_name":"Agitation / Psychosis","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"violent","q":"Violent threats/unsafe behavior right now?","type":"boolean"},
+    {"id":"si","q":"Thoughts of self-harm/suicide?","type":"boolean"},
+    {"id":"halluc","q":"Hallucinations or severe paranoia?","type":"boolean"},
+    {"id":"substance","q":"Intoxication or withdrawal suspected?","type":"boolean"},
+    {"id":"fever","q":"Fever or severe confusion (medical cause concern)?","type":"boolean"},
+    {"id":"unable_safe","q":"Unable to stay safe or care for self right now?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"danger","logic":"violent=true OR unable_safe=true","disposition":"EMERG","reason":"Immediate safety risk"},
+    {"id":"psychosis","logic":"halluc=true","disposition":"EMERG","reason":"Psychosis with safety risk"},
+    {"id":"medical","logic":"fever=true","disposition":"EMERG","reason":"Possible medical delirium"},
+    {"id":"substance_risk","logic":"substance=true AND (violent=true OR halluc=true)","disposition":"EMERG","reason":"Substance + agitation/psychosis risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"acute_psychosis","rule":"halluc=true","pts":4},
+    {"dx":"substance_induced","rule":"substance=true","pts":3},
+    {"dx":"delirium_medical","rule":"fever=true","pts":5},
+    {"dx":"agitation","rule":"violent=true","pts":4},
+    {"dx":"agitation","rule":"unable_safe=true","pts":3}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"danger OR psychosis OR medical OR substance_risk OR si=true","disposition":"EMERG"},
+    {"id":"urgent_default","priority":50,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"psych_agit_summary_v1","type":"summary","text":"Agitation/psychosis assessed for immediate safety risk, hallucinations/paranoia, intoxication/withdrawal, and medical delirium signs."},
+      {"id":"psych_agit_precautions_v1","type":"precautions","text":"If anyone is in immediate danger or you feel unable to stay safe, seek emergency help now. In the U.S., you can call/text 988 for crisis support."}
+    ]
+  },
+  "goldens": [
+    {"id":"AP1","in":{"violent":true,"si":false,"halluc":false,"substance":false,"fever":false,"unable_safe":false},"disp":"EMERG","top_dx":"agitation"},
+    {"id":"AP2","in":{"violent":false,"si":false,"halluc":true,"substance":false,"fever":false,"unable_safe":false},"disp":"EMERG","top_dx":"acute_psychosis"},
+    {"id":"AP3","in":{"violent":false,"si":false,"halluc":true,"substance":true,"fever":false,"unable_safe":false},"disp":"EMERG","top_dx":"substance_induced"},
+    {"id":"AP4","in":{"violent":false,"si":false,"halluc":false,"substance":false,"fever":true,"unable_safe":true},"disp":"EMERG","top_dx":"delirium_medical"},
+    {"id":"AP5","in":{"violent":false,"si":true,"halluc":false,"substance":false,"fever":false,"unable_safe":false},"disp":"EMERG","top_dx":"agitation"},
+    {"id":"AP6","in":{"violent":false,"si":false,"halluc":false,"substance":true,"fever":false,"unable_safe":false},"disp":"URGENT","top_dx":"substance_induced"},
+    {"id":"AP7","in":{"violent":false,"si":false,"halluc":false,"substance":false,"fever":false,"unable_safe":true},"disp":"EMERG","top_dx":"agitation"},
+    {"id":"AP8","in":{"violent":false,"si":false,"halluc":true,"substance":false,"fever":true,"unable_safe":false},"disp":"EMERG","top_dx":"delirium_medical"},
+    {"id":"AP9","in":{"violent":true,"si":true,"halluc":true,"substance":true,"fever":false,"unable_safe":true},"disp":"EMERG","top_dx":"agitation"},
+    {"id":"AP10","in":{"violent":false,"si":false,"halluc":false,"substance":false,"fever":false,"unable_safe":false},"disp":"URGENT","top_dx":"agitation"}
+  ]
+}
+Ship commands (when you’re ready)
+npm run ship:system -- endo
+npm run ship:system -- psych
+
+If any harness failures pop due to your expression grammar (e.g., how you reference OR inside red_flags vs disp rules), paste the FAIL block and I’ll patch only the offending rulesets.

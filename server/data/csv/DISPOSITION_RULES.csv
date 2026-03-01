@@ -78,14 +78,6 @@ gyn_pelvic_pain,DISP_PP_FIBROIDS,6,"answers.Q_PP_HEAVY_BLEEDING == 'yes' && answ
 gyn_pelvic_pain,DISP_PP_ENDOMETRIOSIS,7,"answers.Q_PP_CYCLICAL == 'yes' && answers.Q_PP_MENSES_RELATED == 'yes'",pcp,TPL_PP_ENDOMETRIOSIS,HIGH
 gyn_pelvic_pain,DISP_PP_BENIGN,8,"answers.Q_PP_PELVIC_PAIN == 'yes' && answers.Q_PP_FEVER != 'yes' && answers.Q_PP_PREGNANT != 'yes' && answers.Q_PP_SUDDEN_ONSET != 'yes'",self_care,TPL_PP_BENIGN,MODERATE
 gyn_pelvic_pain,DISP_PP_DEFAULT,99,true,routine,TPL_PP_DEFAULT,LOW
-neuro_headache,DISP_HA_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_HA_ER_SEND,HIGH
-neuro_headache,DISP_HA_ESCALATE,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_HA_ESCALATE,HIGH
-neuro_headache,DISP_HA_GCA,3,"answers.Q_HA_AGE_OVER_50 == 'yes' && answers.Q_HA_NEW_HEADACHE == 'yes' && answers.Q_HA_JAW_CLAUDICATION == 'yes'",urgent_care,TPL_HA_GCA,HIGH
-neuro_headache,DISP_HA_CO,4,"answers.Q_HA_HOUSEHOLD_SICK == 'yes' && answers.Q_HA_NAUSEA == 'yes'",er_send,TPL_HA_CO,HIGH
-neuro_headache,DISP_HA_MIGRAINE,5,"answers.Q_HA_UNILATERAL == 'yes' && answers.Q_HA_THROBBING == 'yes' && answers.Q_HA_PHOTOPHOBIA == 'yes'",pcp,TPL_HA_MIGRAINE,HIGH
-neuro_headache,DISP_HA_CLUSTER,6,"answers.Q_HA_ORBITAL == 'yes' && answers.Q_HA_TEARING == 'yes' && answers.Q_HA_RESTLESS == 'yes'",pcp,TPL_HA_CLUSTER,HIGH
-neuro_headache,DISP_HA_TENSION,7,"answers.Q_HA_BILATERAL == 'yes' && answers.Q_HA_BAND_LIKE == 'yes' && answers.Q_HA_STRESS == 'yes'",self_care,TPL_HA_TENSION,HIGH
-neuro_headache,DISP_HA_DEFAULT,99,true,routine,TPL_HA_DEFAULT,LOW
 ent_sinus_pressure,DISP_SIN_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_SIN_ER_SEND,HIGH
 ent_sinus_pressure,DISP_SIN_BAC_DUR,2,"answers.Q_SINUS_DUR >= 10",urgent_care,TPL_SIN_BACTERIAL,MODERATE
 ent_sinus_pressure,DISP_SIN_BAC_DOUBLE,3,"answers.Q_SINUS_WORSE_AFTER_IMPROVE == 'yes'",urgent_care,TPL_SIN_BACTERIAL,MODERATE
@@ -126,3 +118,58 @@ pulm_chest_tightness,DISP_PCT_ROUTINE,99,"true",self_care,TPL_PCT_SELF,LOW
 pulm_hemoptysis,DISP_HEMO_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_HEMO_ER_SEND,HIGH
 pulm_hemoptysis,DISP_HEMO_URGENT,2,"answers.Q_HEMO_BLOOD_THINNER == 'yes' || answers.Q_HEMO_FEVER == 'yes' || answers.Q_HEMO_CP == 'yes'",urgent_care,TPL_HEMO_URGENT,MODERATE
 pulm_hemoptysis,DISP_HEMO_ROUTINE,99,"true",urgent_care,TPL_HEMO_URGENT,LOW
+gi_abdominal_pain,DISP_ABD_EMERG,1,"answers.Q_ABD_PERITONEAL == 'yes' || answers.Q_ABD_SEV >= 8 || answers.Q_ABD_BLOOD == 'yes' || (answers.Q_ABD_PREG == 'yes' && answers.Q_ABD_ONSET == 'sudden') || answers.Q_ABD_CHEST == 'yes' || answers.Q_ABD_TESTIS == 'yes'",er_send,TPL_ABD_ER_SEND,HIGH
+gi_abdominal_pain,DISP_ABD_URGENT,2,"answers.Q_ABD_FEVER == 'yes' || answers.Q_ABD_LOC == 'rlq' || answers.Q_ABD_LOC == 'ruq' || answers.Q_ABD_LOC == 'llq' || answers.Q_ABD_SEV >= 7",urgent_care,TPL_ABD_URGENT_CARE,MODERATE
+gi_abdominal_pain,DISP_ABD_ROUTINE,99,"answers.Q_ABD_SEV < 7",pcp,TPL_ABD_PCP,LOW
+gi_diarrhea,DISP_DIARR_EMERG,1,"answers.Q_DIARR_DEHYD == 'yes' && (answers.Q_DIARR_FREQ >= 8 || answers.Q_DIARR_DUR >= 2)",er_send,TPL_DIARR_ER_SEND,HIGH
+gi_diarrhea,DISP_DIARR_URGENT,2,"answers.Q_DIARR_BLOOD == 'yes' || answers.Q_DIARR_FEVER == 'yes' || answers.Q_DIARR_ABX == 'yes' || answers.Q_DIARR_ABDSEV == 'yes' || answers.Q_DIARR_IMMUNO == 'yes'",urgent_care,TPL_DIARR_URGENT_CARE,MODERATE
+gi_diarrhea,DISP_DIARR_ROUTINE,99,"answers.Q_DIARR_DUR > 0",pcp,TPL_DIARR_PCP,LOW
+gi_vomiting,DISP_VOM_EMERG,1,"answers.Q_VOM_BLOOD == 'yes' || (answers.Q_VOM_BILIOUS == 'yes' && answers.Q_VOM_ABDSEV == 'yes') || answers.Q_VOM_NEURO == 'yes'",er_send,TPL_VOM_ER_SEND,HIGH
+gi_vomiting,DISP_VOM_URGENT,2,"answers.Q_VOM_DEHYD == 'yes' || answers.Q_VOM_PREG == 'yes' || answers.Q_VOM_FEVER == 'yes' || answers.Q_VOM_ABDSEV == 'yes'",urgent_care,TPL_VOM_URGENT_CARE,MODERATE
+gi_vomiting,DISP_VOM_ROUTINE,99,"answers.Q_VOM_DUR > 0",pcp,TPL_VOM_PCP,LOW
+gi_gi_bleeding,DISP_GIB_EMERG,1,"answers.Q_GIB_TYPE == 'vomit_blood' || answers.Q_GIB_TYPE == 'black_tarry' || answers.Q_GIB_TYPE == 'bright_red_stool' || answers.Q_GIB_TYPE == 'maroon'",er_send,TPL_GIB_ER_SEND,HIGH
+gi_constipation,DISP_CONST_EMERG,1,"answers.Q_CONST_VOMIT == 'yes' && (answers.Q_CONST_NO_GAS == 'yes' || answers.Q_CONST_ABDSEV == 'yes')",er_send,TPL_CONST_ER_SEND,HIGH
+gi_constipation,DISP_CONST_URGENT,2,"answers.Q_CONST_BLOOD == 'yes' || answers.Q_CONST_FEVER == 'yes'",urgent_care,TPL_CONST_URGENT_CARE,MODERATE
+gi_constipation,DISP_CONST_ROUTINE,99,"answers.Q_CONST_DUR > 0",pcp,TPL_CONST_PCP,LOW
+gi_jaundice,DISP_JAUND_EMERG,1,"(answers.Q_JAUND_PAIN_RUQ == 'yes' && answers.Q_JAUND_FEVER == 'yes' && answers.Q_JAUND_DARK_URINE == 'yes') || answers.Q_JAUND_CONFUSION == 'yes' || answers.Q_JAUND_BLEED == 'yes'",er_send,TPL_JAUND_ER_SEND,HIGH
+gi_jaundice,DISP_JAUND_URGENT,2,"answers.Q_JAUND_DARK_URINE == 'yes' || answers.Q_JAUND_PAIN_RUQ == 'yes' || answers.Q_JAUND_FEVER == 'yes'",urgent_care,TPL_JAUND_URGENT_CARE,MODERATE
+gi_jaundice,DISP_JAUND_DEFAULT,99,"true",urgent_care,TPL_JAUND_URGENT_CARE,LOW
+gi_dysphagia,DISP_DYSPH_EMERG,1,"answers.Q_DYSPH_SOB == 'yes' || answers.Q_DYSPH_DROOL == 'yes' || answers.Q_DYSPH_CHEST_PAIN == 'yes'",er_send,TPL_DYSPH_ER_SEND,HIGH
+gi_dysphagia,DISP_DYSPH_URGENT,2,"answers.Q_DYSPH_FOOD_STUCK == 'yes' || answers.Q_DYSPH_WEIGHT_LOSS == 'yes' || answers.Q_DYSPH_ODYN == 'yes'",urgent_care,TPL_DYSPH_URGENT_CARE,MODERATE
+gi_dysphagia,DISP_DYSPH_ROUTINE,99,"true",pcp,TPL_DYSPH_PCP,LOW
+gi_acute_pancreatitis_like,DISP_PANC_EMERG,1,"answers.Q_PANC_SEV >= 8",er_send,TPL_PANC_ER_SEND,HIGH
+gi_acute_pancreatitis_like,DISP_PANC_URGENT,2,"(answers.Q_PANC_EPI == 'yes' && answers.Q_PANC_VOMIT == 'yes') || answers.Q_PANC_BACK == 'yes' || answers.Q_PANC_FEVER == 'yes'",urgent_care,TPL_PANC_URGENT_CARE,MODERATE
+gi_acute_pancreatitis_like,DISP_PANC_DEFAULT,99,"answers.Q_PANC_EPI == 'yes'",urgent_care,TPL_PANC_URGENT_CARE,LOW
+neuro_headache,DISP_NHA_EMERG,1,"answers.Q_NHA_THUNDER == 'yes' || answers.Q_NHA_NEURODEF == 'yes' || answers.Q_NHA_FEVER_NECK == 'yes' || answers.Q_NHA_TRAUMA == 'yes' || answers.Q_NHA_EYE == 'yes'",er_send,TPL_NHA_ER_SEND,HIGH
+neuro_headache,DISP_NHA_URGENT,2,"answers.Q_NHA_AGE50 == 'yes' || answers.Q_NHA_PREG_POSTPARTUM == 'yes'",urgent_care,TPL_NHA_URGENT_CARE,MODERATE
+neuro_headache,DISP_NHA_ROUTINE,99,"true",pcp,TPL_NHA_PCP,LOW
+neuro_dizziness_vertigo,DISP_DIZV_EMERG,1,"answers.Q_DIZV_NEURODEF == 'yes' || answers.Q_DIZV_KIND == 'off_balance' || answers.Q_DIZV_HEADACHE == 'yes' || answers.Q_DIZV_CARDIAC == 'yes'",er_send,TPL_DIZV_ER_SEND,HIGH
+neuro_dizziness_vertigo,DISP_DIZV_URGENT,2,"answers.Q_DIZV_VOMIT == 'yes' || answers.Q_DIZV_EAR == 'yes'",urgent_care,TPL_DIZV_URGENT_CARE,MODERATE
+neuro_dizziness_vertigo,DISP_DIZV_ROUTINE,99,"true",pcp,TPL_DIZV_PCP,LOW
+neuro_weakness_numbness,DISP_WKNUM_EMERG,1,"answers.Q_WKNUM_SPINAL == 'yes' || (answers.Q_WKNUM_SUDDEN == 'yes' && (answers.Q_WKNUM_FACE_SPEECH == 'yes' || answers.Q_WKNUM_ONE_SIDE == 'yes' || answers.Q_WKNUM_VISION == 'yes'))",er_send,TPL_WKNUM_ER_SEND,HIGH
+neuro_weakness_numbness,DISP_WKNUM_DEFAULT,99,"true",urgent_care,TPL_WKNUM_URGENT_CARE,MODERATE
+neuro_seizure,DISP_SEIZ_EMERG,1,"true",er_send,TPL_SEIZ_ER_SEND,HIGH
+neuro_syncope,DISP_SYNC_EMERG,1,"answers.Q_SYNC_EXERT == 'yes' || answers.Q_SYNC_CARDIAC == 'yes' || answers.Q_SYNC_INJURY == 'yes' || answers.Q_SYNC_NEURODEF == 'yes' || answers.Q_SYNC_BLEED == 'yes' || answers.Q_SYNC_PREG == 'yes'",er_send,TPL_SYNC_ER_SEND,HIGH
+neuro_syncope,DISP_SYNC_DEFAULT,99,"true",urgent_care,TPL_SYNC_URGENT_CARE,MODERATE
+neuro_confusion_ams,DISP_AMS_EMERG,1,"true",er_send,TPL_AMS_ER_SEND,HIGH
+gu_dysuria_uti,DISP_DUTI_EMERG,1,"answers.Q_DUTI_FEVER == 'yes' && answers.Q_DUTI_FLANK == 'yes'",er_send,TPL_DUTI_ER_SEND,HIGH
+gu_dysuria_uti,DISP_DUTI_URGENT,2,"answers.Q_DUTI_PREG == 'yes' || answers.Q_DUTI_MALE == 'yes' || answers.Q_DUTI_DISCHARGE == 'yes' || answers.Q_DUTI_FEVER == 'yes' || answers.Q_DUTI_VOMIT == 'yes'",urgent_care,TPL_DUTI_URGENT_CARE,MODERATE
+gu_dysuria_uti,DISP_DUTI_ROUTINE,99,"true",pcp,TPL_DUTI_PCP,LOW
+gu_flank_pain,DISP_FLNK_EMERG,1,"answers.Q_FLNK_FEVER == 'yes' && (answers.Q_FLNK_URINARY == 'yes' || answers.Q_FLNK_HEMATURIA == 'yes')",er_send,TPL_FLNK_ER_SEND,HIGH
+gu_flank_pain,DISP_FLNK_URGENT,2,"answers.Q_FLNK_COLICKY == 'yes' || answers.Q_FLNK_VOMIT == 'yes' || answers.Q_FLNK_HEMATURIA == 'yes' || answers.Q_FLNK_PREG == 'yes'",urgent_care,TPL_FLNK_URGENT_CARE,MODERATE
+gu_flank_pain,DISP_FLNK_ROUTINE,99,"true",pcp,TPL_FLNK_PCP,LOW
+gu_testicular_pain,DISP_TPAIN_EMERG,1,"answers.Q_TPAIN_SUDDEN == 'yes' || answers.Q_TPAIN_HIGH_RIDING == 'yes' || answers.Q_TPAIN_NAUSEA == 'yes'",er_send,TPL_TPAIN_ER_SEND,HIGH
+gu_testicular_pain,DISP_TPAIN_URGENT,2,"answers.Q_TPAIN_FEVER == 'yes' || answers.Q_TPAIN_DISCHARGE == 'yes' || answers.Q_TPAIN_TRAUMA == 'yes'",urgent_care,TPL_TPAIN_URGENT_CARE,MODERATE
+gu_testicular_pain,DISP_TPAIN_DEFAULT,99,"true",urgent_care,TPL_TPAIN_URGENT_CARE,LOW
+gu_hematuria,DISP_HEMU_EMERG,1,"answers.Q_HEMU_CLOTS == 'yes' || (answers.Q_HEMU_FEVER == 'yes' && answers.Q_HEMU_STONE_PAIN == 'yes') || answers.Q_HEMU_TRAUMA == 'yes'",er_send,TPL_HEMU_ER_SEND,HIGH
+gu_hematuria,DISP_HEMU_DEFAULT,99,"true",urgent_care,TPL_HEMU_URGENT_CARE,MODERATE
+gu_urinary_retention,DISP_URET_EMERG,1,"true",er_send,TPL_URET_ER_SEND,HIGH
+gu_sti_exposure_discharge,DISP_STID_EMERG,1,"answers.Q_STID_TESTIS == 'yes'",er_send,TPL_STID_ER_SEND,HIGH
+gu_sti_exposure_discharge,DISP_STID_URGENT,2,"(answers.Q_STID_PELVIC == 'yes' && answers.Q_STID_FEVER == 'yes') || answers.Q_STID_PREG == 'yes' || answers.Q_STID_ULCERS == 'yes' || answers.Q_STID_ASSAULT == 'yes'",urgent_care,TPL_STID_URGENT_CARE,MODERATE
+gu_sti_exposure_discharge,DISP_STID_ROUTINE,99,"true",pcp,TPL_STID_PCP,LOW
+gu_pelvic_pain_possible_ovarian_torsion,DISP_PPOT_EMERG,1,"(answers.Q_PPOT_SUDDEN == 'yes' && answers.Q_PPOT_VOMIT == 'yes') || (answers.Q_PPOT_PREG == 'yes' && answers.Q_PPOT_BLEED == 'yes')",er_send,TPL_PPOT_ER_SEND,HIGH
+gu_pelvic_pain_possible_ovarian_torsion,DISP_PPOT_URGENT,2,"answers.Q_PPOT_FEVER == 'yes' || answers.Q_PPOT_DISCHARGE == 'yes'",urgent_care,TPL_PPOT_URGENT_CARE,MODERATE
+gu_pelvic_pain_possible_ovarian_torsion,DISP_PPOT_DEFAULT,99,"true",urgent_care,TPL_PPOT_URGENT_CARE,LOW
+gu_vaginal_bleeding,DISP_VBLD_EMERG,1,"answers.Q_VBLD_PREG == 'yes' || answers.Q_VBLD_HEAVY == 'yes' || answers.Q_VBLD_FAINT == 'yes' || answers.Q_VBLD_POSTPARTUM == 'yes'",er_send,TPL_VBLD_ER_SEND,HIGH
+gu_vaginal_bleeding,DISP_VBLD_URGENT,2,"answers.Q_VBLD_PAIN == 'yes'",urgent_care,TPL_VBLD_URGENT_CARE,MODERATE
+gu_vaginal_bleeding,DISP_VBLD_DEFAULT,99,"true",urgent_care,TPL_VBLD_URGENT_CARE,LOW

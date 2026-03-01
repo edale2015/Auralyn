@@ -1,0 +1,876 @@
+Absolutely. Here are Batch D full packs (GI + NEURO + GU) in the same “data-only / GENERIC_V1” style as Batch C:
+
+COMPLAINT_REGISTRY (22 rows)
+
+CORE_QUESTIONS (one row per question)
+
+RED_FLAGS (explicit, severity-appropriate)
+
+CLUSTER_SCORING_RULES (includes a few negative suppressors)
+
+DISP_RULES (priority-ordered)
+
+OUTPUT_TEMPLATES (stable IDs)
+
+GOLDENS (10 per complaint = 220 cases)
+
+Everything below is copy/paste-ready CSV blocks.
+
+1) COMPLAINT_REGISTRY (Batch D)
+Complaint_Slug,System,Display_Name,Version,Pipeline,Aliases
+gi_abdominal_pain,GI,Abdominal Pain,GENERIC_V1,GENERIC_V1,"abd pain|stomach pain|belly pain|tummy pain|abdominal cramping"
+gi_diarrhea,GI,Diarrhea,GENERIC_V1,GENERIC_V1,"diarrhea|loose stools|watery stool|the runs"
+gi_vomiting,GI,Vomiting / Nausea,GENERIC_V1,GENERIC_V1,"vomiting|throwing up|nausea|emesis"
+gi_gi_bleeding,GI,GI Bleeding,GENERIC_V1,GENERIC_V1,"blood in stool|black stool|melena|hematochezia|vomiting blood|hematemesis"
+gi_constipation,GI,Constipation,GENERIC_V1,GENERIC_V1,"constipation|no poop|hard stool|can't go"
+gi_jaundice,GI,Jaundice / Yellow Eyes,GENERIC_V1,GENERIC_V1,"jaundice|yellow eyes|yellow skin|dark urine|pale stool"
+gi_dysphagia,GI,Trouble Swallowing,GENERIC_V1,GENERIC_V1,"dysphagia|food stuck|can't swallow|painful swallow|odynophagia"
+gi_acute_pancreatitis_like,GI,Severe Epigastric Pain (Pancreatitis-like),GENERIC_V1,GENERIC_V1,"epigastric pain|upper stomach pain|pain to back|pancreatitis"
+
+neuro_headache,NEURO,Headache,GENERIC_V1,GENERIC_V1,"headache|migraine|pressure in head|head pain"
+neuro_dizziness_vertigo,NEURO,Dizziness / Vertigo,GENERIC_V1,GENERIC_V1,"dizzy|vertigo|room spinning|lightheaded|off balance"
+neuro_weakness_numbness,NEURO,Weakness / Numbness,GENERIC_V1,GENERIC_V1,"weakness|numbness|tingling|one-sided weakness|can't move"
+neuro_seizure,NEURO,Seizure,GENERIC_V1,GENERIC_V1,"seizure|convulsion|shaking episode|passed out shaking"
+neuro_syncope,NEURO,Syncope / Fainting,GENERIC_V1,GENERIC_V1,"syncope|fainted|passed out|blackout"
+neuro_confusion_ams,NEURO,Confusion / Altered Mental Status,GENERIC_V1,GENERIC_V1,"confusion|delirium|altered mental status|AMS|not acting right"
+
+gu_dysuria_uti,GU,Dysuria / UTI Symptoms,GENERIC_V1,GENERIC_V1,"burning urination|uti|pee burns|frequency|urgency"
+gu_flank_pain,GU,Flank Pain,GENERIC_V1,GENERIC_V1,"flank pain|kidney pain|side pain|back pain one side"
+gu_testicular_pain,GU,Testicular Pain / Swelling,GENERIC_V1,GENERIC_V1,"testicle pain|scrotal pain|swollen testicle"
+gu_hematuria,GU,Hematuria (Blood in Urine),GENERIC_V1,GENERIC_V1,"hematuria|blood in urine|pink urine|red urine"
+gu_urinary_retention,GU,Urinary Retention,GENERIC_V1,GENERIC_V1,"can't pee|urinary retention|blocked urine|no urine"
+gu_sti_exposure_discharge,GU,STI Exposure / Genital Discharge,GENERIC_V1,GENERIC_V1,"sti exposure|discharge|std|urethritis|genital discharge"
+gu_pelvic_pain_possible_ovarian_torsion,GU,Pelvic Pain (Torsion/Ectopic/PID),GENERIC_V1,GENERIC_V1,"pelvic pain|ovary pain|one-sided pelvic pain|torsion|ectopic"
+gu_vaginal_bleeding,GU,Vaginal Bleeding,GENERIC_V1,GENERIC_V1,"vaginal bleeding|heavy period|bleeding pregnant|spotting|postpartum bleeding"
+2) CORE_QUESTIONS (Batch D)
+Complaint_Slug,Question_ID,Question_Text,Type,Options
+gi_abdominal_pain,onset,Sudden onset or gradual?,enum,"sudden|gradual"
+gi_abdominal_pain,loc,Where is the pain worst?,enum,"diffuse|epigastric|ruq|rlq|llq|suprapubic"
+gi_abdominal_pain,sev,Severity 0-10?,number,
+gi_abdominal_pain,fever,Fever or chills?,boolean,
+gi_abdominal_pain,vomit,Vomiting?,boolean,
+gi_abdominal_pain,blood,Blood in vomit or stool (black/tarry or red)?,boolean,
+gi_abdominal_pain,preg,Possibility of pregnancy?,boolean,
+gi_abdominal_pain,peritoneal,Rigid abdomen or worse with movement/jarring?,boolean,
+gi_abdominal_pain,chest,Chest pain/pressure or shortness of breath?,boolean,
+gi_abdominal_pain,testis,Testicular pain/swelling (if applicable)?,boolean,
+
+gi_diarrhea,dur,How many days has diarrhea been present?,number,
+gi_diarrhea,freq,How many stools per day?,number,
+gi_diarrhea,blood,Blood or black/tarry stool?,boolean,
+gi_diarrhea,fever,Fever?,boolean,
+gi_diarrhea,dehyd,Dizziness/very low urine/unable to keep fluids?,boolean,
+gi_diarrhea,abdsev,Severe abdominal pain?,boolean,
+gi_diarrhea,travel,Recent travel or high-risk food exposure?,boolean,
+gi_diarrhea,abx,Antibiotics in last 8 weeks?,boolean,
+gi_diarrhea,immuno,Immunocompromised?,boolean,
+
+gi_vomiting,dur,How many days has vomiting/nausea been present?,number,
+gi_vomiting,blood,Blood or coffee-ground vomit?,boolean,
+gi_vomiting,bilious,Bright green bile vomit?,boolean,
+gi_vomiting,abdsev,Severe abdominal pain?,boolean,
+gi_vomiting,fever,Fever?,boolean,
+gi_vomiting,dehyd,Unable to keep fluids / very low urine?,boolean,
+gi_vomiting,neuro,Severe headache/neck stiffness/confusion?,boolean,
+gi_vomiting,preg,Possibility of pregnancy?,boolean,
+
+gi_gi_bleeding,type,What bleeding pattern?,enum,"vomit_blood|black_tarry|bright_red_stool|maroon"
+gi_gi_bleeding,heavy,Large amount/ongoing bleeding or clots?,boolean,
+gi_gi_bleeding,faint,Lightheaded or fainting?,boolean,
+gi_gi_bleeding,cp,Chest pain/shortness of breath?,boolean,
+gi_gi_bleeding,blood_thinner,Blood thinners or bleeding disorder?,boolean,
+gi_gi_bleeding,abdsev,Severe abdominal pain?,boolean,
+
+gi_constipation,dur,Days since last normal bowel movement?,number,
+gi_constipation,abdsev,Severe abdominal pain or distension?,boolean,
+gi_constipation,vomit,Vomiting?,boolean,
+gi_constipation,blood,Blood in stool or black stools?,boolean,
+gi_constipation,fever,Fever?,boolean,
+gi_constipation,no_gas,Unable to pass gas?,boolean,
+
+gi_jaundice,pain_ruq,Right upper abdominal pain?,boolean,
+gi_jaundice,fever,Fever/chills?,boolean,
+gi_jaundice,dark_urine,Dark urine or pale/gray stools?,boolean,
+gi_jaundice,itch,Significant itching?,boolean,
+gi_jaundice,confusion,Confusion/sleepiness?,boolean,
+gi_jaundice,bleed,Easy bruising/bleeding?,boolean,
+
+gi_dysphagia,food_stuck,Food stuck right now / sudden obstruction?,boolean,
+gi_dysphagia,drool,Drooling or cannot swallow saliva?,boolean,
+gi_dysphagia,sob,Trouble breathing/stridor?,boolean,
+gi_dysphagia,chest_pain,Severe chest pain after vomiting/swallowing?,boolean,
+gi_dysphagia,weight_loss,Progressive worsening or weight loss?,boolean,
+gi_dysphagia,odyn,Painful swallowing?,boolean,
+
+gi_acute_pancreatitis_like,epi,Upper middle (epigastric) pain?,boolean,
+gi_acute_pancreatitis_like,back,Radiates to back?,boolean,
+gi_acute_pancreatitis_like,vomit,Vomiting?,boolean,
+gi_acute_pancreatitis_like,fever,Fever?,boolean,
+gi_acute_pancreatitis_like,alc,Heavy alcohol use?,boolean,
+gi_acute_pancreatitis_like,gall,Known gallstones or RUQ biliary history?,boolean,
+gi_acute_pancreatitis_like,sev,Severity 0-10?,number,
+
+neuro_headache,thunder,Sudden thunderclap/worst headache?,boolean,
+neuro_headache,neurodef,New weakness/numbness/speech/vision change?,boolean,
+neuro_headache,fever_neck,Fever with neck stiffness or confusion?,boolean,
+neuro_headache,preg_postpartum,Pregnant or postpartum?,boolean,
+neuro_headache,trauma,Recent head trauma?,boolean,
+neuro_headache,age50,Age > 50 with new headache?,boolean,
+neuro_headache,eye,Eye pain/vision loss?,boolean,
+
+neuro_dizziness_vertigo,kind,Feels like spinning vs faint/lightheaded?,enum,"spinning|lightheaded|off_balance"
+neuro_dizziness_vertigo,neurodef,New weakness/numbness/speech trouble or cannot walk?,boolean,
+neuro_dizziness_vertigo,headache,Severe headache?,boolean,
+neuro_dizziness_vertigo,cardiac,Chest pain/SOB/palpitations?,boolean,
+neuro_dizziness_vertigo,vomit,Persistent vomiting?,boolean,
+neuro_dizziness_vertigo,ear,Unilateral hearing loss/tinnitus?,boolean,
+
+neuro_weakness_numbness,sudden,Sudden onset?,boolean,
+neuro_weakness_numbness,face_speech,Facial droop or speech difficulty?,boolean,
+neuro_weakness_numbness,one_side,One-sided symptoms?,boolean,
+neuro_weakness_numbness,vision,Vision loss/double vision?,boolean,
+neuro_weakness_numbness,spinal,Severe back pain, saddle anesthesia, or new bladder/bowel issues?,boolean,
+neuro_weakness_numbness,fever,Fever?,boolean,
+
+neuro_seizure,first,First seizure ever?,boolean,
+neuro_seizure,ongoing,Ongoing seizure or repeated without recovery?,boolean,
+neuro_seizure,injury,Head injury during event?,boolean,
+neuro_seizure,preg_postpartum,Pregnant or postpartum?,boolean,
+neuro_seizure,fever,Fever/meningitis symptoms?,boolean,
+neuro_seizure,metabolic,Diabetes/low sugar/toxin risk?,boolean,
+
+neuro_syncope,exert,Occurred with exertion?,boolean,
+neuro_syncope,cardiac,Chest pain/palpitations/SOB?,boolean,
+neuro_syncope,injury,Head injury from fall?,boolean,
+neuro_syncope,neurodef,New neurologic deficits afterward?,boolean,
+neuro_syncope,bleed,Black stools/vomiting blood/heavy bleeding?,boolean,
+neuro_syncope,preg,Pregnant?,boolean,
+
+neuro_confusion_ams,sudden,Sudden onset?,boolean,
+neuro_confusion_ams,fever,Fever?,boolean,
+neuro_confusion_ams,headache,Severe headache/neck stiffness?,boolean,
+neuro_confusion_ams,stroke_signs,New weakness/speech/vision changes?,boolean,
+neuro_confusion_ams,low_glucose,Diabetes or possible low sugar?,boolean,
+neuro_confusion_ams,toxic,Possible intoxication/overdose?,boolean,
+
+gu_dysuria_uti,fever,Fever/chills?,boolean,
+gu_dysuria_uti,flank,Flank pain?,boolean,
+gu_dysuria_uti,preg,Pregnant?,boolean,
+gu_dysuria_uti,male,Male anatomy?,boolean,
+gu_dysuria_uti,discharge,Genital discharge or STI risk?,boolean,
+gu_dysuria_uti,vomit,Vomiting/unable to keep fluids?,boolean,
+
+gu_flank_pain,fever,Fever/chills?,boolean,
+gu_flank_pain,urinary,Urinary symptoms (burning/urgency/foul)?,boolean,
+gu_flank_pain,hematuria,Blood in urine?,boolean,
+gu_flank_pain,colicky,Severe colicky waves of pain?,boolean,
+gu_flank_pain,vomit,Vomiting?,boolean,
+gu_flank_pain,preg,Pregnant?,boolean,
+
+gu_testicular_pain,sudden,Sudden severe pain?,boolean,
+gu_testicular_pain,high_riding,High-riding or abnormal lie?,boolean,
+gu_testicular_pain,nausea,Nausea/vomiting?,boolean,
+gu_testicular_pain,fever,Fever?,boolean,
+gu_testicular_pain,discharge,Urethral discharge or STI risk?,boolean,
+gu_testicular_pain,trauma,Recent trauma?,boolean,
+
+gu_hematuria,clots,Clots or trouble urinating?,boolean,
+gu_hematuria,stone_pain,Severe flank pain/colic?,boolean,
+gu_hematuria,fever,Fever/chills?,boolean,
+gu_hematuria,blood_thinner,Blood thinners?,boolean,
+gu_hematuria,trauma,Recent trauma?,boolean,
+
+gu_urinary_retention,unable,Unable to urinate at all?,boolean,
+gu_urinary_retention,pain,Severe lower abdominal pain/distension?,boolean,
+gu_urinary_retention,fever,Fever/chills?,boolean,
+gu_urinary_retention,neuro,New leg weakness/numbness or saddle anesthesia?,boolean,
+gu_urinary_retention,blood,Blood/clots in urine?,boolean,
+
+gu_sti_exposure_discharge,fever,Fever?,boolean,
+gu_sti_exposure_discharge,pelvic,Pelvic/lower abdominal pain?,boolean,
+gu_sti_exposure_discharge,testis,Testicular pain/swelling?,boolean,
+gu_sti_exposure_discharge,preg,Pregnant?,boolean,
+gu_sti_exposure_discharge,ulcers,Painful ulcers/blisters?,boolean,
+gu_sti_exposure_discharge,assault,Sexual assault concern?,boolean,
+
+gu_pelvic_pain_possible_ovarian_torsion,sudden,Sudden severe one-sided pelvic pain?,boolean,
+gu_pelvic_pain_possible_ovarian_torsion,preg,Possibility of pregnancy?,boolean,
+gu_pelvic_pain_possible_ovarian_torsion,bleed,Vaginal bleeding?,boolean,
+gu_pelvic_pain_possible_ovarian_torsion,fever,Fever?,boolean,
+gu_pelvic_pain_possible_ovarian_torsion,discharge,Abnormal discharge or STI risk?,boolean,
+gu_pelvic_pain_possible_ovarian_torsion,vomit,Nausea/vomiting?,boolean,
+
+gu_vaginal_bleeding,preg,Pregnant or possibly pregnant?,boolean,
+gu_vaginal_bleeding,heavy,Heavy bleeding (soaking pad hourly) or large clots?,boolean,
+gu_vaginal_bleeding,faint,Dizziness/fainting?,boolean,
+gu_vaginal_bleeding,pain,Severe pelvic/abdominal pain?,boolean,
+gu_vaginal_bleeding,postpartum,Recently postpartum?,boolean
+3) RED_FLAGS (Batch D)
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+gi_abdominal_pain,peritonitis,"peritoneal=true OR sev>=8",EMERG,"Possible surgical abdomen/peritonitis"
+gi_abdominal_pain,gi_bleed,"blood=true",EMERG,"Possible GI bleeding"
+gi_abdominal_pain,preg_acute,"preg=true AND onset=sudden",EMERG,"Pregnancy + acute pain (ectopic concern)"
+gi_abdominal_pain,cardiac_mimic,"chest=true",EMERG,"Possible cardiac/PE mimic"
+gi_abdominal_pain,torsion_mimic,"testis=true",EMERG,"Possible torsion (time-sensitive)"
+
+gi_diarrhea,instability,"dehyd=true",EMERG,"Dehydration/instability"
+gi_diarrhea,bloody,"blood=true",URGENT,"Bloody diarrhea"
+gi_diarrhea,toxic,"abdsev=true AND fever=true",URGENT,"Possible invasive infection"
+gi_diarrhea,c_diff_risk,"abx=true AND dur>=3",URGENT,"C. diff risk"
+
+gi_vomiting,gi_bleed,"blood=true",EMERG,"Possible GI bleed"
+gi_vomiting,obstruction,"bilious=true AND abdsev=true",EMERG,"Possible obstruction"
+gi_vomiting,neuro,"neuro=true",EMERG,"Possible CNS cause"
+gi_vomiting,dehyd,"dehyd=true",URGENT,"Dehydration risk"
+
+gi_gi_bleeding,instability,"heavy=true OR faint=true OR cp=true",EMERG,"Hemodynamic risk"
+gi_gi_bleeding,anticoag,"blood_thinner=true",EMERG,"Bleeding on anticoagulation"
+gi_gi_bleeding,pain,"abdsev=true",EMERG,"Bleeding + severe pain"
+
+gi_constipation,obstruction,"vomit=true AND (no_gas=true OR abdsev=true)",EMERG,"Possible obstruction"
+gi_constipation,bleed,"blood=true",URGENT,"Bleeding"
+gi_constipation,toxic,"fever=true AND abdsev=true",URGENT,"Systemic illness + pain"
+
+gi_jaundice,cholangitis,"pain_ruq=true AND fever=true AND dark_urine=true",EMERG,"Possible ascending cholangitis"
+gi_jaundice,liver_fail,"confusion=true OR bleed=true",EMERG,"Possible acute liver failure/encephalopathy"
+
+gi_dysphagia,airway,"sob=true OR drool=true",EMERG,"Airway/obstruction risk"
+gi_dysphagia,boerhaave,"chest_pain=true",EMERG,"Possible esophageal rupture"
+gi_dysphagia,impaction,"food_stuck=true",URGENT,"Possible food bolus impaction"
+
+gi_acute_pancreatitis_like,severe,"sev>=8",EMERG,"Severe pain needs urgent eval"
+gi_acute_pancreatitis_like,systemic,"fever=true",URGENT,"Systemic features"
+
+neuro_headache,sah,"thunder=true",EMERG,"Possible SAH"
+neuro_headache,stroke,"neurodef=true",EMERG,"Possible stroke"
+neuro_headache,meningitis,"fever_neck=true",EMERG,"Possible meningitis/encephalitis"
+neuro_headache,trauma,"trauma=true",EMERG,"Possible ICH"
+neuro_headache,vision,"eye=true",EMERG,"Vision-threatening cause"
+
+neuro_dizziness_vertigo,stroke,"neurodef=true OR kind=off_balance",EMERG,"Possible posterior circulation stroke"
+neuro_dizziness_vertigo,cardiac,"cardiac=true",EMERG,"Possible cardiac cause"
+neuro_dizziness_vertigo,central_headache,"headache=true",EMERG,"Central cause concern"
+
+neuro_weakness_numbness,stroke,"sudden=true AND (face_speech=true OR one_side=true OR vision=true)",EMERG,"Possible stroke/TIA"
+neuro_weakness_numbness,spinal,"spinal=true",EMERG,"Possible cauda equina/spinal cord emergency"
+
+neuro_seizure,all,"first=true OR ongoing=true OR injury=true OR preg_postpartum=true OR fever=true OR metabolic=true",EMERG,"Seizure needs ED eval / status / pregnancy / infection / metabolic / trauma risk"
+
+neuro_syncope,cardiac,"exert=true OR cardiac=true",EMERG,"Possible cardiac syncope"
+neuro_syncope,stroke,"neurodef=true",EMERG,"Possible stroke"
+neuro_syncope,trauma,"injury=true",EMERG,"Head injury risk"
+neuro_syncope,bleed,"bleed=true",EMERG,"Possible hemorrhage"
+neuro_syncope,preg,"preg=true",EMERG,"Pregnancy + syncope"
+
+neuro_confusion_ams,all,"stroke_signs=true OR (fever=true AND headache=true) OR low_glucose=true OR toxic=true OR sudden=true",EMERG,"AMS with stroke/infection/metabolic/toxic concern"
+
+gu_dysuria_uti,pyelo,"fever=true AND flank=true",EMERG,"Pyelonephritis/sepsis risk"
+gu_dysuria_uti,preg,"preg=true",URGENT,"UTI in pregnancy"
+gu_dysuria_uti,vomit,"vomit=true",URGENT,"Unable to tolerate PO"
+
+gu_flank_pain,pyelo,"fever=true AND urinary=true",EMERG,"Pyelonephritis concern"
+gu_flank_pain,infected_stone,"fever=true AND hematuria=true",EMERG,"Obstructing infected stone risk"
+gu_flank_pain,preg,"preg=true",URGENT,"Pregnancy + flank pain"
+
+gu_testicular_pain,torsion,"sudden=true OR high_riding=true OR nausea=true",EMERG,"Possible testicular torsion"
+
+gu_hematuria,retention,"clots=true",EMERG,"Clot retention risk"
+gu_hematuria,infected_stone,"fever=true AND stone_pain=true",EMERG,"Obstructing infected stone"
+gu_hematuria,trauma,"trauma=true",EMERG,"Trauma-related bleeding"
+
+gu_urinary_retention,ces,"neuro=true",EMERG,"Possible cauda equina/spinal emergency"
+gu_urinary_retention,clots,"blood=true",EMERG,"Clot retention"
+gu_urinary_retention,acute,"unable=true AND pain=true",EMERG,"Acute retention needs decompression"
+
+gu_sti_exposure_discharge,testis,"testis=true",EMERG,"Testicular pain needs torsion exclusion"
+gu_sti_exposure_discharge,pid,"pelvic=true AND fever=true",URGENT,"Possible PID"
+gu_sti_exposure_discharge,assault,"assault=true",URGENT,"Time-sensitive care/support"
+
+gu_pelvic_pain_possible_ovarian_torsion,torsion,"sudden=true AND vomit=true",EMERG,"Possible ovarian torsion"
+gu_pelvic_pain_possible_ovarian_torsion,ectopic,"preg=true AND bleed=true",EMERG,"Possible ectopic pregnancy"
+gu_pelvic_pain_possible_ovarian_torsion,pid,"fever=true AND discharge=true",URGENT,"PID concern"
+
+gu_vaginal_bleeding,hemodynamic,"heavy=true OR faint=true",EMERG,"Hemodynamic risk"
+gu_vaginal_bleeding,preg,"preg=true",EMERG,"Pregnancy bleeding (ectopic/miscarriage)"
+gu_vaginal_bleeding,postpartum,"postpartum=true",EMERG,"Postpartum hemorrhage concern"
+gu_vaginal_bleeding,pain,"pain=true",URGENT,"Severe pain with bleeding"
+4) CLUSTER_SCORING_RULES (Batch D)
+
+Format: one rule per row, points can be negative.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+gi_abdominal_pain,gastroenteritis,ge_1,"vomit=true",1
+gi_abdominal_pain,gastroenteritis,ge_2,"fever=true",1
+gi_abdominal_pain,gastroenteritis,ge_3,"loc=diffuse",1
+gi_abdominal_pain,appendicitis,app_1,"loc=rlq",3
+gi_abdominal_pain,appendicitis,app_2,"fever=true",1
+gi_abdominal_pain,appendicitis,app_3,"vomit=true",1
+gi_abdominal_pain,cholecystitis,chole_1,"loc=ruq",3
+gi_abdominal_pain,cholecystitis,chole_2,"fever=true",1
+gi_abdominal_pain,cholecystitis,chole_3,"vomit=true",1
+gi_abdominal_pain,diverticulitis,div_1,"loc=llq",3
+gi_abdominal_pain,diverticulitis,div_2,"fever=true",1
+gi_abdominal_pain,obstruction,obs_1,"vomit=true",2
+gi_abdominal_pain,obstruction,obs_2,"sev>=7",1
+gi_abdominal_pain,obstruction,obs_3,"loc=diffuse",1
+gi_abdominal_pain,appendicitis,neg_app_lowsev,"sev<=3",-2
+
+gi_diarrhea,viral_gastro,vg_1,"dur<=7",2
+gi_diarrhea,viral_gastro,vg_2,"blood=false",2
+gi_diarrhea,viral_gastro,vg_3,"fever=false",1
+gi_diarrhea,invasive_bacterial,ib_1,"blood=true",3
+gi_diarrhea,invasive_bacterial,ib_2,"fever=true",2
+gi_diarrhea,invasive_bacterial,ib_3,"abdsev=true",1
+gi_diarrhea,c_diff,cd_1,"abx=true",3
+gi_diarrhea,c_diff,cd_2,"dur>=3",1
+gi_diarrhea,c_diff,cd_3,"freq>=6",1
+gi_diarrhea,travelers,td_1,"travel=true",2
+gi_diarrhea,travelers,td_2,"dur<=7",1
+gi_diarrhea,viral_gastro,neg_vg_blood,"blood=true",-4
+
+gi_vomiting,gastroenteritis,ge_1,"fever=true",1
+gi_vomiting,gastroenteritis,ge_2,"abdsev=true",1
+gi_vomiting,gastroenteritis,ge_3,"dur<=3",1
+gi_vomiting,gastritis,gas_1,"blood=false",1
+gi_vomiting,gastritis,gas_2,"abdsev=false",1
+gi_vomiting,pancreatitis_like,pan_1,"abdsev=true",2
+gi_vomiting,pancreatitis_like,pan_2,"fever=true",1
+gi_vomiting,pancreatitis_like,pan_3,"bilious=true",1
+gi_vomiting,gastritis,neg_gas_blood,"blood=true",-5
+
+gi_gi_bleeding,upper_gi,ug_1,"type=vomit_blood",3
+gi_gi_bleeding,upper_gi,ug_2,"type=black_tarry",2
+gi_gi_bleeding,lower_gi,lg_1,"type=bright_red_stool",3
+gi_gi_bleeding,lower_gi,lg_2,"type=maroon",2
+gi_gi_bleeding,upper_gi,neg_ug_brightred,"type=bright_red_stool",-2
+
+gi_constipation,functional,fn_1,"dur>=3",1
+gi_constipation,functional,fn_2,"abdsev=false",1
+gi_constipation,functional,fn_3,"vomit=false",1
+gi_constipation,obstruction,obs_1,"no_gas=true",3
+gi_constipation,obstruction,obs_2,"vomit=true",2
+gi_constipation,obstruction,obs_3,"abdsev=true",1
+gi_constipation,functional,neg_fn_vomit,"vomit=true",-4
+
+gi_jaundice,biliary_obstruction,bo_1,"dark_urine=true",2
+gi_jaundice,biliary_obstruction,bo_2,"pain_ruq=true",2
+gi_jaundice,biliary_obstruction,bo_3,"itch=true",1
+gi_jaundice,hepatitis,hep_1,"fever=true",1
+gi_jaundice,hepatitis,hep_2,"pain_ruq=false",1
+gi_jaundice,hepatitis,neg_hep_ruq,"pain_ruq=true",-2
+
+gi_dysphagia,gerd_esophagitis,ge_1,"odyn=true",1
+gi_dysphagia,stricture,st_1,"weight_loss=false",1
+gi_dysphagia,malignancy,mal_1,"weight_loss=true",3
+gi_dysphagia,impaction,imp_1,"food_stuck=true",3
+gi_dysphagia,malignancy,neg_mal_sudden,"food_stuck=true",-2
+
+gi_acute_pancreatitis_like,pancreatitis,pan_1,"epi=true",2
+gi_acute_pancreatitis_like,pancreatitis,pan_2,"back=true",2
+gi_acute_pancreatitis_like,pancreatitis,pan_3,"vomit=true",1
+gi_acute_pancreatitis_like,pancreatitis,pan_4,"alc=true",1
+gi_acute_pancreatitis_like,pancreatitis,pan_5,"gall=true",1
+gi_acute_pancreatitis_like,gastritis_ulcer,gas_1,"epi=true",1
+gi_acute_pancreatitis_like,gastritis_ulcer,gas_2,"back=false",1
+gi_acute_pancreatitis_like,biliary,bil_1,"gall=true",2
+gi_acute_pancreatitis_like,biliary,bil_2,"fever=true",1
+gi_acute_pancreatitis_like,gastritis_ulcer,neg_gas_back,"back=true",-3
+
+neuro_headache,migraine,mg_1,"thunder=false",1
+neuro_headache,migraine,mg_2,"neurodef=false",1
+neuro_headache,tension,tn_1,"fever_neck=false",1
+neuro_headache,sinus_related,sn_1,"thunder=false",1
+neuro_headache,migraine,neg_mg_thunder,"thunder=true",-5
+
+neuro_dizziness_vertigo,bppv,bp_1,"kind=spinning",2
+neuro_dizziness_vertigo,bppv,bp_2,"neurodef=false",1
+neuro_dizziness_vertigo,vestibular_neuritis,vn_1,"kind=spinning",1
+neuro_dizziness_vertigo,vestibular_neuritis,vn_2,"vomit=true",1
+neuro_dizziness_vertigo,meniere,me_1,"ear=true",3
+neuro_dizziness_vertigo,bppv,neg_bp_neuro,"neurodef=true",-5
+
+neuro_weakness_numbness,stroke_tia,st_1,"sudden=true",2
+neuro_weakness_numbness,stroke_tia,st_2,"one_side=true",2
+neuro_weakness_numbness,stroke_tia,st_3,"face_speech=true",2
+neuro_weakness_numbness,spinal_process,sp_1,"spinal=true",3
+neuro_weakness_numbness,peripheral,pp_1,"sudden=false",1
+neuro_weakness_numbness,peripheral,neg_pp_sudden,"sudden=true",-2
+
+neuro_seizure,first_time,ft_1,"first=true",4
+neuro_seizure,status,ss_1,"ongoing=true",5
+neuro_seizure,provoked,pr_1,"metabolic=true",3
+neuro_seizure,provoked,pr_2,"fever=true",2
+neuro_seizure,breakthrough,bt_1,"first=false",2
+
+neuro_syncope,vasovagal,vv_1,"exert=false",1
+neuro_syncope,vasovagal,vv_2,"cardiac=false",1
+neuro_syncope,cardiac_syncope,cs_1,"exert=true",3
+neuro_syncope,cardiac_syncope,cs_2,"cardiac=true",2
+neuro_syncope,bleed_related,br_1,"bleed=true",3
+neuro_syncope,vasovagal,neg_vv_exert,"exert=true",-4
+
+neuro_confusion_ams,metabolic_toxic,mt_1,"low_glucose=true",2
+neuro_confusion_ams,metabolic_toxic,mt_2,"toxic=true",2
+neuro_confusion_ams,infection,inf_1,"fever=true",2
+neuro_confusion_ams,stroke,st_1,"stroke_signs=true",3
+neuro_confusion_ams,stroke,st_2,"sudden=true",1
+
+gu_dysuria_uti,cystitis,cy_1,"fever=false",1
+gu_dysuria_uti,cystitis,cy_2,"flank=false",1
+gu_dysuria_uti,pyelonephritis,py_1,"fever=true",2
+gu_dysuria_uti,pyelonephritis,py_2,"flank=true",2
+gu_dysuria_uti,sti_urethritis,st_1,"discharge=true",3
+gu_dysuria_uti,cystitis,neg_cy_fever,"fever=true",-2
+
+gu_flank_pain,nephrolithiasis,ns_1,"hematuria=true",2
+gu_flank_pain,nephrolithiasis,ns_2,"colicky=true",2
+gu_flank_pain,nephrolithiasis,ns_3,"fever=false",1
+gu_flank_pain,pyelonephritis,py_1,"fever=true",2
+gu_flank_pain,pyelonephritis,py_2,"urinary=true",2
+gu_flank_pain,msk,msk_1,"hematuria=false",1
+gu_flank_pain,msk,msk_2,"urinary=false",1
+gu_flank_pain,nephrolithiasis,neg_ns_fever,"fever=true",-3
+
+gu_testicular_pain,torsion,ts_1,"sudden=true",3
+gu_testicular_pain,torsion,ts_2,"high_riding=true",2
+gu_testicular_pain,torsion,ts_3,"nausea=true",1
+gu_testicular_pain,epididymitis,ep_1,"fever=true",1
+gu_testicular_pain,epididymitis,ep_2,"discharge=true",2
+gu_testicular_pain,trauma,tr_1,"trauma=true",3
+gu_testicular_pain,epididymitis,neg_ep_sudden,"sudden=true",-2
+
+gu_hematuria,stone,st_1,"stone_pain=true",2
+gu_hematuria,stone,st_2,"fever=false",1
+gu_hematuria,uti,ut_1,"fever=true",1
+gu_hematuria,anticoag,ac_1,"blood_thinner=true",3
+gu_hematuria,stone,neg_st_clots,"clots=true",-3
+
+gu_urinary_retention,bph_obstruction,bp_1,"unable=true",2
+gu_urinary_retention,bph_obstruction,bp_2,"fever=false",1
+gu_urinary_retention,neurogenic,ng_1,"neuro=true",3
+gu_urinary_retention,clot_retention,cr_1,"blood=true",3
+gu_urinary_retention,bph_obstruction,neg_bp_neuro,"neuro=true",-3
+
+gu_sti_exposure_discharge,gon_chlam,gc_1,"ulcers=false",1
+gu_sti_exposure_discharge,herpes,hs_1,"ulcers=true",3
+gu_sti_exposure_discharge,pid,pid_1,"pelvic=true",2
+gu_sti_exposure_discharge,pid,pid_2,"fever=true",1
+
+gu_pelvic_pain_possible_ovarian_torsion,torsion,tor_1,"sudden=true",3
+gu_pelvic_pain_possible_ovarian_torsion,torsion,tor_2,"vomit=true",2
+gu_pelvic_pain_possible_ovarian_torsion,ectopic,ec_1,"preg=true",2
+gu_pelvic_pain_possible_ovarian_torsion,ectopic,ec_2,"bleed=true",2
+gu_pelvic_pain_possible_ovarian_torsion,pid,pid_1,"fever=true",2
+gu_pelvic_pain_possible_ovarian_torsion,pid,pid_2,"discharge=true",2
+gu_pelvic_pain_possible_ovarian_torsion,cyst,cy_1,"sudden=true",1
+gu_pelvic_pain_possible_ovarian_torsion,cyst,neg_cy_pregbleed,"preg=true AND bleed=true",-4
+
+gu_vaginal_bleeding,preg_related,pr_1,"preg=true",3
+gu_vaginal_bleeding,structural,st_1,"heavy=true",2
+gu_vaginal_bleeding,hormonal,ho_1,"preg=false",1
+gu_vaginal_bleeding,hormonal,neg_ho_preg,"preg=true",-5
+5) DISP_RULES (Batch D)
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+gi_abdominal_pain,emerg_redflags,100,"peritoneal=true OR sev>=8 OR blood=true OR (preg=true AND onset=sudden) OR chest=true OR testis=true",EMERG
+gi_abdominal_pain,urgent_localized,50,"fever=true OR loc=rlq OR loc=ruq OR loc=llq OR sev>=7",URGENT
+gi_abdominal_pain,routine_default,1,"sev<7",ROUTINE
+
+gi_diarrhea,emerg_dehyd,100,"dehyd=true AND (freq>=8 OR dur>=2)",EMERG
+gi_diarrhea,urgent_blood_fever_abx,50,"blood=true OR fever=true OR abx=true OR abdsev=true OR immuno=true",URGENT
+gi_diarrhea,routine_default,1,"dur>0",ROUTINE
+
+gi_vomiting,emerg_bleed_or_obstruct_or_neuro,100,"blood=true OR (bilious=true AND abdsev=true) OR neuro=true",EMERG
+gi_vomiting,urgent_dehyd_preg_fever_pain,50,"dehyd=true OR preg=true OR fever=true OR abdsev=true",URGENT
+gi_vomiting,routine_default,1,"dur>0",ROUTINE
+
+gi_gi_bleeding,emerg_any_bleed,100,"type=vomit_blood OR type=black_tarry OR type=bright_red_stool OR type=maroon",EMERG
+
+gi_constipation,emerg_obstruction,100,"vomit=true AND (no_gas=true OR abdsev=true)",EMERG
+gi_constipation,urgent_blood_fever,50,"blood=true OR fever=true",URGENT
+gi_constipation,routine_default,1,"dur>0",ROUTINE
+
+gi_jaundice,emerg_cholangitis_or_failure,100,"(pain_ruq=true AND fever=true AND dark_urine=true) OR confusion=true OR bleed=true",EMERG
+gi_jaundice,urgent_any_jaundice,50,"dark_urine=true OR pain_ruq=true OR fever=true",URGENT
+gi_jaundice,urgent_default,1,"true",URGENT
+
+gi_dysphagia,emerg_airway_or_rupture,100,"sob=true OR drool=true OR chest_pain=true",EMERG
+gi_dysphagia,urgent_impaction_or_progressive,50,"food_stuck=true OR weight_loss=true OR odyn=true",URGENT
+gi_dysphagia,routine_default,1,"true",ROUTINE
+
+gi_acute_pancreatitis_like,emerg_severe,100,"sev>=8",EMERG
+gi_acute_pancreatitis_like,urgent_pancreas_pattern,50,"(epi=true AND vomit=true) OR back=true OR fever=true",URGENT
+gi_acute_pancreatitis_like,urgent_default,1,"epi=true",URGENT
+
+neuro_headache,emerg_redflags,100,"thunder=true OR neurodef=true OR fever_neck=true OR trauma=true OR eye=true",EMERG
+neuro_headache,urgent_highrisk,50,"age50=true OR preg_postpartum=true",URGENT
+neuro_headache,routine_default,1,"true",ROUTINE
+
+neuro_dizziness_vertigo,emerg_redflags,100,"neurodef=true OR kind=off_balance OR headache=true OR cardiac=true",EMERG
+neuro_dizziness_vertigo,urgent_persistent,50,"vomit=true OR ear=true",URGENT
+neuro_dizziness_vertigo,routine_default,1,"true",ROUTINE
+
+neuro_weakness_numbness,emerg_stroke_or_spinal,100,"spinal=true OR (sudden=true AND (face_speech=true OR one_side=true OR vision=true))",EMERG
+neuro_weakness_numbness,urgent_default,50,"true",URGENT
+
+neuro_seizure,emerg_all,100,"true",EMERG
+
+neuro_syncope,emerg_redflags,100,"exert=true OR cardiac=true OR injury=true OR neurodef=true OR bleed=true OR preg=true",EMERG
+neuro_syncope,urgent_default,50,"true",URGENT
+
+neuro_confusion_ams,emerg_all,100,"true",EMERG
+
+gu_dysuria_uti,emerg_pyelo,100,"fever=true AND flank=true",EMERG
+gu_dysuria_uti,urgent_complicated,50,"preg=true OR male=true OR discharge=true OR fever=true OR vomit=true",URGENT
+gu_dysuria_uti,routine_default,1,"true",ROUTINE
+
+gu_flank_pain,emerg_infected,100,"fever=true AND (urinary=true OR hematuria=true)",EMERG
+gu_flank_pain,urgent_stone_or_preg,50,"colicky=true OR vomit=true OR hematuria=true OR preg=true",URGENT
+gu_flank_pain,routine_default,1,"true",ROUTINE
+
+gu_testicular_pain,emerg_torsion_any,100,"sudden=true OR high_riding=true OR nausea=true",EMERG
+gu_testicular_pain,urgent_infect_or_trauma,50,"fever=true OR discharge=true OR trauma=true",URGENT
+gu_testicular_pain,urgent_default,1,"true",URGENT
+
+gu_hematuria,emerg_clots_or_infected_or_trauma,100,"clots=true OR (fever=true AND stone_pain=true) OR trauma=true",EMERG
+gu_hematuria,urgent_all,50,"true",URGENT
+
+gu_urinary_retention,emerg_all,100,"true",EMERG
+
+gu_sti_exposure_discharge,emerg_testis,100,"testis=true",EMERG
+gu_sti_exposure_discharge,urgent_pid_preg_ulcers_assault,50,"(pelvic=true AND fever=true) OR preg=true OR ulcers=true OR assault=true",URGENT
+gu_sti_exposure_discharge,routine_default,1,"true",ROUTINE
+
+gu_pelvic_pain_possible_ovarian_torsion,emerg_torsion_or_ectopic,100,"(sudden=true AND vomit=true) OR (preg=true AND bleed=true)",EMERG
+gu_pelvic_pain_possible_ovarian_torsion,urgent_pid,50,"fever=true OR discharge=true",URGENT
+gu_pelvic_pain_possible_ovarian_torsion,urgent_default,1,"true",URGENT
+
+gu_vaginal_bleeding,emerg_preg_heavy_faint_postpartum,100,"preg=true OR heavy=true OR faint=true OR postpartum=true",EMERG
+gu_vaginal_bleeding,urgent_pain,50,"pain=true",URGENT
+gu_vaginal_bleeding,urgent_default,1,"true",URGENT
+6) OUTPUT_TEMPLATES (Batch D)
+Complaint_Slug,Template_ID,Type,Text
+gi_abdominal_pain,gi_summary_v1,summary,"Abdominal pain assessed with onset, location, severity, fever, vomiting, bleeding, pregnancy risk, and peritoneal/extra-abdominal red flags."
+gi_abdominal_pain,gi_homecare_pain_v1,homecare,"If mild and stable: hydrate, bland foods, avoid alcohol/NSAIDs if bleeding risk, consider acetaminophen if safe. Return if worsening."
+gi_abdominal_pain,gi_precautions_v1,precautions,"Go now for severe/worsening pain, rigid abdomen, blood in vomit/stool, fainting, pregnancy with acute pain, chest symptoms, or testicular pain."
+
+gi_diarrhea,gi_summary_v1,summary,"Diarrhea assessed with duration, frequency, blood, fever, dehydration, exposures, antibiotics, and immune risk."
+gi_diarrhea,gi_homecare_diarrhea_v1,homecare,"Oral rehydration, small bland meals, avoid alcohol. Seek care if unable to keep fluids or symptoms worsen."
+gi_diarrhea,gi_precautions_v1,precautions,"Go now for severe dehydration, significant blood/black stool, severe abdominal pain with fever, or fainting."
+
+gi_vomiting,gi_summary_v1,summary,"Vomiting assessed for bleeding, bilious emesis, dehydration, severe pain, fever, neuro symptoms, and pregnancy risk."
+gi_vomiting,gi_homecare_vomit_v1,homecare,"Small frequent sips of oral rehydration, advance diet slowly. Seek care if cannot keep fluids or worsening pain."
+gi_vomiting,gi_precautions_v1,precautions,"Go now for blood/coffee-ground vomit, green bile with severe pain, severe headache/neck stiffness/confusion, or dehydration."
+
+gi_gi_bleeding,gi_summary_v1,summary,"GI bleeding characterized by appearance, amount, instability symptoms, anticoagulation, and associated pain."
+gi_gi_bleeding,gi_precautions_v1,precautions,"Any vomiting blood, black/tarry stool, or bright red blood per rectum needs emergency evaluation now."
+
+gi_constipation,gi_summary_v1,summary,"Constipation assessed with duration, pain/distension, vomiting, bleeding, fever, and ability to pass gas."
+gi_constipation,gi_homecare_constipation_v1,homecare,"Hydration, fiber if appropriate, gentle osmotic laxative if safe, activity. Seek care if severe pain, vomiting, or no gas."
+gi_constipation,gi_precautions_v1,precautions,"Go now for severe distension/pain with vomiting, inability to pass gas, or blood/black stool."
+
+gi_jaundice,gi_summary_v1,summary,"Jaundice assessed with RUQ pain, fever, dark urine/pale stool, itching, bleeding tendency, and confusion."
+gi_jaundice,gi_precautions_v1,precautions,"Go now for jaundice with fever and RUQ pain, confusion, bleeding, or rapid worsening."
+
+gi_dysphagia,gi_summary_v1,summary,"Dysphagia assessed for airway risk, impaction, severe chest pain, odynophagia, and progressive symptoms/weight loss."
+gi_dysphagia,gi_precautions_v1,precautions,"Go now for drooling, breathing trouble, severe chest pain, or food stuck unable to clear."
+
+gi_acute_pancreatitis_like,gi_summary_v1,summary,"Severe epigastric pain assessed for pancreatitis pattern (back radiation, vomiting, alcohol/gallstone risk) and systemic features."
+gi_acute_pancreatitis_like,gi_precautions_v1,precautions,"Go now for severe pain, persistent vomiting, fever, fainting, or worsening symptoms."
+
+neuro_headache,neuro_summary_v1,summary,"Headache assessed for thunderclap onset, focal deficits, fever/neck stiffness, trauma, pregnancy/postpartum, age>50, and eye symptoms."
+neuro_headache,neuro_precautions_v1,precautions,"Go now for sudden worst headache, new neuro deficit, fever with stiff neck/confusion, head trauma, or vision loss."
+
+neuro_dizziness_vertigo,neuro_summary_v1,summary,"Dizziness characterized by type, focal neuro signs, severe headache, cardiac symptoms, vomiting, and ear findings."
+neuro_dizziness_vertigo,neuro_precautions_v1,precautions,"Go now for new weakness/numbness/speech trouble, inability to walk, chest pain/SOB, or severe headache."
+
+neuro_weakness_numbness,neuro_summary_v1,summary,"Weakness/numbness assessed for sudden onset, focal deficits, one-sided symptoms, and spinal red flags."
+neuro_weakness_numbness,neuro_precautions_v1,precautions,"Go now for sudden weakness/numbness, facial droop, speech trouble, vision loss, or bladder/bowel changes with back pain."
+
+neuro_seizure,neuro_summary_v1,summary,"Seizure assessed for first episode, ongoing/recurrent activity, pregnancy, fever/CNS infection, metabolic causes, and trauma."
+neuro_seizure,neuro_precautions_v1,precautions,"Any seizure that is first-time, prolonged/recurrent, associated with pregnancy, fever, or injury needs emergency care now."
+
+neuro_syncope,neuro_summary_v1,summary,"Syncope assessed for exertional/cardiac symptoms, bleeding, pregnancy, trauma, and neurologic deficits."
+neuro_syncope,neuro_precautions_v1,precautions,"Go now for fainting with chest pain/palpitations/SOB, exertional syncope, injury, bleeding, pregnancy, or neuro deficits."
+
+neuro_confusion_ams,neuro_summary_v1,summary,"Altered mental status assessed for stroke signs, infection signs, metabolic causes (hypoglycemia), and intoxication risk."
+neuro_confusion_ams,neuro_precautions_v1,precautions,"Any new confusion/AMS warrants emergency evaluation now, especially with fever, headache, focal deficits, or overdose risk."
+
+gu_dysuria_uti,gu_summary_v1,summary,"Dysuria assessed for fever/flank pain (pyelo), pregnancy, male anatomy (complicated UTI), and STI/discharge features."
+gu_dysuria_uti,gu_precautions_v1,precautions,"Go now for fever with flank pain, vomiting/dehydration, pregnancy with urinary symptoms, or worsening severe pain."
+
+gu_flank_pain,gu_summary_v1,summary,"Flank pain assessed for stone features (colicky pain, hematuria) vs infection (fever, urinary symptoms) and pregnancy risk."
+gu_flank_pain,gu_precautions_v1,precautions,"Go now for fever with flank pain, vomiting/dehydration, pregnancy, or severe uncontrolled pain."
+
+gu_testicular_pain,gu_summary_v1,summary,"Testicular pain assessed for torsion pattern (sudden severe, abnormal lie, nausea), infection/STI features, and trauma."
+gu_testicular_pain,gu_precautions_v1,precautions,"Go now for sudden testicular pain, high-riding/abnormal position, nausea/vomiting, or rapidly worsening swelling."
+
+gu_hematuria,gu_summary_v1,summary,"Hematuria assessed for clots/retention, stone pain, fever (infection), anticoagulation, and trauma."
+gu_hematuria,gu_precautions_v1,precautions,"Go now for clots with trouble urinating, fever with flank pain, or trauma."
+
+gu_urinary_retention,gu_summary_v1,summary,"Urinary retention assessed for complete inability, severe distension pain, fever, blood/clots, and neurologic red flags."
+gu_urinary_retention,gu_precautions_v1,precautions,"Acute urinary retention needs emergency evaluation now, especially with severe pain, blood/clots, fever, or neurologic symptoms."
+
+gu_sti_exposure_discharge,gu_summary_v1,summary,"STI symptoms assessed for fever, pelvic pain (PID), testicular pain (torsion/epididymitis), pregnancy, ulcers, and assault concerns."
+gu_sti_exposure_discharge,gu_precautions_v1,precautions,"Go now for testicular pain, severe pelvic pain with fever, pregnancy, or sexual assault concern."
+
+gu_pelvic_pain_possible_ovarian_torsion,gu_summary_v1,summary,"Pelvic pain assessed for torsion (sudden severe + vomiting), ectopic (pregnancy + bleeding), PID features, and discharge."
+gu_pelvic_pain_possible_ovarian_torsion,gu_precautions_v1,precautions,"Go now for sudden severe pelvic pain, pregnancy with bleeding, fainting, fever, or persistent vomiting."
+
+gu_vaginal_bleeding,gu_summary_v1,summary,"Vaginal bleeding assessed for pregnancy status, heaviness/instability, severe pain, and postpartum risk."
+gu_vaginal_bleeding,gu_precautions_v1,precautions,"Go now for pregnancy bleeding, heavy bleeding, fainting, severe pain, or postpartum bleeding."
+7) GOLDENS (Batch D) — 10 per complaint (220 total)
+
+Format:
+
+Inputs_JSON is a compact JSON object of question_id → value
+
+Expected_Top_Dx matches one of the Dx_IDs used above
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+gi_abdominal_pain,GIA1,"{""onset"":""gradual"",""loc"":""diffuse"",""sev"":4,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":false}",ROUTINE,gastroenteritis
+gi_abdominal_pain,GIA2,"{""onset"":""sudden"",""loc"":""rlq"",""sev"":7,""fever"":true,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":false}",URGENT,appendicitis
+gi_abdominal_pain,GIA3,"{""onset"":""gradual"",""loc"":""ruq"",""sev"":7,""fever"":true,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":false}",URGENT,cholecystitis
+gi_abdominal_pain,GIA4,"{""onset"":""gradual"",""loc"":""llq"",""sev"":6,""fever"":true,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":false}",URGENT,diverticulitis
+gi_abdominal_pain,GIA5,"{""onset"":""sudden"",""loc"":""diffuse"",""sev"":8,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":true,""chest"":false,""testis"":false}",EMERG,obstruction
+gi_abdominal_pain,GIA6,"{""onset"":""sudden"",""loc"":""suprapubic"",""sev"":6,""fever"":false,""vomit"":false,""blood"":true,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":false}",EMERG,obstruction
+gi_abdominal_pain,GIA7,"{""onset"":""sudden"",""loc"":""epigastric"",""sev"":5,""fever"":false,""vomit"":false,""blood"":false,""preg"":true,""peritoneal"":false,""chest"":false,""testis"":false}",EMERG,obstruction
+gi_abdominal_pain,GIA8,"{""onset"":""gradual"",""loc"":""epigastric"",""sev"":6,""fever"":false,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":true,""testis"":false}",EMERG,obstruction
+gi_abdominal_pain,GIA9,"{""onset"":""sudden"",""loc"":""diffuse"",""sev"":6,""fever"":false,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":true}",EMERG,obstruction
+gi_abdominal_pain,GIA10,"{""onset"":""gradual"",""loc"":""diffuse"",""sev"":2,""fever"":false,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""chest"":false,""testis"":false}",ROUTINE,gastroenteritis
+
+gi_diarrhea,GID1,"{""dur"":2,""freq"":5,""blood"":false,""fever"":false,""dehyd"":false,""abdsev"":false,""travel"":false,""abx"":false,""immuno"":false}",ROUTINE,viral_gastro
+gi_diarrhea,GID2,"{""dur"":5,""freq"":9,""blood"":false,""fever"":false,""dehyd"":true,""abdsev"":false,""travel"":false,""abx"":false,""immuno"":false}",EMERG,viral_gastro
+gi_diarrhea,GID3,"{""dur"":3,""freq"":6,""blood"":true,""fever"":true,""dehyd"":false,""abdsev"":true,""travel"":false,""abx"":false,""immuno"":false}",URGENT,invasive_bacterial
+gi_diarrhea,GID4,"{""dur"":4,""freq"":8,""blood"":false,""fever"":false,""dehyd"":false,""abdsev"":false,""travel"":false,""abx"":true,""immuno"":false}",URGENT,c_diff
+gi_diarrhea,GID5,"{""dur"":2,""freq"":6,""blood"":false,""fever"":false,""dehyd"":false,""abdsev"":false,""travel"":true,""abx"":false,""immuno"":false}",ROUTINE,travelers
+gi_diarrhea,GID6,"{""dur"":10,""freq"":5,""blood"":false,""fever"":false,""dehyd"":false,""abdsev"":false,""travel"":false,""abx"":false,""immuno"":false}",ROUTINE,viral_gastro
+gi_diarrhea,GID7,"{""dur"":1,""freq"":4,""blood"":true,""fever"":false,""dehyd"":false,""abdsev"":false,""travel"":false,""abx"":false,""immuno"":false}",URGENT,invasive_bacterial
+gi_diarrhea,GID8,"{""dur"":3,""freq"":7,""blood"":false,""fever"":true,""dehyd"":false,""abdsev"":false,""travel"":false,""abx"":false,""immuno"":false}",URGENT,invasive_bacterial
+gi_diarrhea,GID9,"{""dur"":4,""freq"":6,""blood"":false,""fever"":false,""dehyd"":false,""abdsev"":true,""travel"":false,""abx"":false,""immuno"":false}",URGENT,viral_gastro
+gi_diarrhea,GID10,"{""dur"":2,""freq"":5,""blood"":false,""fever"":false,""dehyd"":false,""abdsev"":false,""travel"":false,""abx"":false,""immuno"":true}",URGENT,viral_gastro
+
+gi_vomiting,GIV1,"{""dur"":1,""blood"":false,""bilious"":false,""abdsev"":false,""fever"":false,""dehyd"":false,""neuro"":false,""preg"":false}",ROUTINE,gastritis
+gi_vomiting,GIV2,"{""dur"":1,""blood"":true,""bilious"":false,""abdsev"":false,""fever"":false,""dehyd"":false,""neuro"":false,""preg"":false}",EMERG,gastroenteritis
+gi_vomiting,GIV3,"{""dur"":1,""blood"":false,""bilious"":true,""abdsev"":true,""fever"":false,""dehyd"":false,""neuro"":false,""preg"":false}",EMERG,pancreatitis_like
+gi_vomiting,GIV4,"{""dur"":2,""blood"":false,""bilious"":false,""abdsev"":true,""fever"":true,""dehyd"":false,""neuro"":false,""preg"":false}",URGENT,pancreatitis_like
+gi_vomiting,GIV5,"{""dur"":2,""blood"":false,""bilious"":false,""abdsev"":false,""fever"":false,""dehyd"":true,""neuro"":false,""preg"":false}",URGENT,gastroenteritis
+gi_vomiting,GIV6,"{""dur"":1,""blood"":false,""bilious"":false,""abdsev"":false,""fever"":false,""dehyd"":false,""neuro"":true,""preg"":false}",EMERG,gastroenteritis
+gi_vomiting,GIV7,"{""dur"":1,""blood"":false,""bilious"":false,""abdsev"":false,""fever"":false,""dehyd"":false,""neuro"":false,""preg"":true}",URGENT,gastroenteritis
+gi_vomiting,GIV8,"{""dur"":4,""blood"":false,""bilious"":false,""abdsev"":false,""fever"":false,""dehyd"":false,""neuro"":false,""preg"":false}",ROUTINE,gastritis
+gi_vomiting,GIV9,"{""dur"":1,""blood"":false,""bilious"":true,""abdsev"":false,""fever"":false,""dehyd"":false,""neuro"":false,""preg"":false}",URGENT,pancreatitis_like
+gi_vomiting,GIV10,"{""dur"":2,""blood"":false,""bilious"":false,""abdsev"":false,""fever"":true,""dehyd"":false,""neuro"":false,""preg"":false}",URGENT,gastroenteritis
+
+gi_gi_bleeding,GIB1,"{""type"":""black_tarry"",""heavy"":false,""faint"":false,""cp"":false,""blood_thinner"":false,""abdsev"":false}",EMERG,upper_gi
+gi_gi_bleeding,GIB2,"{""type"":""vomit_blood"",""heavy"":true,""faint"":false,""cp"":false,""blood_thinner"":false,""abdsev"":false}",EMERG,upper_gi
+gi_gi_bleeding,GIB3,"{""type"":""bright_red_stool"",""heavy"":false,""faint"":false,""cp"":false,""blood_thinner"":false,""abdsev"":false}",EMERG,lower_gi
+gi_gi_bleeding,GIB4,"{""type"":""maroon"",""heavy"":false,""faint"":false,""cp"":false,""blood_thinner"":false,""abdsev"":false}",EMERG,lower_gi
+gi_gi_bleeding,GIB5,"{""type"":""bright_red_stool"",""heavy"":true,""faint"":true,""cp"":false,""blood_thinner"":false,""abdsev"":false}",EMERG,lower_gi
+gi_gi_bleeding,GIB6,"{""type"":""black_tarry"",""heavy"":false,""faint"":true,""cp"":false,""blood_thinner"":false,""abdsev"":false}",EMERG,upper_gi
+gi_gi_bleeding,GIB7,"{""type"":""vomit_blood"",""heavy"":false,""faint"":false,""cp"":true,""blood_thinner"":false,""abdsev"":false}",EMERG,upper_gi
+gi_gi_bleeding,GIB8,"{""type"":""bright_red_stool"",""heavy"":false,""faint"":false,""cp"":false,""blood_thinner"":true,""abdsev"":false}",EMERG,lower_gi
+gi_gi_bleeding,GIB9,"{""type"":""black_tarry"",""heavy"":false,""faint"":false,""cp"":false,""blood_thinner"":false,""abdsev"":true}",EMERG,upper_gi
+gi_gi_bleeding,GIB10,"{""type"":""vomit_blood"",""heavy"":false,""faint"":false,""cp"":false,""blood_thinner"":true,""abdsev"":false}",EMERG,upper_gi
+
+gi_constipation,GIC1,"{""dur"":3,""abdsev"":false,""vomit"":false,""blood"":false,""fever"":false,""no_gas"":false}",ROUTINE,functional
+gi_constipation,GIC2,"{""dur"":7,""abdsev"":false,""vomit"":false,""blood"":false,""fever"":false,""no_gas"":false}",ROUTINE,functional
+gi_constipation,GIC3,"{""dur"":2,""abdsev"":true,""vomit"":true,""blood"":false,""fever"":false,""no_gas"":true}",EMERG,obstruction
+gi_constipation,GIC4,"{""dur"":5,""abdsev"":true,""vomit"":true,""blood"":false,""fever"":false,""no_gas"":false}",EMERG,obstruction
+gi_constipation,GIC5,"{""dur"":5,""abdsev"":false,""vomit"":false,""blood"":true,""fever"":false,""no_gas"":false}",URGENT,functional
+gi_constipation,GIC6,"{""dur"":5,""abdsev"":true,""vomit"":false,""blood"":false,""fever"":true,""no_gas"":false}",URGENT,obstruction
+gi_constipation,GIC7,"{""dur"":1,""abdsev"":false,""vomit"":false,""blood"":false,""fever"":false,""no_gas"":false}",ROUTINE,functional
+gi_constipation,GIC8,"{""dur"":4,""abdsev"":false,""vomit"":true,""blood"":false,""fever"":false,""no_gas"":true}",EMERG,obstruction
+gi_constipation,GIC9,"{""dur"":10,""abdsev"":false,""vomit"":false,""blood"":false,""fever"":false,""no_gas"":false}",ROUTINE,functional
+gi_constipation,GIC10,"{""dur"":4,""abdsev"":false,""vomit"":false,""blood"":false,""fever"":false,""no_gas"":true}",ROUTINE,obstruction
+
+gi_jaundice,GIJ1,"{""pain_ruq"":true,""fever"":true,""dark_urine"":true,""itch"":true,""confusion"":false,""bleed"":false}",EMERG,biliary_obstruction
+gi_jaundice,GIJ2,"{""pain_ruq"":false,""fever"":true,""dark_urine"":true,""itch"":false,""confusion"":false,""bleed"":false}",URGENT,hepatitis
+gi_jaundice,GIJ3,"{""pain_ruq"":true,""fever"":false,""dark_urine"":true,""itch"":true,""confusion"":false,""bleed"":false}",URGENT,biliary_obstruction
+gi_jaundice,GIJ4,"{""pain_ruq"":false,""fever"":false,""dark_urine"":true,""itch"":true,""confusion"":false,""bleed"":false}",URGENT,biliary_obstruction
+gi_jaundice,GIJ5,"{""pain_ruq"":true,""fever"":false,""dark_urine"":false,""itch"":false,""confusion"":true,""bleed"":false}",EMERG,hepatitis
+gi_jaundice,GIJ6,"{""pain_ruq"":false,""fever"":false,""dark_urine"":false,""itch"":false,""confusion"":false,""bleed"":true}",EMERG,hepatitis
+gi_jaundice,GIJ7,"{""pain_ruq"":true,""fever"":true,""dark_urine"":false,""itch"":false,""confusion"":false,""bleed"":false}",URGENT,biliary_obstruction
+gi_jaundice,GIJ8,"{""pain_ruq"":false,""fever"":false,""dark_urine"":false,""itch"":true,""confusion"":false,""bleed"":false}",URGENT,biliary_obstruction
+gi_jaundice,GIJ9,"{""pain_ruq"":false,""fever"":true,""dark_urine"":false,""itch"":false,""confusion"":false,""bleed"":false}",URGENT,hepatitis
+gi_jaundice,GIJ10,"{""pain_ruq"":true,""fever"":false,""dark_urine"":true,""itch"":false,""confusion"":false,""bleed"":false}",URGENT,biliary_obstruction
+
+gi_dysphagia,GIS1,"{""food_stuck"":true,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":false,""odyn"":false}",URGENT,impaction
+gi_dysphagia,GIS2,"{""food_stuck"":false,""drool"":true,""sob"":false,""chest_pain"":false,""weight_loss"":false,""odyn"":false}",EMERG,impaction
+gi_dysphagia,GIS3,"{""food_stuck"":false,""drool"":false,""sob"":true,""chest_pain"":false,""weight_loss"":false,""odyn"":false}",EMERG,impaction
+gi_dysphagia,GIS4,"{""food_stuck"":false,""drool"":false,""sob"":false,""chest_pain"":true,""weight_loss"":false,""odyn"":false}",EMERG,impaction
+gi_dysphagia,GIS5,"{""food_stuck"":false,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":true,""odyn"":false}",URGENT,malignancy
+gi_dysphagia,GIS6,"{""food_stuck"":false,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":false,""odyn"":true}",URGENT,gerd_esophagitis
+gi_dysphagia,GIS7,"{""food_stuck"":false,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":false,""odyn"":false}",ROUTINE,stricture
+gi_dysphagia,GIS8,"{""food_stuck"":false,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":true,""odyn"":true}",URGENT,malignancy
+gi_dysphagia,GIS9,"{""food_stuck"":true,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":true,""odyn"":false}",URGENT,impaction
+gi_dysphagia,GIS10,"{""food_stuck"":false,""drool"":false,""sob"":false,""chest_pain"":false,""weight_loss"":false,""odyn"":true}",URGENT,gerd_esophagitis
+
+gi_acute_pancreatitis_like,GIP1,"{""epi"":true,""back"":true,""vomit"":true,""fever"":false,""alc"":true,""gall"":false,""sev"":7}",URGENT,pancreatitis
+gi_acute_pancreatitis_like,GIP2,"{""epi"":true,""back"":true,""vomit"":true,""fever"":true,""alc"":false,""gall"":true,""sev"":8}",EMERG,pancreatitis
+gi_acute_pancreatitis_like,GIP3,"{""epi"":true,""back"":false,""vomit"":false,""fever"":false,""alc"":false,""gall"":false,""sev"":4}",URGENT,gastritis_ulcer
+gi_acute_pancreatitis_like,GIP4,"{""epi"":true,""back"":true,""vomit"":false,""fever"":false,""alc"":false,""gall"":true,""sev"":6}",URGENT,pancreatitis
+gi_acute_pancreatitis_like,GIP5,"{""epi"":true,""back"":false,""vomit"":true,""fever"":false,""alc"":false,""gall"":false,""sev"":6}",URGENT,pancreatitis
+gi_acute_pancreatitis_like,GIP6,"{""epi"":true,""back"":true,""vomit"":true,""fever"":false,""alc"":false,""gall"":false,""sev"":9}",EMERG,pancreatitis
+gi_acute_pancreatitis_like,GIP7,"{""epi"":true,""back"":false,""vomit"":false,""fever"":true,""alc"":false,""gall"":true,""sev"":6}",URGENT,biliary
+gi_acute_pancreatitis_like,GIP8,"{""epi"":true,""back"":true,""vomit"":true,""fever"":false,""alc"":false,""gall"":true,""sev"":7}",URGENT,pancreatitis
+gi_acute_pancreatitis_like,GIP9,"{""epi"":true,""back"":false,""vomit"":false,""fever"":false,""alc"":true,""gall"":false,""sev"":3}",URGENT,gastritis_ulcer
+gi_acute_pancreatitis_like,GIP10,"{""epi"":true,""back"":true,""vomit"":false,""fever"":true,""alc"":true,""gall"":false,""sev"":8}",EMERG,pancreatitis
+
+neuro_headache,NH1,"{""thunder"":true,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,migraine
+neuro_headache,NH2,"{""thunder"":false,""neurodef"":true,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,migraine
+neuro_headache,NH3,"{""thunder"":false,""neurodef"":false,""fever_neck"":true,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",EMERG,tension
+neuro_headache,NH4,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":true,""age50"":false,""eye"":false}",EMERG,tension
+neuro_headache,NH5,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":true}",EMERG,migraine
+neuro_headache,NH6,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":true,""eye"":false}",URGENT,migraine
+neuro_headache,NH7,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":true,""trauma"":false,""age50"":false,""eye"":false}",URGENT,migraine
+neuro_headache,NH8,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",ROUTINE,tension
+neuro_headache,NH9,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",ROUTINE,migraine
+neuro_headache,NH10,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""preg_postpartum"":false,""trauma"":false,""age50"":false,""eye"":false}",ROUTINE,sinus_related
+
+neuro_dizziness_vertigo,ND1,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",ROUTINE,bppv
+neuro_dizziness_vertigo,ND2,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":true,""ear"":false}",URGENT,vestibular_neuritis
+neuro_dizziness_vertigo,ND3,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":true}",URGENT,meniere
+neuro_dizziness_vertigo,ND4,"{""kind"":""off_balance"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,ND5,"{""kind"":""spinning"",""neurodef"":true,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,ND6,"{""kind"":""lightheaded"",""neurodef"":false,""headache"":false,""cardiac"":true,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,ND7,"{""kind"":""spinning"",""neurodef"":false,""headache"":true,""cardiac"":false,""vomit"":false,""ear"":false}",EMERG,bppv
+neuro_dizziness_vertigo,ND8,"{""kind"":""lightheaded"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",ROUTINE,bppv
+neuro_dizziness_vertigo,ND9,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":true,""ear"":true}",URGENT,meniere
+neuro_dizziness_vertigo,ND10,"{""kind"":""spinning"",""neurodef"":false,""headache"":false,""cardiac"":false,""vomit"":false,""ear"":false}",ROUTINE,bppv
+
+neuro_weakness_numbness,NW1,"{""sudden"":true,""face_speech"":true,""one_side"":true,""vision"":false,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NW2,"{""sudden"":true,""face_speech"":false,""one_side"":true,""vision"":true,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NW3,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":false,""fever"":false}",URGENT,peripheral
+neuro_weakness_numbness,NW4,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":true,""fever"":false}",EMERG,spinal_process
+neuro_weakness_numbness,NW5,"{""sudden"":true,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":true,""fever"":false}",EMERG,spinal_process
+neuro_weakness_numbness,NW6,"{""sudden"":false,""face_speech"":false,""one_side"":true,""vision"":false,""spinal"":false,""fever"":false}",URGENT,peripheral
+neuro_weakness_numbness,NW7,"{""sudden"":true,""face_speech"":false,""one_side"":true,""vision"":false,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+neuro_weakness_numbness,NW8,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":false,""fever"":true}",URGENT,peripheral
+neuro_weakness_numbness,NW9,"{""sudden"":false,""face_speech"":false,""one_side"":false,""vision"":false,""spinal"":false,""fever"":false}",URGENT,peripheral
+neuro_weakness_numbness,NW10,"{""sudden"":true,""face_speech"":true,""one_side"":false,""vision"":false,""spinal"":false,""fever"":false}",EMERG,stroke_tia
+
+neuro_seizure,NS1,"{""first"":true,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,first_time
+neuro_seizure,NS2,"{""first"":false,""ongoing"":true,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,status
+neuro_seizure,NS3,"{""first"":false,""ongoing"":false,""injury"":true,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,breakthrough
+neuro_seizure,NS4,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":true,""fever"":false,""metabolic"":false}",EMERG,provoked
+neuro_seizure,NS5,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":true,""metabolic"":false}",EMERG,provoked
+neuro_seizure,NS6,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":true}",EMERG,provoked
+neuro_seizure,NS7,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,breakthrough
+neuro_seizure,NS8,"{""first"":true,""ongoing"":true,""injury"":false,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,status
+neuro_seizure,NS9,"{""first"":false,""ongoing"":false,""injury"":false,""preg_postpartum"":false,""fever"":true,""metabolic"":true}",EMERG,provoked
+neuro_seizure,NS10,"{""first"":true,""ongoing"":false,""injury"":true,""preg_postpartum"":false,""fever"":false,""metabolic"":false}",EMERG,first_time
+
+neuro_syncope,NY1,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",URGENT,vasovagal
+neuro_syncope,NY2,"{""exert"":true,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+neuro_syncope,NY3,"{""exert"":false,""cardiac"":true,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+neuro_syncope,NY4,"{""exert"":false,""cardiac"":false,""injury"":true,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,vasovagal
+neuro_syncope,NY5,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":true,""bleed"":false,""preg"":false}",EMERG,vasovagal
+neuro_syncope,NY6,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":true,""preg"":false}",EMERG,bleed_related
+neuro_syncope,NY7,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":true}",EMERG,vasovagal
+neuro_syncope,NY8,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",URGENT,vasovagal
+neuro_syncope,NY9,"{""exert"":true,""cardiac"":true,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",EMERG,cardiac_syncope
+neuro_syncope,NY10,"{""exert"":false,""cardiac"":false,""injury"":false,""neurodef"":false,""bleed"":false,""preg"":false}",URGENT,vasovagal
+
+neuro_confusion_ams,NA1,"{""sudden"":true,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NA2,"{""sudden"":false,""fever"":true,""headache"":true,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,infection
+neuro_confusion_ams,NA3,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":true,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NA4,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":true,""toxic"":false}",EMERG,metabolic_toxic
+neuro_confusion_ams,NA5,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":false,""toxic"":true}",EMERG,metabolic_toxic
+neuro_confusion_ams,NA6,"{""sudden"":false,""fever"":true,""headache"":false,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,infection
+neuro_confusion_ams,NA7,"{""sudden"":true,""fever"":false,""headache"":false,""stroke_signs"":true,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NA8,"{""sudden"":false,""fever"":false,""headache"":true,""stroke_signs"":false,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NA9,"{""sudden"":false,""fever"":true,""headache"":true,""stroke_signs"":true,""low_glucose"":false,""toxic"":false}",EMERG,stroke
+neuro_confusion_ams,NA10,"{""sudden"":false,""fever"":false,""headache"":false,""stroke_signs"":false,""low_glucose"":true,""toxic"":true}",EMERG,metabolic_toxic
+
+gu_dysuria_uti,GUD1,"{""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""vomit"":false}",ROUTINE,cystitis
+gu_dysuria_uti,GUD2,"{""fever"":true,""flank"":true,""preg"":false,""male"":false,""discharge"":false,""vomit"":false}",EMERG,pyelonephritis
+gu_dysuria_uti,GUD3,"{""fever"":true,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""vomit"":false}",URGENT,pyelonephritis
+gu_dysuria_uti,GUD4,"{""fever"":false,""flank"":false,""preg"":true,""male"":false,""discharge"":false,""vomit"":false}",URGENT,cystitis
+gu_dysuria_uti,GUD5,"{""fever"":false,""flank"":false,""preg"":false,""male"":true,""discharge"":false,""vomit"":false}",URGENT,cystitis
+gu_dysuria_uti,GUD6,"{""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":true,""vomit"":false}",URGENT,sti_urethritis
+gu_dysuria_uti,GUD7,"{""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""vomit"":true}",URGENT,cystitis
+gu_dysuria_uti,GUD8,"{""fever"":true,""flank"":true,""preg"":true,""male"":false,""discharge"":false,""vomit"":false}",EMERG,pyelonephritis
+gu_dysuria_uti,GUD9,"{""fever"":true,""flank"":false,""preg"":false,""male"":false,""discharge"":true,""vomit"":false}",URGENT,sti_urethritis
+gu_dysuria_uti,GUD10,"{""fever"":false,""flank"":false,""preg"":false,""male"":false,""discharge"":false,""vomit"":false}",ROUTINE,cystitis
+
+gu_flank_pain,GUF1,"{""fever"":false,""urinary"":false,""hematuria"":true,""colicky"":true,""vomit"":false,""preg"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUF2,"{""fever"":true,""urinary"":true,""hematuria"":false,""colicky"":false,""vomit"":false,""preg"":false}",EMERG,pyelonephritis
+gu_flank_pain,GUF3,"{""fever"":true,""urinary"":false,""hematuria"":true,""colicky"":true,""vomit"":false,""preg"":false}",EMERG,pyelonephritis
+gu_flank_pain,GUF4,"{""fever"":false,""urinary"":false,""hematuria"":false,""colicky"":false,""vomit"":false,""preg"":false}",ROUTINE,msk
+gu_flank_pain,GUF5,"{""fever"":false,""urinary"":false,""hematuria"":true,""colicky"":true,""vomit"":true,""preg"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUF6,"{""fever"":false,""urinary"":true,""hematuria"":false,""colicky"":false,""vomit"":false,""preg"":false}",ROUTINE,pyelonephritis
+gu_flank_pain,GUF7,"{""fever"":false,""urinary"":false,""hematuria"":false,""colicky"":true,""vomit"":false,""preg"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUF8,"{""fever"":false,""urinary"":false,""hematuria"":false,""colicky"":false,""vomit"":true,""preg"":false}",URGENT,nephrolithiasis
+gu_flank_pain,GUF9,"{""fever"":false,""urinary"":false,""hematuria"":false,""colicky"":false,""vomit"":false,""preg"":true}",URGENT,msk
+gu_flank_pain,GUF10,"{""fever"":false,""urinary"":false,""hematuria"":true,""colicky"":true,""vomit"":false,""preg"":false}",URGENT,nephrolithiasis
+
+gu_testicular_pain,GUT1,"{""sudden"":true,""high_riding"":false,""nausea"":true,""fever"":false,""discharge"":false,""trauma"":false}",EMERG,torsion
+gu_testicular_pain,GUT2,"{""sudden"":true,""high_riding"":true,""nausea"":false,""fever"":false,""discharge"":false,""trauma"":false}",EMERG,torsion
+gu_testicular_pain,GUT3,"{""sudden"":false,""high_riding"":false,""nausea"":false,""fever"":true,""discharge"":true,""trauma"":false}",URGENT,epididymitis
+gu_testicular_pain,GUT4,"{""sudden"":false,""high_riding"":false,""nausea"":false,""fever"":false,""discharge"":true,""trauma"":false}",URGENT,epididymitis
+gu_testicular_pain,GUT5,"{""sudden"":false,""high_riding"":false,""nausea"":false,""fever"":false,""discharge"":false,""trauma"":true}",URGENT,trauma
+gu_testicular_pain,GUT6,"{""sudden"":true,""high_riding"":false,""nausea"":false,""fever"":false,""discharge"":false,""trauma"":false}",EMERG,torsion
+gu_testicular_pain,GUT7,"{""sudden"":false,""high_riding"":false,""nausea"":false,""fever"":true,""discharge"":false,""trauma"":false}",URGENT,epididymitis
+gu_testicular_pain,GUT8,"{""sudden"":false,""high_riding"":false,""nausea"":true,""fever"":false,""discharge"":false,""trauma"":false}",EMERG,torsion
+gu_testicular_pain,GUT9,"{""sudden"":false,""high_riding"":false,""nausea"":false,""fever"":false,""discharge"":false,""trauma"":false}",URGENT,epididymitis
+gu_testicular_pain,GUT10,"{""sudden"":true,""high_riding"":true,""nausea"":true,""fever"":false,""discharge"":false,""trauma"":false}",EMERG,torsion
+
+gu_hematuria,GUH1,"{""clots"":false,""stone_pain"":true,""fever"":false,""blood_thinner"":false,""trauma"":false}",URGENT,stone
+gu_hematuria,GUH2,"{""clots"":true,""stone_pain"":false,""fever"":false,""blood_thinner"":false,""trauma"":false}",EMERG,stone
+gu_hematuria,GUH3,"{""clots"":false,""stone_pain"":true,""fever"":true,""blood_thinner"":false,""trauma"":false}",EMERG,uti
+gu_hematuria,GUH4,"{""clots"":false,""stone_pain"":false,""fever"":true,""blood_thinner"":false,""trauma"":false}",URGENT,uti
+gu_hematuria,GUH5,"{""clots"":false,""stone_pain"":false,""fever"":false,""blood_thinner"":true,""trauma"":false}",URGENT,anticoag
+gu_hematuria,GUH6,"{""clots"":false,""stone_pain"":false,""fever"":false,""blood_thinner"":false,""trauma"":true}",EMERG,stone
+gu_hematuria,GUH7,"{""clots"":false,""stone_pain"":true,""fever"":false,""blood_thinner"":true,""trauma"":false}",URGENT,anticoag
+gu_hematuria,GUH8,"{""clots"":true,""stone_pain"":true,""fever"":true,""blood_thinner"":false,""trauma"":false}",EMERG,uti
+gu_hematuria,GUH9,"{""clots"":false,""stone_pain"":false,""fever"":false,""blood_thinner"":false,""trauma"":false}",URGENT,stone
+gu_hematuria,GUH10,"{""clots"":false,""stone_pain"":true,""fever"":false,""blood_thinner"":false,""trauma"":false}",URGENT,stone
+
+gu_urinary_retention,GUR1,"{""unable"":true,""pain"":true,""fever"":false,""neuro"":false,""blood"":false}",EMERG,bph_obstruction
+gu_urinary_retention,GUR2,"{""unable"":true,""pain"":false,""fever"":false,""neuro"":false,""blood"":false}",EMERG,bph_obstruction
+gu_urinary_retention,GUR3,"{""unable"":false,""pain"":false,""fever"":false,""neuro"":true,""blood"":false}",EMERG,neurogenic
+gu_urinary_retention,GUR4,"{""unable"":true,""pain"":true,""fever"":false,""neuro"":true,""blood"":false}",EMERG,neurogenic
+gu_urinary_retention,GUR5,"{""unable"":true,""pain"":true,""fever"":false,""neuro"":false,""blood"":true}",EMERG,clot_retention
+gu_urinary_retention,GUR6,"{""unable"":true,""pain"":false,""fever"":true,""neuro"":false,""blood"":false}",EMERG,bph_obstruction
+gu_urinary_retention,GUR7,"{""unable"":false,""pain"":false,""fever"":false,""neuro"":false,""blood"":true}",EMERG,clot_retention
+gu_urinary_retention,GUR8,"{""unable"":true,""pain"":true,""fever"":true,""neuro"":false,""blood"":false}",EMERG,bph_obstruction
+gu_urinary_retention,GUR9,"{""unable"":true,""pain"":true,""fever"":false,""neuro"":false,""blood"":false}",EMERG,bph_obstruction
+gu_urinary_retention,GUR10,"{""unable"":true,""pain"":false,""fever"":false,""neuro"":false,""blood"":false}",EMERG,bph_obstruction
+
+gu_sti_exposure_discharge,GUS1,"{""fever"":false,""pelvic"":false,""testis"":false,""preg"":false,""ulcers"":false,""assault"":false}",ROUTINE,gon_chlam
+gu_sti_exposure_discharge,GUS2,"{""fever"":false,""pelvic"":false,""testis"":false,""preg"":false,""ulcers"":true,""assault"":false}",URGENT,herpes
+gu_sti_exposure_discharge,GUS3,"{""fever"":true,""pelvic"":true,""testis"":false,""preg"":false,""ulcers"":false,""assault"":false}",URGENT,pid
+gu_sti_exposure_discharge,GUS4,"{""fever"":false,""pelvic"":true,""testis"":false,""preg"":false,""ulcers"":false,""assault"":false}",ROUTINE,pid
+gu_sti_exposure_discharge,GUS5,"{""fever"":false,""pelvic"":false,""testis"":true,""preg"":false,""ulcers"":false,""assault"":false}",EMERG,gon_chlam
+gu_sti_exposure_discharge,GUS6,"{""fever"":false,""pelvic"":false,""testis"":false,""preg"":true,""ulcers"":false,""assault"":false}",URGENT,gon_chlam
+gu_sti_exposure_discharge,GUS7,"{""fever"":false,""pelvic"":false,""testis"":false,""preg"":false,""ulcers"":false,""assault"":true}",URGENT,gon_chlam
+gu_sti_exposure_discharge,GUS8,"{""fever"":true,""pelvic"":true,""testis"":false,""preg"":true,""ulcers"":false,""assault"":false}",URGENT,pid
+gu_sti_exposure_discharge,GUS9,"{""fever"":false,""pelvic"":false,""testis"":false,""preg"":false,""ulcers"":true,""assault"":false}",URGENT,herpes
+gu_sti_exposure_discharge,GUS10,"{""fever"":false,""pelvic"":false,""testis"":false,""preg"":false,""ulcers"":false,""assault"":false}",ROUTINE,gon_chlam
+
+gu_pelvic_pain_possible_ovarian_torsion,GUP1,"{""sudden"":true,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false,""vomit"":true}",EMERG,torsion
+gu_pelvic_pain_possible_ovarian_torsion,GUP2,"{""sudden"":true,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false,""vomit"":false}",URGENT,cyst
+gu_pelvic_pain_possible_ovarian_torsion,GUP3,"{""sudden"":false,""preg"":true,""bleed"":true,""fever"":false,""discharge"":false,""vomit"":false}",EMERG,ectopic
+gu_pelvic_pain_possible_ovarian_torsion,GUP4,"{""sudden"":false,""preg"":false,""bleed"":false,""fever"":true,""discharge"":true,""vomit"":false}",URGENT,pid
+gu_pelvic_pain_possible_ovarian_torsion,GUP5,"{""sudden"":false,""preg"":false,""bleed"":false,""fever"":true,""discharge"":false,""vomit"":false}",URGENT,pid
+gu_pelvic_pain_possible_ovarian_torsion,GUP6,"{""sudden"":true,""preg"":true,""bleed"":true,""fever"":false,""discharge"":false,""vomit"":false}",EMERG,ectopic
+gu_pelvic_pain_possible_ovarian_torsion,GUP7,"{""sudden"":true,""preg"":false,""bleed"":false,""fever"":false,""discharge"":true,""vomit"":true}",EMERG,torsion
+gu_pelvic_pain_possible_ovarian_torsion,GUP8,"{""sudden"":false,""preg"":false,""bleed"":false,""fever"":false,""discharge"":false,""vomit"":false}",URGENT,cyst
+gu_pelvic_pain_possible_ovarian_torsion,GUP9,"{""sudden"":false,""preg"":true,""bleed"":false,""fever"":false,""discharge"":false,""vomit"":false}",URGENT,ectopic
+gu_pelvic_pain_possible_ovarian_torsion,GUP10,"{""sudden"":false,""preg"":false,""bleed"":true,""fever"":false,""discharge"":false,""vomit"":false}",URGENT,cyst
+
+gu_vaginal_bleeding,GUV1,"{""preg"":true,""heavy"":false,""faint"":false,""pain"":false,""postpartum"":false}",EMERG,preg_related
+gu_vaginal_bleeding,GUV2,"{""preg"":false,""heavy"":true,""faint"":false,""pain"":false,""postpartum"":false}",EMERG,structural
+gu_vaginal_bleeding,GUV3,"{""preg"":false,""heavy"":false,""faint"":true,""pain"":false,""postpartum"":false}",EMERG,hormonal
+gu_vaginal_bleeding,GUV4,"{""preg"":false,""heavy"":false,""faint"":false,""pain"":true,""postpartum"":false}",URGENT,hormonal
+gu_vaginal_bleeding,GUV5,"{""preg"":false,""heavy"":false,""faint"":false,""pain"":false,""postpartum"":true}",EMERG,hormonal
+gu_vaginal_bleeding,GUV6,"{""preg"":true,""heavy"":true,""faint"":false,""pain"":false,""postpartum"":false}",EMERG,preg_related
+gu_vaginal_bleeding,GUV7,"{""preg"":false,""heavy"":true,""faint"":true,""pain"":true,""postpartum"":false}",EMERG,structural
+gu_vaginal_bleeding,GUV8,"{""preg"":false,""heavy"":false,""faint"":false,""pain"":false,""postpartum"":false}",URGENT,hormonal
+gu_vaginal_bleeding,GUV9,"{""preg"":false,""heavy"":false,""faint"":false,""pain"":true,""postpartum"":true}",EMERG,hormonal
+gu_vaginal_bleeding,GUV10,"{""preg"":false,""heavy"":true,""faint"":false,""pain"":false,""postpartum"":false}",EMERG,structural
+Run order (same as you like)
+npm run ship:system -- gi
+npm run ship:system -- neuro
+npm run ship:system -- gu
+
+If anything fails due to your expression parser specifics (e.g., enum comparisons, true literal, list syntax), paste only the FAIL block and I’ll regenerate only the offending rows to match your exact validator grammar
