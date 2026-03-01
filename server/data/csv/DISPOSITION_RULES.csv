@@ -173,3 +173,47 @@ gu_pelvic_pain_possible_ovarian_torsion,DISP_PPOT_DEFAULT,99,"true",urgent_care,
 gu_vaginal_bleeding,DISP_VBLD_EMERG,1,"answers.Q_VBLD_PREG == 'yes' || answers.Q_VBLD_HEAVY == 'yes' || answers.Q_VBLD_FAINT == 'yes' || answers.Q_VBLD_POSTPARTUM == 'yes'",er_send,TPL_VBLD_ER_SEND,HIGH
 gu_vaginal_bleeding,DISP_VBLD_URGENT,2,"answers.Q_VBLD_PAIN == 'yes'",urgent_care,TPL_VBLD_URGENT_CARE,MODERATE
 gu_vaginal_bleeding,DISP_VBLD_DEFAULT,99,"true",urgent_care,TPL_VBLD_URGENT_CARE,LOW
+cardio_chest_pain,DISP_CCP_EMERG_ANY_RF,1,"answers.Q_CCP_PRESSURE == 'yes' && (answers.Q_CCP_EXERT == 'yes' || answers.Q_CCP_RADIATE == 'yes' || answers.Q_CCP_SWEAT == 'yes') || (answers.Q_CCP_PLEURITIC == 'yes' && answers.Q_CCP_SOB == 'yes' && answers.Q_CCP_RISK == 'yes') || answers.Q_CCP_TEARING == 'yes'",er_send,TPL_CCP_ER_SEND,HIGH
+cardio_chest_pain,DISP_CCP_URGENT_SOB,2,"answers.Q_CCP_SOB == 'yes'",urgent_care,TPL_CCP_URGENT_CARE,HIGH
+cardio_chest_pain,DISP_CCP_URGENT_DEFAULT,99,"true",urgent_care,TPL_CCP_URGENT_CARE,HIGH
+cardio_palpitations,DISP_PALP_EMERG_RF,1,"answers.Q_PALP_SYNCOPE == 'yes' || (answers.Q_PALP_CP == 'yes' && answers.Q_PALP_SOB == 'yes') || (answers.Q_PALP_HR_VERY_FAST == 'yes' && answers.Q_PALP_SOB == 'yes')",er_send,TPL_PALP_ER_SEND,HIGH
+cardio_palpitations,DISP_PALP_URGENT_FAST,2,"answers.Q_PALP_HR_VERY_FAST == 'yes' || answers.Q_PALP_CP == 'yes' || answers.Q_PALP_SOB == 'yes' || answers.Q_PALP_THYROID == 'yes'",urgent_care,TPL_PALP_URGENT_CARE,HIGH
+cardio_palpitations,DISP_PALP_ROUTINE,99,"true",pcp,TPL_PALP_PCP,HIGH
+cardio_leg_swelling,DISP_LGSW_EMERG_PE,1,"answers.Q_LGSW_SOB == 'yes' && (answers.Q_LGSW_ONE_LEG == 'yes' || answers.Q_LGSW_RECENT_TRAVEL == 'yes')",er_send,TPL_LGSW_ER_SEND,HIGH
+cardio_leg_swelling,DISP_LGSW_URGENT_DVT_OR_CELL,2,"(answers.Q_LGSW_ONE_LEG == 'yes' && answers.Q_LGSW_PAIN == 'yes' && answers.Q_LGSW_RECENT_TRAVEL == 'yes') || answers.Q_LGSW_FEVER_RED == 'yes' || answers.Q_LGSW_ONE_LEG == 'yes' || answers.Q_LGSW_SOB == 'yes'",urgent_care,TPL_LGSW_URGENT_CARE,HIGH
+cardio_leg_swelling,DISP_LGSW_ROUTINE_BILAT,99,"true",pcp,TPL_LGSW_PCP,HIGH
+msk_back_pain,DISP_BKPN_EMERG,1,"answers.Q_BKPN_SADDLE == 'yes' || answers.Q_BKPN_WEAK == 'yes' || (answers.Q_BKPN_FEVER == 'yes' && answers.Q_BKPN_PAIN_SEVERE == 'yes')",er_send,TPL_BKPN_ER_SEND,HIGH
+msk_back_pain,DISP_BKPN_URGENT,2,"(answers.Q_BKPN_TRAUMA == 'yes' && answers.Q_BKPN_PAIN_SEVERE == 'yes') || answers.Q_BKPN_CANCER == 'yes' || answers.Q_BKPN_FEVER == 'yes'",urgent_care,TPL_BKPN_URGENT_CARE,HIGH
+msk_back_pain,DISP_BKPN_ROUTINE,99,"true",pcp,TPL_BKPN_PCP,HIGH
+msk_joint_pain,DISP_JTPN_EMERG_SEPTIC,1,"answers.Q_JTPN_HOT == 'yes' && answers.Q_JTPN_FEVER == 'yes'",er_send,TPL_JTPN_ER_SEND,HIGH
+msk_joint_pain,DISP_JTPN_URGENT,2,"(answers.Q_JTPN_TRAUMA == 'yes' && answers.Q_JTPN_UNABLE_WEIGHT == 'yes') || answers.Q_JTPN_UNABLE_WEIGHT == 'yes' || answers.Q_JTPN_HOT == 'yes' || answers.Q_JTPN_FEVER == 'yes'",urgent_care,TPL_JTPN_URGENT_CARE,HIGH
+msk_joint_pain,DISP_JTPN_ROUTINE,99,"true",pcp,TPL_JTPN_PCP,HIGH
+msk_sprain_injury,DISP_SINJ_EMERG_RF,1,"answers.Q_SINJ_OPEN == 'yes' || answers.Q_SINJ_DEFORM == 'yes' || answers.Q_SINJ_NEUROVASCULAR == 'yes' || (answers.Q_SINJ_SEVERE == 'yes' && answers.Q_SINJ_UNABLE_WEIGHT == 'yes') || answers.Q_SINJ_HEAD_INJURY == 'yes'",er_send,TPL_SINJ_ER_SEND,HIGH
+msk_sprain_injury,DISP_SINJ_URGENT_UNABLE,2,"answers.Q_SINJ_UNABLE_WEIGHT == 'yes'",urgent_care,TPL_SINJ_URGENT_CARE,HIGH
+msk_sprain_injury,DISP_SINJ_ROUTINE,99,"true",pcp,TPL_SINJ_PCP,HIGH
+derm_rash,DISP_DRSH_EMERG,1,"(answers.Q_DRSH_MUCOSAL == 'yes' && answers.Q_DRSH_BLISTER == 'yes' && answers.Q_DRSH_NEW_MED == 'yes') || (answers.Q_DRSH_FEVER == 'yes' && answers.Q_DRSH_PURPLE == 'yes')",er_send,TPL_DRSH_ER_SEND,HIGH
+derm_rash,DISP_DRSH_URGENT,2,"answers.Q_DRSH_FEVER == 'yes' || answers.Q_DRSH_NEW_MED == 'yes' || answers.Q_DRSH_PURPLE == 'yes'",urgent_care,TPL_DRSH_URGENT_CARE,HIGH
+derm_rash,DISP_DRSH_ROUTINE,99,"true",pcp,TPL_DRSH_PCP,HIGH
+derm_cellulitis,DISP_DCELL_EMERG,1,"(answers.Q_DCELL_PAIN_OUT == 'yes' && (answers.Q_DCELL_FEVER == 'yes' || answers.Q_DCELL_SPREADING == 'yes')) || (answers.Q_DCELL_FACE_EYE == 'yes' && answers.Q_DCELL_FEVER == 'yes')",er_send,TPL_DCELL_ER_SEND,HIGH
+derm_cellulitis,DISP_DCELL_URGENT,2,"(answers.Q_DCELL_FEVER == 'yes' && answers.Q_DCELL_SPREADING == 'yes') || answers.Q_DCELL_IMMUNO == 'yes' || answers.Q_DCELL_PUS == 'yes'",urgent_care,TPL_DCELL_URGENT_CARE,HIGH
+derm_cellulitis,DISP_DCELL_ROUTINE,99,"true",pcp,TPL_DCELL_PCP,HIGH
+derm_allergic_reaction,DISP_DALRG_EMERG,1,"answers.Q_DALRG_LIP_TONGUE == 'yes' || answers.Q_DALRG_THROAT == 'yes' || answers.Q_DALRG_SOB == 'yes'",er_send,TPL_DALRG_ER_SEND,HIGH
+derm_allergic_reaction,DISP_DALRG_URGENT,2,"(answers.Q_DALRG_HIVES == 'yes' && answers.Q_DALRG_VOMIT == 'yes') || answers.Q_DALRG_HIVES == 'yes'",urgent_care,TPL_DALRG_URGENT_CARE,HIGH
+derm_allergic_reaction,DISP_DALRG_ROUTINE,99,"true",pcp,TPL_DALRG_PCP,HIGH
+endo_hyperglycemia,DISP_EHYPR_EMERG_DKA,1,"(answers.Q_EHYPR_VOMIT == 'yes' && (answers.Q_EHYPR_RAPID_BREATH == 'yes' || answers.Q_EHYPR_CONFUSION == 'yes')) || (answers.Q_EHYPR_RAPID_BREATH == 'yes' && answers.Q_EHYPR_ABD_PAIN == 'yes') || answers.Q_EHYPR_CONFUSION == 'yes'",er_send,TPL_EHYPR_ER_SEND,HIGH
+endo_hyperglycemia,DISP_EHYPR_URGENT,2,"answers.Q_EHYPR_VOMIT == 'yes' || answers.Q_EHYPR_INFECTION == 'yes' || (answers.Q_EHYPR_POLYURIA == 'yes' && answers.Q_EHYPR_POLYDIPSIA == 'yes') || (answers.Q_EHYPR_KNOWN_DM == 'yes' && answers.Q_EHYPR_POLYURIA == 'yes')",urgent_care,TPL_EHYPR_URGENT_CARE,HIGH
+endo_hyperglycemia,DISP_EHYPR_ROUTINE,99,"true",pcp,TPL_EHYPR_PCP,HIGH
+endo_hypoglycemia,DISP_EHYPO_EMERG,1,"answers.Q_EHYPO_CONFUSION == 'yes' || answers.Q_EHYPO_SYNCOPE == 'yes' || answers.Q_EHYPO_UNABLE_PO == 'yes'",er_send,TPL_EHYPO_ER_SEND,HIGH
+endo_hypoglycemia,DISP_EHYPO_URGENT,2,"(answers.Q_EHYPO_RECURRENT == 'yes' && answers.Q_EHYPO_KNOWN_DM == 'yes') || answers.Q_EHYPO_KNOWN_DM == 'yes'",urgent_care,TPL_EHYPO_URGENT_CARE,HIGH
+endo_hypoglycemia,DISP_EHYPO_ROUTINE,99,"true",pcp,TPL_EHYPO_PCP,HIGH
+endo_thyroid_symptoms,DISP_ETHYR_EMERG,1,"(answers.Q_ETHYR_FEVER_DELIRIUM == 'yes' && answers.Q_ETHYR_TACHY == 'yes') || (answers.Q_ETHYR_CP_SOB == 'yes' && answers.Q_ETHYR_TACHY == 'yes') || answers.Q_ETHYR_FEVER_DELIRIUM == 'yes'",er_send,TPL_ETHYR_ER_SEND,HIGH
+endo_thyroid_symptoms,DISP_ETHYR_URGENT,2,"answers.Q_ETHYR_TACHY == 'yes' || answers.Q_ETHYR_WEIGHT_LOSS == 'yes' || answers.Q_ETHYR_WEIGHT_GAIN == 'yes' || answers.Q_ETHYR_FATIGUE == 'yes'",urgent_care,TPL_ETHYR_URGENT_CARE,HIGH
+endo_thyroid_symptoms,DISP_ETHYR_ROUTINE,99,"true",pcp,TPL_ETHYR_PCP,HIGH
+psych_anxiety_panic,DISP_PANX_EMERG_SI,1,"answers.Q_PANX_SI == 'yes'",er_send,TPL_PANX_ER_SEND,HIGH
+psych_anxiety_panic,DISP_PANX_URGENT,2,"answers.Q_PANX_CP == 'yes' || answers.Q_PANX_SOB == 'yes' || answers.Q_PANX_SYNCOPE == 'yes'",urgent_care,TPL_PANX_URGENT_CARE,HIGH
+psych_anxiety_panic,DISP_PANX_ROUTINE,99,"true",pcp,TPL_PANX_PCP,HIGH
+psych_depression_suicidal_ideation,DISP_PDEP_EMERG,1,"(answers.Q_PDEP_SI == 'yes' && answers.Q_PDEP_INTENT == 'yes') || answers.Q_PDEP_PSYCHOSIS == 'yes' || (answers.Q_PDEP_SUBSTANCE == 'yes' && answers.Q_PDEP_SI == 'yes')",er_send,TPL_PDEP_ER_SEND,HIGH
+psych_depression_suicidal_ideation,DISP_PDEP_URGENT,2,"answers.Q_PDEP_GRAVE == 'yes' || answers.Q_PDEP_SI == 'yes'",urgent_care,TPL_PDEP_URGENT_CARE,HIGH
+psych_depression_suicidal_ideation,DISP_PDEP_ROUTINE,99,"true",pcp,TPL_PDEP_PCP,HIGH
+psych_agitation_psychosis,DISP_PAGIT_EMERG,1,"answers.Q_PAGIT_VIOLENT == 'yes' || answers.Q_PAGIT_UNABLE_SAFE == 'yes' || answers.Q_PAGIT_HALLUC == 'yes' || answers.Q_PAGIT_FEVER == 'yes' || (answers.Q_PAGIT_SUBSTANCE == 'yes' && (answers.Q_PAGIT_VIOLENT == 'yes' || answers.Q_PAGIT_HALLUC == 'yes')) || answers.Q_PAGIT_SI == 'yes'",er_send,TPL_PAGIT_ER_SEND,HIGH
+psych_agitation_psychosis,DISP_PAGIT_URGENT,99,"true",urgent_care,TPL_PAGIT_URGENT_CARE,HIGH
