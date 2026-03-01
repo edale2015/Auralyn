@@ -289,7 +289,6 @@ gi_jaundice,CL_JAUND_BILIARY_OBSTRUCTION,CSR_JAUND_BILIARY_OBSTRUCTION_02,2,"ans
 gi_jaundice,CL_JAUND_BILIARY_OBSTRUCTION,CSR_JAUND_BILIARY_OBSTRUCTION_03,1,"answers.Q_JAUND_ITCH == 'yes'","Itching"
 gi_jaundice,CL_JAUND_HEPATITIS,CSR_JAUND_HEPATITIS_01,1,"answers.Q_JAUND_FEVER == 'yes'","Fever"
 gi_jaundice,CL_JAUND_HEPATITIS,CSR_JAUND_HEPATITIS_02,1,"answers.Q_JAUND_PAIN_RUQ == 'no'","No RUQ pain"
-gi_jaundice,CL_JAUND_HEPATITIS,CSR_JAUND_HEPATITIS_03,-2,"answers.Q_JAUND_PAIN_RUQ == 'yes'","RUQ pain suppresses hepatitis"
 gi_dysphagia,CL_DYSPH_GERD_ESOPHAGITIS,CSR_DYSPH_GERD_ESOPHAGITIS_01,1,"answers.Q_DYSPH_ODYN == 'yes'","Odynophagia"
 gi_dysphagia,CL_DYSPH_STRICTURE,CSR_DYSPH_STRICTURE_01,1,"answers.Q_DYSPH_WEIGHT_LOSS == 'no'","No weight loss"
 gi_dysphagia,CL_DYSPH_MALIGNANCY,CSR_DYSPH_MALIGNANCY_01,3,"answers.Q_DYSPH_WEIGHT_LOSS == 'yes'","Weight loss"
@@ -568,3 +567,17 @@ general_nausea_malaise,CL_GNAUS_DEHYDRATION,CSR_GNAUS_02,3,"answers.Q_GNAUS_DEHY
 general_nausea_malaise,CL_GNAUS_GI_BLEED,CSR_GNAUS_03,5,"answers.Q_GNAUS_BLOOD == 'yes'",gi_bleed rule 3
 general_nausea_malaise,CL_GNAUS_CARDIAC_MIMIC,CSR_GNAUS_04,5,"answers.Q_GNAUS_CP == 'yes' || answers.Q_GNAUS_SOB == 'yes'",cardiac_mimic rule 4
 general_nausea_malaise,CL_GNAUS_PREG_RELATED,CSR_GNAUS_05,3,"answers.Q_GNAUS_PREG == 'yes'",preg_related rule 5
+cardio_chest_pain,CL_CCP_PLEURISY,CSR_CCP_PLEURISY_03,-2,"answers.Q_CCP_PRESSURE == 'yes' && answers.Q_CCP_EXERT == 'yes'","Pressure+exertion suppresses pleurisy"
+cardio_palpitations,CL_PALP_SVT_AF,CSR_PALP_SVT_AF_03,2,"answers.Q_PALP_SYNCOPE == 'yes'","Syncope suggests arrhythmia"
+cardio_leg_swelling,CL_LGSW_CELLULITIS,CSR_LGSW_CELLULITIS_02,1,"answers.Q_LGSW_ONE_LEG == 'yes'","Unilateral swelling with infection"
+cardio_leg_swelling,CL_LGSW_DVT,CSR_LGSW_DVT_05,-3,"answers.Q_LGSW_FEVER_RED == 'yes'","Fever and redness suppresses DVT"
+gi_abdominal_pain,CL_ABD_GASTROENTERITIS,CSR_ABD_GASTROENTERITIS_04,1,"answers.Q_ABD_LOC != 'rlq' && answers.Q_ABD_LOC != 'ruq' && answers.Q_ABD_LOC != 'llq' && answers.Q_ABD_LOC != 'diffuse'","Non-localized pain defaults gastro"
+gi_constipation,CL_CONST_OBSTRUCTION,CSR_CONST_OBSTRUCTION_04,1,"answers.Q_CONST_FEVER == 'yes'","Fever suggests obstruction"
+gi_constipation,CL_CONST_OBSTRUCTION,CSR_CONST_OBSTRUCTION_05,1,"answers.Q_CONST_DUR >= 6","Prolonged obstipation"
+gi_diarrhea,CL_DIARR_INVASIVE_BACTERIAL,CSR_DIARR_INVASIVE_BACTERIAL_04,2,"answers.Q_DIARR_FEVER == 'yes' && answers.Q_DIARR_TRAVEL == 'yes'","Fever plus travel invasive"
+gi_diarrhea,CL_DIARR_VIRAL_GASTRO,CSR_DIARR_VIRAL_GASTRO_05,-1,"answers.Q_DIARR_FEVER == 'yes' && answers.Q_DIARR_TRAVEL == 'yes'","Fever plus travel suppresses viral"
+gi_diarrhea,CL_DIARR_C_DIFF,CSR_DIARR_C_DIFF_04,1,"answers.Q_DIARR_IMMUNO == 'yes'","Immunocompromised c_diff risk"
+gi_diarrhea,CL_DIARR_C_DIFF,CSR_DIARR_C_DIFF_05,2,"answers.Q_DIARR_ABX == 'yes' && answers.Q_DIARR_TRAVEL == 'yes'","ABX plus travel c_diff risk"
+gi_diarrhea,CL_DIARR_TRAVELERS,CSR_DIARR_TRAVELERS_03,2,"answers.Q_DIARR_FEVER == 'no' && answers.Q_DIARR_BLOOD == 'no'","Benign travelers diarrhea"
+gi_diarrhea,CL_DIARR_TRAVELERS,CSR_DIARR_TRAVELERS_04,1,"answers.Q_DIARR_DUR >= 5","Prolonged travelers diarrhea"
+gi_vomiting,CL_VOM_PANCREATITIS_LIKE,CSR_VOM_PANCREATITIS_LIKE_04,1,"answers.Q_VOM_DUR <= 1","Acute onset pancreatitis"
