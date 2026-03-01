@@ -217,3 +217,47 @@ psych_depression_suicidal_ideation,DISP_PDEP_URGENT,2,"answers.Q_PDEP_GRAVE == '
 psych_depression_suicidal_ideation,DISP_PDEP_ROUTINE,99,"true",pcp,TPL_PDEP_PCP,HIGH
 psych_agitation_psychosis,DISP_PAGIT_EMERG,1,"answers.Q_PAGIT_VIOLENT == 'yes' || answers.Q_PAGIT_UNABLE_SAFE == 'yes' || answers.Q_PAGIT_HALLUC == 'yes' || answers.Q_PAGIT_FEVER == 'yes' || (answers.Q_PAGIT_SUBSTANCE == 'yes' && (answers.Q_PAGIT_VIOLENT == 'yes' || answers.Q_PAGIT_HALLUC == 'yes')) || answers.Q_PAGIT_SI == 'yes'",er_send,TPL_PAGIT_ER_SEND,HIGH
 psych_agitation_psychosis,DISP_PAGIT_URGENT,99,"true",urgent_care,TPL_PAGIT_URGENT_CARE,HIGH
+ophtho_vision_loss,DISP_OVL_EMERG_ANY,1,"answers.Q_OVL_SUDDEN == 'yes' || answers.Q_OVL_NEURODEF == 'yes' || answers.Q_OVL_TRAUMA == 'yes' || answers.Q_OVL_FLASHES_FLOATERS == 'yes' || (answers.Q_OVL_PAIN == 'yes' && answers.Q_OVL_HEADACHE == 'yes')",er_send,TPL_OVL_ER_SEND,HIGH
+ophtho_vision_loss,DISP_OVL_URGENT_DEFAULT,99,"true",urgent_care,TPL_OVL_URGENT_CARE,HIGH
+ophtho_red_eye,DISP_ORE_EMERG_RF,1,"(answers.Q_ORE_CONTACT == 'yes' && (answers.Q_ORE_PAIN == 'yes' || answers.Q_ORE_VISION_CHANGE == 'yes' || answers.Q_ORE_PHOTOPHOBIA == 'yes')) || (answers.Q_ORE_PAIN == 'yes' && (answers.Q_ORE_VISION_CHANGE == 'yes' || answers.Q_ORE_PHOTOPHOBIA == 'yes')) || answers.Q_ORE_TRAUMA == 'yes' || answers.Q_ORE_VISION_CHANGE == 'yes'",er_send,TPL_ORE_ER_SEND,HIGH
+ophtho_red_eye,DISP_ORE_URGENT_PUS,50,"answers.Q_ORE_DISCHARGE_PUS == 'yes' || answers.Q_ORE_CONTACT == 'yes'",urgent_care,TPL_ORE_URGENT_CARE,HIGH
+ophtho_red_eye,DISP_ORE_ROUTINE_DEFAULT,99,"true",pcp,TPL_ORE_PCP,HIGH
+ophtho_eye_pain_foreign_body,DISP_OEPFB_EMERG_RF,1,"answers.Q_OEPFB_CHEMICAL == 'yes' || answers.Q_OEPFB_METAL_WORK == 'yes' || (answers.Q_OEPFB_CONTACT == 'yes' && (answers.Q_OEPFB_SEVERE_PAIN == 'yes' || answers.Q_OEPFB_PHOTOPHOBIA == 'yes' || answers.Q_OEPFB_VISION_CHANGE == 'yes')) || answers.Q_OEPFB_VISION_CHANGE == 'yes'",er_send,TPL_OEPFB_ER_SEND,HIGH
+ophtho_eye_pain_foreign_body,DISP_OEPFB_URGENT_PAIN,50,"answers.Q_OEPFB_SEVERE_PAIN == 'yes' || answers.Q_OEPFB_PHOTOPHOBIA == 'yes' || answers.Q_OEPFB_CONTACT == 'yes'",urgent_care,TPL_OEPFB_URGENT_CARE,HIGH
+ophtho_eye_pain_foreign_body,DISP_OEPFB_ROUTINE_DEFAULT,99,"true",pcp,TPL_OEPFB_PCP,HIGH
+id_fever,DISP_IDF_EMERG_RF,1,"answers.Q_IDF_CONFUSION == 'yes' || answers.Q_IDF_SOB == 'yes' || answers.Q_IDF_NECK_STIFF == 'yes' || answers.Q_IDF_RASH_PURPLE == 'yes' || (answers.Q_IDF_IMMUNO == 'yes' && answers.Q_IDF_TEMP_HIGH == 'yes')",er_send,TPL_IDF_ER_SEND,HIGH
+id_fever,DISP_IDF_URGENT_TEMP_OR_IMMUNO,50,"answers.Q_IDF_TEMP_HIGH == 'yes' || answers.Q_IDF_IMMUNO == 'yes'",urgent_care,TPL_IDF_URGENT_CARE,HIGH
+id_fever,DISP_IDF_ROUTINE_DEFAULT,99,"true",pcp,TPL_IDF_PCP,HIGH
+id_flu_like,DISP_IDFL_EMERG_RESP,1,"answers.Q_IDFL_SOB == 'yes' || answers.Q_IDFL_CP == 'yes'",er_send,TPL_IDFL_ER_SEND,HIGH
+id_flu_like,DISP_IDFL_URGENT_DEHYD_OR_HIGHRISK,50,"answers.Q_IDFL_DEHYD == 'yes' || answers.Q_IDFL_HIGH_RISK == 'yes' || answers.Q_IDFL_SYMPTOM_DAYS_5PLUS == 'yes'",urgent_care,TPL_IDFL_URGENT_CARE,HIGH
+id_flu_like,DISP_IDFL_ROUTINE_DEFAULT,99,"true",pcp,TPL_IDFL_PCP,HIGH
+id_animal_bite_wound_infection,DISP_IDBW_EMERG_NEC,1,"answers.Q_IDBW_PAIN_OUT == 'yes' && (answers.Q_IDBW_FEVER == 'yes' || answers.Q_IDBW_SPREADING == 'yes')",er_send,TPL_IDBW_ER_SEND,HIGH
+id_animal_bite_wound_infection,DISP_IDBW_URGENT_HIGHRISK,50,"answers.Q_IDBW_FEVER == 'yes' || answers.Q_IDBW_SPREADING == 'yes' || answers.Q_IDBW_DEEP == 'yes' || answers.Q_IDBW_IMMUNO == 'yes' || answers.Q_IDBW_RABIES_RISK == 'yes'",urgent_care,TPL_IDBW_URGENT_CARE,HIGH
+id_animal_bite_wound_infection,DISP_IDBW_ROUTINE_DEFAULT,99,"true",pcp,TPL_IDBW_PCP,HIGH
+tox_overdose_intoxication,DISP_TOXOD_EMERG_ANY_RF,1,"answers.Q_TOXOD_SLOW_BREATH == 'yes' || answers.Q_TOXOD_SEIZURE == 'yes' || answers.Q_TOXOD_AMS == 'yes' || answers.Q_TOXOD_CHEST_PAIN == 'yes'",er_send,TPL_TOXOD_ER_SEND,HIGH
+tox_overdose_intoxication,DISP_TOXOD_URGENT_UNKNOWN_OR_VOMIT,50,"answers.Q_TOXOD_UNKNOWN == 'yes' || answers.Q_TOXOD_VOMIT == 'yes'",urgent_care,TPL_TOXOD_URGENT_CARE,HIGH
+tox_overdose_intoxication,DISP_TOXOD_URGENT_DEFAULT,99,"true",urgent_care,TPL_TOXOD_URGENT_CARE,HIGH
+tox_withdrawal,DISP_TOXWD_EMERG_SEVERE,1,"answers.Q_TOXWD_SEIZURE == 'yes' || answers.Q_TOXWD_HALLUC == 'yes' || answers.Q_TOXWD_CHEST_PAIN == 'yes'",er_send,TPL_TOXWD_ER_SEND,HIGH
+tox_withdrawal,DISP_TOXWD_URGENT_MOD,50,"answers.Q_TOXWD_AUTONOMIC == 'yes' || answers.Q_TOXWD_VOMIT == 'yes' || answers.Q_TOXWD_HIGH_RISK == 'yes'",urgent_care,TPL_TOXWD_URGENT_CARE,HIGH
+tox_withdrawal,DISP_TOXWD_URGENT_DEFAULT,99,"true",urgent_care,TPL_TOXWD_URGENT_CARE,HIGH
+tox_poisoning_exposure,DISP_TOXPX_EMERG_ANY_RF,1,"answers.Q_TOXPX_CORROSIVE == 'yes' || answers.Q_TOXPX_INHALATION == 'yes' || answers.Q_TOXPX_AMS == 'yes' || answers.Q_TOXPX_CHEST_PAIN == 'yes'",er_send,TPL_TOXPX_ER_SEND,HIGH
+tox_poisoning_exposure,DISP_TOXPX_URGENT_UNKNOWN_OR_VOMIT,50,"answers.Q_TOXPX_UNKNOWN == 'yes' || answers.Q_TOXPX_VOMIT == 'yes'",urgent_care,TPL_TOXPX_URGENT_CARE,HIGH
+tox_poisoning_exposure,DISP_TOXPX_URGENT_DEFAULT,99,"true",urgent_care,TPL_TOXPX_URGENT_CARE,HIGH
+ortho_trauma_head_injury,DISP_OTHI_EMERG_RF,1,"answers.Q_OTHI_NEURODEF == 'yes' || (answers.Q_OTHI_VOMIT == 'yes' && answers.Q_OTHI_SEVERE_HEADACHE == 'yes') || (answers.Q_OTHI_BLOOD_THINNER == 'yes' && answers.Q_OTHI_VOMIT == 'yes')",er_send,TPL_OTHI_ER_SEND,HIGH
+ortho_trauma_head_injury,DISP_OTHI_URGENT_LOC_OR_THINNER,50,"answers.Q_OTHI_LOC == 'yes' || answers.Q_OTHI_BLOOD_THINNER == 'yes' || answers.Q_OTHI_SEVERE_HEADACHE == 'yes' || answers.Q_OTHI_DANGER_MECH == 'yes' || answers.Q_OTHI_VOMIT == 'yes'",urgent_care,TPL_OTHI_URGENT_CARE,HIGH
+ortho_trauma_head_injury,DISP_OTHI_ROUTINE_DEFAULT,99,"true",pcp,TPL_OTHI_PCP,HIGH
+ortho_trauma_fracture_dislocation,DISP_OTFX_EMERG_RF,1,"answers.Q_OTFX_OPEN == 'yes' || answers.Q_OTFX_NEUROVASCULAR == 'yes' || (answers.Q_OTFX_SEVERE == 'yes' && answers.Q_OTFX_UNABLE_WEIGHT == 'yes')",er_send,TPL_OTFX_ER_SEND,HIGH
+ortho_trauma_fracture_dislocation,DISP_OTFX_URGENT_DEFORM_UNABLE,50,"answers.Q_OTFX_DEFORM == 'yes' || answers.Q_OTFX_UNABLE_WEIGHT == 'yes' || answers.Q_OTFX_HIGH_ENERGY == 'yes' || answers.Q_OTFX_SEVERE == 'yes'",urgent_care,TPL_OTFX_URGENT_CARE,HIGH
+ortho_trauma_fracture_dislocation,DISP_OTFX_ROUTINE_DEFAULT,99,"true",pcp,TPL_OTFX_PCP,HIGH
+ortho_trauma_laceration,DISP_OTLAC_EMERG_BLEED,1,"answers.Q_OTLAC_BLEEDING_UNCONTROLLED == 'yes'",er_send,TPL_OTLAC_ER_SEND,HIGH
+ortho_trauma_laceration,DISP_OTLAC_URGENT_TENDON_OR_DEEP,50,"answers.Q_OTLAC_TENDON == 'yes' || answers.Q_OTLAC_NUMB == 'yes' || answers.Q_OTLAC_DEEP == 'yes' || answers.Q_OTLAC_DIRTY == 'yes' || answers.Q_OTLAC_FACE_HAND == 'yes'",urgent_care,TPL_OTLAC_URGENT_CARE,HIGH
+ortho_trauma_laceration,DISP_OTLAC_ROUTINE_DEFAULT,99,"true",pcp,TPL_OTLAC_PCP,HIGH
+general_fatigue,DISP_GFAT_EMERG_RF,1,"answers.Q_GFAT_CP_SOB == 'yes' || answers.Q_GFAT_SYNCOPE == 'yes' || answers.Q_GFAT_BLEEDING == 'yes' || answers.Q_GFAT_DEPRESSION_SI == 'yes'",er_send,TPL_GFAT_ER_SEND,HIGH
+general_fatigue,DISP_GFAT_URGENT_FEVER_OR_WEIGHTLOSS,50,"answers.Q_GFAT_FEVER == 'yes' || answers.Q_GFAT_WEIGHT_LOSS == 'yes'",urgent_care,TPL_GFAT_URGENT_CARE,HIGH
+general_fatigue,DISP_GFAT_ROUTINE_DEFAULT,99,"true",pcp,TPL_GFAT_PCP,HIGH
+general_generalized_weakness,DISP_GWEAK_EMERG_FOCAL_OR_GLUCOSE_OR_CP,1,"answers.Q_GWEAK_FOCAL == 'yes' || answers.Q_GWEAK_LOW_GLUCOSE == 'yes' || answers.Q_GWEAK_CP_SOB == 'yes'",er_send,TPL_GWEAK_ER_SEND,HIGH
+general_generalized_weakness,DISP_GWEAK_URGENT_FEVER_DEHYD_FALL,50,"answers.Q_GWEAK_FEVER == 'yes' || answers.Q_GWEAK_DEHYD == 'yes' || answers.Q_GWEAK_FALL == 'yes'",urgent_care,TPL_GWEAK_URGENT_CARE,HIGH
+general_generalized_weakness,DISP_GWEAK_ROUTINE_DEFAULT,99,"true",pcp,TPL_GWEAK_PCP,HIGH
+general_nausea_malaise,DISP_GNAUS_EMERG_CARDIAC_OR_BLEED,1,"answers.Q_GNAUS_CP == 'yes' || answers.Q_GNAUS_SOB == 'yes' || answers.Q_GNAUS_BLOOD == 'yes' || (answers.Q_GNAUS_PREG == 'yes' && answers.Q_GNAUS_ABDSEV == 'yes')",er_send,TPL_GNAUS_ER_SEND,HIGH
+general_nausea_malaise,DISP_GNAUS_URGENT_DEHYD_OR_PAIN_OR_PREG,50,"answers.Q_GNAUS_DEHYD == 'yes' || answers.Q_GNAUS_ABDSEV == 'yes' || answers.Q_GNAUS_PREG == 'yes'",urgent_care,TPL_GNAUS_URGENT_CARE,HIGH
+general_nausea_malaise,DISP_GNAUS_ROUTINE_DEFAULT,99,"true",pcp,TPL_GNAUS_PCP,HIGH

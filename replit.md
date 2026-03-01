@@ -57,22 +57,26 @@ A stress test harness at `POST /api/admin/stress-test` accepts an array of scena
 `server/data/corruptionGuard.ts` validates core configuration data on every config load, checking for corruption, invalid formats, and inconsistencies, hard-failing to prevent silent rule poisoning.
 
 ### Complaint Pipelines
-57 complaint pipelines implemented across 12 medical systems (6 legacy + 51 GENERIC_V1):
+72 complaint pipelines implemented across 16 medical systems (6 legacy + 66 GENERIC_V1):
 - **ENT** (7): Sore Throat (legacy), Earache (legacy), Sinus Pressure, Sore Throat ENT, Ear Pain, Nasal Congestion, Epistaxis
 - **PULM** (6): Persistent Cough (legacy), Pulmonary Cough, Shortness of Breath, Wheezing, Chest Tightness, Hemoptysis
 - **GU** (10): UTI, Testicular Pain/Prostatitis, Dysuria/UTI, Flank Pain, Testicular Pain, Hematuria, Urinary Retention, STI Exposure/Discharge, Pelvic Pain/Torsion, Vaginal Bleeding
 - **GYN** (1): Pelvic Pain
 - **NEURO** (6): Headache, Dizziness/Vertigo, Weakness/Numbness, Seizure, Syncope, Confusion/AMS
 - **GI** (10): Chest Pain (legacy), Abdominal Pain (legacy+GENERIC_V1), Diarrhea, Vomiting, GI Bleeding, Constipation, Jaundice, Dysphagia, Acute Pancreatitis-like
-- **General** (1): Dizziness (legacy)
+- **General** (1+3): Dizziness (legacy), Fatigue, Generalized Weakness, Nausea/Malaise
 - **CARDIO** (3): Chest Pain, Palpitations, Leg Swelling
 - **MSK** (3): Back Pain, Joint Pain, Sprain/Injury
 - **DERM** (3): Rash, Cellulitis/Skin Infection, Allergic Reaction/Hives
 - **ENDO** (3): Hyperglycemia, Hypoglycemia, Thyroid Symptoms
 - **PSYCH** (3): Anxiety/Panic, Depression/Suicidal Ideation, Agitation/Psychosis
+- **OPHTHO** (3): Vision Loss/Visual Changes, Red Eye, Eye Pain/Foreign Body
+- **ID** (3): Fever, Flu-Like Illness, Animal Bite/Wound Infection
+- **TOX** (3): Overdose/Intoxication, Withdrawal, Poisoning/Exposure
+- **ORTHO_TRAUMA** (3): Head Injury, Fracture/Dislocation, Laceration
 
 ### Generic Data-Driven Engine (GENERIC_V1)
-`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic, enabling new complaints to be added with zero TypeScript code. 51/57 complaints run on GENERIC_V1; 6 remain LEGACY. Batch E added 9 complaints (3 CARDIO, 3 MSK, 3 DERM), Batch F added 6 complaints (3 ENDO, 3 PSYCH), with 675 total tests passing across 56 directories.
+`server/engines/genericComplaintEngineV1.ts` provides a fully data-driven complaint pipeline that replaces per-complaint TypeScript scoring modules. Complaints use `CLUSTER_SCORING_RULES` CSV rows to define cluster scoring logic, enabling new complaints to be added with zero TypeScript code. 66/72 complaints run on GENERIC_V1; 6 remain LEGACY. Batch G added 9 complaints (3 OPHTHO, 3 ID, 3 TOX), Batch H added 6 complaints (3 ORTHO_TRAUMA, 3 GENERAL), with 825 total tests passing across 71 directories.
 
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings.

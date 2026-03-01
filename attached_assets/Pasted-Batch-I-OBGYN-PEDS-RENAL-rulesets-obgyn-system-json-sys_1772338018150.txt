@@ -1,0 +1,955 @@
+Batch I: OBGYN + PEDS + RENAL
+rulesets/obgyn/_system.json
+{
+  "system": "obgyn",
+  "complaints": [
+    "obgyn_pregnancy_bleeding",
+    "obgyn_pelvic_pain",
+    "obgyn_postpartum_complications"
+  ]
+}
+rulesets/obgyn/obgyn_pregnancy_bleeding/ruleset.json
+{
+  "meta": {"system":"OBGYN","complaint_slug":"obgyn_pregnancy_bleeding","complaint_name":"Pregnancy Bleeding","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"preg_confirmed","q":"Pregnant or possibly pregnant?","type":"boolean"},
+    {"id":"heavy","q":"Heavy bleeding (soaking pad hourly) or large clots?","type":"boolean"},
+    {"id":"pain","q":"Severe abdominal/pelvic pain?","type":"boolean"},
+    {"id":"faint","q":"Dizziness/fainting?","type":"boolean"},
+    {"id":"one_sided","q":"One-sided pelvic pain?","type":"boolean"},
+    {"id":"shoulder","q":"Shoulder pain or severe lightheadedness (possible internal bleeding)?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"ectopic_like","logic":"preg_confirmed=true AND (one_sided=true OR shoulder=true OR faint=true)","disposition":"EMERG","reason":"Possible ectopic pregnancy"},
+    {"id":"hemodynamic","logic":"heavy=true OR faint=true","disposition":"EMERG","reason":"Hemodynamic risk"},
+    {"id":"preg_pain","logic":"preg_confirmed=true AND pain=true","disposition":"EMERG","reason":"Pregnancy bleeding with pain"}
+  ],
+  "dx_scoring": [
+    {"dx":"ectopic_concern","rule":"preg_confirmed=true","pts":2},
+    {"dx":"ectopic_concern","rule":"one_sided=true","pts":3},
+    {"dx":"ectopic_concern","rule":"shoulder=true OR faint=true","pts":4},
+    {"dx":"miscarriage_threatened","rule":"preg_confirmed=true AND heavy=false AND pain=false","pts":2},
+    {"dx":"hemorrhage_risk","rule":"heavy=true","pts":4}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"preg_confirmed=true AND (heavy=true OR pain=true OR faint=true OR one_sided=true OR shoulder=true)","disposition":"EMERG"},
+    {"id":"urgent_if_uncertain","priority":50,"logic":"preg_confirmed=false AND (heavy=true OR faint=true)","disposition":"EMERG"},
+    {"id":"urgent_default","priority":1,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"ob_pregbleed_summary_v1","type":"summary","text":"Pregnancy bleeding assessed for heaviness, pain, syncope, one-sided pain, and ectopic warning signs."},
+      {"id":"ob_pregbleed_precautions_v1","type":"precautions","text":"Go now for pregnancy bleeding with pain, heavy bleeding, dizziness/fainting, shoulder pain, or one-sided severe pelvic pain."}
+    ]
+  },
+  "goldens": [
+    {"id":"PB1","in":{"preg_confirmed":true,"heavy":false,"pain":false,"faint":false,"one_sided":false,"shoulder":false},"disp":"EMERG","top_dx":"miscarriage_threatened"},
+    {"id":"PB2","in":{"preg_confirmed":true,"heavy":true,"pain":false,"faint":false,"one_sided":false,"shoulder":false},"disp":"EMERG","top_dx":"hemorrhage_risk"},
+    {"id":"PB3","in":{"preg_confirmed":true,"heavy":false,"pain":true,"faint":false,"one_sided":false,"shoulder":false},"disp":"EMERG","top_dx":"miscarriage_threatened"},
+    {"id":"PB4","in":{"preg_confirmed":true,"heavy":false,"pain":true,"faint":true,"one_sided":true,"shoulder":false},"disp":"EMERG","top_dx":"ectopic_concern"},
+    {"id":"PB5","in":{"preg_confirmed":true,"heavy":false,"pain":false,"faint":true,"one_sided":false,"shoulder":true},"disp":"EMERG","top_dx":"ectopic_concern"},
+    {"id":"PB6","in":{"preg_confirmed":false,"heavy":true,"pain":false,"faint":false,"one_sided":false,"shoulder":false},"disp":"EMERG","top_dx":"hemorrhage_risk"},
+    {"id":"PB7","in":{"preg_confirmed":true,"heavy":false,"pain":false,"faint":false,"one_sided":true,"shoulder":false},"disp":"EMERG","top_dx":"ectopic_concern"},
+    {"id":"PB8","in":{"preg_confirmed":true,"heavy":true,"pain":true,"faint":false,"one_sided":false,"shoulder":false},"disp":"EMERG","top_dx":"hemorrhage_risk"},
+    {"id":"PB9","in":{"preg_confirmed":true,"heavy":false,"pain":true,"faint":false,"one_sided":true,"shoulder":false},"disp":"EMERG","top_dx":"ectopic_concern"},
+    {"id":"PB10","in":{"preg_confirmed":false,"heavy":false,"pain":false,"faint":false,"one_sided":false,"shoulder":false},"disp":"URGENT","top_dx":"miscarriage_threatened"}
+  ]
+}
+rulesets/obgyn/obgyn_pelvic_pain/ruleset.json
+{
+  "meta": {"system":"OBGYN","complaint_slug":"obgyn_pelvic_pain","complaint_name":"Pelvic Pain (OBGYN-focused)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"sudden","q":"Sudden severe pain?","type":"boolean"},
+    {"id":"one_sided","q":"One-sided pelvic pain?","type":"boolean"},
+    {"id":"vomit","q":"Nausea/vomiting?","type":"boolean"},
+    {"id":"preg","q":"Possibly pregnant?","type":"boolean"},
+    {"id":"bleed","q":"Vaginal bleeding?","type":"boolean"},
+    {"id":"fever","q":"Fever?","type":"boolean"},
+    {"id":"discharge","q":"Abnormal discharge / STI risk?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"torsion","logic":"sudden=true AND one_sided=true AND vomit=true","disposition":"EMERG","reason":"Possible ovarian torsion"},
+    {"id":"ectopic","logic":"preg=true AND bleed=true","disposition":"EMERG","reason":"Possible ectopic pregnancy"},
+    {"id":"pid_severe","logic":"fever=true AND discharge=true","disposition":"URGENT","reason":"Possible PID"}
+  ],
+  "dx_scoring": [
+    {"dx":"ovarian_torsion","rule":"sudden=true","pts":3},
+    {"dx":"ovarian_torsion","rule":"one_sided=true","pts":2},
+    {"dx":"ovarian_torsion","rule":"vomit=true","pts":2},
+    {"dx":"ectopic_concern","rule":"preg=true AND bleed=true","pts":5},
+    {"dx":"pid","rule":"fever=true","pts":2},
+    {"dx":"pid","rule":"discharge=true","pts":2},
+    {"dx":"cyst_pain","rule":"one_sided=true AND sudden=true","pts":1},
+    {"dx":"pid","rule":"sudden=true","pts":-1}
+  ],
+  "disp_rules": [
+    {"id":"emerg_torsion_or_ectopic","priority":100,"logic":"torsion OR ectopic","disposition":"EMERG"},
+    {"id":"urgent_pid_or_fever","priority":50,"logic":"pid_severe OR fever=true OR discharge=true","disposition":"URGENT"},
+    {"id":"urgent_default","priority":1,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"ob_pelvic_summary_v1","type":"summary","text":"Pelvic pain assessed for torsion pattern (sudden one-sided with vomiting), ectopic pattern (pregnancy + bleeding), and PID features."},
+      {"id":"ob_pelvic_precautions_v1","type":"precautions","text":"Go now for sudden severe one-sided pelvic pain, vomiting, pregnancy with bleeding, fainting, or fever with pelvic pain/discharge."}
+    ]
+  },
+  "goldens": [
+    {"id":"OP1","in":{"sudden":true,"one_sided":true,"vomit":true,"preg":false,"bleed":false,"fever":false,"discharge":false},"disp":"EMERG","top_dx":"ovarian_torsion"},
+    {"id":"OP2","in":{"sudden":false,"one_sided":false,"vomit":false,"preg":true,"bleed":true,"fever":false,"discharge":false},"disp":"EMERG","top_dx":"ectopic_concern"},
+    {"id":"OP3","in":{"sudden":false,"one_sided":false,"vomit":false,"preg":false,"bleed":false,"fever":true,"discharge":true},"disp":"URGENT","top_dx":"pid"},
+    {"id":"OP4","in":{"sudden":true,"one_sided":true,"vomit":false,"preg":false,"bleed":false,"fever":false,"discharge":false},"disp":"URGENT","top_dx":"cyst_pain"},
+    {"id":"OP5","in":{"sudden":false,"one_sided":true,"vomit":false,"preg":false,"bleed":false,"fever":false,"discharge":false},"disp":"URGENT","top_dx":"cyst_pain"},
+    {"id":"OP6","in":{"sudden":false,"one_sided":false,"vomit":false,"preg":false,"bleed":false,"fever":false,"discharge":false},"disp":"URGENT","top_dx":"cyst_pain"},
+    {"id":"OP7","in":{"sudden":true,"one_sided":true,"vomit":true,"preg":true,"bleed":true,"fever":false,"discharge":false},"disp":"EMERG","top_dx":"ectopic_concern"},
+    {"id":"OP8","in":{"sudden":false,"one_sided":false,"vomit":false,"preg":false,"bleed":false,"fever":true,"discharge":false},"disp":"URGENT","top_dx":"pid"},
+    {"id":"OP9","in":{"sudden":false,"one_sided":false,"vomit":false,"preg":true,"bleed":false,"fever":false,"discharge":false},"disp":"URGENT","top_dx":"ectopic_concern"},
+    {"id":"OP10","in":{"sudden":true,"one_sided":true,"vomit":false,"preg":true,"bleed":true,"fever":false,"discharge":false},"disp":"EMERG","top_dx":"ectopic_concern"}
+  ]
+}
+rulesets/obgyn/obgyn_postpartum_complications/ruleset.json
+{
+  "meta": {"system":"OBGYN","complaint_slug":"obgyn_postpartum_complications","complaint_name":"Postpartum Complications","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"postpartum","q":"Within 6 weeks postpartum?","type":"boolean"},
+    {"id":"heavy_bleed","q":"Heavy bleeding or large clots?","type":"boolean"},
+    {"id":"fever","q":"Fever/chills?","type":"boolean"},
+    {"id":"severe_headache","q":"Severe headache/vision changes?","type":"boolean"},
+    {"id":"sob_cp","q":"Shortness of breath or chest pain?","type":"boolean"},
+    {"id":"leg_swelling","q":"One leg swelling/pain?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"pph","logic":"postpartum=true AND heavy_bleed=true","disposition":"EMERG","reason":"Postpartum hemorrhage concern"},
+    {"id":"pe","logic":"postpartum=true AND sob_cp=true AND leg_swelling=true","disposition":"EMERG","reason":"Possible PE"},
+    {"id":"preeclampsia","logic":"postpartum=true AND severe_headache=true","disposition":"EMERG","reason":"Postpartum preeclampsia concern"},
+    {"id":"endometritis","logic":"postpartum=true AND fever=true","disposition":"URGENT","reason":"Possible infection/endometritis"}
+  ],
+  "dx_scoring": [
+    {"dx":"postpartum_hemorrhage","rule":"heavy_bleed=true","pts":5},
+    {"dx":"postpartum_preeclampsia","rule":"severe_headache=true","pts":4},
+    {"dx":"postpartum_infection","rule":"fever=true","pts":3},
+    {"dx":"postpartum_pe","rule":"sob_cp=true AND leg_swelling=true","pts":5}
+  ],
+  "disp_rules": [
+    {"id":"emerg_pph_pe_pree","priority":100,"logic":"pph OR pe OR preeclampsia","disposition":"EMERG"},
+    {"id":"urgent_fever","priority":50,"logic":"endometritis","disposition":"URGENT"},
+    {"id":"urgent_default","priority":1,"logic":"postpartum=true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"ob_postpartum_summary_v1","type":"summary","text":"Postpartum symptoms assessed for hemorrhage, infection, PE risk, and postpartum preeclampsia warning signs."},
+      {"id":"ob_postpartum_precautions_v1","type":"precautions","text":"Go now for heavy postpartum bleeding, chest pain/SOB, severe headache/vision changes, or fever postpartum."}
+    ]
+  },
+  "goldens": [
+    {"id":"PP1","in":{"postpartum":true,"heavy_bleed":true,"fever":false,"severe_headache":false,"sob_cp":false,"leg_swelling":false},"disp":"EMERG","top_dx":"postpartum_hemorrhage"},
+    {"id":"PP2","in":{"postpartum":true,"heavy_bleed":false,"fever":true,"severe_headache":false,"sob_cp":false,"leg_swelling":false},"disp":"URGENT","top_dx":"postpartum_infection"},
+    {"id":"PP3","in":{"postpartum":true,"heavy_bleed":false,"fever":false,"severe_headache":true,"sob_cp":false,"leg_swelling":false},"disp":"EMERG","top_dx":"postpartum_preeclampsia"},
+    {"id":"PP4","in":{"postpartum":true,"heavy_bleed":false,"fever":false,"severe_headache":false,"sob_cp":true,"leg_swelling":true},"disp":"EMERG","top_dx":"postpartum_pe"},
+    {"id":"PP5","in":{"postpartum":true,"heavy_bleed":false,"fever":false,"severe_headache":false,"sob_cp":false,"leg_swelling":false},"disp":"URGENT","top_dx":"postpartum_infection"},
+    {"id":"PP6","in":{"postpartum":false,"heavy_bleed":true,"fever":false,"severe_headache":false,"sob_cp":false,"leg_swelling":false},"disp":"URGENT","top_dx":"postpartum_hemorrhage"},
+    {"id":"PP7","in":{"postpartum":true,"heavy_bleed":true,"fever":true,"severe_headache":false,"sob_cp":false,"leg_swelling":false},"disp":"EMERG","top_dx":"postpartum_hemorrhage"},
+    {"id":"PP8","in":{"postpartum":true,"heavy_bleed":false,"fever":true,"severe_headache":true,"sob_cp":false,"leg_swelling":false},"disp":"EMERG","top_dx":"postpartum_preeclampsia"},
+    {"id":"PP9","in":{"postpartum":true,"heavy_bleed":false,"fever":false,"severe_headache":false,"sob_cp":true,"leg_swelling":false},"disp":"URGENT","top_dx":"postpartum_pe"},
+    {"id":"PP10","in":{"postpartum":true,"heavy_bleed":false,"fever":true,"severe_headache":false,"sob_cp":true,"leg_swelling":true},"disp":"EMERG","top_dx":"postpartum_pe"}
+  ]
+}
+rulesets/peds/_system.json
+{
+  "system": "peds",
+  "complaints": [
+    "peds_infant_fever",
+    "peds_respiratory_distress",
+    "peds_vomiting_diarrhea_dehydration"
+  ]
+}
+rulesets/peds/peds_infant_fever/ruleset.json
+{
+  "meta": {"system":"PEDS","complaint_slug":"peds_infant_fever","complaint_name":"Infant Fever","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"age_under_3mo","q":"Age under 3 months?","type":"boolean"},
+    {"id":"temp_high","q":"High fever (>=100.4F if <3mo, or very high fever)?","type":"boolean"},
+    {"id":"lethargy","q":"Very sleepy/hard to wake or not acting right?","type":"boolean"},
+    {"id":"breathing","q":"Trouble breathing?","type":"boolean"},
+    {"id":"dehyd","q":"Poor feeding or very low wet diapers?","type":"boolean"},
+    {"id":"rash_purple","q":"Purple rash that doesn't blanch?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"young_infant_fever","logic":"age_under_3mo=true AND temp_high=true","disposition":"EMERG","reason":"Fever in young infant"},
+    {"id":"ill_appearing","logic":"lethargy=true OR breathing=true","disposition":"EMERG","reason":"Ill-appearing infant"},
+    {"id":"purpura","logic":"rash_purple=true","disposition":"EMERG","reason":"Severe infection concern"},
+    {"id":"dehydration","logic":"dehyd=true AND age_under_3mo=true","disposition":"EMERG","reason":"Dehydration risk in young infant"}
+  ],
+  "dx_scoring": [
+    {"dx":"serious_bacterial_infection","rule":"age_under_3mo=true AND temp_high=true","pts":6},
+    {"dx":"serious_bacterial_infection","rule":"lethargy=true","pts":4},
+    {"dx":"viral_fever","rule":"age_under_3mo=false AND temp_high=true","pts":2},
+    {"dx":"serious_bacterial_infection","rule":"rash_purple=true","pts":6}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"young_infant_fever OR ill_appearing OR purpura OR dehydration","disposition":"EMERG"},
+    {"id":"urgent_temp","priority":50,"logic":"temp_high=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"peds_infant_fever_summary_v1","type":"summary","text":"Infant fever assessed for age <3 months, high fever, lethargy, breathing trouble, dehydration, and purpuric rash."},
+      {"id":"peds_infant_fever_precautions_v1","type":"precautions","text":"Go now for fever in an infant under 3 months, lethargy, breathing trouble, poor feeding/low wet diapers, or purple rash."}
+    ]
+  },
+  "goldens": [
+    {"id":"IF1","in":{"age_under_3mo":true,"temp_high":true,"lethargy":false,"breathing":false,"dehyd":false,"rash_purple":false},"disp":"EMERG","top_dx":"serious_bacterial_infection"},
+    {"id":"IF2","in":{"age_under_3mo":true,"temp_high":false,"lethargy":true,"breathing":false,"dehyd":false,"rash_purple":false},"disp":"EMERG","top_dx":"serious_bacterial_infection"},
+    {"id":"IF3","in":{"age_under_3mo":false,"temp_high":true,"lethargy":false,"breathing":false,"dehyd":false,"rash_purple":false},"disp":"URGENT","top_dx":"viral_fever"},
+    {"id":"IF4","in":{"age_under_3mo":false,"temp_high":false,"lethargy":false,"breathing":false,"dehyd":false,"rash_purple":false},"disp":"ROUTINE","top_dx":"viral_fever"},
+    {"id":"IF5","in":{"age_under_3mo":true,"temp_high":false,"lethargy":false,"breathing":true,"dehyd":false,"rash_purple":false},"disp":"EMERG","top_dx":"serious_bacterial_infection"},
+    {"id":"IF6","in":{"age_under_3mo":true,"temp_high":true,"lethargy":true,"breathing":false,"dehyd":false,"rash_purple":false},"disp":"EMERG","top_dx":"serious_bacterial_infection"},
+    {"id":"IF7","in":{"age_under_3mo":true,"temp_high":true,"lethargy":false,"breathing":false,"dehyd":true,"rash_purple":false},"disp":"EMERG","top_dx":"serious_bacterial_infection"},
+    {"id":"IF8","in":{"age_under_3mo":false,"temp_high":true,"lethargy":false,"breathing":true,"dehyd":false,"rash_purple":false},"disp":"EMERG","top_dx":"viral_fever"},
+    {"id":"IF9","in":{"age_under_3mo":true,"temp_high":false,"lethargy":false,"breathing":false,"dehyd":false,"rash_purple":true},"disp":"EMERG","top_dx":"serious_bacterial_infection"},
+    {"id":"IF10","in":{"age_under_3mo":false,"temp_high":false,"lethargy":true,"breathing":false,"dehyd":false,"rash_purple":false},"disp":"EMERG","top_dx":"serious_bacterial_infection"}
+  ]
+}
+rulesets/peds/peds_respiratory_distress/ruleset.json
+{
+  "meta": {"system":"PEDS","complaint_slug":"peds_respiratory_distress","complaint_name":"Pediatric Breathing Trouble","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"sob_rest","q":"Trouble breathing at rest?","type":"boolean"},
+    {"id":"blue","q":"Blue lips/face or very pale?","type":"boolean"},
+    {"id":"stridor","q":"Noisy breathing/stridor?","type":"boolean"},
+    {"id":"wheeze","q":"Wheezing?","type":"boolean"},
+    {"id":"fever","q":"Fever?","type":"boolean"},
+    {"id":"dehyd","q":"Not drinking / very low urine?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"hypoxia","logic":"blue=true","disposition":"EMERG","reason":"Possible hypoxia"},
+    {"id":"severe_distress","logic":"sob_rest=true","disposition":"EMERG","reason":"Severe respiratory distress"},
+    {"id":"upper_airway","logic":"stridor=true AND sob_rest=true","disposition":"EMERG","reason":"Upper airway obstruction risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"asthma_wheeze","rule":"wheeze=true","pts":3},
+    {"dx":"pneumonia","rule":"fever=true AND sob_rest=true","pts":4},
+    {"dx":"croup_upper_airway","rule":"stridor=true","pts":4},
+    {"dx":"bronchiolitis","rule":"sob_rest=true AND fever=false","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"blue=true OR sob_rest=true OR (stridor=true AND sob_rest=true)","disposition":"EMERG"},
+    {"id":"urgent_wheeze_or_fever","priority":50,"logic":"wheeze=true OR fever=true OR dehyd=true OR stridor=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"peds_resp_summary_v1","type":"summary","text":"Pediatric breathing trouble assessed for hypoxia (blue), distress at rest, stridor/upper airway risk, wheeze, fever, and dehydration."},
+      {"id":"peds_resp_precautions_v1","type":"precautions","text":"Go now for blue lips, breathing trouble at rest, stridor, severe wheezing, or inability to drink."}
+    ]
+  },
+  "goldens": [
+    {"id":"PR1","in":{"sob_rest":true,"blue":false,"stridor":false,"wheeze":true,"fever":false,"dehyd":false},"disp":"EMERG","top_dx":"asthma_wheeze"},
+    {"id":"PR2","in":{"sob_rest":true,"blue":true,"stridor":false,"wheeze":false,"fever":false,"dehyd":false},"disp":"EMERG","top_dx":"bronchiolitis"},
+    {"id":"PR3","in":{"sob_rest":false,"blue":false,"stridor":true,"wheeze":false,"fever":false,"dehyd":false},"disp":"URGENT","top_dx":"croup_upper_airway"},
+    {"id":"PR4","in":{"sob_rest":true,"blue":false,"stridor":true,"wheeze":false,"fever":false,"dehyd":false},"disp":"EMERG","top_dx":"croup_upper_airway"},
+    {"id":"PR5","in":{"sob_rest":true,"blue":false,"stridor":false,"wheeze":false,"fever":true,"dehyd":false},"disp":"EMERG","top_dx":"pneumonia"},
+    {"id":"PR6","in":{"sob_rest":false,"blue":false,"stridor":false,"wheeze":true,"fever":false,"dehyd":false},"disp":"URGENT","top_dx":"asthma_wheeze"},
+    {"id":"PR7","in":{"sob_rest":false,"blue":false,"stridor":false,"wheeze":false,"fever":true,"dehyd":false},"disp":"URGENT","top_dx":"pneumonia"},
+    {"id":"PR8","in":{"sob_rest":false,"blue":false,"stridor":false,"wheeze":false,"fever":false,"dehyd":true},"disp":"URGENT","top_dx":"bronchiolitis"},
+    {"id":"PR9","in":{"sob_rest":true,"blue":false,"stridor":false,"wheeze":false,"fever":false,"dehyd":false},"disp":"EMERG","top_dx":"bronchiolitis"},
+    {"id":"PR10","in":{"sob_rest":false,"blue":false,"stridor":false,"wheeze":false,"fever":false,"dehyd":false},"disp":"ROUTINE","top_dx":"bronchiolitis"}
+  ]
+}
+rulesets/peds/peds_vomiting_diarrhea_dehydration/ruleset.json
+{
+  "meta": {"system":"PEDS","complaint_slug":"peds_vomiting_diarrhea_dehydration","complaint_name":"Pediatric Vomiting/Diarrhea (Dehydration)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"unable_po","q":"Unable to keep fluids down?","type":"boolean"},
+    {"id":"low_urine","q":"Very low urine / no wet diapers?","type":"boolean"},
+    {"id":"lethargy","q":"Very sleepy/not acting right?","type":"boolean"},
+    {"id":"blood","q":"Blood in vomit or stool?","type":"boolean"},
+    {"id":"abdsev","q":"Severe belly pain?","type":"boolean"},
+    {"id":"age_under_1","q":"Under 1 year old?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"severe_dehyd","logic":"unable_po=true AND low_urine=true","disposition":"EMERG","reason":"Severe dehydration"},
+    {"id":"ill_appearing","logic":"lethargy=true","disposition":"EMERG","reason":"Ill-appearing child"},
+    {"id":"gi_bleed","logic":"blood=true","disposition":"EMERG","reason":"Bleeding concern"},
+    {"id":"young_highrisk","logic":"age_under_1=true AND (unable_po=true OR low_urine=true)","disposition":"URGENT","reason":"Young infant risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"viral_gastro","rule":"blood=false AND abdsev=false","pts":2},
+    {"dx":"dehydration","rule":"unable_po=true","pts":3},
+    {"dx":"dehydration","rule":"low_urine=true","pts":3},
+    {"dx":"invasive_infection","rule":"blood=true","pts":5}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"severe_dehyd OR lethargy=true OR blood=true","disposition":"EMERG"},
+    {"id":"urgent_young_or_unable","priority":50,"logic":"age_under_1=true OR unable_po=true OR low_urine=true OR abdsev=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"peds_gi_summary_v1","type":"summary","text":"Peds vomiting/diarrhea assessed for dehydration (PO intolerance, low urine), lethargy, blood, severe pain, and young age risk."},
+      {"id":"peds_gi_precautions_v1","type":"precautions","text":"Go now for lethargy, blood, no urine/wet diapers, inability to keep fluids down, or severe abdominal pain."}
+    ]
+  },
+  "goldens": [
+    {"id":"PG1","in":{"unable_po":true,"low_urine":true,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp":"EMERG","top_dx":"dehydration"},
+    {"id":"PG2","in":{"unable_po":true,"low_urine":false,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp":"URGENT","top_dx":"dehydration"},
+    {"id":"PG3","in":{"unable_po":false,"low_urine":false,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp
+continue
+
+Continuing right where it cut off. I’ll finish peds_vomiting_diarrhea_dehydration (remaining goldens), then complete RENAL, then Batch J: HEMEONC + RHEUM + ENVIRONMENTAL (all minimal-spine packs, 10 goldens each).
+
+rulesets/peds/peds_vomiting_diarrhea_dehydration/ruleset.json (continued + complete)
+{
+  "meta": {"system":"PEDS","complaint_slug":"peds_vomiting_diarrhea_dehydration","complaint_name":"Pediatric Vomiting/Diarrhea (Dehydration)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"unable_po","q":"Unable to keep fluids down?","type":"boolean"},
+    {"id":"low_urine","q":"Very low urine / no wet diapers?","type":"boolean"},
+    {"id":"lethargy","q":"Very sleepy/not acting right?","type":"boolean"},
+    {"id":"blood","q":"Blood in vomit or stool?","type":"boolean"},
+    {"id":"abdsev","q":"Severe belly pain?","type":"boolean"},
+    {"id":"age_under_1","q":"Under 1 year old?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"severe_dehyd","logic":"unable_po=true AND low_urine=true","disposition":"EMERG","reason":"Severe dehydration"},
+    {"id":"ill_appearing","logic":"lethargy=true","disposition":"EMERG","reason":"Ill-appearing child"},
+    {"id":"gi_bleed","logic":"blood=true","disposition":"EMERG","reason":"Bleeding concern"},
+    {"id":"young_highrisk","logic":"age_under_1=true AND (unable_po=true OR low_urine=true)","disposition":"URGENT","reason":"Young infant risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"viral_gastro","rule":"blood=false AND abdsev=false","pts":2},
+    {"dx":"dehydration","rule":"unable_po=true","pts":3},
+    {"dx":"dehydration","rule":"low_urine=true","pts":3},
+    {"dx":"invasive_infection","rule":"blood=true","pts":5}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"severe_dehyd OR lethargy=true OR blood=true","disposition":"EMERG"},
+    {"id":"urgent_young_or_unable","priority":50,"logic":"age_under_1=true OR unable_po=true OR low_urine=true OR abdsev=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"peds_gi_summary_v1","type":"summary","text":"Peds vomiting/diarrhea assessed for dehydration (PO intolerance, low urine), lethargy, blood, severe pain, and young age risk."},
+      {"id":"peds_gi_precautions_v1","type":"precautions","text":"Go now for lethargy, blood, no urine/wet diapers, inability to keep fluids down, or severe abdominal pain."}
+    ]
+  },
+  "goldens": [
+    {"id":"PG1","in":{"unable_po":true,"low_urine":true,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp":"EMERG","top_dx":"dehydration"},
+    {"id":"PG2","in":{"unable_po":true,"low_urine":false,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp":"URGENT","top_dx":"dehydration"},
+    {"id":"PG3","in":{"unable_po":false,"low_urine":false,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp":"ROUTINE","top_dx":"viral_gastro"},
+    {"id":"PG4","in":{"unable_po":false,"low_urine":false,"lethargy":false,"blood":true,"abdsev":false,"age_under_1":false},"disp":"EMERG","top_dx":"invasive_infection"},
+    {"id":"PG5","in":{"unable_po":false,"low_urine":false,"lethargy":true,"blood":false,"abdsev":false,"age_under_1":false},"disp":"EMERG","top_dx":"dehydration"},
+    {"id":"PG6","in":{"unable_po":false,"low_urine":true,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":false},"disp":"URGENT","top_dx":"dehydration"},
+    {"id":"PG7","in":{"unable_po":true,"low_urine":false,"lethargy":false,"blood":false,"abdsev":true,"age_under_1":false},"disp":"URGENT","top_dx":"dehydration"},
+    {"id":"PG8","in":{"unable_po":false,"low_urine":false,"lethargy":false,"blood":false,"abdsev":true,"age_under_1":false},"disp":"URGENT","top_dx":"viral_gastro"},
+    {"id":"PG9","in":{"unable_po":true,"low_urine":false,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":true},"disp":"URGENT","top_dx":"dehydration"},
+    {"id":"PG10","in":{"unable_po":false,"low_urine":true,"lethargy":false,"blood":false,"abdsev":false,"age_under_1":true},"disp":"URGENT","top_dx":"dehydration"}
+  ]
+}
+RENAL
+rulesets/renal/_system.json
+{
+  "system": "renal",
+  "complaints": [
+    "renal_acute_kidney_injury_like",
+    "renal_edema_fluid_overload",
+    "renal_dialysis_complication_like"
+  ]
+}
+rulesets/renal/renal_acute_kidney_injury_like/ruleset.json
+{
+  "meta": {"system":"RENAL","complaint_slug":"renal_acute_kidney_injury_like","complaint_name":"Possible AKI (Low urine / Dehydration / Toxins)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"low_urine","q":"Much less urine than usual / not peeing?","type":"boolean"},
+    {"id":"dehyd","q":"Vomiting/diarrhea or unable to keep fluids?","type":"boolean"},
+    {"id":"confusion","q":"Confusion or severe weakness?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath?","type":"boolean"},
+    {"id":"swelling","q":"New swelling in legs/face?","type":"boolean"},
+    {"id":"toxin_meds","q":"New meds/toxins (NSAIDs, contrast, supplements) or overdose concern?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"anuria","logic":"low_urine=true AND dehyd=false AND swelling=true","disposition":"EMERG","reason":"Possible severe AKI/obstruction/fluid overload"},
+    {"id":"resp","logic":"sob=true AND swelling=true","disposition":"EMERG","reason":"Pulmonary edema risk"},
+    {"id":"ams","logic":"confusion=true","disposition":"EMERG","reason":"Uremia/metabolic risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"pre_renal_dehydration","rule":"dehyd=true","pts":3},
+    {"dx":"pre_renal_dehydration","rule":"low_urine=true","pts":2},
+    {"dx":"intrinsic_or_toxic","rule":"toxin_meds=true","pts":3},
+    {"dx":"fluid_overload","rule":"swelling=true","pts":3},
+    {"dx":"fluid_overload","rule":"sob=true","pts":3},
+    {"dx":"pre_renal_dehydration","rule":"swelling=true","pts":-2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_ams_or_resp","priority":100,"logic":"confusion=true OR (sob=true AND swelling=true)","disposition":"EMERG"},
+    {"id":"urgent_lowurine_or_toxin","priority":50,"logic":"low_urine=true OR dehyd=true OR toxin_meds=true OR swelling=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"renal_aki_summary_v1","type":"summary","text":"Low urine/AKI concern assessed for dehydration losses, toxin/med exposure, swelling/volume overload, SOB, and confusion/uremia signs."},
+      {"id":"renal_aki_precautions_v1","type":"precautions","text":"Go now for confusion, severe shortness of breath with swelling, or not peeing with worsening symptoms."}
+    ]
+  },
+  "goldens": [
+    {"id":"AKI1","in":{"low_urine":true,"dehyd":true,"confusion":false,"sob":false,"swelling":false,"toxin_meds":false},"disp":"URGENT","top_dx":"pre_renal_dehydration"},
+    {"id":"AKI2","in":{"low_urine":true,"dehyd":false,"confusion":false,"sob":false,"swelling":true,"toxin_meds":false},"disp":"URGENT","top_dx":"fluid_overload"},
+    {"id":"AKI3","in":{"low_urine":true,"dehyd":false,"confusion":true,"sob":false,"swelling":false,"toxin_meds":false},"disp":"EMERG","top_dx":"intrinsic_or_toxic"},
+    {"id":"AKI4","in":{"low_urine":false,"dehyd":true,"confusion":false,"sob":false,"swelling":false,"toxin_meds":false},"disp":"URGENT","top_dx":"pre_renal_dehydration"},
+    {"id":"AKI5","in":{"low_urine":true,"dehyd":false,"confusion":false,"sob":true,"swelling":true,"toxin_meds":false},"disp":"EMERG","top_dx":"fluid_overload"},
+    {"id":"AKI6","in":{"low_urine":true,"dehyd":false,"confusion":false,"sob":false,"swelling":false,"toxin_meds":true},"disp":"URGENT","top_dx":"intrinsic_or_toxic"},
+    {"id":"AKI7","in":{"low_urine":false,"dehyd":false,"confusion":false,"sob":false,"swelling":true,"toxin_meds":false},"disp":"URGENT","top_dx":"fluid_overload"},
+    {"id":"AKI8","in":{"low_urine":false,"dehyd":false,"confusion":false,"sob":false,"swelling":false,"toxin_meds":false},"disp":"ROUTINE","top_dx":"pre_renal_dehydration"},
+    {"id":"AKI9","in":{"low_urine":true,"dehyd":true,"confusion":true,"sob":false,"swelling":false,"toxin_meds":false},"disp":"EMERG","top_dx":"pre_renal_dehydration"},
+    {"id":"AKI10","in":{"low_urine":true,"dehyd":false,"confusion":false,"sob":false,"swelling":true,"toxin_meds":true},"disp":"URGENT","top_dx":"intrinsic_or_toxic"}
+  ]
+}
+rulesets/renal/renal_edema_fluid_overload/ruleset.json
+{
+  "meta": {"system":"RENAL","complaint_slug":"renal_edema_fluid_overload","complaint_name":"Edema / Fluid Overload (Renal)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"sob","q":"Shortness of breath or trouble lying flat?","type":"boolean"},
+    {"id":"rapid_gain","q":"Rapid weight gain or rapidly worsening swelling?","type":"boolean"},
+    {"id":"one_leg","q":"One leg more swollen/painful?","type":"boolean"},
+    {"id":"chest_pain","q":"Chest pain?","type":"boolean"},
+    {"id":"known_kidney","q":"Known kidney disease or on dialysis?","type":"boolean"},
+    {"id":"foamy_urine","q":"Foamy urine or very low urine?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"pulm_edema","logic":"sob=true AND (rapid_gain=true OR known_kidney=true)","disposition":"EMERG","reason":"Pulmonary edema risk"},
+    {"id":"pe_dvt","logic":"one_leg=true AND sob=true","disposition":"EMERG","reason":"Possible PE/DVT"},
+    {"id":"cardiac","logic":"chest_pain=true","disposition":"EMERG","reason":"Cardiac complication"}
+  ],
+  "dx_scoring": [
+    {"dx":"renal_volume_overload","rule":"known_kidney=true","pts":3},
+    {"dx":"renal_volume_overload","rule":"rapid_gain=true","pts":2},
+    {"dx":"nephrotic_like","rule":"foamy_urine=true","pts":3},
+    {"dx":"dvt_pe","rule":"one_leg=true","pts":3},
+    {"dx":"dvt_pe","rule":"sob=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_rf","priority":100,"logic":"pulm_edema OR pe_dvt OR chest_pain=true","disposition":"EMERG"},
+    {"id":"urgent_swelling","priority":50,"logic":"rapid_gain=true OR known_kidney=true OR foamy_urine=true OR one_leg=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"renal_edema_summary_v1","type":"summary","text":"Edema assessed for SOB/orthopnea, rapid worsening, unilateral swelling (DVT), kidney disease/dialysis, and nephrotic clues (foamy urine/low urine)."},
+      {"id":"renal_edema_precautions_v1","type":"precautions","text":"Go now for swelling with shortness of breath, chest pain, or unilateral leg swelling with breathing symptoms."}
+    ]
+  },
+  "goldens": [
+    {"id":"ED1","in":{"sob":true,"rapid_gain":true,"one_leg":false,"chest_pain":false,"known_kidney":true,"foamy_urine":false},"disp":"EMERG","top_dx":"renal_volume_overload"},
+    {"id":"ED2","in":{"sob":false,"rapid_gain":true,"one_leg":false,"chest_pain":false,"known_kidney":true,"foamy_urine":false},"disp":"URGENT","top_dx":"renal_volume_overload"},
+    {"id":"ED3","in":{"sob":true,"rapid_gain":false,"one_leg":true,"chest_pain":false,"known_kidney":false,"foamy_urine":false},"disp":"EMERG","top_dx":"dvt_pe"},
+    {"id":"ED4","in":{"sob":false,"rapid_gain":false,"one_leg":true,"chest_pain":false,"known_kidney":false,"foamy_urine":false},"disp":"URGENT","top_dx":"dvt_pe"},
+    {"id":"ED5","in":{"sob":false,"rapid_gain":false,"one_leg":false,"chest_pain":false,"known_kidney":false,"foamy_urine":true},"disp":"URGENT","top_dx":"nephrotic_like"},
+    {"id":"ED6","in":{"sob":true,"rapid_gain":false,"one_leg":false,"chest_pain":true,"known_kidney":false,"foamy_urine":false},"disp":"EMERG","top_dx":"renal_volume_overload"},
+    {"id":"ED7","in":{"sob":false,"rapid_gain":false,"one_leg":false,"chest_pain":false,"known_kidney":true,"foamy_urine":true},"disp":"URGENT","top_dx":"nephrotic_like"},
+    {"id":"ED8","in":{"sob":false,"rapid_gain":false,"one_leg":false,"chest_pain":false,"known_kidney":false,"foamy_urine":false},"disp":"ROUTINE","top_dx":"renal_volume_overload"},
+    {"id":"ED9","in":{"sob":true,"rapid_gain":true,"one_leg":false,"chest_pain":false,"known_kidney":false,"foamy_urine":false},"disp":"EMERG","top_dx":"renal_volume_overload"},
+    {"id":"ED10","in":{"sob":false,"rapid_gain":true,"one_leg":false,"chest_pain":false,"known_kidney":false,"foamy_urine":false},"disp":"URGENT","top_dx":"renal_volume_overload"}
+  ]
+}
+rulesets/renal/renal_dialysis_complication_like/ruleset.json
+{
+  "meta": {"system":"RENAL","complaint_slug":"renal_dialysis_complication_like","complaint_name":"Dialysis Complication (Hypotension/Infection/Access)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"on_dialysis","q":"On dialysis?","type":"boolean"},
+    {"id":"fever","q":"Fever/chills?","type":"boolean"},
+    {"id":"sob_cp","q":"Shortness of breath or chest pain?","type":"boolean"},
+    {"id":"access_red","q":"Redness/pain/drainage at access site?","type":"boolean"},
+    {"id":"faint","q":"Fainting/very low BP symptoms?","type":"boolean"},
+    {"id":"missed","q":"Missed dialysis sessions?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"sepsis_access","logic":"fever=true AND access_red=true","disposition":"EMERG","reason":"Possible access infection/sepsis"},
+    {"id":"pulm_edema","logic":"sob_cp=true AND missed=true","disposition":"EMERG","reason":"Volume overload/uremia"},
+    {"id":"shock","logic":"faint=true","disposition":"EMERG","reason":"Hemodynamic instability"}
+  ],
+  "dx_scoring": [
+    {"dx":"access_infection","rule":"access_red=true","pts":3},
+    {"dx":"access_infection","rule":"fever=true","pts":3},
+    {"dx":"volume_overload","rule":"missed=true","pts":3},
+    {"dx":"volume_overload","rule":"sob_cp=true","pts":3},
+    {"dx":"hypotension","rule":"faint=true","pts":4}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"on_dialysis=true AND (fever=true OR access_red=true OR sob_cp=true OR faint=true OR missed=true)","disposition":"EMERG"},
+    {"id":"urgent_default","priority":50,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"renal_dialysis_summary_v1","type":"summary","text":"Dialysis symptoms assessed for access infection, fever, missed sessions/volume overload, chest pain/SOB, and hypotension/syncope."},
+      {"id":"renal_dialysis_precautions_v1","type":"precautions","text":"Go now for fever with access redness/drainage, chest pain/SOB especially after missed dialysis, or fainting/very low BP."}
+    ]
+  },
+  "goldens": [
+    {"id":"DX1","in":{"on_dialysis":true,"fever":true,"sob_cp":false,"access_red":true,"faint":false,"missed":false},"disp":"EMERG","top_dx":"access_infection"},
+    {"id":"DX2","in":{"on_dialysis":true,"fever":false,"sob_cp":true,"access_red":false,"faint":false,"missed":true},"disp":"EMERG","top_dx":"volume_overload"},
+    {"id":"DX3","in":{"on_dialysis":true,"fever":false,"sob_cp":false,"access_red":false,"faint":true,"missed":false},"disp":"EMERG","top_dx":"hypotension"},
+    {"id":"DX4","in":{"on_dialysis":true,"fever":true,"sob_cp":true,"access_red":false,"faint":false,"missed":false},"disp":"EMERG","top_dx":"volume_overload"},
+    {"id":"DX5","in":{"on_dialysis":true,"fever":false,"sob_cp":false,"access_red":true,"faint":false,"missed":false},"disp":"EMERG","top_dx":"access_infection"},
+    {"id":"DX6","in":{"on_dialysis":false,"fever":false,"sob_cp":false,"access_red":false,"faint":false,"missed":false},"disp":"URGENT","top_dx":"volume_overload"},
+    {"id":"DX7","in":{"on_dialysis":true,"fever":false,"sob_cp":true,"access_red":false,"faint":false,"missed":false},"disp":"EMERG","top_dx":"volume_overload"},
+    {"id":"DX8","in":{"on_dialysis":true,"fever":false,"sob_cp":false,"access_red":false,"faint":false,"missed":true},"disp":"EMERG","top_dx":"volume_overload"},
+    {"id":"DX9","in":{"on_dialysis":true,"fever":true,"sob_cp":false,"access_red":false,"faint":true,"missed":false},"disp":"EMERG","top_dx":"hypotension"},
+    {"id":"DX10","in":{"on_dialysis":true,"fever":false,"sob_cp":false,"access_red":false,"faint":false,"missed":false},"disp":"URGENT","top_dx":"volume_overload"}
+  ]
+}
+Batch J: HEMEONC + RHEUM + ENVIRONMENTAL
+rulesets/hemeonc/_system.json
+{
+  "system": "hemeonc",
+  "complaints": [
+    "hemeonc_neutropenic_fever_like",
+    "hemeonc_bleeding_anticoag",
+    "hemeonc_anemia_symptoms"
+  ]
+}
+rulesets/hemeonc/hemeonc_neutropenic_fever_like/ruleset.json
+{
+  "meta": {"system":"HEMEONC","complaint_slug":"hemeonc_neutropenic_fever_like","complaint_name":"Neutropenic Fever (Chemo/Immunocompromised)","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"chemo","q":"Chemo within last 6 weeks or known neutropenia?","type":"boolean"},
+    {"id":"fever","q":"Fever or chills?","type":"boolean"},
+    {"id":"temp_high","q":"High fever/rigors?","type":"boolean"},
+    {"id":"sob","q":"Shortness of breath?","type":"boolean"},
+    {"id":"confusion","q":"Confusion or very ill-appearing?","type":"boolean"},
+    {"id":"line","q":"Central line/port with redness/pain?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"nf","logic":"chemo=true AND fever=true","disposition":"EMERG","reason":"Neutropenic fever emergency"},
+    {"id":"sepsis","logic":"confusion=true OR sob=true","disposition":"EMERG","reason":"Sepsis/instability risk"},
+    {"id":"line_inf","logic":"line=true AND fever=true","disposition":"EMERG","reason":"Line infection/sepsis risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"neutropenic_fever","rule":"chemo=true","pts":3},
+    {"dx":"neutropenic_fever","rule":"fever=true","pts":3},
+    {"dx":"sepsis_risk","rule":"confusion=true","pts":5},
+    {"dx":"sepsis_risk","rule":"sob=true","pts":4},
+    {"dx":"line_infection","rule":"line=true","pts":4}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any_nf","priority":100,"logic":"(chemo=true AND fever=true) OR confusion=true OR sob=true OR (line=true AND fever=true)","disposition":"EMERG"},
+    {"id":"urgent_default","priority":50,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"heme_nf_summary_v1","type":"summary","text":"Possible neutropenic fever assessed for recent chemo/neutropenia, fever/rigors, respiratory symptoms, confusion, and line infection signs."},
+      {"id":"heme_nf_precautions_v1","type":"precautions","text":"Go now for any fever after chemo or with known neutropenia, or if confusion/shortness of breath is present."}
+    ]
+  },
+  "goldens": [
+    {"id":"NF1","in":{"chemo":true,"fever":true,"temp_high":false,"sob":false,"confusion":false,"line":false},"disp":"EMERG","top_dx":"neutropenic_fever"},
+    {"id":"NF2","in":{"chemo":true,"fever":false,"temp_high":false,"sob":false,"confusion":false,"line":false},"disp":"URGENT","top_dx":"neutropenic_fever"},
+    {"id":"NF3","in":{"chemo":true,"fever":true,"temp_high":true,"sob":true,"confusion":false,"line":false},"disp":"EMERG","top_dx":"sepsis_risk"},
+    {"id":"NF4","in":{"chemo":true,"fever":true,"temp_high":false,"sob":false,"confusion":true,"line":false},"disp":"EMERG","top_dx":"sepsis_risk"},
+    {"id":"NF5","in":{"chemo":true,"fever":true,"temp_high":false,"sob":false,"confusion":false,"line":true},"disp":"EMERG","top_dx":"line_infection"},
+    {"id":"NF6","in":{"chemo":false,"fever":true,"temp_high":false,"sob":false,"confusion":false,"line":false},"disp":"URGENT","top_dx":"sepsis_risk"},
+    {"id":"NF7","in":{"chemo":true,"fever":true,"temp_high":false,"sob":true,"confusion":true,"line":true},"disp":"EMERG","top_dx":"sepsis_risk"},
+    {"id":"NF8","in":{"chemo":true,"fever":true,"temp_high":false,"sob":false,"confusion":false,"line":false},"disp":"EMERG","top_dx":"neutropenic_fever"},
+    {"id":"NF9","in":{"chemo":true,"fever":true,"temp_high":true,"sob":false,"confusion":false,"line":false},"disp":"EMERG","top_dx":"neutropenic_fever"},
+    {"id":"NF10","in":{"chemo":true,"fever":true,"temp_high":false,"sob":false,"confusion":false,"line":false},"disp":"EMERG","top_dx":"neutropenic_fever"}
+  ]
+}
+rulesets/hemeonc/hemeonc_bleeding_anticoag/ruleset.json
+{
+  "meta": {"system":"HEMEONC","complaint_slug":"hemeonc_bleeding_anticoag","complaint_name":"Bleeding on Anticoagulation / Coagulopathy","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"heavy","q":"Heavy/uncontrolled bleeding or large clots?","type":"boolean"},
+    {"id":"head_injury","q":"Head injury or severe headache?","type":"boolean"},
+    {"id":"gi_bleed","q":"Black stool or vomiting blood?","type":"boolean"},
+    {"id":"blood_thinner","q":"On blood thinners?","type":"boolean"},
+    {"id":"faint","q":"Dizziness/fainting?","type":"boolean"},
+    {"id":"bruising","q":"Widespread bruising/petechiae?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"unstable","logic":"heavy=true OR faint=true","disposition":"EMERG","reason":"Hemodynamic risk"},
+    {"id":"ich","logic":"blood_thinner=true AND head_injury=true","disposition":"EMERG","reason":"ICH risk"},
+    {"id":"gi","logic":"gi_bleed=true","disposition":"EMERG","reason":"GI bleeding"},
+    {"id":"coag","logic":"bruising=true AND blood_thinner=false","disposition":"URGENT","reason":"Possible coagulopathy"}
+  ],
+  "dx_scoring": [
+    {"dx":"anticoag_bleed","rule":"blood_thinner=true","pts":3},
+    {"dx":"anticoag_bleed","rule":"heavy=true OR gi_bleed=true","pts":3},
+    {"dx":"coagulopathy","rule":"bruising=true","pts":3},
+    {"dx":"ich_risk","rule":"head_injury=true","pts":4},
+    {"dx":"shock_risk","rule":"faint=true","pts":4}
+  ],
+  "disp_rules": [
+    {"id":"emerg_major","priority":100,"logic":"heavy=true OR faint=true OR gi_bleed=true OR (blood_thinner=true AND head_injury=true)","disposition":"EMERG"},
+    {"id":"urgent_bruising","priority":50,"logic":"bruising=true OR blood_thinner=true","disposition":"URGENT"},
+    {"id":"urgent_default","priority":1,"logic":"true","disposition":"URGENT"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"heme_bleed_summary_v1","type":"summary","text":"Bleeding assessed for severity/instability, anticoagulation use, head injury/ICH risk, GI bleeding, and coagulopathy signs."},
+      {"id":"heme_bleed_precautions_v1","type":"precautions","text":"Go now for heavy bleeding, fainting, black stools/vomiting blood, or any head injury while on blood thinners."}
+    ]
+  },
+  "goldens": [
+    {"id":"HB1","in":{"heavy":true,"head_injury":false,"gi_bleed":false,"blood_thinner":true,"faint":false,"bruising":false},"disp":"EMERG","top_dx":"anticoag_bleed"},
+    {"id":"HB2","in":{"heavy":false,"head_injury":true,"gi_bleed":false,"blood_thinner":true,"faint":false,"bruising":false},"disp":"EMERG","top_dx":"ich_risk"},
+    {"id":"HB3","in":{"heavy":false,"head_injury":false,"gi_bleed":true,"blood_thinner":false,"faint":false,"bruising":false},"disp":"EMERG","top_dx":"anticoag_bleed"},
+    {"id":"HB4","in":{"heavy":false,"head_injury":false,"gi_bleed":false,"blood_thinner":true,"faint":false,"bruising":true},"disp":"URGENT","top_dx":"anticoag_bleed"},
+    {"id":"HB5","in":{"heavy":false,"head_injury":false,"gi_bleed":false,"blood_thinner":false,"faint":false,"bruising":true},"disp":"URGENT","top_dx":"coagulopathy"},
+    {"id":"HB6","in":{"heavy":false,"head_injury":false,"gi_bleed":false,"blood_thinner":false,"faint":true,"bruising":false},"disp":"EMERG","top_dx":"shock_risk"},
+    {"id":"HB7","in":{"heavy":false,"head_injury":false,"gi_bleed":true,"blood_thinner":true,"faint":true,"bruising":false},"disp":"EMERG","top_dx":"shock_risk"},
+    {"id":"HB8","in":{"heavy":false,"head_injury":false,"gi_bleed":false,"blood_thinner":true,"faint":false,"bruising":false},"disp":"URGENT","top_dx":"anticoag_bleed"},
+    {"id":"HB9","in":{"heavy":true,"head_injury":true,"gi_bleed":false,"blood_thinner":true,"faint":true,"bruising":false},"disp":"EMERG","top_dx":"shock_risk"},
+    {"id":"HB10","in":{"heavy":false,"head_injury":false,"gi_bleed":false,"blood_thinner":false,"faint":false,"bruising":false},"disp":"URGENT","top_dx":"coagulopathy"}
+  ]
+}
+rulesets/hemeonc/hemeonc_anemia_symptoms/ruleset.json
+{
+  "meta": {"system":"HEMEONC","complaint_slug":"hemeonc_anemia_symptoms","complaint_name":"Anemia Symptoms","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"sob","q":"Shortness of breath?","type":"boolean"},
+    {"id":"cp","q":"Chest pain/pressure?","type":"boolean"},
+    {"id":"syncope","q":"Fainting/near fainting?","type":"boolean"},
+    {"id":"bleeding","q":"Black stools/heavy bleeding?","type":"boolean"},
+    {"id":"pallor","q":"Very pale or severe fatigue?","type":"boolean"},
+    {"id":"cancer","q":"Cancer/chemo history?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"unstable","logic":"cp=true OR syncope=true","disposition":"EMERG","reason":"Possible cardiopulmonary instability"},
+    {"id":"bleed","logic":"bleeding=true","disposition":"EMERG","reason":"Active bleeding concern"},
+    {"id":"symptomatic","logic":"sob=true AND pallor=true","disposition":"URGENT","reason":"Symptomatic anemia"}
+  ],
+  "dx_scoring": [
+    {"dx":"blood_loss_anemia","rule":"bleeding=true","pts":5},
+    {"dx":"symptomatic_anemia","rule":"sob=true","pts":3},
+    {"dx":"symptomatic_anemia","rule":"pallor=true","pts":3},
+    {"dx":"chemo_related","rule":"cancer=true","pts":3},
+    {"dx":"cardiac_strain","rule":"cp=true","pts":4}
+  ],
+  "disp_rules": [
+    {"id":"emerg_cp_syncope_bleed","priority":100,"logic":"cp=true OR syncope=true OR bleeding=true","disposition":"EMERG"},
+    {"id":"urgent_symptomatic","priority":50,"logic":"sob=true OR pallor=true OR cancer=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"heme_anemia_summary_v1","type":"summary","text":"Anemia symptoms assessed for chest pain/syncope, bleeding source, dyspnea/pallor severity, and cancer/chemo risk."},
+      {"id":"heme_anemia_precautions_v1","type":"precautions","text":"Go now for chest pain, fainting, black stools/heavy bleeding, or severe shortness of breath."}
+    ]
+  },
+  "goldens": [
+    {"id":"AN1","in":{"sob":true,"cp":false,"syncope":false,"bleeding":false,"pallor":true,"cancer":false},"disp":"URGENT","top_dx":"symptomatic_anemia"},
+    {"id":"AN2","in":{"sob":false,"cp":true,"syncope":false,"bleeding":false,"pallor":true,"cancer":false},"disp":"EMERG","top_dx":"cardiac_strain"},
+    {"id":"AN3","in":{"sob":false,"cp":false,"syncope":true,"bleeding":false,"pallor":true,"cancer":false},"disp":"EMERG","top_dx":"symptomatic_anemia"},
+    {"id":"AN4","in":{"sob":false,"cp":false,"syncope":false,"bleeding":true,"pallor":true,"cancer":false},"disp":"EMERG","top_dx":"blood_loss_anemia"},
+    {"id":"AN5","in":{"sob":true,"cp":false,"syncope":false,"bleeding":false,"pallor":false,"cancer":true},"disp":"URGENT","top_dx":"chemo_related"},
+    {"id":"AN6","in":{"sob":false,"cp":false,"syncope":false,"bleeding":false,"pallor":false,"cancer":false},"disp":"ROUTINE","top_dx":"symptomatic_anemia"},
+    {"id":"AN7","in":{"sob":true,"cp":true,"syncope":false,"bleeding":false,"pallor":true,"cancer":false},"disp":"EMERG","top_dx":"cardiac_strain"},
+    {"id":"AN8","in":{"sob":true,"cp":false,"syncope":false,"bleeding":true,"pallor":true,"cancer":false},"disp":"EMERG","top_dx":"blood_loss_anemia"},
+    {"id":"AN9","in":{"sob":false,"cp":false,"syncope":false,"bleeding":false,"pallor":true,"cancer":false},"disp":"URGENT","top_dx":"symptomatic_anemia"},
+    {"id":"AN10","in":{"sob":false,"cp":false,"syncope":false,"bleeding":false,"pallor":true,"cancer":true},"disp":"URGENT","top_dx":"chemo_related"}
+  ]
+}
+rulesets/rheum/_system.json
+{
+  "system": "rheum",
+  "complaints": [
+    "rheum_hot_swollen_joint",
+    "rheum_flares_polyarthralgia",
+    "rheum_temporal_arteritis_like"
+  ]
+}
+rulesets/rheum/rheum_hot_swollen_joint/ruleset.json
+{
+  "meta": {"system":"RHEUM","complaint_slug":"rheum_hot_swollen_joint","complaint_name":"Hot Swollen Joint","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"fever","q":"Fever?","type":"boolean"},
+    {"id":"one_joint","q":"Single joint mainly affected?","type":"boolean"},
+    {"id":"unable_use","q":"Unable to bear weight/use joint?","type":"boolean"},
+    {"id":"immuno","q":"Immunocompromised or diabetes?","type":"boolean"},
+    {"id":"trauma","q":"Recent trauma?","type":"boolean"},
+    {"id":"rash","q":"Rash or recent infection?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"septic","logic":"fever=true AND one_joint=true","disposition":"EMERG","reason":"Possible septic arthritis"},
+    {"id":"severe","logic":"unable_use=true AND one_joint=true","disposition":"URGENT","reason":"Severe monoarthritis"},
+    {"id":"high_risk","logic":"immuno=true AND (one_joint=true OR fever=true)","disposition":"URGENT","reason":"High-risk host"}
+  ],
+  "dx_scoring": [
+    {"dx":"septic_arthritis","rule":"fever=true","pts":3},
+    {"dx":"septic_arthritis","rule":"one_joint=true","pts":3},
+    {"dx":"gout_cppd","rule":"one_joint=true AND fever=false","pts":2},
+    {"dx":"inflammatory_arthritis","rule":"rash=true","pts":2},
+    {"dx":"traumatic","rule":"trauma=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_septic","priority":100,"logic":"fever=true AND one_joint=true","disposition":"EMERG"},
+    {"id":"urgent_mono_or_immuno","priority":50,"logic":"one_joint=true OR unable_use=true OR immuno=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"rheum_hot_summary_v1","type":"summary","text":"Hot swollen joint assessed for septic arthritis risk (fever + monoarthritis), inability to use joint, immunocompromise, trauma, and inflammatory clues."},
+      {"id":"rheum_hot_precautions_v1","type":"precautions","text":"Go now for hot swollen joint with fever, inability to bear weight, or if immunocompromised."}
+    ]
+  },
+  "goldens": [
+    {"id":"HJ1","in":{"fever":true,"one_joint":true,"unable_use":true,"immuno":false,"trauma":false,"rash":false},"disp":"EMERG","top_dx":"septic_arthritis"},
+    {"id":"HJ2","in":{"fever":false,"one_joint":true,"unable_use":false,"immuno":false,"trauma":false,"rash":false},"disp":"URGENT","top_dx":"gout_cppd"},
+    {"id":"HJ3","in":{"fever":false,"one_joint":false,"unable_use":false,"immuno":false,"trauma":false,"rash":true},"disp":"ROUTINE","top_dx":"inflammatory_arthritis"},
+    {"id":"HJ4","in":{"fever":true,"one_joint":false,"unable_use":false,"immuno":false,"trauma":false,"rash":false},"disp":"URGENT","top_dx":"septic_arthritis"},
+    {"id":"HJ5","in":{"fever":false,"one_joint":true,"unable_use":true,"immuno":false,"trauma":false,"rash":false},"disp":"URGENT","top_dx":"gout_cppd"},
+    {"id":"HJ6","in":{"fever":false,"one_joint":true,"unable_use":false,"immuno":true,"trauma":false,"rash":false},"disp":"URGENT","top_dx":"septic_arthritis"},
+    {"id":"HJ7","in":{"fever":false,"one_joint":true,"unable_use":false,"immuno":false,"trauma":true,"rash":false},"disp":"URGENT","top_dx":"traumatic"},
+    {"id":"HJ8","in":{"fever":true,"one_joint":true,"unable_use":false,"immuno":true,"trauma":false,"rash":false},"disp":"EMERG","top_dx":"septic_arthritis"},
+    {"id":"HJ9","in":{"fever":false,"one_joint":false,"unable_use":true,"immuno":false,"trauma":false,"rash":false},"disp":"URGENT","top_dx":"inflammatory_arthritis"},
+    {"id":"HJ10","in":{"fever":false,"one_joint":false,"unable_use":false,"immuno":false,"trauma":false,"rash":false},"disp":"ROUTINE","top_dx":"inflammatory_arthritis"}
+  ]
+}
+rulesets/rheum/rheum_flares_polyarthralgia/ruleset.json
+{
+  "meta": {"system":"RHEUM","complaint_slug":"rheum_flares_polyarthralgia","complaint_name":"Polyarthralgia / Inflammatory Flare","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"many_joints","q":"Multiple joints involved?","type":"boolean"},
+    {"id":"morning_stiff","q":"Morning stiffness > 30 minutes?","type":"boolean"},
+    {"id":"fever","q":"Fever?","type":"boolean"},
+    {"id":"rash","q":"Rash?","type":"boolean"},
+    {"id":"new_weak","q":"New weakness or neurologic symptoms?","type":"boolean"},
+    {"id":"immuno","q":"Immunocompromised?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"systemic","logic":"fever=true AND many_joints=true","disposition":"URGENT","reason":"Systemic inflammatory/infectious concern"},
+    {"id":"neuro","logic":"new_weak=true","disposition":"EMERG","reason":"Neurologic red flag"},
+    {"id":"high_risk","logic":"immuno=true AND fever=true","disposition":"EMERG","reason":"High-risk host with fever"}
+  ],
+  "dx_scoring": [
+    {"dx":"inflammatory_arthritis","rule":"many_joints=true","pts":2},
+    {"dx":"inflammatory_arthritis","rule":"morning_stiff=true","pts":3},
+    {"dx":"viral_arthralgia","rule":"fever=true AND morning_stiff=false","pts":2},
+    {"dx":"autoimmune","rule":"rash=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_neuro_or_immuno","priority":100,"logic":"new_weak=true OR (immuno=true AND fever=true)","disposition":"EMERG"},
+    {"id":"urgent_fever_or_poly","priority":50,"logic":"fever=true OR many_joints=true OR rash=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"rheum_poly_summary_v1","type":"summary","text":"Polyarthralgia assessed for inflammatory pattern (multi-joint + morning stiffness), fever/systemic symptoms, rash/autoimmune clues, and neuro red flags."},
+      {"id":"rheum_poly_precautions_v1","type":"precautions","text":"Go now for new neurologic weakness, high fever with severe symptoms, or immunocompromise with fever."}
+    ]
+  },
+  "goldens": [
+    {"id":"PA1","in":{"many_joints":true,"morning_stiff":true,"fever":false,"rash":false,"new_weak":false,"immuno":false},"disp":"URGENT","top_dx":"inflammatory_arthritis"},
+    {"id":"PA2","in":{"many_joints":true,"morning_stiff":false,"fever":true,"rash":false,"new_weak":false,"immuno":false},"disp":"URGENT","top_dx":"viral_arthralgia"},
+    {"id":"PA3","in":{"many_joints":false,"morning_stiff":false,"fever":false,"rash":true,"new_weak":false,"immuno":false},"disp":"URGENT","top_dx":"autoimmune"},
+    {"id":"PA4","in":{"many_joints":false,"morning_stiff":false,"fever":false,"rash":false,"new_weak":true,"immuno":false},"disp":"EMERG","top_dx":"inflammatory_arthritis"},
+    {"id":"PA5","in":{"many_joints":true,"morning_stiff":true,"fever":true,"rash":true,"new_weak":false,"immuno":false},"disp":"URGENT","top_dx":"inflammatory_arthritis"},
+    {"id":"PA6","in":{"many_joints":false,"morning_stiff":true,"fever":false,"rash":false,"new_weak":false,"immuno":false},"disp":"ROUTINE","top_dx":"inflammatory_arthritis"},
+    {"id":"PA7","in":{"many_joints":true,"morning_stiff":false,"fever":false,"rash":false,"new_weak":false,"immuno":false},"disp":"URGENT","top_dx":"inflammatory_arthritis"},
+    {"id":"PA8","in":{"many_joints":true,"morning_stiff":true,"fever":true,"rash":false,"new_weak":false,"immuno":true},"disp":"EMERG","top_dx":"viral_arthralgia"},
+    {"id":"PA9","in":{"many_joints":false,"morning_stiff":false,"fever":true,"rash":false,"new_weak":false,"immuno":false},"disp":"URGENT","top_dx":"viral_arthralgia"},
+    {"id":"PA10","in":{"many_joints":false,"morning_stiff":false,"fever":false,"rash":false,"new_weak":false,"immuno":false},"disp":"ROUTINE","top_dx":"inflammatory_arthritis"}
+  ]
+}
+rulesets/rheum/rheum_temporal_arteritis_like/ruleset.json
+{
+  "meta": {"system":"RHEUM","complaint_slug":"rheum_temporal_arteritis_like","complaint_name":"Temporal Arteritis / GCA-like Symptoms","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"age50","q":"Age over 50?","type":"boolean"},
+    {"id":"new_headache","q":"New severe headache?","type":"boolean"},
+    {"id":"jaw_claud","q":"Jaw pain with chewing?","type":"boolean"},
+    {"id":"vision_change","q":"Vision loss/double vision?","type":"boolean"},
+    {"id":"fever","q":"Fever or systemic symptoms?","type":"boolean"},
+    {"id":"scalp_tender","q":"Scalp tenderness/temple pain?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"vision","logic":"vision_change=true","disposition":"EMERG","reason":"Vision-threatening"},
+    {"id":"gca_high","logic":"age50=true AND new_headache=true AND (jaw_claud=true OR scalp_tender=true)","disposition":"URGENT","reason":"Possible GCA"},
+    {"id":"systemic","logic":"age50=true AND fever=true AND new_headache=true","disposition":"URGENT","reason":"Systemic inflammatory concern"}
+  ],
+  "dx_scoring": [
+    {"dx":"gca","rule":"age50=true","pts":2},
+    {"dx":"gca","rule":"new_headache=true","pts":2},
+    {"dx":"gca","rule":"jaw_claud=true","pts":3},
+    {"dx":"gca","rule":"scalp_tender=true","pts":2},
+    {"dx":"gca","rule":"vision_change=true","pts":5}
+  ],
+  "disp_rules": [
+    {"id":"emerg_vision","priority":100,"logic":"vision_change=true","disposition":"EMERG"},
+    {"id":"urgent_gca","priority":50,"logic":"age50=true AND new_headache=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"rheum_gca_summary_v1","type":"summary","text":"GCA-like symptoms assessed for age>50, new headache, jaw claudication, scalp tenderness, systemic symptoms, and vision changes."},
+      {"id":"rheum_gca_precautions_v1","type":"precautions","text":"Go now for any vision change with new headache, especially age >50, or jaw pain with chewing."}
+    ]
+  },
+  "goldens": [
+    {"id":"GCA1","in":{"age50":true,"new_headache":true,"jaw_claud":true,"vision_change":false,"fever":false,"scalp_tender":false},"disp":"URGENT","top_dx":"gca"},
+    {"id":"GCA2","in":{"age50":true,"new_headache":true,"jaw_claud":false,"vision_change":true,"fever":false,"scalp_tender":false},"disp":"EMERG","top_dx":"gca"},
+    {"id":"GCA3","in":{"age50":false,"new_headache":true,"jaw_claud":false,"vision_change":false,"fever":false,"scalp_tender":false},"disp":"ROUTINE","top_dx":"gca"},
+    {"id":"GCA4","in":{"age50":true,"new_headache":false,"jaw_claud":true,"vision_change":false,"fever":false,"scalp_tender":false},"disp":"URGENT","top_dx":"gca"},
+    {"id":"GCA5","in":{"age50":true,"new_headache":true,"jaw_claud":false,"vision_change":false,"fever":true,"scalp_tender":true},"disp":"URGENT","top_dx":"gca"},
+    {"id":"GCA6","in":{"age50":true,"new_headache":true,"jaw_claud":false,"vision_change":false,"fever":false,"scalp_tender":true},"disp":"URGENT","top_dx":"gca"},
+    {"id":"GCA7","in":{"age50":true,"new_headache":true,"jaw_claud":true,"vision_change":true,"fever":true,"scalp_tender":true},"disp":"EMERG","top_dx":"gca"},
+    {"id":"GCA8","in":{"age50":true,"new_headache":false,"jaw_claud":false,"vision_change":true,"fever":false,"scalp_tender":false},"disp":"EMERG","top_dx":"gca"},
+    {"id":"GCA9","in":{"age50":true,"new_headache":true,"jaw_claud":false,"vision_change":false,"fever":false,"scalp_tender":false},"disp":"URGENT","top_dx":"gca"},
+    {"id":"GCA10","in":{"age50":false,"new_headache":false,"jaw_claud":false,"vision_change":false,"fever":false,"scalp_tender":false},"disp":"ROUTINE","top_dx":"gca"}
+  ]
+}
+rulesets/environmental/_system.json
+{
+  "system": "environmental",
+  "complaints": [
+    "environmental_heat_illness",
+    "environmental_hypothermia_cold_exposure",
+    "environmental_smoke_inhalation"
+  ]
+}
+rulesets/environmental/environmental_heat_illness/ruleset.json
+{
+  "meta": {"system":"ENV","complaint_slug":"environmental_heat_illness","complaint_name":"Heat Illness","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"confusion","q":"Confusion, collapse, or seizure?","type":"boolean"},
+    {"id":"very_hot","q":"Very hot skin or very high temperature?","type":"boolean"},
+    {"id":"vomit","q":"Persistent vomiting?","type":"boolean"},
+    {"id":"cramps","q":"Muscle cramps/weakness?","type":"boolean"},
+    {"id":"sob_cp","q":"Chest pain or shortness of breath?","type":"boolean"},
+    {"id":"exertion","q":"Heavy exertion or hot environment exposure?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"heat_stroke","logic":"confusion=true OR very_hot=true","disposition":"EMERG","reason":"Possible heat stroke"},
+    {"id":"cardio","logic":"sob_cp=true","disposition":"EMERG","reason":"Cardiopulmonary complication"},
+    {"id":"dehyd","logic":"vomit=true","disposition":"URGENT","reason":"Dehydration risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"heat_stroke","rule":"confusion=true","pts":6},
+    {"dx":"heat_stroke","rule":"very_hot=true","pts":5},
+    {"dx":"heat_exhaustion","rule":"vomit=true","pts":3},
+    {"dx":"heat_exhaustion","rule":"cramps=true","pts":2},
+    {"dx":"heat_related","rule":"exertion=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_stroke_or_cp","priority":100,"logic":"confusion=true OR very_hot=true OR sob_cp=true","disposition":"EMERG"},
+    {"id":"urgent_exhaustion","priority":50,"logic":"vomit=true OR cramps=true OR exertion=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"env_heat_summary_v1","type":"summary","text":"Heat illness assessed for heat stroke signs (confusion/very hot), vomiting/dehydration, cramps, exertional exposure, and cardiopulmonary symptoms."},
+      {"id":"env_heat_precautions_v1","type":"precautions","text":"Go now for confusion/collapse, very hot skin/high temperature, chest pain/SOB, or persistent vomiting in heat."}
+    ]
+  },
+  "goldens": [
+    {"id":"H1","in":{"confusion":true,"very_hot":true,"vomit":false,"cramps":false,"sob_cp":false,"exertion":true},"disp":"EMERG","top_dx":"heat_stroke"},
+    {"id":"H2","in":{"confusion":false,"very_hot":false,"vomit":true,"cramps":true,"sob_cp":false,"exertion":true},"disp":"URGENT","top_dx":"heat_exhaustion"},
+    {"id":"H3","in":{"confusion":false,"very_hot":false,"vomit":false,"cramps":true,"sob_cp":false,"exertion":true},"disp":"URGENT","top_dx":"heat_exhaustion"},
+    {"id":"H4","in":{"confusion":false,"very_hot":true,"vomit":false,"cramps":false,"sob_cp":false,"exertion":true},"disp":"EMERG","top_dx":"heat_stroke"},
+    {"id":"H5","in":{"confusion":false,"very_hot":false,"vomit":false,"cramps":false,"sob_cp":true,"exertion":true},"disp":"EMERG","top_dx":"heat_related"},
+    {"id":"H6","in":{"confusion":false,"very_hot":false,"vomit":false,"cramps":false,"sob_cp":false,"exertion":false},"disp":"ROUTINE","top_dx":"heat_related"},
+    {"id":"H7","in":{"confusion":true,"very_hot":false,"vomit":true,"cramps":false,"sob_cp":false,"exertion":true},"disp":"EMERG","top_dx":"heat_stroke"},
+    {"id":"H8","in":{"confusion":false,"very_hot":false,"vomit":true,"cramps":false,"sob_cp":false,"exertion":true},"disp":"URGENT","top_dx":"heat_exhaustion"},
+    {"id":"H9","in":{"confusion":false,"very_hot":false,"vomit":false,"cramps":true,"sob_cp":true,"exertion":true},"disp":"EMERG","top_dx":"heat_related"},
+    {"id":"H10","in":{"confusion":false,"very_hot":false,"vomit":false,"cramps":false,"sob_cp":false,"exertion":true},"disp":"URGENT","top_dx":"heat_related"}
+  ]
+}
+rulesets/environmental/environmental_hypothermia_cold_exposure/ruleset.json
+{
+  "meta": {"system":"ENV","complaint_slug":"environmental_hypothermia_cold_exposure","complaint_name":"Cold Exposure / Hypothermia","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"confusion","q":"Confusion, extreme sleepiness, or collapse?","type":"boolean"},
+    {"id":"shivering_stopped","q":"Shivering stopped or severe weakness?","type":"boolean"},
+    {"id":"frostbite","q":"Skin numb/white/blue or blistering (frostbite)?","type":"boolean"},
+    {"id":"wet_cold","q":"Wet clothing/prolonged cold exposure?","type":"boolean"},
+    {"id":"sob_cp","q":"Chest pain or shortness of breath?","type":"boolean"},
+    {"id":"alcohol","q":"Alcohol intoxication?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"severe_hypo","logic":"confusion=true OR shivering_stopped=true","disposition":"EMERG","reason":"Severe hypothermia risk"},
+    {"id":"frostbite","logic":"frostbite=true","disposition":"URGENT","reason":"Frostbite needs evaluation"},
+    {"id":"cardio","logic":"sob_cp=true","disposition":"EMERG","reason":"Cardiopulmonary complication"}
+  ],
+  "dx_scoring": [
+    {"dx":"severe_hypothermia","rule":"confusion=true","pts":6},
+    {"dx":"severe_hypothermia","rule":"shivering_stopped=true","pts":5},
+    {"dx":"frostbite_injury","rule":"frostbite=true","pts":4},
+    {"dx":"mild_hypothermia","rule":"wet_cold=true","pts":2},
+    {"dx":"risk_intox","rule":"alcohol=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_severe_or_cp","priority":100,"logic":"confusion=true OR shivering_stopped=true OR sob_cp=true","disposition":"EMERG"},
+    {"id":"urgent_frostbite","priority":50,"logic":"frostbite=true OR wet_cold=true OR alcohol=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"env_cold_summary_v1","type":"summary","text":"Cold exposure assessed for severe hypothermia signs (confusion/shivering stopped), frostbite, wet prolonged exposure, intoxication risk, and cardiopulmonary symptoms."},
+      {"id":"env_cold_precautions_v1","type":"precautions","text":"Go now for confusion, collapse, shivering stopped, chest pain/SOB, or signs of frostbite (numb white/blue skin or blisters)."}
+    ]
+  },
+  "goldens": [
+    {"id":"C1","in":{"confusion":true,"shivering_stopped":true,"frostbite":false,"wet_cold":true,"sob_cp":false,"alcohol":false},"disp":"EMERG","top_dx":"severe_hypothermia"},
+    {"id":"C2","in":{"confusion":false,"shivering_stopped":false,"frostbite":true,"wet_cold":true,"sob_cp":false,"alcohol":false},"disp":"URGENT","top_dx":"frostbite_injury"},
+    {"id":"C3","in":{"confusion":false,"shivering_stopped":false,"frostbite":false,"wet_cold":true,"sob_cp":false,"alcohol":false},"disp":"URGENT","top_dx":"mild_hypothermia"},
+    {"id":"C4","in":{"confusion":false,"shivering_stopped":true,"frostbite":false,"wet_cold":false,"sob_cp":false,"alcohol":false},"disp":"EMERG","top_dx":"severe_hypothermia"},
+    {"id":"C5","in":{"confusion":false,"shivering_stopped":false,"frostbite":false,"wet_cold":false,"sob_cp":true,"alcohol":false},"disp":"EMERG","top_dx":"mild_hypothermia"},
+    {"id":"C6","in":{"confusion":false,"shivering_stopped":false,"frostbite":false,"wet_cold":false,"sob_cp":false,"alcohol":true},"disp":"URGENT","top_dx":"risk_intox"},
+    {"id":"C7","in":{"confusion":true,"shivering_stopped":false,"frostbite":false,"wet_cold":true,"sob_cp":false,"alcohol":true},"disp":"EMERG","top_dx":"severe_hypothermia"},
+    {"id":"C8","in":{"confusion":false,"shivering_stopped":false,"frostbite":true,"wet_cold":false,"sob_cp":false,"alcohol":false},"disp":"URGENT","top_dx":"frostbite_injury"},
+    {"id":"C9","in":{"confusion":false,"shivering_stopped":false,"frostbite":false,"wet_cold":false,"sob_cp":false,"alcohol":false},"disp":"ROUTINE","top_dx":"mild_hypothermia"},
+    {"id":"C10","in":{"confusion":false,"shivering_stopped":false,"frostbite":false,"wet_cold":true,"sob_cp":false,"alcohol":true},"disp":"URGENT","top_dx":"risk_intox"}
+  ]
+}
+rulesets/environmental/environmental_smoke_inhalation/ruleset.json
+{
+  "meta": {"system":"ENV","complaint_slug":"environmental_smoke_inhalation","complaint_name":"Smoke Inhalation / CO Concern","version":"GENERIC_V1"},
+  "core_questions": [
+    {"id":"sob","q":"Shortness of breath/wheezing?","type":"boolean"},
+    {"id":"confusion","q":"Confusion, fainting, severe headache?","type":"boolean"},
+    {"id":"burns_face","q":"Facial burns/soot in mouth or hoarse voice?","type":"boolean"},
+    {"id":"enclosed","q":"Enclosed-space exposure (fire/CO)?","type":"boolean"},
+    {"id":"cp","q":"Chest pain?","type":"boolean"},
+    {"id":"vomit","q":"Persistent vomiting?","type":"boolean"}
+  ],
+  "red_flags": [
+    {"id":"airway","logic":"burns_face=true","disposition":"EMERG","reason":"Airway injury risk"},
+    {"id":"co","logic":"enclosed=true AND confusion=true","disposition":"EMERG","reason":"CO poisoning concern"},
+    {"id":"resp","logic":"sob=true","disposition":"EMERG","reason":"Respiratory compromise"},
+    {"id":"cardiac","logic":"cp=true","disposition":"EMERG","reason":"Cardiac risk"}
+  ],
+  "dx_scoring": [
+    {"dx":"smoke_airway_injury","rule":"burns_face=true","pts":5},
+    {"dx":"co_poisoning","rule":"enclosed=true","pts":3},
+    {"dx":"co_poisoning","rule":"confusion=true","pts":4},
+    {"dx":"bronchospasm","rule":"sob=true","pts":4},
+    {"dx":"systemic_toxicity","rule":"vomit=true","pts":2}
+  ],
+  "disp_rules": [
+    {"id":"emerg_any","priority":100,"logic":"burns_face=true OR sob=true OR cp=true OR (enclosed=true AND confusion=true)","disposition":"EMERG"},
+    {"id":"urgent_enclosed","priority":50,"logic":"enclosed=true OR confusion=true OR vomit=true","disposition":"URGENT"},
+    {"id":"routine_default","priority":1,"logic":"true","disposition":"ROUTINE"}
+  ],
+  "outputs": {
+    "templates": [
+      {"id":"env_smoke_summary_v1","type":"summary","text":"Smoke/CO exposure assessed for SOB/wheeze, airway burns/soot, enclosed-space exposure, confusion/headache, chest pain, and vomiting."},
+      {"id":"env_smoke_precautions_v1","type":"precautions","text":"Go now for breathing trouble, confusion/fainting, chest pain, or facial burns/hoarse voice after smoke exposure."}
+    ]
+  },
+  "goldens": [
+    {"id":"S1","in":{"sob":true,"confusion":false,"burns_face":false,"enclosed":false,"cp":false,"vomit":false},"disp":"EMERG","top_dx":"bronchospasm"},
+    {"id":"S2","in":{"sob":false,"confusion":true,"burns_face":false,"enclosed":true,"cp":false,"vomit":false},"disp":"EMERG","top_dx":"co_poisoning"},
+    {"id":"S3","in":{"sob":false,"confusion":false,"burns_face":true,"enclosed":false,"cp":false,"vomit":false},"disp":"EMERG","top_dx":"smoke_airway_injury"},
+    {"id":"S4","in":{"sob":false,"confusion":false,"burns_face":false,"enclosed":true,"cp":false,"vomit":false},"disp":"URGENT","top_dx":"co_poisoning"},
+    {"id":"S5","in":{"sob":false,"confusion":false,"burns_face":false,"enclosed":false,"cp":true,"vomit":false},"disp":"EMERG","top_dx":"bronchospasm"},
+    {"id":"S6","in":{"sob":false,"confusion":false,"burns_face":false,"enclosed":false,"cp":false,"vomit":true},"disp":"URGENT","top_dx":"systemic_toxicity"},
+    {"id":"S7","in":{"sob":true,"confusion":true,"burns_face":false,"enclosed":true,"cp":false,"vomit":false},"disp":"EMERG","top_dx":"co_poisoning"},
+    {"id":"S8","in":{"sob":false,"confusion":true,"burns_face":false,"enclosed":false,"cp":false,"vomit":false},"disp":"URGENT","top_dx":"co_poisoning"},
+    {"id":"S9","in":{"sob":true,"confusion":false,"burns_face":true,"enclosed":true,"cp":false,"vomit":false},"disp":"EMERG","top_dx":"smoke_airway_injury"},
+    {"id":"S10","in":{"sob":false,"confusion":false,"burns_face":false,"enclosed":false,"cp":false,"vomit":false},"disp":"ROUTINE","top_dx":"bronchospasm"}
+  ]
+}
+Ship commands (Batch I + J)
+npm run ship:system -- obgyn
+npm run ship:system -- peds
+npm run ship:system -- renal
+npm run ship:system -- hemeonc
+npm run ship:system -- rheum
+npm run ship:system -- environmental
