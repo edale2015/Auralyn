@@ -1,0 +1,363 @@
+Great — here’s Phase 2A Suppressor Sweep v1 for the same 5 systems:
+
+OPHTHO
+
+ID
+
+TOX
+
+ORTHO_TRAUMA
+
+DERM
+
+Format matches your CLUSTER_SCORING_RULES.csv rows:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+
+These are negative-point suppressors only (plus a few “anti-false-winner” boosts as negatives elsewhere). They’re tuned to stop the most common hard-golden “wrong winner” patterns while preserving RF gating.
+
+OPHTHO suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ophtho_vision_loss,migraine_aura,NEG_MIG_SUDDEN_NO_HEADACHE,"sudden=true AND headache=false",-3
+ophtho_vision_loss,migraine_aura,NEG_MIG_NEURODEF,"neurodef=true",-6
+ophtho_vision_loss,migraine_aura,NEG_MIG_FLASHES,"flashes_floaters=true",-4
+ophtho_vision_loss,vascular_event,NEG_VASC_PAINFUL,"pain=true",-3
+ophtho_vision_loss,vascular_event,NEG_VASC_FLASHES,"flashes_floaters=true",-3
+ophtho_vision_loss,stroke_visual,NEG_STROKE_NO_NEURO,"neurodef=false",-4
+ophtho_vision_loss,retinal_detachment,NEG_RD_NO_FLASHES,"flashes_floaters=false",-6
+ophtho_vision_loss,acute_glaucoma,NEG_GLAU_NO_PAIN,"pain=false",-6
+ophtho_vision_loss,acute_glaucoma,NEG_GLAU_NO_HEADACHE,"headache=false",-2
+ophtho_vision_loss,traumatic_injury,NEG_TRAUMA_NO_TRAUMA,"trauma=false",-6
+
+ophtho_red_eye,keratitis,NEG_KER_NO_CONTACT,"contact=false",-6
+ophtho_red_eye,keratitis,NEG_KER_NO_PAIN_PHOTO_VIS,"contact=true AND pain=false AND photophobia=false AND vision_change=false",-3
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_NO_PAIN_PHOTO_VIS,"pain=false AND photophobia=false AND vision_change=false",-6
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_PUS_ONLY,"discharge_pus=true AND pain=false AND photophobia=false",-2
+ophtho_red_eye,conjunctivitis,NEG_CONJ_PAIN_PHOTO_VIS,"pain=true OR photophobia=true OR vision_change=true",-4
+ophtho_red_eye,conjunctivitis,NEG_CONJ_CONTACT,"contact=true",-3
+ophtho_red_eye,viral_conjunctivitis,NEG_VCONJ_PUS,"discharge_pus=true",-3
+ophtho_red_eye,viral_conjunctivitis,NEG_VCONJ_PAIN,"pain=true",-3
+ophtho_red_eye,keratitis,NEG_KER_TRAUMA,"trauma=true AND contact=false",-2
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_CONTACT_PAIN,"contact=true AND pain=true",-1
+
+ophtho_eye_pain_foreign_body,abrasion,NEG_ABR_METAL_WORK,"metal_work=true",-4
+ophtho_eye_pain_foreign_body,abrasion,NEG_ABR_CHEMICAL,"chemical=true",-6
+ophtho_eye_pain_foreign_body,abrasion,NEG_ABR_CONTACT,"contact=true",-4
+ophtho_eye_pain_foreign_body,foreign_body,NEG_FB_NO_METAL,"metal_work=false",-6
+ophtho_eye_pain_foreign_body,chemical_injury,NEG_CHEM_NO_CHEMICAL,"chemical=false",-6
+ophtho_eye_pain_foreign_body,keratitis,NEG_KER_NO_CONTACT2,"contact=false",-6
+ophtho_eye_pain_foreign_body,keratitis,NEG_KER_NO_PAIN_PHOTO_VIS,"contact=true AND severe_pain=false AND photophobia=false AND vision_change=false",-3
+ophtho_eye_pain_foreign_body,foreign_body,NEG_FB_CHEMICAL,"chemical=true",-4
+ophtho_eye_pain_foreign_body,chemical_injury,NEG_CHEM_METAL,"metal_work=true",-2
+ophtho_eye_pain_foreign_body,foreign_body,NEG_FB_LOW_SEV,"severe_pain=false AND vision_change=false",-1
+ID suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+id_fever,viral_fever,NEG_VIRAL_IMMUNO,"immuno=true",-4
+id_fever,viral_fever,NEG_VIRAL_TEMP_HIGH,"temp_high=true",-3
+id_fever,viral_fever,NEG_VIRAL_SOB_OR_CONF,"sob=true OR confusion=true",-6
+id_fever,viral_fever,NEG_VIRAL_NECK,"neck_stiff=true",-6
+id_fever,viral_fever,NEG_VIRAL_PURPURA,"rash_purple=true",-6
+id_fever,meningitis_like,NEG_MEN_NO_NECK,"neck_stiff=false",-6
+id_fever,meningitis_like,NEG_MEN_PURE_SOB,"sob=true AND neck_stiff=false",-2
+id_fever,serious_infection,NEG_SER_NO_SIGNS,"temp_high=false AND sob=false AND confusion=false AND neck_stiff=false AND rash_purple=false AND immuno=false",-4
+id_fever,serious_infection,NEG_SER_NECK_DOMINATES,"neck_stiff=true",-1
+id_fever,serious_infection,NEG_SER_PURPURA_DOMINATES,"rash_purple=true",-1
+
+id_flu_like,viral_uri,NEG_URI_FEVER,"fever=true",-3
+id_flu_like,viral_uri,NEG_URI_SOB_CP,"sob=true OR cp=true",-6
+id_flu_like,influenza_like,NEG_FLU_NO_FEVER,"fever=false",-6
+id_flu_like,influenza_like,NEG_FLU_SOB_CP,"sob=true OR cp=true",-2
+id_flu_like,complicated_flu,NEG_CFLU_LOW_RISK_SHORT,"high_risk=false AND symptom_days_5plus=false",-4
+id_flu_like,complicated_flu,NEG_CFLU_NO_FEVER_LOW_RISK,"fever=false AND high_risk=false",-3
+id_flu_like,pneumonia_risk,NEG_PNA_NO_SOB_CP,"sob=false AND cp=false",-6
+id_flu_like,pneumonia_risk,NEG_PNA_DEHYD_ONLY,"dehyd=true AND sob=false AND cp=false",-3
+id_flu_like,viral_uri,NEG_URI_HIGH_RISK_LONG,"high_risk=true OR symptom_days_5plus=true",-2
+id_flu_like,influenza_like,NEG_FLU_DEHYD_HIGH_RISK,"dehyd=true AND high_risk=true",-1
+
+id_animal_bite_wound_infection,nec_fas,NEG_NEC_NO_PAINOUT,"pain_out=false",-6
+id_animal_bite_wound_infection,rabies_exposure,NEG_RABIES_NO_RISK,"rabies_risk=false",-6
+id_animal_bite_wound_infection,high_risk_bite,NEG_HRB_NOT_DEEP_NOT_IMMUNO,"deep=false AND immuno=false",-3
+id_animal_bite_wound_infection,cellulitis_bite,NEG_CELL_NO_SPREAD_NO_FEVER,"spreading=false AND fever=false",-4
+id_animal_bite_wound_infection,cellulitis_bite,NEG_CELL_PAINOUT_DOMINATES,"pain_out=true",-2
+id_animal_bite_wound_infection,high_risk_bite,NEG_HRB_SPREAD_FEVER,"spreading=true AND fever=true",-2
+id_animal_bite_wound_infection,rabies_exposure,NEG_RABIES_SPREADING,"spreading=true",-2
+id_animal_bite_wound_infection,nec_fas,NEG_NEC_NO_FEVER_NO_SPREAD,"fever=false AND spreading=false",-4
+id_animal_bite_wound_infection,cellulitis_bite,NEG_CELL_RABIES_ONLY,"rabies_risk=true AND spreading=false AND fever=false",-3
+id_animal_bite_wound_infection,high_risk_bite,NEG_HRB_NEC,"pain_out=true",-3
+TOX suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+tox_overdose_intoxication,sedative_opioid_like,NEG_SED_NO_SLOWBREATH,"slow_breath=false",-6
+tox_overdose_intoxication,sedative_opioid_like,NEG_SED_STIM_CP,"chest_pain=true AND slow_breath=false",-3
+tox_overdose_intoxication,stimulant_like,NEG_STIM_NO_CP,"chest_pain=false",-6
+tox_overdose_intoxication,gi_toxicity,NEG_GI_NO_VOMIT,"vomit=false",-6
+tox_overdose_intoxication,gi_toxicity,NEG_GI_SLOWBREATH,"slow_breath=true",-3
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_KNOWN_NO_AMS,"unknown=false AND ams=false AND seizure=false AND chest_pain=false AND vomit=false",-4
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_SED_STRONG,"slow_breath=true",-3
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_STIM_STRONG,"chest_pain=true AND slow_breath=false",-2
+tox_overdose_intoxication,stimulant_like,NEG_STIM_SLOWBREATH,"slow_breath=true",-5
+
+tox_withdrawal,severe_withdrawal,NEG_SEV_NO_SEIZ_NO_HALLUC,"seizure=false AND halluc=false AND autonomic=false",-6
+tox_withdrawal,severe_withdrawal,NEG_SEV_VOMIT_ONLY,"vomit=true AND seizure=false AND halluc=false AND chest_pain=false",-3
+tox_withdrawal,moderate_withdrawal,NEG_MOD_SEIZURE,"seizure=true",-6
+tox_withdrawal,moderate_withdrawal,NEG_MOD_HALLUC,"halluc=true",-6
+tox_withdrawal,moderate_withdrawal,NEG_MOD_CHESTPAIN,"chest_pain=true",-4
+tox_withdrawal,moderate_withdrawal,NEG_MOD_AUTONOMIC_HIGH,"autonomic=true AND high_risk=true",-2
+tox_withdrawal,severe_withdrawal,NEG_SEV_CHESTPAIN_DOMINATES,"chest_pain=true",-1
+tox_withdrawal,severe_withdrawal,NEG_SEV_AUTONOMIC_FALSE,"autonomic=false AND (seizure=true OR halluc=true)",-1
+tox_withdrawal,moderate_withdrawal,NEG_MOD_HIGH_RISK_NO_SYMP,"high_risk=true AND autonomic=false AND vomit=false",-2
+tox_withdrawal,severe_withdrawal,NEG_SEV_HIGH_RISK_FALSE,"high_risk=false AND seizure=false AND halluc=false AND autonomic=true",-2
+
+tox_poisoning_exposure,corrosive_injury,NEG_CORR_NO_CORR,"corrosive=false",-6
+tox_poisoning_exposure,inhalation_injury,NEG_INH_NO_INH,"inhalation=false",-6
+tox_poisoning_exposure,systemic_toxicity,NEG_SYS_NO_AMS,"ams=false",-6
+tox_poisoning_exposure,gi_toxicity,NEG_GI2_NO_VOMIT,"vomit=false",-6
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_KNOWN_ALL_FALSE,"unknown=false AND corrosive=false AND inhalation=false AND ams=false AND chest_pain=false AND vomit=false",-3
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_CORR_DOM,"corrosive=true",-4
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_INH_DOM,"inhalation=true",-4
+tox_poisoning_exposure,unknown_exposure,NEG_UNK_AMS_DOM,"ams=true",-4
+tox_poisoning_exposure,inhalation_injury,NEG_INH_CORR,"corrosive=true",-2
+tox_poisoning_exposure,corrosive_injury,NEG_CORR_INH,"inhalation=true",-2
+ORTHO_TRAUMA suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_LOC,"loc=true",-5
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_VOMIT,"vomit=true",-5
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_NEURO,"neurodef=true",-6
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_THINNER,"blood_thinner=true",-4
+ortho_trauma_head_injury,concussion,NEG_CONC_NEURODEF,"neurodef=true",-3
+ortho_trauma_head_injury,concussion,NEG_CONC_THINNER_VOMIT,"blood_thinner=true AND vomit=true",-3
+ortho_trauma_head_injury,ich_risk,NEG_ICH_NO_RF,"loc=false AND vomit=false AND severe_headache=false AND neurodef=false AND blood_thinner=false",-6
+ortho_trauma_head_injury,ich_risk,NEG_ICH_ONLY_MECH,"danger_mech=true AND loc=false AND vomit=false AND neurodef=false AND severe_headache=false AND blood_thinner=false",-4
+ortho_trauma_head_injury,concussion,NEG_CONC_NO_SIGNS,"loc=false AND severe_headache=false AND danger_mech=false",-2
+ortho_trauma_head_injury,concussion,NEG_CONC_VOMIT_SEV,"vomit=true AND severe_headache=true",-2
+
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_DEFORM,"deform=true",-6
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_OPEN,"open=true",-6
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_NV,"neurovascular=true",-6
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_UNABLE,"unable_weight=true",-4
+ortho_trauma_fracture_dislocation,open_fracture,NEG_OPEN_NO_OPEN,"open=false",-6
+ortho_trauma_fracture_dislocation,nv_compromise,NEG_NV_NO_NV,"neurovascular=false",-6
+ortho_trauma_fracture_dislocation,fracture_dislocation,NEG_FX_NO_DEFORM_NO_UNABLE,"deform=false AND unable_weight=false AND high_energy=false",-4
+ortho_trauma_fracture_dislocation,fracture_dislocation,NEG_FX_OPEN_DOM,"open=true",-2
+ortho_trauma_fracture_dislocation,fracture_dislocation,NEG_FX_NV_DOM,"neurovascular=true",-2
+ortho_trauma_fracture_dislocation,sprain_strain,NEG_SPR_SEVERE,"severe=true AND unable_weight=true",-3
+
+ortho_trauma_laceration,simple_lac,NEG_SIMPLE_DEEP,"deep=true",-6
+ortho_trauma_laceration,simple_lac,NEG_SIMPLE_BLEED,"bleeding_uncontrolled=true",-6
+ortho_trauma_laceration,simple_lac,NEG_SIMPLE_TENDON,"tendon=true OR numb=true",-6
+ortho_trauma_laceration,needs_repair,NEG_REPAIR_NO_DEEP_NO_BLEED,"deep=false AND bleeding_uncontrolled=false",-3
+ortho_trauma_laceration,tendon_nerve_injury,NEG_TNI_NO_SIGNS,"tendon=false AND numb=false",-6
+ortho_trauma_laceration,infection_risk,NEG_INF_NOT_DIRTY,"dirty=false",-6
+ortho_trauma_laceration,cosmetic_risk,NEG_COS_NOT_FACEHAND,"face_hand=false",-6
+ortho_trauma_laceration,needs_repair,NEG_REPAIR_TENDON_DOM,"tendon=true OR numb=true",-2
+ortho_trauma_laceration,needs_repair,NEG_REPAIR_DIRTY_DOM,"dirty=true AND deep=false",-1
+ortho_trauma_laceration,infection_risk,NEG_INF_BLEED_ONLY,"bleeding_uncontrolled=true AND dirty=false",-2
+DERM suppressors
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+derm_rash,urticaria,NEG_URT_FEVER,"fever=true",-4
+derm_rash,urticaria,NEG_URT_MUCOSAL,"mucosal=true",-6
+derm_rash,urticaria,NEG_URT_BLISTER,"blister=true",-6
+derm_rash,urticaria,NEG_URT_PURPLE,"purple=true",-6
+derm_rash,viral_exanthem,NEG_VIR_NEW_MED,"new_med=true",-4
+derm_rash,viral_exanthem,NEG_VIR_MUCOSAL,"mucosal=true",-3
+derm_rash,vasculitic,NEG_VASC_NO_PURPLE,"purple=false",-6
+derm_rash,allergic_drug,NEG_DRUG_NO_NEWMED,"new_med=false",-6
+derm_rash,allergic_drug,NEG_DRUG_PURPLE_ONLY,"purple=true AND new_med=false",-2
+derm_rash,allergic_drug,NEG_DRUG_FEVER_NO_NEWMED,"fever=true AND new_med=false",-2
+
+derm_cellulitis,nec_fas,NEG_NEC_NO_PAINOUT,"pain_out=false",-6
+derm_cellulitis,abscess,NEG_ABS_NO_PUS,"pus=false",-6
+derm_cellulitis,cellulitis,NEG_CELL_NO_SPREAD_NO_SIGNS,"spreading=false AND fever=false AND pus=false",-3
+derm_cellulitis,cellulitis,NEG_CELL_PUS_DOM,"pus=true",-2
+derm_cellulitis,cellulitis,NEG_CELL_PAINOUT_DOM,"pain_out=true",-3
+derm_cellulitis,cellulitis,NEG_CELL_FACE_EYE_FEVER,"face_eye=true AND fever=true",-1
+derm_cellulitis,abscess,NEG_ABS_PAINOUT,"pain_out=true",-3
+derm_cellulitis,nec_fas,NEG_NEC_PUS_ONLY,"pus=true AND pain_out=false",-2
+derm_cellulitis,abscess,NEG_ABS_NO_LOCAL,"spreading=true AND pus=false",-2
+derm_cellulitis,cellulitis,NEG_CELL_IMMUNO_NO_SIGNS,"immuno=true AND spreading=false AND fever=false",-2
+
+derm_allergic_reaction,urticaria,NEG_URT_NO_HIVES,"hives=false",-6
+derm_allergic_reaction,urticaria,NEG_URT_AIRWAY,"lip_tongue=true OR throat=true OR sob=true",-6
+derm_allergic_reaction,anaphylaxis,NEG_ANA_NO_AIRWAY,"lip_tongue=false AND throat=false AND sob=false",-6
+derm_allergic_reaction,anaphylaxis,NEG_ANA_HIVES_ONLY,"hives=true AND lip_tongue=false AND throat=false AND sob=false AND vomit=false",-4
+derm_allergic_reaction,urticaria,NEG_URT_VOMIT_NO_HIVES,"vomit=true AND hives=false",-3
+derm_allergic_reaction,anaphylaxis,NEG_ANA_NO_TRIGGER,"trigger=false AND (lip_tongue=false AND throat=false AND sob=false)",-2
+derm_allergic_reaction,urticaria,NEG_URT_TRIGGER_FALSE,"trigger=false AND hives=true",-1
+derm_allergic_reaction,anaphylaxis,NEG_ANA_VOMIT_ONLY,"vomit=true AND lip_tongue=false AND throat=false AND sob=false",-3
+derm_allergic_reaction,urticaria,NEG_URT_LIPONLY,"lip_tongue=true AND hives=false",-3
+derm_allergic_reaction,anaphylaxis,NEG_ANA_THROAT_OR_SOB,"throat=true OR sob=true",-1
+Apply + run
+
+Paste these rows into CLUSTER_SCORING_RULES.csv
+
+Run the hard suite for this 5-system batch:
+
+npm run ship:system -- ophtho
+npm run ship:system -- id
+npm run ship:system -- tox
+npm run ship:system -- ortho_trauma
+npm run ship:system -- derm
+
+When you tell me PASS/FAIL, we move to the next 5 systems (MSK + ENDO + PSYCH + RENAL + HEMEONC) with 13-per-complaint strict hard v1.1, then their suppressor sweep.
+
+next 5 systems (MSK + ENDO + PSYCH + RENAL + HEMEONC) with 13-per-complaint strict hard v1.1, then their suppressor sweep.
+
+Phase 2A hard goldens (13 per complaint) for:
+
+MSK
+
+ENDO
+
+PSYCH
+
+RENAL
+
+HEMEONC
+
+Total: 195 strict cases
+
+Download here:
+
+👉 hard_goldens_v1_13_msk_endo_psych_renal_hemeonc.csv
+
+Next: Suppressor Sweep for These 5 Systems
+
+Before I generate that sweep, I need one structural confirmation:
+
+Do you want suppressors to be:
+
+Purely negative rules only (strict suppressor philosophy), or
+
+Negative + small corrective boosts (e.g., +1/-1 micro-adjustments to stabilize tie-break edge cases)?
+
+Given how far your engine has matured, I recommend option 2.
+It reduces future golden rewrites.
+
+Reply with:
+
+Negative only
+or
+
+Negative + micro-boost
+
+Then I generate the full suppressor sweep block for these 5 systems. 
+
+nagative + micro-boost
+
+Excellent. 🔧
+We’re now in true refinement mode.
+
+Below is Phase 2A Suppressor Sweep v1.1 for:
+
+MSK
+
+ENDO
+
+PSYCH
+
+RENAL
+
+HEMEONC
+
+This includes:
+
+🔻 Negative suppressors (prevent false winners)
+
+➕ Micro-boosts (+1 / +2) to stabilize tie-breaks and reduce golden rewrites
+
+Format matches your CLUSTER_SCORING_RULES.csv:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+MSK — Suppressor + Micro-Boost
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+msk_back_pain,strain,NEG_STR_NEURO,"neurodef=true",-6
+msk_back_pain,strain,NEG_STR_BOWEL,"bowel_bladder=true",-6
+msk_back_pain,strain,NEG_STR_FEVER,"fever=true",-4
+msk_back_pain,cord_compression,NEG_CC_NO_NEURO_NO_BB,"neurodef=false AND bowel_bladder=false",-4
+msk_back_pain,infection,NEG_INF_NO_FEVER,"fever=false",-6
+msk_back_pain,infection,BOOST_INF_FEVER_NEURO,"fever=true AND neurodef=true",2
+msk_back_pain,cord_compression,BOOST_CC_NEURO_BB,"neurodef=true OR bowel_bladder=true",2
+msk_back_pain,strain,BOOST_STR_TRAUMA_ONLY,"trauma=true AND neurodef=false AND fever=false",1
+
+msk_joint_pain,gout,NEG_GOUT_FEVER_HIGH,"fever=true AND hot=true",-3
+msk_joint_pain,septic_joint,NEG_SEP_NO_FEVER,"fever=false",-6
+msk_joint_pain,septic_joint,BOOST_SEP_MONO_FEVER,"mono=true AND fever=true",2
+msk_joint_pain,degenerative,NEG_DEGEN_HOT,"hot=true",-5
+msk_joint_pain,inflammatory,BOOST_INF_POLY,"mono=false AND hot=true",1
+
+msk_sprain_injury,sprain,NEG_SPR_DEFORM,"deform=true",-6
+msk_sprain_injury,sprain,NEG_SPR_UNABLE_WEIGHT,"unable_weight=true",-4
+msk_sprain_injury,fracture,BOOST_FX_DEFORM,"deform=true",2
+msk_sprain_injury,fracture,BOOST_FX_UNABLE_WEIGHT,"unable_weight=true",1
+ENDO — Suppressor + Micro-Boost
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_CONFUSION,"confusion=true",-6
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_VOMIT,"vomit=true",-4
+endo_hyperglycemia,dka_hhs,BOOST_DKA_CONFUSION,"confusion=true",2
+endo_hyperglycemia,dka_hhs,BOOST_DKA_VOMIT,"vomit=true",1
+
+endo_hypoglycemia,mild_hypoglycemia,NEG_MILD_CONFUSION,"confusion=true",-6
+endo_hypoglycemia,mild_hypoglycemia,NEG_MILD_SYNCOPE,"syncope=true",-6
+endo_hypoglycemia,severe_hypoglycemia,BOOST_SEV_CONFUSION,"confusion=true",2
+endo_hypoglycemia,severe_hypoglycemia,BOOST_SEV_SYNCOPE,"syncope=true",2
+
+endo_thyroid_symptoms,hyperthyroid,NEG_HYPER_NO_TACHY,"tachy=false",-4
+endo_thyroid_symptoms,hypothyroid,NEG_HYPO_TACHY,"tachy=true",-3
+endo_thyroid_symptoms,thyroid_storm,NEG_STORM_NO_FEVERDELIR,"fever_delirium=false",-6
+endo_thyroid_symptoms,thyroid_storm,BOOST_STORM_TACHY_DELIR,"tachy=true AND fever_delirium=true",2
+PSYCH — Suppressor + Micro-Boost
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+psych_anxiety_panic,panic_attack,NEG_PANIC_SI,"si=true",-5
+psych_anxiety_panic,medical_mimic,BOOST_MED_CP_SOB,"cp=true OR sob=true",1
+psych_anxiety_panic,panic_attack,NEG_PANIC_CP_STRONG,"cp=true AND sob=true",-3
+
+psych_depression_suicidal_ideation,major_depression,NEG_MD_SI,"si=true",-6
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_INTENT,"intent=true",2
+psych_depression_suicidal_ideation,psychotic_depression,BOOST_PD_PSYCHOSIS,"psychosis=true",2
+
+psych_agitation_psychosis,agitation,NEG_AG_HALLUC_ONLY,"halluc=true",-4
+psych_agitation_psychosis,acute_psychosis,BOOST_AP_HALLUC,"halluc=true",2
+psych_agitation_psychosis,agitation,BOOST_AG_VIOLENT,"violent=true",1
+RENAL — Suppressor + Micro-Boost
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+renal_acute_kidney_injury_like,pre_renal_dehydration,NEG_PR_CONFUSION,"confusion=true",-5
+renal_acute_kidney_injury_like,intrinsic_or_toxic,BOOST_INTR_CONFUSION,"confusion=true",2
+renal_acute_kidney_injury_like,fluid_overload,BOOST_FO_SOB,"sob=true",1
+renal_acute_kidney_injury_like,fluid_overload,NEG_FO_NO_SOB_NO_SWELL,"sob=false AND swelling=false",-3
+
+renal_edema_fluid_overload,renal_volume_overload,NEG_RVO_ONELEG,"one_leg=true",-3
+renal_edema_fluid_overload,dvt_pe,BOOST_DVT_ONELEG_SOB,"one_leg=true AND sob=true",2
+renal_edema_fluid_overload,nephrotic_like,BOOST_NEPH_FOAMY,"foamy_urine=true",1
+
+renal_dialysis_complication_like,volume_overload,NEG_VOL_NO_SOB,"sob_cp=false",-3
+renal_dialysis_complication_like,access_infection,BOOST_INF_FEVER,"fever=true",1
+renal_dialysis_complication_like,hypotension,BOOST_HYP_FAINT,"faint=true",2
+HEMEONC — Suppressor + Micro-Boost
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+hemeonc_neutropenic_fever_like,sepsis_risk,NEG_SEP_NO_SOB_NO_CONF,"sob=false AND confusion=false",-3
+hemeonc_neutropenic_fever_like,neutropenic_fever,BOOST_NF_CHEMO_FEVER,"chemo=true AND fever=true",2
+
+hemeonc_bleeding_anticoag,coagulopathy,NEG_COAG_THINNER,"blood_thinner=true",-3
+hemeonc_bleeding_anticoag,ich_risk,BOOST_ICH_HEAD_THINNER,"head_injury=true AND blood_thinner=true",2
+hemeonc_bleeding_anticoag,anticoag_bleed,BOOST_ANTICOAG_HEAVY,"heavy=true",1
+
+hemeonc_anemia_symptoms,symptomatic_anemia,NEG_ANEMIA_CP,"cp=true",-3
+hemeonc_anemia_symptoms,cardiac_strain,BOOST_CARDIAC_CP,"cp=true",2
+hemeonc_anemia_symptoms,blood_loss_anemia,BOOST_BLA_BLEED,"bleeding=true",2
+What This Does
+
+Stabilizes tie-breaks
+
+Reduces golden rewrites
+
+Keeps RF gate dominant
+
+Improves cluster realism under mixed presentations
+
+Adds gentle gravity instead of violent scoring shifts
+
+Now Run
+npm run ship:system -- msk
+npm run ship:system -- endo
+npm run ship:system -- psych
+npm run ship:system -- renal
+npm run ship:system -- hemeonc
