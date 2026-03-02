@@ -20,6 +20,67 @@ import {
 } from "../services/complaintEngines";
 import { getTable } from "../data/registry";
 import type { GraphResult, NodeTrace } from "../services/complaintNodeRunner";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+type DxPriorityMap = Map<string, Map<string, number>>;
+
+let _dxPriorityCache: DxPriorityMap | null = null;
+
+function resolveDxPriorityPath(): string {
+  try {
+    const thisDir = path.dirname(fileURLToPath(import.meta.url));
+    return path.resolve(thisDir, "../data/csv/DX_PRIORITY.csv");
+  } catch {
+    return path.resolve(process.cwd(), "server/data/csv/DX_PRIORITY.csv");
+  }
+}
+
+function loadDxPriority(): DxPriorityMap {
+  if (_dxPriorityCache) return _dxPriorityCache;
+  const csvPath = resolveDxPriorityPath();
+  if (!fs.existsSync(csvPath)) {
+    _dxPriorityCache = new Map();
+    return _dxPriorityCache;
+  }
+  const text = fs.readFileSync(csvPath, "utf8").trim();
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const map: DxPriorityMap = new Map();
+  for (const line of lines.slice(1)) {
+    const [ccId, clusterId, priStr] = line.split(",").map(s => s.trim());
+    if (!ccId || !clusterId) continue;
+    const pri = Number(priStr ?? "0");
+    if (!map.has(ccId)) map.set(ccId, new Map());
+    map.get(ccId)!.set(clusterId, isNaN(pri) ? 0 : pri);
+  }
+  _dxPriorityCache = map;
+  return map;
+}
+
+function getDxPriority(ccId: string, clusterId: string): number {
+  const map = loadDxPriority();
+  return map.get(ccId)?.get(clusterId) ?? 0;
+}
+
+export function resetDxPriorityCache(): void {
+  _dxPriorityCache = null;
+}
+
+export interface FiredRule {
+  ruleId: string;
+  clusterId: string;
+  points: number;
+}
+
+export interface ScoringExplanation {
+  topRules: FiredRule[];
+  topSuppressors: FiredRule[];
+  rfTriggered: string[];
+  tieBreak: "score" | "priority" | "dx_id" | "none";
+  margin: number;
+  confidence: "HIGH" | "MODERATE" | "LOW";
+}
 
 export interface GenericScoringResult {
   scores: Record<string, number>;
@@ -27,14 +88,18 @@ export interface GenericScoringResult {
   topCluster: string;
   ranked: Array<{ clusterId: string; points: number; evidence: string[] }>;
   inputsUsed: string[];
+  firedRules: FiredRule[];
+  explanation: ScoringExplanation;
 }
 
 export function computeScoresFromRules(
   rules: ClusterScoringRule[],
-  state: CaseState
+  state: CaseState,
+  ccId?: string
 ): GenericScoringResult {
   const clusterPoints: Record<string, number> = {};
   const clusterEvidence: Record<string, string[]> = {};
+  const firedRules: FiredRule[] = [];
   const inputsUsed = new Set<string>();
 
   for (const rule of rules) {
@@ -53,6 +118,7 @@ export function computeScoresFromRules(
     }
     clusterPoints[rule.clusterId] += rule.points;
     clusterEvidence[rule.clusterId].push(rule.evidenceLabel);
+    firedRules.push({ ruleId: rule.ruleId, clusterId: rule.clusterId, points: rule.points });
 
     const qRefs = rule.whenExpr.match(/answers\.(Q_[A-Z0-9_]+)/g) ?? [];
     for (const ref of qRefs) {
@@ -60,13 +126,26 @@ export function computeScoresFromRules(
     }
   }
 
+  const complaintSlug = ccId || state.normalizedComplaint || "";
+  const priMap = loadDxPriority();
+  const hasPriority = priMap.has(complaintSlug);
+
   const ranked = Object.entries(clusterPoints)
     .map(([clusterId, points]) => ({
       clusterId,
       points,
       evidence: clusterEvidence[clusterId] ?? [],
     }))
-    .sort((a, b) => b.points - a.points);
+    .sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (hasPriority) {
+        const priA = getDxPriority(complaintSlug, a.clusterId);
+        const priB = getDxPriority(complaintSlug, b.clusterId);
+        if (priB !== priA) return priB - priA;
+        return a.clusterId.localeCompare(b.clusterId);
+      }
+      return 0;
+    });
 
   const topCluster = ranked.length > 0 ? ranked[0].clusterId : "";
 
@@ -79,12 +158,39 @@ export function computeScoresFromRules(
     scores[compositeScoreKey(state.normalizedComplaint || "")] = ranked[0].points;
   }
 
+  const topRules = firedRules.filter(r => r.points > 0).sort((a, b) => b.points - a.points).slice(0, 5);
+  const topSuppressors = firedRules.filter(r => r.points < 0).sort((a, b) => a.points - b.points).slice(0, 5);
+
+  const margin = ranked.length >= 2 ? ranked[0].points - ranked[1].points : (ranked.length === 1 ? ranked[0].points : 0);
+  let tieBreak: ScoringExplanation["tieBreak"] = "none";
+  if (ranked.length >= 2 && ranked[0].points === ranked[1].points) {
+    const priA = getDxPriority(complaintSlug, ranked[0].clusterId);
+    const priB = getDxPriority(complaintSlug, ranked[1].clusterId);
+    tieBreak = priA !== priB ? "priority" : "dx_id";
+  } else if (ranked.length >= 2) {
+    tieBreak = "score";
+  }
+
+  const suppressorsHit = firedRules.filter(r => r.points < 0).length;
+  const scoringConfidence: ScoringExplanation["confidence"] =
+    margin >= 4 && suppressorsHit <= 1 ? "HIGH" :
+    margin >= 2 ? "MODERATE" : "LOW";
+
   return {
     scores,
     evidence: clusterEvidence,
     topCluster,
     ranked,
     inputsUsed: Array.from(inputsUsed),
+    firedRules,
+    explanation: {
+      topRules,
+      topSuppressors,
+      rfTriggered: [],
+      tieBreak,
+      margin,
+      confidence: scoringConfidence,
+    },
   };
 }
 
@@ -248,9 +354,11 @@ export async function runGenericComplaintV1(
     updated.routing = { ...updated.routing, state: "EMERGENT_ESCALATION" };
   }
 
-  const scoringResult = computeScoresFromRules(config.clusterScoringRules, updated as CaseState);
+  const scoringResult = computeScoresFromRules(config.clusterScoringRules, updated as CaseState, ccId);
+  scoringResult.explanation.rfTriggered = rfResult.triggeredFlags.map(f => f.rfId);
   updated.scores = { ...updated.scores, ...scoringResult.scores };
   events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:SCORING] ${Object.entries(scoringResult.scores).map(([k, v]) => `${k}=${v}`).join(", ")}` });
+  events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:EXPLAIN] tieBreak=${scoringResult.explanation.tieBreak}, margin=${scoringResult.explanation.margin}, confidence=${scoringResult.explanation.confidence}` });
 
   const dispResult = runDisposition(updated as CaseState, config.dispositionRules);
   updated.disposition = dispResult.dispositionLevel;
@@ -293,10 +401,11 @@ export async function runGenericComplaintV1(
 
   const confidence =
     rfResult.gateResult === "ER_SEND" ? "HIGH" :
-    topN.length > 0 ? "MODERATE" : "LOW";
+    scoringResult.explanation.confidence;
   updated.caseConfidence = confidence;
+  updated.scoringExplanation = scoringResult.explanation;
 
-  events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:DIFF] clusters=${updated.activeClusters.join(",")}, confidence=${confidence}` });
+  events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:DIFF] clusters=${updated.activeClusters.join(",")}, confidence=${confidence}, tieBreak=${scoringResult.explanation.tieBreak}` });
 
   nodeTraces.push({
     nodeId: "SCORING",

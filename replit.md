@@ -99,7 +99,29 @@ Three automation scripts support the suppressor/boost rule development workflow:
 Key files: `phase2a_pairs_20.txt` (pair schedule), `micro_packs/*.csv` (per-complaint candidate rules), `data/micro_packs.csv` (auto-generated combined file).
 
 ### Suppressor/Boost Rule Status
-123 active suppressor/boost rules across 17 complaints in CLUSTER_SCORING_RULES.csv. 6 complaints have candidate rules in `micro_packs/` awaiting adjusted versions (derm_cellulitis, ophtho_red_eye, endo_hyperglycemia, msk_back_pain, psych_anxiety_panic, psych_depression_suicidal_ideation). Test status: 1238/1247 PASS with 9 pre-existing failures.
+139 active suppressor/boost rules across 21 complaints in CLUSTER_SCORING_RULES.csv. 2 complaints still need adjusted rules (endo_hyperglycemia, msk_back_pain). Test status: 1238/1247 PASS with 9 pre-existing failures.
+
+### Deterministic Tie-Break System
+`server/data/csv/DX_PRIORITY.csv` provides optional priority-based tie-breaking for cluster scoring. When clusters have equal scores:
+1. If the complaint has entries in DX_PRIORITY.csv → higher priority wins → alphabetical fallback
+2. If no entries → stable sort (CSV insertion order preserved)
+The tie-break mode is recorded in the `ScoringExplanation` as `"score" | "priority" | "dx_id" | "none"`.
+
+### Scoring Explanation & Confidence
+`computeScoresFromRules()` now returns a `ScoringExplanation` object containing:
+- `topRules`: top 5 positive-scoring fired rules (ruleId, clusterId, points)
+- `topSuppressors`: top 5 negative-scoring fired rules
+- `rfTriggered`: red flag IDs that fired
+- `tieBreak`: how the winner was determined
+- `margin`: point gap between #1 and #2 cluster
+- `confidence`: HIGH (margin≥4, ≤1 suppressor), MODERATE (margin≥2), LOW (margin≤1 or many suppressors)
+Stored on `CaseState.scoringExplanation` for audit trail.
+
+### Replay Harness
+`scripts/replay.ts` replays stored cases through the engine for reproducible debugging.
+- `data/case_store.jsonl`: append-only JSONL case store
+- Usage: `npx tsx scripts/replay.ts --list [filter]` (list cases), `npx tsx scripts/replay.ts --add <slug> <answers.json>` (add case), `npx tsx scripts/replay.ts <CASE_ID>` (replay case)
+- Output includes disposition, clusters, scores, red flags, and full scoring explanation
 
 ### Release Candidate (RC) System
 The RC system ensures consistent agent behavior through automated regression testing. It executes golden scenarios across LLM variants, generating reports with pass/fail summaries, diffs, latency, and token usage. A replay mode allows testing changes against existing traces, and PHI-safe replay packs enable secure QA.

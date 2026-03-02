@@ -1,0 +1,303 @@
+Perfect. We’ll do this in the order you want:
+
+3A deterministic tie-break (first, locks the engine)
+
+4A replay harness (so every case is reproducible)
+
+Continue 2D (confidence + explanation, built on top of the above)
+
+Below is copy/paste-ready implementation that’s intentionally minimal and compatible with your “CSV-driven, GENERIC_V1” world.
+
+3A Deterministic Tie-break (Priority → dx_id)
+What we’re adding
+
+A single new canonical file:
+
+data/DX_PRIORITY.csv
+Complaint_Slug,Dx_ID,Priority
+
+Rules:
+
+higher Priority wins tie
+
+if still tied: Dx_ID alphabetically (stable)
+
+Minimal starter DX_PRIORITY (you can expand)
+
+Paste this as a baseline; adjust as you like later:
+
+Complaint_Slug,Dx_ID,Priority
+cardio_chest_pain,acs,100
+cardio_chest_pain,pe,90
+cardio_chest_pain,pleurisy,60
+cardio_chest_pain,msk,50
+
+cardio_palpitations,svt_af,100
+cardio_palpitations,thyroid_related,80
+cardio_palpitations,panic_stimulant,60
+cardio_palpitations,benign,50
+
+cardio_leg_swelling,dvt,100
+cardio_leg_swelling,cellulitis,80
+cardio_leg_swelling,chf_volume,70
+cardio_leg_swelling,venous,50
+
+(You’ll add the rest iteratively. Missing entries default to 0.)
+
+Code patch
+
+Wherever your engine currently does:
+
+compute dx scores
+
+pick “winner” by max score
+
+tie-break by insertion order
+
+Replace the tie-break with this.
+
+src/engine/dxPriority.ts
+import fs from "node:fs";
+
+export type DxPriorityMap = Map<string, Map<string, number>>; 
+// complaint_slug -> (dx_id -> priority)
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim().replace(/^"|"$/g, ""));
+}
+
+export function loadDxPriority(csvPath: string): DxPriorityMap {
+  if (!fs.existsSync(csvPath)) return new Map();
+  const text = fs.readFileSync(csvPath, "utf8").trim();
+  if (!text) return new Map();
+
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const header = splitCsvLine(lines[0]);
+  const idxComplaint = header.indexOf("Complaint_Slug");
+  const idxDx = header.indexOf("Dx_ID");
+  const idxPri = header.indexOf("Priority");
+
+  const map: DxPriorityMap = new Map();
+
+  for (const line of lines.slice(1)) {
+    const cols = splitCsvLine(line);
+    const complaint = cols[idxComplaint];
+    const dx = cols[idxDx];
+    const pri = Number(cols[idxPri] ?? "0");
+    if (!complaint || !dx || Number.isNaN(pri)) continue;
+
+    if (!map.has(complaint)) map.set(complaint, new Map());
+    map.get(complaint)!.set(dx, pri);
+  }
+  return map;
+}
+
+export function getDxPriority(
+  priMap: DxPriorityMap,
+  complaintSlug: string,
+  dxId: string
+): number {
+  return priMap.get(complaintSlug)?.get(dxId) ?? 0;
+}
+Winner selection helper
+
+Drop this into your scoring module (where you pick top dx):
+
+import { DxPriorityMap, getDxPriority } from "./dxPriority";
+
+export type DxScore = { dxId: string; score: number };
+
+export function pickWinnerDeterministic(
+  complaintSlug: string,
+  scores: DxScore[],
+  priMap: DxPriorityMap
+): DxScore | null {
+  if (!scores.length) return null;
+
+  // 1) max score
+  let maxScore = -Infinity;
+  for (const s of scores) maxScore = Math.max(maxScore, s.score);
+  const tied = scores.filter(s => s.score === maxScore);
+
+  if (tied.length === 1) return tied[0];
+
+  // 2) highest dx priority
+  let maxPri = -Infinity;
+  for (const t of tied) maxPri = Math.max(maxPri, getDxPriority(priMap, complaintSlug, t.dxId));
+  const priTied = tied.filter(t => getDxPriority(priMap, complaintSlug, t.dxId) === maxPri);
+
+  if (priTied.length === 1) return priTied[0];
+
+  // 3) stable alphabetical tie-break
+  priTied.sort((a, b) => a.dxId.localeCompare(b.dxId));
+  return priTied[0];
+}
+Wire it into the engine
+
+At engine startup (where you load CSVs), add:
+
+import { loadDxPriority } from "./dxPriority";
+
+const dxPriorityMap = loadDxPriority("data/DX_PRIORITY.csv");
+
+And pass dxPriorityMap into the function where you compute final dx winner.
+
+That’s it.
+
+✅ Deterministic.
+✅ Explainable.
+✅ Stops the “insertion order ghost.”
+
+4A Replay Harness (case_store.jsonl + replay command)
+What we add
+
+data/case_store.jsonl (append-only)
+
+scripts/replay.ts
+
+optional: scripts/log-case.ts (if you want to store cases from CLI)
+
+data/case_store.jsonl format
+
+One JSON per line:
+
+{"case_id":"CASE_2026_03_02_0001","complaint_slug":"cardio_chest_pain","answers":{"pressure":true,"exert":true,"sob":false},"meta":{"source":"stress_sim","ts":"2026-03-02T12:00:00Z"}}
+scripts/replay.ts
+import fs from "node:fs";
+import process from "node:process";
+
+// import your engine entry point
+import { runComplaint } from "../src/engine/runComplaint"; // adjust to your real path
+
+const CASE_STORE = "data/case_store.jsonl";
+
+function loadCase(caseId: string): any | null {
+  if (!fs.existsSync(CASE_STORE)) return null;
+  const lines = fs.readFileSync(CASE_STORE, "utf8").split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.case_id === caseId) return obj;
+    } catch {}
+  }
+  return null;
+}
+
+async function main() {
+  const caseId = process.argv[2];
+  if (!caseId) {
+    console.error("Usage: tsx scripts/replay.ts <CASE_ID>");
+    process.exit(2);
+  }
+
+  const c = loadCase(caseId);
+  if (!c) {
+    console.error(`Case not found: ${caseId}`);
+    process.exit(1);
+  }
+
+  const res = await runComplaint({
+    complaintSlug: c.complaint_slug,
+    answers: c.answers
+  });
+
+  console.log(JSON.stringify({
+    case_id: c.case_id,
+    complaint_slug: c.complaint_slug,
+    disposition: res.disposition,
+    top_dx: res.top_dx,
+    confidence: res.confidence,       // comes from 2D below
+    explanation: res.explanation      // comes from 2D below
+  }, null, 2));
+}
+
+main().catch(e => {
+  console.error(e);
+  process.exit(1);
+});
+
+Add to package.json:
+
+{
+  "scripts": {
+    "replay": "tsx scripts/replay.ts"
+  }
+}
+Continue 2D (Confidence + Explanation) built on top of 3A
+
+Now that tie-break is deterministic, 2D becomes clean and stable.
+
+2D1 Confidence (minimal, reliable)
+
+Compute from:
+
+margin between #1 and #2
+
+number of RF triggers (RF should override confidence down if noisy)
+
+number of suppressors applied
+
+Suggested rule:
+
+HIGH: margin ≥ 4 and suppressors_hit ≤ 1
+
+MOD: margin 2–3
+
+LOW: margin ≤ 1 or many suppressors
+
+2D2 Explanation (auditable)
+
+Return:
+
+top 5 positive rule hits (rule_id, points, logic)
+
+top 5 suppressor hits
+
+rf_triggered[] (ids)
+
+tie_break_used: score|priority|dx_id
+
+Your engine result object should include:
+{
+  disposition,
+  top_dx,
+  scores: [{dxId, score}],
+  confidence,
+  explanation: {
+    rf: string[],
+    top_rules: {ruleId, dxId, points}[],
+    top_suppressors: {ruleId, dxId, points}[],
+    tie_break: "score"|"priority"|"dx_id"
+  }
+}
+
+If you paste the name/signature of your current “evaluate complaint” function (the one producing top_dx/disposition), I’ll adapt the exact fields to your real object model so it drops in with minimal edits.
+
+What to do next in Replit (copy/paste mode)
+
+Add data/DX_PRIORITY.csv (start with the stub above)
+
+Add src/engine/dxPriority.ts and the pickWinnerDeterministic helper
+
+Wire tie-break into the engine winner selection
+
+Add data/case_store.jsonl + scripts/replay.ts + package.json script
+
+Run:
+
+npm run harness
+
+Then:
+
+npm run replay -- CASE_...
