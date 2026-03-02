@@ -625,3 +625,27 @@ tox_withdrawal,CL_TOXWD_MODERATE_WITHDRAWAL,NEG_MOD_SEIZURE,-6,"answers.Q_TOXWD_
 tox_withdrawal,CL_TOXWD_MODERATE_WITHDRAWAL,NEG_MOD_HALLUC,-6,"answers.Q_TOXWD_HALLUC == 'yes'",NEG_MOD_HALLUC suppressor
 tox_withdrawal,CL_TOXWD_SEVERE_WITHDRAWAL,NEG_SEV_AUTONOMIC_ONLY,-4,"answers.Q_TOXWD_AUTONOMIC == 'yes' && answers.Q_TOXWD_SEIZURE == 'no' && answers.Q_TOXWD_HALLUC == 'no' && answers.Q_TOXWD_CHEST_PAIN == 'no' && answers.Q_TOXWD_VOMIT == 'no' && answers.Q_TOXWD_HIGH_RISK == 'no'",NEG_SEV_AUTONOMIC_ONLY suppressor
 tox_withdrawal,CL_TOXWD_MODERATE_WITHDRAWAL,BOOST_MOD_VOMIT_ONLY,1,"answers.Q_TOXWD_VOMIT == 'yes' && answers.Q_TOXWD_SEIZURE == 'no' && answers.Q_TOXWD_HALLUC == 'no' && answers.Q_TOXWD_CHEST_PAIN == 'no'",BOOST_MOD_VOMIT_ONLY suppressor
+id_flu_like,CL_IDFL_PNEUMONIA_RISK,NEG_PNA_NO_RESP,-6,"answers.Q_IDFL_SOB == 'no' && answers.Q_IDFL_CP == 'no'",NEG_PNA_NO_RESP suppressor
+id_flu_like,CL_IDFL_PNEUMONIA_RISK,NEG_PNA_DEHYD_ONLY,-3,"answers.Q_IDFL_DEHYD == 'yes' && answers.Q_IDFL_SOB == 'no' && answers.Q_IDFL_CP == 'no'",NEG_PNA_DEHYD_ONLY suppressor
+id_flu_like,CL_IDFL_INFLUENZA_LIKE,NEG_FLU_NO_FEVER,-6,"answers.Q_IDFL_FEVER == 'no'",NEG_FLU_NO_FEVER suppressor
+id_flu_like,CL_IDFL_VIRAL_URI,NEG_URI_FEVER_PRESENT,-3,"answers.Q_IDFL_FEVER == 'yes'",NEG_URI_FEVER_PRESENT suppressor
+id_flu_like,CL_IDFL_COMPLICATED_FLU,NEG_CFLU_NO_RISK_LONG,-4,"answers.Q_IDFL_HIGH_RISK == 'no' && answers.Q_IDFL_SYMPTOM_DAYS_5PLUS == 'no'",NEG_CFLU_NO_RISK_LONG suppressor
+id_flu_like,CL_IDFL_PNEUMONIA_RISK,BOOST_PNA_SOB_FEVER,2,"answers.Q_IDFL_SOB == 'yes' && answers.Q_IDFL_FEVER == 'yes'",BOOST_PNA_SOB_FEVER suppressor
+endo_thyroid_symptoms,CL_ETHYR_THYROID_STORM,BOOST_STORM_DELIR,4,"answers.Q_ETHYR_FEVER_DELIRIUM == 'yes'",BOOST_STORM_DELIR suppressor
+endo_thyroid_symptoms,CL_ETHYR_THYROID_STORM,BOOST_STORM_TACHY_CP,2,"answers.Q_ETHYR_TACHY == 'yes' && answers.Q_ETHYR_CP_SOB == 'yes'",BOOST_STORM_TACHY_CP suppressor
+endo_thyroid_symptoms,CL_ETHYR_THYROID_STORM,NEG_STORM_NO_DELIR_NO_CP,-4,"answers.Q_ETHYR_FEVER_DELIRIUM == 'no' && answers.Q_ETHYR_CP_SOB == 'no'",NEG_STORM_NO_DELIR_NO_CP suppressor
+endo_thyroid_symptoms,CL_ETHYR_HYPERTHYROID,NEG_HYPER_NO_TACHY,-4,"answers.Q_ETHYR_TACHY == 'no'",NEG_HYPER_NO_TACHY suppressor
+endo_thyroid_symptoms,CL_ETHYR_HYPOTHYROID,NEG_HYPO_TACHY_DOM,-2,"answers.Q_ETHYR_TACHY == 'yes' && answers.Q_ETHYR_WEIGHT_GAIN == 'no'",NEG_HYPO_TACHY_DOM suppressor
+endo_thyroid_symptoms,CL_ETHYR_HYPOTHYROID,BOOST_HYPO_WEIGHTGAIN,2,"answers.Q_ETHYR_WEIGHT_GAIN == 'yes'",BOOST_HYPO_WEIGHTGAIN suppressor
+ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,NEG_MINOR_LOC,-6,"answers.Q_OTHI_LOC == 'yes'",NEG_MINOR_LOC suppressor
+ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,NEG_MINOR_VOMIT,-6,"answers.Q_OTHI_VOMIT == 'yes'",NEG_MINOR_VOMIT suppressor
+ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,NEG_MINOR_NEURO,-6,"answers.Q_OTHI_NEURODEF == 'yes'",NEG_MINOR_NEURO suppressor
+ortho_trauma_head_injury,CL_OTHI_CONCUSSION,NEG_CONC_NEURODEF,-3,"answers.Q_OTHI_NEURODEF == 'yes'",NEG_CONC_NEURODEF suppressor
+ortho_trauma_head_injury,CL_OTHI_ICH_RISK,BOOST_ICH_THINNER,2,"answers.Q_OTHI_BLOOD_THINNER == 'yes'",BOOST_ICH_THINNER suppressor
+ortho_trauma_head_injury,CL_OTHI_ICH_RISK,BOOST_ICH_NEURODEF,3,"answers.Q_OTHI_NEURODEF == 'yes'",BOOST_ICH_NEURODEF suppressor
+psych_agitation_psychosis,CL_PAGIT_AGITATION,BOOST_AG_VIOLENT,2,"answers.Q_PAGIT_VIOLENT == 'yes'",BOOST_AG_VIOLENT suppressor
+psych_agitation_psychosis,CL_PAGIT_AGITATION,BOOST_AG_UNSAFE,2,"answers.Q_PAGIT_UNABLE_SAFE == 'yes'",BOOST_AG_UNSAFE suppressor
+psych_agitation_psychosis,CL_PAGIT_ACUTE_PSYCHOSIS,BOOST_AP_HALLUC,3,"answers.Q_PAGIT_HALLUC == 'yes'",BOOST_AP_HALLUC suppressor
+psych_agitation_psychosis,CL_PAGIT_DELIRIUM_MEDICAL,BOOST_DELIR_FEVER,4,"answers.Q_PAGIT_FEVER == 'yes'",BOOST_DELIR_FEVER suppressor
+psych_agitation_psychosis,CL_PAGIT_AGITATION,NEG_AG_FEVER,-3,"answers.Q_PAGIT_FEVER == 'yes'",NEG_AG_FEVER suppressor
+psych_agitation_psychosis,CL_PAGIT_ACUTE_PSYCHOSIS,NEG_AP_NO_HALLUC,-5,"answers.Q_PAGIT_HALLUC == 'no'",NEG_AP_NO_HALLUC suppressor

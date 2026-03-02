@@ -1,0 +1,107 @@
+5-Pair Surgical Batch v1 (10 complaints)
+
+Paste these into CLUSTER_SCORING_RULES.csv (same format as always):
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+1) id_flu_like
+id_flu_like,pneumonia_risk,NEG_PNA_NO_RESP,"sob=false AND cp=false",-6
+id_flu_like,pneumonia_risk,NEG_PNA_DEHYD_ONLY,"dehyd=true AND sob=false AND cp=false",-3
+id_flu_like,influenza_like,NEG_FLU_NO_FEVER,"fever=false",-6
+id_flu_like,viral_uri,NEG_URI_FEVER_PRESENT,"fever=true",-3
+id_flu_like,complicated_flu,NEG_CFLU_NO_RISK_LONG,"high_risk=false AND symptom_days_5plus=false",-4
+id_flu_like,pneumonia_risk,BOOST_PNA_SOB_FEVER,"sob=true AND fever=true",2
+2) ophtho_red_eye
+ophtho_red_eye,keratitis,NEG_KER_NO_CONTACT,"contact=false",-6
+ophtho_red_eye,keratitis,NEG_KER_NO_PAIN_PHOTO_VIS,"contact=true AND pain=false AND photophobia=false AND vision_change=false",-3
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_NO_PAIN_PHOTO_VIS,"pain=false AND photophobia=false AND vision_change=false",-6
+ophtho_red_eye,conjunctivitis,NEG_CONJ_PAIN_PHOTO_VIS,"pain=true OR photophobia=true OR vision_change=true",-4
+ophtho_red_eye,viral_conjunctivitis,NEG_VCONJ_PURULENT,"discharge_pus=true",-3
+ophtho_red_eye,conjunctivitis,BOOST_CONJ_PURULENT_NO_PAIN,"discharge_pus=true AND pain=false",1
+3) derm_cellulitis
+derm_cellulitis,nec_fas,NEG_NEC_NO_PAINOUT,"pain_out=false",-6
+derm_cellulitis,nec_fas,NEG_NEC_NO_SYSTEMIC_OR_SPREAD,"pain_out=true AND fever=false AND spreading=false",-4
+derm_cellulitis,abscess,NEG_ABS_NO_PUS,"pus=false",-6
+derm_cellulitis,cellulitis,NEG_CELL_NO_SPREAD_NO_FEVER,"spreading=false AND fever=false",-3
+derm_cellulitis,abscess,BOOST_ABS_PUS,"pus=true",2
+derm_cellulitis,nec_fas,BOOST_NEC_PAINOUT_PLUS_SYSTEMIC,"pain_out=true AND (fever=true OR spreading=true)",2
+4) endo_hyperglycemia
+endo_hyperglycemia,dka_hhs,BOOST_DKA_CONFUSION,"confusion=true",3
+endo_hyperglycemia,dka_hhs,BOOST_DKA_RAPIDBREATH,"rapid_breath=true",2
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_DKA_SIGNS,"confusion=true OR vomit=true OR rapid_breath=true",-6
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_VOMIT,"vomit=true",-3
+endo_hyperglycemia,stress_hyperglycemia,NEG_STRESS_DKA_SIGNS,"confusion=true OR rapid_breath=true",-3
+endo_hyperglycemia,stress_hyperglycemia,BOOST_STRESS_INFECTION,"infection=true",1
+5) endo_thyroid_symptoms
+endo_thyroid_symptoms,thyroid_storm,BOOST_STORM_DELIR,"fever_delirium=true",4
+endo_thyroid_symptoms,thyroid_storm,BOOST_STORM_TACHY_CP,"tachy=true AND cp_sob=true",2
+endo_thyroid_symptoms,thyroid_storm,NEG_STORM_NO_DELIR_NO_CP,"fever_delirium=false AND cp_sob=false",-4
+endo_thyroid_symptoms,hyperthyroid,NEG_HYPER_NO_TACHY,"tachy=false",-4
+endo_thyroid_symptoms,hypothyroid,NEG_HYPO_TACHY_DOM,"tachy=true AND weight_gain=false",-2
+endo_thyroid_symptoms,hypothyroid,BOOST_HYPO_WEIGHTGAIN,"weight_gain=true",2
+6) ortho_trauma_head_injury
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_LOC,"loc=true",-6
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_VOMIT,"vomit=true",-6
+ortho_trauma_head_injury,minor_head_injury,NEG_MINOR_NEURO,"neurodef=true",-6
+ortho_trauma_head_injury,concussion,NEG_CONC_NEURODEF,"neurodef=true",-3
+ortho_trauma_head_injury,ich_risk,BOOST_ICH_THINNER,"blood_thinner=true",2
+ortho_trauma_head_injury,ich_risk,BOOST_ICH_NEURODEF,"neurodef=true",3
+7) msk_back_pain
+
+(uses your existing MSK schema: trauma, weak, saddle, fever, cancer, pain_severe)
+
+msk_back_pain,mechanical,NEG_MECH_WEAK,"weak=true",-6
+msk_back_pain,mechanical,NEG_MECH_SADDLE,"saddle=true",-6
+msk_back_pain,mechanical,NEG_MECH_FEVER,"fever=true",-4
+msk_back_pain,mechanical,NEG_MECH_CANCER,"cancer=true",-4
+msk_back_pain,serious_spine,BOOST_SPINE_SADDLE,"saddle=true",3
+msk_back_pain,radicular,BOOST_RAD_WEAK,"weak=true",2
+8) psych_anxiety_panic
+
+(schema: cp, sob, syncope, sudden, substance, si)
+
+psych_anxiety_panic,panic_attack,NEG_PANIC_MEDICAL,"cp=true OR sob=true OR syncope=true",-6
+psych_anxiety_panic,panic_attack,NEG_PANIC_SI,"si=true",-5
+psych_anxiety_panic,substance_induced,NEG_SUB_NO_SUBSTANCE,"substance=false",-6
+psych_anxiety_panic,medical_mimic,BOOST_MED_CP_SOB,"cp=true OR sob=true",2
+psych_anxiety_panic,medical_mimic,BOOST_MED_SYNCOPE,"syncope=true",2
+psych_anxiety_panic,panic_attack,BOOST_PANIC_SUDDEN,"sudden=true AND cp=false AND sob=false AND syncope=false",1
+9) psych_depression_suicidal_ideation
+
+(schema: si, intent, psychosis, substance, grave, support)
+
+psych_depression_suicidal_ideation,major_depression,NEG_MD_SI,"si=true",-6
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_SI,"si=true",2
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_INTENT,"intent=true",3
+psych_depression_suicidal_ideation,psychotic_depression,BOOST_PD_PSYCHOSIS,"psychosis=true",3
+psych_depression_suicidal_ideation,major_depression,NEG_MD_PSYCHOSIS,"psychosis=true",-5
+psych_depression_suicidal_ideation,substance_related,BOOST_SUB_SI_SUBSTANCE,"si=true AND substance=true",2
+10) psych_agitation_psychosis
+
+(schema: violent, si, halluc, substance, fever, unable_safe)
+
+psych_agitation_psychosis,agitation,BOOST_AG_VIOLENT,"violent=true",2
+psych_agitation_psychosis,agitation,BOOST_AG_UNSAFE,"unable_safe=true",2
+psych_agitation_psychosis,acute_psychosis,BOOST_AP_HALLUC,"halluc=true",3
+psych_agitation_psychosis,delirium_medical,BOOST_DELIR_FEVER,"fever=true",4
+psych_agitation_psychosis,agitation,NEG_AG_FEVER,"fever=true",-3
+psych_agitation_psychosis,acute_psychosis,NEG_AP_NO_HALLUC,"halluc=false",-5
+How you run this batch (fast + safe)
+
+For each complaint in order (or any order), run:
+
+npm run ship:complaint -- id_flu_like
+npm run ship:complaint -- ophtho_red_eye
+npm run ship:complaint -- derm_cellulitis
+npm run ship:complaint -- endo_hyperglycemia
+npm run ship:complaint -- endo_thyroid_symptoms
+npm run ship:complaint -- ortho_trauma_head_injury
+npm run ship:complaint -- msk_back_pain
+npm run ship:complaint -- psych_anxiety_panic
+npm run ship:complaint -- psych_depression_suicidal_ideation
+npm run ship:complaint -- psych_agitation_psychosis
+
+Then:
+
+npm run harness
+
+If anything fails, paste only the failing case IDs (just the FAIL block). We’ll adjust only that complaint, with at most 2 more rules.

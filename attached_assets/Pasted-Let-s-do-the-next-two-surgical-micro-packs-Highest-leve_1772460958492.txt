@@ -1,0 +1,51 @@
+Let’s do the next two surgical micro-packs. Highest leverage now:
+
+endo_hyperglycemia
+
+endo_thyroid_symptoms
+
+Why these two next:
+
+They influence multiple systems (neuro/psych/cardiac mimics).
+
+They’re score-sensitive and easy to stabilize with tiny rules.
+
+Below are tight, complaint-specific micro-packs (negative + micro-boost), designed to avoid changing unrelated behavior.
+
+1) ENDO_HYPERGLYCEMIA — Surgical Micro-Pack
+
+Goal:
+
+Make DKA/HHS dominate when confusion or vomiting is present.
+
+Keep “uncontrolled hyperglycemia” as the winner in stable, non-toxic cases.
+
+Avoid broad shifts that change mild patterns.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+endo_hyperglycemia,dka_hhs,BOOST_DKA_CONFUSION,"confusion=true",3
+endo_hyperglycemia,dka_hhs,BOOST_DKA_VOMIT,"vomit=true",2
+endo_hyperglycemia,dka_hhs,BOOST_DKA_RAPID,"rapid_breath=true",2
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_DKA_SIGNS,"confusion=true OR vomit=true OR rapid_breath=true",-6
+endo_hyperglycemia,stress_hyperglycemia,BOOST_STRESS_INFECT,"infection=true",1
+endo_hyperglycemia,stress_hyperglycemia,NEG_STRESS_DKA_SIGNS,"confusion=true OR rapid_breath=true",-3
+2) ENDO_THYROID_SYMPTOMS — Surgical Micro-Pack
+
+Goal:
+
+Make thyroid_storm win only when storm signals exist (fever_delirium, or tachy+cp_sob).
+
+Prevent hyper/hypo from flipping under mixed inputs.
+
+Preserve baseline winners.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+endo_thyroid_symptoms,thyroid_storm,BOOST_STORM_DELIR,"fever_delirium=true",4
+endo_thyroid_symptoms,thyroid_storm,BOOST_STORM_TACHY_CP,"tachy=true AND cp_sob=true",2
+endo_thyroid_symptoms,thyroid_storm,NEG_STORM_NO_DELIR_NO_CP,"fever_delirium=false AND cp_sob=false",-4
+endo_thyroid_symptoms,hyperthyroid,NEG_HYPER_NO_TACHY,"tachy=false",-4
+endo_thyroid_symptoms,hypothyroid,BOOST_HYPO_WEIGHTGAIN,"weight_gain=true",2
+endo_thyroid_symptoms,hypothyroid,NEG_HYPO_TACHY_DOM,"tachy=true AND weight_gain=false",-2
+Run (complaint level first)
+npm run ship:complaint -- endo_hyperglycemia
+npm run ship:complaint -- endo_thyroid_symptoms
