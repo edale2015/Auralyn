@@ -1,0 +1,488 @@
+🧭 What This Achieves
+
+You now support:
+
+Pressure urticaria
+
+Cold urticaria
+
+Heat urticaria
+
+Cholinergic urticaria (exercise)
+
+Dermatographism
+
+Chronic spontaneous urticaria
+
+Anaphylaxis separation
+
+Without:
+
+Overtriggering EMERG
+
+Breaking existing goldens
+
+Causing cluster cascade
+
+Next Step
+
+Apply:
+
+New core questions
+
+New scoring rules
+
+Disposition refinement
+
+Hard goldens
+
+Then run:
+
+npm run ship:complaint -- derm_allergic_reaction
+
+If PASS, we’ll next expand:
+
+Angioedema without hives
+
+Hereditary angioedema pattern
+
+Mast-cell disorder patterns
+
+But one layer at a time.
+
+Run it and tell me the result.
+
+THIS IS GOOD, SO ANY TIME WE CAN EXPAND OR CHANGE THIS.
+
+Yes. And this is the right mental model now.
+
+You are no longer “building a static rule set.”
+
+You are maintaining a living clinical engine.
+
+Expansion and change are not bugs. They are features of a mature system.
+
+The Correct Philosophy Going Forward
+
+You now have three layers:
+
+1️⃣ Base layer (stable spine)
+
+Core complaints
+
+Red flag gating
+
+Conservative disposition
+
+Canonical scoring structure
+
+This layer should change rarely.
+
+2️⃣ Accuracy layer (Phase 2A)
+
+Suppressors
+
+Micro-boosts
+
+Hard goldens
+
+Tie-break stabilization
+
+This layer evolves gradually and carefully.
+
+3️⃣ Expansion layer (what you just did with urticaria)
+
+New subtypes
+
+New clusters
+
+New phenotypes
+
+Real-world nuance
+
+This is where the engine becomes truly intelligent.
+
+When Should We Expand?
+
+Expand when:
+
+A complaint lacks a clinically meaningful subtype
+
+A hard golden exposes a repeated pattern
+
+A real-world case doesn’t fit existing clusters
+
+A domain has more nuance (like urticaria did)
+
+You want future-proofing
+
+Do NOT expand just to “add complexity.”
+
+Expand when it increases diagnostic discrimination.
+
+Your System is Now Flexible
+
+Because you have:
+
+Complaint registry
+
+Core questions editable
+
+Cluster scoring modular
+
+Disposition priority logic
+
+Hard goldens
+
+Harness enforcement
+
+You can expand safely.
+
+That is the key difference between:
+
+“Rule engine chaos”
+and
+“Disciplined clinical platform.”
+
+Important Structural Principle
+
+Whenever we expand:
+
+Add subtype cluster
+
+Add 2–6 core questions max
+
+Add micro-scoring rules
+
+Add 6–13 hard goldens
+
+Run harness
+
+Add suppressors only if needed
+
+That keeps the engine stable.
+
+The System Is Now Strong Enough To Do This
+
+We can expand any complaint at any time without destabilizing others — because:
+
+RF gating dominates
+
+Hard goldens protect behavior
+
+We do surgical suppressors
+
+We avoid global shifts
+
+That is how large clinical engines survive long-term.
+
+If you’d like, next we can:
+
+A) Expand angioedema properly
+B) Expand infectious rash separation (viral vs vasculitic vs drug vs necrotic)
+C) Expand psychiatric medical-mimic detection
+D) Expand metabolic-to-neuro cross-system interplay
+E) Move to Phase 2B stress simulation
+
+Pick a direction.
+
+DO A THROUGH E IN ORDER.
+Thought for 33s
+
+Done. We’ll do A → B → C → D → E in order, and I’ll give you copy/paste-ready deltas for each step so you can ship with your existing “make → test → iterate” loop.
+
+A) Expand angioedema properly (including hereditary patterns)
+A1. Add questions to CORE_QUESTIONS.csv
+
+Append under derm_allergic_reaction:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+derm_allergic_reaction,angioedema_only,"Swelling without hives (no welts), e.g., lips/eyes/tongue?",boolean
+derm_allergic_reaction,acei_use,"On an ACE inhibitor (lisinopril, enalapril, etc.)?",boolean
+derm_allergic_reaction,recurrent,"Recurrent swelling episodes?",boolean
+derm_allergic_reaction,family_history,"Family history of similar swelling episodes?",boolean
+derm_allergic_reaction,abd_pain,"Severe abdominal pain with swelling episodes?",boolean
+derm_allergic_reaction,no_response_antihist,"Does NOT improve with antihistamines?",boolean
+A2. Add clusters + scoring to CLUSTER_SCORING_RULES.csv
+
+New Dx_IDs:
+
+ace_inhibitor_angioedema
+
+hereditary_angioedema
+
+keep existing urticaria + anaphylaxis + inducible_urticaria_physical + chronic_spontaneous_urticaria
+
+Append:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+derm_allergic_reaction,ace_inhibitor_angioedema,BOOST_ACEI_ANGIO,"angioedema_only=true AND acei_use=true",4
+derm_allergic_reaction,ace_inhibitor_angioedema,NEG_ACEI_HIVES,"hives=true",-3
+derm_allergic_reaction,ace_inhibitor_angioedema,NEG_ACEI_TRIGGER,"trigger=true",-1
+
+derm_allergic_reaction,hereditary_angioedema,BOOST_HAE_ANGIO_ONLY,"angioedema_only=true AND hives=false",3
+derm_allergic_reaction,hereditary_angioedema,BOOST_HAE_RECURRENT,"recurrent=true",2
+derm_allergic_reaction,hereditary_angioedema,BOOST_HAE_FAMILY,"family_history=true",2
+derm_allergic_reaction,hereditary_angioedema,BOOST_HAE_ABD,"abd_pain=true",2
+derm_allergic_reaction,hereditary_angioedema,BOOST_HAE_NO_H1,"no_response_antihist=true",2
+derm_allergic_reaction,hereditary_angioedema,NEG_HAE_ACEI,"acei_use=true",-2
+
+derm_allergic_reaction,anaphylaxis,BOOST_ANA_AIRWAY2,"lip_tongue=true OR throat=true OR sob=true",3
+derm_allergic_reaction,anaphylaxis,NEG_ANA_NO_AIRWAY2,"lip_tongue=false AND throat=false AND sob=false",-6
+
+derm_allergic_reaction,urticaria,NEG_URT_ANGIO_ONLY,"angioedema_only=true AND hives=false",-4
+derm_allergic_reaction,urticaria,BOOST_URT_HIVES_ONLY2,"hives=true AND lip_tongue=false AND throat=false AND sob=false",1
+A3. Disposition tweak (DISP_RULES.csv)
+
+Angioedema with airway symptoms stays EMERG. HAE/ACEi without airway stays URGENT.
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+derm_allergic_reaction,EMERG_AIRWAY,100,"lip_tongue=true OR throat=true OR sob=true",EMERG
+derm_allergic_reaction,URGENT_ANGIO_ONLY,70,"angioedema_only=true",URGENT
+derm_allergic_reaction,URGENT_SYSTEMIC_HIVES,60,"vomit=true AND hives=true",URGENT
+derm_allergic_reaction,URGENT_PHYSICAL,50,"physical_trigger=true",URGENT
+derm_allergic_reaction,ROUTINE_DEFAULT,1,"true",ROUTINE
+A4. Add hard goldens (13) for angioedema spectrum
+
+Append to your hard suite:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+derm_allergic_reaction,DA_ANG1,"{""angioedema_only"":true,""acei_use"":true,""hives"":false,""lip_tongue"":true,""throat"":false,""sob"":false}",EMERG,anaphylaxis
+derm_allergic_reaction,DA_ANG2,"{""angioedema_only"":true,""acei_use"":true,""hives"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,ace_inhibitor_angioedema
+derm_allergic_reaction,DA_ANG3,"{""angioedema_only"":true,""acei_use"":false,""recurrent"":true,""family_history"":true,""abd_pain"":true,""no_response_antihist"":true,""hives"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,hereditary_angioedema
+derm_allergic_reaction,DA_ANG4,"{""angioedema_only"":true,""acei_use"":false,""recurrent"":true,""family_history"":false,""abd_pain"":true,""no_response_antihist"":true,""hives"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,hereditary_angioedema
+derm_allergic_reaction,DA_ANG5,"{""hives"":true,""angioedema_only"":false,""trigger"":true,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,urticaria
+derm_allergic_reaction,DA_ANG6,"{""hives"":false,""angioedema_only"":true,""acei_use"":false,""recurrent"":false,""abd_pain"":false,""no_response_antihist"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,hereditary_angioedema
+
+(Those last “default” HAE cases help keep angio-only from incorrectly falling into urticaria.)
+
+Run:
+
+npm run ship:complaint -- derm_allergic_reaction
+B) Expand infectious rash separation (viral vs dangerous infectious vs drug vs vasculitic)
+
+This is for derm_rash specifically.
+
+B1. Add 3 questions
+Complaint_Slug,Question_ID,Question_Text,Type
+derm_rash,meningitis_symptoms,"Severe headache/neck stiffness/confusion?",boolean
+derm_rash,rapid_spread,"Rapidly spreading rash with systemic illness?",boolean
+derm_rash,recent_tick,"Recent tick bite or travel exposure?",boolean
+B2. Add 2 new clusters + scoring
+
+New Dx_IDs:
+
+meningococcemia_like
+
+tickborne_like
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+derm_rash,meningococcemia_like,BOOST_MEN_PURP_FEVER,"purple=true AND fever=true",4
+derm_rash,meningococcemia_like,BOOST_MEN_NECK,"meningitis_symptoms=true",3
+derm_rash,meningococcemia_like,NEG_MEN_NO_PURP,"purple=false",-6
+
+derm_rash,tickborne_like,BOOST_TICK_EXPOSURE,"recent_tick=true",3
+derm_rash,tickborne_like,BOOST_TICK_FEVER,"fever=true",2
+derm_rash,tickborne_like,NEG_TICK_MUCOSAL,"mucosal=true",-3
+
+Disposition tweak (keep safety):
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+derm_rash,EMERG_PURPURA_OR_MENINGITIS,100,"(purple=true AND fever=true) OR meningitis_symptoms=true",EMERG
+
+Run:
+
+npm run ship:complaint -- derm_rash
+C) Expand psychiatric medical-mimic detection
+
+We’ll add a “medical override pressure” so panic/anxiety doesn’t win when cardiopulmonary red flags exist.
+
+C1. psych_anxiety_panic: add 2 questions
+Complaint_Slug,Question_ID,Question_Text,Type
+psych_anxiety_panic,new_neuro,"New neurologic symptoms (weakness, speech trouble)?",boolean
+psych_anxiety_panic,fever,"Fever?",boolean
+C2. Add scoring + disposition guard
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+psych_anxiety_panic,medical_mimic,BOOST_MED_NEURO,"new_neuro=true",3
+psych_anxiety_panic,medical_mimic,BOOST_MED_FEVER,"fever=true",2
+psych_anxiety_panic,panic_attack,NEG_PANIC_MEDICAL,"cp=true OR sob=true OR syncope=true OR new_neuro=true OR fever=true",-6
+
+Disposition:
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+psych_anxiety_panic,URGENT_MED_OVERRIDE,90,"cp=true OR sob=true OR syncope=true OR new_neuro=true OR fever=true",URGENT
+
+Run:
+
+npm run ship:complaint -- psych_anxiety_panic
+D) Expand metabolic-to-neuro cross-system interplay
+
+We’ll harden the “hypoglycemia can look like stroke” pathway so Neuro doesn’t win when low_glucose is present.
+
+D1. neuro_confusion_ams: add question
+Complaint_Slug,Question_ID,Question_Text,Type
+neuro_confusion_ams,low_glucose_confirmed,"Known/confirmed low blood sugar or rapid improvement after sugar?",boolean
+D2. Add scoring
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+neuro_confusion_ams,metabolic_toxic,BOOST_META_LOW_GLUCOSE_CONF,"low_glucose_confirmed=true",4
+neuro_confusion_ams,stroke,NEG_STROKE_LOW_GLUCOSE_CONF,"low_glucose_confirmed=true",-5
+
+Disposition stays EMERG for AMS, but cluster winner becomes metabolic when appropriate.
+
+Run:
+
+npm run ship:complaint -- neuro_confusion_ams
+E) Phase 2B: 500-case cross-system stress simulation
+
+Here’s a starter script (Node/TS) that creates mixed cases and logs disposition distribution + top dx frequency. It assumes you can call your harness runner programmatically or via CLI.
+
+scripts/simulate-stress.ts
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+
+const SYSTEMS = ["cardio","pulm","gi","neuro","gu","derm","endo","psych","id","tox","ophtho","ortho_trauma","general","msk","renal","hemeonc","rheum","environmental"];
+
+const N = 500;
+
+type SimResult = { disposition: string; top_dx: string; complaint: string };
+
+const results: SimResult[] = [];
+
+function randBool(p=0.3){ return Math.random() < p; }
+
+for (let i=0;i<N;i++){
+  // pick random complaint slug from your registry in real version
+  // placeholder: run an existing harness command that supports randomization
+  // Example: npm run harness:random -- --n 1 --seed <i>
+  const out = execSync(`npm run harness:random -- --n 1 --seed ${i}`, { encoding: "utf8" });
+
+  // Expect your harness prints JSON on one line; adapt to your output format.
+  // Example line: {"complaint":"pulm_cough","disposition":"URGENT","top_dx":"pneumonia"}
+  const line = out.trim().split("\n").find(l => l.startsWith("{"));
+  if (!line) continue;
+  const obj = JSON.parse(line);
+  results.push({ complaint: obj.complaint, disposition: obj.disposition, top_dx: obj.top_dx });
+}
+
+// Summaries
+const dispCounts = results.reduce((m,r)=>{ m[r.disposition]=(m[r.disposition]??0)+1; return m; }, {} as Record<string,number>);
+const topDxCounts = results.reduce((m,r)=>{ const k=`${r.complaint}:${r.top_dx}`; m[k]=(m[k]??0)+1; return m; }, {} as Record<string,number>);
+
+fs.writeFileSync("stress_results.json", JSON.stringify({ dispCounts, topDxCounts, results }, null, 2));
+console.log("Wrote stress_results.json", dispCounts);
+
+Run:
+
+npm run simulate:stress
+
+(If you don’t have harness:random yet, you can stub it by sampling from your goldens; same idea.)
+
+What I need from you
+
+Reply with: “Proceed” and tell me whether you want these changes applied as:
+
+Hard suite only (safe)
+or
+
+Base + hard (aggressive)
+
+If you don’t specify, I’ll assume hard suite only for A–D.
+
+BASE + HARD
+
+Got it: BASE + HARD. ✅
+That means A–D become canonical behavior, and both your archetype goldens and hard goldens must stay green.
+
+Here’s the clean execution order (no extra ceremony):
+
+Apply A–D to BASE + HARD
+1) Update CSVs (canonical)
+
+Apply the deltas I gave you for:
+
+A) derm_allergic_reaction
+
+add the 6 angioedema questions
+
+add the new clusters + scoring rules
+
+add the disposition tweak
+
+B) derm_rash
+
+add 3 questions
+
+add 2 new clusters + scoring
+
+add emerg disposition rule for purpura/meningitis symptoms
+
+C) psych_anxiety_panic
+
+add 2 questions
+
+add the medical mimic scoring + disposition override
+
+D) neuro_confusion_ams
+
+add 1 question
+
+add metabolic boost + stroke suppressor
+
+These go into the same canonical CSVs you already ship:
+
+CORE_QUESTIONS.csv
+
+CLUSTER_SCORING_RULES.csv
+
+DISP_RULES.csv
+(+ any template text only if you want, not required for correctness)
+
+2) Add goldens to BOTH suites
+
+Add the new angioedema hard goldens (A4) to your hard set
+
+Add a small base set too (recommended 4–6 cases) so baseline behavior is pinned
+
+If you want a minimal BASE set for angioedema, use these 6:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+derm_allergic_reaction,DA_BASE_ANG1,"{""angioedema_only"":true,""acei_use"":true,""hives"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,ace_inhibitor_angioedema
+derm_allergic_reaction,DA_BASE_ANG2,"{""angioedema_only"":true,""acei_use"":false,""recurrent"":true,""family_history"":true,""abd_pain"":true,""no_response_antihist"":true,""hives"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,hereditary_angioedema
+derm_allergic_reaction,DA_BASE_ANG3,"{""hives"":true,""trigger"":true,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,urticaria
+derm_allergic_reaction,DA_BASE_ANG4,"{""hives"":true,""physical_trigger"":true,""pressure_trigger"":true,""lip_tongue"":false,""throat"":false,""sob"":false}",URGENT,inducible_urticaria_physical
+derm_allergic_reaction,DA_BASE_ANG5,"{""hives"":true,""chronic_over_6w"":true,""physical_trigger"":false,""lip_tongue"":false,""throat"":false,""sob"":false}",ROUTINE,chronic_spontaneous_urticaria
+derm_allergic_reaction,DA_BASE_ANG6,"{""angioedema_only"":true,""acei_use"":false,""hives"":false,""lip_tongue"":true,""throat"":false,""sob"":false}",EMERG,anaphylaxis
+3) Ship in tight slices
+
+Run these in order:
+
+npm run ship:complaint -- derm_allergic_reaction
+npm run ship:complaint -- derm_rash
+npm run ship:complaint -- psych_anxiety_panic
+npm run ship:complaint -- neuro_confusion_ams
+
+Then run full regression:
+
+npm run harness
+How we handle the inevitable mismatch or two
+
+Because this is BASE + HARD, you may see failures that are either:
+
+legit: engine needs a tiny micro-boost/suppressor
+
+governance: old base goldens are now clinically obsolete and should be updated
+
+Your rule still applies:
+if identical inputs differ, older canon wins unless we intentionally version-bump that behavior.
+
+Next after A–D are green: E (500-case stress sim)
+
+Once harness is green again, we move to E (stress simulation) and start tracking:
+
+% EMERG / URGENT / ROUTINE
+
+top dx distribution
+
+“hotspots” where URGENT is over-used
+
+When you run the four ship:complaint commands, paste only the FAIL block if anything pops.
