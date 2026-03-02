@@ -1,7 +1,5 @@
 Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
-ophtho_red_eye,CL_ORE_KERATITIS,NEG_KER_NO_CONTACT,"answers.Q_ORE_CONTACT == 'no'",-6,v1,Prevent keratitis without contact lens
-ophtho_red_eye,CL_ORE_KERATITIS,NEG_KER_NO_PAIN_PHOTO_VIS,"answers.Q_ORE_CONTACT == 'yes' && answers.Q_ORE_PAIN == 'no' && answers.Q_ORE_PHOTOPHOBIA == 'no' && answers.Q_ORE_VISION_CHANGE == 'no'",-3,v1,contact alone not enough for keratitis
-ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,NEG_UVG_NO_PAIN_PHOTO_VIS,"answers.Q_ORE_PAIN == 'no' && answers.Q_ORE_PHOTOPHOBIA == 'no' && answers.Q_ORE_VISION_CHANGE == 'no'",-6,v1,Prevent uveitis without pain/photo/vision
-ophtho_red_eye,CL_ORE_CONJUNCTIVITIS,NEG_CONJ_PAIN_PHOTO_VIS,"answers.Q_ORE_PAIN == 'yes' || answers.Q_ORE_PHOTOPHOBIA == 'yes' || answers.Q_ORE_VISION_CHANGE == 'yes'",-4,v1,Suppress conjunctivitis when pain/photo/vision present
-ophtho_red_eye,CL_ORE_VIRAL_CONJUNCTIVITIS,NEG_VCONJ_PURULENT,"answers.Q_ORE_DISCHARGE_PUS == 'yes'",-3,v1,Prevent viral conj with purulent discharge
-ophtho_red_eye,CL_ORE_CONJUNCTIVITIS,BOOST_CONJ_PURULENT_NO_PAIN,"answers.Q_ORE_DISCHARGE_PUS == 'yes' && answers.Q_ORE_PAIN == 'no'",1,v1,Boost bacterial conj with pus and no pain
+ophtho_red_eye,CL_ORE_KERATITIS,NEG_KER_NO_CONTACT_V4,-6,"answers.Q_ORE_CONTACT == 'no'",v4,Keratitis requires contact risk group
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,NEG_UVG_NO_PAIN_PHOTO_VIS_V4,-6,"answers.Q_ORE_PAIN == 'no' && answers.Q_ORE_PHOTOPHOBIA == 'no' && answers.Q_ORE_VISION_CHANGE == 'no'",v4,Serious painful red eye requires pain/photo/vision change
+ophtho_red_eye,CL_ORE_CONJUNCTIVITIS,BOOST_CONJ_PURULENT_NO_PAIN_V4,1,"answers.Q_ORE_DISCHARGE_PUS == 'yes' && answers.Q_ORE_PAIN == 'no'",v4,Purulent painless -> conjunctivitis
+ophtho_red_eye,CL_ORE_KERATITIS,BOOST_KER_CONTACT_ONLY_V4,1,"answers.Q_ORE_CONTACT == 'yes' && answers.Q_ORE_PAIN == 'no' && answers.Q_ORE_PHOTOPHOBIA == 'no' && answers.Q_ORE_VISION_CHANGE == 'no'",v4,Canon: contact lens red eye defaults keratitis even if mild

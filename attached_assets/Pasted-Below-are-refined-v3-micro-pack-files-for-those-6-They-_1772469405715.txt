@@ -1,0 +1,64 @@
+Below are refined v3 micro-pack files for those 6. They’re intentionally small and conservative (a few rules each) to avoid baseline regressions. Paste each block into the corresponding file in micro_packs/.
+
+Each file uses this header:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+
+1) micro_packs/derm_cellulitis.csv (v3)
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+derm_cellulitis,nec_fas,NEG_NEC_NO_PAINOUT_V3,"pain_out=false",-6,v3,"Nec fasc requires pain out of proportion"
+derm_cellulitis,nec_fas,NEG_NEC_PAINOUT_ONLY_V3,"pain_out=true AND fever=false AND spreading=false",-4,v3,"Avoid nec fasc on pain-only"
+derm_cellulitis,abscess,NEG_ABS_NO_PUS_V3,"pus=false",-6,v3,"Abscess requires pus"
+derm_cellulitis,cellulitis,BOOST_CELL_FEVER_SPREAD_V3,"fever=true AND spreading=true",1,v3,"Favor cellulitis with systemic + spread"
+2) micro_packs/ophtho_red_eye.csv (v3)
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+ophtho_red_eye,keratitis,NEG_KER_NO_CONTACT_V3,"contact=false",-6,v3,"Keratitis mainly in contact lens risk group"
+ophtho_red_eye,keratitis,NEG_KER_CONTACT_NO_SYM_V3,"contact=true AND pain=false AND photophobia=false AND vision_change=false",-4,v3,"No corneal red flags -> avoid keratitis"
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_NO_PAIN_PHOTO_VIS_V3,"pain=false AND photophobia=false AND vision_change=false",-6,v3,"Serious painful red eye requires pain/photo/vision change"
+ophtho_red_eye,conjunctivitis,BOOST_CONJ_PURULENT_NO_PAIN_V3,"discharge_pus=true AND pain=false",1,v3,"Purulent painless -> conjunctivitis"
+3) micro_packs/endo_hyperglycemia.csv (v3)
+
+This one was regressing because “vomit-only” pushes things too hard. So v3 focuses on confusion/rapid breathing only, and lets infection-only patterns stay stable.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+endo_hyperglycemia,dka_hhs,BOOST_DKA_CONFUSION_V3,"confusion=true",3,v3,"DKA/HHS: AMS signal"
+endo_hyperglycemia,dka_hhs,BOOST_DKA_RAPID_V3,"rapid_breath=true",2,v3,"DKA/HHS: Kussmaul/fruity breath proxy"
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_DKA_SIGNS_V3,"confusion=true OR rapid_breath=true",-6,v3,"Prevent uncontrolled winning when DKA signs present"
+endo_hyperglycemia,stress_hyperglycemia,BOOST_STRESS_INFECT_V3,"infection=true AND confusion=false AND rapid_breath=false",1,v3,"Infection-only stays stress hyperglycemia"
+4) micro_packs/msk_back_pain.csv (v3)
+
+Your MSK schema is: trauma, weak, saddle, fever, cancer, pain_severe.
+v3 is minimal: just stop mechanical from winning when weak/saddle.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+msk_back_pain,mechanical,NEG_MECH_NEURO_V3,"weak=true OR saddle=true",-6,v3,"No mechanical win with neuro red flags"
+msk_back_pain,serious_spine,BOOST_SPINE_SADDLE_V3,"saddle=true",2,v3,"Saddle anesthesia -> serious spine"
+msk_back_pain,radicular,BOOST_RAD_WEAK_V3,"weak=true AND saddle=false",1,v3,"Weakness without saddle leans radicular"
+5) micro_packs/psych_anxiety_panic.csv (v3)
+
+This complaint is sensitive because baseline tests may intentionally allow panic even with some symptoms. v3 is conservative: only hard-suppress panic when syncope exists, and only micro-boost medical mimic when cp+sob together.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+psych_anxiety_panic,panic_attack,NEG_PANIC_SYNCOPE_V3,"syncope=true",-6,v3,"Syncope should not be panic winner"
+psych_anxiety_panic,medical_mimic,BOOST_MED_CP_SOB_V3,"cp=true AND sob=true",1,v3,"CP+SOB together pushes medical mimic"
+psych_anxiety_panic,medical_mimic,NEG_MED_CP_ONLY_V3,"cp=true AND sob=false AND syncope=false",-2,v3,"Avoid over-medicalizing isolated CP"
+psych_anxiety_panic,panic_attack,BOOST_PANIC_SUDDEN_SAFE_V3,"sudden=true AND cp=false AND sob=false AND syncope=false",1,v3,"Classic panic pattern"
+6) micro_packs/psych_depression_suicidal_ideation.csv (v3)
+
+PD4 regression is typically “psychosis present but major_depression wins.” Fix with two rules only.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+psych_depression_suicidal_ideation,psychotic_depression,BOOST_PD_PSYCH_V3,"psychosis=true",3,v3,"Psychosis should dominate cluster"
+psych_depression_suicidal_ideation,major_depression,NEG_MD_PSYCH_V3,"psychosis=true",-6,v3,"Prevent major depression winning with psychosis"
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_INTENT_V3,"intent=true",2,v3,"Intent increases suicide risk"
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_SI_V3,"si=true",1,v3,"SI increases suicide risk"
+What to do in Replit (fastest)
+
+Paste each block into its file in micro_packs/ (overwrite the whole file).
+
+Run:
+
+npx tsx scripts/build-micro-packs.ts
+HARNESS_MODE=1 npx tsx scripts/tune-pairs.ts
+
+If those 6 still fail, paste just the new phase2a_pairs_report.json FAIL entries (for those complaints). I’ll do a v4 with at most 2-rule tweaks per complaint.

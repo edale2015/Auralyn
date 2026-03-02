@@ -1,0 +1,68 @@
+Got it. We’ll continue copy/paste and I’ll give you v4 micro-pack edits that target exactly the failing cases you listed, with minimal blast radius.
+
+Then I’ll answer how to start using Clawdbot in a safe, low-friction way (as an “operator” that runs commands + copies output, not as a god-mode editor).
+
+✅ v4 Micro-Pack Fixes (only the 4 offenders)
+1) micro_packs/ophtho_red_eye.csv (v4)
+
+Your RE5/RE9 pattern is: contact=yes but no pain/photophobia/vision change should still be keratitis per your canon.
+
+So we remove/relax the “contact+no symptoms” suppressor. Replace the file with:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+ophtho_red_eye,keratitis,NEG_KER_NO_CONTACT_V4,"contact=false",-6,v4,"Keratitis requires contact risk group"
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_NO_PAIN_PHOTO_VIS_V4,"pain=false AND photophobia=false AND vision_change=false",-6,v4,"Serious painful red eye requires pain/photo/vision change"
+ophtho_red_eye,conjunctivitis,BOOST_CONJ_PURULENT_NO_PAIN_V4,"discharge_pus=true AND pain=false",1,v4,"Purulent painless -> conjunctivitis"
+ophtho_red_eye,keratitis,BOOST_KER_CONTACT_ONLY_V4,"contact=true AND pain=false AND photophobia=false AND vision_change=false",1,v4,"Canon: contact lens red eye defaults keratitis even if mild"
+
+Key change: we stop suppressing keratitis for “contact-only”.
+
+2) micro_packs/endo_hyperglycemia.csv (v4)
+
+HG4 wants uncontrolled to beat stress in a vomit-only case.
+
+So we add one tiny rule: penalize stress when infection is false, and boost uncontrolled when vomit is present but DKA signs are absent.
+
+Replace file with:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+endo_hyperglycemia,dka_hhs,BOOST_DKA_CONFUSION_V4,"confusion=true",3,v4,"DKA/HHS: AMS"
+endo_hyperglycemia,dka_hhs,BOOST_DKA_RAPID_V4,"rapid_breath=true",2,v4,"DKA/HHS: Kussmaul proxy"
+endo_hyperglycemia,uncontrolled_hyperglycemia,NEG_UH_DKA_SIGNS_V4,"confusion=true OR rapid_breath=true",-6,v4,"Uncontrolled can't win with DKA signs"
+endo_hyperglycemia,uncontrolled_hyperglycemia,BOOST_UH_VOMIT_ONLY_V4,"vomit=true AND infection=false AND confusion=false AND rapid_breath=false",2,v4,"Canon: vomit-only (no DKA signs) stays uncontrolled"
+endo_hyperglycemia,stress_hyperglycemia,BOOST_STRESS_INFECT_V4,"infection=true AND confusion=false AND rapid_breath=false",1,v4,"Infection-only -> stress"
+endo_hyperglycemia,stress_hyperglycemia,NEG_STRESS_NO_INFECT_V4,"infection=false AND confusion=false AND rapid_breath=false",-2,v4,"Stop stress winning bland cases"
+3) micro_packs/msk_back_pain.csv (v4)
+
+BP2 expects mechanical even though weak=yes. That’s canon in your baseline, so we respect it.
+
+So we remove the hard mechanical suppression on weak, and instead only suppress mechanical for saddle (cauda equina) or weak+saddle combos. Replace file:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+msk_back_pain,mechanical,NEG_MECH_SADDLE_V4,"saddle=true",-6,v4,"Mechanical should not win with cauda equina signs"
+msk_back_pain,serious_spine,BOOST_SPINE_SADDLE_V4,"saddle=true",2,v4,"Saddle -> serious spine"
+msk_back_pain,radicular,BOOST_RAD_WEAK_V4,"weak=true AND saddle=false",1,v4,"Weakness without saddle leans radicular, but doesn't kill mechanical"
+4) micro_packs/psych_depression_suicidal_ideation.csv (v4)
+
+PD4 wants suicide_risk to beat psychotic_depression when psychosis is true. That’s your canon, so we’ll stop forcing psychotic_depression to win and instead give suicide_risk a stronger boost when SI is present.
+
+Replace file:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+psych_depression_suicidal_ideation,psychotic_depression,BOOST_PD_PSYCH_V4,"psychosis=true",1,v4,"Psychosis contributes but doesn't dominate SI"
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_SI_V4,"si=true",3,v4,"SI dominates cluster"
+psych_depression_suicidal_ideation,suicide_risk,BOOST_SR_INTENT_V4,"intent=true",3,v4,"Intent dominates cluster"
+psych_depression_suicidal_ideation,major_depression,NEG_MD_SI_V4,"si=true",-6,v4,"No major depression winner when SI present"
+
+Key change: psychosis boost reduced from 3 → 1; SI/intent boosted.
+
+✅ Run steps (copy/paste loop)
+
+Overwrite those 4 files in micro_packs/
+
+Run:
+
+npx tsx scripts/build-micro-packs.ts
+HARNESS_MODE=1 npx tsx scripts/tune-pairs.ts
+
+Those four should now land.
