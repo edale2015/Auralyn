@@ -1,0 +1,94 @@
+Step 1: Create replay cases for the failing IDs
+
+Add these cases to case_store.jsonl so we can replay them after each v5 tweak.
+
+Run (examples):
+
+npx tsx scripts/replay.ts --add endo_hyperglycemia path/to/HG4_answers.json
+npx tsx scripts/replay.ts --add msk_back_pain path/to/BP2_answers.json
+
+Then replay:
+
+npx tsx scripts/replay.ts CASE_...
+
+Copy/paste only the scoringExplanation blocks for each failing case.
+
+That tells us exactly:
+
+which rules are making stress win
+
+which rule is pushing radicular over mechanical
+
+which suppressor is flipping winners
+
+Step 2: v5 micro-pack strategy (based on your notes)
+Endo hyperglycemia v5
+
+You already diagnosed it correctly:
+
+NEG_STRESS_NO_INFECT is too broad
+
+it turns “all-no” cases into stress instead of UNCLASSIFIED
+
+Fix: narrow the stress penalty to vomit-only without infection, or remove it entirely and instead boost uncontrolled only in the precise HG4 pattern.
+
+A safe v5 shape is:
+
+Remove broad NEG_STRESS_NO_INFECT
+
+Add:
+
+NEG_STRESS_VOMIT_NO_INFECT (only fires when vomit=true and infection=false)
+
+BOOST_UH_VOMIT_NO_DKA_SIGNS (vomit true, no confusion/rapid_breath)
+
+MSK back pain v5
+
+You diagnosed it too:
+
+radicular already gets points for weak=true
+
+your boost just worsens the flip
+
+BP2 expects mechanical to survive even with weak=yes (your canon)
+
+Fix:
+
+Remove BOOST_RAD_WEAK
+
+Add one counter-boost for mechanical for “weak=yes but no saddle/no red flags”
+
+Example:
+
+BOOST_MECH_WEAK_NO_SADDLE_NO_FEVER (+2) when weak=true AND saddle=false AND fever=false AND cancer=false AND trauma=false (or whatever matches BP2’s pattern)
+
+But we should base this on the replay explanation so we don’t accidentally “mechanical wins everything.”
+
+Step 3: Start populating DX_PRIORITY where you have tie churn
+
+Your DX_PRIORITY file is empty and that’s fine. Now you can populate it only for complaints that have repeated “tie churn” problems.
+
+Start with the two holdouts and any complaint where:
+
+tie-break mode == dx_id or insertion_order frequently
+
+margin <= 1 often
+
+This reduces future golden churn dramatically.
+
+If you want, I can give you v5 packs now
+
+If you paste the scoringExplanation for:
+
+HG4 (and one of H3/H6/H9/H12)
+
+BP2 (and one of H2/H6/H9)
+
+…I’ll return:
+
+exact v5 micro_packs/endo_hyperglycemia.csv
+
+exact v5 micro_packs/msk_back_pain.csv
+that only changes what’s necessary.
+
+No more “maybe this rule.” We’ll do it by trace.
