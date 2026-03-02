@@ -613,3 +613,15 @@ tox_overdose_intoxication,CL_TOXOD_STIMULANT_LIKE,NEG_STIM_NO_CP,-6,"answers.Q_T
 tox_overdose_intoxication,CL_TOXOD_GI_TOXICITY,NEG_GI_NO_VOMIT,-6,"answers.Q_TOXOD_VOMIT == 'no'",NEG_GI_NO_VOMIT suppressor
 tox_overdose_intoxication,CL_TOXOD_MIXED_UNKNOWN,NEG_MIXED_ALL_FALSE,-5,"answers.Q_TOXOD_UNKNOWN == 'no' && answers.Q_TOXOD_AMS == 'no' && answers.Q_TOXOD_SLOW_BREATH == 'no' && answers.Q_TOXOD_SEIZURE == 'no' && answers.Q_TOXOD_CHEST_PAIN == 'no' && answers.Q_TOXOD_VOMIT == 'no'",NEG_MIXED_ALL_FALSE suppressor
 tox_overdose_intoxication,CL_TOXOD_MIXED_UNKNOWN,NEG_MIXED_SED_STRONG,-3,"answers.Q_TOXOD_SLOW_BREATH == 'yes'",NEG_MIXED_SED_STRONG suppressor
+derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,NEG_ANA_NO_AIRWAY,-6,"answers.Q_DALRG_LIP_TONGUE == 'no' && answers.Q_DALRG_THROAT == 'no' && answers.Q_DALRG_SOB == 'no'",NEG_ANA_NO_AIRWAY suppressor
+derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,NEG_ANA_HIVES_ONLY,-4,"answers.Q_DALRG_HIVES == 'yes' && answers.Q_DALRG_VOMIT == 'no' && answers.Q_DALRG_LIP_TONGUE == 'no' && answers.Q_DALRG_THROAT == 'no' && answers.Q_DALRG_SOB == 'no'",NEG_ANA_HIVES_ONLY suppressor
+derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,BOOST_ANA_AIRWAY,2,"answers.Q_DALRG_LIP_TONGUE == 'yes' || answers.Q_DALRG_THROAT == 'yes' || answers.Q_DALRG_SOB == 'yes'",BOOST_ANA_AIRWAY suppressor
+derm_allergic_reaction,CL_DALRG_URTICARIA,NEG_URT_AIRWAY,-6,"answers.Q_DALRG_LIP_TONGUE == 'yes' || answers.Q_DALRG_THROAT == 'yes' || answers.Q_DALRG_SOB == 'yes'",NEG_URT_AIRWAY suppressor
+derm_allergic_reaction,CL_DALRG_URTICARIA,BOOST_URT_HIVES_ONLY,1,"answers.Q_DALRG_HIVES == 'yes' && answers.Q_DALRG_LIP_TONGUE == 'no' && answers.Q_DALRG_THROAT == 'no' && answers.Q_DALRG_SOB == 'no'",BOOST_URT_HIVES_ONLY suppressor
+derm_allergic_reaction,CL_DALRG_URTICARIA,NEG_URT_NO_HIVES,-4,"answers.Q_DALRG_HIVES == 'no'",NEG_URT_NO_HIVES suppressor
+tox_withdrawal,CL_TOXWD_SEVERE_WITHDRAWAL,BOOST_SEV_SEIZURE,3,"answers.Q_TOXWD_SEIZURE == 'yes'",BOOST_SEV_SEIZURE suppressor
+tox_withdrawal,CL_TOXWD_SEVERE_WITHDRAWAL,BOOST_SEV_HALLUC,3,"answers.Q_TOXWD_HALLUC == 'yes'",BOOST_SEV_HALLUC suppressor
+tox_withdrawal,CL_TOXWD_MODERATE_WITHDRAWAL,NEG_MOD_SEIZURE,-6,"answers.Q_TOXWD_SEIZURE == 'yes'",NEG_MOD_SEIZURE suppressor
+tox_withdrawal,CL_TOXWD_MODERATE_WITHDRAWAL,NEG_MOD_HALLUC,-6,"answers.Q_TOXWD_HALLUC == 'yes'",NEG_MOD_HALLUC suppressor
+tox_withdrawal,CL_TOXWD_SEVERE_WITHDRAWAL,NEG_SEV_AUTONOMIC_ONLY,-4,"answers.Q_TOXWD_AUTONOMIC == 'yes' && answers.Q_TOXWD_SEIZURE == 'no' && answers.Q_TOXWD_HALLUC == 'no' && answers.Q_TOXWD_CHEST_PAIN == 'no' && answers.Q_TOXWD_VOMIT == 'no' && answers.Q_TOXWD_HIGH_RISK == 'no'",NEG_SEV_AUTONOMIC_ONLY suppressor
+tox_withdrawal,CL_TOXWD_MODERATE_WITHDRAWAL,BOOST_MOD_VOMIT_ONLY,1,"answers.Q_TOXWD_VOMIT == 'yes' && answers.Q_TOXWD_SEIZURE == 'no' && answers.Q_TOXWD_HALLUC == 'no' && answers.Q_TOXWD_CHEST_PAIN == 'no'",BOOST_MOD_VOMIT_ONLY suppressor
