@@ -1,0 +1,568 @@
+I’m interpreting “all 4” as:
+
+Automation: tune:pairs runner (so 20-pair mode is one command)
+
+Phase 2B: stress simulation (500+ mixed cases with metrics)
+
+Phase 2C: production integration hooks (API + logging + replay)
+
+Phase 2D: confidence + explanation layer (why + trace + stability)
+
+1) tune:pairs runner (20 pairs, sequential, auto-revert)
+What it does
+
+For each pair:
+
+snapshots your CSV(s)
+
+applies only the micro-pack rows for those complaint slugs (you keep a micro_packs.csv)
+
+runs npm run ship:complaint -- <slug> for both
+
+if either fails, it reverts the CSV(s) and logs failure
+
+writes a report: PASS/FAIL per pair + failing complaint + failing case IDs (if present)
+
+Files you’ll add
+
+scripts/tune-pairs.ts
+
+phase2a_pairs_20.txt (you already have)
+
+micro_packs.csv (a single CSV with columns: Complaint_Slug,Dx_ID,Rule_ID,Logic,Points)
+
+package.json
+{
+  "scripts": {
+    "tune:pairs": "tsx scripts/tune-pairs.ts"
+  }
+}
+scripts/tune-pairs.ts
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
+
+type MicroRule = {
+  Complaint_Slug: string;
+  Dx_ID: string;
+  Rule_ID: string;
+  Logic: string;
+  Points: string;
+};
+
+// Adjust these paths to your repo:
+const CLUSTER_RULES_CSV = "data/CLUSTER_SCORING_RULES.csv";
+const MICRO_PACKS_CSV = "data/micro_packs.csv";
+const PAIRS_FILE = "phase2a_pairs_20.txt";
+const REPORT_PATH = "phase2a_pairs_report.json";
+
+function readText(p: string) {
+  return fs.readFileSync(p, "utf8");
+}
+function writeText(p: string, s: string) {
+  fs.writeFileSync(p, s, "utf8");
+}
+
+function parsePairs(text: string): Array<{ id: string; a: string; b: string }> {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"))
+    .map((l) => {
+      // "P01 | a, b"
+      const [left, right] = l.split("|").map((x) => x.trim());
+      const [a, b] = right.split(",").map((x) => x.trim());
+      return { id: left, a, b };
+    });
+}
+
+// minimal CSV split that tolerates commas inside quotes
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') {
+      cur += '"';
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inQ = !inQ;
+      continue;
+    }
+    if (ch === "," && !inQ) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseMicroPacks(csvText: string): MicroRule[] {
+  const lines = csvText.trim().split("\n");
+  const header = splitCsvLine(lines[0]);
+  const idx = (k: string) => header.indexOf(k);
+  return lines.slice(1).map((l) => {
+    const cols = splitCsvLine(l);
+    return {
+      Complaint_Slug: cols[idx("Complaint_Slug")] ?? "",
+      Dx_ID: cols[idx("Dx_ID")] ?? "",
+      Rule_ID: cols[idx("Rule_ID")] ?? "",
+      Logic: cols[idx("Logic")] ?? "",
+      Points: cols[idx("Points")] ?? "",
+    };
+  });
+}
+
+function appendRules(existingCsv: string, rules: MicroRule[]): string {
+  // Assumes same header schema as CLUSTER_SCORING_RULES.csv.
+  // We simply append lines; your corruption guard / validator will catch format issues.
+  const lines = existingCsv.trimEnd().split("\n");
+  const header = lines[0];
+  const out = [header, ...lines.slice(1)];
+  for (const r of rules) {
+    const row = [
+      r.Complaint_Slug,
+      r.Dx_ID,
+      r.Rule_ID,
+      // Quote logic if needed
+      r.Logic.includes(",") || r.Logic.includes('"') ? `"${r.Logic.replace(/"/g, '""')}"` : r.Logic,
+      r.Points,
+    ].join(",");
+    out.push(row);
+  }
+  return out.join("\n") + "\n";
+}
+
+function runShip(complaintSlug: string): { ok: boolean; output: string } {
+  try {
+    const output = execSync(`npm run ship:complaint -- ${complaintSlug}`, {
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    return { ok: true, output };
+  } catch (e: any) {
+    const output =
+      (e?.stdout ? String(e.stdout) : "") + "\n" + (e?.stderr ? String(e.stderr) : "");
+    return { ok: false, output };
+  }
+}
+
+function extractFailingCases(output: string): string[] {
+  // Looks for lines like "- CASE_ID:" or "FAILING CASES"
+  const ids: string[] = [];
+  for (const line of output.split("\n")) {
+    const m = line.match(/-\s*([A-Z0-9_]+)\s*:/);
+    if (m) ids.push(m[1]);
+  }
+  return Array.from(new Set(ids));
+}
+
+async function main() {
+  const pairs = parsePairs(readText(PAIRS_FILE));
+  const microRules = parseMicroPacks(readText(MICRO_PACKS_CSV));
+
+  const baseClusterCsv = readText(CLUSTER_RULES_CSV);
+
+  const report: any = {
+    startedAt: new Date().toISOString(),
+    pairs: [],
+  };
+
+  for (const p of pairs) {
+    const pairRules = microRules.filter(
+      (r) => r.Complaint_Slug === p.a || r.Complaint_Slug === p.b
+    );
+
+    // Snapshot current state (cluster csv only; expand to other csvs if needed)
+    const before = readText(CLUSTER_RULES_CSV);
+
+    // Apply
+    const patched = appendRules(before, pairRules);
+    writeText(CLUSTER_RULES_CSV, patched);
+
+    // Ship both
+    const ra = runShip(p.a);
+    const rb = runShip(p.b);
+
+    const ok = ra.ok && rb.ok;
+
+    if (!ok) {
+      // Revert to snapshot for this pair
+      writeText(CLUSTER_RULES_CSV, before);
+
+      report.pairs.push({
+        pair: p.id,
+        complaints: [p.a, p.b],
+        ok: false,
+        failed: [
+          ...(ra.ok ? [] : [{ complaint: p.a, cases: extractFailingCases(ra.output) }]),
+          ...(rb.ok ? [] : [{ complaint: p.b, cases: extractFailingCases(rb.output) }]),
+        ],
+      });
+      continue;
+    }
+
+    // Keep changes
+    report.pairs.push({
+      pair: p.id,
+      complaints: [p.a, p.b],
+      ok: true,
+      appliedRules: pairRules.length,
+    });
+  }
+
+  report.finishedAt = new Date().toISOString();
+  writeText(REPORT_PATH, JSON.stringify(report, null, 2));
+  console.log(`Wrote ${REPORT_PATH}`);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
+
+That gives you: one command, 20 pairs, auto-revert per pair.
+
+2) Phase 2B: Stress simulation (500–5000 mixed cases)
+
+Add:
+
+scripts/simulate-stress.ts
+
+npm run simulate:stress
+
+What it outputs:
+
+disposition distribution
+
+top_dx distribution
+
+“hotspots” (complaints that overproduce EMERG/URGENT)
+
+If you already have a harness random mode, plug it in. If not, we can sample from goldens and inject noise.
+
+3) Phase 2C: Production integration hooks
+
+Minimum “real world” wiring that pays off immediately:
+
+POST /api/triage: takes user answers + complaint_slug, returns disposition + top_dx + confidence + explanation_id
+
+POST /api/logs: write every run (inputs hash, outputs, rule hits)
+
+GET /api/replay/:id: re-run exact case on current ruleset (drift detection)
+
+You already have the harness and corruption guard; this just makes production observable.
+
+4) Phase 2D: Confidence + Explanation layer
+
+Add two computed artifacts to every result:
+
+Confidence (simple + effective)
+
+HIGH: top_dx score ≥ (runner-up score + margin) and no contradictions
+
+MODERATE: clear winner but small margin
+
+LOW: tie/near tie or many suppressors triggered
+
+Explanation (auditable)
+
+Return:
+
+top 5 scoring rules that contributed
+
+top 5 suppressors that penalized
+
+any RF gates triggered
+
+tie-break resolution used
+
+This makes your platform defensible.
+
+If you want, next message I’ll also generate:
+
+a micro_packs.csv template header
+
+a sample row bundle for your current 20-pair queue
+
+and the simulate:stress script wired to your actual harness output
+
+Say: “Generate micro_packs.csv template + simulate:stress script”
+
+Generate micro_packs.csv template + simulate:stress script” PLEASE DO THIS AUTOMATICALLY FOR ALL PAIRS 
+
+Yep. We can make this fully automatic for all pairs.
+
+You’ll end up with:
+
+micro_packs/ folder containing one CSV per complaint (or JSON if you prefer)
+
+a generator script that builds data/micro_packs.csv automatically by reading only the complaints in phase2a_pairs_20.txt
+
+a simulate:stress script that runs 500+ random cases and prints metrics
+
+No more hand-merging micro packs.
+
+1) micro_packs.csv template (single combined file)
+
+This is the schema your tools will consume:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+
+Example row:
+
+id_flu_like,pneumonia_risk,NEG_PNA_NO_RESP,"sob=false AND cp=false",-6,v2,"Prevent pneumonia without resp symptoms"
+2) Automatic micro_packs builder for all pairs
+Folder structure
+
+Create a folder:
+
+micro_packs/
+  id_flu_like.csv
+  ophtho_red_eye.csv
+  derm_cellulitis.csv
+  ...
+phase2a_pairs_20.txt
+data/
+  CLUSTER_SCORING_RULES.csv
+  micro_packs.csv   <-- auto-generated, DO NOT edit by hand
+scripts/
+  build-micro-packs.ts
+  tune-pairs.ts     (your runner)
+
+Each complaint file uses the same header:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+scripts/build-micro-packs.ts
+
+This reads the 20-pair schedule, finds which complaints are mentioned, loads only those micro pack files, validates headers, and writes a single combined data/micro_packs.csv.
+
+import fs from "node:fs";
+import path from "node:path";
+
+const PAIRS_FILE = "phase2a_pairs_20.txt";
+const MICRO_DIR = "micro_packs";
+const OUT_FILE = "data/micro_packs.csv";
+
+const HEADER = "Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes";
+
+function parsePairs(text: string): string[] {
+  const slugs = new Set<string>();
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const parts = line.split("|");
+    if (parts.length < 2) continue;
+    const right = parts[1].trim();
+    const [a, b] = right.split(",").map((s) => s.trim());
+    if (a) slugs.add(a);
+    if (b) slugs.add(b);
+  }
+  return Array.from(slugs).sort();
+}
+
+function ensureDir(p: string) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function main() {
+  ensureDir(path.dirname(OUT_FILE));
+
+  const pairText = fs.readFileSync(PAIRS_FILE, "utf8");
+  const needed = parsePairs(pairText);
+
+  const rows: string[] = [HEADER];
+
+  const missing: string[] = [];
+  const badHeader: string[] = [];
+
+  for (const slug of needed) {
+    const fp = path.join(MICRO_DIR, `${slug}.csv`);
+    if (!fs.existsSync(fp)) {
+      missing.push(slug);
+      continue;
+    }
+    const content = fs.readFileSync(fp, "utf8").trim();
+    if (!content) continue;
+
+    const lines = content.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) continue;
+
+    const hdr = lines[0].replace(/\s+/g, "");
+    const expected = HEADER.replace(/\s+/g, "");
+    if (hdr !== expected) {
+      badHeader.push(slug);
+      continue;
+    }
+
+    for (const line of lines.slice(1)) {
+      if (!line) continue;
+      rows.push(line);
+    }
+  }
+
+  fs.writeFileSync(OUT_FILE, rows.join("\n") + "\n", "utf8");
+
+  console.log(`Wrote ${OUT_FILE}`);
+  console.log(`Complaints referenced in pairs: ${needed.length}`);
+  console.log(`Rows written (incl header): ${rows.length}`);
+
+  if (missing.length) {
+    console.log(`Missing micro pack files (${missing.length}): ${missing.join(", ")}`);
+    process.exitCode = 2; // non-fatal but visible
+  }
+  if (badHeader.length) {
+    console.log(`Bad header in micro pack files (${badHeader.length}): ${badHeader.join(", ")}`);
+    process.exitCode = 3;
+  }
+}
+
+main();
+Add to package.json
+{
+  "scripts": {
+    "micro:build": "tsx scripts/build-micro-packs.ts"
+  }
+}
+
+Now every time you change the pair schedule or a complaint micro pack:
+
+npm run micro:build
+
+…and data/micro_packs.csv is rebuilt automatically.
+
+3) Modify tune:pairs to auto-build micro_packs first
+
+At the top of tune-pairs.ts, before reading data/micro_packs.csv, call:
+
+execSync("npm run micro:build", { stdio: "inherit" });
+
+So running npm run tune:pairs always uses the latest micro packs.
+
+4) simulate:stress script (Phase 2B)
+
+This assumes you either already have npm run harness:random OR you can add a small endpoint that returns a single randomized case result.
+
+Option A: If you have harness:random
+
+Add:
+
+{
+  "scripts": {
+    "simulate:stress": "tsx scripts/simulate-stress.ts"
+  }
+}
+scripts/simulate-stress.ts
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+
+const N = Number(process.env.N ?? "500");
+const OUT = "stress_results.json";
+
+/**
+ * Expected harness:random output contains a JSON line like:
+ * {"complaint":"pulm_cough","disposition":"URGENT","top_dx":"pneumonia","confidence":"MODERATE"}
+ * Adjust the parser to your real output.
+ */
+function runOne(seed: number) {
+  const out = execSync(`npm run harness:random -- --n 1 --seed ${seed}`, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const line = out
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("{") && l.endsWith("}"));
+
+  if (!line) return null;
+
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function main() {
+  const results: any[] = [];
+  for (let i = 0; i < N; i++) {
+    const r = runOne(i);
+    if (r) results.push(r);
+  }
+
+  const dispCounts: Record<string, number> = {};
+  const byComplaint: Record<string, Record<string, number>> = {};
+  const topDxCounts: Record<string, number> = {};
+
+  for (const r of results) {
+    dispCounts[r.disposition] = (dispCounts[r.disposition] ?? 0) + 1;
+
+    const c = r.complaint ?? "unknown";
+    byComplaint[c] = byComplaint[c] ?? {};
+    byComplaint[c][r.disposition] = (byComplaint[c][r.disposition] ?? 0) + 1;
+
+    const k = `${c}:${r.top_dx ?? "unknown"}`;
+    topDxCounts[k] = (topDxCounts[k] ?? 0) + 1;
+  }
+
+  const payload = { N: results.length, dispCounts, byComplaint, topDxCounts, results };
+  fs.writeFileSync(OUT, JSON.stringify(payload, null, 2));
+  console.log(`Wrote ${OUT}`);
+  console.log("Disposition counts:", dispCounts);
+
+  // quick hotspot view
+  const complaints = Object.keys(byComplaint).sort();
+  const hotspots = complaints
+    .map((c) => {
+      const m = byComplaint[c];
+      const total = Object.values(m).reduce((a, b) => a + b, 0);
+      const emerg = m["EMERG"] ?? 0;
+      return { complaint: c, total, emerg, emergRate: total ? emerg / total : 0 };
+    })
+    .sort((a, b) => b.emergRate - a.emergRate)
+    .slice(0, 10);
+
+  console.log("Top EMERG-rate hotspots:", hotspots);
+}
+
+main();
+
+Run:
+
+N=500 npm run simulate:stress
+Option B: If you don’t have harness:random
+
+Tell me what your harness can do (or paste the CLI help output), and I’ll adapt the script to whatever it already supports (sampling goldens, etc.) without adding new TS engine code.
+
+What “automatic for all pairs” means in practice
+
+Once this is in:
+
+You update phase2a_pairs_20.txt
+
+You update micro_packs/<complaint>.csv (only for the complaints you’re tuning)
+
+Run:
+
+npm run tune:pairs -- phase2a_pairs_20.txt
+
+It will:
+
+auto-build combined data/micro_packs.csv
+
+apply only micro packs for the current pairs
+
+ship each complaint sequentially
+
+auto-revert failures
+
+produce a report file
+
+If you paste your actual CSV directory paths (e.g., where CLUSTER_SCORING_RULES.csv lives), I’ll rewrite the constants in the scripts to match your repo exactly.

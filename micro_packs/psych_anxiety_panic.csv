@@ -1,0 +1,7 @@
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+psych_anxiety_panic,CL_PANX_PANIC_ATTACK,NEG_PANIC_MEDICAL,"answers.Q_PANX_CP == 'yes' || answers.Q_PANX_SOB == 'yes' || answers.Q_PANX_SYNCOPE == 'yes'",-6,v1,Suppress panic when medical signs present
+psych_anxiety_panic,CL_PANX_PANIC_ATTACK,NEG_PANIC_SI,"answers.Q_PANX_SI == 'yes'",-5,v1,Suppress panic when SI present
+psych_anxiety_panic,CL_PANX_SUBSTANCE_INDUCED,NEG_SUB_NO_SUBSTANCE,"answers.Q_PANX_SUBSTANCE == 'no'",-6,v1,Suppress substance without substance use
+psych_anxiety_panic,CL_PANX_MEDICAL_MIMIC,BOOST_MED_CP_SOB,"answers.Q_PANX_CP == 'yes' || answers.Q_PANX_SOB == 'yes'",2,v1,Boost medical mimic with CP/SOB
+psych_anxiety_panic,CL_PANX_MEDICAL_MIMIC,BOOST_MED_SYNCOPE,"answers.Q_PANX_SYNCOPE == 'yes'",2,v1,Boost medical mimic with syncope
+psych_anxiety_panic,CL_PANX_PANIC_ATTACK,BOOST_PANIC_SUDDEN,"answers.Q_PANX_SUDDEN == 'yes' && answers.Q_PANX_CP == 'no' && answers.Q_PANX_SOB == 'no' && answers.Q_PANX_SYNCOPE == 'no'",1,v1,Boost panic when sudden onset without medical signs

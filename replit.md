@@ -89,6 +89,18 @@ A stress test harness at `POST /api/admin/stress-test` accepts an array of scena
 ### Multi-Channel Messaging
 A unified messaging architecture uses a `MessageEvent` type with channel abstraction (WhatsApp, Telegram, Web, Test) and `conversationId` keying. Conversation state is Firestore-cached with deduplication. Channel adapters route replies, and a message orchestrator handles shared processing logic, staff commands, menu routing, answer parsing, and emergency warnings.
 
+### Phase 2A Automation Tooling
+Three automation scripts support the suppressor/boost rule development workflow:
+
+- **`scripts/build-micro-packs.ts`**: Reads `phase2a_pairs_20.txt` (20-pair schedule) and combines per-complaint CSV files from `micro_packs/` into a single `data/micro_packs.csv`. Run: `npx tsx scripts/build-micro-packs.ts`
+- **`scripts/tune-pairs.ts`**: Automated pair-by-pair suppressor testing with auto-revert. For each pair: snapshots CSV → removes existing suppressors for complaints with micro rules → applies micro-pack rules → runs harness per complaint → reverts on failure. Outputs `phase2a_pairs_report.json`. Run: `HARNESS_MODE=1 npx tsx scripts/tune-pairs.ts`
+- **`scripts/simulate-stress.ts`**: Stress simulation using golden cases with injected noise (0-40% answer flipping). Runs N cases (default 500), reports disposition distribution, cluster distribution, ER_SEND hotspots. Run: `N=500 HARNESS_MODE=1 npx tsx scripts/simulate-stress.ts`
+
+Key files: `phase2a_pairs_20.txt` (pair schedule), `micro_packs/*.csv` (per-complaint candidate rules), `data/micro_packs.csv` (auto-generated combined file).
+
+### Suppressor/Boost Rule Status
+123 active suppressor/boost rules across 17 complaints in CLUSTER_SCORING_RULES.csv. 6 complaints have candidate rules in `micro_packs/` awaiting adjusted versions (derm_cellulitis, ophtho_red_eye, endo_hyperglycemia, msk_back_pain, psych_anxiety_panic, psych_depression_suicidal_ideation). Test status: 1238/1247 PASS with 9 pre-existing failures.
+
 ### Release Candidate (RC) System
 The RC system ensures consistent agent behavior through automated regression testing. It executes golden scenarios across LLM variants, generating reports with pass/fail summaries, diffs, latency, and token usage. A replay mode allows testing changes against existing traces, and PHI-safe replay packs enable secure QA.
 

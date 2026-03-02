@@ -1,0 +1,7 @@
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points,Pack_Version,Notes
+derm_cellulitis,CL_DCELL_NEC_FAS,NEG_NEC_NO_PAINOUT,"answers.Q_DCELL_PAIN_OUT == 'no'",-6,v1,Prevent nec_fas without pain outside wound
+derm_cellulitis,CL_DCELL_NEC_FAS,NEG_NEC_NO_SYSTEMIC_OR_SPREAD,"answers.Q_DCELL_PAIN_OUT == 'yes' && answers.Q_DCELL_FEVER == 'no' && answers.Q_DCELL_SPREADING == 'no'",-4,v1,pain_out alone not enough for nec_fas
+derm_cellulitis,CL_DCELL_ABSCESS,NEG_ABS_NO_PUS,"answers.Q_DCELL_PUS == 'no'",-6,v1,Prevent abscess without pus
+derm_cellulitis,CL_DCELL_CELLULITIS,NEG_CELL_NO_SPREAD_NO_FEVER,"answers.Q_DCELL_SPREADING == 'no' && answers.Q_DCELL_FEVER == 'no'",-3,v1,cellulitis less likely without spread/fever
+derm_cellulitis,CL_DCELL_ABSCESS,BOOST_ABS_PUS,"answers.Q_DCELL_PUS == 'yes'",2,v1,Boost abscess when pus present
+derm_cellulitis,CL_DCELL_NEC_FAS,BOOST_NEC_PAINOUT_PLUS_SYSTEMIC,"answers.Q_DCELL_PAIN_OUT == 'yes' && (answers.Q_DCELL_FEVER == 'yes' || answers.Q_DCELL_SPREADING == 'yes')",2,v1,Boost nec_fas with systemic signs
