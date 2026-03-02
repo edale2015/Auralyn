@@ -1,0 +1,210 @@
+yes please do
+
+Good. We’re going surgical now. ✂️
+I’m starting with the highest-leverage pair:
+
+ID_fever + ID_flu_like
+Targeted suppressors only.
+No global gravity shifts.
+Max ~6 rules per complaint.
+
+These are designed to:
+
+Fix the hard-golden regressions
+
+Preserve existing baseline winners
+
+Avoid tie-break cascades
+
+Not touch unrelated clusters
+
+🎯 ID_FEVER — Targeted Suppressor Micro-Pack
+Observed failure pattern
+
+From prior iterations, ID regressions usually happen when:
+
+serious_infection over-dominates mild fever
+
+meningitis_like wins without neck stiffness
+
+viral_fever steals moderate-risk patterns
+
+immunocompromised cases aren’t strongly separated
+
+We will correct those without broad shifts.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+id_fever,viral_fever,NEG_VIRAL_HIGH_RISK,"immuno=true",-3
+id_fever,viral_fever,NEG_VIRAL_NECK,"neck_stiff=true",-6
+id_fever,viral_fever,NEG_VIRAL_CONFUSION,"confusion=true",-5
+id_fever,viral_fever,NEG_VIRAL_SOB,"sob=true",-4
+
+id_fever,meningitis_like,NEG_MEN_NO_NECK,"neck_stiff=false",-5
+id_fever,meningitis_like,BOOST_MEN_NECK_CONF,"neck_stiff=true AND confusion=true",2
+
+id_fever,serious_infection,NEG_SER_NO_SYSTEMIC,"temp_high=false AND sob=false AND confusion=false AND rash_purple=false",-3
+id_fever,serious_infection,BOOST_SER_PURPURA,"rash_purple=true",2
+
+Why this works
+
+Viral loses appropriately when systemic red flags appear.
+
+Meningitis cannot win without neck stiffness.
+
+Serious infection remains dominant when purpura or systemic signals exist.
+
+Mild fever stays mild.
+
+No global reweighting.
+
+🎯 ID_FLU_LIKE — Targeted Suppressor Micro-Pack
+Observed failure pattern
+
+Typical regressions:
+
+Pneumonia over-triggered without SOB/CP
+
+Complicated flu winning too easily
+
+Viral URI losing to influenza-like with no fever
+
+We stabilize those.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+id_flu_like,pneumonia_risk,NEG_PNA_NO_RESP,"sob=false AND cp=false",-5
+id_flu_like,pneumonia_risk,BOOST_PNA_RESP_FEVER,"sob=true AND fever=true",2
+
+id_flu_like,complicated_flu,NEG_CFLU_NO_RISK,"high_risk=false AND symptom_days_5plus=false",-4
+id_flu_like,complicated_flu,BOOST_CFLU_RISK_LONG,"high_risk=true OR symptom_days_5plus=true",1
+
+id_flu_like,influenza_like,NEG_FLU_NO_FEVER,"fever=false",-5
+id_flu_like,viral_uri,NEG_URI_FEVER_PRESENT,"fever=true",-3
+
+id_flu_like,viral_uri,BOOST_URI_NO_FEVER,"fever=false AND sob=false AND cp=false",1
+
+Why this works
+
+Pneumonia cannot win without respiratory involvement.
+
+Influenza-like requires fever.
+
+Viral URI only dominates in mild presentations.
+
+Complicated flu only wins when risk or duration supports it.
+
+Again: tight, contained, minimal ripple.
+
+🔬 What To Do Now
+
+Add only these rules (do not reintroduce prior removed suppressors).
+
+Re-run:
+
+npm run ship:system -- id
+
+Report:
+
+PASS / FAIL count
+
+Which clusters mismatched (if any)
+
+If these stabilize cleanly, next pair will be:
+
+ophtho_red_eye + derm_cellulitis
+
+We iterate 2 complaints at a time until the entire Phase 2A layer is clean and stable.
+
+Make, test, iterate.
+
+please now do ophtho and tox-overdose withdrawal
+
+Got you. Here are two targeted suppressor micro-packs:
+
+ophtho_red_eye
+
+tox_overdose_intoxication + tox_withdrawal
+
+Same philosophy: small, complaint-specific, no broad shifts, designed to avoid baseline regressions.
+
+Format for CLUSTER_SCORING_RULES.csv:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+OPHTHO_RED_EYE — Targeted Micro-Pack
+
+Goal: stop keratitis/uveitis from stealing simple conjunctivitis without weakening the serious painful-red-eye safety.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ophtho_red_eye,keratitis,NEG_KER_NO_CONTACT,"contact=false",-6
+ophtho_red_eye,keratitis,NEG_KER_NO_PAIN_PHOTO_VIS,"contact=true AND pain=false AND photophobia=false AND vision_change=false",-3
+ophtho_red_eye,uveitis_glaucoma,NEG_UVG_NO_PAIN_PHOTO_VIS,"pain=false AND photophobia=false AND vision_change=false",-6
+ophtho_red_eye,conjunctivitis,NEG_CONJ_PAIN_OR_PHOTO_OR_VIS,"pain=true OR photophobia=true OR vision_change=true",-4
+ophtho_red_eye,viral_conjunctivitis,NEG_VCONJ_PURULENT,"discharge_pus=true",-3
+ophtho_red_eye,conjunctivitis,BOOST_CONJ_PURULENT_NO_PAIN,"discharge_pus=true AND pain=false",1
+
+Why it’s safe:
+
+Only pushes down keratitis when no contact lens or no corneal red flags.
+
+Only pushes down uveitis/glaucoma when no pain/photophobia/vision change.
+
+Keeps purulent, painless eyes in conjunctivitis reliably.
+
+TOX_OVERDOSE_INTOXICATION — Targeted Micro-Pack
+
+Goal: make sedative/opioid-like dominate when respiratory depression exists; stop “mixed_unknown” from winning “all false”; stop stimulant-like from winning without CP.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+tox_overdose_intoxication,sedative_opioid_like,BOOST_SED_SLOWBREATH,"slow_breath=true",2
+tox_overdose_intoxication,sedative_opioid_like,BOOST_SED_AMS_PLUS_SLOW,"ams=true AND slow_breath=true",2
+tox_overdose_intoxication,stimulant_like,NEG_STIM_NO_CP,"chest_pain=false",-6
+tox_overdose_intoxication,gi_toxicity,NEG_GI_NO_VOMIT,"vomit=false",-6
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_ALL_FALSE,"unknown=false AND ams=false AND slow_breath=false AND seizure=false AND chest_pain=false AND vomit=false",-5
+tox_overdose_intoxication,mixed_unknown,NEG_MIXED_SED_STRONG,"slow_breath=true",-3
+TOX_WITHDRAWAL — Targeted Micro-Pack
+
+Goal: ensure severe_withdrawal wins for seizure/hallucinations; prevent severe from winning “autonomic-only” mild cases; keep moderate stable.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+tox_withdrawal,severe_withdrawal,BOOST_SEV_SEIZURE,"seizure=true",3
+tox_withdrawal,severe_withdrawal,BOOST_SEV_HALLUC,"halluc=true",3
+tox_withdrawal,moderate_withdrawal,NEG_MOD_SEIZURE,"seizure=true",-6
+tox_withdrawal,moderate_withdrawal,NEG_MOD_HALLUC,"halluc=true",-6
+tox_withdrawal,severe_withdrawal,NEG_SEV_AUTONOMIC_ONLY,"autonomic=true AND seizure=false AND halluc=false AND chest_pain=false AND vomit=false AND high_risk=false",-4
+tox_withdrawal,moderate_withdrawal,BOOST_MOD_VOMIT_ONLY,"vomit=true AND seizure=false AND halluc=false AND chest_pain=false",1
+Run order
+npm run ship:system -- ophtho
+npm run ship:system -- tox
+
+If you paste the remaining FAIL lines (if any), I’ll tighten only the two offenders, same micro-pack style.
+
+also derm celluitis
+
+Absolutely. Here’s a DERM_CELLULITIS targeted suppressor micro-pack (small, surgical) to stabilize winners without kicking off regressions.
+
+Goal:
+
+Nec fasc only wins when pain-out-of-proportion + systemic/spread signals exist.
+
+Abscess wins when pus is present.
+
+Cellulitis wins in classic spreading redness patterns.
+
+Avoid broad changes that alter unrelated DERM behavior.
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+derm_cellulitis,nec_fas,NEG_NEC_NO_PAINOUT,"pain_out=false",-6
+derm_cellulitis,nec_fas,NEG_NEC_NO_SYSTEMIC_OR_SPREAD,"pain_out=true AND fever=false AND spreading=false",-4
+derm_cellulitis,nec_fas,BOOST_NEC_PAINOUT_PLUS_SYSTEMIC,"pain_out=true AND (fever=true OR spreading=true)",2
+
+derm_cellulitis,abscess,NEG_ABS_NO_PUS,"pus=false",-6
+derm_cellulitis,abscess,BOOST_ABS_PUS,"pus=true",2
+derm_cellulitis,abscess,NEG_ABS_FACE_EYE_NO_PUS,"face_eye=true AND pus=false",-2
+
+derm_cellulitis,cellulitis,NEG_CELL_NO_SPREAD_AND_NO_FEVER,"spreading=false AND fever=false",-3
+derm_cellulitis,cellulitis,NEG_CELL_PAINOUT_DOMINATES,"pain_out=true",-2
+derm_cellulitis,cellulitis,BOOST_CELL_SPREADING,"spreading=true",1
+derm_cellulitis,cellulitis,BOOST_CELL_FEVER_SPREAD,"fever=true AND spreading=true",1
+Run
+npm run ship:system -- derm
+
+If cellulitis still flips winners due to tie-break behavior, the next surgical move is to add one explicit tie-break micro-rule for your dominant ambiguous pattern (e.g., pus=true should always beat spreading=true when both present, or vice versa) but we’ll only do that after we see exactly what fails.
