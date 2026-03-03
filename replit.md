@@ -32,14 +32,29 @@ This system deterministically assembles an auditable clinical state from multipl
 ### Case Management & Physician Review
 A Firestore-backed case lifecycle manages cases through a state machine (DRAFT → TRIAGED → NEEDS_REVIEW → APPROVED → SENT → CLOSED). This includes services for CRUD operations on cases, wiring the triage engine, hashing for deduplication, and authentication for review. The frontend provides a physician review queue and detailed case review interfaces.
 
+### Scoring Systems (B1)
+Data-driven clinical scoring systems computed from `server/data/csv/SCORING_SYSTEMS.csv`. Currently supports 5 validated instruments:
+- **PERC** (8 criteria, pass/fail) — PE rule-out for `pulm_shortness_of_breath`
+- **WELLS_PE** (7 criteria, pe_unlikely/intermediate/pe_likely) — Wells score for PE
+- **CENTOR** (7 criteria, low/moderate/high) — Centor/McIsaac strep score for `ent_sore_throat`
+- **CURB-65** (5 criteria, low/moderate/high) — Pneumonia severity for `pulm_cough`
+- **HEART** (10 criteria, low/moderate/high) — Chest pain risk for `cardio_chest_pain`
+
+Engine: `server/engines/scoringSystemsEngine.ts` → `computeScoringSystems(complaintSlug, state)`. Called automatically by `runGenericComplaintV1` after cluster scoring. Results stored in `CaseState.scoringSystems[]` and individual scores in `CaseState.scores` (e.g., `perc_score`, `wells_pe_score`).
+
+Scoring questions use `REQUIRED=FALSE` in CORE_QUESTIONS.csv (category `scoring`, ASK_ORDER 110+). The engine only blocks on required questions, so scoring questions are optional — computed when answers are present, skipped gracefully when absent.
+
+Tests: `npx tsx scripts/test-scoring.ts` (9 golden scenarios).
+
 ### Validation and Testing
 The system includes several validation tools:
 -   **Stress Test Harness**: For performance and stability testing.
 -   **Complaint Golden Test Harness**: For deterministic testing of complaint pipelines.
--   **Data Corruption Guard**: Validates core configuration data.
+-   **Data Corruption Guard**: Validates core configuration data (including SCORING_SYSTEMS.csv validation).
 -   **Replay Harness**: For reproducible debugging of stored cases.
 -   **Release Candidate (RC) System**: Ensures consistent agent behavior through automated regression testing across LLM variants.
 -   **Gate-Prod Pipeline**: A comprehensive pre-deployment validation pipeline including corruption checks, harness execution, stress smoke tests, and drift audits.
+-   **Scoring Systems Tests**: 9 golden scenarios validating all 5 scoring instruments (`scripts/test-scoring.ts`).
 
 ## External Dependencies
 

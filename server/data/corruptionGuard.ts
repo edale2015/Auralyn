@@ -51,7 +51,7 @@ export function assertCoreQuestionsNotCorrupt(rows: SheetRow[]): void {
     if (ccCheck) bad.push(ccCheck);
 
     const qId = String(r.Q_ID ?? "").trim();
-    if (qId && !/^Q_[A-Z0-9_]+$/.test(qId)) {
+    if (qId && !/^Q_[A-Z0-9_]+$/.test(qId) && !/^[a-z][a-z0-9_]+$/.test(qId)) {
       bad.push({ idx, table: "CORE_QUESTIONS", field: "Q_ID", value: qId.substring(0, 80), reason: "invalid_format" });
     }
   });

@@ -98,6 +98,18 @@ export const CaseStateSchema = z.object({
     detail: z.string().optional(),
   })).default([]),
 
+  scoringSystems: z.array(z.object({
+    scoreId: z.string(),
+    name: z.string(),
+    total: z.number(),
+    category: z.string().optional(),
+    criteriaFired: z.array(z.object({
+      criterionId: z.string(),
+      points: z.number(),
+    })).default([]),
+    templateId: z.string().optional(),
+  })).default([]),
+
   redFlags: z.array(z.string()).default([]),
   requiredQuestionIdsMissing: z.array(z.string()).default([]),
   recommendedActions: z.array(z.object({

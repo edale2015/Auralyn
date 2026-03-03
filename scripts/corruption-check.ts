@@ -102,7 +102,27 @@ function main() {
     }
   }
 
-  console.log(`\nTables checked: COMPLAINT_REGISTRY (${registry.rows.length}), CORE_QUESTIONS (${coreQ.rows.length}), RED_FLAG_RULES (${rfRules.rows.length}), DISPOSITION_RULES (${dispRules.rows.length}), CLUSTER_SCORING_RULES (${cluster.rows.length}), OUTPUT_TEMPLATES (${templates.rows.length}), DX_PRIORITY (${dxPriority.rows.length})`);
+  const scoringSystems = loadCsv("SCORING_SYSTEMS.csv");
+  if (scoringSystems.rows.length > 0) {
+    const seenCriteria = new Set<string>();
+    for (const r of scoringSystems.rows) {
+      check("SCORING_SYSTEMS", !!r.Score_ID, `Missing Score_ID`);
+      check("SCORING_SYSTEMS", !!r.Criterion_ID, `Missing Criterion_ID for ${r.Score_ID}`);
+      check("SCORING_SYSTEMS", !!r.Logic, `Missing Logic for ${r.Score_ID}/${r.Criterion_ID}`);
+      const pts = Number(r.Points);
+      check("SCORING_SYSTEMS", !isNaN(pts), `Invalid Points "${r.Points}" for ${r.Score_ID}/${r.Criterion_ID}`);
+      const applies = r.Applies_To_Complaint ?? "";
+      check("SCORING_SYSTEMS", applies === "*" || CC_ID_PATTERN.test(applies), `Invalid Applies_To_Complaint: "${applies}" for ${r.Score_ID}`);
+      const dupeKey = `${r.Score_ID}::${r.Criterion_ID}`;
+      check("SCORING_SYSTEMS", !seenCriteria.has(dupeKey), `Duplicate criterion: ${dupeKey}`);
+      seenCriteria.add(dupeKey);
+      if (r.Threshold_JSON && r.Threshold_JSON.trim()) {
+        try { JSON.parse(r.Threshold_JSON); } catch { check("SCORING_SYSTEMS", false, `Invalid Threshold_JSON for ${r.Score_ID}/${r.Criterion_ID}`); }
+      }
+    }
+  }
+
+  console.log(`\nTables checked: COMPLAINT_REGISTRY (${registry.rows.length}), CORE_QUESTIONS (${coreQ.rows.length}), RED_FLAG_RULES (${rfRules.rows.length}), DISPOSITION_RULES (${dispRules.rows.length}), CLUSTER_SCORING_RULES (${cluster.rows.length}), OUTPUT_TEMPLATES (${templates.rows.length}), DX_PRIORITY (${dxPriority.rows.length}), SCORING_SYSTEMS (${scoringSystems.rows.length})`);
 
   if (errors > 0) {
     console.error(`\nCorruption guard FAIL: ${errors} errors`);

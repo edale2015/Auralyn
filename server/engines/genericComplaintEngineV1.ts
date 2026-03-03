@@ -19,6 +19,7 @@ import {
   type DispositionResult,
 } from "../services/complaintEngines";
 import { getTable } from "../data/registry";
+import { computeScoringSystems } from "./scoringSystemsEngine";
 import type { GraphResult, NodeTrace } from "../services/complaintNodeRunner";
 import fs from "node:fs";
 import path from "node:path";
@@ -305,7 +306,7 @@ export async function runGenericComplaintV1(
   events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:INIT] System=${config.registry.system}, cc=${config.registry.ccId}` });
 
   const qResult = runCoreQuestions(updated as CaseState, config);
-  if (qResult.nextQuestion) {
+  if (qResult.requiredMissing.length > 0 && qResult.nextQuestion) {
     const questionQueue = config.coreQuestions.map(q => ({
       questionId: q.qId,
       bundleId: `CC_${config.registry.ccId}`,
@@ -404,6 +405,15 @@ export async function runGenericComplaintV1(
     scoringResult.explanation.confidence;
   updated.caseConfidence = confidence;
   updated.scoringExplanation = scoringResult.explanation;
+
+  const scoringSystemResults = await computeScoringSystems(ccId, updated as CaseState);
+  if (scoringSystemResults.length > 0) {
+    updated.scoringSystems = scoringSystemResults;
+    for (const ss of scoringSystemResults) {
+      updated.scores[`${ss.scoreId.toLowerCase()}_score`] = ss.total;
+    }
+    events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:SCORING_SYSTEMS] ${scoringSystemResults.map(s => `${s.scoreId}=${s.total}(${s.category ?? "n/a"})`).join(", ")}` });
+  }
 
   events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:DIFF] clusters=${updated.activeClusters.join(",")}, confidence=${confidence}, tieBreak=${scoringResult.explanation.tieBreak}` });
 

@@ -38,6 +38,7 @@ const TABLE_CONFIG: Record<string, { tab: string; range?: string; ttlMs?: number
   DISPOSITION_RULES: { tab: "DISPOSITION_RULES", range: "A1:Z2000", ttlMs: 60_000 },
   OUTPUT_TEMPLATES: { tab: "OUTPUT_TEMPLATES", range: "A1:Z2000", ttlMs: 60_000 },
   CLUSTER_SCORING_RULES: { tab: "CLUSTER_SCORING_RULES", range: "A1:Z5000", ttlMs: 60_000 },
+  SCORING_SYSTEMS: { tab: "SCORING_SYSTEMS", range: "A1:Z2000", ttlMs: 60_000 },
 
   // Legacy per-system tabs kept for diagnosis resolver fallback (read-only)
   ENT_DIAGNOSIS_MASTER: { tab: "ENT_DIAGNOSIS_MASTER", range: "A1:Z5000" },
@@ -63,6 +64,7 @@ const CSV_ENABLED_TABLES = new Set([
   "DISPOSITION_RULES",
   "OUTPUT_TEMPLATES",
   "CLUSTER_SCORING_RULES",
+  "SCORING_SYSTEMS",
 ]);
 
 export async function loadTable(tableName: string): Promise<SheetRow[]> {

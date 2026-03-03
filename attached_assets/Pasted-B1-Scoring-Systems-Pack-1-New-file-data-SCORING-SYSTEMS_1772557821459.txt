@@ -1,0 +1,158 @@
+B1 Scoring Systems Pack
+1) New file: data/SCORING_SYSTEMS.csv
+
+Schema (one row per criterion):
+
+Score_ID,Name,Applies_To_Complaint,Criterion_ID,Logic,Points,Threshold_JSON,Output_Template_ID
+
+Applies_To_Complaint: complaint slug (single) or * (global)
+
+Threshold_JSON: only needed on criterion rows where you want category output; otherwise leave blank. Use a simple JSON object like:
+
+{"low_max":1,"moderate_max":2,"high_min":3} or {"rule":"WELLS","pe_unlikely_max":4,"pe_likely_min":5}
+
+Output_Template_ID: TPL_SCORE_*
+
+Paste this starter pack
+Score_ID,Name,Applies_To_Complaint,Criterion_ID,Logic,Points,Threshold_JSON,Output_Template_ID
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_age_lt_50,"perc_age_lt_50=true",1,"{""pass_min"":8}","TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_hr_lt_100,"perc_hr_lt_100=true",1,,"TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_spo2_ge_95,"perc_spo2_ge_95=true",1,,"TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_no_hemoptysis,"perc_no_hemoptysis=true",1,,"TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_no_estrogen,"perc_no_estrogen=true",1,,"TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_no_prior_dvt_pe,"perc_no_prior_dvt_pe=true",1,,"TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_no_unilateral_leg_swelling,"perc_no_unilateral_leg_swelling=true",1,,"TPL_SCORE_PERC_V1"
+PERC,PERC Rule-Out Criteria,pulm_shortness_of_breath,perc_no_recent_surgery,"perc_no_recent_surgery=true",1,,"TPL_SCORE_PERC_V1"
+
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_clinical_dvt,"wells_clinical_dvt=true",3,"{""pe_unlikely_max"":4,""pe_likely_min"":5}","TPL_SCORE_WELLS_PE_V1"
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_pe_most_likely,"wells_pe_most_likely=true",3,,"TPL_SCORE_WELLS_PE_V1"
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_hr_gt_100,"wells_hr_gt_100=true",1.5,,"TPL_SCORE_WELLS_PE_V1"
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_recent_surgery,"wells_recent_surgery=true",1.5,,"TPL_SCORE_WELLS_PE_V1"
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_prior_dvt_pe,"wells_prior_dvt_pe=true",1.5,,"TPL_SCORE_WELLS_PE_V1"
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_hemoptysis,"wells_hemoptysis=true",1,,"TPL_SCORE_WELLS_PE_V1"
+WELLS_PE,Wells Score for PE,pulm_shortness_of_breath,wells_active_cancer,"wells_active_cancer=true",1,,"TPL_SCORE_WELLS_PE_V1"
+
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_fever,"centor_fever=true",1,"{""low_max"":1,""mid_max"":3,""high_min"":4}","TPL_SCORE_CENTOR_V1"
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_no_cough,"centor_no_cough=true",1,,"TPL_SCORE_CENTOR_V1"
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_tonsillar_exudate,"centor_tonsillar_exudate=true",1,,"TPL_SCORE_CENTOR_V1"
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_tender_nodes,"centor_tender_nodes=true",1,,"TPL_SCORE_CENTOR_V1"
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_age_3_14,"centor_age_3_14=true",1,,"TPL_SCORE_CENTOR_V1"
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_age_15_44,"centor_age_15_44=true",0,,"TPL_SCORE_CENTOR_V1"
+CENTOR,Centor/McIsaac (Adult Strep),ent_sore_throat,centor_age_45_plus,"centor_age_45_plus=true",-1,,"TPL_SCORE_CENTOR_V1"
+
+CURB65,CURB-65 (Pneumonia Severity),pulm_cough,curb_confusion,"curb_confusion=true",1,"{""low_max"":1,""mid_max"":2,""high_min"":3}","TPL_SCORE_CURB65_V1"
+CURB65,CURB-65 (Pneumonia Severity),pulm_cough,curb_urea_high,"curb_urea_high=true",1,,"TPL_SCORE_CURB65_V1"
+CURB65,CURB-65 (Pneumonia Severity),pulm_cough,curb_rr_ge_30,"curb_rr_ge_30=true",1,,"TPL_SCORE_CURB65_V1"
+CURB65,CURB-65 (Pneumonia Severity),pulm_cough,curb_bp_low,"curb_bp_low=true",1,,"TPL_SCORE_CURB65_V1"
+CURB65,CURB-65 (Pneumonia Severity),pulm_cough,curb_age_ge_65,"curb_age_ge_65=true",1,,"TPL_SCORE_CURB65_V1"
+
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_history_moderate,"heart_history_moderate=true",1,"{""low_max"":3,""mid_max"":6,""high_min"":7}","TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_history_high,"heart_history_high=true",2,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_ecg_st_dev,"heart_ecg_st_dev=true",2,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_ecg_nonspecific,"heart_ecg_nonspecific=true",1,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_age_ge_65,"heart_age_ge_65=true",2,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_age_45_64,"heart_age_45_64=true",1,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_risk_factors_ge3,"heart_risk_factors_ge3=true",2,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_risk_factors_1_2,"heart_risk_factors_1_2=true",1,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_troponin_elevated,"heart_troponin_elevated=true",2,,"TPL_SCORE_HEART_V1"
+HEART,HEART Score (Chest Pain),cardio_chest_pain,heart_troponin_normal,"heart_troponin_normal=true",0,,"TPL_SCORE_HEART_V1"
+2) Add the minimal new questions to CORE_QUESTIONS.csv
+PULM SOB: PERC + Wells
+Complaint_Slug,Question_ID,Question_Text,Type
+pulm_shortness_of_breath,perc_age_lt_50,Age under 50?,boolean
+pulm_shortness_of_breath,perc_hr_lt_100,Heart rate under 100?,boolean
+pulm_shortness_of_breath,perc_spo2_ge_95,Oxygen saturation >= 95%?,boolean
+pulm_shortness_of_breath,perc_no_hemoptysis,No hemoptysis?,boolean
+pulm_shortness_of_breath,perc_no_estrogen,No estrogen use (OCP/HRT)?,boolean
+pulm_shortness_of_breath,perc_no_prior_dvt_pe,No prior DVT/PE?,boolean
+pulm_shortness_of_breath,perc_no_unilateral_leg_swelling,No unilateral leg swelling?,boolean
+pulm_shortness_of_breath,perc_no_recent_surgery,No recent surgery/immobilization?,boolean
+
+pulm_shortness_of_breath,wells_clinical_dvt,Clinical signs of DVT?,boolean
+pulm_shortness_of_breath,wells_pe_most_likely,PE is most likely diagnosis?,boolean
+pulm_shortness_of_breath,wells_hr_gt_100,Heart rate > 100?,boolean
+pulm_shortness_of_breath,wells_recent_surgery,Recent surgery/immobilization?,boolean
+pulm_shortness_of_breath,wells_prior_dvt_pe,Prior DVT/PE?,boolean
+pulm_shortness_of_breath,wells_hemoptysis,Hemoptysis?,boolean
+pulm_shortness_of_breath,wells_active_cancer,Active cancer?,boolean
+ENT sore throat: Centor/McIsaac
+Complaint_Slug,Question_ID,Question_Text,Type
+ent_sore_throat,centor_fever,Fever?,boolean
+ent_sore_throat,centor_no_cough,No cough?,boolean
+ent_sore_throat,centor_tonsillar_exudate,Tonsillar exudate?,boolean
+ent_sore_throat,centor_tender_nodes,Tender anterior cervical nodes?,boolean
+ent_sore_throat,centor_age_3_14,Age 3-14?,boolean
+ent_sore_throat,centor_age_15_44,Age 15-44?,boolean
+ent_sore_throat,centor_age_45_plus,Age 45+?,boolean
+PULM cough: CURB-65
+Complaint_Slug,Question_ID,Question_Text,Type
+pulm_cough,curb_confusion,Confusion?,boolean
+pulm_cough,curb_urea_high,Urea/BUN elevated?,boolean
+pulm_cough,curb_rr_ge_30,Respiratory rate >= 30?,boolean
+pulm_cough,curb_bp_low,Low blood pressure (SBP<90 or DBP<=60)?,boolean
+pulm_cough,curb_age_ge_65,Age >= 65?,boolean
+CARDIO chest pain: HEART
+Complaint_Slug,Question_ID,Question_Text,Type
+cardio_chest_pain,heart_history_high,History highly suspicious for ACS?,boolean
+cardio_chest_pain,heart_history_moderate,History moderately suspicious for ACS?,boolean
+cardio_chest_pain,heart_ecg_st_dev,ECG significant ST depression?,boolean
+cardio_chest_pain,heart_ecg_nonspecific,ECG nonspecific repolarization changes?,boolean
+cardio_chest_pain,heart_age_ge_65,Age >= 65?,boolean
+cardio_chest_pain,heart_age_45_64,Age 45-64?,boolean
+cardio_chest_pain,heart_risk_factors_ge3,3+ CAD risk factors or known atherosclerosis?,boolean
+cardio_chest_pain,heart_risk_factors_1_2,1-2 CAD risk factors?,boolean
+cardio_chest_pain,heart_troponin_elevated,Troponin elevated?,boolean
+cardio_chest_pain,heart_troponin_normal,Troponin normal?,boolean
+3) Output templates (add to OUTPUT_TEMPLATES.csv)
+
+(IDs follow your corruption guard pattern.)
+
+Complaint_Slug,Template_ID,Type,Text
+pulm_shortness_of_breath,TPL_SCORE_PERC_V1,score,"PERC computed. If all 8 criteria pass and clinical suspicion is low, PE may be ruled out without further testing in low-risk patients."
+pulm_shortness_of_breath,TPL_SCORE_WELLS_PE_V1,score,"Wells PE score computed. Use thresholds to classify PE unlikely vs likely (consider D-dimer vs imaging per clinical workflow)."
+ent_sore_throat,TPL_SCORE_CENTOR_V1,score,"Centor/McIsaac score computed for strep likelihood. Use score category to guide testing/treatment."
+pulm_cough,TPL_SCORE_CURB65_V1,score,"CURB-65 computed for pneumonia severity. Higher scores suggest need for inpatient evaluation."
+cardio_chest_pain,TPL_SCORE_HEART_V1,score,"HEART score computed for chest pain risk. Higher category suggests higher short-term risk and need for urgent evaluation."
+4) Engine hook (minimal)
+
+Add a function computeScoringSystems() that:
+
+loads SCORING_SYSTEMS.csv
+
+filters by complaint slug
+
+evaluates criteria against answers
+
+sums points
+
+attaches result into CaseState.scoringSystems[]
+
+Minimal interface you want to add into your existing CaseState
+type ScoringSystemResult = {
+  scoreId: string;
+  name: string;
+  total: number;
+  category?: string;
+  criteriaFired: { criterionId: string; points: number }[];
+  templateId?: string;
+};
+Pseudocode drop-in (adapt to your CSV loader + expression evaluator)
+const systems = scoringRows.filter(r => r.Applies_To_Complaint === complaintSlug);
+group by scoreId:
+  total = sum(points where logic true)
+  if Threshold_JSON present on any row: apply to category
+  push into CaseState.scoringSystems
+
+If you want, paste the name of your existing “evaluate expression” function and your CSV loader utility, and I’ll rewrite this as exact TypeScript that matches your codebase conventions.
+
+5) Add scoring tests into gate-prod (recommended)
+
+Since your gate-prod is solid, add an extra step:
+
+scripts/test-scoring.ts reads a new file data/SCORING_GOLDENS.jsonl
+
+runs computeScoringSystems
+
+asserts totals/categories
+
+I can generate that next, but it’s optional for B1 MVP. (You can start with manual confidence and add scoring goldens in B3 calibration.)
