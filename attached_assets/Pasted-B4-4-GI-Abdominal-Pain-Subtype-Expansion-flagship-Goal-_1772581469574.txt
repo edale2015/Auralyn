@@ -1,0 +1,128 @@
+B4-4 GI Abdominal Pain Subtype Expansion (flagship)
+
+Goal: make abdominal pain smarter without turning it into a surgical textbook. We’ll separate the most important urgent-care patterns with a small set of optional questions and subtype clusters.
+
+Subtypes we’ll separate
+
+appendicitis_like
+
+biliary_cholecystitis_like
+
+diverticulitis_like
+
+pancreatitis_like (epigastric/back/vomiting)
+
+obstruction_like
+
+keep existing gastroenteritis/functional
+
+We’ll also add suppressors so gastroenteritis doesn’t steal localized surgical patterns.
+
+A) Add optional questions to CORE_QUESTIONS.csv (gi_abdominal_pain)
+
+Add only what you don’t already have:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+gi_abdominal_pain,migration_rlq,Pain started elsewhere and moved to RLQ?,boolean
+gi_abdominal_pain,anorexia,Loss of appetite?,boolean
+gi_abdominal_pain,ruq_after_fatty,Worse after fatty meals?,boolean
+gi_abdominal_pain,murphy_like,Worse when taking a deep breath with RUQ pain?,boolean
+gi_abdominal_pain,change_bowel,Constipation or no gas/bloating?,boolean
+gi_abdominal_pain,prior_surgery,Prior abdominal surgery/adhesions?,boolean
+gi_abdominal_pain,back_radiation,Radiates to the back?,boolean
+gi_abdominal_pain,alcohol_heavy,Heavy alcohol use recently?,boolean
+gi_abdominal_pain,urinary_symptoms,Burning urination or flank pain?,boolean
+gi_abdominal_pain,gyne_one_sided,One-sided pelvic pain (if applicable)?,boolean
+
+(If you already have some of these concepts, skip duplicates.)
+
+B) Add subtype clusters + scoring rules in CLUSTER_SCORING_RULES.csv
+
+Add/extend Dx_IDs (use your naming convention; I’ll use consistent CL_GAP_* style — adjust if you prefer):
+
+CL_GAP_APPENDICITIS_LIKE
+
+CL_GAP_BILIARY_LIKE
+
+CL_GAP_DIVERTICULITIS_LIKE
+
+CL_GAP_PANCREATITIS_LIKE
+
+CL_GAP_OBSTRUCTION_LIKE
+
+keep your existing gastroenteritis, etc.
+
+Paste these rows (they won’t break your existing ones; they refine):
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,APP_1,"loc=rlq",3
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,APP_2,"migration_rlq=true",2
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,APP_3,"fever=true",1
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,APP_4,"vomit=true",1
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,APP_5,"anorexia=true",1
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,APP_NEG_1,"loc!=rlq",-3
+
+gi_abdominal_pain,CL_GAP_BILIARY_LIKE,BIL_1,"loc=ruq",3
+gi_abdominal_pain,CL_GAP_BILIARY_LIKE,BIL_2,"ruq_after_fatty=true",2
+gi_abdominal_pain,CL_GAP_BILIARY_LIKE,BIL_3,"murphy_like=true",2
+gi_abdominal_pain,CL_GAP_BILIARY_LIKE,BIL_4,"fever=true",1
+gi_abdominal_pain,CL_GAP_BILIARY_LIKE,BIL_NEG_1,"loc!=ruq",-3
+
+gi_abdominal_pain,CL_GAP_DIVERTICULITIS_LIKE,DIV_1,"loc=llq",3
+gi_abdominal_pain,CL_GAP_DIVERTICULITIS_LIKE,DIV_2,"fever=true",1
+gi_abdominal_pain,CL_GAP_DIVERTICULITIS_LIKE,DIV_3,"change_bowel=true",1
+gi_abdominal_pain,CL_GAP_DIVERTICULITIS_LIKE,DIV_NEG_1,"loc!=llq",-3
+
+gi_abdominal_pain,CL_GAP_PANCREATITIS_LIKE,PAN_1,"loc=epigastric",3
+gi_abdominal_pain,CL_GAP_PANCREATITIS_LIKE,PAN_2,"back_radiation=true",2
+gi_abdominal_pain,CL_GAP_PANCREATITIS_LIKE,PAN_3,"vomit=true",1
+gi_abdominal_pain,CL_GAP_PANCREATITIS_LIKE,PAN_4,"alcohol_heavy=true",1
+gi_abdominal_pain,CL_GAP_PANCREATITIS_LIKE,PAN_NEG_1,"loc!=epigastric",-3
+
+gi_abdominal_pain,CL_GAP_OBSTRUCTION_LIKE,OBS_1,"vomit=true",2
+gi_abdominal_pain,CL_GAP_OBSTRUCTION_LIKE,OBS_2,"change_bowel=true",2
+gi_abdominal_pain,CL_GAP_OBSTRUCTION_LIKE,OBS_3,"loc=diffuse",1
+gi_abdominal_pain,CL_GAP_OBSTRUCTION_LIKE,OBS_4,"prior_surgery=true",1
+gi_abdominal_pain,CL_GAP_OBSTRUCTION_LIKE,OBS_NEG_1,"sev<=4",-2
+
+gi_abdominal_pain,gastroenteritis,GE_NEG_LOCALIZED,"loc=rlq OR loc=ruq OR loc=llq",-3
+gi_abdominal_pain,gastroenteritis,GE_NEG_PERITONEAL,"peritoneal=true",-6
+gi_abdominal_pain,gastroenteritis,GE_NEG_HIGHSEV,"sev>=7",-3
+
+⚠️ Note: If your expression parser doesn’t support !=, replace e.g. loc!=rlq with three negative rules like loc=ruq, loc=llq, etc. (you’ve done this before). If you want, I’ll rewrite those lines in “no !=” form.
+
+C) DX_PRIORITY tie-break for GI abdominal pain
+
+Append to DX_PRIORITY.csv:
+
+Complaint_Slug,Dx_ID,Priority
+gi_abdominal_pain,CL_GAP_OBSTRUCTION_LIKE,100
+gi_abdominal_pain,CL_GAP_APPENDICITIS_LIKE,95
+gi_abdominal_pain,CL_GAP_BILIARY_LIKE,90
+gi_abdominal_pain,CL_GAP_PANCREATITIS_LIKE,85
+gi_abdominal_pain,CL_GAP_DIVERTICULITIS_LIKE,80
+gi_abdominal_pain,gastroenteritis,50
+
+(Obstruction highest because it’s time-sensitive and often needs emergent eval.)
+
+D) Add 13 strict subtype goldens (append to GI abdominal pain goldens)
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+gi_abdominal_pain,GAP_SUB1,"{""onset"":""gradual"",""loc"":""rlq"",""sev"":7,""fever"":true,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""migration_rlq"":true,""anorexia"":true}",URGENT,CL_GAP_APPENDICITIS_LIKE
+gi_abdominal_pain,GAP_SUB2,"{""onset"":""gradual"",""loc"":""ruq"",""sev"":6,""fever"":true,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""ruq_after_fatty"":true,""murphy_like"":true}",URGENT,CL_GAP_BILIARY_LIKE
+gi_abdominal_pain,GAP_SUB3,"{""onset"":""gradual"",""loc"":""llq"",""sev"":6,""fever"":true,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""change_bowel"":true}",URGENT,CL_GAP_DIVERTICULITIS_LIKE
+gi_abdominal_pain,GAP_SUB4,"{""onset"":""sudden"",""loc"":""epigastric"",""sev"":7,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""back_radiation"":true,""alcohol_heavy"":true}",URGENT,CL_GAP_PANCREATITIS_LIKE
+gi_abdominal_pain,GAP_SUB5,"{""onset"":""sudden"",""loc"":""diffuse"",""sev"":8,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":true,""change_bowel"":true,""prior_surgery"":true}",EMERG,CL_GAP_OBSTRUCTION_LIKE
+gi_abdominal_pain,GAP_SUB6,"{""onset"":""gradual"",""loc"":""diffuse"",""sev"":4,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false}",ROUTINE,gastroenteritis
+gi_abdominal_pain,GAP_SUB7,"{""onset"":""gradual"",""loc"":""ruq"",""sev"":5,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""ruq_after_fatty"":true}",URGENT,CL_GAP_BILIARY_LIKE
+gi_abdominal_pain,GAP_SUB8,"{""onset"":""gradual"",""loc"":""rlq"",""sev"":6,""fever"":false,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""migration_rlq"":true}",URGENT,CL_GAP_APPENDICITIS_LIKE
+gi_abdominal_pain,GAP_SUB9,"{""onset"":""gradual"",""loc"":""epigastric"",""sev"":6,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""back_radiation"":true}",URGENT,CL_GAP_PANCREATITIS_LIKE
+gi_abdominal_pain,GAP_SUB10,"{""onset"":""gradual"",""loc"":""diffuse"",""sev"":6,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false,""change_bowel"":true,""prior_surgery"":true}",URGENT,CL_GAP_OBSTRUCTION_LIKE
+gi_abdominal_pain,GAP_SUB11,"{""onset"":""gradual"",""loc"":""llq"",""sev"":5,""fever"":false,""vomit"":false,""blood"":false,""preg"":false,""peritoneal"":false,""change_bowel"":true}",URGENT,CL_GAP_DIVERTICULITIS_LIKE
+gi_abdominal_pain,GAP_SUB12,"{""onset"":""gradual"",""loc"":""diffuse"",""sev"":7,""fever"":true,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":false}",URGENT,gastroenteritis
+gi_abdominal_pain,GAP_SUB13,"{""onset"":""sudden"",""loc"":""diffuse"",""sev"":9,""fever"":false,""vomit"":true,""blood"":false,""preg"":false,""peritoneal"":true,""change_bowel"":true}",EMERG,CL_GAP_OBSTRUCTION_LIKE
+E) Run
+npm run ship:complaint -- gi_abdominal_pain
+npx tsx scripts/gate-prod.ts
+Quick note about loc!=rlq style rules
+
+If your parser doesn’t support !=, tell me and I’ll rewrite the 5 NEG_* loc!=... lines into equivalent explicit negatives.

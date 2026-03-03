@@ -95,6 +95,10 @@ Data-driven subtype upgrades that improve diagnostic granularity. Each upgrade a
 
 **B4-3 Neuro Headache (flagship)**: Added 7 optional questions (Q_NHA_PHOTOPHOBIA, Q_NHA_UNILATERAL, Q_NHA_STRESS_TIGHT, Q_NHA_JAW_CLAUD, Q_NHA_SCALP_TENDER, Q_NHA_IMMUNO, Q_NHA_RASH_PURPLE) and 3 new clusters (CL_NHA_SAH_LIKE, CL_NHA_MENINGITIS_LIKE, CL_NHA_GCA) plus enhanced migraine/tension with subtype-specific boosters and danger-signal suppressors (-6) on benign clusters. DX_PRIORITY for 5 headache clusters (sah=100, meningitis=90, gca=80, migraine=60, tension=50). 3 existing goldens updated (NH1/NH2→SAH_LIKE, NH3→MENINGITIS_LIKE). 13 hard subtype goldens + 10 existing = 23 total headache tests passing.
 
+**B4-4 GI Abdominal Pain**: Added 10 optional questions (Q_ABD_MIGRATION_RLQ, Q_ABD_ANOREXIA, Q_ABD_RUQ_FATTY, Q_ABD_MURPHY, Q_ABD_CHANGE_BOWEL, Q_ABD_PRIOR_SURG, Q_ABD_BACK_RAD, Q_ABD_ALCOHOL, Q_ABD_URINARY, Q_ABD_GYNE_SIDED) and 1 new cluster (CL_ABD_PANCREATITIS with 4 rules: epigastric+3, back_rad+2, vomit+1, alcohol+1, non-epigastric -3). Enhanced existing clusters: APP (migration_rlq+2, anorexia+1, non-rlq -3), CHOL (fatty+2, murphy+2, non-ruq -3), DIV (change_bowel+1, non-llq -3), OBS (change_bowel+2, prior_surg+1, sev≤4 -2), GE (localized -3, peritoneal -6, sev≥7 -3). DX_PRIORITY for 6 clusters (obstruction=100, appendicitis=95, cholecystitis=90, pancreatitis=85, diverticulitis=80, gastroenteritis=50). 5 existing goldens updated (GIA1→GE, GIAH2→PANCREATITIS, GIAH6→OBSTRUCTION, GIAH10→PANCREATITIS, GIA9→OBSTRUCTION). 13 hard subtype goldens + 30 existing = 43 total abdominal pain tests passing.
+
+Currently 72+ complaints on GENERIC_V1 with 1299 golden tests passing.
+
 ### Validation and Testing
 The system includes several validation tools:
 -   **Stress Test Harness**: For performance and stability testing. Outputs per-result data for calibration analysis.
