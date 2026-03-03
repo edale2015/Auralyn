@@ -1,0 +1,136 @@
+B4-3 NEURO Headache Subtypes (flagship)
+
+Subtypes we’ll separate:
+
+migraine
+
+tension
+
+meningitis_like
+
+sah_thunderclap
+
+gca (giant cell arteritis)
+
+A) Add optional questions to CORE_QUESTIONS.csv (neuro_headache)
+
+(Only add ones you don’t already have.)
+
+Complaint_Slug,Question_ID,Question_Text,Type
+neuro_headache,photophobia,Light sensitivity or nausea typical of migraine?,boolean
+neuro_headache,unilateral,Unilateral throbbing headache?,boolean
+neuro_headache,stress_tight,Pressure/tight band-like pain (tension pattern)?,boolean
+neuro_headache,jaw_claud,Jaw pain with chewing?,boolean
+neuro_headache,scalp_tender,Scalp tenderness/temple pain?,boolean
+neuro_headache,immuno,Immunocompromised?,boolean
+neuro_headache,rash_purple,Purple rash that doesn't blanch?,boolean
+
+(You already have thunder/neurodef/fever_neck/preg_postpartum/trauma/age50/eye.)
+
+B) Add subtype scoring rows to CLUSTER_SCORING_RULES.csv under neuro_headache
+
+Use your existing dx IDs if they exist; if not, add these Dx_IDs:
+
+migraine
+
+tension
+
+meningitis_like
+
+sah_like
+
+gca
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+neuro_headache,sah_like,SAH_1,"thunder=true",6
+neuro_headache,sah_like,SAH_2,"neurodef=true",2
+neuro_headache,sah_like,SAH_NEG_1,"thunder=false",-6
+
+neuro_headache,meningitis_like,MEN_1,"fever_neck=true",6
+neuro_headache,meningitis_like,MEN_2,"immuno=true",2
+neuro_headache,meningitis_like,MEN_3,"rash_purple=true",4
+neuro_headache,meningitis_like,MEN_NEG_1,"fever_neck=false",-6
+
+neuro_headache,gca,GCA_1,"age50=true",2
+neuro_headache,gca,GCA_2,"jaw_claud=true",3
+neuro_headache,gca,GCA_3,"scalp_tender=true",2
+neuro_headache,gca,GCA_4,"eye=true",2
+neuro_headache,gca,GCA_NEG_1,"age50=false",-5
+
+neuro_headache,migraine,MIG_1,"photophobia=true",2
+neuro_headache,migraine,MIG_2,"unilateral=true",2
+neuro_headache,migraine,MIG_3,"thunder=false AND fever_neck=false AND neurodef=false",1
+neuro_headache,migraine,MIG_NEG_1,"thunder=true OR fever_neck=true OR neurodef=true",-6
+
+neuro_headache,tension,TEN_1,"stress_tight=true",3
+neuro_headache,tension,TEN_2,"photophobia=false",1
+neuro_headache,tension,TEN_3,"unilateral=false",1
+neuro_headache,tension,TEN_NEG_1,"thunder=true OR fever_neck=true OR neurodef=true",-6
+C) Add DX_PRIORITY tie protection for headache
+
+Append to DX_PRIORITY.csv:
+
+Complaint_Slug,Dx_ID,Priority
+neuro_headache,sah_like,100
+neuro_headache,meningitis_like,90
+neuro_headache,gca,80
+neuro_headache,migraine,60
+neuro_headache,tension,50
+D) Add 13 hard subtype goldens (strict)
+
+Append to your headache hard goldens:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+neuro_headache,NH_SUB1,"{""thunder"":true,""neurodef"":false,""fever_neck"":false,""age50"":false,""eye"":false,""photophobia"":false,""stress_tight"":false}",EMERG,sah_like
+neuro_headache,NH_SUB2,"{""thunder"":false,""neurodef"":false,""fever_neck"":true,""immuno"":false,""rash_purple"":false,""age50"":false}",EMERG,meningitis_like
+neuro_headache,NH_SUB3,"{""thunder"":false,""neurodef"":false,""fever_neck"":true,""immuno"":true,""rash_purple"":false,""age50"":false}",EMERG,meningitis_like
+neuro_headache,NH_SUB4,"{""thunder"":false,""neurodef"":false,""fever_neck"":true,""rash_purple"":true,""age50"":false}",EMERG,meningitis_like
+neuro_headache,NH_SUB5,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":true,""jaw_claud"":true,""scalp_tender"":true,""eye"":false}",URGENT,gca
+neuro_headache,NH_SUB6,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":true,""jaw_claud"":false,""scalp_tender"":true,""eye"":true}",EMERG,gca
+neuro_headache,NH_SUB7,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":false,""photophobia"":true,""unilateral"":true,""stress_tight"":false}",ROUTINE,migraine
+neuro_headache,NH_SUB8,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":false,""photophobia"":false,""unilateral"":false,""stress_tight"":true}",ROUTINE,tension
+neuro_headache,NH_SUB9,"{""thunder"":true,""neurodef"":true,""fever_neck"":false,""age50"":false}",EMERG,sah_like
+neuro_headache,NH_SUB10,"{""thunder"":false,""neurodef"":true,""fever_neck"":false,""age50"":false}",EMERG,sah_like
+neuro_headache,NH_SUB11,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":true,""jaw_claud"":true,""scalp_tender"":false,""photophobia"":true}",URGENT,gca
+neuro_headache,NH_SUB12,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":false,""photophobia"":true,""unilateral"":false,""stress_tight"":false}",ROUTINE,migraine
+neuro_headache,NH_SUB13,"{""thunder"":false,""neurodef"":false,""fever_neck"":false,""age50"":false,""photophobia"":false,""unilateral"":false,""stress_tight"":true}",ROUTINE,tension
+E) Run
+npm run ship:complaint -- neuro_headache
+npx tsx scripts/gate-prod.ts
+B4 Flagship Queue (all systems)
+
+After headache lands, we proceed in this order:
+
+NEURO: neuro_headache ✅ (this one)
+
+GI: gi_abdominal_pain
+
+DERM: derm_rash (finish SJS/TEN + vasculitis + meningococcemia separation)
+
+ENT: ent_sore_throat (Centor already; add mono/PTA/peritonsillar nuance)
+
+GU: gu_flank_pain (infected stone nuance)
+
+OPHTHO: ophtho_red_eye (already stable; add keratitis/uveitis/chemical nuance if desired)
+
+ID: id_fever (source separation minimal)
+
+TOX: tox_overdose_intoxication (opioid vs stimulant toxidrome nuance)
+
+MSK: msk_back_pain (sciatica vs red flags nuance)
+
+ENDO: endo_hyperglycemia (DKA vs hyper nuance)
+
+PSYCH: psych_anxiety_panic (medical mimic nuance)
+
+ORTHO_TRAUMA: ortho_trauma_head_injury (Canadian CT head rule-ish cues if desired)
+
+RENAL: renal_acute_kidney_injury_like
+
+HEMEONC: hemeonc_neutropenic_fever_like
+
+RHEUM: rheum_hot_swollen_joint
+
+ENV: environmental_heat_illness
+
+GENERAL: general_generalized_weakness

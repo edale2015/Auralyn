@@ -93,6 +93,8 @@ Data-driven subtype upgrades that improve diagnostic granularity. Each upgrade a
 
 **B4-2 Pulm Cough**: Added 2 optional questions (Q_PCO_PND postnasal drip, Q_PCO_HEARTBURN reflux) and 1 new cluster (CL_PCO_GERD_COUGH) plus suppressors/boosters on existing clusters (CL_PCO_POSTNASAL PND boost, CL_PCO_VIRAL_BRONCHITIS fever+SOB/blood/immuno suppressors, CL_PCO_ASTHMA_REACTIVE fever suppressor, CL_PCO_PNEUMONIA duration/immuno boost + PND suppressor). DX_PRIORITY for 5 cough clusters (pneumonia=100, asthma=90, gerd=70, postnasal=65, viral_bronchitis=50). 13 hard subtype goldens + 25 existing = 38 total cough tests passing.
 
+**B4-3 Neuro Headache (flagship)**: Added 7 optional questions (Q_NHA_PHOTOPHOBIA, Q_NHA_UNILATERAL, Q_NHA_STRESS_TIGHT, Q_NHA_JAW_CLAUD, Q_NHA_SCALP_TENDER, Q_NHA_IMMUNO, Q_NHA_RASH_PURPLE) and 3 new clusters (CL_NHA_SAH_LIKE, CL_NHA_MENINGITIS_LIKE, CL_NHA_GCA) plus enhanced migraine/tension with subtype-specific boosters and danger-signal suppressors (-6) on benign clusters. DX_PRIORITY for 5 headache clusters (sah=100, meningitis=90, gca=80, migraine=60, tension=50). 3 existing goldens updated (NH1/NH2→SAH_LIKE, NH3→MENINGITIS_LIKE). 13 hard subtype goldens + 10 existing = 23 total headache tests passing.
+
 ### Validation and Testing
 The system includes several validation tools:
 -   **Stress Test Harness**: For performance and stability testing. Outputs per-result data for calibration analysis.
