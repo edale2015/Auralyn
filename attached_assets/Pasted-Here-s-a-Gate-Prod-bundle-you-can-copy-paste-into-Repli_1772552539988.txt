@@ -1,0 +1,394 @@
+Here’s a Gate-Prod bundle you can copy/paste into Replit. It gives you:
+
+✅ npm run gate:prod single command
+✅ runs: corruption/schema + harness + stress smoke + drift audit
+✅ writes: artifacts/gate_report.json (+ human-readable console summary)
+✅ exits non-zero on failure
+
+I’m assuming you already have:
+
+npm run harness
+
+HARNESS_MODE=1 npx tsx scripts/simulate-stress.ts (you do)
+
+corruption/schema checks either as scripts or already embedded in your existing validators
+
+If any command names differ, just adjust the constants at the top of gate-prod.ts.
+
+1) scripts/gate-prod.ts
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
+
+type StepResult = {
+  name: string;
+  ok: boolean;
+  durationMs: number;
+  stdoutTail: string;
+  stderrTail: string;
+};
+
+type GateReport = {
+  startedAt: string;
+  finishedAt: string;
+  ok: boolean;
+  steps: StepResult[];
+  summary: {
+    harnessPass?: boolean;
+    stress?: {
+      n: number;
+      dispCounts?: Record<string, number>;
+      topHotspots?: Array<{ complaint: string; total: number; emerg: number; emergRate: number }>;
+      outputFile?: string;
+    };
+    drift?: {
+      ok: boolean;
+      issues: Array<{ kind: string; detail: string }>;
+    };
+  };
+  env: {
+    rulesetVersion: string;
+    dxPriorityVersion: string;
+  };
+};
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function tail(s: string, max = 2500) {
+  if (!s) return "";
+  return s.length <= max ? s : s.slice(-max);
+}
+
+function runStep(name: string, cmd: string, env?: Record<string, string>): StepResult {
+  const start = Date.now();
+  try {
+    const stdout = execSync(cmd, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...(env ?? {}) },
+    });
+    const end = Date.now();
+    return { name, ok: true, durationMs: end - start, stdoutTail: tail(stdout), stderrTail: "" };
+  } catch (e: any) {
+    const end = Date.now();
+    const stdout = e?.stdout ? String(e.stdout) : "";
+    const stderr = e?.stderr ? String(e.stderr) : "";
+    return { name, ok: false, durationMs: end - start, stdoutTail: tail(stdout), stderrTail: tail(stderr) };
+  }
+}
+
+function ensureDir(p: string) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function tryReadJson(p: string): any | null {
+  try {
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function main() {
+  const ART_DIR = "artifacts";
+  ensureDir(ART_DIR);
+
+  const report: GateReport = {
+    startedAt: nowIso(),
+    finishedAt: "",
+    ok: false,
+    steps: [],
+    summary: { drift: { ok: true, issues: [] } },
+    env: {
+      rulesetVersion: process.env.RULESET_VERSION ?? "local",
+      dxPriorityVersion: process.env.DX_PRIORITY_VERSION ?? "local",
+    },
+  };
+
+  // ---- CONFIG: adjust these if your repo uses different command names ----
+  const CMD_SCHEMA = process.env.GATE_SCHEMA_CMD ?? "npm run validate"; // optional; can be a no-op script
+  const CMD_CORRUPTION = process.env.GATE_CORRUPTION_CMD ?? "npm run corruption:guard"; // optional
+  const CMD_HARNESS = process.env.GATE_HARNESS_CMD ?? "npm run harness";
+  const STRESS_N = Number(process.env.STRESS_N ?? "200");
+  const CMD_STRESS = process.env.GATE_STRESS_CMD ?? `N=${STRESS_N} HARNESS_MODE=1 npx tsx scripts/simulate-stress.ts`;
+  const CMD_DRIFT = process.env.GATE_DRIFT_CMD ?? "npx tsx scripts/drift-audit.ts";
+
+  // ---- Step 1: schema / validator (optional but recommended) ----
+  if (CMD_SCHEMA) report.steps.push(runStep("schema_validate", CMD_SCHEMA));
+
+  // ---- Step 2: corruption guard (optional but recommended) ----
+  if (CMD_CORRUPTION) report.steps.push(runStep("corruption_guard", CMD_CORRUPTION));
+
+  // ---- Step 3: harness ----
+  report.steps.push(runStep("harness", CMD_HARNESS));
+
+  // ---- Step 4: stress smoke ----
+  report.steps.push(runStep("stress_smoke", CMD_STRESS));
+
+  // ---- Step 5: drift audit ----
+  report.steps.push(runStep("drift_audit", CMD_DRIFT));
+
+  // ---- Summarize ----
+  const allOk = report.steps.every((s) => s.ok);
+  report.ok = allOk;
+  report.finishedAt = nowIso();
+
+  // Attach stress summary if stress_results.json exists
+  const stressJson = tryReadJson("stress_results.json");
+  if (stressJson) {
+    report.summary.stress = {
+      n: stressJson.N ?? STRESS_N,
+      dispCounts: stressJson.dispCounts ?? {},
+      topHotspots: (() => {
+        const byC = stressJson.byComplaint ?? {};
+        const list = Object.keys(byC).map((complaint) => {
+          const m = byC[complaint];
+          const total = Object.values(m).reduce((a: number, b: any) => a + Number(b), 0);
+          const emerg = Number(m["EMERG"] ?? 0);
+          return { complaint, total, emerg, emergRate: total ? emerg / total : 0 };
+        });
+        list.sort((a, b) => b.emergRate - a.emergRate);
+        return list.slice(0, 10);
+      })(),
+      outputFile: "stress_results.json",
+    };
+  }
+
+  // Attach drift issues if drift report exists
+  const driftJson = tryReadJson("artifacts/drift_report.json") ?? tryReadJson("drift_report.json");
+  if (driftJson) {
+    report.summary.drift = {
+      ok: !!driftJson.ok,
+      issues: Array.isArray(driftJson.issues) ? driftJson.issues : [],
+    };
+  }
+
+  const outPath = path.join(ART_DIR, "gate_report.json");
+  fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
+
+  // Console summary
+  console.log(`\n=== gate:prod ${report.ok ? "PASS ✅" : "FAIL ❌"} ===`);
+  for (const s of report.steps) {
+    console.log(`${s.ok ? "PASS" : "FAIL"}  ${s.name}  (${s.durationMs}ms)`);
+  }
+  if (report.summary.stress?.dispCounts) {
+    console.log("\nStress disposition counts:", report.summary.stress.dispCounts);
+    console.log("Top EMERG-rate hotspots:", report.summary.stress.topHotspots);
+  }
+  if (report.summary.drift?.issues?.length) {
+    console.log("\nDrift issues:");
+    for (const i of report.summary.drift.issues.slice(0, 20)) {
+      console.log(`- ${i.kind}: ${i.detail}`);
+    }
+  }
+
+  console.log(`\nWrote ${outPath}\n`);
+  process.exit(report.ok ? 0 : 1);
+}
+
+main();
+2) scripts/drift-audit.ts
+
+This is a practical drift audit that catches the biggest footguns quickly:
+
+missing complaint slugs referenced by micro packs
+
+duplicate Rule_IDs within a complaint (easy source of silent behavior change)
+
+invalid template IDs (your corruption guard already does this, but we include a check)
+
+optionally: ensure every complaint has at least 1 dx score rule
+
+Adjust file paths at the top to match your repo layout.
+
+import fs from "node:fs";
+import path from "node:path";
+
+type Issue = { kind: string; detail: string };
+
+const OUT_DIR = "artifacts";
+const OUT_PATH = path.join(OUT_DIR, "drift_report.json");
+
+// Adjust these to your actual file locations
+const PATH_REGISTRY = "data/COMPLAINT_REGISTRY.csv";
+const PATH_CLUSTER = "data/CLUSTER_SCORING_RULES.csv";
+const PATH_TEMPLATES = "data/OUTPUT_TEMPLATES.csv";
+const PATH_MICRO = "data/micro_packs.csv";
+
+function ensureDir(p: string) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim().replace(/^"|"$/g, ""));
+}
+
+function parseCsv(p: string): { header: string[]; rows: string[][] } {
+  if (!fs.existsSync(p)) return { header: [], rows: [] };
+  const lines = fs.readFileSync(p, "utf8").trim().split("\n").map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return { header: [], rows: [] };
+  const header = splitCsvLine(lines[0]);
+  const rows = lines.slice(1).map(splitCsvLine);
+  return { header, rows };
+}
+
+function main() {
+  ensureDir(OUT_DIR);
+
+  const issues: Issue[] = [];
+
+  const reg = parseCsv(PATH_REGISTRY);
+  const cluster = parseCsv(PATH_CLUSTER);
+  const tpl = parseCsv(PATH_TEMPLATES);
+  const micro = parseCsv(PATH_MICRO);
+
+  const idx = (header: string[], name: string) => header.indexOf(name);
+
+  const regSlugIdx = idx(reg.header, "Complaint_Slug");
+  const clusterSlugIdx = idx(cluster.header, "Complaint_Slug");
+  const clusterRuleIdx = idx(cluster.header, "Rule_ID");
+  const tplIdIdx = idx(tpl.header, "Template_ID");
+  const tplSlugIdx = idx(tpl.header, "Complaint_Slug");
+  const microSlugIdx = idx(micro.header, "Complaint_Slug");
+
+  const knownComplaints = new Set<string>();
+  for (const r of reg.rows) {
+    const s = r[regSlugIdx] ?? "";
+    if (s) knownComplaints.add(s);
+  }
+
+  // Micro packs must reference known complaints
+  const microComplaints = new Set<string>();
+  for (const r of micro.rows) {
+    const s = r[microSlugIdx] ?? "";
+    if (s) microComplaints.add(s);
+  }
+  for (const s of microComplaints) {
+    if (!knownComplaints.has(s)) {
+      issues.push({ kind: "micro_unknown_complaint", detail: `${s} is not in COMPLAINT_REGISTRY.csv` });
+    }
+  }
+
+  // Duplicate Rule_IDs per complaint in CLUSTER rules
+  const seen = new Map<string, Set<string>>(); // complaint -> ruleIds
+  for (const r of cluster.rows) {
+    const slug = r[clusterSlugIdx] ?? "";
+    const rid = r[clusterRuleIdx] ?? "";
+    if (!slug || !rid) continue;
+    if (!seen.has(slug)) seen.set(slug, new Set());
+    const set = seen.get(slug)!;
+    if (set.has(rid)) {
+      issues.push({ kind: "duplicate_rule_id", detail: `${slug} has duplicate Rule_ID: ${rid}` });
+    } else {
+      set.add(rid);
+    }
+  }
+
+  // Templates must match required prefix (you already enforce this, but keep it here)
+  const tplPrefix = /^TPL_[A-Z0-9_]+$/;
+  for (const r of tpl.rows) {
+    const slug = r[tplSlugIdx] ?? "";
+    const tid = r[tplIdIdx] ?? "";
+    if (!tid) continue;
+    if (!tplPrefix.test(tid)) {
+      issues.push({ kind: "bad_template_id", detail: `${slug} has Template_ID not matching TPL_[A-Z0-9_]+: ${tid}` });
+    }
+  }
+
+  // Every complaint should have at least one cluster scoring rule row (basic coverage)
+  const hasCluster = new Set<string>();
+  for (const r of cluster.rows) {
+    const slug = r[clusterSlugIdx] ?? "";
+    if (slug) hasCluster.add(slug);
+  }
+  for (const s of knownComplaints) {
+    if (!hasCluster.has(s)) {
+      issues.push({ kind: "missing_cluster_rules", detail: `${s} has no CLUSTER_SCORING_RULES rows` });
+    }
+  }
+
+  const ok = issues.length === 0;
+
+  const report = {
+    ok,
+    issues,
+    counts: {
+      knownComplaints: knownComplaints.size,
+      microComplaints: microComplaints.size,
+      driftIssues: issues.length,
+    },
+    generatedAt: new Date().toISOString(),
+  };
+
+  fs.writeFileSync(OUT_PATH, JSON.stringify(report, null, 2));
+  console.log(`Wrote ${OUT_PATH}`);
+  if (!ok) {
+    console.log(`Drift audit FAIL: ${issues.length} issues`);
+    for (const i of issues.slice(0, 25)) console.log(`- ${i.kind}: ${i.detail}`);
+    process.exit(1);
+  } else {
+    console.log("Drift audit PASS ✅");
+    process.exit(0);
+  }
+}
+
+main();
+3) package.json scripts
+
+Add these:
+
+{
+  "scripts": {
+    "audit:drift": "tsx scripts/drift-audit.ts",
+    "gate:prod": "tsx scripts/gate-prod.ts"
+  }
+}
+4) Optional: make schema/corruption steps non-fatal if you don’t have scripts
+
+If you don’t have npm run validate or npm run corruption:guard, set them as env overrides or create no-op scripts:
+
+{
+  "scripts": {
+    "validate": "node -e \"console.log('validate: (no-op)')\"",
+    "corruption:guard": "node -e \"console.log('corruption:guard: (no-op)')\""
+  }
+}
+
+(But since you do have corruption guard, keep the real one.)
+
+How to run it
+npm run gate:prod
+
+Artifacts:
+
+artifacts/gate_report.json
+
+artifacts/drift_report.json
+
+stress_results.json (produced by simulate-stress)
+
+Next after gate-prod
+
+Once gate:prod is green reliably, you’re ready to:
+
+turn REVIEW_AUTH_MODE=on and add real physician auth
+
+wire WhatsApp/Telegram adapters to create/advance cases
+
+add “send after approval” actions
+
+If you paste your current command names for validator/corruption guard (or your package.json scripts block), I can align GATE_SCHEMA_CMD and GATE_CORRUPTION_CMD defaults exactly so you don’t have to set env vars.
