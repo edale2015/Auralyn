@@ -1,0 +1,346 @@
+B3 Calibration Bundle
+1) New CSV: server/data/csv/CALIBRATION_TARGETS.csv
+
+Schema:
+
+Complaint_Slug,TargetEmergRate,TargetNeedsReviewRate,MaxUnclassifiedRate,MaxWinnerChurnRate,Notes
+
+Use * as a default row.
+
+Starter file (paste)
+Complaint_Slug,TargetEmergRate,TargetNeedsReviewRate,MaxUnclassifiedRate,MaxWinnerChurnRate,Notes
+*,0.10,0.35,0.01,0.15,"Global defaults: conservative urgent-care triage"
+
+cardio_chest_pain,0.40,0.70,0.00,0.10,"High risk, allow higher EMERG"
+pulm_shortness_of_breath,0.35,0.70,0.00,0.12,"High risk dyspnea"
+neuro_weakness_numbness,0.45,0.80,0.00,0.10,"Stroke/cord concern"
+neuro_confusion_ams,0.60,0.90,0.00,0.08,"AMS should heavily review/escalate"
+gi_gi_bleeding,0.85,0.95,0.00,0.05,"Bleeding should be emergent"
+ophtho_vision_loss,0.60,0.85,0.00,0.08,"Vision loss high stakes"
+tox_overdose_intoxication,0.70,0.90,0.00,0.08,"Overdose high stakes"
+ortho_trauma_head_injury,0.30,0.70,0.00,0.12,"Concussion/ICH risk"
+peds_infant_fever,0.60,0.90,0.00,0.08,"Infant fever high stakes"
+derm_allergic_reaction,0.20,0.60,0.00,0.12,"Anaphylaxis subset"
+
+(We’ll add more overrides once we see the calibration report.)
+
+2) Script: scripts/calibration-report.ts
+
+This reads stress_results.json and computes:
+
+emerg rate per complaint
+
+needs_review rate if available (if your stress sim includes it; if not, we’ll approximate from disposition/confidence/flags)
+
+unclassified rate (topDx == UNCLASSIFIED or similar)
+
+winner churn (optional: requires running stress with noise twice or providing churn stats)
+
+It outputs:
+
+artifacts/calibration_report.json
+
+console summary + top deltas
+
+import fs from "node:fs";
+import path from "node:path";
+
+const STRESS_PATH = "stress_results.json";
+const TARGETS_PATH = "server/data/csv/CALIBRATION_TARGETS.csv";
+const OUT_DIR = "artifacts";
+const OUT_PATH = path.join(OUT_DIR, "calibration_report.json");
+
+function ensureDir(p: string) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim().replace(/^"|"$/g, ""));
+}
+
+type Target = {
+  complaint: string;
+  emerg: number;
+  review: number;
+  unclassified: number;
+  churn: number;
+  notes: string;
+};
+
+function loadTargets(): { defaults: Target; overrides: Map<string, Target> } {
+  const text = fs.readFileSync(TARGETS_PATH, "utf8").trim();
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const header = splitCsvLine(lines[0]);
+
+  const idx = (k: string) => header.indexOf(k);
+  const overrides = new Map<string, Target>();
+
+  let defaults: Target | null = null;
+
+  for (const line of lines.slice(1)) {
+    const c = splitCsvLine(line);
+    const complaint = c[idx("Complaint_Slug")];
+    const t: Target = {
+      complaint,
+      emerg: Number(c[idx("TargetEmergRate")] ?? "0"),
+      review: Number(c[idx("TargetNeedsReviewRate")] ?? "0"),
+      unclassified: Number(c[idx("MaxUnclassifiedRate")] ?? "0"),
+      churn: Number(c[idx("MaxWinnerChurnRate")] ?? "1"),
+      notes: c[idx("Notes")] ?? "",
+    };
+    if (complaint === "*") defaults = t;
+    else overrides.set(complaint, t);
+  }
+
+  if (!defaults) {
+    defaults = { complaint: "*", emerg: 0.1, review: 0.35, unclassified: 0.01, churn: 0.15, notes: "default" };
+  }
+  return { defaults, overrides };
+}
+
+function main() {
+  if (!fs.existsSync(STRESS_PATH)) {
+    console.error(`Missing ${STRESS_PATH}. Run simulate-stress first.`);
+    process.exit(1);
+  }
+  ensureDir(OUT_DIR);
+
+  const stress = JSON.parse(fs.readFileSync(STRESS_PATH, "utf8"));
+  const results: any[] = stress.results ?? [];
+  const { defaults, overrides } = loadTargets();
+
+  // Aggregate per complaint
+  const agg: Record<string, { total: number; emerg: number; review: number; unclassified: number }> = {};
+
+  for (const r of results) {
+    const c = r.complaint ?? "unknown";
+    agg[c] ??= { total: 0, emerg: 0, review: 0, unclassified: 0 };
+    agg[c].total++;
+
+    if (r.disposition === "EMERG") agg[c].emerg++;
+
+    // Needs review approximation:
+    // If your stress includes needsReview boolean, use it; otherwise:
+    // review if disposition != ROUTINE or confidence == LOW or rfTriggered non-empty
+    const needsReview =
+      (typeof r.needsReview === "boolean" ? r.needsReview :
+        (r.disposition !== "ROUTINE" || r.confidence === "LOW" || (r.rfTriggered?.length ?? 0) > 0));
+    if (needsReview) agg[c].review++;
+
+    const topDx = String(r.top_dx ?? r.topDx ?? "");
+    if (!topDx || topDx.toUpperCase().includes("UNCLASS")) agg[c].unclassified++;
+  }
+
+  const rows = Object.entries(agg).map(([complaint, m]) => {
+    const t = overrides.get(complaint) ?? defaults;
+    const emergRate = m.total ? m.emerg / m.total : 0;
+    const reviewRate = m.total ? m.review / m.total : 0;
+    const unclassRate = m.total ? m.unclassified / m.total : 0;
+
+    return {
+      complaint,
+      total: m.total,
+      emergRate,
+      reviewRate,
+      unclassRate,
+      targetEmerg: t.emerg,
+      targetReview: t.review,
+      maxUnclass: t.unclassified,
+      deltaEmerg: emergRate - t.emerg,
+      deltaReview: reviewRate - t.review,
+      deltaUnclass: unclassRate - t.unclassified,
+      notes: t.notes,
+    };
+  });
+
+  // Sort by biggest absolute delta emerg+review+unclass
+  rows.sort((a, b) => {
+    const sa = Math.abs(a.deltaEmerg) + Math.abs(a.deltaReview) + Math.abs(a.deltaUnclass);
+    const sb = Math.abs(b.deltaEmerg) + Math.abs(b.deltaReview) + Math.abs(b.deltaUnclass);
+    return sb - sa;
+  });
+
+  const report = {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      complaints: rows.length,
+      N: results.length
+    },
+    topDeltas: rows.slice(0, 20),
+    all: rows
+  };
+
+  fs.writeFileSync(OUT_PATH, JSON.stringify(report, null, 2));
+  console.log(`Wrote ${OUT_PATH}`);
+  console.log("Top calibration deltas:");
+  for (const r of rows.slice(0, 10)) {
+    console.log(
+      `${r.complaint} N=${r.total} emerg=${r.emergRate.toFixed(2)}(t${r.targetEmerg}) review=${r.reviewRate.toFixed(2)}(t${r.targetReview}) unclass=${r.unclassRate.toFixed(3)}(max${r.maxUnclass})`
+    );
+  }
+}
+
+main();
+3) Add scripts to package.json
+{
+  "scripts": {
+    "calibration:report": "tsx scripts/calibration-report.ts"
+  }
+}
+4) Add calibration step to gate-prod (non-blocking initially)
+
+In scripts/gate-prod.ts, after stress, add:
+
+run report and include it in artifacts
+
+don’t fail gate-prod yet unless you want strict gating
+
+Example step:
+
+report.steps.push(runStep("calibration_report", "npm run calibration:report"));
+
+Later, we can enforce thresholds.
+
+How you run B3
+
+Run stress:
+
+N=500 HARNESS_MODE=1 npx tsx scripts/simulate-stress.ts
+
+Run calibration report:
+
+npm run calibration:report
+
+Then open:
+
+artifacts/calibration_report.json
+
+Next: B4 subtype expansion
+
+After B3 is in place, B4 becomes much easier because you can measure the impact of subtype expansions on emerg/review rates.
+
+If you say “Proceed B4”, I’ll propose 3–5 subtype upgrades and generate the CSV + goldens for the first set.
+
+Proced B4
+
+Cool — B4 subtype expansion time. We’ll do it the same disciplined way you’ve used everywhere:
+
+add a small number of questions
+
+add new subclusters / scoring rows
+
+add 10–13 hard goldens per new subtype
+
+run gate:prod
+
+B4 Plan: 5 high-yield subtype upgrades (in order)
+
+cardio_chest_pain: ACS vs PE vs pleurisy vs GERD/MSK nuance
+
+pulm_cough: post-nasal drip vs GERD vs asthma/COPD vs pneumonia nuance
+
+neuro_headache: migraine vs tension vs GCA vs meningitis vs SAH nuance
+
+gi_abdominal_pain: appendicitis/chole/divert/obstruction vs gastritis nuance
+
+derm_rash: SJS/TEN vs viral vs drug vs vasculitic vs meningococcemia nuance (you already started)
+
+Below is Upgrade #1 (CARDIO chest pain) as a complete bundle. Once it’s green, we repeat for #2, #3, #4, #5.
+
+B4-1 CARDIO Chest Pain Subtypes
+A) Add questions to CORE_QUESTIONS.csv (cardio_chest_pain)
+Complaint_Slug,Question_ID,Question_Text,Type
+cardio_chest_pain,reproducible,Reproducible with pressing on chest wall?,boolean
+cardio_chest_pain,position,Better or worse with position changes (leaning forward / lying flat)?,boolean
+cardio_chest_pain,heartburn,Burning sensation/acid reflux taste or worse after meals?,boolean
+cardio_chest_pain,recent_viral,Recent viral illness with sharp pain worse lying down?,boolean
+cardio_chest_pain,leg_swelling_unilateral,Unilateral leg swelling?,boolean
+cardio_chest_pain,estrogen,Estrogen/OCP use?,boolean
+cardio_chest_pain,prior_vte,Prior DVT/PE?,boolean
+cardio_chest_pain,recent_surgery,Recent surgery/immobilization?,boolean
+
+(These are optional, not required.)
+
+B) Add new Dx_IDs in your cluster scoring rules
+
+New subclusters (Dx_ID):
+
+gerd
+
+msk_costochondritis
+
+pericarditis
+
+pe (already exists in some systems, but keep local dx_id if your complaint uses local IDs)
+
+Append to CLUSTER_SCORING_RULES.csv under cardio_chest_pain
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+cardio_chest_pain,msk_costochondritis,MSK_1,"reproducible=true",3
+cardio_chest_pain,msk_costochondritis,MSK_2,"pressure=false AND pleuritic=false AND exert=false",1
+cardio_chest_pain,msk_costochondritis,MSK_NEG_1,"radiate=true OR sweat=true",-3
+
+cardio_chest_pain,gerd,GERD_1,"heartburn=true",3
+cardio_chest_pain,gerd,GERD_2,"pressure=false AND exert=false",1
+cardio_chest_pain,gerd,GERD_NEG_1,"radiate=true OR sweat=true",-3
+
+cardio_chest_pain,pericarditis,PERI_1,"pleuritic=true AND position=true",3
+cardio_chest_pain,pericarditis,PERI_2,"recent_viral=true",2
+cardio_chest_pain,pericarditis,PERI_NEG_1,"exert=true AND pressure=true",-3
+
+cardio_chest_pain,pe,PE_1,"pleuritic=true",2
+cardio_chest_pain,pe,PE_2,"sob=true",2
+cardio_chest_pain,pe,PE_3,"leg_swelling_unilateral=true",2
+cardio_chest_pain,pe,PE_4,"prior_vte=true OR recent_surgery=true OR estrogen=true",2
+cardio_chest_pain,pe,PE_NEG_1,"pressure=true AND exert=true",-3
+
+Keep your existing ACS scoring rules; these additions mainly prevent pleurisy from eating everything and allow better subtype separation.
+
+C) DX_PRIORITY tie protection (optional but recommended)
+
+Add to DX_PRIORITY.csv (cardio_chest_pain only):
+
+Complaint_Slug,Dx_ID,Priority
+cardio_chest_pain,acs,100
+cardio_chest_pain,pe,90
+cardio_chest_pain,pericarditis,80
+cardio_chest_pain,msk_costochondritis,60
+cardio_chest_pain,gerd,55
+cardio_chest_pain,pleurisy,50
+D) Update output templates (optional, but nice)
+
+Add to OUTPUT_TEMPLATES.csv:
+
+Complaint_Slug,Template_ID,Type,Text
+cardio_chest_pain,TPL_CARDIO_CHESTPAIN_SUBTYPES_V1,summary,"Chest pain subtyped across ACS, PE, pericarditis, GERD, and costochondritis features. Disposition remains driven by red flags and risk patterns."
+E) Add 13 hard goldens (strict) for subtype separation
+
+Add to your hard goldens file for cardio_chest_pain:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+cardio_chest_pain,CP_SUB1,"{""pressure"":true,""exert"":true,""sob"":false,""sweat"":true,""pleuritic"":false,""radiate"":true,""risk"":false,""tearing"":false,""reproducible"":false,""heartburn"":false}",EMERG,acs
+cardio_chest_pain,CP_SUB2,"{""pressure"":false,""exert"":false,""sob"":true,""sweat"":false,""pleuritic"":true,""radiate"":false,""risk"":true,""tearing"":false,""leg_swelling_unilateral"":true}",EMERG,pe
+cardio_chest_pain,CP_SUB3,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":true,""position"":true,""recent_viral"":true,""radiate"":false}",URGENT,pericarditis
+cardio_chest_pain,CP_SUB4,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":false,""reproducible"":true,""radiate"":false}",URGENT,msk_costochondritis
+cardio_chest_pain,CP_SUB5,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":false,""heartburn"":true,""radiate"":false}",URGENT,gerd
+cardio_chest_pain,CP_SUB6,"{""pressure"":true,""exert"":false,""sob"":true,""sweat"":false,""pleuritic"":true,""radiate"":true,""risk"":true,""leg_swelling_unilateral"":true}",EMERG,pe
+cardio_chest_pain,CP_SUB7,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":true,""position"":true,""recent_viral"":false,""radiate"":false}",URGENT,pericarditis
+cardio_chest_pain,CP_SUB8,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":false,""reproducible"":true,""heartburn"":true,""radiate"":false}",URGENT,msk_costochondritis
+cardio_chest_pain,CP_SUB9,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":false,""heartburn"":true,""reproducible"":false,""radiate"":false}",URGENT,gerd
+cardio_chest_pain,CP_SUB10,"{""pressure"":false,""exert"":false,""sob"":true,""sweat"":false,""pleuritic"":true,""radiate"":false,""prior_vte"":true,""recent_surgery"":false,""estrogen"":false}",EMERG,pe
+cardio_chest_pain,CP_SUB11,"{""pressure"":true,""exert"":true,""sob"":true,""sweat"":true,""pleuritic"":false,""radiate"":false}",EMERG,acs
+cardio_chest_pain,CP_SUB12,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":true,""position"":true,""recent_viral"":true,""reproducible"":false}",URGENT,pericarditis
+cardio_chest_pain,CP_SUB13,"{""pressure"":false,""exert"":false,""sob"":false,""sweat"":false,""pleuritic"":false,""reproducible"":true,""radiate"":true}",URGENT,msk_costochondritis
+Run
+npm run ship:complaint -- cardio_chest_pain
+npm run gate:prod

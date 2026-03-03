@@ -110,7 +110,15 @@ function main() {
 
   report.steps.push(runStep("drift_audit", CMD_DRIFT));
 
-  const allOk = report.steps.every((s) => s.ok);
+  const CMD_CALIBRATION = process.env.GATE_CALIBRATION_CMD ?? "npx tsx scripts/calibration-report.ts";
+  const calibStep = runStep("calibration_report", CMD_CALIBRATION);
+  report.steps.push(calibStep);
+  if (!calibStep.ok) {
+    console.log("  (calibration_report is non-blocking — gate continues)");
+  }
+
+  const blockingSteps = report.steps.filter(s => s.name !== "calibration_report");
+  const allOk = blockingSteps.every((s) => s.ok);
   report.ok = allOk;
   report.finishedAt = nowIso();
 

@@ -228,6 +228,13 @@ async function main() {
     topClusters: Object.fromEntries(sortedClusters),
     hotspots: hotspots.map(h => ({ complaint: h.cc, erSendPct: h.erPct, total: h.total })),
     errorDetails: errorCount,
+    results: results.map(r => ({
+      cc_id: r.cc_id,
+      disposition: r.disposition,
+      cluster: r.cluster,
+      rf_gate: r.rf_gate,
+      rf_fired: r.rf_fired,
+    })),
   };
 
   fs.writeFileSync(OUT, JSON.stringify(report, null, 2), "utf8");

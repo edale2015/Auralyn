@@ -79,16 +79,29 @@ Results stored in `CaseTriage.consistencyFlags[]` (type `ConsistencyFlag` in `se
 
 Tests: `npx tsx scripts/test-consistency.ts` (10 golden scenarios in `server/data/csv/CONSISTENCY_GOLDENS.jsonl`).
 
+### Calibration System (B3)
+Measures over/under-triage rates per complaint against configurable targets. Targets defined in `server/data/csv/CALIBRATION_TARGETS.csv` with global defaults (`*` row) and per-complaint overrides for high-risk complaints.
+
+Script: `scripts/calibration-report.ts` reads stress results, computes emerg/review/unclassified rates per complaint, compares against targets, and writes `artifacts/calibration_report.json`. Integrated as a non-blocking 6th gate-prod step.
+
+Tracked metrics: TargetEmergRate, TargetNeedsReviewRate, MaxUnclassifiedRate, MaxWinnerChurnRate.
+
+### Subtype Expansions (B4)
+Data-driven subtype upgrades that improve diagnostic granularity. Each upgrade adds optional questions, new cluster scoring rules, DX_PRIORITY tie-breaking, and hard golden tests.
+
+**B4-1 Cardio Chest Pain**: Added 8 optional questions (reproducible, positional, heartburn, recent viral, leg swelling, estrogen, prior VTE, recent surgery) and 4 new subclusters (CL_CCP_MSK expanded, CL_CCP_GERD, CL_CCP_PERICARDITIS, CL_CCP_PE expanded with VTE factors). 13 hard subtype goldens + 20 existing = 33 total chest pain tests passing.
+
 ### Validation and Testing
 The system includes several validation tools:
--   **Stress Test Harness**: For performance and stability testing.
+-   **Stress Test Harness**: For performance and stability testing. Outputs per-result data for calibration analysis.
 -   **Complaint Golden Test Harness**: For deterministic testing of complaint pipelines.
 -   **Data Corruption Guard**: Validates core configuration data (including SCORING_SYSTEMS.csv and CONSISTENCY_RULES.csv validation).
 -   **Replay Harness**: For reproducible debugging of stored cases.
 -   **Release Candidate (RC) System**: Ensures consistent agent behavior through automated regression testing across LLM variants.
--   **Gate-Prod Pipeline**: A comprehensive pre-deployment validation pipeline (5 steps: corruption → harness → consistency_goldens → stress → drift).
+-   **Gate-Prod Pipeline**: A comprehensive pre-deployment validation pipeline (6 steps: corruption → harness → consistency_goldens → stress → drift → calibration_report).
 -   **Scoring Systems Tests**: 9 golden scenarios validating all 5 scoring instruments (`scripts/test-scoring.ts`).
 -   **Consistency Tests**: 10 golden scenarios validating all consistency rules (`scripts/test-consistency.ts`).
+-   **Calibration Report**: Non-blocking gate step measuring triage rate alignment against targets (`scripts/calibration-report.ts`).
 
 ## External Dependencies
 
