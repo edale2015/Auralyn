@@ -56,8 +56,8 @@ A stress test harness at `POST /api/admin/stress-test` accepts an array of scena
 ### Data Corruption Guard
 `server/data/corruptionGuard.ts` validates core configuration data on every config load, checking for corruption, invalid formats, and inconsistencies, hard-failing to prevent silent rule poisoning.
 
-### Latest Status (as of Hard Golden Batch I)
-**Test Status:** 1238/1247 PASS across 71 directories (9 pre-existing cluster mismatches, 0 new regressions)
+### Latest Status (as of DX_PRIORITY + Micro-Pack Fix Session)
+**Test Status:** 1247/1247 PASS across 71 directories (0 failures)
 **Hard Golden Coverage:** 312 hard golden tests (13 per complaint × 24 complaints) across OPHTHO, ID, TOX, ORTHO_TRAUMA, DERM, MSK, ENDO, PSYCH
 **System Coverage:** 72 total complaint pipelines across 16 medical systems (66 GENERIC_V1, 6 LEGACY)
 **Pending:** RENAL (3 complaints) and HEMEONC (3 complaints) need full pipeline scaffolding before golden ingestion
@@ -99,7 +99,7 @@ Three automation scripts support the suppressor/boost rule development workflow:
 Key files: `phase2a_pairs_20.txt` (pair schedule), `micro_packs/*.csv` (per-complaint candidate rules), `data/micro_packs.csv` (auto-generated combined file).
 
 ### Suppressor/Boost Rule Status
-139 active suppressor/boost rules across 21 complaints in CLUSTER_SCORING_RULES.csv. 2 complaints still need adjusted rules (endo_hyperglycemia, msk_back_pain). Test status: 1238/1247 PASS with 9 pre-existing failures.
+147 active suppressor/boost rules across 25 complaints in CLUSTER_SCORING_RULES.csv. All complaints are resolved. Test status: 1247/1247 PASS with 0 failures. DX_PRIORITY tie-break covers 7 complaints (endo_hyperglycemia, msk_back_pain, derm_cellulitis, ent_epistaxis, gi_dysphagia, gu_urinary_retention). Micro-pack scoring rules cover gi_diarrhea (blood differentiator), gu_flank_pain (fever differentiator), neuro_dizziness_vertigo (neurodef differentiator), pulm_chest_tightness (wheeze differentiator).
 
 ### Deterministic Tie-Break System
 `server/data/csv/DX_PRIORITY.csv` provides optional priority-based tie-breaking for cluster scoring. When clusters have equal scores:
