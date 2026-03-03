@@ -16,6 +16,8 @@ import { registerAnalyticsRoutes } from "./routes/analytics.routes";
 import { registerRcRoutes } from "./routes/rc.routes";
 import { registerAdminRoutes } from "./routes/admin.routes";
 import complaintIntakeRoutes from "./routes/complaintIntake.routes";
+import { casesRouter } from "./routes/cases.routes";
+import { reviewRouter } from "./routes/review.routes";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -136,6 +138,11 @@ app.use(summaryRouter);
 
 app.use("/api/complaint-intake", complaintIntakeRoutes);
 console.log("[ComplaintIntake] Conversational intake endpoints registered at /api/complaint-intake/*");
+
+app.use(casesRouter);
+app.use(reviewRouter);
+console.log("[Cases] Case management endpoints registered at /api/cases/*");
+console.log("[Review] Physician review endpoints registered at /api/review/*");
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

@@ -12,6 +12,8 @@ import IntakeSummary from "@/pages/IntakeSummary";
 import StartVisit from "@/pages/StartVisit";
 import ProviderCaseView from "@/pages/ProviderCaseView";
 import TraceViewer from "@/pages/TraceViewer";
+import ReviewQueue from "@/pages/ReviewQueue";
+import CaseReview from "@/pages/CaseReview";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -26,6 +28,8 @@ function Router() {
       <Route path="/intake/:token/summary" component={IntakeSummary} />
       <Route path="/provider/case" component={ProviderCaseView} />
       <Route path="/provider/case/:caseId" component={ProviderCaseView} />
+      <Route path="/review" component={ReviewQueue} />
+      <Route path="/review/:caseId" component={CaseReview} />
       <Route path="/debug/traces" component={TraceViewer} />
       <Route component={NotFound} />
     </Switch>

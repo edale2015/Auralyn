@@ -1,0 +1,667 @@
+you can start anytime
+
+Alright. Here’s a Phase 4 code bundle you can copy/paste into Replit as files. It gives you:
+
+✅ Firestore-backed cases model + state machine
+✅ API routes: create case, add message, merge answers, run triage, review queue, physician review
+✅ Minimal React UI: Review Queue + Case Detail (with approve/modify/escalate/reject)
+✅ Uses your existing engine (you just wire one function call)
+
+No extra planning needed.
+
+0) Environment variables
+
+Add to .env (or Replit Secrets):
+
+# Firestore Admin SDK (recommended as JSON string)
+FIREBASE_ADMIN_JSON='{"type":"service_account",...}'
+
+# Optional: show review UI without auth for now
+REVIEW_AUTH_MODE=off
+Server code
+1) server/firestoreAdmin.ts
+import admin from "firebase-admin";
+
+function initAdmin() {
+  if (admin.apps.length) return admin;
+
+  const raw = process.env.FIREBASE_ADMIN_JSON;
+  if (!raw) {
+    throw new Error("Missing FIREBASE_ADMIN_JSON. Add Firebase Admin service account JSON to env.");
+  }
+
+  const creds = JSON.parse(raw);
+  admin.initializeApp({
+    credential: admin.credential.cert(creds),
+  });
+
+  return admin;
+}
+
+export const firebaseAdmin = initAdmin();
+export const firestore = firebaseAdmin.firestore();
+export const FieldValue = firebaseAdmin.firestore.FieldValue;
+export type Timestamp = admin.firestore.Timestamp;
+2) server/models/caseTypes.ts
+export type CaseState =
+  | "DRAFT"
+  | "TRIAGED"
+  | "NEEDS_REVIEW"
+  | "APPROVED"
+  | "SENT"
+  | "CLOSED";
+
+export type ReviewStatus =
+  | "NONE"
+  | "APPROVED"
+  | "MODIFIED"
+  | "ESCALATED"
+  | "REJECTED";
+
+export type Disposition = "EMERG" | "URGENT" | "ROUTINE";
+
+export type Confidence = "HIGH" | "MODERATE" | "LOW";
+
+export type CaseMessage = {
+  ts: string; // ISO
+  dir: "in" | "out";
+  channel: "web" | "telegram" | "whatsapp";
+  text: string;
+  meta?: Record<string, unknown>;
+};
+
+export type ScoringItem = {
+  ruleId: string;
+  dxId: string;
+  points: number;
+};
+
+export type ScoringExplanation = {
+  topRules: ScoringItem[];
+  topSuppressors: ScoringItem[];
+  tieBreak: "score" | "priority" | "dx_id" | "none";
+  margin: number;
+};
+
+export type CaseTriage = {
+  disposition: Disposition;
+  topDx: string;
+  confidence: Confidence;
+  tieBreak: ScoringExplanation["tieBreak"];
+  margin: number;
+  rfTriggered: string[];
+  explanation: ScoringExplanation;
+  engineVersion: {
+    rulesetVersion: string; // e.g. git SHA or semver
+    dxPriorityVersion: string;
+  };
+};
+
+export type PhysicianReview = {
+  status: ReviewStatus;
+  reviewedAt: string | null;
+  reviewer: { id: string; name: string } | null;
+  notes: string;
+  finalDisposition: Disposition | null;
+  finalDx: string | null;
+};
+
+export type CaseDoc = {
+  caseId: string;
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+  state: CaseState;
+
+  source: {
+    channel: "web" | "telegram" | "whatsapp";
+    threadId?: string;
+    userId?: string;
+  };
+
+  complaint: {
+    slug: string;
+    display: string;
+    engine: "GENERIC_V1" | "LEGACY";
+  };
+
+  answers: {
+    structured: Record<string, unknown>;
+    answerHash: string;
+  };
+
+  triage: CaseTriage | null;
+
+  physicianReview: PhysicianReview;
+
+  messages: CaseMessage[];
+};
+3) server/services/hash.ts
+import crypto from "node:crypto";
+
+export function sha256Hex(input: string): string {
+  return crypto.createHash("sha256").update(input, "utf8").digest("hex");
+}
+
+export function stableJson(obj: unknown): string {
+  return JSON.stringify(obj, Object.keys(obj as any).sort());
+}
+4) server/services/caseService.ts
+import { firestore, FieldValue } from "../firestoreAdmin";
+import { CaseDoc, CaseMessage, CaseState, PhysicianReview } from "../models/caseTypes";
+import { sha256Hex } from "./hash";
+
+const CASES = firestore.collection("cases");
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function defaultReview(): PhysicianReview {
+  return {
+    status: "NONE",
+    reviewedAt: null,
+    reviewer: null,
+    notes: "",
+    finalDisposition: null,
+    finalDx: null,
+  };
+}
+
+export async function createCase(params: {
+  channel: CaseDoc["source"]["channel"];
+  threadId?: string;
+  userId?: string;
+  complaintSlug: string;
+  complaintDisplay: string;
+  engine: CaseDoc["complaint"]["engine"];
+}): Promise<CaseDoc> {
+  const caseId = `CASE_${nowIso().replace(/[-:.TZ]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
+
+  const createdAt = nowIso();
+  const doc: CaseDoc = {
+    caseId,
+    createdAt,
+    updatedAt: createdAt,
+    state: "DRAFT",
+    source: { channel: params.channel, threadId: params.threadId, userId: params.userId },
+    complaint: { slug: params.complaintSlug, display: params.complaintDisplay, engine: params.engine },
+    answers: { structured: {}, answerHash: sha256Hex("{}") },
+    triage: null,
+    physicianReview: defaultReview(),
+    messages: [],
+  };
+
+  await CASES.doc(caseId).set(doc);
+  return doc;
+}
+
+export async function getCase(caseId: string): Promise<CaseDoc | null> {
+  const snap = await CASES.doc(caseId).get();
+  if (!snap.exists) return null;
+  return snap.data() as CaseDoc;
+}
+
+export async function appendMessage(caseId: string, msg: CaseMessage): Promise<void> {
+  const updatedAt = nowIso();
+  await CASES.doc(caseId).update({
+    updatedAt,
+    messages: FieldValue.arrayUnion(msg),
+  });
+}
+
+export async function mergeAnswers(caseId: string, patch: Record<string, unknown>): Promise<CaseDoc> {
+  const doc = await getCase(caseId);
+  if (!doc) throw new Error("Case not found");
+
+  const merged = { ...(doc.answers?.structured ?? {}), ...patch };
+  const answerHash = sha256Hex(JSON.stringify(merged));
+
+  const updatedAt = nowIso();
+  await CASES.doc(caseId).update({
+    updatedAt,
+    "answers.structured": merged,
+    "answers.answerHash": answerHash,
+  });
+
+  const next = await getCase(caseId);
+  if (!next) throw new Error("Case not found after update");
+  return next;
+}
+
+export async function setState(caseId: string, state: CaseState): Promise<void> {
+  await CASES.doc(caseId).update({ updatedAt: nowIso(), state });
+}
+
+export async function setTriage(caseId: string, triage: CaseDoc["triage"], nextState: CaseState): Promise<void> {
+  await CASES.doc(caseId).update({
+    updatedAt: nowIso(),
+    triage,
+    state: nextState,
+  });
+}
+
+export async function setPhysicianReview(caseId: string, review: Partial<PhysicianReview>, nextState: CaseState): Promise<void> {
+  await CASES.doc(caseId).update({
+    updatedAt: nowIso(),
+    physicianReview: {
+      ...review,
+      reviewedAt: nowIso(),
+    },
+    state: nextState,
+  });
+}
+
+export async function listReviewQueue(params: {
+  state?: "NEEDS_REVIEW" | "TRIAGED";
+  limit?: number;
+}): Promise<CaseDoc[]> {
+  const limit = params.limit ?? 50;
+  const state = params.state ?? "NEEDS_REVIEW";
+
+  const q = CASES.where("state", "==", state).orderBy("updatedAt", "desc").limit(limit);
+  const snaps = await q.get();
+  return snaps.docs.map((d) => d.data() as CaseDoc);
+}
+5) server/services/triageService.ts
+
+Wire this to your real engine. Replace the placeholder runEngine() with your existing call (you already have scoringExplanation + confidence now).
+
+import { CaseTriage } from "../models/caseTypes";
+
+// ✅ Replace this import with your real engine entry point
+// Example: import { runComplaint } from "../engine/runComplaint";
+async function runEngine(input: {
+  complaintSlug: string;
+  answers: Record<string, unknown>;
+}): Promise<{
+  disposition: "EMERG" | "URGENT" | "ROUTINE";
+  topDx: string;
+  confidence: "HIGH" | "MODERATE" | "LOW";
+  rfTriggered: string[];
+  scoringExplanation: {
+    topRules: { ruleId: string; dxId: string; points: number }[];
+    topSuppressors: { ruleId: string; dxId: string; points: number }[];
+    tieBreak: "score" | "priority" | "dx_id" | "none";
+    margin: number;
+  };
+}> {
+  // Placeholder so code compiles; replace with real engine call.
+  return {
+    disposition: "URGENT",
+    topDx: "CL_UNSPECIFIED",
+    confidence: "LOW",
+    rfTriggered: [],
+    scoringExplanation: { topRules: [], topSuppressors: [], tieBreak: "none", margin: 0 },
+  };
+}
+
+export async function runTriage(params: {
+  complaintSlug: string;
+  answers: Record<string, unknown>;
+  rulesetVersion: string;
+  dxPriorityVersion: string;
+}): Promise<CaseTriage> {
+  const r = await runEngine({ complaintSlug: params.complaintSlug, answers: params.answers });
+
+  return {
+    disposition: r.disposition,
+    topDx: r.topDx,
+    confidence: r.confidence,
+    tieBreak: r.scoringExplanation.tieBreak,
+    margin: r.scoringExplanation.margin,
+    rfTriggered: r.rfTriggered ?? [],
+    explanation: {
+      topRules: r.scoringExplanation.topRules ?? [],
+      topSuppressors: r.scoringExplanation.topSuppressors ?? [],
+      tieBreak: r.scoringExplanation.tieBreak,
+      margin: r.scoringExplanation.margin,
+    },
+    engineVersion: {
+      rulesetVersion: params.rulesetVersion,
+      dxPriorityVersion: params.dxPriorityVersion,
+    },
+  };
+}
+6) server/middleware/reviewAuth.ts
+
+Simple “off/on” auth gate placeholder.
+
+import { Request, Response, NextFunction } from "express";
+
+export function requireReviewAuth(req: Request, res: Response, next: NextFunction) {
+  if (process.env.REVIEW_AUTH_MODE === "off") return next();
+
+  // Placeholder: replace with real auth (JWT/session)
+  const token = req.headers["x-review-token"];
+  if (!token) return res.status(401).json({ error: "missing review token" });
+  return next();
+}
+7) server/routes/cases.ts
+import { Router } from "express";
+import {
+  appendMessage,
+  createCase,
+  getCase,
+  mergeAnswers,
+  setState,
+  setTriage,
+} from "../services/caseService";
+import { runTriage } from "../services/triageService";
+
+export const casesRouter = Router();
+
+casesRouter.post("/", async (req, res) => {
+  const { channel, threadId, userId, complaintSlug, complaintDisplay, engine } = req.body ?? {};
+  if (!channel || !complaintSlug) return res.status(400).json({ error: "missing channel/complaintSlug" });
+
+  const doc = await createCase({
+    channel,
+    threadId,
+    userId,
+    complaintSlug,
+    complaintDisplay: complaintDisplay ?? complaintSlug,
+    engine: engine ?? "GENERIC_V1",
+  });
+
+  res.json(doc);
+});
+
+casesRouter.get("/:caseId", async (req, res) => {
+  const doc = await getCase(req.params.caseId);
+  if (!doc) return res.status(404).json({ error: "not found" });
+  res.json(doc);
+});
+
+casesRouter.post("/:caseId/message", async (req, res) => {
+  const { dir, channel, text, meta } = req.body ?? {};
+  if (!dir || !channel || !text) return res.status(400).json({ error: "missing message fields" });
+
+  await appendMessage(req.params.caseId, {
+    ts: new Date().toISOString(),
+    dir,
+    channel,
+    text,
+    meta: meta ?? {},
+  });
+
+  res.json({ ok: true });
+});
+
+casesRouter.post("/:caseId/answers", async (req, res) => {
+  const patch = req.body ?? {};
+  const updated = await mergeAnswers(req.params.caseId, patch);
+  res.json(updated);
+});
+
+casesRouter.post("/:caseId/triage", async (req, res) => {
+  const doc = await getCase(req.params.caseId);
+  if (!doc) return res.status(404).json({ error: "not found" });
+
+  // run engine
+  const triage = await runTriage({
+    complaintSlug: doc.complaint.slug,
+    answers: doc.answers.structured ?? {},
+    rulesetVersion: req.body?.rulesetVersion ?? "local",
+    dxPriorityVersion: req.body?.dxPriorityVersion ?? "local",
+  });
+
+  // decide if review needed
+  const needsReview =
+    triage.disposition !== "ROUTINE" ||
+    triage.confidence === "LOW" ||
+    (triage.rfTriggered?.length ?? 0) > 0;
+
+  await setTriage(req.params.caseId, triage, needsReview ? "NEEDS_REVIEW" : "TRIAGED");
+
+  res.json({ ok: true, triage, nextState: needsReview ? "NEEDS_REVIEW" : "TRIAGED" });
+});
+
+casesRouter.post("/:caseId/state", async (req, res) => {
+  const { state } = req.body ?? {};
+  if (!state) return res.status(400).json({ error: "missing state" });
+  await setState(req.params.caseId, state);
+  res.json({ ok: true });
+});
+8) server/routes/review.ts
+import { Router } from "express";
+import { requireReviewAuth } from "../middleware/reviewAuth";
+import { getCase, listReviewQueue, setPhysicianReview } from "../services/caseService";
+
+export const reviewRouter = Router();
+
+reviewRouter.use(requireReviewAuth);
+
+reviewRouter.get("/queue", async (req, res) => {
+  const state = (req.query.state as any) ?? "NEEDS_REVIEW";
+  const limit = req.query.limit ? Number(req.query.limit) : 50;
+  const cases = await listReviewQueue({ state, limit });
+  res.json(cases);
+});
+
+reviewRouter.get("/case/:caseId", async (req, res) => {
+  const doc = await getCase(req.params.caseId);
+  if (!doc) return res.status(404).json({ error: "not found" });
+  res.json(doc);
+});
+
+reviewRouter.post("/case/:caseId", async (req, res) => {
+  const { status, notes, finalDisposition, finalDx, reviewer } = req.body ?? {};
+  if (!status) return res.status(400).json({ error: "missing status" });
+
+  const nextState =
+    status === "APPROVED" || status === "MODIFIED" ? "APPROVED" :
+    status === "ESCALATED" ? "NEEDS_REVIEW" :
+    status === "REJECTED" ? "NEEDS_REVIEW" :
+    "NEEDS_REVIEW";
+
+  await setPhysicianReview(req.params.caseId, {
+    status,
+    notes: notes ?? "",
+    finalDisposition: finalDisposition ?? null,
+    finalDx: finalDx ?? null,
+    reviewer: reviewer ?? { id: "phys1", name: "Physician" },
+  }, nextState);
+
+  res.json({ ok: true, nextState });
+});
+9) server/routes/index.ts
+import { Router } from "express";
+import { casesRouter } from "./cases";
+import { reviewRouter } from "./review";
+
+export const apiRouter = Router();
+
+apiRouter.use("/cases", casesRouter);
+apiRouter.use("/review", reviewRouter);
+
+Then in your main server file (where you register routes), add:
+
+import { apiRouter } from "./routes/index";
+app.use("/api", apiRouter);
+Client code (React)
+10) client/src/api.ts
+export type CaseDoc = any;
+
+async function j<T>(url: string, opts?: RequestInit): Promise<T> {
+  const r = await fetch(url, {
+    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
+    ...opts,
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export const api = {
+  reviewQueue: (state = "NEEDS_REVIEW") => j<CaseDoc[]>(`/api/review/queue?state=${state}`),
+  getCase: (caseId: string) => j<CaseDoc>(`/api/review/case/${caseId}`),
+  reviewCase: (caseId: string, body: any) =>
+    j(`/api/review/case/${caseId}`, { method: "POST", body: JSON.stringify(body) }),
+};
+11) client/src/pages/ReviewQueue.tsx
+import React from "react";
+import { api } from "../api";
+
+export default function ReviewQueue() {
+  const [state, setState] = React.useState("NEEDS_REVIEW");
+  const [items, setItems] = React.useState<any[]>([]);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    api.reviewQueue(state).then(setItems).catch((e) => setErr(String(e)));
+  }, [state]);
+
+  return (
+    <div style={{ padding: 16, fontFamily: "system-ui" }}>
+      <h2>Physician Review Queue</h2>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <select value={state} onChange={(e) => setState(e.target.value)}>
+          <option value="NEEDS_REVIEW">NEEDS_REVIEW</option>
+          <option value="TRIAGED">TRIAGED</option>
+        </select>
+      </div>
+
+      {err && <div style={{ color: "crimson" }}>{err}</div>}
+
+      <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
+            <th>Case</th>
+            <th>Complaint</th>
+            <th>Disposition</th>
+            <th>Confidence</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((c) => (
+            <tr key={c.caseId} style={{ borderBottom: "1px solid #f0f0f0" }}>
+              <td>
+                <a href={`/review/${c.caseId}`}>{c.caseId}</a>
+              </td>
+              <td>{c.complaint?.display ?? c.complaint?.slug}</td>
+              <td>{c.triage?.disposition ?? "-"}</td>
+              <td>{c.triage?.confidence ?? "-"}</td>
+              <td>{c.updatedAt}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+12) client/src/pages/CaseDetail.tsx
+import React from "react";
+import { api } from "../api";
+
+export default function CaseDetail({ caseId }: { caseId: string }) {
+  const [c, setC] = React.useState<any | null>(null);
+  const [notes, setNotes] = React.useState("");
+  const [err, setErr] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    api.getCase(caseId).then((doc) => {
+      setC(doc);
+      setNotes(doc?.physicianReview?.notes ?? "");
+    }).catch((e) => setErr(String(e)));
+  }, [caseId]);
+
+  async function submit(status: string) {
+    setErr(null);
+    try {
+      await api.reviewCase(caseId, {
+        status,
+        notes,
+        finalDisposition: c?.triage?.disposition ?? null,
+        finalDx: c?.triage?.topDx ?? null,
+        reviewer: { id: "phys1", name: "Physician" },
+      });
+      const updated = await api.getCase(caseId);
+      setC(updated);
+    } catch (e: any) {
+      setErr(String(e));
+    }
+  }
+
+  if (!c) return <div style={{ padding: 16 }}>Loading...</div>;
+
+  return (
+    <div style={{ padding: 16, fontFamily: "system-ui" }}>
+      <a href="/">← Back</a>
+      <h2>{c.caseId}</h2>
+
+      <div style={{ marginBottom: 12 }}>
+        <b>Complaint:</b> {c.complaint?.display ?? c.complaint?.slug} <br />
+        <b>State:</b> {c.state} <br />
+        <b>Disposition:</b> {c.triage?.disposition ?? "-"} <br />
+        <b>Top Dx:</b> {c.triage?.topDx ?? "-"} <br />
+        <b>Confidence:</b> {c.triage?.confidence ?? "-"} <br />
+        <b>TieBreak:</b> {c.triage?.tieBreak ?? "-"} (margin {c.triage?.margin ?? "-"}) <br />
+      </div>
+
+      <h3>Answers</h3>
+      <pre style={{ background: "#fafafa", padding: 12, border: "1px solid #eee" }}>
+        {JSON.stringify(c.answers?.structured ?? {}, null, 2)}
+      </pre>
+
+      <h3>Scoring Explanation</h3>
+      <pre style={{ background: "#fafafa", padding: 12, border: "1px solid #eee" }}>
+        {JSON.stringify(c.triage?.explanation ?? {}, null, 2)}
+      </pre>
+
+      <h3>Physician Review</h3>
+      {err && <div style={{ color: "crimson" }}>{err}</div>}
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        rows={6}
+        style={{ width: "100%", marginBottom: 8 }}
+        placeholder="Physician notes..."
+      />
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => submit("APPROVED")}>Approve</button>
+        <button onClick={() => submit("MODIFIED")}>Modify</button>
+        <button onClick={() => submit("ESCALATED")}>Escalate</button>
+        <button onClick={() => submit("REJECTED")}>Reject</button>
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <b>Review status:</b> {c.physicianReview?.status}
+      </div>
+    </div>
+  );
+}
+13) Wire routes in your React router
+
+If you use React Router:
+
+// client/src/App.tsx
+import React from "react";
+import { BrowserRouter, Routes, Route, useParams } from "react-router-dom";
+import ReviewQueue from "./pages/ReviewQueue";
+import CaseDetail from "./pages/CaseDetail";
+
+function CaseDetailRoute() {
+  const { caseId } = useParams();
+  return <CaseDetail caseId={caseId!} />;
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<ReviewQueue />} />
+        <Route path="/review/:caseId" element={<CaseDetailRoute />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+Next steps to make it “real”
+
+Wire triageService.runEngine() to your actual engine call (you already have it).
+
+Add channel adapters (WhatsApp/Telegram) to create a case + append inbound message + merge answers + triage.
+
+Add auth to /api/review/*.
+
+If you paste the name of your engine entry function (the one returning disposition/topDx/confidence/explanation), I’ll give you the exact 3-line replacement for runEngine() so it’s plugged in immediately.

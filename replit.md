@@ -126,6 +126,24 @@ Stored on `CaseState.scoringExplanation` for audit trail.
 ### Release Candidate (RC) System
 The RC system ensures consistent agent behavior through automated regression testing. It executes golden scenarios across LLM variants, generating reports with pass/fail summaries, diffs, latency, and token usage. A replay mode allows testing changes against existing traces, and PHI-safe replay packs enable secure QA.
 
+### Phase 4: Case Management & Physician Review (Firestore-backed)
+Firestore-backed case lifecycle with state machine (DRAFT → TRIAGED → NEEDS_REVIEW → APPROVED → SENT → CLOSED).
+
+**Server files:**
+- `server/models/caseTypes.ts`: CaseDoc, CaseTriage, PhysicianReview, ScoringExplanation types
+- `server/services/caseService.ts`: Firestore CRUD (create, get, merge answers, set triage, physician review, list queue)
+- `server/services/triageService.ts`: Wires `runGenericComplaintV1` engine to case triage — builds minimal CaseState, runs engine, maps results
+- `server/services/hash.ts`: SHA-256 answer hashing for deduplication
+- `server/middleware/reviewAuth.ts`: Placeholder auth gate (REVIEW_AUTH_MODE=off bypasses)
+- `server/routes/cases.routes.ts`: POST /api/cases, GET /api/cases/:id, POST answers/message/triage/state
+- `server/routes/review.routes.ts`: GET /api/review/queue, GET/POST /api/review/case/:id
+
+**Frontend pages:**
+- `/review` → `ReviewQueue.tsx`: Physician review queue with state filter, auto-refresh
+- `/review/:caseId` → `CaseReview.tsx`: Case detail with answers, scoring explanation, approve/modify/escalate/reject actions
+
+**Environment:** `REVIEW_AUTH_MODE=off` disables auth for development.
+
 ## External Dependencies
 
 -   **AI Integration**: OpenAI API (via Replit AI Integrations).
