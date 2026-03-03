@@ -103,6 +103,9 @@ function main() {
 
   report.steps.push(runStep("harness", CMD_HARNESS));
 
+  const CMD_CONSISTENCY = process.env.GATE_CONSISTENCY_CMD ?? "npx tsx scripts/test-consistency.ts";
+  report.steps.push(runStep("consistency_goldens", CMD_CONSISTENCY));
+
   report.steps.push(runStep("stress_smoke", CMD_STRESS));
 
   report.steps.push(runStep("drift_audit", CMD_DRIFT));

@@ -95,10 +95,12 @@ casesRouter.post("/api/cases/:caseId/triage", async (req, res) => {
       dxPriorityVersion: req.body?.dxPriorityVersion ?? "local",
     });
 
+    const consistencyFlags = triage.consistencyFlags ?? [];
     const needsReview =
       triage.disposition === "er_send" ||
       triage.confidence === "LOW" ||
-      (triage.rfTriggered?.length ?? 0) > 0;
+      (triage.rfTriggered?.length ?? 0) > 0 ||
+      consistencyFlags.some(f => f.action === "NEEDS_REVIEW" || f.action === "FORCE_EMERG");
 
     await setTriage(
       req.params.caseId,

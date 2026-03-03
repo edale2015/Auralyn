@@ -122,7 +122,28 @@ function main() {
     }
   }
 
-  console.log(`\nTables checked: COMPLAINT_REGISTRY (${registry.rows.length}), CORE_QUESTIONS (${coreQ.rows.length}), RED_FLAG_RULES (${rfRules.rows.length}), DISPOSITION_RULES (${dispRules.rows.length}), CLUSTER_SCORING_RULES (${cluster.rows.length}), OUTPUT_TEMPLATES (${templates.rows.length}), DX_PRIORITY (${dxPriority.rows.length}), SCORING_SYSTEMS (${scoringSystems.rows.length})`);
+  const consistencyRules = loadCsv("CONSISTENCY_RULES.csv");
+  if (consistencyRules.rows.length > 0) {
+    const seenRuleIds = new Set<string>();
+    const validActions = new Set(["FLAG_ONLY", "NEEDS_REVIEW", "FORCE_EMERG"]);
+    const validSeverities = new Set(["LOW", "MODERATE", "HIGH"]);
+    for (const r of consistencyRules.rows) {
+      check("CONSISTENCY_RULES", !!r.Rule_ID, `Missing Rule_ID`);
+      check("CONSISTENCY_RULES", !seenRuleIds.has(r.Rule_ID ?? ""), `Duplicate Rule_ID: ${r.Rule_ID}`);
+      seenRuleIds.add(r.Rule_ID ?? "");
+      const applies = r.Applies_To ?? "";
+      check("CONSISTENCY_RULES", applies === "*" || CC_ID_PATTERN.test(applies), `Invalid Applies_To format: "${applies}" for ${r.Rule_ID}`);
+      if (applies !== "*" && applies) {
+        check("CONSISTENCY_RULES", knownCcIds.has(applies), `Applies_To "${applies}" not found in COMPLAINT_REGISTRY for ${r.Rule_ID}`);
+      }
+      check("CONSISTENCY_RULES", !!r.Logic, `Missing Logic for ${r.Rule_ID}`);
+      check("CONSISTENCY_RULES", validActions.has(r.Action ?? ""), `Invalid Action "${r.Action}" for ${r.Rule_ID}`);
+      check("CONSISTENCY_RULES", validSeverities.has(r.Severity ?? ""), `Invalid Severity "${r.Severity}" for ${r.Rule_ID}`);
+      check("CONSISTENCY_RULES", !!r.Message, `Missing Message for ${r.Rule_ID}`);
+    }
+  }
+
+  console.log(`\nTables checked: COMPLAINT_REGISTRY (${registry.rows.length}), CORE_QUESTIONS (${coreQ.rows.length}), RED_FLAG_RULES (${rfRules.rows.length}), DISPOSITION_RULES (${dispRules.rows.length}), CLUSTER_SCORING_RULES (${cluster.rows.length}), OUTPUT_TEMPLATES (${templates.rows.length}), DX_PRIORITY (${dxPriority.rows.length}), SCORING_SYSTEMS (${scoringSystems.rows.length}), CONSISTENCY_RULES (${consistencyRules.rows.length})`);
 
   if (errors > 0) {
     console.error(`\nCorruption guard FAIL: ${errors} errors`);

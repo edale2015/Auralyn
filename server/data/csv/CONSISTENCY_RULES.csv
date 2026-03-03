@@ -1,0 +1,12 @@
+Rule_ID,Applies_To,Logic,Action,Severity,Message
+CR_ANAPHYLAXIS_SIGNS,derm_allergic_reaction,"lip_tongue=true",FORCE_EMERG,HIGH,"Lip/tongue swelling suggests possible anaphylaxis — requires emergency evaluation"
+CR_GI_BLEED_UNSTABLE,gi_gi_bleeding,"heavy=true",FORCE_EMERG,HIGH,"Heavy GI bleeding suggests hemodynamic instability — requires emergency evaluation"
+CR_SYNCOPE_MEDICAL,psych_anxiety_panic,"syncope=true",NEEDS_REVIEW,HIGH,"Syncope in psychiatric presentation requires medical workup to rule out cardiac/neuro causes"
+CR_CP_SOB_COMBO,pulm_shortness_of_breath,"cp=true && sob=true",NEEDS_REVIEW,HIGH,"Chest pain + SOB combination raises concern for PE/ACS — needs physician review"
+CR_PREG_BLEED_PAIN,gu_pelvic_pain_possible_ovarian_torsion,"preg=true && bleed=true && pain=true",FORCE_EMERG,HIGH,"Pregnant with bleeding and pain — ectopic pregnancy must be ruled out emergently"
+CR_INFECTION_IMMUNO,id_fever,"immuno=true && fever=true",NEEDS_REVIEW,HIGH,"Immunocompromised patient with fever — high risk for sepsis, needs urgent review"
+CR_SEPSIS_AMS,neuro_confusion_ams,"confusion=true && fever=true",FORCE_EMERG,HIGH,"Confusion + fever suggests possible meningitis/sepsis — requires emergency evaluation"
+CR_CO_EXPOSURE_CONFUSION,*,"enclosed=true && confusion=true",FORCE_EMERG,HIGH,"Enclosed space exposure with confusion suggests CO poisoning — requires emergency evaluation"
+CR_TORSION_TESTIS,gu_testicular_pain,"sudden=true && nausea=true",FORCE_EMERG,HIGH,"Sudden testicular pain with nausea — torsion must be ruled out within 6 hours"
+CR_LOW_CONFIDENCE,*,"confidence=LOW",NEEDS_REVIEW,MODERATE,"Low triage confidence — physician review recommended"
+CR_TIE_MARGIN_0,*,"margin=0",FLAG_ONLY,LOW,"Scoring tie (margin=0) — multiple diagnoses equally likely"

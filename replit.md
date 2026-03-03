@@ -46,15 +46,28 @@ Scoring questions use `REQUIRED=FALSE` in CORE_QUESTIONS.csv (category `scoring`
 
 Tests: `npx tsx scripts/test-scoring.ts` (9 golden scenarios).
 
+### Consistency Engine (B2)
+A safety-net layer that catches dangerous symptom combinations the main triage might miss. Rules defined in `server/data/csv/CONSISTENCY_RULES.csv` with 11 rules covering anaphylaxis, GI bleed, syncope, chest pain+SOB, ectopic pregnancy, immunocompromised fever, sepsis/AMS, CO poisoning, testicular torsion, low confidence, and scoring ties.
+
+Engine: `server/engines/consistencyEngine.ts` → `computeConsistencyFlags()`. Wired into `server/services/triageService.ts` after triage completes. Actions:
+- **FORCE_EMERG**: Overrides disposition to `er_send`
+- **NEEDS_REVIEW**: Forces case to `NEEDS_REVIEW` state for physician review
+- **FLAG_ONLY**: Advisory flag, no automatic action
+
+Results stored in `CaseTriage.consistencyFlags[]` (type `ConsistencyFlag` in `server/models/caseTypes.ts`). The triage route (`cases.routes.ts`) considers consistency flags in the `needsReview` decision.
+
+Tests: `npx tsx scripts/test-consistency.ts` (10 golden scenarios in `server/data/csv/CONSISTENCY_GOLDENS.jsonl`).
+
 ### Validation and Testing
 The system includes several validation tools:
 -   **Stress Test Harness**: For performance and stability testing.
 -   **Complaint Golden Test Harness**: For deterministic testing of complaint pipelines.
--   **Data Corruption Guard**: Validates core configuration data (including SCORING_SYSTEMS.csv validation).
+-   **Data Corruption Guard**: Validates core configuration data (including SCORING_SYSTEMS.csv and CONSISTENCY_RULES.csv validation).
 -   **Replay Harness**: For reproducible debugging of stored cases.
 -   **Release Candidate (RC) System**: Ensures consistent agent behavior through automated regression testing across LLM variants.
--   **Gate-Prod Pipeline**: A comprehensive pre-deployment validation pipeline including corruption checks, harness execution, stress smoke tests, and drift audits.
+-   **Gate-Prod Pipeline**: A comprehensive pre-deployment validation pipeline (5 steps: corruption → harness → consistency_goldens → stress → drift).
 -   **Scoring Systems Tests**: 9 golden scenarios validating all 5 scoring instruments (`scripts/test-scoring.ts`).
+-   **Consistency Tests**: 10 golden scenarios validating all consistency rules (`scripts/test-consistency.ts`).
 
 ## External Dependencies
 

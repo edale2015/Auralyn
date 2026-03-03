@@ -1,0 +1,177 @@
+1) Hook patch
+A) Add types: server/models/caseTypes.ts
+
+Add this type (or equivalent) near your other types:
+
+export type ConsistencyAction = "FLAG_ONLY" | "NEEDS_REVIEW" | "FORCE_EMERG";
+export type ConsistencySeverity = "LOW" | "MODERATE" | "HIGH";
+
+export type ConsistencyFlag = {
+  ruleId: string;
+  action: ConsistencyAction;
+  severity: ConsistencySeverity;
+  message: string;
+};
+
+Then add to CaseTriage or CaseDoc (recommended: CaseState / triage output layer):
+
+// inside CaseTriage (or alongside triage on CaseState)
+consistencyFlags?: ConsistencyFlag[];
+
+If you store explanation on CaseState.scoringExplanation, keep consistency flags adjacent:
+
+CaseState.consistencyFlags
+
+B) Hook into the pipeline
+Option 1 (recommended): hook in server/services/triageService.ts
+
+After you call runGenericComplaintV1, compute flags and adjust triage/state.
+
+Add imports:
+
+import { loadConsistencyRules, computeConsistencyFlags } from "../engines/consistencyEngine";
+
+Add a module-level cache (loads once):
+
+const CONSISTENCY_RULES = loadConsistencyRules("server/data/csv/CONSISTENCY_RULES.csv");
+
+Then inside runTriage() right after you construct CaseTriage:
+
+// Build anyAnswers = all structured answers (this is the “any.answers.*” namespace)
+const anyAnswers = (params.answers ?? {}) as Record<string, unknown>;
+
+const flags = computeConsistencyFlags({
+  complaintSlug: params.complaintSlug,
+  rules: CONSISTENCY_RULES,
+  anyAnswers,
+  triage: { confidence: triage.confidence, margin: triage.margin },
+});
+
+// Attach flags
+triage.explanation = triage.explanation ?? ({} as any);
+(triage as any).consistencyFlags = flags;
+
+// Escalation behavior
+const hasForceEmerg = flags.some(f => f.action === "FORCE_EMERG");
+const hasNeedsReview = flags.some(f => f.action === "NEEDS_REVIEW");
+
+if (hasForceEmerg) {
+  triage.disposition = "EMERG";
+}
+
+// Return triage + flags; caller decides state:
+// - if hasForceEmerg or hasNeedsReview -> NEEDS_REVIEW
+// - else normal
+
+And in cases.routes.ts where you decide needsReview, add:
+
+const consistencyFlags = (triage as any).consistencyFlags ?? [];
+const needsReview =
+  triage.disposition !== "ROUTINE" ||
+  triage.confidence === "LOW" ||
+  (triage.rfTriggered?.length ?? 0) > 0 ||
+  consistencyFlags.some((f: any) => f.action === "NEEDS_REVIEW" || f.action === "FORCE_EMERG");
+
+That’s the core behavior.
+
+2) B2 tests
+A) Create golden cases file: server/data/csv/CONSISTENCY_GOLDENS.jsonl
+
+Each line is a JSON object:
+
+{"id":"B2_001","complaintSlug":"derm_allergic_reaction","anyAnswers":{"lip_tongue":true},"triage":{"confidence":"MODERATE","margin":2},"expect":{"flags":["CR_ANAPHYLAXIS_SIGNS"],"forceEmerg":true,"needsReview":true}}
+
+Paste this set (10 goldens):
+
+{"id":"B2_001","complaintSlug":"derm_allergic_reaction","anyAnswers":{"lip_tongue":true},"triage":{"confidence":"MODERATE","margin":2},"expect":{"flags":["CR_ANAPHYLAXIS_SIGNS"],"forceEmerg":true,"needsReview":true}}
+{"id":"B2_002","complaintSlug":"gi_gi_bleeding","anyAnswers":{"heavy":true},"triage":{"confidence":"MODERATE","margin":2},"expect":{"flags":["CR_GI_BLEED_UNSTABLE"],"forceEmerg":true,"needsReview":true}}
+{"id":"B2_003","complaintSlug":"psych_anxiety_panic","anyAnswers":{"syncope":true},"triage":{"confidence":"HIGH","margin":5},"expect":{"flags":["CR_SYNCOPE_MEDICAL"],"forceEmerg":false,"needsReview":true}}
+{"id":"B2_004","complaintSlug":"pulm_shortness_of_breath","anyAnswers":{"cp":true,"sob":true},"triage":{"confidence":"HIGH","margin":4},"expect":{"flags":["CR_CP_SOB_COMBO"],"forceEmerg":false,"needsReview":true}}
+{"id":"B2_005","complaintSlug":"obgyn_pelvic_pain","anyAnswers":{"preg":true,"bleed":true,"pain":true},"triage":{"confidence":"MODERATE","margin":1},"expect":{"flags":["CR_PREG_BLEED_PAIN"],"forceEmerg":true,"needsReview":true}}
+{"id":"B2_006","complaintSlug":"id_fever","anyAnswers":{"immuno":true,"fever":true},"triage":{"confidence":"HIGH","margin":3},"expect":{"flags":["CR_INFECTION_IMMUNO"],"forceEmerg":false,"needsReview":true}}
+{"id":"B2_007","complaintSlug":"neuro_confusion_ams","anyAnswers":{"confusion":true,"fever":true},"triage":{"confidence":"LOW","margin":0},"expect":{"flags":["CR_SEPSIS_AMS","CR_LOW_CONFIDENCE","CR_TIE_MARGIN_0"],"forceEmerg":true,"needsReview":true}}
+{"id":"B2_008","complaintSlug":"environmental_smoke_inhalation","anyAnswers":{"enclosed":true,"confusion":true},"triage":{"confidence":"MODERATE","margin":2},"expect":{"flags":["CR_CO_EXPOSURE_CONFUSION"],"forceEmerg":true,"needsReview":true}}
+{"id":"B2_009","complaintSlug":"gu_testicular_pain","anyAnswers":{"sudden":true,"nausea":true},"triage":{"confidence":"MODERATE","margin":2},"expect":{"flags":["CR_TORSION_TESTIS"],"forceEmerg":true,"needsReview":true}}
+{"id":"B2_010","complaintSlug":"ent_sore_throat","anyAnswers":{},"triage":{"confidence":"HIGH","margin":4},"expect":{"flags":[],"forceEmerg":false,"needsReview":false}}
+B) Add test runner: scripts/test-consistency.ts
+import fs from "node:fs";
+import path from "node:path";
+
+import { loadConsistencyRules, computeConsistencyFlags } from "../server/engines/consistencyEngine";
+
+const RULES_PATH = "server/data/csv/CONSISTENCY_RULES.csv";
+const GOLDENS_PATH = "server/data/csv/CONSISTENCY_GOLDENS.jsonl";
+
+function readJsonl(p: string): any[] {
+  if (!fs.existsSync(p)) throw new Error(`Missing ${p}`);
+  const lines = fs.readFileSync(p, "utf8").split("\n").map(l => l.trim()).filter(Boolean);
+  return lines.map(l => JSON.parse(l));
+}
+
+function setEq(a: string[], b: string[]) {
+  const A = [...new Set(a)].sort();
+  const B = [...new Set(b)].sort();
+  return JSON.stringify(A) === JSON.stringify(B);
+}
+
+function main() {
+  const rules = loadConsistencyRules(RULES_PATH);
+  const goldens = readJsonl(GOLDENS_PATH);
+
+  const fails: string[] = [];
+
+  for (const g of goldens) {
+    const flags = computeConsistencyFlags({
+      complaintSlug: g.complaintSlug,
+      rules,
+      anyAnswers: g.anyAnswers ?? {},
+      triage: g.triage ?? {},
+    });
+
+    const ids = flags.map(f => f.ruleId);
+
+    const hasForceEmerg = flags.some(f => f.action === "FORCE_EMERG");
+    const hasNeedsReview = flags.some(f => f.action === "NEEDS_REVIEW" || f.action === "FORCE_EMERG");
+
+    const okFlags = setEq(ids, g.expect.flags ?? []);
+    const okForce = hasForceEmerg === !!g.expect.forceEmerg;
+    const okReview = hasNeedsReview === !!g.expect.needsReview;
+
+    if (!okFlags || !okForce || !okReview) {
+      fails.push(
+        `${g.id} FAIL\n` +
+        `  expected flags=${JSON.stringify(g.expect.flags)} force=${g.expect.forceEmerg} review=${g.expect.needsReview}\n` +
+        `  got      flags=${JSON.stringify(ids)} force=${hasForceEmerg} review=${hasNeedsReview}`
+      );
+    }
+  }
+
+  if (fails.length) {
+    console.error(`CONSISTENCY GOLDENS FAIL (${fails.length}/${goldens.length})`);
+    for (const f of fails.slice(0, 30)) console.error(f);
+    process.exit(1);
+  }
+
+  console.log(`CONSISTENCY GOLDENS PASS (${goldens.length}/${goldens.length}) ✅`);
+  process.exit(0);
+}
+
+main();
+C) Add to package.json
+{
+  "scripts": {
+    "test:consistency": "tsx scripts/test-consistency.ts"
+  }
+}
+D) Add to gate-prod (optional but recommended)
+
+In scripts/gate-prod.ts, add a step:
+
+after harness, before stress_smoke:
+
+report.steps.push(runStep("consistency_goldens", "npm run test:consistency"));
+What you run
+npm run test:consistency
+npx tsx scripts/gate-prod.ts
+
+If you paste your current CONSISTENCY_RULES.csv (or confirm it matches the starter pack I gave), I can also generate a B2 UI display update (show consistency flags in CaseReview page) in one small patch.

@@ -1,6 +1,9 @@
 import { CaseTriage, Disposition } from "../models/caseTypes";
 import { runGenericComplaintV1 } from "../engines/genericComplaintEngineV1";
 import { CaseState } from "../../shared/agentTypes";
+import { loadConsistencyRules, computeConsistencyFlags } from "../engines/consistencyEngine";
+
+const CONSISTENCY_RULES = loadConsistencyRules("server/data/csv/CONSISTENCY_RULES.csv");
 
 function mapDisposition(raw: string): Disposition {
   const normalized = raw.toLowerCase().replace(/[\s_-]+/g, "_");
@@ -67,14 +70,26 @@ export async function runTriage(params: {
     confidence: "LOW" as const,
   };
 
+  const anyAnswers = (params.answers ?? {}) as Record<string, unknown>;
+  const consistencyFlags = computeConsistencyFlags({
+    complaintSlug: params.complaintSlug,
+    rules: CONSISTENCY_RULES,
+    anyAnswers,
+    triage: { confidence, margin: explanation.margin },
+  });
+
+  const hasForceEmerg = consistencyFlags.some(f => f.action === "FORCE_EMERG");
+  const finalDisposition = hasForceEmerg ? "er_send" as Disposition : disposition;
+
   return {
-    disposition,
+    disposition: finalDisposition,
     topCluster,
     confidence,
     tieBreak: explanation.tieBreak,
     margin: explanation.margin,
     rfTriggered: updated.redFlags || [],
     explanation,
+    consistencyFlags: consistencyFlags.length > 0 ? consistencyFlags : undefined,
     engineVersion: {
       rulesetVersion: params.rulesetVersion,
       dxPriorityVersion: params.dxPriorityVersion,

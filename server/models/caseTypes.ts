@@ -17,6 +17,16 @@ export type Disposition = "er_send" | "urgent_care" | "pcp" | "self_care";
 
 export type Confidence = "HIGH" | "MODERATE" | "LOW";
 
+export type ConsistencyAction = "FLAG_ONLY" | "NEEDS_REVIEW" | "FORCE_EMERG";
+export type ConsistencySeverity = "LOW" | "MODERATE" | "HIGH";
+
+export type ConsistencyFlag = {
+  ruleId: string;
+  action: ConsistencyAction;
+  severity: ConsistencySeverity;
+  message: string;
+};
+
 export type CaseMessage = {
   ts: string;
   dir: "in" | "out";
@@ -48,6 +58,7 @@ export type CaseTriage = {
   margin: number;
   rfTriggered: string[];
   explanation: CaseTriageScoringExplanation;
+  consistencyFlags?: ConsistencyFlag[];
   engineVersion: {
     rulesetVersion: string;
     dxPriorityVersion: string;
