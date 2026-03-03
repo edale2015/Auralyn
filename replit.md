@@ -23,6 +23,27 @@ Physician authentication uses password-only, session-based HMAC-signed httpOnly 
 ### Agent System
 The agent system orchestrates patient flow through various routing states using `AgentAction` types. A pipeline orchestrator manages complaint routing, FHIR prefill, modifiers, rules evaluation, question queue generation, and a supervisor gate. It incorporates LLM-powered actions such as `REFRAME_QUESTION` and `DRAFT_SUMMARY`, supports prompt template versioning, and allows for LLM A/B testing with guardrails.
 
+### Generic Complaint Engine (GENERIC_V1)
+A data-driven engine (`server/engines/genericComplaintEngineV1.ts`) that replaces per-complaint TypeScript scoring modules with CSV-driven rules. Adding a new complaint requires only CSV rows + golden tests — zero new TypeScript code.
+
+**Architecture:**
+- `COMPLAINT_REGISTRY.csv` `ENGINE_TYPE` column routes complaints: `GENERIC_V1` → generic engine, `LEGACY` → hardcoded graph
+- `CLUSTER_SCORING_RULES.csv` (675 rows) defines cluster scoring: `CC_ID,CLUSTER_ID,RULE_ID,POINTS,WHEN_EXPR,EVIDENCE_LABEL`
+- Expression evaluator (`server/services/exprEval.ts`) evaluates `WHEN_EXPR` against `CaseState` (supports `answers.*`, `scores.*`, `demographics.*`, `&&`, `||`, `==`, `!=`, `>=`, `in`, etc.)
+
+**Pipeline steps in `runGenericComplaintV1()`:**
+1. `loadComplaintConfig(ccId)` → loads all rules from CSV
+2. Core questions evaluation (blocks only on `REQUIRED=TRUE`)
+3. `computeScoresFromRules()` → cluster scores + ranked clusters + evidence
+4. `evalRedFlagsGeneric()` → gate result (PASS/ESCALATE/ER_SEND) + triggered flags
+5. Scoring systems computation (B1, optional)
+6. `evalDispositionGeneric()` → disposition level + template
+7. Confidence scoring + output template rendering + trace assembly
+
+**Adding a new complaint:** `npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>` scaffolds all CSV rows + golden test stubs.
+
+Currently 72+ complaints on GENERIC_V1 with 1247 golden tests passing.
+
 ### Multi-System Triage Pipeline
 A robust triage pipeline uses canonical keys for medical systems, chief complaints, and clusters. A unified sheets registry, loaded from Google Sheets, dynamically configures data for complaint routing, integration maps, FHIR prefill, modifiers, and rules engines. It dynamically builds question queues, uses an enhanced supervisor for red flags and triage upgrades, resolves dispositions, and provides confidence-scored diagnostic candidates and medication suggestions with safety checks. A secondary ObesityAgent can run in parallel, extending `CaseState` with metabolic, DM, HTN, bariatric, GLP-1, and social details, and supporting specific interventions.
 

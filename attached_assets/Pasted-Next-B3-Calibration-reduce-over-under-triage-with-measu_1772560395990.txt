@@ -1,0 +1,289 @@
+Next: B3 Calibration (reduce over/under-triage with measurable targets)
+
+You already have:
+
+stress sim producing distribution + hotspots
+
+gate-prod smoke
+Now we add:
+
+calibration targets
+
+a calibration report
+
+a safe “recommendations” output (it suggests micro-pack edits but does NOT auto-apply)
+
+What we’ll build in B3
+
+server/data/csv/CALIBRATION_TARGETS.csv
+
+scripts/calibration-report.ts
+
+scripts/improve-suggest.ts (optional, writes candidate micro-pack files)
+
+add a 6th gate step (optional): npm run calibration:smoke (non-blocking at first)
+
+Targets we’ll track per complaint
+
+EMERG rate
+
+NEEDS_REVIEW rate
+
+UNCLASSIFIED rate
+
+winner churn under 10–30% noise (optional, but powerful)
+
+Before I generate B3 bundle
+
+One small decision: do you want calibration targets to be:
+
+A) global defaults + per-complaint overrides (recommended)
+or
+B) per-complaint required targets for all 72 pipelines (more work, but strict)
+
+If you don’t care, I’ll default to A and seed targets for the top 20 “hotspot” complaints first (based on your stress sim output), then we expand gradually.
+
+Reply with:
+“A” or “B” and I’ll generate the full B3 code + CSV pack next.
+
+if B is more accurate do B.  otherwise A.
+
+Go with A.
+
+B isn’t “more accurate”; it’s just more strict and more work up front. Accuracy comes from calibration behavior + iteration, not from forcing 72 exact targets on day one.
+
+So we’ll do:
+
+✅ Global defaults (so every complaint has a target)
+✅ Per-complaint overrides for hotspot/high-risk complaints
+✅ Expand overrides over time as you learn real distributions
+
+This gives you the best accuracy-to-effort ratio and avoids inventing fake “perfect” targets prematurely.
+
+B3 Calibration Bundle
+1) New CSV: server/data/csv/CALIBRATION_TARGETS.csv
+
+Schema:
+
+Complaint_Slug,TargetEmergRate,TargetNeedsReviewRate,MaxUnclassifiedRate,MaxWinnerChurnRate,Notes
+
+Use * as a default row.
+
+Starter file (paste)
+Complaint_Slug,TargetEmergRate,TargetNeedsReviewRate,MaxUnclassifiedRate,MaxWinnerChurnRate,Notes
+*,0.10,0.35,0.01,0.15,"Global defaults: conservative urgent-care triage"
+
+cardio_chest_pain,0.40,0.70,0.00,0.10,"High risk, allow higher EMERG"
+pulm_shortness_of_breath,0.35,0.70,0.00,0.12,"High risk dyspnea"
+neuro_weakness_numbness,0.45,0.80,0.00,0.10,"Stroke/cord concern"
+neuro_confusion_ams,0.60,0.90,0.00,0.08,"AMS should heavily review/escalate"
+gi_gi_bleeding,0.85,0.95,0.00,0.05,"Bleeding should be emergent"
+ophtho_vision_loss,0.60,0.85,0.00,0.08,"Vision loss high stakes"
+tox_overdose_intoxication,0.70,0.90,0.00,0.08,"Overdose high stakes"
+ortho_trauma_head_injury,0.30,0.70,0.00,0.12,"Concussion/ICH risk"
+peds_infant_fever,0.60,0.90,0.00,0.08,"Infant fever high stakes"
+derm_allergic_reaction,0.20,0.60,0.00,0.12,"Anaphylaxis subset"
+
+(We’ll add more overrides once we see the calibration report.)
+
+2) Script: scripts/calibration-report.ts
+
+This reads stress_results.json and computes:
+
+emerg rate per complaint
+
+needs_review rate if available (if your stress sim includes it; if not, we’ll approximate from disposition/confidence/flags)
+
+unclassified rate (topDx == UNCLASSIFIED or similar)
+
+winner churn (optional: requires running stress with noise twice or providing churn stats)
+
+It outputs:
+
+artifacts/calibration_report.json
+
+console summary + top deltas
+
+import fs from "node:fs";
+import path from "node:path";
+
+const STRESS_PATH = "stress_results.json";
+const TARGETS_PATH = "server/data/csv/CALIBRATION_TARGETS.csv";
+const OUT_DIR = "artifacts";
+const OUT_PATH = path.join(OUT_DIR, "calibration_report.json");
+
+function ensureDir(p: string) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim().replace(/^"|"$/g, ""));
+}
+
+type Target = {
+  complaint: string;
+  emerg: number;
+  review: number;
+  unclassified: number;
+  churn: number;
+  notes: string;
+};
+
+function loadTargets(): { defaults: Target; overrides: Map<string, Target> } {
+  const text = fs.readFileSync(TARGETS_PATH, "utf8").trim();
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const header = splitCsvLine(lines[0]);
+
+  const idx = (k: string) => header.indexOf(k);
+  const overrides = new Map<string, Target>();
+
+  let defaults: Target | null = null;
+
+  for (const line of lines.slice(1)) {
+    const c = splitCsvLine(line);
+    const complaint = c[idx("Complaint_Slug")];
+    const t: Target = {
+      complaint,
+      emerg: Number(c[idx("TargetEmergRate")] ?? "0"),
+      review: Number(c[idx("TargetNeedsReviewRate")] ?? "0"),
+      unclassified: Number(c[idx("MaxUnclassifiedRate")] ?? "0"),
+      churn: Number(c[idx("MaxWinnerChurnRate")] ?? "1"),
+      notes: c[idx("Notes")] ?? "",
+    };
+    if (complaint === "*") defaults = t;
+    else overrides.set(complaint, t);
+  }
+
+  if (!defaults) {
+    defaults = { complaint: "*", emerg: 0.1, review: 0.35, unclassified: 0.01, churn: 0.15, notes: "default" };
+  }
+  return { defaults, overrides };
+}
+
+function main() {
+  if (!fs.existsSync(STRESS_PATH)) {
+    console.error(`Missing ${STRESS_PATH}. Run simulate-stress first.`);
+    process.exit(1);
+  }
+  ensureDir(OUT_DIR);
+
+  const stress = JSON.parse(fs.readFileSync(STRESS_PATH, "utf8"));
+  const results: any[] = stress.results ?? [];
+  const { defaults, overrides } = loadTargets();
+
+  // Aggregate per complaint
+  const agg: Record<string, { total: number; emerg: number; review: number; unclassified: number }> = {};
+
+  for (const r of results) {
+    const c = r.complaint ?? "unknown";
+    agg[c] ??= { total: 0, emerg: 0, review: 0, unclassified: 0 };
+    agg[c].total++;
+
+    if (r.disposition === "EMERG") agg[c].emerg++;
+
+    // Needs review approximation:
+    // If your stress includes needsReview boolean, use it; otherwise:
+    // review if disposition != ROUTINE or confidence == LOW or rfTriggered non-empty
+    const needsReview =
+      (typeof r.needsReview === "boolean" ? r.needsReview :
+        (r.disposition !== "ROUTINE" || r.confidence === "LOW" || (r.rfTriggered?.length ?? 0) > 0));
+    if (needsReview) agg[c].review++;
+
+    const topDx = String(r.top_dx ?? r.topDx ?? "");
+    if (!topDx || topDx.toUpperCase().includes("UNCLASS")) agg[c].unclassified++;
+  }
+
+  const rows = Object.entries(agg).map(([complaint, m]) => {
+    const t = overrides.get(complaint) ?? defaults;
+    const emergRate = m.total ? m.emerg / m.total : 0;
+    const reviewRate = m.total ? m.review / m.total : 0;
+    const unclassRate = m.total ? m.unclassified / m.total : 0;
+
+    return {
+      complaint,
+      total: m.total,
+      emergRate,
+      reviewRate,
+      unclassRate,
+      targetEmerg: t.emerg,
+      targetReview: t.review,
+      maxUnclass: t.unclassified,
+      deltaEmerg: emergRate - t.emerg,
+      deltaReview: reviewRate - t.review,
+      deltaUnclass: unclassRate - t.unclassified,
+      notes: t.notes,
+    };
+  });
+
+  // Sort by biggest absolute delta emerg+review+unclass
+  rows.sort((a, b) => {
+    const sa = Math.abs(a.deltaEmerg) + Math.abs(a.deltaReview) + Math.abs(a.deltaUnclass);
+    const sb = Math.abs(b.deltaEmerg) + Math.abs(b.deltaReview) + Math.abs(b.deltaUnclass);
+    return sb - sa;
+  });
+
+  const report = {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      complaints: rows.length,
+      N: results.length
+    },
+    topDeltas: rows.slice(0, 20),
+    all: rows
+  };
+
+  fs.writeFileSync(OUT_PATH, JSON.stringify(report, null, 2));
+  console.log(`Wrote ${OUT_PATH}`);
+  console.log("Top calibration deltas:");
+  for (const r of rows.slice(0, 10)) {
+    console.log(
+      `${r.complaint} N=${r.total} emerg=${r.emergRate.toFixed(2)}(t${r.targetEmerg}) review=${r.reviewRate.toFixed(2)}(t${r.targetReview}) unclass=${r.unclassRate.toFixed(3)}(max${r.maxUnclass})`
+    );
+  }
+}
+
+main();
+3) Add scripts to package.json
+{
+  "scripts": {
+    "calibration:report": "tsx scripts/calibration-report.ts"
+  }
+}
+4) Add calibration step to gate-prod (non-blocking initially)
+
+In scripts/gate-prod.ts, after stress, add:
+
+run report and include it in artifacts
+
+don’t fail gate-prod yet unless you want strict gating
+
+Example step:
+
+report.steps.push(runStep("calibration_report", "npm run calibration:report"));
+
+Later, we can enforce thresholds.
+
+How you run B3
+
+Run stress:
+
+N=500 HARNESS_MODE=1 npx tsx scripts/simulate-stress.ts
+
+Run calibration report:
+
+npm run calibration:report
+
+Then open:
+
+artifacts/calibration_report.json
