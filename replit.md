@@ -91,6 +91,8 @@ Data-driven subtype upgrades that improve diagnostic granularity. Each upgrade a
 
 **B4-1 Cardio Chest Pain**: Added 8 optional questions (reproducible, positional, heartburn, recent viral, leg swelling, estrogen, prior VTE, recent surgery) and 4 new subclusters (CL_CCP_MSK expanded, CL_CCP_GERD, CL_CCP_PERICARDITIS, CL_CCP_PE expanded with VTE factors). 13 hard subtype goldens + 20 existing = 33 total chest pain tests passing.
 
+**B4-2 Pulm Cough**: Added 2 optional questions (Q_PCO_PND postnasal drip, Q_PCO_HEARTBURN reflux) and 1 new cluster (CL_PCO_GERD_COUGH) plus suppressors/boosters on existing clusters (CL_PCO_POSTNASAL PND boost, CL_PCO_VIRAL_BRONCHITIS fever+SOB/blood/immuno suppressors, CL_PCO_ASTHMA_REACTIVE fever suppressor, CL_PCO_PNEUMONIA duration/immuno boost + PND suppressor). DX_PRIORITY for 5 cough clusters (pneumonia=100, asthma=90, gerd=70, postnasal=65, viral_bronchitis=50). 13 hard subtype goldens + 25 existing = 38 total cough tests passing.
+
 ### Validation and Testing
 The system includes several validation tools:
 -   **Stress Test Harness**: For performance and stability testing. Outputs per-result data for calibration analysis.

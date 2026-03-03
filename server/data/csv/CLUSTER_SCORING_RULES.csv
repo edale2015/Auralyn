@@ -183,6 +183,20 @@ pulm_cough,CL_PCO_ASTHMA_REACTIVE,CSR_PCO_ASTHMA_02,2,"answers.Q_PCO_NIGHT == 'y
 pulm_cough,CL_PCO_POSTNASAL,CSR_PCO_POSTNA_01,2,"answers.Q_PCO_DUR >= 7",Duration 7+ days
 pulm_cough,CL_PCO_POSTNASAL,CSR_PCO_POSTNA_02,1,"answers.Q_PCO_FEVER == 'no'",No fever
 pulm_cough,CL_PCO_POSTNASAL,CSR_PCO_POSTNA_03,1,"answers.Q_PCO_WHEEZE == 'no'",No wheeze
+pulm_cough,CL_PCO_POSTNASAL,CSR_PCO_POSTNA_04,3,"answers.Q_PCO_PND == 'yes'",Post-nasal drip symptom
+pulm_cough,CL_PCO_POSTNASAL,CSR_PCO_POSTNA_NEG1,-3,"answers.Q_PCO_WHEEZE == 'yes' || answers.Q_PCO_SOB == 'yes'",Wheeze/SOB inconsistent with PND
+pulm_cough,CL_PCO_POSTNASAL,CSR_PCO_POSTNA_NEG2,-6,"answers.Q_PCO_BLOOD == 'yes'",Hemoptysis rules out simple PND
+pulm_cough,CL_PCO_GERD_COUGH,CSR_PCO_GERD_01,3,"answers.Q_PCO_HEARTBURN == 'yes'",Heartburn/acid reflux
+pulm_cough,CL_PCO_GERD_COUGH,CSR_PCO_GERD_02,2,"answers.Q_PCO_NIGHT == 'yes'",Nocturnal cough (reflux pattern)
+pulm_cough,CL_PCO_GERD_COUGH,CSR_PCO_GERD_03,1,"answers.Q_PCO_FEVER == 'no'",No fever (non-infectious)
+pulm_cough,CL_PCO_GERD_COUGH,CSR_PCO_GERD_NEG1,-4,"answers.Q_PCO_SOB == 'yes' || answers.Q_PCO_BLOOD == 'yes'",SOB/hemoptysis inconsistent with GERD
+pulm_cough,CL_PCO_ASTHMA_REACTIVE,CSR_PCO_ASTHMA_NEG1,-2,"answers.Q_PCO_FEVER == 'yes'",Fever reduces asthma likelihood
+pulm_cough,CL_PCO_PNEUMONIA,CSR_PCO_PNEUMO_04,1,"answers.Q_PCO_DUR >= 10",Prolonged duration
+pulm_cough,CL_PCO_PNEUMONIA,CSR_PCO_PNEUMO_05,2,"answers.Q_PCO_IMMUNO == 'yes'",Immunocompromised risk
+pulm_cough,CL_PCO_PNEUMONIA,CSR_PCO_PNEUMO_NEG1,-2,"answers.Q_PCO_PND == 'yes' && answers.Q_PCO_FEVER == 'no'",PND pattern without fever unlikely pneumonia
+pulm_cough,CL_PCO_VIRAL_BRONCHITIS,CSR_PCO_VIRAL_NEG1,-4,"answers.Q_PCO_FEVER == 'yes' && answers.Q_PCO_SOB == 'yes'",Fever+SOB suggests pneumonia not bronchitis
+pulm_cough,CL_PCO_VIRAL_BRONCHITIS,CSR_PCO_VIRAL_NEG2,-6,"answers.Q_PCO_BLOOD == 'yes'",Hemoptysis rules out simple bronchitis
+pulm_cough,CL_PCO_VIRAL_BRONCHITIS,CSR_PCO_VIRAL_NEG3,-3,"answers.Q_PCO_IMMUNO == 'yes' && answers.Q_PCO_FEVER == 'yes'",Immunocompromised+fever needs workup
 pulm_shortness_of_breath,CL_SOB_ASTHMA_COPD,CSR_SOB_ASTHMA_01,4,"answers.Q_SOB_WHEEZE == 'yes'",Wheezing
 pulm_shortness_of_breath,CL_SOB_PNEUMONIA,CSR_SOB_PNEUMO_01,4,"answers.Q_SOB_FEVER == 'yes'",Fever
 pulm_shortness_of_breath,CL_SOB_PNEUMONIA,CSR_SOB_PNEUMO_02,1,"answers.Q_SOB_REST == 'yes'",Rest dyspnea with fever

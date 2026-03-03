@@ -1,0 +1,161 @@
+Next: B4-2 PULM Cough Subtypes
+
+We’ll add high-yield separation:
+
+postnasal_drip
+
+gerd_cough
+
+asthma_reactive
+
+pneumonia
+(and keep viral bronchitis)
+
+New optional questions (minimal set)
+
+postnasal_drip
+
+heartburn
+
+wheeze
+
+fever
+
+sob
+
+dur_ge_10 (or duration bucket)
+
+immuno
+
+New cluster scoring rules
+
+Boost PND with postnasal drip + no fever
+
+Boost GERD cough with heartburn + nocturnal + no fever
+
+Boost asthma with wheeze + nocturnal
+
+Boost pneumonia with fever + sob
+
+Add suppressors so bronchitis doesn’t win when fever+sob
+
+Add 13 subtype goldens
+
+Strict winners.
+
+Update DX_PRIORITY for pulm_cough
+
+Tie order: pneumonia > asthma_reactive > gerd_cough > postnasal_drip > viral_bronchitis
+
+Then run:
+
+ship:complaint -- pulm_cough
+
+gate:prod
+
+After that (queued)
+
+B4-3 neuro_headache
+
+B4-4 gi_abdominal_pain
+
+B4-5 derm_rash
+
+Each one adds 8–13 goldens, so expect your total test count to rise in a controlled way.
+
+If you want, I’ll generate the full B4-2 Pulm Cough Subtypes pack (questions + scoring rows + DX_PRIORITY + 13 goldens) in one pasteable block like we did for chest pain.
+
+Reply with:
+“Generate B4-2 pack”
+
+Generate B4-2 pack.  should we expand B1-4 to at least one complaint for all systems?
+
+Here you go: B4-2 Pulm Cough Subtypes pack (questions + scoring rules + DX_PRIORITY + 13 goldens). Then I’ll answer your “expand B1–B4 across all systems” question.
+
+B4-2 Pulm Cough Subtypes
+A) Add optional questions to CORE_QUESTIONS.csv (pulm_cough)
+Complaint_Slug,Question_ID,Question_Text,Type
+pulm_cough,postnasal_drip,Post-nasal drip or frequent throat clearing?,boolean
+pulm_cough,heartburn,Burning reflux/acid taste or worse after meals?,boolean
+pulm_cough,nocturnal,Cough worse at night or when lying down?,boolean
+pulm_cough,wheeze,Wheezing heard or felt?,boolean
+pulm_cough,fever,Fever?,boolean
+pulm_cough,sob,Shortness of breath?,boolean
+pulm_cough,dur_ge_10,Cough duration >= 10 days?,boolean
+pulm_cough,immuno,Immunocompromised?,boolean
+
+(If you already have fever/sob/wheeze on cough, only add the new ones: postnasal_drip, heartburn, nocturnal, dur_ge_10.)
+
+B) Add new Dx_IDs + scoring rules in CLUSTER_SCORING_RULES.csv
+
+New Dx_IDs:
+
+postnasal_drip
+
+gerd_cough
+
+pneumonia (already exists in your cough pack)
+
+asthma_reactive (already exists)
+
+keep viral_bronchitis
+
+Append:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+pulm_cough,postnasal_drip,PND_1,"postnasal_drip=true",3
+pulm_cough,postnasal_drip,PND_2,"fever=false",1
+pulm_cough,postnasal_drip,PND_NEG_1,"wheeze=true OR sob=true",-3
+pulm_cough,postnasal_drip,PND_NEG_2,"blood=true",-6
+
+pulm_cough,gerd_cough,GERD_1,"heartburn=true",3
+pulm_cough,gerd_cough,GERD_2,"nocturnal=true",2
+pulm_cough,gerd_cough,GERD_3,"fever=false",1
+pulm_cough,gerd_cough,GERD_NEG_1,"sob=true OR blood=true",-4
+
+pulm_cough,asthma_reactive,ASTH_1,"wheeze=true",3
+pulm_cough,asthma_reactive,ASTH_2,"nocturnal=true",1
+pulm_cough,asthma_reactive,ASTH_NEG_1,"fever=true",-2
+
+pulm_cough,pneumonia,PNA_1,"fever=true",3
+pulm_cough,pneumonia,PNA_2,"sob=true",2
+pulm_cough,pneumonia,PNA_3,"dur_ge_10=true",1
+pulm_cough,pneumonia,PNA_4,"immuno=true",2
+pulm_cough,pneumonia,PNA_NEG_1,"postnasal_drip=true AND fever=false",-2
+
+pulm_cough,viral_bronchitis,VB_1,"dur_ge_10=false",1
+pulm_cough,viral_bronchitis,VB_2,"fever=false",1
+pulm_cough,viral_bronchitis,VB_NEG_1,"fever=true AND sob=true",-4
+pulm_cough,viral_bronchitis,VB_NEG_2,"blood=true",-6
+pulm_cough,viral_bronchitis,VB_NEG_3,"immuno=true AND fever=true",-3
+C) DX_PRIORITY tie protection for cough
+
+Add to DX_PRIORITY.csv:
+
+Complaint_Slug,Dx_ID,Priority
+pulm_cough,pneumonia,100
+pulm_cough,asthma_reactive,90
+pulm_cough,gerd_cough,70
+pulm_cough,postnasal_drip,65
+pulm_cough,viral_bronchitis,50
+D) Add 13 hard subtype goldens (strict)
+
+Append to your pulm_cough hard goldens file:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+pulm_cough,CO_SUB1,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":false,""postnasal_drip"":true,""heartburn"":false,""nocturnal"":false,""immuno"":false,""blood"":false}",ROUTINE,postnasal_drip
+pulm_cough,CO_SUB2,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":false,""postnasal_drip"":false,""heartburn"":true,""nocturnal"":true,""immuno"":false,""blood"":false}",ROUTINE,gerd_cough
+pulm_cough,CO_SUB3,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":true,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":true,""immuno"":false,""blood"":false}",URGENT,asthma_reactive
+pulm_cough,CO_SUB4,"{""dur_ge_10"":true,""fever"":true,""sob"":true,""wheeze"":false,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":false,""immuno"":false,""blood"":false}",EMERG,pneumonia
+pulm_cough,CO_SUB5,"{""dur_ge_10"":true,""fever"":true,""sob"":false,""wheeze"":false,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":false,""immuno"":true,""blood"":false}",EMERG,pneumonia
+pulm_cough,CO_SUB6,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":false,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":false,""immuno"":false,""blood"":false}",ROUTINE,viral_bronchitis
+pulm_cough,CO_SUB7,"{""dur_ge_10"":false,""fever"":true,""sob"":true,""wheeze"":false,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":false,""immuno"":false,""blood"":false}",EMERG,pneumonia
+pulm_cough,CO_SUB8,"{""dur_ge_10"":false,""fever"":false,""sob"":true,""wheeze"":true,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":true,""immuno"":false,""blood"":false}",URGENT,asthma_reactive
+pulm_cough,CO_SUB9,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":false,""postnasal_drip"":true,""heartburn"":true,""nocturnal"":true,""immuno"":false,""blood"":false}",ROUTINE,gerd_cough
+pulm_cough,CO_SUB10,"{""dur_ge_10"":true,""fever"":false,""sob"":false,""wheeze"":false,""postnasal_drip"":true,""heartburn"":false,""nocturnal"":false,""immuno"":false,""blood"":false}",ROUTINE,postnasal_drip
+pulm_cough,CO_SUB11,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":false,""postnasal_drip"":false,""heartburn"":true,""nocturnal"":false,""immuno"":false,""blood"":false}",ROUTINE,gerd_cough
+pulm_cough,CO_SUB12,"{""dur_ge_10"":false,""fever"":false,""sob"":false,""wheeze"":true,""postnasal_drip"":false,""heartburn"":true,""nocturnal"":true,""immuno"":false,""blood"":false}",URGENT,asthma_reactive
+pulm_cough,CO_SUB13,"{""dur_ge_10"":true,""fever"":true,""sob"":true,""wheeze"":true,""postnasal_drip"":false,""heartburn"":false,""nocturnal"":false,""immuno"":false,""blood"":false}",EMERG,pneumonia
+E) Run
+npm run ship:complaint -- pulm_cough
+npx tsx scripts/gate-prod.ts
