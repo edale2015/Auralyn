@@ -1,0 +1,439 @@
+Below is a drop-in script that:
+
+Reads a differentials table (CSV)
+
+For each complaint row, calls your existing generator (single mode) to create the complaint if missing
+
+Appends differential-driven cluster scoring rules + DX priority rows into your central CSVs (idempotent)
+
+Optionally emits a “golden test suggestions” file per complaint (so you can paste into your golden harness easily)
+
+A) Create the input file
+
+Create: data/complaints/differentials_seed.csv
+
+COMPLAINT_KEY,SYSTEM,LABEL,ALIASES,DIFFERENTIALS
+cough,PULM,Cough,cough;productive_cough;dry_cough,viral_uri;asthma_exacerbation;pneumonia;copd_exacerbation;gerd
+sinus_pressure,ENT,Sinus Pressure,sinus;sinusitis;facial_pressure,viral_rhinosinusitis;allergic_rhinitis;acute_bacterial_sinusitis;dental_source
+chest_pain,CARD,Chest Pain,chest_pain;chest_tightness;pressure,mi;pe;pneumothorax;gerd;costochondritis
+
+Notes:
+
+ALIASES is ; separated (matches your generator style).
+
+DIFFERENTIALS is ; separated. Keep them snake_case.
+
+B) Add the script: scripts/generate-complaints-from-differentials.ts
+/**
+ * scripts/generate-complaints-from-differentials.ts
+ *
+ * Step 2 Accelerator:
+ * - Reads data/complaints/differentials_seed.csv
+ * - For each complaint row:
+ *    1) runs existing generator in "single" mode (idempotent)
+ *    2) appends differential-derived cluster scoring rules + DX priority rows to central CSVs (idempotent)
+ *    3) emits golden test suggestions file per complaint (optional helper)
+ *
+ * Usage:
+ *   npx tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv
+ *
+ * Optional flags:
+ *   --dry-run         Don't write, just print what would happen
+ *   --no-golden       Don't emit golden suggestions
+ *   --engine GENERIC_V1   Override engine type if your generator supports it (passed through as env)
+ */
+
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+import Papa from "papaparse";
+
+type SeedRow = {
+  COMPLAINT_KEY: string;
+  SYSTEM: string;
+  LABEL: string;
+  ALIASES: string;
+  DIFFERENTIALS: string;
+};
+
+type Args = {
+  seedPath: string;
+  dryRun: boolean;
+  noGolden: boolean;
+  engine?: string;
+};
+
+function parseArgs(argv: string[]): Args {
+  const seedPath = argv[0];
+  if (!seedPath) {
+    console.error("Usage: npx tsx scripts/generate-complaints-from-differentials.ts <seed.csv> [--dry-run] [--no-golden] [--engine GENERIC_V1]");
+    process.exit(2);
+  }
+  const args: Args = { seedPath, dryRun: false, noGolden: false };
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--no-golden") args.noGolden = true;
+    else if (a === "--engine") args.engine = argv[++i];
+  }
+  return args;
+}
+
+function ensureDir(p: string) {
+  fs.mkdirSync(p, { recursive: true });
+}
+
+function readCsv<T>(filePath: string): T[] {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const parsed = Papa.parse<T>(raw, { header: true, skipEmptyLines: true });
+  if (parsed.errors?.length) {
+    throw new Error(`CSV parse errors in ${filePath}: ${JSON.stringify(parsed.errors.slice(0, 3))}`);
+  }
+  return (parsed.data ?? []).filter((r: any) => r && Object.values(r).some(Boolean));
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Array<Record<string, string>>) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    lines.push(headers.map((h) => (r[h] ?? "")).join(","));
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function findFirstExisting(candidates: string[]): string | null {
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return null;
+}
+
+function normalizeKey(s: string) {
+  return (s ?? "").trim();
+}
+
+function splitSemi(s: string): string[] {
+  return (s ?? "")
+    .split(";")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Generic “append rows idempotently” by key column (RULE_ID or TEST_ID etc.)
+ */
+function appendRowsIdempotent(params: {
+  filePath: string;
+  keyColCandidates: string[];
+  rowsToAdd: Array<Record<string, string>>;
+  dryRun: boolean;
+}) {
+  const { filePath, keyColCandidates, rowsToAdd, dryRun } = params;
+
+  const raw = fs.readFileSync(filePath, "utf8");
+  const parsed = Papa.parse<Record<string, string>>(raw, { header: true, skipEmptyLines: true });
+  const headers = (parsed.meta.fields ?? []) as string[];
+  const existing = (parsed.data ?? []).filter((r) => r && Object.values(r).some(Boolean));
+
+  const keyCol = keyColCandidates.find((k) => headers.includes(k));
+  if (!keyCol) {
+    console.warn(`[WARN] ${path.basename(filePath)} missing key column. Tried: ${keyColCandidates.join(", ")}`);
+    return { added: 0, skipped: rowsToAdd.length };
+  }
+
+  const existingKeys = new Set(existing.map((r) => r[keyCol]).filter(Boolean));
+
+  const addable = rowsToAdd.filter((r) => {
+    const k = r[keyCol];
+    return k && !existingKeys.has(k);
+  });
+
+  if (dryRun) {
+    console.log(`[DRY] Would append ${addable.length} rows to ${filePath}`);
+    return { added: addable.length, skipped: rowsToAdd.length - addable.length };
+  }
+
+  const merged = [...existing, ...addable];
+
+  // Preserve original header order; fill missing columns with ""
+  const normalized = merged.map((r) => {
+    const out: Record<string, string> = {};
+    for (const h of headers) out[h] = r[h] ?? "";
+    return out;
+  });
+
+  writeCsv(filePath, headers, normalized);
+  return { added: addable.length, skipped: rowsToAdd.length - addable.length };
+}
+
+/**
+ * Builds rows that match whatever headers exist in the target CSV, using best-effort mapping.
+ */
+function buildRowsForClusterScoring(headers: string[], ctx: {
+  ccId: string;
+  complaintKey: string;
+  differentials: string[];
+}): Array<Record<string, string>> {
+  const rows: Array<Record<string, string>> = [];
+
+  // Tier assignment: first 2 PRIMARY, next 3 SECONDARY, rest BENIGN
+  function tier(i: number) {
+    if (i < 2) return "PRIMARY";
+    if (i < 5) return "SECONDARY";
+    return "BENIGN";
+  }
+
+  for (let i = 0; i < ctx.differentials.length; i++) {
+    const dx = ctx.differentials[i];
+    const t = tier(i);
+
+    const ruleId = `CSR_${ctx.ccId}_${dx}_v1`;
+
+    const r: Record<string, string> = {};
+    // Common columns across many schemas
+    if (headers.includes("RULE_ID")) r["RULE_ID"] = ruleId;
+    if (headers.includes("CC_ID")) r["CC_ID"] = ctx.ccId;
+    if (headers.includes("COMPLAINT_KEY")) r["COMPLAINT_KEY"] = ctx.complaintKey;
+
+    // cluster identifiers
+    const clusterId = `CL_${ctx.ccId}_${t}_${Math.min(i + 1, 9)}`;
+    if (headers.includes("CLUSTER_ID")) r["CLUSTER_ID"] = clusterId;
+    if (headers.includes("CLUSTER_TIER")) r["CLUSTER_TIER"] = t;
+    if (headers.includes("TIER")) r["TIER"] = t;
+
+    // scoring
+    if (headers.includes("WEIGHT")) r["WEIGHT"] = t === "PRIMARY" ? "3" : t === "SECONDARY" ? "2" : "1";
+    if (headers.includes("SCORE")) r["SCORE"] = t === "PRIMARY" ? "3" : t === "SECONDARY" ? "2" : "1";
+
+    // condition expression: default true (you’ll refine clinically)
+    const when = "true";
+    if (headers.includes("WHEN_EXPR")) r["WHEN_EXPR"] = when;
+    if (headers.includes("IF_ALL")) r["IF_ALL"] = when;
+
+    // label fields
+    const label = dx.replace(/_/g, " ");
+    if (headers.includes("DX_LABEL")) r["DX_LABEL"] = label;
+    if (headers.includes("LABEL")) r["LABEL"] = label;
+    if (headers.includes("DX_ID")) r["DX_ID"] = dx;
+
+    // version fields
+    if (headers.includes("VERSION")) r["VERSION"] = "v1";
+
+    rows.push(r);
+  }
+
+  return rows;
+}
+
+function buildRowsForDxPriority(headers: string[], ctx: {
+  ccId: string;
+  complaintKey: string;
+  differentials: string[];
+}): Array<Record<string, string>> {
+  const rows: Array<Record<string, string>> = [];
+
+  for (let i = 0; i < ctx.differentials.length; i++) {
+    const dx = ctx.differentials[i];
+    const rowId = `DXP_${ctx.ccId}_${dx}_v1`;
+    const r: Record<string, string> = {};
+
+    if (headers.includes("ROW_ID")) r["ROW_ID"] = rowId;
+    if (headers.includes("DXP_ID")) r["DXP_ID"] = rowId;
+    if (headers.includes("CC_ID")) r["CC_ID"] = ctx.ccId;
+    if (headers.includes("COMPLAINT_KEY")) r["COMPLAINT_KEY"] = ctx.complaintKey;
+
+    // dx identity
+    if (headers.includes("DX_ID")) r["DX_ID"] = dx;
+    if (headers.includes("DX_LABEL")) r["DX_LABEL"] = dx.replace(/_/g, " ");
+    if (headers.includes("LABEL")) r["LABEL"] = dx.replace(/_/g, " ");
+
+    // priority rank (lower = higher priority)
+    const rank = String(i + 1);
+    if (headers.includes("PRIORITY")) r["PRIORITY"] = rank;
+    if (headers.includes("RANK")) r["RANK"] = rank;
+    if (headers.includes("ORDER")) r["ORDER"] = rank;
+
+    if (headers.includes("VERSION")) r["VERSION"] = "v1";
+
+    rows.push(r);
+  }
+
+  return rows;
+}
+
+function readHeaders(filePath: string): string[] {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const parsed = Papa.parse<Record<string, string>>(raw, { header: true, skipEmptyLines: true });
+  return (parsed.meta.fields ?? []) as string[];
+}
+
+function runSingleGenerator(params: { complaintKey: string; system: string; label: string; aliasesSemi: string; engine?: string; dryRun: boolean; }) {
+  const { complaintKey, system, label, aliasesSemi, engine, dryRun } = params;
+
+  const cmd = "npx";
+  const args = ["tsx", "scripts/generate-complaints.ts", complaintKey, system, label, aliasesSemi];
+
+  if (dryRun) {
+    console.log(`[DRY] Would run: ${cmd} ${args.join(" ")}`);
+    return;
+  }
+
+  const env = { ...process.env };
+  if (engine) env["ENGINE_TYPE_OVERRIDE"] = engine; // optional convention; your generator can ignore this safely
+
+  const res = spawnSync(cmd, args, { stdio: "inherit", env });
+  if (res.status !== 0) {
+    throw new Error(`generate-complaints.ts failed for ${complaintKey} (exit ${res.status})`);
+  }
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed file not found: ${seedAbs}`);
+
+  const seed = readCsv<SeedRow>(seedAbs);
+
+  // Find your canonical “central CSVs”. Adjust candidates if your repo differs.
+  const clusterCandidates = [
+    path.join(root, "data", "complaints", "cluster_scoring_rules.csv"),
+    path.join(root, "data", "complaints", "CLUSTER_SCORING_RULES.csv"),
+    path.join(root, "data", "CLUSTER_SCORING_RULES.csv"),
+  ];
+  const dxpCandidates = [
+    path.join(root, "data", "complaints", "dx_priority.csv"),
+    path.join(root, "data", "complaints", "DX_PRIORITY.csv"),
+    path.join(root, "data", "DX_PRIORITY.csv"),
+  ];
+
+  const clusterFile = findFirstExisting(clusterCandidates);
+  const dxpFile = findFirstExisting(dxpCandidates);
+
+  if (!clusterFile) {
+    console.warn(`[WARN] Could not find cluster scoring rules CSV. Checked:\n${clusterCandidates.map(x => " - " + x).join("\n")}`);
+  }
+  if (!dxpFile) {
+    console.warn(`[WARN] Could not find DX priority CSV. Checked:\n${dxpCandidates.map(x => " - " + x).join("\n")}`);
+  }
+
+  const goldenOutDir = path.join(root, "scripts", "golden_suggestions");
+  if (!args.noGolden) ensureDir(goldenOutDir);
+
+  let totalComplaints = 0;
+  let totalCsrAdded = 0;
+  let totalDxpAdded = 0;
+
+  for (const row of seed) {
+    const complaintKey = normalizeKey(row.COMPLAINT_KEY);
+    const system = normalizeKey(row.SYSTEM);
+    const label = normalizeKey(row.LABEL);
+    const aliases = normalizeKey(row.ALIASES);
+    const differentials = splitSemi(row.DIFFERENTIALS);
+
+    if (!complaintKey || !system || !label) continue;
+    if (differentials.length === 0) {
+      console.warn(`[WARN] No differentials for ${complaintKey}; skipping differential seeding.`);
+    }
+
+    totalComplaints++;
+
+    // Your generator expects: key system label aliasesSemi
+    runSingleGenerator({
+      complaintKey,
+      system,
+      label,
+      aliasesSemi: (aliases || complaintKey).includes(";") ? aliases : (aliases ? aliases : complaintKey),
+      engine: args.engine,
+      dryRun: args.dryRun,
+    });
+
+    // Map CC_ID: your generator uses CC_ID in registry; we need it to build stable IDs.
+    // Best-effort: try to infer CC_ID as "CC_" + uppercase complaint key if you don’t store it elsewhere.
+    // If your loader exposes a registry table, you can upgrade this later to read CC_ID from it.
+    const ccId = `CC_${complaintKey.toUpperCase()}`;
+
+    // Append CSR
+    if (clusterFile && differentials.length) {
+      const headers = readHeaders(clusterFile);
+      const rowsToAdd = buildRowsForClusterScoring(headers, { ccId, complaintKey, differentials });
+
+      const { added } = appendRowsIdempotent({
+        filePath: clusterFile,
+        keyColCandidates: ["RULE_ID", "CSR_ID", "ROW_ID"],
+        rowsToAdd,
+        dryRun: args.dryRun,
+      });
+      totalCsrAdded += added;
+    }
+
+    // Append DX Priority
+    if (dxpFile && differentials.length) {
+      const headers = readHeaders(dxpFile);
+      const rowsToAdd = buildRowsForDxPriority(headers, { ccId, complaintKey, differentials });
+
+      const { added } = appendRowsIdempotent({
+        filePath: dxpFile,
+        keyColCandidates: ["ROW_ID", "DXP_ID", "ID"],
+        rowsToAdd,
+        dryRun: args.dryRun,
+      });
+      totalDxpAdded += added;
+    }
+
+    // Emit golden suggestions (does NOT modify your golden harness automatically)
+    if (!args.noGolden) {
+      const suggestPath = path.join(goldenOutDir, `${complaintKey}.golden-suggestions.txt`);
+      const suggestions = [
+        `# Golden test suggestions for ${complaintKey}`,
+        `# (Paste/adapt into your golden test harness as needed)`,
+        ``,
+        `- Mild/benign: duration=2, fever=no, pain=no, sob=no, severity=2 -> expect self_care/home`,
+        `- Moderate: duration=7, fever=yes, pain=yes, sob=no, severity=6 -> expect UC/PCP (depends rules)`,
+        `- Red flag: sob=yes -> expect ER_SEND + NEEDS_REVIEW`,
+        ``,
+        `# Differential seeds (expected candidates)`,
+        ...differentials.map((d, i) => `- [${i + 1}] ${d}`),
+        ``,
+      ].join("\n");
+
+      if (args.dryRun) {
+        console.log(`[DRY] Would write golden suggestions: ${suggestPath}`);
+      } else {
+        fs.writeFileSync(suggestPath, suggestions, "utf8");
+      }
+    }
+  }
+
+  console.log("\n=== Differential Seed Generation Summary ===");
+  console.log(`Complaints processed: ${totalComplaints}`);
+  if (clusterFile) console.log(`Cluster scoring rows added: ${totalCsrAdded}`);
+  if (dxpFile) console.log(`DX priority rows added: ${totalDxpAdded}`);
+  if (!args.noGolden) console.log(`Golden suggestions dir: scripts/golden_suggestions/`);
+  console.log("Done.");
+}
+
+main();
+C) Add an npm script (optional)
+
+In package.json:
+
+{
+  "scripts": {
+    "gen:differentials": "tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv"
+  }
+}
+
+Run:
+
+npm run gen:differentials
+npm run abi:complaints
+npm test
+D) Important: one quick adjustment you might need
+
+This script tries to find these central CSVs:
+
+data/complaints/cluster_scoring_rules.csv (or uppercase variants)
+
+data/complaints/dx_priority.csv (or uppercase variants)
+
+If your real filenames differ, update the clusterCandidates / dxpCandidates arrays in the script.
