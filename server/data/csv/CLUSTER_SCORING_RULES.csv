@@ -426,14 +426,21 @@ derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,CSR_DALRG_ANAPHYLAXIS_01,4,"answers.
 derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,CSR_DALRG_ANAPHYLAXIS_02,4,"answers.Q_DALRG_THROAT == 'yes'","anaphylaxis rule 2"
 derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,CSR_DALRG_ANAPHYLAXIS_03,4,"answers.Q_DALRG_SOB == 'yes'","anaphylaxis rule 3"
 derm_allergic_reaction,CL_DALRG_URTICARIA,CSR_DALRG_URTICARIA_02,1,"answers.Q_DALRG_TRIGGER == 'yes'","urticaria rule 2"
-endo_hyperglycemia,CL_EHYPR_DKA_HHS,CSR_EHYPR_DKA_HHS_01,4,"answers.Q_EHYPR_RAPID_BREATH == 'yes'","dka_hhs rule 1"
-endo_hyperglycemia,CL_EHYPR_DKA_HHS,CSR_EHYPR_DKA_HHS_02,3,"answers.Q_EHYPR_VOMIT == 'yes'","dka_hhs rule 2"
-endo_hyperglycemia,CL_EHYPR_DKA_HHS,CSR_EHYPR_DKA_HHS_03,3,"answers.Q_EHYPR_CONFUSION == 'yes'","dka_hhs rule 3"
-endo_hyperglycemia,CL_EHYPR_DKA_HHS,CSR_EHYPR_DKA_HHS_04,2,"answers.Q_EHYPR_ABD_PAIN == 'yes'","dka_hhs rule 4"
-endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,CSR_EHYPR_UNCONTROLLED_HYPERGLYCEMIA_01,2,"answers.Q_EHYPR_KNOWN_DM == 'yes'","uncontrolled_hyperglycemia rule 1"
-endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,CSR_EHYPR_UNCONTROLLED_HYPERGLYCEMIA_02,2,"answers.Q_EHYPR_POLYURIA == 'yes'","uncontrolled_hyperglycemia rule 2"
-endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,CSR_EHYPR_UNCONTROLLED_HYPERGLYCEMIA_03,2,"answers.Q_EHYPR_POLYDIPSIA == 'yes'","uncontrolled_hyperglycemia rule 3"
-endo_hyperglycemia,CL_EHYPR_STRESS_HYPERGLYCEMIA,CSR_EHYPR_STRESS_HYPERGLYCEMIA_01,2,"answers.Q_EHYPR_INFECTION == 'yes'","stress_hyperglycemia rule 1"
+endo_hyperglycemia,CL_EHYPR_DKA_HHS,DKA_1,4,"answers.Q_EHYPR_CONFUSION == 'yes'",Confusion present
+endo_hyperglycemia,CL_EHYPR_DKA_HHS,DKA_2,3,"answers.Q_EHYPR_RAPID_BREATH == 'yes'",Kussmaul breathing
+endo_hyperglycemia,CL_EHYPR_DKA_HHS,DKA_3,3,"answers.Q_EHYPR_FRUITY_BREATH == 'yes'",Fruity breath
+endo_hyperglycemia,CL_EHYPR_DKA_HHS,DKA_4,2,"answers.Q_EHYPR_VOMIT == 'yes'",Vomiting
+endo_hyperglycemia,CL_EHYPR_DKA_HHS,DKA_5,2,"answers.Q_EHYPR_MISSED_INSULIN == 'yes'",Missed insulin
+endo_hyperglycemia,CL_EHYPR_DKA_HHS,DKA_NEG_1,-3,"answers.Q_EHYPR_INFECTION == 'yes' && answers.Q_EHYPR_RAPID_BREATH != 'yes' && answers.Q_EHYPR_FRUITY_BREATH != 'yes' && answers.Q_EHYPR_CONFUSION != 'yes'",Infection without DKA features
+endo_hyperglycemia,CL_EHYPR_STRESS_HYPERGLYCEMIA,STRESS_1,3,"answers.Q_EHYPR_INFECTION == 'yes'",Infection present
+endo_hyperglycemia,CL_EHYPR_STRESS_HYPERGLYCEMIA,STRESS_2,1,"answers.Q_EHYPR_KNOWN_DM != 'yes'",Not known diabetic
+endo_hyperglycemia,CL_EHYPR_STRESS_HYPERGLYCEMIA,STRESS_NEG_1,-6,"answers.Q_EHYPR_RAPID_BREATH == 'yes' || answers.Q_EHYPR_FRUITY_BREATH == 'yes' || answers.Q_EHYPR_CONFUSION == 'yes'",DKA features suppress stress
+endo_hyperglycemia,CL_EHYPR_STRESS_HYPERGLYCEMIA,STRESS_NEG_2,-3,"answers.Q_EHYPR_MISSED_INSULIN == 'yes'",Missed insulin suppresses stress
+endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,UH_1,2,"answers.Q_EHYPR_KNOWN_DM == 'yes'",Known diabetic
+endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,UH_2,2,"answers.Q_EHYPR_POLYURIA == 'yes'",Polyuria
+endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,UH_3,2,"answers.Q_EHYPR_POLYDIPSIA == 'yes'",Polydipsia
+endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,UH_4,2,"answers.Q_EHYPR_MISSED_INSULIN == 'yes'",Missed insulin
+endo_hyperglycemia,CL_EHYPR_UNCONTROLLED_HYPERGLYCEMIA,UH_NEG_1,-6,"answers.Q_EHYPR_RAPID_BREATH == 'yes' || answers.Q_EHYPR_FRUITY_BREATH == 'yes' || answers.Q_EHYPR_CONFUSION == 'yes'",DKA features suppress uncontrolled
 endo_hypoglycemia,CL_EHYPO_SEVERE_HYPOGLYCEMIA,CSR_EHYPO_SEVERE_HYPOGLYCEMIA_01,5,"answers.Q_EHYPO_SYNCOPE == 'yes'","severe_hypoglycemia rule 1"
 endo_hypoglycemia,CL_EHYPO_SEVERE_HYPOGLYCEMIA,CSR_EHYPO_SEVERE_HYPOGLYCEMIA_02,4,"answers.Q_EHYPO_CONFUSION == 'yes'","severe_hypoglycemia rule 2"
 endo_hypoglycemia,CL_EHYPO_SEVERE_HYPOGLYCEMIA,CSR_EHYPO_SEVERE_HYPOGLYCEMIA_03,4,"answers.Q_EHYPO_UNABLE_PO == 'yes'","severe_hypoglycemia rule 3"
@@ -515,12 +522,24 @@ tox_poisoning_exposure,CL_TOXPX_SYSTEMIC_TOXICITY,CSR_TOXPX_03,4,"answers.Q_TOXP
 tox_poisoning_exposure,CL_TOXPX_GI_TOXICITY,CSR_TOXPX_04,2,"answers.Q_TOXPX_VOMIT == 'yes'",gi_toxicity rule 4
 tox_poisoning_exposure,CL_TOXPX_UNKNOWN_EXPOSURE,CSR_TOXPX_05,3,"answers.Q_TOXPX_UNKNOWN == 'yes'",unknown_exposure rule 5
 tox_poisoning_exposure,CL_TOXPX_UNKNOWN_EXPOSURE,CSR_TOXPX_06,1,"answers.Q_TOXPX_CORROSIVE == 'no' && answers.Q_TOXPX_INHALATION == 'no' && answers.Q_TOXPX_AMS == 'no'",unknown_exposure rule 6
-ortho_trauma_head_injury,CL_OTHI_CONCUSSION,CSR_OTHI_01,2,"answers.Q_OTHI_LOC == 'yes'",concussion rule 1
-ortho_trauma_head_injury,CL_OTHI_CONCUSSION,CSR_OTHI_02,2,"answers.Q_OTHI_SEVERE_HEADACHE == 'yes'",concussion rule 2
-ortho_trauma_head_injury,CL_OTHI_ICH_RISK,CSR_OTHI_03,5,"answers.Q_OTHI_NEURODEF == 'yes'",ich_risk rule 3
-ortho_trauma_head_injury,CL_OTHI_ICH_RISK,CSR_OTHI_04,3,"answers.Q_OTHI_BLOOD_THINNER == 'yes'",ich_risk rule 4
-ortho_trauma_head_injury,CL_OTHI_ICH_RISK,CSR_OTHI_05,2,"answers.Q_OTHI_VOMIT == 'yes'",ich_risk rule 5
-ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,CSR_OTHI_06,2,"answers.Q_OTHI_LOC == 'no' && answers.Q_OTHI_NEURODEF == 'no' && answers.Q_OTHI_VOMIT == 'no'",minor_head_injury rule 6
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_1,4,"answers.Q_OTHI_BLOOD_THINNER == 'yes'",Blood thinner present
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_2,4,"answers.Q_OTHI_NEURODEF == 'yes'",Neurodeficit present
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_3,2,"answers.Q_OTHI_VOMIT == 'yes'",Vomiting present
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_4,2,"answers.Q_OTHI_WORSENING == 'yes'",Worsening symptoms
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_NEG_1,-3,"answers.Q_OTHI_BLOOD_THINNER != 'yes' && answers.Q_OTHI_NEURODEF != 'yes' && answers.Q_OTHI_VOMIT != 'yes' && answers.Q_OTHI_WORSENING != 'yes'",No ICH risk factors
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,NEU_1,6,"answers.Q_OTHI_NEURODEF == 'yes'",Neurodeficit present
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,NEU_2,2,"answers.Q_OTHI_LOC == 'yes'",LOC present
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,NEU_NEG_1,-6,"answers.Q_OTHI_NEURODEF != 'yes'",No neurodeficit
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_1,3,"answers.Q_OTHI_DANGER_MECH == 'yes'",Dangerous mechanism
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_2,1,"answers.Q_OTHI_AGE_GE_65 == 'yes'",Age 65+
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_3,1,"answers.Q_OTHI_INTOX == 'yes'",Intoxicated
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_NEG_1,-4,"answers.Q_OTHI_DANGER_MECH != 'yes'",No dangerous mechanism
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_1,3,"answers.Q_OTHI_LOC == 'yes'",LOC present
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_2,2,"answers.Q_OTHI_SEVERE_HEADACHE == 'yes'",Severe headache
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_3,2,"answers.Q_OTHI_AMNESIA == 'yes'",Amnesia present
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_NEG_1,-6,"answers.Q_OTHI_NEURODEF == 'yes'",Neurodef suppresses concussion
+ortho_trauma_head_injury,CL_HI_MINOR,MIN_1,3,"answers.Q_OTHI_LOC != 'yes' && answers.Q_OTHI_VOMIT != 'yes' && answers.Q_OTHI_NEURODEF != 'yes' && answers.Q_OTHI_SEVERE_HEADACHE != 'yes'",No significant findings
+ortho_trauma_head_injury,CL_HI_MINOR,MIN_NEG_1,-3,"answers.Q_OTHI_BLOOD_THINNER == 'yes' || answers.Q_OTHI_DANGER_MECH == 'yes'",Risk factors suppress minor
 ortho_trauma_fracture_dislocation,CL_OTFX_FRACTURE_DISLOCATION,CSR_OTFX_01,4,"answers.Q_OTFX_DEFORM == 'yes'",fracture_dislocation rule 1
 ortho_trauma_fracture_dislocation,CL_OTFX_FRACTURE_DISLOCATION,CSR_OTFX_02,2,"answers.Q_OTFX_UNABLE_WEIGHT == 'yes'",fracture_dislocation rule 2
 ortho_trauma_fracture_dislocation,CL_OTFX_OPEN_FRACTURE,CSR_OTFX_03,6,"answers.Q_OTFX_OPEN == 'yes'",open_fracture rule 3
@@ -648,12 +667,6 @@ endo_thyroid_symptoms,CL_ETHYR_THYROID_STORM,NEG_STORM_NO_DELIR_NO_CP,-4,"answer
 endo_thyroid_symptoms,CL_ETHYR_HYPERTHYROID,NEG_HYPER_NO_TACHY,-4,"answers.Q_ETHYR_TACHY == 'no'",NEG_HYPER_NO_TACHY suppressor
 endo_thyroid_symptoms,CL_ETHYR_HYPOTHYROID,NEG_HYPO_TACHY_DOM,-2,"answers.Q_ETHYR_TACHY == 'yes' && answers.Q_ETHYR_WEIGHT_GAIN == 'no'",NEG_HYPO_TACHY_DOM suppressor
 endo_thyroid_symptoms,CL_ETHYR_HYPOTHYROID,BOOST_HYPO_WEIGHTGAIN,2,"answers.Q_ETHYR_WEIGHT_GAIN == 'yes'",BOOST_HYPO_WEIGHTGAIN suppressor
-ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,NEG_MINOR_LOC,-6,"answers.Q_OTHI_LOC == 'yes'",NEG_MINOR_LOC suppressor
-ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,NEG_MINOR_VOMIT,-6,"answers.Q_OTHI_VOMIT == 'yes'",NEG_MINOR_VOMIT suppressor
-ortho_trauma_head_injury,CL_OTHI_MINOR_HEAD_INJURY,NEG_MINOR_NEURO,-6,"answers.Q_OTHI_NEURODEF == 'yes'",NEG_MINOR_NEURO suppressor
-ortho_trauma_head_injury,CL_OTHI_CONCUSSION,NEG_CONC_NEURODEF,-3,"answers.Q_OTHI_NEURODEF == 'yes'",NEG_CONC_NEURODEF suppressor
-ortho_trauma_head_injury,CL_OTHI_ICH_RISK,BOOST_ICH_THINNER,2,"answers.Q_OTHI_BLOOD_THINNER == 'yes'",BOOST_ICH_THINNER suppressor
-ortho_trauma_head_injury,CL_OTHI_ICH_RISK,BOOST_ICH_NEURODEF,3,"answers.Q_OTHI_NEURODEF == 'yes'",BOOST_ICH_NEURODEF suppressor
 psych_agitation_psychosis,CL_PAGIT_AGITATION,BOOST_AG_VIOLENT,2,"answers.Q_PAGIT_VIOLENT == 'yes'",BOOST_AG_VIOLENT suppressor
 psych_agitation_psychosis,CL_PAGIT_AGITATION,BOOST_AG_UNSAFE,2,"answers.Q_PAGIT_UNABLE_SAFE == 'yes'",BOOST_AG_UNSAFE suppressor
 psych_agitation_psychosis,CL_PAGIT_ACUTE_PSYCHOSIS,BOOST_AP_HALLUC,3,"answers.Q_PAGIT_HALLUC == 'yes'",BOOST_AP_HALLUC suppressor

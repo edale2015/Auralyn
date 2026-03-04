@@ -1,0 +1,181 @@
+B4-10 ORTHO_TRAUMA Head Injury Subtype Expansion
+Subtypes
+
+minor_head_injury
+
+concussion
+
+ich_risk_anticoag
+
+high_risk_neurodef
+
+dangerous_mechanism
+(plus existing ICH risk logic)
+
+A) Optional questions (CORE_QUESTIONS.csv additions for ortho_trauma_head_injury)
+
+Add if missing:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+ortho_trauma_head_injury,age_ge_65,Age 65 or older?,boolean
+ortho_trauma_head_injury,amnesia,Amnesia to event or >30 minutes?,boolean
+ortho_trauma_head_injury,danger_mech,High-risk mechanism (high fall/MVC/struck)?,boolean
+ortho_trauma_head_injury,intox,Intoxicated?,boolean
+ortho_trauma_head_injury,worsening,Symptoms worsening over time?,boolean
+
+(You already have: loc, vomit, severe_headache, neurodef, blood_thinner.)
+
+B) Cluster scoring rules (CLUSTER_SCORING_RULES.csv) for ortho_trauma_head_injury
+
+Dx_IDs (align with your current names if they exist):
+
+CL_HI_MINOR
+
+CL_HI_CONCUSSION
+
+CL_HI_ICH_RISK
+
+CL_HI_HIGH_RISK_NEURO
+
+CL_HI_DANGER_MECH
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_1,"blood_thinner=true",4
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_2,"neurodef=true",4
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_3,"vomit=true",2
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_4,"worsening=true",2
+ortho_trauma_head_injury,CL_HI_ICH_RISK,ICH_NEG_1,"blood_thinner=false AND neurodef=false AND vomit=false AND worsening=false",-3
+
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,NEU_1,"neurodef=true",6
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,NEU_2,"loc=true",2
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,NEU_NEG_1,"neurodef=false",-6
+
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_1,"danger_mech=true",3
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_2,"age_ge_65=true",1
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_3,"intox=true",1
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,MECH_NEG_1,"danger_mech=false",-4
+
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_1,"loc=true",3
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_2,"severe_headache=true",2
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_3,"amnesia=true",2
+ortho_trauma_head_injury,CL_HI_CONCUSSION,CONC_NEG_1,"neurodef=true",-6
+
+ortho_trauma_head_injury,CL_HI_MINOR,MIN_1,"loc=false AND vomit=false AND neurodef=false AND severe_headache=false",3
+ortho_trauma_head_injury,CL_HI_MINOR,MIN_NEG_1,"blood_thinner=true OR danger_mech=true",-3
+C) DX_PRIORITY ties (DX_PRIORITY.csv)
+Complaint_Slug,Dx_ID,Priority
+ortho_trauma_head_injury,CL_HI_HIGH_RISK_NEURO,100
+ortho_trauma_head_injury,CL_HI_ICH_RISK,95
+ortho_trauma_head_injury,CL_HI_DANGER_MECH,80
+ortho_trauma_head_injury,CL_HI_CONCUSSION,70
+ortho_trauma_head_injury,CL_HI_MINOR,50
+D) Red flags (ensure)
+
+If not already, include:
+
+neurodef, anticoag + head injury, repeated vomiting, worsening headache → EMERG
+
+E) 13 strict subtype goldens
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+ortho_trauma_head_injury,HI_SUB1,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""danger_mech"":false}",ROUTINE,CL_HI_MINOR
+ortho_trauma_head_injury,HI_SUB2,"{""loc"":true,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""amnesia"":true}",URGENT,CL_HI_CONCUSSION
+ortho_trauma_head_injury,HI_SUB3,"{""loc"":false,""vomit"":true,""severe_headache"":true,""neurodef"":false,""blood_thinner"":false}",EMERG,CL_HI_ICH_RISK
+ortho_trauma_head_injury,HI_SUB4,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":true,""blood_thinner"":false}",EMERG,CL_HI_HIGH_RISK_NEURO
+ortho_trauma_head_injury,HI_SUB5,"{""loc"":false,""vomit"":true,""severe_headache"":false,""neurodef"":false,""blood_thinner"":true}",EMERG,CL_HI_ICH_RISK
+ortho_trauma_head_injury,HI_SUB6,"{""loc"":false,""vomit"":false,""severe_headache"":true,""neurodef"":false,""blood_thinner"":false,""danger_mech"":true}",URGENT,CL_HI_DANGER_MECH
+ortho_trauma_head_injury,HI_SUB7,"{""loc"":true,""vomit"":true,""severe_headache"":true,""neurodef"":false,""blood_thinner"":false,""worsening"":true}",EMERG,CL_HI_ICH_RISK
+ortho_trauma_head_injury,HI_SUB8,"{""loc"":false,""vomit"":false,""severe_headache"":true,""neurodef"":false,""blood_thinner"":true}",URGENT,CL_HI_ICH_RISK
+ortho_trauma_head_injury,HI_SUB9,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":true}",URGENT,CL_HI_ICH_RISK
+ortho_trauma_head_injury,HI_SUB10,"{""loc"":false,""vomit"":true,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false}",URGENT,CL_HI_CONCUSSION
+ortho_trauma_head_injury,HI_SUB11,"{""loc"":true,""vomit"":false,""severe_headache"":true,""neurodef"":false,""blood_thinner"":true,""danger_mech"":true}",EMERG,CL_HI_ICH_RISK
+ortho_trauma_head_injury,HI_SUB12,"{""loc"":false,""vomit"":true,""severe_headache"":true,""neurodef"":true,""blood_thinner"":false}",EMERG,CL_HI_HIGH_RISK_NEURO
+ortho_trauma_head_injury,HI_SUB13,"{""loc"":false,""vomit"":false,""severe_headache"":false,""neurodef"":false,""blood_thinner"":false,""danger_mech"":true,""age_ge_65"":true}",URGENT,CL_HI_DANGER_MECH
+
+Run:
+
+npm run ship:complaint -- ortho_trauma_head_injury
+npx tsx scripts/gate-prod.ts
+B4-11 ENDO Hyperglycemia Nuance Expansion
+
+Subtypes:
+
+dka_hhs_like
+
+stress_hyperglycemia
+
+uncontrolled_hyperglycemia
+
+(You already have these clusters; this is about adding the right discriminators and reducing “vomit-only confusion”.)
+
+A) Optional questions to add (CORE_QUESTIONS.csv for endo_hyperglycemia)
+
+Add if missing:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+endo_hyperglycemia,polyuria,Frequent urination?,boolean
+endo_hyperglycemia,polydipsia,Very thirsty?,boolean
+endo_hyperglycemia,weight_loss,Recent weight loss?,boolean
+endo_hyperglycemia,fruity_breath,Fruity breath?,boolean
+endo_hyperglycemia,kussmaul,Deep/rapid breathing?,boolean
+endo_hyperglycemia,infection,Infection symptoms (fever/cough/UTI)?,boolean
+endo_hyperglycemia,missed_insulin,Missed insulin or stopped diabetes meds?,boolean
+endo_hyperglycemia,known_dm,Known diabetes?,boolean
+
+(If some already exist, skip duplicates.)
+
+B) Scoring rules to refine clusters (CLUSTER_SCORING_RULES.csv)
+
+Dx_IDs:
+
+dka_hhs
+
+stress_hyperglycemia
+
+uncontrolled_hyperglycemia
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+endo_hyperglycemia,dka_hhs,DKA_1,"confusion=true",4
+endo_hyperglycemia,dka_hhs,DKA_2,"kussmaul=true OR rapid_breath=true",3
+endo_hyperglycemia,dka_hhs,DKA_3,"fruity_breath=true",3
+endo_hyperglycemia,dka_hhs,DKA_4,"vomit=true",2
+endo_hyperglycemia,dka_hhs,DKA_5,"missed_insulin=true",2
+endo_hyperglycemia,dka_hhs,DKA_NEG_1,"infection=true AND (kussmaul=false AND fruity_breath=false AND confusion=false)",-3
+
+endo_hyperglycemia,stress_hyperglycemia,STRESS_1,"infection=true",3
+endo_hyperglycemia,stress_hyperglycemia,STRESS_2,"known_dm=false",1
+endo_hyperglycemia,stress_hyperglycemia,STRESS_NEG_1,"kussmaul=true OR fruity_breath=true OR confusion=true",-6
+endo_hyperglycemia,stress_hyperglycemia,STRESS_NEG_2,"missed_insulin=true",-3
+
+endo_hyperglycemia,uncontrolled_hyperglycemia,UH_1,"known_dm=true",2
+endo_hyperglycemia,uncontrolled_hyperglycemia,UH_2,"polyuria=true",2
+endo_hyperglycemia,uncontrolled_hyperglycemia,UH_3,"polydipsia=true",2
+endo_hyperglycemia,uncontrolled_hyperglycemia,UH_4,"missed_insulin=true",2
+endo_hyperglycemia,uncontrolled_hyperglycemia,UH_NEG_1,"kussmaul=true OR fruity_breath=true OR confusion=true",-6
+C) DX_PRIORITY ties (DX_PRIORITY.csv)
+Complaint_Slug,Dx_ID,Priority
+endo_hyperglycemia,dka_hhs,100
+endo_hyperglycemia,stress_hyperglycemia,70
+endo_hyperglycemia,uncontrolled_hyperglycemia,60
+
+(You already had uncontrolled>stress tie in one scenario; you can keep that if it’s your canon. This order is the clinical default; adjust if needed.)
+
+D) 13 subtype goldens (strict)
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+endo_hyperglycemia,EHY_SUB1,"{""known_dm"":true,""missed_insulin"":true,""vomit"":true,""kussmaul"":true,""fruity_breath"":true,""confusion"":false,""infection"":false}",EMERG,dka_hhs
+endo_hyperglycemia,EHY_SUB2,"{""known_dm"":true,""polyuria"":true,""polydipsia"":true,""missed_insulin"":true,""vomit"":false,""kussmaul"":false,""fruity_breath"":false,""confusion"":false,""infection"":false}",URGENT,uncontrolled_hyperglycemia
+endo_hyperglycemia,EHY_SUB3,"{""known_dm"":false,""infection"":true,""vomit"":false,""kussmaul"":false,""fruity_breath"":false,""confusion"":false}",URGENT,stress_hyperglycemia
+endo_hyperglycemia,EHY_SUB4,"{""known_dm"":true,""infection"":true,""vomit"":false,""kussmaul"":false,""fruity_breath"":false,""confusion"":false,""polyuria"":true,""polydipsia"":true}",URGENT,stress_hyperglycemia
+endo_hyperglycemia,EHY_SUB5,"{""known_dm"":true,""vomit"":true,""kussmaul"":true,""fruity_breath"":false,""confusion"":true,""infection"":false}",EMERG,dka_hhs
+endo_hyperglycemia,EHY_SUB6,"{""known_dm"":false,""vomit"":true,""kussmaul"":true,""fruity_breath"":true,""confusion"":true,""infection"":false}",EMERG,dka_hhs
+endo_hyperglycemia,EHY_SUB7,"{""known_dm"":true,""infection"":true,""vomit"":true,""kussmaul"":false,""fruity_breath"":false,""confusion"":false}",URGENT,stress_hyperglycemia
+endo_hyperglycemia,EHY_SUB8,"{""known_dm"":true,""missed_insulin"":true,""vomit"":false,""kussmaul"":false,""fruity_breath"":false,""confusion"":false,""polyuria"":true,""polydipsia"":false}",URGENT,uncontrolled_hyperglycemia
+endo_hyperglycemia,EHY_SUB9,"{""known_dm"":true,""missed_insulin"":true,""vomit"":true,""kussmaul"":false,""fruity_breath"":false,""confusion"":false,""infection"":false}",URGENT,uncontrolled_hyperglycemia
+endo_hyperglycemia,EHY_SUB10,"{""known_dm"":false,""infection"":true,""vomit"":false,""confusion"":false,""kussmaul"":false,""fruity_breath"":false}",URGENT,stress_hyperglycemia
+endo_hyperglycemia,EHY_SUB11,"{""known_dm"":true,""polyuria"":true,""polydipsia"":true,""vomit"":false,""infection"":false,""kussmaul"":false,""fruity_breath"":false}",URGENT,uncontrolled_hyperglycemia
+endo_hyperglycemia,EHY_SUB12,"{""known_dm"":true,""infection"":true,""kussmaul"":true,""fruity_breath"":false,""confusion"":false,""vomit"":false}",EMERG,dka_hhs
+endo_hyperglycemia,EHY_SUB13,"{""known_dm"":true,""infection"":false,""vomit"":false,""kussmaul"":false,""fruity_breath"":false,""confusion"":false}",ROUTINE,uncontrolled_hyperglycemia
+
+Run:
+
+npm run ship:complaint -- endo_hyperglycemia
+npx tsx scripts/gate-prod.ts
