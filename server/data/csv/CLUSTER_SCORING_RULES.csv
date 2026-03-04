@@ -346,13 +346,6 @@ gu_dysuria_uti,CL_DUTI_CYSTITIS,CSR_DUTI_CYSTITIS_02,1,"answers.Q_DUTI_FLANK == 
 gu_dysuria_uti,CL_DUTI_PYELONEPHRITIS,CSR_DUTI_PYELONEPHRITIS_01,2,"answers.Q_DUTI_FEVER == 'yes'","Fever"
 gu_dysuria_uti,CL_DUTI_PYELONEPHRITIS,CSR_DUTI_PYELONEPHRITIS_02,2,"answers.Q_DUTI_FLANK == 'yes'","Flank pain"
 gu_dysuria_uti,CL_DUTI_STI_URETHRITIS,CSR_DUTI_STI_URETHRITIS_01,3,"answers.Q_DUTI_DISCHARGE == 'yes'","Discharge"
-gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_NEPHROLITHIASIS_01,2,"answers.Q_FLNK_HEMATURIA == 'yes'","Hematuria"
-gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_NEPHROLITHIASIS_02,2,"answers.Q_FLNK_COLICKY == 'yes'","Colicky pain"
-gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_NEPHROLITHIASIS_03,1,"answers.Q_FLNK_FEVER == 'no'","No fever"
-gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELONEPHRITIS_01,2,"answers.Q_FLNK_FEVER == 'yes'","Fever"
-gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELONEPHRITIS_02,2,"answers.Q_FLNK_URINARY == 'yes'","Urinary symptoms"
-gu_flank_pain,CL_FLNK_MSK,CSR_FLNK_MSK_01,1,"answers.Q_FLNK_HEMATURIA == 'no'","No hematuria"
-gu_flank_pain,CL_FLNK_MSK,CSR_FLNK_MSK_02,1,"answers.Q_FLNK_URINARY == 'no'","No urinary symptoms"
 gu_testicular_pain,CL_TPAIN_TORSION,CSR_TPAIN_TORSION_01,3,"answers.Q_TPAIN_SUDDEN == 'yes'","Sudden onset"
 gu_testicular_pain,CL_TPAIN_TORSION,CSR_TPAIN_TORSION_02,2,"answers.Q_TPAIN_HIGH_RIDING == 'yes'","High-riding"
 gu_testicular_pain,CL_TPAIN_TORSION,CSR_TPAIN_TORSION_03,1,"answers.Q_TPAIN_NAUSEA == 'yes'","Nausea"
@@ -704,8 +697,6 @@ psych_depression_suicidal_ideation,CL_PDEP_SUICIDE_RISK,BOOST_SR_INTENT_V4,3,"an
 psych_depression_suicidal_ideation,CL_PDEP_MAJOR_DEPRESSION,NEG_MD_SI_V4,-6,"answers.Q_PDEP_SI == 'yes'",NEG_MD_SI_V4 suppressor
 gi_diarrhea,CL_DIARR_INVASIVE_BACTERIAL,BOOST_BACT_BLOOD_V1,2,"answers.Q_DIARR_BLOOD == 'yes'",BOOST_BACT_BLOOD_V1 suppressor
 gi_diarrhea,CL_DIARR_VIRAL_GASTRO,NEG_VIRAL_BLOOD_V1,-2,"answers.Q_DIARR_BLOOD == 'yes'",NEG_VIRAL_BLOOD_V1 suppressor
-gu_flank_pain,CL_FLNK_PYELONEPHRITIS,BOOST_PYELO_FEVER_V1,2,"answers.Q_FLNK_FEVER == 'yes'",BOOST_PYELO_FEVER_V1 suppressor
-gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,NEG_STONE_FEVER_V1,-3,"answers.Q_FLNK_FEVER == 'yes'",NEG_STONE_FEVER_V1 suppressor
 pulm_chest_tightness,CL_PCT_ASTHMA,BOOST_ASTHMA_WHEEZE_V1,2,"answers.Q_PCT_WHEEZE == 'yes'",BOOST_ASTHMA_WHEEZE_V1 suppressor
 pulm_chest_tightness,CL_PCT_PLEURISY,NEG_PLR_WHEEZE_V1,-2,"answers.Q_PCT_WHEEZE == 'yes'",NEG_PLR_WHEEZE_V1 suppressor
 neuro_dizziness_vertigo,CL_DIZV_VESTIBULAR_NEURITIS,BOOST_VN_NEURODEF_V1,3,"answers.Q_DIZV_NEURODEF == 'yes'",BOOST_VN_NEURODEF_V1 suppressor
@@ -762,3 +753,23 @@ ent_sore_throat,CL_ENT_MONO,CSR_ST_MONO_NEG_01,-1,"answers.Q_ST_COUGH == 'no' &&
 ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,CSR_ST_VIR_01,2,"answers.Q_ST_COUGH == 'yes'",Cough present (viral marker)
 ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,CSR_ST_VIR_02,1,"answers.Q_ST_FEVER == 'no'",No fever
 ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,CSR_ST_VIR_NEG_01,-6,"answers.Q_ST_TRISMUS == 'yes' || answers.Q_ST_DROOL == 'yes' || answers.Q_ST_SOB == 'yes'",Danger signs (suppressor)
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_STONE_01,2,"answers.Q_FLNK_HEMATURIA == 'yes'",Hematuria
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_STONE_02,2,"answers.Q_FLNK_COLICKY == 'yes'",Colicky pain
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_STONE_03,1,"answers.Q_FLNK_STONE_HX == 'yes'",Stone history
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_STONE_04,1,"answers.Q_FLNK_FEVER == 'no'",No fever (simple stone)
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,CSR_FLNK_STONE_NEG_01,-4,"answers.Q_FLNK_FEVER == 'yes'",Fever (infection suppressor)
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELO_01,3,"answers.Q_FLNK_FEVER == 'yes'",Fever
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELO_02,2,"answers.Q_FLNK_URINARY == 'yes'",Urinary symptoms
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELO_03,2,"answers.Q_FLNK_CVA == 'yes'",CVA tenderness
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELO_04,1,"answers.Q_FLNK_RIGORS == 'yes'",Rigors
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELO_05,1,"answers.Q_FLNK_IMMUNO == 'yes'",Immunocompromised
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,CSR_FLNK_PYELO_NEG_01,-3,"answers.Q_FLNK_TRAUMA == 'yes'",Trauma (MSK suppressor)
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,CSR_FLNK_IOS_01,3,"answers.Q_FLNK_FEVER == 'yes'",Fever
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,CSR_FLNK_IOS_02,2,"answers.Q_FLNK_HEMATURIA == 'yes' || answers.Q_FLNK_COLICKY == 'yes' || answers.Q_FLNK_STONE_HX == 'yes'",Stone features
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,CSR_FLNK_IOS_03,1,"answers.Q_FLNK_UNABLE_PO == 'yes' || answers.Q_FLNK_VOMIT == 'yes'",Systemic: unable PO or vomiting
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,CSR_FLNK_IOS_04,1,"answers.Q_FLNK_RIGORS == 'yes'",Rigors
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,CSR_FLNK_IOS_05,1,"answers.Q_FLNK_CVA == 'yes'",CVA tenderness
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,CSR_FLNK_IOS_NEG_01,-6,"answers.Q_FLNK_FEVER != 'yes'",No fever (suppressor)
+gu_flank_pain,CL_FLNK_MSK,CSR_FLNK_MSK_01,2,"answers.Q_FLNK_TRAUMA == 'yes'",Trauma
+gu_flank_pain,CL_FLNK_MSK,CSR_FLNK_MSK_02,2,"answers.Q_FLNK_HEMATURIA != 'yes' && answers.Q_FLNK_URINARY != 'yes' && answers.Q_FLNK_FEVER != 'yes'",No renal/infection signs
+gu_flank_pain,CL_FLNK_MSK,CSR_FLNK_MSK_NEG_01,-2,"answers.Q_FLNK_CVA == 'yes'",CVA tenderness (renal suppressor)

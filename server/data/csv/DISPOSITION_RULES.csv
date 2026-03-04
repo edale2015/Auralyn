@@ -156,8 +156,8 @@ neuro_confusion_ams,DISP_AMS_EMERG,1,"true",er_send,TPL_AMS_ER_SEND,HIGH
 gu_dysuria_uti,DISP_DUTI_EMERG,1,"answers.Q_DUTI_FEVER == 'yes' && answers.Q_DUTI_FLANK == 'yes'",er_send,TPL_DUTI_ER_SEND,HIGH
 gu_dysuria_uti,DISP_DUTI_URGENT,2,"answers.Q_DUTI_PREG == 'yes' || answers.Q_DUTI_MALE == 'yes' || answers.Q_DUTI_DISCHARGE == 'yes' || answers.Q_DUTI_FEVER == 'yes' || answers.Q_DUTI_VOMIT == 'yes'",urgent_care,TPL_DUTI_URGENT_CARE,MODERATE
 gu_dysuria_uti,DISP_DUTI_ROUTINE,99,"true",pcp,TPL_DUTI_PCP,LOW
-gu_flank_pain,DISP_FLNK_EMERG,1,"answers.Q_FLNK_FEVER == 'yes' && (answers.Q_FLNK_URINARY == 'yes' || answers.Q_FLNK_HEMATURIA == 'yes')",er_send,TPL_FLNK_ER_SEND,HIGH
-gu_flank_pain,DISP_FLNK_URGENT,2,"answers.Q_FLNK_COLICKY == 'yes' || answers.Q_FLNK_VOMIT == 'yes' || answers.Q_FLNK_HEMATURIA == 'yes' || answers.Q_FLNK_PREG == 'yes'",urgent_care,TPL_FLNK_URGENT_CARE,MODERATE
+gu_flank_pain,DISP_FLNK_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_FLNK_ER_SEND,HIGH
+gu_flank_pain,DISP_FLNK_URGENT,2,"answers.Q_FLNK_FEVER == 'yes' || answers.Q_FLNK_VOMIT == 'yes' || answers.Q_FLNK_COLICKY == 'yes' || answers.Q_FLNK_HEMATURIA == 'yes' || answers.Q_FLNK_PREG == 'yes' || answers.Q_FLNK_UNABLE_PO == 'yes'",urgent_care,TPL_FLNK_URGENT_CARE,MODERATE
 gu_flank_pain,DISP_FLNK_ROUTINE,99,"true",pcp,TPL_FLNK_PCP,LOW
 gu_testicular_pain,DISP_TPAIN_EMERG,1,"answers.Q_TPAIN_SUDDEN == 'yes' || answers.Q_TPAIN_HIGH_RIDING == 'yes' || answers.Q_TPAIN_NAUSEA == 'yes'",er_send,TPL_TPAIN_ER_SEND,HIGH
 gu_testicular_pain,DISP_TPAIN_URGENT,2,"answers.Q_TPAIN_FEVER == 'yes' || answers.Q_TPAIN_DISCHARGE == 'yes' || answers.Q_TPAIN_TRAUMA == 'yes'",urgent_care,TPL_TPAIN_URGENT_CARE,MODERATE

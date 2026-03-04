@@ -1,0 +1,133 @@
+Next: B4-7 GU flank pain → then B4-8 TOX overdose
+
+You asked “gu then tox no need to confirm,” so here’s the TOX pack now so you can do it immediately after GU passes.
+
+B4-8 TOX Overdose/Intoxication Subtype Expansion (flagship)
+
+We’ll subtype into 5 practical toxidrome buckets without overfitting:
+
+opioid_like (resp depression)
+
+stimulant_like (chest pain/agitation)
+
+sedative_hypnotic_like (AMS without resp depression)
+
+anticholinergic_like (agitated + dry/hot, confusion)
+
+serotonin_like (agitation + tremor/clonus + fever)
+
+We keep your existing mixed_unknown as fallback.
+
+A) Optional questions to add to CORE_QUESTIONS.csv (tox_overdose_intoxication)
+
+Add only those you don’t already have:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+tox_overdose_intoxication,pinpoint_pupils,Pinpoint pupils?,boolean
+tox_overdose_intoxication,agitation_severe,Severe agitation?,boolean
+tox_overdose_intoxication,diaphoresis,Heavy sweating?,boolean
+tox_overdose_intoxication,hyperthermia,High temperature / very hot to touch?,boolean
+tox_overdose_intoxication,tremor_clonus,Tremor, clonus, or muscle rigidity?,boolean
+tox_overdose_intoxication,dry_skin,Dry skin / dry mouth (not sweaty)?,boolean
+tox_overdose_intoxication,hallucinations,Hallucinations or severe paranoia?,boolean
+tox_overdose_intoxication,antidepressants_ssri,SSRI/MAOI/serotonergic meds involved?,boolean
+
+(You already have: ams, slow_breath, seizure, chest_pain, vomit, unknown.)
+
+B) Add subtype clusters + scoring in CLUSTER_SCORING_RULES.csv
+
+Use Dx_IDs (adapt naming if you prefer):
+
+CL_TOX_OPIOID_LIKE
+
+CL_TOX_STIMULANT_LIKE
+
+CL_TOX_SEDATIVE_LIKE
+
+CL_TOX_ANTICHOLINERGIC_LIKE
+
+CL_TOX_SEROTONIN_LIKE
+
+CL_TOX_MIXED_UNKNOWN (your existing mixed bucket)
+
+Append:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+tox_overdose_intoxication,CL_TOX_OPIOID_LIKE,OPI_1,"slow_breath=true",6
+tox_overdose_intoxication,CL_TOX_OPIOID_LIKE,OPI_2,"ams=true",2
+tox_overdose_intoxication,CL_TOX_OPIOID_LIKE,OPI_3,"pinpoint_pupils=true",2
+tox_overdose_intoxication,CL_TOX_OPIOID_LIKE,OPI_NEG_1,"chest_pain=true AND slow_breath=false",-3
+
+tox_overdose_intoxication,CL_TOX_STIMULANT_LIKE,STIM_1,"chest_pain=true",3
+tox_overdose_intoxication,CL_TOX_STIMULANT_LIKE,STIM_2,"agitation_severe=true",2
+tox_overdose_intoxication,CL_TOX_STIMULANT_LIKE,STIM_3,"diaphoresis=true",1
+tox_overdose_intoxication,CL_TOX_STIMULANT_LIKE,STIM_NEG_1,"slow_breath=true",-6
+
+tox_overdose_intoxication,CL_TOX_SEDATIVE_LIKE,SED_1,"ams=true",3
+tox_overdose_intoxication,CL_TOX_SEDATIVE_LIKE,SED_2,"slow_breath=false",1
+tox_overdose_intoxication,CL_TOX_SEDATIVE_LIKE,SED_NEG_1,"agitation_severe=true",-3
+tox_overdose_intoxication,CL_TOX_SEDATIVE_LIKE,SED_NEG_2,"hyperthermia=true",-2
+
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,ANTI_1,"agitation_severe=true",2
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,ANTI_2,"dry_skin=true",3
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,ANTI_3,"hallucinations=true",2
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,ANTI_4,"hyperthermia=true",1
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,ANTI_NEG_1,"diaphoresis=true",-3
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,ANTI_NEG_2,"slow_breath=true",-4
+
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,SERO_1,"tremor_clonus=true",4
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,SERO_2,"hyperthermia=true",2
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,SERO_3,"diaphoresis=true",1
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,SERO_4,"antidepressants_ssri=true",2
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,SERO_NEG_1,"dry_skin=true",-3
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,SERO_NEG_2,"slow_breath=true",-6
+
+tox_overdose_intoxication,CL_TOX_MIXED_UNKNOWN,MIX_1,"unknown=true",3
+tox_overdose_intoxication,CL_TOX_MIXED_UNKNOWN,MIX_2,"seizure=true",2
+tox_overdose_intoxication,CL_TOX_MIXED_UNKNOWN,MIX_3,"vomit=true",1
+tox_overdose_intoxication,CL_TOX_MIXED_UNKNOWN,MIX_NEG_1,"slow_breath=true OR chest_pain=true OR tremor_clonus=true",-2
+C) DX_PRIORITY for TOX ties (DX_PRIORITY.csv)
+
+Append:
+
+Complaint_Slug,Dx_ID,Priority
+tox_overdose_intoxication,CL_TOX_OPIOID_LIKE,100
+tox_overdose_intoxication,CL_TOX_SEROTONIN_LIKE,95
+tox_overdose_intoxication,CL_TOX_ANTICHOLINERGIC_LIKE,90
+tox_overdose_intoxication,CL_TOX_STIMULANT_LIKE,85
+tox_overdose_intoxication,CL_TOX_SEDATIVE_LIKE,70
+tox_overdose_intoxication,CL_TOX_MIXED_UNKNOWN,50
+D) Red flags / disposition
+
+You likely already route overdose to EMERG on AMS/slow breath/seizure/chest pain. Keep that.
+
+Optionally add:
+
+hyperthermia + clonus → EMERG
+
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+tox_overdose_intoxication,RF_TOX_SEROTONIN,"tremor_clonus=true AND hyperthermia=true",EMERG,"Possible serotonin syndrome"
+E) 13 strict subtype goldens
+
+Append to tox_overdose_intoxication goldens:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+tox_overdose_intoxication,TOX_SUB1,"{""ams"":true,""slow_breath"":true,""pinpoint_pupils"":true,""chest_pain"":false,""agitation_severe"":false,""unknown"":true}",EMERG,CL_TOX_OPIOID_LIKE
+tox_overdose_intoxication,TOX_SUB2,"{""ams"":false,""slow_breath"":false,""chest_pain"":true,""agitation_severe"":true,""diaphoresis"":true,""unknown"":false}",EMERG,CL_TOX_STIMULANT_LIKE
+tox_overdose_intoxication,TOX_SUB3,"{""ams"":true,""slow_breath"":false,""agitation_severe"":false,""hyperthermia"":false,""unknown"":true}",EMERG,CL_TOX_SEDATIVE_LIKE
+tox_overdose_intoxication,TOX_SUB4,"{""ams"":false,""slow_breath"":false,""agitation_severe"":true,""dry_skin"":true,""hallucinations"":true,""diaphoresis"":false,""unknown"":true}",EMERG,CL_TOX_ANTICHOLINERGIC_LIKE
+tox_overdose_intoxication,TOX_SUB5,"{""ams"":false,""slow_breath"":false,""tremor_clonus"":true,""hyperthermia"":true,""diaphoresis"":true,""antidepressants_ssri"":true,""unknown"":true}",EMERG,CL_TOX_SEROTONIN_LIKE
+tox_overdose_intoxication,TOX_SUB6,"{""ams"":false,""slow_breath"":false,""vomit"":true,""unknown"":true,""chest_pain"":false,""tremor_clonus"":false}",URGENT,CL_TOX_MIXED_UNKNOWN
+tox_overdose_intoxication,TOX_SUB7,"{""ams"":true,""slow_breath"":false,""hyperthermia"":false,""diaphoresis"":false,""unknown"":false}",EMERG,CL_TOX_SEDATIVE_LIKE
+tox_overdose_intoxication,TOX_SUB8,"{""ams"":false,""slow_breath"":true,""pinpoint_pupils"":false,""unknown"":false}",EMERG,CL_TOX_OPIOID_LIKE
+tox_overdose_intoxication,TOX_SUB9,"{""ams"":false,""slow_breath"":false,""agitation_severe"":true,""diaphoresis"":true,""dry_skin"":false,""unknown"":false}",EMERG,CL_TOX_STIMULANT_LIKE
+tox_overdose_intoxication,TOX_SUB10,"{""ams"":false,""slow_breath"":false,""dry_skin"":true,""hallucinations"":false,""agitation_severe"":true,""unknown"":true}",EMERG,CL_TOX_ANTICHOLINERGIC_LIKE
+tox_overdose_intoxication,TOX_SUB11,"{""ams"":false,""slow_breath"":false,""tremor_clonus"":true,""hyperthermia"":false,""diaphoresis"":true,""antidepressants_ssri"":true,""unknown"":true}",EMERG,CL_TOX_SEROTONIN_LIKE
+tox_overdose_intoxication,TOX_SUB12,"{""ams"":true,""slow_breath"":true,""chest_pain"":true,""unknown"":true}",EMERG,CL_TOX_OPIOID_LIKE
+tox_overdose_intoxication,TOX_SUB13,"{""ams"":false,""slow_breath"":false,""seizure"":true,""unknown"":true,""tremor_clonus"":false}",EMERG,CL_TOX_MIXED_UNKNOWN
+Run
+
+After GU is green, run:
+
+npm run ship:complaint -- tox_overdose_intoxication
+npx tsx scripts/gate-prod.ts

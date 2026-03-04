@@ -1,0 +1,119 @@
+Got it. Next two flagship expansions in order:
+
+B4-7 GU Flank Pain
+
+B4-8 TOX Overdose/Intoxication
+
+No more confirmations needed. Here’s GU first (full pack). After you ship and gate-prod is green, I’ll give you TOX next.
+
+B4-7 GU Flank Pain Subtype Expansion
+
+Subtypes we’ll separate cleanly:
+
+nephrolithiasis
+
+pyelonephritis
+
+infected_obstructing_stone (high risk: fever + stone features)
+
+msk_flank (fallback)
+
+keep existing if present, but these are the winners
+
+A) Optional questions to add to CORE_QUESTIONS.csv (gu_flank_pain)
+
+(Only add what you don’t already have.)
+
+Complaint_Slug,Question_ID,Question_Text,Type
+gu_flank_pain,colicky_waves,Colicky waves of pain (comes/goes severely)?,boolean
+gu_flank_pain,cv_tenderness,Flank pain with CVA tenderness?,boolean
+gu_flank_pain,urinary_symptoms,Burning urination/urgency/frequency?,boolean
+gu_flank_pain,rigors,Shaking chills/rigors?,boolean
+gu_flank_pain,unable_po,Unable to keep fluids down?,boolean
+gu_flank_pain,known_stone_history,History of kidney stones?,boolean
+gu_flank_pain,immuno,Immunocompromised?,boolean
+
+(You likely already have fever, hematuria, vomiting, pregnancy, trauma. Keep those.)
+
+B) Cluster scoring rules (CLUSTER_SCORING_RULES.csv) for gu_flank_pain
+
+Use your existing Dx_ID names if you already have them. If not, use:
+
+CL_FLNK_NEPHROLITHIASIS
+
+CL_FLNK_PYELONEPHRITIS
+
+CL_FLNK_INFECTED_OBSTRUCTING_STONE
+
+CL_FLNK_MSK
+
+Append:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,STONE_1,"hematuria=true",2
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,STONE_2,"colicky_waves=true",2
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,STONE_3,"known_stone_history=true",1
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,STONE_4,"fever=false",1
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,STONE_NEG_1,"fever=true",-4
+
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,PYELO_1,"fever=true",3
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,PYELO_2,"urinary_symptoms=true",2
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,PYELO_3,"cv_tenderness=true",2
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,PYELO_4,"rigors=true",1
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,PYELO_5,"immuno=true",1
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,PYELO_NEG_1,"trauma=true",-3
+
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,IOS_1,"fever=true",3
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,IOS_2,"(hematuria=true OR colicky_waves=true OR known_stone_history=true)",2
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,IOS_3,"unable_po=true OR vomit=true",1
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,IOS_4,"rigors=true",1
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,IOS_NEG_1,"fever=false",-6
+
+gu_flank_pain,CL_FLNK_MSK,MSK_1,"trauma=true",2
+gu_flank_pain,CL_FLNK_MSK,MSK_2,"hematuria=false AND urinary_symptoms=false AND fever=false",2
+gu_flank_pain,CL_FLNK_MSK,MSK_NEG_1,"cv_tenderness=true",-2
+C) DX_PRIORITY for gu_flank_pain ties (DX_PRIORITY.csv)
+
+Append:
+
+Complaint_Slug,Dx_ID,Priority
+gu_flank_pain,CL_FLNK_INFECTED_OBSTRUCTING_STONE,100
+gu_flank_pain,CL_FLNK_PYELONEPHRITIS,90
+gu_flank_pain,CL_FLNK_NEPHROLITHIASIS,70
+gu_flank_pain,CL_FLNK_MSK,50
+D) Red flags + disposition rules (ensure safety)
+
+Add/confirm in RED_FLAG_RULES.csv:
+
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+gu_flank_pain,RF_FLNK_INFECTED_STONE,"fever=true AND (hematuria=true OR colicky_waves=true OR known_stone_history=true) AND (vomit=true OR unable_po=true OR rigors=true)",EMERG,"Possible obstructing infected stone"
+gu_flank_pain,RF_FLNK_SEPSIS,"fever=true AND rigors=true",EMERG,"Possible sepsis"
+gu_flank_pain,RF_FLNK_PREG,"preg=true AND (fever=true OR severe=true)",EMERG,"Pregnancy + flank pain risk"
+
+In DISP_RULES.csv:
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+gu_flank_pain,DISP_FLNK_EMERG_INFECTED,100,"RF_FLNK_INFECTED_STONE OR RF_FLNK_SEPSIS OR RF_FLNK_PREG",EMERG
+gu_flank_pain,DISP_FLNK_URGENT_FEVER,70,"fever=true OR unable_po=true OR vomit=true",URGENT
+gu_flank_pain,DISP_FLNK_ROUTINE_DEFAULT,1,"true",ROUTINE
+
+(Adjust severe if you track it; otherwise drop that part.)
+
+E) Add 13 strict subtype goldens (append to flank pain goldens)
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+gu_flank_pain,FLNK_SUB1,"{""fever"":false,""hematuria"":true,""colicky_waves"":true,""known_stone_history"":true,""urinary_symptoms"":false,""cv_tenderness"":false,""rigors"":false,""vomit"":false,""unable_po"":false,""trauma"":false}",URGENT,CL_FLNK_NEPHROLITHIASIS
+gu_flank_pain,FLNK_SUB2,"{""fever"":true,""urinary_symptoms"":true,""cv_tenderness"":true,""hematuria"":false,""rigors"":false,""vomit"":false,""unable_po"":false,""trauma"":false}",EMERG,CL_FLNK_PYELONEPHRITIS
+gu_flank_pain,FLNK_SUB3,"{""fever"":true,""hematuria"":true,""colicky_waves"":true,""rigors"":true,""vomit"":true,""unable_po"":true,""known_stone_history"":true}",EMERG,CL_FLNK_INFECTED_OBSTRUCTING_STONE
+gu_flank_pain,FLNK_SUB4,"{""fever"":true,""hematuria"":true,""colicky_waves"":true,""rigors"":false,""vomit"":true,""unable_po"":false,""known_stone_history"":false}",EMERG,CL_FLNK_INFECTED_OBSTRUCTING_STONE
+gu_flank_pain,FLNK_SUB5,"{""fever"":false,""hematuria"":false,""colicky_waves"":false,""urinary_symptoms"":false,""cv_tenderness"":false,""trauma"":true}",ROUTINE,CL_FLNK_MSK
+gu_flank_pain,FLNK_SUB6,"{""fever"":true,""urinary_symptoms"":false,""cv_tenderness"":true,""rigors"":true,""hematuria"":false}",EMERG,CL_FLNK_PYELONEPHRITIS
+gu_flank_pain,FLNK_SUB7,"{""fever"":false,""hematuria"":true,""colicky_waves"":false,""known_stone_history"":false,""urinary_symptoms"":false}",URGENT,CL_FLNK_NEPHROLITHIASIS
+gu_flank_pain,FLNK_SUB8,"{""fever"":true,""hematuria"":false,""urinary_symptoms"":true,""cv_tenderness"":false,""rigors"":false,""vomit"":false}",URGENT,CL_FLNK_PYELONEPHRITIS
+gu_flank_pain,FLNK_SUB9,"{""fever"":true,""hematuria"":true,""colicky_waves"":true,""vomit"":false,""unable_po"":false,""rigors"":false}",EMERG,CL_FLNK_INFECTED_OBSTRUCTING_STONE
+gu_flank_pain,FLNK_SUB10,"{""fever"":false,""hematuria"":false,""urinary_symptoms"":false,""cv_tenderness"":false,""trauma"":false}",ROUTINE,CL_FLNK_MSK
+gu_flank_pain,FLNK_SUB11,"{""fever"":false,""hematuria"":true,""colicky_waves"":true,""urinary_symptoms"":false,""vomit"":true}",URGENT,CL_FLNK_NEPHROLITHIASIS
+gu_flank_pain,FLNK_SUB12,"{""fever"":true,""hematuria"":false,""urinary_symptoms"":true,""cv_tenderness"":true,""vomit"":true,""unable_po"":true}",EMERG,CL_FLNK_PYELONEPHRITIS
+gu_flank_pain,FLNK_SUB13,"{""fever"":true,""hematuria"":true,""colicky_waves"":true,""urinary_symptoms"":true,""cv_tenderness"":true,""rigors"":true,""vomit"":true}",EMERG,CL_FLNK_INFECTED_OBSTRUCTING_STONE
+Run
+npm run ship:complaint -- gu_flank_pain
+npx tsx scripts/gate-prod.ts
