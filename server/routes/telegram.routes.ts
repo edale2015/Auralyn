@@ -10,6 +10,8 @@ import {
   appendMessage,
   mergeAnswers,
   getCase,
+  setTriage,
+  setCaseState,
 } from "../services/caseService";
 import { matchComplaintFromText } from "../services/complaintMatchService";
 import { getNextRequiredQuestion } from "../services/questionFlowService";
@@ -43,6 +45,53 @@ function parseAnswer(text: string, answerType: string): string | number | null {
   return text.trim() || null;
 }
 
+async function runTriageAndSend(params: {
+  caseId: string;
+  complaintSlug: string;
+  answers: Record<string, any>;
+  botToken: string;
+  chatId: number | string;
+  threadId: string;
+}): Promise<void> {
+  const triage = await runTriage({
+    complaintSlug: params.complaintSlug,
+    answers: params.answers,
+    rulesetVersion: "local",
+    dxPriorityVersion: "local",
+  });
+
+  const needsReview =
+    triage.confidence === "LOW" ||
+    (triage.rfTriggered?.length ?? 0) > 0 ||
+    (triage.consistencyFlags?.length ?? 0) > 0;
+
+  const nextState = needsReview ? "NEEDS_REVIEW" : "TRIAGED";
+  await setTriage(params.caseId, triage, nextState as any);
+
+  const lines: string[] = [
+    `<b>Assessment complete</b>`,
+    ``,
+    `Disposition: <b>${triage.disposition}</b>`,
+    `Top diagnosis: <b>${triage.topCluster}</b>`,
+    `Confidence: <b>${triage.confidence}</b>`,
+  ];
+
+  if (needsReview) {
+    lines.push(
+      "",
+      "A clinician will review your case before final advice is sent."
+    );
+  }
+
+  await telegramSendMessage({
+    botToken: params.botToken,
+    chatId: params.chatId,
+    text: lines.join("\n"),
+  });
+
+  await clearActiveCaseId({ channel: "telegram", threadId: params.threadId });
+}
+
 telegramRouter.post("/webhook", async (req, res) => {
   try {
     if (!verifySecret(req)) {
@@ -66,6 +115,13 @@ telegramRouter.post("/webhook", async (req, res) => {
     const text: string = (msg.text ?? "").trim();
 
     if (text.toLowerCase() === "/start" || text.toLowerCase() === "/reset") {
+      const oldCaseId = await getActiveCaseId({ channel: "telegram", threadId });
+      if (oldCaseId) {
+        const oldCase = await getCase(oldCaseId);
+        if (oldCase && oldCase.state === "DRAFT") {
+          await setCaseState(oldCaseId, "CLOSED");
+        }
+      }
       await clearActiveCaseId({ channel: "telegram", threadId });
       await telegramSendMessage({
         botToken,
@@ -118,10 +174,20 @@ telegramRouter.post("/webhook", async (req, res) => {
         answers: {},
       });
 
+      if (!firstQ) {
+        await telegramSendMessage({
+          botToken,
+          chatId,
+          text: `Got it — <b>${match.display}</b>. Processing your assessment now…`,
+        });
+        await runTriageAndSend({ caseId, complaintSlug: match.slug, answers: {}, botToken, chatId, threadId });
+        return res.json({ ok: true });
+      }
+
       await telegramSendMessage({
         botToken,
         chatId,
-        text: `Got it — <b>${match.display}</b>. I'll ask a few questions.\n\n${firstQ?.QUESTION_TEXT ?? "Tell me more about your symptoms."}`,
+        text: `Got it — <b>${match.display}</b>. I'll ask a few questions.\n\n${firstQ.QUESTION_TEXT}`,
       });
       return res.json({ ok: true });
     }
@@ -140,40 +206,7 @@ telegramRouter.post("/webhook", async (req, res) => {
     });
 
     if (!nextQ) {
-      const triage = await runTriage({
-        complaintSlug: c.complaint.slug,
-        answers,
-        rulesetVersion: "local",
-        dxPriorityVersion: "local",
-      });
-
-      const needsReview =
-        triage.confidence === "LOW" ||
-        (triage.rfTriggered?.length ?? 0) > 0 ||
-        (triage.consistencyFlags?.length ?? 0) > 0;
-
-      const lines: string[] = [
-        `<b>Assessment complete</b>`,
-        ``,
-        `Disposition: <b>${triage.disposition}</b>`,
-        `Top diagnosis: <b>${triage.topCluster}</b>`,
-        `Confidence: <b>${triage.confidence}</b>`,
-      ];
-
-      if (needsReview) {
-        lines.push(
-          "",
-          "A clinician will review your case before final advice is sent."
-        );
-      }
-
-      await telegramSendMessage({
-        botToken,
-        chatId,
-        text: lines.join("\n"),
-      });
-
-      await clearActiveCaseId({ channel: "telegram", threadId });
+      await runTriageAndSend({ caseId: caseId!, complaintSlug: c.complaint.slug, answers, botToken, chatId, threadId });
       return res.json({ ok: true });
     }
 
@@ -194,10 +227,7 @@ telegramRouter.post("/webhook", async (req, res) => {
     const patch: Record<string, any> = { [nextQ.Q_ID]: parsed };
     const updated = await mergeAnswers(caseId!, patch);
 
-    const updatedAnswers = (updated.answers?.structured ?? {}) as Record<
-      string,
-      any
-    >;
+    const updatedAnswers = (updated.answers?.structured ?? {}) as Record<string, any>;
     const next2 = getNextRequiredQuestion({
       complaintSlug: updated.complaint.slug,
       answers: updatedAnswers,
@@ -215,41 +245,14 @@ telegramRouter.post("/webhook", async (req, res) => {
         chatId,
         text: "Thanks — processing your assessment now…",
       });
-
-      const triage = await runTriage({
+      await runTriageAndSend({
+        caseId: caseId!,
         complaintSlug: updated.complaint.slug,
         answers: updatedAnswers,
-        rulesetVersion: "local",
-        dxPriorityVersion: "local",
-      });
-
-      const needsReview =
-        triage.confidence === "LOW" ||
-        (triage.rfTriggered?.length ?? 0) > 0 ||
-        (triage.consistencyFlags?.length ?? 0) > 0;
-
-      const lines: string[] = [
-        `<b>Assessment complete</b>`,
-        ``,
-        `Disposition: <b>${triage.disposition}</b>`,
-        `Top diagnosis: <b>${triage.topCluster}</b>`,
-        `Confidence: <b>${triage.confidence}</b>`,
-      ];
-
-      if (needsReview) {
-        lines.push(
-          "",
-          "A clinician will review your case before final advice is sent."
-        );
-      }
-
-      await telegramSendMessage({
         botToken,
         chatId,
-        text: lines.join("\n"),
+        threadId,
       });
-
-      await clearActiveCaseId({ channel: "telegram", threadId });
     }
 
     return res.json({ ok: true });

@@ -50,6 +50,9 @@ Data-driven subtype upgrades for improved diagnostic granularity. These add opti
 ### Cross-Complaint Boosts (B5)
 A data-driven engine (`crossComplaintBoostEngine.ts`) that nudges cluster scores based on cross-system clinical patterns. Configured via `CROSS_COMPLAINT_BOOSTS.csv` with rules like PE triad (CP+SOB+leg swelling), ACS pattern, meningitis triad, anaphylaxis respiratory, DKA neuro, and heat stroke exertional. Applied after complaint scoring but before winner pick. Produces audit trail via `crossComplaintAdjustments[]` on CaseState. Validated by 10 golden tests in `CROSS_COMPLAINT_GOLDENS.jsonl`.
 
+### Telegram Triage Bot
+A Telegram webhook at `/telegram/webhook` provides conversational triage via the generic complaint engine. Uses `channelThreadService` (Firestore `channel_threads` collection) to map chats → active cases, `complaintMatchService` (registry ALIASES) for symptom→complaint routing, `questionFlowService` (CORE_QUESTIONS.csv REQUIRED column) for sequential question flow, and `triageService` for final disposition. Supports `/start` and `/reset` commands. Env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`. Webhook setup: `npx tsx scripts/telegram-set-webhook.ts`.
+
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, and a comprehensive Gate-Prod Pipeline (7 gates) for pre-deployment validation.
 
