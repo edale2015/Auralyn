@@ -1,0 +1,85 @@
+B4-12 PSYCH Anxiety/Panic Subtype Expansion (flagship)
+
+Subtypes:
+
+panic_attack_like
+
+substance_induced_anxiety
+
+medical_mimic_high_risk (cp/sob/syncope/neuro)
+
+suicide_risk_override (already present but formalize)
+
+A) Optional questions (add to CORE_QUESTIONS.csv for psych_anxiety_panic)
+
+(Only add missing; you already have cp/sob/syncope/sudden/substance/si.)
+
+Complaint_Slug,Question_ID,Question_Text,Type
+psych_anxiety_panic,new_neuro,New neurologic symptoms (weakness/speech trouble)?,boolean
+psych_anxiety_panic,fever,Fever?,boolean
+psych_anxiety_panic,thyroid_symptoms,Weight loss/tremor/heat intolerance?,boolean
+psych_anxiety_panic,withdrawal,Withdrawal suspected (alcohol/benzo/opioid)?,boolean
+B) Clusters (CLUSTER_SCORING_RULES.csv)
+
+Dx_IDs:
+
+CL_PANIC_PRIMARY
+
+CL_PANIC_SUBSTANCE
+
+CL_PANIC_MEDICAL_MIMIC
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_1,"cp=true",3
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_2,"sob=true",3
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_3,"syncope=true",4
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_4,"new_neuro=true",4
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_5,"fever=true",2
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_NEG_1,"sudden=true AND cp=false AND sob=false AND syncope=false AND new_neuro=false AND fever=false",-2
+
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_1,"substance=true",4
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_2,"withdrawal=true",3
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_3,"cp=false AND new_neuro=false",1
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_NEG_1,"syncope=true",-3
+
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_1,"sudden=true",3
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_2,"cp=false AND sob=false AND syncope=false",2
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_3,"new_neuro=false AND fever=false",1
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_NEG_1,"cp=true OR sob=true OR syncope=true OR new_neuro=true OR fever=true",-6
+C) DX_PRIORITY ties
+Complaint_Slug,Dx_ID,Priority
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,100
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,80
+psych_anxiety_panic,CL_PANIC_PRIMARY,60
+D) Disposition rules (ensure)
+
+If SI → EMERG (already exists)
+
+If medical mimic flags (cp/sob/syncope/new_neuro/fever) → URGENT
+
+Otherwise ROUTINE
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+psych_anxiety_panic,DISP_PANIC_EMERG_SI,100,"si=true",EMERG
+psych_anxiety_panic,DISP_PANIC_URGENT_MED,80,"cp=true OR sob=true OR syncope=true OR new_neuro=true OR fever=true",URGENT
+psych_anxiety_panic,DISP_PANIC_ROUTINE,1,"true",ROUTINE
+E) 13 subtype goldens
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+psych_anxiety_panic,PAN_SUB1,"{""sudden"":true,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""si"":false,""new_neuro"":false,""fever"":false}",ROUTINE,CL_PANIC_PRIMARY
+psych_anxiety_panic,PAN_SUB2,"{""sudden"":true,""cp"":true,""sob"":false,""syncope"":false,""substance"":false,""si"":false}",URGENT,CL_PANIC_MEDICAL_MIMIC
+psych_anxiety_panic,PAN_SUB3,"{""sudden"":true,""cp"":false,""sob"":true,""syncope"":false,""substance"":false,""si"":false}",URGENT,CL_PANIC_MEDICAL_MIMIC
+psych_anxiety_panic,PAN_SUB4,"{""sudden"":true,""cp"":false,""sob"":false,""syncope"":true,""substance"":false,""si"":false}",URGENT,CL_PANIC_MEDICAL_MIMIC
+psych_anxiety_panic,PAN_SUB5,"{""sudden"":false,""cp"":false,""sob"":false,""syncope"":false,""substance"":true,""withdrawal"":false,""si"":false}",ROUTINE,CL_PANIC_SUBSTANCE
+psych_anxiety_panic,PAN_SUB6,"{""sudden"":false,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""withdrawal"":true,""si"":false}",ROUTINE,CL_PANIC_SUBSTANCE
+psych_anxiety_panic,PAN_SUB7,"{""sudden"":true,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""si"":true}",EMERG,CL_PANIC_PRIMARY
+psych_anxiety_panic,PAN_SUB8,"{""sudden"":false,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""new_neuro"":true,""si"":false}",URGENT,CL_PANIC_MEDICAL_MIMIC
+psych_anxiety_panic,PAN_SUB9,"{""sudden"":false,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""fever"":true,""si"":false}",URGENT,CL_PANIC_MEDICAL_MIMIC
+psych_anxiety_panic,PAN_SUB10,"{""sudden"":true,""cp"":false,""sob"":false,""syncope"":false,""substance"":true,""si"":false}",ROUTINE,CL_PANIC_SUBSTANCE
+psych_anxiety_panic,PAN_SUB11,"{""sudden"":true,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""thyroid_symptoms"":true,""si"":false}",ROUTINE,CL_PANIC_PRIMARY
+psych_anxiety_panic,PAN_SUB12,"{""sudden"":true,""cp"":true,""sob"":true,""syncope"":false,""substance"":false,""si"":false}",URGENT,CL_PANIC_MEDICAL_MIMIC
+psych_anxiety_panic,PAN_SUB13,"{""sudden"":false,""cp"":false,""sob"":false,""syncope"":false,""substance"":false,""si"":false}",ROUTINE,CL_PANIC_PRIMARY
+
+Run:
+
+npm run ship:complaint -- psych_anxiety_panic
+npx tsx scripts/gate-prod.ts

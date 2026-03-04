@@ -452,11 +452,21 @@ endo_thyroid_symptoms,CL_ETHYR_HYPERTHYROID,CSR_ETHYR_HYPERTHYROID_03,2,"answers
 endo_thyroid_symptoms,CL_ETHYR_HYPOTHYROID,CSR_ETHYR_HYPOTHYROID_01,3,"answers.Q_ETHYR_WEIGHT_GAIN == 'yes'","hypothyroid rule 1"
 endo_thyroid_symptoms,CL_ETHYR_HYPOTHYROID,CSR_ETHYR_HYPOTHYROID_02,2,"answers.Q_ETHYR_FATIGUE == 'yes'","hypothyroid rule 2"
 endo_thyroid_symptoms,CL_ETHYR_THYROID_STORM,CSR_ETHYR_THYROID_STORM_01,5,"answers.Q_ETHYR_FEVER_DELIRIUM == 'yes'","thyroid_storm rule 1"
-psych_anxiety_panic,CL_PANX_PANIC_ATTACK,CSR_PANX_PANIC_ATTACK_01,3,"answers.Q_PANX_SUDDEN == 'yes'","panic_attack rule 1"
-psych_anxiety_panic,CL_PANX_PANIC_ATTACK,CSR_PANX_PANIC_ATTACK_02,1,"answers.Q_PANX_CP == 'no' && answers.Q_PANX_SOB == 'no'","panic_attack rule 2"
-psych_anxiety_panic,CL_PANX_SUBSTANCE_INDUCED,CSR_PANX_SUBSTANCE_INDUCED_01,3,"answers.Q_PANX_SUBSTANCE == 'yes'","substance_induced rule 1"
-psych_anxiety_panic,CL_PANX_MEDICAL_MIMIC,CSR_PANX_MEDICAL_MIMIC_01,3,"answers.Q_PANX_CP == 'yes'","medical_mimic rule 1"
-psych_anxiety_panic,CL_PANX_MEDICAL_MIMIC,CSR_PANX_MEDICAL_MIMIC_02,3,"answers.Q_PANX_SOB == 'yes'","medical_mimic rule 2"
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_1,3,"answers.Q_PANX_CP == 'yes'",Chest pain
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_2,3,"answers.Q_PANX_SOB == 'yes'",SOB
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_3,4,"answers.Q_PANX_SYNCOPE == 'yes'",Syncope
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_4,4,"answers.Q_PANX_NEW_NEURO == 'yes'",New neuro symptoms
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_5,2,"answers.Q_PANX_FEVER == 'yes'",Fever
+psych_anxiety_panic,CL_PANIC_MEDICAL_MIMIC,MED_NEG_1,-2,"answers.Q_PANX_SUDDEN == 'yes' && answers.Q_PANX_CP != 'yes' && answers.Q_PANX_SOB != 'yes' && answers.Q_PANX_SYNCOPE != 'yes' && answers.Q_PANX_NEW_NEURO != 'yes' && answers.Q_PANX_FEVER != 'yes'",Sudden without medical signs
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_1,4,"answers.Q_PANX_SUBSTANCE == 'yes'",Substance use
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_2,3,"answers.Q_PANX_WITHDRAWAL == 'yes'",Withdrawal
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_3,1,"answers.Q_PANX_CP != 'yes' && answers.Q_PANX_NEW_NEURO != 'yes'",No medical overlap
+psych_anxiety_panic,CL_PANIC_SUBSTANCE,SUB_NEG_1,-3,"answers.Q_PANX_SYNCOPE == 'yes'",Syncope suppresses substance
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_1,3,"answers.Q_PANX_SUDDEN == 'yes'",Sudden onset
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_2,2,"answers.Q_PANX_CP != 'yes' && answers.Q_PANX_SOB != 'yes' && answers.Q_PANX_SYNCOPE != 'yes'",No cardiopulm
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_3,1,"answers.Q_PANX_NEW_NEURO != 'yes' && answers.Q_PANX_FEVER != 'yes'",No neuro/fever
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_NEG_1,-6,"answers.Q_PANX_CP == 'yes' || answers.Q_PANX_SOB == 'yes' || answers.Q_PANX_SYNCOPE == 'yes' || answers.Q_PANX_NEW_NEURO == 'yes' || answers.Q_PANX_FEVER == 'yes'",Medical features suppress primary
+psych_anxiety_panic,CL_PANIC_PRIMARY,PAN_NEG_2,-3,"answers.Q_PANX_SUBSTANCE == 'yes' || answers.Q_PANX_WITHDRAWAL == 'yes'",Substance/withdrawal suppress primary
 psych_depression_suicidal_ideation,CL_PDEP_SUICIDE_RISK,CSR_PDEP_SUICIDE_RISK_01,4,"answers.Q_PDEP_SI == 'yes'","suicide_risk rule 1"
 psych_depression_suicidal_ideation,CL_PDEP_SUICIDE_RISK,CSR_PDEP_SUICIDE_RISK_02,4,"answers.Q_PDEP_INTENT == 'yes'","suicide_risk rule 2"
 psych_depression_suicidal_ideation,CL_PDEP_PSYCHOTIC_DEPRESSION,CSR_PDEP_PSYCHOTIC_DEPRESSION_01,4,"answers.Q_PDEP_PSYCHOSIS == 'yes'","psychotic_depression rule 1"
@@ -677,10 +687,6 @@ derm_cellulitis,CL_DCELL_NEC_FAS,NEG_NEC_NO_PAINOUT_V3,-6,"answers.Q_DCELL_PAIN_
 derm_cellulitis,CL_DCELL_NEC_FAS,NEG_NEC_PAINOUT_ONLY_V3,-4,"answers.Q_DCELL_PAIN_OUT == 'yes' && answers.Q_DCELL_FEVER == 'no' && answers.Q_DCELL_SPREADING == 'no'",NEG_NEC_PAINOUT_ONLY_V3 suppressor
 derm_cellulitis,CL_DCELL_ABSCESS,NEG_ABS_NO_PUS_V3,-6,"answers.Q_DCELL_PUS == 'no'",NEG_ABS_NO_PUS_V3 suppressor
 derm_cellulitis,CL_DCELL_CELLULITIS,BOOST_CELL_FEVER_SPREAD_V3,1,"answers.Q_DCELL_FEVER == 'yes' && answers.Q_DCELL_SPREADING == 'yes'",BOOST_CELL_FEVER_SPREAD_V3 suppressor
-psych_anxiety_panic,CL_PANX_PANIC_ATTACK,NEG_PANIC_SYNCOPE_V3,-6,"answers.Q_PANX_SYNCOPE == 'yes'",NEG_PANIC_SYNCOPE_V3 suppressor
-psych_anxiety_panic,CL_PANX_MEDICAL_MIMIC,BOOST_MED_CP_SOB_V3,1,"answers.Q_PANX_CP == 'yes' && answers.Q_PANX_SOB == 'yes'",BOOST_MED_CP_SOB_V3 suppressor
-psych_anxiety_panic,CL_PANX_MEDICAL_MIMIC,NEG_MED_CP_ONLY_V3,-2,"answers.Q_PANX_CP == 'yes' && answers.Q_PANX_SOB == 'no' && answers.Q_PANX_SYNCOPE == 'no'",NEG_MED_CP_ONLY_V3 suppressor
-psych_anxiety_panic,CL_PANX_PANIC_ATTACK,BOOST_PANIC_SUDDEN_SAFE_V3,1,"answers.Q_PANX_SUDDEN == 'yes' && answers.Q_PANX_CP == 'no' && answers.Q_PANX_SOB == 'no' && answers.Q_PANX_SYNCOPE == 'no'",BOOST_PANIC_SUDDEN_SAFE_V3 suppressor
 psych_depression_suicidal_ideation,CL_PDEP_PSYCHOTIC_DEPRESSION,BOOST_PD_PSYCH_V4,1,"answers.Q_PDEP_PSYCHOSIS == 'yes'",BOOST_PD_PSYCH_V4 suppressor
 psych_depression_suicidal_ideation,CL_PDEP_SUICIDE_RISK,BOOST_SR_SI_V4,3,"answers.Q_PDEP_SI == 'yes'",BOOST_SR_SI_V4 suppressor
 psych_depression_suicidal_ideation,CL_PDEP_SUICIDE_RISK,BOOST_SR_INTENT_V4,3,"answers.Q_PDEP_INTENT == 'yes'",BOOST_SR_INTENT_V4 suppressor
