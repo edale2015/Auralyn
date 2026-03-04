@@ -1,0 +1,111 @@
+B4-6 ENT Sore Throat Mapping
+
+Use Q_ST_* for clusters + RF/disp (triage).
+Keep centor_* only for the B1 scoring system.
+
+Mapping table
+
+fever → Q_ST_FEVER
+
+cough present → Q_ST_COUGH (so “no cough” = Q_ST_COUGH = no)
+
+exudate → Q_ST_EXUDATE
+
+tender nodes → Q_ST_TENDER_NODES
+
+drooling → Q_ST_DROOL
+
+SOB/stridor proxy → Q_ST_SOB
+
+mono features → Q_ST_MONO
+
+PTA muffled voice/trismus/uvula deviation proxy → use Q_ST_TRISMUS (combined); add 1 new optional Q_ST_UVULA_DEV if you want more specificity
+
+If you don’t want to add uvula deviation right now, PTA can still be represented by trismus/muffled voice proxy.
+
+1) CORE_QUESTIONS additions (minimal)
+
+Only add what you don’t already have:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+ent_sore_throat,Q_ST_UVULA_DEV,Uvula deviation or one-sided severe throat swelling?,boolean
+ent_sore_throat,Q_ST_VACC_HIB,Fully vaccinated for Hib?,boolean
+
+(Everything else you listed already exists in combined form.)
+
+2) Cluster scoring rules (use Q_ST_*)
+
+Append to CLUSTER_SCORING_RULES.csv under ent_sore_throat:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_1,"Q_ST_DROOL=true",4
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_2,"Q_ST_SOB=true",3
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_3,"Q_ST_VACC_HIB=false",1
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_NEG_1,"Q_ST_DROOL=false AND Q_ST_SOB=false",-6
+
+ent_sore_throat,CL_ENT_PTA,PTA_1,"Q_ST_TRISMUS=true",4
+ent_sore_throat,CL_ENT_PTA,PTA_2,"Q_ST_UVULA_DEV=true",3
+ent_sore_throat,CL_ENT_PTA,PTA_3,"Q_ST_FEVER=true",1
+ent_sore_throat,CL_ENT_PTA,PTA_NEG_1,"Q_ST_DROOL=true OR Q_ST_SOB=true",-3
+
+ent_sore_throat,CL_ENT_MONO,MONO_1,"Q_ST_MONO=true",4
+ent_sore_throat,CL_ENT_MONO,MONO_2,"Q_ST_EXUDATE=true",1
+ent_sore_throat,CL_ENT_MONO,MONO_NEG_1,"Q_ST_COUGH=false AND Q_ST_TENDER_NODES=true",-1
+
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_1,"Q_ST_FEVER=true",2
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_2,"Q_ST_COUGH=false",2
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_3,"Q_ST_EXUDATE=true",2
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_4,"Q_ST_TENDER_NODES=true",1
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_NEG_1,"Q_ST_MONO=true",-2
+
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,VIR_1,"Q_ST_COUGH=true",2
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,VIR_2,"Q_ST_FEVER=false",1
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,VIR_NEG_1,"Q_ST_TRISMUS=true OR Q_ST_DROOL=true OR Q_ST_SOB=true",-6
+3) DX_PRIORITY for ENT sore throat
+
+Append to DX_PRIORITY.csv:
+
+Complaint_Slug,Dx_ID,Priority
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,100
+ent_sore_throat,CL_ENT_PTA,95
+ent_sore_throat,CL_ENT_STREP_LIKE,80
+ent_sore_throat,CL_ENT_MONO,70
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,50
+4) Red flags + disposition rules
+
+Ensure drool/SOB forces EMERG.
+
+Add/confirm in RED_FLAG_RULES.csv:
+
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+ent_sore_throat,RF_ST_AIRWAY,"Q_ST_DROOL=true OR Q_ST_SOB=true",EMERG,"Airway risk"
+ent_sore_throat,RF_ST_PTA_SEVERE,"Q_ST_TRISMUS=true AND Q_ST_FEVER=true",URGENT,"Possible peritonsillar abscess"
+
+And in DISP_RULES.csv:
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+ent_sore_throat,DISP_ST_EMERG_AIRWAY,100,"Q_ST_DROOL=true OR Q_ST_SOB=true",EMERG
+ent_sore_throat,DISP_ST_URGENT_PTA,80,"Q_ST_TRISMUS=true OR Q_ST_UVULA_DEV=true",URGENT
+ent_sore_throat,DISP_ST_URGENT_FEVER_EXUDATE,50,"Q_ST_FEVER=true OR Q_ST_EXUDATE=true",URGENT
+ent_sore_throat,DISP_ST_ROUTINE_DEFAULT,1,"true",ROUTINE
+5) 13 subtype goldens (strict)
+
+Append to ent_sore_throat goldens (use your expected cluster IDs):
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+ent_sore_throat,ST_SUB1,"{""Q_ST_DROOL"":true,""Q_ST_SOB"":false,""Q_ST_VACC_HIB"":false,""Q_ST_FEVER"":true}",EMERG,CL_ENT_EPIGLOTTITIS_LIKE
+ent_sore_throat,ST_SUB2,"{""Q_ST_DROOL"":false,""Q_ST_SOB"":true,""Q_ST_VACC_HIB"":true,""Q_ST_FEVER"":true}",EMERG,CL_ENT_EPIGLOTTITIS_LIKE
+ent_sore_throat,ST_SUB3,"{""Q_ST_TRISMUS"":true,""Q_ST_UVULA_DEV"":true,""Q_ST_FEVER"":true,""Q_ST_DROOL"":false,""Q_ST_SOB"":false}",URGENT,CL_ENT_PTA
+ent_sore_throat,ST_SUB4,"{""Q_ST_TRISMUS"":true,""Q_ST_UVULA_DEV"":false,""Q_ST_FEVER"":true,""Q_ST_DROOL"":false,""Q_ST_SOB"":false}",URGENT,CL_ENT_PTA
+ent_sore_throat,ST_SUB5,"{""Q_ST_FEVER"":true,""Q_ST_COUGH"":false,""Q_ST_EXUDATE"":true,""Q_ST_TENDER_NODES"":true,""Q_ST_MONO"":false}",URGENT,CL_ENT_STREP_LIKE
+ent_sore_throat,ST_SUB6,"{""Q_ST_FEVER"":false,""Q_ST_COUGH"":true,""Q_ST_EXUDATE"":false,""Q_ST_TENDER_NODES"":false,""Q_ST_MONO"":false}",ROUTINE,CL_ENT_VIRAL_PHARYNGITIS
+ent_sore_throat,ST_SUB7,"{""Q_ST_MONO"":true,""Q_ST_EXUDATE"":true,""Q_ST_FEVER"":true,""Q_ST_COUGH"":true}",URGENT,CL_ENT_MONO
+ent_sore_throat,ST_SUB8,"{""Q_ST_MONO"":true,""Q_ST_EXUDATE"":true,""Q_ST_FEVER"":false,""Q_ST_COUGH"":true}",URGENT,CL_ENT_MONO
+ent_sore_throat,ST_SUB9,"{""Q_ST_FEVER"":true,""Q_ST_COUGH"":true,""Q_ST_EXUDATE"":false,""Q_ST_TENDER_NODES"":false,""Q_ST_MONO"":false}",URGENT,CL_ENT_VIRAL_PHARYNGITIS
+ent_sore_throat,ST_SUB10,"{""Q_ST_FEVER"":true,""Q_ST_COUGH"":false,""Q_ST_EXUDATE"":false,""Q_ST_TENDER_NODES"":true,""Q_ST_MONO"":false}",URGENT,CL_ENT_STREP_LIKE
+ent_sore_throat,ST_SUB11,"{""Q_ST_DROOL"":true,""Q_ST_SOB"":true,""Q_ST_FEVER"":true,""Q_ST_VACC_HIB"":true}",EMERG,CL_ENT_EPIGLOTTITIS_LIKE
+ent_sore_throat,ST_SUB12,"{""Q_ST_TRISMUS"":true,""Q_ST_DROOL"":true,""Q_ST_FEVER"":true}",EMERG,CL_ENT_EPIGLOTTITIS_LIKE
+ent_sore_throat,ST_SUB13,"{""Q_ST_FEVER"":false,""Q_ST_COUGH"":false,""Q_ST_EXUDATE"":true,""Q_ST_TENDER_NODES"":true,""Q_ST_MONO"":true}",URGENT,CL_ENT_MONO
+Run
+npm run ship:complaint -- ent_sore_throat
+npx tsx scripts/gate-prod.ts

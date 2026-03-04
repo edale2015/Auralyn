@@ -1,6 +1,6 @@
 {
   "id": "G05",
-  "label": "PTA – trismus → er_send",
+  "label": "PTA – trismus + fever → urgent_care (ESCALATE)",
   "answers": {
     "Q_ST_DUR": 3,
     "Q_ST_FEVER": "yes",
@@ -14,12 +14,12 @@
     "Q_ST_MONO": "no"
   },
   "expect": {
-    "disposition": "er_send",
-    "cluster": "CL_ST_PTA",
+    "disposition": "urgent_care",
+    "cluster": "CL_ENT_PTA",
     "rf_must_fire": [
-      "RF_ST_PTA"
+      "RF_ST_PTA_SEVERE"
     ],
-    "rf_gate": "ER_SEND"
+    "rf_gate": "ESCALATE"
   },
   "cc_id": "ent_sore_throat"
 }

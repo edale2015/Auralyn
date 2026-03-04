@@ -85,9 +85,10 @@ ent_sinus_pressure,DISP_SIN_BAC_SEVERE,4,"answers.Q_SINUS_FEVER == 'yes' && answ
 ent_sinus_pressure,DISP_SIN_PCP,5,"answers.Q_SINUS_DUR >= 7",pcp,TPL_SIN_PCP,LOW
 ent_sinus_pressure,DISP_SIN_VIRAL,99,true,self_care,TPL_SIN_VIRAL,LOW
 ent_sore_throat,DISP_ST_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_ST_ER_SEND,HIGH
-ent_sore_throat,DISP_ST_STREP,2,"answers.Q_ST_FEVER == 'yes' && answers.Q_ST_EXUDATE == 'yes'",urgent_care,TPL_ST_STREP,MODERATE
-ent_sore_throat,DISP_ST_MONO,3,"answers.Q_ST_MONO == 'yes'",urgent_care,TPL_ST_MONO,MODERATE
-ent_sore_throat,DISP_ST_ROUTINE,4,"answers.Q_ST_DUR >= 5",pcp,TPL_ST_ROUTINE,LOW
+ent_sore_throat,DISP_ST_EMERG_AIRWAY,2,"answers.Q_ST_DROOL == 'yes' || answers.Q_ST_SOB == 'yes'",er_send,TPL_ST_ER_SEND,HIGH
+ent_sore_throat,DISP_ST_URGENT_PTA,3,"answers.Q_ST_TRISMUS == 'yes' || answers.Q_ST_UVULA_DEV == 'yes'",urgent_care,TPL_ST_STREP,HIGH
+ent_sore_throat,DISP_ST_URGENT_FEVER,4,"answers.Q_ST_FEVER == 'yes' || answers.Q_ST_EXUDATE == 'yes' || answers.Q_ST_MONO == 'yes'",urgent_care,TPL_ST_STREP,MODERATE
+ent_sore_throat,DISP_ST_ROUTINE,5,"answers.Q_ST_DUR >= 5",pcp,TPL_ST_ROUTINE,LOW
 ent_sore_throat,DISP_ST_VIRAL,99,"true",self_care,TPL_ST_VIRAL,LOW
 ent_ear_pain,DISP_EAR_ER,1,"redFlagGate.gateResult == 'ER_SEND'",er_send,TPL_EAR_ER_SEND,HIGH
 ent_ear_pain,DISP_EAR_ESC,2,"redFlagGate.gateResult == 'ESCALATE'",urgent_care,TPL_EAR_URGENT,HIGH
