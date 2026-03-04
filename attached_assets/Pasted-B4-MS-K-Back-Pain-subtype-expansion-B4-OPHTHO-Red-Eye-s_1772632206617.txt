@@ -1,0 +1,197 @@
+B4-MS K Back Pain subtype expansion
+
+B4-OPHTHO Red Eye subtype expansion
+
+Both are designed to layer onto your current complaint IDs (no breaking renames), add only a few optional questions, add subtype clusters + DX_PRIORITY, and include 13 strict subtype goldens each.
+
+B4-MS K Back Pain Subtypes (flagship)
+Subtypes to separate
+
+mechanical
+
+radicular_sciatica
+
+cauda_equina_like
+
+spinal_infection_like
+
+fracture_like
+
+cancer_redflag_like (optional; uses existing cancer flag)
+
+A) Optional questions (add to CORE_QUESTIONS.csv under msk_back_pain)
+
+(Only add those you don’t already have.)
+
+Complaint_Slug,Question_ID,Question_Text,Type
+msk_back_pain,leg_pain_below_knee,Pain radiates below the knee?,boolean
+msk_back_pain,dermatomal_numbness,Numbness/tingling in a dermatomal pattern?,boolean
+msk_back_pain,worse_cough_sneeze,Worse with coughing/sneezing/valsalva?,boolean
+msk_back_pain,ivdu,IV drug use?,boolean
+msk_back_pain,recent_infection,Recent infection or immunocompromised?,boolean
+msk_back_pain,night_pain,Night pain or pain at rest?,boolean
+
+(You already have: trauma, weak, saddle, fever, cancer, pain_severe.)
+
+B) Subtype clusters (append to CLUSTER_SCORING_RULES.csv for msk_back_pain)
+
+Dx_IDs:
+
+CL_BKPN_MECHANICAL (existing)
+
+CL_BKPN_RADICULAR
+
+CL_BKPN_CAUDA_EQUINA
+
+CL_BKPN_SPINAL_INFECTION
+
+CL_BKPN_FRACTURE
+
+CL_BKPN_CANCER_REDFLAG
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,CES_1,"saddle=true",6
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,CES_2,"weak=true",2
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,CES_NEG_1,"saddle=false",-6
+
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_1,"fever=true",3
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_2,"ivdu=true",3
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_3,"recent_infection=true",2
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_4,"pain_severe=true",1
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_NEG_1,"fever=false AND ivdu=false AND recent_infection=false",-4
+
+msk_back_pain,CL_BKPN_FRACTURE,FX_1,"trauma=true",3
+msk_back_pain,CL_BKPN_FRACTURE,FX_2,"pain_severe=true",2
+msk_back_pain,CL_BKPN_FRACTURE,FX_NEG_1,"trauma=false",-6
+
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,CA_1,"cancer=true",4
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,CA_2,"night_pain=true",2
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,CA_NEG_1,"cancer=false",-6
+
+msk_back_pain,CL_BKPN_RADICULAR,RAD_1,"weak=true",2
+msk_back_pain,CL_BKPN_RADICULAR,RAD_2,"leg_pain_below_knee=true",2
+msk_back_pain,CL_BKPN_RADICULAR,RAD_3,"dermatomal_numbness=true",2
+msk_back_pain,CL_BKPN_RADICULAR,RAD_4,"worse_cough_sneeze=true",1
+msk_back_pain,CL_BKPN_RADICULAR,RAD_NEG_1,"saddle=true",-4
+
+msk_back_pain,CL_BKPN_MECHANICAL,MECH_1,"trauma=false AND fever=false AND cancer=false AND saddle=false",1
+msk_back_pain,CL_BKPN_MECHANICAL,MECH_NEG_1,"saddle=true OR (fever=true AND ivdu=true) OR trauma=true",-3
+C) DX_PRIORITY for ties (DX_PRIORITY.csv)
+Complaint_Slug,Dx_ID,Priority
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,100
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,95
+msk_back_pain,CL_BKPN_FRACTURE,90
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,85
+msk_back_pain,CL_BKPN_RADICULAR,70
+msk_back_pain,CL_BKPN_MECHANICAL,60
+D) 13 strict subtype goldens (append to back pain goldens)
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+msk_back_pain,BK_SUB1,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":false,""leg_pain_below_knee"":false,""dermatomal_numbness"":false,""worse_cough_sneeze"":false}",ROUTINE,CL_BKPN_MECHANICAL
+msk_back_pain,BK_SUB2,"{""trauma"":false,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true,""leg_pain_below_knee"":true,""dermatomal_numbness"":true,""worse_cough_sneeze"":true}",EMERG,CL_BKPN_RADICULAR
+msk_back_pain,BK_SUB3,"{""trauma"":false,""weak"":true,""saddle"":true,""fever"":false,""cancer"":false,""pain_severe"":true}",EMERG,CL_BKPN_CAUDA_EQUINA
+msk_back_pain,BK_SUB4,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":true,""ivdu"":true,""pain_severe"":true}",EMERG,CL_BKPN_SPINAL_INFECTION
+msk_back_pain,BK_SUB5,"{""trauma"":true,""weak"":false,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true}",URGENT,CL_BKPN_FRACTURE
+msk_back_pain,BK_SUB6,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":true,""night_pain"":true}",URGENT,CL_BKPN_CANCER_REDFLAG
+msk_back_pain,BK_SUB7,"{""trauma"":false,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""leg_pain_below_knee"":true}",URGENT,CL_BKPN_RADICULAR
+msk_back_pain,BK_SUB8,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":true,""ivdu"":false,""recent_infection"":true,""pain_severe"":true}",EMERG,CL_BKPN_SPINAL_INFECTION
+msk_back_pain,BK_SUB9,"{""trauma"":true,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true}",EMERG,CL_BKPN_FRACTURE
+msk_back_pain,BK_SUB10,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true}",ROUTINE,CL_BKPN_MECHANICAL
+msk_back_pain,BK_SUB11,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":true,""night_pain"":false}",URGENT,CL_BKPN_CANCER_REDFLAG
+msk_back_pain,BK_SUB12,"{""trauma"":false,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""leg_pain_below_knee"":false,""dermatomal_numbness"":true}",URGENT,CL_BKPN_RADICULAR
+msk_back_pain,BK_SUB13,"{""trauma"":false,""weak"":false,""saddle"":true,""fever"":false,""cancer"":false}",EMERG,CL_BKPN_CAUDA_EQUINA
+
+Run:
+
+npm run ship:complaint -- msk_back_pain
+npx tsx scripts/gate-prod.ts
+B4-OPHTHO Red Eye Subtypes (flagship)
+
+Subtypes:
+
+bacterial_conjunctivitis
+
+viral_conjunctivitis
+
+keratitis_contact_lens
+
+uveitis_glaucoma_like
+
+chemical_or_trauma
+
+A) Optional questions (CORE_QUESTIONS additions) for ophtho_red_eye
+
+Add if missing:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+ophtho_red_eye,foreign_body_sensation,Foreign body sensation or gritty feeling?,boolean
+ophtho_red_eye,chemical_exposure,Chemical exposure?,boolean
+ophtho_red_eye,trauma_high_velocity,Metal grinding/high-velocity debris?,boolean
+ophtho_red_eye,severe_pain,Severe pain?,boolean
+ophtho_red_eye,halo_vision,Haloes around lights?,boolean
+
+(You already have pain, vision_change, photophobia, discharge_pus, contact, trauma.)
+
+B) Scoring rules (append to CLUSTER_SCORING_RULES.csv)
+
+Dx_IDs:
+
+CL_ORE_BACT_CONJ
+
+CL_ORE_VIRAL_CONJ
+
+CL_ORE_KERATITIS
+
+CL_ORE_UVEITIS_GLAUCOMA
+
+CL_ORE_TRAUMA_CHEM
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ophtho_red_eye,CL_ORE_TRAUMA_CHEM,TC_1,"chemical_exposure=true OR trauma=true OR trauma_high_velocity=true",6
+ophtho_red_eye,CL_ORE_TRAUMA_CHEM,TC_2,"vision_change=true",2
+ophtho_red_eye,CL_ORE_TRAUMA_CHEM,TC_NEG_1,"chemical_exposure=false AND trauma=false AND trauma_high_velocity=false",-6
+
+ophtho_red_eye,CL_ORE_KERATITIS,KER_1,"contact=true",3
+ophtho_red_eye,CL_ORE_KERATITIS,KER_2,"pain=true OR photophobia=true OR vision_change=true",2
+ophtho_red_eye,CL_ORE_KERATITIS,KER_3,"foreign_body_sensation=true",1
+ophtho_red_eye,CL_ORE_KERATITIS,KER_NEG_1,"contact=false",-6
+
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,UVG_1,"severe_pain=true",3
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,UVG_2,"photophobia=true",2
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,UVG_3,"halo_vision=true",2
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,UVG_4,"vision_change=true",2
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,UVG_NEG_1,"pain=false AND photophobia=false AND vision_change=false",-6
+
+ophtho_red_eye,CL_ORE_BACT_CONJ,BC_1,"discharge_pus=true",3
+ophtho_red_eye,CL_ORE_BACT_CONJ,BC_2,"pain=false AND photophobia=false",1
+ophtho_red_eye,CL_ORE_BACT_CONJ,BC_NEG_1,"contact=true",-2
+
+ophtho_red_eye,CL_ORE_VIRAL_CONJ,VC_1,"discharge_pus=false",2
+ophtho_red_eye,CL_ORE_VIRAL_CONJ,VC_2,"pain=false AND photophobia=false AND vision_change=false",1
+ophtho_red_eye,CL_ORE_VIRAL_CONJ,VC_NEG_1,"discharge_pus=true",-3
+C) DX_PRIORITY ties
+Complaint_Slug,Dx_ID,Priority
+ophtho_red_eye,CL_ORE_TRAUMA_CHEM,100
+ophtho_red_eye,CL_ORE_KERATITIS,90
+ophtho_red_eye,CL_ORE_UVEITIS_GLAUCOMA,85
+ophtho_red_eye,CL_ORE_BACT_CONJ,70
+ophtho_red_eye,CL_ORE_VIRAL_CONJ,50
+D) 13 goldens (append to ophtho_red_eye goldens)
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+ophtho_red_eye,ORE_SUB1,"{""discharge_pus"":true,""pain"":false,""photophobia"":false,""vision_change"":false,""contact"":false,""chemical_exposure"":false,""trauma"":false}",URGENT,CL_ORE_BACT_CONJ
+ophtho_red_eye,ORE_SUB2,"{""discharge_pus"":false,""pain"":false,""photophobia"":false,""vision_change"":false,""contact"":false,""chemical_exposure"":false,""trauma"":false}",ROUTINE,CL_ORE_VIRAL_CONJ
+ophtho_red_eye,ORE_SUB3,"{""contact"":true,""pain"":true,""photophobia"":true,""vision_change"":false,""discharge_pus"":false}",EMERG,CL_ORE_KERATITIS
+ophtho_red_eye,ORE_SUB4,"{""contact"":true,""pain"":false,""photophobia"":false,""vision_change"":true,""discharge_pus"":false}",EMERG,CL_ORE_KERATITIS
+ophtho_red_eye,ORE_SUB5,"{""pain"":true,""severe_pain"":true,""photophobia"":true,""halo_vision"":true,""vision_change"":true,""contact"":false}",EMERG,CL_ORE_UVEITIS_GLAUCOMA
+ophtho_red_eye,ORE_SUB6,"{""chemical_exposure"":true,""pain"":true,""vision_change"":true,""contact"":false}",EMERG,CL_ORE_TRAUMA_CHEM
+ophtho_red_eye,ORE_SUB7,"{""trauma_high_velocity"":true,""pain"":true,""vision_change"":false,""contact"":false}",EMERG,CL_ORE_TRAUMA_CHEM
+ophtho_red_eye,ORE_SUB8,"{""contact"":true,""pain"":false,""photophobia"":false,""vision_change"":false,""foreign_body_sensation"":true}",URGENT,CL_ORE_KERATITIS
+ophtho_red_eye,ORE_SUB9,"{""discharge_pus"":true,""pain"":true,""photophobia"":true,""vision_change"":false,""contact"":false}",EMERG,CL_ORE_UVEITIS_GLAUCOMA
+ophtho_red_eye,ORE_SUB10,"{""discharge_pus"":false,""pain"":true,""photophobia"":true,""vision_change"":false,""contact"":false}",EMERG,CL_ORE_UVEITIS_GLAUCOMA
+ophtho_red_eye,ORE_SUB11,"{""discharge_pus"":true,""pain"":false,""photophobia"":false,""vision_change"":false,""contact"":true}",URGENT,CL_ORE_BACT_CONJ
+ophtho_red_eye,ORE_SUB12,"{""discharge_pus"":false,""pain"":false,""photophobia"":false,""vision_change"":false,""contact"":true}",URGENT,CL_ORE_KERATITIS
+ophtho_red_eye,ORE_SUB13,"{""pain"":false,""photophobia"":false,""vision_change"":false,""contact"":false,""foreign_body_sensation"":true}",ROUTINE,CL_ORE_VIRAL_CONJ
+
+Run:
+
+npm run ship:complaint -- ophtho_red_eye
+npx tsx scripts/gate-prod.ts
