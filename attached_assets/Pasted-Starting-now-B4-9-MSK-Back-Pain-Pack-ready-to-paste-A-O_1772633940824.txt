@@ -1,0 +1,83 @@
+Starting now: B4-9 MSK Back Pain Pack (ready to paste)
+A) Optional questions to add (CORE_QUESTIONS.csv)
+
+(Only add missing.)
+
+Complaint_Slug,Question_ID,Question_Text,Type
+msk_back_pain,Q_BK_RAD_BELOW_KNEE,Pain radiates below the knee?,boolean
+msk_back_pain,Q_BK_DERMATOMAL_NUMB,Numbness/tingling in a dermatomal pattern?,boolean
+msk_back_pain,Q_BK_WORSE_VALSALVA,Worse with coughing/sneezing/valsalva?,boolean
+msk_back_pain,Q_BK_IVDU,IV drug use?,boolean
+msk_back_pain,Q_BK_RECENT_INFECTION,Recent infection or immunocompromised?,boolean
+msk_back_pain,Q_BK_NIGHT_PAIN,Night pain or pain at rest?,boolean
+B) Cluster scoring rules (CLUSTER_SCORING_RULES.csv)
+
+Dx_IDs (use your canonical naming; these align with what you already track):
+
+CL_BKPN_CAUDA_EQUINA
+
+CL_BKPN_SPINAL_INFECTION
+
+CL_BKPN_FRACTURE
+
+CL_BKPN_CANCER_REDFLAG
+
+CL_BKPN_RADICULAR
+
+CL_BKPN_MECHANICAL
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,CES_1,"saddle=true",6
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,CES_2,"weak=true",2
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,CES_NEG_1,"saddle=false",-6
+
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_1,"fever=true",3
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_2,"Q_BK_IVDU=true",3
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_3,"Q_BK_RECENT_INFECTION=true",2
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_4,"pain_severe=true",1
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,INF_NEG_1,"fever=false AND Q_BK_IVDU=false AND Q_BK_RECENT_INFECTION=false",-4
+
+msk_back_pain,CL_BKPN_FRACTURE,FX_1,"trauma=true",3
+msk_back_pain,CL_BKPN_FRACTURE,FX_2,"pain_severe=true",2
+msk_back_pain,CL_BKPN_FRACTURE,FX_NEG_1,"trauma=false",-6
+
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,CA_1,"cancer=true",4
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,CA_2,"Q_BK_NIGHT_PAIN=true",2
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,CA_NEG_1,"cancer=false",-6
+
+msk_back_pain,CL_BKPN_RADICULAR,RAD_1,"weak=true",2
+msk_back_pain,CL_BKPN_RADICULAR,RAD_2,"Q_BK_RAD_BELOW_KNEE=true",2
+msk_back_pain,CL_BKPN_RADICULAR,RAD_3,"Q_BK_DERMATOMAL_NUMB=true",2
+msk_back_pain,CL_BKPN_RADICULAR,RAD_4,"Q_BK_WORSE_VALSALVA=true",1
+msk_back_pain,CL_BKPN_RADICULAR,RAD_NEG_1,"saddle=true",-4
+
+msk_back_pain,CL_BKPN_MECHANICAL,MECH_1,"trauma=false AND fever=false AND cancer=false AND saddle=false",1
+msk_back_pain,CL_BKPN_MECHANICAL,MECH_NEG_1,"saddle=true OR (fever=true AND Q_BK_IVDU=true) OR trauma=true",-3
+C) DX_PRIORITY (DX_PRIORITY.csv)
+Complaint_Slug,Dx_ID,Priority
+msk_back_pain,CL_BKPN_CAUDA_EQUINA,100
+msk_back_pain,CL_BKPN_SPINAL_INFECTION,95
+msk_back_pain,CL_BKPN_FRACTURE,90
+msk_back_pain,CL_BKPN_CANCER_REDFLAG,85
+msk_back_pain,CL_BKPN_RADICULAR,70
+msk_back_pain,CL_BKPN_MECHANICAL,60
+D) 13 subtype goldens (append)
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+msk_back_pain,BK4_SUB1,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":false}",ROUTINE,CL_BKPN_MECHANICAL
+msk_back_pain,BK4_SUB2,"{""trauma"":false,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true,""Q_BK_RAD_BELOW_KNEE"":true}",URGENT,CL_BKPN_RADICULAR
+msk_back_pain,BK4_SUB3,"{""trauma"":false,""weak"":true,""saddle"":true,""fever"":false,""cancer"":false,""pain_severe"":true}",EMERG,CL_BKPN_CAUDA_EQUINA
+msk_back_pain,BK4_SUB4,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":true,""Q_BK_IVDU"":true,""pain_severe"":true}",EMERG,CL_BKPN_SPINAL_INFECTION
+msk_back_pain,BK4_SUB5,"{""trauma"":true,""weak"":false,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true}",URGENT,CL_BKPN_FRACTURE
+msk_back_pain,BK4_SUB6,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":true,""Q_BK_NIGHT_PAIN"":true}",URGENT,CL_BKPN_CANCER_REDFLAG
+msk_back_pain,BK4_SUB7,"{""trauma"":false,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""Q_BK_DERMATOMAL_NUMB"":true}",URGENT,CL_BKPN_RADICULAR
+msk_back_pain,BK4_SUB8,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":true,""Q_BK_RECENT_INFECTION"":true,""pain_severe"":true}",EMERG,CL_BKPN_SPINAL_INFECTION
+msk_back_pain,BK4_SUB9,"{""trauma"":true,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true}",EMERG,CL_BKPN_FRACTURE
+msk_back_pain,BK4_SUB10,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":false,""pain_severe"":true}",ROUTINE,CL_BKPN_MECHANICAL
+msk_back_pain,BK4_SUB11,"{""trauma"":false,""weak"":false,""saddle"":false,""fever"":false,""cancer"":true,""Q_BK_NIGHT_PAIN"":false}",URGENT,CL_BKPN_CANCER_REDFLAG
+msk_back_pain,BK4_SUB12,"{""trauma"":false,""weak"":true,""saddle"":false,""fever"":false,""cancer"":false,""Q_BK_WORSE_VALSALVA"":true}",URGENT,CL_BKPN_RADICULAR
+msk_back_pain,BK4_SUB13,"{""trauma"":false,""weak"":false,""saddle"":true,""fever"":false,""cancer"":false}",EMERG,CL_BKPN_CAUDA_EQUINA
+
+Run:
+
+npm run ship:complaint -- msk_back_pain
+npx tsx scripts/gate-prod.ts
