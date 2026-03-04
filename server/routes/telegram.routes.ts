@@ -27,8 +27,8 @@ function verifySecret(req: any): boolean {
 
 function parseBoolean(text: string): boolean | null {
   const t = text.trim().toLowerCase();
-  if (["yes", "y", "true", "1"].includes(t)) return true;
-  if (["no", "n", "false", "0"].includes(t)) return false;
+  if (["yes", "y", "true", "1", "yep", "yeah", "yea", "sure", "si"].includes(t)) return true;
+  if (["no", "n", "false", "0", "nah", "nope", "nay"].includes(t)) return false;
   return null;
 }
 
