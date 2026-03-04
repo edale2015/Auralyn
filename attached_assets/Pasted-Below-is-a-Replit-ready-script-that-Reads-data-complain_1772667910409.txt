@@ -1,0 +1,497 @@
+Below is a Replit-ready script that:
+
+Reads data/complaints/differentials_seed.csv
+
+For each row:
+
+Calls your existing generator in single mode (idempotent)
+
+Appends CLUSTER_SCORING_RULES rows using your headers:
+
+CC_ID,CLUSTER_ID,RULE_ID,POINTS,WHEN_EXPR,EVIDENCE_LABEL
+
+Appends DX_PRIORITY rows using your headers:
+
+CC_ID,CLUSTER_ID,PRIORITY
+
+Uses no Papa.parse (it includes a splitCsvLine() compatible with quoted commas)
+
+You should paste this into Replit.
+
+1) Input file format
+
+Create: data/complaints/differentials_seed.csv
+
+CC_ID,SYSTEM,LABEL,ALIASES,DIFFERENTIALS
+allergic_rhinitis,ENT,Allergic Rhinitis,runny_nose;sneezing;itchy_eyes,allergic_rhinitis;viral_uri;acute_bacterial_sinusitis
+gu_uti_symptoms,GU,UTI Symptoms,uti;dysuria;burning_urination,cystitis;pyelonephritis;std_urethritis;nephrolithiasis
+chest_pain,CARD,Chest Pain,chest_pain;pressure;chest_tightness,mi;pe;pneumothorax;gerd;costochondritis
+
+Notes:
+
+CC_ID is already your lowercase snake_case complaint id (no CC_ prefix).
+
+ALIASES and DIFFERENTIALS are ; separated.
+
+2) Add script: scripts/generate-complaints-from-differentials.ts
+/**
+ * scripts/generate-complaints-from-differentials.ts
+ *
+ * Step 2 Accelerator (repo-native):
+ * - Reads seed CSV (quoted commas supported)
+ * - For each complaint:
+ *    1) runs existing generator in "single" mode (idempotent)
+ *    2) appends cluster scoring rules (idempotent by CC_ID+RULE_ID)
+ *    3) appends DX priority rows (idempotent by CC_ID+CLUSTER_ID)
+ *
+ * Uses:
+ * - server/data/csv/CLUSTER_SCORING_RULES.csv
+ * - server/data/csv/DX_PRIORITY.csv
+ *
+ * Usage:
+ *   npx tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv
+ *   npx tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv --dry-run
+ */
+
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+
+type SeedRow = {
+  CC_ID: string;
+  SYSTEM: string;
+  LABEL: string;
+  ALIASES: string;
+  DIFFERENTIALS: string;
+};
+
+type Args = {
+  seedPath: string;
+  dryRun: boolean;
+  noGolden: boolean;
+};
+
+function parseArgs(argv: string[]): Args {
+  const seedPath = argv[0];
+  if (!seedPath) {
+    console.error(
+      "Usage: npx tsx scripts/generate-complaints-from-differentials.ts <seed.csv> [--dry-run] [--no-golden]"
+    );
+    process.exit(2);
+  }
+  const args: Args = { seedPath, dryRun: false, noGolden: false };
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--no-golden") args.noGolden = true;
+  }
+  return args;
+}
+
+/**
+ * CSV parsing with quoted commas support.
+ * Matches the style you described in scripts/generate-complaints.ts.
+ */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+
+    if (ch === '"') {
+      // handle escaped quote ""
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+
+    cur += ch;
+  }
+
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsvFile(filePath: string): { headers: string[]; rows: Record<string, string>[] } {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return { headers: [], rows: [] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) {
+      r[headers[j]] = cols[j] ?? "";
+    }
+    rows.push(r);
+  }
+
+  return { headers, rows };
+}
+
+function writeCsvFile(filePath: string, headers: string[], rows: Record<string, string>[], dryRun: boolean) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      // quote if needed
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) {
+        return `"${v.replace(/"/g, '""')}"`;
+      }
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+
+  if (dryRun) {
+    console.log(`[DRY] Would write ${rows.length} rows to ${filePath}`);
+    return;
+  }
+
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function splitSemi(s: string): string[] {
+  return (s ?? "")
+    .split(";")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function safeUpperToken(s: string) {
+  return (s ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 18); // keep prefixes short-ish
+}
+
+/**
+ * Cluster naming convention (yours):
+ * CL_<PREFIX>_<TYPE>
+ * Example: CL_AR_PRIMARY, CL_GU_CYSTITIS
+ *
+ * We generate 3 tiers:
+ * - PRIMARY
+ * - SECONDARY
+ * - BENIGN
+ *
+ * And we also generate “dx clusters” when system is provided:
+ * e.g. CL_ENT_DX_MI? No — that's not your style.
+ * So we keep it simple and predictable:
+ * CL_<PREFIX>_PRIMARY, CL_<PREFIX>_SECONDARY, CL_<PREFIX>_BENIGN
+ */
+function makeClusterIds(system: string, ccId: string) {
+  const sys = safeUpperToken(system);
+  const key = safeUpperToken(ccId);
+
+  // prefix like AR (allergic rhinitis) is often project-specific; we’ll do SYS_KEY short
+  // Example: ENT_ALLERGIC_RHIN... -> ENT_ALLERGIC_RHIN
+  const prefix = `${sys}_${key}`.replace(/_+/g, "_").slice(0, 18);
+
+  return {
+    prefix,
+    primary: `CL_${prefix}_PRIMARY`,
+    secondary: `CL_${prefix}_SECONDARY`,
+    benign: `CL_${prefix}_BENIGN`,
+  };
+}
+
+function runSingleGenerator(params: { ccId: string; system: string; label: string; aliasesSemi: string; dryRun: boolean }) {
+  const { ccId, system, label, aliasesSemi, dryRun } = params;
+
+  // Your generator single mode (as you described):
+  // npx tsx scripts/generate-complaints.ts allergic_rhinitis ENT "Allergic Rhinitis" "runny_nose;sneezing"
+  const cmd = "npx";
+  const args = ["tsx", "scripts/generate-complaints.ts", ccId, system, label, aliasesSemi];
+
+  if (dryRun) {
+    console.log(`[DRY] Would run: ${cmd} ${args.join(" ")}`);
+    return;
+  }
+
+  const res = spawnSync(cmd, args, { stdio: "inherit", env: process.env });
+  if (res.status !== 0) {
+    throw new Error(`generate-complaints.ts failed for ${ccId} (exit ${res.status})`);
+  }
+}
+
+function appendClusterScoring(params: {
+  csvPath: string;
+  ccId: string;
+  system: string;
+  differentials: string[];
+  dryRun: boolean;
+}) {
+  const { csvPath, ccId, system, differentials, dryRun } = params;
+  const { headers, rows } = readCsvFile(csvPath);
+
+  // required headers per your file
+  const required = ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"];
+  for (const h of required) {
+    if (!headers.includes(h)) throw new Error(`CLUSTER_SCORING_RULES.csv missing header: ${h}`);
+  }
+
+  const existingKeys = new Set(rows.map((r) => `${r.CC_ID}||${r.RULE_ID}`).filter(Boolean));
+
+  const clusters = makeClusterIds(system, ccId);
+
+  // Tier: first 2 -> PRIMARY, next 3 -> SECONDARY, rest -> BENIGN
+  const tierForIndex = (i: number) => (i < 2 ? "PRIMARY" : i < 5 ? "SECONDARY" : "BENIGN");
+  const clusterForTier = (t: string) =>
+    t === "PRIMARY" ? clusters.primary : t === "SECONDARY" ? clusters.secondary : clusters.benign;
+
+  let addCount = 0;
+  let seq = 1;
+
+  for (let i = 0; i < differentials.length; i++) {
+    const dx = differentials[i];
+    const tier = tierForIndex(i);
+    const clusterId = clusterForTier(tier);
+
+    // RULE_ID format: CSR_<PREFIX>_<NUMBER>
+    const ruleId = `CSR_${clusters.prefix}_${String(seq).padStart(2, "0")}`;
+    seq++;
+
+    const key = `${ccId}||${ruleId}`;
+    if (existingKeys.has(key)) continue;
+
+    // POINTS heuristic: PRIMARY 100, SECONDARY 70, BENIGN 50
+    const points = tier === "PRIMARY" ? "100" : tier === "SECONDARY" ? "70" : "50";
+
+    rows.push({
+      CC_ID: ccId,
+      CLUSTER_ID: clusterId,
+      RULE_ID: ruleId,
+      POINTS: points,
+      WHEN_EXPR: "true", // seed stub; you refine clinically
+      EVIDENCE_LABEL: dx, // seed with dx token; you can later make human-readable
+    });
+
+    existingKeys.add(key);
+    addCount++;
+  }
+
+  writeCsvFile(csvPath, headers, rows, dryRun);
+  return addCount;
+}
+
+function appendDxPriority(params: {
+  csvPath: string;
+  ccId: string;
+  system: string;
+  differentials: string[];
+  dryRun: boolean;
+}) {
+  const { csvPath, ccId, system, differentials, dryRun } = params;
+  const { headers, rows } = readCsvFile(csvPath);
+
+  const required = ["CC_ID", "CLUSTER_ID", "PRIORITY"];
+  for (const h of required) {
+    if (!headers.includes(h)) throw new Error(`DX_PRIORITY.csv missing header: ${h}`);
+  }
+
+  const clusters = makeClusterIds(system, ccId);
+
+  // Ensure 3 cluster ids exist in DX_PRIORITY (idempotent by CC_ID+CLUSTER_ID)
+  const existingKeys = new Set(rows.map((r) => `${r.CC_ID}||${r.CLUSTER_ID}`).filter(Boolean));
+
+  const want = [
+    { clusterId: clusters.primary, priority: "100" },
+    { clusterId: clusters.secondary, priority: "70" },
+    { clusterId: clusters.benign, priority: "50" },
+  ];
+
+  let addCount = 0;
+  for (const w of want) {
+    const key = `${ccId}||${w.clusterId}`;
+    if (existingKeys.has(key)) continue;
+
+    rows.push({
+      CC_ID: ccId,
+      CLUSTER_ID: w.clusterId,
+      PRIORITY: w.priority,
+    });
+
+    existingKeys.add(key);
+    addCount++;
+  }
+
+  writeCsvFile(csvPath, headers, rows, dryRun);
+  return addCount;
+}
+
+function maybeWriteGoldenSuggestions(params: {
+  outDir: string;
+  ccId: string;
+  label: string;
+  differentials: string[];
+  dryRun: boolean;
+}) {
+  const { outDir, ccId, label, differentials, dryRun } = params;
+  const filePath = path.join(outDir, `${ccId}.golden-suggestions.txt`);
+
+  const content = [
+    `# Golden test suggestions for ${ccId} (${label})`,
+    `# (These are suggestions only; paste/adapt into your golden harness.)`,
+    ``,
+    `- Mild: duration=2, fever=no, pain=no, sob=no, severity=2 -> expect SELF_CARE`,
+    `- Moderate: duration=7, fever=yes, pain=yes, sob=no, severity=6 -> expect PCP/UC (depending on rules)`,
+    `- Red flag: sob=yes -> expect ER_SEND / NEEDS_REVIEW`,
+    ``,
+    `# Differential seeds (expected candidates)`,
+    ...differentials.map((d, i) => `- [${i + 1}] ${d}`),
+    ``,
+  ].join("\n");
+
+  if (dryRun) {
+    console.log(`[DRY] Would write ${filePath}`);
+    return;
+  }
+
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed file not found: ${seedAbs}`);
+
+  const CLUSTER_CSV = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_CSV = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  if (!fs.existsSync(CLUSTER_CSV)) throw new Error(`Missing: ${CLUSTER_CSV}`);
+  if (!fs.existsSync(DXP_CSV)) throw new Error(`Missing: ${DXP_CSV}`);
+
+  const seedParsed = readCsvFile(seedAbs);
+  const seedRows: SeedRow[] = seedParsed.rows as any;
+
+  let complaints = 0;
+  let csrAddedTotal = 0;
+  let dxpAddedTotal = 0;
+
+  const goldenDir = path.join(root, "scripts", "golden_suggestions");
+
+  for (const r of seedRows) {
+    const ccId = (r.CC_ID ?? "").trim();
+    const system = (r.SYSTEM ?? "").trim();
+    const label = (r.LABEL ?? "").trim();
+    const aliases = (r.ALIASES ?? "").trim();
+    const diffs = splitSemi(r.DIFFERENTIALS ?? "");
+
+    if (!ccId || !system || !label) continue;
+
+    complaints++;
+
+    // 1) Ensure complaint exists (idempotent)
+    runSingleGenerator({
+      ccId,
+      system,
+      label,
+      aliasesSemi: aliases || ccId,
+      dryRun: args.dryRun,
+    });
+
+    // 2) Seed CSR rows (one per differential)
+    if (diffs.length) {
+      const added = appendClusterScoring({
+        csvPath: CLUSTER_CSV,
+        ccId,
+        system,
+        differentials: diffs,
+        dryRun: args.dryRun,
+      });
+      csrAddedTotal += added;
+    }
+
+    // 3) Ensure DX_PRIORITY tiers exist for this complaint
+    const addedDxp = appendDxPriority({
+      csvPath: DXP_CSV,
+      ccId,
+      system,
+      differentials: diffs,
+      dryRun: args.dryRun,
+    });
+    dxpAddedTotal += addedDxp;
+
+    // 4) Optional golden suggestions
+    if (!args.noGolden) {
+      maybeWriteGoldenSuggestions({
+        outDir: goldenDir,
+        ccId,
+        label,
+        differentials: diffs,
+        dryRun: args.dryRun,
+      });
+    }
+  }
+
+  console.log("\n=== Differential Seed Generation Summary ===");
+  console.log(`Complaints processed: ${complaints}`);
+  console.log(`Cluster scoring rules added: ${csrAddedTotal}`);
+  console.log(`DX priority rows added: ${dxpAddedTotal}`);
+  if (!args.noGolden) console.log(`Golden suggestions: ${path.relative(root, goldenDir)}/`);
+  console.log("Done.");
+}
+
+main();
+3) Add npm script (optional)
+
+In package.json:
+
+{
+  "scripts": {
+    "gen:differentials": "tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv"
+  }
+}
+4) Run it
+npm run gen:differentials
+npm run abi:complaints
+npm test
+
+If you want to preview without writing:
+
+npx tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv --dry-run
+5) Why this matches your conventions
+
+CC_ID: uses your lowercase complaint id as-is (no CC_ prefix).
+
+CLUSTER_ID: CL_<PREFIX>_<TYPE> where <TYPE> is PRIMARY|SECONDARY|BENIGN.
+
+RULE_ID: CSR_<PREFIX>_<NN> like CSR_ENT_ALLERGIC_RHIN_01.
+
+CSV paths: uses server/data/csv/… exactly.
+
+Headers: writes only your exact header columns.
+
+One thing you’ll likely want next (tiny improvement)
+
+Right now CSR rows use:
+
+WHEN_EXPR=true
+
+EVIDENCE_LABEL=<dx_token>
+
+That’s intentional: it seeds structure fast. Next step is to make profile-based seed logic (ENT sinus vs chest pain) so WHEN_EXPR stubs are more clinically meaningful.
