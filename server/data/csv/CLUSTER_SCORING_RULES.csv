@@ -472,12 +472,25 @@ ophtho_eye_pain_foreign_body,CL_OEPFB_ABRASION,CSR_OEPFB_02,2,"answers.Q_OEPFB_S
 ophtho_eye_pain_foreign_body,CL_OEPFB_KERATITIS,CSR_OEPFB_03,3,"answers.Q_OEPFB_CONTACT == 'yes'",keratitis rule 3
 ophtho_eye_pain_foreign_body,CL_OEPFB_CHEMICAL_INJURY,CSR_OEPFB_04,5,"answers.Q_OEPFB_CHEMICAL == 'yes'",chemical_injury rule 4
 ophtho_eye_pain_foreign_body,CL_OEPFB_ABRASION,CSR_OEPFB_05,1,"answers.Q_OEPFB_METAL_WORK == 'no' && answers.Q_OEPFB_CHEMICAL == 'no' && answers.Q_OEPFB_CONTACT == 'no'",abrasion rule 5
-id_fever,CL_IDF_VIRAL_FEVER,CSR_IDF_01,2,"answers.Q_IDF_TEMP_HIGH == 'no' && answers.Q_IDF_CONFUSION == 'no' && answers.Q_IDF_SOB == 'no'",viral_fever rule 1
-id_fever,CL_IDF_SERIOUS_INFECTION,CSR_IDF_02,3,"answers.Q_IDF_TEMP_HIGH == 'yes'",serious_infection rule 2
-id_fever,CL_IDF_SERIOUS_INFECTION,CSR_IDF_03,3,"answers.Q_IDF_IMMUNO == 'yes'",serious_infection rule 3
-id_fever,CL_IDF_SERIOUS_INFECTION,CSR_IDF_04,4,"answers.Q_IDF_CONFUSION == 'yes'",serious_infection rule 4
-id_fever,CL_IDF_MENINGITIS_LIKE,CSR_IDF_05,5,"answers.Q_IDF_NECK_STIFF == 'yes'",meningitis_like rule 5
-id_fever,CL_IDF_VIRAL_FEVER,CSR_IDF_06,1,"answers.Q_IDF_IMMUNO == 'no' && answers.Q_IDF_TEMP_HIGH == 'no' && answers.Q_IDF_NECK_STIFF == 'no'",viral_fever rule 6
+id_fever,CL_FEV_MENINGITIS,MEN_1,4,"answers.Q_IDF_NECK_STIFF == 'yes'",Neck stiffness present
+id_fever,CL_FEV_MENINGITIS,MEN_2,2,"answers.Q_IDF_CONFUSION == 'yes'",Confusion present
+id_fever,CL_FEV_MENINGITIS,MEN_NEG_1,-4,"answers.Q_IDF_NECK_STIFF == 'no'",No neck stiffness
+id_fever,CL_FEV_NEUTROPENIC,NEUT_1,3,"answers.Q_IDF_IMMUNO == 'yes'",Immunocompromised
+id_fever,CL_FEV_NEUTROPENIC,NEUT_2,3,"answers.Q_IDF_CHEMO_RECENT == 'yes'",Recent chemotherapy
+id_fever,CL_FEV_NEUTROPENIC,NEUT_3,1,"answers.Q_IDF_SEVERE_CHILLS == 'yes'",Severe chills
+id_fever,CL_FEV_NEUTROPENIC,NEUT_NEG_1,-4,"answers.Q_IDF_IMMUNO != 'yes' && answers.Q_IDF_CHEMO_RECENT != 'yes'",Not immunocompromised or chemo
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_1,2,"answers.Q_IDF_COUGH_PRESENT == 'yes'",Cough present
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_2,2,"answers.Q_IDF_SOB == 'yes'",SOB present
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_3,1,"answers.Q_IDF_SEVERE_CHILLS == 'yes'",Severe chills
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_NEG_1,-2,"answers.Q_IDF_COUGH_PRESENT != 'yes'",No cough
+id_fever,CL_FEV_URINARY_SRC,UTI_1,3,"answers.Q_IDF_URINARY_SYMPTOMS == 'yes'",Urinary symptoms
+id_fever,CL_FEV_URINARY_SRC,UTI_2,1,"answers.Q_IDF_SEVERE_CHILLS == 'yes'",Severe chills
+id_fever,CL_FEV_URINARY_SRC,UTI_NEG_1,-3,"answers.Q_IDF_URINARY_SYMPTOMS != 'yes'",No urinary symptoms
+id_fever,CL_FEV_SKIN_SRC,SKIN_1,3,"answers.Q_IDF_SKIN_WOUND == 'yes'",Skin wound present
+id_fever,CL_FEV_SKIN_SRC,SKIN_2,1,"answers.Q_IDF_SEVERE_CHILLS == 'yes'",Severe chills
+id_fever,CL_FEV_SKIN_SRC,SKIN_NEG_1,-3,"answers.Q_IDF_SKIN_WOUND != 'yes'",No skin wound
+id_fever,CL_FEV_VIRAL,VIR_1,2,"answers.Q_IDF_COUGH_PRESENT != 'yes' && answers.Q_IDF_URINARY_SYMPTOMS != 'yes' && answers.Q_IDF_SKIN_WOUND != 'yes'",No focal source
+id_fever,CL_FEV_VIRAL,VIR_NEG_1,-4,"answers.Q_IDF_NECK_STIFF == 'yes' || answers.Q_IDF_IMMUNO == 'yes'",High risk features
 id_flu_like,CL_IDFL_INFLUENZA_LIKE,CSR_IDFL_01,2,"answers.Q_IDFL_FEVER == 'yes'",influenza_like rule 1
 id_flu_like,CL_IDFL_VIRAL_URI,CSR_IDFL_02,2,"answers.Q_IDFL_FEVER == 'no'",viral_uri rule 2
 id_flu_like,CL_IDFL_PNEUMONIA_RISK,CSR_IDFL_03,3,"answers.Q_IDFL_SOB == 'yes'",pneumonia_risk rule 3
@@ -611,14 +624,6 @@ endo_hypoglycemia,CL_EHYPO_MILD_HYPOGLYCEMIA,NEG_MILD_CONFUSION,-6,"answers.Q_EH
 endo_hypoglycemia,CL_EHYPO_MILD_HYPOGLYCEMIA,NEG_MILD_SYNCOPE,-6,"answers.Q_EHYPO_SYNCOPE == 'yes'",NEG_MILD_SYNCOPE suppressor
 endo_hypoglycemia,CL_EHYPO_SEVERE_HYPOGLYCEMIA,BOOST_SEV_CONFUSION,2,"answers.Q_EHYPO_CONFUSION == 'yes'",BOOST_SEV_CONFUSION suppressor
 endo_hypoglycemia,CL_EHYPO_SEVERE_HYPOGLYCEMIA,BOOST_SEV_SYNCOPE,2,"answers.Q_EHYPO_SYNCOPE == 'yes'",BOOST_SEV_SYNCOPE suppressor
-id_fever,CL_IDF_VIRAL_FEVER,NEG_VIRAL_HIGH_RISK,-3,"answers.Q_IDF_IMMUNO == 'yes'",NEG_VIRAL_HIGH_RISK suppressor
-id_fever,CL_IDF_VIRAL_FEVER,NEG_VIRAL_NECK,-6,"answers.Q_IDF_NECK_STIFF == 'yes'",NEG_VIRAL_NECK suppressor
-id_fever,CL_IDF_VIRAL_FEVER,NEG_VIRAL_CONFUSION,-5,"answers.Q_IDF_CONFUSION == 'yes'",NEG_VIRAL_CONFUSION suppressor
-id_fever,CL_IDF_VIRAL_FEVER,NEG_VIRAL_SOB,-4,"answers.Q_IDF_SOB == 'yes'",NEG_VIRAL_SOB suppressor
-id_fever,CL_IDF_MENINGITIS_LIKE,NEG_MEN_NO_NECK,-5,"answers.Q_IDF_NECK_STIFF == 'no'",NEG_MEN_NO_NECK suppressor
-id_fever,CL_IDF_MENINGITIS_LIKE,BOOST_MEN_NECK_CONF,2,"answers.Q_IDF_NECK_STIFF == 'yes' && answers.Q_IDF_CONFUSION == 'yes'",BOOST_MEN_NECK_CONF suppressor
-id_fever,CL_IDF_SERIOUS_INFECTION,NEG_SER_NO_SYSTEMIC,-3,"answers.Q_IDF_TEMP_HIGH == 'no' && answers.Q_IDF_SOB == 'no' && answers.Q_IDF_CONFUSION == 'no' && answers.Q_IDF_RASH_PURPLE == 'no'",NEG_SER_NO_SYSTEMIC suppressor
-id_fever,CL_IDF_SERIOUS_INFECTION,BOOST_SER_PURPURA,2,"answers.Q_IDF_RASH_PURPLE == 'yes'",BOOST_SER_PURPURA suppressor
 derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,NEG_ANA_NO_AIRWAY,-6,"answers.Q_DALRG_LIP_TONGUE == 'no' && answers.Q_DALRG_THROAT == 'no' && answers.Q_DALRG_SOB == 'no'",NEG_ANA_NO_AIRWAY suppressor
 derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,NEG_ANA_HIVES_ONLY,-4,"answers.Q_DALRG_HIVES == 'yes' && answers.Q_DALRG_VOMIT == 'no' && answers.Q_DALRG_LIP_TONGUE == 'no' && answers.Q_DALRG_THROAT == 'no' && answers.Q_DALRG_SOB == 'no'",NEG_ANA_HIVES_ONLY suppressor
 derm_allergic_reaction,CL_DALRG_ANAPHYLAXIS,BOOST_ANA_AIRWAY,2,"answers.Q_DALRG_LIP_TONGUE == 'yes' || answers.Q_DALRG_THROAT == 'yes' || answers.Q_DALRG_SOB == 'yes'",BOOST_ANA_AIRWAY suppressor

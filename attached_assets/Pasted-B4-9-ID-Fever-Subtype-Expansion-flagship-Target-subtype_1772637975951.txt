@@ -1,0 +1,117 @@
+B4-9 ID Fever Subtype Expansion (flagship)
+Target subtypes
+
+viral_syndrome
+
+pneumonia_source
+
+urinary_source
+
+skin_soft_tissue_source
+
+meningitis_like
+
+neutropenic_fever_like
+
+This makes fever triage much more realistic without adding hundreds of rules.
+
+A) Optional questions (add to CORE_QUESTIONS.csv)
+
+Only add what you don’t already have.
+
+Complaint_Slug,Question_ID,Question_Text,Type
+id_fever,cough_present,Cough present?,boolean
+id_fever,urinary_symptoms,Burning urination or urinary frequency?,boolean
+id_fever,skin_wound,Skin infection, wound, or redness?,boolean
+id_fever,neck_stiffness,Neck stiffness or severe headache?,boolean
+id_fever,confusion,Confusion or altered mental status?,boolean
+id_fever,immunocompromised,Immunocompromised or chemotherapy?,boolean
+id_fever,chemo_recent,Recent chemotherapy within 6 weeks?,boolean
+id_fever,severe_chills,Severe shaking chills?,boolean
+
+(You likely already have fever, sob, etc.)
+
+B) Cluster scoring rules
+
+Append to CLUSTER_SCORING_RULES.csv under id_fever
+
+Clusters:
+
+CL_FEV_VIRAL
+
+CL_FEV_PNEUMONIA_SRC
+
+CL_FEV_URINARY_SRC
+
+CL_FEV_SKIN_SRC
+
+CL_FEV_MENINGITIS
+
+CL_FEV_NEUTROPENIC
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+id_fever,CL_FEV_MENINGITIS,MEN_1,"neck_stiffness=true",4
+id_fever,CL_FEV_MENINGITIS,MEN_2,"confusion=true",2
+id_fever,CL_FEV_MENINGITIS,MEN_NEG_1,"neck_stiffness=false",-4
+
+id_fever,CL_FEV_NEUTROPENIC,NEUT_1,"immunocompromised=true",3
+id_fever,CL_FEV_NEUTROPENIC,NEUT_2,"chemo_recent=true",3
+id_fever,CL_FEV_NEUTROPENIC,NEUT_3,"severe_chills=true",1
+id_fever,CL_FEV_NEUTROPENIC,NEUT_NEG_1,"immunocompromised=false AND chemo_recent=false",-4
+
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_1,"cough_present=true",2
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_2,"sob=true",2
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_3,"severe_chills=true",1
+id_fever,CL_FEV_PNEUMONIA_SRC,PNA_NEG_1,"cough_present=false",-2
+
+id_fever,CL_FEV_URINARY_SRC,UTI_1,"urinary_symptoms=true",3
+id_fever,CL_FEV_URINARY_SRC,UTI_2,"severe_chills=true",1
+id_fever,CL_FEV_URINARY_SRC,UTI_NEG_1,"urinary_symptoms=false",-3
+
+id_fever,CL_FEV_SKIN_SRC,SKIN_1,"skin_wound=true",3
+id_fever,CL_FEV_SKIN_SRC,SKIN_2,"severe_chills=true",1
+id_fever,CL_FEV_SKIN_SRC,SKIN_NEG_1,"skin_wound=false",-3
+
+id_fever,CL_FEV_VIRAL,VIR_1,"cough_present=false AND urinary_symptoms=false AND skin_wound=false",2
+id_fever,CL_FEV_VIRAL,VIR_NEG_1,"neck_stiffness=true OR immunocompromised=true",-4
+C) DX_PRIORITY for fever ties
+
+Append to DX_PRIORITY.csv
+
+Complaint_Slug,Dx_ID,Priority
+id_fever,CL_FEV_MENINGITIS,100
+id_fever,CL_FEV_NEUTROPENIC,95
+id_fever,CL_FEV_PNEUMONIA_SRC,85
+id_fever,CL_FEV_URINARY_SRC,80
+id_fever,CL_FEV_SKIN_SRC,75
+id_fever,CL_FEV_VIRAL,50
+D) Red flag safety rules
+
+Ensure meningitis / neutropenic fever go to ER.
+
+Append to RED_FLAG_RULES.csv:
+
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+id_fever,RF_FEV_MENINGITIS,"neck_stiffness=true AND fever=true",EMERG,"Possible meningitis"
+id_fever,RF_FEV_NEUTROPENIC,"immunocompromised=true AND fever=true",EMERG,"Neutropenic fever risk"
+E) 13 subtype goldens
+
+Append to fever goldens:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+id_fever,FEV_SUB1,"{""fever"":true,""neck_stiffness"":true,""confusion"":false}",EMERG,CL_FEV_MENINGITIS
+id_fever,FEV_SUB2,"{""fever"":true,""neck_stiffness"":true,""confusion"":true}",EMERG,CL_FEV_MENINGITIS
+id_fever,FEV_SUB3,"{""fever"":true,""immunocompromised"":true,""chemo_recent"":true}",EMERG,CL_FEV_NEUTROPENIC
+id_fever,FEV_SUB4,"{""fever"":true,""cough_present"":true,""sob"":true}",EMERG,CL_FEV_PNEUMONIA_SRC
+id_fever,FEV_SUB5,"{""fever"":true,""urinary_symptoms"":true}",URGENT,CL_FEV_URINARY_SRC
+id_fever,FEV_SUB6,"{""fever"":true,""skin_wound"":true}",URGENT,CL_FEV_SKIN_SRC
+id_fever,FEV_SUB7,"{""fever"":true,""cough_present"":false,""urinary_symptoms"":false,""skin_wound"":false}",ROUTINE,CL_FEV_VIRAL
+id_fever,FEV_SUB8,"{""fever"":true,""immunocompromised"":true,""severe_chills"":true}",EMERG,CL_FEV_NEUTROPENIC
+id_fever,FEV_SUB9,"{""fever"":true,""cough_present"":true,""severe_chills"":true}",EMERG,CL_FEV_PNEUMONIA_SRC
+id_fever,FEV_SUB10,"{""fever"":true,""urinary_symptoms"":true,""severe_chills"":true}",URGENT,CL_FEV_URINARY_SRC
+id_fever,FEV_SUB11,"{""fever"":true,""skin_wound"":true,""severe_chills"":true}",URGENT,CL_FEV_SKIN_SRC
+id_fever,FEV_SUB12,"{""fever"":true,""cough_present"":false,""urinary_symptoms"":false}",ROUTINE,CL_FEV_VIRAL
+id_fever,FEV_SUB13,"{""fever"":true,""confusion"":true,""neck_stiffness"":false}",EMERG,CL_FEV_MENINGITIS
+Run
+npm run ship:complaint -- id_fever
+npx tsx scripts/gate-prod.ts
