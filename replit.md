@@ -47,8 +47,11 @@ Measures over/under-triage rates per complaint against configurable targets defi
 ### Subtype Expansions (B4)
 Data-driven subtype upgrades for improved diagnostic granularity. These add optional questions, new cluster scoring rules, DX_PRIORITY tie-breaking, and hard golden tests for various complaints like Cardio Chest Pain, Pulm Cough, Neuro Headache, GI Abdominal Pain, DERM Rash, ENT Sore Throat, GU Flank Pain, MSK Back Pain, OPHTHO Red Eye, TOX Overdose, ID Fever, ORTHO Head Injury, ENDO Hyperglycemia, PSYCH Anxiety/Panic, ENV Heat Illness, and ENV Cold Exposure/Hypothermia. Currently 73+ complaints on GENERIC_V1 with 1455 golden tests passing.
 
+### Cross-Complaint Boosts (B5)
+A data-driven engine (`crossComplaintBoostEngine.ts`) that nudges cluster scores based on cross-system clinical patterns. Configured via `CROSS_COMPLAINT_BOOSTS.csv` with rules like PE triad (CP+SOB+leg swelling), ACS pattern, meningitis triad, anaphylaxis respiratory, DKA neuro, and heat stroke exertional. Applied after complaint scoring but before winner pick. Produces audit trail via `crossComplaintAdjustments[]` on CaseState. Validated by 10 golden tests in `CROSS_COMPLAINT_GOLDENS.jsonl`.
+
 ### Validation and Testing
-The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, and a comprehensive Gate-Prod Pipeline for pre-deployment validation.
+The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, and a comprehensive Gate-Prod Pipeline (7 gates) for pre-deployment validation.
 
 ## External Dependencies
 

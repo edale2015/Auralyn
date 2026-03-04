@@ -9,6 +9,7 @@ import type {
 } from "../services/complaintConfigLoader";
 import { loadComplaintConfig } from "../services/complaintConfigLoader";
 import { evaluateExpr } from "../services/exprEval";
+import { loadCrossComplaintBoosts, applyCrossComplaintBoosts } from "./crossComplaintBoostEngine";
 import {
   runCoreQuestions,
   runRedFlagsComplaint,
@@ -357,6 +358,45 @@ export async function runGenericComplaintV1(
 
   const scoringResult = computeScoresFromRules(config.clusterScoringRules, updated as CaseState, ccId);
   scoringResult.explanation.rfTriggered = rfResult.triggeredFlags.map(f => f.rfId);
+
+  const crossBoostRules = loadCrossComplaintBoosts("server/data/csv/CROSS_COMPLAINT_BOOSTS.csv");
+  if (crossBoostRules.length > 0) {
+    const clusterScoreMap: Record<string, number> = {};
+    for (const r of scoringResult.ranked) {
+      clusterScoreMap[r.clusterId] = r.points;
+    }
+    const { scores: boostedScores, adjustments } = applyCrossComplaintBoosts({
+      complaintSlug: ccId,
+      anyAnswers: updated.answers ?? {},
+      rules: crossBoostRules,
+      scores: clusterScoreMap,
+    });
+    if (adjustments.length > 0) {
+      for (const r of scoringResult.ranked) {
+        if (boostedScores[r.clusterId] !== undefined) {
+          r.points = boostedScores[r.clusterId];
+        }
+      }
+      scoringResult.ranked.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        const priA = getDxPriority(ccId, a.clusterId);
+        const priB = getDxPriority(ccId, b.clusterId);
+        if (priB !== priA) return priB - priA;
+        return a.clusterId.localeCompare(b.clusterId);
+      });
+      (scoringResult as any).topCluster = scoringResult.ranked.length > 0 ? scoringResult.ranked[0].clusterId : "";
+      for (const r of scoringResult.ranked) {
+        scoringResult.scores[clusterIdToScoreKey(r.clusterId)] = r.points;
+      }
+      if (scoringResult.ranked.length > 0) {
+        scoringResult.scores[compositeScoreKey(ccId)] = scoringResult.ranked[0].points;
+      }
+      (updated as any).crossComplaintAdjustments = adjustments;
+      (updated as any).scoreAdjustmentsApplied = true;
+      events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:CROSS_BOOST] ${adjustments.length} adjustments applied: ${adjustments.map(a => `${a.ruleId}→${a.targetDxId}(+${a.points})`).join(", ")}` });
+    }
+  }
+
   updated.scores = { ...updated.scores, ...scoringResult.scores };
   events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:SCORING] ${Object.entries(scoringResult.scores).map(([k, v]) => `${k}=${v}`).join(", ")}` });
   events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "info", message: `[GENERIC_V1:EXPLAIN] tieBreak=${scoringResult.explanation.tieBreak}, margin=${scoringResult.explanation.margin}, confidence=${scoringResult.explanation.confidence}` });

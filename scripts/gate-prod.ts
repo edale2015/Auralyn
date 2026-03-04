@@ -106,6 +106,9 @@ function main() {
   const CMD_CONSISTENCY = process.env.GATE_CONSISTENCY_CMD ?? "npx tsx scripts/test-consistency.ts";
   report.steps.push(runStep("consistency_goldens", CMD_CONSISTENCY));
 
+  const CMD_CROSS = process.env.GATE_CROSS_CMD ?? "npx tsx scripts/test-cross-complaint.ts";
+  report.steps.push(runStep("cross_complaint_goldens", CMD_CROSS));
+
   report.steps.push(runStep("stress_smoke", CMD_STRESS));
 
   report.steps.push(runStep("drift_audit", CMD_DRIFT));

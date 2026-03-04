@@ -1,0 +1,319 @@
+This upgrades B2 from flagging/escalation only to also nudging cluster scores in a controlled, auditable way, using a new CSV table and golden tests. It preserves your safety posture and remains gate-prod friendly.
+
+B5 Overview
+What B5 adds
+
+New CSV: server/data/csv/CROSS_COMPLAINT_BOOSTS.csv
+
+Engine: server/engines/crossComplaintBoostEngine.ts
+
+Pipeline hook: after complaint scoring, before winner pick (so boosts affect cluster winner deterministically; tie-break still works)
+
+CaseState fields:
+
+crossComplaintAdjustments[] (audit trail)
+
+scoreAdjustmentsApplied=true
+
+Tests: scripts/test-cross-complaint.ts + CROSS_COMPLAINT_GOLDENS.jsonl
+
+Gate-prod: add step cross_complaint_goldens
+
+1) New CSV: server/data/csv/CROSS_COMPLAINT_BOOSTS.csv
+
+Schema:
+
+Rule_ID,Applies_To_Complaint,When_AnyAnswers_Logic,Target_Dx_ID,Points,Max_Applications,Severity,Message
+
+Applies_To_Complaint: single complaint slug (the one being triaged)
+
+When_AnyAnswers_Logic: logic over anyAnswers (aggregated structured answers on the case)
+
+Target_Dx_ID: the dx/cluster in this complaint to adjust
+
+Points: integer (positive or negative)
+
+Max_Applications: cap per case per rule (usually 1)
+
+Severity: LOW|MODERATE|HIGH (for audit)
+
+Message: included in explanation/UI
+
+Starter rules (high yield, safe)
+
+Paste this file:
+
+Rule_ID,Applies_To_Complaint,When_AnyAnswers_Logic,Target_Dx_ID,Points,Max_Applications,Severity,Message
+B5_PE_TRIAD,pulm_shortness_of_breath,"any.cp=true AND any.sob=true AND any.leg_swelling_unilateral=true",pe,3,1,HIGH,"CP+SOB+unilateral leg swelling increases PE likelihood"
+B5_PE_TRIAD_CT,pulm_chest_tightness,"any.cp=true AND any.sob=true AND any.leg_swelling_unilateral=true",pe,3,1,HIGH,"CP+SOB+unilateral leg swelling increases PE likelihood"
+B5_PE_HEMOPTYSIS,pulm_hemoptysis,"any.risk=true AND any.sob=true",pe,2,1,HIGH,"Hemoptysis with PE risk + SOB increases PE likelihood"
+B5_ACS_PATTERN,cardio_chest_pain,"any.pressure=true AND any.exert=true AND (any.radiate=true OR any.sweat=true)",acs,2,1,HIGH,"Classic ACS pattern increases ACS likelihood"
+B5_MENINGITIS_TRIAD,neuro_headache,"any.fever=true AND any.neck_stiffness=true",CL_NHA_MENINGITIS_LIKE,3,1,HIGH,"Fever + neck stiffness increases meningitis likelihood"
+B5_MENINGITIS_AMS,neuro_confusion_ams,"any.fever=true AND any.meningitis_symptoms=true",infection,2,1,HIGH,"Fever + meningitis symptoms increases infectious AMS likelihood"
+B5_MENINGO_RASH,derm_rash,"any.fever=true AND any.purple=true AND (any.confusion=true OR any.hypotension_like=true)",CL_DRSH_MENINGOCOCCEMIA,3,1,HIGH,"Fever + purpura + systemic signs increases meningococcemia likelihood"
+B5_ANAPHYLAXIS_RESP,derm_allergic_reaction,"any.hives=true AND (any.throat=true OR any.sob=true OR any.lip_tongue=true)",anaphylaxis,3,1,HIGH,"Hives + airway symptoms increases anaphylaxis likelihood"
+B5_DKA_NEURO,neuro_confusion_ams,"any.kussmaul=true OR any.fruity_breath=true",metabolic_toxic,2,1,HIGH,"Kussmaul/fruity breath increases metabolic/toxic AMS likelihood"
+B5_HEAT_STROKE,environmental_heat_illness,"any.exertional=true AND (any.ams=true OR any.core_temp_high=true)",CL_ENV_HEAT_STROKE,3,1,HIGH,"Exertional heat + AMS/high temp increases heat stroke likelihood"
+B5_STONE_INFECTED,gu_flank_pain,"any.fever=true AND (any.hematuria=true OR any.colicky_waves=true) AND (any.rigors=true OR any.unable_po=true)",CL_FLNK_INFECTED_OBSTRUCTING_STONE,3,1,HIGH,"Fever + stone signs + systemic symptoms increases infected stone likelihood"
+B5_PT A_ENT,ent_sore_throat,"any.Q_ST_TRISMUS=true AND any.Q_ST_FEVER=true",CL_ENT_PTA,2,1,HIGH,"Trismus + fever increases PTA likelihood"
+
+Notes:
+
+Some Target_Dx_IDs are complaint-specific (e.g., CL_ENT_PTA). Use your actual dx IDs if they differ.
+
+If your pulmonary PE dx id is not pe, change accordingly.
+
+2) Engine: server/engines/crossComplaintBoostEngine.ts
+import fs from "node:fs";
+
+export type CrossBoostRule = {
+  Rule_ID: string;
+  Applies_To_Complaint: string;
+  When_AnyAnswers_Logic: string;
+  Target_Dx_ID: string;
+  Points: number;
+  Max_Applications: number;
+  Severity: "LOW" | "MODERATE" | "HIGH";
+  Message: string;
+};
+
+export type CrossAdjustment = {
+  ruleId: string;
+  targetDxId: string;
+  points: number;
+  severity: "LOW" | "MODERATE" | "HIGH";
+  message: string;
+};
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim().replace(/^"|"$/g, ""));
+}
+
+export function loadCrossComplaintBoosts(csvPath: string): CrossBoostRule[] {
+  if (!fs.existsSync(csvPath)) return [];
+  const text = fs.readFileSync(csvPath, "utf8").trim();
+  if (!text) return [];
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const header = splitCsvLine(lines[0]);
+  const idx = (k: string) => header.indexOf(k);
+
+  return lines.slice(1).map(line => {
+    const c = splitCsvLine(line);
+    return {
+      Rule_ID: c[idx("Rule_ID")] ?? "",
+      Applies_To_Complaint: c[idx("Applies_To_Complaint")] ?? "",
+      When_AnyAnswers_Logic: c[idx("When_AnyAnswers_Logic")] ?? "",
+      Target_Dx_ID: c[idx("Target_Dx_ID")] ?? "",
+      Points: Number(c[idx("Points")] ?? "0"),
+      Max_Applications: Number(c[idx("Max_Applications")] ?? "1"),
+      Severity: (c[idx("Severity")] ?? "LOW") as any,
+      Message: c[idx("Message")] ?? "",
+    };
+  }).filter(r => r.Rule_ID && r.Applies_To_Complaint && r.When_AnyAnswers_Logic && r.Target_Dx_ID);
+}
+
+/**
+ * Simple evaluator for "any.<field>=true/false" with AND/OR.
+ * Matches your consistency engine style.
+ */
+export function evalAnyLogic(expr: string, anyAnswers: Record<string, unknown>): boolean {
+  const norm = expr.replace(/\s+/g, " ").trim();
+  const orParts = norm.split(" OR ").map(s => s.trim());
+  for (const orPart of orParts) {
+    const andParts = orPart.split(" AND ").map(s => s.trim());
+    let ok = true;
+    for (const p of andParts) {
+      if (!p.startsWith("any.")) { ok = false; break; }
+      const [lhs, rhs] = p.split("=");
+      const key = lhs.replace("any.", "").trim();
+      const want = rhs.trim();
+      const val = anyAnswers[key];
+
+      const isTrue = (v: any) => v === true || v === "yes" || v === "true";
+      const isFalse = (v: any) => v === false || v === "no" || v === "false";
+
+      if (want === "true") ok = ok && isTrue(val);
+      else if (want === "false") ok = ok && isFalse(val);
+      else { ok = false; break; }
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+export function applyCrossComplaintBoosts(params: {
+  complaintSlug: string;
+  anyAnswers: Record<string, unknown>;
+  rules: CrossBoostRule[];
+  scores: Record<string, number>; // dxId -> score
+}): { scores: Record<string, number>; adjustments: CrossAdjustment[] } {
+  const outScores = { ...params.scores };
+  const adjustments: CrossAdjustment[] = [];
+
+  for (const r of params.rules) {
+    if (r.Applies_To_Complaint !== params.complaintSlug) continue;
+    if (!evalAnyLogic(r.When_AnyAnswers_Logic, params.anyAnswers)) continue;
+
+    const current = outScores[r.Target_Dx_ID] ?? 0;
+    outScores[r.Target_Dx_ID] = current + r.Points;
+
+    adjustments.push({
+      ruleId: r.Rule_ID,
+      targetDxId: r.Target_Dx_ID,
+      points: r.Points,
+      severity: r.Severity,
+      message: r.Message,
+    });
+  }
+
+  return { scores: outScores, adjustments };
+}
+3) Pipeline hook patch
+
+Wherever you currently:
+
+compute complaint dx scores
+
+then pick winner
+
+Insert:
+
+Build anyAnswers from case answers (same approach as B2 consistency).
+
+Load boosts once and apply to the score map.
+
+Add once (module cache)
+import { loadCrossComplaintBoosts, applyCrossComplaintBoosts } from "../engines/crossComplaintBoostEngine";
+
+const CROSS_BOOSTS = loadCrossComplaintBoosts("server/data/csv/CROSS_COMPLAINT_BOOSTS.csv");
+Apply after base scoring and before winner
+const anyAnswers = caseState.answers ?? {}; // or case answers structured
+const baseScoresMap = caseState.scoresByDxId; // adapt to your field
+const { scores: boostedScores, adjustments } = applyCrossComplaintBoosts({
+  complaintSlug,
+  anyAnswers,
+  rules: CROSS_BOOSTS,
+  scores: baseScoresMap,
+});
+
+caseState.scoresByDxId = boostedScores;
+caseState.crossComplaintAdjustments = adjustments;
+caseState.scoreAdjustmentsApplied = adjustments.length > 0;
+
+Also include adjustments in your explanation output if you like:
+
+list them under scoringExplanation.crossComplaintAdjustments.
+
+4) CaseState schema additions (shared/agentTypes.ts or equivalent)
+
+Add:
+
+crossComplaintAdjustments?: Array<{
+  ruleId: string;
+  targetDxId: string;
+  points: number;
+  severity: "LOW" | "MODERATE" | "HIGH";
+  message: string;
+}>;
+scoreAdjustmentsApplied?: boolean;
+5) Goldens for B5
+server/data/csv/CROSS_COMPLAINT_GOLDENS.jsonl
+
+Each line asserts that adjustments occur and winner changes (or score increases) as expected.
+
+Paste 10 goldens:
+
+{"id":"B5_001","complaintSlug":"pulm_shortness_of_breath","anyAnswers":{"cp":true,"sob":true,"leg_swelling_unilateral":true},"baseScores":{"pe":1},"expect":{"adjustRuleIds":["B5_PE_TRIAD"],"targetDx":"pe","minAddedPoints":3}}
+{"id":"B5_002","complaintSlug":"cardio_chest_pain","anyAnswers":{"pressure":true,"exert":true,"radiate":true},"baseScores":{"acs":2},"expect":{"adjustRuleIds":["B5_ACS_PATTERN"],"targetDx":"acs","minAddedPoints":2}}
+{"id":"B5_003","complaintSlug":"derm_rash","anyAnswers":{"fever":true,"purple":true,"confusion":true},"baseScores":{"CL_DRSH_MENINGOCOCCEMIA":1},"expect":{"adjustRuleIds":["B5_MENINGO_RASH"],"targetDx":"CL_DRSH_MENINGOCOCCEMIA","minAddedPoints":3}}
+{"id":"B5_004","complaintSlug":"derm_allergic_reaction","anyAnswers":{"hives":true,"throat":true},"baseScores":{"anaphylaxis":1},"expect":{"adjustRuleIds":["B5_ANAPHYLAXIS_RESP"],"targetDx":"anaphylaxis","minAddedPoints":3}}
+{"id":"B5_005","complaintSlug":"gu_flank_pain","anyAnswers":{"fever":true,"hematuria":true,"colicky_waves":true,"rigors":true,"unable_po":true},"baseScores":{"CL_FLNK_INFECTED_OBSTRUCTING_STONE":2},"expect":{"adjustRuleIds":["B5_STONE_INFECTED"],"targetDx":"CL_FLNK_INFECTED_OBSTRUCTING_STONE","minAddedPoints":3}}
+{"id":"B5_006","complaintSlug":"ent_sore_throat","anyAnswers":{"Q_ST_TRISMUS":true,"Q_ST_FEVER":true},"baseScores":{"CL_ENT_PTA":1},"expect":{"adjustRuleIds":["B5_PT A_ENT"],"targetDx":"CL_ENT_PTA","minAddedPoints":2}}
+{"id":"B5_007","complaintSlug":"environmental_heat_illness","anyAnswers":{"exertional":true,"ams":true},"baseScores":{"CL_ENV_HEAT_STROKE":1},"expect":{"adjustRuleIds":["B5_HEAT_STROKE"],"targetDx":"CL_ENV_HEAT_STROKE","minAddedPoints":3}}
+{"id":"B5_008","complaintSlug":"neuro_headache","anyAnswers":{"fever":true,"neck_stiffness":true},"baseScores":{"CL_NHA_MENINGITIS_LIKE":1},"expect":{"adjustRuleIds":["B5_MENINGITIS_TRIAD"],"targetDx":"CL_NHA_MENINGITIS_LIKE","minAddedPoints":3}}
+{"id":"B5_009","complaintSlug":"neuro_confusion_ams","anyAnswers":{"kussmaul":true},"baseScores":{"metabolic_toxic":1},"expect":{"adjustRuleIds":["B5_DKA_NEURO"],"targetDx":"metabolic_toxic","minAddedPoints":2}}
+{"id":"B5_010","complaintSlug":"pulm_hemoptysis","anyAnswers":{"risk":true,"sob":true},"baseScores":{"pe":0},"expect":{"adjustRuleIds":["B5_PE_HEMOPTYSIS"],"targetDx":"pe","minAddedPoints":2}}
+
+(If any Dx_ID names differ in your repo, substitute them. The structure stays.)
+
+scripts/test-cross-complaint.ts
+import fs from "node:fs";
+import { loadCrossComplaintBoosts, applyCrossComplaintBoosts } from "../server/engines/crossComplaintBoostEngine";
+
+const RULES_PATH = "server/data/csv/CROSS_COMPLAINT_BOOSTS.csv";
+const GOLDENS_PATH = "server/data/csv/CROSS_COMPLAINT_GOLDENS.jsonl";
+
+function readJsonl(p: string): any[] {
+  const lines = fs.readFileSync(p, "utf8").split("\n").map(l => l.trim()).filter(Boolean);
+  return lines.map(l => JSON.parse(l));
+}
+
+function main() {
+  const rules = loadCrossComplaintBoosts(RULES_PATH);
+  const goldens = readJsonl(GOLDENS_PATH);
+
+  const fails: string[] = [];
+
+  for (const g of goldens) {
+    const { scores: outScores, adjustments } = applyCrossComplaintBoosts({
+      complaintSlug: g.complaintSlug,
+      anyAnswers: g.anyAnswers ?? {},
+      rules,
+      scores: g.baseScores ?? {},
+    });
+
+    const gotRuleIds = adjustments.map((a) => a.ruleId).sort();
+    const wantRuleIds = (g.expect.adjustRuleIds ?? []).slice().sort();
+
+    const okRules = JSON.stringify(gotRuleIds) === JSON.stringify(wantRuleIds);
+    const target = g.expect.targetDx;
+    const base = Number((g.baseScores ?? {})[target] ?? 0);
+    const after = Number(outScores[target] ?? 0);
+    const minAdded = Number(g.expect.minAddedPoints ?? 0);
+
+    const okDelta = (after - base) >= minAdded;
+
+    if (!okRules || !okDelta) {
+      fails.push(
+        `${g.id} FAIL\n` +
+        `  expected rules=${JSON.stringify(wantRuleIds)} minAdded=${minAdded} target=${target}\n` +
+        `  got      rules=${JSON.stringify(gotRuleIds)} delta=${after-base} outScore=${after}`
+      );
+    }
+  }
+
+  if (fails.length) {
+    console.error(`CROSS-COMPLAINT GOLDENS FAIL (${fails.length}/${goldens.length})`);
+    for (const f of fails.slice(0, 50)) console.error(f);
+    process.exit(1);
+  }
+
+  console.log(`CROSS-COMPLAINT GOLDENS PASS (${goldens.length}/${goldens.length}) ✅`);
+  process.exit(0);
+}
+
+main();
+
+Add to package.json:
+
+{
+  "scripts": {
+    "test:cross": "tsx scripts/test-cross-complaint.ts"
+  }
+}
+6) Gate-prod integration
+
+In scripts/gate-prod.ts, insert after consistency_goldens:
+
+report.steps.push(runStep("cross_complaint_goldens", "npm run test:cross"));
