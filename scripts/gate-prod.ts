@@ -113,6 +113,9 @@ function main() {
 
   report.steps.push(runStep("drift_audit", CMD_DRIFT));
 
+  const CMD_BUNDLE_ABI = process.env.GATE_BUNDLE_ABI_CMD ?? "npx tsx scripts/validate-complaint-bundles.ts --quiet";
+  report.steps.push(runStep("bundle_abi", CMD_BUNDLE_ABI));
+
   const CMD_CALIBRATION = process.env.GATE_CALIBRATION_CMD ?? "npx tsx scripts/calibration-report.ts";
   const calibStep = runStep("calibration_report", CMD_CALIBRATION);
   report.steps.push(calibStep);

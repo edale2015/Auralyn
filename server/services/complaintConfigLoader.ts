@@ -239,7 +239,7 @@ function rowToClusterScoringRule(row: SheetRow): ClusterScoringRule | null {
   };
 }
 
-type BundleIssue = {
+export type BundleIssue = {
   level: "ERROR" | "WARN";
   code: string;
   message: string;
@@ -251,7 +251,7 @@ function isTruthyExpr(expr: string | null | undefined): boolean {
   return s === "true" || s === "1" || s === "always";
 }
 
-function validateComplaintBundle(cfg: ComplaintConfig): BundleIssue[] {
+export function validateComplaintBundle(cfg: ComplaintConfig): BundleIssue[] {
   const issues: BundleIssue[] = [];
 
   if (!cfg.registry) {

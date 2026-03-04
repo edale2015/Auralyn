@@ -1,0 +1,288 @@
+Here you go: a Bundle ABI self-test you can run in CI or locally that loads every complaint via loadComplaintConfig(ccId) and fails hard if any bundle violates the contract.
+
+No magic, no vibes, just a bouncer at the club door checking IDs. 🪪🚪
+
+1) Add script: scripts/validate-complaint-bundles.ts
+/* scripts/validate-complaint-bundles.ts
+ *
+ * Bundle ABI Self-Test
+ * - Loads every complaint from the registry via loadComplaintConfig()
+ * - Runs the same validator logic you added in complaintConfigLoader.ts
+ * - Fails with a clear summary if any complaint is missing required artifacts
+ *
+ * Usage:
+ *   npx tsx scripts/validate-complaint-bundles.ts
+ *   npx tsx scripts/validate-complaint-bundles.ts --engine GENERIC_V1
+ *   npx tsx scripts/validate-complaint-bundles.ts --cc CC_SINUS_PRESSURE
+ */
+
+import fs from "fs";
+import path from "path";
+import Papa from "papaparse";
+
+// Import your loader
+import { loadComplaintConfig } from "../server/services/complaintConfigLoader";
+
+type Args = {
+  engine?: string;
+  cc?: string;
+  quiet?: boolean;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--engine") args.engine = argv[++i];
+    else if (a === "--cc") args.cc = argv[++i];
+    else if (a === "--quiet") args.quiet = true;
+  }
+  return args;
+}
+
+type RegistryRow = {
+  CC_ID: string;
+  SYSTEM?: string;
+  LABEL?: string;
+  ENGINE_TYPE?: string;
+  COMPLAINT_KEY?: string;
+};
+
+type Issue = {
+  level: "ERROR" | "WARN";
+  code: string;
+  message: string;
+};
+
+function isTruthyExpr(expr: string | null | undefined) {
+  if (!expr) return false;
+  const s = expr.trim().toLowerCase();
+  return s === "true" || s === "1" || s === "always";
+}
+
+/**
+ * IMPORTANT: Keep this validator in sync with complaintConfigLoader.ts.
+ * If you already exported validateComplaintBundle from the loader, import it instead of duplicating it.
+ */
+function validateComplaintBundle(cfg: any): Issue[] {
+  const issues: Issue[] = [];
+
+  if (!cfg?.registry) {
+    issues.push({ level: "ERROR", code: "REGISTRY_MISSING", message: "Missing registry entry." });
+    return issues;
+  }
+  if (!cfg.registry.CC_ID) {
+    issues.push({ level: "ERROR", code: "CC_ID_MISSING", message: "Registry CC_ID missing." });
+  }
+  if (!cfg.registry.ENGINE_TYPE) {
+    issues.push({ level: "ERROR", code: "ENGINE_TYPE_MISSING", message: "Registry ENGINE_TYPE missing." });
+  }
+
+  // Questions
+  if (!Array.isArray(cfg.questions) || cfg.questions.length === 0) {
+    issues.push({ level: "ERROR", code: "QUESTIONS_MISSING", message: "No questions defined." });
+  }
+
+  // Output templates
+  const templates = Array.isArray(cfg.outputTemplates) ? cfg.outputTemplates : [];
+  const states = new Set(templates.map((t: any) => (t.STATE ?? t.state ?? "").toString().toUpperCase()));
+  if (!states.has("TRIAGED")) {
+    issues.push({ level: "ERROR", code: "TPL_TRIAGED_MISSING", message: "Missing output template for TRIAGED." });
+  }
+  if (!states.has("NEEDS_REVIEW")) {
+    issues.push({ level: "ERROR", code: "TPL_NEEDS_REVIEW_MISSING", message: "Missing output template for NEEDS_REVIEW." });
+  }
+
+  // Disposition rules
+  const disp = Array.isArray(cfg.dispositionRules) ? cfg.dispositionRules : [];
+  if (disp.length === 0) {
+    issues.push({ level: "ERROR", code: "DISP_RULES_MISSING", message: "No disposition rules defined." });
+  } else {
+    const defaults = disp.filter((r: any) => isTruthyExpr(r.WHEN_EXPR ?? r.WHEN ?? r.IF_ALL));
+    if (defaults.length !== 1) {
+      issues.push({
+        level: "ERROR",
+        code: "DISP_DEFAULT_INVALID",
+        message: `Expected exactly 1 default disposition rule (WHEN true). Found: ${defaults.length}.`,
+      });
+    }
+
+    const hasEscalation = disp.some((r: any) => {
+      const setState = (r.SET_STATE ?? r.SETSTATE ?? "").toString().toUpperCase();
+      const dispVal = (r.DISPOSITION ?? "").toString().toUpperCase();
+      return (
+        setState === "NEEDS_REVIEW" ||
+        dispVal.includes("ER") ||
+        dispVal.includes("EMERG") ||
+        dispVal.includes("EMERGENCY")
+      );
+    });
+    if (!hasEscalation) {
+      issues.push({
+        level: "WARN",
+        code: "DISP_NO_ESCALATION",
+        message: "No escalation disposition rule found (NEEDS_REVIEW or ER/EMERGENCY).",
+      });
+    }
+  }
+
+  // Cluster scoring PRIMARY (warn-only because some early complaints might not have tiers yet)
+  const csr = Array.isArray(cfg.clusterScoringRules) ? cfg.clusterScoringRules : [];
+  const hasPrimary = csr.some(
+    (r: any) => (r.CLUSTER_TIER ?? r.TIER ?? r.BUCKET ?? "").toString().toUpperCase() === "PRIMARY"
+  );
+  if (!hasPrimary) {
+    issues.push({ level: "WARN", code: "CSR_NO_PRIMARY", message: "No PRIMARY cluster scoring rules found." });
+  }
+
+  return issues;
+}
+
+function loadRegistryCsv(): RegistryRow[] {
+  // Adjust this path to your actual canonical complaint registry CSV
+  // Common options in your repo might be:
+  // data/complaints/complaint_registry.csv
+  // data/complaints/registry.csv
+  // server/data/complaints_registry.csv
+  const root = process.cwd();
+
+  const candidates = [
+    path.join(root, "data", "complaints", "complaint_registry.csv"),
+    path.join(root, "data", "complaints", "registry.csv"),
+    path.join(root, "data", "complaints", "seed.csv"), // fallback (if seed contains ENGINE_TYPE)
+  ];
+
+  const file = candidates.find((p) => fs.existsSync(p));
+  if (!file) {
+    throw new Error(
+      `Could not find complaint registry CSV. Checked:\n${candidates.map((c) => " - " + c).join("\n")}`
+    );
+  }
+
+  const raw = fs.readFileSync(file, "utf8");
+  const parsed = Papa.parse<RegistryRow>(raw, { header: true, skipEmptyLines: true });
+  if (parsed.errors?.length) {
+    throw new Error(`CSV parse errors in registry: ${JSON.stringify(parsed.errors.slice(0, 3))}`);
+  }
+
+  const rows = (parsed.data ?? []).filter((r) => r && r.CC_ID);
+  return rows;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  const registry = loadRegistryCsv()
+    .filter((r) => (args.cc ? r.CC_ID === args.cc : true))
+    .filter((r) => (args.engine ? (r.ENGINE_TYPE ?? "").toUpperCase() === args.engine.toUpperCase() : true));
+
+  if (registry.length === 0) {
+    console.error("No complaints matched the filter.");
+    process.exit(2);
+  }
+
+  const failures: Array<{
+    ccId: string;
+    label?: string;
+    engine?: string;
+    issues: Issue[];
+    error?: string;
+  }> = [];
+
+  for (const r of registry) {
+    try {
+      const cfg = await loadComplaintConfig(r.CC_ID);
+      const issues = validateComplaintBundle(cfg);
+      const errs = issues.filter((i) => i.level === "ERROR");
+      const warns = issues.filter((i) => i.level === "WARN");
+
+      if (!args.quiet) {
+        const header = `[ABI] ${r.CC_ID}${r.LABEL ? ` (${r.LABEL})` : ""}`;
+        if (errs.length === 0 && warns.length === 0) console.log(`${header} ✅ OK`);
+        else if (errs.length === 0) console.log(`${header} ⚠️ WARN ${warns.map((w) => w.code).join(", ")}`);
+        else console.log(`${header} ❌ FAIL ${errs.map((e) => e.code).join(", ")}`);
+      }
+
+      if (errs.length > 0) {
+        failures.push({ ccId: r.CC_ID, label: r.LABEL, engine: r.ENGINE_TYPE, issues });
+      }
+    } catch (e: any) {
+      failures.push({
+        ccId: r.CC_ID,
+        label: r.LABEL,
+        engine: r.ENGINE_TYPE,
+        issues: [{ level: "ERROR", code: "LOAD_FAILED", message: "loadComplaintConfig threw an error." }],
+        error: e?.stack ?? String(e),
+      });
+      if (!args.quiet) console.log(`[ABI] ${r.CC_ID} ❌ FAIL LOAD_FAILED`);
+    }
+  }
+
+  if (failures.length) {
+    console.error("\n=== Complaint Bundle ABI FAILURES ===");
+    for (const f of failures) {
+      console.error(`\n• ${f.ccId}${f.label ? ` (${f.label})` : ""}${f.engine ? ` [${f.engine}]` : ""}`);
+      for (const i of f.issues) {
+        if (i.level === "ERROR") console.error(`  - ERROR ${i.code}: ${i.message}`);
+        else console.error(`  - WARN  ${i.code}: ${i.message}`);
+      }
+      if (f.error) {
+        console.error("  - STACK:");
+        console.error(f.error.split("\n").slice(0, 20).map((l) => "    " + l).join("\n"));
+      }
+    }
+    console.error(`\nTotal failing complaints: ${failures.length} / ${registry.length}`);
+    process.exit(1);
+  }
+
+  console.log(`\n✅ All complaint bundles passed ABI validation (${registry.length} checked).`);
+  process.exit(0);
+}
+
+main().catch((e) => {
+  console.error("Fatal:", e?.stack ?? e);
+  process.exit(1);
+});
+2) Add npm script (optional but nice)
+
+In package.json:
+
+{
+  "scripts": {
+    "abi:complaints": "tsx scripts/validate-complaint-bundles.ts"
+  }
+}
+
+Then run:
+
+npm run abi:complaints
+3) CI hook (recommended)
+
+In your CI job right after tests:
+
+npx tsx scripts/validate-complaint-bundles.ts --quiet
+
+If any complaint is malformed, CI fails immediately.
+
+4) One improvement I strongly recommend (small, high value)
+
+Right now I duplicated validateComplaintBundle() inside the script. Better is:
+
+export the validator from complaintConfigLoader.ts, and import it here.
+
+In complaintConfigLoader.ts:
+export function validateComplaintBundle(cfg: any): BundleIssue[] {
+  ...
+}
+In the ABI script:
+import { loadComplaintConfig, validateComplaintBundle } from "../server/services/complaintConfigLoader";
+
+That guarantees perfect sync.
+
+5) Tiny path adjustment you might need
+
+The only likely change: the registry CSV path.
+
+In loadRegistryCsv(), swap the candidates list to match your canonical registry file (the one your loader uses). Once you set that, you’re done.
+
+If you tell me the actual registry CSV filename you’re using in complaintConfigLoader.ts (just the path string), I’ll rewrite loadRegistryCsv() to match it exactly.
