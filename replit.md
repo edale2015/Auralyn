@@ -45,7 +45,7 @@ A safety-net layer defined by `CONSISTENCY_RULES.csv` that catches dangerous sym
 Measures over/under-triage rates per complaint against configurable targets defined in `CALIBRATION_TARGETS.csv`.
 
 ### Subtype Expansions (B4)
-Data-driven subtype upgrades for improved diagnostic granularity. These add optional questions, new cluster scoring rules, DX_PRIORITY tie-breaking, and hard golden tests for various complaints like Cardio Chest Pain, Pulm Cough, Neuro Headache, GI Abdominal Pain, DERM Rash, ENT Sore Throat, GU Flank Pain, MSK Back Pain, OPHTHO Red Eye, TOX Overdose, ID Fever, ORTHO Head Injury, ENDO Hyperglycemia, and PSYCH Anxiety/Panic. Currently 72+ complaints on GENERIC_V1 with 1429 golden tests passing.
+Data-driven subtype upgrades for improved diagnostic granularity. These add optional questions, new cluster scoring rules, DX_PRIORITY tie-breaking, and hard golden tests for various complaints like Cardio Chest Pain, Pulm Cough, Neuro Headache, GI Abdominal Pain, DERM Rash, ENT Sore Throat, GU Flank Pain, MSK Back Pain, OPHTHO Red Eye, TOX Overdose, ID Fever, ORTHO Head Injury, ENDO Hyperglycemia, PSYCH Anxiety/Panic, ENV Heat Illness, and ENV Cold Exposure/Hypothermia. Currently 73+ complaints on GENERIC_V1 with 1455 golden tests passing.
 
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, and a comprehensive Gate-Prod Pipeline for pre-deployment validation.

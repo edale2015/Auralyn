@@ -1,0 +1,169 @@
+B4-13 ENV Heat Illness Subtype Expansion
+
+Subtypes:
+
+heat_stroke_like
+
+heat_exhaustion
+
+heat_cramps/dehydration
+(keep routing conservative)
+
+A) Optional questions (CORE_QUESTIONS.csv additions for environmental_heat_illness)
+
+Add if missing:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+environmental_heat_illness,ams,Confusion, collapse, or seizure?,boolean
+environmental_heat_illness,core_temp_high,Very high temperature / very hot skin?,boolean
+environmental_heat_illness,anhidrosis,Not sweating / dry hot skin?,boolean
+environmental_heat_illness,syncope,Fainting?,boolean
+environmental_heat_illness,cramps,Muscle cramps?,boolean
+environmental_heat_illness,dehydration,Unable to keep fluids / low urine?,boolean
+environmental_heat_illness,exertional,Heavy exertion in heat?,boolean
+environmental_heat_illness,cardiac_symptoms,Chest pain or severe shortness of breath?,boolean
+
+(If some already exist, keep only the new ones like anhidrosis/syncope/dehydration.)
+
+B) Clusters (CLUSTER_SCORING_RULES.csv) for environmental_heat_illness
+
+Dx_IDs:
+
+CL_ENV_HEAT_STROKE
+
+CL_ENV_HEAT_EXHAUSTION
+
+CL_ENV_HEAT_CRAMPS_DEHYD
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+environmental_heat_illness,CL_ENV_HEAT_STROKE,HS_1,"ams=true",6
+environmental_heat_illness,CL_ENV_HEAT_STROKE,HS_2,"core_temp_high=true",4
+environmental_heat_illness,CL_ENV_HEAT_STROKE,HS_3,"anhidrosis=true",2
+environmental_heat_illness,CL_ENV_HEAT_STROKE,HS_4,"syncope=true",2
+environmental_heat_illness,CL_ENV_HEAT_STROKE,HS_NEG_1,"ams=false AND core_temp_high=false",-4
+
+environmental_heat_illness,CL_ENV_HEAT_EXHAUSTION,HE_1,"exertional=true",2
+environmental_heat_illness,CL_ENV_HEAT_EXHAUSTION,HE_2,"dehydration=true",2
+environmental_heat_illness,CL_ENV_HEAT_EXHAUSTION,HE_3,"cramps=true",1
+environmental_heat_illness,CL_ENV_HEAT_EXHAUSTION,HE_NEG_1,"ams=true OR core_temp_high=true",-6
+
+environmental_heat_illness,CL_ENV_HEAT_CRAMPS_DEHYD,HC_1,"cramps=true",3
+environmental_heat_illness,CL_ENV_HEAT_CRAMPS_DEHYD,HC_2,"dehydration=true",2
+environmental_heat_illness,CL_ENV_HEAT_CRAMPS_DEHYD,HC_NEG_1,"ams=true OR core_temp_high=true",-6
+C) DX_PRIORITY for ties
+Complaint_Slug,Dx_ID,Priority
+environmental_heat_illness,CL_ENV_HEAT_STROKE,100
+environmental_heat_illness,CL_ENV_HEAT_EXHAUSTION,70
+environmental_heat_illness,CL_ENV_HEAT_CRAMPS_DEHYD,60
+D) Red flags / disposition
+
+Add/confirm:
+
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+environmental_heat_illness,RF_ENV_HEAT_STROKE,"ams=true OR core_temp_high=true",EMERG,"Possible heat stroke"
+environmental_heat_illness,RF_ENV_HEAT_CARDIAC,"cardiac_symptoms=true",EMERG,"Cardiopulmonary symptoms in heat illness"
+
+Disposition rules (if needed):
+
+RF heat stroke/cardiac -> ER
+
+dehydration/syncope -> urgent
+
+cramps only -> routine/urgent depending
+
+E) 13 subtype goldens
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+environmental_heat_illness,HEAT_SUB1,"{""ams"":true,""core_temp_high"":true,""anhidrosis"":true,""exertional"":true}",EMERG,CL_ENV_HEAT_STROKE
+environmental_heat_illness,HEAT_SUB2,"{""ams"":true,""core_temp_high"":false,""syncope"":true,""exertional"":true}",EMERG,CL_ENV_HEAT_STROKE
+environmental_heat_illness,HEAT_SUB3,"{""ams"":false,""core_temp_high"":false,""dehydration"":true,""exertional"":true,""cramps"":true}",URGENT,CL_ENV_HEAT_EXHAUSTION
+environmental_heat_illness,HEAT_SUB4,"{""ams"":false,""core_temp_high"":false,""cramps"":true,""dehydration"":false,""exertional"":true}",URGENT,CL_ENV_HEAT_CRAMPS_DEHYD
+environmental_heat_illness,HEAT_SUB5,"{""ams"":false,""core_temp_high"":false,""cramps"":true,""dehydration"":true,""exertional"":false}",URGENT,CL_ENV_HEAT_CRAMPS_DEHYD
+environmental_heat_illness,HEAT_SUB6,"{""ams"":false,""core_temp_high"":true,""anhidrosis"":false}",EMERG,CL_ENV_HEAT_STROKE
+environmental_heat_illness,HEAT_SUB7,"{""ams"":false,""core_temp_high"":false,""dehydration"":false,""cramps"":false,""exertional"":true}",URGENT,CL_ENV_HEAT_EXHAUSTION
+environmental_heat_illness,HEAT_SUB8,"{""ams"":false,""core_temp_high"":false,""dehydration"":true,""cramps"":false,""exertional"":true}",URGENT,CL_ENV_HEAT_EXHAUSTION
+environmental_heat_illness,HEAT_SUB9,"{""ams"":false,""core_temp_high"":false,""syncope"":true,""dehydration"":true,""exertional"":true}",EMERG,CL_ENV_HEAT_STROKE
+environmental_heat_illness,HEAT_SUB10,"{""ams"":false,""core_temp_high"":false,""cardiac_symptoms"":true,""exertional"":true}",EMERG,CL_ENV_HEAT_STROKE
+environmental_heat_illness,HEAT_SUB11,"{""ams"":false,""core_temp_high"":false,""cramps"":false,""dehydration"":false,""exertional"":false}",ROUTINE,CL_ENV_HEAT_EXHAUSTION
+environmental_heat_illness,HEAT_SUB12,"{""ams"":true,""core_temp_high"":false,""cardiac_symptoms"":true}",EMERG,CL_ENV_HEAT_STROKE
+environmental_heat_illness,HEAT_SUB13,"{""ams"":false,""core_temp_high"":false,""cramps"":true,""dehydration"":true,""syncope"":false}",URGENT,CL_ENV_HEAT_CRAMPS_DEHYD
+
+Run:
+
+npm run ship:complaint -- environmental_heat_illness
+npx tsx scripts/gate-prod.ts
+B4-14 ENV Cold Exposure / Hypothermia Subtype Expansion
+
+Subtypes:
+
+severe_hypothermia_like
+
+mild_hypothermia
+
+frostbite_injury
+
+intoxication_risk (contributor)
+
+A) Optional questions (CORE_QUESTIONS.csv for environmental_hypothermia_cold_exposure)
+
+Add if missing:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+environmental_hypothermia_cold_exposure,collapse,Collapse or cannot stand?,boolean
+environmental_hypothermia_cold_exposure,shivering_stopped,Shivering stopped?,boolean
+environmental_hypothermia_cold_exposure,frostbite,White/blue numb skin or blisters?,boolean
+environmental_hypothermia_cold_exposure,wet_exposure,Wet clothing / prolonged cold exposure?,boolean
+environmental_hypothermia_cold_exposure,intox,Alcohol/drug intoxication?,boolean
+environmental_hypothermia_cold_exposure,confusion,Confusion?,boolean
+environmental_hypothermia_cold_exposure,cardiac_symptoms,Chest pain or shortness of breath?,boolean
+B) Clusters (CLUSTER_SCORING_RULES.csv)
+
+Dx_IDs:
+
+CL_ENV_HYPO_SEVERE
+
+CL_ENV_HYPO_MILD
+
+CL_ENV_FROSTBITE
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_SEVERE,SH_1,"confusion=true",5
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_SEVERE,SH_2,"shivering_stopped=true",5
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_SEVERE,SH_3,"collapse=true",3
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_SEVERE,SH_NEG_1,"confusion=false AND shivering_stopped=false",-4
+
+environmental_hypothermia_cold_exposure,CL_ENV_FROSTBITE,FR_1,"frostbite=true",6
+environmental_hypothermia_cold_exposure,CL_ENV_FROSTBITE,FR_NEG_1,"frostbite=false",-6
+
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_MILD,MI_1,"wet_exposure=true",2
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_MILD,MI_2,"intox=true",2
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_MILD,MI_NEG_1,"confusion=true OR shivering_stopped=true",-6
+C) DX_PRIORITY
+Complaint_Slug,Dx_ID,Priority
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_SEVERE,100
+environmental_hypothermia_cold_exposure,CL_ENV_FROSTBITE,90
+environmental_hypothermia_cold_exposure,CL_ENV_HYPO_MILD,60
+D) RF/disposition
+Complaint_Slug,RedFlag_ID,Logic,Disposition,Reason
+environmental_hypothermia_cold_exposure,RF_ENV_HYPO_SEVERE,"confusion=true OR shivering_stopped=true OR collapse=true",EMERG,"Severe hypothermia"
+environmental_hypothermia_cold_exposure,RF_ENV_FROSTBITE,"frostbite=true",URGENT,"Frostbite needs evaluation"
+environmental_hypothermia_cold_exposure,RF_ENV_COLD_CARDIAC,"cardiac_symptoms=true",EMERG,"Cardiac symptoms with cold exposure"
+E) 13 goldens
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+environmental_hypothermia_cold_exposure,COLD_SUB1,"{""confusion"":true,""shivering_stopped"":true,""collapse"":true,""wet_exposure"":true}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB2,"{""frostbite"":true,""wet_exposure"":true,""confusion"":false}",URGENT,CL_ENV_FROSTBITE
+environmental_hypothermia_cold_exposure,COLD_SUB3,"{""wet_exposure"":true,""intox"":false,""confusion"":false,""shivering_stopped"":false}",URGENT,CL_ENV_HYPO_MILD
+environmental_hypothermia_cold_exposure,COLD_SUB4,"{""intox"":true,""wet_exposure"":false,""confusion"":false,""shivering_stopped"":false}",URGENT,CL_ENV_HYPO_MILD
+environmental_hypothermia_cold_exposure,COLD_SUB5,"{""cardiac_symptoms"":true,""wet_exposure"":true,""confusion"":false}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB6,"{""confusion"":true,""wet_exposure"":false,""shivering_stopped"":false}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB7,"{""shivering_stopped"":true,""confusion"":false,""wet_exposure"":true}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB8,"{""frostbite"":true,""confusion"":true}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB9,"{""frostbite"":false,""wet_exposure"":false,""intox"":false,""confusion"":false}",ROUTINE,CL_ENV_HYPO_MILD
+environmental_hypothermia_cold_exposure,COLD_SUB10,"{""frostbite"":true,""cardiac_symptoms"":true}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB11,"{""wet_exposure"":true,""intox"":true,""confusion"":false}",URGENT,CL_ENV_HYPO_MILD
+environmental_hypothermia_cold_exposure,COLD_SUB12,"{""collapse"":true,""confusion"":false,""shivering_stopped"":false}",EMERG,CL_ENV_HYPO_SEVERE
+environmental_hypothermia_cold_exposure,COLD_SUB13,"{""frostbite"":true,""wet_exposure"":false,""confusion"":false}",URGENT,CL_ENV_FROSTBITE
+
+Run:
+
+npm run ship:complaint -- environmental_hypothermia_cold_exposure
+npx tsx scripts/gate-prod.ts

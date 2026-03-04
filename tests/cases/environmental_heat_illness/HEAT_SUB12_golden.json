@@ -1,0 +1,23 @@
+{
+  "id": "HEAT_SUB12",
+  "label": "environmental_heat_illness - HEAT_SUB12 - expect er_send",
+  "cc_id": "environmental_heat_illness",
+  "answers": {
+    "Q_ENVH_AMS": "yes",
+    "Q_ENVH_CORE_TEMP_HIGH": "no",
+    "Q_ENVH_SYNCOPE": "no",
+    "Q_ENVH_CRAMPS": "no",
+    "Q_ENVH_DEHYDRATION": "no",
+    "Q_ENVH_EXERTIONAL": "no",
+    "Q_ENVH_CARDIAC": "yes"
+  },
+  "expect": {
+    "disposition": "er_send",
+    "cluster": "CL_ENV_HEAT_STROKE",
+    "rf_must_fire": [
+      "RF_ENV_HEAT_STROKE",
+      "RF_ENV_HEAT_CARDIAC"
+    ],
+    "rf_gate": "ER_SEND"
+  }
+}
