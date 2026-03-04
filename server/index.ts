@@ -18,6 +18,7 @@ import { registerAdminRoutes } from "./routes/admin.routes";
 import complaintIntakeRoutes from "./routes/complaintIntake.routes";
 import { casesRouter } from "./routes/cases.routes";
 import { reviewRouter } from "./routes/review.routes";
+import { telegramRouter } from "./routes/telegram.routes";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -141,8 +142,10 @@ console.log("[ComplaintIntake] Conversational intake endpoints registered at /ap
 
 app.use(casesRouter);
 app.use(reviewRouter);
+app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
+console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
