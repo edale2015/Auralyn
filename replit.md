@@ -24,7 +24,10 @@ Physician authentication uses password-only, session-based HMAC-signed httpOnly 
 The agent system orchestrates patient flow through various routing states. A pipeline orchestrator manages complaint routing, FHIR prefill, modifiers, rules evaluation, question queue generation, and a supervisor gate. It supports LLM-powered actions, prompt template versioning, and LLM A/B testing with guardrails.
 
 ### Generic Complaint Engine (GENERIC_V1)
-This data-driven engine replaces per-complaint TypeScript scoring with CSV-driven rules. It processes rules from `CLUSTER_SCORING_RULES.csv` using an expression evaluator and calculates scores, red flags, and dispositions.
+This data-driven engine replaces per-complaint TypeScript scoring with CSV-driven rules. It processes rules from `CLUSTER_SCORING_RULES.csv` using an expression evaluator and calculates scores, red flags, and dispositions. A **bundle validator** (`validateComplaintBundle`) enforces structural integrity at load time: registry entry exists with engineType, questions are present, disposition rules include a catch-all, escalation paths exist, and GENERIC_V1 complaints have cluster scoring rules with PRIMARY entries and red flag rules. Errors hard-fail; warnings log but proceed.
+
+### Expression Evaluator (exprEval.ts)
+Recursive-descent parser supporting: `&&`, `||`, `==`, `!=`, `>=`, `<=`, `>`, `<`, `!`, `in [...]`, dot-path resolution, strings, numbers, booleans, parens. **Atomic grammar functions**: `ALL(expr, ...)` (logical AND), `ANY(expr, ...)` (logical OR), `NOT(expr)` (negation), `LEN(val)` (array/string length). **Compatibility**: single `=` is auto-normalized to `==` for CSV authoring convenience (does not affect `>=`, `<=`, `!=`). Example CSV expressions: `ANY(answers.Q_SOB = 'yes', answers.Q_CHEST = 'yes')`, `ALL(answers.Q_FEVER = 'yes', NOT(answers.Q_IMMUNOCOMP = 'yes'))`.
 
 ### Multi-System Triage Pipeline
 A robust triage pipeline uses canonical keys for medical systems and dynamically configures data from a unified sheets registry. It builds question queues, uses an enhanced supervisor for red flags, resolves dispositions, and provides confidence-scored diagnostic candidates and medication suggestions.

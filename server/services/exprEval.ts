@@ -102,7 +102,7 @@ function tokenize(expr: string): Token[] {
       continue;
     }
 
-    const ops = ["&&", "||", "==", "!=", ">=", "<=", ">", "<", "!"];
+    const ops = ["&&", "||", "==", "!=", ">=", "<=", ">", "<", "!", "="];
     let matched = false;
     for (const op of ops) {
       if (expr.substring(i, i + op.length) === op) {
@@ -273,11 +273,49 @@ class Parser {
 
     if (t.type === TokenType.IDENT) {
       this.advance();
+
+      if (this.peek().type === TokenType.LPAREN) {
+        return this.parseCall(t.value);
+      }
+
       return resolvePath(this.ctx, t.value);
     }
 
     this.advance();
     return undefined;
+  }
+
+  private parseCall(name: string): any {
+    this.expect(TokenType.LPAREN);
+    const args: any[] = [];
+    if (this.peek().type !== TokenType.RPAREN) {
+      args.push(this.parseOr());
+      while (this.peek().type === TokenType.COMMA) {
+        this.advance();
+        args.push(this.parseOr());
+      }
+    }
+    this.expect(TokenType.RPAREN);
+
+    const fn = name.toUpperCase();
+    if (fn === "ALL") {
+      if (args.length === 0) throw new Error("ALL() requires at least 1 argument");
+      return args.every(Boolean);
+    }
+    if (fn === "ANY") {
+      if (args.length === 0) throw new Error("ANY() requires at least 1 argument");
+      return args.some(Boolean);
+    }
+    if (fn === "NOT") {
+      if (args.length !== 1) throw new Error("NOT() expects exactly 1 argument");
+      return !args[0];
+    }
+    if (fn === "LEN") {
+      if (args.length !== 1) throw new Error("LEN() expects exactly 1 argument");
+      if (Array.isArray(args[0])) return args[0].length;
+      return String(args[0] ?? "").length;
+    }
+    throw new Error(`Unknown function: ${name}`);
   }
 }
 
@@ -287,12 +325,22 @@ export function evaluateExpr(expr: string, state: CaseState): any {
 
   const ctx = buildContext(state);
   const tokens = tokenize(expr);
+  normalizeSingleEquals(tokens);
   const parser = new Parser(tokens, ctx);
   try {
     return parser.parse();
   } catch (err: any) {
     console.warn(`[ExprEval] Failed to evaluate "${expr}": ${err.message}`);
     return false;
+  }
+}
+
+function normalizeSingleEquals(tokens: Token[]): void {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type === TokenType.OP && t.value === "=") {
+      t.value = "==";
+    }
   }
 }
 

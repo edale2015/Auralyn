@@ -239,6 +239,105 @@ function rowToClusterScoringRule(row: SheetRow): ClusterScoringRule | null {
   };
 }
 
+type BundleIssue = {
+  level: "ERROR" | "WARN";
+  code: string;
+  message: string;
+};
+
+function isTruthyExpr(expr: string | null | undefined): boolean {
+  if (!expr) return false;
+  const s = expr.trim().toLowerCase();
+  return s === "true" || s === "1" || s === "always";
+}
+
+function validateComplaintBundle(cfg: ComplaintConfig): BundleIssue[] {
+  const issues: BundleIssue[] = [];
+
+  if (!cfg.registry) {
+    issues.push({ level: "ERROR", code: "REGISTRY_MISSING", message: "Missing registry entry." });
+    return issues;
+  }
+  if (!cfg.registry.ccId) {
+    issues.push({ level: "ERROR", code: "CC_ID_MISSING", message: "Registry ccId missing." });
+  }
+  if (!cfg.registry.engineType) {
+    issues.push({ level: "ERROR", code: "ENGINE_TYPE_MISSING", message: "Registry engineType missing." });
+  }
+
+  if (!Array.isArray(cfg.coreQuestions) || cfg.coreQuestions.length === 0) {
+    issues.push({ level: "ERROR", code: "QUESTIONS_MISSING", message: "No questions defined." });
+  }
+
+  const templates = Array.isArray(cfg.outputTemplates) ? cfg.outputTemplates : [];
+  if (templates.length === 0) {
+    issues.push({ level: "ERROR", code: "TEMPLATES_MISSING", message: "No output templates defined." });
+  }
+
+  const disp = Array.isArray(cfg.dispositionRules) ? cfg.dispositionRules : [];
+  if (disp.length === 0) {
+    issues.push({ level: "ERROR", code: "DISP_RULES_MISSING", message: "No disposition rules defined." });
+  } else {
+    const defaults = disp.filter(r => isTruthyExpr(r.whenExpr));
+    if (defaults.length === 0) {
+      issues.push({
+        level: "WARN",
+        code: "DISP_NO_DEFAULT",
+        message: "No default catch-all disposition rule (whenExpr=true). Engine will fall back to 'routine'.",
+      });
+    } else if (defaults.length > 1) {
+      issues.push({
+        level: "WARN",
+        code: "DISP_MULTIPLE_DEFAULTS",
+        message: `Multiple default disposition rules (whenExpr=true). Found: ${defaults.length}. Only the first (by priority) will fire.`,
+      });
+    }
+
+    const hasEscalation = disp.some(r => {
+      const level = r.dispositionLevel.toUpperCase();
+      return (
+        level.includes("ER") ||
+        level.includes("EMERG") ||
+        level === "ER_SEND"
+      );
+    });
+    if (!hasEscalation) {
+      issues.push({
+        level: "WARN",
+        code: "DISP_NO_ESCALATION",
+        message: "No escalation disposition rule found (er_send or emergency level).",
+      });
+    }
+  }
+
+  if (cfg.registry.engineType === "GENERIC_V1") {
+    const csr = Array.isArray(cfg.clusterScoringRules) ? cfg.clusterScoringRules : [];
+    if (csr.length === 0) {
+      issues.push({ level: "ERROR", code: "CSR_MISSING", message: "No cluster scoring rules for GENERIC_V1 engine." });
+    } else {
+      const hasPrimary = csr.some(r => r.clusterId.toUpperCase().includes("PRIMARY"));
+      if (!hasPrimary) {
+        issues.push({
+          level: "WARN",
+          code: "CSR_NO_PRIMARY",
+          message: "No PRIMARY cluster scoring rules found.",
+        });
+      }
+    }
+
+    const rfRules = Array.isArray(cfg.redFlagRules) ? cfg.redFlagRules : [];
+    if (rfRules.length === 0) {
+      issues.push({
+        level: "WARN",
+        code: "RF_RULES_MISSING",
+        message: "No red flag rules defined for GENERIC_V1 engine.",
+      });
+    }
+  }
+
+  return issues;
+}
+
 export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig | null> {
   const key = ccId.toLowerCase().trim().replace(/[\s-]+/g, "_");
   const now = Date.now();
@@ -307,6 +406,20 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     outputTemplates,
     clusterScoringRules,
   };
+
+  const issues = validateComplaintBundle(config);
+  const errors = issues.filter(i => i.level === "ERROR");
+  if (errors.length) {
+    const msg = errors.map(e => `${e.code}: ${e.message}`).join(" | ");
+    throw new Error(`Complaint bundle invalid for CC_ID=${canonicalKey}: ${msg}`);
+  }
+  const warns = issues.filter(i => i.level === "WARN");
+  if (warns.length) {
+    console.warn(
+      `[ComplaintBundleValidator] CC_ID=${canonicalKey} WARN: ` +
+        warns.map(w => `${w.code}: ${w.message}`).join(", ")
+    );
+  }
 
   CONFIG_CACHE.set(key, { config, expiresAt: now + CONFIG_TTL_MS });
   if (key !== canonicalKey) {

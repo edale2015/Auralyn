@@ -1,0 +1,284 @@
+Patch 1: Bundle validator (server/services/complaintConfigLoader.ts)
+What it enforces (ABI for complaints)
+
+For each complaint config returned by loadComplaintConfig(ccId):
+
+Registry entry exists and has the expected engine type
+
+Output templates include at least TRIAGED and NEEDS_REVIEW
+
+Disposition rules include:
+
+at least one “escalation” path (ER / EMERG / EMERGENCY style disposition or SET_STATE=NEEDS_REVIEW)
+
+exactly one default catch-all (WHEN true-ish)
+
+Cluster scoring has at least 1 PRIMARY entry
+
+Questions exist and include your required core keys (or you can relax this per engine type)
+
+Add this helper into complaintConfigLoader.ts
+
+Place near the bottom, or above loadComplaintConfig, whichever matches your style.
+
+// server/services/complaintConfigLoader.ts
+
+type BundleIssue = {
+  level: "ERROR" | "WARN";
+  code: string;
+  message: string;
+};
+
+function isTruthyExpr(expr: string | null | undefined) {
+  if (!expr) return false;
+  const s = expr.trim().toLowerCase();
+  return s === "true" || s === "1" || s === "always";
+}
+
+function validateComplaintBundle(cfg: any): BundleIssue[] {
+  const issues: BundleIssue[] = [];
+
+  // 1) Registry
+  if (!cfg?.registry) {
+    issues.push({ level: "ERROR", code: "REGISTRY_MISSING", message: "Missing registry entry." });
+    return issues;
+  }
+  if (!cfg.registry.CC_ID) {
+    issues.push({ level: "ERROR", code: "CC_ID_MISSING", message: "Registry CC_ID missing." });
+  }
+  if (!cfg.registry.ENGINE_TYPE) {
+    issues.push({ level: "ERROR", code: "ENGINE_TYPE_MISSING", message: "Registry ENGINE_TYPE missing." });
+  }
+
+  // 2) Questions
+  if (!Array.isArray(cfg.questions) || cfg.questions.length === 0) {
+    issues.push({ level: "ERROR", code: "QUESTIONS_MISSING", message: "No questions defined." });
+  } else {
+    // Optional: enforce core IDs (align to your generator)
+    const ids = new Set(cfg.questions.map((q: any) => q?.QUESTION_ID ?? q?.id).filter(Boolean));
+    const required = ["duration_days", "fever", "pain", "sob", "severity"]; // adjust to your schema
+    for (const r of required) {
+      if (!ids.has(r)) {
+        issues.push({ level: "WARN", code: "QUESTION_CORE_MISSING", message: `Core question missing: ${r}` });
+      }
+    }
+  }
+
+  // 3) Output templates (states)
+  const templates = Array.isArray(cfg.outputTemplates) ? cfg.outputTemplates : [];
+  const states = new Set(templates.map((t: any) => (t.STATE ?? t.state ?? "").toString().toUpperCase()));
+  if (!states.has("TRIAGED")) {
+    issues.push({ level: "ERROR", code: "TPL_TRIAGED_MISSING", message: "Missing output template for TRIAGED." });
+  }
+  if (!states.has("NEEDS_REVIEW")) {
+    issues.push({ level: "ERROR", code: "TPL_NEEDS_REVIEW_MISSING", message: "Missing output template for NEEDS_REVIEW." });
+  }
+
+  // 4) Disposition rules
+  const disp = Array.isArray(cfg.dispositionRules) ? cfg.dispositionRules : [];
+  if (disp.length === 0) {
+    issues.push({ level: "ERROR", code: "DISP_RULES_MISSING", message: "No disposition rules defined." });
+  } else {
+    // Default catch-all: WHEN true-ish
+    const defaults = disp.filter((r: any) => isTruthyExpr(r.WHEN_EXPR ?? r.WHEN ?? r.IF_ALL));
+    if (defaults.length !== 1) {
+      issues.push({
+        level: "ERROR",
+        code: "DISP_DEFAULT_INVALID",
+        message: `Expected exactly 1 default disposition rule (WHEN true). Found: ${defaults.length}.`,
+      });
+    }
+
+    // Escalation: any rule that sets NEEDS_REVIEW or uses emergency dispositions
+    const hasEscalation = disp.some((r: any) => {
+      const setState = (r.SET_STATE ?? r.SETSTATE ?? "").toString().toUpperCase();
+      const dispVal = (r.DISPOSITION ?? "").toString().toUpperCase();
+      return (
+        setState === "NEEDS_REVIEW" ||
+        dispVal.includes("ER") ||
+        dispVal.includes("EMERG") ||
+        dispVal.includes("EMERGENCY")
+      );
+    });
+    if (!hasEscalation) {
+      issues.push({
+        level: "WARN",
+        code: "DISP_NO_ESCALATION",
+        message: "No escalation disposition rule found (NEEDS_REVIEW or ER/EMERGENCY).",
+      });
+    }
+  }
+
+  // 5) Cluster scoring PRIMARY
+  const csr = Array.isArray(cfg.clusterScoringRules) ? cfg.clusterScoringRules : [];
+  const hasPrimary = csr.some((r: any) => (r.CLUSTER_TIER ?? r.TIER ?? r.BUCKET ?? "").toString().toUpperCase() === "PRIMARY");
+  if (!hasPrimary) {
+    issues.push({
+      level: "WARN",
+      code: "CSR_NO_PRIMARY",
+      message: "No PRIMARY cluster scoring rules found.",
+    });
+  }
+
+  return issues;
+}
+Call it from loadComplaintConfig(ccId)
+
+In loadComplaintConfig(ccId) right before returning cfg:
+
+// after cfg is assembled (registry + questions + rules + templates etc.)
+const issues = validateComplaintBundle(cfg);
+
+// Hard fail on ERRORs (recommended for CI/boot), soft-warn on WARNs
+const errors = issues.filter(i => i.level === "ERROR");
+if (errors.length) {
+  // If you prefer to not crash prod, convert to a controlled error path:
+  const msg = errors.map(e => `${e.code}: ${e.message}`).join(" | ");
+  throw new Error(`Complaint bundle invalid for CC_ID=${cfg.registry?.CC_ID}: ${msg}`);
+}
+
+// You can log WARNs without failing:
+const warns = issues.filter(i => i.level === "WARN");
+if (warns.length) {
+  console.warn(
+    `[ComplaintBundleValidator] CC_ID=${cfg.registry?.CC_ID} WARN: ` +
+      warns.map(w => `${w.code}`).join(", ")
+  );
+}
+
+✅ Result: your engine now has a hard safety rail: no half-bundles, no silent failures, no “template missing so Telegram sends blank”.
+
+Patch 2: Atomic grammar (server/services/exprEval.ts)
+
+You already have a recursive-descent parser that handles && etc. We’ll add function-style atoms that are easy to author in CSV:
+
+ALL(expr1, expr2, ...) → logical AND across args
+
+ANY(expr1, expr2, ...) → logical OR across args
+
+NOT(expr) → negation
+
+This gives you the “atom grammar” feel without requiring you to invent a whole new DSL.
+
+Target behavior (examples)
+
+These should all work:
+
+ANY(SOB=true, CHEST_PAIN=true)
+
+ALL(FEVER=true, PAIN=true)
+
+ALL(DURATION_DAYS>10, NOT(IMMUNOCOMP=true))
+
+true (default catch-all)
+
+Minimal change approach
+
+Add support for parsing function calls in your “primary expression” parser:
+
+when token is IDENT and next is ( → parse call
+
+Then implement builtins as AST nodes or evaluate inline.
+
+Add builtins in evaluation
+
+Wherever you evaluate AST nodes, add:
+
+// exprEval.ts (inside evaluate node switch)
+case "call": {
+  const name = node.name.toUpperCase();
+  const args = node.args.map((a: any) => evaluateAst(a, ctx));
+
+  if (name === "ALL") return args.every(Boolean);
+  if (name === "ANY") return args.some(Boolean);
+  if (name === "NOT") {
+    if (args.length !== 1) throw new Error("NOT() expects exactly 1 argument");
+    return !args[0];
+  }
+
+  throw new Error(`Unknown function: ${node.name}`);
+}
+Add parsing for function calls
+
+In your parser, locate the method that parses “primary” values (IDENT, NUMBER, STRING, parentheses). Add:
+
+// exprEval.ts (in parsePrimary or equivalent)
+
+if (this.peekIsIdent()) {
+  const ident = this.consumeIdent();
+
+  // Function call: IDENT '(' args ')'
+  if (this.peekIs("(")) {
+    this.consume("(");
+
+    const args: any[] = [];
+    if (!this.peekIs(")")) {
+      args.push(this.parseExpr()); // or parseOr/parseAnd - use your highest-level entry
+      while (this.peekIs(",")) {
+        this.consume(",");
+        args.push(this.parseExpr());
+      }
+    }
+
+    this.consume(")");
+    return { type: "call", name: ident.value, args };
+  }
+
+  // Otherwise normal identifier variable lookup
+  return { type: "ident", name: ident.value };
+}
+Tokenizer: ensure commas are tokens
+
+If your tokenizer doesn’t already treat , as its own token, add it to the single-character tokens:
+
+// exprEval.ts tokenizer
+if (ch === ",") { pushToken("comma", ","); i++; continue; }
+
+(Or however your tokenizer emits tokens.)
+
+Compatibility bridge: allow SOB=true as shorthand for SOB==true
+
+This is optional, but it makes CSV authoring feel natural. If your parser currently only supports ==, add a small normalization step before parsing:
+
+export function evaluateExpr(exprRaw: string, ctx: any) {
+  const expr = (exprRaw ?? "").trim();
+  if (!expr) return false;
+
+  // Compatibility: convert single '=' to '==' when it's used as comparison
+  // Avoid touching '>=', '<=', '!=' and '=='
+  const normalized = expr.replace(/(^|[^!<>=])=([^=])/g, "$1==$2");
+
+  return internalEvaluate(normalized, ctx);
+}
+
+This is conservative and won’t break >= etc.
+
+Where this pays off immediately
+
+Once ALL/ANY/NOT exists, your CSV rules become clean, readable, and consistent across all complaints.
+
+Example disposition rule row:
+
+ER rule WHEN_EXPR:
+
+ANY(SOB=true, CHEST_PAIN=true, CONFUSION=true)
+
+UC rule:
+
+ANY(ALL(FEVER=true, PAIN=true), SEVERITY>=7, DURATION_DAYS>10)
+
+No spaghetti && and parentheses soup.
+
+Fast integration checklist (so nothing surprises you)
+
+Add validator helper + call in loadComplaintConfig
+
+Add ALL/ANY/NOT support in exprEval
+
+Add comma token if needed
+
+Add optional = to == normalizer (only if your CSV already uses single equals)
+
+Run your generator complaints test suite again
+
+Add 2 new golden tests that explicitly use ANY/ALL/NOT in WHEN_EXPR to lock behavior
