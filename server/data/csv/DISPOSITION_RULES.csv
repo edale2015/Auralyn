@@ -269,3 +269,15 @@ environmental_heat_illness,DISP_ENVH_ROUTINE,99,"true",pcp,TPL_ENVH_PCP,HIGH
 environmental_hypothermia_cold_exposure,DISP_ENVC_EMERG,1,"answers.Q_ENVC_CONFUSION == 'yes' || answers.Q_ENVC_SHIVER_STOP == 'yes' || answers.Q_ENVC_COLLAPSE == 'yes' || answers.Q_ENVC_CARDIAC == 'yes'",er_send,TPL_ENVC_ER_SEND,HIGH
 environmental_hypothermia_cold_exposure,DISP_ENVC_URGENT,2,"answers.Q_ENVC_FROSTBITE == 'yes' || answers.Q_ENVC_WET_EXPOSURE == 'yes' || answers.Q_ENVC_INTOX == 'yes'",urgent_care,TPL_ENVC_URGENT_CARE,HIGH
 environmental_hypothermia_cold_exposure,DISP_ENVC_ROUTINE,99,"true",pcp,TPL_ENVC_PCP,HIGH
+allergic_rhinitis,DISP_AR_ER,1,redFlagGate.gateResult == 'ER_SEND',er_send,TPL_AR_ER,HIGH
+allergic_rhinitis,DISP_AR_UC,2,redFlagGate.gateResult == 'ESCALATE',urgent_care,TPL_AR_UC,MODERATE
+allergic_rhinitis,DISP_AR_PCP,3,scores.CL_AR_PRIMARY >= 5,pcp,TPL_AR_PCP,MODERATE
+allergic_rhinitis,DISP_AR_ROUTINE,99,true,self_care,TPL_AR_ROUTINE,LOW
+dental_pain,DISP_DP_ER,1,redFlagGate.gateResult == 'ER_SEND',er_send,TPL_DP_ER,HIGH
+dental_pain,DISP_DP_UC,2,redFlagGate.gateResult == 'ESCALATE',urgent_care,TPL_DP_UC,MODERATE
+dental_pain,DISP_DP_PCP,3,scores.CL_DP_PRIMARY >= 5,pcp,TPL_DP_PCP,MODERATE
+dental_pain,DISP_DP_ROUTINE,99,true,self_care,TPL_DP_ROUTINE,LOW
+insomnia,DISP_I_ER,1,redFlagGate.gateResult == 'ER_SEND',er_send,TPL_I_ER,HIGH
+insomnia,DISP_I_UC,2,redFlagGate.gateResult == 'ESCALATE',urgent_care,TPL_I_UC,MODERATE
+insomnia,DISP_I_PCP,3,scores.CL_I_PRIMARY >= 5,pcp,TPL_I_PCP,MODERATE
+insomnia,DISP_I_ROUTINE,99,true,self_care,TPL_I_ROUTINE,LOW

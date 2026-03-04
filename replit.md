@@ -53,6 +53,9 @@ A data-driven engine (`crossComplaintBoostEngine.ts`) that nudges cluster scores
 ### Telegram Triage Bot
 A Telegram webhook at `/telegram/webhook` provides conversational triage via the generic complaint engine. Uses `channelThreadService` (Firestore `channel_threads` collection) to map chats → active cases, `complaintMatchService` (registry ALIASES) for symptom→complaint routing, `questionFlowService` (CORE_QUESTIONS.csv REQUIRED column) for sequential question flow, and `triageService` for final disposition. Supports `/start` and `/reset` commands. Env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`. Webhook setup: `npx tsx scripts/telegram-set-webhook.ts`.
 
+### Complaint Engine Generator
+A bulk complaint scaffolding tool (`scripts/generate-complaints.ts`) that generates complete complaint bundles from a seed CSV or single command. For each complaint it appends rows to all central CSVs (COMPLAINT_REGISTRY, CORE_QUESTIONS, CLUSTER_SCORING_RULES, RED_FLAG_RULES, DISPOSITION_RULES, OUTPUT_TEMPLATES, DX_PRIORITY) and creates 10 golden test stubs. Supports bulk mode (`npx tsx scripts/generate-complaints.ts data/complaints/seed.csv`) and single mode (`npx tsx scripts/generate-complaints.ts <cc_id> <system> <label> [aliases]`). Idempotent — skips existing CC_IDs. Seed CSV columns: CC_ID, SYSTEM, LABEL, ALIASES.
+
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, and a comprehensive Gate-Prod Pipeline (7 gates) for pre-deployment validation.
 

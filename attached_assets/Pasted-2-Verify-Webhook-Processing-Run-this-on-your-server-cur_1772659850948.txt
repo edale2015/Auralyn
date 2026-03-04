@@ -1,0 +1,621 @@
+2. Verify Webhook Processing
+
+Run this on your server:
+
+curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo
+
+Expected:
+
+"url": "https://yourdomain.com/api/telegram/webhook"
+"pending_update_count": 0
+
+If pending updates grow → webhook handler is failing.
+
+3. Critical Logs to Watch
+
+Add logging in your webhook route:
+
+server/routes/telegramWebhook.ts
+
+Example:
+
+console.log("Telegram update received:", JSON.stringify(update));
+
+And log triage execution:
+
+console.log("Complaint:", complaint);
+console.log("Disposition:", result.disposition);
+
+This helps diagnose:
+
+• missing complaint templates
+• state transitions failing
+• Firestore write errors
+
+4. 3 Things to Test Immediately
+
+These expose most bugs.
+
+Test 1 — Simple symptom
+fever
+
+Expected → normal triage.
+
+Test 2 — Red flag
+chest pain
+
+Answer:
+
+shortness of breath: yes
+
+Expected:
+
+Disposition: EMERGENCY
+state: NEEDS_REVIEW
+Test 3 — Invalid answer handling
+
+User:
+
+banana
+
+Expected:
+
+Please answer yes or no
+
+If this fails, add answer normalization:
+
+yes → y, yeah, yep
+no → n, nope, nah
+5. Next Upgrade (Very Important)
+
+Right now the bot is symptom driven.
+
+Your architecture becomes powerful when you add modifier intake first.
+
+You previously planned this in the system:
+
+Age, PMH, meds, allergies, pregnancy, etc.
+
+Example flow:
+
+User: fever
+
+Bot: How old is the patient?
+Bot: Any major medical conditions?
+Bot: Are you pregnant?
+Bot: What medications do you take?
+
+Then complaint triage.
+
+This dramatically improves accuracy.
+
+6. What You Now Have
+
+You just built a real multi-channel medical AI entry point.
+
+Your architecture now looks like this:
+
+Patient
+   ↓
+Telegram Bot
+   ↓
+Webhook
+   ↓
+Complaint Router
+   ↓
+Triage Engine
+   ↓
+Disposition Rules
+   ↓
+Firestore Case State
+   ↓
+Provider Review Queue
+
+That is essentially the core of a telemedicine intake system.
+
+7. The Next 4 Steps I Recommend Tonight
+
+These will transform the system quickly.
+
+Step 1 — Add complaint registry auto routing
+complaintRouter.ts
+fever → fever_template
+cough → cough_template
+sinus pressure → sinus_template
+Step 2 — Add modifier intake layer
+
+Age
+PMH
+Medications
+Allergies
+Pregnancy
+
+Step 3 — Add physician dashboard
+/dashboard/cases
+
+Shows:
+
+TRIAGED
+NEEDS_REVIEW
+ESCALATED
+Step 4 — Add AI differential engine
+
+Right now diagnosis is rule-based.
+
+Next layer:
+
+LLM differential ranking
+
+Example:
+
+Rule engine → 5 diagnoses
+LLM → probability ranking
+8. The Big Picture (Important)
+
+You now have three layers built:
+
+1️⃣ Channel ingestion
+
+Telegram
+WhatsApp (ready)
+SMS (easy next)
+
+2️⃣ Clinical reasoning
+
+Complaint templates
+Disposition rules
+Red flag detection
+
+3️⃣ Case persistence
+
+Firestore case records
+State machine transitions
+
+This is exactly the foundation used by modern AI triage platforms.
+
+9. If you want, next I can show you the one upgrade that will accelerate this entire project 10x:
+
+A Complaint Engine Generator
+
+Instead of manually building:
+
+fever
+cough
+sinus
+abdominal pain
+
+You generate them automatically from:
+
+complaint_registry.csv
+
+Meaning:
+
+you could add 100 complaints in one run instead of months of prompting.
+
+Given the scale of the system you're building, that tool will save an enormous amount of time.
+
+If you'd like, I can build that next.
+
+please build Complaint Engine Generator 
+
+Got it. We’re going to build a Complaint Engine Generator that turns a single CSV row into a whole complaint “engine bundle”:
+
+registry entry (complaint registry)
+
+output templates stub
+
+disposition rules stub
+
+cluster scoring rules stub
+
+optional question flow skeleton
+
+a generated TS module that your router can import
+
+Think of it as a printing press for complaints: you drop in rows, it stamps out consistent, schema-correct files every time. 🏭✨
+
+Below is a plug-and-play implementation you can drop into your repo.
+
+What this generator produces
+
+For each complaint (example: sinus_pressure), it generates:
+
+server/complaints/generated/sinus_pressure/
+  complaint.meta.json
+  output_templates.csv
+  disposition_rules.csv
+  cluster_scoring_rules.csv
+  questions.json
+  index.ts
+
+And it also generates a single barrel export:
+
+server/complaints/generated/index.ts
+
+So your router can do:
+
+import { GENERATED_COMPLAINTS } from "../complaints/generated";
+1) Input CSV format (the only thing you maintain)
+
+Create:
+
+data/complaints/complaint_registry_seed.csv
+
+CC_ID,COMPLAINT_KEY,DISPLAY_NAME,SYSTEM,SEVERITY_MODEL,DEFAULT_DISPOSITION,NOTES
+CC_SINUS_PRESSURE,sinus_pressure,Sinus Pressure,ENT,standard,URGENT_CARE,"build first"
+CC_FEVER,fever,Fever,GENERAL,standard,HOME_CARE,"basic"
+CC_COUGH,cough,Cough,PULM,standard,HOME_CARE,"basic"
+
+Rules:
+
+COMPLAINT_KEY must be lowercase snake_case.
+
+CC_ID can be real or placeholder; generator won’t break if it’s “temp”.
+
+2) Install dependency
+
+From repo root:
+
+npm i papaparse zod
+
+(If you already have one of these, great.)
+
+3) Add the generator script
+
+Create:
+
+server/tools/generateComplaints.ts
+
+import fs from "fs";
+import path from "path";
+import Papa from "papaparse";
+import { z } from "zod";
+
+type RegistryRow = {
+  CC_ID: string;
+  COMPLAINT_KEY: string;
+  DISPLAY_NAME: string;
+  SYSTEM: string;
+  SEVERITY_MODEL?: string;
+  DEFAULT_DISPOSITION?: string;
+  NOTES?: string;
+};
+
+const RowSchema = z.object({
+  CC_ID: z.string().min(1),
+  COMPLAINT_KEY: z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/, "COMPLAINT_KEY must be snake_case"),
+  DISPLAY_NAME: z.string().min(1),
+  SYSTEM: z.string().min(1),
+  SEVERITY_MODEL: z.string().optional().default("standard"),
+  DEFAULT_DISPOSITION: z.string().optional().default("HOME_CARE"),
+  NOTES: z.string().optional().default(""),
+});
+
+function ensureDir(p: string) {
+  fs.mkdirSync(p, { recursive: true });
+}
+
+function writeFileIfChanged(filePath: string, content: string) {
+  if (fs.existsSync(filePath)) {
+    const existing = fs.readFileSync(filePath, "utf8");
+    if (existing === content) return;
+  }
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
+function csvString(headers: string[], rows: Array<Record<string, string>>) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const row of rows) {
+    lines.push(headers.map((h) => (row[h] ?? "")).join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function main() {
+  const root = process.cwd();
+  const inputCsv = path.join(root, "data", "complaints", "complaint_registry_seed.csv");
+  const outBase = path.join(root, "server", "complaints", "generated");
+
+  if (!fs.existsSync(inputCsv)) {
+    console.error(`Missing input CSV: ${inputCsv}`);
+    process.exit(1);
+  }
+
+  const raw = fs.readFileSync(inputCsv, "utf8");
+  const parsed = Papa.parse<RegistryRow>(raw, {
+    header: true,
+    skipEmptyLines: true,
+  });
+
+  if (parsed.errors?.length) {
+    console.error("CSV parse errors:", parsed.errors);
+    process.exit(1);
+  }
+
+  const rowsRaw = parsed.data.filter((r) => Object.values(r).some(Boolean));
+  const rows: Array<z.infer<typeof RowSchema>> = [];
+
+  // Validate rows
+  for (const r of rowsRaw) {
+    const res = RowSchema.safeParse(r);
+    if (!res.success) {
+      console.error("Invalid row:", r);
+      console.error(res.error.issues);
+      process.exit(1);
+    }
+    rows.push(res.data);
+  }
+
+  ensureDir(outBase);
+
+  const barrelExports: string[] = [];
+  const mapEntries: string[] = [];
+
+  for (const r of rows) {
+    const complaintKey = r.COMPLAINT_KEY;
+    const dir = path.join(outBase, complaintKey);
+    ensureDir(dir);
+
+    // meta
+    const meta = {
+      generated_at: nowIso(),
+      cc_id: r.CC_ID,
+      complaint_key: complaintKey,
+      display_name: r.DISPLAY_NAME,
+      system: r.SYSTEM,
+      severity_model: r.SEVERITY_MODEL ?? "standard",
+      default_disposition: r.DEFAULT_DISPOSITION ?? "HOME_CARE",
+      notes: r.NOTES ?? "",
+      version: "v1",
+    };
+    writeFileIfChanged(path.join(dir, "complaint.meta.json"), JSON.stringify(meta, null, 2) + "\n");
+
+    // output_templates.csv (stub)
+    // Keep headers stable and conservative. Your renderer can ignore unknowns.
+    const outputHeaders = [
+      "TEMPLATE_ID",
+      "CC_ID",
+      "COMPLAINT_KEY",
+      "STATE",
+      "TITLE",
+      "BODY_HTML",
+      "SEVERITY",
+      "VERSION",
+    ];
+    const outputRows = [
+      {
+        TEMPLATE_ID: `OT_${r.CC_ID}_TRIAGED_v1`,
+        CC_ID: r.CC_ID,
+        COMPLAINT_KEY: complaintKey,
+        STATE: "TRIAGED",
+        TITLE: `${r.DISPLAY_NAME} Result`,
+        BODY_HTML:
+          "Disposition: <b>{{DISPOSITION}}</b><br/>Possible Diagnoses:<br/>{{DX_LIST}}<br/><br/>{{SAFETY_NET}}",
+        SEVERITY: "INFO",
+        VERSION: "v1",
+      },
+      {
+        TEMPLATE_ID: `OT_${r.CC_ID}_NEEDS_REVIEW_v1`,
+        CC_ID: r.CC_ID,
+        COMPLAINT_KEY: complaintKey,
+        STATE: "NEEDS_REVIEW",
+        TITLE: `${r.DISPLAY_NAME} Needs Review`,
+        BODY_HTML:
+          "Your answers suggest this may need clinician review.<br/>Disposition: <b>{{DISPOSITION}}</b><br/>{{SAFETY_NET}}",
+        SEVERITY: "WARN",
+        VERSION: "v1",
+      },
+    ];
+    writeFileIfChanged(path.join(dir, "output_templates.csv"), csvString(outputHeaders, outputRows));
+
+    // disposition_rules.csv (stub)
+    const dispHeaders = [
+      "RULE_ID",
+      "CC_ID",
+      "COMPLAINT_KEY",
+      "PRIORITY",
+      "IF_ALL",
+      "DISPOSITION",
+      "SET_STATE",
+      "REASON",
+      "VERSION",
+    ];
+    const dispRows = [
+      {
+        RULE_ID: `DR_${r.CC_ID}_RED_FLAG_v1`,
+        CC_ID: r.CC_ID,
+        COMPLAINT_KEY: complaintKey,
+        PRIORITY: "100",
+        IF_ALL: "HAS_RED_FLAG=true",
+        DISPOSITION: "EMERGENCY",
+        SET_STATE: "NEEDS_REVIEW",
+        REASON: "Red flag present",
+        VERSION: "v1",
+      },
+      {
+        RULE_ID: `DR_${r.CC_ID}_DEFAULT_v1`,
+        CC_ID: r.CC_ID,
+        COMPLAINT_KEY: complaintKey,
+        PRIORITY: "1",
+        IF_ALL: "true",
+        DISPOSITION: r.DEFAULT_DISPOSITION ?? "HOME_CARE",
+        SET_STATE: "TRIAGED",
+        REASON: "Default disposition",
+        VERSION: "v1",
+      },
+    ];
+    writeFileIfChanged(path.join(dir, "disposition_rules.csv"), csvString(dispHeaders, dispRows));
+
+    // cluster_scoring_rules.csv (stub)
+    const clusterHeaders = [
+      "RULE_ID",
+      "CC_ID",
+      "COMPLAINT_KEY",
+      "CLUSTER_ID",
+      "WEIGHT",
+      "IF_ALL",
+      "DX_LABEL",
+      "VERSION",
+    ];
+    const clusterRows = [
+      {
+        RULE_ID: `CSR_${r.CC_ID}_VIRAL_v1`,
+        CC_ID: r.CC_ID,
+        COMPLAINT_KEY: complaintKey,
+        CLUSTER_ID: "CLUSTER_VIRAL_SYNDROME",
+        WEIGHT: "1",
+        IF_ALL: "true",
+        DX_LABEL: "Viral syndrome",
+        VERSION: "v1",
+      },
+    ];
+    writeFileIfChanged(path.join(dir, "cluster_scoring_rules.csv"), csvString(clusterHeaders, clusterRows));
+
+    // questions.json (stub)
+    const questions = {
+      complaint_key: complaintKey,
+      version: "v1",
+      // You can extend this later to include branching question sets and required modifiers.
+      questions: [
+        {
+          id: "duration_days",
+          type: "number",
+          prompt: `How many days have you had ${r.DISPLAY_NAME.toLowerCase()}?`,
+          required: true,
+          min: 0,
+          max: 60,
+        },
+        {
+          id: "has_red_flag",
+          type: "yesno",
+          prompt: "Any severe symptoms like trouble breathing, severe pain, confusion, fainting, or blue lips?",
+          required: true,
+          maps_to: "HAS_RED_FLAG",
+        },
+      ],
+    };
+    writeFileIfChanged(path.join(dir, "questions.json"), JSON.stringify(questions, null, 2) + "\n");
+
+    // index.ts per complaint
+    const complaintTs = `/**
+ * AUTO-GENERATED. Do not edit by hand.
+ * Source: data/complaints/complaint_registry_seed.csv
+ */
+import fs from "fs";
+import path from "path";
+
+export const meta = ${JSON.stringify(meta, null, 2)} as const;
+
+const DIR = __dirname;
+
+export function loadCsv(name: "output_templates.csv" | "disposition_rules.csv" | "cluster_scoring_rules.csv"): string {
+  return fs.readFileSync(path.join(DIR, name), "utf8");
+}
+
+export function loadQuestionsJson(): any {
+  return JSON.parse(fs.readFileSync(path.join(DIR, "questions.json"), "utf8"));
+}
+`;
+    writeFileIfChanged(path.join(dir, "index.ts"), complaintTs);
+
+    barrelExports.push(`export * as ${complaintKey} from "./${complaintKey}";`);
+    mapEntries.push(`  "${complaintKey}": ${complaintKey},`);
+  }
+
+  // barrel index
+  const barrel = `/**
+ * AUTO-GENERATED. Do not edit by hand.
+ * Generated by: server/tools/generateComplaints.ts
+ */
+${barrelExports.join("\n")}
+
+export const GENERATED_COMPLAINTS = {
+${mapEntries.join("\n")}
+} as const;
+
+export type GeneratedComplaintKey = keyof typeof GENERATED_COMPLAINTS;
+`;
+  writeFileIfChanged(path.join(outBase, "index.ts"), barrel);
+
+  console.log(`✅ Generated ${rows.length} complaint bundles in ${outBase}`);
+}
+
+main();
+4) Add an npm script
+
+In package.json:
+
+{
+  "scripts": {
+    "gen:complaints": "ts-node server/tools/generateComplaints.ts"
+  }
+}
+
+If you don’t have ts-node installed:
+
+npm i -D ts-node typescript
+5) Run it
+npm run gen:complaints
+
+You should see:
+
+✅ Generated 3 complaint bundles in .../server/complaints/generated
+6) Wire it into your router (minimal)
+
+Where you route complaint keys, do something like:
+
+import { GENERATED_COMPLAINTS } from "../complaints/generated";
+
+export function getGeneratedComplaintBundle(complaintKey: string) {
+  return (GENERATED_COMPLAINTS as any)[complaintKey] ?? null;
+}
+
+Then you can load CSVs:
+
+const bundle = getGeneratedComplaintBundle(complaintKey);
+if (bundle) {
+  const dispCsv = bundle.loadCsv("disposition_rules.csv");
+  const templatesCsv = bundle.loadCsv("output_templates.csv");
+  const scoringCsv = bundle.loadCsv("cluster_scoring_rules.csv");
+  const questions = bundle.loadQuestionsJson();
+}
+Safety defaults baked in (so you don’t ship nonsense)
+
+Every complaint gets a red-flag rule that escalates to NEEDS_REVIEW + EMERGENCY
+
+Every complaint gets a default rule (so it never dead-ends)
+
+Output templates always include a safety net placeholder for your standardized warnings
+
+The “next level” upgrade (optional but huge)
+
+Once this is working, we can extend the CSV to include:
+
+REQUIRED_MODIFIERS (age/pregnancy/immunocompromised)
+
+RED_FLAGS as structured rule atoms
+
+CORE_QUESTIONS list
+
+DX_SEEDS list (clusters + labels)
+
+Then the generator stops being a “stub maker” and becomes a full complaint compiler.
+
+Quick next step you asked earlier: start with Sinus Pressure
+
+Add only this row first (so we harden the whole pipeline on 1 complaint):
+
+CC_ID,COMPLAINT_KEY,DISPLAY_NAME,SYSTEM,SEVERITY_MODEL,DEFAULT_DISPOSITION,NOTES
+CC_SINUS_PRESSURE,sinus_pressure,Sinus Pressure,ENT,standard,URGENT_CARE,"engine starter complaint"
+
+Run npm run gen:complaints, wire it, test /start → sinus pressure.
+
+If you paste your current complaint router file (the one that maps symptom text → complaintKey), I’ll show you the exact 10-line patch to make it prefer generated bundles automatically.
