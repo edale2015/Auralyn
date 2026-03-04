@@ -1,0 +1,89 @@
+Next: B4-6 ENT Sore Throat (flagship)
+
+We already have Centor scoring in B1. Now we add subtype differentiation for:
+
+strep_like
+
+viral_pharyngitis
+
+infectious_mono
+
+peritonsillar_abscess (PTA)
+
+epiglottitis_like (rare, high-stakes)
+
+This gives you better clusters + cleaner red flag gating.
+
+A) Optional questions to add (ent_sore_throat)
+
+Add only missing:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+ent_sore_throat,mono_fatigue,Severe fatigue and swollen posterior neck nodes?,boolean
+ent_sore_throat,mono_hepatosplenomegaly,Left upper abdominal pain or enlarged spleen concern?,boolean
+ent_sore_throat,ptA_muffled_voice,Muffled “hot potato” voice?,boolean
+ent_sore_throat,ptA_trismus,Trouble opening mouth (trismus)?,boolean
+ent_sore_throat,ptA_uvula_deviation,Uvula deviation or one-sided severe throat swelling?,boolean
+ent_sore_throat,airway_drooling,Drooling or trouble swallowing saliva?,boolean
+ent_sore_throat,stridor,Noisy breathing/stridor?,boolean
+ent_sore_throat,vaccinated_hib,Fully vaccinated for Hib?,boolean
+B) Clusters + scoring rules (ent_sore_throat)
+
+New/updated Dx_IDs:
+
+CL_ENT_STREP_LIKE
+
+CL_ENT_VIRAL_PHARYNGITIS
+
+CL_ENT_MONO
+
+CL_ENT_PTA
+
+CL_ENT_EPIGLOTTITIS_LIKE
+
+Add:
+
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_1,"centor_fever=true",2
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_2,"centor_no_cough=true",2
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_3,"centor_tonsillar_exudate=true",2
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_4,"centor_tender_nodes=true",1
+ent_sore_throat,CL_ENT_STREP_LIKE,STREP_NEG_1,"mono_fatigue=true",-2
+
+ent_sore_throat,CL_ENT_MONO,MONO_1,"mono_fatigue=true",3
+ent_sore_throat,CL_ENT_MONO,MONO_2,"centor_tonsillar_exudate=true",1
+ent_sore_throat,CL_ENT_MONO,MONO_3,"mono_hepatosplenomegaly=true",2
+ent_sore_throat,CL_ENT_MONO,MONO_NEG_1,"centor_no_cough=true AND centor_tender_nodes=true",-1
+
+ent_sore_throat,CL_ENT_PTA,PTA_1,"ptA_muffled_voice=true",3
+ent_sore_throat,CL_ENT_PTA,PTA_2,"ptA_trismus=true",3
+ent_sore_throat,CL_ENT_PTA,PTA_3,"ptA_uvula_deviation=true",3
+ent_sore_throat,CL_ENT_PTA,PTA_4,"centor_fever=true",1
+ent_sore_throat,CL_ENT_PTA,PTA_NEG_1,"airway_drooling=true OR stridor=true",-2
+
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_1,"airway_drooling=true",4
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_2,"stridor=true",4
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_3,"vaccinated_hib=false",1
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,EPI_NEG_1,"airway_drooling=false AND stridor=false",-6
+
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,VIR_1,"centor_no_cough=false",2
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,VIR_2,"centor_fever=false",1
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,VIR_NEG_1,"ptA_muffled_voice=true OR ptA_trismus=true OR airway_drooling=true",-6
+C) DX_PRIORITY for ties (ENT sore throat)
+Complaint_Slug,Dx_ID,Priority
+ent_sore_throat,CL_ENT_EPIGLOTTITIS_LIKE,100
+ent_sore_throat,CL_ENT_PTA,95
+ent_sore_throat,CL_ENT_STREP_LIKE,80
+ent_sore_throat,CL_ENT_MONO,70
+ent_sore_throat,CL_ENT_VIRAL_PHARYNGITIS,50
+D) Red flags + disposition (ensure)
+
+Add/confirm red flags in your RF and disposition rules:
+
+drooling or stridor → EMERG
+
+PTA triad → URGENT/EMERG depending on your policy (I’d do URGENT unless airway flags)
+
+E) 13 goldens (strict)
+
+I can generate the 13 subtype goldens exactly like we’ve been doing, but before I do: tell me if your ent_sore_throat complaint uses the centor_* question IDs directly (as in B1), or if your core questions have different IDs and you map them. If it’s direct, I’ll generate goldens immediately in the next message without asking anything else.
