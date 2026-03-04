@@ -1,0 +1,131 @@
+B4-5 DERM Rash Subtype Expansion
+
+We’ll finish the rash “big buckets” so it stops being a vague blob. Subtypes:
+
+SJS/TEN (drug reaction with mucosal + blister/peel)
+
+meningococcemia_like (purpura + fever ± meningitis symptoms)
+
+vasculitic (purpura without systemic or with arthralgia)
+
+drug_exanthem (new med without mucosal/blister)
+
+viral_exanthem (fever without new med, no purpura/mucosal)
+
+keep “benign urticaria-like” as lowest if you still want it here (or leave to allergic complaint)
+
+You already have some of this, but we’ll make it deterministic and properly separated.
+
+A) Add optional questions to CORE_QUESTIONS.csv (derm_rash)
+
+Add only missing ones:
+
+Complaint_Slug,Question_ID,Question_Text,Type
+derm_rash,meningitis_symptoms,Severe headache/neck stiffness/confusion?,boolean
+derm_rash,rapid_spread,Rapidly spreading rash with severe illness?,boolean
+derm_rash,hypotension_like,Dizziness/fainting/very low BP?,boolean
+derm_rash,arthralgia_joint_pain,Joint pain/swelling?,boolean
+derm_rash,tick_exposure,Recent tick bite or outdoor exposure?,boolean
+derm_rash,face_swelling,Facial swelling?,boolean
+
+(You already have: fever, mucosal, painful, blister, purple, new_med.)
+
+B) Add/adjust clusters + scoring in CLUSTER_SCORING_RULES.csv
+
+Use these Dx_IDs (adjust names to your convention):
+
+meningococcemia_like
+
+sjs_ten
+
+vasculitic
+
+drug_exanthem
+
+viral_exanthem
+
+tickborne_like (optional, but useful)
+
+Paste these rules (additive + safe)
+Complaint_Slug,Dx_ID,Rule_ID,Logic,Points
+derm_rash,sjs_ten,SJS_1,"new_med=true",2
+derm_rash,sjs_ten,SJS_2,"mucosal=true",4
+derm_rash,sjs_ten,SJS_3,"blister=true",4
+derm_rash,sjs_ten,SJS_4,"painful=true",2
+derm_rash,sjs_ten,SJS_NEG_1,"mucosal=false AND blister=false",-6
+
+derm_rash,meningococcemia_like,MEN_1,"fever=true",2
+derm_rash,meningococcemia_like,MEN_2,"purple=true",5
+derm_rash,meningococcemia_like,MEN_3,"meningitis_symptoms=true",3
+derm_rash,meningococcemia_like,MEN_4,"hypotension_like=true",2
+derm_rash,meningococcemia_like,MEN_NEG_1,"purple=false",-6
+
+derm_rash,vasculitic,VASC_1,"purple=true",4
+derm_rash,vasculitic,VASC_2,"arthralgia_joint_pain=true",2
+derm_rash,vasculitic,VASC_NEG_1,"fever=true AND meningitis_symptoms=true",-4
+derm_rash,vasculitic,VASC_NEG_2,"mucosal=true AND blister=true",-4
+
+derm_rash,drug_exanthem,DRUG_1,"new_med=true",3
+derm_rash,drug_exanthem,DRUG_2,"fever=false",1
+derm_rash,drug_exanthem,DRUG_NEG_1,"mucosal=true OR blister=true",-6
+derm_rash,drug_exanthem,DRUG_NEG_2,"purple=true",-4
+
+derm_rash,viral_exanthem,VIR_1,"fever=true",2
+derm_rash,viral_exanthem,VIR_2,"new_med=false",2
+derm_rash,viral_exanthem,VIR_NEG_1,"purple=true",-6
+derm_rash,viral_exanthem,VIR_NEG_2,"mucosal=true AND blister=true",-6
+
+derm_rash,tickborne_like,TICK_1,"tick_exposure=true",3
+derm_rash,tickborne_like,TICK_2,"fever=true",2
+derm_rash,tickborne_like,TICK_NEG_1,"mucosal=true AND blister=true",-4
+C) DX_PRIORITY for rash ties (append to DX_PRIORITY.csv)
+Complaint_Slug,Dx_ID,Priority
+derm_rash,meningococcemia_like,100
+derm_rash,sjs_ten,95
+derm_rash,vasculitic,80
+derm_rash,tickborne_like,70
+derm_rash,drug_exanthem,60
+derm_rash,viral_exanthem,50
+
+Rationale: highest risk first.
+
+D) Disposition rules (if not already)
+
+In DISP_RULES.csv for derm_rash, ensure:
+
+SJS/TEN → EMERG
+
+meningococcemia_like → EMERG
+
+purpura + fever → EMERG
+
+mucosal + blister → EMERG
+
+If you already have these, skip. If not, add:
+
+Complaint_Slug,Rule_ID,Priority,Logic,Disposition
+derm_rash,EMERG_SJS,100,"mucosal=true AND blister=true AND new_med=true",EMERG
+derm_rash,EMERG_PURPURA_FEVER,95,"purple=true AND fever=true",EMERG
+derm_rash,EMERG_MENINGITIS,90,"meningitis_symptoms=true AND fever=true",EMERG
+derm_rash,URGENT_PURPURA_NOFEVER,60,"purple=true AND fever=false",URGENT
+E) Add 13 strict subtype goldens
+
+Append to derm_rash goldens:
+
+Complaint_Slug,Case_ID,Inputs_JSON,Expected_Disposition,Expected_Top_Dx
+derm_rash,DR_SUB1,"{""fever"":true,""mucosal"":true,""painful"":true,""blister"":true,""purple"":false,""new_med"":true}",EMERG,sjs_ten
+derm_rash,DR_SUB2,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":false,""meningitis_symptoms"":true}",EMERG,meningococcemia_like
+derm_rash,DR_SUB3,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":false,""hypotension_like"":true}",EMERG,meningococcemia_like
+derm_rash,DR_SUB4,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":false,""arthralgia_joint_pain"":true}",URGENT,vasculitic
+derm_rash,DR_SUB5,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":true}",URGENT,drug_exanthem
+derm_rash,DR_SUB6,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":false}",URGENT,viral_exanthem
+derm_rash,DR_SUB7,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":true}",URGENT,drug_exanthem
+derm_rash,DR_SUB8,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":true}",URGENT,vasculitic
+derm_rash,DR_SUB9,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":true,""new_med"":true}",EMERG,meningococcemia_like
+derm_rash,DR_SUB10,"{""fever"":true,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":false,""tick_exposure"":true}",URGENT,tickborne_like
+derm_rash,DR_SUB11,"{""fever"":false,""mucosal"":true,""painful"":true,""blister"":true,""purple"":false,""new_med"":false}",EMERG,sjs_ten
+derm_rash,DR_SUB12,"{""fever"":false,""mucosal"":false,""painful"":false,""blister"":false,""purple"":false,""new_med"":false}",ROUTINE,viral_exanthem
+derm_rash,DR_SUB13,"{""fever"":true,""mucosal"":false,""painful"":true,""blister"":false,""purple"":false,""new_med"":false,""rapid_spread"":true}",URGENT,viral_exanthem
+F) Run
+npm run ship:complaint -- derm_rash
+npx tsx scripts/gate-prod.ts
