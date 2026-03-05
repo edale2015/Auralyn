@@ -1,0 +1,849 @@
+Step 4A: Coverage Report
+Goal
+
+Answer, for every complaint and profile:
+
+Which complaints have a profile assigned (via profile_apply_seed.csv)?
+
+For each assigned profile, how many targets are:
+
+Present in CSR
+
+Active (WHEN not false and POINTS > 0)
+
+Still inert
+
+Missing CSR rows
+
+Which profiles exist but aren’t used
+
+Basic “unknown token” counts (tokens referenced in WHEN_EXPR that don’t exist as CORE_QUESTIONS tokens), so you can spot dead expressions fast.
+
+Create: scripts/profile-pack-coverage-report.ts
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every(c => c === "")) continue;
+    const r: Record<string,string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map(h => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function asBoolFalse(s: string) {
+  const t = (s ?? "").trim().toLowerCase();
+  return t === "false" || t === "0" || t === "no";
+}
+
+function asNum(s: string) {
+  const n = Number((s ?? "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pickHeader(headers: string[], candidates: string[]) {
+  for (const c of candidates) if (headers.includes(c)) return c;
+  return null;
+}
+
+// Extract tokens like SOB, DIAPHORESIS, DURATION_DAYS from WHEN_EXPR
+function extractTokens(expr: string) {
+  const s = (expr ?? "").toUpperCase();
+  const found = new Set<string>();
+  const re = /\b[A-Z][A-Z0-9_]{1,40}\b/g;
+  for (const m of s.matchAll(re)) {
+    const tok = m[0];
+    // ignore obvious DSL/builtins/literals
+    if (["ANY","ALL","NOT","TRUE","FALSE","AND","OR"].includes(tok)) continue;
+    found.add(tok);
+  }
+  return [...found];
+}
+
+type Profile = {
+  cluster_prefix: string;
+  tiers?: any;
+  activate: Array<{ evidence: string; tier: "PRIMARY"|"SECONDARY"|"BENIGN"; when: string; points?: number }>;
+};
+
+function main() {
+  const root = process.cwd();
+
+  const PROFILE_PACKS = path.join(root, "data", "complaints", "profile_packs.json");
+  const APPLY_SEED = path.join(root, "data", "complaints", "profile_apply_seed.csv");
+
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+  const REG_PATH = path.join(root, "server", "data", "csv", "COMPLAINT_REGISTRY.csv");
+  const Q_PATH = path.join(root, "server", "data", "csv", "CORE_QUESTIONS.csv");
+
+  if (!fs.existsSync(PROFILE_PACKS)) throw new Error(`Missing: ${PROFILE_PACKS}`);
+  if (!fs.existsSync(APPLY_SEED)) throw new Error(`Missing: ${APPLY_SEED}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+  if (!fs.existsSync(DXP_PATH)) throw new Error(`Missing: ${DXP_PATH}`);
+  if (!fs.existsSync(REG_PATH)) throw new Error(`Missing: ${REG_PATH}`);
+  if (!fs.existsSync(Q_PATH)) throw new Error(`Missing: ${Q_PATH}`);
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PACKS, "utf8")) as Record<string, Profile>;
+  const apply = readCsv(APPLY_SEED);
+  const csr = readCsv(CSR_PATH);
+  const dxp = readCsv(DXP_PATH);
+  const reg = readCsv(REG_PATH);
+  const qs = readCsv(Q_PATH);
+
+  const ccIdColReg = pickHeader(reg.headers, ["CC_ID","cc_id"]);
+  if (!ccIdColReg) throw new Error("COMPLAINT_REGISTRY.csv missing CC_ID column");
+  const knownComplaints = new Set(reg.rows.map(r => r[ccIdColReg]).filter(Boolean));
+
+  const ccColApply = pickHeader(apply.headers, ["CC_ID","cc_id"]) ?? "CC_ID";
+  const pfColApply = pickHeader(apply.headers, ["PROFILE_ID","profile_id"]) ?? "PROFILE_ID";
+
+  const ccColCSR = pickHeader(csr.headers, ["CC_ID","cc_id"]) ?? "CC_ID";
+  const evColCSR = pickHeader(csr.headers, ["EVIDENCE_LABEL","evidence_label"]) ?? "EVIDENCE_LABEL";
+  const whenColCSR = pickHeader(csr.headers, ["WHEN_EXPR","when_expr"]) ?? "WHEN_EXPR";
+  const ptsColCSR = pickHeader(csr.headers, ["POINTS","points"]) ?? "POINTS";
+
+  const ccColQ = pickHeader(qs.headers, ["CC_ID","cc_id"]) ?? "CC_ID";
+  const tokColQ = pickHeader(qs.headers, ["QUESTION_TOKEN","TOKEN","VAR","FIELD","QUESTION_ID","ID"]);
+  // If we can't find a token column, we still run but token coverage will be "unknown"
+  const haveTokens = Boolean(tokColQ);
+
+  // Index: tokens per complaint
+  const tokensByCc = new Map<string, Set<string>>();
+  if (haveTokens) {
+    for (const r of qs.rows) {
+      const cc = (r[ccColQ] ?? "").trim();
+      const tok = (r[tokColQ!] ?? "").trim().toUpperCase();
+      if (!cc || !tok) continue;
+      if (!tokensByCc.has(cc)) tokensByCc.set(cc, new Set());
+      tokensByCc.get(cc)!.add(tok);
+    }
+  }
+
+  // Index CSR rows by cc+evidence
+  const csrByCcEv = new Map<string, Record<string,string>>();
+  for (const r of csr.rows) {
+    const cc = (r[ccColCSR] ?? "").trim();
+    const ev = (r[evColCSR] ?? "").trim();
+    if (!cc || !ev) continue;
+    csrByCcEv.set(`${cc}||${ev}`, r);
+  }
+
+  // Coverage rows
+  const outRows: Record<string,string>[] = [];
+  const outHeaders = [
+    "CC_ID","PROFILE_ID",
+    "PROFILE_TARGETS",
+    "CSR_PRESENT",
+    "CSR_ACTIVE",
+    "CSR_INERT",
+    "CSR_MISSING",
+    "DXP_TIER_ROWS_PRESENT",
+    "UNKNOWN_TOKEN_COUNT",
+    "UNKNOWN_TOKENS_SAMPLE"
+  ];
+
+  // Count DXP tier rows by cc (presence only)
+  const dxpByCc = new Map<string, number>();
+  const ccColDXP = pickHeader(dxp.headers, ["CC_ID","cc_id"]) ?? "CC_ID";
+  for (const r of dxp.rows) {
+    const cc = (r[ccColDXP] ?? "").trim();
+    if (!cc) continue;
+    dxpByCc.set(cc, (dxpByCc.get(cc) ?? 0) + 1);
+  }
+
+  const usedProfiles = new Set<string>();
+  const applyPairs = apply.rows
+    .map(r => ({ cc: (r[ccColApply] ?? "").trim(), pf: (r[pfColApply] ?? "").trim() }))
+    .filter(x => x.cc && x.pf);
+
+  for (const { cc, pf } of applyPairs) {
+    usedProfiles.add(pf);
+
+    const profile = profiles[pf];
+    if (!profile) {
+      outRows.push({
+        CC_ID: cc,
+        PROFILE_ID: pf,
+        PROFILE_TARGETS: "0",
+        CSR_PRESENT: "0",
+        CSR_ACTIVE: "0",
+        CSR_INERT: "0",
+        CSR_MISSING: "0",
+        DXP_TIER_ROWS_PRESENT: String(dxpByCc.get(cc) ?? 0),
+        UNKNOWN_TOKEN_COUNT: "0",
+        UNKNOWN_TOKENS_SAMPLE: "PROFILE_NOT_FOUND"
+      });
+      continue;
+    }
+
+    const targets = profile.activate ?? [];
+    let present = 0, active = 0, inert = 0, missing = 0;
+
+    const unknown = new Set<string>();
+    for (const t of targets) {
+      const row = csrByCcEv.get(`${cc}||${t.evidence}`);
+      if (!row) { missing++; continue; }
+
+      present++;
+      const when = row[whenColCSR] ?? "";
+      const pts = asNum(row[ptsColCSR] ?? "0");
+      const isActive = !asBoolFalse(when) && pts > 0;
+      if (isActive) active++;
+      else inert++;
+
+      if (haveTokens) {
+        const toks = extractTokens(when);
+        const have = tokensByCc.get(cc) ?? new Set<string>();
+        for (const tok of toks) {
+          if (!have.has(tok)) unknown.add(tok);
+        }
+      }
+    }
+
+    outRows.push({
+      CC_ID: cc,
+      PROFILE_ID: pf,
+      PROFILE_TARGETS: String(targets.length),
+      CSR_PRESENT: String(present),
+      CSR_ACTIVE: String(active),
+      CSR_INERT: String(inert),
+      CSR_MISSING: String(missing),
+      DXP_TIER_ROWS_PRESENT: String(dxpByCc.get(cc) ?? 0),
+      UNKNOWN_TOKEN_COUNT: haveTokens ? String(unknown.size) : "NA",
+      UNKNOWN_TOKENS_SAMPLE: haveTokens ? [...unknown].slice(0, 8).join(";") : "NA"
+    });
+  }
+
+  // Also report profiles that exist but are unused
+  const unused = Object.keys(profiles).filter(p => !usedProfiles.has(p));
+  const reportDir = path.join(root, "data", "complaints", "reports");
+  fs.mkdirSync(reportDir, { recursive: true });
+
+  const outPath = path.join(reportDir, "profile_pack_coverage_report.csv");
+  writeCsv(outPath, outHeaders, outRows);
+
+  console.log(`\n✅ Wrote coverage report: ${path.relative(root, outPath)}`);
+  console.log(`Complaints in registry: ${knownComplaints.size}`);
+  console.log(`Profile apply rows: ${applyPairs.length}`);
+  console.log(`Unused profiles: ${unused.length}${unused.length ? " -> " + unused.slice(0, 8).join(", ") : ""}`);
+}
+
+main();
+Run it
+npx tsx scripts/profile-pack-coverage-report.ts
+
+Output:
+
+data/complaints/reports/profile_pack_coverage_report.csv
+
+Step 4B: Profile Pack Linter
+Goal
+
+Fail fast on “bad profiles” before they cause dead logic:
+
+bad tiers
+
+duplicate evidence entries
+
+missing cluster_prefix
+
+points not numeric
+
+WHEN contains tokens that don’t exist in CORE_QUESTIONS (best-effort)
+
+Create: scripts/lint-profile-packs.ts
+import fs from "fs";
+import path from "path";
+
+function extractTokens(expr: string) {
+  const s = (expr ?? "").toUpperCase();
+  const found = new Set<string>();
+  const re = /\b[A-Z][A-Z0-9_]{1,40}\b/g;
+  for (const m of s.matchAll(re)) {
+    const tok = m[0];
+    if (["ANY","ALL","NOT","TRUE","FALSE","AND","OR"].includes(tok)) continue;
+    found.add(tok);
+  }
+  return [...found];
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = ""; let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i+1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur=""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s=>s.trim());
+}
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(l => l.trim().length>0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i=1;i<lines.length;i++){
+    const cols = splitCsvLine(lines[i]);
+    const r: Record<string,string> = {};
+    for (let j=0;j<headers.length;j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function pickHeader(headers: string[], candidates: string[]) {
+  for (const c of candidates) if (headers.includes(c)) return c;
+  return null;
+}
+
+function main() {
+  const root = process.cwd();
+  const PROFILE_PACKS = path.join(root, "data", "complaints", "profile_packs.json");
+  const Q_PATH = path.join(root, "server", "data", "csv", "CORE_QUESTIONS.csv");
+
+  if (!fs.existsSync(PROFILE_PACKS)) throw new Error(`Missing: ${PROFILE_PACKS}`);
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PACKS, "utf8")) as Record<string, any>;
+
+  const qs = fs.existsSync(Q_PATH) ? readCsv(Q_PATH) : { headers: [], rows: [] as any[] };
+  const ccColQ = pickHeader(qs.headers, ["CC_ID","cc_id"]) ?? "CC_ID";
+  const tokColQ = pickHeader(qs.headers, ["QUESTION_TOKEN","TOKEN","VAR","FIELD","QUESTION_ID","ID"]);
+  const tokensByCc = new Map<string, Set<string>>();
+  if (tokColQ) {
+    for (const r of qs.rows) {
+      const cc = (r[ccColQ] ?? "").trim();
+      const tok = (r[tokColQ] ?? "").trim().toUpperCase();
+      if (!cc || !tok) continue;
+      if (!tokensByCc.has(cc)) tokensByCc.set(cc, new Set());
+      tokensByCc.get(cc)!.add(tok);
+    }
+  }
+
+  const errors: string[] = [];
+  const warns: string[] = [];
+
+  for (const [profileId, p] of Object.entries(profiles)) {
+    if (!p.cluster_prefix || typeof p.cluster_prefix !== "string") {
+      errors.push(`${profileId}: missing cluster_prefix`);
+    }
+    if (!Array.isArray(p.activate)) {
+      errors.push(`${profileId}: missing activate[]`);
+      continue;
+    }
+
+    const seenEvidence = new Set<string>();
+    for (const a of p.activate) {
+      const ev = (a?.evidence ?? "").trim();
+      const tier = (a?.tier ?? "").trim();
+      const when = (a?.when ?? "").trim();
+      const points = a?.points;
+
+      if (!ev) errors.push(`${profileId}: activate entry missing evidence`);
+      else {
+        if (seenEvidence.has(ev)) errors.push(`${profileId}: duplicate evidence '${ev}'`);
+        seenEvidence.add(ev);
+      }
+
+      if (!["PRIMARY","SECONDARY","BENIGN"].includes(tier)) errors.push(`${profileId}: invalid tier '${tier}' for evidence '${ev}'`);
+      if (!when) warns.push(`${profileId}: empty when for evidence '${ev}'`);
+
+      if (points !== undefined && Number.isFinite(Number(points)) === false) {
+        errors.push(`${profileId}: non-numeric points '${points}' for evidence '${ev}'`);
+      }
+    }
+  }
+
+  // Token lint (best-effort): scan WHEN for tokens; ensure each token exists in at least one complaint’s questions.
+  if (tokColQ) {
+    const globalTokens = new Set<string>();
+    for (const set of tokensByCc.values()) for (const t of set) globalTokens.add(t);
+
+    for (const [profileId, p] of Object.entries(profiles)) {
+      if (!Array.isArray((p as any).activate)) continue;
+      for (const a of (p as any).activate) {
+        const ev = (a?.evidence ?? "").trim();
+        const when = (a?.when ?? "").trim();
+        for (const tok of extractTokens(when)) {
+          if (!globalTokens.has(tok)) {
+            warns.push(`${profileId}: WHEN for '${ev}' references token '${tok}' not found in CORE_QUESTIONS (best-effort check)`);
+          }
+        }
+      }
+    }
+  } else {
+    warns.push(`CORE_QUESTIONS token column not detected; token lint skipped.`);
+  }
+
+  console.log("\n=== Profile Pack Lint ===");
+  console.log(`Profiles: ${Object.keys(profiles).length}`);
+  console.log(`Errors: ${errors.length}`);
+  console.log(`Warnings: ${warns.length}`);
+
+  if (warns.length) {
+    console.log("\nWarnings:");
+    for (const w of warns.slice(0, 40)) console.log("- " + w);
+    if (warns.length > 40) console.log(`... (${warns.length - 40} more)`);
+  }
+
+  if (errors.length) {
+    console.log("\nErrors:");
+    for (const e of errors) console.log("- " + e);
+    process.exit(1);
+  }
+
+  console.log("\n✅ Lint passed.");
+  process.exit(0);
+}
+
+main();
+
+Run:
+
+npx tsx scripts/lint-profile-packs.ts
+Step 4C: Auto-add missing questions (safe by default)
+Goal
+
+If profile WHEN expressions reference tokens not present in CORE_QUESTIONS for a complaint, generate suggestions, and optionally apply them.
+
+This avoids dead rules like PLEURITIC=true when you never ask pleuritic pain.
+
+Create: scripts/ensure-profile-questions.ts
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = ""; let inQuotes = false;
+  for (let i=0;i<line.length;i++){
+    const ch=line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i+1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur=""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s=>s.trim());
+}
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(l => l.trim().length>0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i=1;i<lines.length;i++){
+    const cols=splitCsvLine(lines[i]);
+    const r: Record<string,string> = {};
+    for (let j=0;j<headers.length;j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map(h => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function pickHeader(headers: string[], candidates: string[]) {
+  for (const c of candidates) if (headers.includes(c)) return c;
+  return null;
+}
+
+function extractTokens(expr: string) {
+  const s = (expr ?? "").toUpperCase();
+  const found = new Set<string>();
+  const re = /\b[A-Z][A-Z0-9_]{1,40}\b/g;
+  for (const m of s.matchAll(re)) {
+    const tok = m[0];
+    if (["ANY","ALL","NOT","TRUE","FALSE","AND","OR"].includes(tok)) continue;
+    found.add(tok);
+  }
+  return [...found];
+}
+
+// Heuristic token->type
+function defaultType(tok: string) {
+  if (tok.includes("DURATION") || tok.endsWith("_DAYS") || tok.endsWith("_HOURS")) return "number";
+  if (tok.includes("TEMP") || tok.includes("SEVERITY")) return "number";
+  return "yesno";
+}
+
+function main() {
+  const root = process.cwd();
+  const PROFILE_PACKS = path.join(root, "data", "complaints", "profile_packs.json");
+  const APPLY_SEED = path.join(root, "data", "complaints", "profile_apply_seed.csv");
+  const Q_PATH = path.join(root, "server", "data", "csv", "CORE_QUESTIONS.csv");
+
+  const APPLY = process.argv.includes("--apply"); // actually append to CORE_QUESTIONS.csv
+  const OUT = path.join(root, "data", "complaints", "reports", "profile_missing_questions_suggestions.csv");
+
+  if (!fs.existsSync(PROFILE_PACKS)) throw new Error(`Missing: ${PROFILE_PACKS}`);
+  if (!fs.existsSync(APPLY_SEED)) throw new Error(`Missing: ${APPLY_SEED}`);
+  if (!fs.existsSync(Q_PATH)) throw new Error(`Missing: ${Q_PATH}`);
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PACKS, "utf8")) as Record<string, any>;
+  const apply = readCsv(APPLY_SEED);
+  const qs = readCsv(Q_PATH);
+
+  const ccColApply = pickHeader(apply.headers, ["CC_ID","cc_id"]) ?? "CC_ID";
+  const pfColApply = pickHeader(apply.headers, ["PROFILE_ID","profile_id"]) ?? "PROFILE_ID";
+
+  const ccColQ = pickHeader(qs.headers, ["CC_ID","cc_id"]);
+  const tokColQ
+Please dontinue
+
+Yes, we can proceed in order. I did not build Step 4A yet in code; the “complaint family pack generator” was a separate track you asked for. Below is Step 4A (Coverage Report) first, then 4B (Linter), then 4C (Auto-add missing questions) in that order.
+
+I’m giving you Step 4A as a ready-to-paste script that matches your repo conventions (flat CSVs, quoted commas, no Papa).
+
+Step 4A: Coverage Report
+What it reports
+
+Per complaint (CC_ID), it summarizes:
+
+Which profile(s) apply to it (from profile_apply_seed.csv)
+
+Total CSR rows for that complaint
+
+How many CSR rows are still inert (WHEN_EXPR=false OR POINTS=0)
+
+How many are “active” (not inert)
+
+Tier distribution by CLUSTER_ID suffix: _PRIMARY/_SECONDARY/_BENIGN
+
+DXP tiers present (CL_<prefix>_PRIMARY/SECONDARY/BENIGN) count
+
+Missing expected tier rows in DX_PRIORITY.csv based on profiles
+
+Profile evidence targets missing a CSR row (should be zero now with ensure rows, but this catches drift)
+
+Outputs:
+
+Console summary
+
+data/complaints/coverage_report.csv (default) or custom path via flag
+
+Add scripts/coverage-report.ts
+/**
+ * scripts/coverage-report.ts
+ *
+ * Step 4A: Coverage Report
+ *
+ * Reads:
+ * - data/complaints/profile_packs.json
+ * - data/complaints/profile_apply_seed.csv
+ * - server/data/csv/CLUSTER_SCORING_RULES.csv
+ * - server/data/csv/DX_PRIORITY.csv
+ *
+ * Writes:
+ * - coverage report CSV (default: data/complaints/coverage_report.csv)
+ *
+ * Usage:
+ *   npx tsx scripts/coverage-report.ts
+ *   npx tsx scripts/coverage-report.ts --out data/complaints/coverage_report.csv
+ *   npx tsx scripts/coverage-report.ts --cc cough --cc sinus_pressure
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = { outPath: string; ccs: string[] };
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = { outPath: "data/complaints/coverage_report.csv", ccs: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--out") args.outPath = argv[++i];
+    else if (a === "--cc") args.ccs.push(argv[++i]);
+  }
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) throw new Error(`Missing file: ${filePath}`);
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[]) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const PROFILE_PACKS = path.join(root, "data", "complaints", "profile_packs.json");
+  const APPLY_SEED = path.join(root, "data", "complaints", "profile_apply_seed.csv");
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  const packs = JSON.parse(fs.readFileSync(PROFILE_PACKS, "utf8")) as Record<string, any>;
+  const apply = readCsv(APPLY_SEED);
+  const csr = readCsv(CSR_PATH);
+  const dxp = readCsv(DXP_PATH);
+
+  const applyMap = new Map<string, string[]>(); // CC_ID -> [PROFILE_ID...]
+  for (const r of apply.rows) {
+    const cc = (r.CC_ID ?? "").trim();
+    const pf = (r.PROFILE_ID ?? "").trim();
+    if (!cc || !pf) continue;
+    if (!applyMap.has(cc)) applyMap.set(cc, []);
+    applyMap.get(cc)!.push(pf);
+  }
+
+  // Index CSR by CC
+  const csrByCc = new Map<string, Record<string, string>[]>();
+  for (const r of csr.rows) {
+    const cc = (r.CC_ID ?? "").trim();
+    if (!cc) continue;
+    if (!csrByCc.has(cc)) csrByCc.set(cc, []);
+    csrByCc.get(cc)!.push(r);
+  }
+
+  // Index DXP by CC
+  const dxpByCc = new Map<string, Record<string, string>[]>();
+  for (const r of dxp.rows) {
+    const cc = (r.CC_ID ?? "").trim();
+    if (!cc) continue;
+    if (!dxpByCc.has(cc)) dxpByCc.set(cc, []);
+    dxpByCc.get(cc)!.push(r);
+  }
+
+  const allCcs = new Set<string>([
+    ...applyMap.keys(),
+    ...csrByCc.keys(),
+    ...dxpByCc.keys()
+  ]);
+
+  // Filter CCs if provided
+  const ccFilter = args.ccs.length ? new Set(args.ccs.map((x) => x.trim())) : null;
+
+  const outRows: Record<string, string>[] = [];
+  const headers = [
+    "CC_ID",
+    "PROFILES",
+    "CSR_TOTAL",
+    "CSR_ACTIVE",
+    "CSR_INERT",
+    "CSR_PRIMARY",
+    "CSR_SECONDARY",
+    "CSR_BENIGN",
+    "DXP_TOTAL",
+    "DXP_TIER_ROWS_PRESENT",
+    "DXP_TIER_ROWS_MISSING",
+    "PROFILE_TARGETS_MISSING_CSR"
+  ];
+
+  let totals = { cc: 0, inert: 0, active: 0, missingTargets: 0 };
+
+  for (const ccId of Array.from(allCcs).sort()) {
+    if (ccFilter && !ccFilter.has(ccId)) continue;
+
+    const profiles = (applyMap.get(ccId) ?? []).slice().sort();
+    const csrRows = csrByCc.get(ccId) ?? [];
+    const dxpRows = dxpByCc.get(ccId) ?? [];
+
+    const inert = csrRows.filter((r) => {
+      const when = (r.WHEN_EXPR ?? "").trim().toLowerCase();
+      const pts = (r.POINTS ?? "").trim();
+      return when === "false" || pts === "0" || pts === "";
+    }).length;
+
+    const active = csrRows.length - inert;
+
+    const tierCounts = { PRIMARY: 0, SECONDARY: 0, BENIGN: 0 };
+    for (const r of csrRows) {
+      const cl = (r.CLUSTER_ID ?? "").toUpperCase();
+      if (cl.endsWith("_PRIMARY")) tierCounts.PRIMARY++;
+      else if (cl.endsWith("_SECONDARY")) tierCounts.SECONDARY++;
+      else if (cl.endsWith("_BENIGN")) tierCounts.BENIGN++;
+    }
+
+    // Expected tier cluster IDs derived from profiles
+    const expectedTierClusters = new Set<string>();
+    const missingProfileTargets: string[] = [];
+
+    for (const pf of profiles) {
+      const p = packs[pf];
+      if (!p) continue;
+      const prefix = p.cluster_prefix;
+      if (prefix) {
+        expectedTierClusters.add(`CL_${prefix}_PRIMARY`);
+        expectedTierClusters.add(`CL_${prefix}_SECONDARY`);
+        expectedTierClusters.add(`CL_${prefix}_BENIGN`);
+      }
+
+      // profile targets missing CSR rows (by evidence label)
+      const targets: string[] = (p.activate ?? []).map((x: any) => x.evidence).filter(Boolean);
+      for (const ev of targets) {
+        const exists = csrRows.some((rr) => (rr.EVIDENCE_LABEL ?? "") === ev);
+        if (!exists) missingProfileTargets.push(`${pf}:${ev}`);
+      }
+    }
+
+    const dxpClusterSet = new Set(dxpRows.map((r) => (r.CLUSTER_ID ?? "").trim()).filter(Boolean));
+    const tierPresent = Array.from(expectedTierClusters).filter((c) => dxpClusterSet.has(c)).length;
+    const tierMissing = Array.from(expectedTierClusters).filter((c) => !dxpClusterSet.has(c)).length;
+
+    outRows.push({
+      CC_ID: ccId,
+      PROFILES: profiles.join("|"),
+      CSR_TOTAL: String(csrRows.length),
+      CSR_ACTIVE: String(active),
+      CSR_INERT: String(inert),
+      CSR_PRIMARY: String(tierCounts.PRIMARY),
+      CSR_SECONDARY: String(tierCounts.SECONDARY),
+      CSR_BENIGN: String(tierCounts.BENIGN),
+      DXP_TOTAL: String(dxpRows.length),
+      DXP_TIER_ROWS_PRESENT: String(tierPresent),
+      DXP_TIER_ROWS_MISSING: String(tierMissing),
+      PROFILE_TARGETS_MISSING_CSR: missingProfileTargets.join("|")
+    });
+
+    totals.cc++;
+    totals.inert += inert;
+    totals.active += active;
+    totals.missingTargets += missingProfileTargets.length;
+  }
+
+  const outAbs = path.isAbsolute(args.outPath) ? args.outPath : path.join(root, args.outPath);
+  writeCsv(outAbs, headers, outRows);
+
+  console.log("\n=== Coverage Report ===");
+  console.log(`Complaints: ${totals.cc}`);
+  console.log(`CSR active: ${totals.active}`);
+  console.log(`CSR inert:  ${totals.inert}`);
+  console.log(`Profile targets missing CSR: ${totals.missingTargets}`);
+  console.log(`Wrote: ${outAbs}`);
+}
+
+main();
+Run Step 4A
+npx tsx scripts/coverage-report.ts
+
+Optional:
+
+npx tsx scripts/coverage-report.ts --cc cough --cc sinus_pressure
+npx tsx scripts/coverage-report.ts --out data/complaints/coverage_report.csv
+Step 4B: Linter
+
+Next, I’ll build scripts/profile-pack-lint.ts that checks:
+
+duplicate evidence entries inside a profile
+
+missing tier definitions
+
+non-numeric points/priority
+
+invalid cluster prefix strings
+
+references to evidence tokens not present in CSR
+
+(optionally) references to question tokens not present in CORE_QUESTIONS (if you confirm headers)
