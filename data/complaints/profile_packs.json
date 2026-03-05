@@ -23,7 +23,6 @@
       }
     ]
   },
-
   "ENT_SINUS_V1": {
     "cc_id": "sinus_pressure",
     "cluster_prefix": "SP",
@@ -48,7 +47,6 @@
       }
     ]
   },
-
   "CARD_CP_V1": {
     "cc_id": "chest_pain",
     "cluster_prefix": "CP",
@@ -70,6 +68,78 @@
         "when": "ALL(answers.Q_CP_SOB == 'yes', answers.Q_CP_PLEURITIC == 'yes', answers.Q_CP_REPRODUCIBLE != 'yes')",
         "points": 5,
         "label": "Pneumothorax pattern (SOB + pleuritic, not reproducible)"
+      }
+    ]
+  },
+  "ENT_SINUS_V2": {
+    "cc_id": "sinus_pressure",
+    "cluster_prefix": "SP",
+    "activate": [
+      {
+        "dx": "acute_bacterial_sinusitis",
+        "when": "false",
+        "points": 6,
+        "label": "Acute Bacterial Sinusitis (primary - auto-generated)"
+      },
+      {
+        "dx": "allergic_rhinitis",
+        "when": "false",
+        "points": 4,
+        "label": "Allergic Rhinitis (secondary - auto-generated)"
+      },
+      {
+        "dx": "viral_rhinosinusitis",
+        "when": "true",
+        "points": 3,
+        "label": "Viral Rhinosinusitis (benign - auto-generated)"
+      }
+    ]
+  },
+  "PULM_COUGH_V2": {
+    "cc_id": "cough",
+    "cluster_prefix": "C",
+    "activate": [
+      {
+        "dx": "pneumonia",
+        "when": "false",
+        "points": 6,
+        "label": "Pneumonia (primary - auto-generated)"
+      },
+      {
+        "dx": "asthma_exacerbation",
+        "when": "false",
+        "points": 4,
+        "label": "Asthma Exacerbation (secondary - auto-generated)"
+      },
+      {
+        "dx": "viral_uri",
+        "when": "true",
+        "points": 3,
+        "label": "Viral Uri (benign - auto-generated)"
+      }
+    ]
+  },
+  "CARD_CP_V2": {
+    "cc_id": "chest_pain",
+    "cluster_prefix": "CP",
+    "activate": [
+      {
+        "dx": "mi",
+        "when": "false",
+        "points": 6,
+        "label": "Mi (primary - auto-generated)"
+      },
+      {
+        "dx": "pe",
+        "when": "false",
+        "points": 6,
+        "label": "Pe (primary - auto-generated)"
+      },
+      {
+        "dx": "pneumothorax",
+        "when": "false",
+        "points": 6,
+        "label": "Pneumothorax (primary - auto-generated)"
       }
     ]
   }
