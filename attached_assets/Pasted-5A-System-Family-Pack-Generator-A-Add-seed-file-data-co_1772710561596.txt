@@ -1,0 +1,350 @@
+5A) System Family Pack Generator
+A) Add seed file: data/complaints/family_seed_v1.csv
+
+This is a “starter library” of families. You will expand/edit over time, but this gets you moving immediately.
+
+FAMILY_ID,PROFILE_ID,SYSTEM,CLUSTER_PREFIX,CC_IDS,DIFFERENTIALS_PRIMARY,DIFFERENTIALS_SECONDARY,DIFFERENTIALS_BENIGN,QUESTIONS
+ENT_SINUS,ENT_SINUS_V3,ENT,ENT_SINUS,sinus_pressure;allergic_rhinitis;nasal_congestion,acute_bacterial_sinusitis,allergic_rhinitis,viral_rhinosinusitis,"DURATION_DAYS:number;FEVER:yesno;FACIAL_PAIN:yesno;DOUBLE_SICKENING:yesno;SNEEZING:yesno;ITCHY_EYES:yesno;RUNNY_NOSE:yesno"
+ENT_SORE_THROAT,ENT_ST_V1,ENT,ENT_ST,sore_throat,strep_pharyngitis,viral_pharyngitis,postnasal_drip,"FEVER:yesno;COUGH:yesno;EXUDATE:yesno;TENDER_ANT_CERVICAL:yesno"
+PULM_COUGH,PULM_COUGH_V3,PULM,PULM_COUGH,cough,pneumonia,asthma_exacerbation,viral_uri,"DURATION_DAYS:number;FEVER:yesno;SOB:yesno;CHEST_PAIN:yesno;WHEEZE:yesno"
+CARD_CHEST_PAIN,CARD_CP_V3,CARD,CARD_CP,chest_pain,mi;pe;pneumothorax,pericarditis;aaa,gerd;costochondritis,"SOB:yesno;RADIATION:yesno;DIAPHORESIS:yesno;EXERTIONAL:yesno;PLEURITIC:yesno;ONE_SIDED_PAIN:yesno"
+GI_ABD_PAIN,GI_ABD_V1,GI,GI_ABD,abdominal_pain,appendicitis;cholecystitis;pancreatitis,bowel_obstruction;diverticulitis,gastroenteritis;constipation,"SEVERE_PAIN:yesno;FEVER:yesno;VOMITING:yesno;LOCALIZED_RLQ:yesno;RUQ:yesno"
+GI_DIARRHEA,GI_DIARRHEA_V1,GI,GI_DIARRHEA,diarrhea,dehydration;infectious_diarrhea,c_diff,viral_gastroenteritis,"FEVER:yesno;BLOODY_STOOL:yesno;DURATION_DAYS:number;SEVERE_PAIN:yesno"
+GU_DYSURIA,GU_DYSURIA_V1,GU,GU_DYSURIA,gu_uti_symptoms;dysuria,cystitis,pyelonephritis;std_urethritis,irritant_urethritis,"FEVER:yesno;FLANK_PAIN:yesno;VAGINAL_DISCHARGE:yesno;TESTICULAR_PAIN:yesno"
+NEURO_HEADACHE,NEURO_HA_V1,NEURO,NEURO_HA,headache,ich;meningitis;stroke,migraine,benign_tension,"WORST_HEADACHE:yesno;NEURO_DEFICIT:yesno;FEVER:yesno;NECK_STIFFNESS:yesno"
+DERM_RASH,DERM_RASH_V1,DERM,DERM_RASH,derm_rash,stevens_johnson;anaphylaxis,cellulitis,viral_exanthem;contact_dermatitis,"FEVER:yesno;MUCOSAL:yesno;PALMS_SOLES:yesno;PAIN_OVER_ITCH:yesno"
+MSK_BACK_PAIN,MSK_BACK_V1,MSK,MSK_BACK,back_pain,cauda_equina;spinal_epidural_abscess,fracture,sprain_strain,"SADDLE_ANESTHESIA:yesno;BOWEL_BLADDER:yesno;FEVER:yesno;TRAUMA:yesno"
+PSYCH_ANXIETY,PSYCH_ANX_V1,PSYCH,PSYCH_ANX,anxiety,panic_attack,substance_related,adjustment_stress,"CHEST_PAIN:yesno;SOB:yesno;SUICIDAL:yesno"
+ENDO_HYPERGLYCEMIA,ENDO_GLU_V1,ENDO,ENDO_GLU,hyperglycemia,DKA;HHS,uncontrolled_dm,stress_hyperglycemia,"VOMITING:yesno;ABD_PAIN:yesno;CONFUSION:yesno;DEHYDRATION:yesno"
+B) Run your existing family generator
+
+You already have scripts/generate-family-packs.ts. Use it:
+
+npx tsx scripts/generate-family-packs.ts data/complaints/family_seed_v1.csv
+
+Then apply safely:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --parallel 12 --continue-on-fail
+5B) Red Flag Pack System
+
+We’ll add:
+
+data/complaints/red_flag_packs.json
+
+scripts/apply-red-flag-packs.ts (bulk apply, idempotent)
+
+A) Create: data/complaints/red_flag_packs.json
+{
+  "RF_PACK_CHEST_PAIN": {
+    "applies_to_cc_ids": ["chest_pain"],
+    "rules": [
+      { "rule_id": "RF_CP_SOB", "when_expr": "SOB=true", "label": "Shortness of breath", "severity": "ER_SEND" },
+      { "rule_id": "RF_CP_SYNCOPE", "when_expr": "SYNCOPE=true", "label": "Syncope", "severity": "ER_SEND" },
+      { "rule_id": "RF_CP_DIAPHORESIS", "when_expr": "DIAPHORESIS=true", "label": "Diaphoresis", "severity": "ER_SEND" }
+    ]
+  },
+  "RF_PACK_NEURO": {
+    "applies_to_cc_ids": ["headache", "dizziness"],
+    "rules": [
+      { "rule_id": "RF_NEURO_DEFICIT", "when_expr": "NEURO_DEFICIT=true", "label": "Focal neurologic deficit", "severity": "ER_SEND" },
+      { "rule_id": "RF_NEURO_SEIZURE", "when_expr": "SEIZURE=true", "label": "Seizure", "severity": "ER_SEND" }
+    ]
+  },
+  "RF_PACK_DERM": {
+    "applies_to_cc_ids": ["derm_rash"],
+    "rules": [
+      { "rule_id": "RF_DERM_MUCOSAL", "when_expr": "MUCOSAL=true", "label": "Mucosal involvement", "severity": "ESCALATE" },
+      { "rule_id": "RF_DERM_PAIN", "when_expr": "PAIN_OVER_ITCH=true", "label": "Pain predominant", "severity": "ESCALATE" }
+    ]
+  }
+}
+B) Add: scripts/apply-red-flag-packs.ts
+
+This script is schema-adaptive: it looks for common columns. If your RED_FLAG_RULES.csv uses different column names, it will print which ones it couldn’t map so you can add an alias list.
+
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every(c => c === "")) continue;
+    const r: Record<string,string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map(h => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function pick(headers: string[], candidates: string[]) {
+  for (const c of candidates) if (headers.includes(c)) return c;
+  return null;
+}
+
+function main() {
+  const root = process.cwd();
+  const PACKS = path.join(root, "data", "complaints", "red_flag_packs.json");
+  const RFCSV = path.join(root, "server", "data", "csv", "RED_FLAG_RULES.csv");
+
+  if (!fs.existsSync(PACKS)) throw new Error(`Missing: ${PACKS}`);
+  if (!fs.existsSync(RFCSV)) throw new Error(`Missing: ${RFCSV}`);
+
+  const packs = JSON.parse(fs.readFileSync(PACKS, "utf8")) as any;
+  const rf = readCsv(RFCSV);
+
+  // Try to map columns
+  const ccCol = pick(rf.headers, ["CC_ID", "cc_id"]);
+  const ruleCol = pick(rf.headers, ["RULE_ID", "RF_RULE_ID", "RED_FLAG_RULE_ID", "ID"]);
+  const whenCol = pick(rf.headers, ["WHEN_EXPR", "when_expr", "EXPR", "IF_EXPR"]);
+  const labelCol = pick(rf.headers, ["LABEL", "EVIDENCE_LABEL", "DESCRIPTION", "TEXT"]);
+  const sevCol = pick(rf.headers, ["SEVERITY", "LEVEL", "ACTION", "DISPOSITION_LEVEL"]);
+  const verCol = pick(rf.headers, ["VERSION"]);
+
+  if (!ccCol || !ruleCol || !whenCol) {
+    console.log("RED_FLAG_RULES.csv headers:", rf.headers.join(","));
+    throw new Error(`Cannot map required columns. Need CC_ID + RULE_ID + WHEN_EXPR columns.`);
+  }
+
+  const existing = new Set(rf.rows.map(r => `${r[ccCol]}||${r[ruleCol]}`));
+
+  let added = 0;
+  for (const [packId, pack] of Object.entries(packs)) {
+    const applies: string[] = (pack as any).applies_to_cc_ids ?? [];
+    const rules: any[] = (pack as any).rules ?? [];
+    for (const cc of applies) {
+      for (const rr of rules) {
+        const key = `${cc}||${rr.rule_id}`;
+        if (existing.has(key)) continue;
+
+        const row: Record<string,string> = {};
+        for (const h of rf.headers) row[h] = ""; // fill blanks
+
+        row[ccCol] = cc;
+        row[ruleCol] = rr.rule_id;
+        row[whenCol] = rr.when_expr;
+        if (labelCol) row[labelCol] = rr.label ?? packId;
+        if (sevCol) row[sevCol] = rr.severity ?? "ESCALATE";
+        if (verCol) row[verCol] = "v1";
+
+        rf.rows.push(row);
+        existing.add(key);
+        added++;
+      }
+    }
+  }
+
+  writeCsv(RFCSV, rf.headers, rf.rows);
+  console.log(`✅ Red flag packs applied. Rows added: ${added}`);
+}
+
+main();
+
+Run:
+
+npx tsx scripts/apply-red-flag-packs.ts
+5C) DX Candidate Engine (Generated diagnoses)
+
+This creates DX_CANDIDATES.csv from CSR + DXP:
+
+It treats each CSR EVIDENCE_LABEL as a dx token (DX_ID)
+
+Uses POINTS and tier priority (from DX_PRIORITY.csv) to compute a base weight
+
+Produces top candidates per complaint
+
+This is not the final clinical differential engine, but it eliminates manual diagnosis lists.
+
+Add: scripts/generate-dx-candidates.ts
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = ""; let inQuotes = false;
+  for (let i=0;i<line.length;i++){
+    const ch=line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i+1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur=""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(s=>s.trim());
+}
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(l=>l.trim().length>0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i=1;i<lines.length;i++){
+    const cols = splitCsvLine(lines[i]);
+    const r: Record<string,string> = {};
+    for (let j=0;j<headers.length;j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map(h => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+function n(s: string) {
+  const x = Number((s ?? "").trim());
+  return Number.isFinite(x) ? x : 0;
+}
+
+function main() {
+  const root = process.cwd();
+  const CSR = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+  const OUT = path.join(root, "server", "data", "csv", "DX_CANDIDATES.csv");
+
+  const csr = readCsv(CSR);
+  const dxp = readCsv(DXP);
+
+  const neededCSR = ["CC_ID","CLUSTER_ID","POINTS","WHEN_EXPR","EVIDENCE_LABEL"];
+  for (const h of neededCSR) if (!csr.headers.includes(h)) throw new Error(`CSR missing ${h}`);
+  const neededDXP = ["CC_ID","CLUSTER_ID","PRIORITY"];
+  for (const h of neededDXP) if (!dxp.headers.includes(h)) throw new Error(`DXP missing ${h}`);
+
+  // Map (cc, cluster) -> priority weight
+  const prByCcCluster = new Map<string, number>();
+  for (const r of dxp.rows) {
+    const cc = (r.CC_ID ?? "").trim();
+    const cl = (r.CLUSTER_ID ?? "").trim();
+    if (!cc || !cl) continue;
+    prByCcCluster.set(`${cc}||${cl}`, n(r.PRIORITY));
+  }
+
+  // Aggregate: for each (cc, dx_id), compute best weighted score
+  // score = points * (clusterPriority/100) with sane fallback
+  const agg = new Map<string, { cc: string; dx: string; label: string; bestCluster: string; score: number; maxPoints: number; clusterPriority: number }>();
+
+  for (const r of csr.rows) {
+    const cc = (r.CC_ID ?? "").trim();
+    const cl = (r.CLUSTER_ID ?? "").trim();
+    const dx = (r.EVIDENCE_LABEL ?? "").trim();
+    if (!cc || !cl || !dx) continue;
+
+    const points = n(r.POINTS);
+    const clusterPriority = prByCcCluster.get(`${cc}||${cl}`) ?? 50; // fallback
+    const score = points * (clusterPriority / 100);
+
+    const key = `${cc}||${dx}`;
+    const label = dx.replace(/_/g, " ");
+
+    const cur = agg.get(key);
+    if (!cur || score > cur.score) {
+      agg.set(key, { cc, dx, label, bestCluster: cl, score, maxPoints: points, clusterPriority });
+    }
+  }
+
+  // Build output rows: top N per complaint
+  const byCc = new Map<string, Array<ReturnType<typeof agg.get>>>();
+  for (const v of agg.values()) {
+    if (!byCc.has(v.cc)) byCc.set(v.cc, []);
+    byCc.get(v.cc)!.push(v as any);
+  }
+
+  const rowsOut: Record<string,string>[] = [];
+  const headersOut = ["CC_ID","DX_ID","DX_LABEL","BEST_CLUSTER_ID","BASE_POINTS","CLUSTER_PRIORITY","BASE_SCORE","RANK"];
+
+  for (const [cc, arr] of byCc.entries()) {
+    arr.sort((a,b) => (b!.score - a!.score));
+    const top = arr.slice(0, 15);
+    for (let i=0;i<top.length;i++){
+      const v = top[i]!;
+      rowsOut.push({
+        CC_ID: cc,
+        DX_ID: v.dx,
+        DX_LABEL: v.label,
+        BEST_CLUSTER_ID: v.bestCluster,
+        BASE_POINTS: String(v.maxPoints),
+        CLUSTER_PRIORITY: String(v.clusterPriority),
+        BASE_SCORE: v.score.toFixed(2),
+        RANK: String(i+1),
+      });
+    }
+  }
+
+  writeCsv(OUT, headersOut, rowsOut);
+  console.log(`✅ Wrote DX candidates: ${OUT} (${rowsOut.length} rows)`);
+}
+
+main();
+
+Run:
+
+npx tsx scripts/generate-dx-candidates.ts
+
+Now you have server/data/csv/DX_CANDIDATES.csv ready for your loader to consume (or for the engine to query).
+
+What to run now, in order
+5A generate families + apply
+npx tsx scripts/generate-family-packs.ts data/complaints/family_seed_v1.csv
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --parallel 12 --continue-on-fail
+5B apply red flag packs
+npx tsx scripts/apply-red-flag-packs.ts
+5C generate dx candidates
+npx tsx scripts/generate-dx-candidates.ts
+
+Then:
+
+npm run abi:complaints
+npm test
+One small note about 5B
+
+Because you didn’t paste your RED_FLAG_RULES.csv headers here, the applier uses auto-mapping. If it errors, it will print the headers it found. If that happens, paste that header line and I’ll update the mapping to match your exact schema in one shot.
+
+If you want, the next thing I can do is wire DX_CANDIDATES.csv into complaintConfigLoader.ts so your Telegram output automatically lists “Lik

@@ -1,0 +1,24 @@
+{
+  "RF_PACK_CHEST_PAIN": {
+    "applies_to_cc_ids": ["chest_pain"],
+    "rules": [
+      { "rf_id": "RF_CP_SOB", "trigger_expr": "answers.Q_CP_SOB == 'yes'", "label": "Shortness of breath", "severity": "HARD", "action": "ER_SEND", "immediate_actions": "Evaluate for ACS/PE", "rationale": "SOB with chest pain raises concern for acute coronary syndrome or PE" },
+      { "rf_id": "RF_CP_SYNCOPE", "trigger_expr": "answers.Q_CP_SYNCOPE == 'yes'", "label": "Syncope", "severity": "HARD", "action": "ER_SEND", "immediate_actions": "Cardiac monitoring", "rationale": "Syncope with chest pain suggests hemodynamic instability" },
+      { "rf_id": "RF_CP_DIAPHORESIS", "trigger_expr": "answers.Q_CP_DIAPHORESIS == 'yes'", "label": "Diaphoresis", "severity": "HARD", "action": "ER_SEND", "immediate_actions": "Evaluate for ACS", "rationale": "Diaphoresis with chest pain is classic ACS presentation" }
+    ]
+  },
+  "RF_PACK_NEURO": {
+    "applies_to_cc_ids": ["headache", "dizziness"],
+    "rules": [
+      { "rf_id": "RF_NEURO_DEFICIT", "trigger_expr": "answers.Q_HA_NEURO_DEFICIT == 'yes'", "label": "Focal neurologic deficit", "severity": "HARD", "action": "ER_SEND", "immediate_actions": "Call 911; stroke alert", "rationale": "Focal deficit suggests stroke or intracranial lesion" },
+      { "rf_id": "RF_NEURO_SEIZURE", "trigger_expr": "answers.Q_HA_SEIZURE == 'yes'", "label": "Seizure", "severity": "HARD", "action": "ER_SEND", "immediate_actions": "Seizure precautions; call 911", "rationale": "New seizure with headache suggests ICH or mass lesion" }
+    ]
+  },
+  "RF_PACK_DERM": {
+    "applies_to_cc_ids": ["derm_rash"],
+    "rules": [
+      { "rf_id": "RF_DERM_MUCOSAL", "trigger_expr": "answers.Q_RASH_MUCOSAL == 'yes'", "label": "Mucosal involvement", "severity": "SOFT", "action": "ESCALATE", "immediate_actions": "Evaluate for SJS/TEN", "rationale": "Mucosal involvement with rash raises concern for Stevens-Johnson syndrome" },
+      { "rf_id": "RF_DERM_PAIN", "trigger_expr": "answers.Q_RASH_PAIN_OVER_ITCH == 'yes'", "label": "Pain predominant over itch", "severity": "SOFT", "action": "ESCALATE", "immediate_actions": "Evaluate for cellulitis or necrotizing fasciitis", "rationale": "Painful rash may indicate deeper infection" }
+    ]
+  }
+}
