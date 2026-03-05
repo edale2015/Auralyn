@@ -66,7 +66,7 @@ A data-driven system for safely "waking up" inert differential CSR stubs with re
 
 - **ensure-profile-rows** (`scripts/ensure-profile-rows.ts`): Creates missing CSR stub rows for profile activation targets. Usage: `npx tsx scripts/ensure-profile-rows.ts <cc_id> <PROFILE_ID> [--dry-run]`
 - **apply-profile-pack** (`scripts/apply-profile-pack.ts`): Activates targeted CSR stubs by updating WHEN_EXPR, POINTS, and EVIDENCE_LABEL. Also ensures DXP tier rows exist. Matches by RULE_ID pattern (`CSR_<CCID>_DX_<TOKEN>`). Usage: `npx tsx scripts/apply-profile-pack.ts <cc_id> <PROFILE_ID> [--dry-run]`
-- **bulk applier** (`scripts/apply-profile-pack-bulk.ts`): Reads all CSVs once, plans all changes in-memory, writes once. Supports `--dry-run`, `--continue-on-fail`, `--only-profile <ID>`, `--cc <id>`, `--list`, `--summary-json <path>`. Usage: `npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv [flags]`
+- **bulk applier** (`scripts/apply-profile-pack-bulk.ts`): Reads all CSVs once, plans all changes in-memory, writes once. Supports `--dry-run`, `--continue-on-fail`, `--only-profile <ID>`, `--cc <id>`, `--list`, `--summary-json <path>`. Usage: `npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv [flags]`. Includes transaction backups (`_tx_backups/<RUN_ID>/`), atomic writes (tmp+rename), `--validate-cmd <cmd>` for post-write validation with auto-rollback on failure, `--no-auto-rollback`, and `--rollback <RUN_ID>` for manual restore. `--parallel <N>` accepted for future concurrency.
 
 Currently 3 profiles defined: `PULM_COUGH_V1` (cough), `ENT_SINUS_V1` (sinus_pressure), `CARD_CP_V1` (chest_pain). All idempotent. Gate-prod 8/8 green after activation.
 

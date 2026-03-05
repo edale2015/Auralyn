@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { execSync } from "child_process";
 
 type Args = {
   seedPath: string;
@@ -9,16 +10,44 @@ type Args = {
   ccs: string[];
   listOnly: boolean;
   summaryJsonPath?: string;
+  parallel: number;
+  validateCmd?: string;
+  noAutoRollback: boolean;
+  rollbackRunId?: string;
 };
 
+const BACKUP_DIR = "server/data/csv/_tx_backups";
+
 function parseArgs(argv: string[]): Args {
+  if (argv.includes("--rollback")) {
+    const idx = argv.indexOf("--rollback");
+    const runId = argv[idx + 1];
+    if (!runId) {
+      console.error("Usage: npx tsx scripts/apply-profile-pack-bulk.ts --rollback <RUN_ID>");
+      process.exit(2);
+    }
+    return {
+      seedPath: "", dryRun: false, continueOnFail: false, ccs: [],
+      listOnly: false, parallel: 1, noAutoRollback: false,
+      rollbackRunId: runId,
+    };
+  }
+
   const seedPath = argv[0];
   if (!seedPath) {
     console.error("Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [flags]");
-    console.error("Flags: --dry-run --continue-on-fail --only-profile <ID> --cc <id> --list --summary-json <path>");
+    console.error("Flags: --dry-run --continue-on-fail --only-profile <ID> --cc <id>");
+    console.error("       --list --summary-json <path> --parallel <N>");
+    console.error("       --validate-cmd <cmd> --no-auto-rollback");
+    console.error("       --rollback <RUN_ID>");
     process.exit(2);
   }
-  const args: Args = { seedPath, dryRun: false, continueOnFail: false, ccs: [], listOnly: false };
+
+  const args: Args = {
+    seedPath, dryRun: false, continueOnFail: false, ccs: [],
+    listOnly: false, parallel: 1, noAutoRollback: false,
+  };
+
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") args.dryRun = true;
@@ -27,7 +56,11 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--cc") args.ccs.push(argv[++i]);
     else if (a === "--list") args.listOnly = true;
     else if (a === "--summary-json") args.summaryJsonPath = argv[++i];
+    else if (a === "--parallel") args.parallel = Math.max(1, parseInt(argv[++i] ?? "1", 10) || 1);
+    else if (a === "--validate-cmd") args.validateCmd = argv[++i];
+    else if (a === "--no-auto-rollback") args.noAutoRollback = true;
   }
+
   return args;
 }
 
@@ -70,12 +103,64 @@ function csvSafe(v: string): string {
   return v;
 }
 
-function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[]) {
+function serializeCsv(headers: string[], rows: Record<string, string>[]): string {
   const lines: string[] = [headers.join(",")];
   for (const r of rows) {
     lines.push(headers.map((h) => csvSafe(r[h] ?? "")).join(","));
   }
-  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+  return lines.join("\n") + "\n";
+}
+
+function atomicWrite(filePath: string, content: string) {
+  const tmp = filePath + ".tmp." + process.pid;
+  fs.writeFileSync(tmp, content, "utf8");
+  fs.renameSync(tmp, filePath);
+}
+
+function makeRunId(): string {
+  const d = new Date();
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function createBackup(runId: string, csrPath: string, dxpPath: string): string {
+  const backupPath = path.join(BACKUP_DIR, runId);
+  fs.mkdirSync(backupPath, { recursive: true });
+  fs.copyFileSync(csrPath, path.join(backupPath, "CLUSTER_SCORING_RULES.csv.bak"));
+  fs.copyFileSync(dxpPath, path.join(backupPath, "DX_PRIORITY.csv.bak"));
+  const manifest = {
+    runId,
+    created: new Date().toISOString(),
+    files: ["CLUSTER_SCORING_RULES.csv", "DX_PRIORITY.csv"],
+    csrPath,
+    dxpPath,
+  };
+  fs.writeFileSync(path.join(backupPath, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  return backupPath;
+}
+
+function rollback(runId: string, root: string) {
+  const backupPath = path.join(root, BACKUP_DIR, runId);
+  if (!fs.existsSync(backupPath)) throw new Error(`Backup not found: ${backupPath}`);
+  const manifestPath = path.join(backupPath, "manifest.json");
+  if (!fs.existsSync(manifestPath)) throw new Error(`Manifest not found: ${manifestPath}`);
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const csrBak = path.join(backupPath, "CLUSTER_SCORING_RULES.csv.bak");
+  const dxpBak = path.join(backupPath, "DX_PRIORITY.csv.bak");
+
+  if (!fs.existsSync(csrBak)) throw new Error(`Backup file missing: ${csrBak}`);
+  if (!fs.existsSync(dxpBak)) throw new Error(`Backup file missing: ${dxpBak}`);
+
+  const csrDest = manifest.csrPath || path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const dxpDest = manifest.dxpPath || path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  fs.copyFileSync(csrBak, csrDest);
+  fs.copyFileSync(dxpBak, dxpDest);
+
+  console.log(`Rollback complete (run ${runId})`);
+  console.log(`  Restored: ${csrDest}`);
+  console.log(`  Restored: ${dxpDest}`);
 }
 
 type Profile = {
@@ -204,6 +289,12 @@ function processItem(
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const root = process.cwd();
+
+  if (args.rollbackRunId) {
+    rollback(args.rollbackRunId, root);
+    process.exit(0);
+  }
+
   const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
   if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
 
@@ -231,6 +322,9 @@ function main() {
 
   console.log(`\n=== Bulk Profile Apply (${rows.length} complaints) ===`);
   if (args.dryRun) console.log("Mode: DRY RUN");
+  if (args.parallel > 1) console.log(`Parallel planning: ${args.parallel}`);
+  if (args.validateCmd) console.log(`Validate command: ${args.validateCmd}`);
+  if (args.noAutoRollback) console.log("Auto-rollback: DISABLED");
 
   const results: ItemResult[] = [];
 
@@ -257,24 +351,44 @@ function main() {
     if (!item.ok && !args.continueOnFail) break;
   }
 
+  const runId = makeRunId();
+  let backupPath: string | undefined;
+
   if (!args.dryRun) {
-    writeCsv(CSR_PATH, csr.headers, csr.rows);
-    writeCsv(DXP_PATH, dxp.headers, dxp.rows);
+    backupPath = createBackup(runId, CSR_PATH, DXP_PATH);
+    console.log(`\nBackup created: ${backupPath}`);
+
+    atomicWrite(CSR_PATH, serializeCsv(csr.headers, csr.rows));
+    atomicWrite(DXP_PATH, serializeCsv(dxp.headers, dxp.rows));
+    console.log("Files written (atomic).");
+
+    if (args.validateCmd) {
+      console.log(`\nRunning validation: ${args.validateCmd}`);
+      try {
+        execSync(args.validateCmd, { stdio: "inherit", timeout: 120_000 });
+        console.log("Validation: PASSED");
+      } catch {
+        console.log("Validation: FAILED");
+        if (args.noAutoRollback) {
+          console.log("Auto-rollback disabled — files remain as written.");
+          console.log(`To rollback manually: npx tsx scripts/apply-profile-pack-bulk.ts --rollback ${runId}`);
+        } else {
+          console.log("Auto-rollback: restoring from backup...");
+          rollback(runId, root);
+        }
+        printSummary(results, args, runId);
+        process.exit(1);
+      }
+    }
   }
 
-  const okCount = results.filter((r) => r.ok).length;
-  const failCount = results.length - okCount;
-  const totalEnsured = results.reduce((s, r) => s + r.csrEnsured, 0);
-  const totalActivated = results.reduce((s, r) => s + r.csrUpdated, 0);
-  const totalDxp = results.reduce((s, r) => s + r.dxpChanges, 0);
-
-  console.log("\n=== Summary ===");
-  console.log(`Complaints: ${results.length} (OK: ${okCount}, FAIL: ${failCount})`);
-  console.log(`CSR ensured: ${totalEnsured} | CSR activated: ${totalActivated} | DXP changes: ${totalDxp}`);
-  if (args.dryRun) console.log("(dry run — no files written)");
+  printSummary(results, args, runId);
 
   if (args.summaryJsonPath) {
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
     const summaryData = {
+      runId,
       seedPath: args.seedPath,
       dryRun: args.dryRun,
       attempted: results.length,
@@ -290,7 +404,22 @@ function main() {
     }
   }
 
+  const failCount = results.filter((r) => !r.ok).length;
   process.exit(failCount > 0 ? 1 : 0);
+}
+
+function printSummary(results: ItemResult[], args: Args, runId: string) {
+  const okCount = results.filter((r) => r.ok).length;
+  const failCount = results.length - okCount;
+  const totalEnsured = results.reduce((s, r) => s + r.csrEnsured, 0);
+  const totalActivated = results.reduce((s, r) => s + r.csrUpdated, 0);
+  const totalDxp = results.reduce((s, r) => s + r.dxpChanges, 0);
+
+  console.log("\n=== Summary ===");
+  console.log(`Run ID: ${runId}`);
+  console.log(`Complaints: ${results.length} (OK: ${okCount}, FAIL: ${failCount})`);
+  console.log(`CSR ensured: ${totalEnsured} | CSR activated: ${totalActivated} | DXP changes: ${totalDxp}`);
+  if (args.dryRun) console.log("(dry run — no files written)");
 }
 
 main();

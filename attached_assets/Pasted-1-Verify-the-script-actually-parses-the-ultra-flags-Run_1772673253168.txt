@@ -1,0 +1,184 @@
+1) Verify the script actually parses the ultra flags
+
+Run help-ish probes by forcing behavior:
+
+A) --list should print plan and exit without touching files
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --list
+echo $?
+
+Expected:
+
+prints the filtered rows as cc -> profile
+
+exit code 0
+
+no backup dir created
+
+no CSV timestamps change
+
+B) Filters must work
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --list --cc sinus_pressure
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --list --only-profile ENT_SINUS_V1
+
+Expected: fewer rows listed.
+
+C) --parallel must be accepted (no “unknown flag” crash)
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --dry-run --parallel 12
+
+Expected: it runs and prints “parallel planning: 12” (or similar).
+
+2) Verify “transaction backups” are real
+A) Ensure backup directory is created on a real run
+
+Run a real apply on one complaint that produces 0 changes (your current state is perfect for this):
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --summary-json scripts/profile_apply_runs/check.json
+
+Now check backups:
+
+ls -lah server/data/csv/_tx_backups
+
+Expected:
+
+at least one new folder like 20260304_093112/
+
+Check its contents:
+
+ls -lah server/data/csv/_tx_backups/* | head
+
+Inside the newest run folder you should see:
+
+CLUSTER_SCORING_RULES.csv.bak
+
+DX_PRIORITY.csv.bak
+
+manifest.json
+
+Verify manifest references the run:
+
+cat server/data/csv/_tx_backups/<RUN_ID>/manifest.json | head -n 40
+3) Verify rollback actually restores files
+
+This is the most convincing proof because it changes state in a controlled way.
+
+A) Make a tiny reversible “damage”
+
+Temporarily edit one CSV (fastest is DX_PRIORITY) and change one number, save.
+
+Then run rollback:
+
+npx tsx scripts/apply-profile-pack-bulk.ts --rollback <RUN_ID>
+
+Expected:
+
+it prints “Rollback complete”
+
+the edited value is back to the backed-up value
+
+If you want a clean “no manual edits” rollback test instead:
+
+Duplicate DX_PRIORITY.csv somewhere
+
+Change the original
+
+Rollback
+
+Diff the restored file vs the copy
+
+cp server/data/csv/DX_PRIORITY.csv /tmp/DX_PRIORITY.before
+# edit DX_PRIORITY.csv (change one digit)
+npx tsx scripts/apply-profile-pack-bulk.ts --rollback <RUN_ID>
+diff -u /tmp/DX_PRIORITY.before server/data/csv/DX_PRIORITY.csv | head
+
+Expected: no diff.
+
+4) Verify validation + auto-rollback triggers on failure
+
+Force validation to fail safely:
+
+A) Run with a validator that always fails
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --validate-cmd "exit 1"
+echo $?
+
+Expected:
+
+It should create a backup run folder
+
+It should write, then say validation failed
+
+It should say auto-rollback
+
+Exit code should be 1
+
+Then confirm the files match backup after rollback:
+
+# find the newest backup run id
+ls -1t server/data/csv/_tx_backups | head -n 1
+# compare restored file to its backup
+RUN_ID=$(ls -1t server/data/csv/_tx_backups | head -n 1)
+diff -u server/data/csv/DX_PRIORITY.csv server/data/csv/_tx_backups/$RUN_ID/DX_PRIORITY.csv.bak | head
+diff -u server/data/csv/CLUSTER_SCORING_RULES.csv server/data/csv/_tx_backups/$RUN_ID/CLUSTER_SCORING_RULES.csv.bak | head
+
+Expected: no diff output (files identical).
+
+B) Verify --no-auto-rollback really disables rollback
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --validate-cmd "exit 1" --no-auto-rollback
+echo $?
+
+Expected:
+
+it prints “auto-rollback disabled”
+
+exit 1
+
+files will remain as written (so only do this when you’re ready to rollback manually using --rollback)
+
+5) Verify “belt and suspenders” atomic write exists
+
+Your ultra script should be writing temp files then renaming.
+
+Easiest proof:
+
+Run once with --no-atomic and once without, and confirm both paths work and don’t crash.
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --dry-run
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --dry-run --no-atomic
+
+If you enabled --keep-prev, you can also verify the .prev.<runId> files appear:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --keep-prev
+ls -lah server/data/csv | grep "\.prev\."
+
+Expected: files like:
+
+CLUSTER_SCORING_RULES.csv.prev.<runId>
+
+DX_PRIORITY.csv.prev.<runId>
+
+6) Confirm idempotency the “real” way: diffs
+
+After a clean run, do:
+
+git diff -- server/data/csv/CLUSTER_SCORING_RULES.csv server/data/csv/DX_PRIORITY.csv
+
+Expected: no changes.
+
+Or file checksum comparison:
+
+shasum server/data/csv/CLUSTER_SCORING_RULES.csv server/data/csv/DX_PRIORITY.csv
+# run script again
+shasum server/data/csv/CLUSTER_SCORING_RULES.csv server/data/csv/DX_PRIORITY.csv
+
+Expected: identical hashes.
+
+The fastest single verification sequence
+
+If you only do one sequence, do this:
+
+--validate-cmd "exit 1" to force failure
+
+confirm backup created + rollback ran
+
+diff current files vs .bak files (must match)
+
+That proves: backup + validation + rollback + single-commit write path are all real.
