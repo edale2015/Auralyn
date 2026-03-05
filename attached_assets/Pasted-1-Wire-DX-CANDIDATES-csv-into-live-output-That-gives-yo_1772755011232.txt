@@ -1,0 +1,92 @@
+1) Wire DX_CANDIDATES.csv into live output
+
+That gives you immediate user-facing value in Telegram.
+
+Target files:
+
+server/services/complaintConfigLoader.ts
+
+server/engines/genericComplaintEngineV1.ts
+
+Goal:
+
+load DX_CANDIDATES.csv into ComplaintConfig
+
+expose top 3–5 ranked labels as DX_LIST
+
+let Telegram render “Likely causes” automatically from the existing template
+
+This is the highest-value next move because the data is already generated and waiting backstage.
+
+2) Bulk activate the 54 missing family stubs
+
+Your coverage report is already pointing a flashlight at them.
+
+Run:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --continue-on-fail
+
+That should:
+
+ensure missing CSR rows
+
+apply the family profiles
+
+validate
+
+rollback if broken
+
+Then rerun:
+
+npx tsx scripts/coverage-report.ts
+npx tsx scripts/lint-profile-packs.ts
+npm run abi:complaints
+npm test
+
+What you want to see:
+
+PROFILE_TARGETS_MISSING_CSR drops sharply
+
+inert rows become active where expected
+
+3) Add DX_CANDIDATES to the loader cache contract
+
+Once wired, make sure it is treated like the other core CSVs:
+
+cached
+
+mtime-aware
+
+complaint-scoped
+
+That keeps Telegram, harness, and future web UI all pulling from the same ranked diagnosis source.
+
+4) Then expand only the highest-yield families first
+
+Don’t activate all 12 families blindly. Do the ones with the biggest clinical payoff first:
+
+GI_ABD_V1
+
+GU_DYSURIA_V1
+
+NEURO_HA_V1
+
+ENT_ST_V1
+
+Those four complaint families add a lot of urgent-care value quickly.
+
+Best immediate sequence
+# activate family targets
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --continue-on-fail
+
+# verify coverage shrinks
+npx tsx scripts/coverage-report.ts
+
+# regenerate diagnosis candidates from newly active CSR rows
+npx tsx scripts/generate-dx-candidates.ts
+
+# then wire loader + engine output
+npm test
+npm run abi:complaints
+
+The cleanest next deliverable is still the same one: wire DX_CANDIDATES.csv into complaintConfigLoader.ts and genericComplaintEngineV1.ts so Telegram starts showing ranked likely causes instead of static or sparse diagnosis lists.

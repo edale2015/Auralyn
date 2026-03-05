@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { getTable, getTableFiltered } from "../data/registry";
 import {
   assertCoreQuestionsNotCorrupt,
@@ -80,6 +82,17 @@ export interface ClusterScoringRule {
   evidenceLabel: string;
 }
 
+export interface DxCandidateRow {
+  CC_ID: string;
+  DX_ID: string;
+  DX_LABEL: string;
+  BEST_CLUSTER_ID: string;
+  BASE_POINTS: number;
+  CLUSTER_PRIORITY: number;
+  BASE_SCORE: number;
+  RANK: number;
+}
+
 export interface ComplaintConfig {
   registry: ComplaintRegistryEntry;
   coreQuestions: CoreQuestion[];
@@ -88,6 +101,7 @@ export interface ComplaintConfig {
   dispositionRules: DispositionRule[];
   outputTemplates: OutputTemplate[];
   clusterScoringRules: ClusterScoringRule[];
+  dxCandidates: DxCandidateRow[];
 }
 
 interface CachedConfig {
@@ -338,6 +352,86 @@ export function validateComplaintBundle(cfg: ComplaintConfig): BundleIssue[] {
   return issues;
 }
 
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+const DX_CANDIDATES_PATH = path.join(process.cwd(), "server", "data", "csv", "DX_CANDIDATES.csv");
+let _dxCandidatesCache: Map<string, DxCandidateRow[]> | null = null;
+let _dxCandidatesMtimeMs: number | null = null;
+
+function loadDxCandidatesTable(): Map<string, DxCandidateRow[]> {
+  if (!fs.existsSync(DX_CANDIDATES_PATH)) return new Map();
+
+  const stat = fs.statSync(DX_CANDIDATES_PATH);
+  if (_dxCandidatesCache && _dxCandidatesMtimeMs === stat.mtimeMs) return _dxCandidatesCache;
+
+  const raw = fs.readFileSync(DX_CANDIDATES_PATH, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return new Map();
+
+  const headers = splitCsvLine(lines[0]);
+  const idx = (name: string) => headers.indexOf(name);
+
+  const iCC = idx("CC_ID");
+  const iDxId = idx("DX_ID");
+  const iDxLabel = idx("DX_LABEL");
+  const iCl = idx("BEST_CLUSTER_ID");
+  const iPts = idx("BASE_POINTS");
+  const iPr = idx("CLUSTER_PRIORITY");
+  const iScore = idx("BASE_SCORE");
+  const iRank = idx("RANK");
+
+  if ([iCC, iDxId, iDxLabel, iCl, iPts, iPr, iScore, iRank].some((x) => x < 0)) {
+    console.warn("[DX_CANDIDATES] Missing expected headers:", headers.join(","));
+    return new Map();
+  }
+
+  const out = new Map<string, DxCandidateRow[]>();
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[iCC] ?? "").trim();
+    if (!cc) continue;
+
+    const row: DxCandidateRow = {
+      CC_ID: cc,
+      DX_ID: (cols[iDxId] ?? "").trim(),
+      DX_LABEL: (cols[iDxLabel] ?? "").trim(),
+      BEST_CLUSTER_ID: (cols[iCl] ?? "").trim(),
+      BASE_POINTS: Number((cols[iPts] ?? "0").trim()) || 0,
+      CLUSTER_PRIORITY: Number((cols[iPr] ?? "0").trim()) || 0,
+      BASE_SCORE: Number((cols[iScore] ?? "0").trim()) || 0,
+      RANK: Number((cols[iRank] ?? "0").trim()) || 0,
+    };
+
+    if (!out.has(cc)) out.set(cc, []);
+    out.get(cc)!.push(row);
+  }
+
+  for (const [, arr] of out.entries()) {
+    arr.sort((a, b) => (a.RANK - b.RANK) || (b.BASE_SCORE - a.BASE_SCORE));
+  }
+
+  _dxCandidatesCache = out;
+  _dxCandidatesMtimeMs = stat.mtimeMs;
+  return out;
+}
+
 export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig | null> {
   const key = ccId.toLowerCase().trim().replace(/[\s-]+/g, "_");
   const now = Date.now();
@@ -397,6 +491,9 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     .map(rowToClusterScoringRule)
     .filter((r): r is ClusterScoringRule => r !== null && r.ccId === canonicalKey);
 
+  const dxCandidatesByCc = loadDxCandidatesTable();
+  const dxCandidates = dxCandidatesByCc.get(canonicalKey) ?? [];
+
   const config: ComplaintConfig = {
     registry: regEntry,
     coreQuestions,
@@ -405,6 +502,7 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     dispositionRules,
     outputTemplates,
     clusterScoringRules,
+    dxCandidates,
   };
 
   const issues = validateComplaintBundle(config);

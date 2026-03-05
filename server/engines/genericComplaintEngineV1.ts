@@ -6,6 +6,7 @@ import type {
   RedFlagRule,
   DispositionRule,
   OutputTemplate,
+  DxCandidateRow,
 } from "../services/complaintConfigLoader";
 import { loadComplaintConfig } from "../services/complaintConfigLoader";
 import { evaluateExpr } from "../services/exprEval";
@@ -279,6 +280,16 @@ function compositeScoreKey(ccId: string): string {
   return map[ccId] || ccId.replace(/[_-]/g, "_") + "_score";
 }
 
+function pickLikelyDxFromCandidates(cfg: ComplaintConfig, max = 5): Array<{ id: string; label: string }> {
+  const cands = cfg.dxCandidates ?? [];
+  return cands
+    .slice(0, max)
+    .map((c) => ({
+      id: c.DX_ID,
+      label: c.DX_LABEL,
+    }));
+}
+
 export async function runGenericComplaintV1(
   state: CaseState,
   ccId: string,
@@ -439,6 +450,12 @@ export async function runGenericComplaintV1(
     }
   });
   updated.diagnosisCandidates = dxCandidates.slice(0, 6);
+
+  const likelyDx = pickLikelyDxFromCandidates(config, 5);
+  if (likelyDx.length > 0) {
+    updated.likelyDx = likelyDx;
+    updated.dxListText = likelyDx.map((d: { id: string; label: string }) => `• ${d.label}`).join("\n");
+  }
 
   const confidence =
     rfResult.gateResult === "ER_SEND" ? "HIGH" :

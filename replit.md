@@ -68,7 +68,21 @@ A data-driven system for safely "waking up" inert differential CSR stubs with re
 - **apply-profile-pack** (`scripts/apply-profile-pack.ts`): Activates targeted CSR stubs by updating WHEN_EXPR, POINTS, and EVIDENCE_LABEL. Also ensures DXP tier rows exist. Matches by RULE_ID pattern (`CSR_<CCID>_DX_<TOKEN>`). Usage: `npx tsx scripts/apply-profile-pack.ts <cc_id> <PROFILE_ID> [--dry-run]`
 - **bulk applier** (`scripts/apply-profile-pack-bulk.ts`): Reads all CSVs once, plans all changes in-memory, writes once. Supports `--dry-run`, `--continue-on-fail`, `--only-profile <ID>`, `--cc <id>`, `--list`, `--summary-json <path>`. Usage: `npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv [flags]`. Includes transaction backups (`_tx_backups/<RUN_ID>/`), atomic writes (tmp+rename), `--validate-cmd <cmd>` for post-write validation with auto-rollback on failure, `--no-auto-rollback`, and `--rollback <RUN_ID>` for manual restore. `--parallel <N>` accepted for future concurrency.
 
-Currently 3 profiles defined: `PULM_COUGH_V1` (cough), `ENT_SINUS_V1` (sinus_pressure), `CARD_CP_V1` (chest_pain). All idempotent. Gate-prod 8/8 green after activation.
+Currently 18 profiles defined across 12 system families (ENT, PULM, CARD, GI, GU, NEURO, DERM, MSK, PSYCH, ENDO). All idempotent. 1505 golden tests passing after activation.
+
+### Family Pack Generator
+Generates profile packs and apply-seed rows from a family seed CSV (`data/complaints/family_seed_v1.csv`). Usage: `npx tsx scripts/generate-family-packs.ts data/complaints/family_seed_v1.csv [--dry-run] [--emit-questions <out.csv>]`. Seed CSV columns: FAMILY_ID, PROFILE_ID, SYSTEM, CLUSTER_PREFIX, CC_IDS, DIFFERENTIALS_PRIMARY/SECONDARY/BENIGN, QUESTIONS. Idempotent — skips existing profile IDs.
+
+### Red Flag Packs
+Data-driven red flag rule packs in `data/complaints/red_flag_packs.json`. Applied by `scripts/apply-red-flag-packs.ts [--dry-run]`. Each pack specifies `applies_to_cc_ids` and an array of rules with `rf_id`, `trigger_expr`, `label`, `severity`, `action`, `immediate_actions`, `rationale`. Idempotent — skips existing RF_ID+CC_ID pairs. Currently 3 packs: RF_PACK_CHEST_PAIN, RF_PACK_NEURO, RF_PACK_DERM.
+
+### DX Candidates Engine
+Generates ranked diagnostic candidates from CSR + DXP data. Script: `scripts/generate-dx-candidates.ts`. Output: `server/data/csv/DX_CANDIDATES.csv` (596 rows across 73 complaints). Loaded by `complaintConfigLoader.ts` into `ComplaintConfig.dxCandidates` with file-mtime caching. Used by `genericComplaintEngineV1.ts` to populate `likelyDx` and `dxListText` on CaseState for template rendering.
+
+### Profile Quality Tooling
+- **Coverage Report** (`scripts/coverage-report.ts`): Reports CSR active/inert counts, profile target status, and missing CSR rows per complaint. Output: `data/complaints/reports/coverage_report.csv`. Supports `--cc <id>` filter and `--out <path>`.
+- **Profile Pack Linter** (`scripts/lint-profile-packs.ts`): Validates all profiles for missing fields, duplicate dx entries, non-numeric points, and WHEN_EXPR tokens not found in CORE_QUESTIONS. Exit code 1 on errors.
+- **Question Coverage** (`scripts/ensure-profile-questions.ts`): Detects Q_IDs referenced in profile WHEN_EXPRs missing from CORE_QUESTIONS. Reports suggestions; `--apply` auto-adds them.
 
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, Bundle ABI Validator (`scripts/validate-complaint-bundles.ts`), and a comprehensive Gate-Prod Pipeline (8 gates) for pre-deployment validation.

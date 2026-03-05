@@ -1,0 +1,164 @@
+1) complaintConfigLoader.ts: load DX_CANDIDATES and attach to config
+A) Add a new type (near other config types)
+export type DxCandidateRow = {
+  CC_ID: string;
+  DX_ID: string;
+  DX_LABEL: string;
+  BEST_CLUSTER_ID: string;
+  BASE_POINTS: number;
+  CLUSTER_PRIORITY: number;
+  BASE_SCORE: number;
+  RANK: number;
+};
+B) Add a cached loader (near your other CSV table loaders)
+const DX_CANDIDATES_PATH = path.join(process.cwd(), "server", "data", "csv", "DX_CANDIDATES.csv");
+
+let _dxCandidatesCache: Map<string, DxCandidateRow[]> | null = null;
+let _dxCandidatesMtimeMs: number | null = null;
+
+function loadDxCandidatesTable(): Map<string, DxCandidateRow[]> {
+  if (!fs.existsSync(DX_CANDIDATES_PATH)) return new Map();
+
+  const stat = fs.statSync(DX_CANDIDATES_PATH);
+  if (_dxCandidatesCache && _dxCandidatesMtimeMs === stat.mtimeMs) return _dxCandidatesCache;
+
+  const raw = fs.readFileSync(DX_CANDIDATES_PATH, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return new Map();
+
+  const headers = splitCsvLine(lines[0]);
+  const idx = (name: string) => headers.indexOf(name);
+
+  const iCC = idx("CC_ID");
+  const iDxId = idx("DX_ID");
+  const iDxLabel = idx("DX_LABEL");
+  const iCl = idx("BEST_CLUSTER_ID");
+  const iPts = idx("BASE_POINTS");
+  const iPr = idx("CLUSTER_PRIORITY");
+  const iScore = idx("BASE_SCORE");
+  const iRank = idx("RANK");
+
+  if ([iCC, iDxId, iDxLabel, iCl, iPts, iPr, iScore, iRank].some((x) => x < 0)) {
+    console.warn("[DX_CANDIDATES] Missing expected headers:", headers.join(","));
+    return new Map();
+  }
+
+  const out = new Map<string, DxCandidateRow[]>();
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[iCC] ?? "").trim();
+    if (!cc) continue;
+
+    const row: DxCandidateRow = {
+      CC_ID: cc,
+      DX_ID: (cols[iDxId] ?? "").trim(),
+      DX_LABEL: (cols[iDxLabel] ?? "").trim(),
+      BEST_CLUSTER_ID: (cols[iCl] ?? "").trim(),
+      BASE_POINTS: Number((cols[iPts] ?? "0").trim()) || 0,
+      CLUSTER_PRIORITY: Number((cols[iPr] ?? "0").trim()) || 0,
+      BASE_SCORE: Number((cols[iScore] ?? "0").trim()) || 0,
+      RANK: Number((cols[iRank] ?? "0").trim()) || 0,
+    };
+
+    if (!out.has(cc)) out.set(cc, []);
+    out.get(cc)!.push(row);
+  }
+
+  // sort by RANK then score
+  for (const [cc, arr] of out.entries()) {
+    arr.sort((a, b) => (a.RANK - b.RANK) || (b.BASE_SCORE - a.BASE_SCORE));
+    out.set(cc, arr);
+  }
+
+  _dxCandidatesCache = out;
+  _dxCandidatesMtimeMs = stat.mtimeMs;
+  return out;
+}
+C) Extend ComplaintConfig return object
+
+Where loadComplaintConfig(ccId) assembles the final config, add:
+
+const dxCandidatesByCc = loadDxCandidatesTable();
+const dxCandidates = dxCandidatesByCc.get(ccId) ?? [];
+
+and include in the returned object:
+
+dxCandidates,
+
+So the final ComplaintConfig now contains dxCandidates: DxCandidateRow[].
+
+2) genericComplaintEngineV1.ts: use candidates to form “Likely causes” list
+
+Somewhere after cluster scoring and final disposition is chosen (where you currently build the response payload), add:
+
+function pickLikelyDxFromCandidates(cfg: any, max = 5): Array<{ id: string; label: string }> {
+  const cands = (cfg.dxCandidates ?? []) as any[];
+  return cands
+    .slice(0, max)
+    .map((c) => ({
+      id: c.DX_ID ?? c.DX_ID,
+      label: c.DX_LABEL ?? c.DX_ID,
+    }));
+}
+
+Then, in the result object that you pass to templates / telegram, add:
+
+const likelyDx = pickLikelyDxFromCandidates(cfg, 5);
+
+// Ensure DX_LIST is present for template rendering
+const dxListHtml = likelyDx.length
+  ? likelyDx.map((d) => `• ${d.label}`).join("<br/>")
+  : "• (No ranked candidates yet)";
+
+result.render = {
+  ...(result.render ?? {}),
+  DX_LIST: dxListHtml,
+  LIKELY_DX: likelyDx, // structured (optional)
+};
+
+If you already have a render context object, just merge those keys in.
+
+Important: only do this if you don’t already have DX_LIST:
+
+if (!result.render?.DX_LIST) {
+  // set DX_LIST from candidates
+}
+
+So hardcoded dx lists (if any) can override.
+
+3) Telegram output: ensure template uses DX_LIST
+
+You said your OUTPUT_TEMPLATES.csv already includes something like:
+
+Possible Diagnoses:<br/>{{DX_LIST}}
+
+So if we populate DX_LIST, Telegram automatically gets the “Likely causes” list without any additional template edits.
+
+If your template uses a different token (e.g., {{DIAGNOSES}}), just set that instead or set both:
+
+result.render.DIAGNOSES = dxListHtml;
+result.render.DX_LIST = dxListHtml;
+Quick verification steps
+
+After you patch:
+
+Regenerate candidates (optional but quick):
+
+npx tsx scripts/generate-dx-candidates.ts
+
+Run a Telegram complaint that has candidates (e.g. cough):
+
+Expect to see “Possible Diagnoses” list populated.
+
+Unit/CI:
+
+npm test
+npm run abi:complaints
+One small refinement I recommend immediately
+
+Right now your DX candidates are ranked from CSR points × DXP priority. That’s good for a baseline.
+
+Next refinement (fast win): filter out any candidate whose CSR rule is still WHEN_EXPR=false or POINTS=0 if you want the list to reflect only “activated” diagnoses. (Optional, since you already set most rules active.)
+
+If you paste the section of complaintConfigLoader.ts where it loads tables and returns ComplaintConfig, I can tailor the exact insertion point and naming so it’s literally copy/paste without any refactor.
