@@ -61,6 +61,15 @@ A bulk complaint scaffolding tool (`scripts/generate-complaints.ts`) that genera
 
 A differentials accelerator (`scripts/generate-complaints-from-differentials.ts`) extends the base generator by reading a seed CSV with a DIFFERENTIALS column (semicolon-separated differential diagnoses). For each complaint it: (1) runs the base generator if missing, (2) appends differential-derived cluster scoring rules (inert stubs with `WHEN_EXPR=false`, 0 points) and DX_PRIORITY rows, (3) optionally emits golden test suggestion files. Usage: `npx tsx scripts/generate-complaints-from-differentials.ts data/complaints/differentials_seed.csv [--dry-run] [--no-golden]`. Seed CSV columns: COMPLAINT_KEY, SYSTEM, LABEL, ALIASES, DIFFERENTIALS.
 
+### Profile Pack System
+A data-driven system for safely "waking up" inert differential CSR stubs with real clinical WHEN_EXPRs. Profile packs are defined in `data/complaints/profile_packs.json`, each specifying a complaint's `cc_id`, `cluster_prefix`, and an `activate` array with `dx` (differential token matching RULE_ID), `when` (expression using `answers.Q_XX_YY` format), `points`, and `label`. Three scripts work together:
+
+- **ensure-profile-rows** (`scripts/ensure-profile-rows.ts`): Creates missing CSR stub rows for profile activation targets. Usage: `npx tsx scripts/ensure-profile-rows.ts <cc_id> <PROFILE_ID> [--dry-run]`
+- **apply-profile-pack** (`scripts/apply-profile-pack.ts`): Activates targeted CSR stubs by updating WHEN_EXPR, POINTS, and EVIDENCE_LABEL. Also ensures DXP tier rows exist. Matches by RULE_ID pattern (`CSR_<CCID>_DX_<TOKEN>`). Usage: `npx tsx scripts/apply-profile-pack.ts <cc_id> <PROFILE_ID> [--dry-run]`
+- **bulk applier** (`scripts/apply-profile-pack-bulk.ts`): Reads all CSVs once, plans all changes in-memory, writes once. Supports `--dry-run`, `--continue-on-fail`, `--only-profile <ID>`, `--cc <id>`, `--list`, `--summary-json <path>`. Usage: `npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv [flags]`
+
+Currently 3 profiles defined: `PULM_COUGH_V1` (cough), `ENT_SINUS_V1` (sinus_pressure), `CARD_CP_V1` (chest_pain). All idempotent. Gate-prod 8/8 green after activation.
+
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, Bundle ABI Validator (`scripts/validate-complaint-bundles.ts`), and a comprehensive Gate-Prod Pipeline (8 gates) for pre-deployment validation.
 

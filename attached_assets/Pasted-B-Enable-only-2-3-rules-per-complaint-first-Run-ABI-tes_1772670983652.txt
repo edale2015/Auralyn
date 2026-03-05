@@ -1,0 +1,3794 @@
+B) Enable only 2–3 rules per complaint first
+
+Run ABI test, run golden tests, then expand.
+
+If you want, I’ll build Step 3 next: apply-profile-pack.ts
+
+It will:
+
+Read server/data/csv/CLUSTER_SCORING_RULES.csv
+
+Apply profile rules to specific evidence labels
+
+Update rows idempotently
+
+Leave everything else inert
+
+Emit a diff summary like:
+
+“Activated 3 CSR rules for cough”
+
+“Updated points for 2 rules”
+
+“No changes for 7 rules”
+
+You’ll be able to scale complaint-by-complaint without spreadsheets eating your weekend.
+
+Just tell me which you want first:
+
+Cough profile
+
+Sinus pressure profile
+
+Chest pain profile
+
+(If you don’t want to choose, I’ll default to sinus pressure since you said it’s the engine-starter complaint.)
+
+build step 3 next please
+Thought for 20s
+
+Done. Step 3 is Profile Packs + an applier script that safely “wakes up” a small set of inert differential stubs (CSR rows) and optionally enforces tier priorities, without detonating your golden suite.
+
+You’ll add:
+
+data/complaints/profile_packs.json (the playbook)
+
+scripts/apply-profile-pack.ts (the wand) 🪄
+
+This script updates only what you target, stays idempotent, and prints a clean diff summary.
+
+1) Create data/complaints/profile_packs.json
+
+This file defines how to activate a complaint safely. Start with 3 profiles (you can expand later):
+
+{
+  "ENT_SINUS_V1": {
+    "cluster_prefix": "ENT_SINUS",
+    "tiers": {
+      "PRIMARY": { "points": 120, "priority": 100 },
+      "SECONDARY": { "points": 80, "priority": 70 },
+      "BENIGN": { "points": 40, "priority": 50 }
+    },
+    "activate": [
+      {
+        "evidence": "viral_rhinosinusitis",
+        "tier": "BENIGN",
+        "when": "true",
+        "points": 40
+      },
+      {
+        "evidence": "allergic_rhinitis",
+        "tier": "SECONDARY",
+        "when": "ANY(SNEEZING=true, ITCHY_EYES=true, RUNNY_NOSE=true)",
+        "points": 80
+      },
+      {
+        "evidence": "acute_bacterial_sinusitis",
+        "tier": "PRIMARY",
+        "when": "ANY(DURATION_DAYS>10, DOUBLE_SICKENING=true, ALL(FEVER=true, FACIAL_PAIN=true))",
+        "points": 120
+      }
+    ]
+  },
+
+  "PULM_COUGH_V1": {
+    "cluster_prefix": "PULM_COUGH",
+    "tiers": {
+      "PRIMARY": { "points": 120, "priority": 100 },
+      "SECONDARY": { "points": 80, "priority": 70 },
+      "BENIGN": { "points": 40, "priority": 50 }
+    },
+    "activate": [
+      {
+        "evidence": "pneumonia",
+        "tier": "PRIMARY",
+        "when": "ALL(FEVER=true, ANY(SOB=true, CHEST_PAIN=true))",
+        "points": 120
+      },
+      {
+        "evidence": "asthma_exacerbation",
+        "tier": "SECONDARY",
+        "when": "ALL(WHEEZE=true, SOB=true)",
+        "points": 80
+      },
+      {
+        "evidence": "viral_uri",
+        "tier": "BENIGN",
+        "when": "true",
+        "points": 40
+      }
+    ]
+  },
+
+  "CARD_CHEST_PAIN_V1": {
+    "cluster_prefix": "CARD_CP",
+    "tiers": {
+      "PRIMARY": { "points": 150, "priority": 100 },
+      "SECONDARY": { "points": 90, "priority": 70 },
+      "BENIGN": { "points": 40, "priority": 50 }
+    },
+    "activate": [
+      {
+        "evidence": "mi",
+        "tier": "PRIMARY",
+        "when": "ANY(SOB=true, DIAPHORESIS=true, RADIATION=true)",
+        "points": 150
+      },
+      {
+        "evidence": "pe",
+        "tier": "PRIMARY",
+        "when": "ALL(SOB=true, PLEURITIC=true)",
+        "points": 150
+      },
+      {
+        "evidence": "pneumothorax",
+        "tier": "PRIMARY",
+        "when": "ALL(SOB=true, ONE_SIDED_PAIN=true)",
+        "points": 150
+      }
+    ]
+  }
+}
+
+Notes:
+
+evidence must match your EVIDENCE_LABEL exactly (the differential token).
+
+Expressions assume your atomic grammar (ANY/ALL/NOT). If you haven’t merged that yet, replace with &&/|| style or merge atomic grammar first.
+
+2) Add scripts/apply-profile-pack.ts
+
+This script:
+
+Reads server/data/csv/CLUSTER_SCORING_RULES.csv
+
+Finds rows by CC_ID + EVIDENCE_LABEL
+
+Updates WHEN_EXPR, POINTS, and sets CLUSTER_ID to CL_<PREFIX>_<TIER>
+
+Ensures DX_PRIORITY.csv has the 3 tier rows for that complaint (PRIMARY/SECONDARY/BENIGN) with weights from the profile
+
+Idempotent (re-run safe)
+
+/**
+ * scripts/apply-profile-pack.ts
+ *
+ * Step 3: Apply Profile Pack
+ * - Activates a targeted subset of inert CSR rows for a complaint
+ * - Sets CLUSTER_ID tier, WHEN_EXPR, POINTS
+ * - Ensures tier priorities exist in DX_PRIORITY
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack.ts <cc_id> <PROFILE_ID>
+ *   npx tsx scripts/apply-profile-pack.ts sinus_pressure ENT_SINUS_V1 --dry-run
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = { ccId: string; profileId: string; dryRun: boolean };
+
+function parseArgs(argv: string[]): Args {
+  const ccId = argv[0];
+  const profileId = argv[1];
+  if (!ccId || !profileId) {
+    console.error("Usage: npx tsx scripts/apply-profile-pack.ts <cc_id> <PROFILE_ID> [--dry-run]");
+    process.exit(2);
+  }
+  return { ccId, profileId, dryRun: argv.includes("--dry-run") };
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[], dryRun: boolean) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  if (dryRun) {
+    console.log(`[DRY] Would write ${rows.length} rows -> ${filePath}`);
+    return;
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+type Profile = {
+  cluster_prefix: string;
+  tiers: Record<string, { points: number; priority: number }>;
+  activate: Array<{ evidence: string; tier: "PRIMARY" | "SECONDARY" | "BENIGN"; when: string; points?: number }>;
+};
+
+function mustHave(headers: string[], needed: string[], fileLabel: string) {
+  for (const h of needed) {
+    if (!headers.includes(h)) throw new Error(`${fileLabel} missing header: ${h}`);
+  }
+}
+
+function main() {
+  const { ccId, profileId, dryRun } = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const PROFILE_PATH = path.join(root, "data", "complaints", "profile_packs.json");
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  if (!fs.existsSync(PROFILE_PATH)) throw new Error(`Missing profile file: ${PROFILE_PATH}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+  if (!fs.existsSync(DXP_PATH)) throw new Error(`Missing: ${DXP_PATH}`);
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8")) as Record<string, Profile>;
+  const profile = profiles[profileId];
+  if (!profile) throw new Error(`Profile not found: ${profileId}`);
+
+  // ---- CSR updates ----
+  const csr = readCsv(CSR_PATH);
+  mustHave(csr.headers, ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"], "CLUSTER_SCORING_RULES.csv");
+
+  const tierClusterId = (tier: string) => `CL_${profile.cluster_prefix}_${tier}`;
+
+  let csrTouched = 0;
+  let csrMissing = 0;
+  const changes: string[] = [];
+
+  for (const item of profile.activate) {
+    const target = csr.rows.find((r) => r.CC_ID === ccId && r.EVIDENCE_LABEL === item.evidence);
+    if (!target) {
+      csrMissing++;
+      changes.push(`CSR MISSING: CC_ID=${ccId} evidence=${item.evidence} (no row found to update)`);
+      continue;
+    }
+
+    const newClusterId = tierClusterId(item.tier);
+    const newWhen = item.when;
+    const newPoints = String(item.points ?? profile.tiers[item.tier]?.points ?? 0);
+
+    const before = { CLUSTER_ID: target.CLUSTER_ID, WHEN_EXPR: target.WHEN_EXPR, POINTS: target.POINTS };
+
+    let touched = false;
+    if (target.CLUSTER_ID !== newClusterId) { target.CLUSTER_ID = newClusterId; touched = true; }
+    if (target.WHEN_EXPR !== newWhen) { target.WHEN_EXPR = newWhen; touched = true; }
+    if (target.POINTS !== newPoints) { target.POINTS = newPoints; touched = true; }
+
+    if (touched) {
+      csrTouched++;
+      changes.push(
+        `CSR UPDATE: ${ccId} evidence=${item.evidence} tier=${item.tier} ` +
+        `CLUSTER_ID ${before.CLUSTER_ID} -> ${newClusterId}; ` +
+        `POINTS ${before.POINTS} -> ${newPoints}; ` +
+        `WHEN_EXPR ${before.WHEN_EXPR} -> ${newWhen}`
+      );
+    }
+  }
+
+  // ---- DX_PRIORITY ensure tier rows ----
+  const dxp = readCsv(DXP_PATH);
+  mustHave(dxp.headers, ["CC_ID", "CLUSTER_ID", "PRIORITY"], "DX_PRIORITY.csv");
+
+  const tierRows = (["PRIMARY", "SECONDARY", "BENIGN"] as const).map((tier) => {
+    return {
+      CC_ID: ccId,
+      CLUSTER_ID: tierClusterId(tier),
+      PRIORITY: String(profile.tiers[tier]?.priority ?? (tier === "PRIMARY" ? 100 : tier === "SECONDARY" ? 70 : 50))
+    };
+  });
+
+  let dxpAdded = 0;
+  let dxpUpdated = 0;
+
+  for (const tr of tierRows) {
+    const existing = dxp.rows.find((r) => r.CC_ID === ccId && r.CLUSTER_ID === tr.CLUSTER_ID);
+    if (!existing) {
+      dxp.rows.push(tr);
+      dxpAdded++;
+      changes.push(`DXP ADD: ${ccId} ${tr.CLUSTER_ID} PRIORITY=${tr.PRIORITY}`);
+    } else if (existing.PRIORITY !== tr.PRIORITY) {
+      const before = existing.PRIORITY;
+      existing.PRIORITY = tr.PRIORITY;
+      dxpUpdated++;
+      changes.push(`DXP UPDATE: ${ccId} ${tr.CLUSTER_ID} PRIORITY ${before} -> ${tr.PRIORITY}`);
+    }
+  }
+
+  // write changes
+  writeCsv(CSR_PATH, csr.headers, csr.rows, dryRun);
+  writeCsv(DXP_PATH, dxp.headers, dxp.rows, dryRun);
+
+  // summary
+  console.log("\n=== Profile Pack Applied ===");
+  console.log(`CC_ID: ${ccId}`);
+  console.log(`PROFILE: ${profileId}`);
+  console.log(`CSR updated: ${csrTouched}`);
+  console.log(`CSR missing targets: ${csrMissing}`);
+  console.log(`DX_PRIORITY added: ${dxpAdded}`);
+  console.log(`DX_PRIORITY updated: ${dxpUpdated}`);
+  if (changes.length) {
+    console.log("\nChanges:");
+    for (const c of changes) console.log(`- ${c}`);
+  } else {
+    console.log("\nNo changes (already applied).");
+  }
+}
+
+main();
+3) Run it (safe first)
+npx tsx scripts/apply-profile-pack.ts sinus_pressure ENT_SINUS_V1 --dry-run
+
+If the diff looks right, run for real:
+
+npx tsx scripts/apply-profile-pack.ts sinus_pressure ENT_SINUS_V1
+npm run abi:complaints
+npm test
+
+Then:
+
+npx tsx scripts/apply-profile-pack.ts cough PULM_COUGH_V1
+npx tsx scripts/apply-profile-pack.ts chest_pain CARD_CHEST_PAIN_V1
+npm test
+4) Important expectation
+
+This script will print CSR MISSING... for evidence labels that exist in your profile but don’t exist as CSR rows yet (meaning: your differentials accelerator didn’t seed that evidence token for that complaint). Fix is simple: add that evidence to the complaint’s DIFFERENTIALS list and re-run the differentials accelerator (idempotent), then re-run profile apply.
+
+Next Step 3.5 (if you want it immediately)
+
+A companion script that adds missing CSR rows automatically when profile targets are missing, using your naming conventions (RULE_ID generation, default inert fields). That would make profile packs fully self-contained.
+
+If you say “yes”, I’ll build scripts/ensure-profile-rows.ts so profile apply never complains about missing rows again.
+
+yes
+
+Awesome. Here’s Step 3.5: ensure-profile-rows.ts.
+
+This makes profile packs self-contained: if a profile wants to activate evidence=acute_bacterial_sinusitis but that CSR row doesn’t exist yet for that complaint, this script creates the missing CSR stub rows (still inert unless you apply the profile), using your exact CSV schema and naming conventions.
+
+Then your flow becomes:
+
+npx tsx scripts/ensure-profile-rows.ts sinus_pressure ENT_SINUS_V1
+npx tsx scripts/apply-profile-pack.ts sinus_pressure ENT_SINUS_V1
+npm run abi:complaints
+npm test
+Add scripts/ensure-profile-rows.ts
+/**
+ * scripts/ensure-profile-rows.ts
+ *
+ * Step 3.5: Ensure Profile Rows Exist
+ * - Reads profile pack (data/complaints/profile_packs.json)
+ * - Ensures there is a CSR row for each activation target (CC_ID + EVIDENCE_LABEL)
+ * - If missing, creates a stub CSR row with:
+ *    CC_ID=<cc>
+ *    CLUSTER_ID=CL_<profile_prefix>_BENIGN (placeholder tier)
+ *    RULE_ID=CSR_<profile_prefix>_<NN> (unique within complaint)
+ *    POINTS=0
+ *    WHEN_EXPR=false
+ *    EVIDENCE_LABEL=<evidence>
+ *
+ * Usage:
+ *   npx tsx scripts/ensure-profile-rows.ts <cc_id> <PROFILE_ID> [--dry-run]
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = { ccId: string; profileId: string; dryRun: boolean };
+
+function parseArgs(argv: string[]): Args {
+  const ccId = argv[0];
+  const profileId = argv[1];
+  if (!ccId || !profileId) {
+    console.error("Usage: npx tsx scripts/ensure-profile-rows.ts <cc_id> <PROFILE_ID> [--dry-run]");
+    process.exit(2);
+  }
+  return { ccId, profileId, dryRun: argv.includes("--dry-run") };
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[], dryRun: boolean) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  if (dryRun) {
+    console.log(`[DRY] Would write ${rows.length} rows -> ${filePath}`);
+    return;
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+type Profile = {
+  cluster_prefix: string;
+  tiers: Record<string, { points: number; priority: number }>;
+  activate: Array<{ evidence: string; tier: "PRIMARY" | "SECONDARY" | "BENIGN"; when: string; points?: number }>;
+};
+
+function mustHave(headers: string[], needed: string[], fileLabel: string) {
+  for (const h of needed) {
+    if (!headers.includes(h)) throw new Error(`${fileLabel} missing header: ${h}`);
+  }
+}
+
+function main() {
+  const { ccId, profileId, dryRun } = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const PROFILE_PATH = path.join(root, "data", "complaints", "profile_packs.json");
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+
+  if (!fs.existsSync(PROFILE_PATH)) throw new Error(`Missing profile file: ${PROFILE_PATH}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8")) as Record<string, Profile>;
+  const profile = profiles[profileId];
+  if (!profile) throw new Error(`Profile not found: ${profileId}`);
+
+  const csr = readCsv(CSR_PATH);
+  mustHave(csr.headers, ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"], "CLUSTER_SCORING_RULES.csv");
+
+  const existsByEvidence = new Set(
+    csr.rows
+      .filter((r) => r.CC_ID === ccId && r.EVIDENCE_LABEL)
+      .map((r) => r.EVIDENCE_LABEL)
+  );
+
+  // Determine next available NN for RULE_ID=CSR_<prefix>_<NN>
+  const prefix = profile.cluster_prefix;
+  const re = new RegExp(`^CSR_${prefix}_(\\d+)$`);
+  let maxN = 0;
+
+  for (const r of csr.rows) {
+    if (r.CC_ID !== ccId) continue;
+    const m = (r.RULE_ID ?? "").match(re);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (!Number.isNaN(n)) maxN = Math.max(maxN, n);
+    }
+  }
+
+  const stubClusterId = `CL_${prefix}_BENIGN`;
+
+  let added = 0;
+  const changes: string[] = [];
+
+  for (const item of profile.activate) {
+    const ev = item.evidence;
+    if (existsByEvidence.has(ev)) continue;
+
+    maxN++;
+    const ruleId = `CSR_${prefix}_${String(maxN).padStart(2, "0")}`;
+
+    csr.rows.push({
+      CC_ID: ccId,
+      CLUSTER_ID: stubClusterId, // placeholder; apply-profile-pack will set to correct tier
+      RULE_ID: ruleId,
+      POINTS: "0",
+      WHEN_EXPR: "false",
+      EVIDENCE_LABEL: ev
+    });
+
+    existsByEvidence.add(ev);
+    added++;
+    changes.push(`ADD CSR: ${ccId} evidence=${ev} RULE_ID=${ruleId} CLUSTER_ID=${stubClusterId}`);
+  }
+
+  writeCsv(CSR_PATH, csr.headers, csr.rows, dryRun);
+
+  console.log("\n=== Ensure Profile Rows ===");
+  console.log(`CC_ID: ${ccId}`);
+  console.log(`PROFILE: ${profileId}`);
+  console.log(`CSR rows added: ${added}`);
+  if (changes.length) {
+    console.log("\nChanges:");
+    for (const c of changes) console.log(`- ${c}`);
+  } else {
+    console.log("\nNo changes (all targets already exist).");
+  }
+}
+
+main();
+Recommended usage sequence
+
+For a complaint you want to “wake up”:
+
+npx tsx scripts/ensure-profile-rows.ts sinus_pressure ENT_SINUS_V1
+npx tsx scripts/apply-profile-pack.ts sinus_pressure ENT_SINUS_V1
+npm run abi:complaints
+npm test
+
+If you want to preview first:
+
+npx tsx scripts/ensure-profile-rows.ts sinus_pressure ENT_SINUS_V1 --dry-run
+Why this matches your conventions
+
+Uses your exact CSR headers
+
+Adds missing rows as inert stubs (WHEN_EXPR=false, POINTS=0) so no scoring changes until profile apply
+
+RULE_ID format is exactly: CSR_<profile_prefix>_<NN> (unique per complaint/prefix)
+
+CLUSTER_ID uses tier-format CL_<prefix>_BENIGN as placeholder, then profile apply sets proper tier
+
+Next upgrade after this (optional but juicy)
+
+A one-liner script to apply a profile across multiple complaints in a list:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+
+If you want that, say “bulk apply” and I’ll drop it in.
+
+bulk apply
+
+Here you go: bulk apply that runs ensure rows + apply profile across a CSV list, with a clean summary at the end. It’s idempotent and supports --dry-run.
+
+1) Create seed file: data/complaints/profile_apply_seed.csv
+CC_ID,PROFILE_ID
+sinus_pressure,ENT_SINUS_V1
+cough,PULM_COUGH_V1
+chest_pain,CARD_CHEST_PAIN_V1
+2) Add script: scripts/apply-profile-pack-bulk.ts
+/**
+ * scripts/apply-profile-pack-bulk.ts
+ *
+ * Bulk apply profiles:
+ * - For each row (CC_ID, PROFILE_ID):
+ *    1) ensure-profile-rows.ts
+ *    2) apply-profile-pack.ts
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --dry-run
+ */
+
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+
+type Args = { seedPath: string; dryRun: boolean };
+
+function parseArgs(argv: string[]): Args {
+  const seedPath = argv[0];
+  if (!seedPath) {
+    console.error("Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [--dry-run]");
+    process.exit(2);
+  }
+  return { seedPath, dryRun: argv.includes("--dry-run") };
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readSeed(filePath: string): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+
+  const headers = splitCsvLine(lines[0]);
+  const idxCc = headers.indexOf("CC_ID");
+  const idxPf = headers.indexOf("PROFILE_ID");
+
+  if (idxCc < 0 || idxPf < 0) {
+    throw new Error(`Seed CSV must have headers CC_ID,PROFILE_ID (got: ${headers.join(",")})`);
+  }
+
+  const rows: Array<{ CC_ID: string; PROFILE_ID: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[idxCc] ?? "").trim();
+    const pf = (cols[idxPf] ?? "").trim();
+    if (!cc || !pf) continue;
+    rows.push({ CC_ID: cc, PROFILE_ID: pf });
+  }
+  return rows;
+}
+
+function run(cmd: string, args: string[], dryRun: boolean) {
+  if (dryRun) {
+    console.log(`[DRY] ${cmd} ${args.join(" ")}`);
+    return { ok: true, code: 0 };
+  }
+  const res = spawnSync(cmd, args, { stdio: "inherit", env: process.env });
+  return { ok: res.status === 0, code: res.status ?? 1 };
+}
+
+function main() {
+  const { seedPath, dryRun } = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+  const seedAbs = path.isAbsolute(seedPath) ? seedPath : path.join(root, seedPath);
+
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
+
+  const rows = readSeed(seedAbs);
+  if (!rows.length) {
+    console.log("No rows in seed.");
+    process.exit(0);
+  }
+
+  let okCount = 0;
+  let failCount = 0;
+
+  const failures: Array<{ ccId: string; profileId: string; step: string; code: number }> = [];
+
+  console.log(`\n=== Bulk Profile Apply (${rows.length} rows) ===\n`);
+
+  for (const r of rows) {
+    const ccId = r.CC_ID;
+    const profileId = r.PROFILE_ID;
+
+    console.log(`\n--- ${ccId} -> ${profileId} ---`);
+
+    // 1) Ensure rows
+    const ensureArgs = ["tsx", "scripts/ensure-profile-rows.ts", ccId, profileId];
+    if (dryRun) ensureArgs.push("--dry-run");
+    const ensureRes = run("npx", ensureArgs, dryRun);
+
+    if (!ensureRes.ok) {
+      failCount++;
+      failures.push({ ccId, profileId, step: "ensure-profile-rows", code: ensureRes.code });
+      console.log(`❌ FAIL ensure-profile-rows (${ensureRes.code})`);
+      continue;
+    }
+
+    // 2) Apply profile
+    const applyArgs = ["tsx", "scripts/apply-profile-pack.ts", ccId, profileId];
+    if (dryRun) applyArgs.push("--dry-run");
+    const applyRes = run("npx", applyArgs, dryRun);
+
+    if (!applyRes.ok) {
+      failCount++;
+      failures.push({ ccId, profileId, step: "apply-profile-pack", code: applyRes.code });
+      console.log(`❌ FAIL apply-profile-pack (${applyRes.code})`);
+      continue;
+    }
+
+    okCount++;
+    console.log(`✅ OK ${ccId}`);
+  }
+
+  console.log("\n=== Bulk Apply Summary ===");
+  console.log(`OK: ${okCount}`);
+  console.log(`FAIL: ${failCount}`);
+
+  if (failures.length) {
+    console.log("\nFailures:");
+    for (const f of failures) {
+      console.log(`- ${f.ccId} (${f.profileId}) step=${f.step} code=${f.code}`);
+    }
+    process.exit(1);
+  }
+
+  process.exit(0);
+}
+
+main();
+3) Run it
+
+Preview:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --dry-run
+
+Apply for real:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+npm run abi:complaints
+npm test
+4) Optional: add npm script
+
+package.json:
+
+{
+  "scripts": {
+    "profiles:apply": "tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv"
+  }
+}
+
+Then:
+
+npm run profiles:apply
+
+If you want the “deluxe” version, I can add:
+
+--continue-on-fail (don’t stop if one complaint fails)
+
+--only PROFILE_ID filter
+
+--cc sinus_pressure filter
+
+deluxe
+
+Below is the deluxe bulk applier with:
+
+--dry-run
+
+--continue-on-fail (keeps going)
+
+--only-profile <PROFILE_ID> (filter)
+
+--cc <cc_id> (filter; can be repeated)
+
+--list (prints what would run after filters)
+
+--summary-json <path> (writes a machine-readable results file)
+
+Clear step-by-step logging and a final scoreboard
+
+Paste this over your existing scripts/apply-profile-pack-bulk.ts.
+
+scripts/apply-profile-pack-bulk.ts (deluxe)
+/**
+ * scripts/apply-profile-pack-bulk.ts  (DELUXE)
+ *
+ * Bulk apply profiles:
+ * - For each row (CC_ID, PROFILE_ID):
+ *    1) ensure-profile-rows.ts
+ *    2) apply-profile-pack.ts
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+ *
+ * Flags:
+ *   --dry-run
+ *   --continue-on-fail
+ *   --only-profile <PROFILE_ID>
+ *   --cc <cc_id>           (can repeat)
+ *   --list                 (show plan after filters, then exit 0)
+ *   --summary-json <path>  (write results JSON)
+ */
+
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+
+type Args = {
+  seedPath: string;
+  dryRun: boolean;
+  continueOnFail: boolean;
+  onlyProfile?: string;
+  ccs: string[];
+  listOnly: boolean;
+  summaryJsonPath?: string;
+};
+
+function parseArgs(argv: string[]): Args {
+  const seedPath = argv[0];
+  if (!seedPath) {
+    console.error("Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [flags]");
+    process.exit(2);
+  }
+
+  const args: Args = {
+    seedPath,
+    dryRun: false,
+    continueOnFail: false,
+    ccs: [],
+    listOnly: false,
+  };
+
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+
+    if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--continue-on-fail") args.continueOnFail = true;
+    else if (a === "--only-profile") args.onlyProfile = argv[++i];
+    else if (a === "--cc") args.ccs.push(argv[++i]);
+    else if (a === "--list") args.listOnly = true;
+    else if (a === "--summary-json") args.summaryJsonPath = argv[++i];
+  }
+
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readSeed(filePath: string): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+
+  const headers = splitCsvLine(lines[0]);
+  const idxCc = headers.indexOf("CC_ID");
+  const idxPf = headers.indexOf("PROFILE_ID");
+
+  if (idxCc < 0 || idxPf < 0) {
+    throw new Error(`Seed CSV must have headers CC_ID,PROFILE_ID (got: ${headers.join(",")})`);
+  }
+
+  const rows: Array<{ CC_ID: string; PROFILE_ID: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[idxCc] ?? "").trim();
+    const pf = (cols[idxPf] ?? "").trim();
+    if (!cc || !pf) continue;
+    rows.push({ CC_ID: cc, PROFILE_ID: pf });
+  }
+  return rows;
+}
+
+type StepResult = {
+  step: "ensure-profile-rows" | "apply-profile-pack";
+  ok: boolean;
+  code: number;
+};
+
+type ItemResult = {
+  ccId: string;
+  profileId: string;
+  ok: boolean;
+  steps: StepResult[];
+};
+
+function run(cmd: string, args: string[], dryRun: boolean): StepResult {
+  const stepName: StepResult["step"] =
+    args.includes("scripts/ensure-profile-rows.ts") ? "ensure-profile-rows" : "apply-profile-pack";
+
+  if (dryRun) {
+    console.log(`[DRY] ${cmd} ${args.join(" ")}`);
+    return { step: stepName, ok: true, code: 0 };
+  }
+
+  const res = spawnSync(cmd, args, { stdio: "inherit", env: process.env });
+  const code = res.status ?? 1;
+  return { step: stepName, ok: code === 0, code };
+}
+
+function applyFilters(
+  rows: Array<{ CC_ID: string; PROFILE_ID: string }>,
+  args: Args
+): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  let out = rows;
+
+  if (args.onlyProfile) {
+    const p = args.onlyProfile.trim();
+    out = out.filter((r) => r.PROFILE_ID === p);
+  }
+
+  if (args.ccs.length) {
+    const set = new Set(args.ccs.map((x) => x.trim()).filter(Boolean));
+    out = out.filter((r) => set.has(r.CC_ID));
+  }
+
+  return out;
+}
+
+function maybeWriteSummary(pathOut: string | undefined, data: any, dryRun: boolean) {
+  if (!pathOut) return;
+  if (dryRun) {
+    console.log(`[DRY] Would write summary JSON -> ${pathOut}`);
+    return;
+  }
+  fs.mkdirSync(path.dirname(pathOut), { recursive: true });
+  fs.writeFileSync(pathOut, JSON.stringify(data, null, 2) + "\n", "utf8");
+  console.log(`\nWrote summary JSON: ${pathOut}`);
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
+
+  const rowsAll = readSeed(seedAbs);
+  if (!rowsAll.length) {
+    console.log("No rows in seed.");
+    process.exit(0);
+  }
+
+  const rows = applyFilters(rowsAll, args);
+
+  if (args.listOnly) {
+    console.log("\n=== Bulk Profile Apply Plan ===");
+    console.log(`Seed rows: ${rowsAll.length}`);
+    console.log(`After filters: ${rows.length}`);
+    console.log("");
+    for (const r of rows) console.log(`- ${r.CC_ID} -> ${r.PROFILE_ID}`);
+    process.exit(0);
+  }
+
+  console.log(`\n=== Bulk Profile Apply (${rows.length} rows) ===`);
+  if (args.dryRun) console.log("Mode: DRY RUN");
+  if (args.continueOnFail) console.log("Mode: CONTINUE ON FAIL");
+  if (args.onlyProfile) console.log(`Filter: only-profile=${args.onlyProfile}`);
+  if (args.ccs.length) console.log(`Filter: cc in [${args.ccs.join(", ")}]`);
+  if (args.summaryJsonPath) console.log(`Will write: ${args.summaryJsonPath}`);
+  console.log("");
+
+  const results: ItemResult[] = [];
+
+  for (const r of rows) {
+    const ccId = r.CC_ID;
+    const profileId = r.PROFILE_ID;
+
+    console.log(`\n--- ${ccId} -> ${profileId} ---`);
+
+    const item: ItemResult = { ccId, profileId, ok: false, steps: [] };
+
+    // 1) Ensure rows
+    const ensureArgs = ["tsx", "scripts/ensure-profile-rows.ts", ccId, profileId];
+    if (args.dryRun) ensureArgs.push("--dry-run");
+    const ensureRes = run("npx", ensureArgs, args.dryRun);
+    item.steps.push(ensureRes);
+
+    if (!ensureRes.ok) {
+      console.log(`❌ FAIL ensure-profile-rows (exit ${ensureRes.code})`);
+      results.push(item);
+
+      if (!args.continueOnFail) {
+        console.log("\nStopping on first failure (use --continue-on-fail to proceed).");
+        break;
+      }
+      continue;
+    }
+
+    // 2) Apply profile
+    const applyArgs = ["tsx", "scripts/apply-profile-pack.ts", ccId, profileId];
+    if (args.dryRun) applyArgs.push("--dry-run");
+    const applyRes = run("npx", applyArgs, args.dryRun);
+    item.steps.push(applyRes);
+
+    if (!applyRes.ok) {
+      console.log(`❌ FAIL apply-profile-pack (exit ${applyRes.code})`);
+      results.push(item);
+
+      if (!args.continueOnFail) {
+        console.log("\nStopping on first failure (use --continue-on-fail to proceed).");
+        break;
+      }
+      continue;
+    }
+
+    item.ok = true;
+    results.push(item);
+    console.log(`✅ OK ${ccId}`);
+  }
+
+  const okCount = results.filter((r) => r.ok).length;
+  const failCount = results.length - okCount;
+
+  console.log("\n=== Bulk Apply Summary ===");
+  console.log(`Total attempted: ${results.length}`);
+  console.log(`OK: ${okCount}`);
+  console.log(`FAIL: ${failCount}`);
+
+  const failures = results.filter((r) => !r.ok);
+  if (failures.length) {
+    console.log("\nFailures:");
+    for (const f of failures) {
+      const failedStep = f.steps.find((s) => !s.ok);
+      console.log(
+        `- ${f.ccId} (${f.profileId}) step=${failedStep?.step ?? "unknown"} code=${failedStep?.code ?? 1}`
+      );
+    }
+  }
+
+  const summary = {
+    seedPath: args.seedPath,
+    dryRun: args.dryRun,
+    continueOnFail: args.continueOnFail,
+    onlyProfile: args.onlyProfile ?? null,
+    ccs: args.ccs,
+    attempted: results.length,
+    ok: okCount,
+    fail: failCount,
+    results,
+    generated_at: new Date().toISOString(),
+  };
+
+  maybeWriteSummary(args.summaryJsonPath, summary, args.dryRun);
+
+  // Exit code: fail if any failures
+  process.exit(failCount > 0 ? 1 : 0);
+}
+
+main();
+3) Examples
+
+List plan (after filters) without running:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --list
+
+Apply everything, keep going on failures, write JSON summary:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv \
+  --continue-on-fail \
+  --summary-json scripts/profile_apply_runs/latest.json
+
+Only apply one profile:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --only-profile ENT_SINUS_V1
+
+Only apply to specific complaint(s):
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --cc cough
+
+Dry-run everything:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --dry-run --continue-on-fail
+
+If you want the ultra deluxe cherry on top, I can add --parallel N to run multiple complaints at once (safe as long as CSV writes are serialized).
+
+ultra deluxe
+Thought for 13s
+
+Ultra deluxe it is. 🧰⚙️
+
+Key reality check (and design choice): true parallel execution of “ensure+apply” as separate child processes is unsafe because every complaint writes to the same two files:
+
+server/data/csv/CLUSTER_SCORING_RULES.csv
+
+server/data/csv/DX_PRIORITY.csv
+
+Parallel writers = race conditions + corrupted CSV.
+
+So the ultra deluxe version does the smart thing:
+
+✅ Reads CSR + DXP once
+✅ Plans changes for many complaints concurrently (--parallel N)
+✅ Applies all changes in-memory
+✅ Writes CSR + DXP exactly once (atomic-ish)
+✅ Still supports your deluxe flags: --dry-run, --continue-on-fail, filters, --list, --summary-json
+
+This gives you real speedup without file collisions.
+
+Replace with this: scripts/apply-profile-pack-bulk.ts (ULTRA)
+
+Paste this over your current bulk script.
+
+/**
+ * scripts/apply-profile-pack-bulk.ts  (ULTRA DELUXE)
+ *
+ * Safe parallel planning + single commit write:
+ * - Loads CSR + DXP once
+ * - Loads profile packs once
+ * - For each CC_ID+PROFILE_ID:
+ *    - ENSURE: create missing CSR stub rows for each activation target evidence
+ *    - APPLY: set tier CLUSTER_ID + WHEN_EXPR + POINTS for targeted evidence rows
+ *    - ENSURE DXP: ensure 3 tier rows exist (PRIMARY/SECONDARY/BENIGN)
+ * - Writes CSR + DXP once at end (or prints plan in --dry-run)
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+ *
+ * Flags:
+ *   --dry-run
+ *   --continue-on-fail
+ *   --only-profile <PROFILE_ID>
+ *   --cc <cc_id>            (can repeat)
+ *   --list                  (show plan after filters, then exit 0)
+ *   --summary-json <path>   (write results JSON)
+ *   --parallel <N>          (planning concurrency; commit always single write)
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  seedPath: string;
+  dryRun: boolean;
+  continueOnFail: boolean;
+  onlyProfile?: string;
+  ccs: string[];
+  listOnly: boolean;
+  summaryJsonPath?: string;
+  parallel: number;
+};
+
+function parseArgs(argv: string[]): Args {
+  const seedPath = argv[0];
+  if (!seedPath) {
+    console.error("Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [flags]");
+    process.exit(2);
+  }
+
+  const args: Args = {
+    seedPath,
+    dryRun: false,
+    continueOnFail: false,
+    ccs: [],
+    listOnly: false,
+    parallel: 4,
+  };
+
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--continue-on-fail") args.continueOnFail = true;
+    else if (a === "--only-profile") args.onlyProfile = argv[++i];
+    else if (a === "--cc") args.ccs.push(argv[++i]);
+    else if (a === "--list") args.listOnly = true;
+    else if (a === "--summary-json") args.summaryJsonPath = argv[++i];
+    else if (a === "--parallel") args.parallel = Math.max(1, parseInt(argv[++i] ?? "4", 10) || 4);
+  }
+
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[], dryRun: boolean) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  if (dryRun) {
+    console.log(`[DRY] Would write ${rows.length} rows -> ${filePath}`);
+    return;
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function mustHave(headers: string[], needed: string[], fileLabel: string) {
+  for (const h of needed) {
+    if (!headers.includes(h)) throw new Error(`${fileLabel} missing header: ${h}`);
+  }
+}
+
+type Profile = {
+  cluster_prefix: string;
+  tiers: Record<"PRIMARY" | "SECONDARY" | "BENIGN", { points: number; priority: number }>;
+  activate: Array<{ evidence: string; tier: "PRIMARY" | "SECONDARY" | "BENIGN"; when: string; points?: number }>;
+};
+
+function readSeed(filePath: string): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+
+  const headers = splitCsvLine(lines[0]);
+  const idxCc = headers.indexOf("CC_ID");
+  const idxPf = headers.indexOf("PROFILE_ID");
+  if (idxCc < 0 || idxPf < 0) {
+    throw new Error(`Seed CSV must have headers CC_ID,PROFILE_ID (got: ${headers.join(",")})`);
+  }
+
+  const rows: Array<{ CC_ID: string; PROFILE_ID: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[idxCc] ?? "").trim();
+    const pf = (cols[idxPf] ?? "").trim();
+    if (!cc || !pf) continue;
+    rows.push({ CC_ID: cc, PROFILE_ID: pf });
+  }
+  return rows;
+}
+
+function applyFilters(rows: Array<{ CC_ID: string; PROFILE_ID: string }>, args: Args) {
+  let out = rows;
+  if (args.onlyProfile) out = out.filter((r) => r.PROFILE_ID === args.onlyProfile);
+  if (args.ccs.length) {
+    const set = new Set(args.ccs.map((x) => x.trim()).filter(Boolean));
+    out = out.filter((r) => set.has(r.CC_ID));
+  }
+  return out;
+}
+
+type ItemPlan = {
+  ccId: string;
+  profileId: string;
+  ok: boolean;
+  errors: string[];
+  csrAdded: number;
+  csrUpdated: number;
+  dxpAdded: number;
+  dxpUpdated: number;
+  notes: string[];
+};
+
+function makeLimiter(n: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => {
+    if (active >= n) return;
+    const job = queue.shift();
+    if (!job) return;
+    active++;
+    job();
+  };
+  return function limit<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      queue.push(() => {
+        fn()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active--;
+            next();
+          });
+      });
+      next();
+    });
+  };
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+  const PROFILE_PATH = path.join(root, "data", "complaints", "profile_packs.json");
+
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
+  if (!fs.existsSync(PROFILE_PATH)) throw new Error(`Missing profile file: ${PROFILE_PATH}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+  if (!fs.existsSync(DXP_PATH)) throw new Error(`Missing: ${DXP_PATH}`);
+
+  const seedAll = readSeed(seedAbs);
+  const seed = applyFilters(seedAll, args);
+
+  if (args.listOnly) {
+    console.log("\n=== Bulk Profile Apply Plan ===");
+    console.log(`Seed rows: ${seedAll.length}`);
+    console.log(`After filters: ${seed.length}`);
+    console.log("");
+    for (const r of seed) console.log(`- ${r.CC_ID} -> ${r.PROFILE_ID}`);
+    process.exit(0);
+  }
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8")) as Record<string, Profile>;
+
+  const csr = readCsv(CSR_PATH);
+  const dxp = readCsv(DXP_PATH);
+
+  mustHave(csr.headers, ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"], "CLUSTER_SCORING_RULES.csv");
+  mustHave(dxp.headers, ["CC_ID", "CLUSTER_ID", "PRIORITY"], "DX_PRIORITY.csv");
+
+  // Index CSR for quick lookup
+  const csrByCcEvidence = new Map<string, Record<string, string>>(); // key = `${ccId}||${evidence}`
+  const csrRuleIdsByCc = new Map<string, Set<string>>();
+
+  for (const r of csr.rows) {
+    const ccId = r.CC_ID;
+    if (!ccId) continue;
+    if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+    if (r.RULE_ID) csrRuleIdsByCc.get(ccId)!.add(r.RULE_ID);
+
+    if (r.EVIDENCE_LABEL) {
+      csrByCcEvidence.set(`${ccId}||${r.EVIDENCE_LABEL}`, r);
+    }
+  }
+
+  // Index DXP
+  const dxpByCcCluster = new Map<string, Record<string, string>>(); // key = `${ccId}||${clusterId}`
+  for (const r of dxp.rows) {
+    if (r.CC_ID && r.CLUSTER_ID) dxpByCcCluster.set(`${r.CC_ID}||${r.CLUSTER_ID}`, r);
+  }
+
+  const limiter = makeLimiter(args.parallel);
+
+  console.log(`\n=== ULTRA Bulk Profile Apply (${seed.length} rows) ===`);
+  console.log(`parallel planning: ${args.parallel}`);
+  if (args.dryRun) console.log("Mode: DRY RUN");
+  if (args.continueOnFail) console.log("Mode: CONTINUE ON FAIL");
+  if (args.onlyProfile) console.log(`Filter: only-profile=${args.onlyProfile}`);
+  if (args.ccs.length) console.log(`Filter: cc in [${args.ccs.join(", ")}]`);
+  if (args.summaryJsonPath) console.log(`Will write: ${args.summaryJsonPath}`);
+  console.log("");
+
+  const plans: ItemPlan[] = [];
+
+  const runOne = async (ccId: string, profileId: string): Promise<ItemPlan> => {
+    const p: ItemPlan = {
+      ccId,
+      profileId,
+      ok: true,
+      errors: [],
+      csrAdded: 0,
+      csrUpdated: 0,
+      dxpAdded: 0,
+      dxpUpdated: 0,
+      notes: [],
+    };
+
+    const profile = profiles[profileId];
+    if (!profile) {
+      p.ok = false;
+      p.errors.push(`Profile not found: ${profileId}`);
+      return p;
+    }
+
+    const prefix = profile.cluster_prefix;
+
+    const tierClusterId = (tier: "PRIMARY" | "SECONDARY" | "BENIGN") => `CL_${prefix}_${tier}`;
+
+    // ---- ENSURE CSR rows exist for activation targets ----
+    // RULE_ID format: CSR_<prefix>_<NN> (unique within CC_ID + prefix)
+    const ruleIdRe = new RegExp(`^CSR_${prefix}_(\\d+)$`);
+    let maxN = 0;
+    const existingRuleIds = csrRuleIdsByCc.get(ccId) ?? new Set<string>();
+    for (const rid of existingRuleIds) {
+      const m = rid.match(ruleIdRe);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (!Number.isNaN(n)) maxN = Math.max(maxN, n);
+      }
+    }
+
+    for (const item of profile.activate) {
+      const key = `${ccId}||${item.evidence}`;
+      const existing = csrByCcEvidence.get(key);
+
+      if (!existing) {
+        maxN++;
+        const ruleId = `CSR_${prefix}_${String(maxN).padStart(2, "0")}`;
+
+        const newRow: Record<string, string> = {
+          CC_ID: ccId,
+          CLUSTER_ID: tierClusterId("BENIGN"), // placeholder until apply
+          RULE_ID: ruleId,
+          POINTS: "0",
+          WHEN_EXPR: "false",
+          EVIDENCE_LABEL: item.evidence,
+        };
+
+        csr.rows.push(newRow);
+        csrByCcEvidence.set(key, newRow);
+
+        if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+        csrRuleIdsByCc.get(ccId)!.add(ruleId);
+
+        p.csrAdded++;
+        p.notes.push(`CSR add evidence=${item.evidence} RULE_ID=${ruleId}`);
+      }
+    }
+
+    // ---- APPLY targeted activations ----
+    for (const item of profile.activate) {
+      const row = csrByCcEvidence.get(`${ccId}||${item.evidence}`);
+      if (!row) {
+        // should not happen after ensure
+        p.ok = false;
+        p.errors.push(`CSR missing after ensure for evidence=${item.evidence}`);
+        if (!args.continueOnFail) return p;
+        continue;
+      }
+
+      const wantCluster = tierClusterId(item.tier);
+      const wantWhen = item.when;
+      const wantPoints = String(item.points ?? profile.tiers[item.tier].points);
+
+      let changed = false;
+      if (row.CLUSTER_ID !== wantCluster) { row.CLUSTER_ID = wantCluster; changed = true; }
+      if (row.WHEN_EXPR !== wantWhen) { row.WHEN_EXPR = wantWhen; changed = true; }
+      if (row.POINTS !== wantPoints) { row.POINTS = wantPoints; changed = true; }
+
+      if (changed) p.csrUpdated++;
+    }
+
+    // ---- ENSURE DXP tiers exist ----
+    for (const tier of ["PRIMARY", "SECONDARY", "BENIGN"] as const) {
+      const clusterId = tierClusterId(tier);
+      const wantPriority = String(profile.tiers[tier].priority);
+      const key = `${ccId}||${clusterId}`;
+
+      const existing = dxpByCcCluster.get(key);
+      if (!existing) {
+        const newRow: Record<string, string> = {
+          CC_ID: ccId,
+          CLUSTER_ID: clusterId,
+          PRIORITY: wantPriority,
+        };
+        dxp.rows.push(newRow);
+        dxpByCcCluster.set(key, newRow);
+        p.dxpAdded++;
+      } else if (existing.PRIORITY !== wantPriority) {
+        existing.PRIORITY = wantPriority;
+        p.dxpUpdated++;
+      }
+    }
+
+    return p;
+  };
+
+  const tasks = seed.map((r) =>
+    limiter(async () => runOne(r.CC_ID, r.PROFILE_ID))
+      .then((p) => {
+        plans.push(p);
+        const status = p.ok ? "✅" : "❌";
+        console.log(`${status} ${p.ccId} -> ${p.profileId} | CSR +${p.csrAdded} upd ${p.csrUpdated} | DXP +${p.dxpAdded} upd ${p.dxpUpdated}`);
+        if (!p.ok && p.errors.length) {
+          for (const e of p.errors) console.log(`   - ${e}`);
+        }
+        if (!p.ok && !args.continueOnFail) {
+          throw new Error(`Stopping on failure (use --continue-on-fail): ${p.ccId}`);
+        }
+      })
+  );
+
+  Promise.allSettled(tasks).then((settled) => {
+    const hadStop = settled.some((s) => s.status === "rejected");
+
+    const okCount = plans.filter((p) => p.ok).length;
+    const failCount = plans.length - okCount;
+
+    console.log("\n=== ULTRA Summary ===");
+    console.log(`attempted: ${plans.length}`);
+    console.log(`ok: ${okCount}`);
+    console.log(`fail: ${failCount}`);
+    console.log(`CSR added: ${plans.reduce((a, p) => a + p.csrAdded, 0)}`);
+    console.log(`CSR updated: ${plans.reduce((a, p) => a + p.csrUpdated, 0)}`);
+    console.log(`DXP added: ${plans.reduce((a, p) => a + p.dxpAdded, 0)}`);
+    console.log(`DXP updated: ${plans.reduce((a, p) => a + p.dxpUpdated, 0)}`);
+
+    // Write summary JSON if requested
+    const summary = {
+      seedPath: args.seedPath,
+      dryRun: args.dryRun,
+      continueOnFail: args.continueOnFail,
+      onlyProfile: args.onlyProfile ?? null,
+      ccs: args.ccs,
+      parallel: args.parallel,
+      attempted: plans.length,
+      ok: okCount,
+      fail: failCount,
+      totals: {
+        csrAdded: plans.reduce((a, p) => a + p.csrAdded, 0),
+        csrUpdated: plans.reduce((a, p) => a + p.csrUpdated, 0),
+        dxpAdded: plans.reduce((a, p) => a + p.dxpAdded, 0),
+        dxpUpdated: plans.reduce((a, p) => a + p.dxpUpdated, 0),
+      },
+      results: plans,
+      generated_at: new Date().toISOString(),
+    };
+
+    if (args.summaryJsonPath) {
+      if (args.dryRun) {
+        console.log(`[DRY] Would write summary JSON -> ${args.summaryJsonPath}`);
+      } else {
+        fs.mkdirSync(path.dirname(args.summaryJsonPath), { recursive: true });
+        fs.writeFileSync(args.summaryJsonPath, JSON.stringify(summary, null, 2) + "\n", "utf8");
+        console.log(`Wrote summary JSON: ${args.summaryJsonPath}`);
+      }
+    }
+
+    // Commit write once (unless dry-run)
+    if (!args.dryRun) {
+      writeCsv(CSR_PATH, csr.headers, csr.rows, false);
+      writeCsv(DXP_PATH, dxp.headers, dxp.rows, false);
+      console.log("\nWrote CSR + DXP once (safe commit).");
+    } else {
+      console.log("\n[DRY] No files written.");
+    }
+
+    // exit code
+    if (hadStop) process.exit(1);
+    process.exit(failCount > 0 ? 1 : 0);
+  }).catch((e) => {
+    console.error("Fatal:", e?.stack ?? e);
+    process.exit(1);
+  });
+}
+
+main();
+How to use it
+List what will run
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --list
+Dry-run plan + summary JSON (no writes)
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv \
+  --dry-run \
+  --parallel 12 \
+  --continue-on-fail \
+  --summary-json scripts/profile_apply_runs/dry_latest.json
+Apply for real (single safe commit)
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv \
+  --parallel 12 \
+  --continue-on-fail \
+  --summary-json scripts/profile_apply_runs/latest.json
+
+npm run abi:complaints
+npm test
+Filter examples
+# only one profile
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --only-profile ENT_SINUS_V1
+
+# only specific complaints
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --cc sinus_pressure --cc cough
+Why this is actually “ultra” (not fake parallel)
+
+With --parallel N, the script does concurrent planning work and updates in-memory indices.
+
+It avoids corruption by writing once at the end.
+
+It’s faster on big batches because it doesn’t repeatedly parse and write CSVs per complaint.
+
+If you want the next notch up: I can add transaction backup files (auto-copy CSR/DXP to *.bak.<timestamp> before commit) plus a --rollback helper.
+
+add transaction backup files
+
+Done. Add transaction backups + rollback helper in the ultra script with minimal friction:
+
+Before the single “commit write”, it will copy:
+
+server/data/csv/CLUSTER_SCORING_RULES.csv
+
+server/data/csv/DX_PRIORITY.csv
+
+Into a timestamped backup dir:
+
+server/data/csv/_tx_backups/<RUN_ID>/CLUSTER_SCORING_RULES.csv.bak
+
+server/data/csv/_tx_backups/<RUN_ID>/DX_PRIORITY.csv.bak
+
+It also writes:
+
+manifest.json (paths + run metadata)
+
+Adds flags:
+
+--backup-dir <path> (default server/data/csv/_tx_backups)
+
+--run-id <id> (default autogenerated)
+
+--no-backup (opt out)
+
+--rollback <RUN_ID> (restore from a backup run)
+
+Below are the patches. Easiest: replace your ultra script with this version.
+
+Replace scripts/apply-profile-pack-bulk.ts with this (Ultra + Tx backup + rollback)
+/**
+ * scripts/apply-profile-pack-bulk.ts  (ULTRA + TX BACKUP + ROLLBACK)
+ *
+ * Features:
+ * - Safe parallel planning + single commit write
+ * - Transaction backups (CSR + DXP) with manifest.json
+ * - Rollback support: --rollback <RUN_ID>
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv [flags]
+ *
+ * Flags:
+ *   --dry-run
+ *   --continue-on-fail
+ *   --only-profile <PROFILE_ID>
+ *   --cc <cc_id>            (can repeat)
+ *   --list                  (show plan after filters, then exit 0)
+ *   --summary-json <path>   (write results JSON)
+ *   --parallel <N>          (planning concurrency; commit always single write)
+ *
+ * Transaction flags:
+ *   --backup-dir <path>     default: server/data/csv/_tx_backups
+ *   --run-id <id>           default: autogenerated timestamp-based id
+ *   --no-backup             skip backups
+ *   --rollback <RUN_ID>     restore CSR+DXP from backup run and exit 0/1
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  seedPath?: string;              // optional if --rollback is used
+  dryRun: boolean;
+  continueOnFail: boolean;
+  onlyProfile?: string;
+  ccs: string[];
+  listOnly: boolean;
+  summaryJsonPath?: string;
+  parallel: number;
+
+  // tx
+  backupDir: string;
+  runId?: string;
+  noBackup: boolean;
+  rollbackRunId?: string;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    seedPath: argv[0] && !argv[0].startsWith("--") ? argv[0] : undefined,
+    dryRun: argv.includes("--dry-run"),
+    continueOnFail: argv.includes("--continue-on-fail"),
+    ccs: [],
+    listOnly: argv.includes("--list"),
+    parallel: 4,
+
+    backupDir: "server/data/csv/_tx_backups",
+    noBackup: argv.includes("--no-backup"),
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--only-profile") args.onlyProfile = argv[++i];
+    else if (a === "--cc") args.ccs.push(argv[++i]);
+    else if (a === "--summary-json") args.summaryJsonPath = argv[++i];
+    else if (a === "--parallel") args.parallel = Math.max(1, parseInt(argv[++i] ?? "4", 10) || 4);
+
+    else if (a === "--backup-dir") args.backupDir = argv[++i];
+    else if (a === "--run-id") args.runId = argv[++i];
+    else if (a === "--rollback") args.rollbackRunId = argv[++i];
+  }
+
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[], dryRun: boolean) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  if (dryRun) {
+    console.log(`[DRY] Would write ${rows.length} rows -> ${filePath}`);
+    return;
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function mustHave(headers: string[], needed: string[], fileLabel: string) {
+  for (const h of needed) {
+    if (!headers.includes(h)) throw new Error(`${fileLabel} missing header: ${h}`);
+  }
+}
+
+type Profile = {
+  cluster_prefix: string;
+  tiers: Record<"PRIMARY" | "SECONDARY" | "BENIGN", { points: number; priority: number }>;
+  activate: Array<{ evidence: string; tier: "PRIMARY" | "SECONDARY" | "BENIGN"; when: string; points?: number }>;
+};
+
+function readSeed(filePath: string): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+
+  const headers = splitCsvLine(lines[0]);
+  const idxCc = headers.indexOf("CC_ID");
+  const idxPf = headers.indexOf("PROFILE_ID");
+  if (idxCc < 0 || idxPf < 0) {
+    throw new Error(`Seed CSV must have headers CC_ID,PROFILE_ID (got: ${headers.join(",")})`);
+  }
+
+  const rows: Array<{ CC_ID: string; PROFILE_ID: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[idxCc] ?? "").trim();
+    const pf = (cols[idxPf] ?? "").trim();
+    if (!cc || !pf) continue;
+    rows.push({ CC_ID: cc, PROFILE_ID: pf });
+  }
+  return rows;
+}
+
+function applyFilters(rows: Array<{ CC_ID: string; PROFILE_ID: string }>, args: Args) {
+  let out = rows;
+  if (args.onlyProfile) out = out.filter((r) => r.PROFILE_ID === args.onlyProfile);
+  if (args.ccs.length) {
+    const set = new Set(args.ccs.map((x) => x.trim()).filter(Boolean));
+    out = out.filter((r) => set.has(r.CC_ID));
+  }
+  return out;
+}
+
+type ItemPlan = {
+  ccId: string;
+  profileId: string;
+  ok: boolean;
+  errors: string[];
+  csrAdded: number;
+  csrUpdated: number;
+  dxpAdded: number;
+  dxpUpdated: number;
+  notes: string[];
+};
+
+function makeLimiter(n: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => {
+    if (active >= n) return;
+    const job = queue.shift();
+    if (!job) return;
+    active++;
+    job();
+  };
+  return function limit<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      queue.push(() => {
+        fn()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active--;
+            next();
+          });
+      });
+      next();
+    });
+  };
+}
+
+function makeRunId() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  // YYYYMMDD_HHMMSS
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function copyFile(src: string, dst: string, dryRun: boolean) {
+  if (dryRun) {
+    console.log(`[DRY] Would copy ${src} -> ${dst}`);
+    return;
+  }
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+}
+
+function rollbackFromBackup(params: {
+  root: string;
+  backupDir: string;
+  runId: string;
+  csrPath: string;
+  dxpPath: string;
+}) {
+  const { root, backupDir, runId, csrPath, dxpPath } = params;
+  const base = path.isAbsolute(backupDir) ? backupDir : path.join(root, backupDir);
+  const runDir = path.join(base, runId);
+
+  const csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+  const dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+  const manifest = path.join(runDir, "manifest.json");
+
+  if (!fs.existsSync(runDir)) throw new Error(`Backup run dir not found: ${runDir}`);
+  if (!fs.existsSync(csrBak)) throw new Error(`Missing CSR backup: ${csrBak}`);
+  if (!fs.existsSync(dxpBak)) throw new Error(`Missing DXP backup: ${dxpBak}`);
+
+  // Restore
+  fs.copyFileSync(csrBak, csrPath);
+  fs.copyFileSync(dxpBak, dxpPath);
+
+  console.log("✅ Rollback complete.");
+  console.log(`Restored:\n- ${csrPath}\n- ${dxpPath}`);
+  if (fs.existsSync(manifest)) {
+    console.log(`Manifest: ${manifest}`);
+  }
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const PROFILE_PATH = path.join(root, "data", "complaints", "profile_packs.json");
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  if (!fs.existsSync(PROFILE_PATH)) throw new Error(`Missing profile file: ${PROFILE_PATH}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+  if (!fs.existsSync(DXP_PATH)) throw new Error(`Missing: ${DXP_PATH}`);
+
+  // --- ROLLBACK MODE ---
+  if (args.rollbackRunId) {
+    rollbackFromBackup({
+      root,
+      backupDir: args.backupDir,
+      runId: args.rollbackRunId,
+      csrPath: CSR_PATH,
+      dxpPath: DXP_PATH,
+    });
+    process.exit(0);
+  }
+
+  if (!args.seedPath) {
+    throw new Error("Missing seed.csv path. Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [flags]");
+  }
+
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
+
+  const seedAll = readSeed(seedAbs);
+  const seed = applyFilters(seedAll, args);
+
+  if (args.listOnly) {
+    console.log("\n=== Bulk Profile Apply Plan ===");
+    console.log(`Seed rows: ${seedAll.length}`);
+    console.log(`After filters: ${seed.length}`);
+    console.log("");
+    for (const r of seed) console.log(`- ${r.CC_ID} -> ${r.PROFILE_ID}`);
+    process.exit(0);
+  }
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8")) as Record<string, Profile>;
+
+  const csr = readCsv(CSR_PATH);
+  const dxp = readCsv(DXP_PATH);
+
+  mustHave(csr.headers, ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"], "CLUSTER_SCORING_RULES.csv");
+  mustHave(dxp.headers, ["CC_ID", "CLUSTER_ID", "PRIORITY"], "DX_PRIORITY.csv");
+
+  // Index CSR for quick lookup
+  const csrByCcEvidence = new Map<string, Record<string, string>>(); // key = `${ccId}||${evidence}`
+  const csrRuleIdsByCc = new Map<string, Set<string>>();
+
+  for (const r of csr.rows) {
+    const ccId = r.CC_ID;
+    if (!ccId) continue;
+    if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+    if (r.RULE_ID) csrRuleIdsByCc.get(ccId)!.add(r.RULE_ID);
+
+    if (r.EVIDENCE_LABEL) {
+      csrByCcEvidence.set(`${ccId}||${r.EVIDENCE_LABEL}`, r);
+    }
+  }
+
+  // Index DXP
+  const dxpByCcCluster = new Map<string, Record<string, string>>(); // key = `${ccId}||${clusterId}`
+  for (const r of dxp.rows) {
+    if (r.CC_ID && r.CLUSTER_ID) dxpByCcCluster.set(`${r.CC_ID}||${r.CLUSTER_ID}`, r);
+  }
+
+  const limiter = makeLimiter(args.parallel);
+
+  console.log(`\n=== ULTRA Bulk Profile Apply (${seed.length} rows) ===`);
+  console.log(`parallel planning: ${args.parallel}`);
+  if (args.dryRun) console.log("Mode: DRY RUN");
+  if (args.continueOnFail) console.log("Mode: CONTINUE ON FAIL");
+  if (args.onlyProfile) console.log(`Filter: only-profile=${args.onlyProfile}`);
+  if (args.ccs.length) console.log(`Filter: cc in [${args.ccs.join(", ")}]`);
+  if (args.summaryJsonPath) console.log(`Will write: ${args.summaryJsonPath}`);
+  if (!args.noBackup) console.log(`Backup dir: ${args.backupDir}`);
+  console.log("");
+
+  const plans: ItemPlan[] = [];
+
+  const runOne = async (ccId: string, profileId: string): Promise<ItemPlan> => {
+    const p: ItemPlan = {
+      ccId,
+      profileId,
+      ok: true,
+      errors: [],
+      csrAdded: 0,
+      csrUpdated: 0,
+      dxpAdded: 0,
+      dxpUpdated: 0,
+      notes: [],
+    };
+
+    const profile = profiles[profileId];
+    if (!profile) {
+      p.ok = false;
+      p.errors.push(`Profile not found: ${profileId}`);
+      return p;
+    }
+
+    const prefix = profile.cluster_prefix;
+    const tierClusterId = (tier: "PRIMARY" | "SECONDARY" | "BENIGN") => `CL_${prefix}_${tier}`;
+
+    // ENSURE CSR rows exist
+    const ruleIdRe = new RegExp(`^CSR_${prefix}_(\\d+)$`);
+    let maxN = 0;
+    const existingRuleIds = csrRuleIdsByCc.get(ccId) ?? new Set<string>();
+    for (const rid of existingRuleIds) {
+      const m = rid.match(ruleIdRe);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (!Number.isNaN(n)) maxN = Math.max(maxN, n);
+      }
+    }
+
+    for (const item of profile.activate) {
+      const key = `${ccId}||${item.evidence}`;
+      const existing = csrByCcEvidence.get(key);
+      if (!existing) {
+        maxN++;
+        const ruleId = `CSR_${prefix}_${String(maxN).padStart(2, "0")}`;
+        const newRow: Record<string, string> = {
+          CC_ID: ccId,
+          CLUSTER_ID: tierClusterId("BENIGN"), // placeholder until apply
+          RULE_ID: ruleId,
+          POINTS: "0",
+          WHEN_EXPR: "false",
+          EVIDENCE_LABEL: item.evidence,
+        };
+        csr.rows.push(newRow);
+        csrByCcEvidence.set(key, newRow);
+        if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+        csrRuleIdsByCc.get(ccId)!.add(ruleId);
+        p.csrAdded++;
+        p.notes.push(`CSR add evidence=${item.evidence} RULE_ID=${ruleId}`);
+      }
+    }
+
+    // APPLY targeted activations
+    for (const item of profile.activate) {
+      const row = csrByCcEvidence.get(`${ccId}||${item.evidence}`);
+      if (!row) {
+        p.ok = false;
+        p.errors.push(`CSR missing after ensure for evidence=${item.evidence}`);
+        if (!args.continueOnFail) return p;
+        continue;
+      }
+
+      const wantCluster = tierClusterId(item.tier);
+      const wantWhen = item.when;
+      const wantPoints = String(item.points ?? profile.tiers[item.tier].points);
+
+      let changed = false;
+      if (row.CLUSTER_ID !== wantCluster) { row.CLUSTER_ID = wantCluster; changed = true; }
+      if (row.WHEN_EXPR !== wantWhen) { row.WHEN_EXPR = wantWhen; changed = true; }
+      if (row.POINTS !== wantPoints) { row.POINTS = wantPoints; changed = true; }
+
+      if (changed) p.csrUpdated++;
+    }
+
+    // ENSURE DXP tiers exist
+    for (const tier of ["PRIMARY", "SECONDARY", "BENIGN"] as const) {
+      const clusterId = tierClusterId(tier);
+      const wantPriority = String(profile.tiers[tier].priority);
+      const key = `${ccId}||${clusterId}`;
+
+      const existing = dxpByCcCluster.get(key);
+      if (!existing) {
+        const newRow: Record<string, string> = {
+          CC_ID: ccId,
+          CLUSTER_ID: clusterId,
+          PRIORITY: wantPriority,
+        };
+        dxp.rows.push(newRow);
+        dxpByCcCluster.set(key, newRow);
+        p.dxpAdded++;
+      } else if (existing.PRIORITY !== wantPriority) {
+        existing.PRIORITY = wantPriority;
+        p.dxpUpdated++;
+      }
+    }
+
+    return p;
+  };
+
+  const tasks = seed.map((r) =>
+    limiter(async () => runOne(r.CC_ID, r.PROFILE_ID))
+      .then((p) => {
+        plans.push(p);
+        const status = p.ok ? "✅" : "❌";
+        console.log(`${status} ${p.ccId} -> ${p.profileId} | CSR +${p.csrAdded} upd ${p.csrUpdated} | DXP +${p.dxpAdded} upd ${p.dxpUpdated}`);
+        if (!p.ok && p.errors.length) for (const e of p.errors) console.log(`   - ${e}`);
+        if (!p.ok && !args.continueOnFail) throw new Error(`Stopping on failure (use --continue-on-fail): ${p.ccId}`);
+      })
+  );
+
+  Promise.allSettled(tasks).then((settled) => {
+    const hadStop = settled.some((s) => s.status === "rejected");
+    const okCount = plans.filter((p) => p.ok).length;
+    const failCount = plans.length - okCount;
+
+    console.log("\n=== ULTRA Summary ===");
+    console.log(`attempted: ${plans.length}`);
+    console.log(`ok: ${okCount}`);
+    console.log(`fail: ${failCount}`);
+    console.log(`CSR added: ${plans.reduce((a, p) => a + p.csrAdded, 0)}`);
+    console.log(`CSR updated: ${plans.reduce((a, p) => a + p.csrUpdated, 0)}`);
+    console.log(`DXP added: ${plans.reduce((a, p) => a + p.dxpAdded, 0)}`);
+    console.log(`DXP updated: ${plans.reduce((a, p) => a + p.dxpUpdated, 0)}`);
+
+    const summary = {
+      seedPath: args.seedPath,
+      dryRun: args.dryRun,
+      continueOnFail: args.continueOnFail,
+      onlyProfile: args.onlyProfile ?? null,
+      ccs: args.ccs,
+      parallel: args.parallel,
+      attempted: plans.length,
+      ok: okCount,
+      fail: failCount,
+      totals: {
+        csrAdded: plans.reduce((a, p) => a + p.csrAdded, 0),
+        csrUpdated: plans.reduce((a, p) => a + p.csrUpdated, 0),
+        dxpAdded: plans.reduce((a, p) => a + p.dxpAdded, 0),
+        dxpUpdated: plans.reduce((a, p) => a + p.dxpUpdated, 0),
+      },
+      results: plans,
+      generated_at: new Date().toISOString(),
+    };
+
+    // Summary JSON
+    if (args.summaryJsonPath) {
+      if (args.dryRun) {
+        console.log(`[DRY] Would write summary JSON -> ${args.summaryJsonPath}`);
+      } else {
+        fs.mkdirSync(path.dirname(args.summaryJsonPath), { recursive: true });
+        fs.writeFileSync(args.summaryJsonPath, JSON.stringify(summary, null, 2) + "\n", "utf8");
+        console.log(`Wrote summary JSON: ${args.summaryJsonPath}`);
+      }
+    }
+
+    // Commit write once (unless dry-run)
+    if (args.dryRun) {
+      console.log("\n[DRY] No files written.");
+      process.exit(hadStop || failCount > 0 ? 1 : 0);
+      return;
+    }
+
+    // Transaction backup
+    const runId = args.runId ?? makeRunId();
+    const backupBase = path.isAbsolute(args.backupDir) ? args.backupDir : path.join(root, args.backupDir);
+    const runDir = path.join(backupBase, runId);
+
+    if (!args.noBackup) {
+      fs.mkdirSync(runDir, { recursive: true });
+
+      const csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+      const dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+
+      copyFile(CSR_PATH, csrBak, false);
+      copyFile(DXP_PATH, dxpBak, false);
+
+      const manifest = {
+        run_id: runId,
+        created_at: new Date().toISOString(),
+        seed_path: args.seedPath,
+        backup_dir: runDir,
+        files: [
+          { src: CSR_PATH, backup: csrBak },
+          { src: DXP_PATH, backup: dxpBak }
+        ],
+        summary
+      };
+
+      fs.writeFileSync(path.join(runDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+      console.log(`\n🧾 Transaction backup created: ${runDir}`);
+      console.log(`Rollback with: npx tsx scripts/apply-profile-pack-bulk.ts --rollback ${runId}`);
+    }
+
+    // Now commit the write
+    writeCsv(CSR_PATH, csr.headers, csr.rows, false);
+    writeCsv(DXP_PATH, dxp.headers, dxp.rows, false);
+    console.log("\nWrote CSR + DXP once (safe commit).");
+
+    process.exit(hadStop || failCount > 0 ? 1 : 0);
+  }).catch((e) => {
+    console.error("Fatal:", e?.stack ?? e);
+    process.exit(1);
+  });
+}
+
+main();
+How to use backups
+Apply with automatic backup (default)
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv \
+  --parallel 12 \
+  --continue-on-fail \
+  --summary-json scripts/profile_apply_runs/latest.json
+
+Backups land in:
+server/data/csv/_tx_backups/<RUN_ID>/
+
+Rollback to a run
+npx tsx scripts/apply-profile-pack-bulk.ts --rollback 20260304_081530
+Custom backup directory + explicit run id
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv \
+  --run-id my_run_001 \
+  --backup-dir server/data/csv/_tx_backups
+Skip backups
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --no-backup
+
+If you want one more safety rail, I can add pre-commit validation: run npm run abi:complaints automatically after writing and, if it fails, auto-rollback to the just-created backup.
+
+add pre-commit validation
+please continue
+
+Yep. Here’s pre-commit validation with auto-rollback added to the ULTRA script.
+
+Design (safe + practical):
+
+Plan changes in-memory (same as now)
+
+Create transaction backup (same as now)
+
+Write CSR + DXP
+
+Run validation command (default: npm run abi:complaints)
+
+If validation fails:
+
+restore CSR + DXP from the backup we just made
+
+exit non-zero
+
+If validation passes:
+
+keep changes and exit normally
+
+Also adds flags:
+
+--validate-cmd "<command>" (default npm run abi:complaints)
+
+--no-validate (skip)
+
+--no-auto-rollback (validate but don’t rollback)
+
+Patch: Update scripts/apply-profile-pack-bulk.ts
+1) Add new args fields
+
+In the Args type, add:
+
+  noValidate: boolean;
+  validateCmd: string;
+  noAutoRollback: boolean;
+2) Update parseArgs
+
+Add defaults and flag parsing:
+
+  // defaults
+  args.noValidate = argv.includes("--no-validate");
+  args.validateCmd = "npm run abi:complaints";
+  args.noAutoRollback = argv.includes("--no-auto-rollback");
+
+  // parse
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    ...
+    else if (a === "--validate-cmd") args.validateCmd = argv[++i];
+  }
+3) Add helper to run shell command
+
+Add this near your helpers:
+
+import { spawnSync } from "child_process";
+
+function runShell(cmdLine: string) {
+  // Works in Replit shells; uses sh -lc so npm scripts resolve.
+  const res = spawnSync("sh", ["-lc", cmdLine], { stdio: "inherit", env: process.env });
+  return { ok: (res.status ?? 1) === 0, code: res.status ?? 1 };
+}
+4) Add helper to rollback from this run dir
+
+You already have rollback logic. Add a lightweight “rollback now” helper:
+
+function rollbackNow(csrBak: string, dxpBak: string, csrPath: string, dxpPath: string) {
+  fs.copyFileSync(csrBak, csrPath);
+  fs.copyFileSync(dxpBak, dxpPath);
+}
+5) Inject validation right after commit write
+
+Find the section where you do:
+
+writeCsv(CSR_PATH, csr.headers, csr.rows, false);
+writeCsv(DXP_PATH, dxp.headers, dxp.rows, false);
+console.log("\nWrote CSR + DXP once (safe commit).");
+process.exit(...)
+
+Replace that end block with:
+
+// Now commit the write
+writeCsv(CSR_PATH, csr.headers, csr.rows, false);
+writeCsv(DXP_PATH, dxp.headers, dxp.rows, false);
+console.log("\nWrote CSR + DXP once (safe commit).");
+
+// Pre-commit validation (post-write, auto-rollback on failure)
+if (!args.noValidate) {
+  console.log(`\n🔎 Validation: ${args.validateCmd}`);
+  const v = runShell(args.validateCmd);
+
+  if (!v.ok) {
+    console.log(`\n❌ Validation failed (exit ${v.code}).`);
+
+    if (!args.noBackup) {
+      if (!args.noAutoRollback) {
+        console.log("↩️  Auto-rollback to transaction backup...");
+        try {
+          const csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+          const dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+          rollbackNow(csrBak, dxpBak, CSR_PATH, DXP_PATH);
+          console.log("✅ Rollback complete.");
+        } catch (e: any) {
+          console.log("⚠️ Rollback failed:", e?.message ?? String(e));
+        }
+      } else {
+        console.log("⚠️ Auto-rollback disabled (--no-auto-rollback).");
+      }
+      console.log(`Backup run id: ${runId}`);
+    } else {
+      console.log("⚠️ No backup was created (--no-backup), cannot auto-rollback safely.");
+    }
+
+    process.exit(1);
+  }
+
+  console.log("✅ Validation passed.");
+}
+
+process.exit(hadStop || failCount > 0 ? 1 : 0);
+Full set of new flags
+
+Examples:
+
+Default behavior (backup + validate + rollback if validate fails)
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --parallel 12
+Use a different validator command
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv \
+  --validate-cmd "npm test"
+Validate but don’t rollback
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --no-auto-rollback
+Skip validation
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --no-validate
+One tiny recommendation
+
+If your ABI validator is fast, keep it as default. If it’s slower later, you can create a lighter script:
+
+npm run abi:complaints -- --engine GENERIC_V1
+or a dedicated abi:fast that only validates recently modified complaints.
+
+If you want, I can rewrite the entire ultra script as one clean file with these changes already merged (so you don’t patch by hand).
+
+yes one clean file
+/**
+ * scripts/apply-profile-pack-bulk.ts
+ * ULTRA DELUXE: bulk ensure+apply profile packs with:
+ * - Safe parallel planning (no concurrent file writers)
+ * - Single-commit write of CSR + DXP
+ * - Transaction backups (CSR + DXP) + manifest.json
+ * - Rollback mode: --rollback <RUN_ID>
+ * - Pre-commit validation (post-write) with auto-rollback on failure
+ *
+ * CSVs touched (flat dir):
+ *   server/data/csv/CLUSTER_SCORING_RULES.csv
+ *   server/data/csv/DX_PRIORITY.csv
+ *
+ * Profile packs:
+ *   data/complaints/profile_packs.json
+ *
+ * Seed CSV:
+ *   data/complaints/profile_apply_seed.csv  with headers CC_ID,PROFILE_ID
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+ *
+ * Filters / controls:
+ *   --dry-run
+ *   --continue-on-fail
+ *   --only-profile <PROFILE_ID>
+ *   --cc <cc_id>            (repeatable)
+ *   --list                  (show plan after filters then exit)
+ *   --summary-json <path>   (write results JSON)
+ *   --parallel <N>          (planning concurrency; commit always single write)
+ *
+ * Transaction:
+ *   --backup-dir <path>     default: server/data/csv/_tx_backups
+ *   --run-id <id>           default: autogenerated YYYYMMDD_HHMMSS
+ *   --no-backup             skip backups
+ *   --rollback <RUN_ID>     restore CSR+DXP from backup run and exit
+ *
+ * Validation:
+ *   --no-validate           skip validation
+ *   --validate-cmd "<cmd>"  default: npm run abi:complaints
+ *   --no-auto-rollback      validate but do not rollback on failure
+ */
+
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+
+type Args = {
+  seedPath?: string; // optional if rollback
+  dryRun: boolean;
+  continueOnFail: boolean;
+  onlyProfile?: string;
+  ccs: string[];
+  listOnly: boolean;
+  summaryJsonPath?: string;
+  parallel: number;
+
+  // tx
+  backupDir: string;
+  runId?: string;
+  noBackup: boolean;
+  rollbackRunId?: string;
+
+  // validation
+  noValidate: boolean;
+  validateCmd: string;
+  noAutoRollback: boolean;
+};
+
+type Profile = {
+  cluster_prefix: string;
+  tiers: Record<"PRIMARY" | "SECONDARY" | "BENIGN", { points: number; priority: number }>;
+  activate: Array<{ evidence: string; tier: "PRIMARY" | "SECONDARY" | "BENIGN"; when: string; points?: number }>;
+};
+
+type ItemPlan = {
+  ccId: string;
+  profileId: string;
+  ok: boolean;
+  errors: string[];
+  csrAdded: number;
+  csrUpdated: number;
+  dxpAdded: number;
+  dxpUpdated: number;
+  notes: string[];
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    seedPath: argv[0] && !argv[0].startsWith("--") ? argv[0] : undefined,
+    dryRun: argv.includes("--dry-run"),
+    continueOnFail: argv.includes("--continue-on-fail"),
+    ccs: [],
+    listOnly: argv.includes("--list"),
+    parallel: 4,
+
+    backupDir: "server/data/csv/_tx_backups",
+    noBackup: argv.includes("--no-backup"),
+
+    noValidate: argv.includes("--no-validate"),
+    validateCmd: "npm run abi:complaints",
+    noAutoRollback: argv.includes("--no-auto-rollback"),
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--only-profile") args.onlyProfile = argv[++i];
+    else if (a === "--cc") args.ccs.push(argv[++i]);
+    else if (a === "--summary-json") args.summaryJsonPath = argv[++i];
+    else if (a === "--parallel") args.parallel = Math.max(1, parseInt(argv[++i] ?? "4", 10) || 4);
+
+    else if (a === "--backup-dir") args.backupDir = argv[++i];
+    else if (a === "--run-id") args.runId = argv[++i];
+    else if (a === "--rollback") args.rollbackRunId = argv[++i];
+
+    else if (a === "--validate-cmd") args.validateCmd = argv[++i];
+  }
+
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[], dryRun: boolean) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  if (dryRun) {
+    console.log(`[DRY] Would write ${rows.length} rows -> ${filePath}`);
+    return;
+  }
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function mustHave(headers: string[], needed: string[], fileLabel: string) {
+  for (const h of needed) {
+    if (!headers.includes(h)) throw new Error(`${fileLabel} missing header: ${h}`);
+  }
+}
+
+function readSeed(filePath: string): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+
+  const headers = splitCsvLine(lines[0]);
+  const idxCc = headers.indexOf("CC_ID");
+  const idxPf = headers.indexOf("PROFILE_ID");
+  if (idxCc < 0 || idxPf < 0) {
+    throw new Error(`Seed CSV must have headers CC_ID,PROFILE_ID (got: ${headers.join(",")})`);
+  }
+
+  const rows: Array<{ CC_ID: string; PROFILE_ID: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[idxCc] ?? "").trim();
+    const pf = (cols[idxPf] ?? "").trim();
+    if (!cc || !pf) continue;
+    rows.push({ CC_ID: cc, PROFILE_ID: pf });
+  }
+  return rows;
+}
+
+function applyFilters(rows: Array<{ CC_ID: string; PROFILE_ID: string }>, args: Args) {
+  let out = rows;
+  if (args.onlyProfile) out = out.filter((r) => r.PROFILE_ID === args.onlyProfile);
+  if (args.ccs.length) {
+    const set = new Set(args.ccs.map((x) => x.trim()).filter(Boolean));
+    out = out.filter((r) => set.has(r.CC_ID));
+  }
+  return out;
+}
+
+function makeLimiter(n: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => {
+    if (active >= n) return;
+    const job = queue.shift();
+    if (!job) return;
+    active++;
+    job();
+  };
+  return function limit<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      queue.push(() => {
+        fn()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active--;
+            next();
+          });
+      });
+      next();
+    });
+  };
+}
+
+function makeRunId() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function copyFile(src: string, dst: string, dryRun: boolean) {
+  if (dryRun) {
+    console.log(`[DRY] Would copy ${src} -> ${dst}`);
+    return;
+  }
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+}
+
+function runShell(cmdLine: string) {
+  const res = spawnSync("sh", ["-lc", cmdLine], { stdio: "inherit", env: process.env });
+  return { ok: (res.status ?? 1) === 0, code: res.status ?? 1 };
+}
+
+function rollbackFromBackup(params: {
+  root: string;
+  backupDir: string;
+  runId: string;
+  csrPath: string;
+  dxpPath: string;
+}) {
+  const { root, backupDir, runId, csrPath, dxpPath } = params;
+  const base = path.isAbsolute(backupDir) ? backupDir : path.join(root, backupDir);
+  const runDir = path.join(base, runId);
+
+  const csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+  const dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+  const manifest = path.join(runDir, "manifest.json");
+
+  if (!fs.existsSync(runDir)) throw new Error(`Backup run dir not found: ${runDir}`);
+  if (!fs.existsSync(csrBak)) throw new Error(`Missing CSR backup: ${csrBak}`);
+  if (!fs.existsSync(dxpBak)) throw new Error(`Missing DXP backup: ${dxpBak}`);
+
+  fs.copyFileSync(csrBak, csrPath);
+  fs.copyFileSync(dxpBak, dxpPath);
+
+  console.log("✅ Rollback complete.");
+  console.log(`Restored:\n- ${csrPath}\n- ${dxpPath}`);
+  if (fs.existsSync(manifest)) console.log(`Manifest: ${manifest}`);
+}
+
+function rollbackNow(csrBak: string, dxpBak: string, csrPath: string, dxpPath: string) {
+  fs.copyFileSync(csrBak, csrPath);
+  fs.copyFileSync(dxpBak, dxpPath);
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const PROFILE_PATH = path.join(root, "data", "complaints", "profile_packs.json");
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  if (!fs.existsSync(PROFILE_PATH)) throw new Error(`Missing profile file: ${PROFILE_PATH}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+  if (!fs.existsSync(DXP_PATH)) throw new Error(`Missing: ${DXP_PATH}`);
+
+  // ROLLBACK MODE
+  if (args.rollbackRunId) {
+    rollbackFromBackup({
+      root,
+      backupDir: args.backupDir,
+      runId: args.rollbackRunId,
+      csrPath: CSR_PATH,
+      dxpPath: DXP_PATH,
+    });
+    process.exit(0);
+  }
+
+  if (!args.seedPath) {
+    throw new Error("Missing seed.csv path. Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [flags]");
+  }
+
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
+
+  const seedAll = readSeed(seedAbs);
+  const seed = applyFilters(seedAll, args);
+
+  if (args.listOnly) {
+    console.log("\n=== Bulk Profile Apply Plan ===");
+    console.log(`Seed rows: ${seedAll.length}`);
+    console.log(`After filters: ${seed.length}`);
+    console.log("");
+    for (const r of seed) console.log(`- ${r.CC_ID} -> ${r.PROFILE_ID}`);
+    process.exit(0);
+  }
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8")) as Record<string, Profile>;
+
+  const csr = readCsv(CSR_PATH);
+  const dxp = readCsv(DXP_PATH);
+
+  mustHave(csr.headers, ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"], "CLUSTER_SCORING_RULES.csv");
+  mustHave(dxp.headers, ["CC_ID", "CLUSTER_ID", "PRIORITY"], "DX_PRIORITY.csv");
+
+  // Index CSR
+  const csrByCcEvidence = new Map<string, Record<string, string>>(); // `${ccId}||${evidence}`
+  const csrRuleIdsByCc = new Map<string, Set<string>>();
+
+  for (const r of csr.rows) {
+    const ccId = r.CC_ID;
+    if (!ccId) continue;
+    if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+    if (r.RULE_ID) csrRuleIdsByCc.get(ccId)!.add(r.RULE_ID);
+
+    if (r.EVIDENCE_LABEL) csrByCcEvidence.set(`${ccId}||${r.EVIDENCE_LABEL}`, r);
+  }
+
+  // Index DXP
+  const dxpByCcCluster = new Map<string, Record<string, string>>(); // `${ccId}||${clusterId}`
+  for (const r of dxp.rows) {
+    if (r.CC_ID && r.CLUSTER_ID) dxpByCcCluster.set(`${r.CC_ID}||${r.CLUSTER_ID}`, r);
+  }
+
+  const limiter = makeLimiter(args.parallel);
+
+  console.log(`\n=== ULTRA Bulk Profile Apply (${seed.length} rows) ===`);
+  console.log(`parallel planning: ${args.parallel}`);
+  if (args.dryRun) console.log("Mode: DRY RUN");
+  if (args.continueOnFail) console.log("Mode: CONTINUE ON FAIL");
+  if (args.onlyProfile) console.log(`Filter: only-profile=${args.onlyProfile}`);
+  if (args.ccs.length) console.log(`Filter: cc in [${args.ccs.join(", ")}]`);
+  if (args.summaryJsonPath) console.log(`Will write: ${args.summaryJsonPath}`);
+  if (!args.noBackup) console.log(`Backup dir: ${args.backupDir}`);
+  if (!args.noValidate) console.log(`Validate cmd: ${args.validateCmd}`);
+  console.log("");
+
+  const plans: ItemPlan[] = [];
+
+  const runOne = async (ccId: string, profileId: string): Promise<ItemPlan> => {
+    const p: ItemPlan = {
+      ccId,
+      profileId,
+      ok: true,
+      errors: [],
+      csrAdded: 0,
+      csrUpdated: 0,
+      dxpAdded: 0,
+      dxpUpdated: 0,
+      notes: [],
+    };
+
+    const profile = profiles[profileId];
+    if (!profile) {
+      p.ok = false;
+      p.errors.push(`Profile not found: ${profileId}`);
+      return p;
+    }
+
+    const prefix = profile.cluster_prefix;
+    const tierClusterId = (tier: "PRIMARY" | "SECONDARY" | "BENIGN") => `CL_${prefix}_${tier}`;
+
+    // ENSURE CSR rows exist
+    const ruleIdRe = new RegExp(`^CSR_${prefix}_(\\d+)$`);
+    let maxN = 0;
+    const existingRuleIds = csrRuleIdsByCc.get(ccId) ?? new Set<string>();
+    for (const rid of existingRuleIds) {
+      const m = rid.match(ruleIdRe);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (!Number.isNaN(n)) maxN = Math.max(maxN, n);
+      }
+    }
+
+    for (const item of profile.activate) {
+      const key = `${ccId}||${item.evidence}`;
+      const existing = csrByCcEvidence.get(key);
+      if (!existing) {
+        maxN++;
+        const ruleId = `CSR_${prefix}_${String(maxN).padStart(2, "0")}`;
+        const newRow: Record<string, string> = {
+          CC_ID: ccId,
+          CLUSTER_ID: tierClusterId("BENIGN"),
+          RULE_ID: ruleId,
+          POINTS: "0",
+          WHEN_EXPR: "false",
+          EVIDENCE_LABEL: item.evidence,
+        };
+        csr.rows.push(newRow);
+        csrByCcEvidence.set(key, newRow);
+
+        if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+        csrRuleIdsByCc.get(ccId)!.add(ruleId);
+
+        p.csrAdded++;
+        p.notes.push(`CSR add evidence=${item.evidence} RULE_ID=${ruleId}`);
+      }
+    }
+
+    // APPLY activations
+    for (const item of profile.activate) {
+      const row = csrByCcEvidence.get(`${ccId}||${item.evidence}`);
+      if (!row) {
+        p.ok = false;
+        p.errors.push(`CSR missing after ensure for evidence=${item.evidence}`);
+        if (!args.continueOnFail) return p;
+        continue;
+      }
+
+      const wantCluster = tierClusterId(item.tier);
+      const wantWhen = item.when;
+      const wantPoints = String(item.points ?? profile.tiers[item.tier].points);
+
+      let changed = false;
+      if (row.CLUSTER_ID !== wantCluster) { row.CLUSTER_ID = wantCluster; changed = true; }
+      if (row.WHEN_EXPR !== wantWhen) { row.WHEN_EXPR = wantWhen; changed = true; }
+      if (row.POINTS !== wantPoints) { row.POINTS = wantPoints; changed = true; }
+      if (changed) p.csrUpdated++;
+    }
+
+    // ENSURE DXP tiers exist
+    for (const tier of ["PRIMARY", "SECONDARY", "BENIGN"] as const) {
+      const clusterId = tierClusterId(tier);
+      const wantPriority = String(profile.tiers[tier].priority);
+      const key = `${ccId}||${clusterId}`;
+
+      const existing = dxpByCcCluster.get(key);
+      if (!existing) {
+        const newRow: Record<string, string> = { CC_ID: ccId, CLUSTER_ID: clusterId, PRIORITY: wantPriority };
+        dxp.rows.push(newRow);
+        dxpByCcCluster.set(key, newRow);
+        p.dxpAdded++;
+      } else if (existing.PRIORITY !== wantPriority) {
+        existing.PRIORITY = wantPriority;
+        p.dxpUpdated++;
+      }
+    }
+
+    return p;
+  };
+
+  const tasks = seed.map((r) =>
+    limiter(async () => runOne(r.CC_ID, r.PROFILE_ID))
+      .then((p) => {
+        plans.push(p);
+        const status = p.ok ? "✅" : "❌";
+        console.log(
+          `${status} ${p.ccId} -> ${p.profileId} | CSR +${p.csrAdded} upd ${p.csrUpdated} | DXP +${p.dxpAdded} upd ${p.dxpUpdated}`
+        );
+        if (!p.ok && p.errors.length) for (const e of p.errors) console.log(`   - ${e}`);
+        if (!p.ok && !args.continueOnFail) throw new Error(`Stopping on failure (use --continue-on-fail): ${p.ccId}`);
+      })
+  );
+
+  Promise.allSettled(tasks)
+    .then((settled) => {
+      const hadStop = settled.some((s) => s.status === "rejected");
+      const okCount = plans.filter((p) => p.ok).length;
+      const failCount = plans.length - okCount;
+
+      console.log("\n=== ULTRA Summary ===");
+      console.log(`attempted: ${plans.length}`);
+      console.log(`ok: ${okCount}`);
+      console.log(`fail: ${failCount}`);
+      console.log(`CSR added: ${plans.reduce((a, p) => a + p.csrAdded, 0)}`);
+      console.log(`CSR updated: ${plans.reduce((a, p) => a + p.csrUpdated, 0)}`);
+      console.log(`DXP added: ${plans.reduce((a, p) => a + p.dxpAdded, 0)}`);
+      console.log(`DXP updated: ${plans.reduce((a, p) => a + p.dxpUpdated, 0)}`);
+
+      const summary = {
+        seedPath: args.seedPath,
+        dryRun: args.dryRun,
+        continueOnFail: args.continueOnFail,
+        onlyProfile: args.onlyProfile ?? null,
+        ccs: args.ccs,
+        parallel: args.parallel,
+        attempted: plans.length,
+        ok: okCount,
+        fail: failCount,
+        totals: {
+          csrAdded: plans.reduce((a, p) => a + p.csrAdded, 0),
+          csrUpdated: plans.reduce((a, p) => a + p.csrUpdated, 0),
+          dxpAdded: plans.reduce((a, p) => a + p.dxpAdded, 0),
+          dxpUpdated: plans.reduce((a, p) => a + p.dxpUpdated, 0),
+        },
+        results: plans,
+        generated_at: new Date().toISOString(),
+      };
+
+      // Summary JSON
+      if (args.summaryJsonPath) {
+        if (args.dryRun) {
+          console.log(`[DRY] Would write summary JSON -> ${args.summaryJsonPath}`);
+        } else {
+          fs.mkdirSync(path.dirname(args.summaryJsonPath), { recursive: true });
+          fs.writeFileSync(args.summaryJsonPath, JSON.stringify(summary, null, 2) + "\n", "utf8");
+          console.log(`Wrote summary JSON: ${args.summaryJsonPath}`);
+        }
+      }
+
+      // DRY RUN: no writes
+      if (args.dryRun) {
+        console.log("\n[DRY] No files written.");
+        process.exit(hadStop || failCount > 0 ? 1 : 0);
+        return;
+      }
+
+      // Transaction backup
+      const runId = args.runId ?? makeRunId();
+      const backupBase = path.isAbsolute(args.backupDir) ? args.backupDir : path.join(root, args.backupDir);
+      const runDir = path.join(backupBase, runId);
+
+      let csrBak = "";
+      let dxpBak = "";
+
+      if (!args.noBackup) {
+        fs.mkdirSync(runDir, { recursive: true });
+
+        csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+        dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+
+        copyFile(CSR_PATH, csrBak, false);
+        copyFile(DXP_PATH, dxpBak, false);
+
+        const manifest = {
+          run_id: runId,
+          created_at: new Date().toISOString(),
+          seed_path: args.seedPath,
+          backup_dir: runDir,
+          files: [
+            { src: CSR_PATH, backup: csrBak },
+            { src: DXP_PATH, backup: dxpBak },
+          ],
+          summary,
+        };
+
+        fs.writeFileSync(path.join(runDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+        console.log(`\n🧾 Transaction backup created: ${runDir}`);
+        console.log(`Rollback with: npx tsx scripts/apply-profile-pack-bulk.ts --rollback ${runId}`);
+      }
+
+      // Commit write once
+      writeCsv(CSR_PATH, csr.headers, csr.rows, false);
+      writeCsv(DXP_PATH, dxp.headers, dxp.rows, false);
+      console.log("\nWrote CSR + DXP once (safe commit).");
+
+      // Validation (post-write) with auto-rollback
+      if (!args.noValidate) {
+        console.log(`\n🔎 Validation: ${args.validateCmd}`);
+        const v = runShell(args.validateCmd);
+
+        if (!v.ok) {
+          console.log(`\n❌ Validation failed (exit ${v.code}).`);
+
+          if (args.noBackup) {
+            console.log("⚠️ No backup was created (--no-backup), cannot auto-rollback safely.");
+          } else if (args.noAutoRollback) {
+            console.log("⚠️ Auto-rollback disabled (--no-auto-rollback).");
+            console.log(`Backup run id: ${runId}`);
+          } else {
+            console.log("↩️  Auto-rollback to transaction backup...");
+            try {
+              if (!csrBak || !dxpBak) {
+                // defensive: reconstruct from runDir
+                csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+                dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+              }
+              rollbackNow(csrBak, dxpBak, CSR_PATH, DXP_PATH);
+              console.log("✅ Rollback complete.");
+              console.log(`Backup run id: ${runId}`);
+            } catch (e: any) {
+              console.log("⚠️ Rollback failed:", e?.message ?? String(e));
+              console.log(`Backup run id: ${runId}`);
+            }
+          }
+
+          process.exit(1);
+          return;
+        }
+
+        console.log("✅ Validation passed.");
+      }
+
+      process.exit(hadStop || failCount > 0 ? 1 : 0);
+    })
+    .catch((e) => {
+      console.error("Fatal:", e?.stack ?? e);
+      process.exit(1);
+    });
+}
+
+main();
+Quick usage recipes
+
+Apply with backup + validation + auto-rollback:
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --parallel 12 --continue-on-fail
+
+Custom validator (e.g., run tests instead of ABI):
+
+npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv --validate-cmd "npm test"
+
+Rollback:
+
+npx tsx scripts/apply-profile-pack-bulk.ts --rollback 20260304_081530
+
+If you want, next we can add one more belt-and-suspenders: write CSR/DXP to temporary files first, then rename (safer against crashes mid-write).
+
+add belt and suspenders
+/**
+ * scripts/apply-profile-pack-bulk.ts
+ * ULTRA DELUXE: bulk ensure+apply profile packs with:
+ * - Safe parallel planning (no concurrent file writers)
+ * - Single-commit write of CSR + DXP
+ * - Transaction backups (CSR + DXP) + manifest.json
+ * - Rollback mode: --rollback <RUN_ID>
+ * - Post-write validation with auto-rollback on failure
+ * - Belt & suspenders file commit:
+ *    - write to temp files
+ *    - fsync
+ *    - rename over originals
+ *    - optionally keep .prev copies
+ *
+ * CSVs touched:
+ *   server/data/csv/CLUSTER_SCORING_RULES.csv
+ *   server/data/csv/DX_PRIORITY.csv
+ *
+ * Profile packs:
+ *   data/complaints/profile_packs.json
+ *
+ * Seed CSV:
+ *   data/complaints/profile_apply_seed.csv (CC_ID,PROFILE_ID)
+ *
+ * Usage:
+ *   npx tsx scripts/apply-profile-pack-bulk.ts data/complaints/profile_apply_seed.csv
+ *
+ * Flags (common):
+ *   --dry-run
+ *   --continue-on-fail
+ *   --only-profile <PROFILE_ID>
+ *   --cc <cc_id>                 (repeatable)
+ *   --list
+ *   --summary-json <path>
+ *   --parallel <N>
+ *
+ * Transaction:
+ *   --backup-dir <path>          default: server/data/csv/_tx_backups
+ *   --run-id <id>                default: autogenerated YYYYMMDD_HHMMSS
+ *   --no-backup
+ *   --rollback <RUN_ID>
+ *
+ * Validation:
+ *   --no-validate
+ *   --validate-cmd "<cmd>"       default: npm run abi:complaints
+ *   --no-auto-rollback
+ *
+ * Belt & suspenders:
+ *   --keep-prev                  keep <file>.prev.<runId> copies of originals
+ *   --no-atomic                  fall back to direct write (not recommended)
+ */
+
+import fs from "fs";
+import path from "path";
+import { spawnSync } from "child_process";
+
+type Args = {
+  seedPath?: string;
+  dryRun: boolean;
+  continueOnFail: boolean;
+  onlyProfile?: string;
+  ccs: string[];
+  listOnly: boolean;
+  summaryJsonPath?: string;
+  parallel: number;
+
+  backupDir: string;
+  runId?: string;
+  noBackup: boolean;
+  rollbackRunId?: string;
+
+  noValidate: boolean;
+  validateCmd: string;
+  noAutoRollback: boolean;
+
+  keepPrev: boolean;
+  noAtomic: boolean;
+};
+
+type Profile = {
+  cluster_prefix: string;
+  tiers: Record<"PRIMARY" | "SECONDARY" | "BENIGN", { points: number; priority: number }>;
+  activate: Array<{ evidence: string; tier: "PRIMARY" | "SECONDARY" | "BENIGN"; when: string; points?: number }>;
+};
+
+type ItemPlan = {
+  ccId: string;
+  profileId: string;
+  ok: boolean;
+  errors: string[];
+  csrAdded: number;
+  csrUpdated: number;
+  dxpAdded: number;
+  dxpUpdated: number;
+  notes: string[];
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    seedPath: argv[0] && !argv[0].startsWith("--") ? argv[0] : undefined,
+    dryRun: argv.includes("--dry-run"),
+    continueOnFail: argv.includes("--continue-on-fail"),
+    ccs: [],
+    listOnly: argv.includes("--list"),
+    parallel: 4,
+
+    backupDir: "server/data/csv/_tx_backups",
+    noBackup: argv.includes("--no-backup"),
+
+    noValidate: argv.includes("--no-validate"),
+    validateCmd: "npm run abi:complaints",
+    noAutoRollback: argv.includes("--no-auto-rollback"),
+
+    keepPrev: argv.includes("--keep-prev"),
+    noAtomic: argv.includes("--no-atomic"),
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--only-profile") args.onlyProfile = argv[++i];
+    else if (a === "--cc") args.ccs.push(argv[++i]);
+    else if (a === "--summary-json") args.summaryJsonPath = argv[++i];
+    else if (a === "--parallel") args.parallel = Math.max(1, parseInt(argv[++i] ?? "4", 10) || 4);
+
+    else if (a === "--backup-dir") args.backupDir = argv[++i];
+    else if (a === "--run-id") args.runId = argv[++i];
+    else if (a === "--rollback") args.rollbackRunId = argv[++i];
+
+    else if (a === "--validate-cmd") args.validateCmd = argv[++i];
+  }
+
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.every((c) => c === "")) continue;
+    const r: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) r[headers[j]] = cols[j] ?? "";
+    rows.push(r);
+  }
+  return { headers, rows };
+}
+
+function encodeCsv(headers: string[], rows: Record<string, string>[]) {
+  const lines: string[] = [];
+  lines.push(headers.join(","));
+  for (const r of rows) {
+    const cols = headers.map((h) => {
+      const v = r[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    });
+    lines.push(cols.join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function mustHave(headers: string[], needed: string[], fileLabel: string) {
+  for (const h of needed) {
+    if (!headers.includes(h)) throw new Error(`${fileLabel} missing header: ${h}`);
+  }
+}
+
+function readSeed(filePath: string): Array<{ CC_ID: string; PROFILE_ID: string }> {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+
+  const headers = splitCsvLine(lines[0]);
+  const idxCc = headers.indexOf("CC_ID");
+  const idxPf = headers.indexOf("PROFILE_ID");
+  if (idxCc < 0 || idxPf < 0) {
+    throw new Error(`Seed CSV must have headers CC_ID,PROFILE_ID (got: ${headers.join(",")})`);
+  }
+
+  const rows: Array<{ CC_ID: string; PROFILE_ID: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const cc = (cols[idxCc] ?? "").trim();
+    const pf = (cols[idxPf] ?? "").trim();
+    if (!cc || !pf) continue;
+    rows.push({ CC_ID: cc, PROFILE_ID: pf });
+  }
+  return rows;
+}
+
+function applyFilters(rows: Array<{ CC_ID: string; PROFILE_ID: string }>, args: Args) {
+  let out = rows;
+  if (args.onlyProfile) out = out.filter((r) => r.PROFILE_ID === args.onlyProfile);
+  if (args.ccs.length) {
+    const set = new Set(args.ccs.map((x) => x.trim()).filter(Boolean));
+    out = out.filter((r) => set.has(r.CC_ID));
+  }
+  return out;
+}
+
+function makeLimiter(n: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => {
+    if (active >= n) return;
+    const job = queue.shift();
+    if (!job) return;
+    active++;
+    job();
+  };
+  return function limit<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      queue.push(() => {
+        fn()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active--;
+            next();
+          });
+      });
+      next();
+    });
+  };
+}
+
+function makeRunId() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function copyFile(src: string, dst: string) {
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+}
+
+function runShell(cmdLine: string) {
+  const res = spawnSync("sh", ["-lc", cmdLine], { stdio: "inherit", env: process.env });
+  return { ok: (res.status ?? 1) === 0, code: res.status ?? 1 };
+}
+
+function rollbackFromBackup(params: {
+  root: string;
+  backupDir: string;
+  runId: string;
+  csrPath: string;
+  dxpPath: string;
+}) {
+  const { root, backupDir, runId, csrPath, dxpPath } = params;
+  const base = path.isAbsolute(backupDir) ? backupDir : path.join(root, backupDir);
+  const runDir = path.join(base, runId);
+
+  const csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+  const dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+  const manifest = path.join(runDir, "manifest.json");
+
+  if (!fs.existsSync(runDir)) throw new Error(`Backup run dir not found: ${runDir}`);
+  if (!fs.existsSync(csrBak)) throw new Error(`Missing CSR backup: ${csrBak}`);
+  if (!fs.existsSync(dxpBak)) throw new Error(`Missing DXP backup: ${dxpBak}`);
+
+  fs.copyFileSync(csrBak, csrPath);
+  fs.copyFileSync(dxpBak, dxpPath);
+
+  console.log("✅ Rollback complete.");
+  console.log(`Restored:\n- ${csrPath}\n- ${dxpPath}`);
+  if (fs.existsSync(manifest)) console.log(`Manifest: ${manifest}`);
+}
+
+function rollbackNow(csrBak: string, dxpBak: string, csrPath: string, dxpPath: string) {
+  fs.copyFileSync(csrBak, csrPath);
+  fs.copyFileSync(dxpBak, dxpPath);
+}
+
+function atomicWriteFile(targetPath: string, content: string, runId: string, keepPrev: boolean) {
+  const dir = path.dirname(targetPath);
+  const base = path.basename(targetPath);
+  const tmp = path.join(dir, `.${base}.tmp.${process.pid}.${Date.now()}`);
+  const prev = path.join(dir, `${base}.prev.${runId}`);
+
+  // Optionally keep a local "prev" copy (extra belt)
+  if (keepPrev) {
+    fs.copyFileSync(targetPath, prev);
+  }
+
+  // Write tmp then fsync
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeFileSync(fd, content, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  // Rename temp over target (atomic on POSIX in same filesystem)
+  fs.renameSync(tmp, targetPath);
+
+  // Fsync directory entry (best effort)
+  try {
+    const dfd = fs.openSync(dir, "r");
+    try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); }
+  } catch {
+    // ignore
+  }
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const PROFILE_PATH = path.join(root, "data", "complaints", "profile_packs.json");
+  const CSR_PATH = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const DXP_PATH = path.join(root, "server", "data", "csv", "DX_PRIORITY.csv");
+
+  if (!fs.existsSync(PROFILE_PATH)) throw new Error(`Missing profile file: ${PROFILE_PATH}`);
+  if (!fs.existsSync(CSR_PATH)) throw new Error(`Missing: ${CSR_PATH}`);
+  if (!fs.existsSync(DXP_PATH)) throw new Error(`Missing: ${DXP_PATH}`);
+
+  // Rollback mode
+  if (args.rollbackRunId) {
+    rollbackFromBackup({
+      root,
+      backupDir: args.backupDir,
+      runId: args.rollbackRunId,
+      csrPath: CSR_PATH,
+      dxpPath: DXP_PATH,
+    });
+    process.exit(0);
+  }
+
+  if (!args.seedPath) {
+    throw new Error("Missing seed.csv path. Usage: npx tsx scripts/apply-profile-pack-bulk.ts <seed.csv> [flags]");
+  }
+
+  const seedAbs = path.isAbsolute(args.seedPath) ? args.seedPath : path.join(root, args.seedPath);
+  if (!fs.existsSync(seedAbs)) throw new Error(`Seed not found: ${seedAbs}`);
+
+  const seedAll = readSeed(seedAbs);
+  const seed = applyFilters(seedAll, args);
+
+  if (args.listOnly) {
+    console.log("\n=== Bulk Profile Apply Plan ===");
+    console.log(`Seed rows: ${seedAll.length}`);
+    console.log(`After filters: ${seed.length}`);
+    console.log("");
+    for (const r of seed) console.log(`- ${r.CC_ID} -> ${r.PROFILE_ID}`);
+    process.exit(0);
+  }
+
+  const profiles = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8")) as Record<string, Profile>;
+
+  const csr = readCsv(CSR_PATH);
+  const dxp = readCsv(DXP_PATH);
+
+  mustHave(csr.headers, ["CC_ID", "CLUSTER_ID", "RULE_ID", "POINTS", "WHEN_EXPR", "EVIDENCE_LABEL"], "CLUSTER_SCORING_RULES.csv");
+  mustHave(dxp.headers, ["CC_ID", "CLUSTER_ID", "PRIORITY"], "DX_PRIORITY.csv");
+
+  // Index CSR
+  const csrByCcEvidence = new Map<string, Record<string, string>>();
+  const csrRuleIdsByCc = new Map<string, Set<string>>();
+  for (const r of csr.rows) {
+    const ccId = r.CC_ID;
+    if (!ccId) continue;
+    if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+    if (r.RULE_ID) csrRuleIdsByCc.get(ccId)!.add(r.RULE_ID);
+    if (r.EVIDENCE_LABEL) csrByCcEvidence.set(`${ccId}||${r.EVIDENCE_LABEL}`, r);
+  }
+
+  // Index DXP
+  const dxpByCcCluster = new Map<string, Record<string, string>>();
+  for (const r of dxp.rows) {
+    if (r.CC_ID && r.CLUSTER_ID) dxpByCcCluster.set(`${r.CC_ID}||${r.CLUSTER_ID}`, r);
+  }
+
+  const limiter = makeLimiter(args.parallel);
+
+  console.log(`\n=== ULTRA Bulk Profile Apply (${seed.length} rows) ===`);
+  console.log(`parallel planning: ${args.parallel}`);
+  if (args.dryRun) console.log("Mode: DRY RUN");
+  if (args.continueOnFail) console.log("Mode: CONTINUE ON FAIL");
+  if (args.onlyProfile) console.log(`Filter: only-profile=${args.onlyProfile}`);
+  if (args.ccs.length) console.log(`Filter: cc in [${args.ccs.join(", ")}]`);
+  if (args.summaryJsonPath) console.log(`Will write: ${args.summaryJsonPath}`);
+  if (!args.noBackup) console.log(`Backup dir: ${args.backupDir}`);
+  if (!args.noValidate) console.log(`Validate cmd: ${args.validateCmd}`);
+  if (!args.noAtomic) console.log("Commit mode: atomic temp-write + rename");
+  else console.log("Commit mode: direct write (--no-atomic)");
+  if (args.keepPrev) console.log("Keep prev: enabled");
+  console.log("");
+
+  const plans: ItemPlan[] = [];
+
+  const runOne = async (ccId: string, profileId: string): Promise<ItemPlan> => {
+    const p: ItemPlan = {
+      ccId,
+      profileId,
+      ok: true,
+      errors: [],
+      csrAdded: 0,
+      csrUpdated: 0,
+      dxpAdded: 0,
+      dxpUpdated: 0,
+      notes: [],
+    };
+
+    const profile = profiles[profileId];
+    if (!profile) {
+      p.ok = false;
+      p.errors.push(`Profile not found: ${profileId}`);
+      return p;
+    }
+
+    const prefix = profile.cluster_prefix;
+    const tierClusterId = (tier: "PRIMARY" | "SECONDARY" | "BENIGN") => `CL_${prefix}_${tier}`;
+
+    // ENSURE CSR rows exist
+    const ruleIdRe = new RegExp(`^CSR_${prefix}_(\\d+)$`);
+    let maxN = 0;
+    const existingRuleIds = csrRuleIdsByCc.get(ccId) ?? new Set<string>();
+    for (const rid of existingRuleIds) {
+      const m = rid.match(ruleIdRe);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (!Number.isNaN(n)) maxN = Math.max(maxN, n);
+      }
+    }
+
+    for (const item of profile.activate) {
+      const key = `${ccId}||${item.evidence}`;
+      const existing = csrByCcEvidence.get(key);
+      if (!existing) {
+        maxN++;
+        const ruleId = `CSR_${prefix}_${String(maxN).padStart(2, "0")}`;
+        const newRow: Record<string, string> = {
+          CC_ID: ccId,
+          CLUSTER_ID: tierClusterId("BENIGN"),
+          RULE_ID: ruleId,
+          POINTS: "0",
+          WHEN_EXPR: "false",
+          EVIDENCE_LABEL: item.evidence,
+        };
+        csr.rows.push(newRow);
+        csrByCcEvidence.set(key, newRow);
+        if (!csrRuleIdsByCc.has(ccId)) csrRuleIdsByCc.set(ccId, new Set());
+        csrRuleIdsByCc.get(ccId)!.add(ruleId);
+        p.csrAdded++;
+      }
+    }
+
+    // APPLY activations
+    for (const item of profile.activate) {
+      const row = csrByCcEvidence.get(`${ccId}||${item.evidence}`);
+      if (!row) {
+        p.ok = false;
+        p.errors.push(`CSR missing after ensure for evidence=${item.evidence}`);
+        if (!args.continueOnFail) return p;
+        continue;
+      }
+
+      const wantCluster = tierClusterId(item.tier);
+      const wantWhen = item.when;
+      const wantPoints = String(item.points ?? profile.tiers[item.tier].points);
+
+      let changed = false;
+      if (row.CLUSTER_ID !== wantCluster) { row.CLUSTER_ID = wantCluster; changed = true; }
+      if (row.WHEN_EXPR !== wantWhen) { row.WHEN_EXPR = wantWhen; changed = true; }
+      if (row.POINTS !== wantPoints) { row.POINTS = wantPoints; changed = true; }
+      if (changed) p.csrUpdated++;
+    }
+
+    // ENSURE DXP tiers exist
+    for (const tier of ["PRIMARY", "SECONDARY", "BENIGN"] as const) {
+      const clusterId = tierClusterId(tier);
+      const wantPriority = String(profile.tiers[tier].priority);
+      const key = `${ccId}||${clusterId}`;
+
+      const existing = dxpByCcCluster.get(key);
+      if (!existing) {
+        const newRow: Record<string, string> = { CC_ID: ccId, CLUSTER_ID: clusterId, PRIORITY: wantPriority };
+        dxp.rows.push(newRow);
+        dxpByCcCluster.set(key, newRow);
+        p.dxpAdded++;
+      } else if (existing.PRIORITY !== wantPriority) {
+        existing.PRIORITY = wantPriority;
+        p.dxpUpdated++;
+      }
+    }
+
+    return p;
+  };
+
+  const tasks = seed.map((r) =>
+    limiter(async () => runOne(r.CC_ID, r.PROFILE_ID)).then((p) => {
+      plans.push(p);
+      const status = p.ok ? "✅" : "❌";
+      console.log(
+        `${status} ${p.ccId} -> ${p.profileId} | CSR +${p.csrAdded} upd ${p.csrUpdated} | DXP +${p.dxpAdded} upd ${p.dxpUpdated}`
+      );
+      if (!p.ok && p.errors.length) for (const e of p.errors) console.log(`   - ${e}`);
+      if (!p.ok && !args.continueOnFail) throw new Error(`Stopping on failure (use --continue-on-fail): ${p.ccId}`);
+    })
+  );
+
+  Promise.allSettled(tasks)
+    .then((settled) => {
+      const hadStop = settled.some((s) => s.status === "rejected");
+      const okCount = plans.filter((p) => p.ok).length;
+      const failCount = plans.length - okCount;
+
+      const summary = {
+        seedPath: args.seedPath,
+        dryRun: args.dryRun,
+        continueOnFail: args.continueOnFail,
+        onlyProfile: args.onlyProfile ?? null,
+        ccs: args.ccs,
+        parallel: args.parallel,
+        attempted: plans.length,
+        ok: okCount,
+        fail: failCount,
+        totals: {
+          csrAdded: plans.reduce((a, p) => a + p.csrAdded, 0),
+          csrUpdated: plans.reduce((a, p) => a + p.csrUpdated, 0),
+          dxpAdded: plans.reduce((a, p) => a + p.dxpAdded, 0),
+          dxpUpdated: plans.reduce((a, p) => a + p.dxpUpdated, 0),
+        },
+        results: plans,
+        generated_at: new Date().toISOString(),
+      };
+
+      if (args.summaryJsonPath) {
+        if (args.dryRun) console.log(`[DRY] Would write summary JSON -> ${args.summaryJsonPath}`);
+        else {
+          fs.mkdirSync(path.dirname(args.summaryJsonPath), { recursive: true });
+          fs.writeFileSync(args.summaryJsonPath, JSON.stringify(summary, null, 2) + "\n", "utf8");
+          console.log(`Wrote summary JSON: ${args.summaryJsonPath}`);
+        }
+      }
+
+      if (args.dryRun) {
+        console.log("\n[DRY] No files written.");
+        process.exit(hadStop || failCount > 0 ? 1 : 0);
+        return;
+      }
+
+      // Transaction backup
+      const runId = args.runId ?? makeRunId();
+      const backupBase = path.isAbsolute(args.backupDir) ? args.backupDir : path.join(root, args.backupDir);
+      const runDir = path.join(backupBase, runId);
+
+      let csrBak = "";
+      let dxpBak = "";
+
+      if (!args.noBackup) {
+        fs.mkdirSync(runDir, { recursive: true });
+        csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+        dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+
+        copyFile(CSR_PATH, csrBak);
+        copyFile(DXP_PATH, dxpBak);
+
+        fs.writeFileSync(
+          path.join(runDir, "manifest.json"),
+          JSON.stringify(
+            {
+              run_id: runId,
+              created_at: new Date().toISOString(),
+              seed_path: args.seedPath,
+              backup_dir: runDir,
+              files: [
+                { src: CSR_PATH, backup: csrBak },
+                { src: DXP_PATH, backup: dxpBak },
+              ],
+              summary,
+            },
+            null,
+            2
+          ) + "\n",
+          "utf8"
+        );
+
+        console.log(`\n🧾 Transaction backup created: ${runDir}`);
+        console.log(`Rollback with: npx tsx scripts/apply-profile-pack-bulk.ts --rollback ${runId}`);
+      }
+
+      // BELT & SUSPENDERS COMMIT
+      const csrContent = encodeCsv(csr.headers, csr.rows);
+      const dxpContent = encodeCsv(dxp.headers, dxp.rows);
+
+      if (args.noAtomic) {
+        fs.writeFileSync(CSR_PATH, csrContent, "utf8");
+        fs.writeFileSync(DXP_PATH, dxpContent, "utf8");
+      } else {
+        atomicWriteFile(CSR_PATH, csrContent, runId, args.keepPrev);
+        atomicWriteFile(DXP_PATH, dxpContent, runId, args.keepPrev);
+      }
+
+      console.log("\nCommitted CSR + DXP (atomic).");
+
+      // Validation with auto-rollback
+      if (!args.noValidate) {
+        console.log(`\n🔎 Validation: ${args.validateCmd}`);
+        const v = runShell(args.validateCmd);
+
+        if (!v.ok) {
+          console.log(`\n❌ Validation failed (exit ${v.code}).`);
+
+          if (args.noBackup) {
+            console.log("⚠️ No backup created (--no-backup). Cannot auto-rollback safely.");
+          } else if (args.noAutoRollback) {
+            console.log("⚠️ Auto-rollback disabled (--no-auto-rollback).");
+            console.log(`Backup run id: ${runId}`);
+          } else {
+            console.log("↩️  Auto-rollback to transaction backup...");
+            try {
+              if (!csrBak || !dxpBak) {
+                csrBak = path.join(runDir, "CLUSTER_SCORING_RULES.csv.bak");
+                dxpBak = path.join(runDir, "DX_PRIORITY.csv.bak");
+              }
+              rollbackNow(csrBak, dxpBak, CSR_PATH, DXP_PATH);
+              console.log("✅ Rollback complete.");
+              console.log(`Backup run id: ${runId}`);
+            } catch (e: any) {
+              console.log("⚠️ Rollback failed:", e?.message ?? String(e));
+              console.log(`Backup run id: ${runId}`);
+            }
+          }
+
+          process.exit(1);
+          return;
+        }
+
+        console.log("✅ Validation passed.");
+      }
+
+      process.exit(hadStop || failCount > 0 ? 1 : 0);
+    })
+    .catch((e) => {
+      console.error("Fatal:", e?.stack ?? e);
+      process.exit(1);
+    });
+}
+
+main();

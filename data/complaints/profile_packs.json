@@ -1,0 +1,76 @@
+{
+  "PULM_COUGH_V1": {
+    "cc_id": "cough",
+    "cluster_prefix": "C",
+    "activate": [
+      {
+        "dx": "pneumonia",
+        "when": "ALL(answers.Q_C_FEVER == 'yes', answers.Q_C_SOB == 'yes')",
+        "points": 5,
+        "label": "Pneumonia pattern (fever + SOB)"
+      },
+      {
+        "dx": "asthma_exacerbation",
+        "when": "ALL(answers.Q_C_SOB == 'yes', answers.Q_C_FEVER != 'yes')",
+        "points": 4,
+        "label": "Asthma exacerbation (SOB without fever)"
+      },
+      {
+        "dx": "viral_uri",
+        "when": "ALL(answers.Q_C_FEVER != 'yes', answers.Q_C_SOB != 'yes')",
+        "points": 3,
+        "label": "Viral URI (no fever, no SOB)"
+      }
+    ]
+  },
+
+  "ENT_SINUS_V1": {
+    "cc_id": "sinus_pressure",
+    "cluster_prefix": "SP",
+    "activate": [
+      {
+        "dx": "acute_bacterial_sinusitis",
+        "when": "ANY(answers.Q_SP_DUR >= 10, ALL(answers.Q_SP_FEVER == 'yes', answers.Q_SP_PAIN == 'yes'))",
+        "points": 5,
+        "label": "Acute bacterial sinusitis (prolonged or fever+pain)"
+      },
+      {
+        "dx": "allergic_rhinitis",
+        "when": "ALL(answers.Q_SP_FEVER != 'yes', answers.Q_SP_PAIN != 'yes')",
+        "points": 3,
+        "label": "Allergic rhinitis (no fever, no pain)"
+      },
+      {
+        "dx": "viral_rhinosinusitis",
+        "when": "ALL(answers.Q_SP_DUR < 10, answers.Q_SP_FEVER != 'yes')",
+        "points": 3,
+        "label": "Viral rhinosinusitis (short duration, no fever)"
+      }
+    ]
+  },
+
+  "CARD_CP_V1": {
+    "cc_id": "chest_pain",
+    "cluster_prefix": "CP",
+    "activate": [
+      {
+        "dx": "mi",
+        "when": "ANY(answers.Q_CP_RADIATES == 'yes', answers.Q_CP_DIAPHORESIS == 'yes', answers.Q_CP_EXERTIONAL == 'yes')",
+        "points": 6,
+        "label": "MI pattern (radiation/diaphoresis/exertional)"
+      },
+      {
+        "dx": "pe",
+        "when": "ALL(answers.Q_CP_SOB == 'yes', answers.Q_CP_PLEURITIC == 'yes')",
+        "points": 6,
+        "label": "PE pattern (SOB + pleuritic)"
+      },
+      {
+        "dx": "pneumothorax",
+        "when": "ALL(answers.Q_CP_SOB == 'yes', answers.Q_CP_PLEURITIC == 'yes', answers.Q_CP_REPRODUCIBLE != 'yes')",
+        "points": 5,
+        "label": "Pneumothorax pattern (SOB + pleuritic, not reproducible)"
+      }
+    ]
+  }
+}
