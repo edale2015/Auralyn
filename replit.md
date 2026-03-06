@@ -42,12 +42,13 @@ A Firestore-backed case lifecycle manages cases through a state machine (DRAFT �
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.
 
 ### Guideline-to-Engine Toolchain
-A 5-step toolchain compiles raw clinical guideline text into engine-ready CSV rows:
+A 6-step toolchain compiles raw clinical guideline text into engine-ready CSV rows:
 1. **Compiler** (`scripts/compile-guideline-to-ir.ts`): Text → draft IR JSON (`data/complaints/ir/`). Heuristic keyword/phrase matching.
 2. **Normalizer** (`scripts/normalize-ir.ts`): Draft IR → normalized IR (`data/complaints/ir_normalized/`). Converts prose to token expressions, surfaces unresolved fragments.
 3. **Emitter** (`scripts/emit-ir-to-csvs.ts`): Normalized IR → draft CSVs (`data/complaints/emitted/<cc_id>/`). Generates CORE_QUESTIONS, RED_FLAG_RULES, CLUSTER_SCORING_RULES, DISPOSITION_RULES, DX_PRIORITY drafts + manifest.json.
-4. **Reviewer** (`scripts/review-emitted-drafts.ts`): Compares drafts against live CSVs (`data/complaints/review/<cc_id>/`). Outputs `*.new.csv`, `*.conflicts.csv`, `review_summary.json`. Safe diff — no merging.
-5. **Merger** (`scripts/merge-approved-drafts.ts`): Safely merges `*.new.csv` rows into live CSVs. Creates `_tx_backups/` before writing. Idempotent — skips duplicates. Supports `--dry-run`. WARNING: Do not merge into CC_IDs that have existing hand-crafted rules without careful review.
+4. **Harmonizer** (`scripts/harmonize-compiler-output.ts`): Rewrites emitted draft tokens/actions to match existing engine vocabulary using `data/complaints/token_harmonizer.json`. Supports `--dry-run`. Writes `harmonize_summary.json`.
+5. **Reviewer** (`scripts/review-emitted-drafts.ts`): Compares drafts against live CSVs (`data/complaints/review/<cc_id>/`). Outputs `*.new.csv`, `*.conflicts.csv`, `review_summary.json`. Safe diff — no merging.
+6. **Merger** (`scripts/merge-approved-drafts.ts`): Safely merges `*.new.csv` rows into live CSVs. Creates `_tx_backups/` before writing. Idempotent — skips duplicates. Supports `--dry-run`. WARNING: Do not merge into CC_IDs that have existing hand-crafted rules without careful review.
 
 ### Validation and Testing
 The system includes various testing harnesses (Stress Test, Complaint Golden Test, Replay), a Data Corruption Guard, a Release Candidate system, Cross-Complaint Goldens, a Bundle ABI Validator, and an 8-gate Prod Pipeline for pre-deployment validation.
