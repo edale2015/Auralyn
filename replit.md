@@ -69,6 +69,26 @@ A 6-step toolchain compiles raw clinical guideline text into engine-ready CSV ro
    - **Alias Promoter** (`scripts/promote-learned-aliases.ts`): Promotes learned aliases into `token_harmonizer.json` with support-count and confidence thresholds.
 6. **Merger** (`scripts/merge-approved-drafts.ts`): Safely merges `*.new.csv` rows into live CSVs. Creates `_tx_backups/` before writing. Idempotent — skips duplicates. Supports `--dry-run`. WARNING: Do not merge into CC_IDs that have existing hand-crafted rules without careful review.
 
+### Operational Intelligence & Self-Improving Loop
+A suite of scripts provides engine visibility and automatic quality control:
+- **Engine Coverage Audit** (`scripts/engine-coverage-audit.ts`): Scans dead rules, weak clusters, disposition dominance, unused red flags, missing question tokens. Outputs `data/complaints/reports/engine_coverage_audit.csv`, `dead_rules.csv`, `unused_red_flags.csv`, `missing_question_tokens.csv`.
+- **Dead Cluster Classifier** (`scripts/classify-dead-clusters.ts`): Categorizes dead clusters as `UNDER_TESTED`, `NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD`, `LIKELY_OVERSPECIFIED`, `LIKELY_SHADOWED`, or `UNKNOWN`.
+- **Rule Contradiction Detector** (`scripts/analyze-rule-contradictions.ts`): Finds obvious contradictions in WHEN/TRIGGER expressions (boolean conflicts, impossible numeric ranges).
+- **Auto Test Generator** (`scripts/auto-generate-missing-tests.ts`): Generates draft golden tests for dead clusters by extracting synthetic inputs from WHEN_EXPR constraints.
+- **Golden Test Exporter** (`scripts/export-missing-tests-to-golden-format.ts`): Converts generated tests into draft golden JSONL format.
+- **Golden Test Validator** (`scripts/validate-generated-golden-tests.ts`): Validates generated test JSONL structure before promotion.
+- **Test Status Backfiller** (`scripts/backfill-generated-test-status.ts`): Bulk-updates review_status (APPROVED/REJECTED/PENDING_REVIEW) by complaint or test ID.
+- **Test Promoter** (`scripts/promote-approved-generated-tests.ts`): Filters to approved-only JSONL.
+- **Test Appender** (`scripts/append-generated-tests-to-golden.ts`): Appends approved tests to a golden harness JSONL.
+- **Harness Merger** (`scripts/merge-generated-tests-into-harness.ts`): Merges approved tests into harness with backup + idempotency + dry-run.
+- **Complaint Folder Merger** (`scripts/merge-generated-tests-into-real-complaint-folders.ts`): Routes approved tests into complaint-specific `golden.generated.jsonl` files.
+- **Harness Manifest Builder** (`scripts/build-harness-manifest.ts`): Scans complaint dirs, produces `harness_manifest.json` with test counts.
+- **Runtime Audit Logger** (`server/services/engineRuntimeAuditLogger.ts`): Appends production engine execution data to `data/complaints/runtime/engine_runtime_audit.csv`. Wired into `runGenericComplaintV1`.
+- **Runtime Coverage Converter** (`scripts/runtime-audit-to-coverage.ts`): Converts runtime audit logs into cluster/complaint coverage summaries.
+- **Priority Refinement Report** (`scripts/priority-refinement-report.ts`): Flags DX candidate ranking instability (benign dominance, low score gaps, ties).
+- **Phase Readiness Report** (`scripts/phase-readiness-report.ts`): One-shot check for all required scripts and artifacts.
+- **Close-the-Loop Report** (`scripts/close-the-loop-report.ts`): Consolidated dashboard combining all audit/test/runtime data into one JSON+CSV report.
+
 ### Validation and Testing
 The system includes various testing harnesses (Stress Test, Complaint Golden Test, Replay), a Data Corruption Guard, a Release Candidate system, Cross-Complaint Goldens, a Bundle ABI Validator, and an 8-gate Prod Pipeline for pre-deployment validation.
 

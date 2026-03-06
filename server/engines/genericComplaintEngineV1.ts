@@ -22,6 +22,7 @@ import {
 } from "../services/complaintEngines";
 import { getTable } from "../data/registry";
 import { computeScoringSystems } from "./scoringSystemsEngine";
+import { logEngineRuntimeAudit } from "../services/engineRuntimeAuditLogger";
 import type { GraphResult, NodeTrace } from "../services/complaintNodeRunner";
 import fs from "node:fs";
 import path from "node:path";
@@ -541,6 +542,17 @@ export async function runGenericComplaintV1(
       dxScore: likelyDx.length > 0 ? likelyDx[0].score : 0,
       redFlagTriggered: rfResult.triggeredFlags.length > 0,
       topCluster: scoringResult.topCluster,
+    });
+
+    logEngineRuntimeAudit({
+      timestamp: new Date().toISOString(),
+      case_id: (updated as any).caseId ?? "unknown",
+      complaint_id: ccId,
+      winning_cluster_id: scoringResult.topCluster,
+      triggered_red_flags: rfResult.triggeredFlags.map((f) => f.id),
+      disposition: dispResult.dispositionLevel,
+      fired_cluster_ids: scoringResult.ranked.map((r) => r.clusterId),
+      engine_version: "GENERIC_V1",
     });
   }
 

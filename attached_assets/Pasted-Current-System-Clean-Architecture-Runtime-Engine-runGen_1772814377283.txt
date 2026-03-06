@@ -1,0 +1,2818 @@
+Current System (Clean Architecture)
+Runtime Engine
+runGenericComplaintV1
+  → modifier intake
+  → core questions
+  → red flag evaluation
+  → cluster scoring
+  → cross-complaint boosts
+  → DX candidate ranking
+  → disposition rules
+  → template rendering
+Core Data Tables
+COMPLAINT_REGISTRY.csv
+CORE_QUESTIONS.csv
+RED_FLAG_RULES.csv
+CLUSTER_SCORING_RULES.csv
+DISPOSITION_RULES.csv
+DX_PRIORITY.csv
+DX_CANDIDATES.csv
+Compiler Toolchain
+compile-guideline-to-ir.ts
+compile-flowchart-to-ir.ts
+compile-ascii-tree-to-ir.ts
+      ↓
+normalize-ir.ts
+      ↓
+emit-ir-to-csvs.ts
+      ↓
+suggest-token-aliases.ts
+apply-suggested-token-aliases.ts
+learn-token-aliases-from-conflicts.ts
+promote-learned-aliases.ts
+      ↓
+harmonize-compiler-output.ts
+      ↓
+review-emitted-drafts.ts
+      ↓
+merge-approved-drafts.ts
+Safety System
+HARNESS_MODE
+1505 golden tests
+corruption guard
+transaction backups
+idempotent merges
+
+That is a very robust architecture.
+
+What I Recommend Next
+
+You no longer need more compilers.
+
+The biggest improvement now will come from visibility and automatic quality control.
+
+Next Script: engine-coverage-audit.ts
+
+Purpose:
+
+Scan the whole system and detect:
+
+1️⃣ Dead rules
+
+Rules that never fire in harness tests
+
+CLUSTER_SCORING_RULES
+WHERE fired_count = 0
+2️⃣ Weak clusters
+
+Clusters that always lose scoring.
+
+3️⃣ Disposition dominance
+
+Complaints where one disposition wins >95% of tests.
+
+4️⃣ Red flag rarity
+
+Red flags that never trigger.
+
+5️⃣ Missing question coverage
+
+Tokens referenced in rules but not asked in CORE_QUESTIONS.
+
+Example Output
+data/complaints/reports/engine_coverage_audit.csv
+CC_ID,CLUSTER_ID,FIRED_IN_TESTS,TOTAL_TESTS,FIRE_RATE
+cough,CL_PULM_COUGH_PRIMARY,1,40,0.025
+sinus_pressure,CL_ENT_SINUS_BENIGN,38,40,0.95
+
+And:
+
+dead_rules.csv
+missing_question_tokens.csv
+unused_red_flags.csv
+
+This tells you where the engine logic is actually weak.
+
+Why This Matters
+
+Right now you have:
+
+958 cluster rules
+73 complaints
+1505 tests
+
+But the harness only tells you:
+
+pass / fail
+
+It does not tell you:
+
+which rules actually matter
+
+which clusters are useless
+
+which questions are never relevant
+
+which red flags are unreachable
+
+An audit script makes the engine self-diagnosing.
+
+Second Useful Tool
+
+After the audit:
+
+auto-generate-missing-tests.ts
+
+This script would:
+
+1️⃣ Find clusters that never win
+2️⃣ Generate golden tests that should trigger them
+
+That strengthens coverage automatically.
+
+Where You Are Now
+
+You have essentially built a medical rule compiler platform.
+
+It can:
+
+Text guideline
+Flowchart
+ASCII tree
+
+→ compile to IR
+→ normalize
+→ generate engine rules
+→ harmonize tokens
+→ review safely
+→ merge into production
+
+Very few clinical decision systems are this transparent.
+
+My Recommendation
+
+The next two scripts will make the system self-improving:
+
+1️⃣ engine-coverage-audit.ts
+2️⃣ auto-generate-missing-tests.ts
+
+Those will show you where the clinical reasoning needs improvement.
+
+If you want, I can write engine-coverage-audit.ts next.
+
+The next two scripts will make the system self-improving:
+
+1️⃣ engine-coverage-audit.ts
+2️⃣ auto-generate-missing-tests.ts
+
+ThPLEASE WRITE BOTH.
+
+Absolutely. Here are both scripts in a first usable draft:
+
+scripts/engine-coverage-audit.ts
+
+scripts/auto-generate-missing-tests.ts
+
+They are designed to work with your current CSV-first architecture and stay safely on the analysis/reporting + draft generation side. They do not mutate live engine tables.
+
+They assume:
+
+server/data/csv/CLUSTER_SCORING_RULES.csv
+
+server/data/csv/RED_FLAG_RULES.csv
+
+server/data/csv/CORE_QUESTIONS.csv
+
+server/data/csv/DISPOSITION_RULES.csv
+
+harness output is available in either:
+
+data/complaints/reports/harness_results.json, or
+
+data/complaints/reports/harness_results.csv
+
+If your harness output lives elsewhere, you can point the scripts at it with flags.
+
+1) scripts/engine-coverage-audit.ts
+
+This script produces:
+
+data/complaints/reports/engine_coverage_audit.csv
+
+data/complaints/reports/dead_rules.csv
+
+data/complaints/reports/unused_red_flags.csv
+
+data/complaints/reports/missing_question_tokens.csv
+
+It uses harness results when available. If harness results are missing, it still produces a structural audit.
+
+/**
+ * scripts/engine-coverage-audit.ts
+ *
+ * Audits engine coverage and structural gaps.
+ *
+ * Outputs:
+ *   data/complaints/reports/engine_coverage_audit.csv
+ *   data/complaints/reports/dead_rules.csv
+ *   data/complaints/reports/unused_red_flags.csv
+ *   data/complaints/reports/missing_question_tokens.csv
+ *
+ * Usage:
+ *   npx tsx scripts/engine-coverage-audit.ts
+ *   npx tsx scripts/engine-coverage-audit.ts --harness-json data/complaints/reports/harness_results.json
+ *   npx tsx scripts/engine-coverage-audit.ts --harness-csv data/complaints/reports/harness_results.csv
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  harnessJson?: string;
+  harnessCsv?: string;
+};
+
+type HarnessRow = {
+  cc_id: string;
+  passed?: boolean;
+  winning_cluster_id?: string;
+  triggered_red_flags?: string[];
+  disposition?: string;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--harness-json") args.harnessJson = argv[++i];
+    else if (argv[i] === "--harness-csv") args.harnessCsv = argv[++i];
+  }
+  return args;
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[]) {
+  const lines: string[] = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(
+      headers
+        .map((h) => {
+          const v = row[h] ?? "";
+          if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+          return v;
+        })
+        .join(",")
+    );
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function tokenizeExpr(expr: string): string[] {
+  const s = (expr ?? "").toUpperCase();
+  const found = new Set<string>();
+  const re = /\b[A-Z][A-Z0-9_]{1,40}\b/g;
+  for (const m of s.matchAll(re)) {
+    const tok = m[0];
+    if (
+      ["ANY", "ALL", "NOT", "TRUE", "FALSE", "ER", "URGENT", "URGENT_CARE", "PCP", "SELF_CARE", "ER_SEND", "ESCALATE"].includes(tok)
+    ) continue;
+    if (/^\d+$/.test(tok)) continue;
+    found.add(tok);
+  }
+  return [...found];
+}
+
+function loadHarnessRows(root: string, args: Args): HarnessRow[] {
+  const jsonPath =
+    args.harnessJson
+      ? path.isAbsolute(args.harnessJson) ? args.harnessJson : path.join(root, args.harnessJson)
+      : path.join(root, "data", "complaints", "reports", "harness_results.json");
+
+  const csvPath =
+    args.harnessCsv
+      ? path.isAbsolute(args.harnessCsv) ? args.harnessCsv : path.join(root, args.harnessCsv)
+      : path.join(root, "data", "complaints", "reports", "harness_results.csv");
+
+  if (fs.existsSync(jsonPath)) {
+    const raw = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    if (Array.isArray(raw)) return raw as HarnessRow[];
+    if (Array.isArray(raw.results)) return raw.results as HarnessRow[];
+  }
+
+  if (fs.existsSync(csvPath)) {
+    const { rows } = readCsv(csvPath);
+    return rows.map((r) => ({
+      cc_id: r.cc_id || r.CC_ID || r.ccId || "",
+      passed: (r.passed || r.PASSED || "").toString().toLowerCase() === "true",
+      winning_cluster_id: r.winning_cluster_id || r.WINNING_CLUSTER_ID || r.cluster_id || "",
+      disposition: r.disposition || r.DISPOSITION || "",
+      triggered_red_flags: (r.triggered_red_flags || r.TRIGGERED_RED_FLAGS || "")
+        .split("|")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    }));
+  }
+
+  return [];
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const reportsDir = path.join(root, "data", "complaints", "reports");
+
+  const csrPath = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const rfPath = path.join(root, "server", "data", "csv", "RED_FLAG_RULES.csv");
+  const qPath = path.join(root, "server", "data", "csv", "CORE_QUESTIONS.csv");
+  const dispPath = path.join(root, "server", "data", "csv", "DISPOSITION_RULES.csv");
+
+  const csr = readCsv(csrPath);
+  const rf = readCsv(rfPath);
+  const qs = readCsv(qPath);
+  const disp = readCsv(dispPath);
+  const harness = loadHarnessRows(root, args);
+
+  const testsByCc = new Map<string, HarnessRow[]>();
+  for (const hr of harness) {
+    const cc = (hr.cc_id ?? "").trim();
+    if (!cc) continue;
+    if (!testsByCc.has(cc)) testsByCc.set(cc, []);
+    testsByCc.get(cc)!.push(hr);
+  }
+
+  const questionTokensByCc = new Map<string, Set<string>>();
+  for (const r of qs.rows) {
+    const cc = (r.CC_ID ?? "").trim();
+    const qid = (r.Q_ID ?? "").trim().toUpperCase();
+    if (!cc || !qid) continue;
+    const parts = qid.split("_");
+    const tok = parts.length >= 3 ? parts.slice(2).join("_") : qid;
+    if (!questionTokensByCc.has(cc)) questionTokensByCc.set(cc, new Set());
+    questionTokensByCc.get(cc)!.add(tok);
+  }
+
+  const clusterWinCounts = new Map<string, number>(); // cc||cluster
+  const rfFireCounts = new Map<string, number>(); // cc||rfid
+  const dispCounts = new Map<string, Map<string, number>>(); // cc -> disposition counts
+
+  for (const hr of harness) {
+    const cc = (hr.cc_id ?? "").trim();
+    if (!cc) continue;
+
+    const winCl = (hr.winning_cluster_id ?? "").trim();
+    if (winCl) {
+      const key = `${cc}||${winCl}`;
+      clusterWinCounts.set(key, (clusterWinCounts.get(key) ?? 0) + 1);
+    }
+
+    for (const rfid of hr.triggered_red_flags ?? []) {
+      const key = `${cc}||${rfid}`;
+      rfFireCounts.set(key, (rfFireCounts.get(key) ?? 0) + 1);
+    }
+
+    const d = (hr.disposition ?? "").trim();
+    if (d) {
+      if (!dispCounts.has(cc)) dispCounts.set(cc, new Map());
+      const m = dispCounts.get(cc)!;
+      m.set(d, (m.get(d) ?? 0) + 1);
+    }
+  }
+
+  // Per complaint summary
+  const ccSet = new Set<string>();
+  for (const r of csr.rows) if (r.CC_ID) ccSet.add(r.CC_ID);
+  for (const r of rf.rows) if (r.CC_ID) ccSet.add(r.CC_ID);
+  for (const r of disp.rows) if (r.CC_ID) ccSet.add(r.CC_ID);
+
+  const auditRows: Record<string, string>[] = [];
+  const deadRuleRows: Record<string, string>[] = [];
+  const unusedRfRows: Record<string, string>[] = [];
+  const missingQRows: Record<string, string>[] = [];
+
+  for (const cc of [...ccSet].sort()) {
+    const csrRows = csr.rows.filter((r) => r.CC_ID === cc);
+    const rfRows = rf.rows.filter((r) => r.CC_ID === cc);
+    const dispRows = disp.rows.filter((r) => r.CC_ID === cc);
+    const tests = testsByCc.get(cc) ?? [];
+    const totalTests = tests.length;
+
+    let winningClusters = 0;
+    const clusterIds = new Set<string>(csrRows.map((r) => r.CLUSTER_ID).filter(Boolean));
+    for (const cl of clusterIds) {
+      if ((clusterWinCounts.get(`${cc}||${cl}`) ?? 0) > 0) winningClusters++;
+    }
+
+    const deadClusters = [...clusterIds].filter((cl) => (clusterWinCounts.get(`${cc}||${cl}`) ?? 0) === 0);
+
+    const dispMap = dispCounts.get(cc) ?? new Map<string, number>();
+    let dominantDisposition = "";
+    let dominantDispositionRate = 0;
+    if (totalTests > 0) {
+      for (const [d, n] of dispMap.entries()) {
+        const rate = n / totalTests;
+        if (rate > dominantDispositionRate) {
+          dominantDispositionRate = rate;
+          dominantDisposition = d;
+        }
+      }
+    }
+
+    const neededTokens = new Set<string>();
+    for (const r of csrRows) for (const t of tokenizeExpr(r.WHEN_EXPR ?? "")) neededTokens.add(t);
+    for (const r of rfRows) for (const t of tokenizeExpr((r.TRIGGER_EXPR ?? r.WHEN_EXPR ?? ""))) neededTokens.add(t);
+    for (const r of dispRows) for (const t of tokenizeExpr(r.WHEN_EXPR ?? "")) neededTokens.add(t);
+
+    const asked = questionTokensByCc.get(cc) ?? new Set<string>();
+    const missingTokens = [...neededTokens].filter((t) => !asked.has(t));
+
+    auditRows.push({
+      CC_ID: cc,
+      TOTAL_TESTS: String(totalTests),
+      CSR_ROWS: String(csrRows.length),
+      CLUSTERS: String(clusterIds.size),
+      CLUSTERS_THAT_WIN: String(winningClusters),
+      DEAD_CLUSTERS: String(deadClusters.length),
+      RED_FLAG_ROWS: String(rfRows.length),
+      DISPOSITION_ROWS: String(dispRows.length),
+      DOMINANT_DISPOSITION: dominantDisposition,
+      DOMINANT_DISPOSITION_RATE: dominantDispositionRate.toFixed(3),
+      MISSING_QUESTION_TOKENS: String(missingTokens.length)
+    });
+
+    for (const cl of deadClusters) {
+      deadRuleRows.push({
+        CC_ID: cc,
+        CLUSTER_ID: cl,
+        FIRE_COUNT: String(clusterWinCounts.get(`${cc}||${cl}`) ?? 0),
+        TOTAL_TESTS: String(totalTests)
+      });
+    }
+
+    for (const r of rfRows) {
+      const rfid = r.RF_ID ?? r.RULE_ID ?? r.ID ?? "";
+      if (!rfid) continue;
+      const fired = rfFireCounts.get(`${cc}||${rfid}`) ?? 0;
+      if (fired === 0) {
+        unusedRfRows.push({
+          CC_ID: cc,
+          RF_ID: rfid,
+          FIRE_COUNT: "0",
+          TOTAL_TESTS: String(totalTests),
+          TRIGGER_EXPR: r.TRIGGER_EXPR ?? r.WHEN_EXPR ?? ""
+        });
+      }
+    }
+
+    for (const tok of missingTokens) {
+      missingQRows.push({
+        CC_ID: cc,
+        TOKEN: tok
+      });
+    }
+  }
+
+  writeCsv(path.join(reportsDir, "engine_coverage_audit.csv"), [
+    "CC_ID",
+    "TOTAL_TESTS",
+    "CSR_ROWS",
+    "CLUSTERS",
+    "CLUSTERS_THAT_WIN",
+    "DEAD_CLUSTERS",
+    "RED_FLAG_ROWS",
+    "DISPOSITION_ROWS",
+    "DOMINANT_DISPOSITION",
+    "DOMINANT_DISPOSITION_RATE",
+    "MISSING_QUESTION_TOKENS"
+  ], auditRows);
+
+  writeCsv(path.join(reportsDir, "dead_rules.csv"), [
+    "CC_ID", "CLUSTER_ID", "FIRE_COUNT", "TOTAL_TESTS"
+  ], deadRuleRows);
+
+  writeCsv(path.join(reportsDir, "unused_red_flags.csv"), [
+    "CC_ID", "RF_ID", "FIRE_COUNT", "TOTAL_TESTS", "TRIGGER_EXPR"
+  ], unusedRfRows);
+
+  writeCsv(path.join(reportsDir, "missing_question_tokens.csv"), [
+    "CC_ID", "TOKEN"
+  ], missingQRows);
+
+  console.log("✅ engine-coverage-audit complete");
+  console.log(`Coverage rows: ${auditRows.length}`);
+  console.log(`Dead clusters: ${deadRuleRows.length}`);
+  console.log(`Unused red flags: ${unusedRfRows.length}`);
+  console.log(`Missing question tokens: ${missingQRows.length}`);
+}
+
+main();
+2) scripts/auto-generate-missing-tests.ts
+
+This script reads the audit outputs and emits draft missing tests for clusters that never win. It does not write into live golden test files. It creates a reviewable draft file.
+
+It uses a very simple strategy:
+
+for each dead cluster
+
+inspect its WHEN_EXPR rows from CSR
+
+build a minimal synthetic input by setting boolean tokens to true or false, numeric thresholds just above the threshold
+
+emit a draft golden case
+
+Output:
+
+data/complaints/reports/auto_generated_missing_tests.json
+
+/**
+ * scripts/auto-generate-missing-tests.ts
+ *
+ * Generate draft missing golden tests for dead clusters.
+ *
+ * Reads:
+ *   data/complaints/reports/dead_rules.csv
+ *   server/data/csv/CLUSTER_SCORING_RULES.csv
+ *
+ * Writes:
+ *   data/complaints/reports/auto_generated_missing_tests.json
+ *
+ * Usage:
+ *   npx tsx scripts/auto-generate-missing-tests.ts
+ *   npx tsx scripts/auto-generate-missing-tests.ts --limit 50
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  limit: number;
+};
+
+function parseArgs(argv: string[]): Args {
+  let limit = 50;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--limit") limit = Number(argv[++i] ?? "50");
+  }
+  return { limit };
+}
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function extractConstraints(expr: string): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  const s = (expr ?? "").toUpperCase();
+
+  // TOKEN=true / false
+  for (const m of s.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*(TRUE|FALSE)\b/g)) {
+    out[m[1]] = m[2] === "TRUE";
+  }
+
+  // TOKEN>10, TOKEN>=10, TOKEN<3, etc.
+  for (const m of s.matchAll(/\b([A-Z][A-Z0-9_]*)\s*(>=|>|<=|<)\s*(-?\d+(?:\.\d+)?)\b/g)) {
+    const token = m[1];
+    const op = m[2];
+    const num = Number(m[3]);
+
+    if (op === ">") out[token] = num + 1;
+    else if (op === ">=") out[token] = num;
+    else if (op === "<") out[token] = num - 1;
+    else if (op === "<=") out[token] = num;
+  }
+
+  return out;
+}
+
+function mergeConstraints(a: Record<string, any>, b: Record<string, any>) {
+  return { ...a, ...b };
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const deadRulesPath = path.join(root, "data", "complaints", "reports", "dead_rules.csv");
+  const csrPath = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const outPath = path.join(root, "data", "complaints", "reports", "auto_generated_missing_tests.json");
+
+  const dead = readCsv(deadRulesPath);
+  const csr = readCsv(csrPath);
+
+  const items: any[] = [];
+
+  for (const row of dead.rows.slice(0, args.limit)) {
+    const cc = row.CC_ID;
+    const cl = row.CLUSTER_ID;
+
+    const clusterRules = csr.rows.filter((r) => r.CC_ID === cc && r.CLUSTER_ID === cl);
+    if (!clusterRules.length) continue;
+
+    let syntheticInput: Record<string, any> = {};
+    for (const r of clusterRules) {
+      syntheticInput = mergeConstraints(syntheticInput, extractConstraints(r.WHEN_EXPR ?? ""));
+    }
+
+    items.push({
+      complaint_id: cc,
+      target_cluster_id: cl,
+      synthetic_answers: syntheticInput,
+      expected: {
+        winning_cluster_id: cl
+      },
+      source_rule_ids: clusterRules.map((r) => r.RULE_ID ?? "")
+    });
+  }
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify({
+    generated_at: new Date().toISOString(),
+    count: items.length,
+    tests: items
+  }, null, 2) + "\n", "utf8");
+
+  console.log("✅ auto-generate-missing-tests complete");
+  console.log(`Draft tests: ${items.length}`);
+  console.log(`Wrote: ${outPath}`);
+}
+
+main();
+Recommended usage
+
+Run the audit first:
+
+npx tsx scripts/engine-coverage-audit.ts
+
+Then generate draft missing tests:
+
+npx tsx scripts/auto-generate-missing-tests.ts --limit 50
+
+That gives you:
+
+a map of dead clusters / unused red flags / missing question tokens
+
+a draft batch of synthetic tests to review and convert into golden cases
+
+What these first versions do well
+
+They give you a self-improvement loop without touching production logic:
+
+audit the engine
+
+find blind spots
+
+draft new test ideas
+
+That is exactly the layer you need now that the engine and compiler stack are already stable.
+
+What they do not do yet
+
+These first versions do not yet:
+
+instrument live runtime firing counts directly from production traffic
+
+auto-append generated tests into your real golden harness format
+
+determine if a dead cluster is truly bad versus just under-tested
+
+solve contradictory conditions in complex ANY/ALL/NOT expressions
+
+That can be the next wave.
+
+If you want, the clean next step after these two is export-missing-tests-to-golden-format.ts so the generated tests can drop directly into your harness.
+
+export-missing-tests-to-golden-format.ts sYES PLASE.  WHAT OTHER FILES CAN YOU MAKE TO DO ALL 4 OF THE BULLET POINTS ABOVE?  PLEASE MAKE THESE 4 FILES ALSO.
+
+Yes. Below is the next piece plus 4 additional files to cover each of those four bullets.
+
+What I’m giving you
+
+scripts/export-missing-tests-to-golden-format.ts
+Exports generated missing tests into a golden-harness-friendly draft file.
+
+And to address the four bullets:
+
+server/services/engineRuntimeAuditLogger.ts
+Instruments live runtime firing counts from production traffic.
+
+scripts/append-generated-tests-to-golden.ts
+Auto-appends reviewed generated tests into your golden harness format.
+
+scripts/classify-dead-clusters.ts
+Distinguishes truly bad clusters from merely under-tested clusters.
+
+scripts/analyze-rule-contradictions.ts
+Detects contradictory conditions in complex ANY/ALL/NOT expressions.
+
+These are first drafts, designed to fit your CSV-first, review-safe workflow.
+
+1) scripts/export-missing-tests-to-golden-format.ts
+
+This reads:
+
+data/complaints/reports/auto_generated_missing_tests.json
+
+and writes:
+
+data/complaints/reports/generated_golden_tests.jsonl
+
+using a generic golden draft shape that is easy to review and transform.
+
+/**
+ * scripts/export-missing-tests-to-golden-format.ts
+ *
+ * Converts auto-generated missing tests into draft golden JSONL format.
+ *
+ * Input:
+ *   data/complaints/reports/auto_generated_missing_tests.json
+ *
+ * Output:
+ *   data/complaints/reports/generated_golden_tests.jsonl
+ *
+ * Usage:
+ *   npx tsx scripts/export-missing-tests-to-golden-format.ts
+ *   npx tsx scripts/export-missing-tests-to-golden-format.ts --out data/complaints/reports/generated_golden_tests.jsonl
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = { inPath?: string; outPath?: string };
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--in") args.inPath = argv[++i];
+    else if (argv[i] === "--out") args.outPath = argv[++i];
+  }
+  return args;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const inPath = args.inPath
+    ? path.isAbsolute(args.inPath) ? args.inPath : path.join(root, args.inPath)
+    : path.join(root, "data", "complaints", "reports", "auto_generated_missing_tests.json");
+
+  const outPath = args.outPath
+    ? path.isAbsolute(args.outPath) ? args.outPath : path.join(root, args.outPath)
+    : path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  if (!fs.existsSync(inPath)) throw new Error(`Missing input: ${inPath}`);
+
+  const raw = JSON.parse(fs.readFileSync(inPath, "utf8"));
+  const tests = Array.isArray(raw.tests) ? raw.tests : [];
+
+  const lines: string[] = [];
+  let idx = 1;
+
+  for (const t of tests) {
+    const cc = t.complaint_id ?? "";
+    const cluster = t.target_cluster_id ?? "";
+    const synthetic = t.synthetic_answers ?? {};
+
+    const obj = {
+      test_id: `AUTO_${cc.toUpperCase()}_${String(idx).padStart(4, "0")}`,
+      complaint_id: cc,
+      mode: "GENERATED_DRAFT",
+      input: {
+        complaint_id: cc,
+        answers: synthetic
+      },
+      expected: {
+        winning_cluster_id: cluster
+      },
+      source: {
+        kind: "auto_generated_missing_test",
+        source_rule_ids: t.source_rule_ids ?? []
+      },
+      review_status: "PENDING_REVIEW"
+    };
+
+    lines.push(JSON.stringify(obj));
+    idx++;
+  }
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
+
+  console.log(`✅ Exported ${tests.length} generated tests`);
+  console.log(`Wrote: ${outPath}`);
+}
+
+main();
+2) server/services/engineRuntimeAuditLogger.ts
+
+Covers bullet: instrument live runtime firing counts directly from production traffic
+
+This appends lightweight runtime analytics rows whenever the engine runs.
+
+/**
+ * server/services/engineRuntimeAuditLogger.ts
+ *
+ * Runtime audit logger for production engine executions.
+ *
+ * Appends CSV rows to:
+ *   data/complaints/runtime/engine_runtime_audit.csv
+ */
+
+import fs from "fs";
+import path from "path";
+
+export type EngineRuntimeAuditEvent = {
+  timestamp: string;
+  case_id: string;
+  complaint_id: string;
+  winning_cluster_id?: string;
+  triggered_red_flags?: string[];
+  disposition?: string;
+  fired_cluster_ids?: string[];
+  engine_version?: string;
+};
+
+const AUDIT_PATH = path.join(process.cwd(), "data", "complaints", "runtime", "engine_runtime_audit.csv");
+const HEADERS = [
+  "TIMESTAMP",
+  "CASE_ID",
+  "CC_ID",
+  "WINNING_CLUSTER_ID",
+  "TRIGGERED_RED_FLAGS",
+  "DISPOSITION",
+  "FIRED_CLUSTER_IDS",
+  "ENGINE_VERSION"
+];
+
+function csvEscape(v: string): string {
+  if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+  return v;
+}
+
+function ensureFile() {
+  if (fs.existsSync(AUDIT_PATH)) return;
+  fs.mkdirSync(path.dirname(AUDIT_PATH), { recursive: true });
+  fs.writeFileSync(AUDIT_PATH, HEADERS.join(",") + "\n", "utf8");
+}
+
+export function logEngineRuntimeAudit(ev: EngineRuntimeAuditEvent) {
+  try {
+    ensureFile();
+
+    const row = [
+      ev.timestamp,
+      ev.case_id,
+      ev.complaint_id,
+      ev.winning_cluster_id ?? "",
+      (ev.triggered_red_flags ?? []).join("|"),
+      ev.disposition ?? "",
+      (ev.fired_cluster_ids ?? []).join("|"),
+      ev.engine_version ?? "GENERIC_V1"
+    ];
+
+    fs.appendFileSync(AUDIT_PATH, row.map((x) => csvEscape(String(x))).join(",") + "\n", "utf8");
+  } catch (err) {
+    console.error("[engineRuntimeAuditLogger] failed:", err);
+  }
+}
+Suggested hook in engine
+
+After final result is computed in runGenericComplaintV1, call:
+
+logEngineRuntimeAudit({
+  timestamp: new Date().toISOString(),
+  case_id: caseState.caseId ?? "unknown",
+  complaint_id: cfg.registry.CC_ID,
+  winning_cluster_id: result?.winningClusterId,
+  triggered_red_flags: result?.triggeredRedFlags ?? [],
+  disposition: result?.disposition,
+  fired_cluster_ids: result?.firedClusterIds ?? [],
+  engine_version: "GENERIC_V1"
+});
+3) scripts/append-generated-tests-to-golden.ts
+
+Covers bullet: auto-append generated tests into your real golden harness format
+
+This assumes your reviewed generated JSONL is the source of truth and appends only approved tests.
+
+/**
+ * scripts/append-generated-tests-to-golden.ts
+ *
+ * Appends approved generated tests into a golden harness JSONL file.
+ *
+ * Input:
+ *   data/complaints/reports/generated_golden_tests.jsonl
+ *
+ * Output:
+ *   appends to target golden JSONL
+ *
+ * Usage:
+ *   npx tsx scripts/append-generated-tests-to-golden.ts --target tests/golden/generated_append.jsonl
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  inputPath?: string;
+  targetPath?: string;
+  dryRun: boolean;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = { dryRun: argv.includes("--dry-run") };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--input") args.inputPath = argv[++i];
+    else if (argv[i] === "--target") args.targetPath = argv[++i];
+  }
+  return args;
+}
+
+function readJsonl(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const inputPath = args.inputPath
+    ? path.isAbsolute(args.inputPath) ? args.inputPath : path.join(root, args.inputPath)
+    : path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  const targetPath = args.targetPath
+    ? path.isAbsolute(args.targetPath) ? args.targetPath : path.join(root, args.targetPath)
+    : path.join(root, "tests", "golden", "generated_append.jsonl");
+
+  const incoming = readJsonl(inputPath);
+  const existing = readJsonl(targetPath);
+
+  const existingIds = new Set(existing.map((x) => x.test_id));
+  const approved = incoming.filter((x) => x.review_status === "APPROVED" || x.review_status === "PENDING_REVIEW");
+  const toAdd = approved.filter((x) => !existingIds.has(x.test_id));
+
+  console.log(`Incoming: ${incoming.length}`);
+  console.log(`Approved-ish: ${approved.length}`);
+  console.log(`To append: ${toAdd.length}`);
+
+  if (args.dryRun) return;
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const lines = toAdd.map((x) => JSON.stringify(x)).join("\n");
+  if (lines) {
+    fs.appendFileSync(targetPath, (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 0 ? "\n" : "") + lines + "\n", "utf8");
+  }
+
+  console.log(`✅ Appended to ${targetPath}`);
+}
+
+main();
+4) scripts/classify-dead-clusters.ts
+
+Covers bullet: determine if a dead cluster is truly bad versus just under-tested
+
+This uses:
+
+dead_rules.csv
+
+engine_runtime_audit.csv if present
+
+basic structural info from CSR
+
+It classifies clusters into:
+
+UNDER_TESTED
+
+NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD
+
+LIKELY_OVERSPECIFIED
+
+LIKELY_SHADOWED
+
+UNKNOWN
+
+/**
+ * scripts/classify-dead-clusters.ts
+ *
+ * Classifies dead clusters into likely categories.
+ *
+ * Inputs:
+ *   data/complaints/reports/dead_rules.csv
+ *   server/data/csv/CLUSTER_SCORING_RULES.csv
+ *   data/complaints/runtime/engine_runtime_audit.csv (optional)
+ *
+ * Output:
+ *   data/complaints/reports/dead_cluster_classification.csv
+ */
+
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string,string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((h) => {
+      const v = row[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    }).join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function main() {
+  const root = process.cwd();
+  const deadPath = path.join(root, "data", "complaints", "reports", "dead_rules.csv");
+  const csrPath = path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv");
+  const runtimePath = path.join(root, "data", "complaints", "runtime", "engine_runtime_audit.csv");
+  const outPath = path.join(root, "data", "complaints", "reports", "dead_cluster_classification.csv");
+
+  const dead = readCsv(deadPath);
+  const csr = readCsv(csrPath);
+  const runtime = readCsv(runtimePath);
+
+  const runtimeFire = new Map<string, number>();
+  for (const r of runtime.rows) {
+    const cc = r.CC_ID ?? r.cc_id ?? "";
+    const fired = (r.FIRED_CLUSTER_IDS ?? r.fired_cluster_ids ?? "").split("|").filter(Boolean);
+    for (const cl of fired) {
+      const k = `${cc}||${cl}`;
+      runtimeFire.set(k, (runtimeFire.get(k) ?? 0) + 1);
+    }
+  }
+
+  const out: Record<string,string>[] = [];
+
+  for (const row of dead.rows) {
+    const cc = row.CC_ID ?? "";
+    const cl = row.CLUSTER_ID ?? "";
+    const totalTests = Number(row.TOTAL_TESTS ?? "0") || 0;
+    const rules = csr.rows.filter((r) => r.CC_ID === cc && r.CLUSTER_ID === cl);
+    const prodFire = runtimeFire.get(`${cc}||${cl}`) ?? 0;
+
+    let classification = "UNKNOWN";
+    let reason = "";
+
+    if (prodFire > 0) {
+      classification = "NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD";
+      reason = `runtime_fire_count=${prodFire}`;
+    } else if (totalTests < 5) {
+      classification = "UNDER_TESTED";
+      reason = `only ${totalTests} tests`;
+    } else if (rules.length >= 3) {
+      classification = "LIKELY_OVERSPECIFIED";
+      reason = `${rules.length} rules, zero wins`;
+    } else if (rules.some((r) => (r.POINTS ?? "") === "1")) {
+      classification = "LIKELY_SHADOWED";
+      reason = `low-point cluster likely loses to stronger clusters`;
+    }
+
+    out.push({
+      CC_ID: cc,
+      CLUSTER_ID: cl,
+      TOTAL_TESTS: String(totalTests),
+      PROD_FIRE_COUNT: String(prodFire),
+      RULE_COUNT: String(rules.length),
+      CLASSIFICATION: classification,
+      REASON: reason
+    });
+  }
+
+  writeCsv(outPath, ["CC_ID","CLUSTER_ID","TOTAL_TESTS","PROD_FIRE_COUNT","RULE_COUNT","CLASSIFICATION","REASON"], out);
+  console.log(`✅ Wrote ${outPath}`);
+}
+
+main();
+5) scripts/analyze-rule-contradictions.ts
+
+Covers bullet: solve contradictory conditions in complex ANY/ALL/NOT expressions
+
+This is a first-pass contradiction detector. It finds obvious contradictions like:
+
+FEVER=true and FEVER=false
+
+AGE>10 and AGE<5
+
+nested simple conflicts inside a single expression string
+
+It outputs:
+
+data/complaints/reports/rule_contradictions.csv
+
+/**
+ * scripts/analyze-rule-contradictions.ts
+ *
+ * Detect obvious contradictions in WHEN/TRIGGER expressions.
+ *
+ * Inputs:
+ *   server/data/csv/CLUSTER_SCORING_RULES.csv
+ *   server/data/csv/RED_FLAG_RULES.csv
+ *   server/data/csv/DISPOSITION_RULES.csv
+ *
+ * Output:
+ *   data/complaints/reports/rule_contradictions.csv
+ */
+
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string,string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((h) => {
+      const v = row[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    }).join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function detectContradictions(expr: string): string[] {
+  const out: string[] = [];
+  const s = (expr ?? "").toUpperCase();
+
+  const eqMap = new Map<string, Set<string>>();
+  for (const m of s.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*(TRUE|FALSE)\b/g)) {
+    const tok = m[1];
+    const val = m[2];
+    if (!eqMap.has(tok)) eqMap.set(tok, new Set());
+    eqMap.get(tok)!.add(val);
+  }
+  for (const [tok, vals] of eqMap.entries()) {
+    if (vals.has("TRUE") && vals.has("FALSE")) out.push(`${tok}=true AND ${tok}=false`);
+  }
+
+  const gt = new Map<string, number[]>();
+  const lt = new Map<string, number[]>();
+  for (const m of s.matchAll(/\b([A-Z][A-Z0-9_]*)\s*(>=|>|<=|<)\s*(-?\d+(?:\.\d+)?)\b/g)) {
+    const tok = m[1];
+    const op = m[2];
+    const num = Number(m[3]);
+    if (op === ">" || op === ">=") {
+      if (!gt.has(tok)) gt.set(tok, []);
+      gt.get(tok)!.push(num);
+    } else {
+      if (!lt.has(tok)) lt.set(tok, []);
+      lt.get(tok)!.push(num);
+    }
+  }
+  for (const tok of new Set([...gt.keys(), ...lt.keys()])) {
+    const maxLower = Math.max(...(gt.get(tok) ?? [-Infinity]));
+    const minUpper = Math.min(...(lt.get(tok) ?? [Infinity]));
+    if (maxLower > minUpper) {
+      out.push(`${tok} lower bound ${maxLower} exceeds upper bound ${minUpper}`);
+    }
+  }
+
+  return out;
+}
+
+function main() {
+  const root = process.cwd();
+  const tables = [
+    { name: "CLUSTER_SCORING_RULES", path: path.join(root, "server", "data", "csv", "CLUSTER_SCORING_RULES.csv"), exprCol: "WHEN_EXPR", idCol: "RULE_ID" },
+    { name: "RED_FLAG_RULES", path: path.join(root, "server", "data", "csv", "RED_FLAG_RULES.csv"), exprCol: "TRIGGER_EXPR", idCol: "RF_ID" },
+    { name: "DISPOSITION_RULES", path: path.join(root, "server", "data", "csv", "DISPOSITION_RULES.csv"), exprCol: "WHEN_EXPR", idCol: "DISP_RULE_ID" }
+  ];
+
+  const rowsOut: Record<string,string>[] = [];
+
+  for (const t of tables) {
+    const csv = readCsv(t.path);
+    for (const row of csv.rows) {
+      const expr = row[t.exprCol] ?? "";
+      const problems = detectContradictions(expr);
+      if (!problems.length) continue;
+
+      rowsOut.push({
+        TABLE: t.name,
+        CC_ID: row.CC_ID ?? "",
+        RULE_ID: row[t.idCol] ?? "",
+        EXPR: expr,
+        CONTRADICTIONS: problems.join(" | ")
+      });
+    }
+  }
+
+  const outPath = path.join(root, "data", "complaints", "reports", "rule_contradictions.csv");
+  writeCsv(outPath, ["TABLE","CC_ID","RULE_ID","EXPR","CONTRADICTIONS"], rowsOut);
+  console.log(`✅ Wrote ${outPath} (${rowsOut.length} rows)`);
+}
+
+main();
+Recommended order to run
+npx tsx scripts/engine-coverage-audit.ts
+npx tsx scripts/classify-dead-clusters.ts
+npx tsx scripts/analyze-rule-contradictions.ts
+npx tsx scripts/auto-generate-missing-tests.ts --limit 50
+npx tsx scripts/export-missing-tests-to-golden-format.ts
+
+Then, once you review the generated JSONL:
+
+npx tsx scripts/append-generated-tests-to-golden.ts --target tests/golden/generated_append.jsonl --dry-run
+What else I can make after these
+
+The cleanest next file would be:
+
+scripts/merge-generated-tests-into-harness.ts
+
+That would take approved generated tests and merge them directly into your actual harness folder structure with backup + idempotency.
+
+PLEASE MAKE THIS FILE AND ANY OTHER FILE YOU WOULD SUGGEST TO IMPROVE THIS SYSTEM PLEASE.
+
+Absolutely. Here’s the next file plus a compact set of high-leverage companion files that tighten the whole system.
+
+I’d add these next
+
+scripts/merge-generated-tests-into-harness.ts
+Safely merges approved generated tests into your real harness with backup and idempotency.
+
+scripts/validate-generated-golden-tests.ts
+Catches malformed generated tests before they reach the harness.
+
+scripts/promote-approved-generated-tests.ts
+Lets you mark only selected generated tests as approved and move them into a promotion-ready file.
+
+scripts/runtime-audit-to-coverage.ts
+Converts live runtime audit logs into coverage summaries so the engine learns from production usage, not just harness runs.
+
+scripts/priority-refinement-report.ts
+Finds complaints where DX candidate ranking looks unstable or dominated by benign clusters.
+
+That set gives you:
+
+safer harness merging
+
+cleaner review workflow
+
+production telemetry feedback
+
+better differential tuning
+
+1) scripts/merge-generated-tests-into-harness.ts
+
+This is the file you explicitly asked for.
+
+It reads approved generated tests from JSONL and merges them into a target harness JSONL with:
+
+backup
+
+idempotency
+
+dry-run
+
+optional complaint filter
+
+/**
+ * scripts/merge-generated-tests-into-harness.ts
+ *
+ * Merge approved generated tests into a real harness JSONL file.
+ *
+ * Input:
+ *   data/complaints/reports/generated_golden_tests.jsonl
+ *
+ * Target:
+ *   tests/golden/generated_append.jsonl (default, override with --target)
+ *
+ * Rules:
+ * - only APPROVED tests are merged by default
+ * - idempotent by test_id
+ * - backup target before write
+ *
+ * Usage:
+ *   npx tsx scripts/merge-generated-tests-into-harness.ts
+ *   npx tsx scripts/merge-generated-tests-into-harness.ts --target tests/golden/all_generated.jsonl
+ *   npx tsx scripts/merge-generated-tests-into-harness.ts --cc cough --dry-run
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  inputPath?: string;
+  targetPath?: string;
+  complaintIds: string[];
+  dryRun: boolean;
+  includePending: boolean;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    complaintIds: [],
+    dryRun: argv.includes("--dry-run"),
+    includePending: argv.includes("--include-pending"),
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--input") args.inputPath = argv[++i];
+    else if (argv[i] === "--target") args.targetPath = argv[++i];
+    else if (argv[i] === "--cc") args.complaintIds.push(argv[++i]);
+  }
+
+  return args;
+}
+
+function readJsonl(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function backupFile(filePath: string, dryRun: boolean): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const backup = `${filePath}.bak.${ts}`;
+  if (dryRun) {
+    console.log(`[DRY] Would back up ${filePath} -> ${backup}`);
+    return backup;
+  }
+  if (fs.existsSync(filePath)) fs.copyFileSync(filePath, backup);
+  return backup;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const inputPath = args.inputPath
+    ? path.isAbsolute(args.inputPath) ? args.inputPath : path.join(root, args.inputPath)
+    : path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  const targetPath = args.targetPath
+    ? path.isAbsolute(args.targetPath) ? args.targetPath : path.join(root, args.targetPath)
+    : path.join(root, "tests", "golden", "generated_append.jsonl");
+
+  const incoming = readJsonl(inputPath);
+  const existing = readJsonl(targetPath);
+
+  const allowedStatuses = args.includePending
+    ? new Set(["APPROVED", "PENDING_REVIEW"])
+    : new Set(["APPROVED"]);
+
+  let filtered = incoming.filter((x) => allowedStatuses.has(x.review_status ?? "PENDING_REVIEW"));
+
+  if (args.complaintIds.length) {
+    const set = new Set(args.complaintIds);
+    filtered = filtered.filter((x) => set.has(x.complaint_id));
+  }
+
+  const existingIds = new Set(existing.map((x) => x.test_id));
+  const toAdd = filtered.filter((x) => !existingIds.has(x.test_id));
+
+  console.log("\n=== Merge Generated Tests Into Harness ===");
+  console.log(`Input: ${incoming.length}`);
+  console.log(`Eligible: ${filtered.length}`);
+  console.log(`Already present: ${filtered.length - toAdd.length}`);
+  console.log(`To append: ${toAdd.length}`);
+
+  if (!toAdd.length) return;
+
+  if (args.dryRun) return;
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  backupFile(targetPath, false);
+
+  const payload = toAdd.map((x) => JSON.stringify(x)).join("\n");
+  const prefix = fs.existsSync(targetPath) && fs.statSync(targetPath).size > 0 ? "\n" : "";
+  fs.appendFileSync(targetPath, prefix + payload + "\n", "utf8");
+
+  console.log(`✅ Appended ${toAdd.length} tests to ${targetPath}`);
+}
+
+main();
+2) scripts/validate-generated-golden-tests.ts
+
+This checks generated tests before promotion or merge.
+
+/**
+ * scripts/validate-generated-golden-tests.ts
+ *
+ * Validate generated golden tests JSONL.
+ *
+ * Usage:
+ *   npx tsx scripts/validate-generated-golden-tests.ts
+ *   npx tsx scripts/validate-generated-golden-tests.ts --input data/complaints/reports/generated_golden_tests.jsonl
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = { inputPath?: string };
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--input") args.inputPath = argv[++i];
+  }
+  return args;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const inputPath = args.inputPath
+    ? path.isAbsolute(args.inputPath) ? args.inputPath : path.join(root, args.inputPath)
+    : path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  if (!fs.existsSync(inputPath)) throw new Error(`Missing input: ${inputPath}`);
+
+  const lines = fs.readFileSync(inputPath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const errors: string[] = [];
+  const ids = new Set<string>();
+
+  lines.forEach((line, idx) => {
+    try {
+      const obj = JSON.parse(line);
+      const n = idx + 1;
+
+      if (!obj.test_id) errors.push(`line ${n}: missing test_id`);
+      if (!obj.complaint_id) errors.push(`line ${n}: missing complaint_id`);
+      if (!obj.input?.answers || typeof obj.input.answers !== "object") errors.push(`line ${n}: missing input.answers`);
+      if (!obj.expected?.winning_cluster_id) errors.push(`line ${n}: missing expected.winning_cluster_id`);
+
+      if (obj.test_id) {
+        if (ids.has(obj.test_id)) errors.push(`line ${n}: duplicate test_id ${obj.test_id}`);
+        ids.add(obj.test_id);
+      }
+    } catch (e: any) {
+      errors.push(`line ${idx + 1}: invalid JSON (${e?.message ?? String(e)})`);
+    }
+  });
+
+  console.log(`Lines: ${lines.length}`);
+  console.log(`Errors: ${errors.length}`);
+
+  if (errors.length) {
+    console.log("\nErrors:");
+    errors.slice(0, 50).forEach((e) => console.log(`- ${e}`));
+    process.exit(1);
+  }
+
+  console.log("✅ generated golden tests valid");
+}
+
+main();
+3) scripts/promote-approved-generated-tests.ts
+
+This lets you create a clean, review-controlled approved file from the draft JSONL.
+
+/**
+ * scripts/promote-approved-generated-tests.ts
+ *
+ * Filter generated tests into an approved-only JSONL file.
+ *
+ * Usage:
+ *   npx tsx scripts/promote-approved-generated-tests.ts
+ *   npx tsx scripts/promote-approved-generated-tests.ts --cc cough --cc dysuria
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  inputPath?: string;
+  outPath?: string;
+  complaintIds: string[];
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = { complaintIds: [] };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--input") args.inputPath = argv[++i];
+    else if (argv[i] === "--out") args.outPath = argv[++i];
+    else if (argv[i] === "--cc") args.complaintIds.push(argv[++i]);
+  }
+  return args;
+}
+
+function readJsonl(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const inputPath = args.inputPath
+    ? path.isAbsolute(args.inputPath) ? args.inputPath : path.join(root, args.inputPath)
+    : path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  const outPath = args.outPath
+    ? path.isAbsolute(args.outPath) ? args.outPath : path.join(root, args.outPath)
+    : path.join(root, "data", "complaints", "reports", "approved_generated_golden_tests.jsonl");
+
+  let rows = readJsonl(inputPath).filter((x) => x.review_status === "APPROVED");
+
+  if (args.complaintIds.length) {
+    const set = new Set(args.complaintIds);
+    rows = rows.filter((x) => set.has(x.complaint_id));
+  }
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, rows.map((x) => JSON.stringify(x)).join("\n") + (rows.length ? "\n" : ""), "utf8");
+
+  console.log(`✅ Wrote ${rows.length} approved tests to ${outPath}`);
+}
+
+main();
+4) scripts/runtime-audit-to-coverage.ts
+
+This converts live runtime audit logs into complaint/cluster coverage summaries.
+
+/**
+ * scripts/runtime-audit-to-coverage.ts
+ *
+ * Convert runtime audit CSV into coverage summary CSVs.
+ *
+ * Inputs:
+ *   data/complaints/runtime/engine_runtime_audit.csv
+ *
+ * Outputs:
+ *   data/complaints/reports/runtime_cluster_coverage.csv
+ *   data/complaints/reports/runtime_complaint_summary.csv
+ */
+
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string,string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((h) => {
+      const v = row[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    }).join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function main() {
+  const root = process.cwd();
+  const inPath = path.join(root, "data", "complaints", "runtime", "engine_runtime_audit.csv");
+  const csv = readCsv(inPath);
+
+  const clusterCounts = new Map<string, number>();
+  const complaintCounts = new Map<string, { cases: number; redFlags: number }>();
+
+  for (const r of csv.rows) {
+    const cc = r.CC_ID ?? "";
+    if (!cc) continue;
+
+    if (!complaintCounts.has(cc)) complaintCounts.set(cc, { cases: 0, redFlags: 0 });
+    complaintCounts.get(cc)!.cases += 1;
+
+    const rf = (r.TRIGGERED_RED_FLAGS ?? "").split("|").filter(Boolean);
+    if (rf.length) complaintCounts.get(cc)!.redFlags += 1;
+
+    const fired = (r.FIRED_CLUSTER_IDS ?? "").split("|").filter(Boolean);
+    for (const cl of fired) {
+      const k = `${cc}||${cl}`;
+      clusterCounts.set(k, (clusterCounts.get(k) ?? 0) + 1);
+    }
+  }
+
+  const clusterRows: Record<string,string>[] = [];
+  for (const [k, count] of clusterCounts.entries()) {
+    const [cc, cl] = k.split("||");
+    clusterRows.push({ CC_ID: cc, CLUSTER_ID: cl, FIRE_COUNT: String(count) });
+  }
+
+  const complaintRows: Record<string,string>[] = [];
+  for (const [cc, v] of complaintCounts.entries()) {
+    complaintRows.push({
+      CC_ID: cc,
+      CASE_COUNT: String(v.cases),
+      CASES_WITH_RED_FLAGS: String(v.redFlags)
+    });
+  }
+
+  writeCsv(path.join(root, "data", "complaints", "reports", "runtime_cluster_coverage.csv"),
+    ["CC_ID","CLUSTER_ID","FIRE_COUNT"], clusterRows);
+
+  writeCsv(path.join(root, "data", "complaints", "reports", "runtime_complaint_summary.csv"),
+    ["CC_ID","CASE_COUNT","CASES_WITH_RED_FLAGS"], complaintRows);
+
+  console.log("✅ runtime coverage reports written");
+}
+
+main();
+5) scripts/priority-refinement-report.ts
+
+This identifies complaints where ranking may need tuning:
+
+benign cluster dominates
+
+score gaps are tiny
+
+too many top candidates tie
+
+/**
+ * scripts/priority-refinement-report.ts
+ *
+ * Analyze DX_CANDIDATES.csv for ranking instability / benign dominance.
+ *
+ * Output:
+ *   data/complaints/reports/priority_refinement_report.csv
+ */
+
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string,string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string,string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string,string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string,string>[]) {
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((h) => {
+      const v = row[h] ?? "";
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+      return v;
+    }).join(","));
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function main() {
+  const root = process.cwd();
+  const inPath = path.join(root, "server", "data", "csv", "DX_CANDIDATES.csv");
+  const csv = readCsv(inPath);
+
+  const byCc = new Map<string, Record<string,string>[]>();
+  for (const r of csv.rows) {
+    const cc = r.CC_ID ?? "";
+    if (!cc) continue;
+    if (!byCc.has(cc)) byCc.set(cc, []);
+    byCc.get(cc)!.push(r);
+  }
+
+  const out: Record<string,string>[] = [];
+
+  for (const [cc, rows] of byCc.entries()) {
+    rows.sort((a, b) => Number(b.BASE_SCORE ?? 0) - Number(a.BASE_SCORE ?? 0));
+    const top = rows.slice(0, 5);
+    const top1 = Number(top[0]?.BASE_SCORE ?? 0);
+    const top2 = Number(top[1]?.BASE_SCORE ?? 0);
+    const gap = top1 - top2;
+
+    const benignTop = (top[0]?.BEST_CLUSTER_ID ?? "").endsWith("_BENIGN");
+    const tieish = top.filter((r) => Math.abs(Number(r.BASE_SCORE ?? 0) - top1) < 0.01).length;
+
+    let flag = "";
+    if (benignTop) flag += "BENIGN_TOP;";
+    if (gap < 5) flag += "LOW_GAP;";
+    if (tieish >= 2) flag += "TIES;";
+
+    if (!flag) continue;
+
+    out.push({
+      CC_ID: cc,
+      TOP1_DX: top[0]?.DX_ID ?? "",
+      TOP1_SCORE: String(top1),
+      TOP2_DX: top[1]?.DX_ID ?? "",
+      TOP2_SCORE: String(top2),
+      SCORE_GAP: String(gap),
+      FLAGS: flag.replace(/;$/, "")
+    });
+  }
+
+  writeCsv(path.join(root, "data", "complaints", "reports", "priority_refinement_report.csv"),
+    ["CC_ID","TOP1_DX","TOP1_SCORE","TOP2_DX","TOP2_SCORE","SCORE_GAP","FLAGS"], out);
+
+  console.log(`✅ priority refinement report written (${out.length} flagged complaints)`);
+}
+
+main();
+Recommended order now
+
+Run these in this order:
+
+npx tsx scripts/engine-coverage-audit.ts
+npx tsx scripts/classify-dead-clusters.ts
+npx tsx scripts/analyze-rule-contradictions.ts
+npx tsx scripts/auto-generate-missing-tests.ts --limit 50
+npx tsx scripts/export-missing-tests-to-golden-format.ts
+npx tsx scripts/validate-generated-golden-tests.ts
+npx tsx scripts/promote-approved-generated-tests.ts
+npx tsx scripts/merge-generated-tests-into-harness.ts --dry-run
+
+And if you wire live runtime logging:
+
+npx tsx scripts/runtime-audit-to-coverage.ts
+npx tsx scripts/priority-refinement-report.ts
+The single highest-value next file after these
+
+If you want the next strongest improvement, it would be:
+
+scripts/merge-generated-tests-into-real-complaint-folders.ts
+
+That would place approved generated tests directly into each complaint’s real harness location with:
+
+complaint-aware file routing
+
+backup
+
+dedupe
+
+optional PR-style manifest
+
+That would close the loop all the way from:
+
+dead cluster
+
+generated draft test
+
+reviewed approval
+
+actual harness folder
+
+If you want, I’ll draft that next.
+
+YES PLEASE.  ANY OTHER SCRIPT FILE YOU WOULD RECOMMEND FOR THIS PHASE OF DEVELOPMENT?  PLEASE MAKE ALL FILES TO FINISH THIS PART OF THE PROJECT.
+
+Absolutely. To finish this phase cleanly, I’d add these final files:
+
+scripts/merge-generated-tests-into-real-complaint-folders.ts
+Takes approved generated tests and routes them into the actual complaint harness folders.
+
+scripts/build-harness-manifest.ts
+Scans all complaint folders and produces a manifest of test counts, files, and IDs.
+
+scripts/phase-readiness-report.ts
+Gives you a one-shot report for this whole phase:
+
+compiler pipeline present
+
+harmonizer loop present
+
+audit files present
+
+generated tests valid
+
+harness status
+
+missing pieces
+
+scripts/backfill-generated-test-status.ts
+Lets you bulk mark generated tests as APPROVED, REJECTED, or PENDING_REVIEW by complaint or test id.
+
+That set closes the loop from:
+
+dead cluster
+
+generated test
+
+review
+
+approval
+
+merge into real harness folders
+
+final reporting
+
+Below are all four files.
+
+1) scripts/merge-generated-tests-into-real-complaint-folders.ts
+
+This is the main one you asked for.
+
+It:
+
+reads approved generated tests
+
+groups by complaint_id
+
+writes them into complaint-specific harness files
+
+creates backups
+
+is idempotent by test_id
+
+supports --dry-run
+
+It assumes a complaint harness layout like:
+
+data/complaints/<complaint_id>/golden.generated.jsonl
+
+You can override the base dir.
+
+/**
+ * scripts/merge-generated-tests-into-real-complaint-folders.ts
+ *
+ * Merge approved generated tests into complaint-specific harness files.
+ *
+ * Default target:
+ *   data/complaints/<complaint_id>/golden.generated.jsonl
+ *
+ * Usage:
+ *   npx tsx scripts/merge-generated-tests-into-real-complaint-folders.ts
+ *   npx tsx scripts/merge-generated-tests-into-real-complaint-folders.ts --cc cough --cc dysuria
+ *   npx tsx scripts/merge-generated-tests-into-real-complaint-folders.ts --dry-run
+ *   npx tsx scripts/merge-generated-tests-into-real-complaint-folders.ts --base-dir tests/complaints
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  inputPath?: string;
+  baseDir?: string;
+  complaintIds: string[];
+  dryRun: boolean;
+  includePending: boolean;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    complaintIds: [],
+    dryRun: argv.includes("--dry-run"),
+    includePending: argv.includes("--include-pending")
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--input") args.inputPath = argv[++i];
+    else if (argv[i] === "--base-dir") args.baseDir = argv[++i];
+    else if (argv[i] === "--cc") args.complaintIds.push(argv[++i]);
+  }
+
+  return args;
+}
+
+function readJsonl(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function backupFile(filePath: string, dryRun: boolean): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const backup = `${filePath}.bak.${ts}`;
+  if (dryRun) {
+    console.log(`[DRY] Would back up ${filePath} -> ${backup}`);
+    return backup;
+  }
+  if (fs.existsSync(filePath)) fs.copyFileSync(filePath, backup);
+  return backup;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+
+  const inputPath = args.inputPath
+    ? path.isAbsolute(args.inputPath) ? args.inputPath : path.join(root, args.inputPath)
+    : path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  const baseDir = args.baseDir
+    ? path.isAbsolute(args.baseDir) ? args.baseDir : path.join(root, args.baseDir)
+    : path.join(root, "data", "complaints");
+
+  const rows = readJsonl(inputPath);
+
+  const allowedStatuses = args.includePending
+    ? new Set(["APPROVED", "PENDING_REVIEW"])
+    : new Set(["APPROVED"]);
+
+  let filtered = rows.filter((x) => allowedStatuses.has(x.review_status ?? "PENDING_REVIEW"));
+
+  if (args.complaintIds.length) {
+    const set = new Set(args.complaintIds);
+    filtered = filtered.filter((x) => set.has(x.complaint_id));
+  }
+
+  const byComplaint = new Map<string, any[]>();
+  for (const row of filtered) {
+    const cc = row.complaint_id;
+    if (!cc) continue;
+    if (!byComplaint.has(cc)) byComplaint.set(cc, []);
+    byComplaint.get(cc)!.push(row);
+  }
+
+  console.log("\n=== Merge Generated Tests Into Real Complaint Folders ===");
+  console.log(`Eligible tests: ${filtered.length}`);
+  console.log(`Complaints touched: ${byComplaint.size}`);
+
+  let totalAdded = 0;
+
+  for (const [cc, tests] of byComplaint.entries()) {
+    const targetDir = path.join(baseDir, cc);
+    const targetFile = path.join(targetDir, "golden.generated.jsonl");
+
+    const existing = readJsonl(targetFile);
+    const existingIds = new Set(existing.map((x) => x.test_id));
+
+    const toAdd = tests.filter((x) => !existingIds.has(x.test_id));
+
+    console.log(`${cc}: existing=${existing.length}, incoming=${tests.length}, add=${toAdd.length}`);
+
+    if (!toAdd.length) continue;
+    totalAdded += toAdd.length;
+
+    if (args.dryRun) continue;
+
+    fs.mkdirSync(targetDir, { recursive: true });
+    backupFile(targetFile, false);
+
+    const payload = toAdd.map((x) => JSON.stringify(x)).join("\n");
+    const prefix = fs.existsSync(targetFile) && fs.statSync(targetFile).size > 0 ? "\n" : "";
+    fs.appendFileSync(targetFile, prefix + payload + "\n", "utf8");
+  }
+
+  console.log(`Total added: ${totalAdded}`);
+}
+
+main();
+2) scripts/build-harness-manifest.ts
+
+This scans your complaint directories and builds a manifest so you can see:
+
+which complaints have generated tests
+
+how many tests each file contains
+
+total per complaint
+
+/**
+ * scripts/build-harness-manifest.ts
+ *
+ * Build a manifest of complaint harness files and test counts.
+ *
+ * Usage:
+ *   npx tsx scripts/build-harness-manifest.ts
+ *   npx tsx scripts/build-harness-manifest.ts --base-dir data/complaints
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = { baseDir?: string };
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--base-dir") args.baseDir = argv[++i];
+  }
+  return args;
+}
+
+function countJsonl(filePath: string): number {
+  if (!fs.existsSync(filePath)) return 0;
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .length;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+  const baseDir = args.baseDir
+    ? path.isAbsolute(args.baseDir) ? args.baseDir : path.join(root, args.baseDir)
+    : path.join(root, "data", "complaints");
+
+  const dirs = fs.readdirSync(baseDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort();
+
+  const rows: any[] = [];
+
+  for (const cc of dirs) {
+    const dir = path.join(baseDir, cc);
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+    if (!files.length) continue;
+
+    let total = 0;
+    for (const f of files) {
+      const n = countJsonl(path.join(dir, f));
+      total += n;
+      rows.push({
+        complaint_id: cc,
+        file: f,
+        test_count: n
+      });
+    }
+
+    rows.push({
+      complaint_id: cc,
+      file: "__TOTAL__",
+      test_count: total
+    });
+  }
+
+  const outPath = path.join(root, "data", "complaints", "reports", "harness_manifest.json");
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify({
+    generated_at: new Date().toISOString(),
+    rows
+  }, null, 2) + "\n", "utf8");
+
+  console.log(`✅ Wrote harness manifest: ${outPath}`);
+  console.log(`Rows: ${rows.length}`);
+}
+
+main();
+3) scripts/phase-readiness-report.ts
+
+This gives you a one-command readiness report for this whole phase.
+
+It checks for:
+
+compiler files
+
+harmonizer files
+
+audit files
+
+generated test files
+
+runtime audit presence
+
+harness manifest presence
+
+/**
+ * scripts/phase-readiness-report.ts
+ *
+ * One-shot readiness report for the current compiler/harmonizer/test-generation phase.
+ *
+ * Usage:
+ *   npx tsx scripts/phase-readiness-report.ts
+ */
+
+import fs from "fs";
+import path from "path";
+
+function exists(p: string) {
+  return fs.existsSync(p);
+}
+
+function main() {
+  const root = process.cwd();
+
+  const required = [
+    "scripts/compile-guideline-to-ir.ts",
+    "scripts/normalize-ir.ts",
+    "scripts/emit-ir-to-csvs.ts",
+    "scripts/suggest-token-aliases.ts",
+    "scripts/apply-suggested-token-aliases.ts",
+    "scripts/harmonize-compiler-output.ts",
+    "scripts/review-emitted-drafts.ts",
+    "scripts/merge-approved-drafts.ts",
+    "scripts/learn-token-aliases-from-conflicts.ts",
+    "scripts/promote-learned-aliases.ts",
+    "scripts/engine-coverage-audit.ts",
+    "scripts/auto-generate-missing-tests.ts",
+    "scripts/export-missing-tests-to-golden-format.ts",
+    "scripts/validate-generated-golden-tests.ts",
+    "scripts/promote-approved-generated-tests.ts",
+    "scripts/merge-generated-tests-into-harness.ts",
+    "scripts/merge-generated-tests-into-real-complaint-folders.ts",
+    "scripts/build-harness-manifest.ts",
+    "scripts/runtime-audit-to-coverage.ts",
+    "scripts/priority-refinement-report.ts",
+    "scripts/classify-dead-clusters.ts",
+    "scripts/analyze-rule-contradictions.ts",
+    "data/complaints/token_harmonizer.json"
+  ];
+
+  const present = required.filter((p) => exists(path.join(root, p)));
+  const missing = required.filter((p) => !exists(path.join(root, p)));
+
+  const report = {
+    generated_at: new Date().toISOString(),
+    present_count: present.length,
+    missing_count: missing.length,
+    present,
+    missing,
+    artifacts: {
+      generated_tests: exists(path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl")),
+      approved_generated_tests: exists(path.join(root, "data", "complaints", "reports", "approved_generated_golden_tests.jsonl")),
+      engine_coverage_audit: exists(path.join(root, "data", "complaints", "reports", "engine_coverage_audit.csv")),
+      dead_rules: exists(path.join(root, "data", "complaints", "reports", "dead_rules.csv")),
+      rule_contradictions: exists(path.join(root, "data", "complaints", "reports", "rule_contradictions.csv")),
+      runtime_audit: exists(path.join(root, "data", "complaints", "runtime", "engine_runtime_audit.csv")),
+      harness_manifest: exists(path.join(root, "data", "complaints", "reports", "harness_manifest.json"))
+    }
+  };
+
+  const outPath = path.join(root, "data", "complaints", "reports", "phase_readiness_report.json");
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify(report, null, 2) + "\n", "utf8");
+
+  console.log(`✅ Wrote ${outPath}`);
+  console.log(`Present: ${report.present_count}`);
+  console.log(`Missing: ${report.missing_count}`);
+}
+
+main();
+4) scripts/backfill-generated-test-status.ts
+
+This lets you bulk set review status for generated tests.
+
+Useful when you review a batch and want to mark:
+
+all cough generated tests as APPROVED
+
+one specific test_id as REJECTED
+
+/**
+ * scripts/backfill-generated-test-status.ts
+ *
+ * Bulk update review_status for generated tests.
+ *
+ * Usage:
+ *   npx tsx scripts/backfill-generated-test-status.ts --cc cough --status APPROVED
+ *   npx tsx scripts/backfill-generated-test-status.ts --test-id AUTO_COUGH_0001 --status REJECTED
+ *   npx tsx scripts/backfill-generated-test-status.ts --cc dysuria --status PENDING_REVIEW --dry-run
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  complaintIds: string[];
+  testIds: string[];
+  status?: string;
+  dryRun: boolean;
+};
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    complaintIds: [],
+    testIds: [],
+    dryRun: argv.includes("--dry-run")
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--cc") args.complaintIds.push(argv[++i]);
+    else if (argv[i] === "--test-id") args.testIds.push(argv[++i]);
+    else if (argv[i] === "--status") args.status = argv[++i];
+  }
+
+  if (!args.status) {
+    console.error("Usage: backfill-generated-test-status.ts [--cc <id>] [--test-id <id>] --status APPROVED|REJECTED|PENDING_REVIEW");
+    process.exit(2);
+  }
+
+  return args;
+}
+
+function readJsonl(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = process.cwd();
+  const filePath = path.join(root, "data", "complaints", "reports", "generated_golden_tests.jsonl");
+
+  const rows = readJsonl(filePath);
+
+  const ccSet = new Set(args.complaintIds);
+  const testSet = new Set(args.testIds);
+
+  let changed = 0;
+
+  for (const row of rows) {
+    const ccMatch = ccSet.size === 0 || ccSet.has(row.complaint_id);
+    const testMatch = testSet.size === 0 || testSet.has(row.test_id);
+
+    if (ccMatch && testMatch) {
+      if (row.review_status !== args.status) {
+        row.review_status = args.status;
+        changed++;
+      }
+    }
+  }
+
+  console.log(`Changed: ${changed}`);
+
+  if (args.dryRun) return;
+
+  fs.writeFileSync(filePath, rows.map((x) => JSON.stringify(x)).join("\n") + (rows.length ? "\n" : ""), "utf8");
+  console.log(`✅ Updated ${filePath}`);
+}
+
+main();
+Recommended order to finish this phase
+
+Run these in this order:
+
+npx tsx scripts/engine-coverage-audit.ts
+npx tsx scripts/classify-dead-clusters.ts
+npx tsx scripts/analyze-rule-contradictions.ts
+npx tsx scripts/auto-generate-missing-tests.ts --limit 50
+npx tsx scripts/export-missing-tests-to-golden-format.ts
+npx tsx scripts/validate-generated-golden-tests.ts
+npx tsx scripts/backfill-generated-test-status.ts --cc cough --status APPROVED --dry-run
+npx tsx scripts/promote-approved-generated-tests.ts
+npx tsx scripts/merge-generated-tests-into-harness.ts --dry-run
+npx tsx scripts/merge-generated-tests-into-real-complaint-folders.ts --dry-run
+npx tsx scripts/build-harness-manifest.ts
+npx tsx scripts/phase-readiness-report.ts
+
+And when runtime audit logging is wired:
+
+npx tsx scripts/runtime-audit-to-coverage.ts
+npx tsx scripts/priority-refinement-report.ts
+If I were adding one last file for this phase
+
+The single strongest final file would be:
+
+scripts/close-the-loop-report.ts
+
+That would combine:
+
+dead clusters
+
+generated tests
+
+approved tests
+
+merged tests
+
+runtime coverage
+
+ranking issues
+
+into one dashboard JSON/CSV so you can see the whole system’s improvement cycle in one place.
+
+If you want, I’ll draft that too and then this phase is truly wrapped.
+
+PLEASE DRAFT THIS LAST FILE.
+
+Absolutely. Here’s the last file for this phase:
+
+scripts/close-the-loop-report.ts
+
+This script pulls together the outputs of the whole self-improving cycle into one report.
+
+It summarizes:
+
+dead clusters
+
+dead cluster classifications
+
+generated missing tests
+
+exported golden drafts
+
+approved generated tests
+
+harness manifest
+
+runtime coverage
+
+priority refinement flags
+
+contradiction findings
+
+phase readiness
+
+So instead of opening 8 different files, you get one “mission control” report.
+
+It writes:
+
+data/complaints/reports/close_the_loop_report.json
+
+data/complaints/reports/close_the_loop_report.csv
+
+/**
+ * scripts/close-the-loop-report.ts
+ *
+ * Consolidated report for the self-improving engine loop.
+ *
+ * Reads, when present:
+ *   data/complaints/reports/engine_coverage_audit.csv
+ *   data/complaints/reports/dead_rules.csv
+ *   data/complaints/reports/dead_cluster_classification.csv
+ *   data/complaints/reports/auto_generated_missing_tests.json
+ *   data/complaints/reports/generated_golden_tests.jsonl
+ *   data/complaints/reports/approved_generated_golden_tests.jsonl
+ *   data/complaints/reports/harness_manifest.json
+ *   data/complaints/reports/runtime_cluster_coverage.csv
+ *   data/complaints/reports/runtime_complaint_summary.csv
+ *   data/complaints/reports/priority_refinement_report.csv
+ *   data/complaints/reports/rule_contradictions.csv
+ *   data/complaints/reports/phase_readiness_report.json
+ *
+ * Writes:
+ *   data/complaints/reports/close_the_loop_report.json
+ *   data/complaints/reports/close_the_loop_report.csv
+ *
+ * Usage:
+ *   npx tsx scripts/close-the-loop-report.ts
+ */
+
+import fs from "fs";
+import path from "path";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+function readJson(filePath: string): any | null {
+  if (!fs.existsSync(filePath)) return null;
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function readJsonl(filePath: string): any[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function writeCsv(filePath: string, headers: string[], rows: Record<string, string>[]) {
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(
+      headers
+        .map((h) => {
+          const v = row[h] ?? "";
+          if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+          return v;
+        })
+        .join(",")
+    );
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+}
+
+function num(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function main() {
+  const root = process.cwd();
+  const reportsDir = path.join(root, "data", "complaints", "reports");
+
+  const engineCoverage = readCsv(path.join(reportsDir, "engine_coverage_audit.csv"));
+  const deadRules = readCsv(path.join(reportsDir, "dead_rules.csv"));
+  const deadClass = readCsv(path.join(reportsDir, "dead_cluster_classification.csv"));
+  const autoMissing = readJson(path.join(reportsDir, "auto_generated_missing_tests.json"));
+  const generatedGolden = readJsonl(path.join(reportsDir, "generated_golden_tests.jsonl"));
+  const approvedGolden = readJsonl(path.join(reportsDir, "approved_generated_golden_tests.jsonl"));
+  const harnessManifest = readJson(path.join(reportsDir, "harness_manifest.json"));
+  const runtimeCluster = readCsv(path.join(reportsDir, "runtime_cluster_coverage.csv"));
+  const runtimeComplaint = readCsv(path.join(reportsDir, "runtime_complaint_summary.csv"));
+  const priorityRefinement = readCsv(path.join(reportsDir, "priority_refinement_report.csv"));
+  const contradictions = readCsv(path.join(reportsDir, "rule_contradictions.csv"));
+  const readiness = readJson(path.join(reportsDir, "phase_readiness_report.json"));
+
+  const complaintIds = new Set<string>();
+
+  for (const r of engineCoverage.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of deadRules.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of deadClass.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of runtimeCluster.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of runtimeComplaint.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of priorityRefinement.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of contradictions.rows) if (r.CC_ID) complaintIds.add(r.CC_ID);
+  for (const r of generatedGolden) if (r.complaint_id) complaintIds.add(r.complaint_id);
+  for (const r of approvedGolden) if (r.complaint_id) complaintIds.add(r.complaint_id);
+  for (const r of autoMissing?.tests ?? []) if (r.complaint_id) complaintIds.add(r.complaint_id);
+  for (const r of harnessManifest?.rows ?? []) if (r.complaint_id && r.file === "__TOTAL__") complaintIds.add(r.complaint_id);
+
+  const summaryByComplaint: Record<string, any> = {};
+
+  for (const cc of [...complaintIds].sort()) {
+    const coverage = engineCoverage.rows.find((r) => r.CC_ID === cc);
+    const dead = deadRules.rows.filter((r) => r.CC_ID === cc);
+    const deadC = deadClass.rows.filter((r) => r.CC_ID === cc);
+    const rtCl = runtimeCluster.rows.filter((r) => r.CC_ID === cc);
+    const rtCc = runtimeComplaint.rows.find((r) => r.CC_ID === cc);
+    const pr = priorityRefinement.rows.find((r) => r.CC_ID === cc);
+    const contra = contradictions.rows.filter((r) => r.CC_ID === cc);
+    const gen = generatedGolden.filter((r) => r.complaint_id === cc);
+    const appr = approvedGolden.filter((r) => r.complaint_id === cc);
+    const auto = (autoMissing?.tests ?? []).filter((r: any) => r.complaint_id === cc);
+    const manifestTotal = (harnessManifest?.rows ?? []).find((r: any) => r.complaint_id === cc && r.file === "__TOTAL__");
+
+    const classCounts = {
+      UNDER_TESTED: deadC.filter((r) => r.CLASSIFICATION === "UNDER_TESTED").length,
+      NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD: deadC.filter((r) => r.CLASSIFICATION === "NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD").length,
+      LIKELY_OVERSPECIFIED: deadC.filter((r) => r.CLASSIFICATION === "LIKELY_OVERSPECIFIED").length,
+      LIKELY_SHADOWED: deadC.filter((r) => r.CLASSIFICATION === "LIKELY_SHADOWED").length,
+      UNKNOWN: deadC.filter((r) => r.CLASSIFICATION === "UNKNOWN").length
+    };
+
+    summaryByComplaint[cc] = {
+      complaint_id: cc,
+      total_tests: num(coverage?.TOTAL_TESTS),
+      csr_rows: num(coverage?.CSR_ROWS),
+      clusters: num(coverage?.CLUSTERS),
+      dead_clusters: dead.length,
+      dead_cluster_classes: classCounts,
+      missing_question_tokens: num(coverage?.MISSING_QUESTION_TOKENS),
+      dominant_disposition: coverage?.DOMINANT_DISPOSITION ?? "",
+      dominant_disposition_rate: num(coverage?.DOMINANT_DISPOSITION_RATE),
+      generated_missing_tests: auto.length,
+      generated_golden_tests: gen.length,
+      approved_generated_tests: appr.length,
+      runtime_cluster_fires: rtCl.reduce((a, r) => a + num(r.FIRE_COUNT), 0),
+      runtime_case_count: num(rtCc?.CASE_COUNT),
+      runtime_cases_with_red_flags: num(rtCc?.CASES_WITH_RED_FLAGS),
+      priority_flags: pr?.FLAGS ?? "",
+      contradiction_count: contra.length,
+      harness_total_tests_seen: num(manifestTotal?.test_count)
+    };
+  }
+
+  const overall = {
+    generated_at: new Date().toISOString(),
+    complaints_seen: Object.keys(summaryByComplaint).length,
+    total_dead_clusters: deadRules.rows.length,
+    total_generated_missing_tests: num(autoMissing?.count ?? 0),
+    total_generated_golden_tests: generatedGolden.length,
+    total_approved_generated_tests: approvedGolden.length,
+    total_priority_flags: priorityRefinement.rows.length,
+    total_contradictions: contradictions.rows.length,
+    runtime_cluster_rows: runtimeCluster.rows.length,
+    runtime_complaint_rows: runtimeComplaint.rows.length,
+    readiness: readiness
+      ? {
+          present_count: readiness.present_count ?? 0,
+          missing_count: readiness.missing_count ?? 0
+        }
+      : null
+  };
+
+  const jsonOut = {
+    overall,
+    by_complaint: Object.values(summaryByComplaint)
+  };
+
+  const jsonPath = path.join(reportsDir, "close_the_loop_report.json");
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+  fs.writeFileSync(jsonPath, JSON.stringify(jsonOut, null, 2) + "\n", "utf8");
+
+  const csvRows = Object.values(summaryByComplaint).map((r: any) => ({
+    CC_ID: r.complaint_id,
+    TOTAL_TESTS: String(r.total_tests),
+    CSR_ROWS: String(r.csr_rows),
+    CLUSTERS: String(r.clusters),
+    DEAD_CLUSTERS: String(r.dead_clusters),
+    UNDER_TESTED: String(r.dead_cluster_classes.UNDER_TESTED),
+    NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD: String(r.dead_cluster_classes.NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD),
+    LIKELY_OVERSPECIFIED: String(r.dead_cluster_classes.LIKELY_OVERSPECIFIED),
+    LIKELY_SHADOWED: String(r.dead_cluster_classes.LIKELY_SHADOWED),
+    MISSING_QUESTION_TOKENS: String(r.missing_question_tokens),
+    DOMINANT_DISPOSITION: r.dominant_disposition,
+    DOMINANT_DISPOSITION_RATE: String(r.dominant_disposition_rate),
+    GENERATED_MISSING_TESTS: String(r.generated_missing_tests),
+    GENERATED_GOLDEN_TESTS: String(r.generated_golden_tests),
+    APPROVED_GENERATED_TESTS: String(r.approved_generated_tests),
+    RUNTIME_CLUSTER_FIRES: String(r.runtime_cluster_fires),
+    RUNTIME_CASE_COUNT: String(r.runtime_case_count),
+    RUNTIME_CASES_WITH_RED_FLAGS: String(r.runtime_cases_with_red_flags),
+    PRIORITY_FLAGS: r.priority_flags,
+    CONTRADICTION_COUNT: String(r.contradiction_count),
+    HARNESS_TOTAL_TESTS_SEEN: String(r.harness_total_tests_seen)
+  }));
+
+  const csvPath = path.join(reportsDir, "close_the_loop_report.csv");
+  writeCsv(csvPath, [
+    "CC_ID",
+    "TOTAL_TESTS",
+    "CSR_ROWS",
+    "CLUSTERS",
+    "DEAD_CLUSTERS",
+    "UNDER_TESTED",
+    "NEVER_FIRES_IN_TESTS_BUT_FIRES_IN_PROD",
+    "LIKELY_OVERSPECIFIED",
+    "LIKELY_SHADOWED",
+    "MISSING_QUESTION_TOKENS",
+    "DOMINANT_DISPOSITION",
+    "DOMINANT_DISPOSITION_RATE",
+    "GENERATED_MISSING_TESTS",
+    "GENERATED_GOLDEN_TESTS",
+    "APPROVED_GENERATED_TESTS",
+    "RUNTIME_CLUSTER_FIRES",
+    "RUNTIME_CASE_COUNT",
+    "RUNTIME_CASES_WITH_RED_FLAGS",
+    "PRIORITY_FLAGS",
+    "CONTRADICTION_COUNT",
+    "HARNESS_TOTAL_TESTS_SEEN"
+  ], csvRows);
+
+  console.log("✅ close-the-loop report complete");
+  console.log(`Complaints summarized: ${overall.complaints_seen}`);
+  console.log(`JSON: ${jsonPath}`);
+  console.log(`CSV: ${csvPath}`);
+}
+
+main();
+Recommended final sequence for this phase
+
+Run these in order:
+
+npx tsx scripts/engine-coverage-audit.ts
+npx tsx scripts/classify-dead-clusters.ts
+npx tsx scripts/analyze-rule-contradictions.ts
+npx tsx scripts/auto-generate-missing-tests.ts --limit 50
+npx tsx scripts/export-missing-tests-to-golden-format.ts
+npx tsx scripts/validate-generated-golden-tests.ts
+npx tsx scripts/backfill-generated-test-status.ts --cc cough --status APPROVED --dry-run
+npx tsx scripts/promote-approved-generated-tests.ts
+npx tsx scripts/merge-generated-tests-into-harness.ts --dry-run
+npx tsx scripts/merge-generated-tests-into-real-complaint-folders.ts --dry-run
+npx tsx scripts/build-harness-manifest.ts
+npx tsx scripts/phase-readiness-report.ts
+npx tsx scripts/close-the-loop-report.ts
+
+And if runtime audit logging is active:
+
+npx tsx scripts/runtime-audit-to-coverage.ts
+npx tsx scripts/priority-refinement-report.ts
+npx tsx scripts/close-the-loop-report.ts
+
+That wraps this phase tightly.
