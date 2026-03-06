@@ -46,8 +46,9 @@ The system generates deterministic note drafts from engine output and case data 
 
 ### Patient Intake Chat (Web)
 Browser-based conversational intake flow at `/chat-intake`:
-- **Chat Session Service** (`server/services/chatSessionService.ts`): In-memory session management with Firestore persistence. Creates cases, asks questions, records answers, re-runs engine after each answer, transitions to AWAITING_REVIEW on completion. Engine adapter (`runEngineForChat`) is isolated for easy wiring.
-- **Chat Intake Routes** (`server/routes/chatIntake.ts`): REST endpoints at `/api/chatIntake` — POST start, GET session, POST answer, GET case.
+- **Chat Engine Adapter** (`server/services/chatEngineAdapter.ts`): Translates `CaseRecord` → `CaseState`, calls `runGenericComplaintV1`, maps `GraphResult` → `CaseEngineResult`. Uses `chatQuestionPlanner.ts` for next-question selection from real complaint config and `chatAnswerNormalizer.ts` for canonical answer normalization ("yes"/"no"/numbers). Types in `server/types/chatEngine.ts`.
+- **Chat Session Service** (`server/services/chatSessionService.ts`): In-memory session management with Firestore persistence. Creates cases, asks questions from real complaint config, normalizes and records answers, runs engine via adapter after each answer, persists unanswered critical questions, transitions to AWAITING_REVIEW on completion.
+- **Chat Intake Routes** (`server/routes/chatIntake.ts`): REST endpoints at `/api/chatIntake` — POST start, GET session, POST `/session/:id/answer`, GET case.
 - **Frontend**: `PatientIntakeChat.tsx` page, `ChatMessageList.tsx`, `AnswerInput.tsx` components.
 
 ### eCW Sidecar Export

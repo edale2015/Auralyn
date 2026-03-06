@@ -56,14 +56,14 @@ export class FirestoreCaseStore {
       reviewStatus: "NOT_REVIEWED",
 
       sourceChannel: input.sourceChannel ?? "unknown",
-      patientContext: input.patientContext,
+      patientContext: input.patientContext ?? null,
 
       complaintId: input.complaintId,
-      complaintLabel: input.complaintLabel,
+      complaintLabel: input.complaintLabel ?? null,
 
-      conversationId: input.conversationId,
-      externalThreadId: input.externalThreadId,
-      sessionId: input.sessionId,
+      conversationId: input.conversationId ?? null,
+      externalThreadId: input.externalThreadId ?? null,
+      sessionId: input.sessionId ?? null,
 
       answers: input.answers ?? {},
       unansweredCriticalQuestions: [],

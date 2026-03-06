@@ -2,23 +2,10 @@ import { firestoreCaseStore } from "./firestoreCaseStore";
 import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
 import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
 import { logShadowModeEvent } from "./shadowModeLogger";
-import type { CaseRecord, CaseEngineResult } from "../types/case";
-
-async function runEngineForChat(caseRecord: CaseRecord): Promise<CaseEngineResult> {
-  return {
-    complaintId: caseRecord.complaintId,
-    complaintLabel: caseRecord.complaintLabel,
-    recommendedDisposition: "UNKNOWN",
-    confidence: "LOW",
-    triggeredRedFlags: [],
-    winningClusterId: undefined,
-    dxCandidates: [],
-    clusterScores: [],
-    ruleTrace: [],
-    render: {},
-    engineVersion: "GENERIC_V1"
-  };
-}
+import { runEngineForChatAdapter } from "./chatEngineAdapter";
+import { normalizeChatAnswer } from "./chatAnswerNormalizer";
+import { planNextQuestion } from "./chatQuestionPlanner";
+import type { CaseRecord } from "../types/case";
 
 export type ChatMessageRole = "system" | "assistant" | "user";
 
@@ -49,44 +36,6 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function humanizeToken(token?: string): string {
-  if (!token) return "question";
-  return token.toLowerCase().replace(/_/g, " ");
-}
-
-function pickNextQuestion(caseRecord: CaseRecord): { token?: string; text?: string; completed: boolean } {
-  const answers = caseRecord.answers ?? {};
-  const critical = caseRecord.unansweredCriticalQuestions ?? [];
-
-  if (critical.length > 0) {
-    const token = critical[0];
-    return {
-      token,
-      text: `Please answer this follow-up question: ${humanizeToken(token)}?`,
-      completed: false
-    };
-  }
-
-  const genericOrder = [
-    "AGE_Y",
-    "DURATION_DAYS",
-    "FEVER",
-    "SEVERITY",
-    "SOB"
-  ];
-
-  for (const token of genericOrder) {
-    if (answers[token] === undefined || answers[token] === null || answers[token] === "") {
-      return {
-        token,
-        text: `Please answer: ${humanizeToken(token)}?`,
-        completed: false
-      };
-    }
-  }
-
-  return { completed: true };
-}
 
 export class ChatSessionService {
   private sessions = new Map<string, ChatSessionState>();
@@ -169,7 +118,7 @@ export class ChatSessionService {
       complaintId: input.complaintId
     });
 
-    const next = pickNextQuestion(existing);
+    const next = await planNextQuestion(input.complaintId, {});
 
     const messages: ChatMessage[] = [
       {
@@ -246,26 +195,30 @@ export class ChatSessionService {
 
     if (token) {
       await firestoreCaseStore.updateAnswers(session.caseId, {
-        [token]: input.answerText
+        [token]: normalizeChatAnswer(input.answerText)
       });
     }
 
     const refreshed = await firestoreCaseStore.getCase(session.caseId);
     if (!refreshed) throw new Error(`Case vanished: ${session.caseId}`);
 
-    const engineResult = await runEngineForChat(refreshed);
+    const engineRun = await runEngineForChatAdapter({ caseRecord: refreshed });
 
-    await firestoreCaseStore.setEngineResult(session.caseId, engineResult);
+    await firestoreCaseStore.setEngineResult(session.caseId, engineRun.engineResult);
+
+    await firestoreCaseStore.patchCase(session.caseId, {
+      unansweredCriticalQuestions: engineRun.unansweredCriticalQuestions
+    });
 
     await firestoreCaseEventsStore.appendEvent({
       caseId: session.caseId,
       type: "ENGINE_RUN",
-      summary: `Engine recommended ${engineResult.recommendedDisposition}`,
+      summary: `Engine recommended ${engineRun.engineResult.recommendedDisposition}`,
       actorRole: "system",
       payload: {
-        winningClusterId: engineResult.winningClusterId,
-        redFlags: engineResult.triggeredRedFlags,
-        dxCandidates: engineResult.dxCandidates.slice(0, 5)
+        winningClusterId: engineRun.engineResult.winningClusterId,
+        redFlags: engineRun.engineResult.triggeredRedFlags,
+        dxCandidates: engineRun.engineResult.dxCandidates.slice(0, 5)
       }
     });
 
@@ -273,17 +226,12 @@ export class ChatSessionService {
       type: "ENGINE_RUN",
       caseId: session.caseId,
       complaintId: refreshed.complaintId,
-      disposition: engineResult.recommendedDisposition,
-      winningClusterId: engineResult.winningClusterId,
-      engineVersion: engineResult.engineVersion
+      disposition: engineRun.engineResult.recommendedDisposition,
+      winningClusterId: engineRun.engineResult.winningClusterId,
+      engineVersion: engineRun.engineResult.engineVersion
     });
 
-    const afterEngine = await firestoreCaseStore.getCase(session.caseId);
-    if (!afterEngine) throw new Error(`Case missing after engine run: ${session.caseId}`);
-
-    const next = pickNextQuestion(afterEngine);
-
-    if (next.completed) {
+    if (engineRun.completed) {
       session.completed = true;
       session.currentQuestionToken = undefined;
       session.currentQuestionText = undefined;
@@ -301,23 +249,23 @@ export class ChatSessionService {
       });
     } else {
       session.completed = false;
-      session.currentQuestionToken = next.token;
-      session.currentQuestionText = next.text;
+      session.currentQuestionToken = engineRun.nextQuestionToken;
+      session.currentQuestionText = engineRun.nextQuestionText;
 
       session.messages.push({
         id: makeId("msg"),
         role: "assistant",
-        text: next.text || "Please continue.",
+        text: engineRun.nextQuestionText || "Please continue.",
         createdAt: nowIso(),
-        token: next.token
+        token: engineRun.nextQuestionToken
       });
 
       await firestoreCaseEventsStore.appendEvent({
         caseId: session.caseId,
         type: "QUESTION_ASKED",
-        summary: `Asked ${next.token}`,
+        summary: `Asked ${engineRun.nextQuestionToken}`,
         actorRole: "assistant",
-        payload: { token: next.token, text: next.text }
+        payload: { token: engineRun.nextQuestionToken, text: engineRun.nextQuestionText }
       });
     }
 

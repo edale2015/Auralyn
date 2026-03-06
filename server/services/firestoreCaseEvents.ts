@@ -34,8 +34,8 @@ export class FirestoreCaseEventsStore {
       caseId: input.caseId,
       type: input.type,
       createdAt: nowIso(),
-      actorId: input.actorId,
-      actorRole: input.actorRole,
+      actorId: input.actorId ?? null,
+      actorRole: input.actorRole ?? null,
       summary: input.summary,
       payload: input.payload ?? {},
     };

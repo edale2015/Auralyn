@@ -25,9 +25,14 @@ export function initFirebase(): admin.app.App {
   return app;
 }
 
+let firestoreInstance: admin.firestore.Firestore | null = null;
+
 export function getFirestore(): admin.firestore.Firestore {
+  if (firestoreInstance) return firestoreInstance;
   initFirebase();
-  return admin.firestore();
+  firestoreInstance = admin.firestore();
+  firestoreInstance.settings({ ignoreUndefinedProperties: true });
+  return firestoreInstance;
 }
 
 export function getStorageBucket() {

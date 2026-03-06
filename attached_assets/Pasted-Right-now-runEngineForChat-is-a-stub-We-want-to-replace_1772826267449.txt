@@ -1,0 +1,499 @@
+Right now runEngineForChat() is a stub. We want to replace it with a thin adapter, not smear engine logic all over the chat code.
+
+Design principle
+
+Keep one adapter seam:
+
+chat/session layer owns:
+
+sessions
+
+messages
+
+answer persistence
+
+next-question orchestration
+
+engine adapter owns:
+
+translating CaseRecord to engine input
+
+calling loadComplaintConfig
+
+calling runGenericComplaintV1
+
+translating engine output back to CaseEngineResult
+
+That keeps the architecture clean.
+
+What to build
+New files
+
+I recommend these 4 files:
+
+server/services/chatEngineAdapter.ts
+
+server/services/chatAnswerNormalizer.ts
+
+server/services/chatQuestionPlanner.ts
+
+server/types/chatEngine.ts
+
+And one modification:
+
+patch server/services/chatSessionService.ts
+
+File 1: server/types/chatEngine.ts
+
+This defines the contract between chat and engine.
+
+import type { CaseRecord, CaseEngineResult } from "./case";
+
+export interface ChatEngineRunInput {
+  caseRecord: CaseRecord;
+}
+
+export interface ChatEngineRunOutput {
+  engineResult: CaseEngineResult;
+  nextQuestionToken?: string;
+  nextQuestionText?: string;
+  unansweredCriticalQuestions?: string[];
+  completed: boolean;
+}
+File 2: server/services/chatAnswerNormalizer.ts
+
+Purpose: convert raw chat text into structured answer values before feeding the engine.
+
+Examples:
+
+"yes", "yep", "yeah" → true
+
+"no", "nah" → false
+
+"5" → 5
+
+everything else stays string
+
+Draft
+export function normalizeChatAnswer(raw: string): string | number | boolean {
+  const s = raw.trim().toLowerCase();
+
+  if (["yes", "y", "yeah", "yep", "true"].includes(s)) return true;
+  if (["no", "n", "nah", "nope", "false"].includes(s)) return false;
+
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isNaN(n)) return n;
+  }
+
+  return raw.trim();
+}
+
+This is intentionally small. Later you can make it token-aware:
+
+duration parsing
+
+fever temp parsing
+
+severity scaling
+
+symptom duration units
+
+File 3: server/services/chatQuestionPlanner.ts
+
+Purpose: choose the next question using real complaint config instead of the generic fallback list.
+
+It should pull from:
+
+CORE_QUESTIONS.csv
+
+current answers
+
+ASK_IF
+
+unanswered critical questions
+
+maybe red-flag prompted follow-ups later
+
+Initial strategy
+
+if unansweredCriticalQuestions exists, ask that first
+
+otherwise load complaint config
+
+iterate complaint questions in order
+
+find first required unanswered question whose ASK_IF passes
+
+if none remain, mark completed
+
+Draft shape
+import { loadComplaintConfig } from "./complaintConfigLoader";
+// import { evaluateExpr } from "./exprEval"; // if safe to use here
+
+export async function planNextQuestion(
+  complaintId: string,
+  answers: Record<string, unknown>,
+  unansweredCriticalQuestions: string[] = []
+): Promise<{
+  token?: string;
+  text?: string;
+  completed: boolean;
+}> {
+  if (unansweredCriticalQuestions.length > 0) {
+    const token = unansweredCriticalQuestions[0];
+    return {
+      token,
+      text: `Please answer: ${token.toLowerCase().replace(/_/g, " ")}?`,
+      completed: false
+    };
+  }
+
+  const cfg = await loadComplaintConfig(complaintId);
+  const questions = [...(cfg.questions ?? [])].sort(
+    (a: any, b: any) => Number(a.ASK_ORDER || 0) - Number(b.ASK_ORDER || 0)
+  );
+
+  for (const q of questions) {
+    const token = q.Q_ID?.split("_").slice(2).join("_") || q.Q_ID;
+    const alreadyAnswered = answers[token] !== undefined && answers[token] !== null && answers[token] !== "";
+
+    if (alreadyAnswered) continue;
+
+    // later: evaluate ASK_IF here
+    return {
+      token,
+      text: q.QUESTION_TEXT,
+      completed: false
+    };
+  }
+
+  return { completed: true };
+}
+
+Later upgrade:
+
+evaluate ASK_IF
+
+complaint-specific follow-up generation
+
+cluster-separating questions based on current score state
+
+File 4: server/services/chatEngineAdapter.ts
+
+This is the real seam.
+
+Purpose:
+
+translate CaseRecord → engine input
+
+call complaint loader + generic engine
+
+map result into CaseEngineResult
+
+ask planner for next question
+
+Draft structure
+import type { ChatEngineRunInput, ChatEngineRunOutput } from "../types/chatEngine";
+import type { CaseEngineResult } from "../types/case";
+import { loadComplaintConfig } from "./complaintConfigLoader";
+import { runGenericComplaintV1 } from "../engines/genericComplaintEngineV1";
+import { planNextQuestion } from "./chatQuestionPlanner";
+
+function mapAnswersToEngineInput(answers: Record<string, unknown>) {
+  return {
+    answers
+  };
+}
+
+function mapEngineOutputToCaseEngineResult(
+  complaintId: string,
+  complaintLabel: string | undefined,
+  engineOutput: any
+): CaseEngineResult {
+  return {
+    complaintId,
+    complaintLabel,
+    recommendedDisposition: engineOutput?.disposition || "UNKNOWN",
+    confidence: engineOutput?.confidence || "LOW",
+    triggeredRedFlags: engineOutput?.triggeredRedFlags || [],
+    winningClusterId: engineOutput?.winningClusterId,
+    dxCandidates: engineOutput?.likelyDx || engineOutput?.dxCandidates || [],
+    clusterScores: engineOutput?.clusterScores || [],
+    ruleTrace: engineOutput?.ruleTrace || [],
+    noteDraft: engineOutput?.noteDraft,
+    returnPrecautions: engineOutput?.returnPrecautions || [],
+    render: engineOutput?.render || {},
+    engineVersion: "GENERIC_V1"
+  };
+}
+
+export async function runEngineForChatAdapter(
+  input: ChatEngineRunInput
+): Promise<ChatEngineRunOutput> {
+  const { caseRecord } = input;
+
+  const cfg = await loadComplaintConfig(caseRecord.complaintId);
+
+  const engineInput = mapAnswersToEngineInput(caseRecord.answers || {});
+
+  const engineOutput = await runGenericComplaintV1(cfg, engineInput);
+
+  const engineResult = mapEngineOutputToCaseEngineResult(
+    caseRecord.complaintId,
+    caseRecord.complaintLabel,
+    engineOutput
+  );
+
+  const unansweredCriticalQuestions: string[] =
+    engineOutput?.unansweredCriticalQuestions || [];
+
+  const next = await planNextQuestion(
+    caseRecord.complaintId,
+    caseRecord.answers || {},
+    unansweredCriticalQuestions
+  );
+
+  return {
+    engineResult,
+    nextQuestionToken: next.token,
+    nextQuestionText: next.text,
+    unansweredCriticalQuestions,
+    completed: next.completed
+  };
+}
+Patch chatSessionService.ts
+Replace the stub
+
+Current:
+
+async function runEngineForChat(caseRecord: CaseRecord): Promise<CaseEngineResult> {
+  ...
+}
+
+Replace with:
+
+import { runEngineForChatAdapter } from "./chatEngineAdapter";
+import { normalizeChatAnswer } from "./chatAnswerNormalizer";
+
+Then in answerQuestion():
+
+Before storing answer
+
+Change:
+
+[token]: input.answerText
+
+to:
+
+[token]: normalizeChatAnswer(input.answerText)
+Replace engine run block
+
+Current:
+
+const engineResult = await runEngineForChat(refreshed);
+await firestoreCaseStore.setEngineResult(session.caseId, engineResult);
+...
+const next = pickNextQuestion(afterEngine);
+
+Replace with:
+
+const engineRun = await runEngineForChatAdapter({
+  caseRecord: refreshed
+});
+
+await firestoreCaseStore.setEngineResult(session.caseId, engineRun.engineResult);
+
+await firestoreCaseStore.patchCase(session.caseId, {
+  unansweredCriticalQuestions: engineRun.unansweredCriticalQuestions
+});
+
+await firestoreCaseEventsStore.appendEvent({
+  caseId: session.caseId,
+  type: "ENGINE_RUN",
+  summary: `Engine recommended ${engineRun.engineResult.recommendedDisposition}`,
+  actorRole: "system",
+  payload: {
+    winningClusterId: engineRun.engineResult.winningClusterId,
+    redFlags: engineRun.engineResult.triggeredRedFlags,
+    dxCandidates: engineRun.engineResult.dxCandidates.slice(0, 5)
+  }
+});
+
+await firestoreRuntimeMetricsStore.logMetric({
+  type: "ENGINE_RUN",
+  caseId: session.caseId,
+  complaintId: refreshed.complaintId,
+  disposition: engineRun.engineResult.recommendedDisposition,
+  winningClusterId: engineRun.engineResult.winningClusterId,
+  engineVersion: engineRun.engineResult.engineVersion
+});
+
+if (engineRun.completed) {
+  ...
+} else {
+  session.completed = false;
+  session.currentQuestionToken = engineRun.nextQuestionToken;
+  session.currentQuestionText = engineRun.nextQuestionText;
+
+  session.messages.push({
+    id: makeId("msg"),
+    role: "assistant",
+    text: engineRun.nextQuestionText || "Please continue.",
+    createdAt: nowIso(),
+    token: engineRun.nextQuestionToken
+  });
+
+  ...
+}
+
+That removes the generic question fallback and replaces it with real engine-driven planning.
+
+Likely engine mismatches you’ll need to handle
+
+Because I do not have the exact function signature of your current runGenericComplaintV1, expect one of these:
+
+Possibility A
+runGenericComplaintV1(cfg, input)
+Possibility B
+runGenericComplaintV1({
+  config: cfg,
+  answers,
+  context
+})
+Possibility C
+
+It expects a richer state object like:
+
+modifiers
+
+message history
+
+complaint registry row
+
+scoring context
+
+That is fine. The adapter is where you translate.
+
+What the adapter should eventually return
+
+For the chat UI to feel smart, the adapter should ultimately provide:
+
+engineResult
+
+nextQuestionToken
+
+nextQuestionText
+
+unansweredCriticalQuestions
+
+completed
+
+maybe later:
+
+questionReason
+
+highPriorityPrompt
+
+needsImmediateEscalation
+
+That last one is especially useful. If red flags indicate immediate stop, you can interrupt intake and tell the patient to seek urgent care/ER while still routing for review.
+
+Recommended implementation order
+Step 1
+
+Create these files:
+
+server/types/chatEngine.ts
+
+server/services/chatAnswerNormalizer.ts
+
+server/services/chatQuestionPlanner.ts
+
+server/services/chatEngineAdapter.ts
+
+Step 2
+
+Patch chatSessionService.ts to use:
+
+normalizeChatAnswer
+
+runEngineForChatAdapter
+
+Step 3
+
+Test with one complaint first:
+
+sore_throat
+or
+
+cough
+
+These are clean enough for first integration.
+
+Step 4
+
+Verify:
+
+questions come from real complaint config
+
+answers persist correctly
+
+engine result changes after each answer
+
+completed state routes to review queue
+
+Testing checklist
+
+Use one complaint with a known working engine path.
+
+For sore_throat
+
+Enter answers like:
+
+AGE_Y = 25
+
+DURATION_DAYS = 2
+
+FEVER = yes
+
+COUGH = no
+
+EXUDATE = yes
+
+Expected:
+
+engine should lean toward strep-like cluster
+
+next questions should come from real config, not generic fallback
+
+case ends in AWAITING_REVIEW
+
+note generation and signoff flow still work
+
+Verify Firestore
+
+Check that case document has:
+
+answers
+
+engineResult
+
+unansweredCriticalQuestions
+
+reviewStatus = PENDING_REVIEW
+
+status = AWAITING_REVIEW once complete
+
+Strong recommendation
+
+Do not make the chat UI call the engine directly.
+Keep all engine invocation behind chatEngineAdapter.ts.
+
+That file is your airlock between:
+
+messy conversational intake
+
+deterministic clinical engine
+
+Without that seam, the app turns into spaghetti with a stethoscope.
