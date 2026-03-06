@@ -1,0 +1,425 @@
+Files in Batch G
+
+server/templates/ecwExportTemplates.ts
+
+server/services/ecwSidecarExport.ts
+
+server/routes/exportEncounter.ts
+
+client/src/components/ExportPanel.tsx
+
+This batch assumes:
+
+Batch A exists
+
+Batch D note generation exists
+
+Batch F discrepancy/timeline exists
+
+reviewed cases and signoffs live in Firestore
+
+1) server/templates/ecwExportTemplates.ts
+export type EcwExportTemplateInput = {
+  caseId: string;
+  patientName?: string;
+  dob?: string;
+  sex?: string;
+  complaintLabel?: string;
+  noteDraft?: string;
+  physicianSummary?: string;
+  engineDisposition?: string;
+  finalDisposition?: string;
+  dxCandidates?: Array<{ label?: string; dxId?: string }>;
+  triggeredRedFlags?: string[];
+  returnPrecautions?: string[];
+  reviewerName?: string;
+  reviewerId?: string;
+  reviewerRationale?: string;
+  signoffStatus?: string;
+  createdAt?: string;
+};
+
+function topDxText(dx: Array<{ label?: string; dxId?: string }> = []): string {
+  if (!dx.length) return "None listed";
+  return dx
+    .slice(0, 5)
+    .map((d, i) => `${i + 1}. ${d.label || d.dxId || "Unknown"}`)
+    .join("\n");
+}
+
+export function buildEcwExportText(input: EcwExportTemplateInput): string {
+  const lines: string[] = [];
+
+  lines.push("=== ENCOUNTER EXPORT BUNDLE ===");
+  lines.push(`Case ID: ${input.caseId}`);
+  if (input.createdAt) lines.push(`Created At: ${input.createdAt}`);
+  lines.push("");
+
+  lines.push("=== PATIENT ===");
+  lines.push(`Name: ${input.patientName || "Unknown"}`);
+  if (input.dob) lines.push(`DOB: ${input.dob}`);
+  if (input.sex) lines.push(`Sex: ${input.sex}`);
+  lines.push("");
+
+  lines.push("=== CHIEF COMPLAINT ===");
+  lines.push(input.complaintLabel || "Unknown complaint");
+  lines.push("");
+
+  lines.push("=== NOTE DRAFT ===");
+  lines.push(input.noteDraft || "No draft note available.");
+  lines.push("");
+
+  lines.push("=== ENGINE SUMMARY ===");
+  lines.push(`Engine disposition: ${input.engineDisposition || "UNKNOWN"}`);
+  lines.push(`Final disposition: ${input.finalDisposition || input.engineDisposition || "UNKNOWN"}`);
+  lines.push(`Triggered red flags: ${(input.triggeredRedFlags || []).join(", ") || "none"}`);
+  lines.push("Top diagnosis candidates:");
+  lines.push(topDxText(input.dxCandidates));
+  lines.push("");
+
+  lines.push("=== RETURN PRECAUTIONS ===");
+  if ((input.returnPrecautions || []).length) {
+    for (const item of input.returnPrecautions || []) lines.push(`- ${item}`);
+  } else {
+    lines.push("None documented.");
+  }
+  lines.push("");
+
+  lines.push("=== REVIEW / SIGNOFF ===");
+  lines.push(`Status: ${input.signoffStatus || "Not signed off"}`);
+  lines.push(`Reviewer: ${input.reviewerName || input.reviewerId || "Unknown reviewer"}`);
+  if (input.reviewerRationale) lines.push(`Rationale: ${input.reviewerRationale}`);
+  if (input.physicianSummary) {
+    lines.push("");
+    lines.push("Reviewer Summary:");
+    lines.push(input.physicianSummary);
+  }
+
+  return lines.join("\n");
+}
+
+export function buildEcwExportJson(input: EcwExportTemplateInput) {
+  return {
+    exportType: "ECW_SIDECAR",
+    caseId: input.caseId,
+    patient: {
+      name: input.patientName,
+      dob: input.dob,
+      sex: input.sex
+    },
+    complaint: {
+      label: input.complaintLabel
+    },
+    noteDraft: input.noteDraft,
+    physicianSummary: input.physicianSummary,
+    engine: {
+      disposition: input.engineDisposition,
+      finalDisposition: input.finalDisposition || input.engineDisposition,
+      dxCandidates: input.dxCandidates || [],
+      triggeredRedFlags: input.triggeredRedFlags || [],
+      returnPrecautions: input.returnPrecautions || []
+    },
+    signoff: {
+      status: input.signoffStatus,
+      reviewerName: input.reviewerName,
+      reviewerId: input.reviewerId,
+      rationale: input.reviewerRationale
+    },
+    metadata: {
+      createdAt: input.createdAt
+    }
+  };
+}
+2) server/services/ecwSidecarExport.ts
+import fs from "fs";
+import path from "path";
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { firestoreSignoffStore } from "./firestoreSignoffStore";
+import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
+import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
+import { buildEcwExportJson, buildEcwExportText } from "../templates/ecwExportTemplates";
+
+export interface EcwExportResult {
+  caseId: string;
+  exportDir: string;
+  textPath: string;
+  jsonPath: string;
+}
+
+function safeName(s: string): string {
+  return (s || "unknown")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+export class EcwSidecarExportService {
+  async exportCase(caseId: string): Promise<EcwExportResult> {
+    const caseRecord = await firestoreCaseStore.getCase(caseId);
+    if (!caseRecord) throw new Error(`Case not found: ${caseId}`);
+
+    const signoffs = await firestoreSignoffStore.listSignoffsForCase(caseId);
+    const latest = signoffs.length ? signoffs[signoffs.length - 1] : null;
+
+    const patientName = [
+      caseRecord.patientContext?.firstName,
+      caseRecord.patientContext?.lastName
+    ].filter(Boolean).join(" ").trim() || undefined;
+
+    const payload = {
+      caseId,
+      patientName,
+      dob: caseRecord.patientContext?.dob,
+      sex: caseRecord.patientContext?.sex,
+      complaintLabel: caseRecord.complaintLabel || caseRecord.complaintId,
+      noteDraft: caseRecord.noteDraft,
+      physicianSummary: caseRecord.physicianSummary,
+      engineDisposition: caseRecord.engineResult?.recommendedDisposition,
+      finalDisposition: latest?.finalDisposition || latest?.engineDisposition || caseRecord.engineResult?.recommendedDisposition,
+      dxCandidates: latest?.override?.dxCandidates || caseRecord.engineResult?.dxCandidates || [],
+      triggeredRedFlags: caseRecord.engineResult?.triggeredRedFlags || [],
+      returnPrecautions: latest?.override?.returnPrecautions || caseRecord.engineResult?.returnPrecautions || [],
+      reviewerName: latest?.reviewerName,
+      reviewerId: latest?.reviewerId,
+      reviewerRationale: latest?.rationale,
+      signoffStatus: latest?.status,
+      createdAt: caseRecord.createdAt
+    };
+
+    const root = process.cwd();
+    const exportDir = path.join(
+      root,
+      "data",
+      "exports",
+      "ecw_sidecar",
+      `${safeName(caseId)}_${safeName(caseRecord.complaintId)}`
+    );
+
+    fs.mkdirSync(exportDir, { recursive: true });
+
+    const textPath = path.join(exportDir, "encounter_export.txt");
+    const jsonPath = path.join(exportDir, "encounter_export.json");
+
+    fs.writeFileSync(textPath, buildEcwExportText(payload), "utf8");
+    fs.writeFileSync(jsonPath, JSON.stringify(buildEcwExportJson(payload), null, 2) + "\n", "utf8");
+
+    await firestoreCaseStore.markExportedToEcw(caseId);
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId,
+      type: "EXPORTED_ECW",
+      actorRole: "system",
+      summary: "Generated eCW sidecar export",
+      payload: {
+        textPath,
+        jsonPath
+      }
+    });
+
+    await firestoreRuntimeMetricsStore.logMetric({
+      type: "EXPORT_ECW",
+      caseId,
+      complaintId: caseRecord.complaintId,
+      disposition: payload.finalDisposition
+    });
+
+    return {
+      caseId,
+      exportDir,
+      textPath,
+      jsonPath
+    };
+  }
+}
+
+export const ecwSidecarExportService = new EcwSidecarExportService();
+3) server/routes/exportEncounter.ts
+import { Router } from "express";
+import { ecwSidecarExportService } from "../services/ecwSidecarExport";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+
+export const exportEncounterRouter = Router();
+
+exportEncounterRouter.get("/:caseId/status", async (req, res) => {
+  try {
+    const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+    if (!caseRecord) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+
+    res.json({
+      caseId: caseRecord.caseId,
+      exportedToEcw: caseRecord.exportedToEcw ?? false,
+      signoffRequired: caseRecord.signoffRequired,
+      reviewStatus: caseRecord.reviewStatus,
+      status: caseRecord.status
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to load export status"
+    });
+  }
+});
+
+exportEncounterRouter.post("/:caseId/export", async (req, res) => {
+  try {
+    const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+    if (!caseRecord) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+
+    if (caseRecord.signoffRequired && caseRecord.reviewStatus !== "APPROVED" && caseRecord.reviewStatus !== "OVERRIDDEN") {
+      res.status(400).json({
+        error: "Case must be reviewed and signed off before export"
+      });
+      return;
+    }
+
+    const result = await ecwSidecarExportService.exportCase(req.params.caseId);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to export encounter"
+    });
+  }
+});
+
+Register it:
+
+import { exportEncounterRouter } from "./routes/exportEncounter";
+
+app.use("/api/exportEncounter", exportEncounterRouter);
+4) client/src/components/ExportPanel.tsx
+import React, { useEffect, useState } from "react";
+
+type Props = {
+  caseId: string;
+};
+
+export function ExportPanel({ caseId }: Props) {
+  const [status, setStatus] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [exportResult, setExportResult] = useState<any>(null);
+
+  async function loadStatus() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/exportEncounter/${caseId}/status`);
+      const data = await res.json();
+      setStatus(data);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function exportCase() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/exportEncounter/${caseId}/export`, {
+        method: "POST"
+      });
+      const data = await res.json();
+      setExportResult(data);
+      await loadStatus();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadStatus();
+  }, [caseId]);
+
+  return (
+    <div style={{ border: "1px solid #ccc", padding: 12, marginTop: 16 }}>
+      <h3>eCW Sidecar Export</h3>
+
+      {status && (
+        <div style={{ marginBottom: 12 }}>
+          <div><strong>Review status:</strong> {status.reviewStatus}</div>
+          <div><strong>Case status:</strong> {status.status}</div>
+          <div><strong>Already exported:</strong> {String(status.exportedToEcw)}</div>
+        </div>
+      )}
+
+      <button
+        onClick={exportCase}
+        disabled={
+          loading ||
+          !status ||
+          (status.signoffRequired && status.reviewStatus !== "APPROVED" && status.reviewStatus !== "OVERRIDDEN")
+        }
+      >
+        Export Encounter Bundle
+      </button>
+
+      {status && status.signoffRequired && status.reviewStatus !== "APPROVED" && status.reviewStatus !== "OVERRIDDEN" && (
+        <div style={{ marginTop: 8, color: "#8a1f1f" }}>
+          This case must be signed off before export.
+        </div>
+      )}
+
+      {exportResult?.exportDir && (
+        <div style={{ marginTop: 12 }}>
+          <div><strong>Export directory:</strong> {exportResult.exportDir}</div>
+          <div><strong>Text file:</strong> {exportResult.textPath}</div>
+          <div><strong>JSON file:</strong> {exportResult.jsonPath}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+Suggested small update to CaseReview.tsx
+
+Add:
+
+import { ExportPanel } from "../components/ExportPanel";
+
+Then render it near the bottom:
+
+<ExportPanel caseId={caseData.caseId} />
+
+A good order inside the page is:
+
+<RuleTracePanel trace={caseData.engineResult?.ruleTrace} />
+<NotePreview caseId={caseData.caseId} />
+<CaseTimeline caseId={caseData.caseId} />
+<SignoffPanel caseData={caseData} />
+<ExportPanel caseId={caseData.caseId} />
+What Batch G gives you
+
+Now your workflow becomes:
+
+Patient intake
+→ engine recommendation
+→ physician review
+→ note drafting
+→ signoff
+→ export bundle generated
+→ ready for manual / sidecar eCW transfer
+
+That is the right operational bridge before direct EHR writeback.
+
+Fast verification checklist
+
+Open a signed-off case
+
+Confirm export status endpoint returns approved/overridden
+
+Click Export Encounter Bundle
+
+Confirm:
+
+export directory created
+
+.txt file created
+
+.json file created
+
+case marked exportedToEcw=true
+
+audit event appended
+
+runtime metric logged

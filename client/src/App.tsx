@@ -15,6 +15,7 @@ import TraceViewer from "@/pages/TraceViewer";
 import ReviewQueue from "@/pages/ReviewQueue";
 import CaseReview from "@/pages/CaseReview";
 import PatientIntakeChat from "@/pages/PatientIntakeChat";
+import Discrepancies from "@/pages/Discrepancies";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/review" component={ReviewQueue} />
       <Route path="/review/:caseId" component={CaseReview} />
       <Route path="/chat-intake" component={PatientIntakeChat} />
+      <Route path="/discrepancies" component={Discrepancies} />
       <Route path="/debug/traces" component={TraceViewer} />
       <Route component={NotFound} />
     </Switch>

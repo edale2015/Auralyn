@@ -23,6 +23,7 @@ import { reviewQueueRouter } from "./routes/reviewQueue";
 import { signoffRouter } from "./routes/signoff";
 import { noteDraftRouter } from "./routes/noteDraft";
 import { chatIntakeRouter } from "./routes/chatIntake";
+import { discrepanciesRouter } from "./routes/discrepancies";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -150,6 +151,7 @@ app.use("/api/reviewQueue", reviewQueueRouter);
 app.use("/api/signoff", signoffRouter);
 app.use("/api/noteDraft", noteDraftRouter);
 app.use("/api/chatIntake", chatIntakeRouter);
+app.use("/api/discrepancies", discrepanciesRouter);
 app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
@@ -157,6 +159,7 @@ console.log("[ReviewQueue] Firestore review queue endpoints registered at /api/r
 console.log("[Signoff] Firestore signoff endpoints registered at /api/signoff/*");
 console.log("[NoteDraft] Note generation endpoints registered at /api/noteDraft/*");
 console.log("[ChatIntake] Web chat intake endpoints registered at /api/chatIntake/*");
+console.log("[Discrepancies] Discrepancy tracking endpoints registered at /api/discrepancies/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
 export function log(message: string, source = "express") {

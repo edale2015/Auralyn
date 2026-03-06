@@ -50,6 +50,12 @@ Browser-based conversational intake flow at `/chat-intake`:
 - **Chat Intake Routes** (`server/routes/chatIntake.ts`): REST endpoints at `/api/chatIntake` — POST start, GET session, POST answer, GET case.
 - **Frontend**: `PatientIntakeChat.tsx` page, `ChatMessageList.tsx`, `AnswerInput.tsx` components.
 
+### Discrepancy Tracking
+Detects and surfaces disagreements between engine recommendations and physician signoffs:
+- **Discrepancy Service** (`server/services/discrepancyService.ts`): Compares engine output vs physician signoff to detect disposition mismatches, Dx top mismatches, red flag overrides, and more-info requests. Provides case timeline (events + signoffs) and lists recent discrepancies.
+- **Discrepancy Routes** (`server/routes/discrepancies.ts`): REST endpoints at `/api/discrepancies` — GET list, GET per-case, GET timeline.
+- **Frontend**: `Discrepancies.tsx` page at `/discrepancies`, `DiscrepancyBadge.tsx` (typed badge component), `CaseTimeline.tsx` (event + signoff timeline).
+
 ### Operational Intelligence & Tooling
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.
 
