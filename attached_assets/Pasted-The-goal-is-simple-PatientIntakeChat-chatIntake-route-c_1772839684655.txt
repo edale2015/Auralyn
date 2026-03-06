@@ -1,0 +1,4094 @@
+The goal is simple:
+
+PatientIntakeChat
+→ chatIntake route
+→ chatSessionService.answerQuestion()
+→ runEngineForChat(caseRecord)
+→ real complaint engine
+→ CaseEngineResult
+→ Firestore case update
+→ physician review queue
+
+Right now runEngineForChat() is a stub. We want to replace it with a thin adapter, not smear engine logic all over the chat code.
+
+Design principle
+
+Keep one adapter seam:
+
+chat/session layer owns:
+
+sessions
+
+messages
+
+answer persistence
+
+next-question orchestration
+
+engine adapter owns:
+
+translating CaseRecord to engine input
+
+calling loadComplaintConfig
+
+calling runGenericComplaintV1
+
+translating engine output back to CaseEngineResult
+
+That keeps the architecture clean.
+
+What to build
+New files
+
+I recommend these 4 files:
+
+server/services/chatEngineAdapter.ts
+
+server/services/chatAnswerNormalizer.ts
+
+server/services/chatQuestionPlanner.ts
+
+server/types/chatEngine.ts
+
+And one modification:
+
+patch server/services/chatSessionService.ts
+
+File 1: server/types/chatEngine.ts
+
+This defines the contract between chat and engine.
+
+import type { CaseRecord, CaseEngineResult } from "./case";
+
+export interface ChatEngineRunInput {
+  caseRecord: CaseRecord;
+}
+
+export interface ChatEngineRunOutput {
+  engineResult: CaseEngineResult;
+  nextQuestionToken?: string;
+  nextQuestionText?: string;
+  unansweredCriticalQuestions?: string[];
+  completed: boolean;
+}
+File 2: server/services/chatAnswerNormalizer.ts
+
+Purpose: convert raw chat text into structured answer values before feeding the engine.
+
+Examples:
+
+"yes", "yep", "yeah" → true
+
+"no", "nah" → false
+
+"5" → 5
+
+everything else stays string
+
+Draft
+export function normalizeChatAnswer(raw: string): string | number | boolean {
+  const s = raw.trim().toLowerCase();
+
+  if (["yes", "y", "yeah", "yep", "true"].includes(s)) return true;
+  if (["no", "n", "nah", "nope", "false"].includes(s)) return false;
+
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isNaN(n)) return n;
+  }
+
+  return raw.trim();
+}
+
+This is intentionally small. Later you can make it token-aware:
+
+duration parsing
+
+fever temp parsing
+
+severity scaling
+
+symptom duration units
+
+File 3: server/services/chatQuestionPlanner.ts
+
+Purpose: choose the next question using real complaint config instead of the generic fallback list.
+
+It should pull from:
+
+CORE_QUESTIONS.csv
+
+current answers
+
+ASK_IF
+
+unanswered critical questions
+
+maybe red-flag prompted follow-ups later
+
+Initial strategy
+
+if unansweredCriticalQuestions exists, ask that first
+
+otherwise load complaint config
+
+iterate complaint questions in order
+
+find first required unanswered question whose ASK_IF passes
+
+if none remain, mark completed
+
+Draft shape
+import { loadComplaintConfig } from "./complaintConfigLoader";
+// import { evaluateExpr } from "./exprEval"; // if safe to use here
+
+export async function planNextQuestion(
+  complaintId: string,
+  answers: Record<string, unknown>,
+  unansweredCriticalQuestions: string[] = []
+): Promise<{
+  token?: string;
+  text?: string;
+  completed: boolean;
+}> {
+  if (unansweredCriticalQuestions.length > 0) {
+    const token = unansweredCriticalQuestions[0];
+    return {
+      token,
+      text: `Please answer: ${token.toLowerCase().replace(/_/g, " ")}?`,
+      completed: false
+    };
+  }
+
+  const cfg = await loadComplaintConfig(complaintId);
+  const questions = [...(cfg.questions ?? [])].sort(
+    (a: any, b: any) => Number(a.ASK_ORDER || 0) - Number(b.ASK_ORDER || 0)
+  );
+
+  for (const q of questions) {
+    const token = q.Q_ID?.split("_").slice(2).join("_") || q.Q_ID;
+    const alreadyAnswered = answers[token] !== undefined && answers[token] !== null && answers[token] !== "";
+
+    if (alreadyAnswered) continue;
+
+    // later: evaluate ASK_IF here
+    return {
+      token,
+      text: q.QUESTION_TEXT,
+      completed: false
+    };
+  }
+
+  return { completed: true };
+}
+
+Later upgrade:
+
+evaluate ASK_IF
+
+complaint-specific follow-up generation
+
+cluster-separating questions based on current score state
+
+File 4: server/services/chatEngineAdapter.ts
+
+This is the real seam.
+
+Purpose:
+
+translate CaseRecord → engine input
+
+call complaint loader + generic engine
+
+map result into CaseEngineResult
+
+ask planner for next question
+
+Draft structure
+import type { ChatEngineRunInput, ChatEngineRunOutput } from "../types/chatEngine";
+import type { CaseEngineResult } from "../types/case";
+import { loadComplaintConfig } from "./complaintConfigLoader";
+import { runGenericComplaintV1 } from "../engines/genericComplaintEngineV1";
+import { planNextQuestion } from "./chatQuestionPlanner";
+
+function mapAnswersToEngineInput(answers: Record<string, unknown>) {
+  return {
+    answers
+  };
+}
+
+function mapEngineOutputToCaseEngineResult(
+  complaintId: string,
+  complaintLabel: string | undefined,
+  engineOutput: any
+): CaseEngineResult {
+  return {
+    complaintId,
+    complaintLabel,
+    recommendedDisposition: engineOutput?.disposition || "UNKNOWN",
+    confidence: engineOutput?.confidence || "LOW",
+    triggeredRedFlags: engineOutput?.triggeredRedFlags || [],
+    winningClusterId: engineOutput?.winningClusterId,
+    dxCandidates: engineOutput?.likelyDx || engineOutput?.dxCandidates || [],
+    clusterScores: engineOutput?.clusterScores || [],
+    ruleTrace: engineOutput?.ruleTrace || [],
+    noteDraft: engineOutput?.noteDraft,
+    returnPrecautions: engineOutput?.returnPrecautions || [],
+    render: engineOutput?.render || {},
+    engineVersion: "GENERIC_V1"
+  };
+}
+
+export async function runEngineForChatAdapter(
+  input: ChatEngineRunInput
+): Promise<ChatEngineRunOutput> {
+  const { caseRecord } = input;
+
+  const cfg = await loadComplaintConfig(caseRecord.complaintId);
+
+  const engineInput = mapAnswersToEngineInput(caseRecord.answers || {});
+
+  const engineOutput = await runGenericComplaintV1(cfg, engineInput);
+
+  const engineResult = mapEngineOutputToCaseEngineResult(
+    caseRecord.complaintId,
+    caseRecord.complaintLabel,
+    engineOutput
+  );
+
+  const unansweredCriticalQuestions: string[] =
+    engineOutput?.unansweredCriticalQuestions || [];
+
+  const next = await planNextQuestion(
+    caseRecord.complaintId,
+    caseRecord.answers || {},
+    unansweredCriticalQuestions
+  );
+
+  return {
+    engineResult,
+    nextQuestionToken: next.token,
+    nextQuestionText: next.text,
+    unansweredCriticalQuestions,
+    completed: next.completed
+  };
+}
+Patch chatSessionService.ts
+Replace the stub
+
+Current:
+
+async function runEngineForChat(caseRecord: CaseRecord): Promise<CaseEngineResult> {
+  ...
+}
+
+Replace with:
+
+import { runEngineForChatAdapter } from "./chatEngineAdapter";
+import { normalizeChatAnswer } from "./chatAnswerNormalizer";
+
+Then in answerQuestion():
+
+Before storing answer
+
+Change:
+
+[token]: input.answerText
+
+to:
+
+[token]: normalizeChatAnswer(input.answerText)
+Replace engine run block
+
+Current:
+
+const engineResult = await runEngineForChat(refreshed);
+await firestoreCaseStore.setEngineResult(session.caseId, engineResult);
+...
+const next = pickNextQuestion(afterEngine);
+
+Replace with:
+
+const engineRun = await runEngineForChatAdapter({
+  caseRecord: refreshed
+});
+
+await firestoreCaseStore.setEngineResult(session.caseId, engineRun.engineResult);
+
+await firestoreCaseStore.patchCase(session.caseId, {
+  unansweredCriticalQuestions: engineRun.unansweredCriticalQuestions
+});
+
+await firestoreCaseEventsStore.appendEvent({
+  caseId: session.caseId,
+  type: "ENGINE_RUN",
+  summary: `Engine recommended ${engineRun.engineResult.recommendedDisposition}`,
+  actorRole: "system",
+  payload: {
+    winningClusterId: engineRun.engineResult.winningClusterId,
+    redFlags: engineRun.engineResult.triggeredRedFlags,
+    dxCandidates: engineRun.engineResult.dxCandidates.slice(0, 5)
+  }
+});
+
+await firestoreRuntimeMetricsStore.logMetric({
+  type: "ENGINE_RUN",
+  caseId: session.caseId,
+  complaintId: refreshed.complaintId,
+  disposition: engineRun.engineResult.recommendedDisposition,
+  winningClusterId: engineRun.engineResult.winningClusterId,
+  engineVersion: engineRun.engineResult.engineVersion
+});
+
+if (engineRun.completed) {
+  ...
+} else {
+  session.completed = false;
+  session.currentQuestionToken = engineRun.nextQuestionToken;
+  session.currentQuestionText = engineRun.nextQuestionText;
+
+  session.messages.push({
+    id: makeId("msg"),
+    role: "assistant",
+    text: engineRun.nextQuestionText || "Please continue.",
+    createdAt: nowIso(),
+    token: engineRun.nextQuestionToken
+  });
+
+  ...
+}
+
+That removes the generic question fallback and replaces it with real engine-driven planning.
+
+Likely engine mismatches you’ll need to handle
+
+Because I do not have the exact function signature of your current runGenericComplaintV1, expect one of these:
+
+Possibility A
+runGenericComplaintV1(cfg, input)
+Possibility B
+runGenericComplaintV1({
+  config: cfg,
+  answers,
+  context
+})
+Possibility C
+
+It expects a richer state object like:
+
+modifiers
+
+message history
+
+complaint registry row
+
+scoring context
+
+That is fine. The adapter is where you translate.
+
+What the adapter should eventually return
+
+For the chat UI to feel smart, the adapter should ultimately provide:
+
+engineResult
+
+nextQuestionToken
+
+nextQuestionText
+
+unansweredCriticalQuestions
+
+completed
+
+maybe later:
+
+questionReason
+
+highPriorityPrompt
+
+needsImmediateEscalation
+
+That last one is especially useful. If red flags indicate immediate stop, you can interrupt intake and tell the patient to seek urgent care/ER while still routing for review.
+
+Recommended implementation order
+Step 1
+
+Create these files:
+
+server/types/chatEngine.ts
+
+server/services/chatAnswerNormalizer.ts
+
+server/services/chatQuestionPlanner.ts
+
+server/services/chatEngineAdapter.ts
+
+Step 2
+
+Patch chatSessionService.ts to use:
+
+normalizeChatAnswer
+
+runEngineForChatAdapter
+
+Step 3
+
+Test with one complaint first:
+
+sore_throat
+or
+
+cough
+
+These are clean enough for first integration.
+
+Step 4
+
+Verify:
+
+questions come from real complaint config
+
+answers persist correctly
+
+engine result changes after each answer
+
+completed state routes to review queue
+
+Testing checklist
+
+Use one complaint with a known working engine path.
+
+For sore_throat
+
+Enter answers like:
+
+AGE_Y = 25
+
+DURATION_DAYS = 2
+
+FEVER = yes
+
+COUGH = no
+
+EXUDATE = yes
+
+Expected:
+
+engine should lean toward strep-like cluster
+
+next questions should come from real config, not generic fallback
+
+case ends in AWAITING_REVIEW
+
+note generation and signoff flow still work
+
+Verify Firestore
+
+Check that case document has:
+
+answers
+
+engineResult
+
+unansweredCriticalQuestions
+
+reviewStatus = PENDING_REVIEW
+
+status = AWAITING_REVIEW once complete
+
+Strong recommendation
+
+Do not make the chat UI call the engine directly.
+Keep all engine invocation behind chatEngineAdapter.ts.
+
+That file is your airlock between:
+
+messy conversational intake
+
+deterministic clinical engine
+
+Without that seam, the app turns into spaghetti with a stethoscope.
+
+Best next move after wiring
+
+Once the adapter is live, the next highest-value upgrade is:
+
+Dynamic complaint-specific question routing
+
+Meaning:
+
+not just first unanswered question
+
+ask the most informative next question based on current cluster competition and red flags
+
+That can come after the adapter works.
+
+The exact deliverable I recommend next
+
+If you want the fastest path, next I should generate the actual four adapter files in code, ready to paste:
+
+chatEngine.ts
+
+chatAnswerNormalizer.ts
+
+chatQuestionPlanner.ts
+
+chatEngineAdapter.ts
+
+Then you can drop them in and patch chatSessionService.ts in one pass.
+
+ACTUAL FOUR ADAPTER FILE IN CODE PLEASE.  All tests pass. The Shadow Mode Ops page now correctly fetches its config from the live backend API endpoint instead of using hardcoded values, and it handles analytics failures gracefully.
+
+Here's a summary of everything that's been completed across all batches:
+
+All 10 Batches (A through J) are complete:
+
+A: Firestore backbone (types + 4 service stores)
+B+C: Review queue, signoff service, routes, frontend components
+D: Note templates, note generator, note draft routes, NotePreview
+E: Chat session service, chat intake routes, PatientIntakeChat page
+F: Discrepancy service, routes, DiscrepancyBadge, CaseTimeline, Discrepancies page
+G: ECW sidecar export (templates + service + routes + ExportPanel)
+H: JWT role-based auth (authService, requireRole middleware, roleAuth routes, AuthContext)
+I: Runtime analytics (service, routes, Recharts dashboard)
+J: Shadow mode ops (config, CSV logger, ops page with live API config, docs, wired into signoff/export/case creation)
+Review fixes applied:
+
+Added /api/shadowMode/config backend endpoint so the ops page fetches live config instead of using hardcoded values
+Used Promise.allSettled so config renders even if analytics has issues
+Wired shadow-mode logger into case creation (chat intake) for complete audit trail
+One note: the runtime analytics page has a Firestore composite index that needs to be created in the Firebase console for the analytics queries to work. This is an infrastructure setup step, not a code issue.
+
+Absolutely. Here are the actual four adapter files in code, ready to paste.
+
+These are designed to slot into your current system with minimal blast radius:
+
+server/types/chatEngine.ts
+
+server/services/chatAnswerNormalizer.ts
+
+server/services/chatQuestionPlanner.ts
+
+server/services/chatEngineAdapter.ts
+
+They assume:
+
+loadComplaintConfig exists in server/services/complaintConfigLoader
+
+runGenericComplaintV1 exists in server/engines/genericComplaintEngineV1
+
+evaluateExpr exists in server/services/exprEval
+
+your CaseRecord / CaseEngineResult types from Batch A exist
+
+I also include a small patch plan for chatSessionService.ts at the end.
+
+1) server/types/chatEngine.ts
+import type { CaseRecord, CaseEngineResult } from "./case";
+
+export interface ChatEngineRunInput {
+  caseRecord: CaseRecord;
+}
+
+export interface ChatEngineRunOutput {
+  engineResult: CaseEngineResult;
+  nextQuestionToken?: string;
+  nextQuestionText?: string;
+  unansweredCriticalQuestions: string[];
+  completed: boolean;
+}
+2) server/services/chatAnswerNormalizer.ts
+
+This version is intentionally small and safe. It normalizes yes/no and numbers without getting overly clever.
+
+export function normalizeChatAnswer(raw: string): string | number | boolean {
+  const s = String(raw ?? "").trim();
+  const lower = s.toLowerCase();
+
+  if (["yes", "y", "yeah", "yep", "true"].includes(lower)) return true;
+  if (["no", "n", "nah", "nope", "false"].includes(lower)) return false;
+
+  if (/^-?\d+(\.\d+)?$/.test(lower)) {
+    const n = Number(lower);
+    if (!Number.isNaN(n)) return n;
+  }
+
+  return s;
+}
+3) server/services/chatQuestionPlanner.ts
+
+This planner uses the real complaint config and asks the next unanswered applicable question.
+
+It respects:
+
+ASK_ORDER
+
+ASK_IF when possible
+
+Q_ID token extraction
+
+unanswered critical questions first
+
+import { loadComplaintConfig } from "./complaintConfigLoader";
+import { evaluateExpr } from "./exprEval";
+
+type ComplaintQuestionRow = {
+  Q_ID?: string;
+  QUESTION_TEXT?: string;
+  ASK_ORDER?: string | number;
+  ASK_IF?: string;
+  REQUIRED?: string | boolean;
+};
+
+export interface PlannedQuestion {
+  token?: string;
+  text?: string;
+  completed: boolean;
+}
+
+function tokenFromQid(qid?: string): string {
+  if (!qid) return "";
+  const parts = qid.split("_");
+  if (parts.length >= 3) return parts.slice(2).join("_");
+  return qid;
+}
+
+function isAnswered(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function toBool(v: unknown): boolean {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes";
+}
+
+function buildExprContext(answers: Record<string, unknown>): Record<string, unknown> {
+  return {
+    answers,
+    ...answers
+  };
+}
+
+export async function planNextQuestion(
+  complaintId: string,
+  answers: Record<string, unknown>,
+  unansweredCriticalQuestions: string[] = []
+): Promise<PlannedQuestion> {
+  if (unansweredCriticalQuestions.length > 0) {
+    const token = unansweredCriticalQuestions[0];
+    return {
+      token,
+      text: `Please answer: ${token.toLowerCase().replace(/_/g, " ")}?`,
+      completed: false
+    };
+  }
+
+  const cfg = await loadComplaintConfig(complaintId);
+  const questions: ComplaintQuestionRow[] = [...(cfg.questions ?? [])].sort(
+    (a: ComplaintQuestionRow, b: ComplaintQuestionRow) =>
+      Number(a.ASK_ORDER ?? 0) - Number(b.ASK_ORDER ?? 0)
+  );
+
+  const exprContext = buildExprContext(answers);
+
+  for (const q of questions) {
+    const token = tokenFromQid(q.Q_ID);
+    if (!token) continue;
+
+    if (isAnswered(answers[token])) continue;
+
+    const askIf = String(q.ASK_IF ?? "").trim();
+    if (askIf) {
+      try {
+        const shouldAsk = evaluateExpr(askIf, exprContext);
+        if (!shouldAsk) continue;
+      } catch {
+        // If ASK_IF is malformed or unsupported here, fail open and still ask.
+      }
+    }
+
+    const required = q.REQUIRED === undefined ? true : toBool(q.REQUIRED);
+    if (!required) {
+      // In MVP mode, optional questions can still be asked,
+      // but required ones naturally come first due to ordering.
+    }
+
+    return {
+      token,
+      text: q.QUESTION_TEXT || `Please answer: ${token.toLowerCase().replace(/_/g, " ")}?`,
+      completed: false
+    };
+  }
+
+  return { completed: true };
+}
+4) server/services/chatEngineAdapter.ts
+
+This is the actual adapter seam.
+
+It:
+
+loads complaint config
+
+maps CaseRecord.answers into engine input
+
+runs the real generic engine
+
+translates the result into CaseEngineResult
+
+asks the planner for the next question
+
+I made the mapping functions isolated so you can patch them easily if your engine’s exact input/output shape differs.
+
+import type { ChatEngineRunInput, ChatEngineRunOutput } from "../types/chatEngine";
+import type { CaseEngineResult, DxCandidate, ClusterScoreSnapshot, RuleTraceItem } from "../types/case";
+import { loadComplaintConfig } from "./complaintConfigLoader";
+import { runGenericComplaintV1 } from "../engines/genericComplaintEngineV1";
+import { planNextQuestion } from "./chatQuestionPlanner";
+
+type GenericEngineOutput = {
+  disposition?: string;
+  confidence?: string;
+  triggeredRedFlags?: string[];
+  winningClusterId?: string;
+  likelyDx?: Array<{ id?: string; label?: string; dxId?: string; rank?: number }>;
+  dxCandidates?: Array<{ dxId?: string; label?: string; rank?: number; bestClusterId?: string; baseScore?: number }>;
+  clusterScores?: Array<{ clusterId?: string; score?: number; reasons?: string[] }>;
+  ruleTrace?: Array<{
+    table?: string;
+    ruleId?: string;
+    fired?: boolean;
+    expr?: string;
+    evidenceLabel?: string;
+    points?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  noteDraft?: string;
+  returnPrecautions?: string[];
+  render?: Record<string, unknown>;
+  unansweredCriticalQuestions?: string[];
+};
+
+function normalizeDisposition(v: unknown): CaseEngineResult["recommendedDisposition"] {
+  const s = String(v ?? "UNKNOWN").trim().toUpperCase();
+  if (s === "ER_SEND" || s === "URGENT" || s === "PCP" || s === "SELF_CARE") return s;
+  return "UNKNOWN";
+}
+
+function normalizeConfidence(v: unknown): CaseEngineResult["confidence"] {
+  const s = String(v ?? "LOW").trim().toUpperCase();
+  if (s === "HIGH" || s === "MODERATE" || s === "LOW") return s;
+  return s;
+}
+
+function mapDxCandidates(out: GenericEngineOutput): DxCandidate[] {
+  const source = out.dxCandidates?.length ? out.dxCandidates : out.likelyDx ?? [];
+
+  return source.slice(0, 10).map((d: any, idx: number) => ({
+    dxId: d.dxId || d.id || `dx_${idx + 1}`,
+    label: d.label || d.dxId || d.id || `Diagnosis ${idx + 1}`,
+    bestClusterId: d.bestClusterId,
+    baseScore: d.baseScore,
+    rank: d.rank ?? idx + 1
+  }));
+}
+
+function mapClusterScores(out: GenericEngineOutput): ClusterScoreSnapshot[] {
+  return (out.clusterScores ?? []).map((c: any) => ({
+    clusterId: c.clusterId || "",
+    score: Number(c.score ?? 0),
+    reasons: c.reasons ?? []
+  }));
+}
+
+function mapRuleTrace(out: GenericEngineOutput): RuleTraceItem[] {
+  return (out.ruleTrace ?? []).map((r: any) => ({
+    table: (r.table as RuleTraceItem["table"]) || "OTHER",
+    ruleId: r.ruleId || "",
+    fired: Boolean(r.fired),
+    expr: r.expr,
+    evidenceLabel: r.evidenceLabel,
+    points: r.points !== undefined ? Number(r.points) : undefined,
+    metadata: r.metadata ?? {}
+  }));
+}
+
+function mapAnswersToEngineInput(answers: Record<string, unknown>) {
+  /**
+   * This is the single place to adapt your chat-stored answers
+   * into whatever your engine expects.
+   *
+   * If your engine later wants:
+   *   { answers, patientContext, messageHistory, modifiers }
+   * patch this here without touching chat routes/pages.
+   */
+  return {
+    answers
+  };
+}
+
+function mapEngineOutputToCaseEngineResult(
+  complaintId: string,
+  complaintLabel: string | undefined,
+  out: GenericEngineOutput
+): CaseEngineResult {
+  return {
+    complaintId,
+    complaintLabel,
+    recommendedDisposition: normalizeDisposition(out.disposition),
+    confidence: normalizeConfidence(out.confidence),
+    triggeredRedFlags: out.triggeredRedFlags ?? [],
+    winningClusterId: out.winningClusterId,
+    dxCandidates: mapDxCandidates(out),
+    clusterScores: mapClusterScores(out),
+    ruleTrace: mapRuleTrace(out),
+    noteDraft: out.noteDraft,
+    returnPrecautions: out.returnPrecautions ?? [],
+    render: out.render ?? {},
+    engineVersion: "GENERIC_V1"
+  };
+}
+
+export async function runEngineForChatAdapter(
+  input: ChatEngineRunInput
+): Promise<ChatEngineRunOutput> {
+  const { caseRecord } = input;
+
+  const cfg = await loadComplaintConfig(caseRecord.complaintId);
+
+  const engineInput = mapAnswersToEngineInput(caseRecord.answers || {});
+
+  /**
+   * IMPORTANT:
+   * This assumes your real engine signature is:
+   *   runGenericComplaintV1(cfg, engineInput)
+   *
+   * If your actual signature differs, patch this one line and the input mapper above.
+   */
+  const rawOutput = (await runGenericComplaintV1(
+    cfg as any,
+    engineInput as any
+  )) as GenericEngineOutput;
+
+  const engineResult = mapEngineOutputToCaseEngineResult(
+    caseRecord.complaintId,
+    caseRecord.complaintLabel,
+    rawOutput
+  );
+
+  const unansweredCriticalQuestions = rawOutput.unansweredCriticalQuestions ?? [];
+
+  const next = await planNextQuestion(
+    caseRecord.complaintId,
+    caseRecord.answers || {},
+    unansweredCriticalQuestions
+  );
+
+  return {
+    engineResult,
+    nextQuestionToken: next.token,
+    nextQuestionText: next.text,
+    unansweredCriticalQuestions,
+    completed: next.completed
+  };
+}
+Patch plan for server/services/chatSessionService.ts
+
+Use these exact changes.
+
+A) Imports
+
+Add:
+
+import { runEngineForChatAdapter } from "./chatEngineAdapter";
+import { normalizeChatAnswer } from "./chatAnswerNormalizer";
+
+Remove the stub runEngineForChat() function entirely.
+
+B) Normalize answers before save
+
+Find:
+
+[token]: input.answerText
+
+Replace with:
+
+[token]: normalizeChatAnswer(input.answerText)
+C) Replace engine run block
+
+Find the current stub-based block and replace with this:
+
+const engineRun = await runEngineForChatAdapter({
+  caseRecord: refreshed
+});
+
+await firestoreCaseStore.setEngineResult(session.caseId, engineRun.engineResult);
+
+await firestoreCaseStore.patchCase(session.caseId, {
+  unansweredCriticalQuestions: engineRun.unansweredCriticalQuestions
+});
+
+await firestoreCaseEventsStore.appendEvent({
+  caseId: session.caseId,
+  type: "ENGINE_RUN",
+  summary: `Engine recommended ${engineRun.engineResult.recommendedDisposition}`,
+  actorRole: "system",
+  payload: {
+    winningClusterId: engineRun.engineResult.winningClusterId,
+    redFlags: engineRun.engineResult.triggeredRedFlags,
+    dxCandidates: engineRun.engineResult.dxCandidates.slice(0, 5)
+  }
+});
+
+await firestoreRuntimeMetricsStore.logMetric({
+  type: "ENGINE_RUN",
+  caseId: session.caseId,
+  complaintId: refreshed.complaintId,
+  disposition: engineRun.engineResult.recommendedDisposition,
+  winningClusterId: engineRun.engineResult.winningClusterId,
+  engineVersion: engineRun.engineResult.engineVersion
+});
+
+if (engineRun.completed) {
+  session.completed = true;
+  session.currentQuestionToken = undefined;
+  session.currentQuestionText = undefined;
+
+  session.messages.push({
+    id: makeId("msg"),
+    role: "assistant",
+    text: "Thank you. Your intake is complete and has been sent for clinician review.",
+    createdAt: nowIso()
+  });
+
+  await firestoreCaseStore.patchCase(session.caseId, {
+    status: "AWAITING_REVIEW",
+    reviewStatus: "PENDING_REVIEW"
+  });
+} else {
+  session.completed = false;
+  session.currentQuestionToken = engineRun.nextQuestionToken;
+  session.currentQuestionText = engineRun.nextQuestionText;
+
+  session.messages.push({
+    id: makeId("msg"),
+    role: "assistant",
+    text: engineRun.nextQuestionText || "Please continue.",
+    createdAt: nowIso(),
+    token: engineRun.nextQuestionToken
+  });
+
+  await firestoreCaseEventsStore.appendEvent({
+    caseId: session.caseId,
+    type: "QUESTION_ASKED",
+    summary: `Asked ${engineRun.nextQuestionToken}`,
+    actorRole: "assistant",
+    payload: {
+      token: engineRun.nextQuestionToken,
+      text: engineRun.nextQuestionText
+    }
+  });
+}
+First complaint to test
+
+Start with:
+
+sore_throat
+or
+
+cough
+
+Those are cleaner than abdominal pain and won’t throw you into the swamp on first adapter wiring.
+
+Suggested test answers for sore_throat
+
+AGE_Y = 25
+
+DURATION_DAYS = 2
+
+FEVER = yes
+
+COUGH = no
+
+EXUDATE = yes
+
+You want to verify:
+
+questions come from real config
+
+engine result updates after each answer
+
+likely dx becomes more specific
+
+case ends in AWAITING_REVIEW
+
+Likely place you may need one quick patch
+
+If runGenericComplaintV1 has a different signature than:
+
+runGenericComplaintV1(cfg, engineInput)
+
+patch this single line in chatEngineAdapter.ts.
+
+That is the whole point of the adapter seam.
+
+What this unlocks
+
+Once these 4 files are in and the patch is applied, your real operational loop becomes:
+
+Patient web intake
+→ real complaint config questions
+→ real generic engine scoring/disposition
+→ Firestore case state
+→ physician review
+→ note generation
+→ signoff
+→ eCW sidecar export
+
+That’s the first true shadow-mode clinical workflow.
+
+If you want, next I can draft the token-aware answer normalizer upgrade so chat answers like “2 days”, “102 fever”, “moderate”, “severe”, “a week” get converted into structured values instead of plain strings.
+
+PLEASAE DRAFT TOKEN-AWARE ANSWER NORMALIZER UPGRADE
+
+Absolutely. Here’s a token-aware answer normalizer upgrade you can drop in.
+
+This version is much smarter than the simple yes/no/number parser. It uses the question token to interpret the answer.
+
+It can handle things like:
+
+"yes", "nah" → booleans
+
+"2 days", "a week", "since yesterday" → duration numbers
+
+"102", "102.4 F", "39 C" → normalized temperature
+
+"moderate", "severe" → severity scale
+
+"25" for age
+
+free text fallback when parsing is uncertain
+
+What I recommend
+
+Replace the simple normalizer with two files:
+
+server/types/chatNormalization.ts
+
+server/services/chatAnswerNormalizer.ts
+
+This keeps the code cleaner and easier to expand.
+
+1) server/types/chatNormalization.ts
+export type NormalizedAnswerValue =
+  | string
+  | number
+  | boolean
+  | null
+  | {
+      raw: string;
+      parsed: string | number | boolean | null;
+      normalizedUnit?: string;
+      confidence: "high" | "medium" | "low";
+    };
+
+export interface TokenAwareNormalizationInput {
+  token?: string;
+  raw: string;
+}
+
+export interface TokenAwareNormalizationResult {
+  token?: string;
+  raw: string;
+  parsed: string | number | boolean | null;
+  normalizedUnit?: string;
+  confidence: "high" | "medium" | "low";
+}
+2) server/services/chatAnswerNormalizer.ts
+import type {
+  TokenAwareNormalizationInput,
+  TokenAwareNormalizationResult
+} from "../types/chatNormalization";
+
+function clean(raw: string): string {
+  return String(raw ?? "").trim();
+}
+
+function lower(raw: string): string {
+  return clean(raw).toLowerCase();
+}
+
+function asResult(
+  input: TokenAwareNormalizationInput,
+  parsed: string | number | boolean | null,
+  confidence: "high" | "medium" | "low",
+  normalizedUnit?: string
+): TokenAwareNormalizationResult {
+  return {
+    token: input.token,
+    raw: input.raw,
+    parsed,
+    normalizedUnit,
+    confidence
+  };
+}
+
+function parseBoolean(raw: string): boolean | null {
+  const s = lower(raw);
+
+  if (["yes", "y", "yeah", "yep", "true", "correct", "affirmative"].includes(s)) return true;
+  if (["no", "n", "nah", "nope", "false", "negative"].includes(s)) return false;
+
+  return null;
+}
+
+function parsePlainNumber(raw: string): number | null {
+  const s = lower(raw);
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isNaN(n)) return n;
+  }
+  return null;
+}
+
+function parseAgeYears(raw: string): number | null {
+  const s = lower(raw);
+
+  const direct = parsePlainNumber(s);
+  if (direct !== null) return direct;
+
+  const m1 = s.match(/(\d+(\.\d+)?)\s*(year|years|yo|y\/o|yr|yrs)\b/);
+  if (m1) return Number(m1[1]);
+
+  return null;
+}
+
+function parseSeverity(raw: string): number | string | null {
+  const s = lower(raw);
+
+  const direct = parsePlainNumber(s);
+  if (direct !== null) return direct;
+
+  if (["mild", "a little", "slight"].includes(s)) return 2;
+  if (["moderate", "medium"].includes(s)) return 5;
+  if (["severe", "very bad", "intense"].includes(s)) return 8;
+  if (["worst", "extreme"].includes(s)) return 10;
+
+  return null;
+}
+
+function parseDurationDays(raw: string): number | null {
+  const s = lower(raw);
+
+  const direct = parsePlainNumber(s);
+  if (direct !== null) return direct;
+
+  const patterns: Array<[RegExp, (m: RegExpMatchArray) => number]> = [
+    [/\b(\d+(\.\d+)?)\s*day(s)?\b/, (m) => Number(m[1])],
+    [/\b(\d+(\.\d+)?)\s*week(s)?\b/, (m) => Number(m[1]) * 7],
+    [/\b(\d+(\.\d+)?)\s*month(s)?\b/, (m) => Number(m[1]) * 30],
+    [/\b(\d+(\.\d+)?)\s*hour(s)?\b/, (m) => Number(m[1]) / 24]
+  ];
+
+  for (const [re, fn] of patterns) {
+    const m = s.match(re);
+    if (m) return fn(m);
+  }
+
+  if (s === "today") return 1;
+  if (s === "yesterday") return 1;
+  if (s === "a day" || s === "one day") return 1;
+  if (s === "a week" || s === "one week") return 7;
+  if (s === "two weeks") return 14;
+
+  if (s.includes("since yesterday")) return 1;
+  if (s.includes("for a week")) return 7;
+  if (s.includes("for two weeks")) return 14;
+
+  return null;
+}
+
+function parseTemperature(raw: string): { value: number; unit: "F" | "C" } | null {
+  const s = lower(raw);
+
+  // 102 / 102.4 assumed F if in plausible Fahrenheit fever range
+  const direct = parsePlainNumber(s);
+  if (direct !== null) {
+    if (direct >= 90 && direct <= 110) return { value: direct, unit: "F" };
+    if (direct >= 32 && direct <= 43) return { value: direct, unit: "C" };
+  }
+
+  const mf = s.match(/(\d+(\.\d+)?)\s*°?\s*f\b/);
+  if (mf) return { value: Number(mf[1]), unit: "F" };
+
+  const mc = s.match(/(\d+(\.\d+)?)\s*°?\s*c\b/);
+  if (mc) return { value: Number(mc[1]), unit: "C" };
+
+  return null;
+}
+
+function parsePainScale(raw: string): number | null {
+  const s = lower(raw);
+
+  const direct = parsePlainNumber(s);
+  if (direct !== null && direct >= 0 && direct <= 10) return direct;
+
+  const m = s.match(/\b(\d+)\s*\/\s*10\b/);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 0 && n <= 10) return n;
+  }
+
+  return null;
+}
+
+function parseTokenAware(input: TokenAwareNormalizationInput): TokenAwareNormalizationResult {
+  const token = String(input.token ?? "").trim().toUpperCase();
+  const raw = clean(input.raw);
+
+  if (!raw) {
+    return asResult(input, null, "low");
+  }
+
+  // universal boolean attempt first for common yes/no symptom questions
+  const bool = parseBoolean(raw);
+
+  // Token-specific routing
+  if (token === "AGE_Y" || token === "AGE") {
+    const age = parseAgeYears(raw);
+    if (age !== null) return asResult(input, age, "high", "years");
+    return asResult(input, raw, "low");
+  }
+
+  if (token === "DURATION_DAYS" || token === "DURATION") {
+    const days = parseDurationDays(raw);
+    if (days !== null) return asResult(input, days, "high", "days");
+    return asResult(input, raw, "low");
+  }
+
+  if (token === "TEMP_F" || token === "TEMP_C" || token === "FEVER_TEMP") {
+    const temp = parseTemperature(raw);
+    if (temp) return asResult(input, temp.value, "high", temp.unit);
+    return asResult(input, raw, "low");
+  }
+
+  if (token === "SEVERITY" || token === "PAIN_SEVERITY" || token === "PAIN_SCALE") {
+    const sev = parsePainScale(raw);
+    if (sev !== null) return asResult(input, sev, "high", "0-10");
+
+    const mapped = parseSeverity(raw);
+    if (mapped !== null) {
+      if (typeof mapped === "number") return asResult(input, mapped, "medium", "0-10");
+      return asResult(input, mapped, "medium");
+    }
+
+    return asResult(input, raw, "low");
+  }
+
+  // Common symptom tokens default to yes/no if answer is boolean-like
+  const symptomishPrefixes = [
+    "FEVER",
+    "COUGH",
+    "SOB",
+    "EXUDATE",
+    "STRIDOR",
+    "DIARRHEA",
+    "VOMITING",
+    "DYSURIA",
+    "RUNNY_NOSE",
+    "SNEEZING",
+    "ITCHY_EYES",
+    "FACIAL_PAIN",
+    "PLEURITIC",
+    "RADIATION",
+    "DIAPHORESIS",
+    "WEAKNESS",
+    "NEURO_DEFICIT",
+    "CONFUSION",
+    "CHEST_PAIN",
+    "FLANK_PAIN"
+  ];
+
+  if (symptomishPrefixes.includes(token) || token.endsWith("_PAIN") || token.endsWith("_PRESENT")) {
+    if (bool !== null) return asResult(input, bool, "high");
+  }
+
+  // Generic yes/no fallback
+  if (bool !== null) return asResult(input, bool, "medium");
+
+  // Generic numeric fallback
+  const num = parsePlainNumber(raw);
+  if (num !== null) return asResult(input, num, "medium");
+
+  // Otherwise preserve raw string
+  return asResult(input, raw, "low");
+}
+
+/**
+ * Backward-compatible simple value return for storage in answers.
+ */
+export function normalizeChatAnswer(raw: string, token?: string): string | number | boolean | null {
+  return parseTokenAware({ token, raw }).parsed;
+}
+
+/**
+ * Rich result version for future debugging / audit / confidence display.
+ */
+export function normalizeChatAnswerDetailed(
+  input: TokenAwareNormalizationInput
+): TokenAwareNormalizationResult {
+  return parseTokenAware(input);
+}
+Patch for chatSessionService.ts
+
+Change this:
+
+[token]: normalizeChatAnswer(input.answerText)
+
+to this:
+
+[token]: normalizeChatAnswer(input.answerText, token)
+
+If you want to keep richer normalization metadata later, you can also append a case event like:
+
+import { normalizeChatAnswerDetailed } from "./chatAnswerNormalizer";
+
+const normalized = normalizeChatAnswerDetailed({
+  token,
+  raw: input.answerText
+});
+
+and log:
+
+await firestoreCaseEventsStore.appendEvent({
+  caseId: session.caseId,
+  type: "ANSWER_RECORDED",
+  summary: `Recorded answer for ${token ?? "free_text"}`,
+  actorRole: "patient",
+  payload: {
+    token,
+    rawAnswer: input.answerText,
+    parsedAnswer: normalized.parsed,
+    normalizedUnit: normalized.normalizedUnit,
+    confidence: normalized.confidence
+  }
+});
+
+Then store:
+
+[token]: normalized.parsed
+
+That gives you a beautiful audit trail later when you want to inspect why the engine took a branch.
+
+What this upgrade now handles well
+Examples
+AGE_Y
+
+"25" → 25
+
+"25 years" → 25
+
+DURATION_DAYS
+
+"2" → 2
+
+"2 days" → 2
+
+"a week" → 7
+
+"since yesterday" → 1
+
+TEMP_F / FEVER_TEMP
+
+"102" → 102 with unit F
+
+"102.4 F" → 102.4
+
+"39 C" → 39
+
+SEVERITY
+
+"7" → 7
+
+"7/10" → 7
+
+"moderate" → 5
+
+"severe" → 8
+
+symptom tokens
+
+"yes" → true
+
+"nah" → false
+
+Strong recommendation
+
+Once this is in, the next best upgrade is:
+
+token-aware question prompts
+
+So instead of:
+
+Please answer: duration days?
+
+you can generate:
+
+How many days have you had these symptoms?
+
+What was the highest temperature?
+
+How severe is the pain from 0 to 10?
+
+You already have the complaint config and token. That would make intake feel much more human and much less spreadsheet goblin.
+
+If you want, I can draft that next as:
+
+server/services/chatQuestionTextResolver.ts
+
+PLEASE DRAFT THE SERVER/SERVICES/CHATQUESTIONTEXTRESOLVER.TS AND ANY OTHER FILES THAT YOU RECOMMEND AFTER THAT PLEASE.  WHAT WOULD YOUR NEXT FILES RECOMMENDATIONS BE?  PLEASE PUT THEM IN A B C OR SOME FORMAT TO KEEP TRACK OF THEM.
+
+Absolutely. Here’s the next tracked set so you can keep the build organized.
+
+A. Draft now
+
+These are the highest-value next files after the token-aware normalizer.
+
+server/services/chatQuestionTextResolver.ts
+
+server/services/chatEscalationPolicy.ts
+
+server/services/chatCompletionDecider.ts
+
+These three tighten the intake loop:
+
+QuestionTextResolver makes prompts sound human
+
+EscalationPolicy lets the chat stop early for dangerous patterns
+
+CompletionDecider decides whether intake is done or needs more questions
+
+1) server/services/chatQuestionTextResolver.ts
+
+This file turns raw tokens into patient-friendly question text.
+
+It uses:
+
+token
+
+optional existing QUESTION_TEXT
+
+optional complaint context
+
+So instead of:
+
+Please answer: DURATION_DAYS?
+
+you get:
+
+How many days have you had these symptoms?
+
+type ResolveQuestionTextInput = {
+  token?: string;
+  fallbackQuestionText?: string;
+  complaintId?: string;
+  complaintLabel?: string;
+};
+
+function cleanToken(token?: string): string {
+  return String(token ?? "").trim().toUpperCase();
+}
+
+function humanizeToken(token?: string): string {
+  return cleanToken(token)
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .trim();
+}
+
+const TOKEN_TEXT_MAP: Record<string, string> = {
+  AGE_Y: "How old are you in years?",
+  AGE: "How old are you?",
+  DURATION_DAYS: "How many days have you had these symptoms?",
+  DURATION: "How long have you had these symptoms?",
+  FEVER: "Have you had a fever?",
+  FEVER_TEMP: "What was the highest temperature?",
+  TEMP_F: "What was the highest temperature in Fahrenheit?",
+  TEMP_C: "What was the highest temperature in Celsius?",
+  SEVERITY: "How severe are your symptoms from 0 to 10?",
+  PAIN_SEVERITY: "How severe is the pain from 0 to 10?",
+  PAIN_SCALE: "How severe is the pain from 0 to 10?",
+  SOB: "Do you have shortness of breath?",
+  COUGH: "Do you have a cough?",
+  EXUDATE: "Do you see or were you told you have tonsillar exudate?",
+  STRIDOR: "Do you have noisy breathing or stridor?",
+  DYSURIA: "Do you have burning or pain with urination?",
+  FLANK_PAIN: "Do you have flank pain?",
+  RUNNY_NOSE: "Do you have a runny nose?",
+  SNEEZING: "Have you been sneezing?",
+  ITCHY_EYES: "Do you have itchy eyes?",
+  FACIAL_PAIN: "Do you have facial pain or pressure?",
+  CHEST_PAIN: "Do you have chest pain?",
+  PLEURITIC: "Is the pain worse when you breathe in?",
+  RADIATION: "Does the pain radiate anywhere?",
+  DIAPHORESIS: "Have you had unusual sweating?",
+  VOMITING: "Have you been vomiting?",
+  DIARRHEA: "Have you had diarrhea?",
+  CONFUSION: "Have you had confusion or altered thinking?",
+  WEAKNESS: "Do you have weakness?",
+  NEURO_DEFICIT: "Do you have numbness, weakness, facial droop, or trouble speaking?",
+  TENDER_ANT_CERVICAL: "Do you have tender swollen glands in the front of the neck?"
+};
+
+const COMPLAINT_OVERRIDES: Record<string, Partial<Record<string, string>>> = {
+  sore_throat: {
+    DURATION_DAYS: "How many days have you had the sore throat?",
+    FEVER: "Have you had fever with the sore throat?",
+    COUGH: "Do you also have a cough?",
+    EXUDATE: "Do you see white patches or pus on the tonsils?"
+  },
+  cough: {
+    DURATION_DAYS: "How many days have you had the cough?",
+    FEVER: "Have you had fever with the cough?",
+    SOB: "Are you short of breath?"
+  },
+  dysuria: {
+    DURATION_DAYS: "How many days have you had burning or pain with urination?",
+    FLANK_PAIN: "Do you have pain in the side or back near the kidney area?"
+  },
+  sinus_pressure: {
+    DURATION_DAYS: "How many days have you had sinus pressure symptoms?",
+    FACIAL_PAIN: "Do you have facial pain or pressure?"
+  }
+};
+
+export function resolveChatQuestionText(input: ResolveQuestionTextInput): string {
+  const token = cleanToken(input.token);
+  const complaintId = String(input.complaintId ?? "").trim();
+
+  if (complaintId && token && COMPLAINT_OVERRIDES[complaintId]?.[token]) {
+    return COMPLAINT_OVERRIDES[complaintId]![token]!;
+  }
+
+  if (token && TOKEN_TEXT_MAP[token]) {
+    return TOKEN_TEXT_MAP[token];
+  }
+
+  if (input.fallbackQuestionText && String(input.fallbackQuestionText).trim()) {
+    return String(input.fallbackQuestionText).trim();
+  }
+
+  if (token) {
+    return `Please answer: ${humanizeToken(token)}?`;
+  }
+
+  return "Please answer the next question.";
+}
+2) server/services/chatEscalationPolicy.ts
+
+This gives you a single place to decide whether the intake should pause immediately and show urgent guidance before continuing.
+
+This does not replace physician review. It just prevents the chat from sleepwalking past danger.
+
+import type { CaseRecord } from "../types/case";
+
+export type ChatEscalationDecision = {
+  shouldInterrupt: boolean;
+  level: "NONE" | "URGENT" | "ER_SEND";
+  message?: string;
+  reason?: string;
+};
+
+function truthy(v: unknown): boolean {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  return ["true", "1", "yes", "y", "yeah", "yep"].includes(s);
+}
+
+export function evaluateChatEscalation(caseRecord: CaseRecord): ChatEscalationDecision {
+  const answers = caseRecord.answers ?? {};
+  const redFlags = caseRecord.engineResult?.triggeredRedFlags ?? [];
+  const disp = caseRecord.engineResult?.recommendedDisposition ?? "UNKNOWN";
+
+  if (disp === "ER_SEND") {
+    return {
+      shouldInterrupt: true,
+      level: "ER_SEND",
+      message: "Your answers suggest this may need emergency evaluation now. Please seek immediate medical care or go to the emergency room.",
+      reason: "engine_disposition_er_send"
+    };
+  }
+
+  if (redFlags.length > 0) {
+    return {
+      shouldInterrupt: true,
+      level: "URGENT",
+      message: "Your answers suggest urgent review is needed. Please seek urgent in-person medical evaluation as soon as possible.",
+      reason: "triggered_red_flags"
+    };
+  }
+
+  // lightweight direct-answer safety net
+  if (truthy(answers["STRIDOR"]) || truthy(answers["NEURO_DEFICIT"])) {
+    return {
+      shouldInterrupt: true,
+      level: "ER_SEND",
+      message: "These symptoms may need emergency evaluation now. Please seek emergency care right away.",
+      reason: "critical_symptom_answer"
+    };
+  }
+
+  if (truthy(answers["SOB"]) && truthy(answers["CHEST_PAIN"])) {
+    return {
+      shouldInterrupt: true,
+      level: "ER_SEND",
+      message: "Shortness of breath with chest pain may require emergency evaluation. Please seek immediate care.",
+      reason: "sob_plus_chest_pain"
+    };
+  }
+
+  return {
+    shouldInterrupt: false,
+    level: "NONE"
+  };
+}
+3) server/services/chatCompletionDecider.ts
+
+This decides whether intake is actually complete, instead of relying only on a simple “no more questions found” rule.
+
+import type { CaseRecord } from "../types/case";
+
+export type ChatCompletionDecision = {
+  completed: boolean;
+  reason:
+    | "NO_MORE_QUESTIONS"
+    | "AWAITING_REVIEW"
+    | "ESCALATED"
+    | "NEEDS_MORE_INFO"
+    | "MISSING_CRITICAL_QUESTIONS";
+};
+
+export function decideChatCompletion(input: {
+  caseRecord: CaseRecord;
+  nextQuestionToken?: string;
+  unansweredCriticalQuestions?: string[];
+}): ChatCompletionDecision {
+  const { caseRecord, nextQuestionToken } = input;
+  const unansweredCriticalQuestions = input.unansweredCriticalQuestions ?? [];
+
+  if (caseRecord.status === "AWAITING_REVIEW") {
+    return {
+      completed: true,
+      reason: "AWAITING_REVIEW"
+    };
+  }
+
+  if (caseRecord.status === "ESCALATED") {
+    return {
+      completed: true,
+      reason: "ESCALATED"
+    };
+  }
+
+  if (unansweredCriticalQuestions.length > 0) {
+    return {
+      completed: false,
+      reason: "MISSING_CRITICAL_QUESTIONS"
+    };
+  }
+
+  if (!nextQuestionToken) {
+    return {
+      completed: true,
+      reason: "NO_MORE_QUESTIONS"
+    };
+  }
+
+  return {
+    completed: false,
+    reason: "NEEDS_MORE_INFO"
+  };
+}
+Patch recommendations after adding these files
+In chatQuestionPlanner.ts
+
+Replace the current raw question text return with the resolver.
+
+Add import:
+
+import { resolveChatQuestionText } from "./chatQuestionTextResolver";
+
+Then change the question return block from:
+
+return {
+  token,
+  text: q.QUESTION_TEXT || `Please answer: ${token.toLowerCase().replace(/_/g, " ")}?`,
+  completed: false
+};
+
+to:
+
+return {
+  token,
+  text: resolveChatQuestionText({
+    token,
+    fallbackQuestionText: q.QUESTION_TEXT,
+    complaintId
+  }),
+  completed: false
+};
+
+And for unanswered critical questions at the top:
+
+return {
+  token,
+  text: resolveChatQuestionText({
+    token,
+    complaintId
+  }),
+  completed: false
+};
+In chatSessionService.ts
+
+Add:
+
+import { evaluateChatEscalation } from "./chatEscalationPolicy";
+import { decideChatCompletion } from "./chatCompletionDecider";
+
+After engineRun is returned, evaluate escalation:
+
+const escalation = evaluateChatEscalation({
+  ...refreshed,
+  engineResult: engineRun.engineResult
+});
+
+If interrupting, add assistant message and optionally set case status:
+
+if (escalation.shouldInterrupt) {
+  session.messages.push({
+    id: makeId("msg"),
+    role: "assistant",
+    text: escalation.message || "Urgent medical evaluation is recommended.",
+    createdAt: nowIso()
+  });
+
+  await firestoreCaseStore.patchCase(session.caseId, {
+    status: escalation.level === "ER_SEND" ? "ESCALATED" : "AWAITING_REVIEW",
+    reviewStatus: "PENDING_REVIEW"
+  });
+}
+
+Then decide completion:
+
+const completion = decideChatCompletion({
+  caseRecord: {
+    ...refreshed,
+    engineResult: engineRun.engineResult
+  },
+  nextQuestionToken: engineRun.nextQuestionToken,
+  unansweredCriticalQuestions: engineRun.unansweredCriticalQuestions
+});
+
+Use completion.completed instead of only engineRun.completed.
+
+B. My next file recommendations
+
+Here’s the next best set, in tracked order.
+
+B1. Strongly recommended next
+server/services/chatStructuredPromptBuilder.ts
+
+Purpose:
+
+build better chat prompts for the next question
+
+include context like complaint and prior answers
+
+produce friendlier patient-facing text
+
+Why next:
+
+intake will feel much more human
+
+better completion rates
+
+less awkward phrasing
+
+B2. Strongly recommended next
+server/services/chatTranscriptSummarizer.ts
+
+Purpose:
+
+summarize the full intake chat into a concise HPI-like narrative
+
+store it in case metadata before note generation
+
+Why next:
+
+bridges raw chat into note drafting
+
+makes physician review much faster
+
+B3. Strongly recommended next
+server/services/chatCriticalQuestionDetector.ts
+
+Purpose:
+
+identify tokens that must be asked before review closes
+
+especially for high-risk complaints
+
+Why next:
+
+improves safety
+
+prevents silent missing red-flag questions
+
+C. Good next files after that
+C1.
+server/services/chatDispositionExplainer.ts
+
+Produces patient-facing explanation text like:
+
+why urgent review is recommended
+
+why export/review is pending
+
+what to expect next
+
+C2.
+server/services/chatAnswerCoercionAudit.ts
+
+Stores normalization decisions and low-confidence parses for review.
+Very helpful later for debugging weird patient inputs.
+
+C3.
+server/services/chatQuestionPriorityRanker.ts
+
+Instead of asking the first unanswered question, ask the most informative next question based on current cluster competition.
+
+That is a big intelligence upgrade.
+
+D. If you want to move toward “maximally operational”
+
+The best sequence after this is:
+
+chatQuestionTextResolver.ts
+
+chatStructuredPromptBuilder.ts
+
+chatTranscriptSummarizer.ts
+
+chatCriticalQuestionDetector.ts
+
+chatQuestionPriorityRanker.ts
+
+That gives you:
+
+human prompts
+
+cleaner summaries
+
+stronger safety
+
+smarter question order
+
+My recommendation
+
+The very next file after this set should be:
+
+server/services/chatTranscriptSummarizer.ts
+
+Because once the intake loop is real, the physician’s next pain point is not the chat itself. It’s reading the whole thing.
+
+A good summarizer turns 15 chat turns into a crisp 4-line HPI draft, and that’s pure gold in review workflow.
+
+If you want, I’ll draft the next A/B tracked mini-batch as:
+
+A1 chatTranscriptSummarizer.ts
+
+A2 chatStructuredPromptBuilder.ts
+
+A3 chatCriticalQuestionDetector.ts
+
+so you can paste them together as the next upgrade set.
+
+LOOKS LIA A1 IS DONE.  BUT B1-4 NEED TO BE BUILT.  A2 IS ESCALATION AND A3 IS DECIDER WHICH AREALSO ALREADY BUILT.  PLEASE PROCEED WITH B1-4
+
+Yes. Let’s proceed with B1–B4 as the next upgrade set.
+
+B1–B4 file list
+
+server/services/chatStructuredPromptBuilder.ts
+
+server/services/chatTranscriptSummarizer.ts
+
+server/services/chatCriticalQuestionDetector.ts
+
+server/services/chatQuestionPriorityRanker.ts
+
+These four work together:
+
+PromptBuilder makes questions sound human
+
+TranscriptSummarizer turns chat into HPI-ready summary
+
+CriticalQuestionDetector enforces safety gaps
+
+PriorityRanker asks the most useful next question, not just the first one
+
+B1) server/services/chatStructuredPromptBuilder.ts
+type BuildStructuredPromptInput = {
+  complaintId?: string;
+  complaintLabel?: string;
+  token?: string;
+  questionText?: string;
+  priorAnswers?: Record<string, unknown>;
+  shortSummary?: string;
+};
+
+function clean(s?: string): string {
+  return String(s ?? "").trim();
+}
+
+function humanizeToken(token?: string): string {
+  return clean(token)
+    .toLowerCase()
+    .replace(/_/g, " ");
+}
+
+function answerSnippet(priorAnswers: Record<string, unknown> = {}, limit = 4): string {
+  const entries = Object.entries(priorAnswers)
+    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .slice(0, limit)
+    .map(([k, v]) => `${humanizeToken(k)}: ${String(v)}`);
+
+  return entries.join("; ");
+}
+
+const TOKEN_HINTS: Record<string, string> = {
+  AGE_Y: "A number is fine.",
+  DURATION_DAYS: "You can answer in days, like 2 days or 1 week.",
+  FEVER_TEMP: "You can answer with a number, like 102 F.",
+  TEMP_F: "You can answer with a temperature like 102.4.",
+  TEMP_C: "You can answer with a temperature like 39.",
+  SEVERITY: "A 0 to 10 number is helpful.",
+  PAIN_SEVERITY: "A 0 to 10 number is helpful.",
+  PAIN_SCALE: "A 0 to 10 number is helpful.",
+  FEVER: "Yes or no is fine.",
+  COUGH: "Yes or no is fine.",
+  SOB: "Yes or no is fine.",
+  DYSURIA: "Yes or no is fine."
+};
+
+export function buildStructuredChatPrompt(input: BuildStructuredPromptInput): string {
+  const complaintLabel = clean(input.complaintLabel || input.complaintId || "your symptoms");
+  const token = clean(input.token).toUpperCase();
+  const q = clean(input.questionText) || `Please answer: ${humanizeToken(token)}?`;
+  const summary = clean(input.shortSummary);
+  const prior = answerSnippet(input.priorAnswers);
+
+  const parts: string[] = [];
+
+  if (summary) {
+    parts.push(`So far I understand: ${summary}.`);
+  } else if (prior) {
+    parts.push(`So far I have: ${prior}.`);
+  }
+
+  parts.push(q);
+
+  if (token && TOKEN_HINTS[token]) {
+    parts.push(TOKEN_HINTS[token]);
+  }
+
+  parts.push(`This helps me assess ${complaintLabel} more accurately.`);
+
+  return parts.join(" ");
+}
+B2) server/services/chatTranscriptSummarizer.ts
+type ChatMessage = {
+  role: "system" | "assistant" | "user";
+  text: string;
+  createdAt?: string;
+  token?: string;
+};
+
+type BuildTranscriptSummaryInput = {
+  complaintId?: string;
+  complaintLabel?: string;
+  patientName?: string;
+  ageYears?: number;
+  sex?: string;
+  answers?: Record<string, unknown>;
+  messages?: ChatMessage[];
+};
+
+function clean(s?: string): string {
+  return String(s ?? "").trim();
+}
+
+function humanizeToken(token?: string): string {
+  return clean(token)
+    .toLowerCase()
+    .replace(/_/g, " ");
+}
+
+function renderAnswerValue(v: unknown): string {
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  return String(v);
+}
+
+function buildAnswerBullets(answers: Record<string, unknown> = {}, max = 8): string[] {
+  return Object.entries(answers)
+    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .slice(0, max)
+    .map(([k, v]) => `${humanizeToken(k)} ${renderAnswerValue(v)}`);
+}
+
+function extractPatientNarrative(messages: ChatMessage[] = [], max = 3): string[] {
+  return messages
+    .filter((m) => m.role === "user")
+    .map((m) => clean(m.text))
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+export function summarizeChatTranscript(input: BuildTranscriptSummaryInput): {
+  shortSummary: string;
+  hpiDraft: string;
+} {
+  const complaintLabel = clean(input.complaintLabel || input.complaintId || "medical concern");
+  const identityBits = [
+    input.ageYears ? `${input.ageYears}-year-old` : "patient",
+    input.sex ? String(input.sex) : ""
+  ].filter(Boolean);
+
+  const intro = `${identityBits.join(" ")} with ${complaintLabel}`.trim();
+
+  const answerBullets = buildAnswerBullets(input.answers);
+  const patientNarrative = extractPatientNarrative(input.messages);
+
+  const shortParts: string[] = [intro];
+  if (answerBullets.length) shortParts.push(answerBullets.slice(0, 4).join("; "));
+  const shortSummary = shortParts.join(". ").trim();
+
+  const hpiParts: string[] = [];
+  hpiParts.push(`${intro} presenting after structured chat intake.`);
+
+  if (patientNarrative.length) {
+    hpiParts.push(`Patient-reported history includes: ${patientNarrative.join(" | ")}.`);
+  }
+
+  if (answerBullets.length) {
+    hpiParts.push(`Structured responses: ${answerBullets.join("; ")}.`);
+  }
+
+  return {
+    shortSummary,
+    hpiDraft: hpiParts.join(" ")
+  };
+}
+B3) server/services/chatCriticalQuestionDetector.ts
+
+This file identifies must-ask tokens before intake can be considered safe to hand off.
+
+import { loadComplaintConfig } from "./complaintConfigLoader";
+
+type CriticalDetectorInput = {
+  complaintId: string;
+  answers: Record<string, unknown>;
+  triggeredRedFlags?: string[];
+  recommendedDisposition?: string;
+};
+
+type CriticalQuestionDetectorOutput = {
+  criticalTokens: string[];
+  reasonsByToken: Record<string, string>;
+};
+
+function tokenFromQid(qid?: string): string {
+  if (!qid) return "";
+  const parts = qid.split("_");
+  if (parts.length >= 3) return parts.slice(2).join("_");
+  return qid;
+}
+
+function isAnswered(v: unknown): boolean {
+  return v !== undefined && v !== null && String(v).trim() !== "";
+}
+
+const GLOBAL_CRITICAL_TOKENS = ["AGE_Y", "DURATION_DAYS"];
+
+const DISPOSITION_CRITICAL_MAP: Record<string, string[]> = {
+  ER_SEND: ["SOB", "CHEST_PAIN", "NEURO_DEFICIT", "STRIDOR"],
+  URGENT: ["FEVER", "SEVERITY"]
+};
+
+export async function detectCriticalQuestions(
+  input: CriticalDetectorInput
+): Promise<CriticalQuestionDetectorOutput> {
+  const { complaintId, answers, triggeredRedFlags = [], recommendedDisposition = "UNKNOWN" } = input;
+
+  const cfg = await loadComplaintConfig(complaintId);
+  const questions = [...(cfg.questions ?? [])];
+
+  const reasonsByToken: Record<string, string> = {};
+  const critical = new Set<string>();
+
+  for (const token of GLOBAL_CRITICAL_TOKENS) {
+    if (!isAnswered(answers[token])) {
+      critical.add(token);
+      reasonsByToken[token] = "global_minimum_required";
+    }
+  }
+
+  for (const token of DISPOSITION_CRITICAL_MAP[recommendedDisposition] ?? []) {
+    if (!isAnswered(answers[token])) {
+      critical.add(token);
+      reasonsByToken[token] = `recommended_disposition_${recommendedDisposition.toLowerCase()}`;
+    }
+  }
+
+  if (triggeredRedFlags.length > 0) {
+    for (const q of questions) {
+      const token = tokenFromQid(q.Q_ID);
+      if (!token) continue;
+      if (!isAnswered(answers[token])) {
+        const text = String(q.QUESTION_TEXT ?? "").toLowerCase();
+        if (
+          text.includes("shortness of breath") ||
+          text.includes("chest pain") ||
+          text.includes("weakness") ||
+          text.includes("stridor") ||
+          text.includes("fever")
+        ) {
+          critical.add(token);
+          reasonsByToken[token] = "red_flag_followup";
+        }
+      }
+    }
+  }
+
+  return {
+    criticalTokens: [...critical],
+    reasonsByToken
+  };
+}
+B4) server/services/chatQuestionPriorityRanker.ts
+
+This ranks candidate questions so you ask the most valuable one first.
+
+For MVP, it scores questions by:
+
+critical token status
+
+whether token appears in red-flag-ish language
+
+whether token appears in top dx labels / winning cluster
+
+whether it is still unanswered
+
+type CandidateQuestion = {
+  token: string;
+  questionText: string;
+  askOrder?: number;
+};
+
+type RankQuestionInput = {
+  candidates: CandidateQuestion[];
+  answers: Record<string, unknown>;
+  criticalTokens?: string[];
+  winningClusterId?: string;
+  dxCandidates?: Array<{ dxId?: string; label?: string }>;
+  triggeredRedFlags?: string[];
+};
+
+type RankedQuestion = CandidateQuestion & {
+  priorityScore: number;
+  priorityReasons: string[];
+};
+
+function isAnswered(v: unknown): boolean {
+  return v !== undefined && v !== null && String(v).trim() !== "";
+}
+
+function tokenish(s?: string): string {
+  return String(s ?? "").trim().toUpperCase();
+}
+
+function questionSignal(token: string, text: string): number {
+  const t = tokenish(token);
+  const q = text.toLowerCase();
+
+  let score = 0;
+  if (["SOB", "CHEST_PAIN", "STRIDOR", "NEURO_DEFICIT"].includes(t)) score += 30;
+  if (["FEVER", "SEVERITY", "DURATION_DAYS", "AGE_Y"].includes(t)) score += 10;
+  if (q.includes("shortness of breath") || q.includes("chest pain") || q.includes("weakness")) score += 15;
+
+  return score;
+}
+
+export function rankNextQuestions(input: RankQuestionInput): RankedQuestion[] {
+  const critical = new Set((input.criticalTokens ?? []).map(tokenish));
+  const dxText = (input.dxCandidates ?? [])
+    .map((d) => `${d.label ?? ""} ${d.dxId ?? ""}`.toUpperCase())
+    .join(" ");
+
+  const ranked = input.candidates
+    .filter((c) => !isAnswered(input.answers[c.token]))
+    .map((c) => {
+      let priorityScore = 0;
+      const priorityReasons: string[] = [];
+
+      if (critical.has(tokenish(c.token))) {
+        priorityScore += 100;
+        priorityReasons.push("critical_token");
+      }
+
+      const signal = questionSignal(c.token, c.questionText);
+      if (signal > 0) {
+        priorityScore += signal;
+        priorityReasons.push("clinical_signal");
+      }
+
+      if (dxText.includes(tokenish(c.token))) {
+        priorityScore += 8;
+        priorityReasons.push("dx_text_overlap");
+      }
+
+      if ((input.winningClusterId ?? "").toUpperCase().includes(tokenish(c.token))) {
+        priorityScore += 5;
+        priorityReasons.push("winning_cluster_overlap");
+      }
+
+      priorityScore += Math.max(0, 50 - Number(c.askOrder ?? 999));
+
+      return {
+        ...c,
+        priorityScore,
+        priorityReasons
+      };
+    })
+    .sort((a, b) => b.priorityScore - a.priorityScore || Number(a.askOrder ?? 999) - Number(b.askOrder ?? 999));
+
+  return ranked;
+}
+How these fit together
+Patch chatQuestionPlanner.ts
+
+Use:
+
+resolveChatQuestionText()
+
+detectCriticalQuestions()
+
+rankNextQuestions()
+
+buildStructuredChatPrompt() if you want the final text to be more natural
+
+Recommended planner flow
+
+load complaint config
+
+build candidate unanswered questions
+
+detect critical questions
+
+rank candidates
+
+pick top ranked
+
+resolve human question text
+
+wrap with structured prompt builder
+
+Suggested planner patch shape
+
+Inside chatQuestionPlanner.ts, add imports:
+
+import { resolveChatQuestionText } from "./chatQuestionTextResolver";
+import { detectCriticalQuestions } from "./chatCriticalQuestionDetector";
+import { rankNextQuestions } from "./chatQuestionPriorityRanker";
+import { buildStructuredChatPrompt } from "./chatStructuredPromptBuilder";
+
+Then replace the simple “first unanswered question” logic with:
+
+const critical = await detectCriticalQuestions({
+  complaintId,
+  answers
+});
+
+const candidates = questions
+  .map((q: any) => {
+    const token = tokenFromQid(q.Q_ID);
+    return {
+      token,
+      questionText: resolveChatQuestionText({
+        token,
+        fallbackQuestionText: q.QUESTION_TEXT,
+        complaintId
+      }),
+      askOrder: Number(q.ASK_ORDER ?? 0)
+    };
+  })
+  .filter((q: any) => q.token);
+
+const ranked = rankNextQuestions({
+  candidates,
+  answers,
+  criticalTokens: critical.criticalTokens
+});
+
+if (!ranked.length) return { completed: true };
+
+const next = ranked[0];
+
+return {
+  token: next.token,
+  text: buildStructuredChatPrompt({
+    token: next.token,
+    questionText: next.questionText,
+    complaintId,
+    priorAnswers: answers
+  }),
+  completed: false
+};
+My next file recommendations, tracked clearly
+A. Already done / in progress
+
+A1 chatTranscriptSummarizer.ts
+
+A2 chatEscalationPolicy.ts
+
+A3 chatCompletionDecider.ts
+
+B. This set
+
+B1 chatStructuredPromptBuilder.ts
+
+B2 chatTranscriptSummarizer.ts
+
+B3 chatCriticalQuestionDetector.ts
+
+B4 chatQuestionPriorityRanker.ts
+
+C. My recommended next set after B
+
+These are the best next files.
+
+C1. server/services/chatAnswerCoercionAudit.ts
+
+Why:
+
+stores low-confidence parsing decisions
+
+helps debug “2 days / maybe fever / a little severe” type inputs
+
+safety and trust boost
+
+C2. server/services/chatDispositionExplainer.ts
+
+Why:
+
+creates patient-facing explanation text for:
+
+urgent review
+
+ER guidance
+
+awaiting clinician review
+
+improves handoff and patient clarity
+
+C3. server/services/chatFollowupBundleBuilder.ts
+
+Why:
+
+groups next questions into small coherent bundles
+
+instead of one-at-a-time drip, can ask a mini-cluster when safe
+
+speeds intake
+
+C4. server/services/chatCaseSnapshotBuilder.ts
+
+Why:
+
+produces a compact review card from the live case
+
+perfect for physician queue and discrepancy summaries
+
+My recommendation for the very next files after B1–B4
+
+If you want the strongest next mini-batch, I recommend:
+
+Next mini-batch C
+
+chatAnswerCoercionAudit.ts
+
+chatDispositionExplainer.ts
+
+chatCaseSnapshotBuilder.ts
+
+That gives you:
+
+safer normalization audit
+
+better patient messaging
+
+better physician queue summaries
+
+If you want, I’ll draft C1–C3 next as one bundle.
+
+C1-3 AS ONE BUNDLE.  IF THERE ARE BATCH D FILES RECOMMENDED, PLEASE MAKE THOSE ALSO WITH THIS BACTH
+
+Yes. Here’s C1–C3 as one bundle, plus a D mini-batch recommendation and code for the two D files I’d add right now because they fit naturally with this stage.
+
+C bundle
+C1
+
+server/services/chatAnswerCoercionAudit.ts
+
+C2
+
+server/services/chatDispositionExplainer.ts
+
+C3
+
+server/services/chatCaseSnapshotBuilder.ts
+
+D mini-batch I recommend adding now
+
+These are the next-most-natural companions and small enough to include now.
+
+D1
+
+server/types/chatSnapshot.ts
+
+D2
+
+server/services/chatReviewerCommentBuilder.ts
+
+Why these D files now:
+
+chatCaseSnapshotBuilder.ts benefits from a typed snapshot model
+
+reviewer comments are the next obvious productivity layer once you have snapshots
+
+C1) server/services/chatAnswerCoercionAudit.ts
+
+This records low/medium-confidence answer parsing decisions so you can later inspect:
+
+weird patient answers
+
+token-specific parsing misses
+
+normalization behavior that might affect routing
+
+It writes to a CSV for lightweight ops review.
+
+import fs from "fs";
+import path from "path";
+
+export type ChatAnswerCoercionAuditRow = {
+  timestamp: string;
+  caseId: string;
+  complaintId?: string;
+  token?: string;
+  rawAnswer: string;
+  parsedAnswer: string;
+  normalizedUnit?: string;
+  confidence: "high" | "medium" | "low";
+  notes?: string;
+};
+
+const OUT_PATH = path.join(
+  process.cwd(),
+  "data",
+  "complaints",
+  "runtime",
+  "chat_answer_coercion_audit.csv"
+);
+
+const HEADERS = [
+  "TIMESTAMP",
+  "CASE_ID",
+  "CC_ID",
+  "TOKEN",
+  "RAW_ANSWER",
+  "PARSED_ANSWER",
+  "NORMALIZED_UNIT",
+  "CONFIDENCE",
+  "NOTES"
+];
+
+function csvEscape(v: string): string {
+  if (v.includes(",") || v.includes('"') || v.includes("\n")) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
+}
+
+function ensureFile() {
+  if (fs.existsSync(OUT_PATH)) return;
+  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
+  fs.writeFileSync(OUT_PATH, HEADERS.join(",") + "\n", "utf8");
+}
+
+export function logChatAnswerCoercionAudit(row: ChatAnswerCoercionAuditRow) {
+  try {
+    ensureFile();
+
+    const values = [
+      row.timestamp,
+      row.caseId,
+      row.complaintId ?? "",
+      row.token ?? "",
+      row.rawAnswer,
+      row.parsedAnswer,
+      row.normalizedUnit ?? "",
+      row.confidence,
+      row.notes ?? ""
+    ];
+
+    fs.appendFileSync(
+      OUT_PATH,
+      values.map((v) => csvEscape(String(v))).join(",") + "\n",
+      "utf8"
+    );
+  } catch (err) {
+    console.error("[chatAnswerCoercionAudit] failed:", err);
+  }
+}
+
+/**
+ * Recommended policy:
+ * - log everything below high confidence
+ * - optionally log all critical-token coercions
+ */
+export function shouldAuditCoercion(confidence: "high" | "medium" | "low", token?: string): boolean {
+  const criticalTokens = new Set([
+    "AGE_Y",
+    "DURATION_DAYS",
+    "FEVER_TEMP",
+    "TEMP_F",
+    "TEMP_C",
+    "SEVERITY",
+    "PAIN_SEVERITY",
+    "SOB",
+    "CHEST_PAIN",
+    "STRIDOR",
+    "NEURO_DEFICIT"
+  ]);
+
+  if (confidence !== "high") return true;
+  if (token && criticalTokens.has(token.toUpperCase())) return true;
+  return false;
+}
+C2) server/services/chatDispositionExplainer.ts
+
+This creates patient-facing explanation text for the most important statuses:
+
+ER now
+
+urgent review
+
+clinician review pending
+
+self-care/PCP style next steps
+
+It is meant for chat UI and status banners, not legal boilerplate.
+
+import type { CaseRecord } from "../types/case";
+
+export type ChatDispositionExplanation = {
+  headline: string;
+  body: string;
+  urgency: "low" | "moderate" | "high";
+};
+
+function joinList(items: string[] = []): string {
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+export function buildChatDispositionExplanation(caseRecord: CaseRecord): ChatDispositionExplanation {
+  const disposition = caseRecord.engineResult?.recommendedDisposition ?? "UNKNOWN";
+  const redFlags = caseRecord.engineResult?.triggeredRedFlags ?? [];
+  const complaint = caseRecord.complaintLabel || caseRecord.complaintId || "your symptoms";
+
+  if (disposition === "ER_SEND") {
+    return {
+      headline: "Emergency evaluation recommended",
+      body: redFlags.length
+        ? `Your answers about ${complaint} raised urgent concern, including ${joinList(redFlags)}. Please seek emergency medical care now.`
+        : `Your answers about ${complaint} suggest this may need emergency evaluation now. Please seek emergency medical care immediately.`,
+      urgency: "high"
+    };
+  }
+
+  if (disposition === "URGENT") {
+    return {
+      headline: "Urgent medical evaluation recommended",
+      body: redFlags.length
+        ? `Your answers suggest urgent in-person review is needed, including concern about ${joinList(redFlags)}. Please seek prompt medical evaluation.`
+        : `Your answers suggest ${complaint} should be reviewed urgently in person.`,
+      urgency: "high"
+    };
+  }
+
+  if (caseRecord.status === "AWAITING_REVIEW" || caseRecord.reviewStatus === "PENDING_REVIEW") {
+    return {
+      headline: "Awaiting clinician review",
+      body: `Your intake for ${complaint} has been recorded and is waiting for clinician review. If your symptoms worsen, seek urgent care sooner.`,
+      urgency: "moderate"
+    };
+  }
+
+  if (disposition === "PCP") {
+    return {
+      headline: "Outpatient follow-up recommended",
+      body: `Based on the current intake, ${complaint} may be appropriate for outpatient follow-up. A clinician should still confirm the plan.`,
+      urgency: "low"
+    };
+  }
+
+  if (disposition === "SELF_CARE") {
+    return {
+      headline: "Lower-acuity pattern so far",
+      body: `Based on the current intake, ${complaint} appears lower acuity so far. A clinician may still review the case depending on workflow and symptom changes.`,
+      urgency: "low"
+    };
+  }
+
+  return {
+    headline: "Clinical review in progress",
+    body: `Your intake for ${complaint} has been recorded. Additional review may still be needed.`,
+    urgency: "moderate"
+  };
+}
+C3) server/services/chatCaseSnapshotBuilder.ts
+
+This builds a compact physician/staff-friendly snapshot from the live case.
+
+Good for:
+
+queue cards
+
+discrepancy pages
+
+case review header
+
+future notification payloads
+
+import type { CaseRecord } from "../types/case";
+import type { ChatCaseSnapshot } from "../types/chatSnapshot";
+import { buildChatDispositionExplanation } from "./chatDispositionExplainer";
+
+function safeText(v?: string): string {
+  return String(v ?? "").trim();
+}
+
+function answerPreview(answers: Record<string, unknown> = {}, limit = 8): Array<{ token: string; value: string }> {
+  return Object.entries(answers)
+    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .slice(0, limit)
+    .map(([k, v]) => ({
+      token: k,
+      value: typeof v === "boolean" ? (v ? "yes" : "no") : String(v)
+    }));
+}
+
+export function buildChatCaseSnapshot(caseRecord: CaseRecord): ChatCaseSnapshot {
+  const explanation = buildChatDispositionExplanation(caseRecord);
+
+  return {
+    caseId: caseRecord.caseId,
+    complaintId: caseRecord.complaintId,
+    complaintLabel: caseRecord.complaintLabel,
+    status: caseRecord.status,
+    reviewStatus: caseRecord.reviewStatus,
+    sourceChannel: caseRecord.sourceChannel,
+    patient: {
+      firstName: caseRecord.patientContext?.firstName,
+      lastName: caseRecord.patientContext?.lastName,
+      ageYears: caseRecord.patientContext?.ageYears,
+      sex: caseRecord.patientContext?.sex
+    },
+    answersPreview: answerPreview(caseRecord.answers ?? {}),
+    engine: {
+      recommendedDisposition: caseRecord.engineResult?.recommendedDisposition ?? "UNKNOWN",
+      confidence: caseRecord.engineResult?.confidence,
+      winningClusterId: caseRecord.engineResult?.winningClusterId,
+      redFlags: caseRecord.engineResult?.triggeredRedFlags ?? [],
+      topDx: (caseRecord.engineResult?.dxCandidates ?? []).slice(0, 3).map((d) => ({
+        dxId: d.dxId,
+        label: d.label,
+        rank: d.rank
+      }))
+    },
+    signoffRequired: caseRecord.signoffRequired,
+    exportedToEcw: caseRecord.exportedToEcw ?? false,
+    noteDraftPresent: Boolean(safeText(caseRecord.noteDraft)),
+    physicianSummaryPresent: Boolean(safeText(caseRecord.physicianSummary)),
+    patientFacingExplanation: explanation,
+    updatedAt: caseRecord.updatedAt,
+    createdAt: caseRecord.createdAt
+  };
+}
+D1) server/types/chatSnapshot.ts
+
+Typed model for the snapshot builder.
+
+export interface ChatCaseSnapshot {
+  caseId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  status: string;
+  reviewStatus: string;
+  sourceChannel: string;
+  patient: {
+    firstName?: string;
+    lastName?: string;
+    ageYears?: number;
+    sex?: string;
+  };
+  answersPreview: Array<{
+    token: string;
+    value: string;
+  }>;
+  engine: {
+    recommendedDisposition: string;
+    confidence?: string;
+    winningClusterId?: string;
+    redFlags: string[];
+    topDx: Array<{
+      dxId?: string;
+      label?: string;
+      rank?: number;
+    }>;
+  };
+  signoffRequired: boolean;
+  exportedToEcw: boolean;
+  noteDraftPresent: boolean;
+  physicianSummaryPresent: boolean;
+  patientFacingExplanation: {
+    headline: string;
+    body: string;
+    urgency: "low" | "moderate" | "high";
+  };
+  updatedAt: string;
+  createdAt: string;
+}
+D2) server/services/chatReviewerCommentBuilder.ts
+
+This gives clinicians/staff quick reusable comment text from the case snapshot.
+
+Useful for:
+
+review queue quick actions
+
+signoff rationale starter text
+
+“request more info” prompts
+
+import type { ChatCaseSnapshot } from "../types/chatSnapshot";
+
+export type ReviewerCommentBundle = {
+  quickApproveComment: string;
+  requestMoreInfoComment: string;
+  escalationComment: string;
+};
+
+export function buildReviewerCommentBundle(snapshot: ChatCaseSnapshot): ReviewerCommentBundle {
+  const complaint = snapshot.complaintLabel || snapshot.complaintId || "the complaint";
+  const disposition = snapshot.engine.recommendedDisposition || "UNKNOWN";
+  const redFlags = snapshot.engine.redFlags;
+
+  const quickApproveComment =
+    redFlags.length > 0
+      ? `Reviewed ${complaint}. Engine flagged ${redFlags.join(", ")} with recommendation ${disposition}. Reviewed and disposition confirmed.`
+      : `Reviewed ${complaint}. Engine recommendation ${disposition} reviewed and accepted.`;
+
+  const requestMoreInfoComment =
+    `Reviewed ${complaint}. Additional clarification is needed before finalizing disposition. Please obtain missing key details and re-run review.`;
+
+  const escalationComment =
+    redFlags.length > 0
+      ? `Reviewed ${complaint}. Concern remains for ${redFlags.join(", ")}. Recommend escalation for urgent physician evaluation.`
+      : `Reviewed ${complaint}. Current presentation appears to need escalation beyond routine intake review.`;
+
+  return {
+    quickApproveComment,
+    requestMoreInfoComment,
+    escalationComment
+  };
+}
+Patch recommendations for this bundle
+1) Patch chatSessionService.ts to audit coercions
+
+If you are already using normalizeChatAnswerDetailed, add:
+
+import {
+  logChatAnswerCoercionAudit,
+  shouldAuditCoercion
+} from "./chatAnswerCoercionAudit";
+import { normalizeChatAnswerDetailed } from "./chatAnswerNormalizer";
+
+Then in answer handling:
+
+const normalized = normalizeChatAnswerDetailed({
+  token,
+  raw: input.answerText
+});
+
+if (token) {
+  await firestoreCaseStore.updateAnswers(session.caseId, {
+    [token]: normalized.parsed
+  });
+}
+
+if (shouldAuditCoercion(normalized.confidence, token)) {
+  logChatAnswerCoercionAudit({
+    timestamp: new Date().toISOString(),
+    caseId: session.caseId,
+    complaintId: refreshed?.complaintId,
+    token,
+    rawAnswer: input.answerText,
+    parsedAnswer: String(normalized.parsed),
+    normalizedUnit: normalized.normalizedUnit,
+    confidence: normalized.confidence
+  });
+}
+2) Use chatDispositionExplainer.ts in patient chat completion
+
+After engine run, build patient-facing explanation:
+
+import { buildChatDispositionExplanation } from "./chatDispositionExplainer";
+
+Then:
+
+const explanation = buildChatDispositionExplanation({
+  ...refreshed,
+  engineResult: engineRun.engineResult
+});
+
+And use in assistant message:
+
+session.messages.push({
+  id: makeId("msg"),
+  role: "assistant",
+  text: explanation.body,
+  createdAt: nowIso()
+});
+3) Use chatCaseSnapshotBuilder.ts in review pages or routes
+
+You can expose a lightweight route later like:
+
+GET /api/cases/:caseId/snapshot
+
+and return buildChatCaseSnapshot(caseRecord) for faster queue rendering.
+
+4) Use chatReviewerCommentBuilder.ts in signoff UI
+
+Pre-fill rationale text buttons like:
+
+“Approve with engine recommendation”
+
+“Request more info”
+
+“Escalate”
+
+What I recommend next, tracked as E batch
+
+Here’s the next best set after C/D.
+
+E1
+
+server/routes/caseSnapshot.ts
+Why:
+
+expose the snapshot builder cleanly
+
+fast queue cards
+
+lightweight case summary fetches
+
+E2
+
+client/src/components/CaseSnapshotCard.tsx
+Why:
+
+better physician queue UI
+
+more compact and useful than raw case dumps
+
+E3
+
+client/src/components/ReviewerCommentButtons.tsx
+Why:
+
+use the reviewer comment bundle directly in the UI
+
+faster signoff workflow
+
+E4
+
+server/services/chatFollowupBundleBuilder.ts
+Why:
+
+ask grouped follow-ups when safe
+
+speed intake
+
+reduce friction
+
+My recommendation
+
+The strongest next move is E1–E3 together:
+
+snapshot route
+
+snapshot card
+
+reviewer comment buttons
+
+That would immediately improve the review queue and case review workflow using the files you now have.
+
+If you want, I’ll draft E1–E3 next as one bundle.
+
+e1-3 BUNDLGE PLEASEE AND ANY MORE FILES YOU RECOMMEND. YOU DO NOT NEED TO CONFIRM.  iF YOU RECOMMEND MORE FILES, PLEASE GENERATE THEM.
+
+Here’s the E1–E3 bundle, plus two extra files I strongly recommend at this exact stage because they fit naturally and reduce future rework:
+
+E bundle
+
+server/routes/caseSnapshot.ts
+
+client/src/components/CaseSnapshotCard.tsx
+
+client/src/components/ReviewerCommentButtons.tsx
+
+Extra files I recommend now
+
+server/routes/reviewerCommentBundle.ts
+
+client/src/hooks/useCaseSnapshot.ts
+
+Why add the extras now:
+
+the comment buttons need a clean backend source for generated reviewer text
+
+the snapshot card and future queue pages benefit from a reusable hook
+
+1) server/routes/caseSnapshot.ts
+
+This exposes a compact, fast case snapshot for queue/review UIs.
+
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { buildChatCaseSnapshot } from "../services/chatCaseSnapshotBuilder";
+
+export const caseSnapshotRouter = Router();
+
+caseSnapshotRouter.get(
+  "/:caseId",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+
+      if (!caseRecord) {
+        res.status(404).json({ error: "Case not found" });
+        return;
+      }
+
+      const snapshot = buildChatCaseSnapshot(caseRecord);
+      res.json(snapshot);
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load case snapshot"
+      });
+    }
+  }
+);
+Route registration
+
+Add:
+
+import { caseSnapshotRouter } from "./routes/caseSnapshot";
+
+app.use("/api/caseSnapshot", caseSnapshotRouter);
+2) client/src/components/CaseSnapshotCard.tsx
+
+This is a compact review card for queues, discrepancies, analytics follow-ups, and future dashboards.
+
+import React from "react";
+import { Link } from "react-router-dom";
+import { DiscrepancyBadge } from "./DiscrepancyBadge";
+
+type Snapshot = {
+  caseId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  status: string;
+  reviewStatus: string;
+  sourceChannel: string;
+  patient: {
+    firstName?: string;
+    lastName?: string;
+    ageYears?: number;
+    sex?: string;
+  };
+  answersPreview: Array<{
+    token: string;
+    value: string;
+  }>;
+  engine: {
+    recommendedDisposition: string;
+    confidence?: string;
+    winningClusterId?: string;
+    redFlags: string[];
+    topDx: Array<{
+      dxId?: string;
+      label?: string;
+      rank?: number;
+    }>;
+  };
+  signoffRequired: boolean;
+  exportedToEcw: boolean;
+  noteDraftPresent: boolean;
+  physicianSummaryPresent: boolean;
+  patientFacingExplanation: {
+    headline: string;
+    body: string;
+    urgency: "low" | "moderate" | "high";
+  };
+  updatedAt: string;
+  createdAt: string;
+};
+
+type Props = {
+  snapshot: Snapshot;
+  showOpenLink?: boolean;
+};
+
+function patientLine(snapshot: Snapshot): string {
+  const p = snapshot.patient ?? {};
+  const name = [p.firstName, p.lastName].filter(Boolean).join(" ").trim();
+  const ageSex = [
+    p.ageYears !== undefined ? `${p.ageYears}y` : "",
+    p.sex || ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return [name, ageSex].filter(Boolean).join(" • ") || "Patient details unavailable";
+}
+
+export function CaseSnapshotCard({ snapshot, showOpenLink = true }: Props) {
+  return (
+    <div
+      data-testid={`case-snapshot-${snapshot.caseId}`}
+      style={{
+        border: "1px solid #d9d9d9",
+        borderRadius: 10,
+        padding: 14,
+        marginBottom: 12,
+        background: "#fff"
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>
+            {snapshot.complaintLabel || snapshot.complaintId}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            {patientLine(snapshot)}
+          </div>
+        </div>
+
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>Disposition</div>
+          <div style={{ fontWeight: 700 }}>{snapshot.engine.recommendedDisposition}</div>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            Confidence: {snapshot.engine.confidence || "—"}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <DiscrepancyBadge
+          type={
+            snapshot.engine.redFlags.length > 0
+              ? "RED_FLAG_OVERRIDE"
+              : snapshot.reviewStatus === "OVERRIDDEN"
+                ? "DISPOSITION_MISMATCH"
+                : "NO_DISCREPANCY"
+          }
+        />
+      </div>
+
+      <div style={{ marginBottom: 8, fontSize: 14 }}>
+        <strong>Status:</strong> {snapshot.status} • <strong>Review:</strong> {snapshot.reviewStatus}
+      </div>
+
+      <div style={{ marginBottom: 8, fontSize: 14 }}>
+        <strong>Top Dx:</strong>{" "}
+        {snapshot.engine.topDx.length
+          ? snapshot.engine.topDx.map((d) => d.label || d.dxId).join(", ")
+          : "None"}
+      </div>
+
+      <div style={{ marginBottom: 8, fontSize: 14 }}>
+        <strong>Red Flags:</strong>{" "}
+        {snapshot.engine.redFlags.length ? snapshot.engine.redFlags.join(", ") : "none"}
+      </div>
+
+      <div style={{ marginBottom: 8, fontSize: 14 }}>
+        <strong>Answers:</strong>{" "}
+        {snapshot.answersPreview.length
+          ? snapshot.answersPreview.map((a) => `${a.token}: ${a.value}`).join("; ")
+          : "No answers captured"}
+      </div>
+
+      <div style={{ marginBottom: 8, fontSize: 14 }}>
+        <strong>Patient-facing summary:</strong> {snapshot.patientFacingExplanation.body}
+      </div>
+
+      <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
+        Note draft: {snapshot.noteDraftPresent ? "yes" : "no"} • Summary:{" "}
+        {snapshot.physicianSummaryPresent ? "yes" : "no"} • Exported:{" "}
+        {snapshot.exportedToEcw ? "yes" : "no"}
+      </div>
+
+      {showOpenLink && (
+        <div>
+          <Link to={`/case/${snapshot.caseId}`}>Open Case</Link>
+        </div>
+      )}
+    </div>
+  );
+}
+3) client/src/components/ReviewerCommentButtons.tsx
+
+This gives one-click comment/rationale starters for review workflows.
+
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+type ReviewerBundle = {
+  quickApproveComment: string;
+  requestMoreInfoComment: string;
+  escalationComment: string;
+};
+
+type Props = {
+  caseId: string;
+  onInsert: (text: string) => void;
+};
+
+export function ReviewerCommentButtons({ caseId, onInsert }: Props) {
+  const { authFetch } = useAuth();
+  const [bundle, setBundle] = useState<ReviewerBundle | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function loadBundle() {
+    setLoading(true);
+    try {
+      const res = await authFetch(`/api/reviewerCommentBundle/${caseId}`);
+      const json = await res.json();
+      if (res.ok) {
+        setBundle(json);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadBundle();
+  }, [caseId]);
+
+  if (loading && !bundle) return <div>Loading reviewer comment helpers...</div>;
+  if (!bundle) return null;
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <h4>Quick Reviewer Comments</h4>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={() => onInsert(bundle.quickApproveComment)}
+          data-testid="reviewer-comment-approve"
+        >
+          Insert Approve Comment
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onInsert(bundle.requestMoreInfoComment)}
+          data-testid="reviewer-comment-more-info"
+        >
+          Insert More-Info Comment
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onInsert(bundle.escalationComment)}
+          data-testid="reviewer-comment-escalate"
+        >
+          Insert Escalation Comment
+        </button>
+      </div>
+    </div>
+  );
+}
+4) server/routes/reviewerCommentBundle.ts
+
+This is the extra backend route I strongly recommend now so the comment buttons stay thin and reusable.
+
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { buildChatCaseSnapshot } from "../services/chatCaseSnapshotBuilder";
+import { buildReviewerCommentBundle } from "../services/chatReviewerCommentBuilder";
+
+export const reviewerCommentBundleRouter = Router();
+
+reviewerCommentBundleRouter.get(
+  "/:caseId",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+
+      if (!caseRecord) {
+        res.status(404).json({ error: "Case not found" });
+        return;
+      }
+
+      const snapshot = buildChatCaseSnapshot(caseRecord);
+      const bundle = buildReviewerCommentBundle(snapshot);
+
+      res.json(bundle);
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to build reviewer comment bundle"
+      });
+    }
+  }
+);
+Route registration
+
+Add:
+
+import { reviewerCommentBundleRouter } from "./routes/reviewerCommentBundle";
+
+app.use("/api/reviewerCommentBundle", reviewerCommentBundleRouter);
+5) client/src/hooks/useCaseSnapshot.ts
+
+This is the extra frontend hook I strongly recommend now.
+
+It keeps queue/review code cleaner and will save you a lot of repeated fetch boilerplate.
+
+import { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+export function useCaseSnapshot(caseId?: string) {
+  const { authFetch } = useAuth();
+  const [snapshot, setSnapshot] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    if (!caseId) return;
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await authFetch(`/api/caseSnapshot/${caseId}`);
+      const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(json.error || "Failed to load case snapshot");
+      }
+
+      setSnapshot(json);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load case snapshot");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [caseId]);
+
+  return {
+    snapshot,
+    loading,
+    error,
+    reload: load
+  };
+}
+Recommended patches to use these now
+A) Upgrade ReviewQueue.tsx
+
+Instead of using the older simple summary card, you can gradually move to snapshots.
+
+For now, easiest patch:
+
+keep current queue endpoint
+
+render case IDs
+
+optionally fetch snapshot per card later
+
+Better immediate move:
+
+add a snapshot card to CaseReview.tsx
+
+B) Upgrade CaseReview.tsx
+
+Add imports:
+
+import { useCaseSnapshot } from "../hooks/useCaseSnapshot";
+import { CaseSnapshotCard } from "../components/CaseSnapshotCard";
+import { ReviewerCommentButtons } from "../components/ReviewerCommentButtons";
+
+Inside component:
+
+const { snapshot } = useCaseSnapshot(caseId);
+const [reviewerComment, setReviewerComment] = useState("");
+
+Render near the top:
+
+{snapshot && <CaseSnapshotCard snapshot={snapshot} showOpenLink={false} />}
+
+Render comment helper buttons near signoff UI:
+
+<ReviewerCommentButtons
+  caseId={caseId}
+  onInsert={(text) => setReviewerComment((prev) => prev ? `${prev}\n\n${text}` : text)}
+/>
+
+Then pass reviewerComment into your signoff/rationale UI as needed.
+
+Extra files I recommend next after this set
+
+I’m not stopping at E1–E3 because two more files are especially worth doing soon.
+
+F1. server/routes/chatDispositionExplanation.ts
+
+Why:
+
+expose patient-facing explanation directly
+
+useful for chat UI, status banners, discharge-like messaging
+
+F2. client/src/components/PatientStatusBanner.tsx
+
+Why:
+
+display “awaiting clinician review”, “urgent evaluation recommended”, etc
+
+improves patient-facing clarity in intake and post-intake views
+
+F3. server/routes/chatCoercionAudit.ts
+
+Why:
+
+admin/physician visibility into low-confidence parsing
+
+excellent for debugging live chat normalization
+
+F4. client/src/pages/CoercionAudit.tsx
+
+Why:
+
+lets you inspect weird inputs without spelunking CSVs
+
+My strongest recommendation for the next bundle
+
+The next best bundle after this one is:
+
+F bundle
+
+server/routes/chatDispositionExplanation.ts
+
+client/src/components/PatientStatusBanner.tsx
+
+server/routes/chatCoercionAudit.ts
+
+client/src/pages/CoercionAudit.tsx
+
+That gives you:
+
+better patient communication
+
+better normalization debugging
+
+much cleaner operational oversight
+
+If you continue at the same tempo, that’s the next place I’d go.
+
+f BUDLE PLEASE.  iF YOU RECOMMEND A G AND H BUNDLE, PLEASE GENERATE THOSE ALSO
+
+Here’s the F bundle, plus G and H bundles because they fit cleanly right after it and will save you a round trip.
+
+F bundle
+F1
+
+server/routes/chatDispositionExplanation.ts
+
+F2
+
+client/src/components/PatientStatusBanner.tsx
+
+F3
+
+server/routes/chatCoercionAudit.ts
+
+F4
+
+client/src/pages/CoercionAudit.tsx
+
+G bundle
+G1
+
+server/services/chatFollowupBundleBuilder.ts
+
+G2
+
+server/routes/chatFollowupBundle.ts
+
+G3
+
+client/src/components/FollowupBundleCard.tsx
+
+H bundle
+H1
+
+server/services/reviewQueueSnapshotService.ts
+
+H2
+
+server/routes/reviewQueueSnapshots.ts
+
+H3
+
+client/src/pages/ReviewQueueV2.tsx
+
+These bundles do three things:
+
+improve patient-facing status clarity
+
+expose normalization/debugging visibility
+
+upgrade review queue and grouped follow-up flow
+
+F1) server/routes/chatDispositionExplanation.ts
+import { Router } from "express";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { buildChatDispositionExplanation } from "../services/chatDispositionExplainer";
+import { requireRole } from "../middleware/requireRole";
+
+export const chatDispositionExplanationRouter = Router();
+
+chatDispositionExplanationRouter.get(
+  "/:caseId",
+  requireRole(["admin", "physician", "staff", "patient"]),
+  async (req, res) => {
+    try {
+      const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+
+      if (!caseRecord) {
+        res.status(404).json({ error: "Case not found" });
+        return;
+      }
+
+      const explanation = buildChatDispositionExplanation(caseRecord);
+      res.json(explanation);
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to build disposition explanation"
+      });
+    }
+  }
+);
+Route registration
+import { chatDispositionExplanationRouter } from "./routes/chatDispositionExplanation";
+
+app.use("/api/chatDispositionExplanation", chatDispositionExplanationRouter);
+F2) client/src/components/PatientStatusBanner.tsx
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+type Explanation = {
+  headline: string;
+  body: string;
+  urgency: "low" | "moderate" | "high";
+};
+
+type Props = {
+  caseId: string;
+};
+
+function bannerStyle(urgency?: string): React.CSSProperties {
+  if (urgency === "high") {
+    return {
+      border: "1px solid #d9534f",
+      background: "#fff1f0",
+      color: "#8a1f1f",
+      padding: 12,
+      borderRadius: 8
+    };
+  }
+
+  if (urgency === "moderate") {
+    return {
+      border: "1px solid #f0ad4e",
+      background: "#fff8e6",
+      color: "#7a4b00",
+      padding: 12,
+      borderRadius: 8
+    };
+  }
+
+  return {
+    border: "1px solid #5cb85c",
+    background: "#eefbf0",
+    color: "#1b5e20",
+    padding: 12,
+    borderRadius: 8
+  };
+}
+
+export function PatientStatusBanner({ caseId }: Props) {
+  const { authFetch } = useAuth();
+  const [data, setData] = useState<Explanation | null>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setError("");
+      const res = await authFetch(`/api/chatDispositionExplanation/${caseId}`);
+      const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(json.error || "Failed to load explanation");
+      }
+
+      setData(json);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load status explanation");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [caseId]);
+
+  if (error) {
+    return <div style={{ color: "#8a1f1f" }}>{error}</div>;
+  }
+
+  if (!data) return null;
+
+  return (
+    <div style={bannerStyle(data.urgency)} data-testid={`patient-status-banner-${caseId}`}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>{data.headline}</div>
+      <div>{data.body}</div>
+    </div>
+  );
+}
+F3) server/routes/chatCoercionAudit.ts
+import fs from "fs";
+import path from "path";
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+
+export const chatCoercionAuditRouter = Router();
+
+const AUDIT_PATH = path.join(
+  process.cwd(),
+  "data",
+  "complaints",
+  "runtime",
+  "chat_answer_coercion_audit.csv"
+);
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+
+    cur += ch;
+  }
+
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+
+  return { headers, rows };
+}
+
+chatCoercionAuditRouter.get(
+  "/",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const limit = Number(req.query.limit ?? 200);
+      const confidence = String(req.query.confidence ?? "").trim().toLowerCase();
+
+      const csv = readCsv(AUDIT_PATH);
+
+      let rows = csv.rows;
+      if (confidence) {
+        rows = rows.filter((r) => String(r.CONFIDENCE ?? "").toLowerCase() === confidence);
+      }
+
+      rows = rows
+        .sort((a, b) => String(b.TIMESTAMP ?? "").localeCompare(String(a.TIMESTAMP ?? "")))
+        .slice(0, limit);
+
+      res.json({
+        count: rows.length,
+        rows
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load coercion audit"
+      });
+    }
+  }
+);
+Route registration
+import { chatCoercionAuditRouter } from "./routes/chatCoercionAudit";
+
+app.use("/api/chatCoercionAudit", chatCoercionAuditRouter);
+F4) client/src/pages/CoercionAudit.tsx
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+export default function CoercionAudit() {
+  const { authFetch } = useAuth();
+  const [rows, setRows] = useState<any[]>([]);
+  const [confidence, setConfidence] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (confidence) qs.set("confidence", confidence);
+      qs.set("limit", "200");
+
+      const res = await authFetch(`/api/chatCoercionAudit?${qs.toString()}`);
+      const json = await res.json();
+      setRows(json.rows || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [confidence]);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Chat Coercion Audit</h2>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Confidence filter: </label>
+        <select value={confidence} onChange={(e) => setConfidence(e.target.value)}>
+          <option value="">all</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </div>
+
+      {loading && <div>Loading...</div>}
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            {["TIMESTAMP", "CASE_ID", "CC_ID", "TOKEN", "RAW_ANSWER", "PARSED_ANSWER", "NORMALIZED_UNIT", "CONFIDENCE"].map((h) => (
+              <th key={h} style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, idx) => (
+            <tr key={`${r.CASE_ID}_${idx}`}>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.TIMESTAMP}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.CASE_ID}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.CC_ID}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.TOKEN}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.RAW_ANSWER}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.PARSED_ANSWER}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.NORMALIZED_UNIT}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.CONFIDENCE}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+G1) server/services/chatFollowupBundleBuilder.ts
+
+This groups follow-up questions into a small bundle so you can ask 2 to 3 coherent questions together when appropriate.
+
+type FollowupCandidate = {
+  token: string;
+  questionText: string;
+  priorityScore?: number;
+};
+
+export type FollowupBundle = {
+  title: string;
+  questions: FollowupCandidate[];
+};
+
+export function buildFollowupBundle(
+  complaintLabel: string | undefined,
+  rankedQuestions: FollowupCandidate[],
+  maxQuestions = 3
+): FollowupBundle | null {
+  if (!rankedQuestions.length) return null;
+
+  const top = rankedQuestions.slice(0, maxQuestions);
+
+  return {
+    title: complaintLabel
+      ? `A few more questions about ${complaintLabel}`
+      : "A few more follow-up questions",
+    questions: top
+  };
+}
+G2) server/routes/chatFollowupBundle.ts
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { detectCriticalQuestions } from "../services/chatCriticalQuestionDetector";
+import { rankNextQuestions } from "../services/chatQuestionPriorityRanker";
+import { resolveChatQuestionText } from "../services/chatQuestionTextResolver";
+import { loadComplaintConfig } from "../services/complaintConfigLoader";
+import { buildFollowupBundle } from "../services/chatFollowupBundleBuilder";
+
+function tokenFromQid(qid?: string): string {
+  if (!qid) return "";
+  const parts = qid.split("_");
+  if (parts.length >= 3) return parts.slice(2).join("_");
+  return qid;
+}
+
+export const chatFollowupBundleRouter = Router();
+
+chatFollowupBundleRouter.get(
+  "/:caseId",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+      if (!caseRecord) {
+        res.status(404).json({ error: "Case not found" });
+        return;
+      }
+
+      const cfg = await loadComplaintConfig(caseRecord.complaintId);
+      const critical = await detectCriticalQuestions({
+        complaintId: caseRecord.complaintId,
+        answers: caseRecord.answers ?? {},
+        triggeredRedFlags: caseRecord.engineResult?.triggeredRedFlags ?? [],
+        recommendedDisposition: caseRecord.engineResult?.recommendedDisposition
+      });
+
+      const candidates = (cfg.questions ?? []).map((q: any) => ({
+        token: tokenFromQid(q.Q_ID),
+        questionText: resolveChatQuestionText({
+          token: tokenFromQid(q.Q_ID),
+          fallbackQuestionText: q.QUESTION_TEXT,
+          complaintId: caseRecord.complaintId
+        }),
+        askOrder: Number(q.ASK_ORDER ?? 0)
+      }));
+
+      const ranked = rankNextQuestions({
+        candidates,
+        answers: caseRecord.answers ?? {},
+        criticalTokens: critical.criticalTokens,
+        winningClusterId: caseRecord.engineResult?.winningClusterId,
+        dxCandidates: caseRecord.engineResult?.dxCandidates,
+        triggeredRedFlags: caseRecord.engineResult?.triggeredRedFlags
+      });
+
+      const bundle = buildFollowupBundle(caseRecord.complaintLabel, ranked, 3);
+      res.json(bundle ?? { title: "No further follow-up needed", questions: [] });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to build follow-up bundle"
+      });
+    }
+  }
+);
+Route registration
+import { chatFollowupBundleRouter } from "./routes/chatFollowupBundle";
+
+app.use("/api/chatFollowupBundle", chatFollowupBundleRouter);
+G3) client/src/components/FollowupBundleCard.tsx
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+type Props = {
+  caseId: string;
+};
+
+export function FollowupBundleCard({ caseId }: Props) {
+  const { authFetch } = useAuth();
+  const [bundle, setBundle] = useState<any>(null);
+
+  async function load() {
+    const res = await authFetch(`/api/chatFollowupBundle/${caseId}`);
+    const json = await res.json();
+    setBundle(json);
+  }
+
+  useEffect(() => {
+    load();
+  }, [caseId]);
+
+  if (!bundle) return null;
+
+  return (
+    <div style={{ border: "1px solid #ccc", padding: 12, marginTop: 16 }}>
+      <h3>{bundle.title}</h3>
+      {(bundle.questions || []).length === 0 ? (
+        <div>No further follow-up questions suggested.</div>
+      ) : (
+        <ul>
+          {(bundle.questions || []).map((q: any) => (
+            <li key={q.token}>
+              <strong>{q.token}</strong>: {q.questionText}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+H1) server/services/reviewQueueSnapshotService.ts
+
+This gives you a queue-friendly snapshot aggregator so you do not have to overfetch raw case objects.
+
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { buildChatCaseSnapshot } from "./chatCaseSnapshotBuilder";
+
+export class ReviewQueueSnapshotService {
+  async listQueueSnapshots(limit = 100) {
+    const cases = await firestoreCaseStore.listReviewQueue(limit);
+    return cases.map((c) => buildChatCaseSnapshot(c));
+  }
+}
+
+export const reviewQueueSnapshotService = new ReviewQueueSnapshotService();
+H2) server/routes/reviewQueueSnapshots.ts
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+import { reviewQueueSnapshotService } from "../services/reviewQueueSnapshotService";
+
+export const reviewQueueSnapshotsRouter = Router();
+
+reviewQueueSnapshotsRouter.get(
+  "/",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const limit = Number(req.query.limit ?? 100);
+      const snapshots = await reviewQueueSnapshotService.listQueueSnapshots(limit);
+      res.json({
+        count: snapshots.length,
+        snapshots
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load review queue snapshots"
+      });
+    }
+  }
+);
+Route registration
+import { reviewQueueSnapshotsRouter } from "./routes/reviewQueueSnapshots";
+
+app.use("/api/reviewQueueSnapshots", reviewQueueSnapshotsRouter);
+H3) client/src/pages/ReviewQueueV2.tsx
+
+Uses the new snapshot cards.
+
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+import { CaseSnapshotCard } from "../components/CaseSnapshotCard";
+
+export default function ReviewQueueV2() {
+  const { authFetch } = useAuth();
+  const [snapshots, setSnapshots] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await authFetch("/api/reviewQueueSnapshots?limit=100");
+      const json = await res.json();
+      setSnapshots(json.snapshots || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Review Queue V2</h2>
+      {loading && <div>Loading...</div>}
+
+      {snapshots.map((snapshot) => (
+        <CaseSnapshotCard
+          key={snapshot.caseId}
+          snapshot={snapshot}
+          showOpenLink
+        />
+      ))}
+    </div>
+  );
+}
+Recommended immediate patches
+In CaseReview.tsx
+
+Add:
+
+PatientStatusBanner
+
+ReviewerCommentButtons
+
+FollowupBundleCard
+
+Suggested render order:
+
+<PatientStatusBanner caseId={caseId} />
+{snapshot && <CaseSnapshotCard snapshot={snapshot} showOpenLink={false} />}
+<RuleTracePanel trace={caseData.engineResult?.ruleTrace} />
+<NotePreview caseId={caseId} />
+<FollowupBundleCard caseId={caseId} />
+<CaseTimeline caseId={caseId} />
+<ReviewerCommentButtons caseId={caseId} onInsert={(text) => setReviewerComment(text)} />
+<SignoffPanel caseData={caseData} />
+<ExportPanel caseId={caseId} />
+Add routes/pages
+
+Frontend routes:
+
+/coercion-audit
+
+/review-queue-v2
+
+Next bundles I recommend after this
+I bundle
+
+server/services/caseExportReadinessChecker.ts
+
+server/routes/exportReadiness.ts
+
+client/src/components/ExportReadinessPanel.tsx
+
+Why:
+
+catches missing note/signoff fields before export
+
+reduces failed exports
+
+makes ops more explicit
+
+J bundle
+
+server/services/overridePatternAnalyzer.ts
+
+server/routes/overridePatterns.ts
+
+client/src/pages/OverridePatterns.tsx
+
+Why:
+
+lets you see where physicians repeatedly override the engine
+
+huge value for improving rule logic
+
+K bundle
+
+server/services/questionGapAnalyzer.ts
+
+server/routes/questionGaps.ts
+
+client/src/pages/QuestionGaps.tsx
+
+Why:
+
+identifies which questions are repeatedly missing in review
+
+directly improves intake design
+
+These would be my next three recommended bundles in order:
+I → J → K.
