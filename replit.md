@@ -50,6 +50,13 @@ Browser-based conversational intake flow at `/chat-intake`:
 - **Chat Intake Routes** (`server/routes/chatIntake.ts`): REST endpoints at `/api/chatIntake` — POST start, GET session, POST answer, GET case.
 - **Frontend**: `PatientIntakeChat.tsx` page, `ChatMessageList.tsx`, `AnswerInput.tsx` components.
 
+### eCW Sidecar Export
+Generates encounter export bundles for manual/sidecar eCW transfer:
+- **Export Templates** (`server/templates/ecwExportTemplates.ts`): Builds structured text and JSON export bundles from case data, engine output, signoff, and note draft.
+- **Export Service** (`server/services/ecwSidecarExport.ts`): Assembles export payload from case + signoffs, writes `.txt` + `.json` to `data/exports/ecw_sidecar/`, marks case as exported, logs audit event + runtime metric.
+- **Export Routes** (`server/routes/exportEncounter.ts`): REST endpoints at `/api/exportEncounter` — GET status, POST export (blocks if signoff required but not approved).
+- **Export Panel** (`client/src/components/ExportPanel.tsx`): Shows export status, signoff gate, export button with loading/success/error states.
+
 ### Discrepancy Tracking
 Detects and surfaces disagreements between engine recommendations and physician signoffs:
 - **Discrepancy Service** (`server/services/discrepancyService.ts`): Compares engine output vs physician signoff to detect disposition mismatches, Dx top mismatches, red flag overrides, and more-info requests. Provides case timeline (events + signoffs) and lists recent discrepancies.
