@@ -139,16 +139,20 @@ function toAnswerType(t: IRQuestion["type"]): string {
 }
 
 function mapDispositionToLevel(d: IRDisposition["disposition"]): string {
-  if (d === "ER") return "ER_SEND";
-  if (d === "URGENT_CARE") return "URGENT";
-  if (d === "PCP") return "PCP";
-  return "SELF_CARE";
+  if (d === "ER") return "er_send";
+  if (d === "URGENT_CARE") return "urgent_care";
+  if (d === "PCP") return "pcp";
+  return "self_care";
 }
 
 function mapRfAction(a: IRRedFlag["action"]): string {
   if (a === "ER_SEND") return "ER_SEND";
-  if (a === "URGENT") return "URGENT";
   return "ESCALATE";
+}
+
+function mapRfSeverity(a: IRRedFlag["action"]): string {
+  if (a === "ER_SEND") return "HARD";
+  return "SOFT";
 }
 
 function clusterPrefixFor(complaintId: string): string {
@@ -208,8 +212,9 @@ function emitRedFlagRules(ir: NormalizedIR): Record<string, string>[] {
     rows.push({
       CC_ID: ir.complaint_id,
       RF_ID: `RF_${prefix}_${String(seq).padStart(2, "0")}`,
+      LABEL: rf.label,
       TRIGGER_EXPR: triggerExpr,
-      SEVERITY: mapRfAction(rf.action),
+      SEVERITY: mapRfSeverity(rf.action),
       ACTION: mapRfAction(rf.action),
       IMMEDIATE_ACTIONS: rf.label,
       RATIONALE: rf.rationale || rf.when_text,
@@ -274,7 +279,7 @@ function emitDispositionRules(ir: NormalizedIR): Record<string, string>[] {
 
     rows.push({
       CC_ID: ir.complaint_id,
-      DISP_RULE_ID: `DR_${prefix}_${String(seq).padStart(2, "0")}`,
+      DISP_RULE_ID: `DISP_${prefix}_${String(seq).padStart(2, "0")}`,
       PRIORITY: String(1000 - seq),
       WHEN_EXPR: whenExpr,
       DISPOSITION_LEVEL: mapDispositionToLevel(d.disposition),
@@ -293,7 +298,7 @@ function emitDispositionRules(ir: NormalizedIR): Record<string, string>[] {
   if (rows.length === 0) {
     rows.push({
       CC_ID: ir.complaint_id,
-      DISP_RULE_ID: `DR_${prefix}_DEFAULT`,
+      DISP_RULE_ID: `DISP_${prefix}_DEFAULT`,
       PRIORITY: "1",
       WHEN_EXPR: "true",
       DISPOSITION_LEVEL: "SELF_CARE",
@@ -386,7 +391,7 @@ function main() {
 
   writeCsv(
     files.red_flag_rules,
-    ["CC_ID", "RF_ID", "TRIGGER_EXPR", "SEVERITY", "ACTION", "IMMEDIATE_ACTIONS", "RATIONALE"],
+    ["CC_ID", "RF_ID", "LABEL", "TRIGGER_EXPR", "SEVERITY", "ACTION", "IMMEDIATE_ACTIONS", "RATIONALE"],
     redFlags
   );
 
