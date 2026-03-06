@@ -44,6 +44,12 @@ This system facilitates physician review with services for managing the review q
 ### Note Generation & Chart Export
 The system generates deterministic note drafts from engine output and case data using `Note Templates` and a `Note Generator Service`. These drafts can be previewed, edited, and saved via dedicated API routes and frontend components.
 
+### Patient Intake Chat (Web)
+Browser-based conversational intake flow at `/chat-intake`:
+- **Chat Session Service** (`server/services/chatSessionService.ts`): In-memory session management with Firestore persistence. Creates cases, asks questions, records answers, re-runs engine after each answer, transitions to AWAITING_REVIEW on completion. Engine adapter (`runEngineForChat`) is isolated for easy wiring.
+- **Chat Intake Routes** (`server/routes/chatIntake.ts`): REST endpoints at `/api/chatIntake` — POST start, GET session, POST answer, GET case.
+- **Frontend**: `PatientIntakeChat.tsx` page, `ChatMessageList.tsx`, `AnswerInput.tsx` components.
+
 ### Operational Intelligence & Tooling
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.
 

@@ -1,0 +1,434 @@
+Files in Batch F
+
+Backend:
+
+server/services/discrepancyService.ts
+
+server/routes/discrepancies.ts
+
+Frontend:
+
+client/src/components/CaseTimeline.tsx
+
+client/src/components/DiscrepancyBadge.tsx
+
+client/src/pages/Discrepancies.tsx
+
+This batch assumes Batch A is present, especially:
+
+firestoreCaseStore
+
+firestoreCaseEventsStore
+
+firestoreSignoffStore
+
+1) server/services/discrepancyService.ts
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
+import { firestoreSignoffStore } from "./firestoreSignoffStore";
+import type { CaseEventRecord, CaseRecord } from "../types/case";
+import type { SignoffRecord } from "../types/signoff";
+
+export type DiscrepancyType =
+  | "DISPOSITION_MISMATCH"
+  | "DX_TOP_MISMATCH"
+  | "RED_FLAG_OVERRIDE"
+  | "REQUEST_MORE_INFO"
+  | "NO_DISCREPANCY";
+
+export interface CaseDiscrepancy {
+  caseId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  discrepancyType: DiscrepancyType;
+  engineDisposition?: string;
+  finalDisposition?: string;
+  engineTopDx?: string;
+  reviewerTopDx?: string;
+  triggeredRedFlags: string[];
+  signoffStatus?: string;
+  rationale?: string;
+  reviewerId?: string;
+  createdAt?: string;
+}
+
+export interface CaseTimelinePayload {
+  caseRecord: CaseRecord | null;
+  events: CaseEventRecord[];
+  signoffs: SignoffRecord[];
+}
+
+export class DiscrepancyService {
+  async getTimeline(caseId: string): Promise<CaseTimelinePayload> {
+    const [caseRecord, events, signoffs] = await Promise.all([
+      firestoreCaseStore.getCase(caseId),
+      firestoreCaseEventsStore.listEventsForCase(caseId),
+      firestoreSignoffStore.listSignoffsForCase(caseId)
+    ]);
+
+    return {
+      caseRecord,
+      events,
+      signoffs
+    };
+  }
+
+  async getCaseDiscrepancy(caseId: string): Promise<CaseDiscrepancy | null> {
+    const caseRecord = await firestoreCaseStore.getCase(caseId);
+    if (!caseRecord) return null;
+
+    const signoffs = await firestoreSignoffStore.listSignoffsForCase(caseId);
+    const latest = signoffs.length ? signoffs[signoffs.length - 1] : null;
+
+    const engineDisposition = caseRecord.engineResult?.recommendedDisposition;
+    const finalDisposition = latest?.finalDisposition ?? latest?.engineDisposition ?? engineDisposition;
+
+    const engineTopDx =
+      caseRecord.engineResult?.dxCandidates?.[0]?.label ||
+      caseRecord.engineResult?.dxCandidates?.[0]?.dxId ||
+      "";
+
+    const reviewerTopDx =
+      latest?.override?.dxCandidates?.[0]?.label ||
+      latest?.override?.dxCandidates?.[0]?.dxId ||
+      "";
+
+    let discrepancyType: DiscrepancyType = "NO_DISCREPANCY";
+
+    if (latest?.status === "REQUEST_MORE_INFO") {
+      discrepancyType = "REQUEST_MORE_INFO";
+    } else if (engineDisposition && finalDisposition && engineDisposition !== finalDisposition) {
+      discrepancyType = "DISPOSITION_MISMATCH";
+    } else if (engineTopDx && reviewerTopDx && engineTopDx !== reviewerTopDx) {
+      discrepancyType = "DX_TOP_MISMATCH";
+    } else if (
+      (caseRecord.engineResult?.triggeredRedFlags?.length ?? 0) > 0 &&
+      latest?.status === "APPROVED_WITH_EDITS"
+    ) {
+      discrepancyType = "RED_FLAG_OVERRIDE";
+    }
+
+    return {
+      caseId,
+      complaintId: caseRecord.complaintId,
+      complaintLabel: caseRecord.complaintLabel,
+      discrepancyType,
+      engineDisposition,
+      finalDisposition,
+      engineTopDx,
+      reviewerTopDx,
+      triggeredRedFlags: caseRecord.engineResult?.triggeredRedFlags ?? [],
+      signoffStatus: latest?.status,
+      rationale: latest?.rationale,
+      reviewerId: latest?.reviewerId,
+      createdAt: latest?.createdAt ?? caseRecord.updatedAt
+    };
+  }
+
+  async listRecentDiscrepancies(limit = 100): Promise<CaseDiscrepancy[]> {
+    const reviewQueue = await firestoreCaseStore.listCases({ limit });
+    const out: CaseDiscrepancy[] = [];
+
+    for (const c of reviewQueue) {
+      if (!c.caseId) continue;
+      const d = await this.getCaseDiscrepancy(c.caseId);
+      if (!d) continue;
+      if (d.discrepancyType !== "NO_DISCREPANCY") out.push(d);
+    }
+
+    out.sort((a, b) => {
+      const av = a.createdAt ?? "";
+      const bv = b.createdAt ?? "";
+      return bv.localeCompare(av);
+    });
+
+    return out.slice(0, limit);
+  }
+}
+
+export const discrepancyService = new DiscrepancyService();
+2) server/routes/discrepancies.ts
+import { Router } from "express";
+import { discrepancyService } from "../services/discrepancyService";
+
+export const discrepanciesRouter = Router();
+
+discrepanciesRouter.get("/", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 100);
+    const items = await discrepancyService.listRecentDiscrepancies(limit);
+
+    res.json({
+      count: items.length,
+      items
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to load discrepancies"
+    });
+  }
+});
+
+discrepanciesRouter.get("/:caseId", async (req, res) => {
+  try {
+    const item = await discrepancyService.getCaseDiscrepancy(req.params.caseId);
+    if (!item) {
+      res.status(404).json({ error: "Case discrepancy not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to load discrepancy"
+    });
+  }
+});
+
+discrepanciesRouter.get("/:caseId/timeline", async (req, res) => {
+  try {
+    const payload = await discrepancyService.getTimeline(req.params.caseId);
+    if (!payload.caseRecord) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to load timeline"
+    });
+  }
+});
+
+Register it:
+
+import { discrepanciesRouter } from "./routes/discrepancies";
+
+app.use("/api/discrepancies", discrepanciesRouter);
+3) client/src/components/DiscrepancyBadge.tsx
+import React from "react";
+
+type Props = {
+  type?: string;
+};
+
+function styleFor(type?: string): React.CSSProperties {
+  switch (type) {
+    case "DISPOSITION_MISMATCH":
+      return { background: "#ffe4b5", color: "#7a4b00" };
+    case "DX_TOP_MISMATCH":
+      return { background: "#e0ecff", color: "#1a4d8f" };
+    case "RED_FLAG_OVERRIDE":
+      return { background: "#ffdede", color: "#8a1f1f" };
+    case "REQUEST_MORE_INFO":
+      return { background: "#f5e6ff", color: "#6f2e8f" };
+    default:
+      return { background: "#e8f5e9", color: "#1b5e20" };
+  }
+}
+
+export function DiscrepancyBadge({ type }: Props) {
+  return (
+    <span
+      style={{
+        ...styleFor(type),
+        padding: "4px 8px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 600,
+        display: "inline-block"
+      }}
+    >
+      {type || "NO_DISCREPANCY"}
+    </span>
+  );
+}
+4) client/src/components/CaseTimeline.tsx
+import React, { useEffect, useState } from "react";
+
+type Props = {
+  caseId: string;
+};
+
+export function CaseTimeline({ caseId }: Props) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/discrepancies/${caseId}/timeline`);
+      const json = await res.json();
+      setData(json);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [caseId]);
+
+  if (loading) return <div>Loading timeline...</div>;
+  if (!data) return <div>No timeline data.</div>;
+
+  return (
+    <div style={{ border: "1px solid #ccc", padding: 12, marginTop: 16 }}>
+      <h3>Case Timeline</h3>
+
+      {(data.events || []).map((e: any) => (
+        <div
+          key={e.eventId}
+          style={{
+            borderLeft: "3px solid #ccc",
+            paddingLeft: 10,
+            marginBottom: 10
+          }}
+        >
+          <div style={{ fontSize: 12, opacity: 0.7 }}>
+            {e.createdAt} • {e.type}
+          </div>
+          <div>{e.summary}</div>
+          {e.payload ? (
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6 }}>
+              {JSON.stringify(e.payload, null, 2)}
+            </pre>
+          ) : null}
+        </div>
+      ))}
+
+      {(data.signoffs || []).length > 0 && (
+        <>
+          <h4>Signoffs</h4>
+          {(data.signoffs || []).map((s: any) => (
+            <div key={s.signoffId} style={{ marginBottom: 10 }}>
+              <div>
+                <strong>{s.status}</strong> by {s.reviewerName || s.reviewerId}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>{s.createdAt}</div>
+              {s.rationale ? <div>{s.rationale}</div> : null}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+5) client/src/pages/Discrepancies.tsx
+import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { DiscrepancyBadge } from "../components/DiscrepancyBadge";
+
+export default function Discrepancies() {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/discrepancies?limit=100");
+      const json = await res.json();
+      setItems(json.items || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Discrepancies</h2>
+
+      {loading && <div>Loading...</div>}
+
+      {!loading && items.length === 0 && (
+        <div>No discrepancies found.</div>
+      )}
+
+      {items.map((item) => (
+        <div
+          key={item.caseId}
+          style={{
+            border: "1px solid #ccc",
+            padding: 12,
+            marginBottom: 12
+          }}
+        >
+          <div style={{ marginBottom: 8 }}>
+            <DiscrepancyBadge type={item.discrepancyType} />
+          </div>
+
+          <div>
+            <strong>{item.complaintLabel || item.complaintId}</strong>
+          </div>
+
+          <div>Case: {item.caseId}</div>
+          <div>Engine disposition: {item.engineDisposition || "—"}</div>
+          <div>Final disposition: {item.finalDisposition || "—"}</div>
+          <div>Engine top dx: {item.engineTopDx || "—"}</div>
+          <div>Reviewer top dx: {item.reviewerTopDx || "—"}</div>
+          <div>Red flags: {(item.triggeredRedFlags || []).join(", ") || "none"}</div>
+
+          <div style={{ marginTop: 8 }}>
+            <Link to={`/case/${item.caseId}`}>Open Case</Link>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+Recommended small update to CaseReview.tsx
+
+Add these imports:
+
+import { NotePreview } from "../components/NotePreview";
+import { CaseTimeline } from "../components/CaseTimeline";
+import { DiscrepancyBadge } from "../components/DiscrepancyBadge";
+
+Then inside the component, load discrepancy info too, or at minimum render the timeline + note preview:
+
+<DiscrepancyBadge type={caseData.discrepancyType} />
+<RuleTracePanel trace={caseData.engineResult?.ruleTrace} />
+<NotePreview caseId={caseData.caseId} />
+<CaseTimeline caseId={caseData.caseId} />
+<SignoffPanel caseData={caseData} />
+
+If your /api/cases/:caseId route does not include discrepancy info, you can leave the badge out for now and rely on the dedicated discrepancies page.
+
+What Batch F gives you
+
+Now your review flow becomes:
+
+Patient intake
+→ engine run
+→ case saved
+→ physician opens case
+→ sees note draft
+→ sees rule trace
+→ sees full timeline
+→ signs off or requests more info
+→ disagreements become visible in discrepancy queue
+
+That’s a major upgrade in operational trust.
+
+Quick verification checklist
+
+Open a reviewed or partially reviewed case
+
+Load /api/discrepancies/:caseId/timeline
+
+Confirm:
+
+case exists
+
+engine run event exists
+
+answer/question events exist
+
+signoff appears if present
+
+Open discrepancies page
+
+Confirm mismatched cases show up with correct badge

@@ -1,0 +1,693 @@
+Here’s Batch E: Patient Intake Chat MVP as a multi-file bundle.
+
+This batch gives you a browser-based intake flow that:
+
+creates a case
+
+starts a chat session
+
+records answers
+
+re-runs the engine after each answer
+
+stores progress in Firestore
+
+hands the case into the physician review queue
+
+Files in this batch
+
+server/services/chatSessionService.ts
+
+server/routes/chatIntake.ts
+
+client/src/pages/PatientIntakeChat.tsx
+
+client/src/components/ChatMessageList.tsx
+
+client/src/components/AnswerInput.tsx
+
+I’m assuming:
+
+Express backend
+
+React frontend
+
+your engine already has a callable entry point you can wire in
+
+Firestore Batch A is present
+
+To avoid blocking you on exact engine internals, I’m making the engine call a small adapter function you can patch in one place.
+
+1) server/services/chatSessionService.ts
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
+import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
+import type { CaseRecord, CaseEngineResult } from "../types/case";
+
+/**
+ * Replace this import/wrapper with your actual engine entry point.
+ * The goal is to keep the route and chat flow stable while you patch one adapter.
+ */
+async function runEngineForChat(caseRecord: CaseRecord): Promise<CaseEngineResult> {
+  // TODO: wire this to your real generic engine.
+  // Example shape only.
+  return {
+    complaintId: caseRecord.complaintId,
+    complaintLabel: caseRecord.complaintLabel,
+    recommendedDisposition: "UNKNOWN",
+    confidence: "LOW",
+    triggeredRedFlags: [],
+    winningClusterId: undefined,
+    dxCandidates: [],
+    clusterScores: [],
+    ruleTrace: [],
+    render: {},
+    engineVersion: "GENERIC_V1"
+  };
+}
+
+export type ChatMessageRole = "system" | "assistant" | "user";
+
+export interface ChatMessage {
+  id: string;
+  role: ChatMessageRole;
+  text: string;
+  createdAt: string;
+  token?: string;
+}
+
+export interface ChatSessionState {
+  caseId: string;
+  sessionId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  messages: ChatMessage[];
+  currentQuestionToken?: string;
+  currentQuestionText?: string;
+  completed: boolean;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function makeId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function humanizeToken(token?: string): string {
+  if (!token) return "question";
+  return token.toLowerCase().replace(/_/g, " ");
+}
+
+/**
+ * Very lightweight question picker for MVP.
+ * Priority:
+ * 1) unanswered critical questions already on case
+ * 2) first missing answer from a small generic token set
+ *
+ * Later this should be replaced by engine-driven dynamic questioning.
+ */
+function pickNextQuestion(caseRecord: CaseRecord): { token?: string; text?: string; completed: boolean } {
+  const answers = caseRecord.answers ?? {};
+  const critical = caseRecord.unansweredCriticalQuestions ?? [];
+
+  if (critical.length > 0) {
+    const token = critical[0];
+    return {
+      token,
+      text: `Please answer this follow-up question: ${humanizeToken(token)}?`,
+      completed: false
+    };
+  }
+
+  const genericOrder = [
+    "AGE_Y",
+    "DURATION_DAYS",
+    "FEVER",
+    "SEVERITY",
+    "SOB"
+  ];
+
+  for (const token of genericOrder) {
+    if (answers[token] === undefined || answers[token] === null || answers[token] === "") {
+      return {
+        token,
+        text: `Please answer: ${humanizeToken(token)}?`,
+        completed: false
+      };
+    }
+  }
+
+  return {
+    completed: true
+  };
+}
+
+export class ChatSessionService {
+  private sessions = new Map<string, ChatSessionState>();
+
+  async startSession(input: {
+    complaintId: string;
+    complaintLabel?: string;
+    caseId?: string;
+    patientContext?: CaseRecord["patientContext"];
+  }): Promise<ChatSessionState> {
+    const caseId = input.caseId ?? makeId("case");
+    const sessionId = makeId("chat");
+
+    const existing = await firestoreCaseStore.createCase({
+      caseId,
+      complaintId: input.complaintId,
+      complaintLabel: input.complaintLabel,
+      sourceChannel: "web_chat",
+      patientContext: input.patientContext,
+      answers: {},
+      sessionId,
+      signoffRequired: true
+    });
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId,
+      type: "CASE_CREATED",
+      summary: "Web chat case created",
+      actorRole: "patient"
+    });
+
+    await firestoreRuntimeMetricsStore.logMetric({
+      type: "CASE_CREATED",
+      caseId,
+      complaintId: input.complaintId
+    });
+
+    const next = pickNextQuestion(existing);
+
+    const messages: ChatMessage[] = [
+      {
+        id: makeId("msg"),
+        role: "assistant",
+        text: next.completed
+          ? "Your intake is complete and ready for review."
+          : `Thanks. I’ll ask a few questions. ${next.text}`,
+        createdAt: nowIso(),
+        token: next.token
+      }
+    ];
+
+    const state: ChatSessionState = {
+      caseId,
+      sessionId,
+      complaintId: input.complaintId,
+      complaintLabel: input.complaintLabel,
+      messages,
+      currentQuestionToken: next.token,
+      currentQuestionText: next.text,
+      completed: next.completed
+    };
+
+    this.sessions.set(sessionId, state);
+
+    if (!next.completed && next.token) {
+      await firestoreCaseEventsStore.appendEvent({
+        caseId,
+        type: "QUESTION_ASKED",
+        summary: `Asked ${next.token}`,
+        actorRole: "assistant",
+        payload: {
+          token: next.token,
+          text: next.text
+        }
+      });
+    }
+
+    return state;
+  }
+
+  async getSession(sessionId: string): Promise<ChatSessionState | null> {
+    return this.sessions.get(sessionId) ?? null;
+  }
+
+  async answerQuestion(input: {
+    sessionId: string;
+    answerText: string;
+  }): Promise<ChatSessionState> {
+    const session = this.sessions.get(input.sessionId);
+    if (!session) throw new Error(`Session not found: ${input.sessionId}`);
+
+    const caseRecord = await firestoreCaseStore.getCase(session.caseId);
+    if (!caseRecord) throw new Error(`Case not found: ${session.caseId}`);
+
+    const token = session.currentQuestionToken;
+
+    session.messages.push({
+      id: makeId("msg"),
+      role: "user",
+      text: input.answerText,
+      createdAt: nowIso(),
+      token
+    });
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId: session.caseId,
+      type: "ANSWER_RECORDED",
+      summary: `Recorded answer for ${token ?? "free_text"}`,
+      actorRole: "patient",
+      payload: {
+        token,
+        answerText: input.answerText
+      }
+    });
+
+    if (token) {
+      await firestoreCaseStore.updateAnswers(session.caseId, {
+        [token]: input.answerText
+      });
+    }
+
+    const refreshed = await firestoreCaseStore.getCase(session.caseId);
+    if (!refreshed) throw new Error(`Case vanished: ${session.caseId}`);
+
+    const engineResult = await runEngineForChat(refreshed);
+
+    await firestoreCaseStore.setEngineResult(session.caseId, engineResult);
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId: session.caseId,
+      type: "ENGINE_RUN",
+      summary: `Engine recommended ${engineResult.recommendedDisposition}`,
+      actorRole: "system",
+      payload: {
+        winningClusterId: engineResult.winningClusterId,
+        redFlags: engineResult.triggeredRedFlags,
+        dxCandidates: engineResult.dxCandidates.slice(0, 5)
+      }
+    });
+
+    await firestoreRuntimeMetricsStore.logMetric({
+      type: "ENGINE_RUN",
+      caseId: session.caseId,
+      complaintId: refreshed.complaintId,
+      disposition: engineResult.recommendedDisposition,
+      winningClusterId: engineResult.winningClusterId,
+      engineVersion: engineResult.engineVersion
+    });
+
+    const afterEngine = await firestoreCaseStore.getCase(session.caseId);
+    if (!afterEngine) throw new Error(`Case missing after engine run: ${session.caseId}`);
+
+    const next = pickNextQuestion(afterEngine);
+
+    if (next.completed) {
+      session.completed = true;
+      session.currentQuestionToken = undefined;
+      session.currentQuestionText = undefined;
+
+      session.messages.push({
+        id: makeId("msg"),
+        role: "assistant",
+        text: "Thank you. Your intake is complete and has been sent for clinician review.",
+        createdAt: nowIso()
+      });
+
+      await firestoreCaseStore.patchCase(session.caseId, {
+        status: "AWAITING_REVIEW",
+        reviewStatus: "PENDING_REVIEW"
+      });
+    } else {
+      session.completed = false;
+      session.currentQuestionToken = next.token;
+      session.currentQuestionText = next.text;
+
+      session.messages.push({
+        id: makeId("msg"),
+        role: "assistant",
+        text: next.text || "Please continue.",
+        createdAt: nowIso(),
+        token: next.token
+      });
+
+      await firestoreCaseEventsStore.appendEvent({
+        caseId: session.caseId,
+        type: "QUESTION_ASKED",
+        summary: `Asked ${next.token}`,
+        actorRole: "assistant",
+        payload: {
+          token: next.token,
+          text: next.text
+        }
+      });
+    }
+
+    this.sessions.set(session.sessionId, session);
+    return session;
+  }
+}
+
+export const chatSessionService = new ChatSessionService();
+2) server/routes/chatIntake.ts
+import { Router } from "express";
+import { chatSessionService } from "../services/chatSessionService";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+
+export const chatIntakeRouter = Router();
+
+chatIntakeRouter.post("/start", async (req, res) => {
+  try {
+    const { complaintId, complaintLabel, patientContext } = req.body ?? {};
+
+    if (!complaintId) {
+      res.status(400).json({ error: "complaintId is required" });
+      return;
+    }
+
+    const session = await chatSessionService.startSession({
+      complaintId,
+      complaintLabel,
+      patientContext
+    });
+
+    res.json(session);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to start session"
+    });
+  }
+});
+
+chatIntakeRouter.get("/session/:sessionId", async (req, res) => {
+  try {
+    const session = await chatSessionService.getSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    res.json(session);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to load session"
+    });
+  }
+});
+
+chatIntakeRouter.post("/session/:sessionId/answer", async (req, res) => {
+  try {
+    const { answerText } = req.body ?? {};
+    if (!answerText || !String(answerText).trim()) {
+      res.status(400).json({ error: "answerText is required" });
+      return;
+    }
+
+    const session = await chatSessionService.answerQuestion({
+      sessionId: req.params.sessionId,
+      answerText: String(answerText)
+    });
+
+    res.json(session);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to submit answer"
+    });
+  }
+});
+
+chatIntakeRouter.get("/case/:caseId", async (req, res) => {
+  try {
+    const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+    if (!caseRecord) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+    res.json(caseRecord);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message ?? "Failed to load case"
+    });
+  }
+});
+3) client/src/components/ChatMessageList.tsx
+import React from "react";
+
+export type ChatMessage = {
+  id: string;
+  role: "assistant" | "user" | "system";
+  text: string;
+  createdAt: string;
+  token?: string;
+};
+
+type Props = {
+  messages: ChatMessage[];
+};
+
+export function ChatMessageList({ messages }: Props) {
+  return (
+    <div style={{ border: "1px solid #ccc", padding: 12, minHeight: 300, marginBottom: 12 }}>
+      {messages.map((m) => (
+        <div
+          key={m.id}
+          style={{
+            marginBottom: 10,
+            textAlign: m.role === "user" ? "right" : "left"
+          }}
+        >
+          <div
+            style={{
+              display: "inline-block",
+              padding: 10,
+              borderRadius: 8,
+              background: m.role === "user" ? "#dff3ff" : "#f2f2f2",
+              maxWidth: "80%"
+            }}
+          >
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>
+              {m.role}
+              {m.token ? ` • ${m.token}` : ""}
+            </div>
+            <div>{m.text}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+4) client/src/components/AnswerInput.tsx
+import React, { useState } from "react";
+
+type Props = {
+  disabled?: boolean;
+  onSubmit: (value: string) => Promise<void> | void;
+};
+
+export function AnswerInput({ disabled, onSubmit }: Props) {
+  const [value, setValue] = useState("");
+
+  async function submit() {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    await onSubmit(trimmed);
+    setValue("");
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      <input
+        type="text"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder="Type your answer..."
+        style={{ flex: 1, padding: 10 }}
+      />
+      <button onClick={submit} disabled={disabled || !value.trim()}>
+        Send
+      </button>
+    </div>
+  );
+}
+5) client/src/pages/PatientIntakeChat.tsx
+import React, { useState } from "react";
+import { ChatMessageList } from "../components/ChatMessageList";
+import { AnswerInput } from "../components/AnswerInput";
+
+type SessionState = {
+  caseId: string;
+  sessionId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  messages: Array<{
+    id: string;
+    role: "assistant" | "user" | "system";
+    text: string;
+    createdAt: string;
+    token?: string;
+  }>;
+  currentQuestionToken?: string;
+  currentQuestionText?: string;
+  completed: boolean;
+};
+
+export default function PatientIntakeChat() {
+  const [complaintId, setComplaintId] = useState("");
+  const [complaintLabel, setComplaintLabel] = useState("");
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function startSession() {
+    if (!complaintId.trim()) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/chatIntake/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          complaintId: complaintId.trim(),
+          complaintLabel: complaintLabel.trim() || complaintId.trim()
+        })
+      });
+
+      const data = await res.json();
+      setSession(data);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitAnswer(answerText: string) {
+    if (!session) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/chatIntake/session/${session.sessionId}/answer`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ answerText })
+      });
+
+      const data = await res.json();
+      setSession(data);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto", padding: 16 }}>
+      <h2>Patient Intake Chat</h2>
+
+      {!session && (
+        <div style={{ border: "1px solid #ccc", padding: 12, marginBottom: 16 }}>
+          <div style={{ marginBottom: 8 }}>
+            <label>Complaint ID</label>
+            <br />
+            <input
+              value={complaintId}
+              onChange={(e) => setComplaintId(e.target.value)}
+              placeholder="e.g. sore_throat"
+              style={{ width: "100%", padding: 10 }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 8 }}>
+            <label>Complaint Label</label>
+            <br />
+            <input
+              value={complaintLabel}
+              onChange={(e) => setComplaintLabel(e.target.value)}
+              placeholder="e.g. Sore throat"
+              style={{ width: "100%", padding: 10 }}
+            />
+          </div>
+
+          <button onClick={startSession} disabled={loading || !complaintId.trim()}>
+            Start Intake
+          </button>
+        </div>
+      )}
+
+      {session && (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            <strong>Case:</strong> {session.caseId}
+            <br />
+            <strong>Complaint:</strong> {session.complaintLabel || session.complaintId}
+            <br />
+            <strong>Status:</strong> {session.completed ? "Complete" : "In progress"}
+          </div>
+
+          <ChatMessageList messages={session.messages} />
+
+          {!session.completed ? (
+            <AnswerInput disabled={loading} onSubmit={submitAnswer} />
+          ) : (
+            <div style={{ padding: 12, border: "1px solid #ccc" }}>
+              Intake complete. This case is ready for clinician review.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+Backend route wiring
+
+Register the route:
+
+import { chatIntakeRouter } from "./routes/chatIntake";
+
+app.use("/api/chatIntake", chatIntakeRouter);
+What this gives you now
+
+With Batch E in place, you have:
+
+Web patient intake
+→ case created in Firestore
+→ answers recorded
+→ engine re-runs after each answer
+→ audit events logged
+→ case moves to awaiting review
+→ appears in physician queue
+
+That is the first real end-to-end operational loop.
+
+Important note
+
+The one place you will need to patch to your actual engine is:
+
+runEngineForChat(caseRecord)
+
+inside chatSessionService.ts.
+
+I kept that isolated on purpose so the rest of the intake flow can stay stable while you wire the exact engine call you already have.
+
+Fast verification checklist
+
+Open the patient intake page
+
+Start a session with a complaint like sore_throat
+
+Answer 4–5 questions
+
+Confirm:
+
+messages appear
+
+case exists in Firestore
+
+answers persist
+
+engine runs are logged
+
+case status becomes AWAITING_REVIEW
+
+Open the physician queue and confirm the case appears
