@@ -185,7 +185,7 @@ export function assertClusterScoringRulesNotCorrupt(rows: SheetRow[]): void {
     }
 
     const ruleId = String(r.RULE_ID ?? "").trim();
-    if (ruleId && !/^CSR_[A-Z0-9_]+$/.test(ruleId)) {
+    if (ruleId && !/^[A-Z0-9_]+$/.test(ruleId)) {
       bad.push({ idx, table: "CLUSTER_SCORING_RULES", field: "RULE_ID", value: ruleId.substring(0, 80), reason: "invalid_format" });
     }
 

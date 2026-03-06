@@ -6,6 +6,7 @@ import {
   assertRedFlagRulesNotCorrupt,
   assertDispositionRulesNotCorrupt,
   assertOutputTemplatesNotCorrupt,
+  assertClusterScoringRulesNotCorrupt,
 } from "../data/corruptionGuard";
 
 type SheetRow = Record<string, any>;
@@ -462,6 +463,7 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
   assertRedFlagRulesNotCorrupt(rfRows);
   assertDispositionRulesNotCorrupt(dRows);
   assertOutputTemplatesNotCorrupt(tRows);
+  assertClusterScoringRulesNotCorrupt(csrRows);
 
   const version = regEntry.version;
 

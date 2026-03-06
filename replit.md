@@ -27,7 +27,20 @@ Physician authentication uses password-only, session-based HMAC-signed httpOnly 
 The agent system orchestrates patient flow through various routing states using a pipeline orchestrator. It supports LLM-powered actions, prompt template versioning, and LLM A/B testing with guardrails.
 
 ### Generic Complaint Engine (GENERIC_V1)
-This data-driven engine processes rules from CSVs using an expression evaluator to calculate scores, red flags, and dispositions. A bundle validator ensures structural integrity of complaint configurations.
+The data-driven engine (`server/engines/genericComplaintEngineV1.ts`) replaces per-complaint TypeScript scoring modules with CSV-configured rules. Adding a new complaint requires zero new TypeScript code — only CSV rows + golden tests.
+
+**Engine pipeline**: `loadComplaintConfig(ccId)` → `runCoreQuestions()` → `runRedFlagsComplaint()` → `computeScoresFromRules()` → `applyCrossComplaintBoosts()` → `computeScoringSystems()` → `runDisposition()` → output assembly.
+
+**Key tables**:
+- `COMPLAINT_REGISTRY.csv`: `ENGINE_TYPE` column routes to `GENERIC_V1` or `LEGACY` engine
+- `CLUSTER_SCORING_RULES.csv`: `CC_ID,CLUSTER_ID,RULE_ID,POINTS,WHEN_EXPR,EVIDENCE_LABEL` — expression-evaluated rules grouped by cluster, scored via `evaluateExpr()`
+- `CORE_QUESTIONS.csv`, `RED_FLAG_RULES.csv`, `DISPOSITION_RULES.csv`, `OUTPUT_TEMPLATES.csv`: shared across both engine types
+
+**Routing** (`server/services/complaintNodeRunner.ts`): If `config.registry.engineType === "GENERIC_V1"`, calls `runGenericComplaintV1()` directly, bypassing the legacy graph state machine.
+
+**Scaffolder** (`scripts/new_complaint_kit.ts`): `npx tsx scripts/new_complaint_kit.ts <cc_id> <system> <label>` generates stub CSV rows + 10 golden test stubs. Edit rules, update tests, run harness.
+
+**Bundle validation**: `validateComplaintBundle()` enforces GENERIC_V1 constraints (requires cluster scoring rules, red flag rules). `assertClusterScoringRulesNotCorrupt()` validates CLUSTER_ID (`^CL_`), RULE_ID (`^[A-Z0-9_]+`), numeric POINTS.
 
 ### Clinical Scoring Systems
 Data-driven clinical scoring systems (PERC, WELLS_PE, CENTOR, CURB-65, HEART) are configured via `SCORING_SYSTEMS.csv` and computed automatically. A consistency engine, defined by `CONSISTENCY_RULES.csv`, acts as a safety-net for dangerous symptom combinations. A calibration system measures triage rates against targets.
@@ -45,6 +58,7 @@ Operational intelligence features include a case analytics log and a cluster cov
 A 6-step toolchain compiles raw clinical guideline text into engine-ready CSV rows:
 1. **Compiler** (`scripts/compile-guideline-to-ir.ts`): Text → draft IR JSON (`data/complaints/ir/`). Heuristic keyword/phrase matching.
    - **Flowchart Compiler** (`scripts/compile-flowchart-to-ir.ts`): Structured `.flow.txt` → IR JSON. Supports `QUESTION:`, `RED_FLAG:`, `CLUSTER:`, `DISPOSITION:`, `MODIFIER:` directives.
+   - **ASCII Tree Compiler** (`scripts/compile-ascii-tree-to-ir.ts`): Indented decision tree `.tree.txt` → IR JSON. Supports `Q:`, `DX:`, `RF:`, `DISP:` nodes with `yes ->`/`no ->` branching.
 2. **Normalizer** (`scripts/normalize-ir.ts`): Draft IR → normalized IR (`data/complaints/ir_normalized/`). Converts prose to token expressions, surfaces unresolved fragments.
 3. **Emitter** (`scripts/emit-ir-to-csvs.ts`): Normalized IR → draft CSVs (`data/complaints/emitted/<cc_id>/`). Generates CORE_QUESTIONS, RED_FLAG_RULES, CLUSTER_SCORING_RULES, DISPOSITION_RULES, DX_PRIORITY drafts + manifest.json.
 4. **Harmonizer** (`scripts/harmonize-compiler-output.ts`): Rewrites emitted draft tokens/actions to match existing engine vocabulary using `data/complaints/token_harmonizer.json`. Supports `--dry-run`. Writes `harmonize_summary.json`.

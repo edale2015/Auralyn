@@ -1,0 +1,13 @@
+TITLE: Acute Sore Throat ASCII Tree
+
+Q: FEVER | Do you have fever?
+  yes -> Q: COUGH | Do you have cough?
+    yes -> DX: viral_pharyngitis | BENIGN
+    no -> Q: EXUDATE | Do you have tonsillar exudate?
+      yes -> DX: strep_pharyngitis | PRIMARY
+      no -> DX: viral_pharyngitis | BENIGN
+  no -> DX: viral_pharyngitis | BENIGN
+
+Q: STRIDOR | Do you have stridor?
+  yes -> RF: airway_compromise | ER_SEND | possible airway compromise
+  no -> DISP: SELF_CARE
