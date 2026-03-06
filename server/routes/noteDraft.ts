@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { noteGeneratorService } from "../services/noteGenerator";
 import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { requireRole } from "../middleware/requireRole";
 
 export const noteDraftRouter = Router();
 
-noteDraftRouter.get("/:caseId", async (req, res) => {
+noteDraftRouter.get("/:caseId", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const { caseId } = req.params;
     const caseRecord = await firestoreCaseStore.getCase(caseId);
@@ -24,7 +25,7 @@ noteDraftRouter.get("/:caseId", async (req, res) => {
   }
 });
 
-noteDraftRouter.post("/:caseId/generate", async (req, res) => {
+noteDraftRouter.post("/:caseId/generate", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const { caseId } = req.params;
     const result = await noteGeneratorService.generateForCase(caseId);
@@ -36,7 +37,7 @@ noteDraftRouter.post("/:caseId/generate", async (req, res) => {
   }
 });
 
-noteDraftRouter.post("/:caseId/save", async (req, res) => {
+noteDraftRouter.post("/:caseId/save", requireRole(["admin", "physician"]), async (req, res) => {
   try {
     const { caseId } = req.params;
     const { noteDraft, physicianSummary } = req.body ?? {};

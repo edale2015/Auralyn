@@ -5,15 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, ArrowRight, Loader2 } from "lucide-react";
 import { DiscrepancyBadge } from "@/components/DiscrepancyBadge";
+import { getQueryFn } from "@/lib/queryClient";
 
 export default function Discrepancies() {
   const { data, isLoading, error } = useQuery<{ count: number; items: any[] }>({
-    queryKey: ["/api/discrepancies"],
-    queryFn: async () => {
-      const res = await fetch("/api/discrepancies?limit=100");
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
+    queryKey: ["/api/discrepancies?limit=100"],
+    queryFn: getQueryFn({ on401: "throw" }),
     refetchInterval: 15000,
   });
 

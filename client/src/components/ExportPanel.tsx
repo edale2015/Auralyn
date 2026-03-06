@@ -14,11 +14,6 @@ export function ExportPanel({ caseId }: Props) {
 
   const { data: status, isLoading, error: statusError } = useQuery<any>({
     queryKey: ["/api/exportEncounter", caseId, "status"],
-    queryFn: async () => {
-      const res = await fetch(`/api/exportEncounter/${caseId}/status`);
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
     enabled: !!caseId,
   });
 

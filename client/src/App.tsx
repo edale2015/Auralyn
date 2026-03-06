@@ -3,6 +3,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider } from "./context/AuthContext";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import PatientIntake from "@/pages/PatientIntake";
@@ -16,6 +17,7 @@ import ReviewQueue from "@/pages/ReviewQueue";
 import CaseReview from "@/pages/CaseReview";
 import PatientIntakeChat from "@/pages/PatientIntakeChat";
 import Discrepancies from "@/pages/Discrepancies";
+import RuntimeAnalytics from "@/pages/RuntimeAnalytics";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -34,6 +36,7 @@ function Router() {
       <Route path="/review/:caseId" component={CaseReview} />
       <Route path="/chat-intake" component={PatientIntakeChat} />
       <Route path="/discrepancies" component={Discrepancies} />
+      <Route path="/runtime-analytics" component={RuntimeAnalytics} />
       <Route path="/debug/traces" component={TraceViewer} />
       <Route component={NotFound} />
     </Switch>
@@ -43,10 +46,12 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Router />
-      </TooltipProvider>
+      <AuthProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

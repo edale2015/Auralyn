@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { ecwSidecarExportService } from "../services/ecwSidecarExport";
 import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { requireRole } from "../middleware/requireRole";
 
 export const exportEncounterRouter = Router();
 
-exportEncounterRouter.get("/:caseId/status", async (req, res) => {
+exportEncounterRouter.get("/:caseId/status", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
     if (!caseRecord) {
@@ -24,7 +25,7 @@ exportEncounterRouter.get("/:caseId/status", async (req, res) => {
   }
 });
 
-exportEncounterRouter.post("/:caseId/export", async (req, res) => {
+exportEncounterRouter.post("/:caseId/export", requireRole(["admin", "physician"]), async (req, res) => {
   try {
     const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
     if (!caseRecord) {

@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { reviewQueueService } from "../services/reviewQueueService";
+import { requireRole } from "../middleware/requireRole";
 
 export const reviewQueueRouter = Router();
 
-reviewQueueRouter.get("/", async (req, res) => {
+reviewQueueRouter.get("/", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const limit = Number(req.query.limit ?? 50);
     const cases = await reviewQueueService.listQueue(limit);
@@ -17,7 +18,7 @@ reviewQueueRouter.get("/", async (req, res) => {
   }
 });
 
-reviewQueueRouter.post("/:caseId/assign", async (req, res) => {
+reviewQueueRouter.post("/:caseId/assign", requireRole(["admin", "physician"]), async (req, res) => {
   try {
     const { caseId } = req.params;
     const { reviewerId } = req.body;
@@ -30,7 +31,7 @@ reviewQueueRouter.post("/:caseId/assign", async (req, res) => {
   }
 });
 
-reviewQueueRouter.post("/:caseId/request-info", async (req, res) => {
+reviewQueueRouter.post("/:caseId/request-info", requireRole(["admin", "physician"]), async (req, res) => {
   try {
     const { caseId } = req.params;
     const { reviewerId, questions } = req.body;

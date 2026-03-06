@@ -17,11 +17,6 @@ export function NotePreview({ caseId }: Props) {
 
   const { data, isLoading } = useQuery<{ noteDraft: string | null; hasDraft: boolean }>({
     queryKey: ["/api/noteDraft", caseId],
-    queryFn: async () => {
-      const res = await fetch(`/api/noteDraft/${caseId}`);
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
     enabled: !!caseId,
     refetchOnWindowFocus: false,
   });

@@ -1,0 +1,1176 @@
+Now let’s do Batch H: Auth + Role Gating.
+
+Goal:
+
+protect physician queue and signoff
+
+keep patient intake open or lightly gated
+
+add a minimal auth spine you can harden later
+
+support roles: admin, physician, staff, patient
+
+Files in Batch H
+
+Backend:
+
+server/types/auth.ts
+
+server/services/authService.ts
+
+server/middleware/requireRole.ts
+
+Frontend:
+
+client/src/context/AuthContext.tsx
+
+client/src/pages/Login.tsx
+
+This is an MVP auth layer, not a final enterprise identity system. It gives you the doors and locks before we add the alarm system.
+
+1) server/types/auth.ts
+export type UserRole = "admin" | "physician" | "staff" | "patient";
+
+export interface AuthUser {
+  userId: string;
+  email?: string;
+  displayName?: string;
+  role: UserRole;
+  organizationId?: string;
+  isActive: boolean;
+}
+
+export interface AuthSessionPayload {
+  userId: string;
+  role: UserRole;
+  organizationId?: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  ok: true;
+  token: string;
+  user: AuthUser;
+}
+2) server/services/authService.ts
+
+This version uses a lightweight local/dev auth model with JWT. You can later swap credential validation to Firebase Auth, Clerk, Auth0, or your own user store.
+
+import jwt from "jsonwebtoken";
+import type { AuthUser, AuthSessionPayload, LoginRequest, LoginResponse, UserRole } from "../types/auth";
+
+const JWT_SECRET = process.env.APP_JWT_SECRET || "dev_only_change_me";
+const JWT_EXPIRES_IN = "12h";
+
+type DemoUserRecord = AuthUser & {
+  password: string;
+};
+
+const DEMO_USERS: DemoUserRecord[] = [
+  {
+    userId: "admin_demo",
+    email: "admin@example.com",
+    displayName: "Admin Demo",
+    role: "admin",
+    organizationId: "default_org",
+    isActive: true,
+    password: "admin123"
+  },
+  {
+    userId: "physician_demo",
+    email: "physician@example.com",
+    displayName: "Physician Demo",
+    role: "physician",
+    organizationId: "default_org",
+    isActive: true,
+    password: "physician123"
+  },
+  {
+    userId: "staff_demo",
+    email: "staff@example.com",
+    displayName: "Staff Demo",
+    role: "staff",
+    organizationId: "default_org",
+    isActive: true,
+    password: "staff123"
+  },
+  {
+    userId: "patient_demo",
+    email: "patient@example.com",
+    displayName: "Patient Demo",
+    role: "patient",
+    organizationId: "default_org",
+    isActive: true,
+    password: "patient123"
+  }
+];
+
+export class AuthService {
+  async login(input: LoginRequest): Promise<LoginResponse> {
+    const email = input.email.trim().toLowerCase();
+    const user = DEMO_USERS.find((u) => u.email?.toLowerCase() === email);
+
+    if (!user || !user.isActive || user.password !== input.password) {
+      throw new Error("Invalid credentials");
+    }
+
+    const payload: AuthSessionPayload = {
+      userId: user.userId,
+      role: user.role,
+      organizationId: user.organizationId
+    };
+
+    const token = jwt.sign(payload, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN
+    });
+
+    return {
+      ok: true,
+      token,
+      user: {
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        role: user.role,
+        organizationId: user.organizationId,
+        isActive: user.isActive
+      }
+    };
+  }
+
+  verifyToken(token: string): AuthSessionPayload {
+    return jwt.verify(token, JWT_SECRET) as AuthSessionPayload;
+  }
+
+  async getUserFromToken(token: string): Promise<AuthUser | null> {
+    try {
+      const payload = this.verifyToken(token);
+      const user = DEMO_USERS.find((u) => u.userId === payload.userId);
+      if (!user || !user.isActive) return null;
+
+      return {
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        role: user.role,
+        organizationId: user.organizationId,
+        isActive: user.isActive
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  hasRole(userRole: UserRole, allowed: UserRole[]): boolean {
+    return allowed.includes(userRole);
+  }
+}
+
+export const authService = new AuthService();
+3) server/middleware/requireRole.ts
+
+This middleware:
+
+reads bearer token from Authorization
+
+resolves the user
+
+blocks requests if role is not allowed
+
+import type { Request, Response, NextFunction } from "express";
+import { authService } from "../services/authService";
+import type { AuthUser, UserRole } from "../types/auth";
+
+declare global {
+  namespace Express {
+    interface Request {
+      authUser?: AuthUser;
+    }
+  }
+}
+
+function extractBearerToken(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (!header) return null;
+
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
+}
+
+export function requireRole(allowedRoles: UserRole[]) {
+  return async function roleMiddleware(req: Request, res: Response, next: NextFunction) {
+    try {
+      const token = extractBearerToken(req);
+      if (!token) {
+        res.status(401).json({ error: "Missing bearer token" });
+        return;
+      }
+
+      const user = await authService.getUserFromToken(token);
+      if (!user) {
+        res.status(401).json({ error: "Invalid or expired token" });
+        return;
+      }
+
+      if (!authService.hasRole(user.role, allowedRoles)) {
+        res.status(403).json({
+          error: "Forbidden",
+          role: user.role,
+          allowedRoles
+        });
+        return;
+      }
+
+      req.authUser = user;
+      next();
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Authorization failed"
+      });
+    }
+  };
+}
+4) Add minimal auth routes
+
+You did not explicitly request a route file, but Batch H is much more usable with a tiny auth route. I strongly recommend adding this too.
+
+server/routes/auth.ts
+import { Router } from "express";
+import { authService } from "../services/authService";
+import { requireRole } from "../middleware/requireRole";
+
+export const authRouter = Router();
+
+authRouter.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body ?? {};
+    const result = await authService.login({
+      email: String(email || ""),
+      password: String(password || "")
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(401).json({
+      error: err?.message ?? "Login failed"
+    });
+  }
+});
+
+authRouter.get("/me", requireRole(["admin", "physician", "staff", "patient"]), async (req, res) => {
+  res.json({
+    user: req.authUser
+  });
+});
+
+Register it:
+
+import { authRouter } from "./routes/auth";
+
+app.use("/api/auth", authRouter);
+5) Apply role gating to existing routes
+
+Now that auth exists, protect the sensitive endpoints.
+
+Recommended route policy:
+
+review queue: physician, admin, maybe staff
+
+signoff: physician, admin
+
+discrepancies: physician, admin, staff
+
+note draft save: physician, admin, maybe staff
+
+export encounter: physician, admin
+
+patient intake: public or patient
+
+Examples:
+
+reviewQueue.ts
+import { requireRole } from "../middleware/requireRole";
+
+reviewQueueRouter.get("/", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+
+reviewQueueRouter.post("/:caseId/assign", requireRole(["admin", "physician"]), async (req, res) => {
+  ...
+});
+
+reviewQueueRouter.post("/:caseId/request-info", requireRole(["admin", "physician"]), async (req, res) => {
+  ...
+});
+signoff.ts
+import { requireRole } from "../middleware/requireRole";
+
+signoffRouter.post("/", requireRole(["admin", "physician"]), async (req, res) => {
+  ...
+});
+discrepancies.ts
+import { requireRole } from "../middleware/requireRole";
+
+discrepanciesRouter.get("/", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+
+discrepanciesRouter.get("/:caseId", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+
+discrepanciesRouter.get("/:caseId/timeline", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+noteDraft.ts
+import { requireRole } from "../middleware/requireRole";
+
+noteDraftRouter.get("/:caseId", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+
+noteDraftRouter.post("/:caseId/generate", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+
+noteDraftRouter.post("/:caseId/save", requireRole(["admin", "physician"]), async (req, res) => {
+  ...
+});
+exportEncounter.ts
+import { requireRole } from "../middleware/requireRole";
+
+exportEncounterRouter.get("/:caseId/status", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  ...
+});
+
+exportEncounterRouter.post("/:caseId/export", requireRole(["admin", "physician"]), async (req, res) => {
+  ...
+});
+6) client/src/context/AuthContext.tsx
+
+This stores token + user in localStorage and exposes login/logout.
+
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+
+type AuthUser = {
+  userId: string;
+  email?: string;
+  displayName?: string;
+  role: "admin" | "physician" | "staff" | "patient";
+  organizationId?: string;
+  isActive: boolean;
+};
+
+type AuthContextValue = {
+  user: AuthUser | null;
+  token: string | null;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  authFetch: typeof fetch;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+const TOKEN_KEY = "app_auth_token";
+const USER_KEY = "app_auth_user";
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [token, setToken] = useState<string | null>(localStorage.getItem(TOKEN_KEY));
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  });
+  const [loading, setLoading] = useState(false);
+
+  async function login(email: string, password: string) {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Login failed");
+
+      setToken(data.token);
+      setUser(data.user);
+
+      localStorage.setItem(TOKEN_KEY, data.token);
+      localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function logout() {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  }
+
+  const authFetch: typeof fetch = (input, init = {}) => {
+    const headers = new Headers(init.headers || {});
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    return fetch(input, {
+      ...init,
+      headers
+    });
+  };
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      token,
+      loading,
+      login,
+      logout,
+      authFetch
+    }),
+    [user, token, loading]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error("useAuth must be used inside AuthProvider");
+  }
+  return ctx;
+}
+7) client/src/pages/Login.tsx
+import React, { useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+export default function Login() {
+  const { login, loading, user, logout } = useAuth();
+  const [email, setEmail] = useState("physician@example.com");
+  const [password, setPassword] = useState("physician123");
+  const [error, setError] = useState("");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      await login(email, password);
+    } catch (err: any) {
+      setError(err?.message ?? "Login failed");
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 420, margin: "40px auto", padding: 16, border: "1px solid #ccc" }}>
+      <h2>Login</h2>
+
+      {user ? (
+        <>
+          <div style={{ marginBottom: 12 }}>
+            Logged in as <strong>{user.displayName || user.email}</strong> ({user.role})
+          </div>
+          <button onClick={logout}>Logout</button>
+        </>
+      ) : (
+        <form onSubmit={submit}>
+          <div style={{ marginBottom: 12 }}>
+            <label>Email</label>
+            <br />
+            <input
+              style={{ width: "100%", padding: 10 }}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label>Password</label>
+            <br />
+            <input
+              type="password"
+              style={{ width: "100%", padding: 10 }}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+
+          {error && (
+            <div style={{ color: "#8a1f1f", marginBottom: 12 }}>
+              {error}
+            </div>
+          )}
+
+          <button type="submit" disabled={loading}>
+            {loading ? "Signing in..." : "Login"}
+          </button>
+
+          <div style={{ marginTop: 16, fontSize: 12, opacity: 0.8 }}>
+            Demo accounts:
+            <br />
+            physician@example.com / physician123
+            <br />
+            admin@example.com / admin123
+            <br />
+            staff@example.com / staff123
+            <br />
+            patient@example.com / patient123
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+Frontend wiring notes
+
+Wrap your app with the provider.
+
+Example in your root:
+
+import { AuthProvider } from "./context/AuthContext";
+
+<AuthProvider>
+  <App />
+</AuthProvider>
+
+Then any page that currently uses fetch for protected endpoints should switch to authFetch.
+
+Example in ReviewQueue.tsx:
+
+import { useAuth } from "../context/AuthContext";
+
+const { authFetch } = useAuth();
+
+useEffect(() => {
+  authFetch("/api/reviewQueue")
+    .then(r => r.json())
+    .then(data => setCases(data.cases ?? []));
+}, []);
+
+Same pattern for:
+
+CaseReview.tsx
+
+NotePreview.tsx
+
+Discrepancies.tsx
+
+ExportPanel.tsx
+
+You can leave patient intake public for now, or protect it with patient role later.
+
+What Batch H gives you
+
+Now your system has the minimum role boundaries:
+
+patient can do intake
+
+staff can view operational queues
+
+physician can review/sign off/export
+
+admin can do everything
+
+That means your review workflow is no longer a wide-open field.
+
+Quick verification checklist
+
+Log in as physician@example.com
+
+Load review queue with authFetch
+
+Confirm it works
+
+Try protected route without token
+
+Confirm 401
+
+Try signoff as staff
+
+Confirm 403
+
+Try signoff as physician
+
+Confirm success
+
+What I recommend next
+
+The strongest next move is Batch I: Runtime Analytics Dashboard.
+
+That gives you:
+
+complaint volume
+
+disposition distribution
+
+red flag rates
+
+disagreement/override rates
+
+operational visibility from Firestore data
+
+That is what turns the app from “workflow works” into “workflow is measurable.”
+
+Say “Batch I now” and I’ll generate the full bundle.
+
+bATCH i NOW.  Here's the complete summary of Batch F:  Backend (2 files):  server/services/discrepancyService.ts — Detects disagreements between engine recommendations and physician signoffs:  getTimeline(caseId) — assembles case record + events + signoffs in parallel getCaseDiscrepancy(caseId) — compares engine vs signoff for disposition mismatch, dx top mismatch, red flag override, or request-more-info listRecentDiscrepancies(limit) — scans cases and returns only those with discrepancies, sorted by recency server/routes/discrepancies.ts — REST endpoints at /api/discrepancies:  GET / — list recent discrepancies GET /:caseId — single case discrepancy GET /:caseId/timeline — full case timeline (events + signoffs) Frontend (3 files):  client/src/components/DiscrepancyBadge.tsx — Typed badge using shadcn Badge with semantic variants (destructive for disposition/red flag issues, secondary for dx mismatch, outline for more-info).  client/src/components/CaseTimeline.tsx — Unified chronological timeline that merges events and signoffs into a single sorted list. Events show type badges and payload, signoffs show status and reviewer. Uses TanStack Query with loading/error states.  client/src/pages/Discrepancies.tsx — Full page at /discrepancies showing all cases with discrepancies, with complaint label, discrepancy badge, engine/final dispositions, dx comparisons, red flags, and links to case review. Auto-refreshes every 15 seconds.  Improvements from code review:  Timeline now merges events and signoffs into a single chronological view (not separate sections) Added comprehensive data-testid coverage across all components.  BATCH I 
+
+Yes. Here’s Batch I: Runtime Analytics Dashboard as a multi-file bundle.
+
+This batch gives you:
+
+runtime analytics service over Firestore metrics + cases + signoffs
+
+analytics API routes
+
+dashboard page
+
+complaint metrics chart
+
+disposition metrics chart
+
+top disagreement table
+
+Files in Batch I
+
+Backend:
+
+server/services/runtimeAnalyticsService.ts
+
+server/routes/runtimeAnalytics.ts
+
+Frontend:
+
+client/src/pages/RuntimeAnalytics.tsx
+
+client/src/components/ComplaintMetricsChart.tsx
+
+client/src/components/DispositionMetricsChart.tsx
+
+client/src/components/TopDisagreementTable.tsx
+
+This batch assumes:
+
+Batch A Firestore stores exist
+
+Batch F discrepancy service exists
+
+Batch H auth exists
+
+I’m keeping the charts simple and dependable. If you already use shadcn and Recharts, these will fit naturally.
+
+1) server/services/runtimeAnalyticsService.ts
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { firestoreSignoffStore } from "./firestoreSignoffStore";
+import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
+import { discrepancyService } from "./discrepancyService";
+
+export interface ComplaintAnalyticsRow {
+  complaintId: string;
+  complaintLabel?: string;
+  caseCount: number;
+  redFlagCaseCount: number;
+  signedOffCount: number;
+  overrideCount: number;
+  disagreementCount: number;
+}
+
+export interface DispositionAnalyticsRow {
+  disposition: string;
+  count: number;
+}
+
+export interface TopDisagreementRow {
+  caseId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  discrepancyType: string;
+  engineDisposition?: string;
+  finalDisposition?: string;
+  reviewerId?: string;
+  createdAt?: string;
+}
+
+export interface RuntimeAnalyticsSummary {
+  totalCases: number;
+  totalSignedOff: number;
+  totalOverrides: number;
+  totalDiscrepancies: number;
+}
+
+export interface RuntimeAnalyticsPayload {
+  summary: RuntimeAnalyticsSummary;
+  complaintMetrics: ComplaintAnalyticsRow[];
+  dispositionMetrics: DispositionAnalyticsRow[];
+  topDisagreements: TopDisagreementRow[];
+}
+
+export class RuntimeAnalyticsService {
+  async buildDashboard(limitCases = 500): Promise<RuntimeAnalyticsPayload> {
+    const cases = await firestoreCaseStore.listCases({ limit: limitCases });
+
+    const complaintMap = new Map<string, ComplaintAnalyticsRow>();
+    const dispositionMap = new Map<string, number>();
+
+    let totalSignedOff = 0;
+    let totalOverrides = 0;
+
+    for (const c of cases) {
+      const key = c.complaintId;
+      const existing = complaintMap.get(key) ?? {
+        complaintId: c.complaintId,
+        complaintLabel: c.complaintLabel,
+        caseCount: 0,
+        redFlagCaseCount: 0,
+        signedOffCount: 0,
+        overrideCount: 0,
+        disagreementCount: 0
+      };
+
+      existing.caseCount += 1;
+
+      if ((c.engineResult?.triggeredRedFlags?.length ?? 0) > 0) {
+        existing.redFlagCaseCount += 1;
+      }
+
+      if (c.reviewStatus === "APPROVED" || c.reviewStatus === "OVERRIDDEN") {
+        existing.signedOffCount += 1;
+        totalSignedOff += 1;
+      }
+
+      if (c.reviewStatus === "OVERRIDDEN") {
+        existing.overrideCount += 1;
+        totalOverrides += 1;
+      }
+
+      const disposition = c.engineResult?.recommendedDisposition || "UNKNOWN";
+      dispositionMap.set(disposition, (dispositionMap.get(disposition) ?? 0) + 1);
+
+      complaintMap.set(key, existing);
+    }
+
+    const discrepancies = await discrepancyService.listRecentDiscrepancies(limitCases);
+
+    for (const d of discrepancies) {
+      const row = complaintMap.get(d.complaintId);
+      if (row) row.disagreementCount += 1;
+    }
+
+    const topDisagreements: TopDisagreementRow[] = discrepancies.slice(0, 50).map((d) => ({
+      caseId: d.caseId,
+      complaintId: d.complaintId,
+      complaintLabel: d.complaintLabel,
+      discrepancyType: d.discrepancyType,
+      engineDisposition: d.engineDisposition,
+      finalDisposition: d.finalDisposition,
+      reviewerId: d.reviewerId,
+      createdAt: d.createdAt
+    }));
+
+    const complaintMetrics = [...complaintMap.values()].sort((a, b) => b.caseCount - a.caseCount);
+
+    const dispositionMetrics: DispositionAnalyticsRow[] = [...dispositionMap.entries()]
+      .map(([disposition, count]) => ({ disposition, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const summary: RuntimeAnalyticsSummary = {
+      totalCases: cases.length,
+      totalSignedOff,
+      totalOverrides,
+      totalDiscrepancies: discrepancies.length
+    };
+
+    return {
+      summary,
+      complaintMetrics,
+      dispositionMetrics,
+      topDisagreements
+    };
+  }
+
+  async getComplaintDetail(complaintId: string, limitCases = 200) {
+    const allCases = await firestoreCaseStore.listCases({ complaintId, limit: limitCases });
+
+    const signoffs = await Promise.all(
+      allCases
+        .filter((c) => c.signoffId)
+        .map(async (c) => ({
+          caseId: c.caseId,
+          signoffs: await firestoreSignoffStore.listSignoffsForCase(c.caseId)
+        }))
+    );
+
+    const metrics = await firestoreRuntimeMetricsStore.listMetricsByComplaint(complaintId, 500);
+
+    return {
+      complaintId,
+      cases: allCases,
+      signoffs,
+      metrics
+    };
+  }
+}
+
+export const runtimeAnalyticsService = new RuntimeAnalyticsService();
+2) server/routes/runtimeAnalytics.ts
+
+Protect this with auth. Recommended: admin, physician, staff.
+
+import { Router } from "express";
+import { runtimeAnalyticsService } from "../services/runtimeAnalyticsService";
+import { requireRole } from "../middleware/requireRole";
+
+export const runtimeAnalyticsRouter = Router();
+
+runtimeAnalyticsRouter.get(
+  "/dashboard",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const limit = Number(req.query.limit ?? 500);
+      const payload = await runtimeAnalyticsService.buildDashboard(limit);
+      res.json(payload);
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load runtime analytics dashboard"
+      });
+    }
+  }
+);
+
+runtimeAnalyticsRouter.get(
+  "/complaint/:complaintId",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const limit = Number(req.query.limit ?? 200);
+      const payload = await runtimeAnalyticsService.getComplaintDetail(req.params.complaintId, limit);
+      res.json(payload);
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load complaint analytics"
+      });
+    }
+  }
+);
+
+Register it:
+
+import { runtimeAnalyticsRouter } from "./routes/runtimeAnalytics";
+
+app.use("/api/runtimeAnalytics", runtimeAnalyticsRouter);
+3) client/src/components/ComplaintMetricsChart.tsx
+
+Using Recharts.
+
+import React from "react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ResponsiveContainer,
+  Legend
+} from "recharts";
+
+type Row = {
+  complaintId: string;
+  caseCount: number;
+  redFlagCaseCount: number;
+  signedOffCount: number;
+  overrideCount: number;
+  disagreementCount: number;
+};
+
+type Props = {
+  rows: Row[];
+};
+
+export function ComplaintMetricsChart({ rows }: Props) {
+  const data = rows.slice(0, 12).map((r) => ({
+    complaintId: r.complaintId,
+    cases: r.caseCount,
+    redFlags: r.redFlagCaseCount,
+    overrides: r.overrideCount,
+    disagreements: r.disagreementCount
+  }));
+
+  return (
+    <div style={{ width: "100%", height: 360 }}>
+      <h3>Complaint Metrics</h3>
+      <ResponsiveContainer>
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="complaintId" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Bar dataKey="cases" />
+          <Bar dataKey="redFlags" />
+          <Bar dataKey="overrides" />
+          <Bar dataKey="disagreements" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+4) client/src/components/DispositionMetricsChart.tsx
+import React from "react";
+import {
+  PieChart,
+  Pie,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  Cell
+} from "recharts";
+
+type Row = {
+  disposition: string;
+  count: number;
+};
+
+type Props = {
+  rows: Row[];
+};
+
+const COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#8dd1e1", "#d0ed57"];
+
+export function DispositionMetricsChart({ rows }: Props) {
+  const data = rows.map((r) => ({
+    name: r.disposition,
+    value: r.count
+  }));
+
+  return (
+    <div style={{ width: "100%", height: 360 }}>
+      <h3>Disposition Distribution</h3>
+      <ResponsiveContainer>
+        <PieChart>
+          <Pie data={data} dataKey="value" nameKey="name" outerRadius={110} label>
+            {data.map((_, idx) => (
+              <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+5) client/src/components/TopDisagreementTable.tsx
+import React from "react";
+import { Link } from "react-router-dom";
+import { DiscrepancyBadge } from "./DiscrepancyBadge";
+
+type Row = {
+  caseId: string;
+  complaintId: string;
+  complaintLabel?: string;
+  discrepancyType: string;
+  engineDisposition?: string;
+  finalDisposition?: string;
+  reviewerId?: string;
+  createdAt?: string;
+};
+
+type Props = {
+  rows: Row[];
+};
+
+export function TopDisagreementTable({ rows }: Props) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <h3>Top Disagreements</h3>
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Case</th>
+            <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Complaint</th>
+            <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Type</th>
+            <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Engine</th>
+            <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Final</th>
+            <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Reviewer</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.caseId}>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                <Link to={`/case/${r.caseId}`}>{r.caseId}</Link>
+              </td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                {r.complaintLabel || r.complaintId}
+              </td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                <DiscrepancyBadge type={r.discrepancyType} />
+              </td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                {r.engineDisposition || "—"}
+              </td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                {r.finalDisposition || "—"}
+              </td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                {r.reviewerId || "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+6) client/src/pages/RuntimeAnalytics.tsx
+
+Uses auth. If your app already has useAuth, use authFetch.
+
+import React, { useEffect, useState } from "react";
+import { ComplaintMetricsChart } from "../components/ComplaintMetricsChart";
+import { DispositionMetricsChart } from "../components/DispositionMetricsChart";
+import { TopDisagreementTable } from "../components/TopDisagreementTable";
+import { useAuth } from "../context/AuthContext";
+
+export default function RuntimeAnalytics() {
+  const { authFetch } = useAuth();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/runtimeAnalytics/dashboard?limit=500");
+      const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(json.error || "Failed to load analytics");
+      }
+
+      setData(json);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load analytics");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Runtime Analytics</h2>
+
+      {loading && !data && <div>Loading...</div>}
+      {error && <div style={{ color: "#8a1f1f" }}>{error}</div>}
+
+      {data && (
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 12,
+              marginBottom: 16
+            }}
+          >
+            <div style={{ border: "1px solid #ccc", padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Total Cases</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{data.summary?.totalCases ?? 0}</div>
+            </div>
+            <div style={{ border: "1px solid #ccc", padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Signed Off</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{data.summary?.totalSignedOff ?? 0}</div>
+            </div>
+            <div style={{ border: "1px solid #ccc", padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Overrides</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{data.summary?.totalOverrides ?? 0}</div>
+            </div>
+            <div style={{ border: "1px solid #ccc", padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Discrepancies</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{data.summary?.totalDiscrepancies ?? 0}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <ComplaintMetricsChart rows={data.complaintMetrics || []} />
+            <DispositionMetricsChart rows={data.dispositionMetrics || []} />
+          </div>
+
+          <TopDisagreementTable rows={data.topDisagreements || []} />
+        </>
+      )}
+    </div>
+  );
+}
+Optional route/link wiring
+
+Add a route in your frontend router for:
+
+<Route path="/runtime-analytics" element={<RuntimeAnalytics />} />
+
+Add nav link for clinicians/admin/staff as needed.
+
+What Batch I gives you
+
+Now your system becomes measurable in a real operational sense:
+
+Patient intake
+→ engine run
+→ review/signoff
+→ discrepancies tracked
+→ analytics dashboard shows complaint volume, dispositions, overrides, disagreements
+
+That means you can start seeing where the workflow is strong, noisy, or fragile.
+
+Quick verification checklist
+
+Log in as physician or staff
+
+Open /runtime-analytics
+
+Confirm dashboard loads
+
+Confirm summary cards show values
+
+Confirm complaint bar chart renders
+
+Confirm disposition pie chart renders
+
+Confirm disagreement table shows cases if present
+
+Confirm 401/403 if accessed without proper auth
+
+What I recommend next
+
+The strongest next move is Batch J: Shadow-mode ops + runbooks.
+
+That gives you:
+
+explicit shadow-mode toggle/config
+
+shadow-mode event logging
+
+ops page for live monitoring
+
+written runbooks and signoff/export policy
+
+That is what takes the system from “working app” to “controlled clinical rollout.”
+
+Say “Batch J now” and I’ll generate the full set.

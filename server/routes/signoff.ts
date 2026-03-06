@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { signoffService } from "../services/signoffService";
+import { requireRole } from "../middleware/requireRole";
 
 export const signoffRouter = Router();
 
 const VALID_STATUSES = ["APPROVED", "APPROVED_WITH_EDITS", "REQUEST_MORE_INFO", "ESCALATED", "REJECTED"] as const;
 
-signoffRouter.post("/", async (req, res) => {
+signoffRouter.post("/", requireRole(["admin", "physician"]), async (req, res) => {
   try {
     const { caseId, reviewerId, status, finalDisposition } = req.body ?? {};
 

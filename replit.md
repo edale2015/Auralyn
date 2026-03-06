@@ -21,7 +21,7 @@ The backend uses Express 5 on Node.js with TypeScript, providing REST API endpoi
 Primary data storage is Firebase Firestore, with SQLite for intake storage abstraction. Schemas exist for physicians, patients, encounters, orders, WhatsApp messages, and cases. PHI retention policies involve splitting storage for clinical records and debug telemetry.
 
 ### Authentication
-Physician authentication uses password-only, session-based HMAC-signed httpOnly cookies. Patient access is token-based for intake, requiring a 6-digit code verification.
+Physician authentication uses password-only, session-based HMAC-signed httpOnly cookies. Patient access is token-based for intake, requiring a 6-digit code verification. A JWT-based role auth layer (`server/services/authService.ts`, `server/middleware/requireRole.ts`) supports roles: admin, physician, staff, patient. Protected routes use `requireRole()` middleware. Auth endpoints at `/api/roleAuth` (login, me). Frontend `AuthProvider` context stores JWT token + user in localStorage, exposes `authFetch` for authenticated requests.
 
 ### Agent System Features
 The agent system orchestrates patient flow through various routing states using a pipeline orchestrator. It supports LLM-powered actions, prompt template versioning, and LLM A/B testing with guardrails.
@@ -62,6 +62,9 @@ Detects and surfaces disagreements between engine recommendations and physician 
 - **Discrepancy Service** (`server/services/discrepancyService.ts`): Compares engine output vs physician signoff to detect disposition mismatches, Dx top mismatches, red flag overrides, and more-info requests. Provides case timeline (events + signoffs) and lists recent discrepancies.
 - **Discrepancy Routes** (`server/routes/discrepancies.ts`): REST endpoints at `/api/discrepancies` — GET list, GET per-case, GET timeline.
 - **Frontend**: `Discrepancies.tsx` page at `/discrepancies`, `DiscrepancyBadge.tsx` (typed badge component), `CaseTimeline.tsx` (event + signoff timeline).
+
+### Runtime Analytics Dashboard
+Runtime analytics service (`server/services/runtimeAnalyticsService.ts`) aggregates complaint volume, disposition distribution, signoff/override rates, and disagreements from Firestore data. Routes at `/api/runtimeAnalytics` (dashboard, complaint detail) protected by role auth. Frontend at `/runtime-analytics` with summary cards, complaint bar chart (Recharts), disposition pie chart, and top disagreement table.
 
 ### Operational Intelligence & Tooling
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.

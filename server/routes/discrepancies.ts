@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { discrepancyService } from "../services/discrepancyService";
+import { requireRole } from "../middleware/requireRole";
 
 export const discrepanciesRouter = Router();
 
-discrepanciesRouter.get("/", async (req, res) => {
+discrepanciesRouter.get("/", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const limit = Number(req.query.limit ?? 100);
     const items = await discrepancyService.listRecentDiscrepancies(limit);
@@ -18,7 +19,7 @@ discrepanciesRouter.get("/", async (req, res) => {
   }
 });
 
-discrepanciesRouter.get("/:caseId", async (req, res) => {
+discrepanciesRouter.get("/:caseId", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const item = await discrepancyService.getCaseDiscrepancy(req.params.caseId);
     if (!item) {
@@ -31,7 +32,7 @@ discrepanciesRouter.get("/:caseId", async (req, res) => {
   }
 });
 
-discrepanciesRouter.get("/:caseId/timeline", async (req, res) => {
+discrepanciesRouter.get("/:caseId/timeline", requireRole(["admin", "physician", "staff"]), async (req, res) => {
   try {
     const payload = await discrepancyService.getTimeline(req.params.caseId);
     if (!payload.caseRecord) {
