@@ -1,0 +1,290 @@
+This script sits after:
+
+learn-token-aliases-from-conflicts.ts
+
+and before the harmonizer.
+
+Pipeline becomes:
+
+compile-guideline-to-ir.ts
+→ normalize-ir.ts
+→ emit-ir-to-csvs.ts
+→ suggest-token-aliases.ts
+→ apply-suggested-token-aliases.ts
+→ harmonize-compiler-output.ts
+→ review-emitted-drafts.ts
+→ learn-token-aliases-from-conflicts.ts
+→ promote-learned-aliases.ts      ← NEW
+→ merge-approved-drafts.ts
+
+The key difference between the two alias systems:
+
+Script	Source of knowledge
+suggest-token-aliases.ts	token similarity heuristics
+learn-token-aliases-from-conflicts.ts	real engine conflicts
+promote-learned-aliases.ts	turns learned aliases into config
+scripts/promote-learned-aliases.ts
+
+This script:
+
+• reads learned_token_aliases.json
+• filters by confidence and support count
+• writes approved aliases into token_harmonizer.json
+• creates a backup
+• produces an audit log
+
+Default behavior is very conservative.
+
+/**
+ * scripts/promote-learned-aliases.ts
+ *
+ * Promote learned alias suggestions into token_harmonizer.json
+ *
+ * Input:
+ *   data/complaints/review/<complaint_id>/learned_token_aliases.json
+ *
+ * Output:
+ *   data/complaints/token_harmonizer.json
+ *
+ * Usage:
+ *   npx tsx scripts/promote-learned-aliases.ts sore_throat
+ *   npx tsx scripts/promote-learned-aliases.ts sore_throat --min-score 0.80 --min-count 2
+ *   npx tsx scripts/promote-learned-aliases.ts sore_throat --dry-run
+ */
+
+import fs from "fs";
+import path from "path";
+
+type Args = {
+  complaintId: string
+  minScore: number
+  minCount: number
+  dryRun: boolean
+  force: boolean
+}
+
+type LearnedSuggestion = {
+  emitted_token: string
+  suggested_live_token: string
+  score: number
+  support_count: number
+  strategy: string
+}
+
+type LearnedFile = {
+  complaint_id: string
+  generated_at: string
+  suggestions: LearnedSuggestion[]
+}
+
+type HarmonizerConfig = {
+  token_aliases: Record<string,string>
+  action_aliases: Record<string,string>
+}
+
+function parseArgs(argv:string[]):Args {
+
+  const complaintId = argv[0]
+
+  if(!complaintId){
+    console.error("Usage: promote-learned-aliases.ts <complaint_id>")
+    process.exit(2)
+  }
+
+  let minScore = 0.80
+  let minCount = 2
+  let dryRun = false
+  let force = false
+
+  for(let i=1;i<argv.length;i++){
+    const a = argv[i]
+    if(a==="--min-score") minScore = Number(argv[++i] ?? "0.80")
+    else if(a==="--min-count") minCount = Number(argv[++i] ?? "2")
+    else if(a==="--dry-run") dryRun = true
+    else if(a==="--force") force = true
+  }
+
+  return {complaintId,minScore,minCount,dryRun,force}
+}
+
+function normalizeToken(t:string){
+  return (t ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g,"")
+    .replace(/_+/g,"_")
+}
+
+function backupFile(filePath:string,dryRun:boolean){
+
+  const ts = new Date().toISOString().replace(/[:.]/g,"-")
+  const backup = `${filePath}.bak.${ts}`
+
+  if(dryRun){
+    console.log(`[DRY] backup ${filePath} -> ${backup}`)
+    return
+  }
+
+  fs.copyFileSync(filePath,backup)
+}
+
+function main(){
+
+  const args = parseArgs(process.argv.slice(2))
+  const root = process.cwd()
+
+  const learnedPath = path.join(
+    root,
+    "data",
+    "complaints",
+    "review",
+    args.complaintId,
+    "learned_token_aliases.json"
+  )
+
+  const harmonizerPath = path.join(
+    root,
+    "data",
+    "complaints",
+    "token_harmonizer.json"
+  )
+
+  if(!fs.existsSync(learnedPath))
+    throw new Error(`Missing learned aliases: ${learnedPath}`)
+
+  const learned = JSON.parse(
+    fs.readFileSync(learnedPath,"utf8")
+  ) as LearnedFile
+
+  const harmonizer = JSON.parse(
+    fs.readFileSync(harmonizerPath,"utf8")
+  ) as HarmonizerConfig
+
+  const aliases = {...harmonizer.token_aliases}
+
+  let promoted = 0
+  let skippedLowScore = 0
+  let skippedLowSupport = 0
+  let skippedExisting = 0
+  let skippedCollision = 0
+
+  const audit:any[] = []
+
+  for(const s of learned.suggestions){
+
+    const emitted = normalizeToken(s.emitted_token)
+    const live = normalizeToken(s.suggested_live_token)
+
+    if(s.score < args.minScore){
+      skippedLowScore++
+      audit.push({...s,action:"SKIP_LOW_SCORE"})
+      continue
+    }
+
+    if(s.support_count < args.minCount){
+      skippedLowSupport++
+      audit.push({...s,action:"SKIP_LOW_SUPPORT"})
+      continue
+    }
+
+    if(aliases[emitted] === live){
+      skippedExisting++
+      audit.push({...s,action:"SKIP_EXISTING"})
+      continue
+    }
+
+    if(aliases[emitted] && aliases[emitted] !== live && !args.force){
+      skippedCollision++
+      audit.push({...s,action:"SKIP_COLLISION"})
+      continue
+    }
+
+    aliases[emitted] = live
+    promoted++
+
+    audit.push({...s,action:"PROMOTED"})
+  }
+
+  console.log("\n=== Promote Learned Aliases ===")
+  console.log(`Complaint: ${args.complaintId}`)
+  console.log(`Promoted: ${promoted}`)
+  console.log(`Skipped low score: ${skippedLowScore}`)
+  console.log(`Skipped low support: ${skippedLowSupport}`)
+  console.log(`Skipped existing: ${skippedExisting}`)
+  console.log(`Skipped collision: ${skippedCollision}`)
+
+  const updated: HarmonizerConfig = {
+    ...harmonizer,
+    token_aliases: Object.fromEntries(
+      Object.entries(aliases).sort(([a],[b]) => a.localeCompare(b))
+    )
+  }
+
+  if(promoted > 0){
+
+    backupFile(harmonizerPath,args.dryRun)
+
+    if(!args.dryRun){
+      fs.writeFileSync(
+        harmonizerPath,
+        JSON.stringify(updated,null,2) + "\n"
+      )
+    }
+  }
+
+  const auditPath = path.join(
+    root,
+    "data",
+    "complaints",
+    "review",
+    args.complaintId,
+    "promoted_aliases_audit.json"
+  )
+
+  if(!args.dryRun){
+    fs.writeFileSync(
+      auditPath,
+      JSON.stringify({
+        complaint_id: args.complaintId,
+        applied_at: new Date().toISOString(),
+        min_score: args.minScore,
+        min_support: args.minCount,
+        results: audit
+      },null,2) + "\n"
+    )
+  }
+
+}
+
+main()
+Recommended usage
+
+For a complaint that had conflicts:
+
+npx tsx scripts/learn-token-aliases-from-conflicts.ts sore_throat
+npx tsx scripts/promote-learned-aliases.ts sore_throat --dry-run
+npx tsx scripts/promote-learned-aliases.ts sore_throat
+
+Then re-run harmonization:
+
+npx tsx scripts/harmonize-compiler-output.ts sore_throat
+
+Future emitted drafts will automatically use the improved vocabulary.
+
+What you now have
+
+Your system now includes a true compiler + learning feedback loop:
+
+Guideline text
+ → IR compiler
+ → normalization
+ → draft emitter
+ → alias suggester
+ → alias learner
+ → alias promoter
+ → harmonizer
+ → review bundle
+ → merge tool
+ → production engine
+
+The system will get better every time you compile new complaints.
