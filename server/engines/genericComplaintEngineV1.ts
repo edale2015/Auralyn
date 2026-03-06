@@ -27,6 +27,38 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const ANALYTICS_LOG_PATH = path.resolve(process.cwd(), "server/data/csv/CASE_ANALYTICS_LOG.csv");
+const ANALYTICS_HEADERS = "TIMESTAMP,CASE_ID,CC_ID,DISPOSITION,TOP_DX,DX_SCORE,RED_FLAG_TRIGGERED,TOP_CLUSTER,ENGINE_VERSION";
+
+function appendAnalyticsLog(entry: {
+  ccId: string;
+  caseId: string;
+  disposition: string;
+  topDx: string;
+  dxScore: number;
+  redFlagTriggered: boolean;
+  topCluster: string;
+}): void {
+  try {
+    if (!fs.existsSync(ANALYTICS_LOG_PATH)) {
+      fs.writeFileSync(ANALYTICS_LOG_PATH, ANALYTICS_HEADERS + "\n", "utf8");
+    }
+    const row = [
+      new Date().toISOString(),
+      entry.caseId,
+      entry.ccId,
+      entry.disposition,
+      entry.topDx,
+      entry.dxScore.toFixed(2),
+      String(entry.redFlagTriggered),
+      entry.topCluster,
+      "GENERIC_V1",
+    ].join(",");
+    fs.appendFileSync(ANALYTICS_LOG_PATH, row + "\n", "utf8");
+  } catch {
+  }
+}
+
 type DxPriorityMap = Map<string, Map<string, number>>;
 
 let _dxPriorityCache: DxPriorityMap | null = null;
@@ -280,13 +312,14 @@ function compositeScoreKey(ccId: string): string {
   return map[ccId] || ccId.replace(/[_-]/g, "_") + "_score";
 }
 
-function pickLikelyDxFromCandidates(cfg: ComplaintConfig, max = 5): Array<{ id: string; label: string }> {
+function pickLikelyDxFromCandidates(cfg: ComplaintConfig, max = 5): Array<{ id: string; label: string; score: number }> {
   const cands = cfg.dxCandidates ?? [];
   return cands
     .slice(0, max)
     .map((c) => ({
       id: c.DX_ID,
       label: c.DX_LABEL,
+      score: c.BASE_SCORE,
     }));
 }
 
@@ -453,8 +486,15 @@ export async function runGenericComplaintV1(
 
   const likelyDx = pickLikelyDxFromCandidates(config, 5);
   if (likelyDx.length > 0) {
-    updated.likelyDx = likelyDx;
-    updated.dxListText = likelyDx.map((d: { id: string; label: string }) => `• ${d.label}`).join("\n");
+    const totalScore = likelyDx.reduce((sum, d) => sum + (d.score || 0), 0);
+    const withConfidence = likelyDx.map(d => ({
+      ...d,
+      confidence: totalScore > 0 ? Math.round((d.score / totalScore) * 100) : 0,
+    }));
+    updated.likelyDx = withConfidence;
+    updated.dxListText = withConfidence
+      .map(d => d.confidence > 0 ? `• ${d.label} (${d.confidence}%)` : `• ${d.label}`)
+      .join("\n");
   }
 
   const confidence =
@@ -491,6 +531,18 @@ export async function runGenericComplaintV1(
     confidence,
     durationMs: 0,
   });
+
+  if (!process.env.HARNESS_MODE) {
+    appendAnalyticsLog({
+      ccId,
+      caseId: (updated as any).caseId ?? "unknown",
+      disposition: dispResult.dispositionLevel,
+      topDx: likelyDx.length > 0 ? likelyDx[0].id : "",
+      dxScore: likelyDx.length > 0 ? likelyDx[0].score : 0,
+      redFlagTriggered: rfResult.triggeredFlags.length > 0,
+      topCluster: scoringResult.topCluster,
+    });
+  }
 
   return {
     state: updated as CaseState,

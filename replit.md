@@ -84,6 +84,11 @@ Generates ranked diagnostic candidates from CSR + DXP data. Script: `scripts/gen
 - **Profile Pack Linter** (`scripts/lint-profile-packs.ts`): Validates all profiles for missing fields, duplicate dx entries, non-numeric points, and WHEN_EXPR tokens not found in CORE_QUESTIONS. Exit code 1 on errors.
 - **Question Coverage** (`scripts/ensure-profile-questions.ts`): Detects Q_IDs referenced in profile WHEN_EXPRs missing from CORE_QUESTIONS. Reports suggestions; `--apply` auto-adds them.
 
+### Operational Intelligence (Phase 6)
+- **Case Analytics Log** (`server/data/csv/CASE_ANALYTICS_LOG.csv`): Auto-appended by `runGenericComplaintV1()` after each disposition. Columns: `TIMESTAMP,CASE_ID,CC_ID,DISPOSITION,TOP_DX,DX_SCORE,RED_FLAG_TRIGGERED,TOP_CLUSTER,ENGINE_VERSION`. Skipped during harness runs (`HARNESS_MODE=1`). Gitignored (runtime data).
+- **Cluster Coverage Heatmap** (`scripts/cluster-coverage-report.ts`): Reports per-complaint CSR row counts, active/inert rules, clusters fired in golden tests vs analytics. Output: `data/complaints/cluster_heatmap.csv`. Highlights complaints with no test coverage and >50% inert rules.
+- **Confidence Calibration**: DX candidates now include normalized confidence percentages (`score / sum(top 5 scores)`). `dxListText` on CaseState renders as `• Viral URI (63%)` format for improved user trust.
+
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, Bundle ABI Validator (`scripts/validate-complaint-bundles.ts`), and a comprehensive Gate-Prod Pipeline (8 gates) for pre-deployment validation.
 

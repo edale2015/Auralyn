@@ -1,0 +1,199 @@
+Phase 6: Operational Intelligence Layer
+
+You now have:
+
+rule engine
+
+cluster scoring
+
+DX candidate ranking
+
+profile packs
+
+red flag packs
+
+automated generation tools
+
+safety rails (rollback + validation)
+
+What you don’t yet have is feedback about how the system performs in the wild.
+
+That’s the next layer.
+
+6A — Add a Case Analytics Log
+
+Add a new CSV:
+
+server/data/csv/CASE_ANALYTICS_LOG.csv
+
+Headers:
+
+TIMESTAMP,CASE_ID,CC_ID,DISPOSITION,TOP_DX,DX_SCORE,RED_FLAG_TRIGGERED,PROFILE_USED,ENGINE_VERSION
+
+Write to it inside runGenericComplaintV1() after disposition is determined.
+
+Example row:
+
+2026-03-05T21:41:03Z,case_9183,cough,HOME_CARE,viral_uri,0.84,false,PULM_COUGH_V3,GENERIC_V1
+
+Purpose:
+
+identify frequent complaints
+
+identify diagnoses that dominate clusters
+
+detect rules that never fire
+
+6B — Build a Coverage Heatmap Script
+
+Create:
+
+scripts/cluster-coverage-report.ts
+
+It should calculate:
+
+CC_ID
+CSR_ROWS
+CLUSTERS
+ACTIVE_RULES
+FIRED_IN_TESTS
+FIRED_IN_ANALYTICS
+
+Output:
+
+data/complaints/cluster_heatmap.csv
+
+This lets you see things like:
+
+appendicitis cluster never triggered
+derm_cellulitis rules dominate rash
+6C — Add “confidence calibration”
+
+Right now your candidate score is:
+
+score = points × clusterPriority
+
+Add a confidence normalization layer:
+
+confidence = score / sum(top 5 scores)
+
+Then you can display:
+
+Likely causes:
+• Viral URI (63%)
+• Pneumonia (21%)
+• Asthma flare (11%)
+
+This dramatically improves user trust.
+
+Phase 7: Medical Depth Expansion
+
+Now that families exist, expand clusters for the highest-yield complaints.
+
+Top targets:
+
+Chest pain
+
+Add clusters:
+
+aortic_dissection
+pericarditis
+esophageal_spasm
+costochondritis
+Abdominal pain
+
+Add clusters:
+
+ectopic_pregnancy
+mesenteric_ischemia
+peptic_ulcer
+kidney_stone
+Headache
+
+Add clusters:
+
+subarachnoid_hemorrhage
+temporal_arteritis
+cluster_headache
+sinus_headache
+
+These add huge diagnostic realism.
+
+Phase 8: Smart Question Routing
+
+You already collect many questions, but they’re static.
+
+Add logic:
+
+if cluster score rises above threshold
+→ ask 1–2 targeted questions
+
+Example:
+
+cluster: appendicitis rising
+ask: "Is the pain worse when you release pressure on the abdomen?"
+
+This turns the system into a dynamic diagnostic interview.
+
+Phase 9: Telemetry for Model Improvement
+
+Create a weekly job:
+
+scripts/analyze-case-analytics.ts
+
+It should output:
+
+Top complaints
+Top diagnoses
+Rules never triggered
+Red flags most common
+
+This tells you where to refine clusters.
+
+Phase 10: UI / Telepresence Integration
+
+Earlier you mentioned integrating this with your telemedicine robot system.
+
+The engine can now power:
+
+Telegram
+
+Web UI
+
+Kiosk
+
+Telepresence robot
+
+All using the same ComplaintConfig.
+
+Where you are now (objectively)
+
+You’ve built something that resembles:
+
+Symptom intake
+→ modifier capture
+→ red flag detection
+→ cluster scoring
+→ differential ranking
+→ disposition
+→ explanation
+
+That’s essentially the architecture used by systems like:
+
+Isabel
+
+Ada
+
+Babylon
+
+Buoy
+
+But yours is fully transparent and rule-auditable, which is rare.
+
+My recommended immediate next step
+
+Implement 6A: Case Analytics Log first.
+
+It’s small, but it unlocks the rest of the roadmap.
+
+Once real usage data exists, the next improvements become obvious.
