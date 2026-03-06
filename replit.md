@@ -49,7 +49,13 @@ Data-driven clinical scoring systems (PERC, WELLS_PE, CENTOR, CURB-65, HEART) ar
 The system supports subtype expansions for improved diagnostic granularity and cross-complaint boosts to adjust cluster scores based on multi-system clinical patterns. It also includes an engine to generate ranked diagnostic candidates.
 
 ### Case Management
-A Firestore-backed case lifecycle manages cases through a state machine (DRAFT → TRIAGED → NEEDS_REVIEW → APPROVED → SENT → CLOSED), providing CRUD services and authentication for review.
+A Firestore-backed case lifecycle manages cases through a state machine (DRAFT → TRIAGED → NEEDS_REVIEW → APPROVED → SENT → CLOSED), providing CRUD services and authentication for review. Schemas exist for physicians, patients, encounters, orders, WhatsApp messages, and cases. PHI retention policies involve splitting storage for clinical records and debug telemetry.
+
+The expanded Firestore backbone (`server/types/case.ts`, `server/types/signoff.ts`) provides comprehensive typed models for cases (with patient context, engine results, DX candidates, cluster scores, rule traces), case events (audit trail), signoffs (physician review with overrides), and runtime metrics. Firestore stores:
+- **Cases** (`server/services/firestoreCaseStore.ts`): Full case lifecycle — INTAKE_IN_PROGRESS → AWAITING_REVIEW → IN_REVIEW → SIGNED_OFF → CLOSED, with review queue, answer updates, engine result storage, reviewer assignment, ECW export tracking.
+- **Case Events** (`server/services/firestoreCaseEvents.ts`): Append-only audit trail of all case activity (creation, messages, engine runs, red flags, signoffs, exports).
+- **Signoffs** (`server/services/firestoreSignoffStore.ts`): Physician review records with status (APPROVED/APPROVED_WITH_EDITS/REQUEST_MORE_INFO/ESCALATED/REJECTED), overrides, rationale.
+- **Runtime Metrics** (`server/services/firestoreRuntimeMetrics.ts`): Production telemetry for engine runs, case creation, red flag triggers, signoffs, discrepancies.
 
 ### Operational Intelligence & Tooling
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.
