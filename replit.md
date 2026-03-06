@@ -89,6 +89,9 @@ Generates ranked diagnostic candidates from CSR + DXP data. Script: `scripts/gen
 - **Cluster Coverage Heatmap** (`scripts/cluster-coverage-report.ts`): Reports per-complaint CSR row counts, active/inert rules, clusters fired in golden tests vs analytics. Output: `data/complaints/cluster_heatmap.csv`. Highlights complaints with no test coverage and >50% inert rules.
 - **Confidence Calibration**: DX candidates now include normalized confidence percentages (`score / sum(top 5 scores)`). `dxListText` on CaseState renders as `• Viral URI (63%)` format for improved user trust.
 
+### Guideline IR Compiler
+A heuristic text-to-IR compiler (`scripts/compile-guideline-to-ir.ts`) that converts raw clinical guideline text into a structured intermediate representation. Source texts go in `data/complaints/sources/`, compiled IRs output to `data/complaints/ir/`. Schema documented in `data/complaints/IR_SCHEMA.md`. The IR captures questions, red flags, diagnostic clusters, disposition logic, and unmapped phrases for human review. Usage: `npx tsx scripts/compile-guideline-to-ir.ts <complaint_id> <source.txt> [--title <title>]`. Stage-1 compiler using keyword/phrase matching — not NLP. Designed to produce reviewable drafts, not final engine rows.
+
 ### Validation and Testing
 The system includes a Stress Test Harness, Complaint Golden Test Harness, Data Corruption Guard, Replay Harness, Release Candidate (RC) System, Cross-Complaint Goldens, Bundle ABI Validator (`scripts/validate-complaint-bundles.ts`), and a comprehensive Gate-Prod Pipeline (8 gates) for pre-deployment validation.
 
