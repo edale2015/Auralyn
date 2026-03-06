@@ -1,0 +1,347 @@
+Now we move to Batch B + C together as planned.
+
+These batches create the physician review system:
+
+Batch B → backend review/signoff API
+
+Batch C → frontend review queue + case review UI
+
+Together they turn the engine from a reasoning engine into a clinician-reviewable workflow.
+
+Batch B: Review / Signoff Backend
+
+Create these 4 files
+
+server/services/reviewQueueService.ts
+server/services/signoffService.ts
+server/routes/reviewQueue.ts
+server/routes/signoff.ts
+
+These sit on top of the Firestore stores you just built.
+
+1️⃣ server/services/reviewQueueService.ts
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
+import type { CaseRecord } from "../types/case";
+
+export class ReviewQueueService {
+
+  async listQueue(limit = 100): Promise<CaseRecord[]> {
+    return firestoreCaseStore.listReviewQueue(limit);
+  }
+
+  async assignReviewer(caseId: string, reviewerId: string) {
+    await firestoreCaseStore.assignReviewer(caseId, reviewerId);
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId,
+      type: "ASSIGNED_REVIEWER",
+      actorId: reviewerId,
+      actorRole: "physician",
+      summary: `Reviewer assigned`
+    });
+  }
+
+  async requestMoreInfo(caseId: string, reviewerId: string, questions: string[]) {
+
+    await firestoreCaseStore.markNeedsMoreInfo(caseId, questions);
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId,
+      type: "REVIEW_REQUESTED_MORE_INFO",
+      actorId: reviewerId,
+      actorRole: "physician",
+      summary: `Reviewer requested additional info`,
+      payload: { questions }
+    });
+
+  }
+
+}
+
+export const reviewQueueService = new ReviewQueueService();
+2️⃣ server/services/signoffService.ts
+import { firestoreSignoffStore } from "./firestoreSignoffStore";
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
+import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
+import type { CreateSignoffInput } from "./firestoreSignoffStore";
+
+export class SignoffService {
+
+  async signoff(input: CreateSignoffInput) {
+
+    const signoff = await firestoreSignoffStore.createSignoff(input);
+
+    if (input.status === "APPROVED" || input.status === "APPROVED_WITH_EDITS") {
+      await firestoreCaseStore.markSignedOff(input.caseId, signoff.signoffId);
+    } else {
+      await firestoreCaseStore.markOverridden(input.caseId, signoff.signoffId);
+    }
+
+    await firestoreCaseEventsStore.appendEvent({
+      caseId: input.caseId,
+      type: "SIGNOFF_COMPLETED",
+      actorId: input.reviewerId,
+      actorRole: "physician",
+      summary: `Signoff ${input.status}`,
+      payload: {
+        signoffId: signoff.signoffId
+      }
+    });
+
+    await firestoreRuntimeMetricsStore.logMetric({
+      type: "SIGNOFF_CREATED",
+      caseId: input.caseId,
+      complaintId: input.caseId,
+      reviewerId: input.reviewerId,
+      disposition: input.finalDisposition
+    });
+
+    return signoff;
+  }
+
+}
+
+export const signoffService = new SignoffService();
+3️⃣ server/routes/reviewQueue.ts
+import { Router } from "express";
+import { reviewQueueService } from "../services/reviewQueueService";
+
+export const reviewQueueRouter = Router();
+
+reviewQueueRouter.get("/", async (req, res) => {
+
+  const limit = Number(req.query.limit ?? 50);
+
+  const cases = await reviewQueueService.listQueue(limit);
+
+  res.json({
+    count: cases.length,
+    cases
+  });
+
+});
+
+reviewQueueRouter.post("/:caseId/assign", async (req, res) => {
+
+  const { caseId } = req.params;
+  const { reviewerId } = req.body;
+
+  await reviewQueueService.assignReviewer(caseId, reviewerId);
+
+  res.json({ ok: true });
+
+});
+
+reviewQueueRouter.post("/:caseId/request-info", async (req, res) => {
+
+  const { caseId } = req.params;
+  const { reviewerId, questions } = req.body;
+
+  await reviewQueueService.requestMoreInfo(caseId, reviewerId, questions);
+
+  res.json({ ok: true });
+
+});
+4️⃣ server/routes/signoff.ts
+import { Router } from "express";
+import { signoffService } from "../services/signoffService";
+
+export const signoffRouter = Router();
+
+signoffRouter.post("/", async (req, res) => {
+
+  const signoff = await signoffService.signoff(req.body);
+
+  res.json(signoff);
+
+});
+Batch C: Review UI (React)
+
+Create these 5 files
+
+client/src/pages/ReviewQueue.tsx
+client/src/pages/CaseReview.tsx
+client/src/components/CaseSummaryCard.tsx
+client/src/components/SignoffPanel.tsx
+client/src/components/RuleTracePanel.tsx
+
+These are intentionally simple MVP components.
+
+5️⃣ ReviewQueue.tsx
+import React, { useEffect, useState } from "react";
+import { CaseSummaryCard } from "../components/CaseSummaryCard";
+
+export default function ReviewQueue() {
+
+  const [cases, setCases] = useState<any[]>([]);
+
+  useEffect(() => {
+
+    fetch("/api/reviewQueue")
+      .then(r => r.json())
+      .then(data => setCases(data.cases ?? []));
+
+  }, []);
+
+  return (
+    <div>
+      <h2>Physician Review Queue</h2>
+
+      {cases.map(c => (
+        <CaseSummaryCard key={c.caseId} caseRecord={c}/>
+      ))}
+
+    </div>
+  );
+}
+6️⃣ CaseSummaryCard.tsx
+import React from "react";
+import { Link } from "react-router-dom";
+
+export function CaseSummaryCard({ caseRecord }: any) {
+
+  return (
+    <div style={{border:"1px solid #ccc", padding:12, marginBottom:10}}>
+
+      <h4>{caseRecord.complaintLabel || caseRecord.complaintId}</h4>
+
+      <div>
+        Recommended: {caseRecord.engineResult?.recommendedDisposition}
+      </div>
+
+      <div>
+        Red Flags: {caseRecord.engineResult?.triggeredRedFlags?.join(", ") || "none"}
+      </div>
+
+      <div>
+        <Link to={`/case/${caseRecord.caseId}`}>
+          Review Case
+        </Link>
+      </div>
+
+    </div>
+  );
+
+}
+7️⃣ CaseReview.tsx
+import React, { useEffect, useState } from "react";
+import { SignoffPanel } from "../components/SignoffPanel";
+import { RuleTracePanel } from "../components/RuleTracePanel";
+
+export default function CaseReview({ caseId }: any) {
+
+  const [caseData, setCaseData] = useState<any>(null);
+
+  useEffect(() => {
+
+    fetch(`/api/cases/${caseId}`)
+      .then(r => r.json())
+      .then(setCaseData);
+
+  }, [caseId]);
+
+  if (!caseData) return <div>Loading...</div>;
+
+  return (
+    <div>
+
+      <h2>Case Review</h2>
+
+      <pre>{JSON.stringify(caseData.engineResult?.dxCandidates, null, 2)}</pre>
+
+      <RuleTracePanel trace={caseData.engineResult?.ruleTrace}/>
+
+      <SignoffPanel caseData={caseData}/>
+
+    </div>
+  );
+
+}
+8️⃣ RuleTracePanel.tsx
+import React from "react";
+
+export function RuleTracePanel({ trace }: any) {
+
+  if (!trace) return null;
+
+  return (
+    <div>
+      <h3>Rule Trace</h3>
+
+      {trace.map((r:any, i:number) => (
+        <div key={i}>
+          {r.table} - {r.ruleId} - fired: {String(r.fired)}
+        </div>
+      ))}
+
+    </div>
+  );
+
+}
+9️⃣ SignoffPanel.tsx
+import React, { useState } from "react";
+
+export function SignoffPanel({ caseData }: any) {
+
+  const [disposition, setDisposition] = useState(
+    caseData.engineResult?.recommendedDisposition
+  );
+
+  const submit = async () => {
+
+    await fetch("/api/signoff", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        caseId: caseData.caseId,
+        reviewerId: "physician_demo",
+        status: "APPROVED_WITH_EDITS",
+        finalDisposition: disposition
+      })
+    });
+
+    alert("Signoff saved");
+
+  };
+
+  return (
+    <div>
+
+      <h3>Signoff</h3>
+
+      <select
+        value={disposition}
+        onChange={e => setDisposition(e.target.value)}
+      >
+        <option>ER_SEND</option>
+        <option>URGENT</option>
+        <option>PCP</option>
+        <option>SELF_CARE</option>
+      </select>
+
+      <button onClick={submit}>
+        Approve / Signoff
+      </button>
+
+    </div>
+  );
+
+}
+What you now have
+
+After Batch B + C you now have:
+
+Patient intake
+→ Engine reasoning
+→ Case stored in Firestore
+→ Appears in physician review queue
+→ Physician opens case
+→ Reviews rule trace + dx candidates
+→ Signs off
+→ Signoff stored + audit trail
+
+That is the minimum safe clinical workflow.
+
+Next Step

@@ -57,6 +57,14 @@ The expanded Firestore backbone (`server/types/case.ts`, `server/types/signoff.t
 - **Signoffs** (`server/services/firestoreSignoffStore.ts`): Physician review records with status (APPROVED/APPROVED_WITH_EDITS/REQUEST_MORE_INFO/ESCALATED/REJECTED), overrides, rationale.
 - **Runtime Metrics** (`server/services/firestoreRuntimeMetrics.ts`): Production telemetry for engine runs, case creation, red flag triggers, signoffs, discrepancies.
 
+### Physician Review & Signoff System
+The review/signoff backend sits on top of the Firestore backbone:
+- **Review Queue Service** (`server/services/reviewQueueService.ts`): Lists cases awaiting review, assigns reviewers, requests additional info — all with audit events.
+- **Signoff Service** (`server/services/signoffService.ts`): Orchestrates physician signoff — creates signoff record, updates case status (signed-off or overridden), appends audit event, logs runtime metric.
+- **Review Queue Routes** (`server/routes/reviewQueue.ts`): REST endpoints at `/api/reviewQueue` — GET queue, POST assign reviewer, POST request-info.
+- **Signoff Routes** (`server/routes/signoff.ts`): REST endpoint at `/api/signoff` — POST signoff.
+- **Frontend Components**: `CaseSummaryCard.tsx` (queue card with disposition + red flags), `SignoffPanel.tsx` (disposition selection + rationale + submit), `RuleTracePanel.tsx` (rule-by-rule trace display).
+
 ### Operational Intelligence & Tooling
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.
 
