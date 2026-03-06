@@ -1,0 +1,16 @@
+TITLE: Acute Sore Throat Flowchart
+
+QUESTION: FEVER | Do you have fever?
+QUESTION: COUGH | Do you have cough?
+QUESTION: EXUDATE | Do you have tonsillar exudate?
+QUESTION: STRIDOR | Do you have stridor?
+QUESTION: TENDER_ANT_CERVICAL | Do you have tender anterior cervical nodes?
+
+RED_FLAG: STRIDOR=true => ER_SEND | possible airway compromise
+
+CLUSTER: strep_pharyngitis | PRIMARY | FEVER=true & COUGH=false & EXUDATE=true & TENDER_ANT_CERVICAL=true
+CLUSTER: viral_pharyngitis | BENIGN | COUGH=true
+
+DISPOSITION: STRIDOR=true => ER
+DISPOSITION: FEVER=true & EXUDATE=true => URGENT_CARE
+DISPOSITION: COUGH=true => SELF_CARE

@@ -44,10 +44,15 @@ Operational intelligence features include a case analytics log and a cluster cov
 ### Guideline-to-Engine Toolchain
 A 6-step toolchain compiles raw clinical guideline text into engine-ready CSV rows:
 1. **Compiler** (`scripts/compile-guideline-to-ir.ts`): Text → draft IR JSON (`data/complaints/ir/`). Heuristic keyword/phrase matching.
+   - **Flowchart Compiler** (`scripts/compile-flowchart-to-ir.ts`): Structured `.flow.txt` → IR JSON. Supports `QUESTION:`, `RED_FLAG:`, `CLUSTER:`, `DISPOSITION:`, `MODIFIER:` directives.
 2. **Normalizer** (`scripts/normalize-ir.ts`): Draft IR → normalized IR (`data/complaints/ir_normalized/`). Converts prose to token expressions, surfaces unresolved fragments.
 3. **Emitter** (`scripts/emit-ir-to-csvs.ts`): Normalized IR → draft CSVs (`data/complaints/emitted/<cc_id>/`). Generates CORE_QUESTIONS, RED_FLAG_RULES, CLUSTER_SCORING_RULES, DISPOSITION_RULES, DX_PRIORITY drafts + manifest.json.
 4. **Harmonizer** (`scripts/harmonize-compiler-output.ts`): Rewrites emitted draft tokens/actions to match existing engine vocabulary using `data/complaints/token_harmonizer.json`. Supports `--dry-run`. Writes `harmonize_summary.json`.
+   - **Token Alias Suggester** (`scripts/suggest-token-aliases.ts`): Compares emitted tokens vs live vocabulary using string similarity heuristics. Outputs `token_alias_suggestions.csv/.json`.
+   - **Alias Applier** (`scripts/apply-suggested-token-aliases.ts`): Promotes high-confidence suggestions into `token_harmonizer.json`. Supports `--dry-run`, `--force`, `--min-score`.
 5. **Reviewer** (`scripts/review-emitted-drafts.ts`): Compares drafts against live CSVs (`data/complaints/review/<cc_id>/`). Outputs `*.new.csv`, `*.conflicts.csv`, `review_summary.json`. Safe diff — no merging.
+   - **Conflict Learner** (`scripts/learn-token-aliases-from-conflicts.ts`): Learns token aliases from actual conflict file data. Evidence-based, requires repeated observations.
+   - **Alias Promoter** (`scripts/promote-learned-aliases.ts`): Promotes learned aliases into `token_harmonizer.json` with support-count and confidence thresholds.
 6. **Merger** (`scripts/merge-approved-drafts.ts`): Safely merges `*.new.csv` rows into live CSVs. Creates `_tx_backups/` before writing. Idempotent — skips duplicates. Supports `--dry-run`. WARNING: Do not merge into CC_IDs that have existing hand-crafted rules without careful review.
 
 ### Validation and Testing
