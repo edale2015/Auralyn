@@ -21,6 +21,7 @@ import { reviewRouter } from "./routes/review.routes";
 import { telegramRouter } from "./routes/telegram.routes";
 import { reviewQueueRouter } from "./routes/reviewQueue";
 import { signoffRouter } from "./routes/signoff";
+import { noteDraftRouter } from "./routes/noteDraft";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -146,11 +147,13 @@ app.use(casesRouter);
 app.use(reviewRouter);
 app.use("/api/reviewQueue", reviewQueueRouter);
 app.use("/api/signoff", signoffRouter);
+app.use("/api/noteDraft", noteDraftRouter);
 app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
 console.log("[ReviewQueue] Firestore review queue endpoints registered at /api/reviewQueue/*");
 console.log("[Signoff] Firestore signoff endpoints registered at /api/signoff/*");
+console.log("[NoteDraft] Note generation endpoints registered at /api/noteDraft/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
 export function log(message: string, source = "express") {

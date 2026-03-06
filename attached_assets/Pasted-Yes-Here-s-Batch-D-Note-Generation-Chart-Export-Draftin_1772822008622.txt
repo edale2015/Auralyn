@@ -1,0 +1,358 @@
+Yes. Here’s Batch D: Note Generation + Chart Export Drafting.
+
+This batch gives you:
+
+server/templates/noteTemplates.ts
+
+server/services/noteGenerator.ts
+
+server/routes/noteDraft.ts
+
+client/src/components/NotePreview.tsx
+
+Goal: turn engine output + case data into a usable clinical draft note for physician review.
+
+1) server/templates/noteTemplates.ts
+export type NoteTemplateInput = {
+  patientName?: string;
+  ageYears?: number;
+  sex?: string;
+  complaintLabel?: string;
+  answers?: Record<string, unknown>;
+  dxCandidates?: Array<{ label?: string; dxId?: string }>;
+  triggeredRedFlags?: string[];
+  recommendedDisposition?: string;
+  winningClusterId?: string;
+  returnPrecautions?: string[];
+  physicianSummary?: string;
+};
+
+function formatAnswers(answers: Record<string, unknown> = {}): string[] {
+  return Object.entries(answers)
+    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .map(([k, v]) => `${k}: ${String(v)}`);
+}
+
+function formatDx(dxCandidates: Array<{ label?: string; dxId?: string }> = {} as any): string[] {
+  return (dxCandidates || []).slice(0, 5).map((d) => d.label || d.dxId || "Unknown");
+}
+
+export function buildHpiSection(input: NoteTemplateInput): string {
+  const bits: string[] = [];
+
+  if (input.ageYears || input.sex) {
+    bits.push(
+      `${input.ageYears ? `${input.ageYears}-year-old` : "Patient"}${input.sex ? ` ${input.sex}` : ""}`
+    );
+  } else {
+    bits.push("Patient");
+  }
+
+  bits.push(`presents with ${input.complaintLabel || "a medical concern"}.`);
+
+  const answerLines = formatAnswers(input.answers);
+  if (answerLines.length) {
+    bits.push(`Relevant structured intake findings: ${answerLines.join("; ")}.`);
+  }
+
+  return bits.join(" ");
+}
+
+export function buildAssessmentSection(input: NoteTemplateInput): string {
+  const dx = formatDx(input.dxCandidates);
+  const lines: string[] = [];
+
+  lines.push(`Primary complaint: ${input.complaintLabel || "Unknown complaint"}.`);
+
+  if (dx.length) {
+    lines.push(`Top differential considerations: ${dx.join(", ")}.`);
+  }
+
+  if (input.winningClusterId) {
+    lines.push(`Engine-selected cluster: ${input.winningClusterId}.`);
+  }
+
+  if ((input.triggeredRedFlags || []).length) {
+    lines.push(`Red flags identified: ${input.triggeredRedFlags!.join(", ")}.`);
+  } else {
+    lines.push(`No engine red flags triggered.`);
+  }
+
+  return lines.join(" ");
+}
+
+export function buildPlanSection(input: NoteTemplateInput): string {
+  const lines: string[] = [];
+
+  lines.push(`Recommended disposition: ${input.recommendedDisposition || "UNKNOWN"}.`);
+
+  if ((input.returnPrecautions || []).length) {
+    lines.push(`Return precautions: ${input.returnPrecautions!.join("; ")}.`);
+  }
+
+  if (input.physicianSummary) {
+    lines.push(`Reviewer summary: ${input.physicianSummary}`);
+  }
+
+  return lines.join(" ");
+}
+
+export function buildFullDraftNote(input: NoteTemplateInput): string {
+  const sections = [
+    `CHIEF COMPLAINT\n${input.complaintLabel || "Unknown complaint"}`,
+    `HPI\n${buildHpiSection(input)}`,
+    `ASSESSMENT\n${buildAssessmentSection(input)}`,
+    `PLAN\n${buildPlanSection(input)}`
+  ];
+
+  return sections.join("\n\n");
+}
+2) server/services/noteGenerator.ts
+import { buildFullDraftNote } from "../templates/noteTemplates";
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import type { CaseRecord } from "../types/case";
+
+export type GeneratedNoteResult = {
+  caseId: string;
+  noteDraft: string;
+  sections: {
+    chiefComplaint: string;
+    hpi: string;
+    assessment: string;
+    plan: string;
+  };
+};
+
+function extractPatientName(caseRecord: CaseRecord): string | undefined {
+  const first = caseRecord.patientContext?.firstName?.trim();
+  const last = caseRecord.patientContext?.lastName?.trim();
+  const full = [first, last].filter(Boolean).join(" ").trim();
+  return full || undefined;
+}
+
+export class NoteGeneratorService {
+  async generateForCase(caseId: string): Promise<GeneratedNoteResult> {
+    const caseRecord = await firestoreCaseStore.getCase(caseId);
+    if (!caseRecord) {
+      throw new Error(`Case not found: ${caseId}`);
+    }
+
+    const engine = caseRecord.engineResult;
+
+    const input = {
+      patientName: extractPatientName(caseRecord),
+      ageYears: caseRecord.patientContext?.ageYears,
+      sex: caseRecord.patientContext?.sex,
+      complaintLabel: caseRecord.complaintLabel || caseRecord.complaintId,
+      answers: caseRecord.answers || {},
+      dxCandidates: engine?.dxCandidates || [],
+      triggeredRedFlags: engine?.triggeredRedFlags || [],
+      recommendedDisposition: engine?.recommendedDisposition || "UNKNOWN",
+      winningClusterId: engine?.winningClusterId,
+      returnPrecautions: engine?.returnPrecautions || [],
+      physicianSummary: caseRecord.physicianSummary
+    };
+
+    const full = buildFullDraftNote(input);
+
+    const result: GeneratedNoteResult = {
+      caseId,
+      noteDraft: full,
+      sections: {
+        chiefComplaint: input.complaintLabel || "Unknown complaint",
+        hpi: full.match(/HPI\n([\s\S]*?)\n\nASSESSMENT/)?.[1]?.trim() || "",
+        assessment: full.match(/ASSESSMENT\n([\s\S]*?)\n\nPLAN/)?.[1]?.trim() || "",
+        plan: full.match(/PLAN\n([\s\S]*)$/)?.[1]?.trim() || ""
+      }
+    };
+
+    await firestoreCaseStore.patchCase(caseId, {
+      noteDraft: result.noteDraft
+    });
+
+    return result;
+  }
+}
+
+export const noteGeneratorService = new NoteGeneratorService();
+3) server/routes/noteDraft.ts
+import { Router } from "express";
+import { noteGeneratorService } from "../services/noteGenerator";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+
+export const noteDraftRouter = Router();
+
+noteDraftRouter.get("/:caseId", async (req, res) => {
+  const { caseId } = req.params;
+  const caseRecord = await firestoreCaseStore.getCase(caseId);
+
+  if (!caseRecord) {
+    res.status(404).json({ error: "Case not found" });
+    return;
+  }
+
+  res.json({
+    caseId,
+    noteDraft: caseRecord.noteDraft || null,
+    hasDraft: Boolean(caseRecord.noteDraft)
+  });
+});
+
+noteDraftRouter.post("/:caseId/generate", async (req, res) => {
+  const { caseId } = req.params;
+  const result = await noteGeneratorService.generateForCase(caseId);
+  res.json(result);
+});
+
+noteDraftRouter.post("/:caseId/save", async (req, res) => {
+  const { caseId } = req.params;
+  const { noteDraft, physicianSummary } = req.body ?? {};
+
+  await firestoreCaseStore.patchCase(caseId, {
+    noteDraft: noteDraft ?? "",
+    physicianSummary: physicianSummary ?? undefined
+  });
+
+  res.json({ ok: true });
+});
+4) client/src/components/NotePreview.tsx
+import React, { useEffect, useState } from "react";
+
+type Props = {
+  caseId: string;
+};
+
+export function NotePreview({ caseId }: Props) {
+  const [noteDraft, setNoteDraft] = useState("");
+  const [physicianSummary, setPhysicianSummary] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadDraft() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/noteDraft/${caseId}`);
+      const data = await res.json();
+      setNoteDraft(data.noteDraft || "");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function generateDraft() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/noteDraft/${caseId}/generate`, {
+        method: "POST"
+      });
+      const data = await res.json();
+      setNoteDraft(data.noteDraft || "");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveDraft() {
+    setLoading(true);
+    try {
+      await fetch(`/api/noteDraft/${caseId}/save`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          noteDraft,
+          physicianSummary
+        })
+      });
+      alert("Note saved");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadDraft();
+  }, [caseId]);
+
+  return (
+    <div style={{ border: "1px solid #ccc", padding: 12, marginTop: 16 }}>
+      <h3>Note Preview</h3>
+
+      <div style={{ marginBottom: 8 }}>
+        <button onClick={generateDraft} disabled={loading}>
+          Generate Draft
+        </button>
+        <button onClick={saveDraft} disabled={loading} style={{ marginLeft: 8 }}>
+          Save Draft
+        </button>
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <label>Physician Summary</label>
+        <br />
+        <textarea
+          value={physicianSummary}
+          onChange={(e) => setPhysicianSummary(e.target.value)}
+          rows={4}
+          style={{ width: "100%" }}
+        />
+      </div>
+
+      <div>
+        <label>Draft Note</label>
+        <br />
+        <textarea
+          value={noteDraft}
+          onChange={(e) => setNoteDraft(e.target.value)}
+          rows={20}
+          style={{ width: "100%", fontFamily: "monospace" }}
+        />
+      </div>
+    </div>
+  );
+}
+Wiring notes
+Backend route registration
+
+Add this to your routes wiring:
+
+import { noteDraftRouter } from "./routes/noteDraft";
+
+app.use("/api/noteDraft", noteDraftRouter);
+Frontend usage
+
+In your CaseReview.tsx, add:
+
+import { NotePreview } from "../components/NotePreview";
+
+and render:
+
+<NotePreview caseId={caseData.caseId} />
+What Batch D gives you
+
+Now your workflow becomes:
+
+Patient intake
+→ engine reasoning
+→ case stored
+→ physician opens case
+→ rule trace visible
+→ note draft generated
+→ physician edits note
+→ note saved before signoff/export
+
+That’s a real jump from “engine output” to “usable clinical workflow.”
+
+Fast verification checklist
+
+Open a case that already has engineResult
+
+Click Generate Draft
+
+Confirm note appears
+
+Edit note text
+
+Click Save Draft
+
+Reload and confirm it persists from Firestore
