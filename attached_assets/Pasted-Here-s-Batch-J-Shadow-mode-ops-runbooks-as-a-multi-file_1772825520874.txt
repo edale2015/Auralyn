@@ -1,0 +1,532 @@
+Here’s Batch J: Shadow-mode ops + runbooks as a multi-file bundle.
+
+This batch gives you:
+
+a central shadow-mode config
+
+runtime logging for shadow-mode operational events
+
+an ops page for monitoring shadow-mode cases
+
+three runbooks/docs:
+
+SHADOW_MODE_RUNBOOK.md
+
+SIGNOFF_POLICY.md
+
+EXPORT_WORKFLOW.md
+
+Files in Batch J
+
+Backend:
+
+server/config/shadowMode.ts
+
+server/services/shadowModeLogger.ts
+
+Frontend:
+
+client/src/pages/ShadowModeOps.tsx
+
+Docs:
+
+docs/SHADOW_MODE_RUNBOOK.md
+
+docs/SIGNOFF_POLICY.md
+
+docs/EXPORT_WORKFLOW.md
+
+This batch assumes:
+
+Batch A Firestore services exist
+
+Batch H auth exists
+
+Batch I runtime analytics exists
+
+Batch G export exists
+
+1) server/config/shadowMode.ts
+
+This is the central switchboard for shadow-mode rollout behavior.
+
+export type ShadowModeConfig = {
+  enabled: boolean;
+  allowExportAfterSignoffOnly: boolean;
+  autoCloseAfterExport: boolean;
+  requirePhysicianSignoffForAllCases: boolean;
+  logEveryEngineRun: boolean;
+  logEveryDiscrepancy: boolean;
+  allowedSourceChannels: string[];
+  notes: string[];
+};
+
+export const shadowModeConfig: ShadowModeConfig = {
+  enabled: (process.env.SHADOW_MODE_ENABLED ?? "true").toLowerCase() === "true",
+  allowExportAfterSignoffOnly: true,
+  autoCloseAfterExport: false,
+  requirePhysicianSignoffForAllCases: true,
+  logEveryEngineRun: true,
+  logEveryDiscrepancy: true,
+  allowedSourceChannels: ["telegram", "web_chat", "internal_dashboard", "unknown"],
+  notes: [
+    "Shadow mode means the engine can recommend but not autonomously finalize care.",
+    "All clinical actions remain physician-reviewed.",
+    "Export bundles are sidecar outputs, not direct chart writeback."
+  ]
+};
+
+export function assertShadowModeEnabled() {
+  if (!shadowModeConfig.enabled) {
+    throw new Error("Shadow mode is disabled");
+  }
+}
+2) server/services/shadowModeLogger.ts
+
+This logs shadow-mode operations to a dedicated CSV so you get a lightweight operational trail even outside Firestore dashboards.
+
+import fs from "fs";
+import path from "path";
+
+export type ShadowModeEventType =
+  | "CASE_ENTERED_SHADOW_MODE"
+  | "ENGINE_RECOMMENDATION_CAPTURED"
+  | "PHYSICIAN_REVIEW_STARTED"
+  | "PHYSICIAN_SIGNOFF_COMPLETED"
+  | "DISCREPANCY_RECORDED"
+  | "EXPORT_CREATED"
+  | "CASE_CLOSED"
+  | "CUSTOM";
+
+export interface ShadowModeEvent {
+  timestamp: string;
+  caseId: string;
+  complaintId?: string;
+  eventType: ShadowModeEventType;
+  actorId?: string;
+  disposition?: string;
+  notes?: string;
+}
+
+const OUT_PATH = path.join(process.cwd(), "data", "complaints", "runtime", "shadow_mode_ops.csv");
+const HEADERS = ["TIMESTAMP", "CASE_ID", "CC_ID", "EVENT_TYPE", "ACTOR_ID", "DISPOSITION", "NOTES"];
+
+function csvEscape(v: string): string {
+  if (v.includes(",") || v.includes('"') || v.includes("\n")) return `"${v.replace(/"/g, '""')}"`;
+  return v;
+}
+
+function ensureFile() {
+  if (fs.existsSync(OUT_PATH)) return;
+  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
+  fs.writeFileSync(OUT_PATH, HEADERS.join(",") + "\n", "utf8");
+}
+
+export function logShadowModeEvent(ev: ShadowModeEvent) {
+  try {
+    ensureFile();
+
+    const row = [
+      ev.timestamp,
+      ev.caseId,
+      ev.complaintId ?? "",
+      ev.eventType,
+      ev.actorId ?? "",
+      ev.disposition ?? "",
+      ev.notes ?? ""
+    ];
+
+    fs.appendFileSync(OUT_PATH, row.map((x) => csvEscape(String(x))).join(",") + "\n", "utf8");
+  } catch (err) {
+    console.error("[shadowModeLogger] failed:", err);
+  }
+}
+Suggested wiring points
+On case creation in chat intake or case start
+import { logShadowModeEvent } from "../services/shadowModeLogger";
+
+logShadowModeEvent({
+  timestamp: new Date().toISOString(),
+  caseId,
+  complaintId,
+  eventType: "CASE_ENTERED_SHADOW_MODE",
+  notes: "Case entered shadow-mode workflow"
+});
+After engine run
+logShadowModeEvent({
+  timestamp: new Date().toISOString(),
+  caseId,
+  complaintId,
+  eventType: "ENGINE_RECOMMENDATION_CAPTURED",
+  disposition: engineResult.recommendedDisposition
+});
+After signoff
+logShadowModeEvent({
+  timestamp: new Date().toISOString(),
+  caseId,
+  complaintId,
+  eventType: "PHYSICIAN_SIGNOFF_COMPLETED",
+  actorId: reviewerId,
+  disposition: finalDisposition
+});
+After export
+logShadowModeEvent({
+  timestamp: new Date().toISOString(),
+  caseId,
+  complaintId,
+  eventType: "EXPORT_CREATED",
+  notes: exportDir
+});
+3) client/src/pages/ShadowModeOps.tsx
+
+This is a lightweight ops page showing:
+
+the current shadow-mode config
+
+summary cards
+
+quick links to analytics/discrepancies/review queue
+
+operational checklist
+
+It assumes auth exists and uses authFetch.
+
+import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+
+type DashboardData = {
+  summary?: {
+    totalCases: number;
+    totalSignedOff: number;
+    totalOverrides: number;
+    totalDiscrepancies: number;
+  };
+};
+
+export default function ShadowModeOps() {
+  const { authFetch } = useAuth();
+  const [analytics, setAnalytics] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const shadowModeConfig = {
+    enabled: true,
+    requirePhysicianSignoffForAllCases: true,
+    allowExportAfterSignoffOnly: true,
+    autoCloseAfterExport: false
+  };
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/runtimeAnalytics/dashboard?limit=300");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load analytics");
+      setAnalytics(json);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load ops dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Shadow Mode Ops</h2>
+
+      {error && <div style={{ color: "#8a1f1f", marginBottom: 12 }}>{error}</div>}
+      {loading && !analytics && <div>Loading...</div>}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 12,
+          marginBottom: 16
+        }}
+      >
+        <div style={{ border: "1px solid #ccc", padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Shadow Mode</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>
+            {shadowModeConfig.enabled ? "ENABLED" : "DISABLED"}
+          </div>
+        </div>
+
+        <div style={{ border: "1px solid #ccc", padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>All Cases Need Signoff</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>
+            {shadowModeConfig.requirePhysicianSignoffForAllCases ? "YES" : "NO"}
+          </div>
+        </div>
+
+        <div style={{ border: "1px solid #ccc", padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Export Gate</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>
+            {shadowModeConfig.allowExportAfterSignoffOnly ? "SIGNOFF FIRST" : "OPEN"}
+          </div>
+        </div>
+
+        <div style={{ border: "1px solid #ccc", padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Auto Close After Export</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>
+            {shadowModeConfig.autoCloseAfterExport ? "YES" : "NO"}
+          </div>
+        </div>
+      </div>
+
+      {analytics?.summary && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, 1fr)",
+            gap: 12,
+            marginBottom: 16
+          }}
+        >
+          <div style={{ border: "1px solid #ccc", padding: 12 }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>Total Cases</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{analytics.summary.totalCases}</div>
+          </div>
+
+          <div style={{ border: "1px solid #ccc", padding: 12 }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>Signed Off</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{analytics.summary.totalSignedOff}</div>
+          </div>
+
+          <div style={{ border: "1px solid #ccc", padding: 12 }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>Overrides</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{analytics.summary.totalOverrides}</div>
+          </div>
+
+          <div style={{ border: "1px solid #ccc", padding: 12 }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>Discrepancies</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{analytics.summary.totalDiscrepancies}</div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ border: "1px solid #ccc", padding: 16, marginBottom: 16 }}>
+        <h3>Operational Checklist</h3>
+        <ul>
+          <li>Review queue monitored</li>
+          <li>All clinical exports signoff-gated</li>
+          <li>Discrepancies reviewed daily</li>
+          <li>Runtime analytics reviewed for complaint drift</li>
+          <li>Shadow-mode CSV and Firestore audit trails available</li>
+        </ul>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <Link to="/review-queue">Review Queue</Link>
+        <Link to="/discrepancies">Discrepancies</Link>
+        <Link to="/runtime-analytics">Runtime Analytics</Link>
+      </div>
+    </div>
+  );
+}
+Route wiring
+
+Add a frontend route such as:
+
+<Route path="/shadow-mode-ops" element={<ShadowModeOps />} />
+4) docs/SHADOW_MODE_RUNBOOK.md
+# Shadow Mode Runbook
+
+## Purpose
+Shadow mode allows the engine to generate recommendations, documentation drafts, and export bundles while all real clinical actions remain physician-reviewed.
+
+## Core principles
+- No autonomous final medical decisions
+- No export without signoff when signoff is required
+- All disagreements are logged
+- All engine runs are auditable
+
+## Daily operating flow
+1. Patient completes intake in web chat or Telegram
+2. Engine runs and stores recommendation
+3. Case enters physician review queue
+4. Physician reviews:
+   - note draft
+   - rule trace
+   - discrepancy/timeline context
+5. Physician:
+   - approves
+   - edits
+   - requests more info
+   - escalates
+6. If appropriate, export sidecar bundle is generated
+7. All actions are logged to Firestore and shadow-mode CSV logs
+
+## What to monitor daily
+- Review queue backlog
+- Signoff turnaround time
+- Disposition overrides
+- Discrepancy count by complaint
+- Export attempts blocked by signoff gate
+- Runtime red flag frequency
+
+## Escalation triggers
+Immediately review if:
+- override rate spikes for one complaint
+- repeated red flag overrides occur
+- export happens without expected note/signoff content
+- discrepancies cluster around one diagnosis family
+
+## Safe launch recommendation
+Start with:
+- limited complaint set
+- shadow mode only
+- clinician-only use
+- no direct EHR writeback
+5) docs/SIGNOFF_POLICY.md
+# Signoff Policy
+
+## Policy intent
+The engine may recommend but does not independently finalize care.
+
+## Required signoff
+Physician signoff is required for:
+- all shadow-mode clinical cases
+- all exports
+- all medication/order suggestions
+- all moderate/high-risk complaints
+- all cases with triggered red flags
+- all pediatric high-risk presentations
+
+## Signoff options
+- APPROVED
+- APPROVED_WITH_EDITS
+- REQUEST_MORE_INFO
+- ESCALATED
+- REJECTED
+
+## Required reviewer actions
+Before signoff, reviewer should inspect:
+- complaint
+- key answers
+- red flags
+- note draft
+- disposition recommendation
+- top diagnosis candidates
+- timeline if discrepancy exists
+
+## Override guidance
+Override should be used when:
+- disposition unsafe/incomplete
+- top diagnosis ranking is clinically misleading
+- follow-up questions are still needed
+- return precautions need strengthening
+
+## Audit requirements
+Every signoff must record:
+- reviewer identity
+- signoff status
+- final disposition
+- rationale
+- timestamp
+- engine version if available
+6) docs/EXPORT_WORKFLOW.md
+# Export Workflow
+
+## Current model
+Exports are sidecar bundles, not direct EHR writeback.
+
+## Export prerequisites
+- case exists
+- note draft exists or can be generated
+- case is signed off if signoff is required
+- review status is APPROVED or OVERRIDDEN
+
+## Export outputs
+Each export generates:
+- encounter_export.txt
+- encounter_export.json
+
+## Export contents
+- patient identifiers available in case
+- complaint
+- note draft
+- engine recommendation
+- final disposition
+- red flags
+- dx candidates
+- reviewer summary
+- signoff metadata
+
+## Workflow
+1. Physician reviews case
+2. Physician signs off
+3. Export panel confirms gate is open
+4. User clicks export
+5. Service writes export files
+6. Case marked exportedToEcw=true
+7. Event + runtime metric logged
+
+## Safety notes
+- No direct automatic EHR writeback in this phase
+- Export bundle is for manual or assisted transfer
+- Export should be reviewed before being pasted/imported into eCW
+Suggested wiring points for Batch J
+A) Log shadow-mode events
+
+Add the logger to:
+
+case creation
+
+engine run
+
+signoff completion
+
+export completion
+
+B) Optional export auto-close policy
+
+Later, if you want:
+
+after export, if signoff complete and no pending tasks, auto-close case
+
+keep disabled for now
+
+C) Add a nav link for ops staff
+
+Point them to:
+
+/shadow-mode-ops
+
+What Batch J gives you
+
+Now your operational workflow is no longer just code. It has:
+
+explicit rollout mode
+
+ops monitoring page
+
+shadow-mode event logging
+
+written runbooks
+
+signoff/export policy docs
+
+That’s what turns a working system into a controlled clinical deployment.
+
+Fast verification checklist
+
+Open /shadow-mode-ops
+
+Confirm ops page loads
+
+Confirm runtime analytics summary cards appear
+
+Create one case, run engine, sign off, export
+
+Confirm shadow_mode_ops.csv contains events
+
+Confirm docs exist in /docs

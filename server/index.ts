@@ -27,6 +27,7 @@ import { discrepanciesRouter } from "./routes/discrepancies";
 import { exportEncounterRouter } from "./routes/exportEncounter";
 import { roleAuthRouter } from "./routes/roleAuth";
 import { runtimeAnalyticsRouter } from "./routes/runtimeAnalytics";
+import { shadowModeOpsRouter } from "./routes/shadowModeOps";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -158,6 +159,7 @@ app.use("/api/discrepancies", discrepanciesRouter);
 app.use("/api/exportEncounter", exportEncounterRouter);
 app.use("/api/roleAuth", roleAuthRouter);
 app.use("/api/runtimeAnalytics", runtimeAnalyticsRouter);
+app.use("/api/shadowMode", shadowModeOpsRouter);
 app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
@@ -169,6 +171,7 @@ console.log("[Discrepancies] Discrepancy tracking endpoints registered at /api/d
 console.log("[ExportEncounter] eCW sidecar export endpoints registered at /api/exportEncounter/*");
 console.log("[RoleAuth] JWT role-based auth endpoints registered at /api/roleAuth/*");
 console.log("[RuntimeAnalytics] Runtime analytics endpoints registered at /api/runtimeAnalytics/*");
+console.log("[ShadowMode] Shadow-mode ops endpoints registered at /api/shadowMode/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
 export function log(message: string, source = "express") {

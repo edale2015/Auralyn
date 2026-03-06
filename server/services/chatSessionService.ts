@@ -1,6 +1,7 @@
 import { firestoreCaseStore } from "./firestoreCaseStore";
 import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
 import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
+import { logShadowModeEvent } from "./shadowModeLogger";
 import type { CaseRecord, CaseEngineResult } from "../types/case";
 
 async function runEngineForChat(caseRecord: CaseRecord): Promise<CaseEngineResult> {
@@ -152,6 +153,14 @@ export class ChatSessionService {
       type: "CASE_CREATED",
       summary: "Web chat case created",
       actorRole: "patient"
+    });
+
+    logShadowModeEvent({
+      timestamp: new Date().toISOString(),
+      caseId,
+      complaintId: input.complaintId,
+      eventType: "CASE_ENTERED_SHADOW_MODE",
+      notes: "Case entered shadow-mode workflow via web chat"
     });
 
     await firestoreRuntimeMetricsStore.logMetric({

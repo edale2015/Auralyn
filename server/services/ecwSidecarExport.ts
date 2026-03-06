@@ -5,6 +5,7 @@ import { firestoreSignoffStore } from "./firestoreSignoffStore";
 import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
 import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
 import { buildEcwExportJson, buildEcwExportText } from "../templates/ecwExportTemplates";
+import { logShadowModeEvent } from "./shadowModeLogger";
 
 export interface EcwExportResult {
   caseId: string;
@@ -85,6 +86,14 @@ export class EcwSidecarExportService {
       caseId,
       complaintId: caseRecord.complaintId,
       disposition: payload.finalDisposition
+    });
+
+    logShadowModeEvent({
+      timestamp: new Date().toISOString(),
+      caseId,
+      complaintId: caseRecord.complaintId,
+      eventType: "EXPORT_CREATED",
+      notes: exportDir
     });
 
     return { caseId, exportDir, textPath, jsonPath };

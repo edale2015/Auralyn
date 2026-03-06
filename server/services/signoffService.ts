@@ -2,6 +2,7 @@ import { firestoreSignoffStore } from "./firestoreSignoffStore";
 import { firestoreCaseStore } from "./firestoreCaseStore";
 import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
 import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
+import { logShadowModeEvent } from "./shadowModeLogger";
 import type { CreateSignoffInput } from "./firestoreSignoffStore";
 
 export class SignoffService {
@@ -34,6 +35,15 @@ export class SignoffService {
       caseId: input.caseId,
       complaintId: caseRecord.complaintId ?? input.caseId,
       reviewerId: input.reviewerId,
+      disposition: input.finalDisposition
+    });
+
+    logShadowModeEvent({
+      timestamp: new Date().toISOString(),
+      caseId: input.caseId,
+      complaintId: caseRecord.complaintId,
+      eventType: "PHYSICIAN_SIGNOFF_COMPLETED",
+      actorId: input.reviewerId,
       disposition: input.finalDisposition
     });
 

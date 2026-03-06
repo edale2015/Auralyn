@@ -66,6 +66,9 @@ Detects and surfaces disagreements between engine recommendations and physician 
 ### Runtime Analytics Dashboard
 Runtime analytics service (`server/services/runtimeAnalyticsService.ts`) aggregates complaint volume, disposition distribution, signoff/override rates, and disagreements from Firestore data. Routes at `/api/runtimeAnalytics` (dashboard, complaint detail) protected by role auth. Frontend at `/runtime-analytics` with summary cards, complaint bar chart (Recharts), disposition pie chart, and top disagreement table.
 
+### Shadow Mode Ops
+Central shadow-mode config (`server/config/shadowMode.ts`) controls rollout behavior (enabled, signoff-gating, export gates, logging flags). Shadow-mode event logger (`server/services/shadowModeLogger.ts`) writes operational events to CSV at `data/complaints/runtime/shadow_mode_ops.csv`. Events logged on signoff completion and export creation. Frontend ops page at `/shadow-mode-ops` shows config status, analytics summary, operational checklist, and navigation links. Operational docs in `docs/` (SHADOW_MODE_RUNBOOK.md, SIGNOFF_POLICY.md, EXPORT_WORKFLOW.md).
+
 ### Operational Intelligence & Tooling
 Operational intelligence features include a case analytics log and a cluster coverage heatmap. Tooling for profile quality includes a coverage report, profile pack linter, and question coverage analysis.
 
