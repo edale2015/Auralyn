@@ -91,6 +91,24 @@ Follow-up bundle builder (`server/services/chatFollowupBundleBuilder.ts`) with s
 ### Review Queue V2 with Snapshots (H1/H2/H3)
 Case snapshot builder (`server/services/chatCaseSnapshotBuilder.ts`) produces lightweight case summaries. Review queue snapshot service (`server/services/reviewQueueSnapshotService.ts`) lists queue with snapshots. Route at `/api/reviewQueueSnapshots`. Frontend `CaseSnapshotCard.tsx` component and `ReviewQueueV2.tsx` page at `/review-queue-v2`.
 
+### Export Safety Layer (I)
+Pre-export readiness checker (`server/services/caseExportReadinessChecker.ts`) validates signoff, note draft, disposition, critical questions, red flags, and prior export state. Route at `/api/exportReadiness/:caseId`. Frontend `ExportReadinessPanel.tsx` component.
+
+### Physician Override Intelligence (J)
+Override pattern analyzer (`server/services/overridePatternAnalyzer.ts`) surfaces override patterns by complaint. Route at `/api/overridePatterns`. Frontend page at `/override-patterns`.
+
+### Question Gap Analyzer (K)
+Question gap analyzer (`server/services/questionGapAnalyzer.ts`) shows commonly missing clinically important questions. Route at `/api/questionGaps`. Frontend page at `/question-gaps`.
+
+### Ops Daily Digest (L)
+Daily digest builder (`server/services/opsDailyDigestBuilder.ts`) produces operational summaries. Route at `/api/opsDailyDigest`. Frontend page at `/ops-daily-digest`.
+
+### Clinical Workflow Health (M)
+Workflow health service (`server/services/clinicalWorkflowHealthService.ts`) computes health score from discrepancies, queue depth, export readiness, red flag coverage. Route at `/api/clinicalWorkflowHealth`. Frontend page at `/clinical-workflow-health`.
+
+### Case Ops Actions (N)
+Case ops action service (`server/services/caseOpsActionService.ts`) supports assign reviewer, request more info, escalate, and close case. Route at `/api/caseOpsActions/:caseId/:action`. Frontend `CaseOpsActions.tsx` component.
+
 ### Validation and Testing
 The system includes various testing harnesses (Stress Test, Complaint Golden Test, Replay), a Data Corruption Guard, a Release Candidate system, Cross-Complaint Goldens, a Bundle ABI Validator, and an 8-gate Prod Pipeline for pre-deployment validation.
 

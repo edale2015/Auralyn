@@ -32,6 +32,12 @@ import { chatDispositionExplanationRouter } from "./routes/chatDispositionExplan
 import { chatCoercionAuditRouter } from "./routes/chatCoercionAudit";
 import { chatFollowupBundleRouter } from "./routes/chatFollowupBundle";
 import { reviewQueueSnapshotsRouter } from "./routes/reviewQueueSnapshots";
+import { exportReadinessRouter } from "./routes/exportReadiness";
+import { overridePatternsRouter } from "./routes/overridePatterns";
+import { questionGapsRouter } from "./routes/questionGaps";
+import { opsDailyDigestRouter } from "./routes/opsDailyDigest";
+import { clinicalWorkflowHealthRouter } from "./routes/clinicalWorkflowHealth";
+import { caseOpsActionsRouter } from "./routes/caseOpsActions";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -168,6 +174,12 @@ app.use("/api/chatDispositionExplanation", chatDispositionExplanationRouter);
 app.use("/api/chatCoercionAudit", chatCoercionAuditRouter);
 app.use("/api/chatFollowupBundle", chatFollowupBundleRouter);
 app.use("/api/reviewQueueSnapshots", reviewQueueSnapshotsRouter);
+app.use("/api/exportReadiness", exportReadinessRouter);
+app.use("/api/overridePatterns", overridePatternsRouter);
+app.use("/api/questionGaps", questionGapsRouter);
+app.use("/api/opsDailyDigest", opsDailyDigestRouter);
+app.use("/api/clinicalWorkflowHealth", clinicalWorkflowHealthRouter);
+app.use("/api/caseOpsActions", caseOpsActionsRouter);
 app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
@@ -184,6 +196,12 @@ console.log("[DispositionExplanation] Disposition explanation endpoints register
 console.log("[CoercionAudit] Coercion audit endpoints registered at /api/chatCoercionAudit/*");
 console.log("[FollowupBundle] Follow-up bundle endpoints registered at /api/chatFollowupBundle/*");
 console.log("[ReviewQueueSnapshots] Review queue snapshot endpoints registered at /api/reviewQueueSnapshots/*");
+console.log("[ExportReadiness] Export readiness endpoints registered at /api/exportReadiness/*");
+console.log("[OverridePatterns] Override pattern endpoints registered at /api/overridePatterns/*");
+console.log("[QuestionGaps] Question gap endpoints registered at /api/questionGaps/*");
+console.log("[OpsDailyDigest] Ops daily digest endpoints registered at /api/opsDailyDigest/*");
+console.log("[ClinicalWorkflowHealth] Clinical workflow health endpoints registered at /api/clinicalWorkflowHealth/*");
+console.log("[CaseOpsActions] Case ops action endpoints registered at /api/caseOpsActions/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
 export function log(message: string, source = "express") {

@@ -21,6 +21,10 @@ import RuntimeAnalytics from "@/pages/RuntimeAnalytics";
 import ShadowModeOps from "@/pages/ShadowModeOps";
 import CoercionAudit from "@/pages/CoercionAudit";
 import ReviewQueueV2 from "@/pages/ReviewQueueV2";
+import OverridePatterns from "@/pages/OverridePatterns";
+import QuestionGaps from "@/pages/QuestionGaps";
+import OpsDailyDigest from "@/pages/OpsDailyDigest";
+import ClinicalWorkflowHealth from "@/pages/ClinicalWorkflowHealth";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -43,6 +47,10 @@ function Router() {
       <Route path="/shadow-mode-ops" component={ShadowModeOps} />
       <Route path="/coercion-audit" component={CoercionAudit} />
       <Route path="/review-queue-v2" component={ReviewQueueV2} />
+      <Route path="/override-patterns" component={OverridePatterns} />
+      <Route path="/question-gaps" component={QuestionGaps} />
+      <Route path="/ops-daily-digest" component={OpsDailyDigest} />
+      <Route path="/clinical-workflow-health" component={ClinicalWorkflowHealth} />
       <Route path="/debug/traces" component={TraceViewer} />
       <Route component={NotFound} />
     </Switch>
