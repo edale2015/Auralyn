@@ -3,7 +3,7 @@ import { firestoreCaseEventsStore } from "./firestoreCaseEvents";
 import { firestoreRuntimeMetricsStore } from "./firestoreRuntimeMetrics";
 import { logShadowModeEvent } from "./shadowModeLogger";
 import { runEngineForChatAdapter } from "./chatEngineAdapter";
-import { normalizeChatAnswer } from "./chatAnswerNormalizer";
+import { normalizeChatAnswerWithAudit } from "./chatAnswerNormalizer";
 import { planNextQuestion } from "./chatQuestionPlanner";
 import type { CaseRecord } from "../types/case";
 
@@ -195,7 +195,11 @@ export class ChatSessionService {
 
     if (token) {
       await firestoreCaseStore.updateAnswers(session.caseId, {
-        [token]: normalizeChatAnswer(input.answerText)
+        [token]: normalizeChatAnswerWithAudit(input.answerText, {
+          caseId: session.caseId,
+          ccId: session.complaintId,
+          token,
+        })
       });
     }
 

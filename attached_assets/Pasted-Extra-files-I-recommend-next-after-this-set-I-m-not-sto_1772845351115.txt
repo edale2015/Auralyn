@@ -1,0 +1,710 @@
+Extra files I recommend next after this set
+
+I’m not stopping at E1–E3 because two more files are especially worth doing soon.
+
+F1. server/routes/chatDispositionExplanation.ts
+
+Why:
+
+expose patient-facing explanation directly
+
+useful for chat UI, status banners, discharge-like messaging
+
+F2. client/src/components/PatientStatusBanner.tsx
+
+Why:
+
+display “awaiting clinician review”, “urgent evaluation recommended”, etc
+
+improves patient-facing clarity in intake and post-intake views
+
+F3. server/routes/chatCoercionAudit.ts
+
+Why:
+
+admin/physician visibility into low-confidence parsing
+
+excellent for debugging live chat normalization
+
+F4. client/src/pages/CoercionAudit.tsx
+
+Why:
+
+lets you inspect weird inputs without spelunking CSVs
+
+My strongest recommendation for the next bundle
+
+The next best bundle after this one is:
+
+F bundle
+
+server/routes/chatDispositionExplanation.ts
+
+client/src/components/PatientStatusBanner.tsx
+
+server/routes/chatCoercionAudit.ts
+
+client/src/pages/CoercionAudit.tsx
+
+That gives you:
+
+better patient communication
+
+better normalization debugging
+
+much cleaner operational oversight
+
+If you continue at the same tempo, that’s the next place I’d go.
+
+f BUDLE PLEASE.  iF YOU RECOMMEND A G AND H BUNDLE, PLEASE GENERATE THOSE ALSO
+
+Here’s the F bundle, plus G and H bundles because they fit cleanly right after it and will save you a round trip.
+
+F bundle
+F1
+
+server/routes/chatDispositionExplanation.ts
+
+F2
+
+client/src/components/PatientStatusBanner.tsx
+
+F3
+
+server/routes/chatCoercionAudit.ts
+
+F4
+
+client/src/pages/CoercionAudit.tsx
+
+G bundle
+G1
+
+server/services/chatFollowupBundleBuilder.ts
+
+G2
+
+server/routes/chatFollowupBundle.ts
+
+G3
+
+client/src/components/FollowupBundleCard.tsx
+
+H bundle
+H1
+
+server/services/reviewQueueSnapshotService.ts
+
+H2
+
+server/routes/reviewQueueSnapshots.ts
+
+H3
+
+client/src/pages/ReviewQueueV2.tsx
+
+These bundles do three things:
+
+improve patient-facing status clarity
+
+expose normalization/debugging visibility
+
+upgrade review queue and grouped follow-up flow
+
+F1) server/routes/chatDispositionExplanation.ts
+import { Router } from "express";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { buildChatDispositionExplanation } from "../services/chatDispositionExplainer";
+import { requireRole } from "../middleware/requireRole";
+
+export const chatDispositionExplanationRouter = Router();
+
+chatDispositionExplanationRouter.get(
+  "/:caseId",
+  requireRole(["admin", "physician", "staff", "patient"]),
+  async (req, res) => {
+    try {
+      const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+
+      if (!caseRecord) {
+        res.status(404).json({ error: "Case not found" });
+        return;
+      }
+
+      const explanation = buildChatDispositionExplanation(caseRecord);
+      res.json(explanation);
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to build disposition explanation"
+      });
+    }
+  }
+);
+Route registration
+import { chatDispositionExplanationRouter } from "./routes/chatDispositionExplanation";
+
+app.use("/api/chatDispositionExplanation", chatDispositionExplanationRouter);
+F2) client/src/components/PatientStatusBanner.tsx
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+type Explanation = {
+  headline: string;
+  body: string;
+  urgency: "low" | "moderate" | "high";
+};
+
+type Props = {
+  caseId: string;
+};
+
+function bannerStyle(urgency?: string): React.CSSProperties {
+  if (urgency === "high") {
+    return {
+      border: "1px solid #d9534f",
+      background: "#fff1f0",
+      color: "#8a1f1f",
+      padding: 12,
+      borderRadius: 8
+    };
+  }
+
+  if (urgency === "moderate") {
+    return {
+      border: "1px solid #f0ad4e",
+      background: "#fff8e6",
+      color: "#7a4b00",
+      padding: 12,
+      borderRadius: 8
+    };
+  }
+
+  return {
+    border: "1px solid #5cb85c",
+    background: "#eefbf0",
+    color: "#1b5e20",
+    padding: 12,
+    borderRadius: 8
+  };
+}
+
+export function PatientStatusBanner({ caseId }: Props) {
+  const { authFetch } = useAuth();
+  const [data, setData] = useState<Explanation | null>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setError("");
+      const res = await authFetch(`/api/chatDispositionExplanation/${caseId}`);
+      const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(json.error || "Failed to load explanation");
+      }
+
+      setData(json);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load status explanation");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [caseId]);
+
+  if (error) {
+    return <div style={{ color: "#8a1f1f" }}>{error}</div>;
+  }
+
+  if (!data) return null;
+
+  return (
+    <div style={bannerStyle(data.urgency)} data-testid={`patient-status-banner-${caseId}`}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>{data.headline}</div>
+      <div>{data.body}</div>
+    </div>
+  );
+}
+F3) server/routes/chatCoercionAudit.ts
+import fs from "fs";
+import path from "path";
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+
+export const chatCoercionAuditRouter = Router();
+
+const AUDIT_PATH = path.join(
+  process.cwd(),
+  "data",
+  "complaints",
+  "runtime",
+  "chat_answer_coercion_audit.csv"
+);
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+
+    cur += ch;
+  }
+
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function readCsv(filePath: string) {
+  if (!fs.existsSync(filePath)) return { headers: [] as string[], rows: [] as Record<string, string>[] };
+
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const headers = splitCsvLine(lines[0]);
+  const rows: Record<string, string>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = cols[j] ?? "";
+    rows.push(row);
+  }
+
+  return { headers, rows };
+}
+
+chatCoercionAuditRouter.get(
+  "/",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const limit = Number(req.query.limit ?? 200);
+      const confidence = String(req.query.confidence ?? "").trim().toLowerCase();
+
+      const csv = readCsv(AUDIT_PATH);
+
+      let rows = csv.rows;
+      if (confidence) {
+        rows = rows.filter((r) => String(r.CONFIDENCE ?? "").toLowerCase() === confidence);
+      }
+
+      rows = rows
+        .sort((a, b) => String(b.TIMESTAMP ?? "").localeCompare(String(a.TIMESTAMP ?? "")))
+        .slice(0, limit);
+
+      res.json({
+        count: rows.length,
+        rows
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load coercion audit"
+      });
+    }
+  }
+);
+Route registration
+import { chatCoercionAuditRouter } from "./routes/chatCoercionAudit";
+
+app.use("/api/chatCoercionAudit", chatCoercionAuditRouter);
+F4) client/src/pages/CoercionAudit.tsx
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+export default function CoercionAudit() {
+  const { authFetch } = useAuth();
+  const [rows, setRows] = useState<any[]>([]);
+  const [confidence, setConfidence] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (confidence) qs.set("confidence", confidence);
+      qs.set("limit", "200");
+
+      const res = await authFetch(`/api/chatCoercionAudit?${qs.toString()}`);
+      const json = await res.json();
+      setRows(json.rows || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [confidence]);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Chat Coercion Audit</h2>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Confidence filter: </label>
+        <select value={confidence} onChange={(e) => setConfidence(e.target.value)}>
+          <option value="">all</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </div>
+
+      {loading && <div>Loading...</div>}
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            {["TIMESTAMP", "CASE_ID", "CC_ID", "TOKEN", "RAW_ANSWER", "PARSED_ANSWER", "NORMALIZED_UNIT", "CONFIDENCE"].map((h) => (
+              <th key={h} style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, idx) => (
+            <tr key={`${r.CASE_ID}_${idx}`}>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.TIMESTAMP}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.CASE_ID}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.CC_ID}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.TOKEN}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.RAW_ANSWER}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.PARSED_ANSWER}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.NORMALIZED_UNIT}</td>
+              <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{r.CONFIDENCE}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+G1) server/services/chatFollowupBundleBuilder.ts
+
+This groups follow-up questions into a small bundle so you can ask 2 to 3 coherent questions together when appropriate.
+
+type FollowupCandidate = {
+  token: string;
+  questionText: string;
+  priorityScore?: number;
+};
+
+export type FollowupBundle = {
+  title: string;
+  questions: FollowupCandidate[];
+};
+
+export function buildFollowupBundle(
+  complaintLabel: string | undefined,
+  rankedQuestions: FollowupCandidate[],
+  maxQuestions = 3
+): FollowupBundle | null {
+  if (!rankedQuestions.length) return null;
+
+  const top = rankedQuestions.slice(0, maxQuestions);
+
+  return {
+    title: complaintLabel
+      ? `A few more questions about ${complaintLabel}`
+      : "A few more follow-up questions",
+    questions: top
+  };
+}
+G2) server/routes/chatFollowupBundle.ts
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { detectCriticalQuestions } from "../services/chatCriticalQuestionDetector";
+import { rankNextQuestions } from "../services/chatQuestionPriorityRanker";
+import { resolveChatQuestionText } from "../services/chatQuestionTextResolver";
+import { loadComplaintConfig } from "../services/complaintConfigLoader";
+import { buildFollowupBundle } from "../services/chatFollowupBundleBuilder";
+
+function tokenFromQid(qid?: string): string {
+  if (!qid) return "";
+  const parts = qid.split("_");
+  if (parts.length >= 3) return parts.slice(2).join("_");
+  return qid;
+}
+
+export const chatFollowupBundleRouter = Router();
+
+chatFollowupBundleRouter.get(
+  "/:caseId",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const caseRecord = await firestoreCaseStore.getCase(req.params.caseId);
+      if (!caseRecord) {
+        res.status(404).json({ error: "Case not found" });
+        return;
+      }
+
+      const cfg = await loadComplaintConfig(caseRecord.complaintId);
+      const critical = await detectCriticalQuestions({
+        complaintId: caseRecord.complaintId,
+        answers: caseRecord.answers ?? {},
+        triggeredRedFlags: caseRecord.engineResult?.triggeredRedFlags ?? [],
+        recommendedDisposition: caseRecord.engineResult?.recommendedDisposition
+      });
+
+      const candidates = (cfg.questions ?? []).map((q: any) => ({
+        token: tokenFromQid(q.Q_ID),
+        questionText: resolveChatQuestionText({
+          token: tokenFromQid(q.Q_ID),
+          fallbackQuestionText: q.QUESTION_TEXT,
+          complaintId: caseRecord.complaintId
+        }),
+        askOrder: Number(q.ASK_ORDER ?? 0)
+      }));
+
+      const ranked = rankNextQuestions({
+        candidates,
+        answers: caseRecord.answers ?? {},
+        criticalTokens: critical.criticalTokens,
+        winningClusterId: caseRecord.engineResult?.winningClusterId,
+        dxCandidates: caseRecord.engineResult?.dxCandidates,
+        triggeredRedFlags: caseRecord.engineResult?.triggeredRedFlags
+      });
+
+      const bundle = buildFollowupBundle(caseRecord.complaintLabel, ranked, 3);
+      res.json(bundle ?? { title: "No further follow-up needed", questions: [] });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to build follow-up bundle"
+      });
+    }
+  }
+);
+Route registration
+import { chatFollowupBundleRouter } from "./routes/chatFollowupBundle";
+
+app.use("/api/chatFollowupBundle", chatFollowupBundleRouter);
+G3) client/src/components/FollowupBundleCard.tsx
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+
+type Props = {
+  caseId: string;
+};
+
+export function FollowupBundleCard({ caseId }: Props) {
+  const { authFetch } = useAuth();
+  const [bundle, setBundle] = useState<any>(null);
+
+  async function load() {
+    const res = await authFetch(`/api/chatFollowupBundle/${caseId}`);
+    const json = await res.json();
+    setBundle(json);
+  }
+
+  useEffect(() => {
+    load();
+  }, [caseId]);
+
+  if (!bundle) return null;
+
+  return (
+    <div style={{ border: "1px solid #ccc", padding: 12, marginTop: 16 }}>
+      <h3>{bundle.title}</h3>
+      {(bundle.questions || []).length === 0 ? (
+        <div>No further follow-up questions suggested.</div>
+      ) : (
+        <ul>
+          {(bundle.questions || []).map((q: any) => (
+            <li key={q.token}>
+              <strong>{q.token}</strong>: {q.questionText}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+H1) server/services/reviewQueueSnapshotService.ts
+
+This gives you a queue-friendly snapshot aggregator so you do not have to overfetch raw case objects.
+
+import { firestoreCaseStore } from "./firestoreCaseStore";
+import { buildChatCaseSnapshot } from "./chatCaseSnapshotBuilder";
+
+export class ReviewQueueSnapshotService {
+  async listQueueSnapshots(limit = 100) {
+    const cases = await firestoreCaseStore.listReviewQueue(limit);
+    return cases.map((c) => buildChatCaseSnapshot(c));
+  }
+}
+
+export const reviewQueueSnapshotService = new ReviewQueueSnapshotService();
+H2) server/routes/reviewQueueSnapshots.ts
+import { Router } from "express";
+import { requireRole } from "../middleware/requireRole";
+import { reviewQueueSnapshotService } from "../services/reviewQueueSnapshotService";
+
+export const reviewQueueSnapshotsRouter = Router();
+
+reviewQueueSnapshotsRouter.get(
+  "/",
+  requireRole(["admin", "physician", "staff"]),
+  async (req, res) => {
+    try {
+      const limit = Number(req.query.limit ?? 100);
+      const snapshots = await reviewQueueSnapshotService.listQueueSnapshots(limit);
+      res.json({
+        count: snapshots.length,
+        snapshots
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err?.message ?? "Failed to load review queue snapshots"
+      });
+    }
+  }
+);
+Route registration
+import { reviewQueueSnapshotsRouter } from "./routes/reviewQueueSnapshots";
+
+app.use("/api/reviewQueueSnapshots", reviewQueueSnapshotsRouter);
+H3) client/src/pages/ReviewQueueV2.tsx
+
+Uses the new snapshot cards.
+
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+import { CaseSnapshotCard } from "../components/CaseSnapshotCard";
+
+export default function ReviewQueueV2() {
+  const { authFetch } = useAuth();
+  const [snapshots, setSnapshots] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await authFetch("/api/reviewQueueSnapshots?limit=100");
+      const json = await res.json();
+      setSnapshots(json.snapshots || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Review Queue V2</h2>
+      {loading && <div>Loading...</div>}
+
+      {snapshots.map((snapshot) => (
+        <CaseSnapshotCard
+          key={snapshot.caseId}
+          snapshot={snapshot}
+          showOpenLink
+        />
+      ))}
+    </div>
+  );
+}
+Recommended immediate patches
+In CaseReview.tsx
+
+Add:
+
+PatientStatusBanner
+
+ReviewerCommentButtons
+
+FollowupBundleCard
+
+Suggested render order:
+
+<PatientStatusBanner caseId={caseId} />
+{snapshot && <CaseSnapshotCard snapshot={snapshot} showOpenLink={false} />}
+<RuleTracePanel trace={caseData.engineResult?.ruleTrace} />
+<NotePreview caseId={caseId} />
+<FollowupBundleCard caseId={caseId} />
+<CaseTimeline caseId={caseId} />
+<ReviewerCommentButtons caseId={caseId} onInsert={(text) => setReviewerComment(text)} />
+<SignoffPanel caseData={caseData} />
+<ExportPanel caseId={caseId} />
+Add routes/pages
+
+Frontend routes:
+
+/coercion-audit
+
+/review-queue-v2
+
+Next bundles I recommend after this
+I bundle
+
+server/services/caseExportReadinessChecker.ts
+
+server/routes/exportReadiness.ts
+
+client/src/components/ExportReadinessPanel.tsx
+
+Why:
+
+catches missing note/signoff fields before export
+
+reduces failed exports
+
+makes ops more explicit
+
+J bundle
+
+server/services/overridePatternAnalyzer.ts
+
+server/routes/overridePatterns.ts
+
+client/src/pages/OverridePatterns.tsx
+
+Why:
+
+lets you see where physicians repeatedly override the engine
+
+huge value for improving rule logic
+
+K bundle
+
+server/services/questionGapAnalyzer.ts
+
+server/routes/questionGaps.ts
+
+client/src/pages/QuestionGaps.tsx
+
+Why:
+
+identifies which questions are repeatedly missing in review
+
+directly improves intake design
+
+These would be my next three recommended bundles in order:
+I → J → K.

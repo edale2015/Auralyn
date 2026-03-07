@@ -19,6 +19,8 @@ import PatientIntakeChat from "@/pages/PatientIntakeChat";
 import Discrepancies from "@/pages/Discrepancies";
 import RuntimeAnalytics from "@/pages/RuntimeAnalytics";
 import ShadowModeOps from "@/pages/ShadowModeOps";
+import CoercionAudit from "@/pages/CoercionAudit";
+import ReviewQueueV2 from "@/pages/ReviewQueueV2";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -39,6 +41,8 @@ function Router() {
       <Route path="/discrepancies" component={Discrepancies} />
       <Route path="/runtime-analytics" component={RuntimeAnalytics} />
       <Route path="/shadow-mode-ops" component={ShadowModeOps} />
+      <Route path="/coercion-audit" component={CoercionAudit} />
+      <Route path="/review-queue-v2" component={ReviewQueueV2} />
       <Route path="/debug/traces" component={TraceViewer} />
       <Route component={NotFound} />
     </Switch>

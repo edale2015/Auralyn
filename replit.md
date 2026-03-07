@@ -79,6 +79,18 @@ A 6-step toolchain compiles raw clinical guideline text into engine-ready CSV ro
 ### Operational Intelligence & Self-Improving Loop
 A suite of scripts provides engine visibility and automatic quality control, including engine coverage audits, dead cluster classification, rule contradiction detection, and auto-generation of missing tests. Runtime audit logging and various reports (e.g., priority refinement, phase readiness, close-the-loop) enhance operational intelligence.
 
+### Patient Disposition Explanation (F1/F2)
+Patient-facing disposition explanation service (`server/services/chatDispositionExplainer.ts`) builds urgency-tagged explanations from case data. Route at `/api/chatDispositionExplanation/:caseId`. Frontend `PatientStatusBanner.tsx` component shows headline/body with urgency-based color coding (red/amber/green).
+
+### Coercion Audit (F3/F4)
+Answer normalization audit logging in `chatAnswerNormalizer.ts` — every answer normalization writes raw→parsed mapping with confidence (high/medium/low) to `data/complaints/runtime/chat_answer_coercion_audit.csv`. Route at `/api/chatCoercionAudit` (GET, filterable by confidence). Frontend page at `/coercion-audit` with `CoercionAudit.tsx`.
+
+### Follow-up Bundles (G1/G2/G3)
+Follow-up bundle builder (`server/services/chatFollowupBundleBuilder.ts`) with supporting services: `chatCriticalQuestionDetector.ts` (red-flag-driven critical question detection), `chatQuestionPriorityRanker.ts` (priority scoring for unanswered questions), `chatQuestionTextResolver.ts` (question text resolution). Route at `/api/chatFollowupBundle/:caseId`. Frontend `FollowupBundleCard.tsx` component.
+
+### Review Queue V2 with Snapshots (H1/H2/H3)
+Case snapshot builder (`server/services/chatCaseSnapshotBuilder.ts`) produces lightweight case summaries. Review queue snapshot service (`server/services/reviewQueueSnapshotService.ts`) lists queue with snapshots. Route at `/api/reviewQueueSnapshots`. Frontend `CaseSnapshotCard.tsx` component and `ReviewQueueV2.tsx` page at `/review-queue-v2`.
+
 ### Validation and Testing
 The system includes various testing harnesses (Stress Test, Complaint Golden Test, Replay), a Data Corruption Guard, a Release Candidate system, Cross-Complaint Goldens, a Bundle ABI Validator, and an 8-gate Prod Pipeline for pre-deployment validation.
 

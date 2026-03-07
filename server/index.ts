@@ -28,6 +28,10 @@ import { exportEncounterRouter } from "./routes/exportEncounter";
 import { roleAuthRouter } from "./routes/roleAuth";
 import { runtimeAnalyticsRouter } from "./routes/runtimeAnalytics";
 import { shadowModeOpsRouter } from "./routes/shadowModeOps";
+import { chatDispositionExplanationRouter } from "./routes/chatDispositionExplanation";
+import { chatCoercionAuditRouter } from "./routes/chatCoercionAudit";
+import { chatFollowupBundleRouter } from "./routes/chatFollowupBundle";
+import { reviewQueueSnapshotsRouter } from "./routes/reviewQueueSnapshots";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -160,6 +164,10 @@ app.use("/api/exportEncounter", exportEncounterRouter);
 app.use("/api/roleAuth", roleAuthRouter);
 app.use("/api/runtimeAnalytics", runtimeAnalyticsRouter);
 app.use("/api/shadowMode", shadowModeOpsRouter);
+app.use("/api/chatDispositionExplanation", chatDispositionExplanationRouter);
+app.use("/api/chatCoercionAudit", chatCoercionAuditRouter);
+app.use("/api/chatFollowupBundle", chatFollowupBundleRouter);
+app.use("/api/reviewQueueSnapshots", reviewQueueSnapshotsRouter);
 app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
@@ -172,6 +180,10 @@ console.log("[ExportEncounter] eCW sidecar export endpoints registered at /api/e
 console.log("[RoleAuth] JWT role-based auth endpoints registered at /api/roleAuth/*");
 console.log("[RuntimeAnalytics] Runtime analytics endpoints registered at /api/runtimeAnalytics/*");
 console.log("[ShadowMode] Shadow-mode ops endpoints registered at /api/shadowMode/*");
+console.log("[DispositionExplanation] Disposition explanation endpoints registered at /api/chatDispositionExplanation/*");
+console.log("[CoercionAudit] Coercion audit endpoints registered at /api/chatCoercionAudit/*");
+console.log("[FollowupBundle] Follow-up bundle endpoints registered at /api/chatFollowupBundle/*");
+console.log("[ReviewQueueSnapshots] Review queue snapshot endpoints registered at /api/reviewQueueSnapshots/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
 export function log(message: string, source = "express") {
