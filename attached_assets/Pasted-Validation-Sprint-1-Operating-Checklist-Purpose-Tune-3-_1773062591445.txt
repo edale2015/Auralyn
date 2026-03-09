@@ -1,0 +1,453 @@
+Validation Sprint 1 Operating Checklist
+Purpose
+
+Tune 3 complaints from “built” to “trustworthy enough for shadow mode” using:
+
+synthetic runs
+
+mismatch review
+
+gold reviews
+
+graph heatmaps
+
+rule suggestions
+
+complaint control center
+
+Complaints for Sprint 1
+
+cough
+
+sore_throat
+
+dysuria
+
+Rules for the sprint
+
+Work on one complaint at a time
+
+Focus on under-triage first
+
+Make small rule changes only
+
+Rerun after every meaningful change
+
+Do not start new bundles during this sprint
+
+Per-complaint workflow
+Step 1 — Open Complaint Control Center
+
+Complaint: _____________
+
+Check and record:
+
+total runs
+
+accuracy
+
+under-triage count
+
+under-triage rate
+
+over-triage count
+
+mismatch count
+
+gold review count
+
+Notes:
+____________________________________________________
+
+Step 2 — Run baseline synthetic validation
+
+Run:
+
+1,000 cases
+
+then 10,000 cases if stable
+
+Record:
+
+complaint: _____________
+
+run size: _____________
+
+accuracy: _____________
+
+under-triage: _____________
+
+over-triage: _____________
+
+total mismatches: _____________
+
+Top mismatch patterns:
+
+_______________________________________________
+
+_______________________________________________
+
+_______________________________________________
+
+Step 3 — Review under-triage mismatches
+
+Open:
+
+Mismatch Dashboard
+
+Validation Stats
+
+Review the top 10–20 worst under-triage cases.
+
+For each case ask:
+
+Was the case realistic?
+
+Was a critical question missing?
+
+Was a red flag missing?
+
+Was diagnosis weighting weak?
+
+Was disposition threshold too soft?
+
+Pattern notes:
+____________________________________________________
+____________________________________________________
+
+Step 4 — Enter gold reviews
+
+Open:
+
+Gold Review Workbench
+
+For each important mismatch, enter:
+
+disposition
+
+top diagnosis
+
+must ask next
+
+optional ask next
+
+enough info now
+
+tests
+
+meds considered
+
+meds avoid
+
+red flags
+
+confidence
+
+rationale
+
+Target for this complaint:
+
+minimum gold reviews today: 10
+
+total target for complaint: 20–50
+
+Gold review notes:
+____________________________________________________
+
+Step 5 — Inspect graph tools
+
+Open:
+
+Decision Graph Heatmaps
+
+Decision Graph Explorer
+
+Decision Graph Diff
+
+Look for:
+
+high mismatch heat nodes
+
+high traffic nodes with bad outcomes
+
+nodes your gold reviews use often but engine does not
+
+duplicated or weak branches
+
+Graph observations:
+
+_______________________________________________
+
+_______________________________________________
+
+_______________________________________________
+
+Step 6 — Review rule suggestions
+
+Open:
+
+Rule Suggestions
+
+For each suggestion, mark:
+
+accept
+
+reject
+
+postpone
+
+Accepted suggestions:
+
+_______________________________________________
+
+_______________________________________________
+
+Rejected suggestions:
+
+_______________________________________________
+
+_______________________________________________
+
+Step 7 — Make focused changes
+
+Allowed changes:
+
+promote one question
+
+add one red flag
+
+strengthen one disposition threshold
+
+increase support for one diagnosis
+
+add one missing trigger
+
+Changes made:
+
+_______________________________________________
+
+_______________________________________________
+
+_______________________________________________
+
+Step 8 — Rerun validation
+
+Run again:
+
+1,000 cases
+
+then 10,000 if improved
+
+Record after-change metrics:
+
+run size: _____________
+
+accuracy: _____________
+
+under-triage: _____________
+
+over-triage: _____________
+
+mismatches: _____________
+
+Did under-triage improve?
+
+yes / no
+
+Did new regressions appear?
+
+yes / no
+
+Notes:
+____________________________________________________
+
+Complaint completion criteria
+
+A complaint is ready to mark Sprint 1 complete when:
+
+under-triage is low and explainable
+
+major mismatch patterns are understood
+
+at least 20–50 gold reviews exist
+
+graph heatmap shows no obvious blind spots
+
+reruns are stable
+
+rule suggestions are mostly low-priority
+
+Mark status:
+
+not ready
+
+improving
+
+sprint complete
+
+ready for shadow mode candidate
+
+Status: _____________
+
+Daily operating loop
+Morning
+
+Pick complaint:
+_____________
+
+Run order
+
+Complaint Control Center
+
+Validation Stats
+
+Mismatch Dashboard
+
+Gold Review Workbench
+
+Decision Graph Heatmaps
+
+Decision Graph Explorer
+
+Rule Suggestions
+
+Case Replay
+
+rerun synthetic validation
+
+return to Control Center
+
+Daily log template
+
+Date: _____________
+Complaint: _____________
+
+Baseline
+
+total runs: _____________
+
+accuracy: _____________
+
+under-triage: _____________
+
+over-triage: _____________
+
+Gold reviews added today
+
+count: _____________
+
+Most important mismatch pattern found
+
+____________________________________________________
+
+Changes made
+
+_______________________________________________
+
+_______________________________________________
+
+Post-change results
+
+accuracy: _____________
+
+under-triage: _____________
+
+over-triage: _____________
+
+Decision
+
+keep changes
+
+revert changes
+
+needs more gold review
+
+ready for next run
+
+Decision: _____________
+
+Weekly summary template
+
+Week of: _____________
+
+Complaint 1
+
+Name: _____________
+
+baseline accuracy: _____________
+
+current accuracy: _____________
+
+baseline under-triage: _____________
+
+current under-triage: _____________
+
+gold reviews completed: _____________
+
+status: _____________
+
+Complaint 2
+
+Name: _____________
+
+baseline accuracy: _____________
+
+current accuracy: _____________
+
+baseline under-triage: _____________
+
+current under-triage: _____________
+
+gold reviews completed: _____________
+
+status: _____________
+
+Complaint 3
+
+Name: _____________
+
+baseline accuracy: _____________
+
+current accuracy: _____________
+
+baseline under-triage: _____________
+
+current under-triage: _____________
+
+gold reviews completed: _____________
+
+status: _____________
+
+Biggest lessons this week
+
+_______________________________________________
+
+_______________________________________________
+
+_______________________________________________
+
+Do not do these during the sprint
+
+do not tune multiple complaints at once
+
+do not chase overall accuracy if under-triage is worsening
+
+do not accept all rule suggestions automatically
+
+do not rewrite an entire complaint from one case
+
+do not add new features mid-sprint
+
+Best first move today
+
+Start with:
+
+Complaint: cough
+Run: 1,000 synthetic cases
+Review: top under-triage mismatches
+Enter: 10 gold reviews
+Inspect: graph heatmap
+Change: 1–2 focused rules
+Rerun: 1,000 cases
+
+If you want, I can also turn this into a PDF or DOCX sprint sheet for upload to Replit.
