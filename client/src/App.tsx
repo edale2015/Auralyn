@@ -4,8 +4,10 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./context/AuthContext";
+import AdminLayout from "@/components/AdminLayout";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
+import AdminDashboard from "@/pages/AdminDashboard";
 import PatientIntake from "@/pages/PatientIntake";
 import SimpleIntake from "@/pages/SimpleIntake";
 import IntakeStatus from "@/pages/IntakeStatus";
@@ -48,6 +50,14 @@ import SyntheticTesting from "@/pages/SyntheticTesting";
 import PerformanceStats from "@/pages/PerformanceStats";
 import NotFound from "@/pages/not-found";
 
+function AdminPage({ component: Component }: { component: React.ComponentType }) {
+  return (
+    <AdminLayout>
+      <Component />
+    </AdminLayout>
+  );
+}
+
 function Router() {
   return (
     <Switch>
@@ -63,37 +73,38 @@ function Router() {
       <Route path="/review" component={ReviewQueue} />
       <Route path="/review/:caseId" component={CaseReview} />
       <Route path="/chat-intake" component={PatientIntakeChat} />
-      <Route path="/discrepancies" component={Discrepancies} />
-      <Route path="/runtime-analytics" component={RuntimeAnalytics} />
-      <Route path="/shadow-mode-ops" component={ShadowModeOps} />
-      <Route path="/coercion-audit" component={CoercionAudit} />
-      <Route path="/review-queue-v2" component={ReviewQueueV2} />
-      <Route path="/override-patterns" component={OverridePatterns} />
-      <Route path="/question-gaps" component={QuestionGaps} />
-      <Route path="/ops-daily-digest" component={OpsDailyDigest} />
-      <Route path="/clinical-workflow-health" component={ClinicalWorkflowHealth} />
-      <Route path="/next-best-question" component={NextBestQuestionInspector} />
-      <Route path="/outcome-capture" component={OutcomeCapture} />
-      <Route path="/complaint-qa" component={ComplaintQADashboard} />
-      <Route path="/organizations" component={Organizations} />
-      <Route path="/notifications" component={Notifications} />
-      <Route path="/ecw-workbench" component={EcwExportWorkbench} />
-      <Route path="/audit-reports" component={AuditReports} />
-      <Route path="/message-ops" component={MessageOps} />
-      <Route path="/formulary" component={FormularyAdmin} />
-      <Route path="/outcome-monitoring" component={OutcomeMonitoring} />
-      <Route path="/patient-consent" component={PatientConsentAdmin} />
-      <Route path="/clinical-validation" component={ClinicalValidation} />
-      <Route path="/release-governance" component={ReleaseGovernance} />
-      <Route path="/agent-ops" component={AgentOps} />
-      <Route path="/ms-agent-ops" component={MicrosoftAgentOps} />
-      <Route path="/ai-assistant" component={AIAssistant} />
-      <Route path="/decision-graphs" component={DecisionGraphExplorer} />
-      <Route path="/decision-graph-heatmaps" component={DecisionGraphHeatmaps} />
-      <Route path="/complaint-control-center" component={ComplaintControlCenter} />
-      <Route path="/synthetic-testing" component={SyntheticTesting} />
-      <Route path="/performance-stats" component={PerformanceStats} />
-      <Route path="/debug/traces" component={TraceViewer} />
+      <Route path="/admin">{() => <AdminPage component={AdminDashboard} />}</Route>
+      <Route path="/complaint-control-center">{() => <AdminPage component={ComplaintControlCenter} />}</Route>
+      <Route path="/review-queue-v2">{() => <AdminPage component={ReviewQueueV2} />}</Route>
+      <Route path="/complaint-qa">{() => <AdminPage component={ComplaintQADashboard} />}</Route>
+      <Route path="/clinical-validation">{() => <AdminPage component={ClinicalValidation} />}</Route>
+      <Route path="/clinical-workflow-health">{() => <AdminPage component={ClinicalWorkflowHealth} />}</Route>
+      <Route path="/next-best-question">{() => <AdminPage component={NextBestQuestionInspector} />}</Route>
+      <Route path="/override-patterns">{() => <AdminPage component={OverridePatterns} />}</Route>
+      <Route path="/question-gaps">{() => <AdminPage component={QuestionGaps} />}</Route>
+      <Route path="/decision-graphs">{() => <AdminPage component={DecisionGraphExplorer} />}</Route>
+      <Route path="/decision-graph-heatmaps">{() => <AdminPage component={DecisionGraphHeatmaps} />}</Route>
+      <Route path="/formulary">{() => <AdminPage component={FormularyAdmin} />}</Route>
+      <Route path="/outcome-capture">{() => <AdminPage component={OutcomeCapture} />}</Route>
+      <Route path="/outcome-monitoring">{() => <AdminPage component={OutcomeMonitoring} />}</Route>
+      <Route path="/discrepancies">{() => <AdminPage component={Discrepancies} />}</Route>
+      <Route path="/ecw-workbench">{() => <AdminPage component={EcwExportWorkbench} />}</Route>
+      <Route path="/patient-consent">{() => <AdminPage component={PatientConsentAdmin} />}</Route>
+      <Route path="/coercion-audit">{() => <AdminPage component={CoercionAudit} />}</Route>
+      <Route path="/ai-assistant">{() => <AdminPage component={AIAssistant} />}</Route>
+      <Route path="/agent-ops">{() => <AdminPage component={AgentOps} />}</Route>
+      <Route path="/ms-agent-ops">{() => <AdminPage component={MicrosoftAgentOps} />}</Route>
+      <Route path="/ops-daily-digest">{() => <AdminPage component={OpsDailyDigest} />}</Route>
+      <Route path="/runtime-analytics">{() => <AdminPage component={RuntimeAnalytics} />}</Route>
+      <Route path="/notifications">{() => <AdminPage component={Notifications} />}</Route>
+      <Route path="/message-ops">{() => <AdminPage component={MessageOps} />}</Route>
+      <Route path="/shadow-mode-ops">{() => <AdminPage component={ShadowModeOps} />}</Route>
+      <Route path="/organizations">{() => <AdminPage component={Organizations} />}</Route>
+      <Route path="/audit-reports">{() => <AdminPage component={AuditReports} />}</Route>
+      <Route path="/release-governance">{() => <AdminPage component={ReleaseGovernance} />}</Route>
+      <Route path="/performance-stats">{() => <AdminPage component={PerformanceStats} />}</Route>
+      <Route path="/synthetic-testing">{() => <AdminPage component={SyntheticTesting} />}</Route>
+      <Route path="/debug/traces">{() => <AdminPage component={TraceViewer} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );
