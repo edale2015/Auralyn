@@ -21,7 +21,7 @@ import {
   ClipboardCheck, Zap, FileCheck, Package, Bell, Building, Pill,
   MessageSquare, Bot, Cpu, Sparkles, GitBranch, Rocket, Gauge,
   FlaskConical, Eye, AlertTriangle, Users, Settings, Search,
-  TrendingUp, Layers, HeartPulse,
+  TrendingUp, Layers, HeartPulse, Lightbulb,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -86,13 +86,20 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    label: "Validation Sprint",
+    items: [
+      { path: "/synthetic-testing", label: "Synthetic Testing", icon: FlaskConical },
+      { path: "/gold-reviews", label: "Gold Reviews", icon: ClipboardCheck },
+      { path: "/rule-suggestions", label: "Rule Suggestions", icon: Lightbulb },
+    ],
+  },
+  {
     label: "Administration",
     items: [
       { path: "/organizations", label: "Organizations", icon: Building },
       { path: "/audit-reports", label: "Audit Reports", icon: Shield },
       { path: "/release-governance", label: "Releases", icon: Rocket },
       { path: "/performance-stats", label: "Performance", icon: Gauge },
-      { path: "/synthetic-testing", label: "Synthetic Testing", icon: FlaskConical },
     ],
   },
 ];
@@ -175,9 +182,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 <p className="text-sm font-medium truncate" data-testid="text-user-email">
                   {user?.email || "User"}
                 </p>
-                <p className="text-xs text-muted-foreground truncate">
+                <span className="text-xs text-muted-foreground truncate block">
                   <Badge variant="outline" className="text-xs px-1 py-0">{user?.role || "unknown"}</Badge>
-                </p>
+                </span>
               </div>
             </div>
             <div className="flex gap-2">

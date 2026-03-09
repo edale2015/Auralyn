@@ -47,6 +47,9 @@ import DecisionGraphExplorer from "@/pages/DecisionGraphExplorer";
 import DecisionGraphHeatmaps from "@/pages/DecisionGraphHeatmaps";
 import ComplaintControlCenter from "@/pages/ComplaintControlCenter";
 import SyntheticTesting from "@/pages/SyntheticTesting";
+import GoldReviewWorkbench from "@/pages/GoldReviewWorkbench";
+import RuleSuggestions from "@/pages/RuleSuggestions";
+import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import NotFound from "@/pages/not-found";
 
@@ -104,6 +107,9 @@ function Router() {
       <Route path="/release-governance">{() => <AdminPage component={ReleaseGovernance} />}</Route>
       <Route path="/performance-stats">{() => <AdminPage component={PerformanceStats} />}</Route>
       <Route path="/synthetic-testing">{() => <AdminPage component={SyntheticTesting} />}</Route>
+      <Route path="/rule-suggestions">{() => <AdminPage component={RuleSuggestions} />}</Route>
+      <Route path="/mismatch-dashboard/:runId">{() => <AdminPage component={MismatchDashboard} />}</Route>
+      <Route path="/gold-reviews">{() => <AdminPage component={GoldReviewWorkbench} />}</Route>
       <Route path="/debug/traces">{() => <AdminPage component={TraceViewer} />}</Route>
       <Route component={NotFound} />
     </Switch>

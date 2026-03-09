@@ -105,7 +105,20 @@ A channel orchestrator and message routing service for managing communication ac
 Includes a healthcheck service and a job runner for maintaining system stability.
 
 ### Synthetic Testing System
-A system for synthetic case generation, engine mass/parallel runners, result storage, physician decision modeling, mismatch analysis, and statistical validation.
+A system for synthetic case generation across all 78 complaints, using the real GENERIC_V1 engine. The mass runner builds CaseState objects from generated answers and runs the full engine pipeline. Results are persisted to Firestore `validation_runs` collection with per-run stats (accuracy, under/over-triage counts, mismatch analysis, disposition breakdown). Supports batch sizes up to 10,000 cases.
+
+### Validation Sprint Tooling
+Tools for complaint validation sprints:
+- **Synthetic Testing UI**: Complaint dropdown, count selector (100-10000), run stats display, mismatch navigation
+- **Mismatch Dashboard**: Per-run mismatch analysis with under/over-triage categorization, severity gap sorting, filter by mismatch type
+- **Gold Review Workbench**: Firestore-backed `gold_reviews` collection with all fields from the validation checklist (disposition, diagnoses, must-ask, tests, meds, red flags, confidence, rationale). CRUD via `/api/goldReviews`
+- **Rule Suggestions**: Firestore-backed `rule_suggestions` with accept/reject/postpone workflow. Types: promote_question, add_red_flag, strengthen_threshold, increase_dx_support, add_trigger
+- **Complaint Control Center**: Now includes validation metrics (accuracy, under/over-triage, mismatch count, gold review count, synthetic run count) alongside existing case volume data
+
+### Navigation & Authentication
+- **Unified Login**: Two-tab login page — Clinic password login (old session auth) and Admin/Physician email+password login (JWT role auth)
+- **Admin Sidebar**: All 40+ admin/physician pages wrapped in AdminLayout with categorized sidebar navigation. Auth-gated (requires JWT token).
+- **Sidebar Sections**: Clinical Operations, Diagnostics & Scoring, Medications, Outcomes & Monitoring, Export & Records, AI & Agents, Operations, Validation Sprint, Administration
 
 ### Decision Graph Visualization
 Tools for building and visualizing decision graphs, case trace graphs, graph differences, and heatmaps.
