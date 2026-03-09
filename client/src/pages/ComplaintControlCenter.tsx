@@ -3,7 +3,8 @@ import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, LayoutDashboard, AlertTriangle, CheckCircle, TrendingDown, TrendingUp } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Loader2, LayoutDashboard, FlaskConical, ClipboardCheck, Lightbulb } from "lucide-react";
 import { Link } from "wouter";
 
 type Summary = {
@@ -46,9 +47,31 @@ export default function ComplaintControlCenter() {
 
   return (
     <div className="p-6 space-y-4" data-testid="page-complaint-control-center">
-      <div className="flex items-center gap-3">
-        <LayoutDashboard className="h-5 w-5" />
-        <h2 className="text-xl font-semibold">Complaint Control Center</h2>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <LayoutDashboard className="h-5 w-5" />
+          <h2 className="text-xl font-semibold">Complaint Control Center</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/synthetic-testing">
+            <Button variant="outline" size="sm" data-testid="link-synthetic-testing">
+              <FlaskConical className="w-4 h-4 mr-1" />
+              Synthetic Testing
+            </Button>
+          </Link>
+          <Link href="/gold-reviews">
+            <Button variant="outline" size="sm" data-testid="link-gold-reviews">
+              <ClipboardCheck className="w-4 h-4 mr-1" />
+              Gold Reviews
+            </Button>
+          </Link>
+          <Link href="/rule-suggestions">
+            <Button variant="outline" size="sm" data-testid="link-rule-suggestions">
+              <Lightbulb className="w-4 h-4 mr-1" />
+              Rule Suggestions
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {!loading && summaries.length > 0 && (
@@ -112,6 +135,7 @@ export default function ComplaintControlCenter() {
                   <TableHead>Gold Reviews</TableHead>
                   <TableHead>Synth Runs</TableHead>
                   <TableHead>Dispositions</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -160,6 +184,14 @@ export default function ComplaintControlCenter() {
                       {Object.entries(s.dispositionBreakdown).map(([k, v]) => (
                         <Badge key={k} variant="outline" className="mr-1 text-xs">{k}: {v}</Badge>
                       ))}
+                    </TableCell>
+                    <TableCell>
+                      <Link href={`/synthetic-testing?complaint=${s.complaintId}`}>
+                        <Button variant="ghost" size="sm" className="h-7 text-xs" data-testid={`action-test-${s.complaintId}`}>
+                          <FlaskConical className="w-3 h-3 mr-1" />
+                          Test
+                        </Button>
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}

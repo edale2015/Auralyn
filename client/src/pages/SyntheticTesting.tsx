@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, FlaskConical, AlertTriangle, CheckCircle, ArrowUpRight, ArrowDownRight, Eye, BarChart3 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 
 type RunStats = {
   accuracy: number;
@@ -113,10 +113,14 @@ function RunStatsPanel({ stats, runId }: { stats: RunStats; runId: string }) {
 export default function SyntheticTesting() {
   const { authFetch } = useAuth();
   const { toast } = useToast();
+  const searchString = useSearch();
+  const urlParams = new URLSearchParams(searchString);
+  const preselectedComplaint = urlParams.get("complaint") || "";
+
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [complaints, setComplaints] = useState<string[]>([]);
-  const [selectedComplaint, setSelectedComplaint] = useState("");
+  const [selectedComplaint, setSelectedComplaint] = useState(preselectedComplaint);
   const [selectedCount, setSelectedCount] = useState("100");
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
