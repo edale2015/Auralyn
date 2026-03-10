@@ -1,0 +1,795 @@
+Absolutely. Here is Pack A + Pack B in paste-ready format.
+
+This gives you:
+
+Pack A
+
+extract_med_to_condition_triggers.ts
+
+Pack B
+
+A lightweight golden-case test harness:
+
+goldenCaseRunner.ts
+
+goldenCaseComparator.ts
+
+goldenCases.sample.json
+
+This closes the last major missing core skill and gives you a fast regression loop so you can harden complaints without hand-testing everything like a one-person QA orchestra.
+
+Pack A
+
+Create:
+
+server/skills/intake/extractMedToConditionTriggers.ts
+
+Then update:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+1. server/skills/intake/extractMedToConditionTriggers.ts
+
+This skill:
+
+reads meds from context.modifiers.medications
+
+tries MED_TO_CONDITION_TRIGGERS.csv first
+
+falls back to a built-in medication map
+
+returns:
+
+suspected conditions
+
+follow-up questions
+
+confidence by condition
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type ConditionTrigger = {
+  condition: string;
+  confidence: number;
+  matched_medications: string[];
+};
+
+type ExtractMedToConditionTriggersResult = {
+  suspected_conditions: ConditionTrigger[];
+  follow_up_questions: string[];
+  confidence_by_condition: Record<string, number>;
+};
+
+function normalizeList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String).map((s) => s.trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[|;,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+type BuiltInMedRule = {
+  meds: string[];
+  condition: string;
+  confidence: number;
+  questions: string[];
+};
+
+const BUILT_IN_MED_RULES: BuiltInMedRule[] = [
+  {
+    meds: ["eliquis", "apixaban", "xarelto", "rivaroxaban", "warfarin", "coumadin"],
+    condition: "anticoagulation_history",
+    confidence: 0.9,
+    questions: [
+      "What do you take the blood thinner for?",
+      "Any bleeding, black stools, coughing blood, or head injury?",
+      "Any missed doses or recent dose changes?",
+    ],
+  },
+  {
+    meds: ["albuterol", "ventolin", "proair", "symbicort", "advair", "flovent"],
+    condition: "asthma_or_copd_history",
+    confidence: 0.86,
+    questions: [
+      "Do you have asthma or COPD?",
+      "How often are you using your rescue inhaler?",
+      "Any wheezing, nighttime symptoms, or worsening shortness of breath?",
+    ],
+  },
+  {
+    meds: ["metformin", "glipizide", "jardiance", "empagliflozin", "ozempic", "insulin"],
+    condition: "diabetes_history",
+    confidence: 0.88,
+    questions: [
+      "Do you have diabetes?",
+      "What have your blood sugars been running?",
+      "Any vomiting, dehydration, or confusion?",
+    ],
+  },
+  {
+    meds: ["lasix", "furosemide", "torsemide", "bumex"],
+    condition: "heart_failure_or_volume_issue_history",
+    confidence: 0.72,
+    questions: [
+      "Do you take this for heart failure or fluid retention?",
+      "Any swelling, orthopnea, or sudden weight gain?",
+    ],
+  },
+  {
+    meds: ["metoprolol", "carvedilol", "diltiazem", "amiodarone", "digoxin"],
+    condition: "arrhythmia_or_rate_control_history",
+    confidence: 0.65,
+    questions: [
+      "Do you take this for atrial fibrillation or another heart rhythm problem?",
+      "Any palpitations, dizziness, or fainting?",
+    ],
+  },
+  {
+    meds: ["prednisone", "methylprednisolone", "dexamethasone"],
+    condition: "steroid_exposure_or_immunosuppression",
+    confidence: 0.78,
+    questions: [
+      "Are you on steroids right now or recently?",
+      "What dose and for how long?",
+      "Any diabetes, infection, or immune suppression concerns?",
+    ],
+  },
+];
+
+function dedupeStrings(items: string[]): string[] {
+  return [...new Set(items.map((s) => s.trim()).filter(Boolean))];
+}
+
+function normalizeMedText(med: string): string {
+  return med.toLowerCase().trim();
+}
+
+export async function extractMedToConditionTriggers(
+  context: SkillContext
+): Promise<SkillResult<ExtractMedToConditionTriggersResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+
+  const medications = normalizeList(context.modifiers?.medications).map(normalizeMedText);
+
+  const suspectedMap = new Map<string, ConditionTrigger>();
+  const followUpQuestions: string[] = [];
+  const tablesUsed: string[] = [];
+  const ruleHits: string[] = [];
+
+  let csvRows: CsvRow[] = [];
+  try {
+    csvRows = await loadCsvTable("MED_TO_CONDITION_TRIGGERS.csv");
+  } catch {
+    csvRows = [];
+  }
+
+  if (csvRows.length) {
+    tablesUsed.push("MED_TO_CONDITION_TRIGGERS");
+
+    for (const row of csvRows) {
+      const medTrigger = getFirstValue(row, [
+        "MEDICATION",
+        "Medication",
+        "MED",
+        "Trigger",
+        "TRIGGER_MED",
+      ]).toLowerCase();
+
+      const condition = getFirstValue(row, [
+        "CONDITION",
+        "Condition",
+        "Condition_Name",
+        "Bundle_Name",
+      ]);
+
+      const confidence = Number(
+        getFirstValue(row, ["CONFIDENCE", "Confidence", "Weight"]) || "0.8"
+      );
+
+      const questions = normalizeList(
+        getFirstValue(row, ["FOLLOWUP_QUESTIONS", "Questions", "Question_List"])
+      );
+
+      if (!medTrigger || !condition) continue;
+
+      const matchedMeds = medications.filter((m) => m.includes(medTrigger));
+      if (!matchedMeds.length) continue;
+
+      const existing = suspectedMap.get(condition) ?? {
+        condition,
+        confidence: 0,
+        matched_medications: [],
+      };
+
+      existing.confidence = Math.max(existing.confidence, confidence);
+      existing.matched_medications = dedupeStrings([
+        ...existing.matched_medications,
+        ...matchedMeds,
+      ]);
+
+      suspectedMap.set(condition, existing);
+      followUpQuestions.push(...questions);
+      ruleHits.push(`MED_TRIGGER_${medTrigger.toUpperCase()}`);
+    }
+  } else {
+    tablesUsed.push("MED_TO_CONDITION_TRIGGERS_FALLBACK");
+
+    for (const rule of BUILT_IN_MED_RULES) {
+      const matchedMeds = medications.filter((m) =>
+        rule.meds.some((r) => m.includes(r))
+      );
+
+      if (!matchedMeds.length) continue;
+
+      const existing = suspectedMap.get(rule.condition) ?? {
+        condition: rule.condition,
+        confidence: 0,
+        matched_medications: [],
+      };
+
+      existing.confidence = Math.max(existing.confidence, rule.confidence);
+      existing.matched_medications = dedupeStrings([
+        ...existing.matched_medications,
+        ...matchedMeds,
+      ]);
+
+      suspectedMap.set(rule.condition, existing);
+      followUpQuestions.push(...rule.questions);
+      ruleHits.push(`MED_TRIGGER_${rule.condition.toUpperCase()}`);
+    }
+  }
+
+  const suspected_conditions = [...suspectedMap.values()].sort(
+    (a, b) => b.confidence - a.confidence
+  );
+
+  const confidence_by_condition: Record<string, number> = {};
+  for (const item of suspected_conditions) {
+    confidence_by_condition[item.condition] = item.confidence;
+  }
+
+  const result: SkillResult<ExtractMedToConditionTriggersResult> = {
+    skillId: "SK002",
+    skillName: "extract_med_to_condition_triggers",
+    version: "v1",
+    status: "success",
+    confidence: suspected_conditions.length ? 0.9 : 0.8,
+    result: {
+      suspected_conditions,
+      follow_up_questions: dedupeStrings(followUpQuestions),
+      confidence_by_condition,
+    },
+    audit: {
+      tablesUsed,
+      ruleHits,
+      missingData: medications.length ? [] : ["medications"],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [
+      "trigger_global_secondary_questions",
+      "run_complaint_question_bundle",
+    ],
+  };
+
+  assertSkillResultShape(result, "extract_med_to_condition_triggers");
+  return result;
+}
+2. Update server/orchestrator/clinicalSkillOrchestrator.ts
+
+Only the relevant updated version below. Replace your file with this one so extract_med_to_condition_triggers is real.
+
+import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
+import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
+import { collectModifiers } from "../skills/intake/collectModifiers";
+import { extractMedToConditionTriggers } from "../skills/intake/extractMedToConditionTriggers";
+import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
+import { normalizePatientStory } from "../skills/intake/normalizePatientStory";
+import { detectRedFlags } from "../skills/safety/detectRedFlags";
+import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { triggerGlobalSecondaryQuestions } from "../skills/questions/triggerGlobalSecondaryQuestions";
+import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
+import { scoreDifferentialClusters } from "../skills/reasoning/scoreDifferentialClusters";
+import { applyClinicalScore } from "../skills/reasoning/applyClinicalScore";
+import { generateDifferential } from "../skills/reasoning/generateDifferential";
+import { checkConsistencyAndGaps } from "../skills/audit/checkConsistencyAndGaps";
+import { determineDisposition } from "../skills/safety/determineDisposition";
+import { generateEmergencyWarning } from "../skills/output/generateEmergencyWarning";
+import { generateAssessmentPlan } from "../skills/output/generateAssessmentPlan";
+import { generatePhysicianReviewPacket } from "../skills/output/generatePhysicianReviewPacket";
+import { measureWorkflowValue } from "../skills/analytics/measureWorkflowValue";
+import { assertSkillResultShape } from "../skills/shared/schemaValidators";
+
+async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
+  const started = Date.now();
+
+  return {
+    skillId: `PLACEHOLDER_${skillName}`,
+    skillName,
+    version: "v1",
+    status: "success",
+    confidence: 0.75,
+    result: {
+      message: `${skillName} not yet fully implemented`,
+      caseId: context.caseId,
+    },
+    audit: {
+      tablesUsed: [],
+      ruleHits: [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+
+const DEFAULT_SEQUENCE = [
+  "collect_modifiers",
+  "extract_med_to_condition_triggers",
+  "identify_chief_complaint",
+  "normalize_patient_story",
+  "detect_red_flags",
+  "run_complaint_question_bundle",
+  "trigger_global_secondary_questions",
+  "select_next_best_question",
+  "score_differential_clusters",
+  "apply_clinical_score",
+  "generate_differential",
+  "check_consistency_and_gaps",
+  "determine_disposition",
+  "generate_emergency_warning",
+  "generate_assessment_plan",
+  "generate_physician_review_packet",
+  "attach_outcome_stub",
+  "measure_workflow_value",
+] as const;
+
+export class ClinicalSkillOrchestrator {
+  async run(initialContext: SkillContext): Promise<OrchestratorState> {
+    const state: OrchestratorState = {
+      context: initialContext,
+      skillResults: {},
+      completedSkills: [],
+      pendingSkills: [...DEFAULT_SEQUENCE],
+      halted: false,
+    };
+
+    for (const skillName of DEFAULT_SEQUENCE) {
+      if (state.halted) break;
+
+      const priorComplaintId =
+        state.skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        state.context.complaintId;
+
+      const currentModifiers =
+        state.skillResults["collect_modifiers"]?.result?.modifiers ??
+        state.context.modifiers;
+
+      const normalizedFacts =
+        state.skillResults["normalize_patient_story"]?.result?.structured_facts ??
+        state.context.knownFacts;
+
+      const contextForSkill: SkillContext = {
+        ...state.context,
+        complaintId: priorComplaintId,
+        modifiers: currentModifiers,
+        knownFacts: normalizedFacts,
+        priorSkillOutputs: state.skillResults,
+      };
+
+      let result: SkillResult;
+
+      switch (skillName) {
+        case "collect_modifiers":
+          result = await collectModifiers(contextForSkill);
+          break;
+        case "extract_med_to_condition_triggers":
+          result = await extractMedToConditionTriggers(contextForSkill);
+          break;
+        case "identify_chief_complaint":
+          result = await identifyChiefComplaint(contextForSkill);
+          break;
+        case "normalize_patient_story":
+          result = await normalizePatientStory(contextForSkill);
+          break;
+        case "detect_red_flags":
+          result = await detectRedFlags(contextForSkill);
+          break;
+        case "run_complaint_question_bundle":
+          result = await runComplaintQuestionBundle(contextForSkill);
+          break;
+        case "trigger_global_secondary_questions":
+          result = await triggerGlobalSecondaryQuestions(contextForSkill);
+          break;
+        case "select_next_best_question":
+          result = await selectNextBestQuestion(contextForSkill);
+          break;
+        case "score_differential_clusters":
+          result = await scoreDifferentialClusters(contextForSkill);
+          break;
+        case "apply_clinical_score":
+          result = await applyClinicalScore(contextForSkill);
+          break;
+        case "generate_differential":
+          result = await generateDifferential(contextForSkill);
+          break;
+        case "check_consistency_and_gaps":
+          result = await checkConsistencyAndGaps(contextForSkill);
+          break;
+        case "determine_disposition":
+          result = await determineDisposition(contextForSkill);
+          break;
+        case "generate_emergency_warning":
+          result = await generateEmergencyWarning(contextForSkill);
+          break;
+        case "generate_assessment_plan":
+          result = await generateAssessmentPlan(contextForSkill);
+          break;
+        case "generate_physician_review_packet":
+          result = await generatePhysicianReviewPacket(contextForSkill);
+          break;
+        case "attach_outcome_stub":
+          result = await attachOutcomeStub(contextForSkill);
+          break;
+        case "measure_workflow_value":
+          result = await measureWorkflowValue(contextForSkill);
+          break;
+        default:
+          result = await runPlaceholderSkill(skillName, contextForSkill);
+          break;
+      }
+
+      assertSkillResultShape(result, skillName);
+
+      state.skillResults[skillName] = result;
+      state.completedSkills.push(skillName);
+      state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+      await appendSkillRunLog(contextForSkill, result);
+
+      if (skillName === "identify_chief_complaint" && result.result?.complaint_id) {
+        state.context.complaintId = result.result.complaint_id;
+      }
+      if (skillName === "collect_modifiers" && result.result?.modifiers) {
+        state.context.modifiers = result.result.modifiers;
+      }
+      if (skillName === "normalize_patient_story" && result.result?.structured_facts) {
+        state.context.knownFacts = result.result.structured_facts;
+      }
+      if (skillName === "determine_disposition") {
+        state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
+      }
+    }
+
+    state.platformChecks = evaluatePlatformPrinciples(state);
+
+    await appendCaseAuditLog({
+      context: state.context,
+      finalDisposition: state.finalDisposition,
+      finalStatus: state.halted ? "halted" : "complete",
+      completedSkills: state.completedSkills,
+      redFlagHits:
+        state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+      differentialTop3:
+        state.skillResults["generate_differential"]?.result?.differential_list
+          ?.slice?.(0, 3)
+          ?.map?.((d: any) => d.diagnosis ?? String(d)) ?? [],
+      clinicalScoreUsed:
+        state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+      platformChecks: state.platformChecks,
+    });
+
+    return state;
+  }
+}
+Pack B
+
+Create:
+
+server/testing/goldenCaseComparator.ts
+server/testing/goldenCaseRunner.ts
+server/testing/goldenCases.sample.json
+
+These are intentionally lightweight so you can expand them complaint by complaint without ceremony.
+
+3. server/testing/goldenCaseComparator.ts
+type ComparatorInput = {
+  actual: any;
+  expected: any;
+};
+
+type ComparatorResult = {
+  passed: boolean;
+  failures: string[];
+};
+
+function includesCaseInsensitive(haystack: string, needle: string): boolean {
+  return haystack.toLowerCase().includes(needle.toLowerCase());
+}
+
+function compareArrayContains(actual: any[], expected: any[], label: string, failures: string[]) {
+  for (const item of expected) {
+    const found = actual.some((a) =>
+      String(a).toLowerCase() === String(item).toLowerCase() ||
+      includesCaseInsensitive(String(a), String(item))
+    );
+    if (!found) failures.push(`${label} missing expected item: ${item}`);
+  }
+}
+
+export function compareGoldenCase({ actual, expected }: ComparatorInput): ComparatorResult {
+  const failures: string[] = [];
+
+  if (expected.complaint_id && actual.complaint_id !== expected.complaint_id) {
+    failures.push(`complaint_id expected ${expected.complaint_id} but got ${actual.complaint_id}`);
+  }
+
+  if (expected.disposition && actual.disposition !== expected.disposition) {
+    failures.push(`disposition expected ${expected.disposition} but got ${actual.disposition}`);
+  }
+
+  if (typeof expected.clinical_score_name === "string") {
+    if (actual.clinical_score_name !== expected.clinical_score_name) {
+      failures.push(
+        `clinical_score_name expected ${expected.clinical_score_name} but got ${actual.clinical_score_name}`
+      );
+    }
+  }
+
+  if (typeof expected.clinical_score_min === "number") {
+    if (typeof actual.clinical_score_value !== "number" || actual.clinical_score_value < expected.clinical_score_min) {
+      failures.push(
+        `clinical_score_value expected >= ${expected.clinical_score_min} but got ${actual.clinical_score_value}`
+      );
+    }
+  }
+
+  if (Array.isArray(expected.red_flag_hits_contains)) {
+    compareArrayContains(
+      actual.red_flag_hits ?? [],
+      expected.red_flag_hits_contains,
+      "red_flag_hits",
+      failures
+    );
+  }
+
+  if (Array.isArray(expected.top_differential_contains)) {
+    compareArrayContains(
+      actual.top_differential ?? [],
+      expected.top_differential_contains,
+      "top_differential",
+      failures
+    );
+  }
+
+  if (Array.isArray(expected.affirmed_symptoms_contains)) {
+    compareArrayContains(
+      actual.affirmed_symptoms ?? [],
+      expected.affirmed_symptoms_contains,
+      "affirmed_symptoms",
+      failures
+    );
+  }
+
+  if (Array.isArray(expected.negated_symptoms_contains)) {
+    compareArrayContains(
+      actual.negated_symptoms ?? [],
+      expected.negated_symptoms_contains,
+      "negated_symptoms",
+      failures
+    );
+  }
+
+  return {
+    passed: failures.length === 0,
+    failures,
+  };
+}
+4. server/testing/goldenCaseRunner.ts
+
+This runner:
+
+loads a JSON file of cases
+
+runs the orchestrator
+
+extracts comparable outputs
+
+prints pass/fail
+
+import fs from "fs/promises";
+import path from "path";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { compareGoldenCase } from "./goldenCaseComparator";
+import { SkillContext } from "../skills/shared/skillTypes";
+
+type GoldenCase = {
+  id: string;
+  input: {
+    rawText: string;
+    modifiers?: Record<string, any>;
+  };
+  expected: Record<string, any>;
+};
+
+function extractActualResult(state: any) {
+  return {
+    complaint_id:
+      state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+    disposition:
+      state.skillResults?.determine_disposition?.result?.disposition ?? "",
+    clinical_score_name:
+      state.skillResults?.apply_clinical_score?.result?.score_name ?? "",
+    clinical_score_value:
+      state.skillResults?.apply_clinical_score?.result?.score_value ?? null,
+    red_flag_hits:
+      (state.skillResults?.detect_red_flags?.result?.red_flag_hits ?? []).map(
+        (r: any) => r.label ?? r.id ?? String(r)
+      ),
+    top_differential:
+      (state.skillResults?.generate_differential?.result?.differential_list ?? [])
+        .slice(0, 3)
+        .map((d: any) => d.diagnosis ?? String(d)),
+    affirmed_symptoms:
+      state.skillResults?.normalize_patient_story?.result?.associated_symptoms ?? [],
+    negated_symptoms:
+      state.skillResults?.normalize_patient_story?.result?.negated_symptoms ?? [],
+  };
+}
+
+async function loadGoldenCases(fileName: string): Promise<GoldenCase[]> {
+  const fullPath = path.resolve(process.cwd(), "server/testing", fileName);
+  const raw = await fs.readFile(fullPath, "utf8");
+  return JSON.parse(raw) as GoldenCase[];
+}
+
+export async function runGoldenCases(fileName = "goldenCases.sample.json") {
+  const cases = await loadGoldenCases(fileName);
+  const orchestrator = new ClinicalSkillOrchestrator();
+
+  let passed = 0;
+  let failed = 0;
+
+  for (const testCase of cases) {
+    const context: SkillContext = {
+      caseId: `GOLDEN_${testCase.id}`,
+      rawText: testCase.input.rawText,
+      modifiers: testCase.input.modifiers ?? {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+      },
+    };
+
+    const state = await orchestrator.run(context);
+    const actual = extractActualResult(state);
+    const comparison = compareGoldenCase({
+      actual,
+      expected: testCase.expected,
+    });
+
+    if (comparison.passed) {
+      passed += 1;
+      console.log(`PASS ${testCase.id}`);
+    } else {
+      failed += 1;
+      console.log(`FAIL ${testCase.id}`);
+      for (const failure of comparison.failures) {
+        console.log(`  - ${failure}`);
+      }
+      console.log(`  actual: ${JSON.stringify(actual, null, 2)}`);
+    }
+  }
+
+  console.log(`\nGolden case results: ${passed} passed, ${failed} failed, total ${cases.length}`);
+  return { passed, failed, total: cases.length };
+}
+
+// Allows: ts-node server/testing/goldenCaseRunner.ts
+if (require.main === module) {
+  runGoldenCases().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+5. server/testing/goldenCases.sample.json
+
+These are starter cases. You can expand them complaint by complaint.
+
+[
+  {
+    "id": "sore_throat_classic",
+    "input": {
+      "rawText": "32 year old male with sore throat x 3 days, fever, no cough"
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "clinical_score_name": "Centor",
+      "clinical_score_min": 2,
+      "top_differential_contains": ["strep", "viral", "mono"],
+      "affirmed_symptoms_contains": ["fever", "sore throat"],
+      "negated_symptoms_contains": ["cough"]
+    }
+  },
+  {
+    "id": "elderly_cough_confusion",
+    "input": {
+      "rawText": "70 year old with cough, fever, confused for 2 days"
+    },
+    "expected": {
+      "complaint_id": "cough",
+      "clinical_score_name": "CURB65",
+      "clinical_score_min": 2,
+      "red_flag_hits_contains": ["confusion"],
+      "top_differential_contains": ["pneumonia"]
+    }
+  },
+  {
+    "id": "uti_no_fever",
+    "input": {
+      "rawText": "26 year old female with dysuria and frequency x 2 days, no fever"
+    },
+    "expected": {
+      "top_differential_contains": ["cystitis"],
+      "affirmed_symptoms_contains": ["dysuria", "frequency"],
+      "negated_symptoms_contains": ["fever"]
+    }
+  },
+  {
+    "id": "airway_warning_sore_throat",
+    "input": {
+      "rawText": "child with sore throat, drooling, muffled voice, cannot swallow"
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "disposition": "er_now",
+      "red_flag_hits_contains": ["drooling", "muffled voice", "cannot swallow"]
+    }
+  }
+]
+What Pack A + B gives you
+
+With these in place:
+
+all 18 of 18 core skills are now real
+
+medication history starts shaping reasoning and follow-up
+
+you can run repeatable golden cases in seconds
+
+regressions stop hiding in the wallpaper
+
+That’s the moment the skill layer becomes not just functional, but maintainable.
+
+Best immediate next move
+
+Run:
+
+your current manual test set
+
+the sample golden cases
+
+then add 3 more per top complaint:
+
+straightforward case
+
+red-flag case
+
+tricky negation case
+
+That will give you a compact but powerful shield against future breakage.
+
+If you want, next I’ll write a golden case worksheet CSV format plus importer so you can author cases in a spreadsheet instead of JSON.
