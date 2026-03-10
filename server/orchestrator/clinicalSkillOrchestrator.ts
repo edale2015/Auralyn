@@ -7,12 +7,17 @@ import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint"
 import { normalizePatientStory } from "../skills/intake/normalizePatientStory";
 import { detectRedFlags } from "../skills/safety/detectRedFlags";
 import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { triggerGlobalSecondaryQuestions } from "../skills/questions/triggerGlobalSecondaryQuestions";
 import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
 import { scoreDifferentialClusters } from "../skills/reasoning/scoreDifferentialClusters";
 import { applyClinicalScore } from "../skills/reasoning/applyClinicalScore";
 import { generateDifferential } from "../skills/reasoning/generateDifferential";
+import { checkConsistencyAndGaps } from "../skills/audit/checkConsistencyAndGaps";
 import { determineDisposition } from "../skills/safety/determineDisposition";
+import { generateEmergencyWarning } from "../skills/output/generateEmergencyWarning";
+import { generateAssessmentPlan } from "../skills/output/generateAssessmentPlan";
 import { generatePhysicianReviewPacket } from "../skills/output/generatePhysicianReviewPacket";
+import { measureWorkflowValue } from "../skills/analytics/measureWorkflowValue";
 import { assertSkillResultShape } from "../skills/shared/schemaValidators";
 
 async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
@@ -110,6 +115,9 @@ export class ClinicalSkillOrchestrator {
         case "run_complaint_question_bundle":
           result = await runComplaintQuestionBundle(contextForSkill);
           break;
+        case "trigger_global_secondary_questions":
+          result = await triggerGlobalSecondaryQuestions(contextForSkill);
+          break;
         case "select_next_best_question":
           result = await selectNextBestQuestion(contextForSkill);
           break;
@@ -122,14 +130,26 @@ export class ClinicalSkillOrchestrator {
         case "generate_differential":
           result = await generateDifferential(contextForSkill);
           break;
+        case "check_consistency_and_gaps":
+          result = await checkConsistencyAndGaps(contextForSkill);
+          break;
         case "determine_disposition":
           result = await determineDisposition(contextForSkill);
+          break;
+        case "generate_emergency_warning":
+          result = await generateEmergencyWarning(contextForSkill);
+          break;
+        case "generate_assessment_plan":
+          result = await generateAssessmentPlan(contextForSkill);
           break;
         case "generate_physician_review_packet":
           result = await generatePhysicianReviewPacket(contextForSkill);
           break;
         case "attach_outcome_stub":
           result = await attachOutcomeStub(contextForSkill);
+          break;
+        case "measure_workflow_value":
+          result = await measureWorkflowValue(contextForSkill);
           break;
         default:
           result = await runPlaceholderSkill(skillName, contextForSkill);
