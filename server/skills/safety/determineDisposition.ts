@@ -5,6 +5,9 @@ import {
   assertSkillResultShape,
 } from "../shared/schemaValidators";
 import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
+import { complaintIdsMatch, canonicalizeComplaintId } from "../shared/complaintAliasRegistry";
+import { evaluateWhenExpr } from "../shared/expressionEvaluator";
 
 type DetermineDispositionResult = {
   disposition: string;
@@ -13,40 +16,39 @@ type DetermineDispositionResult = {
   rationale: string;
 };
 
-function matchDispositionFromRules(
-  rows: CsvRow[],
-  complaintId: string,
-  redFlagIds: string[]
-): DetermineDispositionResult | null {
-  for (const row of rows) {
-    const rowComplaint = getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
-    if (rowComplaint && rowComplaint.toLowerCase() !== complaintId.toLowerCase()) continue;
+function getStructuredFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
 
-    const trigger = getFirstValue(row, ["Trigger", "Rule_Trigger", "Condition", "WHEN_EXPR", "When_Expr"]);
-    const disposition = getFirstValue(row, ["Disposition", "Disposition_Code", "DISPOSITION_LEVEL", "Disposition_Level"]);
-    const urgency = getFirstValue(row, ["Urgency", "CONFIDENCE_HINT", "Confidence_Hint"]) || "routine";
-    const careSite = getFirstValue(row, ["Care_Site", "Site"]) || "urgent_care";
-    const rationale = getFirstValue(row, ["Rationale", "Reason", "Explanation", "RATIONALE_TEMPLATE_ID", "Rationale_Template_ID"]) || disposition;
-
-    if (!trigger || !disposition) continue;
-
-    const triggerTerms = trigger
-      .split("|")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const matched = triggerTerms.some((t) => redFlagIds.includes(t));
-    if (matched) {
-      return {
-        disposition,
-        urgency,
-        care_site: careSite,
-        rationale,
-      };
-    }
+function fallbackDisposition(redFlagSeverity: string, escalationNeeded: boolean): DetermineDispositionResult {
+  if (redFlagSeverity === "critical") {
+    return {
+      disposition: "er_now",
+      urgency: "critical",
+      care_site: "emergency_department",
+      rationale: "Critical red flag(s) detected",
+    };
   }
 
-  return null;
+  if (redFlagSeverity === "high" || escalationNeeded) {
+    return {
+      disposition: "urgent_same_day",
+      urgency: "high",
+      care_site: "urgent_care",
+      rationale: "High-risk feature(s) detected",
+    };
+  }
+
+  return {
+    disposition: "routine_evaluation",
+    urgency: "routine",
+    care_site: "urgent_care",
+    rationale: "No urgent or emergency rule matched",
+  };
 }
 
 export async function determineDisposition(
@@ -56,57 +58,81 @@ export async function determineDisposition(
   assertContextHasCaseId(context);
   assertComplaintIdIfNeeded(context, "determine_disposition");
 
+  const complaintId = canonicalizeComplaintId(context.complaintId);
+  const facts = getStructuredFacts(context);
+  const { answers } = buildSyntheticAnswers(complaintId, facts, context.modifiers ?? {});
+
   const redFlagResult =
     context.priorSkillOutputs?.detect_red_flags?.result ??
     context.priorSkillOutputs?.detectRedFlags?.result ??
     {};
 
-  const redFlagIds: string[] = Array.isArray(redFlagResult.rationale_refs)
-    ? redFlagResult.rationale_refs
-    : [];
-
   const redFlagSeverity = redFlagResult.severity ?? "none";
   const escalationNeeded = redFlagResult.escalation_needed === true;
 
-  let dispRows: CsvRow[] = [];
-  try {
-    dispRows = await loadCsvTable("DISPOSITION_RULES.csv");
-  } catch {
-    try {
-      dispRows = await loadCsvTable("DISP_RULES.csv");
-    } catch {
-      dispRows = [];
+  let gateResult = "PASS";
+  if (redFlagSeverity === "critical") gateResult = "ER_SEND";
+  else if (redFlagSeverity === "high" || escalationNeeded) gateResult = "ESCALATE";
+
+  (answers as Record<string, string>)["redFlagGate.gateResult"] = gateResult;
+
+  const clinicalScoreResult =
+    context.priorSkillOutputs?.apply_clinical_score?.result ?? {};
+  const scoreName = (clinicalScoreResult.score_name ?? "").toLowerCase();
+  const scoreValue = clinicalScoreResult.score_value;
+  if (scoreName && typeof scoreValue === "number") {
+    (answers as Record<string, string>)[`scores.${scoreName}`] = String(scoreValue);
+  }
+
+  const clusterResults = context.priorSkillOutputs?.score_differential_clusters?.result;
+  if (clusterResults?.scored_clusters) {
+    for (const cl of clusterResults.scored_clusters) {
+      (answers as Record<string, string>)[`scores.${cl.cluster_id}`] = String(cl.score);
     }
   }
 
-  let finalResult =
-    dispRows.length > 0
-      ? matchDispositionFromRules(dispRows, context.complaintId!, redFlagIds)
-      : null;
+  let dispRows: CsvRow[] = [];
+  const tablesUsed: string[] = [];
+  let finalResult: DetermineDispositionResult | null = null;
+  let matchedRuleId = "";
+
+  try {
+    dispRows = await loadCsvTable("DISPOSITION_RULES.csv");
+  } catch {
+    dispRows = [];
+  }
+
+  if (dispRows.length) {
+    tablesUsed.push("DISPOSITION_RULES");
+
+    for (const row of dispRows) {
+      const rowComplaint = getFirstValue(row, ["CC_ID", "Complaint_ID", "Complaint"]);
+      if (rowComplaint && !complaintIdsMatch(rowComplaint, complaintId)) continue;
+
+      const expr = getFirstValue(row, ["WHEN_EXPR", "Trigger", "Condition", "Rule_Expr"]);
+      const disposition = getFirstValue(row, ["DISPOSITION_LEVEL", "Disposition", "Disposition_Code"]);
+      const urgency = getFirstValue(row, ["URGENCY", "Urgency", "Priority"]) || "routine";
+      const careSite = getFirstValue(row, ["CARE_SITE", "Care_Site", "Site"]) || "urgent_care";
+      const rationale = getFirstValue(row, ["RATIONALE", "Rationale", "Reason"]) || disposition;
+      const ruleId = getFirstValue(row, ["RULE_ID", "ID", "Disposition_Rule_ID"]) || disposition;
+
+      if (!expr || !disposition) continue;
+      if (!evaluateWhenExpr(expr, answers)) continue;
+
+      finalResult = {
+        disposition,
+        urgency,
+        care_site: careSite,
+        rationale,
+      };
+      matchedRuleId = ruleId;
+      break;
+    }
+  }
 
   if (!finalResult) {
-    if (redFlagSeverity === "critical") {
-      finalResult = {
-        disposition: "er_now",
-        urgency: "critical",
-        care_site: "emergency_department",
-        rationale: "Critical red flag(s) detected",
-      };
-    } else if (escalationNeeded || redFlagSeverity === "high") {
-      finalResult = {
-        disposition: "urgent_same_day",
-        urgency: "high",
-        care_site: "urgent_care",
-        rationale: "High-risk feature(s) detected",
-      };
-    } else {
-      finalResult = {
-        disposition: "routine_evaluation",
-        urgency: "routine",
-        care_site: "urgent_care",
-        rationale: "No red flags requiring escalation detected",
-      };
-    }
+    tablesUsed.push("DISPOSITION_RULES_FALLBACK");
+    finalResult = fallbackDisposition(redFlagSeverity, escalationNeeded);
   }
 
   const result: SkillResult<DetermineDispositionResult> = {
@@ -114,11 +140,11 @@ export async function determineDisposition(
     skillName: "determine_disposition",
     version: "v1",
     status: "success",
-    confidence: 0.96,
+    confidence: matchedRuleId ? 0.97 : 0.93,
     result: finalResult,
     audit: {
-      tablesUsed: dispRows.length ? ["DISPOSITION_RULES"] : ["DISP_RULES_FALLBACK"],
-      ruleHits: redFlagIds,
+      tablesUsed,
+      ruleHits: matchedRuleId ? [matchedRuleId] : [],
       missingData: [],
       latencyMs: Date.now() - started,
     },

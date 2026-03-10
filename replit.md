@@ -101,15 +101,18 @@ Includes a healthcheck service and a job runner for maintaining system stability
 ### Clinical Skill Layer (18/18 real — zero placeholders)
 - **Orchestrator**: `server/orchestrator/clinicalSkillOrchestrator.ts` — sequential 18-skill pipeline with context threading
 - **Negation engine**: `server/skills/shared/negationHelper.ts` — clause-level negation with conjunction boundaries
+- **Complaint alias registry**: `server/skills/shared/complaintAliasRegistry.ts` — canonical complaint families (sore_throat, cough, uti, etc.) with alias resolution
+- **Expression evaluator**: `server/skills/shared/expressionEvaluator.ts` — safe evaluator for sheet expressions (`answers.Q_*`, `redFlagGate.*`, `scores.*`)
+- **Synthetic answer bridge**: `server/skills/shared/syntheticAnswerBridge.ts` — converts structured facts into `answers.Q_*` keys for expression rules, supports tri-state (yes/no/unknown)
 - **Intake**: `collectModifiers`, `extractMedToConditionTriggers`, `identifyChiefComplaint`, `normalizePatientStory`
-- **Safety**: `detectRedFlags`, `determineDisposition`
+- **Safety**: `detectRedFlags` (expression-backed with CSV fallback), `determineDisposition` (expression-backed with redFlagGate + scores injection)
 - **Questions**: `runComplaintQuestionBundle`, `triggerGlobalSecondaryQuestions`, `selectNextBestQuestion`
-- **Reasoning**: `scoreDifferentialClusters`, `applyClinicalScore` (Centor/CURB-65), `generateDifferential`
+- **Reasoning**: `scoreDifferentialClusters` (expression-backed via shared evaluator), `applyClinicalScore` (Centor/CURB-65), `generateDifferential`
 - **Audit**: `checkConsistencyAndGaps`
 - **Output**: `generateEmergencyWarning`, `generateAssessmentPlan`, `generatePhysicianReviewPacket`
 - **Analytics**: `measureWorkflowValue`
 - **Outcomes**: `attachOutcomeStub`
-- **Golden case harness**: `server/testing/goldenCaseRunner.ts` + `goldenCases.sample.json` (7 cases)
+- **Golden case harness**: `server/testing/goldenCaseRunner.ts` + `goldenCaseComparator.ts` + `goldenCaseImporter.ts` + `goldenCaseSummary.ts` + `goldenCases.sample.json` (7 cases) + `goldenCases.template.csv` (spreadsheet-friendly authoring)
 
 ## External Dependencies
 

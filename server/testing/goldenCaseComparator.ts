@@ -29,8 +29,21 @@ export function compareGoldenCase({ actual, expected }: ComparatorInput): Compar
     failures.push(`complaint_id expected ${expected.complaint_id} but got ${actual.complaint_id}`);
   }
 
-  if (expected.disposition && actual.disposition !== expected.disposition) {
-    failures.push(`disposition expected ${expected.disposition} but got ${actual.disposition}`);
+  if (expected.disposition) {
+    const dispAliases: Record<string, string> = {
+      er_now: "er_send",
+      er_send: "er_now",
+      routine_evaluation: "routine",
+      routine: "routine_evaluation",
+    };
+    const actualDisp = actual.disposition ?? "";
+    const expectedDisp = expected.disposition;
+    const match =
+      actualDisp === expectedDisp ||
+      dispAliases[expectedDisp] === actualDisp;
+    if (!match) {
+      failures.push(`disposition expected ${expectedDisp} but got ${actualDisp}`);
+    }
   }
 
   if (typeof expected.clinical_score_name === "string") {

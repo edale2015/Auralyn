@@ -1,0 +1,1087 @@
+This phase does three big things:
+
+makes red flags expression-backed
+
+makes disposition expression-backed
+
+centralizes complaint alias resolution so mappings stop living like loose socks in random drawers
+
+That means your sheets become much closer to the actual source of truth, which is a major step toward making the system faster to tune, easier to scale, and more durable.
+
+What this pack adds
+
+Create these files:
+
+server/skills/shared/complaintAliasRegistry.ts
+server/skills/shared/expressionEvaluator.ts
+server/skills/shared/syntheticAnswerBridge.ts
+server/skills/safety/detectRedFlags.ts
+server/skills/safety/determineDisposition.ts
+
+Then update:
+
+server/skills/reasoning/scoreDifferentialClusters.ts
+server/orchestrator/clinicalSkillOrchestrator.ts
+1. server/skills/shared/complaintAliasRegistry.ts
+
+This file gives you one canonical place for complaint families and aliases.
+
+export type ComplaintAliasGroup = {
+  canonical: string;
+  aliases: string[];
+};
+
+const GROUPS: ComplaintAliasGroup[] = [
+  {
+    canonical: "sore_throat",
+    aliases: ["sore_throat", "ent_sore_throat", "throat_pain"],
+  },
+  {
+    canonical: "cough",
+    aliases: ["cough", "pulm_cough", "resp_cough"],
+  },
+  {
+    canonical: "uti",
+    aliases: ["uti", "gu_uti_symptoms", "gu_dysuria_uti", "dysuria"],
+  },
+  {
+    canonical: "chest_pain",
+    aliases: ["chest_pain", "cardiac_chest_pain"],
+  },
+  {
+    canonical: "abdominal_pain",
+    aliases: ["abdominal_pain", "gi_abdominal_pain", "abd_pain"],
+  },
+  {
+    canonical: "fever",
+    aliases: ["fever", "general_fever"],
+  },
+  {
+    canonical: "rash",
+    aliases: ["rash", "derm_rash"],
+  },
+  {
+    canonical: "ear_pain",
+    aliases: ["ear_pain", "ent_ear_pain", "otalgia"],
+  },
+  {
+    canonical: "sinus_pressure",
+    aliases: ["sinus_pressure", "ent_sinus_pressure", "sinusitis"],
+  },
+];
+
+const aliasToCanonical = new Map<string, string>();
+for (const group of GROUPS) {
+  for (const alias of group.aliases) {
+    aliasToCanonical.set(alias.toLowerCase(), group.canonical);
+  }
+}
+
+export function canonicalizeComplaintId(input?: string): string {
+  if (!input) return "";
+  const normalized = input.trim().toLowerCase();
+  return aliasToCanonical.get(normalized) ?? normalized;
+}
+
+export function getComplaintAliases(input?: string): string[] {
+  const canonical = canonicalizeComplaintId(input);
+  const group = GROUPS.find((g) => g.canonical === canonical);
+  return group ? group.aliases : canonical ? [canonical] : [];
+}
+
+export function complaintIdsMatch(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  return canonicalizeComplaintId(a) === canonicalizeComplaintId(b);
+}
+2. server/skills/shared/expressionEvaluator.ts
+
+This is a safer, reusable evaluator for sheet expressions like:
+
+answers.Q_ST_FEVER == 'yes' && answers.Q_ST_COUGH == 'no'
+
+answers.Q_UTI_DYSURIA == 'yes' || answers.Q_GU_DYSURIA == 'yes'
+
+It supports:
+
+==
+
+!=
+
+<=
+
+>=
+
+<
+
+>
+
+&&
+
+||
+
+parentheses
+
+export type AnswerMap = Record<string, string | number | boolean>;
+
+function normalizeExpr(expr: string): string {
+  return expr
+    .replace(/“|”/g, '"')
+    .replace(/‘|’/g, "'")
+    .trim();
+}
+
+function replaceAnswers(expr: string, answers: AnswerMap): string {
+  let transformed = expr;
+
+  const keys = Object.keys(answers).sort((a, b) => b.length - a.length);
+
+  for (const key of keys) {
+    const rawVal = answers[key];
+    let valueLiteral: string;
+
+    if (typeof rawVal === "string") {
+      valueLiteral = JSON.stringify(rawVal);
+    } else if (typeof rawVal === "boolean") {
+      valueLiteral = rawVal ? "true" : "false";
+    } else {
+      valueLiteral = String(rawVal);
+    }
+
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    transformed = transformed.replace(new RegExp(`\\banswers\\.${escaped}\\b`, "g"), valueLiteral);
+  }
+
+  return transformed;
+}
+
+function sanitizeExpr(expr: string): string {
+  const allowed = /^[a-zA-Z0-9_ "'().<>=!&|+-]*$/;
+  if (!allowed.test(expr)) {
+    throw new Error(`Expression contains unsupported characters: ${expr}`);
+  }
+  return expr;
+}
+
+export function evaluateWhenExpr(expr: string, answers: AnswerMap): boolean {
+  if (!expr || !expr.trim()) return false;
+
+  const normalized = normalizeExpr(expr);
+  const replaced = replaceAnswers(normalized, answers);
+  const sanitized = sanitizeExpr(replaced);
+
+  try {
+    // eslint-disable-next-line no-new-func
+    return Boolean(Function(`"use strict"; return (${sanitized});`)());
+  } catch {
+    return false;
+  }
+}
+3. server/skills/shared/syntheticAnswerBridge.ts
+
+This converts normalized structured facts into answers.Q_* keys that your expression rules can consume.
+
+It also supports tri-state fields:
+
+yes
+
+no
+
+unknown
+
+import { canonicalizeComplaintId } from "./complaintAliasRegistry";
+
+export type SyntheticAnswerBundle = {
+  answers: Record<string, string>;
+  factDebug: Record<string, any>;
+};
+
+function triState(value: unknown): string {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  return "unknown";
+}
+
+function maybeNumber(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+export function buildSyntheticAnswers(
+  complaintId: string,
+  facts: Record<string, any>,
+  modifiers: Record<string, any> = {}
+): SyntheticAnswerBundle {
+  const canonical = canonicalizeComplaintId(complaintId);
+
+  const prefixMap: Record<string, string[]> = {
+    sore_throat: ["ST_"],
+    cough: ["COUGH_", "PCO_"],
+    uti: ["UTI_", "GU_"],
+    chest_pain: ["CP_", "CARD_"],
+    abdominal_pain: ["ABD_", "GI_"],
+    fever: ["FEVER_"],
+    rash: ["RASH_"],
+    ear_pain: ["EAR_", "ENT_"],
+    sinus_pressure: ["SINUS_", "ENT_"],
+  };
+
+  const prefixes = prefixMap[canonical] ?? ["GEN_"];
+  const answers: Record<string, string> = {};
+
+  const yesNoFacts: Record<string, unknown> = {
+    FEVER: facts.fever_present,
+    COUGH: facts.cough_present,
+    COUGH_NEGATED: facts.cough_negated,
+    SORE_THROAT: facts.sore_throat_present,
+    SOB: facts.sob_present,
+    CHEST_PAIN: facts.chest_pain_present,
+    ABDOMINAL_PAIN: facts.abdominal_pain_present,
+    RASH: facts.rash_present,
+    DYSURIA: facts.dysuria_present,
+    FREQUENCY: facts.urinary_frequency_present,
+    URGENCY: facts.urinary_urgency_present,
+    DROOLING: facts.drooling_present,
+    STRIDOR: facts.stridor_present,
+    MUFFLED_VOICE: facts.muffled_voice_present,
+    CANNOT_SWALLOW: facts.cannot_swallow_present,
+    CONFUSION: facts.confusion_present,
+    VOMITING: facts.vomiting_present,
+    DIARRHEA: facts.diarrhea_present,
+  };
+
+  for (const prefix of prefixes) {
+    for (const [key, value] of Object.entries(yesNoFacts)) {
+      answers[`Q_${prefix}${key}`] = triState(value);
+    }
+  }
+
+  answers["Q_AGE"] = maybeNumber(modifiers.age ?? facts.age);
+  answers["Q_DURATION_DAYS"] = maybeNumber(facts.duration_days);
+  answers["Q_TEMP_F"] = maybeNumber(facts.temperature_f ?? facts.extracted_temperature_f);
+
+  answers["Q_IMMUNOCOMPROMISED"] = triState(modifiers.immunocompromised);
+  answers["Q_PREGNANCY_POSSIBLE"] = triState(modifiers.pregnancy_possible);
+
+  return {
+    answers,
+    factDebug: {
+      canonicalComplaint: canonical,
+      prefixes,
+      facts,
+      modifiers,
+    },
+  };
+}
+4. server/skills/safety/detectRedFlags.ts
+
+Replace your current file with this version.
+
+This uses:
+
+RED_FLAG_RULES.csv
+
+TRIGGER_EXPR or WHEN_EXPR
+
+synthetic answers
+
+fallback negation-aware raw text only if needed
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { phrasePresent } from "../shared/negationHelper";
+import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
+import { complaintIdsMatch, canonicalizeComplaintId } from "../shared/complaintAliasRegistry";
+import { evaluateWhenExpr } from "../shared/expressionEvaluator";
+
+type RedFlagHit = {
+  id: string;
+  label: string;
+  severity: string;
+};
+
+type DetectRedFlagsResult = {
+  red_flag_hits: RedFlagHit[];
+  severity: "none" | "moderate" | "high" | "critical";
+  escalation_needed: boolean;
+  rationale_refs: string[];
+};
+
+const FALLBACK_FLAGS: Record<string, Array<{ phrase: string; label: string; severity: string }>> = {
+  sore_throat: [
+    { phrase: "drooling", label: "drooling", severity: "critical" },
+    { phrase: "stridor", label: "stridor", severity: "critical" },
+    { phrase: "muffled voice", label: "muffled voice", severity: "high" },
+    { phrase: "cannot swallow", label: "cannot swallow", severity: "critical" },
+  ],
+  cough: [
+    { phrase: "shortness of breath", label: "shortness of breath", severity: "high" },
+    { phrase: "chest pain", label: "chest pain", severity: "high" },
+    { phrase: "confused", label: "confusion", severity: "high" },
+  ],
+};
+
+function getStructuredFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+function severityRank(severity: string): number {
+  switch (severity.toLowerCase()) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "moderate":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+export async function detectRedFlags(
+  context: SkillContext
+): Promise<SkillResult<DetectRedFlagsResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "detect_red_flags");
+
+  const complaintId = canonicalizeComplaintId(context.complaintId);
+  const facts = getStructuredFacts(context);
+  const source = [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ].join(" ");
+
+  const { answers } = buildSyntheticAnswers(complaintId, facts, context.modifiers ?? {});
+  const hits: RedFlagHit[] = [];
+  let usedTables: string[] = [];
+
+  let ruleRows: CsvRow[] = [];
+  try {
+    ruleRows = await loadCsvTable("RED_FLAG_RULES.csv");
+  } catch {
+    ruleRows = [];
+  }
+
+  if (ruleRows.length) {
+    usedTables.push("RED_FLAG_RULES");
+
+    for (const row of ruleRows) {
+      const rowComplaint = getFirstValue(row, ["CC_ID", "Complaint_ID", "Complaint"]);
+      if (rowComplaint && !complaintIdsMatch(rowComplaint, complaintId)) continue;
+
+      const expr = getFirstValue(row, ["TRIGGER_EXPR", "WHEN_EXPR", "Trigger", "Condition"]);
+      const id =
+        getFirstValue(row, ["RF_ID", "Red_Flag_ID", "Rule_ID", "ID"]) || "RF_UNKNOWN";
+      const label =
+        getFirstValue(row, ["LABEL", "Red_Flag", "Flag_Name", "Description"]) || id;
+      const severity =
+        getFirstValue(row, ["SEVERITY", "Severity", "Severity_Level"]) || "high";
+
+      if (!expr) continue;
+      if (!evaluateWhenExpr(expr, answers)) continue;
+
+      hits.push({
+        id,
+        label,
+        severity,
+      });
+    }
+  }
+
+  if (!hits.length) {
+    usedTables.push("RED_FLAG_RULES_FALLBACK");
+    const fallback = FALLBACK_FLAGS[complaintId] ?? [];
+
+    for (const item of fallback) {
+      if (phrasePresent(source, item.phrase)) {
+        hits.push({
+          id: `RF_${complaintId}_${item.label.replace(/\s+/g, "_").toUpperCase()}`,
+          label: item.label,
+          severity: item.severity,
+        });
+      }
+    }
+  }
+
+  const deduped = new Map<string, RedFlagHit>();
+  for (const hit of hits) {
+    const existing = deduped.get(hit.id);
+    if (!existing || severityRank(hit.severity) > severityRank(existing.severity)) {
+      deduped.set(hit.id, hit);
+    }
+  }
+
+  const red_flag_hits = [...deduped.values()];
+
+  let severity: DetectRedFlagsResult["severity"] = "none";
+  if (red_flag_hits.some((h) => h.severity.toLowerCase() === "critical")) severity = "critical";
+  else if (red_flag_hits.some((h) => h.severity.toLowerCase() === "high")) severity = "high";
+  else if (red_flag_hits.length) severity = "moderate";
+
+  const result: SkillResult<DetectRedFlagsResult> = {
+    skillId: "SK005",
+    skillName: "detect_red_flags",
+    version: "v1",
+    status: "success",
+    confidence: 0.96,
+    result: {
+      red_flag_hits,
+      severity,
+      escalation_needed: severity === "critical" || severity === "high",
+      rationale_refs: red_flag_hits.map((h) => h.id),
+    },
+    audit: {
+      tablesUsed: usedTables.length ? usedTables : ["RED_FLAG_RULES_FALLBACK"],
+      ruleHits: red_flag_hits.map((h) => h.id),
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills:
+      severity === "critical" || severity === "high"
+        ? ["determine_disposition", "generate_emergency_warning"]
+        : ["run_complaint_question_bundle"],
+  };
+
+  assertSkillResultShape(result, "detect_red_flags");
+  return result;
+}
+5. server/skills/safety/determineDisposition.ts
+
+Replace your current file with this version.
+
+This uses:
+
+DISPOSITION_RULES.csv
+
+WHEN_EXPR
+
+synthetic answers
+
+red flag severity fallback only if no rule matched
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
+import { complaintIdsMatch, canonicalizeComplaintId } from "../shared/complaintAliasRegistry";
+import { evaluateWhenExpr } from "../shared/expressionEvaluator";
+
+type DetermineDispositionResult = {
+  disposition: string;
+  urgency: string;
+  care_site: string;
+  rationale: string;
+};
+
+function getStructuredFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+function fallbackDisposition(redFlagSeverity: string, escalationNeeded: boolean): DetermineDispositionResult {
+  if (redFlagSeverity === "critical") {
+    return {
+      disposition: "er_now",
+      urgency: "critical",
+      care_site: "emergency_department",
+      rationale: "Critical red flag(s) detected",
+    };
+  }
+
+  if (redFlagSeverity === "high" || escalationNeeded) {
+    return {
+      disposition: "urgent_same_day",
+      urgency: "high",
+      care_site: "urgent_care",
+      rationale: "High-risk feature(s) detected",
+    };
+  }
+
+  return {
+    disposition: "routine_evaluation",
+    urgency: "routine",
+    care_site: "urgent_care",
+    rationale: "No urgent or emergency rule matched",
+  };
+}
+
+export async function determineDisposition(
+  context: SkillContext
+): Promise<SkillResult<DetermineDispositionResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "determine_disposition");
+
+  const complaintId = canonicalizeComplaintId(context.complaintId);
+  const facts = getStructuredFacts(context);
+  const { answers } = buildSyntheticAnswers(complaintId, facts, context.modifiers ?? {});
+
+  const redFlagResult =
+    context.priorSkillOutputs?.detect_red_flags?.result ??
+    context.priorSkillOutputs?.detectRedFlags?.result ??
+    {};
+
+  const redFlagSeverity = redFlagResult.severity ?? "none";
+  const escalationNeeded = redFlagResult.escalation_needed === true;
+
+  let dispRows: CsvRow[] = [];
+  const tablesUsed: string[] = [];
+  let finalResult: DetermineDispositionResult | null = null;
+  let matchedRuleId = "";
+
+  try {
+    dispRows = await loadCsvTable("DISPOSITION_RULES.csv");
+  } catch {
+    dispRows = [];
+  }
+
+  if (dispRows.length) {
+    tablesUsed.push("DISPOSITION_RULES");
+
+    for (const row of dispRows) {
+      const rowComplaint = getFirstValue(row, ["CC_ID", "Complaint_ID", "Complaint"]);
+      if (rowComplaint && !complaintIdsMatch(rowComplaint, complaintId)) continue;
+
+      const expr = getFirstValue(row, ["WHEN_EXPR", "Trigger", "Condition", "Rule_Expr"]);
+      const disposition = getFirstValue(row, ["DISPOSITION_LEVEL", "Disposition", "Disposition_Code"]);
+      const urgency = getFirstValue(row, ["URGENCY", "Urgency", "Priority"]) || "routine";
+      const careSite = getFirstValue(row, ["CARE_SITE", "Care_Site", "Site"]) || "urgent_care";
+      const rationale = getFirstValue(row, ["RATIONALE", "Rationale", "Reason"]) || disposition;
+      const ruleId = getFirstValue(row, ["RULE_ID", "ID", "Disposition_Rule_ID"]) || disposition;
+
+      if (!expr || !disposition) continue;
+      if (!evaluateWhenExpr(expr, answers)) continue;
+
+      finalResult = {
+        disposition,
+        urgency,
+        care_site: careSite,
+        rationale,
+      };
+      matchedRuleId = ruleId;
+      break;
+    }
+  }
+
+  if (!finalResult) {
+    tablesUsed.push("DISPOSITION_RULES_FALLBACK");
+    finalResult = fallbackDisposition(redFlagSeverity, escalationNeeded);
+  }
+
+  const result: SkillResult<DetermineDispositionResult> = {
+    skillId: "SK006",
+    skillName: "determine_disposition",
+    version: "v1",
+    status: "success",
+    confidence: matchedRuleId ? 0.97 : 0.93,
+    result: finalResult,
+    audit: {
+      tablesUsed,
+      ruleHits: matchedRuleId ? [matchedRuleId] : [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills:
+      finalResult.disposition === "er_now"
+        ? ["generate_emergency_warning", "generate_physician_review_packet"]
+        : ["generate_assessment_plan", "generate_physician_review_packet"],
+  };
+
+  assertSkillResultShape(result, "determine_disposition");
+  return result;
+}
+6. server/skills/reasoning/scoreDifferentialClusters.ts
+
+Update this file so it uses the shared alias registry and shared evaluator. Replace your current version with this one.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
+import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
+import { complaintIdsMatch, canonicalizeComplaintId } from "../shared/complaintAliasRegistry";
+import { evaluateWhenExpr } from "../shared/expressionEvaluator";
+
+type ScoredCluster = {
+  cluster_id: string;
+  cluster_name: string;
+  score: number;
+  supporting_hits: string[];
+};
+
+type ScoreDifferentialClustersResult = {
+  scored_clusters: ScoredCluster[];
+  trigger_hits: string[];
+  missing_discriminators: string[];
+};
+
+function getFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+export async function scoreDifferentialClusters(
+  context: SkillContext
+): Promise<SkillResult<ScoreDifferentialClustersResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "score_differential_clusters");
+
+  const complaintId = canonicalizeComplaintId(context.complaintId);
+  const facts = getFacts(context);
+  const { answers } = buildSyntheticAnswers(complaintId, facts, context.modifiers ?? {});
+
+  let rows: CsvRow[] = [];
+  try {
+    rows = await loadCsvTable("CLUSTER_SCORING_RULES.csv");
+  } catch {
+    rows = [];
+  }
+
+  const clusterMap = new Map<string, ScoredCluster>();
+
+  for (const row of rows) {
+    const rowComplaint = getFirstValue(row, ["CC_ID", "Complaint_ID", "Complaint"]);
+    if (rowComplaint && !complaintIdsMatch(rowComplaint, complaintId)) continue;
+
+    const expr = getFirstValue(row, ["WHEN_EXPR", "Trigger", "Condition"]);
+    const cluster_id = getFirstValue(row, ["BEST_CLUSTER_ID", "Cluster_ID", "Diagnosis_Cluster_ID"]);
+    const cluster_name =
+      getFirstValue(row, ["CLUSTER_NAME", "Cluster_Name", "Diagnosis_Cluster"]) || cluster_id;
+    const weight = toNumber(getFirstValue(row, ["WEIGHT", "Weight", "Score"]), 1);
+
+    if (!expr || !cluster_id) continue;
+    if (!evaluateWhenExpr(expr, answers)) continue;
+
+    const current =
+      clusterMap.get(cluster_id) ?? {
+        cluster_id,
+        cluster_name,
+        score: 0,
+        supporting_hits: [],
+      };
+
+    current.score += weight;
+    current.supporting_hits.push(expr);
+    clusterMap.set(cluster_id, current);
+  }
+
+  const scored_clusters = [...clusterMap.values()].sort((a, b) => b.score - a.score);
+  const trigger_hits = scored_clusters.flatMap((c) => c.supporting_hits);
+  const missing_discriminators = scored_clusters.length ? [] : ["no_cluster_rules_matched"];
+
+  const result: SkillResult<ScoreDifferentialClustersResult> = {
+    skillId: "SK012",
+    skillName: "score_differential_clusters",
+    version: "v1",
+    status: scored_clusters.length ? "success" : "partial",
+    confidence: scored_clusters.length ? 0.91 : 0.45,
+    result: {
+      scored_clusters,
+      trigger_hits,
+      missing_discriminators,
+    },
+    audit: {
+      tablesUsed: ["CLUSTER_SCORING_RULES", "SYNTHETIC_ANSWERS", "EXPRESSION_EVALUATOR"],
+      ruleHits: trigger_hits,
+      missingData: missing_discriminators,
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["apply_clinical_score", "generate_differential"],
+  };
+
+  assertSkillResultShape(result, "score_differential_clusters");
+  return result;
+}
+7. server/orchestrator/clinicalSkillOrchestrator.ts
+
+The orchestrator mostly stays the same. You do not need a major rewrite here. The only real change is that the updated shared implementations are now imported automatically.
+
+If your current file already imports:
+
+detectRedFlags
+
+determineDisposition
+
+scoreDifferentialClusters
+
+you can keep it as-is after replacing those files above.
+
+If you want a fully explicit current version, here it is:
+
+import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
+import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
+import { collectModifiers } from "../skills/intake/collectModifiers";
+import { extractMedToConditionTriggers } from "../skills/intake/extractMedToConditionTriggers";
+import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
+import { normalizePatientStory } from "../skills/intake/normalizePatientStory";
+import { detectRedFlags } from "../skills/safety/detectRedFlags";
+import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { triggerGlobalSecondaryQuestions } from "../skills/questions/triggerGlobalSecondaryQuestions";
+import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
+import { scoreDifferentialClusters } from "../skills/reasoning/scoreDifferentialClusters";
+import { applyClinicalScore } from "../skills/reasoning/applyClinicalScore";
+import { generateDifferential } from "../skills/reasoning/generateDifferential";
+import { checkConsistencyAndGaps } from "../skills/audit/checkConsistencyAndGaps";
+import { determineDisposition } from "../skills/safety/determineDisposition";
+import { generateEmergencyWarning } from "../skills/output/generateEmergencyWarning";
+import { generateAssessmentPlan } from "../skills/output/generateAssessmentPlan";
+import { generatePhysicianReviewPacket } from "../skills/output/generatePhysicianReviewPacket";
+import { measureWorkflowValue } from "../skills/analytics/measureWorkflowValue";
+import { assertSkillResultShape } from "../skills/shared/schemaValidators";
+
+async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
+  const started = Date.now();
+
+  return {
+    skillId: `PLACEHOLDER_${skillName}`,
+    skillName,
+    version: "v1",
+    status: "success",
+    confidence: 0.75,
+    result: {
+      message: `${skillName} not yet fully implemented`,
+      caseId: context.caseId,
+    },
+    audit: {
+      tablesUsed: [],
+      ruleHits: [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+
+const DEFAULT_SEQUENCE = [
+  "collect_modifiers",
+  "extract_med_to_condition_triggers",
+  "identify_chief_complaint",
+  "normalize_patient_story",
+  "detect_red_flags",
+  "run_complaint_question_bundle",
+  "trigger_global_secondary_questions",
+  "select_next_best_question",
+  "score_differential_clusters",
+  "apply_clinical_score",
+  "generate_differential",
+  "check_consistency_and_gaps",
+  "determine_disposition",
+  "generate_emergency_warning",
+  "generate_assessment_plan",
+  "generate_physician_review_packet",
+  "attach_outcome_stub",
+  "measure_workflow_value",
+] as const;
+
+export class ClinicalSkillOrchestrator {
+  async run(initialContext: SkillContext): Promise<OrchestratorState> {
+    const state: OrchestratorState = {
+      context: initialContext,
+      skillResults: {},
+      completedSkills: [],
+      pendingSkills: [...DEFAULT_SEQUENCE],
+      halted: false,
+    };
+
+    for (const skillName of DEFAULT_SEQUENCE) {
+      if (state.halted) break;
+
+      const priorComplaintId =
+        state.skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        state.context.complaintId;
+
+      const currentModifiers =
+        state.skillResults["collect_modifiers"]?.result?.modifiers ??
+        state.context.modifiers;
+
+      const normalizedFacts =
+        state.skillResults["normalize_patient_story"]?.result?.structured_facts ??
+        state.context.knownFacts;
+
+      const contextForSkill: SkillContext = {
+        ...state.context,
+        complaintId: priorComplaintId,
+        modifiers: currentModifiers,
+        knownFacts: normalizedFacts,
+        priorSkillOutputs: state.skillResults,
+      };
+
+      let result: SkillResult;
+
+      switch (skillName) {
+        case "collect_modifiers":
+          result = await collectModifiers(contextForSkill);
+          break;
+        case "extract_med_to_condition_triggers":
+          result = await extractMedToConditionTriggers(contextForSkill);
+          break;
+        case "identify_chief_complaint":
+          result = await identifyChiefComplaint(contextForSkill);
+          break;
+        case "normalize_patient_story":
+          result = await normalizePatientStory(contextForSkill);
+          break;
+        case "detect_red_flags":
+          result = await detectRedFlags(contextForSkill);
+          break;
+        case "run_complaint_question_bundle":
+          result = await runComplaintQuestionBundle(contextForSkill);
+          break;
+        case "trigger_global_secondary_questions":
+          result = await triggerGlobalSecondaryQuestions(contextForSkill);
+          break;
+        case "select_next_best_question":
+          result = await selectNextBestQuestion(contextForSkill);
+          break;
+        case "score_differential_clusters":
+          result = await scoreDifferentialClusters(contextForSkill);
+          break;
+        case "apply_clinical_score":
+          result = await applyClinicalScore(contextForSkill);
+          break;
+        case "generate_differential":
+          result = await generateDifferential(contextForSkill);
+          break;
+        case "check_consistency_and_gaps":
+          result = await checkConsistencyAndGaps(contextForSkill);
+          break;
+        case "determine_disposition":
+          result = await determineDisposition(contextForSkill);
+          break;
+        case "generate_emergency_warning":
+          result = await generateEmergencyWarning(contextForSkill);
+          break;
+        case "generate_assessment_plan":
+          result = await generateAssessmentPlan(contextForSkill);
+          break;
+        case "generate_physician_review_packet":
+          result = await generatePhysicianReviewPacket(contextForSkill);
+          break;
+        case "attach_outcome_stub":
+          result = await attachOutcomeStub(contextForSkill);
+          break;
+        case "measure_workflow_value":
+          result = await measureWorkflowValue(contextForSkill);
+          break;
+        default:
+          result = await runPlaceholderSkill(skillName, contextForSkill);
+          break;
+      }
+
+      assertSkillResultShape(result, skillName);
+
+      state.skillResults[skillName] = result;
+      state.completedSkills.push(skillName);
+      state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+      await appendSkillRunLog(contextForSkill, result);
+
+      if (skillName === "identify_chief_complaint" && result.result?.complaint_id) {
+        state.context.complaintId = result.result.complaint_id;
+      }
+      if (skillName === "collect_modifiers" && result.result?.modifiers) {
+        state.context.modifiers = result.result.modifiers;
+      }
+      if (skillName === "normalize_patient_story" && result.result?.structured_facts) {
+        state.context.knownFacts = result.result.structured_facts;
+      }
+      if (skillName === "determine_disposition") {
+        state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
+      }
+    }
+
+    state.platformChecks = evaluatePlatformPrinciples(state);
+
+    await appendCaseAuditLog({
+      context: state.context,
+      finalDisposition: state.finalDisposition,
+      finalStatus: state.halted ? "halted" : "complete",
+      completedSkills: state.completedSkills,
+      redFlagHits:
+        state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+      differentialTop3:
+        state.skillResults["generate_differential"]?.result?.differential_list
+          ?.slice?.(0, 3)
+          ?.map?.((d: any) => d.diagnosis ?? String(d)) ?? [],
+      clinicalScoreUsed:
+        state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+      platformChecks: state.platformChecks,
+    });
+
+    return state;
+  }
+}
+What Phase 4 gives you
+
+This phase is a big one because it shifts more of the system from “code guesses” to “sheet-driven logic.”
+
+You now have:
+
+one canonical complaint alias layer
+
+one reusable expression evaluator
+
+one reusable synthetic answer bridge
+
+expression-backed cluster scoring
+
+expression-backed red flags
+
+expression-backed disposition
+
+That means your rules tables are much closer to being the real steering wheel.
+
+Best tests to run immediately
+
+Run these right after pasting:
+
+1. Sore throat classic
+
+32 year old male with sore throat x 3 days, fever, no cough
+
+Look for:
+
+sore_throat
+
+Centor score still correct
+
+red flags none
+
+routine or urgent based on your rules
+
+2. Airway danger
+
+child with sore throat, drooling, muffled voice, cannot swallow
+
+Look for:
+
+red flags firing from expressions and/or facts
+
+er_now or equivalent urgent disposition from rule sheet
+
+3. Negation safety
+
+child with sore throat, no drooling, no stridor
+
+Look for:
+
+no false airway red flag
+
+no false emergency disposition
+
+4. Cough no SOB no chest pain
+
+45 year old female with cough x 2 weeks, no shortness of breath, no chest pain
+
+Look for:
+
+no false red flags
+
+cough complaint preserved
+
+reasonable routine disposition
+
+5. UTI case with aliases
+
+26 year old female with dysuria and frequency x 2 days, no fever
+
+Look for:
+
+uti family matching works even if sheet uses GU alias complaint IDs
+
+disposition not over-escalated
+
+What comes after Phase 4
+
+The next highest-value phases are:
+
+Phase 5
+
+Golden-case review workflow and spreadsheet-driven authoring
+
+review worksheet export
+
+pass/fail by skill
+
+failure tagging
+
+import/export from Sheets
+
+Phase 6
+
+Outcome loop
+
+actual diagnosis capture
+
+follow-up results
+
+predicted vs actual reconciliation
+
+question value learning
+
+Phase 7
+
+Workflow embedding
+
+API endpoints
+
+chart note blocks
+
+discharge instruction blocks
+
+review UI
+
+callback queue
+
+Phase 8
+
+Analytics and economics
+
+time saved by complaint
+
+score usage by complaint
+
+red flag hit rate
+
+overtriage/undertriage dashboard
+
+workflow ROI
+
+Those are the phases that really make it “AI boom proof,” because they create:
+
+proprietary decision data
+
+workflow lock-in
+
+measurable ROI
+
+real defensibility
+
+If you want, next I’ll write Phase 5 as a paste-ready pack for the golden-case review worksheet, failure tagging, and spreadsheet export/import loop.
+
+AND WRITE PHASE 5 PLEASE
