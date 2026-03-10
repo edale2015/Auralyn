@@ -1,0 +1,1207 @@
+Absolutely. Here is the Phase 2 implementation pack with a shared negation helper baked in so the skill layer stops tripping over phrases like “no cough” and “denies chest pain.”
+
+This pack gives you:
+
+a reusable negationHelper.ts
+
+updated normalizePatientStory
+
+updated identifyChiefComplaint logic pattern
+
+updated detectRedFlags logic pattern
+
+the 5 Phase 2 skills in paste-ready form
+
+orchestrator wiring notes
+
+I’m keeping this practical and modular so you can drop it into the current app without turning the codebase into a spaghetti chandelier.
+
+Files in this pack
+
+Create or update these files:
+
+server/skills/shared/negationHelper.ts
+server/skills/intake/normalizePatientStory.ts
+server/skills/intake/identifyChiefComplaint.ts
+server/skills/safety/detectRedFlags.ts
+server/skills/reasoning/scoreDifferentialClusters.ts
+server/skills/reasoning/applyClinicalScore.ts
+server/skills/reasoning/generateDifferential.ts
+server/skills/output/generatePhysicianReviewPacket.ts
+1. server/skills/shared/negationHelper.ts
+
+This is the shared engine for:
+
+affirmed findings
+
+negated findings
+
+phrase-level matching
+
+complaint matching that does not get fooled by “no chest pain”
+
+export type PhraseAssertion = "affirmed" | "negated" | "absent";
+
+const NEGATION_PREFIXES = [
+  "no",
+  "not",
+  "denies",
+  "deny",
+  "without",
+  "negative for",
+  "free of",
+  "never had",
+  "has no",
+  "having no",
+];
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[;,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function splitIntoClauses(text: string): string[] {
+  return text
+    .split(/[.!?\n]/)
+    .map((c) => normalizeText(c))
+    .filter(Boolean);
+}
+
+export function isPhraseNegatedInClause(clause: string, phrase: string): boolean {
+  const normalizedClause = normalizeText(clause);
+  const normalizedPhrase = normalizeText(phrase);
+
+  if (!normalizedClause.includes(normalizedPhrase)) return false;
+
+  for (const prefix of NEGATION_PREFIXES) {
+    const pattern = new RegExp(
+      `\\b${escapeRegex(prefix)}\\b(?:\\s+\\w+){0,4}\\s+${escapeRegex(normalizedPhrase)}\\b`,
+      "i"
+    );
+    if (pattern.test(normalizedClause)) return true;
+  }
+
+  return false;
+}
+
+export function isPhraseAffirmedInClause(clause: string, phrase: string): boolean {
+  const normalizedClause = normalizeText(clause);
+  const normalizedPhrase = normalizeText(phrase);
+
+  if (!normalizedClause.includes(normalizedPhrase)) return false;
+  if (isPhraseNegatedInClause(normalizedClause, normalizedPhrase)) return false;
+  return true;
+}
+
+export function getPhraseAssertion(text: string, phrase: string): PhraseAssertion {
+  const clauses = splitIntoClauses(text);
+
+  let sawAffirmed = false;
+  let sawNegated = false;
+
+  for (const clause of clauses) {
+    if (!clause.includes(normalizeText(phrase))) continue;
+    if (isPhraseNegatedInClause(clause, phrase)) sawNegated = true;
+    else if (isPhraseAffirmedInClause(clause, phrase)) sawAffirmed = true;
+  }
+
+  if (sawAffirmed) return "affirmed";
+  if (sawNegated) return "negated";
+  return "absent";
+}
+
+export function phrasePresent(text: string, phrase: string): boolean {
+  return getPhraseAssertion(text, phrase) === "affirmed";
+}
+
+export function phraseNegated(text: string, phrase: string): boolean {
+  return getPhraseAssertion(text, phrase) === "negated";
+}
+
+export function countAffirmedTerms(text: string, phrases: string[]): number {
+  return phrases.filter((p) => phrasePresent(text, p)).length;
+}
+
+export function countNegatedTerms(text: string, phrases: string[]): number {
+  return phrases.filter((p) => phraseNegated(text, p)).length;
+}
+
+export function extractAssertions(
+  text: string,
+  phrases: string[]
+): {
+  affirmed: string[];
+  negated: string[];
+  absent: string[];
+} {
+  const affirmed: string[] = [];
+  const negated: string[] = [];
+  const absent: string[] = [];
+
+  for (const phrase of phrases) {
+    const state = getPhraseAssertion(text, phrase);
+    if (state === "affirmed") affirmed.push(phrase);
+    else if (state === "negated") negated.push(phrase);
+    else absent.push(phrase);
+  }
+
+  return { affirmed, negated, absent };
+}
+2. server/skills/intake/normalizePatientStory.ts
+
+This becomes the truth source for structured facts.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { extractAssertions, phrasePresent } from "../shared/negationHelper";
+
+type NormalizePatientStoryResult = {
+  symptom_timeline: string;
+  associated_symptoms: string[];
+  negated_symptoms: string[];
+  extracted_measurements: Record<string, any>;
+  structured_facts: Record<string, any>;
+};
+
+const TRACKED_SYMPTOMS = [
+  "fever",
+  "cough",
+  "sore throat",
+  "throat pain",
+  "shortness of breath",
+  "sob",
+  "chest pain",
+  "abdominal pain",
+  "nausea",
+  "vomiting",
+  "diarrhea",
+  "rash",
+  "ear pain",
+  "sinus pressure",
+  "headache",
+  "fatigue",
+  "body aches",
+  "dysuria",
+  "frequency",
+  "urgency",
+  "drooling",
+  "stridor",
+  "muffled voice",
+  "cannot swallow",
+  "confused",
+];
+
+function buildSourceText(context: SkillContext): string {
+  return [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ]
+    .join(" ")
+    .trim();
+}
+
+function extractTemperature(text: string): number | undefined {
+  const match = text.match(/\b(?:temp|temperature|fever)\s*(?:of)?\s*(\d{2,3}(?:\.\d)?)\b/i);
+  if (!match) return undefined;
+  const val = Number(match[1]);
+  return Number.isFinite(val) ? val : undefined;
+}
+
+function extractDuration(text: string): string {
+  const match = text.match(/\b(?:x\s*)?(\d+\s*(?:hours?|days?|weeks?|months?))\b/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+export async function normalizePatientStory(
+  context: SkillContext
+): Promise<SkillResult<NormalizePatientStoryResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "normalize_patient_story");
+
+  const source = buildSourceText(context);
+  const assertions = extractAssertions(source, TRACKED_SYMPTOMS);
+
+  const extracted_measurements: Record<string, any> = {};
+  const temp = extractTemperature(source);
+  if (temp != null) extracted_measurements.temperature_f = temp;
+
+  const duration = extractDuration(source);
+  const symptom_timeline = duration || context.modifiers?.duration || "";
+
+  const structured_facts: Record<string, any> = {
+    complaint_id: context.complaintId,
+    age: context.modifiers?.age,
+    duration: symptom_timeline,
+    fever_present: phrasePresent(source, "fever"),
+    cough_present: phrasePresent(source, "cough"),
+    sore_throat_present:
+      phrasePresent(source, "sore throat") || phrasePresent(source, "throat pain"),
+    sob_present:
+      phrasePresent(source, "shortness of breath") || phrasePresent(source, "sob"),
+    chest_pain_present: phrasePresent(source, "chest pain"),
+    abdominal_pain_present: phrasePresent(source, "abdominal pain"),
+    rash_present: phrasePresent(source, "rash"),
+    dysuria_present: phrasePresent(source, "dysuria"),
+    urinary_frequency_present: phrasePresent(source, "frequency"),
+    urinary_urgency_present: phrasePresent(source, "urgency"),
+    drooling_present: phrasePresent(source, "drooling"),
+    stridor_present: phrasePresent(source, "stridor"),
+    muffled_voice_present: phrasePresent(source, "muffled voice"),
+    cannot_swallow_present: phrasePresent(source, "cannot swallow"),
+    confusion_present: phrasePresent(source, "confused"),
+  };
+
+  const result: SkillResult<NormalizePatientStoryResult> = {
+    skillId: "SK004",
+    skillName: "normalize_patient_story",
+    version: "v1",
+    status: "success",
+    confidence: 0.9,
+    result: {
+      symptom_timeline,
+      associated_symptoms: assertions.affirmed,
+      negated_symptoms: assertions.negated,
+      extracted_measurements,
+      structured_facts,
+    },
+    audit: {
+      tablesUsed: ["NEGATION_HELPER", "COMPLAINT_REGISTRY"],
+      ruleHits: [
+        symptom_timeline ? "TIMELINE_EXTRACTED" : "",
+        temp != null ? "TEMP_EXTRACTED" : "",
+        assertions.affirmed.length ? "NEGATION_AWARE_NORMALIZATION" : "",
+      ].filter(Boolean),
+      missingData: symptom_timeline ? [] : ["duration"],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["detect_red_flags", "score_differential_clusters"],
+  };
+
+  assertSkillResultShape(result, "normalize_patient_story");
+  return result;
+}
+3. server/skills/intake/identifyChiefComplaint.ts
+
+This version downweights negated phrases and uses aliases cleanly.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertContextHasCaseId,
+  assertSkillResultShape,
+  safeString,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { phrasePresent, phraseNegated } from "../shared/negationHelper";
+
+type IdentifyChiefComplaintResult = {
+  complaint_id: string;
+  alternate_complaints: string[];
+  ambiguity_score: number;
+};
+
+function complaintIdFromRow(row: CsvRow): string {
+  return (
+    getFirstValue(row, ["Complaint_ID", "CC_ID", "Chief_Complaint_ID"]) ||
+    getFirstValue(row, ["LABEL", "Chief_Complaint", "Complaint_Name", "Complaint"])
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+  );
+}
+
+function aliasesFromRow(row: CsvRow): string[] {
+  const label = getFirstValue(row, ["LABEL", "Chief_Complaint", "Complaint_Name", "Complaint"]);
+  const aliases = getFirstValue(row, ["ALIASES", "Keywords", "Synonyms", "Search_Terms"]);
+
+  return [label, ...aliases.split(/[|;]+/)]
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function scoreComplaint(text: string, row: CsvRow): number {
+  const aliases = aliasesFromRow(row);
+  let score = 0;
+
+  for (const alias of aliases) {
+    if (phrasePresent(text, alias)) score += 6;
+    if (phraseNegated(text, alias)) score -= 5;
+  }
+
+  return score;
+}
+
+export async function identifyChiefComplaint(
+  context: SkillContext
+): Promise<SkillResult<IdentifyChiefComplaintResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+
+  const complaintRegistry = await loadCsvTable("COMPLAINT_REGISTRY.csv");
+  const raw = safeString(context.rawText);
+  const transcriptText = (context.transcript ?? []).map((t) => t.text).join(" ");
+  const source = `${raw} ${transcriptText}`.trim().toLowerCase();
+
+  const scored = complaintRegistry
+    .map((row) => ({
+      row,
+      complaintId: complaintIdFromRow(row),
+      score: scoreComplaint(source, row),
+    }))
+    .filter((x) => x.complaintId);
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const positive = scored.filter((s) => s.score > 0);
+  const top = positive[0] ?? scored[0];
+  const alternates = positive.slice(1, 4).map((x) => x.complaintId);
+
+  const complaint_id = top?.complaintId || "general_symptom";
+  const ambiguity_score =
+    positive.length >= 2
+      ? Math.max(0, Math.min(1, 1 - (positive[0].score - positive[1].score) / Math.max(positive[0].score, 1)))
+      : 0.15;
+
+  const result: SkillResult<IdentifyChiefComplaintResult> = {
+    skillId: "SK003",
+    skillName: "identify_chief_complaint",
+    version: "v1",
+    status: "success",
+    confidence: top?.score ? Math.min(0.98, 0.55 + top.score / 20) : 0.45,
+    result: {
+      complaint_id,
+      alternate_complaints: alternates,
+      ambiguity_score,
+    },
+    audit: {
+      tablesUsed: ["COMPLAINT_REGISTRY", "NEGATION_HELPER"],
+      ruleHits: top ? [`CC_MATCH_${complaint_id.toUpperCase()}`] : ["CC_FALLBACK_GENERAL"],
+      missingData: complaint_id === "general_symptom" ? ["specific_complaint_match"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["normalize_patient_story", "detect_red_flags"],
+  };
+
+  assertSkillResultShape(result, "identify_chief_complaint");
+  return result;
+}
+4. server/skills/safety/detectRedFlags.ts
+
+This version uses normalized facts first, raw text second.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { phrasePresent } from "../shared/negationHelper";
+
+type RedFlagHit = {
+  id: string;
+  label: string;
+  severity: string;
+};
+
+type DetectRedFlagsResult = {
+  red_flag_hits: RedFlagHit[];
+  severity: "none" | "moderate" | "high" | "critical";
+  escalation_needed: boolean;
+  rationale_refs: string[];
+};
+
+const FALLBACK_FLAGS: Record<string, Array<{ phrase: string; label: string }>> = {
+  sore_throat: [
+    { phrase: "drooling", label: "drooling" },
+    { phrase: "stridor", label: "stridor" },
+    { phrase: "muffled voice", label: "muffled voice" },
+    { phrase: "cannot swallow", label: "cannot swallow" },
+  ],
+  cough: [
+    { phrase: "shortness of breath", label: "shortness of breath" },
+    { phrase: "chest pain", label: "chest pain" },
+    { phrase: "confused", label: "confused" },
+  ],
+  chest_pain: [
+    { phrase: "shortness of breath", label: "shortness of breath" },
+    { phrase: "syncope", label: "syncope" },
+  ],
+};
+
+function getStructuredFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+export async function detectRedFlags(
+  context: SkillContext
+): Promise<SkillResult<DetectRedFlagsResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "detect_red_flags");
+
+  const facts = getStructuredFacts(context);
+  const source = [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ].join(" ");
+
+  const hits: RedFlagHit[] = [];
+
+  let ruleRows: CsvRow[] = [];
+  try {
+    ruleRows = await loadCsvTable("RED_FLAG_RULES.csv");
+  } catch {
+    ruleRows = [];
+  }
+
+  if (!ruleRows.length) {
+    const fallback = FALLBACK_FLAGS[context.complaintId!] ?? [];
+    for (const item of fallback) {
+      if (phrasePresent(source, item.phrase)) {
+        hits.push({
+          id: `RF_${context.complaintId}_${item.label.replace(/\s+/g, "_").toUpperCase()}`,
+          label: item.label,
+          severity: "critical",
+        });
+      }
+    }
+  }
+
+  if (facts.drooling_present) {
+    hits.push({ id: "RF_DROOLING", label: "drooling", severity: "critical" });
+  }
+  if (facts.stridor_present) {
+    hits.push({ id: "RF_STRIDOR", label: "stridor", severity: "critical" });
+  }
+  if (facts.muffled_voice_present) {
+    hits.push({ id: "RF_MUFFLED_VOICE", label: "muffled voice", severity: "high" });
+  }
+  if (facts.cannot_swallow_present) {
+    hits.push({ id: "RF_CANNOT_SWALLOW", label: "cannot swallow", severity: "critical" });
+  }
+  if (facts.sob_present) {
+    hits.push({ id: "RF_SOB", label: "shortness of breath", severity: "high" });
+  }
+  if (facts.confusion_present) {
+    hits.push({ id: "RF_CONFUSION", label: "confusion", severity: "high" });
+  }
+
+  const unique = new Map<string, RedFlagHit>();
+  for (const hit of hits) unique.set(hit.id, hit);
+  const red_flag_hits = [...unique.values()];
+
+  let severity: DetectRedFlagsResult["severity"] = "none";
+  if (red_flag_hits.some((h) => h.severity.toLowerCase() === "critical")) severity = "critical";
+  else if (red_flag_hits.some((h) => h.severity.toLowerCase() === "high")) severity = "high";
+  else if (red_flag_hits.length) severity = "moderate";
+
+  const result: SkillResult<DetectRedFlagsResult> = {
+    skillId: "SK005",
+    skillName: "detect_red_flags",
+    version: "v1",
+    status: "success",
+    confidence: 0.95,
+    result: {
+      red_flag_hits,
+      severity,
+      escalation_needed: severity === "critical" || severity === "high",
+      rationale_refs: red_flag_hits.map((h) => h.id),
+    },
+    audit: {
+      tablesUsed: ruleRows.length
+        ? ["RED_FLAG_RULES", "NEGATION_HELPER", "NORMALIZED_FACTS"]
+        : ["RED_FLAG_RULES_FALLBACK", "NEGATION_HELPER", "NORMALIZED_FACTS"],
+      ruleHits: red_flag_hits.map((h) => h.id),
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills:
+      severity === "critical" || severity === "high"
+        ? ["determine_disposition", "generate_emergency_warning"]
+        : ["run_complaint_question_bundle"],
+  };
+
+  assertSkillResultShape(result, "detect_red_flags");
+  return result;
+}
+5. server/skills/reasoning/scoreDifferentialClusters.ts
+
+This version assumes your expression evaluator is already working and just tightens the bridge from normalized facts.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
+
+type ScoredCluster = {
+  cluster_id: string;
+  cluster_name: string;
+  score: number;
+  supporting_hits: string[];
+};
+
+type ScoreDifferentialClustersResult = {
+  scored_clusters: ScoredCluster[];
+  trigger_hits: string[];
+  missing_discriminators: string[];
+};
+
+function getFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+function toSyntheticAnswers(complaintId: string, facts: Record<string, any>): Record<string, string> {
+  const answers: Record<string, string> = {};
+
+  const prefixMap: Record<string, string[]> = {
+    sore_throat: ["ST_"],
+    ent_sore_throat: ["ST_"],
+    cough: ["PCO_", "COUGH_"],
+    uti: ["UTI_", "GU_"],
+    gu_uti_symptoms: ["UTI_", "GU_"],
+  };
+
+  const prefixes = prefixMap[complaintId] ?? ["GEN_"];
+
+  const yesNoMap: Record<string, boolean> = {
+    FEVER: !!facts.fever_present,
+    COUGH: !!facts.cough_present,
+    SORE_THROAT: !!facts.sore_throat_present,
+    SOB: !!facts.sob_present,
+    CHEST_PAIN: !!facts.chest_pain_present,
+    DYSURIA: !!facts.dysuria_present,
+    FREQUENCY: !!facts.urinary_frequency_present,
+    URGENCY: !!facts.urinary_urgency_present,
+    RASH: !!facts.rash_present,
+  };
+
+  for (const prefix of prefixes) {
+    for (const [key, value] of Object.entries(yesNoMap)) {
+      answers[`Q_${prefix}${key}`] = value ? "yes" : "no";
+    }
+  }
+
+  return answers;
+}
+
+// Assumes you already have a real evaluator somewhere in your app.
+// Replace import if your evaluator lives elsewhere.
+function evaluateWhenExpr(expr: string, answers: Record<string, string>): boolean {
+  let transformed = expr;
+
+  for (const [k, v] of Object.entries(answers)) {
+    const re = new RegExp(`answers\\.${k}\\b`, "g");
+    transformed = transformed.replace(re, `'${v}'`);
+  }
+
+  transformed = transformed
+    .replace(/==/g, "===")
+    .replace(/!=/g, "!==");
+
+  try {
+    // eslint-disable-next-line no-new-func
+    return Boolean(Function(`return (${transformed});`)());
+  } catch {
+    return false;
+  }
+}
+
+export async function scoreDifferentialClusters(
+  context: SkillContext
+): Promise<SkillResult<ScoreDifferentialClustersResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "score_differential_clusters");
+
+  const facts = getFacts(context);
+  const answers = toSyntheticAnswers(context.complaintId!, facts);
+
+  let rows: CsvRow[] = [];
+  try {
+    rows = await loadCsvTable("CLUSTER_SCORING_RULES.csv");
+  } catch {
+    rows = [];
+  }
+
+  const clusterMap = new Map<string, ScoredCluster>();
+
+  for (const row of rows) {
+    const complaintId = getFirstValue(row, ["CC_ID", "Complaint_ID", "Complaint"]);
+    if (complaintId && complaintId !== context.complaintId) continue;
+
+    const expr = getFirstValue(row, ["WHEN_EXPR", "Trigger", "Condition"]);
+    const cluster_id = getFirstValue(row, ["BEST_CLUSTER_ID", "Cluster_ID", "Diagnosis_Cluster_ID"]);
+    const cluster_name =
+      getFirstValue(row, ["CLUSTER_NAME", "Cluster_Name", "Diagnosis_Cluster"]) || cluster_id;
+    const weight = toNumber(getFirstValue(row, ["WEIGHT", "Weight", "Score"]), 1);
+
+    if (!expr || !cluster_id) continue;
+    if (!evaluateWhenExpr(expr, answers)) continue;
+
+    const current =
+      clusterMap.get(cluster_id) ?? {
+        cluster_id,
+        cluster_name,
+        score: 0,
+        supporting_hits: [],
+      };
+
+    current.score += weight;
+    current.supporting_hits.push(expr);
+    clusterMap.set(cluster_id, current);
+  }
+
+  const scored_clusters = [...clusterMap.values()].sort((a, b) => b.score - a.score);
+  const trigger_hits = scored_clusters.flatMap((c) => c.supporting_hits);
+  const missing_discriminators = scored_clusters.length ? [] : ["no_cluster_rules_matched"];
+
+  const result: SkillResult<ScoreDifferentialClustersResult> = {
+    skillId: "SK012",
+    skillName: "score_differential_clusters",
+    version: "v1",
+    status: scored_clusters.length ? "success" : "partial",
+    confidence: scored_clusters.length ? 0.9 : 0.45,
+    result: {
+      scored_clusters,
+      trigger_hits,
+      missing_discriminators,
+    },
+    audit: {
+      tablesUsed: ["CLUSTER_SCORING_RULES", "NORMALIZED_FACTS"],
+      ruleHits: trigger_hits,
+      missingData: missing_discriminators,
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["apply_clinical_score", "generate_differential"],
+  };
+
+  assertSkillResultShape(result, "score_differential_clusters");
+  return result;
+}
+6. server/skills/reasoning/applyClinicalScore.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { phrasePresent } from "../shared/negationHelper";
+
+type ApplyClinicalScoreResult = {
+  score_name: string;
+  score_value: number;
+  risk_bucket: string;
+  recommended_implication: string;
+  components: Record<string, any>;
+};
+
+function buildSource(context: SkillContext): string {
+  return [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ].join(" ");
+}
+
+function getFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+function applyCentor(context: SkillContext): ApplyClinicalScoreResult {
+  const facts = getFacts(context);
+  const source = buildSource(context);
+  let score = 0;
+  const components: Record<string, any> = {};
+
+  if (facts.fever_present) {
+    score += 1;
+    components.fever = true;
+  }
+  if (facts.sore_throat_present) {
+    score += 1;
+    components.tonsillar_findings_or_sore_throat = true;
+  }
+  if (phrasePresent(source, "tender nodes") || phrasePresent(source, "lymph node")) {
+    score += 1;
+    components.tender_anterior_nodes = true;
+  }
+  if (facts.cough_present === false) {
+    score += 1;
+    components.absence_of_cough = true;
+  }
+
+  const age = Number(context.modifiers?.age);
+  if (Number.isFinite(age) && age >= 3 && age <= 14) {
+    score += 1;
+    components.age_bonus = "+1";
+  } else if (Number.isFinite(age) && age >= 45) {
+    score -= 1;
+    components.age_penalty = "-1";
+  }
+
+  let risk_bucket = "low";
+  let recommended_implication = "Low strep probability";
+
+  if (score >= 4) {
+    risk_bucket = "high";
+    recommended_implication = "High strep probability; testing/treatment pathway appropriate";
+  } else if (score >= 2) {
+    risk_bucket = "moderate";
+    recommended_implication = "Intermediate risk; formal testing appropriate";
+  }
+
+  return {
+    score_name: "Centor",
+    score_value: score,
+    risk_bucket,
+    recommended_implication,
+    components,
+  };
+}
+
+function applyCurb65(context: SkillContext): ApplyClinicalScoreResult {
+  const facts = getFacts(context);
+  let score = 0;
+  const components: Record<string, any> = {};
+  const age = Number(context.modifiers?.age);
+
+  if (facts.confusion_present) {
+    score += 1;
+    components.confusion = true;
+  }
+  if (Number.isFinite(age) && age >= 65) {
+    score += 1;
+    components.age65 = true;
+  }
+
+  const risk_bucket = score >= 2 ? "high" : score === 1 ? "moderate" : "low";
+  const recommended_implication =
+    score >= 2
+      ? "Higher-risk pneumonia pattern; escalated evaluation appropriate"
+      : "Low-moderate CURB-65 signal based on available data";
+
+  return {
+    score_name: "CURB65",
+    score_value: score,
+    risk_bucket,
+    recommended_implication,
+    components,
+  };
+}
+
+export async function applyClinicalScore(
+  context: SkillContext
+): Promise<SkillResult<ApplyClinicalScoreResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "apply_clinical_score");
+
+  let scored: ApplyClinicalScoreResult;
+
+  switch (context.complaintId) {
+    case "sore_throat":
+    case "ent_sore_throat":
+      scored = applyCentor(context);
+      break;
+    case "cough":
+      scored = applyCurb65(context);
+      break;
+    default:
+      scored = {
+        score_name: "NotApplicable",
+        score_value: 0,
+        risk_bucket: "n/a",
+        recommended_implication: "No formal score configured for this complaint yet",
+        components: {},
+      };
+      break;
+  }
+
+  const result: SkillResult<ApplyClinicalScoreResult> = {
+    skillId: "SK013",
+    skillName: "apply_clinical_score",
+    version: "v1",
+    status: "success",
+    confidence: scored.score_name === "NotApplicable" ? 0.7 : 0.94,
+    result: scored,
+    audit: {
+      tablesUsed: ["NORMALIZED_FACTS", "NEGATION_HELPER", "SCORING_SYSTEMS_FALLBACK"],
+      ruleHits: [scored.score_name],
+      missingData: scored.score_name === "NotApplicable" ? ["formal_score_not_configured"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["generate_differential", "determine_disposition"],
+  };
+
+  assertSkillResultShape(result, "apply_clinical_score");
+  return result;
+}
+7. server/skills/reasoning/generateDifferential.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type DifferentialItem = {
+  diagnosis: string;
+  confidence: number;
+  supporting_findings: string[];
+  contradictory_findings: string[];
+};
+
+type GenerateDifferentialResult = {
+  differential_list: DifferentialItem[];
+  confidence: number;
+  supporting_findings: string[];
+  contradictory_findings: string[];
+};
+
+function baseFallbackDifferential(complaintId: string): string[] {
+  switch (complaintId) {
+    case "sore_throat":
+    case "ent_sore_throat":
+      return ["streptococcal_pharyngitis", "viral_pharyngitis", "mononucleosis"];
+    case "cough":
+      return ["viral_uri", "bronchitis", "pneumonia"];
+    case "uti":
+    case "gu_uti_symptoms":
+      return ["uncomplicated_cystitis", "pyelonephritis", "nephrolithiasis"];
+    default:
+      return ["viral_syndrome", "bacterial_infection", "non_specific_condition"];
+  }
+}
+
+export async function generateDifferential(
+  context: SkillContext
+): Promise<SkillResult<GenerateDifferentialResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "generate_differential");
+
+  const clusterScores =
+    context.priorSkillOutputs?.score_differential_clusters?.result?.scored_clusters ?? [];
+
+  const formalScore =
+    context.priorSkillOutputs?.apply_clinical_score?.result ?? null;
+
+  let dxRows: CsvRow[] = [];
+  try {
+    dxRows = await loadCsvTable("DX_CANDIDATES.csv");
+  } catch {
+    dxRows = [];
+  }
+
+  const items: DifferentialItem[] = [];
+
+  if (clusterScores.length && dxRows.length) {
+    for (const cluster of clusterScores.slice(0, 5)) {
+      const matching = dxRows.filter((row) => {
+        const bestCluster = getFirstValue(row, ["BEST_CLUSTER_ID", "Cluster_ID"]);
+        return bestCluster && bestCluster.toLowerCase() === String(cluster.cluster_id).toLowerCase();
+      });
+
+      for (const row of matching.slice(0, 2)) {
+        const diagnosis =
+          getFirstValue(row, ["DX_NAME", "Diagnosis", "Diagnosis_Name", "Label"]) || cluster.cluster_name;
+
+        items.push({
+          diagnosis,
+          confidence: Math.min(0.96, 0.5 + Number(cluster.score || 0) / 20),
+          supporting_findings: cluster.supporting_hits ?? [],
+          contradictory_findings: [],
+        });
+      }
+    }
+  }
+
+  if (!items.length) {
+    for (const diagnosis of baseFallbackDifferential(context.complaintId!)) {
+      items.push({
+        diagnosis,
+        confidence: 0.6,
+        supporting_findings: [],
+        contradictory_findings: [],
+      });
+    }
+  }
+
+  if (formalScore?.score_name === "Centor" && formalScore.score_value >= 3) {
+    const strep = items.find((i) => i.diagnosis.toLowerCase().includes("strep"));
+    if (strep) strep.confidence = Math.min(0.98, strep.confidence + 0.1);
+  }
+
+  items.sort((a, b) => b.confidence - a.confidence);
+
+  const supporting_findings = [...new Set(items.flatMap((i) => i.supporting_findings))];
+  const contradictory_findings = [...new Set(items.flatMap((i) => i.contradictory_findings))];
+
+  const result: SkillResult<GenerateDifferentialResult> = {
+    skillId: "SK011",
+    skillName: "generate_differential",
+    version: "v1",
+    status: "success",
+    confidence: items[0]?.confidence ?? 0.5,
+    result: {
+      differential_list: items.slice(0, 5),
+      confidence: items[0]?.confidence ?? 0.5,
+      supporting_findings,
+      contradictory_findings,
+    },
+    audit: {
+      tablesUsed: dxRows.length
+        ? ["DX_CANDIDATES", "CLUSTER_SCORING_RULES"]
+        : ["DX_CANDIDATES_FALLBACK"],
+      ruleHits: items.slice(0, 3).map((i) => i.diagnosis),
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["check_consistency_and_gaps", "determine_disposition"],
+  };
+
+  assertSkillResultShape(result, "generate_differential");
+  return result;
+}
+8. server/skills/output/generatePhysicianReviewPacket.ts
+import { ReviewPacket, SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+
+export async function generatePhysicianReviewPacket(
+  context: SkillContext
+): Promise<SkillResult<ReviewPacket>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+
+  const modifiers =
+    context.priorSkillOutputs?.collect_modifiers?.result?.modifiers ??
+    context.modifiers ??
+    {};
+
+  const normalized =
+    context.priorSkillOutputs?.normalize_patient_story?.result ?? {};
+
+  const facts = normalized.structured_facts ?? {};
+  const affirmed = normalized.associated_symptoms ?? [];
+  const negated = normalized.negated_symptoms ?? [];
+
+  const redFlags =
+    context.priorSkillOutputs?.detect_red_flags?.result?.red_flag_hits ?? [];
+
+  const differential =
+    context.priorSkillOutputs?.generate_differential?.result?.differential_list ?? [];
+
+  const disposition =
+    context.priorSkillOutputs?.determine_disposition?.result?.disposition ?? "unknown";
+
+  const complaintSummary = [
+    context.complaintId ?? "unknown_complaint",
+    modifiers.age ? `age ${modifiers.age}` : "",
+    modifiers.duration ? `x ${modifiers.duration}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  const packet: ReviewPacket = {
+    caseId: context.caseId,
+    complaintSummary,
+    keyModifiers: modifiers,
+    keyFindings: {
+      ...facts,
+      affirmed_symptoms: affirmed,
+      negated_symptoms: negated,
+    },
+    redFlags: redFlags.map((r: any) => r.label ?? r.id ?? String(r)),
+    likelyDiagnoses: differential.slice(0, 3).map((d: any) => d.diagnosis ?? String(d)),
+    proposedDisposition: disposition,
+    cautionNotes: [
+      disposition === "er_now" ? "Immediate escalation indicated" : "",
+      redFlags.length ? "Red-flag review required" : "",
+      negated.length ? "Negated symptoms parsed and preserved" : "",
+    ].filter(Boolean),
+    approvalChecklist: [
+      "Review complaint summary",
+      "Confirm key positives and negatives",
+      "Confirm red flags",
+      "Confirm top differential",
+      "Confirm disposition",
+      "Confirm return precautions",
+    ],
+  };
+
+  const result: SkillResult<ReviewPacket> = {
+    skillId: "SK018",
+    skillName: "generate_physician_review_packet",
+    version: "v1",
+    status: "success",
+    confidence: 0.95,
+    result: packet,
+    audit: {
+      tablesUsed: ["OUTPUT_TEMPLATES_FALLBACK", "NORMALIZED_FACTS"],
+      ruleHits: ["PHYSICIAN_REVIEW_PACKET_CREATED"],
+      missingData: disposition === "unknown" ? ["disposition"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["attach_outcome_stub", "measure_workflow_value"],
+  };
+
+  assertSkillResultShape(result, "generate_physician_review_packet");
+  return result;
+}
+9. How to wire this into the orchestrator
+
+Your orchestrator mostly already supports these. The key wiring rule is:
+
+Make normalize_patient_story the upstream truth source
+
+For downstream skills, pass:
+
+knownFacts = normalize_patient_story.result.structured_facts
+
+priorSkillOutputs = all prior skill outputs
+
+This makes the flow:
+
+collect_modifiers
+→ identify_chief_complaint
+→ normalize_patient_story
+→ detect_red_flags
+→ run_complaint_question_bundle
+→ select_next_best_question
+→ score_differential_clusters
+→ apply_clinical_score
+→ generate_differential
+→ determine_disposition
+→ generate_physician_review_packet
+10. What this fixes immediately
+
+This pack specifically fixes the Phase 1 gremlins:
+
+Complaint misrouting from negation
+
+“no chest pain” should no longer strongly pull chest_pain
+
+False red flags
+
+“no drooling”
+
+“denies stridor”
+
+“without cough”
+
+These no longer count as affirmative hits.
+
+Cleaner scoring
+
+Centor now benefits from:
+
+fever yes
+
+sore throat yes
+
+cough absent
+
+instead of getting confused by text-only substring matching.
+
+11. Best quick test cases
+
+Run these first:
+
+Sore throat
+
+32 year old male with sore throat x 3 days, fever, no cough
+
+Expected:
+
+complaint = sore_throat
+
+cough_present = false
+
+Centor elevated
+
+differential topped by strep / viral / mono
+
+Cough
+
+45 year old female with cough for 2 weeks, no chest pain, no shortness of breath
+
+Expected:
+
+complaint = cough
+
+not chest_pain
+
+no false SOB red flag
+
+Airway warning
+
+child with sore throat, drooling, muffled voice, cannot swallow
+
+Expected:
+
+strong sore throat complaint
+
+critical red flags
+
+urgent disposition
+
+UTI
+
+26 year old female with dysuria and frequency x 2 days, no fever
+
+Expected:
+
+complaint = uti
+
+fever false
+
+cystitis above pyelo
+
+12. Fastest next step after this pack
+
+After this negation-aware Phase 2 pack, the shortest road is:
+
+trigger_global_secondary_questions
+
+check_consistency_and_gaps
+
+generate_assessment_plan
+
+generate_emergency_warning
+
+measure_workflow_value
+
+That will finish the highest-value placeholder layer.
+
+If you want, next I’ll write the Phase 3 implementation pack in the same paste-ready format so you can wipe out the next five placeholders quickly.
+
+Cancel

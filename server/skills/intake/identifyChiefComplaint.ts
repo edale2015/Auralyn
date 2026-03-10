@@ -5,6 +5,7 @@ import {
   safeString,
 } from "../shared/schemaValidators";
 import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { phrasePresent, phraseNegated } from "../shared/negationHelper";
 
 type IdentifyChiefComplaintResult = {
   complaint_id: string;
@@ -15,14 +16,14 @@ type IdentifyChiefComplaintResult = {
 function complaintIdFromRow(row: CsvRow): string {
   return (
     getFirstValue(row, ["Complaint_ID", "CC_ID", "Chief_Complaint_ID", "ComplaintId"]) ||
-    getFirstValue(row, ["Chief_Complaint", "Complaint_Name", "Complaint"])
+    getFirstValue(row, ["LABEL", "Chief_Complaint", "Complaint_Name", "Complaint"])
       .toLowerCase()
       .replace(/\s+/g, "_")
   );
 }
 
-function complaintLabelFromRow(row: CsvRow): string {
-  return getFirstValue(row, [
+function aliasesFromRow(row: CsvRow): string[] {
+  const label = getFirstValue(row, [
     "Chief_Complaint",
     "Complaint_Name",
     "Complaint",
@@ -30,40 +31,25 @@ function complaintLabelFromRow(row: CsvRow): string {
     "LABEL",
     "Label",
   ]);
-}
+  const aliases = getFirstValue(row, ["ALIASES", "Keywords", "Synonyms", "Search_Terms"]);
+  const complaintId = complaintIdFromRow(row);
 
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
+  return [
+    label,
+    complaintId.replace(/_/g, " "),
+    ...aliases.split(/[|;]+/),
+  ]
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
 
 function scoreComplaint(text: string, row: CsvRow): number {
-  const label = complaintLabelFromRow(row).toLowerCase();
-  const complaintId = complaintIdFromRow(row).toLowerCase();
-  const hay = text.toLowerCase();
+  const aliases = aliasesFromRow(row);
   let score = 0;
 
-  if (label && hay.includes(label)) score += 10;
-  if (complaintId && hay.includes(complaintId.replace(/_/g, " "))) score += 8;
-
-  for (const token of tokenize(label)) {
-    if (hay.includes(token)) score += 2;
-  }
-  for (const token of tokenize(complaintId)) {
-    if (hay.includes(token)) score += 2;
-  }
-
-  const keywords = getFirstValue(row, ["Keywords", "Synonyms", "Search_Terms", "ALIASES", "Aliases"]);
-  for (const keyword of keywords.split(/[|;]/).map((s) => s.trim()).filter(Boolean)) {
-    const kw = keyword.toLowerCase();
-    if (hay.includes(kw)) score += 3;
-    const spaced = kw.replace(/_/g, " ");
-    if (spaced !== kw && hay.includes(spaced)) score += 3;
-    for (const token of tokenize(kw)) {
-      if (token.length >= 4 && hay.includes(token)) score += 1;
-    }
+  for (const alias of aliases) {
+    if (phrasePresent(text, alias)) score += 6;
+    else if (phraseNegated(text, alias)) score -= 5;
   }
 
   return score;
@@ -90,14 +76,15 @@ export async function identifyChiefComplaint(
 
   scored.sort((a, b) => b.score - a.score);
 
-  const top = scored[0];
-  const alternates = scored.slice(1, 4).filter((x) => x.score > 0).map((x) => x.complaintId);
+  const positive = scored.filter((s) => s.score > 0);
+  const top = positive[0] ?? scored[0];
+  const alternates = positive.slice(1, 4).map((x) => x.complaintId);
 
   const complaint_id = top?.complaintId || "general_symptom";
   const ambiguity_score =
-    top && scored[1]
-      ? Math.max(0, Math.min(1, 1 - (top.score - scored[1].score) / Math.max(top.score, 1)))
-      : 0.1;
+    positive.length >= 2
+      ? Math.max(0, Math.min(1, 1 - (positive[0].score - positive[1].score) / Math.max(positive[0].score, 1)))
+      : 0.15;
 
   const result: SkillResult<IdentifyChiefComplaintResult> = {
     skillId: "SK003",
@@ -111,7 +98,7 @@ export async function identifyChiefComplaint(
       ambiguity_score,
     },
     audit: {
-      tablesUsed: ["COMPLAINT_REGISTRY"],
+      tablesUsed: ["COMPLAINT_REGISTRY", "NEGATION_HELPER"],
       ruleHits: top ? [`CC_MATCH_${complaint_id.toUpperCase()}`] : ["CC_FALLBACK_GENERAL"],
       missingData: complaint_id === "general_symptom" ? ["specific_complaint_match"] : [],
       latencyMs: Date.now() - started,

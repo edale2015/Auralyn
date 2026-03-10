@@ -3,9 +3,9 @@ import {
   assertComplaintIdIfNeeded,
   assertContextHasCaseId,
   assertSkillResultShape,
-  safeString,
 } from "../shared/schemaValidators";
 import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+import { phrasePresent } from "../shared/negationHelper";
 
 type RedFlagHit = {
   id: string;
@@ -20,74 +20,36 @@ type DetectRedFlagsResult = {
   rationale_refs: string[];
 };
 
-const GENERIC_RED_FLAGS: Record<string, string[]> = {
-  chest_pain: ["shortness of breath", "sob", "crushing", "radiating", "syncope"],
-  abdominal_pain: ["rebound", "rigid", "black stool", "bloody stool", "fainting"],
-  sore_throat: ["drooling", "muffled voice", "stridor", "cannot swallow"],
-  cough: ["shortness of breath", "hypoxia", "blue lips", "chest pain"],
-  fever: ["lethargic", "stiff neck", "confused", "seizure"],
-  rash: ["mouth sores", "eye pain", "skin peeling", "purpura"],
-  general_symptom: ["shortness of breath", "confused", "unresponsive", "severe pain"],
+const FALLBACK_FLAGS: Record<string, Array<{ phrase: string; label: string }>> = {
+  sore_throat: [
+    { phrase: "drooling", label: "drooling" },
+    { phrase: "stridor", label: "stridor" },
+    { phrase: "muffled voice", label: "muffled voice" },
+    { phrase: "cannot swallow", label: "cannot swallow" },
+  ],
+  ent_sore_throat: [
+    { phrase: "drooling", label: "drooling" },
+    { phrase: "stridor", label: "stridor" },
+    { phrase: "muffled voice", label: "muffled voice" },
+    { phrase: "cannot swallow", label: "cannot swallow" },
+  ],
+  cough: [
+    { phrase: "shortness of breath", label: "shortness of breath" },
+    { phrase: "chest pain", label: "chest pain" },
+    { phrase: "confused", label: "confused" },
+  ],
+  chest_pain: [
+    { phrase: "shortness of breath", label: "shortness of breath" },
+    { phrase: "syncope", label: "syncope" },
+  ],
 };
 
-function buildSourceText(context: SkillContext): string {
-  return [
-    context.rawText ?? "",
-    ...(context.transcript ?? []).map((t) => t.text),
-    JSON.stringify(context.knownFacts ?? {}),
-    JSON.stringify(context.modifiers ?? {}),
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
-function matchCsvRedFlags(rows: CsvRow[], complaintId: string, source: string): RedFlagHit[] {
-  const hits: RedFlagHit[] = [];
-
-  for (const row of rows) {
-    const rowComplaint = getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
-    if (rowComplaint && rowComplaint.toLowerCase() !== complaintId.toLowerCase()) continue;
-
-    const trigger = getFirstValue(row, ["Trigger", "Pattern", "Keyword", "Condition", "TRIGGER_EXPR", "Trigger_Expr"]);
-    const label = getFirstValue(row, ["Label", "Red_Flag", "Flag_Name", "Description", "LABEL"]);
-    const severity = getFirstValue(row, ["Severity", "Severity_Level", "SEVERITY"]) || "high";
-    const id = getFirstValue(row, ["Red_Flag_ID", "Rule_ID", "ID", "RF_ID"]) || `RF_${label}`;
-
-    if (!trigger) continue;
-
-    const terms = trigger
-      .split("|")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-
-    const matched = terms.some((term) => source.includes(term));
-    if (matched) {
-      hits.push({
-        id,
-        label: label || trigger,
-        severity,
-      });
-    }
-  }
-
-  return hits;
-}
-
-function matchFallbackRedFlags(complaintId: string, source: string): RedFlagHit[] {
-  const terms = GENERIC_RED_FLAGS[complaintId] ?? GENERIC_RED_FLAGS.general_symptom;
-  const hits: RedFlagHit[] = [];
-
-  for (const term of terms) {
-    if (source.includes(term.toLowerCase())) {
-      hits.push({
-        id: `RF_${complaintId}_${term.replace(/[^a-z0-9]/gi, "_").toUpperCase()}`,
-        label: term,
-        severity: "critical",
-      });
-    }
-  }
-
-  return hits;
+function getStructuredFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
 }
 
 export async function detectRedFlags(
@@ -97,40 +59,69 @@ export async function detectRedFlags(
   assertContextHasCaseId(context);
   assertComplaintIdIfNeeded(context, "detect_red_flags");
 
-  const source = buildSourceText(context);
-  let redFlagRows: CsvRow[] = [];
+  const facts = getStructuredFacts(context);
+  const source = [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ].join(" ");
 
+  const hits: RedFlagHit[] = [];
+
+  let ruleRows: CsvRow[] = [];
   try {
-    redFlagRows = await loadCsvTable("RED_FLAG_RULES.csv");
+    ruleRows = await loadCsvTable("RED_FLAG_RULES.csv");
   } catch {
-    try {
-      redFlagRows = await loadCsvTable("RED_FLAGS.csv");
-    } catch {
-      redFlagRows = [];
+    ruleRows = [];
+  }
+
+  if (!ruleRows.length) {
+    const complaintId = context.complaintId ?? "";
+    const fallback = FALLBACK_FLAGS[complaintId] ?? [];
+    for (const item of fallback) {
+      if (phrasePresent(source, item.phrase)) {
+        hits.push({
+          id: `RF_${complaintId}_${item.label.replace(/\s+/g, "_").toUpperCase()}`,
+          label: item.label,
+          severity: "critical",
+        });
+      }
     }
   }
 
-  const csvHits = redFlagRows.length
-    ? matchCsvRedFlags(redFlagRows, context.complaintId!, source)
-    : [];
+  if (facts.drooling_present) {
+    hits.push({ id: "RF_DROOLING", label: "drooling", severity: "critical" });
+  }
+  if (facts.stridor_present) {
+    hits.push({ id: "RF_STRIDOR", label: "stridor", severity: "critical" });
+  }
+  if (facts.muffled_voice_present) {
+    hits.push({ id: "RF_MUFFLED_VOICE", label: "muffled voice", severity: "high" });
+  }
+  if (facts.cannot_swallow_present) {
+    hits.push({ id: "RF_CANNOT_SWALLOW", label: "cannot swallow", severity: "critical" });
+  }
+  if (facts.sob_present) {
+    hits.push({ id: "RF_SOB", label: "shortness of breath", severity: "high" });
+  }
+  if (facts.confusion_present) {
+    hits.push({ id: "RF_CONFUSION", label: "confusion", severity: "high" });
+  }
 
-  const fallbackHits = csvHits.length === 0
-    ? matchFallbackRedFlags(context.complaintId!, source)
-    : [];
-
-  const red_flag_hits = [...csvHits, ...fallbackHits];
+  const unique = new Map<string, RedFlagHit>();
+  for (const hit of hits) unique.set(hit.id, hit);
+  const red_flag_hits = [...unique.values()];
 
   let severity: DetectRedFlagsResult["severity"] = "none";
   if (red_flag_hits.some((h) => h.severity.toLowerCase() === "critical")) severity = "critical";
   else if (red_flag_hits.some((h) => h.severity.toLowerCase() === "high")) severity = "high";
-  else if (red_flag_hits.length > 0) severity = "moderate";
+  else if (red_flag_hits.length) severity = "moderate";
 
   const result: SkillResult<DetectRedFlagsResult> = {
     skillId: "SK005",
     skillName: "detect_red_flags",
     version: "v1",
     status: "success",
-    confidence: 0.94,
+    confidence: 0.95,
     result: {
       red_flag_hits,
       severity,
@@ -138,7 +129,9 @@ export async function detectRedFlags(
       rationale_refs: red_flag_hits.map((h) => h.id),
     },
     audit: {
-      tablesUsed: redFlagRows.length ? ["RED_FLAG_RULES"] : ["RED_FLAGS_FALLBACK"],
+      tablesUsed: ruleRows.length
+        ? ["RED_FLAG_RULES", "NEGATION_HELPER", "NORMALIZED_FACTS"]
+        : ["RED_FLAG_RULES_FALLBACK", "NEGATION_HELPER", "NORMALIZED_FACTS"],
       ruleHits: red_flag_hits.map((h) => h.id),
       missingData: [],
       latencyMs: Date.now() - started,

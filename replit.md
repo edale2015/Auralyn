@@ -131,8 +131,9 @@ A modular skill-based orchestration layer for clinical triage, built on 18 regis
 - **`server/skills/shared/schemaValidators.ts`**: Strict validators for SkillContext and SkillResult shapes
 - **`server/skills/shared/auditLogger.ts`**: NDJSON audit logger — writes `skill_run_log.ndjson` and `case_audit_log.ndjson` to `server/data/runtime/`
 - **`server/skills/intake/collectModifiers.ts`**: Real skill — extracts age, duration, sex, pregnancy, immunocompromised status from text
-- **`server/skills/intake/identifyChiefComplaint.ts`**: Real skill — scores text against COMPLAINT_REGISTRY.csv to identify chief complaint
-- **`server/skills/safety/detectRedFlags.ts`**: Real skill — matches against RED_FLAG_RULES.csv with fallback emergency ruleset
+- **`server/skills/shared/negationHelper.ts`**: Shared negation engine — `phrasePresent`, `phraseNegated`, `extractAssertions`, `getPhraseAssertion`; handles "no X", "denies X", "without X", "negative for X" with clause-level scanning
+- **`server/skills/intake/identifyChiefComplaint.ts`**: Real skill — scores text against COMPLAINT_REGISTRY.csv with negation-aware alias matching (+6 affirmed, -5 negated)
+- **`server/skills/safety/detectRedFlags.ts`**: Real skill — facts-first detection from normalized structured_facts, fallback to negation-aware raw text matching; deduplicates hits
 - **`server/skills/questions/runComplaintQuestionBundle.ts`**: Real skill — loads complaint-specific questions from CSV, tracks pending/asked/skipped
 - **`server/skills/questions/selectNextBestQuestion.ts`**: Real skill — picks highest-impact next question using QUESTION_IMPACT.csv
 - **`server/skills/safety/determineDisposition.ts`**: Real skill — assigns disposition from DISPOSITION_RULES.csv with red-flag-based fallback

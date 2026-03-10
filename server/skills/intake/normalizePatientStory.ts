@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { extractAssertions, phrasePresent, phraseNegated } from "../shared/negationHelper";
 
 type NormalizePatientStoryResult = {
   symptom_timeline: string;
@@ -13,7 +14,7 @@ type NormalizePatientStoryResult = {
   structured_facts: Record<string, any>;
 };
 
-const COMMON_POSITIVES = [
+const TRACKED_SYMPTOMS = [
   "fever",
   "cough",
   "sore throat",
@@ -36,24 +37,12 @@ const COMMON_POSITIVES = [
   "burning urination",
   "frequency",
   "urgency",
+  "drooling",
+  "stridor",
+  "muffled voice",
+  "cannot swallow",
   "confused",
   "confusion",
-];
-
-const COMMON_NEGATIONS = [
-  "no fever",
-  "no cough",
-  "no shortness of breath",
-  "no chest pain",
-  "no vomiting",
-  "no diarrhea",
-  "no rash",
-  "no abdominal pain",
-  "no urinary symptoms",
-  "denies fever",
-  "denies cough",
-  "denies shortness of breath",
-  "denies chest pain",
 ];
 
 function buildSourceText(context: SkillContext): string {
@@ -77,10 +66,6 @@ function extractDuration(text: string): string {
   return match?.[1]?.trim() ?? "";
 }
 
-function hasPhrase(text: string, phrase: string): boolean {
-  return text.toLowerCase().includes(phrase.toLowerCase());
-}
-
 export async function normalizePatientStory(
   context: SkillContext
 ): Promise<SkillResult<NormalizePatientStoryResult>> {
@@ -89,10 +74,7 @@ export async function normalizePatientStory(
   assertComplaintIdIfNeeded(context, "normalize_patient_story");
 
   const source = buildSourceText(context);
-  const lower = source.toLowerCase();
-
-  const associated_symptoms = COMMON_POSITIVES.filter((term) => hasPhrase(lower, term));
-  const negated_symptoms = COMMON_NEGATIONS.filter((term) => hasPhrase(lower, term));
+  const assertions = extractAssertions(source, TRACKED_SYMPTOMS);
 
   const extracted_measurements: Record<string, any> = {};
   const temp = extractTemperature(source);
@@ -105,40 +87,28 @@ export async function normalizePatientStory(
     complaint_id: context.complaintId,
     age: context.modifiers?.age,
     duration: symptom_timeline,
-    fever_present:
-      associated_symptoms.includes("fever") &&
-      !negated_symptoms.includes("no fever") &&
-      !negated_symptoms.includes("denies fever"),
-    cough_present:
-      associated_symptoms.includes("cough") &&
-      !negated_symptoms.includes("no cough") &&
-      !negated_symptoms.includes("denies cough"),
+    fever_present: phrasePresent(source, "fever"),
+    cough_present: phrasePresent(source, "cough"),
     sore_throat_present:
-      associated_symptoms.includes("sore throat") ||
-      associated_symptoms.includes("throat pain"),
+      phrasePresent(source, "sore throat") || phrasePresent(source, "throat pain"),
     sob_present:
-      (associated_symptoms.includes("shortness of breath") ||
-      associated_symptoms.includes("sob")) &&
-      !negated_symptoms.includes("no shortness of breath") &&
-      !negated_symptoms.includes("denies shortness of breath"),
-    chest_pain_present:
-      associated_symptoms.includes("chest pain") &&
-      !negated_symptoms.includes("no chest pain") &&
-      !negated_symptoms.includes("denies chest pain"),
+      phrasePresent(source, "shortness of breath") || phrasePresent(source, "sob"),
+    chest_pain_present: phrasePresent(source, "chest pain"),
+    abdominal_pain_present: phrasePresent(source, "abdominal pain"),
+    rash_present: phrasePresent(source, "rash"),
     dysuria_present:
-      associated_symptoms.includes("dysuria") ||
-      associated_symptoms.includes("burning when urinating") ||
-      associated_symptoms.includes("burning urination"),
+      phrasePresent(source, "dysuria") ||
+      phrasePresent(source, "burning when urinating") ||
+      phrasePresent(source, "burning urination"),
+    urinary_frequency_present: phrasePresent(source, "frequency"),
+    urinary_urgency_present: phrasePresent(source, "urgency"),
+    drooling_present: phrasePresent(source, "drooling"),
+    stridor_present: phrasePresent(source, "stridor"),
+    muffled_voice_present: phrasePresent(source, "muffled voice"),
+    cannot_swallow_present: phrasePresent(source, "cannot swallow"),
     confusion_present:
-      associated_symptoms.includes("confused") ||
-      associated_symptoms.includes("confusion"),
-    urinary_frequency_present: associated_symptoms.includes("frequency"),
-    rash_present:
-      associated_symptoms.includes("rash") &&
-      !negated_symptoms.includes("no rash"),
-    abdominal_pain_present:
-      associated_symptoms.includes("abdominal pain") &&
-      !negated_symptoms.includes("no abdominal pain"),
+      phrasePresent(source, "confused") || phrasePresent(source, "confusion"),
+    cough_negated: phraseNegated(source, "cough"),
   };
 
   const result: SkillResult<NormalizePatientStoryResult> = {
@@ -146,20 +116,20 @@ export async function normalizePatientStory(
     skillName: "normalize_patient_story",
     version: "v1",
     status: "success",
-    confidence: 0.87,
+    confidence: 0.9,
     result: {
       symptom_timeline,
-      associated_symptoms,
-      negated_symptoms,
+      associated_symptoms: assertions.affirmed,
+      negated_symptoms: assertions.negated,
       extracted_measurements,
       structured_facts,
     },
     audit: {
-      tablesUsed: ["COMPLAINT_REGISTRY"],
+      tablesUsed: ["NEGATION_HELPER", "COMPLAINT_REGISTRY"],
       ruleHits: [
         symptom_timeline ? "TIMELINE_EXTRACTED" : "",
         temp != null ? "TEMP_EXTRACTED" : "",
-        associated_symptoms.length ? "SYMPTOMS_NORMALIZED" : "",
+        assertions.affirmed.length ? "NEGATION_AWARE_NORMALIZATION" : "",
       ].filter(Boolean),
       missingData: symptom_timeline ? [] : ["duration"],
       latencyMs: Date.now() - started,

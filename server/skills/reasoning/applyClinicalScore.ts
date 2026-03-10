@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { phrasePresent } from "../shared/negationHelper";
 
 type ApplyClinicalScoreResult = {
   score_name: string;
@@ -13,42 +14,44 @@ type ApplyClinicalScoreResult = {
   components: Record<string, any>;
 };
 
+function buildSource(context: SkillContext): string {
+  return [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ].join(" ");
+}
+
 function getFacts(context: SkillContext): Record<string, any> {
   return (
     context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
-    context.priorSkillOutputs?.normalizePatientStory?.result?.structured_facts ??
+    context.knownFacts ??
     {}
   );
 }
 
 function applyCentor(context: SkillContext): ApplyClinicalScoreResult {
   const facts = getFacts(context);
-  const source = [
-    context.rawText ?? "",
-    ...(context.transcript ?? []).map((t) => t.text),
-  ]
-    .join(" ")
-    .toLowerCase();
-
+  const source = buildSource(context);
   let score = 0;
   const components: Record<string, any> = {};
 
-  if (facts.fever_present || source.includes("fever")) {
+  if (facts.fever_present) {
     score += 1;
     components.fever = true;
   }
-  if (facts.sore_throat_present || source.includes("exudate") || source.includes("tonsil")) {
+  if (facts.sore_throat_present) {
     score += 1;
-    components.tonsillar_findings = true;
+    components.tonsillar_findings_or_sore_throat = true;
   }
-  if (source.includes("tender nodes") || source.includes("lymph node")) {
+  if (phrasePresent(source, "tender nodes") || phrasePresent(source, "lymph node")) {
     score += 1;
     components.tender_anterior_nodes = true;
   }
-  if (facts.cough_present === false || source.includes("no cough") || source.includes("denies cough")) {
+  if (facts.cough_negated === true) {
     score += 1;
     components.absence_of_cough = true;
   }
+
   const age = Number(context.modifiers?.age);
   if (Number.isFinite(age) && age >= 3 && age <= 14) {
     score += 1;
@@ -59,14 +62,14 @@ function applyCentor(context: SkillContext): ApplyClinicalScoreResult {
   }
 
   let risk_bucket = "low";
-  let recommended_implication = "Supportive care / consider no testing depending on full exam";
+  let recommended_implication = "Low strep probability";
 
   if (score >= 4) {
     risk_bucket = "high";
-    recommended_implication = "High strep probability; testing/treatment workflow appropriate";
+    recommended_implication = "High strep probability; testing/treatment pathway appropriate";
   } else if (score >= 2) {
     risk_bucket = "moderate";
-    recommended_implication = "Intermediate risk; testing pathway appropriate";
+    recommended_implication = "Intermediate risk; formal testing appropriate";
   }
 
   return {
@@ -79,18 +82,12 @@ function applyCentor(context: SkillContext): ApplyClinicalScoreResult {
 }
 
 function applyCurb65(context: SkillContext): ApplyClinicalScoreResult {
-  const source = [
-    context.rawText ?? "",
-    ...(context.transcript ?? []).map((t) => t.text),
-  ]
-    .join(" ")
-    .toLowerCase();
-
+  const facts = getFacts(context);
   let score = 0;
   const components: Record<string, any> = {};
   const age = Number(context.modifiers?.age);
 
-  if (source.includes("confused")) {
+  if (facts.confusion_present) {
     score += 1;
     components.confusion = true;
   }
@@ -102,7 +99,7 @@ function applyCurb65(context: SkillContext): ApplyClinicalScoreResult {
   const risk_bucket = score >= 2 ? "high" : score === 1 ? "moderate" : "low";
   const recommended_implication =
     score >= 2
-      ? "Higher risk pneumonia pattern; escalated evaluation may be needed"
+      ? "Higher-risk pneumonia pattern; escalated evaluation appropriate"
       : "Low-moderate CURB-65 signal based on available data";
 
   return {
@@ -149,10 +146,10 @@ export async function applyClinicalScore(
     skillName: "apply_clinical_score",
     version: "v1",
     status: "success",
-    confidence: scored.score_name === "NotApplicable" ? 0.7 : 0.93,
+    confidence: scored.score_name === "NotApplicable" ? 0.7 : 0.94,
     result: scored,
     audit: {
-      tablesUsed: ["SCORING_SYSTEMS_FALLBACK"],
+      tablesUsed: ["NORMALIZED_FACTS", "NEGATION_HELPER", "SCORING_SYSTEMS_FALLBACK"],
       ruleHits: [scored.score_name],
       missingData: scored.score_name === "NotApplicable" ? ["formal_score_not_configured"] : [],
       latencyMs: Date.now() - started,
