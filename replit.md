@@ -98,6 +98,19 @@ A channel orchestrator and message routing service for managing communication ac
 ### Production Resilience
 Includes a healthcheck service and a job runner for maintaining system stability.
 
+### Clinical Skill Layer (18/18 real — zero placeholders)
+- **Orchestrator**: `server/orchestrator/clinicalSkillOrchestrator.ts` — sequential 18-skill pipeline with context threading
+- **Negation engine**: `server/skills/shared/negationHelper.ts` — clause-level negation with conjunction boundaries
+- **Intake**: `collectModifiers`, `extractMedToConditionTriggers`, `identifyChiefComplaint`, `normalizePatientStory`
+- **Safety**: `detectRedFlags`, `determineDisposition`
+- **Questions**: `runComplaintQuestionBundle`, `triggerGlobalSecondaryQuestions`, `selectNextBestQuestion`
+- **Reasoning**: `scoreDifferentialClusters`, `applyClinicalScore` (Centor/CURB-65), `generateDifferential`
+- **Audit**: `checkConsistencyAndGaps`
+- **Output**: `generateEmergencyWarning`, `generateAssessmentPlan`, `generatePhysicianReviewPacket`
+- **Analytics**: `measureWorkflowValue`
+- **Outcomes**: `attachOutcomeStub`
+- **Golden case harness**: `server/testing/goldenCaseRunner.ts` + `goldenCases.sample.json` (7 cases)
+
 ## External Dependencies
 
 -   **AI Integration**: OpenAI API

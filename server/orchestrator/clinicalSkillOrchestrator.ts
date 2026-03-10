@@ -3,6 +3,7 @@ import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
 import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
 import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
 import { collectModifiers } from "../skills/intake/collectModifiers";
+import { extractMedToConditionTriggers } from "../skills/intake/extractMedToConditionTriggers";
 import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
 import { normalizePatientStory } from "../skills/intake/normalizePatientStory";
 import { detectRedFlags } from "../skills/safety/detectRedFlags";
@@ -102,6 +103,9 @@ export class ClinicalSkillOrchestrator {
       switch (skillName) {
         case "collect_modifiers":
           result = await collectModifiers(contextForSkill);
+          break;
+        case "extract_med_to_condition_triggers":
+          result = await extractMedToConditionTriggers(contextForSkill);
           break;
         case "identify_chief_complaint":
           result = await identifyChiefComplaint(contextForSkill);

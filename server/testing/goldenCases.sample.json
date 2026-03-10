@@ -1,0 +1,86 @@
+[
+  {
+    "id": "sore_throat_classic",
+    "input": {
+      "rawText": "32 year old male with sore throat x 3 days, fever, no cough"
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "clinical_score_name": "Centor",
+      "clinical_score_min": 2,
+      "top_differential_contains": ["strep"],
+      "affirmed_symptoms_contains": ["fever", "sore throat"],
+      "negated_symptoms_contains": ["cough"]
+    }
+  },
+  {
+    "id": "elderly_cough_confusion",
+    "input": {
+      "rawText": "70 year old with cough, fever, confused for 2 days"
+    },
+    "expected": {
+      "complaint_id": "cough",
+      "clinical_score_name": "CURB65",
+      "clinical_score_min": 2,
+      "red_flag_hits_contains": ["confusion"],
+      "top_differential_contains": ["pneumonia"]
+    }
+  },
+  {
+    "id": "uti_no_fever",
+    "input": {
+      "rawText": "26 year old female with dysuria and frequency x 2 days, no fever"
+    },
+    "expected": {
+      "top_differential_contains": ["cystitis"],
+      "affirmed_symptoms_contains": ["dysuria", "frequency"],
+      "negated_symptoms_contains": ["fever"]
+    }
+  },
+  {
+    "id": "airway_warning_sore_throat",
+    "input": {
+      "rawText": "child with sore throat, drooling, muffled voice, cannot swallow"
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "disposition": "er_now",
+      "red_flag_hits_contains": ["drooling", "muffled voice", "cannot swallow"]
+    }
+  },
+  {
+    "id": "sore_throat_negation_safe",
+    "input": {
+      "rawText": "35 year old with sore throat, fever, no drooling, no stridor"
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "red_flag_hits_contains": [],
+      "affirmed_symptoms_contains": ["fever", "sore throat"],
+      "negated_symptoms_contains": ["drooling", "stridor"]
+    }
+  },
+  {
+    "id": "cough_no_false_sob_flag",
+    "input": {
+      "rawText": "45 year old female with cough for 2 weeks, no chest pain, no shortness of breath"
+    },
+    "expected": {
+      "complaint_id": "cough",
+      "red_flag_hits_contains": [],
+      "negated_symptoms_contains": ["chest pain", "shortness of breath"]
+    }
+  },
+  {
+    "id": "med_trigger_warfarin",
+    "input": {
+      "rawText": "65 year old with sore throat and fever",
+      "modifiers": {
+        "medications": ["warfarin", "lisinopril"]
+      }
+    },
+    "expected": {
+      "complaint_id": "sore_throat"
+    }
+  }
+]
