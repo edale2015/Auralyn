@@ -111,8 +111,10 @@ Includes a healthcheck service and a job runner for maintaining system stability
 - **Audit**: `checkConsistencyAndGaps`
 - **Output**: `generateEmergencyWarning`, `generateAssessmentPlan`, `generatePhysicianReviewPacket`
 - **Analytics**: `measureWorkflowValue`
-- **Outcomes**: `attachOutcomeStub`
+- **Outcomes**: `attachOutcomeStub`, `recordCaseOutcome`, `linkFollowUpResult`, `reconcilePredictedVsActual`
 - **Golden case harness**: `server/testing/goldenCaseRunner.ts` + `goldenCaseComparator.ts` + `goldenCaseImporter.ts` + `goldenCaseSummary.ts` + `goldenCases.sample.json` (7 cases) + `goldenCases.template.csv` (spreadsheet-friendly authoring)
+- **Golden case review workflow**: `goldenCaseReviewExporter.ts` (exports review worksheet CSV with actual vs expected + pass/fail + failure tags) + `goldenCaseReviewImporter.ts` (imports reviewer overrides/notes) + `goldenCaseFailureTagger.ts` (categorizes failures: wrong_complaint, wrong_disposition, wrong_score, missed_red_flag, wrong_differential, missed_affirmed_symptom, missed_negated_symptom)
+- **Outcome data files**: `server/data/runtime/case_outcomes.ndjson`, `case_followups.ndjson`, `case_reconciliation.ndjson`
 
 ## External Dependencies
 

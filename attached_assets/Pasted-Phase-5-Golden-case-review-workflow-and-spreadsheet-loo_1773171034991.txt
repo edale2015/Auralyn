@@ -1,0 +1,701 @@
+Phase 5
+
+Golden-case review workflow and spreadsheet loop
+
+goldenCaseReviewExporter.ts
+
+goldenCaseFailureTagger.ts
+
+goldenCaseReviewImportTemplate.csv
+
+goldenCaseReviewImporter.ts
+
+Phase 6
+
+Outcome loop and predicted-vs-actual reconciliation
+
+recordCaseOutcome.ts
+
+linkFollowUpResult.ts
+
+reconcilePredictedVsActual.ts
+
+And then a small orchestrator update note so these fit cleanly into your current layer.
+
+This is the part that starts turning the system from a strong rules engine into a compounding decision-data machine.
+
+Phase 5 files
+
+Create these:
+
+server/testing/goldenCaseReviewImportTemplate.csv
+server/testing/goldenCaseFailureTagger.ts
+server/testing/goldenCaseReviewExporter.ts
+server/testing/goldenCaseReviewImporter.ts
+1. server/testing/goldenCaseReviewImportTemplate.csv
+
+This is your spreadsheet review format.
+
+id,review_status,reviewer,expected_complaint_id_override,expected_disposition_override,expected_clinical_score_name_override,expected_clinical_score_min_override,expected_red_flag_hits_contains_override,expected_top_differential_contains_override,failure_tags,review_notes
+sore_throat_classic,pending,,,,,,,"","",
+elderly_cough_confusion,pending,,,,,,,"","",
+uti_no_fever,pending,,,,,,,"","",
+airway_warning_sore_throat,pending,,,,,,,"","",
+negation_safety_ent,pending,,,,,,,"","",
+no_sob_no_chest_pain_cough,pending,,,,,,,"","",
+med_trigger_anticoag,pending,,,,,,,"","",
+2. server/testing/goldenCaseFailureTagger.ts
+
+This creates failure tags from comparator failures.
+
+export type FailureTag =
+  | "wrong_complaint"
+  | "wrong_disposition"
+  | "wrong_score"
+  | "missed_red_flag"
+  | "wrong_differential"
+  | "missed_affirmed_symptom"
+  | "missed_negated_symptom"
+  | "other";
+
+export function tagFailures(failures: string[]): FailureTag[] {
+  const tags = new Set<FailureTag>();
+
+  for (const failure of failures) {
+    const f = failure.toLowerCase();
+
+    if (f.includes("complaint_id")) {
+      tags.add("wrong_complaint");
+    } else if (f.includes("disposition")) {
+      tags.add("wrong_disposition");
+    } else if (f.includes("clinical_score")) {
+      tags.add("wrong_score");
+    } else if (f.includes("red_flag_hits")) {
+      tags.add("missed_red_flag");
+    } else if (f.includes("top_differential")) {
+      tags.add("wrong_differential");
+    } else if (f.includes("affirmed_symptoms")) {
+      tags.add("missed_affirmed_symptom");
+    } else if (f.includes("negated_symptoms")) {
+      tags.add("missed_negated_symptom");
+    } else {
+      tags.add("other");
+    }
+  }
+
+  return [...tags];
+}
+3. server/testing/goldenCaseReviewExporter.ts
+
+This runs the golden cases and exports a CSV worksheet with actual outputs, pass/fail, and failure tags.
+
+import fs from "fs/promises";
+import path from "path";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { compareGoldenCase } from "./goldenCaseComparator";
+import { tagFailures } from "./goldenCaseFailureTagger";
+import { SkillContext } from "../skills/shared/skillTypes";
+
+type GoldenCase = {
+  id: string;
+  input: {
+    rawText: string;
+    modifiers?: Record<string, any>;
+  };
+  expected: Record<string, any>;
+};
+
+function csvEscape(value: unknown): string {
+  const s = String(value ?? "");
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function toPipeList(value: any[]): string {
+  return Array.isArray(value) ? value.map(String).join("|") : "";
+}
+
+function extractActualResult(state: any) {
+  return {
+    complaint_id:
+      state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+    disposition:
+      state.skillResults?.determine_disposition?.result?.disposition ?? "",
+    clinical_score_name:
+      state.skillResults?.apply_clinical_score?.result?.score_name ?? "",
+    clinical_score_value:
+      state.skillResults?.apply_clinical_score?.result?.score_value ?? "",
+    red_flag_hits:
+      (state.skillResults?.detect_red_flags?.result?.red_flag_hits ?? []).map(
+        (r: any) => r.label ?? r.id ?? String(r)
+      ),
+    top_differential:
+      (state.skillResults?.generate_differential?.result?.differential_list ?? [])
+        .slice(0, 3)
+        .map((d: any) => d.diagnosis ?? String(d)),
+    affirmed_symptoms:
+      state.skillResults?.normalize_patient_story?.result?.associated_symptoms ?? [],
+    negated_symptoms:
+      state.skillResults?.normalize_patient_story?.result?.negated_symptoms ?? [],
+  };
+}
+
+async function loadGoldenCases(fileName: string): Promise<GoldenCase[]> {
+  const fullPath = path.resolve(process.cwd(), "server/testing", fileName);
+  const raw = await fs.readFile(fullPath, "utf8");
+  return JSON.parse(raw) as GoldenCase[];
+}
+
+export async function exportGoldenCaseReviewWorksheet(
+  inputFile = "goldenCases.sample.json",
+  outputFile = "goldenCaseReview.csv"
+) {
+  const cases = await loadGoldenCases(inputFile);
+  const orchestrator = new ClinicalSkillOrchestrator();
+
+  const headers = [
+    "id",
+    "raw_text",
+    "expected_complaint_id",
+    "actual_complaint_id",
+    "expected_disposition",
+    "actual_disposition",
+    "expected_clinical_score_name",
+    "actual_clinical_score_name",
+    "actual_clinical_score_value",
+    "expected_red_flags",
+    "actual_red_flags",
+    "expected_top_differential",
+    "actual_top_differential",
+    "expected_affirmed_symptoms",
+    "actual_affirmed_symptoms",
+    "expected_negated_symptoms",
+    "actual_negated_symptoms",
+    "pass_fail",
+    "failure_tags",
+    "failure_details",
+    "review_status",
+    "reviewer",
+    "review_notes",
+  ];
+
+  const rows: string[] = [headers.join(",")];
+
+  for (const testCase of cases) {
+    const context: SkillContext = {
+      caseId: `REVIEW_${testCase.id}`,
+      rawText: testCase.input.rawText,
+      modifiers: testCase.input.modifiers ?? {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+      },
+    };
+
+    const state = await orchestrator.run(context);
+    const actual = extractActualResult(state);
+    const comparison = compareGoldenCase({
+      actual,
+      expected: testCase.expected,
+    });
+    const failureTags = tagFailures(comparison.failures);
+
+    const row = [
+      testCase.id,
+      testCase.input.rawText,
+      testCase.expected.complaint_id ?? "",
+      actual.complaint_id,
+      testCase.expected.disposition ?? "",
+      actual.disposition,
+      testCase.expected.clinical_score_name ?? "",
+      actual.clinical_score_name,
+      actual.clinical_score_value,
+      toPipeList(testCase.expected.red_flag_hits_contains ?? []),
+      toPipeList(actual.red_flag_hits ?? []),
+      toPipeList(testCase.expected.top_differential_contains ?? []),
+      toPipeList(actual.top_differential ?? []),
+      toPipeList(testCase.expected.affirmed_symptoms_contains ?? []),
+      toPipeList(actual.affirmed_symptoms ?? []),
+      toPipeList(testCase.expected.negated_symptoms_contains ?? []),
+      toPipeList(actual.negated_symptoms ?? []),
+      comparison.passed ? "PASS" : "FAIL",
+      toPipeList(failureTags),
+      toPipeList(comparison.failures),
+      "pending",
+      "",
+      "",
+    ].map(csvEscape);
+
+    rows.push(row.join(","));
+  }
+
+  const outPath = path.resolve(process.cwd(), "server/testing", outputFile);
+  await fs.writeFile(outPath, rows.join("\n"), "utf8");
+
+  console.log(`Exported golden case review worksheet -> ${outputFile}`);
+  return { outputFile, count: cases.length };
+}
+
+if (require.main === module) {
+  exportGoldenCaseReviewWorksheet().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+4. server/testing/goldenCaseReviewImporter.ts
+
+This lets you edit the review sheet and re-import overrides or notes.
+
+import fs from "fs/promises";
+import path from "path";
+
+type CsvRow = Record<string, string>;
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  out.push(current);
+  return out.map((v) => v.trim());
+}
+
+function splitList(value: string): string[] {
+  return (value || "")
+    .split(/[|;]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function loadCsv(filePath: string): Promise<CsvRow[]> {
+  const raw = await fs.readFile(filePath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const headers = parseCsvLine(lines[0]);
+  const rows: CsvRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseCsvLine(lines[i]);
+    const row: CsvRow = {};
+    headers.forEach((h, idx) => {
+      row[h] = vals[idx] ?? "";
+    });
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+export async function importGoldenCaseReviewOverrides(
+  inputFile = "goldenCaseReviewImportTemplate.csv",
+  outputFile = "goldenCaseReviewOverrides.json"
+) {
+  const inputPath = path.resolve(process.cwd(), "server/testing", inputFile);
+  const outputPath = path.resolve(process.cwd(), "server/testing", outputFile);
+
+  const rows = await loadCsv(inputPath);
+
+  const overrides = rows.map((row) => {
+    const expectedOverrides: Record<string, any> = {};
+
+    if (row.expected_complaint_id_override) {
+      expectedOverrides.complaint_id = row.expected_complaint_id_override;
+    }
+    if (row.expected_disposition_override) {
+      expectedOverrides.disposition = row.expected_disposition_override;
+    }
+    if (row.expected_clinical_score_name_override) {
+      expectedOverrides.clinical_score_name = row.expected_clinical_score_name_override;
+    }
+    if (row.expected_clinical_score_min_override) {
+      const n = Number(row.expected_clinical_score_min_override);
+      if (Number.isFinite(n)) expectedOverrides.clinical_score_min = n;
+    }
+
+    const redFlags = splitList(row.expected_red_flag_hits_contains_override);
+    if (redFlags.length) expectedOverrides.red_flag_hits_contains = redFlags;
+
+    const topDiff = splitList(row.expected_top_differential_contains_override);
+    if (topDiff.length) expectedOverrides.top_differential_contains = topDiff;
+
+    const failureTags = splitList(row.failure_tags);
+
+    return {
+      id: row.id,
+      review_status: row.review_status || "pending",
+      reviewer: row.reviewer || "",
+      expected_overrides: expectedOverrides,
+      failure_tags: failureTags,
+      review_notes: row.review_notes || "",
+    };
+  });
+
+  await fs.writeFile(outputPath, JSON.stringify(overrides, null, 2), "utf8");
+  console.log(`Imported review overrides -> ${outputFile}`);
+
+  return {
+    outputFile,
+    count: overrides.length,
+  };
+}
+
+if (require.main === module) {
+  importGoldenCaseReviewOverrides().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+Phase 6 files
+
+Create these:
+
+server/skills/outcomes/recordCaseOutcome.ts
+server/skills/outcomes/linkFollowUpResult.ts
+server/skills/outcomes/reconcilePredictedVsActual.ts
+5. server/skills/outcomes/recordCaseOutcome.ts
+
+This records actual outcome data after the visit.
+
+import fs from "fs/promises";
+import path from "path";
+import { SkillResult } from "../shared/skillTypes";
+
+type RecordCaseOutcomeInput = {
+  caseId: string;
+  finalDiagnosis?: string;
+  medicationsPrescribed?: string[];
+  testsPerformed?: string[];
+  hospitalTransfer?: boolean;
+  returnVisit72h?: boolean;
+  returnVisit7d?: boolean;
+  clinicianNotes?: string;
+};
+
+type RecordCaseOutcomeResult = {
+  outcome_record_id: string;
+  case_id: string;
+  outcome_saved: boolean;
+};
+
+const OUTCOME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(OUTCOME_DIR, { recursive: true });
+}
+
+export async function recordCaseOutcome(
+  input: RecordCaseOutcomeInput
+): Promise<SkillResult<RecordCaseOutcomeResult>> {
+  const started = Date.now();
+  await ensureDir();
+
+  const record = {
+    outcome_record_id: `OUTCOME_REC_${input.caseId}_${Date.now()}`,
+    case_id: input.caseId,
+    finalDiagnosis: input.finalDiagnosis ?? "",
+    medicationsPrescribed: input.medicationsPrescribed ?? [],
+    testsPerformed: input.testsPerformed ?? [],
+    hospitalTransfer: input.hospitalTransfer ?? false,
+    returnVisit72h: input.returnVisit72h ?? false,
+    returnVisit7d: input.returnVisit7d ?? false,
+    clinicianNotes: input.clinicianNotes ?? "",
+    recordedAt: new Date().toISOString(),
+  };
+
+  await fs.appendFile(
+    path.join(OUTCOME_DIR, "case_outcomes.ndjson"),
+    JSON.stringify(record) + "\n",
+    "utf8"
+  );
+
+  return {
+    skillId: "OUTCOME_RECORD_CASE",
+    skillName: "record_case_outcome",
+    version: "v1",
+    status: "success",
+    confidence: 0.99,
+    result: {
+      outcome_record_id: record.outcome_record_id,
+      case_id: input.caseId,
+      outcome_saved: true,
+    },
+    audit: {
+      tablesUsed: ["CASE_OUTCOMES_RUNTIME"],
+      ruleHits: ["OUTCOME_RECORDED"],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["link_follow_up_result", "reconcile_predicted_vs_actual"],
+  };
+}
+6. server/skills/outcomes/linkFollowUpResult.ts
+
+This records callback/follow-up information.
+
+import fs from "fs/promises";
+import path from "path";
+import { SkillResult } from "../shared/skillTypes";
+
+type LinkFollowUpResultInput = {
+  caseId: string;
+  callbackCompleted?: boolean;
+  patientImproved?: boolean;
+  patientWorsened?: boolean;
+  emergencyVisitAfter?: boolean;
+  admittedAfter?: boolean;
+  followUpNotes?: string;
+};
+
+type LinkFollowUpResultOutput = {
+  follow_up_record_id: string;
+  case_id: string;
+  follow_up_saved: boolean;
+};
+
+const OUTCOME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(OUTCOME_DIR, { recursive: true });
+}
+
+export async function linkFollowUpResult(
+  input: LinkFollowUpResultInput
+): Promise<SkillResult<LinkFollowUpResultOutput>> {
+  const started = Date.now();
+  await ensureDir();
+
+  const record = {
+    follow_up_record_id: `FOLLOWUP_${input.caseId}_${Date.now()}`,
+    case_id: input.caseId,
+    callbackCompleted: input.callbackCompleted ?? false,
+    patientImproved: input.patientImproved ?? false,
+    patientWorsened: input.patientWorsened ?? false,
+    emergencyVisitAfter: input.emergencyVisitAfter ?? false,
+    admittedAfter: input.admittedAfter ?? false,
+    followUpNotes: input.followUpNotes ?? "",
+    recordedAt: new Date().toISOString(),
+  };
+
+  await fs.appendFile(
+    path.join(OUTCOME_DIR, "case_followups.ndjson"),
+    JSON.stringify(record) + "\n",
+    "utf8"
+  );
+
+  return {
+    skillId: "OUTCOME_LINK_FOLLOWUP",
+    skillName: "link_follow_up_result",
+    version: "v1",
+    status: "success",
+    confidence: 0.99,
+    result: {
+      follow_up_record_id: record.follow_up_record_id,
+      case_id: input.caseId,
+      follow_up_saved: true,
+    },
+    audit: {
+      tablesUsed: ["CASE_FOLLOWUPS_RUNTIME"],
+      ruleHits: ["FOLLOWUP_LINKED"],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["reconcile_predicted_vs_actual"],
+  };
+}
+7. server/skills/outcomes/reconcilePredictedVsActual.ts
+
+This compares the system’s prediction with the actual outcome. This is the seed of the learning moat.
+
+import fs from "fs/promises";
+import path from "path";
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+
+type ReconcilePredictedVsActualInput = {
+  context: SkillContext;
+  actualFinalDiagnosis?: string;
+  actualDisposition?: string;
+  returnVisit72h?: boolean;
+  admittedAfter?: boolean;
+};
+
+type ReconcilePredictedVsActualResult = {
+  case_id: string;
+  top_prediction_match: boolean;
+  disposition_match: boolean;
+  safety_miss_flag: boolean;
+  reconciliation_saved: boolean;
+};
+
+const OUTCOME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(OUTCOME_DIR, { recursive: true });
+}
+
+export async function reconcilePredictedVsActual(
+  input: ReconcilePredictedVsActualInput
+): Promise<SkillResult<ReconcilePredictedVsActualResult>> {
+  const started = Date.now();
+  await ensureDir();
+
+  const differential =
+    input.context.priorSkillOutputs?.generate_differential?.result?.differential_list ?? [];
+
+  const predictedTop = differential[0]?.diagnosis ?? "";
+  const predictedDisposition =
+    input.context.priorSkillOutputs?.determine_disposition?.result?.disposition ?? "";
+
+  const top_prediction_match =
+    !!input.actualFinalDiagnosis &&
+    predictedTop.toLowerCase().includes(input.actualFinalDiagnosis.toLowerCase());
+
+  const disposition_match =
+    !!input.actualDisposition &&
+    predictedDisposition.toLowerCase() === input.actualDisposition.toLowerCase();
+
+  const safety_miss_flag =
+    Boolean(input.admittedAfter) ||
+    Boolean(input.returnVisit72h && predictedDisposition === "routine_evaluation");
+
+  const record = {
+    reconciliation_id: `RECON_${input.context.caseId}_${Date.now()}`,
+    case_id: input.context.caseId,
+    predictedTop,
+    actualFinalDiagnosis: input.actualFinalDiagnosis ?? "",
+    predictedDisposition,
+    actualDisposition: input.actualDisposition ?? "",
+    top_prediction_match,
+    disposition_match,
+    safety_miss_flag,
+    returnVisit72h: input.returnVisit72h ?? false,
+    admittedAfter: input.admittedAfter ?? false,
+    recordedAt: new Date().toISOString(),
+  };
+
+  await fs.appendFile(
+    path.join(OUTCOME_DIR, "case_reconciliation.ndjson"),
+    JSON.stringify(record) + "\n",
+    "utf8"
+  );
+
+  return {
+    skillId: "OUTCOME_RECONCILE_PREDICTED_ACTUAL",
+    skillName: "reconcile_predicted_vs_actual",
+    version: "v1",
+    status: "success",
+    confidence: 0.97,
+    result: {
+      case_id: input.context.caseId,
+      top_prediction_match,
+      disposition_match,
+      safety_miss_flag,
+      reconciliation_saved: true,
+    },
+    audit: {
+      tablesUsed: ["CASE_RECONCILIATION_RUNTIME"],
+      ruleHits: [
+        top_prediction_match ? "TOP_PREDICTION_MATCH" : "",
+        disposition_match ? "DISPOSITION_MATCH" : "",
+        safety_miss_flag ? "SAFETY_MISS_FLAG" : "",
+      ].filter(Boolean),
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+How to use Phase 5
+Export a review worksheet
+npx tsx server/testing/goldenCaseReviewExporter.ts
+Edit the CSV in Sheets/Excel
+
+You can add:
+
+reviewer
+
+review status
+
+failure tags
+
+override expectations
+
+notes
+
+Import review decisions
+npx tsx server/testing/goldenCaseReviewImporter.ts
+How to use Phase 6
+
+These are runtime or admin utilities, usually called from future API/admin endpoints.
+
+Typical sequence:
+
+run case through orchestrator
+
+later save actual diagnosis and treatment with recordCaseOutcome
+
+later save callback/follow-up with linkFollowUpResult
+
+compare predicted vs actual with reconcilePredictedVsActual
+
+This is where the system starts learning where it was right, where it was wrong, and where it was unsafe.
+
+What Phases 5 and 6 do strategically
+
+These two phases are extremely important for making the system more AI-boom-proof.
+
+Phase 5 gives you:
+
+a scalable human review loop
+
+rapid complaint-by-complaint QA
+
+spreadsheet-native tuning workflow
+
+failure tagging for systematic improvement
+
+This helps you improve the engine faster than teams doing random manual testing.
+
+Phase 6 gives you:
+
+actual outcome capture
+
+follow-up result capture
+
+predicted-vs-actual reconciliation
+
+early safety miss detection
+
+This is the beginning of the proprietary clinical decision dataset the article argues matters most.
+
+That is the moat:
+not just “an AI that answers”
+but
+an AI system that captures reasoning, workflow, and real outcomes
