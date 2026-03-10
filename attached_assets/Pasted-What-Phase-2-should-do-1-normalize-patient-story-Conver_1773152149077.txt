@@ -1,0 +1,962 @@
+What Phase 2 should do
+1. normalize_patient_story
+
+Convert messy patient language into structured facts:
+
+positives
+
+negatives
+
+measurements
+
+symptom timeline
+
+2. score_differential_clusters
+
+Use CLUSTER_SCORING_RULES.csv to score likely diagnostic clusters.
+
+3. apply_clinical_score
+
+Run formal score engines only when relevant:
+
+Centor for sore throat
+
+CURB-65 for pneumonia-type cough
+
+basic chest pain risk stub now, expand later
+
+4. generate_differential
+
+Combine complaint, normalized facts, cluster scores, and formal scores into ranked diagnoses.
+
+5. generate_physician_review_packet
+
+Produce a concise physician sign-off bundle:
+
+summary
+
+key findings
+
+red flags
+
+top differentials
+
+disposition
+
+caution notes
+
+Paste-ready Phase 2 files
+
+Create these:
+
+server/skills/intake/normalizePatientStory.ts
+server/skills/reasoning/scoreDifferentialClusters.ts
+server/skills/reasoning/applyClinicalScore.ts
+server/skills/reasoning/generateDifferential.ts
+server/skills/output/generatePhysicianReviewPacket.ts
+
+Then update:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+1. server/skills/intake/normalizePatientStory.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+
+type NormalizePatientStoryResult = {
+  symptom_timeline: string;
+  associated_symptoms: string[];
+  negated_symptoms: string[];
+  extracted_measurements: Record<string, any>;
+  structured_facts: Record<string, any>;
+};
+
+const COMMON_POSITIVES = [
+  "fever",
+  "cough",
+  "sore throat",
+  "throat pain",
+  "shortness of breath",
+  "sob",
+  "chest pain",
+  "abdominal pain",
+  "nausea",
+  "vomiting",
+  "diarrhea",
+  "rash",
+  "ear pain",
+  "sinus pressure",
+  "headache",
+  "fatigue",
+  "body aches",
+  "dysuria",
+  "frequency",
+  "urgency",
+];
+
+const COMMON_NEGATIONS = [
+  "no fever",
+  "no cough",
+  "no shortness of breath",
+  "no chest pain",
+  "no vomiting",
+  "no diarrhea",
+  "no rash",
+  "no abdominal pain",
+  "no urinary symptoms",
+  "denies fever",
+  "denies cough",
+  "denies shortness of breath",
+  "denies chest pain",
+];
+
+function buildSourceText(context: SkillContext): string {
+  return [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ]
+    .join(" ")
+    .trim();
+}
+
+function extractTemperature(text: string): number | undefined {
+  const match = text.match(/\b(?:temp|temperature|fever)\s*(?:of)?\s*(\d{2,3}(?:\.\d)?)\b/i);
+  if (!match) return undefined;
+  const val = Number(match[1]);
+  return Number.isFinite(val) ? val : undefined;
+}
+
+function extractDuration(text: string): string {
+  const match = text.match(/\b(?:x\s*)?(\d+\s*(?:hours?|days?|weeks?|months?))\b/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+function hasPhrase(text: string, phrase: string): boolean {
+  return text.toLowerCase().includes(phrase.toLowerCase());
+}
+
+export async function normalizePatientStory(
+  context: SkillContext
+): Promise<SkillResult<NormalizePatientStoryResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "normalize_patient_story");
+
+  const source = buildSourceText(context);
+  const lower = source.toLowerCase();
+
+  const associated_symptoms = COMMON_POSITIVES.filter((term) => hasPhrase(lower, term));
+  const negated_symptoms = COMMON_NEGATIONS.filter((term) => hasPhrase(lower, term));
+
+  const extracted_measurements: Record<string, any> = {};
+  const temp = extractTemperature(source);
+  if (temp != null) extracted_measurements.temperature_f = temp;
+
+  const duration = extractDuration(source);
+  const symptom_timeline = duration || context.modifiers?.duration || "";
+
+  const structured_facts: Record<string, any> = {
+    complaint_id: context.complaintId,
+    age: context.modifiers?.age,
+    duration: symptom_timeline,
+    fever_present:
+      associated_symptoms.includes("fever") &&
+      !negated_symptoms.includes("no fever") &&
+      !negated_symptoms.includes("denies fever"),
+    cough_present:
+      associated_symptoms.includes("cough") &&
+      !negated_symptoms.includes("no cough") &&
+      !negated_symptoms.includes("denies cough"),
+    sore_throat_present:
+      associated_symptoms.includes("sore throat") ||
+      associated_symptoms.includes("throat pain"),
+    sob_present:
+      associated_symptoms.includes("shortness of breath") ||
+      associated_symptoms.includes("sob"),
+    chest_pain_present: associated_symptoms.includes("chest pain"),
+    dysuria_present: associated_symptoms.includes("dysuria"),
+    urinary_frequency_present: associated_symptoms.includes("frequency"),
+    rash_present: associated_symptoms.includes("rash"),
+    abdominal_pain_present: associated_symptoms.includes("abdominal pain"),
+  };
+
+  const result: SkillResult<NormalizePatientStoryResult> = {
+    skillId: "SK004",
+    skillName: "normalize_patient_story",
+    version: "v1",
+    status: "success",
+    confidence: 0.87,
+    result: {
+      symptom_timeline,
+      associated_symptoms,
+      negated_symptoms,
+      extracted_measurements,
+      structured_facts,
+    },
+    audit: {
+      tablesUsed: ["COMPLAINT_REGISTRY"],
+      ruleHits: [
+        symptom_timeline ? "TIMELINE_EXTRACTED" : "",
+        temp != null ? "TEMP_EXTRACTED" : "",
+        associated_symptoms.length ? "SYMPTOMS_NORMALIZED" : "",
+      ].filter(Boolean),
+      missingData: symptom_timeline ? [] : ["duration"],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["detect_red_flags", "score_differential_clusters"],
+  };
+
+  assertSkillResultShape(result, "normalize_patient_story");
+  return result;
+}
+2. server/skills/reasoning/scoreDifferentialClusters.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
+
+type ScoredCluster = {
+  cluster_id: string;
+  cluster_name: string;
+  score: number;
+  supporting_hits: string[];
+};
+
+type ScoreDifferentialClustersResult = {
+  scored_clusters: ScoredCluster[];
+  trigger_hits: string[];
+  missing_discriminators: string[];
+};
+
+function getFactBag(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.priorSkillOutputs?.normalizePatientStory?.result?.structured_facts ??
+    context.knownFacts ??
+    {}
+  );
+}
+
+function rowComplaintId(row: CsvRow): string {
+  return getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
+}
+
+export async function scoreDifferentialClusters(
+  context: SkillContext
+): Promise<SkillResult<ScoreDifferentialClustersResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "score_differential_clusters");
+
+  let rows: CsvRow[] = [];
+  try {
+    rows = await loadCsvTable("CLUSTER_SCORING_RULES.csv");
+  } catch {
+    rows = [];
+  }
+
+  const facts = getFactBag(context);
+  const factBlob = JSON.stringify({
+    facts,
+    rawText: context.rawText ?? "",
+    transcript: (context.transcript ?? []).map((t) => t.text).join(" "),
+  }).toLowerCase();
+
+  const matchingRows = rows.filter((row) => {
+    const cid = rowComplaintId(row);
+    return !cid || cid.toLowerCase() === context.complaintId!.toLowerCase();
+  });
+
+  const clusterMap = new Map<string, ScoredCluster>();
+
+  for (const row of matchingRows) {
+    const cluster_id =
+      getFirstValue(row, ["Cluster_ID", "Diagnosis_Cluster_ID", "ID"]) || "UNKNOWN_CLUSTER";
+    const cluster_name =
+      getFirstValue(row, ["Cluster_Name", "Diagnosis_Cluster", "Cluster"]) || cluster_id;
+
+    const trigger =
+      getFirstValue(row, ["Trigger", "Keyword", "Condition", "Finding"]) || "";
+    const weight = toNumber(getFirstValue(row, ["Weight", "Score", "Impact"]), 1);
+
+    const terms = trigger
+      .split("|")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    const matched = terms.length > 0 && terms.some((term) => factBlob.includes(term));
+    if (!matched) continue;
+
+    const current =
+      clusterMap.get(cluster_id) ??
+      {
+        cluster_id,
+        cluster_name,
+        score: 0,
+        supporting_hits: [],
+      };
+
+    current.score += weight;
+    current.supporting_hits.push(trigger);
+    clusterMap.set(cluster_id, current);
+  }
+
+  const scored_clusters = [...clusterMap.values()].sort((a, b) => b.score - a.score);
+  const trigger_hits = scored_clusters.flatMap((c) => c.supporting_hits);
+
+  const missing_discriminators: string[] = [];
+  if (scored_clusters.length === 0) missing_discriminators.push("no_cluster_rules_matched");
+
+  const result: SkillResult<ScoreDifferentialClustersResult> = {
+    skillId: "SK012",
+    skillName: "score_differential_clusters",
+    version: "v1",
+    status: scored_clusters.length ? "success" : "partial",
+    confidence: scored_clusters.length ? 0.88 : 0.45,
+    result: {
+      scored_clusters,
+      trigger_hits,
+      missing_discriminators,
+    },
+    audit: {
+      tablesUsed: rows.length ? ["CLUSTER_SCORING_RULES"] : ["CLUSTER_SCORING_RULES_MISSING"],
+      ruleHits: trigger_hits,
+      missingData: missing_discriminators,
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["apply_clinical_score", "generate_differential"],
+  };
+
+  assertSkillResultShape(result, "score_differential_clusters");
+  return result;
+}
+3. server/skills/reasoning/applyClinicalScore.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+
+type ApplyClinicalScoreResult = {
+  score_name: string;
+  score_value: number;
+  risk_bucket: string;
+  recommended_implication: string;
+  components: Record<string, any>;
+};
+
+function getFacts(context: SkillContext): Record<string, any> {
+  return (
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.priorSkillOutputs?.normalizePatientStory?.result?.structured_facts ??
+    {}
+  );
+}
+
+function getQuestionBundle(context: SkillContext): string[] {
+  return (
+    context.priorSkillOutputs?.run_complaint_question_bundle?.result?.pending_questions ??
+    context.priorSkillOutputs?.runComplaintQuestionBundle?.result?.pending_questions ??
+    []
+  );
+}
+
+function applyCentor(context: SkillContext): ApplyClinicalScoreResult {
+  const facts = getFacts(context);
+  const source = [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  let score = 0;
+  const components: Record<string, any> = {};
+
+  if (facts.fever_present || source.includes("fever")) {
+    score += 1;
+    components.fever = true;
+  }
+  if (facts.sore_throat_present || source.includes("exudate") || source.includes("tonsil")) {
+    score += 1;
+    components.tonsillar_findings = true;
+  }
+  if (source.includes("tender nodes") || source.includes("lymph node")) {
+    score += 1;
+    components.tender_anterior_nodes = true;
+  }
+  if (facts.cough_present === false || source.includes("no cough") || source.includes("denies cough")) {
+    score += 1;
+    components.absence_of_cough = true;
+  }
+  const age = Number(context.modifiers?.age);
+  if (Number.isFinite(age) && age >= 3 && age <= 14) {
+    score += 1;
+    components.age_bonus = "+1";
+  } else if (Number.isFinite(age) && age >= 45) {
+    score -= 1;
+    components.age_penalty = "-1";
+  }
+
+  let risk_bucket = "low";
+  let recommended_implication = "Supportive care / consider no testing depending on full exam";
+
+  if (score >= 4) {
+    risk_bucket = "high";
+    recommended_implication = "High strep probability; testing/treatment workflow appropriate";
+  } else if (score >= 2) {
+    risk_bucket = "moderate";
+    recommended_implication = "Intermediate risk; testing pathway appropriate";
+  }
+
+  return {
+    score_name: "Centor",
+    score_value: score,
+    risk_bucket,
+    recommended_implication,
+    components,
+  };
+}
+
+function applyCurb65(context: SkillContext): ApplyClinicalScoreResult {
+  const source = [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  let score = 0;
+  const components: Record<string, any> = {};
+  const age = Number(context.modifiers?.age);
+
+  if (source.includes("confused")) {
+    score += 1;
+    components.confusion = true;
+  }
+  if (Number.isFinite(age) && age >= 65) {
+    score += 1;
+    components.age65 = true;
+  }
+
+  const risk_bucket = score >= 2 ? "high" : score === 1 ? "moderate" : "low";
+  const recommended_implication =
+    score >= 2
+      ? "Higher risk pneumonia pattern; escalated evaluation may be needed"
+      : "Low-moderate CURB-65 signal based on available data";
+
+  return {
+    score_name: "CURB65",
+    score_value: score,
+    risk_bucket,
+    recommended_implication,
+    components,
+  };
+}
+
+export async function applyClinicalScore(
+  context: SkillContext
+): Promise<SkillResult<ApplyClinicalScoreResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "apply_clinical_score");
+
+  let scored: ApplyClinicalScoreResult;
+
+  switch (context.complaintId) {
+    case "sore_throat":
+      scored = applyCentor(context);
+      break;
+    case "cough":
+      scored = applyCurb65(context);
+      break;
+    default:
+      scored = {
+        score_name: "NotApplicable",
+        score_value: 0,
+        risk_bucket: "n/a",
+        recommended_implication: "No formal score configured for this complaint yet",
+        components: {},
+      };
+      break;
+  }
+
+  const result: SkillResult<ApplyClinicalScoreResult> = {
+    skillId: "SK013",
+    skillName: "apply_clinical_score",
+    version: "v1",
+    status: "success",
+    confidence: scored.score_name === "NotApplicable" ? 0.7 : 0.93,
+    result: scored,
+    audit: {
+      tablesUsed: ["SCORING_SYSTEMS_FALLBACK"],
+      ruleHits: [scored.score_name],
+      missingData: scored.score_name === "NotApplicable" ? ["formal_score_not_configured"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["generate_differential", "determine_disposition"],
+  };
+
+  assertSkillResultShape(result, "apply_clinical_score");
+  return result;
+}
+4. server/skills/reasoning/generateDifferential.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type DifferentialItem = {
+  diagnosis: string;
+  confidence: number;
+  supporting_findings: string[];
+  contradictory_findings: string[];
+};
+
+type GenerateDifferentialResult = {
+  differential_list: DifferentialItem[];
+  confidence: number;
+  supporting_findings: string[];
+  contradictory_findings: string[];
+};
+
+function baseFallbackDifferential(complaintId: string): string[] {
+  switch (complaintId) {
+    case "sore_throat":
+      return ["strep_pharyngitis", "viral_pharyngitis", "mononucleosis"];
+    case "cough":
+      return ["viral_uri", "bronchitis", "pneumonia"];
+    case "uti":
+      return ["cystitis", "pyelonephritis", "nephrolithiasis"];
+    case "chest_pain":
+      return ["musculoskeletal_pain", "gerd", "acute_coronary_syndrome"];
+    case "abdominal_pain":
+      return ["viral_gastroenteritis", "constipation", "appendicitis"];
+    default:
+      return ["viral_syndrome", "bacterial_infection", "non_specific_condition"];
+  }
+}
+
+export async function generateDifferential(
+  context: SkillContext
+): Promise<SkillResult<GenerateDifferentialResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "generate_differential");
+
+  const clusterScores =
+    context.priorSkillOutputs?.score_differential_clusters?.result?.scored_clusters ??
+    context.priorSkillOutputs?.scoreDifferentialClusters?.result?.scored_clusters ??
+    [];
+
+  const formalScore =
+    context.priorSkillOutputs?.apply_clinical_score?.result ??
+    context.priorSkillOutputs?.applyClinicalScore?.result ??
+    null;
+
+  let diagnosisRows: CsvRow[] = [];
+  try {
+    diagnosisRows = await loadCsvTable("DIAGNOSIS_CLUSTERS.csv");
+  } catch {
+    diagnosisRows = [];
+  }
+
+  const items: DifferentialItem[] = [];
+
+  if (clusterScores.length && diagnosisRows.length) {
+    for (const cluster of clusterScores.slice(0, 5)) {
+      const matching = diagnosisRows.filter((row) => {
+        const cid = getFirstValue(row, ["Cluster_ID", "Diagnosis_Cluster_ID"]);
+        return cid && cid.toLowerCase() === String(cluster.cluster_id).toLowerCase();
+      });
+
+      for (const row of matching.slice(0, 2)) {
+        const diagnosis =
+          getFirstValue(row, ["Diagnosis", "Diagnosis_Name", "Label"]) || cluster.cluster_name;
+        items.push({
+          diagnosis,
+          confidence: Math.min(0.95, 0.5 + Number(cluster.score || 0) / 20),
+          supporting_findings: cluster.supporting_hits ?? [],
+          contradictory_findings: [],
+        });
+      }
+    }
+  }
+
+  if (!items.length) {
+    const fallback = baseFallbackDifferential(context.complaintId!);
+    fallback.forEach((diagnosis, idx) => {
+      items.push({
+        diagnosis,
+        confidence: Math.max(0.35, 0.75 - idx * 0.12),
+        supporting_findings: [],
+        contradictory_findings: [],
+      });
+    });
+  }
+
+  if (formalScore?.score_name === "Centor" && formalScore.score_value >= 4) {
+    const strep = items.find((i) => i.diagnosis.toLowerCase().includes("strep"));
+    if (strep) strep.confidence = Math.min(0.97, strep.confidence + 0.12);
+  }
+
+  items.sort((a, b) => b.confidence - a.confidence);
+
+  const supporting_findings = [...new Set(items.flatMap((i) => i.supporting_findings))];
+  const contradictory_findings = [...new Set(items.flatMap((i) => i.contradictory_findings))];
+
+  const result: SkillResult<GenerateDifferentialResult> = {
+    skillId: "SK011",
+    skillName: "generate_differential",
+    version: "v1",
+    status: "success",
+    confidence: items[0]?.confidence ?? 0.5,
+    result: {
+      differential_list: items.slice(0, 5),
+      confidence: items[0]?.confidence ?? 0.5,
+      supporting_findings,
+      contradictory_findings,
+    },
+    audit: {
+      tablesUsed: diagnosisRows.length
+        ? ["DIAGNOSIS_CLUSTERS", "CLUSTER_SCORING_RULES"]
+        : ["DIAGNOSIS_CLUSTERS_FALLBACK"],
+      ruleHits: items.slice(0, 3).map((i) => i.diagnosis),
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["check_consistency_and_gaps", "determine_disposition"],
+  };
+
+  assertSkillResultShape(result, "generate_differential");
+  return result;
+}
+5. server/skills/output/generatePhysicianReviewPacket.ts
+import { ReviewPacket, SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+
+export async function generatePhysicianReviewPacket(
+  context: SkillContext
+): Promise<SkillResult<ReviewPacket>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+
+  const modifiers =
+    context.priorSkillOutputs?.collect_modifiers?.result?.modifiers ??
+    context.modifiers ??
+    {};
+
+  const facts =
+    context.priorSkillOutputs?.normalize_patient_story?.result?.structured_facts ??
+    context.priorSkillOutputs?.normalizePatientStory?.result?.structured_facts ??
+    {};
+
+  const redFlags =
+    context.priorSkillOutputs?.detect_red_flags?.result?.red_flag_hits ??
+    context.priorSkillOutputs?.detectRedFlags?.result?.red_flag_hits ??
+    [];
+
+  const differential =
+    context.priorSkillOutputs?.generate_differential?.result?.differential_list ??
+    context.priorSkillOutputs?.generateDifferential?.result?.differential_list ??
+    [];
+
+  const disposition =
+    context.priorSkillOutputs?.determine_disposition?.result?.disposition ??
+    context.priorSkillOutputs?.determineDisposition?.result?.disposition ??
+    "unknown";
+
+  const complaintSummary = [
+    context.complaintId ?? "unknown_complaint",
+    modifiers.age ? `age ${modifiers.age}` : "",
+    modifiers.duration ? `x ${modifiers.duration}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  const packet: ReviewPacket = {
+    caseId: context.caseId,
+    complaintSummary,
+    keyModifiers: modifiers,
+    keyFindings: facts,
+    redFlags: redFlags.map((r: any) => r.label ?? r.id ?? String(r)),
+    likelyDiagnoses: differential.slice(0, 3).map((d: any) => d.diagnosis ?? String(d)),
+    proposedDisposition: disposition,
+    cautionNotes: [
+      disposition === "er_now" ? "Immediate escalation indicated" : "",
+      redFlags.length ? "Red-flag review required" : "",
+    ].filter(Boolean),
+    approvalChecklist: [
+      "Review complaint summary",
+      "Confirm red flags",
+      "Confirm top differential",
+      "Confirm disposition",
+      "Confirm return precautions",
+    ],
+  };
+
+  const result: SkillResult<ReviewPacket> = {
+    skillId: "SK018",
+    skillName: "generate_physician_review_packet",
+    version: "v1",
+    status: "success",
+    confidence: 0.94,
+    result: packet,
+    audit: {
+      tablesUsed: ["OUTPUT_TEMPLATES_FALLBACK"],
+      ruleHits: ["PHYSICIAN_REVIEW_PACKET_CREATED"],
+      missingData: disposition === "unknown" ? ["disposition"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["attach_outcome_stub", "measure_workflow_value"],
+  };
+
+  assertSkillResultShape(result, "generate_physician_review_packet");
+  return result;
+}
+6. Update server/orchestrator/clinicalSkillOrchestrator.ts
+
+Replace the current file with this version.
+
+import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
+import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
+import { collectModifiers } from "../skills/intake/collectModifiers";
+import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
+import { normalizePatientStory } from "../skills/intake/normalizePatientStory";
+import { detectRedFlags } from "../skills/safety/detectRedFlags";
+import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
+import { scoreDifferentialClusters } from "../skills/reasoning/scoreDifferentialClusters";
+import { applyClinicalScore } from "../skills/reasoning/applyClinicalScore";
+import { generateDifferential } from "../skills/reasoning/generateDifferential";
+import { determineDisposition } from "../skills/safety/determineDisposition";
+import { generatePhysicianReviewPacket } from "../skills/output/generatePhysicianReviewPacket";
+import { assertSkillResultShape } from "../skills/shared/schemaValidators";
+
+/**
+ * Placeholder skill runners for non-implemented skills.
+ */
+async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
+  const started = Date.now();
+
+  return {
+    skillId: `PLACEHOLDER_${skillName}`,
+    skillName,
+    version: "v1",
+    status: "success",
+    confidence: 0.75,
+    result: {
+      message: `${skillName} not yet fully implemented`,
+      caseId: context.caseId,
+    },
+    audit: {
+      tablesUsed: [],
+      ruleHits: [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+
+const DEFAULT_SEQUENCE = [
+  "collect_modifiers",
+  "extract_med_to_condition_triggers",
+  "identify_chief_complaint",
+  "normalize_patient_story",
+  "detect_red_flags",
+  "run_complaint_question_bundle",
+  "trigger_global_secondary_questions",
+  "select_next_best_question",
+  "score_differential_clusters",
+  "apply_clinical_score",
+  "generate_differential",
+  "check_consistency_and_gaps",
+  "determine_disposition",
+  "generate_emergency_warning",
+  "generate_assessment_plan",
+  "generate_physician_review_packet",
+  "attach_outcome_stub",
+  "measure_workflow_value",
+] as const;
+
+export class ClinicalSkillOrchestrator {
+  async run(initialContext: SkillContext): Promise<OrchestratorState> {
+    const state: OrchestratorState = {
+      context: initialContext,
+      skillResults: {},
+      completedSkills: [],
+      pendingSkills: [...DEFAULT_SEQUENCE],
+      halted: false,
+    };
+
+    for (const skillName of DEFAULT_SEQUENCE) {
+      if (state.halted) break;
+
+      const priorComplaintId =
+        state.skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        state.context.complaintId;
+
+      const currentModifiers =
+        state.skillResults["collect_modifiers"]?.result?.modifiers ??
+        state.context.modifiers;
+
+      const normalizedFacts =
+        state.skillResults["normalize_patient_story"]?.result?.structured_facts ??
+        state.context.knownFacts;
+
+      const contextForSkill: SkillContext = {
+        ...state.context,
+        complaintId: priorComplaintId,
+        modifiers: currentModifiers,
+        knownFacts: normalizedFacts,
+        priorSkillOutputs: state.skillResults,
+      };
+
+      let result: SkillResult;
+
+      switch (skillName) {
+        case "collect_modifiers":
+          result = await collectModifiers(contextForSkill);
+          break;
+        case "identify_chief_complaint":
+          result = await identifyChiefComplaint(contextForSkill);
+          break;
+        case "normalize_patient_story":
+          result = await normalizePatientStory(contextForSkill);
+          break;
+        case "detect_red_flags":
+          result = await detectRedFlags(contextForSkill);
+          break;
+        case "run_complaint_question_bundle":
+          result = await runComplaintQuestionBundle(contextForSkill);
+          break;
+        case "select_next_best_question":
+          result = await selectNextBestQuestion(contextForSkill);
+          break;
+        case "score_differential_clusters":
+          result = await scoreDifferentialClusters(contextForSkill);
+          break;
+        case "apply_clinical_score":
+          result = await applyClinicalScore(contextForSkill);
+          break;
+        case "generate_differential":
+          result = await generateDifferential(contextForSkill);
+          break;
+        case "determine_disposition":
+          result = await determineDisposition(contextForSkill);
+          break;
+        case "generate_physician_review_packet":
+          result = await generatePhysicianReviewPacket(contextForSkill);
+          break;
+        case "attach_outcome_stub":
+          result = await attachOutcomeStub(contextForSkill);
+          break;
+        default:
+          result = await runPlaceholderSkill(skillName, contextForSkill);
+          break;
+      }
+
+      assertSkillResultShape(result, skillName);
+
+      state.skillResults[skillName] = result;
+      state.completedSkills.push(skillName);
+      state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+      await appendSkillRunLog(contextForSkill, result);
+
+      if (skillName === "identify_chief_complaint" && result.result?.complaint_id) {
+        state.context.complaintId = result.result.complaint_id;
+      }
+      if (skillName === "collect_modifiers" && result.result?.modifiers) {
+        state.context.modifiers = result.result.modifiers;
+      }
+      if (skillName === "normalize_patient_story" && result.result?.structured_facts) {
+        state.context.knownFacts = result.result.structured_facts;
+      }
+      if (skillName === "determine_disposition") {
+        state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
+      }
+    }
+
+    state.platformChecks = evaluatePlatformPrinciples(state);
+
+    await appendCaseAuditLog({
+      context: state.context,
+      finalDisposition: state.finalDisposition,
+      finalStatus: state.halted ? "halted" : "complete",
+      completedSkills: state.completedSkills,
+      redFlagHits:
+        state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+      differentialTop3:
+        state.skillResults["generate_differential"]?.result?.differential_list
+          ?.slice?.(0, 3)
+          ?.map?.((d: any) => d.diagnosis ?? String(d)) ?? [],
+      clinicalScoreUsed:
+        state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+      platformChecks: state.platformChecks,
+    });
+
+    return state;
+  }
+}
+What to do immediately after Phase 2 compiles
+
+Run these test cases first:
+
+sore throat
+
+32 year old male with sore throat x 3 days, fever, no cough
+
+You want to see:
+
+complaint = sore_throat
+
+normalized fever + sore throat
+
+Centor score applied
+
+differential topped by strep/viral/mono
+
+physician review packet populated
+
+cough
+
+70 year old with cough, fever, confused
+
+You want to see:
+
+red flags fire if appropriate
+
+CURB-65 apply
+
+higher-risk disposition pattern
+
+review packet caution notes
+
+uti
+
+26 year old female with burning when urinating and frequency x 2 days
+
+You want to see:
+
+complaint = uti
+
+structured urinary facts
+
+fallback differential reasonable

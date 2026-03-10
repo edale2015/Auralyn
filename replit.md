@@ -138,7 +138,8 @@ A modular skill-based orchestration layer for clinical triage, built on 18 regis
 - **`server/skills/safety/determineDisposition.ts`**: Real skill — assigns disposition from DISPOSITION_RULES.csv with red-flag-based fallback
 - **`server/data/csv/SKILL_REGISTRY.csv`**: CSV version of registry with full column set including principle flags
 - **`server/data/csv/CASE_AUDIT_LOG.csv`**: Audit log schema with principle columns and seeded example row
-- **Phase 1 status**: 7 of 18 skills are real implementations; 11 remain as placeholders
+- **Phase 2 status**: 12 of 18 skills are real implementations; 6 remain as placeholders
+- **Phase 2 skills added**: `normalizePatientStory` (structured fact extraction with negation handling), `scoreDifferentialClusters` (CSV-driven cluster scoring), `applyClinicalScore` (Centor for sore_throat, CURB-65 for cough), `generateDifferential` (ranked diagnosis list with fallbacks), `generatePhysicianReviewPacket` (sign-off bundle with caution notes)
 
 ### Decision Graph Visualization
 Tools for building and visualizing decision graphs, case trace graphs, graph differences, and heatmaps.

@@ -57,7 +57,13 @@ function scoreComplaint(text: string, row: CsvRow): number {
 
   const keywords = getFirstValue(row, ["Keywords", "Synonyms", "Search_Terms", "ALIASES", "Aliases"]);
   for (const keyword of keywords.split(/[|;]/).map((s) => s.trim()).filter(Boolean)) {
-    if (hay.includes(keyword.toLowerCase())) score += 3;
+    const kw = keyword.toLowerCase();
+    if (hay.includes(kw)) score += 3;
+    const spaced = kw.replace(/_/g, " ");
+    if (spaced !== kw && hay.includes(spaced)) score += 3;
+    for (const token of tokenize(kw)) {
+      if (token.length >= 4 && hay.includes(token)) score += 1;
+    }
   }
 
   return score;
