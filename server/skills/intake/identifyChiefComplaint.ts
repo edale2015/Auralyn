@@ -27,6 +27,8 @@ function complaintLabelFromRow(row: CsvRow): string {
     "Complaint_Name",
     "Complaint",
     "Display_Name",
+    "LABEL",
+    "Label",
   ]);
 }
 
@@ -53,8 +55,8 @@ function scoreComplaint(text: string, row: CsvRow): number {
     if (hay.includes(token)) score += 2;
   }
 
-  const keywords = getFirstValue(row, ["Keywords", "Synonyms", "Search_Terms"]);
-  for (const keyword of keywords.split("|").map((s) => s.trim()).filter(Boolean)) {
+  const keywords = getFirstValue(row, ["Keywords", "Synonyms", "Search_Terms", "ALIASES", "Aliases"]);
+  for (const keyword of keywords.split(/[|;]/).map((s) => s.trim()).filter(Boolean)) {
     if (hay.includes(keyword.toLowerCase())) score += 3;
   }
 

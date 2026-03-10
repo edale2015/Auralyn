@@ -22,11 +22,11 @@ function matchDispositionFromRules(
     const rowComplaint = getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
     if (rowComplaint && rowComplaint.toLowerCase() !== complaintId.toLowerCase()) continue;
 
-    const trigger = getFirstValue(row, ["Trigger", "Rule_Trigger", "Condition"]);
-    const disposition = getFirstValue(row, ["Disposition", "Disposition_Code"]);
-    const urgency = getFirstValue(row, ["Urgency", "Priority"]) || "routine";
+    const trigger = getFirstValue(row, ["Trigger", "Rule_Trigger", "Condition", "WHEN_EXPR", "When_Expr"]);
+    const disposition = getFirstValue(row, ["Disposition", "Disposition_Code", "DISPOSITION_LEVEL", "Disposition_Level"]);
+    const urgency = getFirstValue(row, ["Urgency", "CONFIDENCE_HINT", "Confidence_Hint"]) || "routine";
     const careSite = getFirstValue(row, ["Care_Site", "Site"]) || "urgent_care";
-    const rationale = getFirstValue(row, ["Rationale", "Reason", "Explanation"]) || disposition;
+    const rationale = getFirstValue(row, ["Rationale", "Reason", "Explanation", "RATIONALE_TEMPLATE_ID", "Rationale_Template_ID"]) || disposition;
 
     if (!trigger || !disposition) continue;
 

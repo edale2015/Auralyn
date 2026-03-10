@@ -48,10 +48,10 @@ function matchCsvRedFlags(rows: CsvRow[], complaintId: string, source: string): 
     const rowComplaint = getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
     if (rowComplaint && rowComplaint.toLowerCase() !== complaintId.toLowerCase()) continue;
 
-    const trigger = getFirstValue(row, ["Trigger", "Pattern", "Keyword", "Condition"]);
-    const label = getFirstValue(row, ["Label", "Red_Flag", "Flag_Name", "Description"]);
-    const severity = getFirstValue(row, ["Severity", "Severity_Level"]) || "high";
-    const id = getFirstValue(row, ["Red_Flag_ID", "Rule_ID", "ID"]) || `RF_${label}`;
+    const trigger = getFirstValue(row, ["Trigger", "Pattern", "Keyword", "Condition", "TRIGGER_EXPR", "Trigger_Expr"]);
+    const label = getFirstValue(row, ["Label", "Red_Flag", "Flag_Name", "Description", "LABEL"]);
+    const severity = getFirstValue(row, ["Severity", "Severity_Level", "SEVERITY"]) || "high";
+    const id = getFirstValue(row, ["Red_Flag_ID", "Rule_ID", "ID", "RF_ID"]) || `RF_${label}`;
 
     if (!trigger) continue;
 
