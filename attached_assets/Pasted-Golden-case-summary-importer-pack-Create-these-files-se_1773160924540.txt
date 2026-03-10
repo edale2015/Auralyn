@@ -1,0 +1,650 @@
+Golden case summary + importer pack
+
+Create these files:
+
+server/testing/goldenCases.template.csv
+server/testing/goldenCaseImporter.ts
+server/testing/goldenCaseSummary.ts
+1. server/testing/goldenCases.template.csv
+
+This is the spreadsheet-friendly format.
+
+id,raw_text,modifiers_json,expected_complaint_id,expected_disposition,expected_clinical_score_name,expected_clinical_score_min,expected_red_flag_hits_contains,expected_top_differential_contains,expected_affirmed_symptoms_contains,expected_negated_symptoms_contains,notes
+sore_throat_classic,"32 year old male with sore throat x 3 days, fever, no cough","{}","sore_throat","","Centor",2,"","strep|viral|mono","fever|sore throat","cough","Classic Centor-type case"
+elderly_cough_confusion,"70 year old with cough, fever, confused for 2 days","{}","cough","","CURB65",2,"confusion","pneumonia","cough|fever|confused","","High-risk cough case"
+uti_no_fever,"26 year old female with dysuria and frequency x 2 days, no fever","{}","","","","","", "cystitis","dysuria|frequency","fever","Lower UTI shape"
+airway_warning_sore_throat,"child with sore throat, drooling, muffled voice, cannot swallow","{}","sore_throat","er_now","","","drooling|muffled voice|cannot swallow","","sore throat|drooling|muffled voice|cannot swallow","","Airway danger"
+negation_safety_ent,"child with sore throat, no drooling, no stridor","{}","sore_throat","","","","","","sore throat","drooling|stridor","Negation should prevent false airway flags"
+no_sob_no_chest_pain_cough,"45 year old female with cough x 2 weeks, no shortness of breath, no chest pain","{}","cough","","CURB65",0,"","bronchitis|viral","cough","shortness of breath|chest pain","False-flag prevention"
+med_trigger_anticoag,"64 year old on Eliquis with cough and fatigue","{""medications"":[""Eliquis""]}","cough","","CURB65",0,"","","cough|fatigue","","Medication trigger coverage"
+2. server/testing/goldenCaseImporter.ts
+
+This converts the CSV template into the JSON format your runner already uses.
+
+import fs from "fs/promises";
+import path from "path";
+
+type CsvRow = Record<string, string>;
+
+type GoldenCase = {
+  id: string;
+  input: {
+    rawText: string;
+    modifiers?: Record<string, any>;
+  };
+  expected: Record<string, any>;
+};
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  out.push(current);
+  return out.map((v) => v.trim());
+}
+
+function splitList(value: string): string[] {
+  return (value || "")
+    .split(/[|;]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function safeJsonParse(value: string): Record<string, any> {
+  if (!value || !value.trim()) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+async function loadCsv(filePath: string): Promise<CsvRow[]> {
+  const raw = await fs.readFile(filePath, "utf8");
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) return [];
+
+  const headers = parseCsvLine(lines[0]);
+  const rows: CsvRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCsvLine(lines[i]);
+    const row: CsvRow = {};
+    headers.forEach((h, idx) => {
+      row[h] = values[idx] ?? "";
+    });
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function rowToGoldenCase(row: CsvRow): GoldenCase {
+  const expected: Record<string, any> = {};
+
+  if (row.expected_complaint_id) {
+    expected.complaint_id = row.expected_complaint_id;
+  }
+  if (row.expected_disposition) {
+    expected.disposition = row.expected_disposition;
+  }
+  if (row.expected_clinical_score_name) {
+    expected.clinical_score_name = row.expected_clinical_score_name;
+  }
+  if (row.expected_clinical_score_min) {
+    const n = Number(row.expected_clinical_score_min);
+    if (Number.isFinite(n)) expected.clinical_score_min = n;
+  }
+
+  const redFlags = splitList(row.expected_red_flag_hits_contains);
+  if (redFlags.length) expected.red_flag_hits_contains = redFlags;
+
+  const topDiff = splitList(row.expected_top_differential_contains);
+  if (topDiff.length) expected.top_differential_contains = topDiff;
+
+  const affirmed = splitList(row.expected_affirmed_symptoms_contains);
+  if (affirmed.length) expected.affirmed_symptoms_contains = affirmed;
+
+  const negated = splitList(row.expected_negated_symptoms_contains);
+  if (negated.length) expected.negated_symptoms_contains = negated;
+
+  return {
+    id: row.id,
+    input: {
+      rawText: row.raw_text,
+      modifiers: safeJsonParse(row.modifiers_json),
+    },
+    expected,
+  };
+}
+
+export async function importGoldenCasesFromCsv(
+  inputFile = "goldenCases.template.csv",
+  outputFile = "goldenCases.imported.json"
+) {
+  const inputPath = path.resolve(process.cwd(), "server/testing", inputFile);
+  const outputPath = path.resolve(process.cwd(), "server/testing", outputFile);
+
+  const rows = await loadCsv(inputPath);
+  const cases = rows.map(rowToGoldenCase);
+
+  await fs.writeFile(outputPath, JSON.stringify(cases, null, 2), "utf8");
+
+  console.log(
+    `Imported ${cases.length} golden cases from ${inputFile} -> ${outputFile}`
+  );
+
+  return {
+    inputFile,
+    outputFile,
+    count: cases.length,
+  };
+}
+
+if (require.main === module) {
+  importGoldenCasesFromCsv().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+3. server/testing/goldenCaseSummary.ts
+
+This reads a golden case JSON file, runs all cases, and prints a summary by complaint, disposition, score usage, and failure type.
+
+import fs from "fs/promises";
+import path from "path";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { compareGoldenCase } from "./goldenCaseComparator";
+import { SkillContext } from "../skills/shared/skillTypes";
+
+type GoldenCase = {
+  id: string;
+  input: {
+    rawText: string;
+    modifiers?: Record<string, any>;
+  };
+  expected: Record<string, any>;
+};
+
+function extractActualResult(state: any) {
+  return {
+    complaint_id:
+      state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+    disposition:
+      state.skillResults?.determine_disposition?.result?.disposition ?? "",
+    clinical_score_name:
+      state.skillResults?.apply_clinical_score?.result?.score_name ?? "",
+    clinical_score_value:
+      state.skillResults?.apply_clinical_score?.result?.score_value ?? null,
+    red_flag_hits:
+      (state.skillResults?.detect_red_flags?.result?.red_flag_hits ?? []).map(
+        (r: any) => r.label ?? r.id ?? String(r)
+      ),
+    top_differential:
+      (state.skillResults?.generate_differential?.result?.differential_list ?? [])
+        .slice(0, 3)
+        .map((d: any) => d.diagnosis ?? String(d)),
+    affirmed_symptoms:
+      state.skillResults?.normalize_patient_story?.result?.associated_symptoms ?? [],
+    negated_symptoms:
+      state.skillResults?.normalize_patient_story?.result?.negated_symptoms ?? [],
+  };
+}
+
+async function loadGoldenCases(fileName: string): Promise<GoldenCase[]> {
+  const fullPath = path.resolve(process.cwd(), "server/testing", fileName);
+  const raw = await fs.readFile(fullPath, "utf8");
+  return JSON.parse(raw) as GoldenCase[];
+}
+
+type ComplaintStats = {
+  total: number;
+  passed: number;
+  failed: number;
+};
+
+export async function runGoldenCaseSummary(fileName = "goldenCases.sample.json") {
+  const cases = await loadGoldenCases(fileName);
+  const orchestrator = new ClinicalSkillOrchestrator();
+
+  const complaintStats = new Map<string, ComplaintStats>();
+  const dispositionCounts = new Map<string, number>();
+  const scoreCounts = new Map<string, number>();
+  const failureCounts = new Map<string, number>();
+
+  let passed = 0;
+  let failed = 0;
+
+  for (const testCase of cases) {
+    const context: SkillContext = {
+      caseId: `SUMMARY_${testCase.id}`,
+      rawText: testCase.input.rawText,
+      modifiers: testCase.input.modifiers ?? {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+      },
+    };
+
+    const state = await orchestrator.run(context);
+    const actual = extractActualResult(state);
+
+    const complaintId = actual.complaint_id || "unknown";
+    const disposition = actual.disposition || "unknown";
+    const scoreName = actual.clinical_score_name || "none";
+
+    complaintStats.set(complaintId, complaintStats.get(complaintId) ?? {
+      total: 0,
+      passed: 0,
+      failed: 0,
+    });
+    const c = complaintStats.get(complaintId)!;
+    c.total += 1;
+
+    dispositionCounts.set(disposition, (dispositionCounts.get(disposition) ?? 0) + 1);
+    scoreCounts.set(scoreName, (scoreCounts.get(scoreName) ?? 0) + 1);
+
+    const comparison = compareGoldenCase({
+      actual,
+      expected: testCase.expected,
+    });
+
+    if (comparison.passed) {
+      passed += 1;
+      c.passed += 1;
+    } else {
+      failed += 1;
+      c.failed += 1;
+
+      for (const failure of comparison.failures) {
+        const shortKey = failure.split(" expected ")[0];
+        failureCounts.set(shortKey, (failureCounts.get(shortKey) ?? 0) + 1);
+      }
+    }
+  }
+
+  console.log("\n=== GOLDEN CASE SUMMARY ===");
+  console.log(`Total: ${cases.length}`);
+  console.log(`Passed: ${passed}`);
+  console.log(`Failed: ${failed}`);
+
+  console.log("\nBy complaint:");
+  for (const [complaint, stats] of [...complaintStats.entries()].sort()) {
+    console.log(
+      `- ${complaint}: total=${stats.total}, passed=${stats.passed}, failed=${stats.failed}`
+    );
+  }
+
+  console.log("\nDisposition distribution:");
+  for (const [disp, count] of [...dispositionCounts.entries()].sort()) {
+    console.log(`- ${disp}: ${count}`);
+  }
+
+  console.log("\nClinical score usage:");
+  for (const [score, count] of [...scoreCounts.entries()].sort()) {
+    console.log(`- ${score}: ${count}`);
+  }
+
+  console.log("\nFailure categories:");
+  if (failureCounts.size === 0) {
+    console.log("- none");
+  } else {
+    for (const [failure, count] of [...failureCounts.entries()].sort()) {
+      console.log(`- ${failure}: ${count}`);
+    }
+  }
+
+  return {
+    total: cases.length,
+    passed,
+    failed,
+    complaintStats: Object.fromEntries(complaintStats),
+    dispositionCounts: Object.fromEntries(dispositionCounts),
+    scoreCounts: Object.fromEntries(scoreCounts),
+    failureCounts: Object.fromEntries(failureCounts),
+  };
+}
+
+if (require.main === module) {
+  runGoldenCaseSummary().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+How to use this pack
+Import spreadsheet cases into JSON
+npx tsx server/testing/goldenCaseImporter.ts
+Run your existing regression harness
+npx tsx server/testing/goldenCaseRunner.ts
+Run the summary view
+npx tsx server/testing/goldenCaseSummary.ts
+
+You can also point the runner or summary at the imported JSON by changing the filename parameter if you want.
+
+Next phases to finish this layer
+
+Now the layer is working. The next job is turning it from “working engine” into “deployable product moat.”
+
+Phase 4: Rule fidelity and sheet-first control
+
+Goal: make the CSV/Sheet layer the real source of truth.
+
+Build next:
+
+expression-backed evaluation for red flags
+
+expression-backed evaluation for disposition
+
+expression-backed evaluation for global secondary triggers
+
+complaint alias registry in one place instead of scattered maps
+
+shared tri-state fact model beyond cough:
+
+fever
+
+SOB
+
+chest pain
+
+vomiting
+
+dysuria
+
+rash
+
+Why it matters:
+This reduces code drift from the sheets and makes updates faster and safer.
+
+Phase 5: Golden-case scale-up and review workflow
+
+Goal: make regression testing painless.
+
+Build next:
+
+goldenCases.review.csv export
+
+one-row case review worksheet with:
+
+complaint
+
+disposition
+
+score
+
+red flags
+
+top differential
+
+pass/fail
+
+failure reasons
+
+import/export loop with Google Sheets
+
+mismatch tagging:
+
+overtriage
+
+undertriage
+
+missed red flag
+
+wrong complaint
+
+wrong score
+
+wrong differential
+
+Why it matters:
+This is how you tune 50 complaints quickly instead of slowly.
+
+Phase 6: Outcome loop
+
+Goal: create the real proprietary data moat.
+
+Build next:
+
+recordCaseOutcome
+
+linkFollowUpResult
+
+reconcilePredictedVsActual
+
+outcome fields:
+
+final diagnosis
+
+meds prescribed
+
+testing performed
+
+callback status
+
+hospital transfer
+
+return visit in 72h / 7d
+
+skill-level learning logs:
+
+which question changed disposition
+
+which differential was right
+
+which red flag predicted deterioration
+
+Why it matters:
+This is one of the biggest “AI boom proof” moves. It turns your system from static rules into a compounding decision dataset.
+
+Phase 7: Workflow embedding
+
+Goal: make this the workflow, not an extra step.
+
+Build next:
+
+physician sign-off screen / packet view
+
+chart note generation blocks
+
+discharge instruction rendering
+
+coding/billing suggestion stub
+
+callback/follow-up queue
+
+API endpoints for:
+
+run orchestrator
+
+fetch review packet
+
+fetch assessment plan
+
+fetch audit trace
+
+Why it matters:
+The article’s big point was workflow. Winners live inside the work, not beside it.
+
+Phase 8: Analytics and economics
+
+Goal: prove ROI and defend unit economics.
+
+Build next:
+
+workflow metrics dashboard
+
+time-saved estimates by complaint
+
+question burden per complaint
+
+accuracy by complaint
+
+disposition drift dashboard
+
+high-yield question ranking
+
+compute/time cost per skill run
+
+Why it matters:
+This is the “AI revenue > AI cost” part. You need to show the engine saves clinician minutes and scales cheaply.
+
+Phase 9: Packaging into modules
+
+Goal: turn the system into a product, not just a codebase.
+
+Modules:
+
+Intake Module
+
+Triage Module
+
+Reasoning Module
+
+Output Module
+
+Outcome Module
+
+Analytics Module
+
+Each should have:
+
+inputs
+
+outputs
+
+enabled/disabled config
+
+dependency map
+
+audit logging
+
+Why it matters:
+This makes it licensable and deployable across multiple clinics.
+
+How to make it “AI boom proof”
+
+Using the article’s lens, your system becomes durable when it owns these four things:
+
+1. Proprietary decision data
+
+You are now capturing:
+
+symptom input
+
+modifiers
+
+negations
+
+complaint routing
+
+red flags
+
+scores
+
+differentials
+
+disposition
+
+output packet
+
+workflow metrics
+
+Finish the outcome loop and this becomes very hard to copy.
+
+2. Real workflow integration
+
+You already have the beginnings:
+
+review packet
+
+assessment plan
+
+emergency warning
+
+workflow value estimate
+
+Next step is embedding it directly into:
+
+intake
+
+documentation
+
+disposition
+
+follow-up
+
+That is where the real stickiness comes from.
+
+3. Positive unit economics
+
+You now have the measure_workflow_value skill. Expand it so you can show:
+
+minutes saved by complaint
+
+documentation saved by case
+
+questions pre-collected
+
+cases handled per clinician hour
+
+That is the business armor.
+
+4. Regulatory defensibility
+
+You already chose the right architecture:
+
+deterministic safety-critical logic
+
+physician review packet
+
+decision support, not autonomous diagnosis
+
+auditable skill-by-skill logs
+
+That is exactly the lane you want.
+
+Best immediate next move
+
+The best next move is:
+
+Phase 4 + Phase 5 together
+
+Meaning:
+
+finish sheet-first rule fidelity
+
+expand golden-case and review tooling
+
+That gives you the fastest improvement loop and the strongest foundation for everything after.
+
+If you want, next I’ll write the Phase 4 implementation pack for expression-backed red flags/disposition plus a shared complaint alias registry.

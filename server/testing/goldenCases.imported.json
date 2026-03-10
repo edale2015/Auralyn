@@ -1,0 +1,144 @@
+[
+  {
+    "id": "sore_throat_classic",
+    "input": {
+      "rawText": "32 year old male with sore throat x 3 days, fever, no cough",
+      "modifiers": {}
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "clinical_score_name": "Centor",
+      "clinical_score_min": 2,
+      "top_differential_contains": [
+        "strep"
+      ],
+      "affirmed_symptoms_contains": [
+        "fever",
+        "sore throat"
+      ],
+      "negated_symptoms_contains": [
+        "cough"
+      ]
+    }
+  },
+  {
+    "id": "elderly_cough_confusion",
+    "input": {
+      "rawText": "70 year old with cough, fever, confused for 2 days",
+      "modifiers": {}
+    },
+    "expected": {
+      "complaint_id": "cough",
+      "clinical_score_name": "CURB65",
+      "clinical_score_min": 2,
+      "red_flag_hits_contains": [
+        "confusion"
+      ],
+      "top_differential_contains": [
+        "pneumonia"
+      ],
+      "affirmed_symptoms_contains": [
+        "cough",
+        "fever",
+        "confused"
+      ]
+    }
+  },
+  {
+    "id": "uti_no_fever",
+    "input": {
+      "rawText": "26 year old female with dysuria and frequency x 2 days, no fever",
+      "modifiers": {}
+    },
+    "expected": {
+      "top_differential_contains": [
+        "cystitis"
+      ],
+      "affirmed_symptoms_contains": [
+        "dysuria",
+        "frequency"
+      ],
+      "negated_symptoms_contains": [
+        "fever"
+      ]
+    }
+  },
+  {
+    "id": "airway_warning_sore_throat",
+    "input": {
+      "rawText": "child with sore throat, drooling, muffled voice, cannot swallow",
+      "modifiers": {}
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "disposition": "er_now",
+      "red_flag_hits_contains": [
+        "drooling",
+        "muffled voice",
+        "cannot swallow"
+      ],
+      "affirmed_symptoms_contains": [
+        "sore throat",
+        "drooling",
+        "muffled voice",
+        "cannot swallow"
+      ]
+    }
+  },
+  {
+    "id": "negation_safety_ent",
+    "input": {
+      "rawText": "child with sore throat, no drooling, no stridor",
+      "modifiers": {}
+    },
+    "expected": {
+      "complaint_id": "sore_throat",
+      "affirmed_symptoms_contains": [
+        "sore throat"
+      ],
+      "negated_symptoms_contains": [
+        "drooling",
+        "stridor"
+      ]
+    }
+  },
+  {
+    "id": "no_sob_no_chest_pain_cough",
+    "input": {
+      "rawText": "45 year old female with cough x 2 weeks, no shortness of breath, no chest pain",
+      "modifiers": {}
+    },
+    "expected": {
+      "complaint_id": "cough",
+      "clinical_score_name": "CURB65",
+      "clinical_score_min": 0,
+      "affirmed_symptoms_contains": [
+        "cough"
+      ],
+      "negated_symptoms_contains": [
+        "shortness of breath",
+        "chest pain"
+      ]
+    }
+  },
+  {
+    "id": "med_trigger_anticoag",
+    "input": {
+      "rawText": "64 year old on Eliquis with cough and fatigue",
+      "modifiers": {
+        "medications": [
+          "Eliquis"
+        ]
+      }
+    },
+    "expected": {
+      "complaint_id": "cough",
+      "clinical_score_name": "CURB65",
+      "clinical_score_min": 0,
+      "affirmed_symptoms_contains": [
+        "cough",
+        "fatigue"
+      ]
+    }
+  }
+]
