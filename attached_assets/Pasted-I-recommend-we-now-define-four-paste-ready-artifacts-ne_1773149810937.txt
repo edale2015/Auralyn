@@ -1,0 +1,668 @@
+I recommend we now define four paste-ready artifacts next:
+
+Updated SKILL_REGISTRY CSV with the 18 skills and 10 principle columns
+
+Updated CASE_AUDIT_LOG CSV with the new principle fields
+
+TypeScript interfaces for SkillContext, SkillResult, PlatformPrinciplesCheck, and OutcomeStub
+
+Starter code for these 4 files:
+
+skillRegistry.ts
+
+clinicalSkillOrchestrator.ts
+
+platformPrinciplesPolicy.ts
+
+attachOutcomeStub.ts
+
+If you want, I’ll write those four artifacts in full so you can paste them straight into Replit.
+
+ok yes lets do these 4 for starters of the new layer then after that tell what needs to be done to complete this layer as soon as possible.
+
+Absolutely. Here are the 4 starter artifacts for the new skill layer, ready to paste into Replit.
+
+1. SKILL_REGISTRY CSV
+
+Use this as the starter sheet/tab for your new skill layer.
+
+Skill_ID,Skill_Name,Category,Description,Inputs_JSON,Outputs_JSON,Tables_Used,Engine_Type,Safety_Class,Trigger_Type,Enabled,Version,Owner,Notes,Captures_Decision_Data,Infrastructure_Reusable,Captures_Outcome_Loop,Workflow_Embedded,Supports_Network_Effects,Reduces_Physician_Time,Regulatory_Safe,High_Value_Complaint_Ready,Product_Module,Strategic_Notes
+SK001,collect_modifiers,intake,Collect universal modifiers and normalize them,"raw_text|conversation|patient_profile","modifiers|missing_fields|risk_tags","GLOBAL_MODIFIERS","hybrid","high","always",TRUE,v1,core,Run first,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Intake,"Standardized intake across all complaints"
+SK002,extract_med_to_condition_triggers,intake,Infer likely conditions and follow-up bundles from meds,"medications|modifiers","suspected_conditions|follow_up_questions|confidence_by_condition","MED_TO_CONDITION_TRIGGERS","rules","high","after_modifiers",TRUE,v1,core,Medication-aware branching,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Intake,"High-value chronic disease inference from med list"
+SK003,identify_chief_complaint,intake,Map narrative to complaint template,"raw_text|modifiers","complaint_id|alternate_complaints|ambiguity_score","COMPLAINT_REGISTRY","hybrid","high","always",TRUE,v1,core,May return multiple candidates,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Triage,"Complaint routing for all channels"
+SK004,normalize_patient_story,intake,Extract structured findings from transcript,"transcript|complaint_id","symptom_timeline|associated_symptoms|negated_symptoms|measurements","COMPLAINT_REGISTRY","hybrid","high","after_complaint",TRUE,v1,core,Normalize messy language,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Triage,"Creates reusable clinical facts"
+SK005,detect_red_flags,safety,Check complaint and modifiers for emergency red flags,"complaint_id|modifiers|facts","red_flag_hits|severity|escalation_needed|rationale_refs","RED_FLAGS|DISP_RULES","rules","critical","always",TRUE,v1,core,Prefer deterministic logic,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Triage,"Safety anchor skill"
+SK006,determine_disposition,safety,Assign level of care and urgency,"complaint_id|modifiers|facts|scores|differential","disposition|urgency|care_site|rationale","DISP_RULES","rules","critical","pre-final",TRUE,v1,core,Deterministic anchor,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Triage,"Must remain rules-first"
+SK007,generate_emergency_warning,output,Render emergency warning text,"disposition|red_flag_hits","warning_block|instructions","OUTPUT_TEMPLATES","rules","critical","conditional",TRUE,v1,core,Versioned messaging only,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Output,"Channel-safe emergency instructions"
+SK008,select_next_best_question,questions,Choose highest-yield next question,"complaint_id|known_facts|missing_fields|candidate_questions","next_question|why_it_matters|impact|linked_diagnoses","SECONDARY_QUESTIONS|QUESTION_IMPACT","hybrid","high","iterative",TRUE,v1,core,Repeat until threshold met,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Questioning,"Question burden reduction"
+SK009,run_complaint_question_bundle,questions,Load complaint-specific core questions,"complaint_id|known_facts|modifiers","pending_questions|asked_questions|skipped_questions|rule_triggers","SECONDARY_QUESTIONS","rules","high","after_complaint",TRUE,v1,core,Core complaint question set,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Questioning,"Reusable per complaint"
+SK010,trigger_global_secondary_questions,questions,Trigger global follow-up bundles from PMH meds age pregnancy etc,"modifiers|meds|pmh|complaint_id","triggered_question_bundles|priority_order","GLOBAL_SECONDARY|MED_TO_CONDITION_TRIGGERS","rules","high","after_modifiers",TRUE,v1,core,Cross-complaint follow-up,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Questioning,"Global risk bundle trigger"
+SK011,generate_differential,reasoning,Produce ranked differential from structured data,"complaint_id|modifiers|facts|question_answers","differential_list|confidence|supporting_findings|contradictory_findings","DIAGNOSIS_CLUSTERS|COMPLAINT_REGISTRY","hybrid","high","pre-final",TRUE,v1,core,Use structured priors,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Reasoning,"Human-readable ranked differential"
+SK012,score_differential_clusters,reasoning,Apply deterministic scoring to diagnosis clusters,"complaint_id|facts","scored_clusters|trigger_hits|missing_discriminators","CLUSTER_SCORING_RULES","rules","high","pre-differential",TRUE,v1,core,Deterministic diagnostic layer,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Reasoning,"Transparent scoring engine"
+SK013,apply_clinical_score,reasoning,Run formal clinical scores like Centor and Wells,"score_name|variables","score_value|risk_bucket|recommended_implication","SCORING_SYSTEMS","rules","critical","conditional",TRUE,v1,core,Only when complaint relevant,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Reasoning,"Formal evidence score skill"
+SK014,check_consistency_and_gaps,audit,Find contradictions and missing critical data,"transcript|facts|prior_skill_outputs","inconsistencies|missing_critical_data|clarifying_questions","ALL","hybrid","high","pre-final",TRUE,v1,core,Audit safety net,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Audit,"Prevents silent misses"
+SK015,generate_assessment_plan,output,Produce final structured assessment and plan,"complaint_id|modifiers|facts|differential|disposition|scores","assessment|plan|follow_up|return_precautions","OUTPUT_TEMPLATES","hybrid","high","final",TRUE,v1,core,Clinician-facing and patient-safe output,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Output,"Workflow-ready plan"
+SK016,attach_outcome_stub,outcomes,Create placeholder for future outcome tracking,"case_id|complaint_id|disposition","outcome_tracking_id|follow_up_window_days|callback_needed","OUTCOME_TRACKING","rules","high","post-final",TRUE,v1,core,Prepare feedback loop,TRUE,TRUE,TRUE,TRUE,TRUE,FALSE,TRUE,TRUE,Outcomes,"Required for defensible data moat"
+SK017,measure_workflow_value,analytics,Estimate physician time and workflow value created,"case_id|skills_used|question_counts|documentation_outputs","minutes_saved_estimate|questions_precollected|note_sections_prefilled","WORKFLOW_METRICS","rules","medium","post-final",TRUE,v1,core,Unit economics skill,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Analytics,"Tracks ROI and time savings"
+SK018,generate_physician_review_packet,output,Create concise clinician sign-off bundle,"case_id|modifiers|facts|red_flags|differential|disposition","review_packet|approval_checklist|caution_notes","OUTPUT_TEMPLATES","hybrid","critical","post-final",TRUE,v1,core,Supports physician sign-off,TRUE,TRUE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,Output,"Regulatory defensibility layer"
+2. CASE_AUDIT_LOG CSV
+
+Use this as the audit and review backbone.
+
+Audit_ID,Case_ID,Timestamp,Complaint_ID,Complaint_Name,Disposition,Urgency,Care_Site,Final_Status,Overtriage_Flag,Undertriage_Flag,Missing_Questions_Flag,Contradiction_Flag,Decision_Data_Captured,Infrastructure_Reusable,Outcome_Attach_Point,Workflow_Embedded,Network_Effect_Ready,Physician_Time_Saved,Regulatory_Safe,High_Value_Complaint,Product_Module_Assigned,Expert_Pathway_Preserved,Skill_Sequence,Red_Flag_Hits,Clinical_Score_Used,Differential_Top_3,Reviewer_Notes,Reviewed_By
+
+You can also seed one example row:
+
+AUDIT_001,CASE_001,2026-03-10T08:00:00Z,sore_throat,Sore Throat,urgent_same_day,high,urgent_care,review_complete,FALSE,FALSE,FALSE,FALSE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,Triage,TRUE,"collect_modifiers>identify_chief_complaint>detect_red_flags>run_complaint_question_bundle>apply_clinical_score>determine_disposition","RF_NONE",Centor,"strep_pharyngitis|viral_pharyngitis|mononucleosis","Good baseline case",dale
+3. TypeScript interfaces
+
+Create a file like:
+
+server/skills/shared/skillTypes.ts
+
+export type TranscriptTurn = {
+  role: "user" | "assistant" | "system";
+  text: string;
+  timestamp?: string;
+};
+
+export type SkillConfig = {
+  version?: string;
+  strictMode?: boolean;
+  maxQuestions?: number;
+  enableAudit?: boolean;
+};
+
+export type SkillContext = {
+  caseId: string;
+  patientId?: string;
+  encounterId?: string;
+  complaintId?: string;
+  complaintName?: string;
+  rawText?: string;
+  transcript?: TranscriptTurn[];
+  modifiers?: Record<string, any>;
+  knownFacts?: Record<string, any>;
+  priorSkillOutputs?: Record<string, any>;
+  metadata?: {
+    channel?: "web" | "telegram" | "sms" | "voice" | "ehr" | "unknown";
+    clinicId?: string;
+    siteId?: string;
+    clinicianId?: string;
+    createdAt?: string;
+  };
+  config?: SkillConfig;
+};
+
+export type SkillAudit = {
+  tablesUsed: string[];
+  ruleHits: string[];
+  missingData: string[];
+  warnings?: string[];
+  latencyMs: number;
+};
+
+export type SkillResult<T = any> = {
+  skillId: string;
+  skillName: string;
+  version: string;
+  status: "success" | "partial" | "error";
+  confidence: number;
+  result: T;
+  audit: SkillAudit;
+  nextRecommendedSkills?: string[];
+};
+
+export type PlatformPrinciplesCheck = {
+  decisionDataCaptured: boolean;
+  infrastructureReusable: boolean;
+  outcomeAttachPoint: boolean;
+  workflowEmbedded: boolean;
+  networkEffectReady: boolean;
+  physicianTimeSaved: boolean;
+  regulatorySafe: boolean;
+  highValueComplaint: boolean;
+  productModuleAssigned: boolean;
+  expertPathwayPreserved: boolean;
+  strategicNotes?: string[];
+};
+
+export type OutcomeStub = {
+  outcomeTrackingId: string;
+  caseId: string;
+  complaintId?: string;
+  expectedFollowUpWindowDays: number;
+  callbackNeeded: boolean;
+  outcomeStatus: "pending" | "complete" | "unreachable";
+  linkedDiagnosis?: string;
+  linkedTreatment?: string;
+  linkedDisposition?: string;
+  createdAt: string;
+};
+
+export type ReviewPacket = {
+  caseId: string;
+  complaintSummary: string;
+  keyModifiers: Record<string, any>;
+  keyFindings: Record<string, any>;
+  redFlags: string[];
+  likelyDiagnoses: string[];
+  proposedDisposition: string;
+  cautionNotes: string[];
+  approvalChecklist: string[];
+};
+
+export type OrchestratorState = {
+  context: SkillContext;
+  skillResults: Record<string, SkillResult>;
+  completedSkills: string[];
+  pendingSkills: string[];
+  halted: boolean;
+  finalDisposition?: string;
+  platformChecks?: PlatformPrinciplesCheck;
+};
+4. Starter code for the 4 core files
+A. server/skills/registry/skillRegistry.ts
+export type SkillRegistryRow = {
+  skillId: string;
+  skillName: string;
+  category:
+    | "intake"
+    | "safety"
+    | "questions"
+    | "reasoning"
+    | "output"
+    | "outcomes"
+    | "analytics"
+    | "audit";
+  description: string;
+  engineType: "rules" | "hybrid" | "retrieval";
+  safetyClass: "medium" | "high" | "critical";
+  triggerType:
+    | "always"
+    | "after_modifiers"
+    | "after_complaint"
+    | "iterative"
+    | "conditional"
+    | "pre-final"
+    | "post-final";
+  enabled: boolean;
+  version: string;
+  productModule:
+    | "Intake"
+    | "Triage"
+    | "Questioning"
+    | "Reasoning"
+    | "Output"
+    | "Outcomes"
+    | "Analytics"
+    | "Audit";
+  strategicNotes?: string;
+};
+
+export const SKILL_REGISTRY: SkillRegistryRow[] = [
+  {
+    skillId: "SK001",
+    skillName: "collect_modifiers",
+    category: "intake",
+    description: "Collect universal modifiers and normalize them",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "always",
+    enabled: true,
+    version: "v1",
+    productModule: "Intake",
+    strategicNotes: "Run first",
+  },
+  {
+    skillId: "SK002",
+    skillName: "extract_med_to_condition_triggers",
+    category: "intake",
+    description: "Infer likely conditions and follow-up bundles from meds",
+    engineType: "rules",
+    safetyClass: "high",
+    triggerType: "after_modifiers",
+    enabled: true,
+    version: "v1",
+    productModule: "Intake",
+  },
+  {
+    skillId: "SK003",
+    skillName: "identify_chief_complaint",
+    category: "intake",
+    description: "Map narrative to complaint template",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "always",
+    enabled: true,
+    version: "v1",
+    productModule: "Triage",
+  },
+  {
+    skillId: "SK004",
+    skillName: "normalize_patient_story",
+    category: "intake",
+    description: "Extract structured findings from transcript",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "after_complaint",
+    enabled: true,
+    version: "v1",
+    productModule: "Triage",
+  },
+  {
+    skillId: "SK005",
+    skillName: "detect_red_flags",
+    category: "safety",
+    description: "Check complaint and modifiers for emergency red flags",
+    engineType: "rules",
+    safetyClass: "critical",
+    triggerType: "always",
+    enabled: true,
+    version: "v1",
+    productModule: "Triage",
+  },
+  {
+    skillId: "SK006",
+    skillName: "determine_disposition",
+    category: "safety",
+    description: "Assign level of care and urgency",
+    engineType: "rules",
+    safetyClass: "critical",
+    triggerType: "pre-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Triage",
+  },
+  {
+    skillId: "SK007",
+    skillName: "generate_emergency_warning",
+    category: "output",
+    description: "Render emergency warning text",
+    engineType: "rules",
+    safetyClass: "critical",
+    triggerType: "conditional",
+    enabled: true,
+    version: "v1",
+    productModule: "Output",
+  },
+  {
+    skillId: "SK008",
+    skillName: "select_next_best_question",
+    category: "questions",
+    description: "Choose highest-yield next question",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "iterative",
+    enabled: true,
+    version: "v1",
+    productModule: "Questioning",
+  },
+  {
+    skillId: "SK009",
+    skillName: "run_complaint_question_bundle",
+    category: "questions",
+    description: "Load complaint-specific core questions",
+    engineType: "rules",
+    safetyClass: "high",
+    triggerType: "after_complaint",
+    enabled: true,
+    version: "v1",
+    productModule: "Questioning",
+  },
+  {
+    skillId: "SK010",
+    skillName: "trigger_global_secondary_questions",
+    category: "questions",
+    description: "Trigger global follow-up bundles",
+    engineType: "rules",
+    safetyClass: "high",
+    triggerType: "after_modifiers",
+    enabled: true,
+    version: "v1",
+    productModule: "Questioning",
+  },
+  {
+    skillId: "SK011",
+    skillName: "generate_differential",
+    category: "reasoning",
+    description: "Produce ranked differential from structured data",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "pre-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Reasoning",
+  },
+  {
+    skillId: "SK012",
+    skillName: "score_differential_clusters",
+    category: "reasoning",
+    description: "Apply deterministic scoring to diagnosis clusters",
+    engineType: "rules",
+    safetyClass: "high",
+    triggerType: "pre-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Reasoning",
+  },
+  {
+    skillId: "SK013",
+    skillName: "apply_clinical_score",
+    category: "reasoning",
+    description: "Run formal clinical scores like Centor and Wells",
+    engineType: "rules",
+    safetyClass: "critical",
+    triggerType: "conditional",
+    enabled: true,
+    version: "v1",
+    productModule: "Reasoning",
+  },
+  {
+    skillId: "SK014",
+    skillName: "check_consistency_and_gaps",
+    category: "audit",
+    description: "Find contradictions and missing critical data",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "pre-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Audit",
+  },
+  {
+    skillId: "SK015",
+    skillName: "generate_assessment_plan",
+    category: "output",
+    description: "Produce final structured assessment and plan",
+    engineType: "hybrid",
+    safetyClass: "high",
+    triggerType: "pre-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Output",
+  },
+  {
+    skillId: "SK016",
+    skillName: "attach_outcome_stub",
+    category: "outcomes",
+    description: "Create placeholder for future outcome tracking",
+    engineType: "rules",
+    safetyClass: "high",
+    triggerType: "post-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Outcomes",
+  },
+  {
+    skillId: "SK017",
+    skillName: "measure_workflow_value",
+    category: "analytics",
+    description: "Estimate physician time and workflow value created",
+    engineType: "rules",
+    safetyClass: "medium",
+    triggerType: "post-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Analytics",
+  },
+  {
+    skillId: "SK018",
+    skillName: "generate_physician_review_packet",
+    category: "output",
+    description: "Create concise clinician sign-off bundle",
+    engineType: "hybrid",
+    safetyClass: "critical",
+    triggerType: "post-final",
+    enabled: true,
+    version: "v1",
+    productModule: "Output",
+  },
+];
+
+export function getSkillByName(skillName: string): SkillRegistryRow | undefined {
+  return SKILL_REGISTRY.find((s) => s.skillName === skillName && s.enabled);
+}
+
+export function getEnabledSkills(): SkillRegistryRow[] {
+  return SKILL_REGISTRY.filter((s) => s.enabled);
+}
+B. server/orchestrator/platformPrinciplesPolicy.ts
+import { OrchestratorState, PlatformPrinciplesCheck } from "../skills/shared/skillTypes";
+
+const HIGH_VALUE_COMPLAINTS = new Set([
+  "cough",
+  "sore_throat",
+  "fever",
+  "sinus_pressure",
+  "ear_pain",
+  "uti",
+  "abdominal_pain",
+  "chest_pain",
+  "rash",
+  "injury",
+]);
+
+export function evaluatePlatformPrinciples(state: OrchestratorState): PlatformPrinciplesCheck {
+  const results = state.skillResults;
+  const completed = new Set(state.completedSkills);
+
+  const decisionDataCaptured =
+    Object.keys(results).length > 0 &&
+    Object.values(results).every((r) => !!r.audit && !!r.result);
+
+  const infrastructureReusable = true;
+
+  const outcomeAttachPoint = completed.has("attach_outcome_stub");
+
+  const workflowEmbedded =
+    completed.has("determine_disposition") &&
+    completed.has("generate_assessment_plan") &&
+    completed.has("generate_physician_review_packet");
+
+  const networkEffectReady =
+    decisionDataCaptured &&
+    completed.has("measure_workflow_value") &&
+    outcomeAttachPoint;
+
+  const physicianTimeSaved =
+    completed.has("measure_workflow_value") ||
+    completed.has("collect_modifiers") ||
+    completed.has("generate_physician_review_packet");
+
+  const regulatorySafe =
+    completed.has("detect_red_flags") &&
+    completed.has("determine_disposition") &&
+    completed.has("generate_physician_review_packet");
+
+  const highValueComplaint =
+    !!state.context.complaintId && HIGH_VALUE_COMPLAINTS.has(state.context.complaintId);
+
+  const productModuleAssigned = Object.keys(results).length > 0;
+
+  const expertPathwayPreserved =
+    completed.has("run_complaint_question_bundle") ||
+    completed.has("score_differential_clusters") ||
+    completed.has("apply_clinical_score");
+
+  const strategicNotes: string[] = [];
+
+  if (!outcomeAttachPoint) strategicNotes.push("Outcome tracking stub missing");
+  if (!workflowEmbedded) strategicNotes.push("Workflow outputs incomplete");
+  if (!regulatorySafe) strategicNotes.push("Regulatory review layer incomplete");
+  if (!expertPathwayPreserved) strategicNotes.push("Structured expert pathway not sufficiently preserved");
+
+  return {
+    decisionDataCaptured,
+    infrastructureReusable,
+    outcomeAttachPoint,
+    workflowEmbedded,
+    networkEffectReady,
+    physicianTimeSaved,
+    regulatorySafe,
+    highValueComplaint,
+    productModuleAssigned,
+    expertPathwayPreserved,
+    strategicNotes,
+  };
+}
+C. server/skills/outcomes/attachOutcomeStub.ts
+import { OutcomeStub, SkillContext, SkillResult } from "../shared/skillTypes";
+
+function inferFollowUpWindowDays(complaintId?: string, disposition?: string): number {
+  if (disposition === "er_now") return 1;
+  if (disposition === "urgent_same_day") return 2;
+
+  switch (complaintId) {
+    case "chest_pain":
+    case "abdominal_pain":
+      return 2;
+    case "uti":
+    case "fever":
+    case "cough":
+      return 3;
+    default:
+      return 5;
+  }
+}
+
+export async function attachOutcomeStub(
+  context: SkillContext
+): Promise<SkillResult<OutcomeStub>> {
+  const started = Date.now();
+
+  const priorDisposition =
+    context.priorSkillOutputs?.determine_disposition?.result?.disposition ??
+    context.priorSkillOutputs?.determineDisposition?.result?.disposition ??
+    "unknown";
+
+  const stub: OutcomeStub = {
+    outcomeTrackingId: `OUTCOME_${context.caseId}`,
+    caseId: context.caseId,
+    complaintId: context.complaintId,
+    expectedFollowUpWindowDays: inferFollowUpWindowDays(context.complaintId, priorDisposition),
+    callbackNeeded: priorDisposition === "urgent_same_day" || priorDisposition === "er_now",
+    outcomeStatus: "pending",
+    linkedDisposition: priorDisposition,
+    createdAt: new Date().toISOString(),
+  };
+
+  return {
+    skillId: "SK016",
+    skillName: "attach_outcome_stub",
+    version: "v1",
+    status: "success",
+    confidence: 0.98,
+    result: stub,
+    audit: {
+      tablesUsed: ["OUTCOME_TRACKING"],
+      ruleHits: ["OUTCOME_STUB_CREATED"],
+      missingData: priorDisposition === "unknown" ? ["final_disposition"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["measure_workflow_value"],
+  };
+}
+D. server/orchestrator/clinicalSkillOrchestrator.ts
+import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
+import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+
+/**
+ * Placeholder skill runners.
+ * Replace these stubs with your real implementations as you wire them in.
+ */
+async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
+  const started = Date.now();
+
+  return {
+    skillId: `PLACEHOLDER_${skillName}`,
+    skillName,
+    version: "v1",
+    status: "success",
+    confidence: 0.75,
+    result: {
+      message: `${skillName} not yet fully implemented`,
+      caseId: context.caseId,
+    },
+    audit: {
+      tablesUsed: [],
+      ruleHits: [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+
+const DEFAULT_SEQUENCE = [
+  "collect_modifiers",
+  "extract_med_to_condition_triggers",
+  "identify_chief_complaint",
+  "normalize_patient_story",
+  "detect_red_flags",
+  "run_complaint_question_bundle",
+  "trigger_global_secondary_questions",
+  "select_next_best_question",
+  "score_differential_clusters",
+  "apply_clinical_score",
+  "generate_differential",
+  "check_consistency_and_gaps",
+  "determine_disposition",
+  "generate_emergency_warning",
+  "generate_assessment_plan",
+  "generate_physician_review_packet",
+  "attach_outcome_stub",
+  "measure_workflow_value",
+] as const;
+
+export class ClinicalSkillOrchestrator {
+  async run(initialContext: SkillContext): Promise<OrchestratorState> {
+    const state: OrchestratorState = {
+      context: initialContext,
+      skillResults: {},
+      completedSkills: [],
+      pendingSkills: [...DEFAULT_SEQUENCE],
+      halted: false,
+    };
+
+    for (const skillName of DEFAULT_SEQUENCE) {
+      if (state.halted) break;
+
+      const contextForSkill: SkillContext = {
+        ...state.context,
+        priorSkillOutputs: state.skillResults,
+      };
+
+      let result: SkillResult;
+
+      switch (skillName) {
+        case "attach_outcome_stub":
+          result = await attachOutcomeStub(contextForSkill);
+          break;
+
+        default:
+          result = await runPlaceholderSkill(skillName, contextForSkill);
+          break;
+      }
+
+      state.skillResults[skillName] = result;
+      state.completedSkills.push(skillName);
+      state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+      if (skillName === "determine_disposition") {
+        state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
+      }
+
+      const escalationNeeded =
+        state.skillResults["detect_red_flags"]?.result?.escalation_needed === true;
+
+      if (skillName === "detect_red_flags" && escalationNeeded) {
+        state.halted = false;
+      }
+    }
+
+    state.platformChecks = evaluatePlatformPrinciples(state);
+    return state;
+  }
+}

@@ -120,6 +120,16 @@ Tools for complaint validation sprints:
 - **Admin Sidebar**: All 40+ admin/physician pages wrapped in AdminLayout with categorized sidebar navigation. Auth-gated (requires JWT token).
 - **Sidebar Sections**: Clinical Operations, Diagnostics & Scoring, Medications, Outcomes & Monitoring, Export & Records, AI & Agents, Operations, Validation Sprint, Administration
 
+### Clinical Skill Layer
+A modular skill-based orchestration layer for clinical triage, built on 18 registered skills across 8 categories (intake, safety, questions, reasoning, output, outcomes, analytics, audit). Key files:
+- **`server/skills/shared/skillTypes.ts`**: Core types — `SkillContext`, `SkillResult`, `SkillAudit`, `PlatformPrinciplesCheck`, `OutcomeStub`, `ReviewPacket`, `OrchestratorState`
+- **`server/skills/registry/skillRegistry.ts`**: In-code registry of all 18 skills with metadata (safety class, trigger type, engine type, product module)
+- **`server/orchestrator/clinicalSkillOrchestrator.ts`**: Sequential skill runner with halt support, disposition extraction, and platform principles evaluation
+- **`server/orchestrator/platformPrinciplesPolicy.ts`**: Evaluates 10 platform principles (decision data captured, infrastructure reusable, outcome attach point, workflow embedded, network effect ready, physician time saved, regulatory safe, high-value complaint, product module assigned, expert pathway preserved)
+- **`server/skills/outcomes/attachOutcomeStub.ts`**: First real skill implementation — creates outcome tracking stubs with follow-up windows
+- **`server/data/csv/SKILL_REGISTRY.csv`**: CSV version of registry with full column set including principle flags
+- **`server/data/csv/CASE_AUDIT_LOG.csv`**: Audit log schema with principle columns and seeded example row
+
 ### Decision Graph Visualization
 Tools for building and visualizing decision graphs, case trace graphs, graph differences, and heatmaps.
 
