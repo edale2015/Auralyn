@@ -126,9 +126,19 @@ A modular skill-based orchestration layer for clinical triage, built on 18 regis
 - **`server/skills/registry/skillRegistry.ts`**: In-code registry of all 18 skills with metadata (safety class, trigger type, engine type, product module)
 - **`server/orchestrator/clinicalSkillOrchestrator.ts`**: Sequential skill runner with halt support, disposition extraction, and platform principles evaluation
 - **`server/orchestrator/platformPrinciplesPolicy.ts`**: Evaluates 10 platform principles (decision data captured, infrastructure reusable, outcome attach point, workflow embedded, network effect ready, physician time saved, regulatory safe, high-value complaint, product module assigned, expert pathway preserved)
-- **`server/skills/outcomes/attachOutcomeStub.ts`**: First real skill implementation — creates outcome tracking stubs with follow-up windows
+- **`server/skills/outcomes/attachOutcomeStub.ts`**: Outcome tracking stubs with follow-up windows
+- **`server/skills/shared/csvTableLoader.ts`**: CSV parser with flexible column matching for sheet drift tolerance
+- **`server/skills/shared/schemaValidators.ts`**: Strict validators for SkillContext and SkillResult shapes
+- **`server/skills/shared/auditLogger.ts`**: NDJSON audit logger — writes `skill_run_log.ndjson` and `case_audit_log.ndjson` to `server/data/runtime/`
+- **`server/skills/intake/collectModifiers.ts`**: Real skill — extracts age, duration, sex, pregnancy, immunocompromised status from text
+- **`server/skills/intake/identifyChiefComplaint.ts`**: Real skill — scores text against COMPLAINT_REGISTRY.csv to identify chief complaint
+- **`server/skills/safety/detectRedFlags.ts`**: Real skill — matches against RED_FLAG_RULES.csv with fallback emergency ruleset
+- **`server/skills/questions/runComplaintQuestionBundle.ts`**: Real skill — loads complaint-specific questions from CSV, tracks pending/asked/skipped
+- **`server/skills/questions/selectNextBestQuestion.ts`**: Real skill — picks highest-impact next question using QUESTION_IMPACT.csv
+- **`server/skills/safety/determineDisposition.ts`**: Real skill — assigns disposition from DISPOSITION_RULES.csv with red-flag-based fallback
 - **`server/data/csv/SKILL_REGISTRY.csv`**: CSV version of registry with full column set including principle flags
 - **`server/data/csv/CASE_AUDIT_LOG.csv`**: Audit log schema with principle columns and seeded example row
+- **Phase 1 status**: 7 of 18 skills are real implementations; 11 remain as placeholders
 
 ### Decision Graph Visualization
 Tools for building and visualizing decision graphs, case trace graphs, graph differences, and heatmaps.

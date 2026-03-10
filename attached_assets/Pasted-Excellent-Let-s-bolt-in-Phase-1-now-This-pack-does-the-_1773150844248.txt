@@ -1,0 +1,1232 @@
+Excellent. Let’s bolt in Phase 1 now.
+
+This pack does the four things we said Phase 1 needed:
+
+Replaces placeholders for the first 6 skills
+
+Adds persistent logging
+
+Connects skills to your CSV rules tables
+
+Adds strict validators
+
+I’m keeping this paste-ready and defensive, with flexible column matching so it can survive your sheet drift without instantly exploding.
+
+What this Phase 1 pack includes
+
+Create these files:
+
+server/skills/shared/csvTableLoader.ts
+server/skills/shared/schemaValidators.ts
+server/skills/shared/auditLogger.ts
+server/skills/intake/collectModifiers.ts
+server/skills/intake/identifyChiefComplaint.ts
+server/skills/safety/detectRedFlags.ts
+server/skills/questions/runComplaintQuestionBundle.ts
+server/skills/questions/selectNextBestQuestion.ts
+server/skills/safety/determineDisposition.ts
+
+Then update:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+1. server/skills/shared/csvTableLoader.ts
+import fs from "fs/promises";
+import path from "path";
+
+export type CsvRow = Record<string, string>;
+
+const CSV_BASE_DIR = path.resolve(process.cwd(), "server/data/csv");
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  out.push(current);
+  return out.map((v) => v.trim());
+}
+
+function normalizeHeader(header: string): string {
+  return header.trim();
+}
+
+export async function loadCsvTable(fileName: string): Promise<CsvRow[]> {
+  const filePath = path.join(CSV_BASE_DIR, fileName);
+  const raw = await fs.readFile(filePath, "utf8");
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length < 2) return [];
+
+  const headers = parseCsvLine(lines[0]).map(normalizeHeader);
+  const rows: CsvRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCsvLine(lines[i]);
+    const row: CsvRow = {};
+
+    headers.forEach((header, idx) => {
+      row[header] = (values[idx] ?? "").trim();
+    });
+
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+export function normalizeKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function getFirstValue(row: CsvRow, candidateHeaders: string[]): string {
+  const normalizedMap = new Map<string, string>();
+
+  for (const [k, v] of Object.entries(row)) {
+    normalizedMap.set(normalizeKey(k), v);
+  }
+
+  for (const header of candidateHeaders) {
+    const val = normalizedMap.get(normalizeKey(header));
+    if (val !== undefined && val !== "") return val;
+  }
+
+  return "";
+}
+
+export function toBool(val: string): boolean {
+  const s = (val || "").trim().toLowerCase();
+  return s === "true" || s === "yes" || s === "1" || s === "y";
+}
+
+export function toNumber(val: string, fallback = 0): number {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : fallback;
+}
+2. server/skills/shared/schemaValidators.ts
+import { SkillContext, SkillResult } from "./skillTypes";
+
+export class SkillValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SkillValidationError";
+  }
+}
+
+export function assertContextHasCaseId(context: SkillContext): void {
+  if (!context.caseId || context.caseId.trim() === "") {
+    throw new SkillValidationError("SkillContext.caseId is required");
+  }
+}
+
+export function assertComplaintIdIfNeeded(
+  context: SkillContext,
+  skillName: string
+): void {
+  if (!context.complaintId || context.complaintId.trim() === "") {
+    throw new SkillValidationError(`${skillName}: complaintId is required`);
+  }
+}
+
+export function assertSkillResultShape<T>(
+  result: SkillResult<T>,
+  skillName: string
+): void {
+  if (!result.skillId) {
+    throw new SkillValidationError(`${skillName}: skillId missing`);
+  }
+  if (!result.skillName) {
+    throw new SkillValidationError(`${skillName}: skillName missing`);
+  }
+  if (!result.version) {
+    throw new SkillValidationError(`${skillName}: version missing`);
+  }
+  if (!["success", "partial", "error"].includes(result.status)) {
+    throw new SkillValidationError(`${skillName}: invalid status`);
+  }
+  if (typeof result.confidence !== "number") {
+    throw new SkillValidationError(`${skillName}: confidence must be numeric`);
+  }
+  if (!result.audit) {
+    throw new SkillValidationError(`${skillName}: audit missing`);
+  }
+  if (!Array.isArray(result.audit.tablesUsed)) {
+    throw new SkillValidationError(`${skillName}: audit.tablesUsed invalid`);
+  }
+  if (!Array.isArray(result.audit.ruleHits)) {
+    throw new SkillValidationError(`${skillName}: audit.ruleHits invalid`);
+  }
+  if (!Array.isArray(result.audit.missingData)) {
+    throw new SkillValidationError(`${skillName}: audit.missingData invalid`);
+  }
+  if (typeof result.audit.latencyMs !== "number") {
+    throw new SkillValidationError(`${skillName}: audit.latencyMs invalid`);
+  }
+}
+
+export function requireObject(value: unknown, label: string): Record<string, any> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new SkillValidationError(`${label} must be an object`);
+  }
+  return value as Record<string, any>;
+}
+
+export function safeString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function safeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+3. server/skills/shared/auditLogger.ts
+
+This writes newline-delimited JSON logs so it is robust and simple.
+
+import fs from "fs/promises";
+import path from "path";
+import { PlatformPrinciplesCheck, SkillContext, SkillResult } from "./skillTypes";
+
+const LOG_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureLogDir(): Promise<void> {
+  await fs.mkdir(LOG_DIR, { recursive: true });
+}
+
+function summarizeInput(context: SkillContext): string {
+  return JSON.stringify({
+    caseId: context.caseId,
+    complaintId: context.complaintId,
+    rawText: context.rawText?.slice(0, 300) ?? "",
+    knownFactsKeys: Object.keys(context.knownFacts ?? {}),
+    modifierKeys: Object.keys(context.modifiers ?? {}),
+    priorSkillKeys: Object.keys(context.priorSkillOutputs ?? {}),
+  });
+}
+
+function summarizeOutput(result: SkillResult): string {
+  return JSON.stringify({
+    status: result.status,
+    confidence: result.confidence,
+    resultKeys:
+      result.result && typeof result.result === "object"
+        ? Object.keys(result.result)
+        : [],
+    nextRecommendedSkills: result.nextRecommendedSkills ?? [],
+  });
+}
+
+export async function appendSkillRunLog(
+  context: SkillContext,
+  result: SkillResult
+): Promise<void> {
+  await ensureLogDir();
+
+  const record = {
+    runId: `RUN_${context.caseId}_${result.skillName}_${Date.now()}`,
+    caseId: context.caseId,
+    timestamp: new Date().toISOString(),
+    skillId: result.skillId,
+    skillName: result.skillName,
+    version: result.version,
+    status: result.status,
+    confidence: result.confidence,
+    inputSummary: summarizeInput(context),
+    outputSummary: summarizeOutput(result),
+    ruleHits: result.audit.ruleHits,
+    missingData: result.audit.missingData,
+    nextRecommendedSkills: result.nextRecommendedSkills ?? [],
+    latencyMs: result.audit.latencyMs,
+  };
+
+  const filePath = path.join(LOG_DIR, "skill_run_log.ndjson");
+  await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf8");
+}
+
+export async function appendCaseAuditLog(params: {
+  context: SkillContext;
+  finalDisposition?: string;
+  finalStatus?: string;
+  completedSkills: string[];
+  redFlagHits?: string[];
+  differentialTop3?: string[];
+  clinicalScoreUsed?: string;
+  platformChecks?: PlatformPrinciplesCheck;
+}): Promise<void> {
+  await ensureLogDir();
+
+  const record = {
+    auditId: `AUDIT_${params.context.caseId}_${Date.now()}`,
+    caseId: params.context.caseId,
+    timestamp: new Date().toISOString(),
+    complaintId: params.context.complaintId ?? "",
+    complaintName: params.context.complaintName ?? params.context.complaintId ?? "",
+    disposition: params.finalDisposition ?? "",
+    finalStatus: params.finalStatus ?? "complete",
+    decisionDataCaptured: params.platformChecks?.decisionDataCaptured ?? false,
+    infrastructureReusable: params.platformChecks?.infrastructureReusable ?? false,
+    outcomeAttachPoint: params.platformChecks?.outcomeAttachPoint ?? false,
+    workflowEmbedded: params.platformChecks?.workflowEmbedded ?? false,
+    networkEffectReady: params.platformChecks?.networkEffectReady ?? false,
+    physicianTimeSaved: params.platformChecks?.physicianTimeSaved ?? false,
+    regulatorySafe: params.platformChecks?.regulatorySafe ?? false,
+    highValueComplaint: params.platformChecks?.highValueComplaint ?? false,
+    productModuleAssigned: params.platformChecks?.productModuleAssigned ?? false,
+    expertPathwayPreserved: params.platformChecks?.expertPathwayPreserved ?? false,
+    skillSequence: params.completedSkills.join(">"),
+    redFlagHits: params.redFlagHits ?? [],
+    clinicalScoreUsed: params.clinicalScoreUsed ?? "",
+    differentialTop3: params.differentialTop3 ?? [],
+    strategicNotes: params.platformChecks?.strategicNotes ?? [],
+  };
+
+  const filePath = path.join(LOG_DIR, "case_audit_log.ndjson");
+  await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf8");
+}
+4. server/skills/intake/collectModifiers.ts
+
+This is intentionally hybrid but practical: it extracts common modifiers from raw text + prior known fields.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertContextHasCaseId,
+  assertSkillResultShape,
+  safeString,
+} from "../shared/schemaValidators";
+
+type CollectModifiersResult = {
+  modifiers: Record<string, any>;
+  missing_fields: string[];
+  risk_tags: string[];
+};
+
+function detectAge(text: string): number | undefined {
+  const patterns = [
+    /\b(\d{1,3})\s*(?:yo|y\/o|year old|years old)\b/i,
+    /\bage\s*(\d{1,3})\b/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) return Number(m[1]);
+  }
+  return undefined;
+}
+
+function detectDuration(text: string): string {
+  const m = text.match(
+    /\b(x\s*\d+\s*(?:hours?|days?|weeks?|months?)|\d+\s*(?:hours?|days?|weeks?|months?))\b/i
+  );
+  return m?.[1]?.trim() ?? "";
+}
+
+function hasAny(text: string, phrases: string[]): boolean {
+  const lc = text.toLowerCase();
+  return phrases.some((p) => lc.includes(p.toLowerCase()));
+}
+
+export async function collectModifiers(
+  context: SkillContext
+): Promise<SkillResult<CollectModifiersResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+
+  const raw = safeString(context.rawText);
+  const transcriptText = (context.transcript ?? []).map((t) => t.text).join(" ");
+  const source = `${raw} ${transcriptText}`.trim();
+
+  const existing = { ...(context.modifiers ?? {}) };
+  const modifiers: Record<string, any> = { ...existing };
+
+  const inferredAge = detectAge(source);
+  if (modifiers.age == null && inferredAge != null) modifiers.age = inferredAge;
+
+  if (!modifiers.duration) {
+    const d = detectDuration(source);
+    if (d) modifiers.duration = d;
+  }
+
+  if (modifiers.sex == null) {
+    if (hasAny(source, ["male", "man", "boy"])) modifiers.sex = "male";
+    if (hasAny(source, ["female", "woman", "girl"])) modifiers.sex = "female";
+  }
+
+  if (modifiers.pregnancy_possible == null) {
+    if (hasAny(source, ["pregnant", "pregnancy"])) modifiers.pregnancy_possible = true;
+  }
+
+  if (modifiers.immunocompromised == null) {
+    modifiers.immunocompromised = hasAny(source, [
+      "immunocompromised",
+      "chemotherapy",
+      "chemo",
+      "transplant",
+      "hiv",
+      "steroids",
+      "prednisone",
+    ]);
+  }
+
+  if (modifiers.allergies == null) {
+    modifiers.allergies = [];
+  }
+
+  if (modifiers.medications == null) {
+    modifiers.medications = [];
+  }
+
+  if (modifiers.pmh == null) {
+    modifiers.pmh = [];
+  }
+
+  const risk_tags: string[] = [];
+  if (typeof modifiers.age === "number" && modifiers.age < 3) risk_tags.push("very_young");
+  if (typeof modifiers.age === "number" && modifiers.age >= 65) risk_tags.push("elderly");
+  if (modifiers.immunocompromised) risk_tags.push("immunocompromised");
+  if (modifiers.pregnancy_possible) risk_tags.push("pregnancy_consideration");
+
+  const missing_fields: string[] = [];
+  for (const field of ["age", "duration", "medications", "allergies", "pmh"]) {
+    const val = modifiers[field];
+    const empty =
+      val == null ||
+      val === "" ||
+      (Array.isArray(val) && val.length === 0);
+    if (empty) missing_fields.push(field);
+  }
+
+  const result: SkillResult<CollectModifiersResult> = {
+    skillId: "SK001",
+    skillName: "collect_modifiers",
+    version: "v1",
+    status: "success",
+    confidence: 0.86,
+    result: {
+      modifiers,
+      missing_fields,
+      risk_tags,
+    },
+    audit: {
+      tablesUsed: ["GLOBAL_MODIFIERS"],
+      ruleHits: [
+        inferredAge != null ? "AGE_INFERRED" : "",
+        modifiers.duration ? "DURATION_INFERRED" : "",
+        modifiers.immunocompromised ? "IMMUNO_RISK_FLAG" : "",
+      ].filter(Boolean),
+      missingData: missing_fields,
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["extract_med_to_condition_triggers", "identify_chief_complaint"],
+  };
+
+  assertSkillResultShape(result, "collect_modifiers");
+  return result;
+}
+5. server/skills/intake/identifyChiefComplaint.ts
+
+Uses COMPLAINT_REGISTRY.csv and some text matching.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertContextHasCaseId,
+  assertSkillResultShape,
+  safeString,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type IdentifyChiefComplaintResult = {
+  complaint_id: string;
+  alternate_complaints: string[];
+  ambiguity_score: number;
+};
+
+function complaintIdFromRow(row: CsvRow): string {
+  return (
+    getFirstValue(row, ["Complaint_ID", "CC_ID", "Chief_Complaint_ID", "ComplaintId"]) ||
+    getFirstValue(row, ["Chief_Complaint", "Complaint_Name", "Complaint"])
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+  );
+}
+
+function complaintLabelFromRow(row: CsvRow): string {
+  return getFirstValue(row, [
+    "Chief_Complaint",
+    "Complaint_Name",
+    "Complaint",
+    "Display_Name",
+  ]);
+}
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function scoreComplaint(text: string, row: CsvRow): number {
+  const label = complaintLabelFromRow(row).toLowerCase();
+  const complaintId = complaintIdFromRow(row).toLowerCase();
+  const hay = text.toLowerCase();
+  let score = 0;
+
+  if (label && hay.includes(label)) score += 10;
+  if (complaintId && hay.includes(complaintId.replace(/_/g, " "))) score += 8;
+
+  for (const token of tokenize(label)) {
+    if (hay.includes(token)) score += 2;
+  }
+  for (const token of tokenize(complaintId)) {
+    if (hay.includes(token)) score += 2;
+  }
+
+  const keywords = getFirstValue(row, ["Keywords", "Synonyms", "Search_Terms"]);
+  for (const keyword of keywords.split("|").map((s) => s.trim()).filter(Boolean)) {
+    if (hay.includes(keyword.toLowerCase())) score += 3;
+  }
+
+  return score;
+}
+
+export async function identifyChiefComplaint(
+  context: SkillContext
+): Promise<SkillResult<IdentifyChiefComplaintResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+
+  const complaintRegistry = await loadCsvTable("COMPLAINT_REGISTRY.csv");
+  const raw = safeString(context.rawText);
+  const transcriptText = (context.transcript ?? []).map((t) => t.text).join(" ");
+  const source = `${raw} ${transcriptText}`.trim();
+
+  const scored = complaintRegistry
+    .map((row) => ({
+      row,
+      complaintId: complaintIdFromRow(row),
+      score: scoreComplaint(source, row),
+    }))
+    .filter((x) => x.complaintId);
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const top = scored[0];
+  const alternates = scored.slice(1, 4).filter((x) => x.score > 0).map((x) => x.complaintId);
+
+  const complaint_id = top?.complaintId || "general_symptom";
+  const ambiguity_score =
+    top && scored[1]
+      ? Math.max(0, Math.min(1, 1 - (top.score - scored[1].score) / Math.max(top.score, 1)))
+      : 0.1;
+
+  const result: SkillResult<IdentifyChiefComplaintResult> = {
+    skillId: "SK003",
+    skillName: "identify_chief_complaint",
+    version: "v1",
+    status: "success",
+    confidence: top?.score ? Math.min(0.98, 0.55 + top.score / 20) : 0.45,
+    result: {
+      complaint_id,
+      alternate_complaints: alternates,
+      ambiguity_score,
+    },
+    audit: {
+      tablesUsed: ["COMPLAINT_REGISTRY"],
+      ruleHits: top ? [`CC_MATCH_${complaint_id.toUpperCase()}`] : ["CC_FALLBACK_GENERAL"],
+      missingData: complaint_id === "general_symptom" ? ["specific_complaint_match"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["normalize_patient_story", "detect_red_flags"],
+  };
+
+  assertSkillResultShape(result, "identify_chief_complaint");
+  return result;
+}
+6. server/skills/safety/detectRedFlags.ts
+
+Uses RED_FLAGS.csv if present. If not, it falls back to a compact emergency ruleset so it still works.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+  safeString,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type RedFlagHit = {
+  id: string;
+  label: string;
+  severity: string;
+};
+
+type DetectRedFlagsResult = {
+  red_flag_hits: RedFlagHit[];
+  severity: "none" | "moderate" | "high" | "critical";
+  escalation_needed: boolean;
+  rationale_refs: string[];
+};
+
+const GENERIC_RED_FLAGS: Record<string, string[]> = {
+  chest_pain: ["shortness of breath", "sob", "crushing", "radiating", "syncope"],
+  abdominal_pain: ["rebound", "rigid", "black stool", "bloody stool", "fainting"],
+  sore_throat: ["drooling", "muffled voice", "stridor", "cannot swallow"],
+  cough: ["shortness of breath", "hypoxia", "blue lips", "chest pain"],
+  fever: ["lethargic", "stiff neck", "confused", "seizure"],
+  rash: ["mouth sores", "eye pain", "skin peeling", "purpura"],
+  general_symptom: ["shortness of breath", "confused", "unresponsive", "severe pain"],
+};
+
+function buildSourceText(context: SkillContext): string {
+  return [
+    context.rawText ?? "",
+    ...(context.transcript ?? []).map((t) => t.text),
+    JSON.stringify(context.knownFacts ?? {}),
+    JSON.stringify(context.modifiers ?? {}),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchCsvRedFlags(rows: CsvRow[], complaintId: string, source: string): RedFlagHit[] {
+  const hits: RedFlagHit[] = [];
+
+  for (const row of rows) {
+    const rowComplaint = getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
+    if (rowComplaint && rowComplaint.toLowerCase() !== complaintId.toLowerCase()) continue;
+
+    const trigger = getFirstValue(row, ["Trigger", "Pattern", "Keyword", "Condition"]);
+    const label = getFirstValue(row, ["Label", "Red_Flag", "Flag_Name", "Description"]);
+    const severity = getFirstValue(row, ["Severity", "Severity_Level"]) || "high";
+    const id = getFirstValue(row, ["Red_Flag_ID", "Rule_ID", "ID"]) || `RF_${label}`;
+
+    if (!trigger) continue;
+
+    const terms = trigger
+      .split("|")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    const matched = terms.some((term) => source.includes(term));
+    if (matched) {
+      hits.push({
+        id,
+        label: label || trigger,
+        severity,
+      });
+    }
+  }
+
+  return hits;
+}
+
+function matchFallbackRedFlags(complaintId: string, source: string): RedFlagHit[] {
+  const terms = GENERIC_RED_FLAGS[complaintId] ?? GENERIC_RED_FLAGS.general_symptom;
+  const hits: RedFlagHit[] = [];
+
+  for (const term of terms) {
+    if (source.includes(term.toLowerCase())) {
+      hits.push({
+        id: `RF_${complaintId}_${term.replace(/[^a-z0-9]/gi, "_").toUpperCase()}`,
+        label: term,
+        severity: "critical",
+      });
+    }
+  }
+
+  return hits;
+}
+
+export async function detectRedFlags(
+  context: SkillContext
+): Promise<SkillResult<DetectRedFlagsResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "detect_red_flags");
+
+  const source = buildSourceText(context);
+  let redFlagRows: CsvRow[] = [];
+
+  try {
+    redFlagRows = await loadCsvTable("RED_FLAGS.csv");
+  } catch {
+    redFlagRows = [];
+  }
+
+  const csvHits = redFlagRows.length
+    ? matchCsvRedFlags(redFlagRows, context.complaintId!, source)
+    : [];
+
+  const fallbackHits = csvHits.length === 0
+    ? matchFallbackRedFlags(context.complaintId!, source)
+    : [];
+
+  const red_flag_hits = [...csvHits, ...fallbackHits];
+
+  let severity: DetectRedFlagsResult["severity"] = "none";
+  if (red_flag_hits.some((h) => h.severity.toLowerCase() === "critical")) severity = "critical";
+  else if (red_flag_hits.some((h) => h.severity.toLowerCase() === "high")) severity = "high";
+  else if (red_flag_hits.length > 0) severity = "moderate";
+
+  const result: SkillResult<DetectRedFlagsResult> = {
+    skillId: "SK005",
+    skillName: "detect_red_flags",
+    version: "v1",
+    status: "success",
+    confidence: 0.94,
+    result: {
+      red_flag_hits,
+      severity,
+      escalation_needed: severity === "critical" || severity === "high",
+      rationale_refs: red_flag_hits.map((h) => h.id),
+    },
+    audit: {
+      tablesUsed: redFlagRows.length ? ["RED_FLAGS"] : ["RED_FLAGS_FALLBACK"],
+      ruleHits: red_flag_hits.map((h) => h.id),
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills:
+      severity === "critical" || severity === "high"
+        ? ["determine_disposition", "generate_emergency_warning"]
+        : ["run_complaint_question_bundle"],
+  };
+
+  assertSkillResultShape(result, "detect_red_flags");
+  return result;
+}
+7. server/skills/questions/runComplaintQuestionBundle.ts
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type QuestionBundleResult = {
+  pending_questions: string[];
+  asked_questions: string[];
+  skipped_questions: string[];
+  rule_triggers: string[];
+};
+
+function rowComplaintId(row: CsvRow): string {
+  return getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint", "Chief_Complaint_ID"]);
+}
+
+function rowQuestion(row: CsvRow): string {
+  return getFirstValue(row, ["Question_Text", "Question", "Prompt"]);
+}
+
+function rowQuestionId(row: CsvRow): string {
+  return getFirstValue(row, ["Question_ID", "ID", "Q_ID"]);
+}
+
+export async function runComplaintQuestionBundle(
+  context: SkillContext
+): Promise<SkillResult<QuestionBundleResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "run_complaint_question_bundle");
+
+  const rows = await loadCsvTable("SECONDARY_QUESTIONS.csv");
+  const knownBlob = JSON.stringify({
+    knownFacts: context.knownFacts ?? {},
+    priorSkillOutputs: context.priorSkillOutputs ?? {},
+    modifiers: context.modifiers ?? {},
+  }).toLowerCase();
+
+  const matching = rows.filter((row) => {
+    const cid = rowComplaintId(row).toLowerCase();
+    return cid === context.complaintId!.toLowerCase();
+  });
+
+  const pending_questions: string[] = [];
+  const asked_questions: string[] = [];
+  const skipped_questions: string[] = [];
+  const rule_triggers: string[] = [];
+
+  for (const row of matching) {
+    const q = rowQuestion(row);
+    const qid = rowQuestionId(row) || `Q_${q.slice(0, 20)}`;
+    if (!q) continue;
+
+    const normalizedQuestion = q.toLowerCase();
+    const alreadyKnown = knownBlob.includes(normalizedQuestion);
+
+    if (alreadyKnown) {
+      asked_questions.push(q);
+      skipped_questions.push(q);
+      continue;
+    }
+
+    pending_questions.push(q);
+    rule_triggers.push(qid);
+  }
+
+  const result: SkillResult<QuestionBundleResult> = {
+    skillId: "SK009",
+    skillName: "run_complaint_question_bundle",
+    version: "v1",
+    status: "success",
+    confidence: 0.95,
+    result: {
+      pending_questions,
+      asked_questions,
+      skipped_questions,
+      rule_triggers,
+    },
+    audit: {
+      tablesUsed: ["SECONDARY_QUESTIONS"],
+      ruleHits: rule_triggers,
+      missingData: pending_questions.length === 0 ? ["no_pending_questions_found"] : [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: ["select_next_best_question"],
+  };
+
+  assertSkillResultShape(result, "run_complaint_question_bundle");
+  return result;
+}
+8. server/skills/questions/selectNextBestQuestion.ts
+
+Uses QUESTION_IMPACT.csv if available. Falls back gracefully.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
+
+type NextBestQuestionResult = {
+  next_question: string;
+  why_it_matters: string;
+  impact: number;
+  linked_diagnoses: string[];
+};
+
+function rowComplaintId(row: CsvRow): string {
+  return getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint", "Chief_Complaint_ID"]);
+}
+
+function rowQuestion(row: CsvRow): string {
+  return getFirstValue(row, ["Question_Text", "Question", "Prompt"]);
+}
+
+export async function selectNextBestQuestion(
+  context: SkillContext
+): Promise<SkillResult<NextBestQuestionResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "select_next_best_question");
+
+  const bundle =
+    context.priorSkillOutputs?.run_complaint_question_bundle?.result ??
+    context.priorSkillOutputs?.runComplaintQuestionBundle?.result ??
+    {};
+
+  const pending_questions: string[] = Array.isArray(bundle.pending_questions)
+    ? bundle.pending_questions
+    : [];
+
+  let impactRows: CsvRow[] = [];
+  try {
+    impactRows = await loadCsvTable("QUESTION_IMPACT.csv");
+  } catch {
+    impactRows = [];
+  }
+
+  let bestQuestion = pending_questions[0] ?? "";
+  let bestImpact = 1;
+  let why = "Next unanswered complaint-specific question";
+  let linkedDiagnoses: string[] = [];
+
+  if (impactRows.length > 0 && pending_questions.length > 0) {
+    for (const q of pending_questions) {
+      const row = impactRows.find((r) => {
+        const cid = rowComplaintId(r).toLowerCase();
+        const rq = rowQuestion(r).toLowerCase();
+        return (
+          cid === context.complaintId!.toLowerCase() &&
+          rq === q.toLowerCase()
+        );
+      });
+
+      if (!row) continue;
+
+      const impact = toNumber(
+        getFirstValue(row, ["Impact", "Impact_Score", "Weight"]),
+        1
+      );
+      if (impact > bestImpact) {
+        bestImpact = impact;
+        bestQuestion = q;
+        why =
+          getFirstValue(row, ["Why_It_Matters", "Rationale", "Reason"]) ||
+          "High diagnostic/disposition impact";
+        linkedDiagnoses = getFirstValue(row, ["Linked_Diagnoses", "Diagnoses", "Targets"])
+          .split("|")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+    }
+  }
+
+  const result: SkillResult<NextBestQuestionResult> = {
+    skillId: "SK008",
+    skillName: "select_next_best_question",
+    version: "v1",
+    status: bestQuestion ? "success" : "partial",
+    confidence: bestQuestion ? 0.91 : 0.4,
+    result: {
+      next_question: bestQuestion,
+      why_it_matters: why,
+      impact: bestImpact,
+      linked_diagnoses: linkedDiagnoses,
+    },
+    audit: {
+      tablesUsed: impactRows.length ? ["QUESTION_IMPACT"] : ["QUESTION_IMPACT_FALLBACK"],
+      ruleHits: bestQuestion ? [`NBQ_${context.complaintId}`] : [],
+      missingData: bestQuestion ? [] : ["no_pending_question_available"],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: bestQuestion ? ["select_next_best_question"] : ["determine_disposition"],
+  };
+
+  assertSkillResultShape(result, "select_next_best_question");
+  return result;
+}
+9. server/skills/safety/determineDisposition.ts
+
+Uses DISP_RULES.csv if available, otherwise fallback logic based on red flags.
+
+import { SkillContext, SkillResult } from "../shared/skillTypes";
+import {
+  assertComplaintIdIfNeeded,
+  assertContextHasCaseId,
+  assertSkillResultShape,
+} from "../shared/schemaValidators";
+import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
+
+type DetermineDispositionResult = {
+  disposition: string;
+  urgency: string;
+  care_site: string;
+  rationale: string;
+};
+
+function matchDispositionFromRules(
+  rows: CsvRow[],
+  complaintId: string,
+  redFlagIds: string[]
+): DetermineDispositionResult | null {
+  for (const row of rows) {
+    const rowComplaint = getFirstValue(row, ["Complaint_ID", "CC_ID", "Complaint"]);
+    if (rowComplaint && rowComplaint.toLowerCase() !== complaintId.toLowerCase()) continue;
+
+    const trigger = getFirstValue(row, ["Trigger", "Rule_Trigger", "Condition"]);
+    const disposition = getFirstValue(row, ["Disposition", "Disposition_Code"]);
+    const urgency = getFirstValue(row, ["Urgency", "Priority"]) || "routine";
+    const careSite = getFirstValue(row, ["Care_Site", "Site"]) || "urgent_care";
+    const rationale = getFirstValue(row, ["Rationale", "Reason", "Explanation"]) || disposition;
+
+    if (!trigger || !disposition) continue;
+
+    const triggerTerms = trigger
+      .split("|")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const matched = triggerTerms.some((t) => redFlagIds.includes(t));
+    if (matched) {
+      return {
+        disposition,
+        urgency,
+        care_site: careSite,
+        rationale,
+      };
+    }
+  }
+
+  return null;
+}
+
+export async function determineDisposition(
+  context: SkillContext
+): Promise<SkillResult<DetermineDispositionResult>> {
+  const started = Date.now();
+  assertContextHasCaseId(context);
+  assertComplaintIdIfNeeded(context, "determine_disposition");
+
+  const redFlagResult =
+    context.priorSkillOutputs?.detect_red_flags?.result ??
+    context.priorSkillOutputs?.detectRedFlags?.result ??
+    {};
+
+  const redFlagIds: string[] = Array.isArray(redFlagResult.rationale_refs)
+    ? redFlagResult.rationale_refs
+    : [];
+
+  const redFlagSeverity = redFlagResult.severity ?? "none";
+  const escalationNeeded = redFlagResult.escalation_needed === true;
+
+  let dispRows: CsvRow[] = [];
+  try {
+    dispRows = await loadCsvTable("DISP_RULES.csv");
+  } catch {
+    dispRows = [];
+  }
+
+  let finalResult =
+    dispRows.length > 0
+      ? matchDispositionFromRules(dispRows, context.complaintId!, redFlagIds)
+      : null;
+
+  if (!finalResult) {
+    if (redFlagSeverity === "critical") {
+      finalResult = {
+        disposition: "er_now",
+        urgency: "critical",
+        care_site: "emergency_department",
+        rationale: "Critical red flag(s) detected",
+      };
+    } else if (escalationNeeded || redFlagSeverity === "high") {
+      finalResult = {
+        disposition: "urgent_same_day",
+        urgency: "high",
+        care_site: "urgent_care",
+        rationale: "High-risk feature(s) detected",
+      };
+    } else {
+      finalResult = {
+        disposition: "routine_evaluation",
+        urgency: "routine",
+        care_site: "urgent_care",
+        rationale: "No red flags requiring escalation detected",
+      };
+    }
+  }
+
+  const result: SkillResult<DetermineDispositionResult> = {
+    skillId: "SK006",
+    skillName: "determine_disposition",
+    version: "v1",
+    status: "success",
+    confidence: 0.96,
+    result: finalResult,
+    audit: {
+      tablesUsed: dispRows.length ? ["DISP_RULES"] : ["DISP_RULES_FALLBACK"],
+      ruleHits: redFlagIds,
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills:
+      finalResult.disposition === "er_now"
+        ? ["generate_emergency_warning", "generate_physician_review_packet"]
+        : ["generate_assessment_plan", "generate_physician_review_packet"],
+  };
+
+  assertSkillResultShape(result, "determine_disposition");
+  return result;
+}
+10. Update server/orchestrator/clinicalSkillOrchestrator.ts
+
+Replace your current file with this version.
+
+import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
+import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
+import { collectModifiers } from "../skills/intake/collectModifiers";
+import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
+import { detectRedFlags } from "../skills/safety/detectRedFlags";
+import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
+import { determineDisposition } from "../skills/safety/determineDisposition";
+import { assertSkillResultShape } from "../skills/shared/schemaValidators";
+
+/**
+ * Placeholder skill runners for non-Phase-1 skills.
+ */
+async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
+  const started = Date.now();
+
+  return {
+    skillId: `PLACEHOLDER_${skillName}`,
+    skillName,
+    version: "v1",
+    status: "success",
+    confidence: 0.75,
+    result: {
+      message: `${skillName} not yet fully implemented`,
+      caseId: context.caseId,
+    },
+    audit: {
+      tablesUsed: [],
+      ruleHits: [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+
+const DEFAULT_SEQUENCE = [
+  "collect_modifiers",
+  "extract_med_to_condition_triggers",
+  "identify_chief_complaint",
+  "normalize_patient_story",
+  "detect_red_flags",
+  "run_complaint_question_bundle",
+  "trigger_global_secondary_questions",
+  "select_next_best_question",
+  "score_differential_clusters",
+  "apply_clinical_score",
+  "generate_differential",
+  "check_consistency_and_gaps",
+  "determine_disposition",
+  "generate_emergency_warning",
+  "generate_assessment_plan",
+  "generate_physician_review_packet",
+  "attach_outcome_stub",
+  "measure_workflow_value",
+] as const;
+
+export class ClinicalSkillOrchestrator {
+  async run(initialContext: SkillContext): Promise<OrchestratorState> {
+    const state: OrchestratorState = {
+      context: initialContext,
+      skillResults: {},
+      completedSkills: [],
+      pendingSkills: [...DEFAULT_SEQUENCE],
+      halted: false,
+    };
+
+    for (const skillName of DEFAULT_SEQUENCE) {
+      if (state.halted) break;
+
+      const priorComplaintId =
+        state.skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        state.context.complaintId;
+
+      const contextForSkill: SkillContext = {
+        ...state.context,
+        complaintId: priorComplaintId,
+        priorSkillOutputs: state.skillResults,
+        modifiers:
+          state.skillResults["collect_modifiers"]?.result?.modifiers ??
+          state.context.modifiers,
+      };
+
+      let result: SkillResult;
+
+      switch (skillName) {
+        case "collect_modifiers":
+          result = await collectModifiers(contextForSkill);
+          break;
+
+        case "identify_chief_complaint":
+          result = await identifyChiefComplaint(contextForSkill);
+          break;
+
+        case "detect_red_flags":
+          result = await detectRedFlags(contextForSkill);
+          break;
+
+        case "run_complaint_question_bundle":
+          result = await runComplaintQuestionBundle(contextForSkill);
+          break;
+
+        case "select_next_best_question":
+          result = await selectNextBestQuestion(contextForSkill);
+          break;
+
+        case "determine_disposition":
+          result = await determineDisposition(contextForSkill);
+          break;
+
+        case "attach_outcome_stub":
+          result = await attachOutcomeStub(contextForSkill);
+          break;
+
+        default:
+          result = await runPlaceholderSkill(skillName, contextForSkill);
+          break;
+      }
+
+      assertSkillResultShape(result, skillName);
+
+      state.skillResults[skillName] = result;
+      state.completedSkills.push(skillName);
+      state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+      await appendSkillRunLog(contextForSkill, result);
+
+      if (skillName === "identify_chief_complaint" && result.result?.complaint_id) {
+        state.context.complaintId = result.result.complaint_id;
+      }
+
+      if (skillName === "collect_modifiers" && result.result?.modifiers) {
+        state.context.modifiers = result.result.modifiers;
+      }
+
+      if (skillName === "determine_disposition") {
+        state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
+      }
+
+      const escalationNeeded =
+        state.skillResults["detect_red_flags"]?.result?.escalation_needed === true;
+
+      if (skillName === "detect_red_flags" && escalationNeeded) {
+        state.halted = false;
+      }
+    }
+
+    state.platformChecks = evaluatePlatformPrinciples(state);
+
+    await appendCaseAuditLog({
+      context: state.context,
+      finalDisposition: state.finalDisposition,
+      finalStatus: state.halted ? "halted" : "complete",
+      completedSkills: state.completedSkills,
+      redFlagHits:
+        state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+      differentialTop3:
+        state.skillResults["generate_differential"]?.result?.differential_list?.slice?.(0, 3) ??
+        [],
+      clinicalScoreUsed:
+        state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+      platformChecks: state.platformChecks,
+    });
+
+    return state;
+  }
+}

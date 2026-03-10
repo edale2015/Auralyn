@@ -1,6 +1,14 @@
 import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
 import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
 import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
+import { collectModifiers } from "../skills/intake/collectModifiers";
+import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
+import { detectRedFlags } from "../skills/safety/detectRedFlags";
+import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
+import { determineDisposition } from "../skills/safety/determineDisposition";
+import { assertSkillResultShape } from "../skills/shared/schemaValidators";
 
 async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
   const started = Date.now();
@@ -59,14 +67,46 @@ export class ClinicalSkillOrchestrator {
     for (const skillName of DEFAULT_SEQUENCE) {
       if (state.halted) break;
 
+      const priorComplaintId =
+        state.skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        state.context.complaintId;
+
       const contextForSkill: SkillContext = {
         ...state.context,
+        complaintId: priorComplaintId,
         priorSkillOutputs: state.skillResults,
+        modifiers:
+          state.skillResults["collect_modifiers"]?.result?.modifiers ??
+          state.context.modifiers,
       };
 
       let result: SkillResult;
 
       switch (skillName) {
+        case "collect_modifiers":
+          result = await collectModifiers(contextForSkill);
+          break;
+
+        case "identify_chief_complaint":
+          result = await identifyChiefComplaint(contextForSkill);
+          break;
+
+        case "detect_red_flags":
+          result = await detectRedFlags(contextForSkill);
+          break;
+
+        case "run_complaint_question_bundle":
+          result = await runComplaintQuestionBundle(contextForSkill);
+          break;
+
+        case "select_next_best_question":
+          result = await selectNextBestQuestion(contextForSkill);
+          break;
+
+        case "determine_disposition":
+          result = await determineDisposition(contextForSkill);
+          break;
+
         case "attach_outcome_stub":
           result = await attachOutcomeStub(contextForSkill);
           break;
@@ -76,9 +116,21 @@ export class ClinicalSkillOrchestrator {
           break;
       }
 
+      assertSkillResultShape(result, skillName);
+
       state.skillResults[skillName] = result;
       state.completedSkills.push(skillName);
       state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+      await appendSkillRunLog(contextForSkill, result);
+
+      if (skillName === "identify_chief_complaint" && result.result?.complaint_id) {
+        state.context.complaintId = result.result.complaint_id;
+      }
+
+      if (skillName === "collect_modifiers" && result.result?.modifiers) {
+        state.context.modifiers = result.result.modifiers;
+      }
 
       if (skillName === "determine_disposition") {
         state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
@@ -93,6 +145,22 @@ export class ClinicalSkillOrchestrator {
     }
 
     state.platformChecks = evaluatePlatformPrinciples(state);
+
+    await appendCaseAuditLog({
+      context: state.context,
+      finalDisposition: state.finalDisposition,
+      finalStatus: state.halted ? "halted" : "complete",
+      completedSkills: state.completedSkills,
+      redFlagHits:
+        state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+      differentialTop3:
+        state.skillResults["generate_differential"]?.result?.differential_list?.slice?.(0, 3) ??
+        [],
+      clinicalScoreUsed:
+        state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+      platformChecks: state.platformChecks,
+    });
+
     return state;
   }
 }
