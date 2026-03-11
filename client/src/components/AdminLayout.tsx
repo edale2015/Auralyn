@@ -91,6 +91,7 @@ const NAV_SECTIONS = [
       { path: "/synthetic-testing", label: "Synthetic Testing", icon: FlaskConical },
       { path: "/gold-reviews", label: "Gold Reviews", icon: ClipboardCheck },
       { path: "/rule-suggestions", label: "Rule Suggestions", icon: Lightbulb },
+      { path: "/skill-layer-review", label: "Clinician Review", icon: Eye },
     ],
   },
   {

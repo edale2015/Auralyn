@@ -1,0 +1,716 @@
+Absolutely. Here is a clinician-facing review UI pack you can drop into your app.
+
+This gives you a practical review cockpit with:
+
+case input panel
+
+disposition badge
+
+red flags panel
+
+top differential
+
+chart note block
+
+discharge instructions
+
+audit trace timeline
+
+callback queue action
+
+outcome reconciliation panel
+
+I’m assuming your frontend is React/TypeScript and your backend already has the Phase 7 endpoints.
+
+Files in this UI pack
+
+Create these:
+
+client/src/lib/skillLayerApi.ts
+client/src/components/skill-layer/DispositionBadge.tsx
+client/src/components/skill-layer/CaseInputCard.tsx
+client/src/components/skill-layer/RedFlagsCard.tsx
+client/src/components/skill-layer/DifferentialCard.tsx
+client/src/components/skill-layer/ChartNoteCard.tsx
+client/src/components/skill-layer/DischargeCard.tsx
+client/src/components/skill-layer/AuditTraceCard.tsx
+client/src/components/skill-layer/OutcomePanel.tsx
+client/src/components/skill-layer/CallbackQueueCard.tsx
+client/src/pages/SkillLayerReviewPage.tsx
+1. client/src/lib/skillLayerApi.ts
+export type SkillLayerRunRequest = {
+  caseId?: string;
+  rawText: string;
+  modifiers?: Record<string, any>;
+};
+
+export type SkillLayerRunResponse = {
+  ok: boolean;
+  state: any;
+};
+
+async function postJson<T>(url: string, body: any): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+
+  return res.json();
+}
+
+export const skillLayerApi = {
+  runCase(payload: SkillLayerRunRequest) {
+    return postJson<SkillLayerRunResponse>("/api/skill-layer/run", payload);
+  },
+
+  buildChartNote(context: any) {
+    return postJson<{ ok: boolean; note: any }>("/api/skill-layer/chart-note", {
+      context,
+    });
+  },
+
+  buildDischarge(context: any) {
+    return postJson<{ ok: boolean; instructions: any }>(
+      "/api/skill-layer/discharge",
+      { context }
+    );
+  },
+
+  getAuditTrace(context: any) {
+    return postJson<{ ok: boolean; trace: any[] }>(
+      "/api/skill-layer/audit-trace",
+      { context }
+    );
+  },
+
+  enqueueCallback(context: any) {
+    return postJson<{ ok: boolean; queued: boolean; callback_id?: string }>(
+      "/api/skill-layer/callback-queue",
+      { context }
+    );
+  },
+};
+2. client/src/components/skill-layer/DispositionBadge.tsx
+import React from "react";
+
+type Props = {
+  disposition?: string;
+};
+
+function getTone(disposition?: string) {
+  switch (disposition) {
+    case "er_now":
+      return "bg-red-100 text-red-800 border-red-300";
+    case "urgent_same_day":
+      return "bg-amber-100 text-amber-800 border-amber-300";
+    case "routine_evaluation":
+      return "bg-green-100 text-green-800 border-green-300";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-300";
+  }
+}
+
+export default function DispositionBadge({ disposition }: Props) {
+  return (
+    <span
+      className={`inline-flex rounded-full border px-3 py-1 text-sm font-medium ${getTone(
+        disposition
+      )}`}
+    >
+      {disposition ? disposition.replace(/_/g, " ") : "unknown"}
+    </span>
+  );
+}
+3. client/src/components/skill-layer/CaseInputCard.tsx
+import React from "react";
+
+type Props = {
+  rawText: string;
+  complaintId?: string;
+  modifiers?: Record<string, any>;
+};
+
+export default function CaseInputCard({ rawText, complaintId, modifiers }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Case Input</h2>
+
+      <div className="mb-3">
+        <div className="mb-1 text-sm font-medium text-slate-600">Patient input</div>
+        <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-800">{rawText}</div>
+      </div>
+
+      <div className="mb-3">
+        <div className="mb-1 text-sm font-medium text-slate-600">Complaint</div>
+        <div className="text-sm text-slate-800">{complaintId || "Not identified yet"}</div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-sm font-medium text-slate-600">Modifiers</div>
+        <pre className="overflow-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-800">
+          {JSON.stringify(modifiers ?? {}, null, 2)}
+        </pre>
+      </div>
+    </div>
+  );
+}
+4. client/src/components/skill-layer/RedFlagsCard.tsx
+import React from "react";
+
+type RedFlag = {
+  id?: string;
+  label?: string;
+  severity?: string;
+};
+
+type Props = {
+  redFlags: RedFlag[];
+};
+
+export default function RedFlagsCard({ redFlags }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Red Flags</h2>
+
+      {redFlags.length === 0 ? (
+        <div className="text-sm text-slate-500">No red flags detected.</div>
+      ) : (
+        <div className="space-y-2">
+          {redFlags.map((rf, idx) => (
+            <div
+              key={`${rf.id ?? rf.label ?? "rf"}_${idx}`}
+              className="rounded-xl border border-red-200 bg-red-50 p-3"
+            >
+              <div className="font-medium text-red-800">{rf.label ?? rf.id}</div>
+              <div className="text-sm text-red-700">Severity: {rf.severity ?? "unknown"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+5. client/src/components/skill-layer/DifferentialCard.tsx
+import React from "react";
+
+type DifferentialItem = {
+  diagnosis?: string;
+  confidence?: number;
+  supporting_findings?: string[];
+};
+
+type Props = {
+  items: DifferentialItem[];
+};
+
+export default function DifferentialCard({ items }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Top Differential</h2>
+
+      <div className="space-y-3">
+        {items.length === 0 ? (
+          <div className="text-sm text-slate-500">No differential available.</div>
+        ) : (
+          items.slice(0, 5).map((item, idx) => (
+            <div key={`${item.diagnosis ?? "dx"}_${idx}`} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">
+                {idx + 1}. {item.diagnosis ?? "Unknown diagnosis"}
+              </div>
+              <div className="text-sm text-slate-600">
+                Confidence: {typeof item.confidence === "number" ? item.confidence.toFixed(2) : "n/a"}
+              </div>
+              {!!item.supporting_findings?.length && (
+                <div className="mt-1 text-xs text-slate-500">
+                  Supports: {item.supporting_findings.join(" | ")}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+6. client/src/components/skill-layer/ChartNoteCard.tsx
+import React from "react";
+
+type Props = {
+  note?: {
+    hpi?: string;
+    assessment?: string;
+    plan?: string[];
+    redFlags?: string[];
+    disposition?: string;
+  };
+};
+
+export default function ChartNoteCard({ note }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Chart Note</h2>
+
+      {!note ? (
+        <div className="text-sm text-slate-500">No chart note generated.</div>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <div>
+            <div className="mb-1 font-medium text-slate-700">HPI</div>
+            <div className="rounded-xl bg-slate-50 p-3">{note.hpi || "—"}</div>
+          </div>
+
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Assessment</div>
+            <div className="rounded-xl bg-slate-50 p-3">{note.assessment || "—"}</div>
+          </div>
+
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Plan</div>
+            <ul className="list-disc space-y-1 pl-5 text-slate-800">
+              {(note.plan ?? []).map((p, idx) => (
+                <li key={idx}>{p}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Disposition</div>
+            <div className="rounded-xl bg-slate-50 p-3">{note.disposition || "—"}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+7. client/src/components/skill-layer/DischargeCard.tsx
+import React from "react";
+
+type Props = {
+  instructions?: {
+    summary?: string;
+    homeCare?: string[];
+    followUp?: string[];
+    returnPrecautions?: string[];
+  };
+};
+
+export default function DischargeCard({ instructions }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Discharge Instructions</h2>
+
+      {!instructions ? (
+        <div className="text-sm text-slate-500">No discharge instructions generated.</div>
+      ) : (
+        <div className="space-y-4 text-sm">
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Summary</div>
+            <div className="rounded-xl bg-slate-50 p-3">{instructions.summary || "—"}</div>
+          </div>
+
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Home care</div>
+            <ul className="list-disc space-y-1 pl-5">
+              {(instructions.homeCare ?? []).map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Follow up</div>
+            <ul className="list-disc space-y-1 pl-5">
+              {(instructions.followUp ?? []).map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <div className="mb-1 font-medium text-slate-700">Return precautions</div>
+            <ul className="list-disc space-y-1 pl-5 text-red-700">
+              {(instructions.returnPrecautions ?? []).map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+8. client/src/components/skill-layer/AuditTraceCard.tsx
+import React from "react";
+
+type TraceItem = {
+  skillName: string;
+  status: string;
+  confidence?: number;
+  ruleHits?: string[];
+  missingData?: string[];
+  nextRecommendedSkills?: string[];
+};
+
+type Props = {
+  trace: TraceItem[];
+};
+
+export default function AuditTraceCard({ trace }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Audit Trace</h2>
+
+      <div className="space-y-3">
+        {trace.length === 0 ? (
+          <div className="text-sm text-slate-500">No audit trace available.</div>
+        ) : (
+          trace.map((item, idx) => (
+            <div key={`${item.skillName}_${idx}`} className="rounded-xl bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium text-slate-900">{item.skillName}</div>
+                <div className="text-xs text-slate-500">
+                  {item.status} | conf {typeof item.confidence === "number" ? item.confidence.toFixed(2) : "n/a"}
+                </div>
+              </div>
+
+              {!!item.ruleHits?.length && (
+                <div className="mt-2 text-xs text-slate-600">
+                  Rule hits: {item.ruleHits.join(" | ")}
+                </div>
+              )}
+
+              {!!item.missingData?.length && (
+                <div className="mt-1 text-xs text-amber-700">
+                  Missing: {item.missingData.join(" | ")}
+                </div>
+              )}
+
+              {!!item.nextRecommendedSkills?.length && (
+                <div className="mt-1 text-xs text-slate-500">
+                  Next: {item.nextRecommendedSkills.join(" → ")}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+9. client/src/components/skill-layer/OutcomePanel.tsx
+import React, { useState } from "react";
+
+type Props = {
+  caseId?: string;
+};
+
+export default function OutcomePanel({ caseId }: Props) {
+  const [finalDiagnosis, setFinalDiagnosis] = useState("");
+  const [actualDisposition, setActualDisposition] = useState("");
+  const [status, setStatus] = useState("");
+
+  async function handleSave() {
+    try {
+      setStatus("Saved locally for future outcome endpoint wiring.");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Outcome / Reconciliation</h2>
+
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-700">Final diagnosis</label>
+          <input
+            value={finalDiagnosis}
+            onChange={(e) => setFinalDiagnosis(e.target.value)}
+            className="w-full rounded-xl border px-3 py-2 text-sm"
+            placeholder="e.g. Streptococcal Pharyngitis"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-700">Actual disposition</label>
+          <input
+            value={actualDisposition}
+            onChange={(e) => setActualDisposition(e.target.value)}
+            className="w-full rounded-xl border px-3 py-2 text-sm"
+            placeholder="e.g. routine_evaluation"
+          />
+        </div>
+
+        <button
+          onClick={handleSave}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+        >
+          Save outcome draft
+        </button>
+
+        {!!status && <div className="text-sm text-slate-600">{status}</div>}
+
+        <div className="text-xs text-slate-500">Case ID: {caseId || "unknown"}</div>
+      </div>
+    </div>
+  );
+}
+10. client/src/components/skill-layer/CallbackQueueCard.tsx
+import React, { useState } from "react";
+import { skillLayerApi } from "../../lib/skillLayerApi";
+
+type Props = {
+  context?: any;
+};
+
+export default function CallbackQueueCard({ context }: Props) {
+  const [status, setStatus] = useState<string>("");
+
+  async function handleQueue() {
+    try {
+      if (!context) {
+        setStatus("No context available.");
+        return;
+      }
+      const res = await skillLayerApi.enqueueCallback(context);
+      setStatus(res.queued ? `Queued callback: ${res.callback_id}` : "No callback needed.");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed to queue callback");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Callback Queue</h2>
+
+      <button
+        onClick={handleQueue}
+        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+      >
+        Queue callback if needed
+      </button>
+
+      {!!status && <div className="mt-3 text-sm text-slate-600">{status}</div>}
+    </div>
+  );
+}
+11. client/src/pages/SkillLayerReviewPage.tsx
+
+This is the main cockpit page.
+
+import React, { useMemo, useState } from "react";
+import { skillLayerApi } from "../lib/skillLayerApi";
+import CaseInputCard from "../components/skill-layer/CaseInputCard";
+import DispositionBadge from "../components/skill-layer/DispositionBadge";
+import RedFlagsCard from "../components/skill-layer/RedFlagsCard";
+import DifferentialCard from "../components/skill-layer/DifferentialCard";
+import ChartNoteCard from "../components/skill-layer/ChartNoteCard";
+import DischargeCard from "../components/skill-layer/DischargeCard";
+import AuditTraceCard from "../components/skill-layer/AuditTraceCard";
+import OutcomePanel from "../components/skill-layer/OutcomePanel";
+import CallbackQueueCard from "../components/skill-layer/CallbackQueueCard";
+
+export default function SkillLayerReviewPage() {
+  const [rawText, setRawText] = useState(
+    "32 year old male with sore throat x 3 days, fever, no cough"
+  );
+  const [modifiersJson, setModifiersJson] = useState("{}");
+  const [state, setState] = useState<any>(null);
+  const [chartNote, setChartNote] = useState<any>(null);
+  const [discharge, setDischarge] = useState<any>(null);
+  const [auditTrace, setAuditTrace] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const contextForDerivedCalls = useMemo(() => {
+    if (!state?.state?.context) return null;
+    return {
+      ...state.state.context,
+      priorSkillOutputs: state.state.skillResults,
+    };
+  }, [state]);
+
+  async function handleRun() {
+    try {
+      setLoading(true);
+      setError("");
+
+      let modifiers = {};
+      try {
+        modifiers = JSON.parse(modifiersJson || "{}");
+      } catch {
+        throw new Error("Modifiers JSON is invalid.");
+      }
+
+      const runRes = await skillLayerApi.runCase({
+        rawText,
+        modifiers,
+      });
+
+      setState(runRes);
+
+      const context = {
+        ...runRes.state.context,
+        priorSkillOutputs: runRes.state.skillResults,
+      };
+
+      const [noteRes, dischargeRes, traceRes] = await Promise.all([
+        skillLayerApi.buildChartNote(context),
+        skillLayerApi.buildDischarge(context),
+        skillLayerApi.getAuditTrace(context),
+      ]);
+
+      setChartNote(noteRes.note);
+      setDischarge(dischargeRes.instructions);
+      setAuditTrace(traceRes.trace);
+    } catch (err: any) {
+      setError(err.message ?? "Run failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const skillResults = state?.state?.skillResults ?? {};
+  const complaintId =
+    skillResults?.identify_chief_complaint?.result?.complaint_id ?? "";
+  const modifiers =
+    skillResults?.collect_modifiers?.result?.modifiers ?? {};
+  const disposition =
+    skillResults?.determine_disposition?.result?.disposition ?? "";
+  const redFlags =
+    skillResults?.detect_red_flags?.result?.red_flag_hits ?? [];
+  const differential =
+    skillResults?.generate_differential?.result?.differential_list ?? [];
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">Clinician Review UI</h1>
+              <p className="text-sm text-slate-600">
+                Skill-layer case review, audit trace, and workflow outputs
+              </p>
+            </div>
+
+            <DispositionBadge disposition={disposition} />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Patient input
+              </label>
+              <textarea
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                className="min-h-[120px] w-full rounded-2xl border px-4 py-3 text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Modifiers JSON
+              </label>
+              <textarea
+                value={modifiersJson}
+                onChange={(e) => setModifiersJson(e.target.value)}
+                className="min-h-[120px] w-full rounded-2xl border px-4 py-3 font-mono text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={handleRun}
+              disabled={loading}
+              className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {loading ? "Running..." : "Run case"}
+            </button>
+
+            {error && <div className="text-sm text-red-700">{error}</div>}
+          </div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-3">
+          <div className="space-y-6 xl:col-span-1">
+            <CaseInputCard rawText={rawText} complaintId={complaintId} modifiers={modifiers} />
+            <RedFlagsCard redFlags={redFlags} />
+            <CallbackQueueCard context={contextForDerivedCalls} />
+            <OutcomePanel caseId={state?.state?.context?.caseId} />
+          </div>
+
+          <div className="space-y-6 xl:col-span-1">
+            <DifferentialCard items={differential} />
+            <ChartNoteCard note={chartNote} />
+            <DischargeCard instructions={discharge} />
+          </div>
+
+          <div className="space-y-6 xl:col-span-1">
+            <AuditTraceCard trace={auditTrace} />
+
+            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+              <h2 className="mb-3 text-lg font-semibold">Quick Outputs</h2>
+              <pre className="overflow-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-800">
+                {JSON.stringify(
+                  {
+                    complaintId,
+                    disposition,
+                    topDifferential: differential.slice(0, 3),
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+How to wire it into your app
+
+Add a route in your frontend router, for example:
+
+import SkillLayerReviewPage from "./pages/SkillLayerReviewPage";
+
+And then:
+
+<Route path="/skill-layer-review" element={<SkillLayerReviewPage />} />
+What this UI gives you immediately
+
+This page lets a clinician or reviewer:
+
+paste a patient narrative
+
+run the full 18-skill pipeline
+
+inspect complaint routing
+
+inspect red flags
+
+inspect top differential
+
+inspect chart note output
+
+inspect discharge instructions
+
+inspect the audit trace
+
+queue callbacks
+
+start outcome capture
+
+It is the first real cockpit for the engine.
