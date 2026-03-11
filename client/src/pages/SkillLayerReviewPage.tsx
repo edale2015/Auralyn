@@ -12,6 +12,13 @@ import OutcomePanel from "../components/skill-layer/OutcomePanel";
 import CallbackQueueCard from "../components/skill-layer/CallbackQueueCard";
 import DriftAlertsCard from "../components/skill-layer/DriftAlertsCard";
 import CaseReplayCompareCard from "../components/skill-layer/CaseReplayCompareCard";
+import { costValueApi } from "../lib/costValueApi";
+import { ruleGovernanceApi } from "../lib/ruleGovernanceApi";
+import { reconciliationApi } from "../lib/reconciliationApi";
+import GraphVisualizationCard from "../components/skill-layer/GraphVisualizationCard";
+import CostValueDashboardCard from "../components/skill-layer/CostValueDashboardCard";
+import RuleGovernanceCard from "../components/skill-layer/RuleGovernanceCard";
+import ReconciliationCard from "../components/skill-layer/ReconciliationCard";
 
 export default function SkillLayerReviewPage() {
   const [rawText, setRawText] = useState(
@@ -25,12 +32,18 @@ export default function SkillLayerReviewPage() {
   const [graphTrace, setGraphTrace] = useState<any>(null);
   const [driftAlerts, setDriftAlerts] = useState<any[]>([]);
   const [tuningSuggestions, setTuningSuggestions] = useState<any[]>([]);
+  const [costValueRows, setCostValueRows] = useState<any[]>([]);
+  const [ruleGovernanceSummary, setRuleGovernanceSummary] = useState<any[]>([]);
+  const [reconciliationRows, setReconciliationRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     learningApi.getDriftAlerts().then((r) => setDriftAlerts(r.alerts ?? [])).catch(console.error);
     learningApi.getTuningSuggestions().then((r) => setTuningSuggestions(r.suggestions ?? [])).catch(console.error);
+    costValueApi.getCostValue().then((r) => setCostValueRows(r.rows ?? [])).catch(console.error);
+    ruleGovernanceApi.getSummary().then((r) => setRuleGovernanceSummary(r.summary ?? [])).catch(console.error);
+    reconciliationApi.list(50).then((r) => setReconciliationRows(r.rows ?? [])).catch(console.error);
   }, []);
 
   const contextForDerivedCalls = useMemo(() => {
@@ -203,17 +216,6 @@ export default function SkillLayerReviewPage() {
               </pre>
             </div>
 
-            {graphTrace && (
-              <div className="rounded-2xl border bg-white p-4 shadow-sm">
-                <h2 className="mb-3 text-lg font-semibold">Graph Trace</h2>
-                <pre
-                  data-testid="graph-trace"
-                  className="overflow-auto rounded-xl bg-blue-50 p-3 text-xs text-blue-900"
-                >
-                  {JSON.stringify(graphTrace, null, 2)}
-                </pre>
-              </div>
-            )}
           </div>
         </div>
 
@@ -225,6 +227,14 @@ export default function SkillLayerReviewPage() {
             rawText={rawText}
             complaintId={complaintId}
           />
+        </div>
+
+        {/* Third row: graph viz + cost/value + governance + reconciliations */}
+        <div className="grid gap-6 xl:grid-cols-2">
+          <GraphVisualizationCard trace={graphTrace} />
+          <CostValueDashboardCard rows={costValueRows} />
+          <RuleGovernanceCard summary={ruleGovernanceSummary} />
+          <ReconciliationCard rows={reconciliationRows} />
         </div>
       </div>
     </div>

@@ -1,0 +1,898 @@
+Create these backend files:
+
+server/reasoning-graph/graphTraceLogger.ts
+server/testing/graphGoldenCaseComparator.ts
+server/testing/graphGoldenCaseRunner.ts
+server/analytics/costValueDashboard.ts
+server/routes/ruleGovernanceRoutes.ts
+server/routes/reconciliationRoutes.ts
+server/services/ruleGovernanceService.ts
+server/services/reconciliationService.ts
+
+Create these frontend files:
+
+client/src/lib/ruleGovernanceApi.ts
+client/src/lib/reconciliationApi.ts
+client/src/lib/costValueApi.ts
+client/src/components/skill-layer/GraphVisualizationCard.tsx
+client/src/components/skill-layer/CostValueDashboardCard.tsx
+client/src/components/skill-layer/RuleGovernanceCard.tsx
+client/src/components/skill-layer/ReconciliationCard.tsx
+
+And update:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+client/src/pages/SkillLayerReviewPage.tsx
+1. Graph trace logging
+server/reasoning-graph/graphTraceLogger.ts
+
+This writes graph decision traces to NDJSON so you can inspect:
+
+candidate edges
+
+chosen edge
+
+rejected edges
+
+guard results
+
+node score
+
+cost/latency accumulation
+
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+}
+
+export async function appendGraphTraceLog(record: any) {
+  await ensureDir();
+  await fs.appendFile(
+    path.join(RUNTIME_DIR, "graph_trace_log.ndjson"),
+    JSON.stringify({
+      ...record,
+      timestamp: new Date().toISOString(),
+    }) + "\n",
+    "utf8"
+  );
+}
+Update server/reasoning-graph/graphRunner.ts
+
+Replace with this version so every step logs edge selection.
+
+import { SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { GRAPH_EDGES } from "./graphEdgeRegistry";
+import * as Guards from "./graphGuards";
+import { scoreNextSkillCandidate } from "./graphPolicies";
+import { appendGraphTraceLog } from "./graphTraceLogger";
+
+type SkillRunnerMap = Record<
+  string,
+  (context: SkillContext) => Promise<SkillResult>
+>;
+
+function guardPasses(guardName: string, context: SkillContext): boolean {
+  if (guardName === "always") return true;
+  const fn = (Guards as any)[guardName];
+  if (typeof fn !== "function") return false;
+  return Boolean(fn(context));
+}
+
+export async function runReasoningGraph(params: {
+  initialContext: SkillContext;
+  runSkill: SkillRunnerMap;
+}) {
+  const completed: string[] = [];
+  const skillResults: Record<string, SkillResult> = {};
+  let current = "START";
+  let totalEstimatedCostUsd = 0;
+
+  for (let step = 0; step < 50; step++) {
+    const contextForStep: SkillContext = {
+      ...params.initialContext,
+      complaintId:
+        skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        params.initialContext.complaintId,
+      modifiers:
+        skillResults["collect_modifiers"]?.result?.modifiers ??
+        params.initialContext.modifiers,
+      knownFacts:
+        skillResults["normalize_patient_story"]?.result?.structured_facts ??
+        params.initialContext.knownFacts,
+      priorSkillOutputs: skillResults,
+    };
+
+    const rawCandidates = GRAPH_EDGES
+      .filter((e) => e.from === current)
+      .filter((e) => !completed.includes(e.to))
+      .map((e) => {
+        const passed = guardPasses(e.guardName, contextForStep);
+        return {
+          ...e,
+          guardPassed: passed,
+        };
+      });
+
+    const candidates = rawCandidates
+      .filter((e) => e.guardPassed)
+      .map((e) => ({
+        ...e,
+        score: scoreNextSkillCandidate({
+          skillName: e.to,
+          context: contextForStep,
+          currentCaseEstimatedCostUsd: totalEstimatedCostUsd,
+          basePriority: e.priority ?? 0,
+        }),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    await appendGraphTraceLog({
+      caseId: contextForStep.caseId,
+      step: step + 1,
+      currentNode: current,
+      complaintId: contextForStep.complaintId ?? "",
+      totalEstimatedCostUsd,
+      rawCandidates: rawCandidates.map((c) => ({
+        from: c.from,
+        to: c.to,
+        guardName: c.guardName,
+        guardPassed: c.guardPassed,
+        priority: c.priority ?? 0,
+      })),
+      scoredCandidates: candidates.map((c) => ({
+        from: c.from,
+        to: c.to,
+        guardName: c.guardName,
+        score: c.score,
+      })),
+      chosenEdge: candidates[0]
+        ? {
+            from: candidates[0].from,
+            to: candidates[0].to,
+            guardName: candidates[0].guardName,
+            score: candidates[0].score,
+          }
+        : null,
+    });
+
+    if (!candidates.length) break;
+
+    const next = candidates[0];
+    const runner = params.runSkill[next.to];
+    if (!runner) throw new Error(`No runner for graph skill: ${next.to}`);
+
+    const result = await runner(contextForStep);
+    skillResults[next.to] = result;
+    completed.push(next.to);
+    totalEstimatedCostUsd += Number(result.audit.estimatedCostUsd ?? 0);
+    current = next.to;
+
+    await appendGraphTraceLog({
+      caseId: contextForStep.caseId,
+      step: step + 1,
+      executedNode: next.to,
+      resultStatus: result.status,
+      confidence: result.confidence,
+      reasoning_summary: result.reasoning_summary,
+      ruleHits: result.audit.ruleHits ?? [],
+      missingData: result.audit.missingData ?? [],
+      latencyMs: result.audit.latencyMs ?? 0,
+      estimatedCostUsd: result.audit.estimatedCostUsd ?? 0,
+      nextRecommendedSkills: result.nextRecommendedSkills ?? [],
+    });
+  }
+
+  return {
+    completedSkills: completed,
+    skillResults,
+    totalEstimatedCostUsd,
+  };
+}
+2. Graph-specific golden-case assertions
+server/testing/graphGoldenCaseComparator.ts
+
+This compares graph path expectations:
+
+expected skill path prefix
+
+expected stop reason contains
+
+expected max total cost
+
+type GraphComparatorInput = {
+  actual: any;
+  expected: any;
+};
+
+type GraphComparatorResult = {
+  passed: boolean;
+  failures: string[];
+};
+
+function startsWithArray(actual: string[], expectedPrefix: string[]): boolean {
+  if (expectedPrefix.length > actual.length) return false;
+  return expectedPrefix.every((item, idx) => actual[idx] === item);
+}
+
+export function compareGraphGoldenCase({
+  actual,
+  expected,
+}: GraphComparatorInput): GraphComparatorResult {
+  const failures: string[] = [];
+
+  if (Array.isArray(expected.expected_skill_path_prefix)) {
+    if (
+      !startsWithArray(
+        actual.completed_skills ?? [],
+        expected.expected_skill_path_prefix
+      )
+    ) {
+      failures.push(
+        `graph_skill_path expected prefix ${JSON.stringify(
+          expected.expected_skill_path_prefix
+        )} but got ${JSON.stringify(actual.completed_skills ?? [])}`
+      );
+    }
+  }
+
+  if (typeof expected.expected_stop_reason_contains === "string") {
+    const stopReason = String(actual.stop_reason ?? "");
+    if (!stopReason.toLowerCase().includes(expected.expected_stop_reason_contains.toLowerCase())) {
+      failures.push(
+        `graph_stop_reason expected to contain "${expected.expected_stop_reason_contains}" but got "${stopReason}"`
+      );
+    }
+  }
+
+  if (typeof expected.expected_max_total_cost_usd === "number") {
+    const actualCost = Number(actual.total_estimated_cost_usd ?? 0);
+    if (actualCost > expected.expected_max_total_cost_usd) {
+      failures.push(
+        `graph_total_cost expected <= ${expected.expected_max_total_cost_usd} but got ${actualCost}`
+      );
+    }
+  }
+
+  return {
+    passed: failures.length === 0,
+    failures,
+  };
+}
+server/testing/graphGoldenCaseRunner.ts
+import fs from "fs/promises";
+import path from "path";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { SkillContext } from "../skills/shared/skillTypes";
+import { compareGraphGoldenCase } from "./graphGoldenCaseComparator";
+
+type GoldenCase = {
+  id: string;
+  input: {
+    rawText: string;
+    modifiers?: Record<string, any>;
+  };
+  expected?: Record<string, any>;
+};
+
+async function loadGoldenCases(fileName: string): Promise<GoldenCase[]> {
+  const fullPath = path.resolve(process.cwd(), "server/testing", fileName);
+  const raw = await fs.readFile(fullPath, "utf8");
+  return JSON.parse(raw) as GoldenCase[];
+}
+
+function extractGraphActual(state: any) {
+  const totalEstimatedCostUsd = Object.values(state.skillResults ?? {}).reduce(
+    (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+    0
+  );
+
+  return {
+    completed_skills: state.completedSkills ?? [],
+    stop_reason:
+      state.finalDisposition
+        ? `Disposition reached: ${state.finalDisposition}`
+        : "No further graph edges or sequence complete",
+    total_estimated_cost_usd: totalEstimatedCostUsd,
+  };
+}
+
+export async function runGraphGoldenCases(fileName = "goldenCases.sample.json") {
+  const cases = await loadGoldenCases(fileName);
+  const orchestrator = new ClinicalSkillOrchestrator();
+
+  let passed = 0;
+  let failed = 0;
+
+  for (const testCase of cases) {
+    const context: SkillContext = {
+      caseId: `GRAPH_GOLDEN_${testCase.id}`,
+      rawText: testCase.input.rawText,
+      modifiers: testCase.input.modifiers ?? {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+        orchestrationMode: "graph",
+      },
+    };
+
+    const state = await orchestrator.run(context);
+    const actual = extractGraphActual(state);
+    const comparison = compareGraphGoldenCase({
+      actual,
+      expected: testCase.expected ?? {},
+    });
+
+    if (comparison.passed) {
+      passed += 1;
+      console.log(`PASS ${testCase.id}`);
+    } else {
+      failed += 1;
+      console.log(`FAIL ${testCase.id}`);
+      for (const failure of comparison.failures) {
+        console.log(`  - ${failure}`);
+      }
+      console.log(`  actual: ${JSON.stringify(actual, null, 2)}`);
+    }
+  }
+
+  console.log(`\nGraph golden case results: ${passed} passed, ${failed} failed, total ${cases.length}`);
+  return { passed, failed, total: cases.length };
+}
+
+if (require.main === module) {
+  runGraphGoldenCases().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+3. Cost-vs-value dashboard
+server/analytics/costValueDashboard.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function computeCostValueDashboard() {
+  const skillRuns = await loadNdjson("skill_run_log.ndjson");
+
+  const byCase: Record<
+    string,
+    {
+      complaintId: string;
+      totalCostUsd: number;
+      totalLatencyMs: number;
+      workflowMinutesSaved: number;
+    }
+  > = {};
+
+  for (const row of skillRuns) {
+    const caseId = row.caseId ?? row.case_id;
+    if (!caseId) continue;
+
+    byCase[caseId] ??= {
+      complaintId: "unknown",
+      totalCostUsd: 0,
+      totalLatencyMs: 0,
+      workflowMinutesSaved: 0,
+    };
+
+    byCase[caseId].totalCostUsd += Number(row.estimatedCostUsd ?? 0);
+    byCase[caseId].totalLatencyMs += Number(row.latencyMs ?? 0);
+
+    try {
+      const inputSummary = JSON.parse(row.inputSummary ?? "{}");
+      if (inputSummary.complaintId) byCase[caseId].complaintId = inputSummary.complaintId;
+    } catch {
+      // ignore
+    }
+
+    try {
+      const outputSummary = JSON.parse(row.outputSummary ?? "{}");
+      if (row.skillName === "measure_workflow_value" && outputSummary?.resultKeys?.includes("minutes_saved_estimate")) {
+        // not enough detail in outputSummary to get value directly, so skip for now
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const byComplaint: Record<
+    string,
+    {
+      cases: number;
+      totalCostUsd: number;
+      totalLatencyMs: number;
+    }
+  > = {};
+
+  for (const item of Object.values(byCase)) {
+    byComplaint[item.complaintId] ??= {
+      cases: 0,
+      totalCostUsd: 0,
+      totalLatencyMs: 0,
+    };
+    byComplaint[item.complaintId].cases += 1;
+    byComplaint[item.complaintId].totalCostUsd += item.totalCostUsd;
+    byComplaint[item.complaintId].totalLatencyMs += item.totalLatencyMs;
+  }
+
+  const rows = Object.entries(byComplaint).map(([complaint, stat]) => ({
+    complaint,
+    cases: stat.cases,
+    avgCostUsdPerCase: stat.cases ? stat.totalCostUsd / stat.cases : 0,
+    avgLatencyMsPerCase: stat.cases ? stat.totalLatencyMs / stat.cases : 0,
+    totalCostUsd: stat.totalCostUsd,
+  }));
+
+  rows.sort((a, b) => b.totalCostUsd - a.totalCostUsd);
+  return rows;
+}
+Add route: server/routes/costValueRoutes.ts
+import express from "express";
+import { computeCostValueDashboard } from "../analytics/costValueDashboard";
+
+const router = express.Router();
+
+router.get("/api/skill-layer/cost-value", async (_req, res) => {
+  try {
+    const rows = await computeCostValueDashboard();
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register it:
+
+import costValueRoutes from "./routes/costValueRoutes";
+app.use(costValueRoutes);
+Frontend: client/src/lib/costValueApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const costValueApi = {
+  getCostValue() {
+    return getJson<{ ok: boolean; rows: any[] }>("/api/skill-layer/cost-value");
+  },
+};
+client/src/components/skill-layer/CostValueDashboardCard.tsx
+import React from "react";
+
+type Props = {
+  rows: any[];
+};
+
+export default function CostValueDashboardCard({ rows }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Cost vs Value Dashboard</h2>
+
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500">No cost/value rows available.</div>
+      ) : (
+        <div className="overflow-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="text-slate-600">
+              <tr className="border-b">
+                <th className="px-3 py-2">Complaint</th>
+                <th className="px-3 py-2">Cases</th>
+                <th className="px-3 py-2">Avg Cost/Case</th>
+                <th className="px-3 py-2">Avg Latency/Case</th>
+                <th className="px-3 py-2">Total Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => (
+                <tr key={idx} className="border-b">
+                  <td className="px-3 py-2">{r.complaint}</td>
+                  <td className="px-3 py-2">{r.cases}</td>
+                  <td className="px-3 py-2">${Number(r.avgCostUsdPerCase ?? 0).toFixed(4)}</td>
+                  <td className="px-3 py-2">{Number(r.avgLatencyMsPerCase ?? 0).toFixed(1)} ms</td>
+                  <td className="px-3 py-2">${Number(r.totalCostUsd ?? 0).toFixed(4)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+4. Rule governance UI
+server/services/ruleGovernanceService.ts
+
+This is a lightweight governance layer over your CSVs.
+
+import { loadCsvTable, getFirstValue } from "../skills/shared/csvTableLoader";
+
+export async function getRuleGovernanceSummary() {
+  const files = [
+    "RED_FLAG_RULES.csv",
+    "DISPOSITION_RULES.csv",
+    "CLUSTER_SCORING_RULES.csv",
+    "QUESTION_IMPACT.csv",
+  ];
+
+  const summaries: any[] = [];
+
+  for (const file of files) {
+    try {
+      const rows = await loadCsvTable(file);
+      summaries.push({
+        file,
+        rowCount: rows.length,
+        sampleIds: rows.slice(0, 5).map((r) =>
+          getFirstValue(r, ["RULE_ID", "RF_ID", "ID", "BEST_CLUSTER_ID", "CC_ID"])
+        ),
+      });
+    } catch {
+      summaries.push({
+        file,
+        rowCount: 0,
+        sampleIds: [],
+      });
+    }
+  }
+
+  return summaries;
+}
+server/routes/ruleGovernanceRoutes.ts
+import express from "express";
+import { getRuleGovernanceSummary } from "../services/ruleGovernanceService";
+
+const router = express.Router();
+
+router.get("/api/skill-layer/rule-governance", async (_req, res) => {
+  try {
+    const summary = await getRuleGovernanceSummary();
+    res.json({ ok: true, summary });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register it:
+
+import ruleGovernanceRoutes from "./routes/ruleGovernanceRoutes";
+app.use(ruleGovernanceRoutes);
+Frontend: client/src/lib/ruleGovernanceApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const ruleGovernanceApi = {
+  getSummary() {
+    return getJson<{ ok: boolean; summary: any[] }>("/api/skill-layer/rule-governance");
+  },
+};
+client/src/components/skill-layer/RuleGovernanceCard.tsx
+import React from "react";
+
+type Props = {
+  summary: any[];
+};
+
+export default function RuleGovernanceCard({ summary }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Rule Governance</h2>
+
+      {summary.length === 0 ? (
+        <div className="text-sm text-slate-500">No governance summary available.</div>
+      ) : (
+        <div className="space-y-3">
+          {summary.map((row, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">{row.file}</div>
+              <div className="text-sm text-slate-700">Rows: {row.rowCount}</div>
+              <div className="text-xs text-slate-500">
+                Sample IDs: {(row.sampleIds ?? []).filter(Boolean).join(" | ") || "—"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+5. Reconciliations view
+server/services/reconciliationService.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function listReconciliations(limit = 100) {
+  const rows = await loadNdjson("case_reconciliation.ndjson");
+  return rows.slice(-limit).reverse();
+}
+server/routes/reconciliationRoutes.ts
+import express from "express";
+import { listReconciliations } from "../services/reconciliationService";
+
+const router = express.Router();
+
+router.get("/api/skill-layer/reconciliations", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 100);
+    const rows = await listReconciliations(limit);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register it:
+
+import reconciliationRoutes from "./routes/reconciliationRoutes";
+app.use(reconciliationRoutes);
+Frontend: client/src/lib/reconciliationApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const reconciliationApi = {
+  list(limit = 100) {
+    return getJson<{ ok: boolean; rows: any[] }>(
+      `/api/skill-layer/reconciliations?limit=${limit}`
+    );
+  },
+};
+client/src/components/skill-layer/ReconciliationCard.tsx
+import React from "react";
+
+type Props = {
+  rows: any[];
+};
+
+export default function ReconciliationCard({ rows }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Reconciliations</h2>
+
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500">No reconciliations recorded yet.</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((row, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">{row.case_id ?? row.caseId}</div>
+              <div className="text-sm text-slate-700">
+                Predicted top: {row.predictedTop || "—"} | Actual: {row.actualFinalDiagnosis || "—"}
+              </div>
+              <div className="text-sm text-slate-700">
+                Predicted disposition: {row.predictedDisposition || "—"} | Actual: {row.actualDisposition || "—"}
+              </div>
+              <div className="text-xs text-slate-500">
+                Top match: {String(row.top_prediction_match)} | Disposition match: {String(row.disposition_match)} | Safety miss: {String(row.safety_miss_flag)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+6. Graph visualization panel
+Frontend: client/src/components/skill-layer/GraphVisualizationCard.tsx
+import React from "react";
+
+type Props = {
+  trace: any;
+};
+
+export default function GraphVisualizationCard({ trace }: Props) {
+  const steps = trace?.steps ?? [];
+  const totals = trace?.totals ?? {};
+  const stopReason = trace?.stopReason ?? "No graph trace";
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Graph Visualization</h2>
+
+      <div className="mb-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
+        <div>Stop reason: {stopReason}</div>
+        <div>Total cost: ${Number(totals.totalEstimatedCostUsd ?? 0).toFixed(4)}</div>
+        <div>Total latency: {Number(totals.totalLatencyMs ?? 0).toFixed(1)} ms</div>
+      </div>
+
+      {steps.length === 0 ? (
+        <div className="text-sm text-slate-500">No graph trace available.</div>
+      ) : (
+        <div className="space-y-3">
+          {steps.map((step: any, idx: number) => (
+            <div key={idx} className="rounded-xl border bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium text-slate-900">
+                  {step.step}. {step.node}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {step.status} | conf {typeof step.confidence === "number" ? step.confidence.toFixed(2) : "n/a"}
+                </div>
+              </div>
+
+              {!!step.reasoning_summary && (
+                <div className="mt-2 text-sm text-slate-700">{step.reasoning_summary}</div>
+              )}
+
+              {!!step.ruleHits?.length && (
+                <div className="mt-2 text-xs text-slate-600">
+                  Rules: {step.ruleHits.join(" | ")}
+                </div>
+              )}
+
+              {!!step.missingData?.length && (
+                <div className="mt-1 text-xs text-amber-700">
+                  Missing: {step.missingData.join(" | ")}
+                </div>
+              )}
+
+              <div className="mt-1 text-xs text-slate-500">
+                Cost ${Number(step.estimatedCostUsd ?? 0).toFixed(4)} | {Number(step.latencyMs ?? 0).toFixed(1)} ms
+              </div>
+
+              {!!step.nextRecommendedSkills?.length && (
+                <div className="mt-1 text-xs text-slate-500">
+                  Next: {step.nextRecommendedSkills.join(" → ")}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+7. Update SkillLayerReviewPage.tsx
+
+Add imports:
+
+import { costValueApi } from "../lib/costValueApi";
+import { ruleGovernanceApi } from "../lib/ruleGovernanceApi";
+import { reconciliationApi } from "../lib/reconciliationApi";
+import GraphVisualizationCard from "../components/skill-layer/GraphVisualizationCard";
+import CostValueDashboardCard from "../components/skill-layer/CostValueDashboardCard";
+import RuleGovernanceCard from "../components/skill-layer/RuleGovernanceCard";
+import ReconciliationCard from "../components/skill-layer/ReconciliationCard";
+
+Add state:
+
+const [costValueRows, setCostValueRows] = useState<any[]>([]);
+const [ruleGovernanceSummary, setRuleGovernanceSummary] = useState<any[]>([]);
+const [reconciliationRows, setReconciliationRows] = useState<any[]>([]);
+
+In useEffect add:
+
+costValueApi.getCostValue().then((r) => setCostValueRows(r.rows ?? [])).catch(console.error);
+ruleGovernanceApi.getSummary().then((r) => setRuleGovernanceSummary(r.summary ?? [])).catch(console.error);
+reconciliationApi.list(50).then((r) => setReconciliationRows(r.rows ?? [])).catch(console.error);
+
+And render a bottom section under your current layout:
+
+<div className="grid gap-6 xl:grid-cols-2">
+  <GraphVisualizationCard trace={graphTrace} />
+  <CostValueDashboardCard rows={costValueRows} />
+  <RuleGovernanceCard summary={ruleGovernanceSummary} />
+  <ReconciliationCard rows={reconciliationRows} />
+</div>
+What to do right after this pack
+
+Run these in order:
+
+Graph trace logging
+
+Run a graph-mode case, then inspect:
+
+server/data/runtime/graph_trace_log.ndjson
+
+Graph golden-case assertions
+npx tsx server/testing/graphGoldenCaseRunner.ts
+Cost-value dashboard
+
+Open:
+
+/api/skill-layer/cost-value
+
+Rule governance
+
+Open:
+
+/api/skill-layer/rule-governance
+
+Reconciliations
+
+Open:
+
+/api/skill-layer/reconciliations
+
+UI
+
+Open:
+
+/skill-layer-review
+
+Verify:
+
+graph visualization renders after a run
+
+cost dashboard loads
+
+governance card loads
+
+reconciliations list loads
+
+What remains after this
+
+Once this pack is in, the skills layer is very close to “finished enough to scale.” The remaining highest-value items would be:
+
+finish reasoning_summary on all remaining skills
+
+add graph edge/guard visualization, not just node-step visualization
+
+persist compare-mode diffs instead of only logging to console
+
+auto-generate new golden cases from reconciliation failures
+
+add rule-owner / last-reviewed metadata to governance
+
+build a complaint hardening queue from drift alerts + failure tags
+
+That would make the layer not just complete, but self-improving and governable.
+
+If you want, next I’ll write the auto-generate golden cases from reconciliation failures + complaint hardening queue pack.
+
+It sounds like there's some background noise! If you need to step away or adjust something, that’s totally fine. Whenever you're ready, I’m here and we can dive back into whatever you’d like to focus on!
+
+End

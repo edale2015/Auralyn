@@ -2,6 +2,7 @@ import { SkillContext, SkillResult } from "../skills/shared/skillTypes";
 import { GRAPH_EDGES } from "./graphEdgeRegistry";
 import * as Guards from "./graphGuards";
 import { scoreNextSkillCandidate } from "./graphPolicies";
+import { appendGraphTraceLog } from "./graphTraceLogger";
 
 type SkillRunnerMap = Record<
   string,
@@ -39,10 +40,16 @@ export async function runReasoningGraph(params: {
       priorSkillOutputs: skillResults,
     };
 
-    const candidates = GRAPH_EDGES
+    const rawCandidates = GRAPH_EDGES
       .filter((e) => e.from === current)
       .filter((e) => !completed.includes(e.to))
-      .filter((e) => guardPasses(e.guardName, contextForStep))
+      .map((e) => {
+        const passed = guardPasses(e.guardName, contextForStep);
+        return { ...e, guardPassed: passed };
+      });
+
+    const candidates = rawCandidates
+      .filter((e) => e.guardPassed)
       .map((e) => ({
         ...e,
         score: scoreNextSkillCandidate({
@@ -53,6 +60,35 @@ export async function runReasoningGraph(params: {
         }),
       }))
       .sort((a, b) => b.score - a.score);
+
+    await appendGraphTraceLog({
+      caseId: contextForStep.caseId,
+      step: step + 1,
+      currentNode: current,
+      complaintId: contextForStep.complaintId ?? "",
+      totalEstimatedCostUsd,
+      rawCandidates: rawCandidates.map((c) => ({
+        from: c.from,
+        to: c.to,
+        guardName: c.guardName,
+        guardPassed: c.guardPassed,
+        priority: c.priority ?? 0,
+      })),
+      scoredCandidates: candidates.map((c) => ({
+        from: c.from,
+        to: c.to,
+        guardName: c.guardName,
+        score: c.score,
+      })),
+      chosenEdge: candidates[0]
+        ? {
+            from: candidates[0].from,
+            to: candidates[0].to,
+            guardName: candidates[0].guardName,
+            score: candidates[0].score,
+          }
+        : null,
+    });
 
     if (!candidates.length) break;
 
@@ -65,6 +101,20 @@ export async function runReasoningGraph(params: {
     completed.push(next.to);
     totalEstimatedCostUsd += Number(result.audit.estimatedCostUsd ?? 0);
     current = next.to;
+
+    await appendGraphTraceLog({
+      caseId: contextForStep.caseId,
+      step: step + 1,
+      executedNode: next.to,
+      resultStatus: result.status,
+      confidence: result.confidence,
+      reasoning_summary: result.reasoning_summary,
+      ruleHits: result.audit.ruleHits ?? [],
+      missingData: result.audit.missingData ?? [],
+      latencyMs: result.audit.latencyMs ?? 0,
+      estimatedCostUsd: result.audit.estimatedCostUsd ?? 0,
+      nextRecommendedSkills: result.nextRecommendedSkills ?? [],
+    });
   }
 
   return {
