@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
 
 type DifferentialItem = {
@@ -185,12 +186,18 @@ export async function generateDifferential(
   const supporting_findings = [...new Set(deduped.flatMap((i) => i.supporting_findings))];
   const contradictory_findings = [...new Set(deduped.flatMap((i) => i.contradictory_findings))];
 
-  const result: SkillResult<GenerateDifferentialResult> = {
+  const top = deduped[0];
+  const reasoning_summary = top
+    ? `Generated ${deduped.length} differential candidate(s). Top: [${top.diagnosis}] conf=${top.confidence.toFixed(2)}. ${clusterScores.length ? "Cluster-backed." : "Fallback used."}`
+    : `No differential candidates generated for ${context.complaintId} — fallback differential applied.`;
+
+  let result: SkillResult<GenerateDifferentialResult> = {
     skillId: "SK011",
     skillName: "generate_differential",
     version: "v1",
     status: "success",
     confidence: deduped[0]?.confidence ?? 0.5,
+    reasoning_summary,
     result: {
       differential_list: deduped.slice(0, 5),
       confidence: deduped[0]?.confidence ?? 0.5,
@@ -207,6 +214,14 @@ export async function generateDifferential(
     },
     nextRecommendedSkills: ["check_consistency_and_gaps", "determine_disposition"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "generate_differential");
   return result;

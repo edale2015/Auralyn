@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import { phrasePresent } from "../shared/negationHelper";
 
 type ApplyClinicalScoreResult = {
@@ -141,12 +142,18 @@ export async function applyClinicalScore(
       break;
   }
 
-  const result: SkillResult<ApplyClinicalScoreResult> = {
+  const reasoning_summary =
+    scored.score_name === "NotApplicable"
+      ? `No formal clinical score configured for complaint [${context.complaintId}].`
+      : `Applied ${scored.score_name} score = ${scored.score_value} → ${scored.risk_bucket} risk. ${scored.recommended_implication}.`;
+
+  let result: SkillResult<ApplyClinicalScoreResult> = {
     skillId: "SK013",
     skillName: "apply_clinical_score",
     version: "v1",
     status: "success",
     confidence: scored.score_name === "NotApplicable" ? 0.7 : 0.94,
+    reasoning_summary,
     result: scored,
     audit: {
       tablesUsed: ["NORMALIZED_FACTS", "NEGATION_HELPER", "SCORING_SYSTEMS_FALLBACK"],
@@ -156,6 +163,14 @@ export async function applyClinicalScore(
     },
     nextRecommendedSkills: ["generate_differential", "determine_disposition"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "apply_clinical_score");
   return result;

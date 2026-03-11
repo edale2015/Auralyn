@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
 import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
 import { complaintIdsMatch, canonicalizeComplaintId } from "../shared/complaintAliasRegistry";
@@ -135,12 +136,17 @@ export async function determineDisposition(
     finalResult = fallbackDisposition(redFlagSeverity, escalationNeeded);
   }
 
-  const result: SkillResult<DetermineDispositionResult> = {
+  const reasoning_summary = matchedRuleId
+    ? `Disposition [${finalResult.disposition}] matched rule ${matchedRuleId} — gate: ${gateResult}, rationale: ${finalResult.rationale}.`
+    : `No CSV rule matched — fallback disposition [${finalResult.disposition}] from red flag severity [${redFlagSeverity}].`;
+
+  let result: SkillResult<DetermineDispositionResult> = {
     skillId: "SK006",
     skillName: "determine_disposition",
     version: "v1",
     status: "success",
     confidence: matchedRuleId ? 0.97 : 0.93,
+    reasoning_summary,
     result: finalResult,
     audit: {
       tablesUsed,
@@ -153,6 +159,14 @@ export async function determineDisposition(
         ? ["generate_emergency_warning", "generate_physician_review_packet"]
         : ["generate_assessment_plan", "generate_physician_review_packet"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: complaintId,
+  });
 
   assertSkillResultShape(result, "determine_disposition");
   return result;

@@ -9,6 +9,9 @@ export type SkillConfig = {
   strictMode?: boolean;
   maxQuestions?: number;
   enableAudit?: boolean;
+  orchestrationMode?: "sequential" | "graph";
+  cheapRuleFirst?: boolean;
+  maxLlmCostUsdPerCase?: number;
 };
 
 export type SkillContext = {
@@ -38,6 +41,11 @@ export type SkillAudit = {
   missingData: string[];
   warnings?: string[];
   latencyMs: number;
+  modelUsed?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  estimatedCostUsd?: number;
+  complaintFamily?: string;
 };
 
 export type SkillResult<T = any> = {
@@ -46,6 +54,7 @@ export type SkillResult<T = any> = {
   version: string;
   status: "success" | "partial" | "error";
   confidence: number;
+  reasoning_summary?: string;
   result: T;
   audit: SkillAudit;
   nextRecommendedSkills?: string[];
@@ -98,4 +107,46 @@ export type OrchestratorState = {
   halted: boolean;
   finalDisposition?: string;
   platformChecks?: PlatformPrinciplesCheck;
+};
+
+export type ReasoningGraphNode = {
+  skillName: string;
+  category:
+    | "intake"
+    | "safety"
+    | "questions"
+    | "reasoning"
+    | "output"
+    | "outcomes"
+    | "analytics"
+    | "audit";
+  requiredInputs?: string[];
+  produces?: string[];
+  safetyClass?: "medium" | "high" | "critical";
+  estimatedCostUsd?: number;
+  estimatedLatencyMs?: number;
+  engineType?: "rules" | "hybrid" | "llm" | "retrieval";
+  stopIfComplete?: boolean;
+};
+
+export type ReasoningGraphEdge = {
+  from: string;
+  to: string;
+  guardName: string;
+  priority?: number;
+};
+
+export type ReasoningGraphState = {
+  caseId: string;
+  complaintId?: string;
+  knownFacts: Record<string, any>;
+  modifiers: Record<string, any>;
+  completedSkills: string[];
+  availableSkills: string[];
+  pendingSkills: string[];
+  redFlagSeverity?: string;
+  disposition?: string;
+  confidenceBySkill: Record<string, number>;
+  totalEstimatedCostUsd: number;
+  totalEstimatedLatencyMs: number;
 };

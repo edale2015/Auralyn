@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import { CsvRow, getFirstValue, loadCsvTable } from "../shared/csvTableLoader";
 import { phrasePresent } from "../shared/negationHelper";
 import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
@@ -139,12 +140,17 @@ export async function detectRedFlags(
   else if (red_flag_hits.some((h) => h.severity.toLowerCase() === "high")) severity = "high";
   else if (red_flag_hits.length) severity = "moderate";
 
-  const result: SkillResult<DetectRedFlagsResult> = {
+  const reasoning_summary = red_flag_hits.length
+    ? `Detected ${red_flag_hits.length} red flag(s) [${red_flag_hits.map((h) => h.label).join(", ")}] — severity: ${severity}.`
+    : "No red flags matched complaint-specific expressions or fallback patterns — case is clear.";
+
+  let result: SkillResult<DetectRedFlagsResult> = {
     skillId: "SK005",
     skillName: "detect_red_flags",
     version: "v1",
     status: "success",
     confidence: 0.96,
+    reasoning_summary,
     result: {
       red_flag_hits,
       severity,
@@ -162,6 +168,14 @@ export async function detectRedFlags(
         ? ["determine_disposition", "generate_emergency_warning"]
         : ["run_complaint_question_bundle"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: complaintId,
+  });
 
   assertSkillResultShape(result, "detect_red_flags");
   return result;

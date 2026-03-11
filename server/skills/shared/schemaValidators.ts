@@ -26,24 +26,16 @@ export function assertSkillResultShape<T>(
   result: SkillResult<T>,
   skillName: string
 ): void {
-  if (!result.skillId) {
-    throw new SkillValidationError(`${skillName}: skillId missing`);
-  }
-  if (!result.skillName) {
-    throw new SkillValidationError(`${skillName}: skillName missing`);
-  }
-  if (!result.version) {
-    throw new SkillValidationError(`${skillName}: version missing`);
-  }
+  if (!result.skillId) throw new SkillValidationError(`${skillName}: skillId missing`);
+  if (!result.skillName) throw new SkillValidationError(`${skillName}: skillName missing`);
+  if (!result.version) throw new SkillValidationError(`${skillName}: version missing`);
   if (!["success", "partial", "error"].includes(result.status)) {
     throw new SkillValidationError(`${skillName}: invalid status`);
   }
   if (typeof result.confidence !== "number") {
     throw new SkillValidationError(`${skillName}: confidence must be numeric`);
   }
-  if (!result.audit) {
-    throw new SkillValidationError(`${skillName}: audit missing`);
-  }
+  if (!result.audit) throw new SkillValidationError(`${skillName}: audit missing`);
   if (!Array.isArray(result.audit.tablesUsed)) {
     throw new SkillValidationError(`${skillName}: audit.tablesUsed invalid`);
   }
@@ -55,6 +47,9 @@ export function assertSkillResultShape<T>(
   }
   if (typeof result.audit.latencyMs !== "number") {
     throw new SkillValidationError(`${skillName}: audit.latencyMs invalid`);
+  }
+  if (!result.reasoning_summary) {
+    console.warn(`[SkillValidator] ${skillName}: reasoning_summary missing — add it to improve auditability`);
   }
 }
 

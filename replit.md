@@ -116,6 +116,34 @@ Includes a healthcheck service and a job runner for maintaining system stability
 - **Golden case review workflow**: `goldenCaseReviewExporter.ts` (exports review worksheet CSV with actual vs expected + pass/fail + failure tags) + `goldenCaseReviewImporter.ts` (imports reviewer overrides/notes) + `goldenCaseFailureTagger.ts` (categorizes failures: wrong_complaint, wrong_disposition, wrong_score, missed_red_flag, wrong_differential, missed_affirmed_symptom, missed_negated_symptom)
 - **Outcome data files**: `server/data/runtime/case_outcomes.ndjson`, `case_followups.ndjson`, `case_reconciliation.ndjson`
 
+### Medical Reasoning Graph (Graph-Mode Orchestration)
+- **Graph runner**: `server/reasoning-graph/graphRunner.ts` — traverses edge graph up to 50 steps, guard-filtered, cost/priority scored
+- **Node registry**: `server/reasoning-graph/graphNodeRegistry.ts` — 18 nodes with safetyClass, engineType, estimatedCostUsd, estimatedLatencyMs
+- **Edge registry**: `server/reasoning-graph/graphEdgeRegistry.ts` — directed edges with named guards (always, hasComplaint, needsFormalScore, etc.)
+- **Guards**: `server/reasoning-graph/graphGuards.ts` — 8 named guard functions evaluated at runtime from context
+- **Graph policies**: `server/reasoning-graph/graphPolicies.ts` — `scoreNextSkillCandidate()` applies cheap-rule-first + cost-budget + safety-class bonuses
+- **Cost-aware policy**: `server/orchestrator/costAwarePolicy.ts` — `shouldPreferCheapRuleFirst()`, `canSpendMoreLlmCost()`
+- **Orchestrator (graph-enabled)**: `server/orchestrator/clinicalSkillOrchestrator.ts` — dual-mode: sequential (default) or graph (`config.orchestrationMode="graph"`); graph enabled for sore_throat/cough/uti; auto-fallback to sequential on graph error
+
+### Cost Tracking & Skill Economics
+- **Cost tracker**: `server/skills/shared/skillCostTracker.ts` — `estimateSkillCost()`, `attachCostMetadata()` attaches estimatedCostUsd/promptTokens/complaintFamily to audit
+- **Complaint cost analytics**: `server/analytics/complaintCostAnalytics.ts` — aggregates cost + latency by complaint family from skill_run_log.ndjson
+- **5 priority skills instrumented**: `detectRedFlags`, `determineDisposition`, `scoreDifferentialClusters`, `applyClinicalScore`, `generateDifferential` — all now emit `reasoning_summary` + cost metadata
+
+### Skill Schema Enforcement
+- **reasoning_summary**: Optional field added to `SkillResult` type; 5 priority skills emit it; remaining 13 log a console.warn via `assertSkillResultShape` until progressively added
+- **SkillConfig extensions**: `orchestrationMode`, `cheapRuleFirst`, `maxLlmCostUsdPerCase` added
+- **SkillAudit extensions**: `modelUsed`, `promptTokens`, `completionTokens`, `estimatedCostUsd`, `complaintFamily` added
+
+### Extended Learning Loop
+- **Question reprioritizer**: `server/learning/questionReprioritizer.ts` — ranks questions by helped/harmed outcome from reconciliation data
+- **Complaint drift alerts**: `server/learning/complaintDriftAlerts.ts` — fires alert when failureRate >20% or safetyMissRate >5% over 3+ cases
+- **Tuning suggestion engine**: `server/learning/tuningSuggestionEngine.ts` — generates actionable suggestions (golden cases, alias review, red flag audit) per drifting complaint
+
+### Skill Version Registry
+- **Version registry**: `server/skills/registry/skillVersionRegistry.ts` — tracks active version + golden-case pass rate + rollback target per skill
+- **Rollback service**: `server/skills/registry/skillRollbackService.ts` — `getRollbackTarget()`, `getActiveVersion()`, `getPassRate()`
+
 ### Workflow Embedding (API Layer)
 - **Skill layer API**: `server/routes/skillLayerRoutes.ts` — POST endpoints: `/api/skill-layer/run`, `/chart-note`, `/discharge`, `/audit-trace`, `/callback-queue`
 - **Chart note builder**: `server/services/chartNoteBuilder.ts` — builds HPI/assessment/plan/redFlags/disposition blocks from skill outputs

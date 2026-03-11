@@ -1,0 +1,25 @@
+import { ReasoningGraphEdge } from "../skills/shared/skillTypes";
+
+export const GRAPH_EDGES: ReasoningGraphEdge[] = [
+  { from: "START", to: "collect_modifiers", guardName: "always", priority: 100 },
+  { from: "collect_modifiers", to: "extract_med_to_condition_triggers", guardName: "always", priority: 100 },
+  { from: "extract_med_to_condition_triggers", to: "identify_chief_complaint", guardName: "always", priority: 100 },
+  { from: "identify_chief_complaint", to: "normalize_patient_story", guardName: "hasComplaint", priority: 100 },
+  { from: "normalize_patient_story", to: "detect_red_flags", guardName: "hasStructuredFacts", priority: 100 },
+  { from: "detect_red_flags", to: "run_complaint_question_bundle", guardName: "always", priority: 90 },
+  { from: "run_complaint_question_bundle", to: "trigger_global_secondary_questions", guardName: "always", priority: 90 },
+  { from: "trigger_global_secondary_questions", to: "select_next_best_question", guardName: "needsMoreQuestions", priority: 80 },
+  { from: "select_next_best_question", to: "score_differential_clusters", guardName: "hasStructuredFacts", priority: 80 },
+  { from: "detect_red_flags", to: "score_differential_clusters", guardName: "hasStructuredFacts", priority: 70 },
+  { from: "score_differential_clusters", to: "apply_clinical_score", guardName: "needsFormalScore", priority: 90 },
+  { from: "score_differential_clusters", to: "generate_differential", guardName: "always", priority: 80 },
+  { from: "apply_clinical_score", to: "generate_differential", guardName: "always", priority: 90 },
+  { from: "generate_differential", to: "check_consistency_and_gaps", guardName: "always", priority: 90 },
+  { from: "check_consistency_and_gaps", to: "determine_disposition", guardName: "always", priority: 100 },
+  { from: "determine_disposition", to: "generate_emergency_warning", guardName: "isUrgentOrErDisposition", priority: 100 },
+  { from: "determine_disposition", to: "generate_assessment_plan", guardName: "always", priority: 90 },
+  { from: "generate_emergency_warning", to: "generate_assessment_plan", guardName: "always", priority: 100 },
+  { from: "generate_assessment_plan", to: "generate_physician_review_packet", guardName: "always", priority: 100 },
+  { from: "generate_physician_review_packet", to: "attach_outcome_stub", guardName: "always", priority: 100 },
+  { from: "attach_outcome_stub", to: "measure_workflow_value", guardName: "always", priority: 100 },
+];

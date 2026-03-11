@@ -1,0 +1,1386 @@
+Yes. Below is a paste-ready implementation pack for the missing pieces, including:
+
+required reasoning_summary on every skill result
+
+deeper learning from outcomes
+
+adaptive next-skill selection
+
+cost/token tracking and cost-aware orchestration
+
+medical reasoning graph
+
+complaint drift alerts
+
+tuning suggestions from reconciliations
+
+I’m organizing this as new files plus a few targeted updates.
+
+0. Update your core types first
+server/skills/shared/skillTypes.ts
+
+Replace with this version or merge the new fields in.
+
+export type TranscriptTurn = {
+  role: "user" | "assistant" | "system";
+  text: string;
+  timestamp?: string;
+};
+
+export type SkillConfig = {
+  version?: string;
+  strictMode?: boolean;
+  maxQuestions?: number;
+  enableAudit?: boolean;
+  orchestrationMode?: "sequential" | "graph";
+  cheapRuleFirst?: boolean;
+  maxLlmCostUsdPerCase?: number;
+};
+
+export type SkillContext = {
+  caseId: string;
+  patientId?: string;
+  encounterId?: string;
+  complaintId?: string;
+  complaintName?: string;
+  rawText?: string;
+  transcript?: TranscriptTurn[];
+  modifiers?: Record<string, any>;
+  knownFacts?: Record<string, any>;
+  priorSkillOutputs?: Record<string, any>;
+  metadata?: {
+    channel?: "web" | "telegram" | "sms" | "voice" | "ehr" | "unknown";
+    clinicId?: string;
+    siteId?: string;
+    clinicianId?: string;
+    createdAt?: string;
+  };
+  config?: SkillConfig;
+};
+
+export type SkillAudit = {
+  tablesUsed: string[];
+  ruleHits: string[];
+  missingData: string[];
+  warnings?: string[];
+  latencyMs: number;
+
+  // New cost/economics fields
+  modelUsed?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  estimatedCostUsd?: number;
+  complaintFamily?: string;
+};
+
+export type SkillResult<T = any> = {
+  skillId: string;
+  skillName: string;
+  version: string;
+  status: "success" | "partial" | "error";
+  confidence: number;
+
+  // REQUIRED
+  reasoning_summary: string;
+
+  result: T;
+  audit: SkillAudit;
+  nextRecommendedSkills?: string[];
+};
+
+export type PlatformPrinciplesCheck = {
+  decisionDataCaptured: boolean;
+  infrastructureReusable: boolean;
+  outcomeAttachPoint: boolean;
+  workflowEmbedded: boolean;
+  networkEffectReady: boolean;
+  physicianTimeSaved: boolean;
+  regulatorySafe: boolean;
+  highValueComplaint: boolean;
+  productModuleAssigned: boolean;
+  expertPathwayPreserved: boolean;
+  strategicNotes?: string[];
+};
+
+export type OutcomeStub = {
+  outcomeTrackingId: string;
+  caseId: string;
+  complaintId?: string;
+  expectedFollowUpWindowDays: number;
+  callbackNeeded: boolean;
+  outcomeStatus: "pending" | "complete" | "unreachable";
+  linkedDiagnosis?: string;
+  linkedTreatment?: string;
+  linkedDisposition?: string;
+  createdAt: string;
+};
+
+export type ReviewPacket = {
+  caseId: string;
+  complaintSummary: string;
+  keyModifiers: Record<string, any>;
+  keyFindings: Record<string, any>;
+  redFlags: string[];
+  likelyDiagnoses: string[];
+  proposedDisposition: string;
+  cautionNotes: string[];
+  approvalChecklist: string[];
+};
+
+export type OrchestratorState = {
+  context: SkillContext;
+  skillResults: Record<string, SkillResult>;
+  completedSkills: string[];
+  pendingSkills: string[];
+  halted: boolean;
+  finalDisposition?: string;
+  platformChecks?: PlatformPrinciplesCheck;
+};
+
+export type ReasoningGraphNode = {
+  skillName: string;
+  category:
+    | "intake"
+    | "safety"
+    | "questions"
+    | "reasoning"
+    | "output"
+    | "outcomes"
+    | "analytics"
+    | "audit";
+  requiredInputs?: string[];
+  produces?: string[];
+  safetyClass?: "medium" | "high" | "critical";
+  estimatedCostUsd?: number;
+  estimatedLatencyMs?: number;
+  engineType?: "rules" | "hybrid" | "llm" | "retrieval";
+  stopIfComplete?: boolean;
+};
+
+export type ReasoningGraphEdge = {
+  from: string;
+  to: string;
+  guardName: string;
+  priority?: number;
+};
+
+export type ReasoningGraphState = {
+  caseId: string;
+  complaintId?: string;
+  knownFacts: Record<string, any>;
+  modifiers: Record<string, any>;
+  completedSkills: string[];
+  availableSkills: string[];
+  pendingSkills: string[];
+  redFlagSeverity?: string;
+  disposition?: string;
+  confidenceBySkill: Record<string, number>;
+  totalEstimatedCostUsd: number;
+  totalEstimatedLatencyMs: number;
+};
+1. Enforce required reasoning_summary
+server/skills/shared/schemaValidators.ts
+
+Add these checks.
+
+import { SkillContext, SkillResult } from "./skillTypes";
+
+export class SkillValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SkillValidationError";
+  }
+}
+
+export function assertContextHasCaseId(context: SkillContext): void {
+  if (!context.caseId || context.caseId.trim() === "") {
+    throw new SkillValidationError("SkillContext.caseId is required");
+  }
+}
+
+export function assertComplaintIdIfNeeded(
+  context: SkillContext,
+  skillName: string
+): void {
+  if (!context.complaintId || context.complaintId.trim() === "") {
+    throw new SkillValidationError(`${skillName}: complaintId is required`);
+  }
+}
+
+export function assertSkillResultShape<T>(
+  result: SkillResult<T>,
+  skillName: string
+): void {
+  if (!result.skillId) throw new SkillValidationError(`${skillName}: skillId missing`);
+  if (!result.skillName) throw new SkillValidationError(`${skillName}: skillName missing`);
+  if (!result.version) throw new SkillValidationError(`${skillName}: version missing`);
+  if (!["success", "partial", "error"].includes(result.status)) {
+    throw new SkillValidationError(`${skillName}: invalid status`);
+  }
+  if (typeof result.confidence !== "number") {
+    throw new SkillValidationError(`${skillName}: confidence must be numeric`);
+  }
+  if (typeof result.reasoning_summary !== "string" || !result.reasoning_summary.trim()) {
+    throw new SkillValidationError(`${skillName}: reasoning_summary is required`);
+  }
+  if (!result.audit) throw new SkillValidationError(`${skillName}: audit missing`);
+  if (!Array.isArray(result.audit.tablesUsed)) {
+    throw new SkillValidationError(`${skillName}: audit.tablesUsed invalid`);
+  }
+  if (!Array.isArray(result.audit.ruleHits)) {
+    throw new SkillValidationError(`${skillName}: audit.ruleHits invalid`);
+  }
+  if (!Array.isArray(result.audit.missingData)) {
+    throw new SkillValidationError(`${skillName}: audit.missingData invalid`);
+  }
+  if (typeof result.audit.latencyMs !== "number") {
+    throw new SkillValidationError(`${skillName}: audit.latencyMs invalid`);
+  }
+}
+
+export function safeString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+2. Cost and token tracking
+server/skills/shared/skillCostTracker.ts
+import { SkillResult } from "./skillTypes";
+
+export type SkillCostPolicy = {
+  llmCostPer1kPromptTokensUsd: number;
+  llmCostPer1kCompletionTokensUsd: number;
+};
+
+export const DEFAULT_COST_POLICY: SkillCostPolicy = {
+  llmCostPer1kPromptTokensUsd: 0.002,
+  llmCostPer1kCompletionTokensUsd: 0.006,
+};
+
+export function estimateSkillCost(params: {
+  engineType?: "rules" | "hybrid" | "llm" | "retrieval";
+  promptTokens?: number;
+  completionTokens?: number;
+  policy?: SkillCostPolicy;
+}): number {
+  const { engineType, promptTokens = 0, completionTokens = 0 } = params;
+  const policy = params.policy ?? DEFAULT_COST_POLICY;
+
+  if (engineType !== "llm" && engineType !== "hybrid") return 0;
+
+  return (
+    (promptTokens / 1000) * policy.llmCostPer1kPromptTokensUsd +
+    (completionTokens / 1000) * policy.llmCostPer1kCompletionTokensUsd
+  );
+}
+
+export function attachCostMetadata<T>(
+  result: SkillResult<T>,
+  params: {
+    engineType?: "rules" | "hybrid" | "llm" | "retrieval";
+    promptTokens?: number;
+    completionTokens?: number;
+    modelUsed?: string;
+    complaintFamily?: string;
+  }
+): SkillResult<T> {
+  const estimatedCostUsd = estimateSkillCost({
+    engineType: params.engineType,
+    promptTokens: params.promptTokens,
+    completionTokens: params.completionTokens,
+  });
+
+  return {
+    ...result,
+    audit: {
+      ...result.audit,
+      modelUsed: params.modelUsed,
+      promptTokens: params.promptTokens ?? 0,
+      completionTokens: params.completionTokens ?? 0,
+      estimatedCostUsd,
+      complaintFamily: params.complaintFamily,
+    },
+  };
+}
+server/analytics/complaintCostAnalytics.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function computeComplaintCostAnalytics() {
+  const skillRuns = await loadNdjson("skill_run_log.ndjson");
+
+  const byComplaint: Record<
+    string,
+    { count: number; totalCostUsd: number; totalLatencyMs: number }
+  > = {};
+
+  for (const row of skillRuns) {
+    let complaint = "unknown";
+    try {
+      const inputSummary = JSON.parse(row.inputSummary ?? "{}");
+      complaint = inputSummary.complaintId || "unknown";
+    } catch {
+      complaint = "unknown";
+    }
+
+    byComplaint[complaint] ??= { count: 0, totalCostUsd: 0, totalLatencyMs: 0 };
+    byComplaint[complaint].count += 1;
+    byComplaint[complaint].totalCostUsd += Number(row.estimatedCostUsd ?? 0);
+    byComplaint[complaint].totalLatencyMs += Number(row.latencyMs ?? 0);
+  }
+
+  const rows = Object.entries(byComplaint).map(([complaint, info]) => ({
+    complaint,
+    count: info.count,
+    avgCostUsd: info.count ? info.totalCostUsd / info.count : 0,
+    avgLatencyMs: info.count ? info.totalLatencyMs / info.count : 0,
+    totalCostUsd: info.totalCostUsd,
+  }));
+
+  rows.sort((a, b) => b.totalCostUsd - a.totalCostUsd);
+  return rows;
+}
+server/orchestrator/costAwarePolicy.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+
+export function shouldPreferCheapRuleFirst(context: SkillContext): boolean {
+  return context.config?.cheapRuleFirst !== false;
+}
+
+export function canSpendMoreLlmCost(
+  context: SkillContext,
+  currentCaseEstimatedCostUsd: number
+): boolean {
+  const max = context.config?.maxLlmCostUsdPerCase ?? 0.03;
+  return currentCaseEstimatedCostUsd < max;
+}
+3. Adaptive next-skill selector and medical reasoning graph
+server/reasoning-graph/graphNodeRegistry.ts
+import { ReasoningGraphNode } from "../skills/shared/skillTypes";
+
+export const GRAPH_NODES: ReasoningGraphNode[] = [
+  {
+    skillName: "collect_modifiers",
+    category: "intake",
+    produces: ["modifiers"],
+    safetyClass: "high",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 2,
+    engineType: "rules",
+  },
+  {
+    skillName: "extract_med_to_condition_triggers",
+    category: "intake",
+    produces: ["med_condition_triggers"],
+    safetyClass: "high",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 2,
+    engineType: "rules",
+  },
+  {
+    skillName: "identify_chief_complaint",
+    category: "intake",
+    produces: ["complaint_id"],
+    safetyClass: "high",
+    estimatedCostUsd: 0.0001,
+    estimatedLatencyMs: 10,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "normalize_patient_story",
+    category: "intake",
+    produces: ["structured_facts"],
+    safetyClass: "high",
+    estimatedCostUsd: 0.0001,
+    estimatedLatencyMs: 8,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "detect_red_flags",
+    category: "safety",
+    produces: ["red_flags", "red_flag_severity"],
+    safetyClass: "critical",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 4,
+    engineType: "rules",
+  },
+  {
+    skillName: "run_complaint_question_bundle",
+    category: "questions",
+    produces: ["pending_questions"],
+    safetyClass: "high",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 3,
+    engineType: "rules",
+  },
+  {
+    skillName: "trigger_global_secondary_questions",
+    category: "questions",
+    produces: ["global_question_bundles"],
+    safetyClass: "high",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 3,
+    engineType: "rules",
+  },
+  {
+    skillName: "select_next_best_question",
+    category: "questions",
+    produces: ["next_question"],
+    safetyClass: "high",
+    estimatedCostUsd: 0.00005,
+    estimatedLatencyMs: 4,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "score_differential_clusters",
+    category: "reasoning",
+    produces: ["scored_clusters"],
+    safetyClass: "high",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 4,
+    engineType: "rules",
+  },
+  {
+    skillName: "apply_clinical_score",
+    category: "reasoning",
+    produces: ["clinical_score"],
+    safetyClass: "critical",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 2,
+    engineType: "rules",
+  },
+  {
+    skillName: "generate_differential",
+    category: "reasoning",
+    produces: ["differential"],
+    safetyClass: "high",
+    estimatedCostUsd: 0.00005,
+    estimatedLatencyMs: 5,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "check_consistency_and_gaps",
+    category: "audit",
+    produces: ["inconsistencies", "missing_critical_data"],
+    safetyClass: "high",
+    estimatedCostUsd: 0.00005,
+    estimatedLatencyMs: 5,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "determine_disposition",
+    category: "safety",
+    produces: ["disposition"],
+    safetyClass: "critical",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 3,
+    engineType: "rules",
+  },
+  {
+    skillName: "generate_emergency_warning",
+    category: "output",
+    produces: ["warning_block"],
+    safetyClass: "critical",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 2,
+    engineType: "rules",
+  },
+  {
+    skillName: "generate_assessment_plan",
+    category: "output",
+    produces: ["assessment_plan"],
+    safetyClass: "high",
+    estimatedCostUsd: 0.00005,
+    estimatedLatencyMs: 5,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "generate_physician_review_packet",
+    category: "output",
+    produces: ["review_packet"],
+    safetyClass: "critical",
+    estimatedCostUsd: 0.00005,
+    estimatedLatencyMs: 5,
+    engineType: "hybrid",
+  },
+  {
+    skillName: "attach_outcome_stub",
+    category: "outcomes",
+    produces: ["outcome_stub"],
+    safetyClass: "high",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 1,
+    engineType: "rules",
+  },
+  {
+    skillName: "measure_workflow_value",
+    category: "analytics",
+    produces: ["workflow_value"],
+    safetyClass: "medium",
+    estimatedCostUsd: 0,
+    estimatedLatencyMs: 1,
+    engineType: "rules",
+  },
+];
+
+export function getGraphNode(skillName: string) {
+  return GRAPH_NODES.find((n) => n.skillName === skillName);
+}
+server/reasoning-graph/graphGuards.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+import { canonicalizeComplaintId } from "../skills/shared/complaintAliasRegistry";
+
+export function hasComplaint(context: SkillContext): boolean {
+  return Boolean(context.complaintId);
+}
+
+export function isComplaintIn(
+  context: SkillContext,
+  complaintIds: string[]
+): boolean {
+  const current = canonicalizeComplaintId(context.complaintId);
+  return complaintIds.map(canonicalizeComplaintId).includes(current);
+}
+
+export function hasStructuredFacts(context: SkillContext): boolean {
+  return Boolean(context.knownFacts && Object.keys(context.knownFacts).length);
+}
+
+export function hasRedFlagSeverity(context: SkillContext): boolean {
+  return Boolean(
+    context.priorSkillOutputs?.detect_red_flags?.result?.severity
+  );
+}
+
+export function isUrgentOrErDisposition(context: SkillContext): boolean {
+  const d = context.priorSkillOutputs?.determine_disposition?.result?.disposition ?? "";
+  return ["urgent_same_day", "er_now"].includes(d);
+}
+
+export function needsFormalScore(context: SkillContext): boolean {
+  const complaint = canonicalizeComplaintId(context.complaintId);
+  return ["sore_throat", "cough", "chest_pain"].includes(complaint);
+}
+
+export function needsMoreQuestions(context: SkillContext): boolean {
+  const pending =
+    context.priorSkillOutputs?.run_complaint_question_bundle?.result?.pending_questions ?? [];
+  const missing =
+    context.priorSkillOutputs?.check_consistency_and_gaps?.result?.missing_critical_data ?? [];
+  return pending.length > 0 || missing.length > 0;
+}
+
+export function hasDifferential(context: SkillContext): boolean {
+  return Boolean(
+    context.priorSkillOutputs?.generate_differential?.result?.differential_list?.length
+  );
+}
+server/reasoning-graph/graphEdgeRegistry.ts
+import { ReasoningGraphEdge } from "../skills/shared/skillTypes";
+
+export const GRAPH_EDGES: ReasoningGraphEdge[] = [
+  { from: "START", to: "collect_modifiers", guardName: "always", priority: 100 },
+  { from: "collect_modifiers", to: "extract_med_to_condition_triggers", guardName: "always", priority: 100 },
+  { from: "extract_med_to_condition_triggers", to: "identify_chief_complaint", guardName: "always", priority: 100 },
+  { from: "identify_chief_complaint", to: "normalize_patient_story", guardName: "hasComplaint", priority: 100 },
+  { from: "normalize_patient_story", to: "detect_red_flags", guardName: "hasStructuredFacts", priority: 100 },
+  { from: "detect_red_flags", to: "run_complaint_question_bundle", guardName: "always", priority: 90 },
+  { from: "run_complaint_question_bundle", to: "trigger_global_secondary_questions", guardName: "always", priority: 90 },
+  { from: "trigger_global_secondary_questions", to: "select_next_best_question", guardName: "needsMoreQuestions", priority: 80 },
+  { from: "select_next_best_question", to: "score_differential_clusters", guardName: "hasStructuredFacts", priority: 80 },
+  { from: "detect_red_flags", to: "score_differential_clusters", guardName: "hasStructuredFacts", priority: 70 },
+  { from: "score_differential_clusters", to: "apply_clinical_score", guardName: "needsFormalScore", priority: 90 },
+  { from: "score_differential_clusters", to: "generate_differential", guardName: "always", priority: 80 },
+  { from: "apply_clinical_score", to: "generate_differential", guardName: "always", priority: 90 },
+  { from: "generate_differential", to: "check_consistency_and_gaps", guardName: "always", priority: 90 },
+  { from: "check_consistency_and_gaps", to: "determine_disposition", guardName: "always", priority: 100 },
+  { from: "determine_disposition", to: "generate_emergency_warning", guardName: "isUrgentOrErDisposition", priority: 100 },
+  { from: "determine_disposition", to: "generate_assessment_plan", guardName: "always", priority: 90 },
+  { from: "generate_emergency_warning", to: "generate_assessment_plan", guardName: "always", priority: 100 },
+  { from: "generate_assessment_plan", to: "generate_physician_review_packet", guardName: "always", priority: 100 },
+  { from: "generate_physician_review_packet", to: "attach_outcome_stub", guardName: "always", priority: 100 },
+  { from: "attach_outcome_stub", to: "measure_workflow_value", guardName: "always", priority: 100 },
+];
+server/reasoning-graph/graphPolicies.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+import { getGraphNode } from "./graphNodeRegistry";
+import { canSpendMoreLlmCost, shouldPreferCheapRuleFirst } from "../orchestrator/costAwarePolicy";
+
+export function scoreNextSkillCandidate(params: {
+  skillName: string;
+  context: SkillContext;
+  currentCaseEstimatedCostUsd: number;
+  basePriority?: number;
+}): number {
+  const node = getGraphNode(params.skillName);
+  let score = params.basePriority ?? 0;
+
+  if (!node) return score;
+
+  if (shouldPreferCheapRuleFirst(params.context)) {
+    if (node.engineType === "rules") score += 20;
+    if (node.engineType === "hybrid") score += 5;
+    if (node.engineType === "llm") score -= 10;
+  }
+
+  if (!canSpendMoreLlmCost(params.context, params.currentCaseEstimatedCostUsd)) {
+    if (node.engineType === "llm" || node.engineType === "hybrid") score -= 50;
+  }
+
+  if (node.safetyClass === "critical") score += 30;
+  if (node.category === "safety") score += 15;
+
+  return score;
+}
+server/reasoning-graph/graphRunner.ts
+import { SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { GRAPH_EDGES } from "./graphEdgeRegistry";
+import * as Guards from "./graphGuards";
+import { scoreNextSkillCandidate } from "./graphPolicies";
+
+type SkillRunnerMap = Record<
+  string,
+  (context: SkillContext) => Promise<SkillResult>
+>;
+
+function guardPasses(guardName: string, context: SkillContext): boolean {
+  if (guardName === "always") return true;
+  const fn = (Guards as any)[guardName];
+  if (typeof fn !== "function") return false;
+  return Boolean(fn(context));
+}
+
+export async function runReasoningGraph(params: {
+  initialContext: SkillContext;
+  runSkill: SkillRunnerMap;
+}) {
+  const completed: string[] = [];
+  const skillResults: Record<string, SkillResult> = {};
+  let current = "START";
+  let totalEstimatedCostUsd = 0;
+
+  for (let step = 0; step < 50; step++) {
+    const contextForStep: SkillContext = {
+      ...params.initialContext,
+      complaintId:
+        skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+        params.initialContext.complaintId,
+      modifiers:
+        skillResults["collect_modifiers"]?.result?.modifiers ??
+        params.initialContext.modifiers,
+      knownFacts:
+        skillResults["normalize_patient_story"]?.result?.structured_facts ??
+        params.initialContext.knownFacts,
+      priorSkillOutputs: skillResults,
+    };
+
+    const candidates = GRAPH_EDGES
+      .filter((e) => e.from === current)
+      .filter((e) => !completed.includes(e.to))
+      .filter((e) => guardPasses(e.guardName, contextForStep))
+      .map((e) => ({
+        ...e,
+        score: scoreNextSkillCandidate({
+          skillName: e.to,
+          context: contextForStep,
+          currentCaseEstimatedCostUsd: totalEstimatedCostUsd,
+          basePriority: e.priority ?? 0,
+        }),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    if (!candidates.length) break;
+
+    const next = candidates[0];
+    const runner = params.runSkill[next.to];
+    if (!runner) throw new Error(`No runner for graph skill: ${next.to}`);
+
+    const result = await runner(contextForStep);
+    skillResults[next.to] = result;
+    completed.push(next.to);
+    totalEstimatedCostUsd += Number(result.audit.estimatedCostUsd ?? 0);
+    current = next.to;
+  }
+
+  return {
+    completedSkills: completed,
+    skillResults,
+    totalEstimatedCostUsd,
+  };
+}
+4. Deeper learning from outcomes
+server/learning/questionReprioritizer.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw.split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+export async function reprioritizeQuestionsFromOutcomes() {
+  const reconciliations = await loadNdjson("case_reconciliation.ndjson");
+  const skillRuns = await loadNdjson("skill_run_log.ndjson");
+
+  const questionStats: Record<string, { helped: number; harmed: number }> = {};
+
+  for (const recon of reconciliations) {
+    const caseId = recon.case_id ?? recon.caseId;
+    const caseQuestionRuns = skillRuns.filter(
+      (r) => r.caseId === caseId && r.skillName === "select_next_best_question"
+    );
+
+    for (const row of caseQuestionRuns) {
+      let question = "unknown_question";
+      try {
+        const output = JSON.parse(row.outputSummary ?? "{}");
+        question = output?.result?.next_question ?? "unknown_question";
+      } catch {
+        question = "unknown_question";
+      }
+
+      questionStats[question] ??= { helped: 0, harmed: 0 };
+
+      if (recon.top_prediction_match && recon.disposition_match && !recon.safety_miss_flag) {
+        questionStats[question].helped += 1;
+      } else {
+        questionStats[question].harmed += 1;
+      }
+    }
+  }
+
+  return Object.entries(questionStats)
+    .map(([question, stat]) => ({
+      question,
+      netValue: stat.helped - stat.harmed,
+      helped: stat.helped,
+      harmed: stat.harmed,
+    }))
+    .sort((a, b) => b.netValue - a.netValue);
+}
+server/learning/complaintDriftAlerts.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw.split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+export async function generateComplaintDriftAlerts() {
+  const reconciliations = await loadNdjson("case_reconciliation.ndjson");
+  const caseAudits = await loadNdjson("case_audit_log.ndjson");
+
+  const complaintStats: Record<string, { total: number; failures: number; safetyMisses: number }> = {};
+
+  for (const recon of reconciliations) {
+    const caseId = recon.case_id ?? recon.caseId;
+    const audit = caseAudits.find((a) => (a.caseId ?? a.case_id) === caseId);
+    const complaint = audit?.complaintId ?? audit?.complaint_id ?? "unknown";
+
+    complaintStats[complaint] ??= { total: 0, failures: 0, safetyMisses: 0 };
+    complaintStats[complaint].total += 1;
+
+    if (!recon.top_prediction_match || !recon.disposition_match) {
+      complaintStats[complaint].failures += 1;
+    }
+    if (recon.safety_miss_flag) {
+      complaintStats[complaint].safetyMisses += 1;
+    }
+  }
+
+  return Object.entries(complaintStats)
+    .map(([complaint, stat]) => ({
+      complaint,
+      failureRate: stat.total ? stat.failures / stat.total : 0,
+      safetyMissRate: stat.total ? stat.safetyMisses / stat.total : 0,
+      ...stat,
+      alert:
+        stat.total >= 3 &&
+        (stat.failures / stat.total > 0.2 || stat.safetyMisses / stat.total > 0.05),
+    }))
+    .filter((x) => x.alert)
+    .sort((a, b) => b.failureRate - a.failureRate);
+}
+server/learning/tuningSuggestionEngine.ts
+import { generateComplaintDriftAlerts } from "./complaintDriftAlerts";
+
+export async function generateTuningSuggestionsFromReconciliations() {
+  const alerts = await generateComplaintDriftAlerts();
+
+  return alerts.map((alert) => {
+    const suggestions: string[] = [];
+
+    if (alert.failureRate > 0.2) {
+      suggestions.push("Add 3 new golden cases for this complaint.");
+      suggestions.push("Review complaint aliases and question bundle coverage.");
+      suggestions.push("Review top differential cluster rules and disposition expressions.");
+    }
+
+    if (alert.safetyMissRate > 0.05) {
+      suggestions.push("Audit red flag expressions and escalation thresholds.");
+      suggestions.push("Add a mandatory consistency check gate before disposition.");
+      suggestions.push("Add complaint-specific emergency return precautions review.");
+    }
+
+    return {
+      complaint: alert.complaint,
+      failureRate: alert.failureRate,
+      safetyMissRate: alert.safetyMissRate,
+      suggestions,
+    };
+  });
+}
+5. Skill versioning and rollback support
+server/skills/registry/skillVersionRegistry.ts
+export type SkillVersionRecord = {
+  skillName: string;
+  version: string;
+  active: boolean;
+  lastChangedAt: string;
+  goldenCasePassRate?: number;
+  rollbackTargetVersion?: string;
+};
+
+export const SKILL_VERSION_REGISTRY: SkillVersionRecord[] = [
+  {
+    skillName: "detect_red_flags",
+    version: "v1",
+    active: true,
+    lastChangedAt: new Date().toISOString(),
+    goldenCasePassRate: 1,
+    rollbackTargetVersion: "v1",
+  },
+  {
+    skillName: "determine_disposition",
+    version: "v1",
+    active: true,
+    lastChangedAt: new Date().toISOString(),
+    goldenCasePassRate: 1,
+    rollbackTargetVersion: "v1",
+  },
+];
+server/skills/registry/skillRollbackService.ts
+import { SKILL_VERSION_REGISTRY } from "./skillVersionRegistry";
+
+export function getRollbackTarget(skillName: string): string | null {
+  const row = SKILL_VERSION_REGISTRY.find((r) => r.skillName === skillName && r.active);
+  return row?.rollbackTargetVersion ?? null;
+}
+6. What to update in existing skills
+
+For every real skill, add:
+
+reasoning_summary
+
+attachCostMetadata(...)
+
+Example pattern:
+
+import { attachCostMetadata } from "../shared/skillCostTracker";
+
+let result: SkillResult<MyResult> = {
+  skillId: "SK005",
+  skillName: "detect_red_flags",
+  version: "v1",
+  status: "success",
+  confidence: 0.96,
+  reasoning_summary:
+    red_flag_hits.length
+      ? `Detected ${red_flag_hits.length} red flag(s) from expression rules and structured facts.`
+      : "No red flags matched complaint-specific expressions or fallback patterns.",
+  result: {
+    red_flag_hits,
+    severity,
+    escalation_needed: severity === "critical" || severity === "high",
+    rationale_refs: red_flag_hits.map((h) => h.id),
+  },
+  audit: {
+    tablesUsed,
+    ruleHits: red_flag_hits.map((h) => h.id),
+    missingData: [],
+    latencyMs: Date.now() - started,
+  },
+  nextRecommendedSkills: ["determine_disposition"],
+};
+
+result = attachCostMetadata(result, {
+  engineType: "rules",
+  modelUsed: "",
+  promptTokens: 0,
+  completionTokens: 0,
+  complaintFamily: complaintId,
+});
+
+Do this progressively across all 18 skills.
+
+7. What this completes from your list
+
+This pack directly addresses:
+
+required reasoning_summary on every skill result
+
+automatic question reprioritization
+
+automatic complaint drift alerts tied to outcomes
+
+automatic tuning suggestions from reconciliations
+
+real adaptive next-skill selection
+
+compute/token cost per skill
+
+cost by complaint family
+
+cost vs value ratios foundation
+
+cheap-rule-first vs expensive-LLM-later policy
+
+state-driven orchestration via medical reasoning graph
+
+8. What to do immediately after pasting
+
+Run in this order:
+
+update skillTypes.ts
+
+update schemaValidators.ts
+
+add cost tracker + analytics
+
+add reasoning graph files
+
+add learning files
+
+add version registry files
+
+update 3–5 high-value skills first with reasoning_summary and attachCostMetadata
+
+detect_red_flags
+
+determine_disposition
+
+score_differential_clusters
+
+apply_clinical_score
+
+generate_differential
+
+Then start testing graph mode on:
+
+sore throat
+
+cough
+
+UTI
+
+Keep the sequential orchestrator as fallback until graph mode matches golden-case performance.
+
+9. Strong recommendation
+
+Do not switch the whole system to graph mode at once.
+
+Use this rollout:
+
+complaint families: sore throat, cough, UTI only
+
+run both sequential and graph orchestrators
+
+compare outputs on golden cases
+
+switch complaint family only when pass rates match
+
+That keeps the rocket pointed upward instead of sideways.
+
+If you want, next I’ll write the graph-enabled orchestrator file that can run either sequential mode or graph mode based on context.config.orchestrationMode, plus the first graph pathways for sore throat, cough, and UTI.
+
+YES GRAPH ENABLED ORCHESTRATOR FILE.  THEN LET ME KNOW ALL OF THE STEPS TO COMPLETE THIS LAYWER GRAPH-ENABLED.
+
+Absolutely. Here is the graph-enabled orchestrator file plus the exact steps to finish the layer in graph mode.
+
+This gives you:
+
+one orchestrator that can run in either:
+
+sequential
+
+graph
+
+the same skill runners for both modes
+
+a safe fallback path
+
+complaint-family rollout control for:
+
+sore throat
+
+cough
+
+UTI
+
+After the code, I’ll lay out the full checklist to complete the graph-enabled layer.
+
+1. Graph-enabled orchestrator
+
+Create or replace:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+import { OrchestratorState, SkillContext, SkillResult } from "../skills/shared/skillTypes";
+import { evaluatePlatformPrinciples } from "./platformPrinciplesPolicy";
+import { appendCaseAuditLog, appendSkillRunLog } from "../skills/shared/auditLogger";
+import { assertSkillResultShape } from "../skills/shared/schemaValidators";
+
+import { collectModifiers } from "../skills/intake/collectModifiers";
+import { extractMedToConditionTriggers } from "../skills/intake/extractMedToConditionTriggers";
+import { identifyChiefComplaint } from "../skills/intake/identifyChiefComplaint";
+import { normalizePatientStory } from "../skills/intake/normalizePatientStory";
+
+import { detectRedFlags } from "../skills/safety/detectRedFlags";
+import { determineDisposition } from "../skills/safety/determineDisposition";
+
+import { runComplaintQuestionBundle } from "../skills/questions/runComplaintQuestionBundle";
+import { triggerGlobalSecondaryQuestions } from "../skills/questions/triggerGlobalSecondaryQuestions";
+import { selectNextBestQuestion } from "../skills/questions/selectNextBestQuestion";
+
+import { scoreDifferentialClusters } from "../skills/reasoning/scoreDifferentialClusters";
+import { applyClinicalScore } from "../skills/reasoning/applyClinicalScore";
+import { generateDifferential } from "../skills/reasoning/generateDifferential";
+
+import { checkConsistencyAndGaps } from "../skills/audit/checkConsistencyAndGaps";
+
+import { generateEmergencyWarning } from "../skills/output/generateEmergencyWarning";
+import { generateAssessmentPlan } from "../skills/output/generateAssessmentPlan";
+import { generatePhysicianReviewPacket } from "../skills/output/generatePhysicianReviewPacket";
+
+import { attachOutcomeStub } from "../skills/outcomes/attachOutcomeStub";
+
+import { measureWorkflowValue } from "../skills/analytics/measureWorkflowValue";
+
+import { runReasoningGraph } from "../reasoning-graph/graphRunner";
+import { canonicalizeComplaintId } from "../skills/shared/complaintAliasRegistry";
+
+type SkillRunner = (context: SkillContext) => Promise<SkillResult>;
+type SkillRunnerMap = Record<string, SkillRunner>;
+
+async function runPlaceholderSkill(skillName: string, context: SkillContext): Promise<SkillResult> {
+  const started = Date.now();
+
+  return {
+    skillId: `PLACEHOLDER_${skillName}`,
+    skillName,
+    version: "v1",
+    status: "success",
+    confidence: 0.75,
+    reasoning_summary: `${skillName} is not yet fully implemented.`,
+    result: {
+      message: `${skillName} not yet fully implemented`,
+      caseId: context.caseId,
+    },
+    audit: {
+      tablesUsed: [],
+      ruleHits: [],
+      missingData: [],
+      latencyMs: Date.now() - started,
+      estimatedCostUsd: 0,
+    },
+    nextRecommendedSkills: [],
+  };
+}
+
+const DEFAULT_SEQUENCE = [
+  "collect_modifiers",
+  "extract_med_to_condition_triggers",
+  "identify_chief_complaint",
+  "normalize_patient_story",
+  "detect_red_flags",
+  "run_complaint_question_bundle",
+  "trigger_global_secondary_questions",
+  "select_next_best_question",
+  "score_differential_clusters",
+  "apply_clinical_score",
+  "generate_differential",
+  "check_consistency_and_gaps",
+  "determine_disposition",
+  "generate_emergency_warning",
+  "generate_assessment_plan",
+  "generate_physician_review_packet",
+  "attach_outcome_stub",
+  "measure_workflow_value",
+] as const;
+
+const GRAPH_ENABLED_COMPLAINTS = new Set([
+  "sore_throat",
+  "cough",
+  "uti",
+]);
+
+function buildSkillRunnerMap(): SkillRunnerMap {
+  return {
+    collect_modifiers: collectModifiers,
+    extract_med_to_condition_triggers: extractMedToConditionTriggers,
+    identify_chief_complaint: identifyChiefComplaint,
+    normalize_patient_story: normalizePatientStory,
+
+    detect_red_flags: detectRedFlags,
+    determine_disposition: determineDisposition,
+
+    run_complaint_question_bundle: runComplaintQuestionBundle,
+    trigger_global_secondary_questions: triggerGlobalSecondaryQuestions,
+    select_next_best_question: selectNextBestQuestion,
+
+    score_differential_clusters: scoreDifferentialClusters,
+    apply_clinical_score: applyClinicalScore,
+    generate_differential: generateDifferential,
+
+    check_consistency_and_gaps: checkConsistencyAndGaps,
+
+    generate_emergency_warning: generateEmergencyWarning,
+    generate_assessment_plan: generateAssessmentPlan,
+    generate_physician_review_packet: generatePhysicianReviewPacket,
+
+    attach_outcome_stub: attachOutcomeStub,
+
+    measure_workflow_value: measureWorkflowValue,
+  };
+}
+
+function getComplaintIdFromState(skillResults: Record<string, SkillResult>, fallback?: string): string | undefined {
+  return (
+    skillResults["identify_chief_complaint"]?.result?.complaint_id ??
+    fallback
+  );
+}
+
+function buildContextForSkill(
+  baseContext: SkillContext,
+  skillResults: Record<string, SkillResult>
+): SkillContext {
+  const complaintId = getComplaintIdFromState(skillResults, baseContext.complaintId);
+
+  const modifiers =
+    skillResults["collect_modifiers"]?.result?.modifiers ??
+    baseContext.modifiers;
+
+  const knownFacts =
+    skillResults["normalize_patient_story"]?.result?.structured_facts ??
+    baseContext.knownFacts;
+
+  return {
+    ...baseContext,
+    complaintId,
+    modifiers,
+    knownFacts,
+    priorSkillOutputs: skillResults,
+  };
+}
+
+function shouldUseGraphMode(context: SkillContext): boolean {
+  if (context.config?.orchestrationMode !== "graph") return false;
+
+  const complaint = canonicalizeComplaintId(context.complaintId);
+  if (complaint && GRAPH_ENABLED_COMPLAINTS.has(complaint)) return true;
+
+  // Allow graph mode before complaint is known. It will identify complaint first.
+  if (!complaint) return true;
+
+  return false;
+}
+
+async function runSequentialMode(
+  initialContext: SkillContext,
+  runSkill: SkillRunnerMap
+): Promise<OrchestratorState> {
+  const state: OrchestratorState = {
+    context: initialContext,
+    skillResults: {},
+    completedSkills: [],
+    pendingSkills: [...DEFAULT_SEQUENCE],
+    halted: false,
+  };
+
+  for (const skillName of DEFAULT_SEQUENCE) {
+    if (state.halted) break;
+
+    const contextForSkill = buildContextForSkill(state.context, state.skillResults);
+
+    const runner = runSkill[skillName] ?? ((ctx) => runPlaceholderSkill(skillName, ctx));
+    const result = await runner(contextForSkill);
+
+    assertSkillResultShape(result, skillName);
+
+    state.skillResults[skillName] = result;
+    state.completedSkills.push(skillName);
+    state.pendingSkills = state.pendingSkills.filter((s) => s !== skillName);
+
+    await appendSkillRunLog(contextForSkill, {
+      ...result,
+      audit: {
+        ...result.audit,
+        complaintFamily: canonicalizeComplaintId(contextForSkill.complaintId),
+      },
+    });
+
+    if (skillName === "identify_chief_complaint" && result.result?.complaint_id) {
+      state.context.complaintId = result.result.complaint_id;
+    }
+    if (skillName === "collect_modifiers" && result.result?.modifiers) {
+      state.context.modifiers = result.result.modifiers;
+    }
+    if (skillName === "normalize_patient_story" && result.result?.structured_facts) {
+      state.context.knownFacts = result.result.structured_facts;
+    }
+    if (skillName === "determine_disposition") {
+      state.finalDisposition = result.result?.disposition ?? state.finalDisposition;
+    }
+  }
+
+  state.platformChecks = evaluatePlatformPrinciples(state);
+
+  await appendCaseAuditLog({
+    context: state.context,
+    finalDisposition: state.finalDisposition,
+    finalStatus: state.halted ? "halted" : "complete",
+    completedSkills: state.completedSkills,
+    redFlagHits:
+      state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+    differentialTop3:
+      state.skillResults["generate_differential"]?.result?.differential_list
+        ?.slice?.(0, 3)
+        ?.map?.((d: any) => d.diagnosis ?? String(d)) ?? [],
+    clinicalScoreUsed:
+      state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+    platformChecks: state.platformChecks,
+  });
+
+  return state;
+}
+
+async function runGraphMode(
+  initialContext: SkillContext,
+  runSkill: SkillRunnerMap
+): Promise<OrchestratorState> {
+  const graphResult = await runReasoningGraph({
+    initialContext,
+    runSkill: Object.fromEntries(
+      Object.entries(runSkill).map(([skillName, runner]) => [
+        skillName,
+        async (context: SkillContext) => {
+          const result = await runner(context);
+          assertSkillResultShape(result, skillName);
+
+          await appendSkillRunLog(context, {
+            ...result,
+            audit: {
+              ...result.audit,
+              complaintFamily: canonicalizeComplaintId(context.complaintId),
+            },
+          });
+
+          return result;
+        },
+      ])
+    ),
+  });
+
+  const finalContext = buildContextForSkill(initialContext, graphResult.skillResults);
+
+  const state: OrchestratorState = {
+    context: finalContext,
+    skillResults: graphResult.skillResults,
+    completedSkills: graphResult.completedSkills,
+    pendingSkills: DEFAULT_SEQUENCE.filter((s) => !graphResult.completedSkills.includes(s)),
+    halted: false,
+    finalDisposition:
+      graphResult.skillResults["determine_disposition"]?.result?.disposition,
+  };
+
+  state.platformChecks = evaluatePlatformPrinciples(state);
+
+  await appendCaseAuditLog({
+    context: state.context,
+    finalDisposition: state.finalDisposition,
+    finalStatus: "complete",
+    completedSkills: state.completedSkills,
+    redFlagHits:
+      state.skillResults["detect_red_flags"]?.result?.rationale_refs ?? [],
+    differentialTop3:
+      state.skillResults["generate_differential"]?.result?.differential_list
+        ?.slice?.(0, 3)
+        ?.map?.((d: any) => d.diagnosis ?? String(d)) ?? [],
+    clinicalScoreUsed:
+      state.skillResults["apply_clinical_score"]?.result?.score_name ?? "",
+    platformChecks: state.platformChecks,
+  });
+
+  return state;
+}
+
+export class ClinicalSkillOrchestrator {
+  async run(initialContext: SkillContext): Promise<OrchestratorState> {
+    const runSkill = buildSkillRunnerMap();
+
+    if (shouldUseGraphMode(initialContext)) {
+      try {
+        return await runGraphMode(initialContext, runSkill);
+      } catch (err) {
+        console.error("Graph mode failed, falling back to sequential mode:", err);
+        return runSequentialMode(
+          {
+            ...initialContext,
+            config: {
+              ...initialContext.config,
+              orchestrationMode: "sequential",
+            },
+          },
+          runSkill
+        );
+      }
+    }
+
+    return runSequentialMode(initialContext, runSkill);
+  }
+}
+2. What this gives you right now
+
+This file lets you do:
+
+const state = await orchestrator.run({
+  caseId: "CASE_123",
+  rawText: "32 year old male with sore throat x 3 days, fever, no cough",
+  modifiers: {},
+  knownFacts: {},
+  priorSkillOutputs: {},
+  config: {
+    orchestrationMode: "graph",
+    strictMode: true,
+    enableAudit: true,
+    cheapRuleFirst: true,
+    maxLlmCostUsdPerCase: 0.03,
+  },
+});
+
+And if graph mode fails, it quietly falls back to sequential mode instead of detonating the workflow.

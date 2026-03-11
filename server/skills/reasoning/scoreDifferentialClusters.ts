@@ -4,6 +4,7 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
 import { buildSyntheticAnswers } from "../shared/syntheticAnswerBridge";
 import { complaintIdsMatch, canonicalizeComplaintId } from "../shared/complaintAliasRegistry";
@@ -80,12 +81,18 @@ export async function scoreDifferentialClusters(
   const trigger_hits = scored_clusters.flatMap((c) => c.supporting_hits);
   const missing_discriminators = scored_clusters.length ? [] : ["no_cluster_rules_matched"];
 
-  const result: SkillResult<ScoreDifferentialClustersResult> = {
+  const topCluster = scored_clusters[0];
+  const reasoning_summary = scored_clusters.length
+    ? `Scored ${scored_clusters.length} cluster(s) for ${complaintId}. Top: [${topCluster.cluster_name}] score=${topCluster.score.toFixed(1)}, hits=${topCluster.supporting_hits.length}.`
+    : `No cluster rules matched for ${complaintId} — returning partial result.`;
+
+  let result: SkillResult<ScoreDifferentialClustersResult> = {
     skillId: "SK012",
     skillName: "score_differential_clusters",
     version: "v1",
     status: scored_clusters.length ? "success" : "partial",
     confidence: scored_clusters.length ? 0.91 : 0.45,
+    reasoning_summary,
     result: {
       scored_clusters,
       trigger_hits,
@@ -99,6 +106,14 @@ export async function scoreDifferentialClusters(
     },
     nextRecommendedSkills: ["apply_clinical_score", "generate_differential"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: complaintId,
+  });
 
   assertSkillResultShape(result, "score_differential_clusters");
   return result;
