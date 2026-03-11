@@ -1,3 +1,5 @@
+import * as fs from "fs/promises";
+import * as path from "path";
 import { SkillContext, SkillResult } from "../shared/skillTypes";
 import {
   assertComplaintIdIfNeeded,
@@ -5,6 +7,25 @@ import {
   assertSkillResultShape,
 } from "../shared/schemaValidators";
 import { CsvRow, getFirstValue, loadCsvTable, toNumber } from "../shared/csvTableLoader";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadQuestionRanking(): Promise<Record<string, number>> {
+  try {
+    const filePath = path.join(RUNTIME_DIR, "question_reprioritization.json");
+    const raw = await fs.readFile(filePath, "utf8");
+    const rows = JSON.parse(raw) as Array<{ question: string; netValue: number }>;
+    const map: Record<string, number> = {};
+    for (const row of rows) {
+      map[row.question.toLowerCase()] = row.netValue;
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
 
 type NextBestQuestionResult = {
   next_question: string;
@@ -48,6 +69,9 @@ export async function selectNextBestQuestion(
   let bestImpact = 1;
   let why = "Next unanswered complaint-specific question";
   let linkedDiagnoses: string[] = [];
+  let learnedBoostApplied = false;
+
+  const learnedRanking = await loadQuestionRanking();
 
   if (impactRows.length > 0 && pending_questions.length > 0) {
     for (const q of pending_questions) {
@@ -62,12 +86,12 @@ export async function selectNextBestQuestion(
 
       if (!row) continue;
 
-      const impact = toNumber(
-        getFirstValue(row, ["Impact", "Impact_Score", "Weight"]),
-        1
-      );
-      if (impact > bestImpact) {
-        bestImpact = impact;
+      const impact = toNumber(getFirstValue(row, ["Impact", "Impact_Score", "Weight"]), 1);
+      const learnedBoost = learnedRanking[q.toLowerCase()] ?? 0;
+      const totalImpact = impact + learnedBoost;
+
+      if (totalImpact > bestImpact) {
+        bestImpact = totalImpact;
         bestQuestion = q;
         why =
           getFirstValue(row, ["Why_It_Matters", "Rationale", "Reason"]) ||
@@ -76,16 +100,28 @@ export async function selectNextBestQuestion(
           .split("|")
           .map((s) => s.trim())
           .filter(Boolean);
+        if (learnedBoost !== 0) learnedBoostApplied = true;
       }
     }
   }
 
-  const result: SkillResult<NextBestQuestionResult> = {
+  const confidence = bestQuestion ? 0.91 : 0.4;
+
+  let result: SkillResult<NextBestQuestionResult> = {
     skillId: "SK008",
     skillName: "select_next_best_question",
     version: "v1",
     status: bestQuestion ? "success" : "partial",
-    confidence: bestQuestion ? 0.91 : 0.4,
+    confidence,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "select_next_best_question",
+      headline: bestQuestion
+        ? `Selected: "${bestQuestion.slice(0, 60)}"${learnedBoostApplied ? " (outcome-boosted)" : ""}. Impact: ${bestImpact.toFixed(1)}.`
+        : "No pending questions available — routing to disposition.",
+      matchedRules: bestQuestion ? [`NBQ_${context.complaintId}`] : [],
+      missingData: bestQuestion ? [] : ["no_pending_question_available"],
+      confidence,
+    }),
     result: {
       next_question: bestQuestion,
       why_it_matters: why,
@@ -100,6 +136,14 @@ export async function selectNextBestQuestion(
     },
     nextRecommendedSkills: bestQuestion ? ["select_next_best_question"] : ["determine_disposition"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "select_next_best_question");
   return result;

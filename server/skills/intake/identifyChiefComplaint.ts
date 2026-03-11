@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertContextHasCaseId,
   assertSkillResultShape,
@@ -86,25 +88,41 @@ export async function identifyChiefComplaint(
       ? Math.max(0, Math.min(1, 1 - (positive[0].score - positive[1].score) / Math.max(positive[0].score, 1)))
       : 0.15;
 
-  const result: SkillResult<IdentifyChiefComplaintResult> = {
+  const confidence = top?.score ? Math.min(0.98, 0.55 + top.score / 20) : 0.45;
+  const ruleHits = top
+    ? [`CC_MATCH_${complaint_id.toUpperCase()}`]
+    : ["CC_FALLBACK_GENERAL"];
+
+  let result: SkillResult<IdentifyChiefComplaintResult> = {
     skillId: "SK003",
     skillName: "identify_chief_complaint",
     version: "v1",
     status: "success",
-    confidence: top?.score ? Math.min(0.98, 0.55 + top.score / 20) : 0.45,
-    result: {
-      complaint_id,
-      alternate_complaints: alternates,
-      ambiguity_score,
-    },
+    confidence,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "identify_chief_complaint",
+      headline: `Chief complaint identified as [${complaint_id}]${alternates.length ? `. Alternates: ${alternates.slice(0, 2).join(", ")}` : ""}. Ambiguity score ${ambiguity_score.toFixed(2)}.`,
+      matchedRules: ruleHits,
+      missingData: complaint_id === "general_symptom" ? ["specific_complaint_match"] : [],
+      confidence,
+    }),
+    result: { complaint_id, alternate_complaints: alternates, ambiguity_score },
     audit: {
       tablesUsed: ["COMPLAINT_REGISTRY", "NEGATION_HELPER"],
-      ruleHits: top ? [`CC_MATCH_${complaint_id.toUpperCase()}`] : ["CC_FALLBACK_GENERAL"],
+      ruleHits,
       missingData: complaint_id === "general_symptom" ? ["specific_complaint_match"] : [],
       latencyMs: Date.now() - started,
     },
     nextRecommendedSkills: ["normalize_patient_story", "detect_red_flags"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: complaint_id,
+  });
 
   assertSkillResultShape(result, "identify_chief_complaint");
   return result;

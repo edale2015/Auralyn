@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertComplaintIdIfNeeded,
   assertContextHasCaseId,
@@ -204,24 +206,40 @@ export async function triggerGlobalSecondaryQuestions(
   const triggered_question_bundles = [...deduped.values()];
   const priority_order = triggered_question_bundles.map((b) => b.bundle_name);
 
-  const result: SkillResult<TriggerGlobalSecondaryQuestionsResult> = {
+  const ruleHits = triggered_question_bundles.map((b) => b.bundle_name);
+
+  let result: SkillResult<TriggerGlobalSecondaryQuestionsResult> = {
     skillId: "SK010",
     skillName: "trigger_global_secondary_questions",
     version: "v1",
     status: "success",
     confidence: 0.91,
-    result: {
-      triggered_question_bundles,
-      priority_order,
-    },
+    reasoning_summary: buildReasoningSummary({
+      skillName: "trigger_global_secondary_questions",
+      headline: triggered_question_bundles.length
+        ? `Triggered ${triggered_question_bundles.length} secondary bundle(s): ${ruleHits.slice(0, 3).join(", ")}`
+        : "No secondary question bundles triggered — fallback used.",
+      matchedRules: ruleHits,
+      missingData: triggered_question_bundles.length ? [] : ["no_global_bundles_triggered"],
+      confidence: 0.91,
+    }),
+    result: { triggered_question_bundles, priority_order },
     audit: {
       tablesUsed: usedTables.length ? usedTables : ["GLOBAL_SECONDARY_FALLBACK"],
-      ruleHits: triggered_question_bundles.map((b) => b.bundle_name),
+      ruleHits,
       missingData: triggered_question_bundles.length ? [] : ["no_global_bundles_triggered"],
       latencyMs: Date.now() - started,
     },
     nextRecommendedSkills: ["select_next_best_question", "check_consistency_and_gaps"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "trigger_global_secondary_questions");
   return result;

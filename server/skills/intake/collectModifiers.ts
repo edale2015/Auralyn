@@ -4,6 +4,8 @@ import {
   assertSkillResultShape,
   safeString,
 } from "../shared/schemaValidators";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 
 type CollectModifiersResult = {
   modifiers: Record<string, any>;
@@ -105,29 +107,42 @@ export async function collectModifiers(
     if (empty) missing_fields.push(field);
   }
 
-  const result: SkillResult<CollectModifiersResult> = {
+  const ruleHits = [
+    inferredAge != null ? "AGE_INFERRED" : "",
+    modifiers.duration ? "DURATION_INFERRED" : "",
+    modifiers.immunocompromised ? "IMMUNO_RISK_FLAG" : "",
+  ].filter(Boolean);
+
+  let result: SkillResult<CollectModifiersResult> = {
     skillId: "SK001",
     skillName: "collect_modifiers",
     version: "v1",
     status: "success",
     confidence: 0.86,
-    result: {
-      modifiers,
-      missing_fields,
-      risk_tags,
-    },
+    reasoning_summary: buildReasoningSummary({
+      skillName: "collect_modifiers",
+      headline: `Extracted ${Object.keys(modifiers).length} modifier fields. Risk tags: [${risk_tags.join(", ") || "none"}]`,
+      matchedRules: ruleHits,
+      missingData: missing_fields,
+      confidence: 0.86,
+    }),
+    result: { modifiers, missing_fields, risk_tags },
     audit: {
       tablesUsed: ["GLOBAL_MODIFIERS"],
-      ruleHits: [
-        inferredAge != null ? "AGE_INFERRED" : "",
-        modifiers.duration ? "DURATION_INFERRED" : "",
-        modifiers.immunocompromised ? "IMMUNO_RISK_FLAG" : "",
-      ].filter(Boolean),
+      ruleHits,
       missingData: missing_fields,
       latencyMs: Date.now() - started,
     },
     nextRecommendedSkills: ["extract_med_to_condition_triggers", "identify_chief_complaint"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "collect_modifiers");
   return result;

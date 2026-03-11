@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertContextHasCaseId,
   assertSkillResultShape,
@@ -121,12 +123,24 @@ export async function generateAssessmentPlan(
 
   const return_precautions = defaultReturnPrecautions(context.complaintId);
 
-  const result: SkillResult<GenerateAssessmentPlanResult> = {
+  const ruleHits = [
+    topDiagnoses.length ? "TOP_DIAGNOSES_INCLUDED" : "",
+    disposition !== "unknown" ? "DISPOSITION_INCLUDED" : "",
+  ].filter(Boolean);
+
+  let result: SkillResult<GenerateAssessmentPlanResult> = {
     skillId: "SK015",
     skillName: "generate_assessment_plan",
     version: "v1",
     status: "success",
     confidence: 0.93,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "generate_assessment_plan",
+      headline: `Assessment generated. Top dx: ${topDiagnoses.slice(0, 2).join(", ") || "none"}. Disposition: ${disposition}. Plan has ${plan.length} step(s).`,
+      matchedRules: ruleHits,
+      missingData: topDiagnoses.length ? [] : ["differential_list"],
+      confidence: 0.93,
+    }),
     result: {
       assessment: assessmentParts.join(". "),
       likely_diagnoses: topDiagnoses,
@@ -136,15 +150,20 @@ export async function generateAssessmentPlan(
     },
     audit: {
       tablesUsed: ["OUTPUT_TEMPLATES_FALLBACK", "DIFFERENTIAL_OUTPUTS"],
-      ruleHits: [
-        topDiagnoses.length ? "TOP_DIAGNOSES_INCLUDED" : "",
-        disposition !== "unknown" ? "DISPOSITION_INCLUDED" : "",
-      ].filter(Boolean),
+      ruleHits,
       missingData: topDiagnoses.length ? [] : ["differential_list"],
       latencyMs: Date.now() - started,
     },
     nextRecommendedSkills: ["generate_physician_review_packet", "attach_outcome_stub"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "generate_assessment_plan");
   return result;

@@ -1,0 +1,999 @@
+Absolutely. Here is the next pack in order:
+
+Graph comparison runner
+
+Graph trace visualization
+
+Finish reasoning_summary on remaining skills with a helper
+
+Feed question reprioritization into live question selection
+
+Surface drift alerts and tuning suggestions in the cockpit
+
+Add compare-only rollout mode per complaint family
+
+Add clinician outcome save endpoint from the Outcome Panel
+
+Add side-by-side saved-case replay in sequential vs graph mode
+
+I’m structuring this so you can drop it in without turning the codebase into a haunted corn maze.
+
+1. Graph comparison runner
+
+Create:
+
+server/testing/graphComparisonRunner.ts
+server/testing/graphComparisonRunner.ts
+import fs from "fs/promises";
+import path from "path";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { SkillContext } from "../skills/shared/skillTypes";
+
+type GoldenCase = {
+  id: string;
+  input: {
+    rawText: string;
+    modifiers?: Record<string, any>;
+  };
+  expected?: Record<string, any>;
+};
+
+function extractComparable(state: any) {
+  return {
+    complaint_id:
+      state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+    disposition:
+      state.skillResults?.determine_disposition?.result?.disposition ?? "",
+    clinical_score_name:
+      state.skillResults?.apply_clinical_score?.result?.score_name ?? "",
+    clinical_score_value:
+      state.skillResults?.apply_clinical_score?.result?.score_value ?? null,
+    red_flag_hits:
+      (state.skillResults?.detect_red_flags?.result?.red_flag_hits ?? []).map(
+        (r: any) => r.label ?? r.id ?? String(r)
+      ),
+    top_differential:
+      (state.skillResults?.generate_differential?.result?.differential_list ?? [])
+        .slice(0, 3)
+        .map((d: any) => d.diagnosis ?? String(d)),
+    completed_skills: state.completedSkills ?? [],
+    finalDisposition: state.finalDisposition ?? "",
+    totalEstimatedCostUsd:
+      Object.values(state.skillResults ?? {}).reduce(
+        (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+        0
+      ),
+    totalLatencyMs:
+      Object.values(state.skillResults ?? {}).reduce(
+        (sum: number, r: any) => sum + Number(r?.audit?.latencyMs ?? 0),
+        0
+      ),
+  };
+}
+
+function diffObjects(a: any, b: any) {
+  const diffs: Array<{ field: string; sequential: any; graph: any }> = [];
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+
+  for (const key of keys) {
+    const av = JSON.stringify(a[key]);
+    const bv = JSON.stringify(b[key]);
+    if (av !== bv) {
+      diffs.push({
+        field: key,
+        sequential: a[key],
+        graph: b[key],
+      });
+    }
+  }
+
+  return diffs;
+}
+
+async function loadGoldenCases(fileName: string): Promise<GoldenCase[]> {
+  const fullPath = path.resolve(process.cwd(), "server/testing", fileName);
+  const raw = await fs.readFile(fullPath, "utf8");
+  return JSON.parse(raw) as GoldenCase[];
+}
+
+export async function runGraphComparison(fileName = "goldenCases.sample.json") {
+  const cases = await loadGoldenCases(fileName);
+  const orchestrator = new ClinicalSkillOrchestrator();
+
+  const results: any[] = [];
+
+  for (const testCase of cases) {
+    const baseContext: SkillContext = {
+      caseId: `COMPARE_${testCase.id}`,
+      rawText: testCase.input.rawText,
+      modifiers: testCase.input.modifiers ?? {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+      },
+    };
+
+    const sequentialState = await orchestrator.run({
+      ...baseContext,
+      config: {
+        ...baseContext.config,
+        orchestrationMode: "sequential",
+      },
+    });
+
+    const graphState = await orchestrator.run({
+      ...baseContext,
+      config: {
+        ...baseContext.config,
+        orchestrationMode: "graph",
+      },
+    });
+
+    const sequential = extractComparable(sequentialState);
+    const graph = extractComparable(graphState);
+    const diffs = diffObjects(sequential, graph);
+
+    results.push({
+      id: testCase.id,
+      same: diffs.length === 0,
+      diffs,
+      sequential,
+      graph,
+    });
+  }
+
+  const outPath = path.resolve(process.cwd(), "server/testing", "graphComparisonResults.json");
+  await fs.writeFile(outPath, JSON.stringify(results, null, 2), "utf8");
+
+  const sameCount = results.filter((r) => r.same).length;
+  const diffCount = results.length - sameCount;
+
+  console.log(`Graph comparison complete: ${sameCount} matched, ${diffCount} differed.`);
+  console.log(`Saved -> server/testing/graphComparisonResults.json`);
+
+  return {
+    total: results.length,
+    same: sameCount,
+    different: diffCount,
+    results,
+  };
+}
+
+if (require.main === module) {
+  runGraphComparison().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+2. Graph trace visualization backend
+
+Create:
+
+server/services/graphTraceService.ts
+server/routes/graphTraceRoutes.ts
+server/services/graphTraceService.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+
+export function buildGraphTrace(context: SkillContext) {
+  const outputs = context.priorSkillOutputs ?? {};
+
+  const steps = Object.entries(outputs).map(([skillName, result]: any, idx) => ({
+    step: idx + 1,
+    node: skillName,
+    status: result?.status ?? "unknown",
+    confidence: result?.confidence ?? null,
+    reasoning_summary: result?.reasoning_summary ?? "",
+    ruleHits: result?.audit?.ruleHits ?? [],
+    missingData: result?.audit?.missingData ?? [],
+    estimatedCostUsd: result?.audit?.estimatedCostUsd ?? 0,
+    latencyMs: result?.audit?.latencyMs ?? 0,
+    nextRecommendedSkills: result?.nextRecommendedSkills ?? [],
+  }));
+
+  const totalEstimatedCostUsd = steps.reduce(
+    (sum, s) => sum + Number(s.estimatedCostUsd ?? 0),
+    0
+  );
+  const totalLatencyMs = steps.reduce(
+    (sum, s) => sum + Number(s.latencyMs ?? 0),
+    0
+  );
+
+  const stopReason =
+    outputs?.determine_disposition?.result?.disposition
+      ? `Disposition reached: ${outputs.determine_disposition.result.disposition}`
+      : steps.length
+      ? "No further graph edges or sequence complete"
+      : "No graph steps executed";
+
+  return {
+    steps,
+    totals: {
+      totalEstimatedCostUsd,
+      totalLatencyMs,
+    },
+    stopReason,
+  };
+}
+server/routes/graphTraceRoutes.ts
+import express from "express";
+import { buildGraphTrace } from "../services/graphTraceService";
+
+const router = express.Router();
+
+router.post("/api/skill-layer/graph-trace", async (req, res) => {
+  try {
+    const trace = buildGraphTrace(req.body.context);
+    res.json({ ok: true, trace });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register it:
+
+import graphTraceRoutes from "./routes/graphTraceRoutes";
+app.use(graphTraceRoutes);
+3. Finish reasoning_summary on remaining skills with a helper
+
+Create:
+
+server/skills/shared/reasoningSummaryHelper.ts
+server/skills/shared/reasoningSummaryHelper.ts
+export function buildReasoningSummary(params: {
+  skillName: string;
+  headline: string;
+  matchedRules?: string[];
+  missingData?: string[];
+  confidence?: number;
+}) {
+  const bits = [params.headline];
+
+  if (params.matchedRules?.length) {
+    bits.push(`Matched rules: ${params.matchedRules.slice(0, 5).join(", ")}`);
+  }
+
+  if (params.missingData?.length) {
+    bits.push(`Missing data: ${params.missingData.slice(0, 5).join(", ")}`);
+  }
+
+  if (typeof params.confidence === "number") {
+    bits.push(`Confidence ${params.confidence.toFixed(2)}`);
+  }
+
+  return bits.join(". ");
+}
+Update pattern for remaining skills
+
+For each skill that still lacks it, add:
+
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
+
+Then set:
+
+reasoning_summary: buildReasoningSummary({
+  skillName: "my_skill",
+  headline: "Short explanation of what this skill concluded",
+  matchedRules: ruleHits,
+  missingData: missingData,
+  confidence: 0.91,
+}),
+
+and then wrap result:
+
+result = attachCostMetadata(result, {
+  engineType: "rules",
+  modelUsed: "",
+  promptTokens: 0,
+  completionTokens: 0,
+  complaintFamily: complaintId,
+});
+
+This is the fastest way to finish all 13 remaining skills without hand-writing wildly inconsistent summaries.
+
+4. Feed question reprioritization into live question selection
+
+Update:
+
+server/skills/questions/selectNextBestQuestion.ts
+
+Add this import:
+
+import fs from "fs/promises";
+import path from "path";
+
+Add helper near top:
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadQuestionRanking(): Promise<Record<string, number>> {
+  try {
+    const filePath = path.join(RUNTIME_DIR, "question_reprioritization.json");
+    const raw = await fs.readFile(filePath, "utf8");
+    const rows = JSON.parse(raw) as Array<{ question: string; netValue: number }>;
+    const map: Record<string, number> = {};
+    for (const row of rows) {
+      map[row.question.toLowerCase()] = row.netValue;
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+Then inside selectNextBestQuestion, before picking best question:
+
+const learnedRanking = await loadQuestionRanking();
+
+Then change scoring logic:
+
+const learnedBoost = learnedRanking[q.toLowerCase()] ?? 0;
+const totalImpact = impact + learnedBoost;
+if (totalImpact > bestImpact) {
+  bestImpact = totalImpact;
+  bestQuestion = q;
+  why =
+    getFirstValue(row, ["Why_It_Matters", "Rationale", "Reason"]) ||
+    "High diagnostic/disposition impact";
+  linkedDiagnoses = getFirstValue(row, ["Linked_Diagnoses", "Diagnoses", "Targets"])
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+And update reasoning_summary to mention learned reprioritization if boost applied.
+
+Also create a writer for reprioritization output
+
+Create:
+
+server/learning/saveQuestionReprioritization.ts
+import fs from "fs/promises";
+import path from "path";
+import { reprioritizeQuestionsFromOutcomes } from "./questionReprioritizer";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+export async function saveQuestionReprioritization() {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+  const rows = await reprioritizeQuestionsFromOutcomes();
+  const outPath = path.join(RUNTIME_DIR, "question_reprioritization.json");
+  await fs.writeFile(outPath, JSON.stringify(rows, null, 2), "utf8");
+  console.log(`Saved -> ${outPath}`);
+  return rows;
+}
+
+if (require.main === module) {
+  saveQuestionReprioritization().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+5. Surface drift alerts and tuning suggestions in the cockpit
+
+Create:
+
+server/routes/learningRoutes.ts
+client/src/lib/learningApi.ts
+client/src/components/skill-layer/DriftAlertsCard.tsx
+server/routes/learningRoutes.ts
+import express from "express";
+import { generateComplaintDriftAlerts } from "../learning/complaintDriftAlerts";
+import { generateTuningSuggestionsFromReconciliations } from "../learning/tuningSuggestionEngine";
+
+const router = express.Router();
+
+router.get("/api/skill-layer/drift-alerts", async (_req, res) => {
+  try {
+    const alerts = await generateComplaintDriftAlerts();
+    res.json({ ok: true, alerts });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+router.get("/api/skill-layer/tuning-suggestions", async (_req, res) => {
+  try {
+    const suggestions = await generateTuningSuggestionsFromReconciliations();
+    res.json({ ok: true, suggestions });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register:
+
+import learningRoutes from "./routes/learningRoutes";
+app.use(learningRoutes);
+client/src/lib/learningApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const learningApi = {
+  getDriftAlerts() {
+    return getJson<{ ok: boolean; alerts: any[] }>("/api/skill-layer/drift-alerts");
+  },
+  getTuningSuggestions() {
+    return getJson<{ ok: boolean; suggestions: any[] }>("/api/skill-layer/tuning-suggestions");
+  },
+};
+client/src/components/skill-layer/DriftAlertsCard.tsx
+import React from "react";
+
+type Props = {
+  alerts: any[];
+  suggestions: any[];
+};
+
+export default function DriftAlertsCard({ alerts, suggestions }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Drift Alerts & Tuning Suggestions</h2>
+
+      <div className="space-y-4">
+        <div>
+          <div className="mb-2 text-sm font-medium text-slate-700">Alerts</div>
+          {alerts.length === 0 ? (
+            <div className="text-sm text-slate-500">No active complaint drift alerts.</div>
+          ) : (
+            <div className="space-y-2">
+              {alerts.map((a, idx) => (
+                <div key={idx} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="font-medium text-amber-900">{a.complaint}</div>
+                  <div className="text-sm text-amber-800">
+                    Failure rate: {(a.failureRate * 100).toFixed(1)}% | Safety miss rate:{" "}
+                    {(a.safetyMissRate * 100).toFixed(1)}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-2 text-sm font-medium text-slate-700">Suggestions</div>
+          {suggestions.length === 0 ? (
+            <div className="text-sm text-slate-500">No tuning suggestions generated.</div>
+          ) : (
+            <div className="space-y-3">
+              {suggestions.map((s, idx) => (
+                <div key={idx} className="rounded-xl bg-slate-50 p-3">
+                  <div className="font-medium text-slate-900">{s.complaint}</div>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                    {(s.suggestions ?? []).map((item: string, i: number) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+Update SkillLayerReviewPage.tsx
+
+Add imports:
+
+import { learningApi } from "../lib/learningApi";
+import DriftAlertsCard from "../components/skill-layer/DriftAlertsCard";
+
+Add state:
+
+const [driftAlerts, setDriftAlerts] = useState<any[]>([]);
+const [tuningSuggestions, setTuningSuggestions] = useState<any[]>([]);
+const [graphTrace, setGraphTrace] = useState<any>(null);
+
+In useEffect add:
+
+useEffect(() => {
+  refreshSavedCases();
+  learningApi.getDriftAlerts().then((r) => setDriftAlerts(r.alerts ?? [])).catch(console.error);
+  learningApi.getTuningSuggestions().then((r) => setTuningSuggestions(r.suggestions ?? [])).catch(console.error);
+}, []);
+
+When running case, also fetch graph trace:
+
+const graphTraceRes = await fetch("/api/skill-layer/graph-trace", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ context }),
+}).then((r) => r.json());
+
+setGraphTrace(graphTraceRes.trace);
+
+Render the new card in column 3:
+
+<DriftAlertsCard alerts={driftAlerts} suggestions={tuningSuggestions} />
+6. Add compare-only rollout mode per complaint family
+
+Update:
+
+server/config/siteConfigRegistry.ts
+
+Replace or expand with:
+
+export type ComplaintRolloutMode = "sequential" | "graph" | "compare";
+
+export type SiteConfig = {
+  siteId: string;
+  name: string;
+  enabledComplaints: string[];
+  enabledModules: string[];
+  complaintRolloutModes?: Record<string, ComplaintRolloutMode>;
+};
+
+export const SITE_CONFIGS: SiteConfig[] = [
+  {
+    siteId: "default",
+    name: "Default Clinic",
+    enabledComplaints: [
+      "sore_throat",
+      "cough",
+      "uti",
+      "chest_pain",
+      "abdominal_pain",
+      "fever",
+      "rash",
+      "ear_pain",
+      "sinus_pressure",
+    ],
+    enabledModules: [
+      "intake",
+      "triage",
+      "reasoning",
+      "output",
+      "outcomes",
+      "analytics",
+    ],
+    complaintRolloutModes: {
+      sore_throat: "graph",
+      cough: "graph",
+      uti: "graph",
+      chest_pain: "sequential",
+      abdominal_pain: "sequential",
+    },
+  },
+];
+
+export function getSiteConfig(siteId = "default"): SiteConfig {
+  return SITE_CONFIGS.find((s) => s.siteId === siteId) ?? SITE_CONFIGS[0];
+}
+
+export function getComplaintRolloutMode(
+  complaintId: string,
+  siteId = "default"
+): ComplaintRolloutMode {
+  const cfg = getSiteConfig(siteId);
+  return cfg.complaintRolloutModes?.[complaintId] ?? "sequential";
+}
+
+Then update ClinicalSkillOrchestrator with a small helper:
+
+import { getComplaintRolloutMode } from "../config/siteConfigRegistry";
+
+Replace shouldUseGraphMode with:
+
+function getExecutionMode(context: SkillContext): "sequential" | "graph" | "compare" {
+  const requested = context.config?.orchestrationMode;
+  const siteId = context.metadata?.siteId ?? "default";
+  const complaint = canonicalizeComplaintId(context.complaintId);
+
+  if (requested === "sequential") return "sequential";
+  if (requested === "graph") return "graph";
+
+  if (complaint) {
+    return getComplaintRolloutMode(complaint, siteId);
+  }
+
+  return "sequential";
+}
+
+And in run() use:
+
+graph → graph
+
+sequential → sequential
+
+compare → run both and return sequential as primary while logging comparison
+
+For now, simple compare logging:
+
+if (getExecutionMode(initialContext) === "compare") {
+  const sequential = await runSequentialMode(initialContext, runSkill);
+  try {
+    const graph = await runGraphMode(
+      { ...initialContext, config: { ...initialContext.config, orchestrationMode: "graph" } },
+      runSkill
+    );
+    console.log("COMPARE MODE DIFF", {
+      caseId: initialContext.caseId,
+      sequentialDisposition: sequential.finalDisposition,
+      graphDisposition: graph.finalDisposition,
+      sequentialComplaint: sequential.skillResults?.identify_chief_complaint?.result?.complaint_id,
+      graphComplaint: graph.skillResults?.identify_chief_complaint?.result?.complaint_id,
+    });
+  } catch (err) {
+    console.error("Compare mode graph run failed:", err);
+  }
+  return sequential;
+}
+7. Add clinician outcome save endpoint from the Outcome Panel
+
+Create:
+
+server/routes/outcomeRoutes.ts
+server/routes/outcomeRoutes.ts
+import express from "express";
+import { recordCaseOutcome } from "../skills/outcomes/recordCaseOutcome";
+import { linkFollowUpResult } from "../skills/outcomes/linkFollowUpResult";
+
+const router = express.Router();
+
+router.post("/api/skill-layer/outcome", async (req, res) => {
+  try {
+    const result = await recordCaseOutcome(req.body);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+router.post("/api/skill-layer/followup", async (req, res) => {
+  try {
+    const result = await linkFollowUpResult(req.body);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register:
+
+import outcomeRoutes from "./routes/outcomeRoutes";
+app.use(outcomeRoutes);
+
+Update client/src/lib/skillLayerApi.ts:
+
+saveOutcome(payload: any) {
+  return postJson<{ ok: boolean; result: any }>("/api/skill-layer/outcome", payload);
+},
+
+saveFollowUp(payload: any) {
+  return postJson<{ ok: boolean; result: any }>("/api/skill-layer/followup", payload);
+},
+
+Update OutcomePanel.tsx:
+
+import { skillLayerApi } from "../../lib/skillLayerApi";
+
+Replace handleSave() with:
+
+async function handleSave() {
+  try {
+    if (!caseId) {
+      setStatus("Missing case ID.");
+      return;
+    }
+
+    await skillLayerApi.saveOutcome({
+      caseId,
+      finalDiagnosis,
+      clinicianNotes: "",
+    });
+
+    if (actualDisposition.trim()) {
+      await skillLayerApi.saveFollowUp({
+        caseId,
+        followUpNotes: `Actual disposition: ${actualDisposition}`,
+      });
+    }
+
+    setStatus("Outcome saved.");
+  } catch (err: any) {
+    setStatus(err.message ?? "Failed");
+  }
+}
+8. Add side-by-side saved-case replay in sequential vs graph mode
+
+Create:
+
+server/routes/caseReplayRoutes.ts
+client/src/components/skill-layer/CaseReplayCompareCard.tsx
+client/src/lib/caseReplayApi.ts
+server/routes/caseReplayRoutes.ts
+import express from "express";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { getSavedCaseDetail } from "../services/savedCasesService";
+
+const router = express.Router();
+
+router.get("/api/skill-layer/cases/:caseId/replay-compare", async (req, res) => {
+  try {
+    const detail = await getSavedCaseDetail(req.params.caseId);
+    const rawText =
+      detail?.skillRuns?.[0]
+        ? (() => {
+            try {
+              const parsed = JSON.parse(detail.skillRuns[0].inputSummary ?? "{}");
+              return parsed.rawText ?? "";
+            } catch {
+              return "";
+            }
+          })()
+        : "";
+
+    const complaintId = detail?.caseAudit?.complaintId ?? detail?.caseAudit?.complaint_id ?? "";
+
+    const orchestrator = new ClinicalSkillOrchestrator();
+
+    const baseContext = {
+      caseId: `REPLAY_${req.params.caseId}`,
+      rawText,
+      complaintId,
+      modifiers: {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+      },
+    };
+
+    const sequential = await orchestrator.run({
+      ...baseContext,
+      config: { ...baseContext.config, orchestrationMode: "sequential" },
+    });
+
+    const graph = await orchestrator.run({
+      ...baseContext,
+      config: { ...baseContext.config, orchestrationMode: "graph" },
+    });
+
+    res.json({ ok: true, sequential, graph });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+
+Register:
+
+import caseReplayRoutes from "./routes/caseReplayRoutes";
+app.use(caseReplayRoutes);
+client/src/lib/caseReplayApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const caseReplayApi = {
+  replayCompare(caseId: string) {
+    return getJson<{ ok: boolean; sequential: any; graph: any }>(
+      `/api/skill-layer/cases/${encodeURIComponent(caseId)}/replay-compare`
+    );
+  },
+};
+client/src/components/skill-layer/CaseReplayCompareCard.tsx
+import React, { useState } from "react";
+import { caseReplayApi } from "../../lib/caseReplayApi";
+
+type Props = {
+  caseId?: string;
+};
+
+function summarize(state: any) {
+  return {
+    complaint:
+      state?.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+    disposition:
+      state?.skillResults?.determine_disposition?.result?.disposition ?? "",
+    score:
+      state?.skillResults?.apply_clinical_score?.result?.score_name ?? "",
+    topDx:
+      (state?.skillResults?.generate_differential?.result?.differential_list ?? [])
+        .slice(0, 3)
+        .map((d: any) => d.diagnosis ?? String(d)),
+    completedSkills: state?.completedSkills ?? [],
+  };
+}
+
+export default function CaseReplayCompareCard({ caseId }: Props) {
+  const [result, setResult] = useState<any>(null);
+  const [status, setStatus] = useState("");
+
+  async function handleReplay() {
+    try {
+      if (!caseId) {
+        setStatus("Missing case ID.");
+        return;
+      }
+      setStatus("Running replay...");
+      const res = await caseReplayApi.replayCompare(caseId);
+      setResult({
+        sequential: summarize(res.sequential),
+        graph: summarize(res.graph),
+      });
+      setStatus("Replay comparison complete.");
+    } catch (err: any) {
+      setStatus(err.message ?? "Replay failed");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Sequential vs Graph Replay</h2>
+
+      <button
+        onClick={handleReplay}
+        className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+      >
+        Replay selected case
+      </button>
+
+      {!!status && <div className="mt-3 text-sm text-slate-600">{status}</div>}
+
+      {result && (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl bg-slate-50 p-3">
+            <div className="mb-2 font-medium">Sequential</div>
+            <pre className="overflow-auto text-xs">{JSON.stringify(result.sequential, null, 2)}</pre>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3">
+            <div className="mb-2 font-medium">Graph</div>
+            <pre className="overflow-auto text-xs">{JSON.stringify(result.graph, null, 2)}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+Add this to CaseDetailDrawer.tsx
+
+Import:
+
+import CaseReplayCompareCard from "./CaseReplayCompareCard";
+
+And render inside the drawer:
+
+<section>
+  <h3 className="mb-2 font-medium text-slate-800">Replay Comparison</h3>
+  <CaseReplayCompareCard caseId={detail?.caseId} />
+</section>
+What to do next, in order
+
+Now that this pack is in place, here is the exact order to finish the graph-enabled layer:
+
+Step 1
+
+Run the graph comparison runner on all golden cases:
+
+npx tsx server/testing/graphComparisonRunner.ts
+Step 2
+
+Update the remaining 13 skills to emit:
+
+reasoning_summary
+
+attachCostMetadata(...)
+
+Do this complaint-safe order:
+
+question skills
+
+output skills
+
+intake helpers
+
+outcome/analytics skills
+
+Step 3
+
+Save live question reprioritization:
+
+npx tsx server/learning/saveQuestionReprioritization.ts
+
+Then re-run golden cases and inspect question changes.
+
+Step 4
+
+Use compare rollout mode for:
+
+sore_throat
+
+cough
+
+uti
+
+Keep:
+
+chest_pain
+
+abdominal_pain
+
+fever
+as sequential-only
+
+Step 5
+
+Open the clinician cockpit and verify:
+
+drift alerts render
+
+tuning suggestions render
+
+graph trace renders
+
+saved case replay works
+
+outcome save works
+
+Step 6
+
+Add graph path pass/fail assertions to golden cases
+Next upgrade:
+
+expected completed skill order prefix
+
+expected graph stop reason
+
+expected max cost band
+
+Step 7
+
+Build node/edge trace logging
+This is the next most valuable graph-specific enhancement after this pack.
+
+What remains after this pack
+
+After you complete the above, the remaining important work is:
+
+node/edge graph trace logging
+
+graph-specific golden-case assertions
+
+cost-vs-value dashboard
+
+rule governance UI
+
+auto-generated golden cases from reconciliations
+
+graph visualization panel with edges/guards, not just node list
+
+That will make the layer feel truly complete.
+
+The best immediate next move after you paste this is to run:
+
+graph comparison
+
+saved case replay
+
+outcome save
+
+drift/tuning cards in the cockpit
+
+That will tell you exactly where graph mode is already safe and where it still needs sanding.
+
+Voice chat ended

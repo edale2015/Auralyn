@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertComplaintIdIfNeeded,
   assertContextHasCaseId,
@@ -130,28 +132,43 @@ export async function checkConsistencyAndGaps(
     }
   }
 
-  const result: SkillResult<CheckConsistencyAndGapsResult> = {
+  const ruleHits = [
+    inconsistencies.length ? "INCONSISTENCY_DETECTED" : "",
+    missing_critical_data.length ? "MISSING_CRITICAL_DATA" : "",
+  ].filter(Boolean);
+
+  let result: SkillResult<CheckConsistencyAndGapsResult> = {
     skillId: "SK014",
     skillName: "check_consistency_and_gaps",
     version: "v1",
     status: "success",
     confidence: 0.9,
-    result: {
-      inconsistencies,
-      missing_critical_data,
-      clarifying_questions,
-    },
+    reasoning_summary: buildReasoningSummary({
+      skillName: "check_consistency_and_gaps",
+      headline: inconsistencies.length || missing_critical_data.length
+        ? `Found ${inconsistencies.length} inconsistency(ies) and ${missing_critical_data.length} data gap(s).`
+        : "No inconsistencies or critical data gaps detected.",
+      matchedRules: ruleHits,
+      missingData: missing_critical_data,
+      confidence: 0.9,
+    }),
+    result: { inconsistencies, missing_critical_data, clarifying_questions },
     audit: {
       tablesUsed: ["NORMALIZED_FACTS", "COMPLAINT_REQUIREMENTS_FALLBACK"],
-      ruleHits: [
-        inconsistencies.length ? "INCONSISTENCY_DETECTED" : "",
-        missing_critical_data.length ? "MISSING_CRITICAL_DATA" : "",
-      ].filter(Boolean),
+      ruleHits,
       missingData: missing_critical_data,
       latencyMs: Date.now() - started,
     },
     nextRecommendedSkills: ["determine_disposition", "generate_assessment_plan"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "check_consistency_and_gaps");
   return result;

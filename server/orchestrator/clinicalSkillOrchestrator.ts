@@ -30,6 +30,7 @@ import { measureWorkflowValue } from "../skills/analytics/measureWorkflowValue";
 
 import { runReasoningGraph } from "../reasoning-graph/graphRunner";
 import { canonicalizeComplaintId } from "../skills/shared/complaintAliasRegistry";
+import { getComplaintRolloutMode } from "../config/siteConfigRegistry";
 
 type SkillRunner = (context: SkillContext) => Promise<SkillResult>;
 type SkillRunnerMap = Record<string, SkillRunner>;
@@ -79,7 +80,6 @@ const DEFAULT_SEQUENCE = [
   "measure_workflow_value",
 ] as const;
 
-const GRAPH_ENABLED_COMPLAINTS = new Set(["sore_throat", "cough", "uti"]);
 
 function buildSkillRunnerMap(): SkillRunnerMap {
   return {
@@ -124,11 +124,22 @@ function buildContextForSkill(
   };
 }
 
-function shouldUseGraphMode(context: SkillContext): boolean {
-  if (context.config?.orchestrationMode !== "graph") return false;
+function getExecutionMode(
+  context: SkillContext
+): "sequential" | "graph" | "compare" {
+  const requested = context.config?.orchestrationMode as string | undefined;
+  const siteId = (context as any).metadata?.siteId ?? "default";
   const complaint = canonicalizeComplaintId(context.complaintId);
-  if (!complaint) return true;
-  return GRAPH_ENABLED_COMPLAINTS.has(complaint);
+
+  if (requested === "sequential") return "sequential";
+  if (requested === "graph") return "graph";
+  if (requested === "compare") return "compare";
+
+  if (complaint) {
+    return getComplaintRolloutMode(complaint, siteId);
+  }
+
+  return "sequential";
 }
 
 async function buildAuditLogArgs(state: OrchestratorState) {
@@ -246,8 +257,31 @@ async function runGraphMode(
 export class ClinicalSkillOrchestrator {
   async run(initialContext: SkillContext): Promise<OrchestratorState> {
     const runSkill = buildSkillRunnerMap();
+    const mode = getExecutionMode(initialContext);
 
-    if (shouldUseGraphMode(initialContext)) {
+    if (mode === "compare") {
+      const sequential = await runSequentialMode(initialContext, runSkill);
+      try {
+        const graph = await runGraphMode(
+          { ...initialContext, config: { ...initialContext.config, orchestrationMode: "graph" } },
+          runSkill
+        );
+        console.log("[Orchestrator] COMPARE MODE DIFF", {
+          caseId: initialContext.caseId,
+          sequentialDisposition: sequential.finalDisposition,
+          graphDisposition: graph.finalDisposition,
+          sequentialComplaint:
+            sequential.skillResults?.identify_chief_complaint?.result?.complaint_id,
+          graphComplaint:
+            graph.skillResults?.identify_chief_complaint?.result?.complaint_id,
+        });
+      } catch (err) {
+        console.error("[Orchestrator] Compare mode graph run failed:", err);
+      }
+      return sequential;
+    }
+
+    if (mode === "graph") {
       try {
         return await runGraphMode(initialContext, runSkill);
       } catch (err) {

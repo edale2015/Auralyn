@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { skillLayerApi } from "../../lib/skillLayerApi";
 
 type Props = {
   caseId?: string;
@@ -8,13 +9,33 @@ export default function OutcomePanel({ caseId }: Props) {
   const [finalDiagnosis, setFinalDiagnosis] = useState("");
   const [actualDisposition, setActualDisposition] = useState("");
   const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  function handleSave() {
-    if (!finalDiagnosis && !actualDisposition) {
-      setStatus("Enter at least one outcome field before saving.");
-      return;
+  async function handleSave() {
+    try {
+      if (!caseId) {
+        setStatus("Missing case ID.");
+        return;
+      }
+      if (!finalDiagnosis && !actualDisposition) {
+        setStatus("Enter at least one outcome field before saving.");
+        return;
+      }
+      setSaving(true);
+      setStatus("");
+      await skillLayerApi.saveOutcome({ caseId, finalDiagnosis, clinicianNotes: "" });
+      if (actualDisposition.trim()) {
+        await skillLayerApi.saveFollowUp({
+          caseId,
+          followUpNotes: `Actual disposition: ${actualDisposition}`,
+        });
+      }
+      setStatus("Outcome saved.");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed to save outcome.");
+    } finally {
+      setSaving(false);
     }
-    setStatus("Outcome draft saved locally — wired to /api/skill-layer on next pass.");
   }
 
   return (
@@ -51,9 +72,10 @@ export default function OutcomePanel({ caseId }: Props) {
         <button
           data-testid="button-save-outcome"
           onClick={handleSave}
-          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 transition-colors"
+          disabled={saving}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 transition-colors disabled:opacity-50"
         >
-          Save outcome draft
+          {saving ? "Saving…" : "Save outcome"}
         </button>
 
         {!!status && (

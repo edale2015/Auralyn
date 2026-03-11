@@ -3,6 +3,8 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 
 type MeasureWorkflowValueResult = {
   minutes_saved_estimate: number;
@@ -48,17 +50,19 @@ export async function measureWorkflowValue(
   const minutes_saved_estimate =
     Math.round((questions_precollected * 0.25 + note_sections_prefilled * 0.75) * 10) / 10;
 
-  const result: SkillResult<MeasureWorkflowValueResult> = {
+  let result: SkillResult<MeasureWorkflowValueResult> = {
     skillId: "SK017",
     skillName: "measure_workflow_value",
     version: "v1",
     status: "success",
     confidence: 0.86,
-    result: {
-      minutes_saved_estimate,
-      questions_precollected,
-      note_sections_prefilled,
-    },
+    reasoning_summary: buildReasoningSummary({
+      skillName: "measure_workflow_value",
+      headline: `Estimated ${minutes_saved_estimate} min saved. ${questions_precollected} questions pre-collected, ${note_sections_prefilled} note sections pre-filled.`,
+      matchedRules: ["WORKFLOW_VALUE_ESTIMATED"],
+      confidence: 0.86,
+    }),
+    result: { minutes_saved_estimate, questions_precollected, note_sections_prefilled },
     audit: {
       tablesUsed: ["WORKFLOW_METRICS_FALLBACK"],
       ruleHits: ["WORKFLOW_VALUE_ESTIMATED"],
@@ -67,6 +71,14 @@ export async function measureWorkflowValue(
     },
     nextRecommendedSkills: [],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "measure_workflow_value");
   return result;

@@ -1,4 +1,6 @@
 import { OutcomeStub, SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 
 function inferFollowUpWindowDays(complaintId?: string, disposition?: string): number {
   if (disposition === "er_now") return 1;
@@ -38,12 +40,19 @@ export async function attachOutcomeStub(
     createdAt: new Date().toISOString(),
   };
 
-  return {
+  let result: SkillResult<OutcomeStub> = {
     skillId: "SK016",
     skillName: "attach_outcome_stub",
     version: "v1",
     status: "success",
     confidence: 0.98,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "attach_outcome_stub",
+      headline: `Outcome stub created. Disposition: [${priorDisposition}]. Callback needed: ${stub.callbackNeeded}. Follow-up window: ${stub.expectedFollowUpWindowDays}d.`,
+      matchedRules: ["OUTCOME_STUB_CREATED"],
+      missingData: priorDisposition === "unknown" ? ["final_disposition"] : [],
+      confidence: 0.98,
+    }),
     result: stub,
     audit: {
       tablesUsed: ["OUTCOME_TRACKING"],
@@ -53,4 +62,14 @@ export async function attachOutcomeStub(
     },
     nextRecommendedSkills: ["measure_workflow_value"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
+
+  return result;
 }

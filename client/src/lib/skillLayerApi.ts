@@ -41,4 +41,13 @@ export const skillLayerApi = {
       { context }
     );
   },
+  getGraphTrace(context: any) {
+    return postJson<{ ok: boolean; trace: any }>("/api/skill-layer/graph-trace", { context });
+  },
+  saveOutcome(payload: any) {
+    return postJson<{ ok: boolean; result: any }>("/api/skill-layer/outcome", payload);
+  },
+  saveFollowUp(payload: any) {
+    return postJson<{ ok: boolean; result: any }>("/api/skill-layer/followup", payload);
+  },
 };

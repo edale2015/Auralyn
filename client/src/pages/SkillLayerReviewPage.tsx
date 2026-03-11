@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { skillLayerApi } from "../lib/skillLayerApi";
+import { learningApi } from "../lib/learningApi";
 import CaseInputCard from "../components/skill-layer/CaseInputCard";
 import DispositionBadge from "../components/skill-layer/DispositionBadge";
 import RedFlagsCard from "../components/skill-layer/RedFlagsCard";
@@ -9,6 +10,8 @@ import DischargeCard from "../components/skill-layer/DischargeCard";
 import AuditTraceCard from "../components/skill-layer/AuditTraceCard";
 import OutcomePanel from "../components/skill-layer/OutcomePanel";
 import CallbackQueueCard from "../components/skill-layer/CallbackQueueCard";
+import DriftAlertsCard from "../components/skill-layer/DriftAlertsCard";
+import CaseReplayCompareCard from "../components/skill-layer/CaseReplayCompareCard";
 
 export default function SkillLayerReviewPage() {
   const [rawText, setRawText] = useState(
@@ -19,8 +22,16 @@ export default function SkillLayerReviewPage() {
   const [chartNote, setChartNote] = useState<any>(null);
   const [discharge, setDischarge] = useState<any>(null);
   const [auditTrace, setAuditTrace] = useState<any[]>([]);
+  const [graphTrace, setGraphTrace] = useState<any>(null);
+  const [driftAlerts, setDriftAlerts] = useState<any[]>([]);
+  const [tuningSuggestions, setTuningSuggestions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    learningApi.getDriftAlerts().then((r) => setDriftAlerts(r.alerts ?? [])).catch(console.error);
+    learningApi.getTuningSuggestions().then((r) => setTuningSuggestions(r.suggestions ?? [])).catch(console.error);
+  }, []);
 
   const contextForDerivedCalls = useMemo(() => {
     if (!runResult?.state?.context) return null;
@@ -47,21 +58,24 @@ export default function SkillLayerReviewPage() {
 
       const res = await skillLayerApi.runCase({ rawText, modifiers });
       setRunResult(res);
+      setGraphTrace(null);
 
       const context = {
         ...res.state.context,
         priorSkillOutputs: res.state.skillResults,
       };
 
-      const [noteRes, dischargeRes, traceRes] = await Promise.all([
+      const [noteRes, dischargeRes, traceRes, gTraceRes] = await Promise.all([
         skillLayerApi.buildChartNote(context),
         skillLayerApi.buildDischarge(context),
         skillLayerApi.getAuditTrace(context),
+        skillLayerApi.getGraphTrace(context).catch(() => null),
       ]);
 
       setChartNote(noteRes.note);
       setDischarge(dischargeRes.instructions);
       setAuditTrace(traceRes.trace);
+      if (gTraceRes?.ok) setGraphTrace(gTraceRes.trace);
     } catch (err: any) {
       setError(err.message ?? "Run failed");
     } finally {
@@ -167,7 +181,7 @@ export default function SkillLayerReviewPage() {
             <DischargeCard instructions={discharge} />
           </div>
 
-          {/* Column 3: audit trace + quick outputs */}
+          {/* Column 3: audit trace + quick outputs + graph trace */}
           <div className="space-y-6">
             <AuditTraceCard trace={auditTrace} />
 
@@ -188,7 +202,29 @@ export default function SkillLayerReviewPage() {
                 )}
               </pre>
             </div>
+
+            {graphTrace && (
+              <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                <h2 className="mb-3 text-lg font-semibold">Graph Trace</h2>
+                <pre
+                  data-testid="graph-trace"
+                  className="overflow-auto rounded-xl bg-blue-50 p-3 text-xs text-blue-900"
+                >
+                  {JSON.stringify(graphTrace, null, 2)}
+                </pre>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Second row: drift alerts + replay */}
+        <div className="grid gap-6 xl:grid-cols-2">
+          <DriftAlertsCard alerts={driftAlerts} suggestions={tuningSuggestions} />
+          <CaseReplayCompareCard
+            caseId={caseId}
+            rawText={rawText}
+            complaintId={complaintId}
+          />
         </div>
       </div>
     </div>

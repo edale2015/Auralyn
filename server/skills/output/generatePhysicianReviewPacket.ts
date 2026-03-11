@@ -3,6 +3,8 @@ import {
   assertContextHasCaseId,
   assertSkillResultShape,
 } from "../shared/schemaValidators";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 
 export async function generatePhysicianReviewPacket(
   context: SkillContext
@@ -67,12 +69,19 @@ export async function generatePhysicianReviewPacket(
     ],
   };
 
-  const result: SkillResult<ReviewPacket> = {
+  let result: SkillResult<ReviewPacket> = {
     skillId: "SK018",
     skillName: "generate_physician_review_packet",
     version: "v1",
     status: "success",
     confidence: 0.95,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "generate_physician_review_packet",
+      headline: `Review packet created for case [${context.caseId}]. Disposition: ${disposition}. Red flags: ${packet.redFlags.length}. Top dx: ${packet.likelyDiagnoses.slice(0, 2).join(", ") || "none"}.`,
+      matchedRules: ["PHYSICIAN_REVIEW_PACKET_CREATED"],
+      missingData: disposition === "unknown" ? ["disposition"] : [],
+      confidence: 0.95,
+    }),
     result: packet,
     audit: {
       tablesUsed: ["OUTPUT_TEMPLATES_FALLBACK", "NORMALIZED_FACTS"],
@@ -82,6 +91,14 @@ export async function generatePhysicianReviewPacket(
     },
     nextRecommendedSkills: ["attach_outcome_stub", "measure_workflow_value"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "generate_physician_review_packet");
   return result;

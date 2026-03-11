@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertComplaintIdIfNeeded,
   assertContextHasCaseId,
@@ -111,12 +113,25 @@ export async function normalizePatientStory(
     cough_negated: phraseNegated(source, "cough"),
   };
 
-  const result: SkillResult<NormalizePatientStoryResult> = {
+  const ruleHits = [
+    symptom_timeline ? "TIMELINE_EXTRACTED" : "",
+    temp != null ? "TEMP_EXTRACTED" : "",
+    assertions.affirmed.length ? "NEGATION_AWARE_NORMALIZATION" : "",
+  ].filter(Boolean);
+
+  let result: SkillResult<NormalizePatientStoryResult> = {
     skillId: "SK004",
     skillName: "normalize_patient_story",
     version: "v1",
     status: "success",
     confidence: 0.9,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "normalize_patient_story",
+      headline: `Normalized story — ${assertions.affirmed.length} affirmed, ${assertions.negated.length} negated symptoms. ${symptom_timeline ? `Timeline: "${symptom_timeline}"` : "No duration found."}`,
+      matchedRules: ruleHits,
+      missingData: symptom_timeline ? [] : ["duration"],
+      confidence: 0.9,
+    }),
     result: {
       symptom_timeline,
       associated_symptoms: assertions.affirmed,
@@ -126,16 +141,20 @@ export async function normalizePatientStory(
     },
     audit: {
       tablesUsed: ["NEGATION_HELPER", "COMPLAINT_REGISTRY"],
-      ruleHits: [
-        symptom_timeline ? "TIMELINE_EXTRACTED" : "",
-        temp != null ? "TEMP_EXTRACTED" : "",
-        assertions.affirmed.length ? "NEGATION_AWARE_NORMALIZATION" : "",
-      ].filter(Boolean),
+      ruleHits,
       missingData: symptom_timeline ? [] : ["duration"],
       latencyMs: Date.now() - started,
     },
     nextRecommendedSkills: ["detect_red_flags", "score_differential_clusters"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "normalize_patient_story");
   return result;

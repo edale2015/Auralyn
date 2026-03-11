@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertComplaintIdIfNeeded,
   assertContextHasCaseId,
@@ -81,18 +83,20 @@ export async function runComplaintQuestionBundle(
 
   const tableUsed = rows.length > 0 ? "SECONDARY_QUESTIONS" : "CORE_QUESTIONS";
 
-  const result: SkillResult<QuestionBundleResult> = {
+  let result: SkillResult<QuestionBundleResult> = {
     skillId: "SK009",
     skillName: "run_complaint_question_bundle",
     version: "v1",
     status: "success",
     confidence: 0.95,
-    result: {
-      pending_questions,
-      asked_questions,
-      skipped_questions,
-      rule_triggers,
-    },
+    reasoning_summary: buildReasoningSummary({
+      skillName: "run_complaint_question_bundle",
+      headline: `Built question bundle: ${pending_questions.length} pending, ${skipped_questions.length} already answered.`,
+      matchedRules: rule_triggers.slice(0, 5),
+      missingData: pending_questions.length === 0 ? ["no_pending_questions_found"] : [],
+      confidence: 0.95,
+    }),
+    result: { pending_questions, asked_questions, skipped_questions, rule_triggers },
     audit: {
       tablesUsed: [tableUsed],
       ruleHits: rule_triggers,
@@ -101,6 +105,14 @@ export async function runComplaintQuestionBundle(
     },
     nextRecommendedSkills: ["select_next_best_question"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "run_complaint_question_bundle");
   return result;

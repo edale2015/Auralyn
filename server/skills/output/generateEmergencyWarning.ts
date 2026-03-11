@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertContextHasCaseId,
   assertSkillResultShape,
@@ -52,16 +54,21 @@ export async function generateEmergencyWarning(
     ? instructions.join(" ")
     : "";
 
-  const result: SkillResult<GenerateEmergencyWarningResult> = {
+  let result: SkillResult<GenerateEmergencyWarningResult> = {
     skillId: "SK007",
     skillName: "generate_emergency_warning",
     version: "v1",
     status: "success",
     confidence: 0.96,
-    result: {
-      warning_block,
-      instructions,
-    },
+    reasoning_summary: buildReasoningSummary({
+      skillName: "generate_emergency_warning",
+      headline: shouldWarn
+        ? `Emergency warning rendered for disposition [${disposition}]${redFlags.length ? ` and ${redFlags.length} red flag(s)` : ""}.`
+        : `No emergency warning needed — disposition [${disposition}] and no red flags.`,
+      matchedRules: shouldWarn ? ["EMERGENCY_WARNING_RENDERED"] : [],
+      confidence: 0.96,
+    }),
+    result: { warning_block, instructions },
     audit: {
       tablesUsed: ["OUTPUT_TEMPLATES_FALLBACK", "DISPOSITION_OUTPUTS"],
       ruleHits: shouldWarn ? ["EMERGENCY_WARNING_RENDERED"] : [],
@@ -70,6 +77,14 @@ export async function generateEmergencyWarning(
     },
     nextRecommendedSkills: ["generate_assessment_plan", "generate_physician_review_packet"],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "generate_emergency_warning");
   return result;

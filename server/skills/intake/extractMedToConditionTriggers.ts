@@ -1,4 +1,6 @@
 import { SkillContext, SkillResult } from "../shared/skillTypes";
+import { buildReasoningSummary } from "../shared/reasoningSummaryHelper";
+import { attachCostMetadata } from "../shared/skillCostTracker";
 import {
   assertContextHasCaseId,
   assertSkillResultShape,
@@ -211,12 +213,23 @@ export async function extractMedToConditionTriggers(
     confidence_by_condition[item.condition] = item.confidence;
   }
 
-  const result: SkillResult<ExtractMedToConditionTriggersResult> = {
+  const confidence = suspected_conditions.length ? 0.9 : 0.8;
+
+  let result: SkillResult<ExtractMedToConditionTriggersResult> = {
     skillId: "SK002",
     skillName: "extract_med_to_condition_triggers",
     version: "v1",
     status: "success",
-    confidence: suspected_conditions.length ? 0.9 : 0.8,
+    confidence,
+    reasoning_summary: buildReasoningSummary({
+      skillName: "extract_med_to_condition_triggers",
+      headline: suspected_conditions.length
+        ? `Identified ${suspected_conditions.length} medication-condition link(s). Top: [${suspected_conditions[0]?.condition}]`
+        : "No medication-condition triggers matched — no med list or no matching rules.",
+      matchedRules: ruleHits,
+      missingData: medications.length ? [] : ["medications"],
+      confidence,
+    }),
     result: {
       suspected_conditions,
       follow_up_questions: dedupeStrings(followUpQuestions),
@@ -233,6 +246,14 @@ export async function extractMedToConditionTriggers(
       "run_complaint_question_bundle",
     ],
   };
+
+  result = attachCostMetadata(result, {
+    engineType: "rules",
+    modelUsed: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    complaintFamily: context.complaintId,
+  });
 
   assertSkillResultShape(result, "extract_med_to_condition_triggers");
   return result;
