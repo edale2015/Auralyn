@@ -116,6 +116,25 @@ Includes a healthcheck service and a job runner for maintaining system stability
 - **Golden case review workflow**: `goldenCaseReviewExporter.ts` (exports review worksheet CSV with actual vs expected + pass/fail + failure tags) + `goldenCaseReviewImporter.ts` (imports reviewer overrides/notes) + `goldenCaseFailureTagger.ts` (categorizes failures: wrong_complaint, wrong_disposition, wrong_score, missed_red_flag, wrong_differential, missed_affirmed_symptom, missed_negated_symptom)
 - **Outcome data files**: `server/data/runtime/case_outcomes.ndjson`, `case_followups.ndjson`, `case_reconciliation.ndjson`
 
+### Workflow Embedding (API Layer)
+- **Skill layer API**: `server/routes/skillLayerRoutes.ts` — POST endpoints: `/api/skill-layer/run`, `/chart-note`, `/discharge`, `/audit-trace`, `/callback-queue`
+- **Chart note builder**: `server/services/chartNoteBuilder.ts` — builds HPI/assessment/plan/redFlags/disposition blocks from skill outputs
+- **Discharge instruction builder**: `server/services/dischargeInstructionBuilder.ts` — builds summary/homeCare/followUp/returnPrecautions blocks
+- **Callback queue service**: `server/services/callbackQueueService.ts` — enqueues follow-up callbacks to `callback_queue.ndjson`
+- **Audit trace service**: `server/services/auditTraceService.ts` — builds per-skill audit trace from orchestrator state
+
+### Analytics & Economics
+- **Skill layer analytics**: `server/analytics/skillLayerAnalytics.ts` — aggregates skill run counts, latency, disposition distribution, safety misses
+- **Dashboard summary**: `server/analytics/skillLayerDashboardSummary.ts` — CLI printout of analytics (`npx tsx server/analytics/skillLayerDashboardSummary.ts`)
+
+### Multi-Site Configuration
+- **Site config registry**: `server/config/siteConfigRegistry.ts` — per-site enabled complaints and modules
+- **Module toggle registry**: `server/config/moduleToggleRegistry.ts` — module enable/disable toggles
+
+### Learning Loop
+- **Question value learner**: `server/learning/questionValueLearner.ts` — ranks high-yield questions from skill run logs
+- **Rule drift reporter**: `server/learning/ruleDriftReporter.ts` — detects prediction/disposition mismatches from reconciliation data
+
 ## External Dependencies
 
 -   **AI Integration**: OpenAI API

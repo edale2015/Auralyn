@@ -1,0 +1,590 @@
+Phase 7: Workflow embedding
+
+Goal: make the system part of the visit workflow.
+
+Create these files
+server/routes/skillLayerRoutes.ts
+server/services/chartNoteBuilder.ts
+server/services/dischargeInstructionBuilder.ts
+server/services/callbackQueueService.ts
+server/services/auditTraceService.ts
+1. server/services/chartNoteBuilder.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+
+export type ChartNoteBlock = {
+  hpi: string;
+  assessment: string;
+  plan: string[];
+  redFlags: string[];
+  disposition: string;
+};
+
+export function buildChartNoteBlock(context: SkillContext): ChartNoteBlock {
+  const normalized = context.priorSkillOutputs?.normalize_patient_story?.result ?? {};
+  const differential = context.priorSkillOutputs?.generate_differential?.result ?? {};
+  const assessmentPlan = context.priorSkillOutputs?.generate_assessment_plan?.result ?? {};
+  const redFlags = context.priorSkillOutputs?.detect_red_flags?.result?.red_flag_hits ?? [];
+  const disposition =
+    context.priorSkillOutputs?.determine_disposition?.result?.disposition ?? "unknown";
+
+  const affirmed = normalized.associated_symptoms ?? [];
+  const negated = normalized.negated_symptoms ?? [];
+
+  const hpi = [
+    context.rawText ? `Patient reports: ${context.rawText}` : "",
+    affirmed.length ? `Affirmed: ${affirmed.join(", ")}` : "",
+    negated.length ? `Negated: ${negated.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  const assessment =
+    assessmentPlan.assessment ||
+    `Top differential: ${(differential.differential_list ?? [])
+      .slice(0, 3)
+      .map((d: any) => d.diagnosis)
+      .join(", ")}`;
+
+  return {
+    hpi,
+    assessment,
+    plan: assessmentPlan.plan ?? [],
+    redFlags: redFlags.map((r: any) => r.label ?? r.id ?? String(r)),
+    disposition,
+  };
+}
+2. server/services/dischargeInstructionBuilder.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+
+export type DischargeInstructionBlock = {
+  summary: string;
+  homeCare: string[];
+  followUp: string[];
+  returnPrecautions: string[];
+};
+
+export function buildDischargeInstructionBlock(
+  context: SkillContext
+): DischargeInstructionBlock {
+  const assessmentPlan = context.priorSkillOutputs?.generate_assessment_plan?.result ?? {};
+
+  return {
+    summary: assessmentPlan.assessment ?? "Continue monitoring symptoms.",
+    homeCare: assessmentPlan.plan ?? [],
+    followUp: assessmentPlan.follow_up ?? [],
+    returnPrecautions: assessmentPlan.return_precautions ?? [],
+  };
+}
+3. server/services/callbackQueueService.ts
+import fs from "fs/promises";
+import path from "path";
+import { SkillContext } from "../skills/shared/skillTypes";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+}
+
+export async function enqueueCallbackIfNeeded(context: SkillContext) {
+  await ensureDir();
+
+  const outcomeStub = context.priorSkillOutputs?.attach_outcome_stub?.result ?? {};
+  if (!outcomeStub.callbackNeeded) {
+    return { queued: false };
+  }
+
+  const record = {
+    callback_id: `CALLBACK_${context.caseId}_${Date.now()}`,
+    case_id: context.caseId,
+    complaint_id: context.complaintId ?? "",
+    follow_up_window_days: outcomeStub.expectedFollowUpWindowDays ?? 3,
+    created_at: new Date().toISOString(),
+    status: "pending",
+  };
+
+  await fs.appendFile(
+    path.join(RUNTIME_DIR, "callback_queue.ndjson"),
+    JSON.stringify(record) + "\n",
+    "utf8"
+  );
+
+  return { queued: true, callback_id: record.callback_id };
+}
+4. server/services/auditTraceService.ts
+import { SkillContext } from "../skills/shared/skillTypes";
+
+export function buildAuditTrace(context: SkillContext) {
+  const outputs = context.priorSkillOutputs ?? {};
+
+  return Object.entries(outputs).map(([skillName, result]: any) => ({
+    skillName,
+    status: result?.status ?? "unknown",
+    confidence: result?.confidence ?? null,
+    ruleHits: result?.audit?.ruleHits ?? [],
+    missingData: result?.audit?.missingData ?? [],
+    nextRecommendedSkills: result?.nextRecommendedSkills ?? [],
+  }));
+}
+5. server/routes/skillLayerRoutes.ts
+import express from "express";
+import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
+import { buildChartNoteBlock } from "../services/chartNoteBuilder";
+import { buildDischargeInstructionBlock } from "../services/dischargeInstructionBuilder";
+import { buildAuditTrace } from "../services/auditTraceService";
+import { enqueueCallbackIfNeeded } from "../services/callbackQueueService";
+
+const router = express.Router();
+
+router.post("/api/skill-layer/run", async (req, res) => {
+  try {
+    const orchestrator = new ClinicalSkillOrchestrator();
+    const state = await orchestrator.run({
+      caseId: req.body.caseId ?? `CASE_${Date.now()}`,
+      rawText: req.body.rawText ?? "",
+      modifiers: req.body.modifiers ?? {},
+      knownFacts: {},
+      priorSkillOutputs: {},
+      config: {
+        strictMode: true,
+        enableAudit: true,
+      },
+    });
+
+    res.json({ ok: true, state });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+router.post("/api/skill-layer/chart-note", async (req, res) => {
+  try {
+    const note = buildChartNoteBlock(req.body.context);
+    res.json({ ok: true, note });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+router.post("/api/skill-layer/discharge", async (req, res) => {
+  try {
+    const instructions = buildDischargeInstructionBlock(req.body.context);
+    res.json({ ok: true, instructions });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+router.post("/api/skill-layer/audit-trace", async (req, res) => {
+  try {
+    const trace = buildAuditTrace(req.body.context);
+    res.json({ ok: true, trace });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+router.post("/api/skill-layer/callback-queue", async (req, res) => {
+  try {
+    const result = await enqueueCallbackIfNeeded(req.body.context);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message ?? "unknown_error" });
+  }
+});
+
+export default router;
+Register route
+
+In your route registration file, add:
+
+import skillLayerRoutes from "./routes/skillLayerRoutes";
+app.use(skillLayerRoutes);
+Phase 8: Analytics and economics
+
+Goal: prove this thing saves time and catches errors.
+
+Create these files
+server/analytics/skillLayerAnalytics.ts
+server/analytics/skillLayerDashboardSummary.ts
+6. server/analytics/skillLayerAnalytics.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function computeSkillLayerAnalytics() {
+  const skillRuns = await loadNdjson("skill_run_log.ndjson");
+  const caseAudits = await loadNdjson("case_audit_log.ndjson");
+  const reconciliations = await loadNdjson("case_reconciliation.ndjson");
+
+  const bySkill: Record<string, { count: number; avgLatency: number }> = {};
+  for (const run of skillRuns) {
+    const skill = run.skillName ?? "unknown";
+    bySkill[skill] ??= { count: 0, avgLatency: 0 };
+    const current = bySkill[skill];
+    current.avgLatency =
+      (current.avgLatency * current.count + (run.latencyMs ?? 0)) / (current.count + 1);
+    current.count += 1;
+  }
+
+  const dispositionCounts: Record<string, number> = {};
+  for (const audit of caseAudits) {
+    const d = audit.disposition ?? "unknown";
+    dispositionCounts[d] = (dispositionCounts[d] ?? 0) + 1;
+  }
+
+  const safetyMisses = reconciliations.filter((r) => r.safety_miss_flag).length;
+
+  return {
+    totalSkillRuns: skillRuns.length,
+    totalCases: caseAudits.length,
+    dispositionCounts,
+    bySkill,
+    safetyMisses,
+  };
+}
+7. server/analytics/skillLayerDashboardSummary.ts
+import { computeSkillLayerAnalytics } from "./skillLayerAnalytics";
+
+export async function printSkillLayerDashboardSummary() {
+  const stats = await computeSkillLayerAnalytics();
+
+  console.log("\n=== SKILL LAYER DASHBOARD SUMMARY ===");
+  console.log(`Total cases: ${stats.totalCases}`);
+  console.log(`Total skill runs: ${stats.totalSkillRuns}`);
+  console.log(`Safety misses: ${stats.safetyMisses}`);
+
+  console.log("\nDisposition counts:");
+  for (const [k, v] of Object.entries(stats.dispositionCounts)) {
+    console.log(`- ${k}: ${v}`);
+  }
+
+  console.log("\nSkill performance:");
+  for (const [skill, info] of Object.entries(stats.bySkill)) {
+    console.log(`- ${skill}: count=${info.count}, avgLatencyMs=${info.avgLatency.toFixed(1)}`);
+  }
+
+  return stats;
+}
+
+if (require.main === module) {
+  printSkillLayerDashboardSummary().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+Phase 9: Multi-site / product packaging
+
+Goal: make this deployable to multiple clinics without code surgery.
+
+Create these files
+server/config/siteConfigRegistry.ts
+server/config/moduleToggleRegistry.ts
+8. server/config/siteConfigRegistry.ts
+export type SiteConfig = {
+  siteId: string;
+  name: string;
+  enabledComplaints: string[];
+  enabledModules: string[];
+};
+
+export const SITE_CONFIGS: SiteConfig[] = [
+  {
+    siteId: "default",
+    name: "Default Clinic",
+    enabledComplaints: [
+      "sore_throat",
+      "cough",
+      "uti",
+      "chest_pain",
+      "abdominal_pain",
+      "fever",
+      "rash",
+      "ear_pain",
+      "sinus_pressure",
+    ],
+    enabledModules: [
+      "intake",
+      "triage",
+      "reasoning",
+      "output",
+      "outcomes",
+      "analytics",
+    ],
+  },
+];
+
+export function getSiteConfig(siteId = "default"): SiteConfig {
+  return SITE_CONFIGS.find((s) => s.siteId === siteId) ?? SITE_CONFIGS[0];
+}
+9. server/config/moduleToggleRegistry.ts
+export type ModuleToggleMap = Record<string, boolean>;
+
+export const DEFAULT_MODULE_TOGGLES: ModuleToggleMap = {
+  intake: true,
+  triage: true,
+  reasoning: true,
+  output: true,
+  outcomes: true,
+  analytics: true,
+};
+
+export function isModuleEnabled(moduleName: string, toggles?: ModuleToggleMap): boolean {
+  const map = toggles ?? DEFAULT_MODULE_TOGGLES;
+  return map[moduleName] !== false;
+}
+Phase 10: Learning loop
+
+Goal: turn review + outcomes into tuning signals.
+
+Create these files
+server/learning/questionValueLearner.ts
+server/learning/ruleDriftReporter.ts
+10. server/learning/questionValueLearner.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function rankHighYieldQuestions() {
+  const skillRuns = await loadNdjson("skill_run_log.ndjson");
+  const questionRuns = skillRuns.filter((r) => r.skillName === "select_next_best_question");
+
+  const counts: Record<string, number> = {};
+
+  for (const run of questionRuns) {
+    try {
+      const output = JSON.parse(run.outputSummary ?? "{}");
+      const q = output?.resultKeys?.includes("next_question")
+        ? "next_question_present"
+        : "unknown_question";
+      counts[q] = (counts[q] ?? 0) + 1;
+    } catch {
+      counts.unknown_question = (counts.unknown_question ?? 0) + 1;
+    }
+  }
+
+  return Object.entries(counts)
+    .map(([question, count]) => ({ question, count }))
+    .sort((a, b) => b.count - a.count);
+}
+11. server/learning/ruleDriftReporter.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function generateRuleDriftReport() {
+  const reconciliations = await loadNdjson("case_reconciliation.ndjson");
+  const failures = reconciliations.filter(
+    (r) => !r.top_prediction_match || !r.disposition_match || r.safety_miss_flag
+  );
+
+  const byComplaint: Record<string, number> = {};
+
+  for (const row of failures) {
+    const complaint = row.case_id?.split("_")[0] ?? "unknown";
+    byComplaint[complaint] = (byComplaint[complaint] ?? 0) + 1;
+  }
+
+  return {
+    totalReconciliations: reconciliations.length,
+    totalFailures: failures.length,
+    byComplaint,
+  };
+}
+What to do right after these phases
+Run these checks
+
+For Phase 7:
+
+call /api/skill-layer/run
+
+call /api/skill-layer/chart-note
+
+call /api/skill-layer/discharge
+
+call /api/skill-layer/audit-trace
+
+call /api/skill-layer/callback-queue
+
+For Phase 8:
+
+npx tsx server/analytics/skillLayerDashboardSummary.ts
+
+For Phase 10:
+call your outcome functions on a few cases, then run:
+
+rankHighYieldQuestions()
+
+generateRuleDriftReport()
+
+What these phases accomplish strategically
+Phase 7
+
+Makes the system part of real care workflow:
+
+note generation
+
+discharge output
+
+callback queue
+
+audit trace endpoint
+
+Phase 8
+
+Makes economics measurable:
+
+cases
+
+skill latency
+
+disposition mix
+
+safety misses
+
+Phase 9
+
+Makes the system deployable across sites:
+
+enabled complaints by site
+
+module toggles
+
+config separation
+
+Phase 10
+
+Starts the compounding loop:
+
+track mismatches
+
+learn from outcomes
+
+find drift
+
+identify where rules need tuning
+
+What makes the system “AI boom proof”
+
+The article’s framework said winners control:
+
+1. Proprietary data
+
+You now have:
+
+intake data
+
+skill traces
+
+golden case results
+
+outcome records
+
+reconciliations
+
+drift reports
+
+2. Workflow
+
+You now have:
+
+orchestrator
+
+review packet
+
+chart note
+
+discharge block
+
+callback queue
+
+3. Unit economics
+
+You now have:
+
+workflow value estimates
+
+latency tracking
+
+analytics summaries
+
+4. Defensibility
+
+You now have:
+
+deterministic rule execution
+
+sheet-driven logic
+
+physician sign-off artifacts
+
+audit trails
+
+reconciliation loop
+
+That is exactly the kind of vertical AI spine that survives the “AI reality check” better than generic assistant products.
+
+Best next move after 7–10
+
+The strongest next move is to build a thin clinician-facing review UI on top of these endpoints and logs.
+
+That UI should show:
+
+patient input
+
+top skill outputs
+
+chart note
+
+assessment/plan
+
+disposition
+
+review packet
+
+callback queue status
+
+reconciliation history
+
+That would turn the engine into a usable cockpit instead of a powerful but mostly backend submarine.
+
+If you want, next I’ll write the clinician review UI pack with React components and API wiring.
