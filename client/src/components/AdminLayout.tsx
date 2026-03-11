@@ -92,6 +92,7 @@ const NAV_SECTIONS = [
       { path: "/gold-reviews", label: "Gold Reviews", icon: ClipboardCheck },
       { path: "/rule-suggestions", label: "Rule Suggestions", icon: Lightbulb },
       { path: "/skill-layer-review", label: "Clinician Review", icon: Eye },
+      { path: "/skill-layer-admin", label: "Platform Admin 2.1", icon: Settings },
     ],
   },
   {

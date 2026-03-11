@@ -31,6 +31,7 @@ import { measureWorkflowValue } from "../skills/analytics/measureWorkflowValue";
 import { runReasoningGraph } from "../reasoning-graph/graphRunner";
 import { canonicalizeComplaintId } from "../skills/shared/complaintAliasRegistry";
 import { getComplaintRolloutMode } from "../config/siteConfigRegistry";
+import { appendCompareDiff } from "../platform/compareDiffStore";
 
 type SkillRunner = (context: SkillContext) => Promise<SkillResult>;
 type SkillRunnerMap = Record<string, SkillRunner>;
@@ -261,23 +262,54 @@ export class ClinicalSkillOrchestrator {
 
     if (mode === "compare") {
       const sequential = await runSequentialMode(initialContext, runSkill);
+
       try {
         const graph = await runGraphMode(
           { ...initialContext, config: { ...initialContext.config, orchestrationMode: "graph" } },
           runSkill
         );
-        console.log("[Orchestrator] COMPARE MODE DIFF", {
+
+        const diffRecord = {
           caseId: initialContext.caseId,
-          sequentialDisposition: sequential.finalDisposition,
-          graphDisposition: graph.finalDisposition,
-          sequentialComplaint:
-            sequential.skillResults?.identify_chief_complaint?.result?.complaint_id,
-          graphComplaint:
-            graph.skillResults?.identify_chief_complaint?.result?.complaint_id,
-        });
+          siteId: (initialContext.metadata as any)?.siteId ?? "default",
+          complaintRequested: initialContext.complaintId ?? "",
+          sequential: {
+            complaint:
+              sequential.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+            disposition: sequential.finalDisposition ?? "",
+            completedSkills: sequential.completedSkills ?? [],
+            totalEstimatedCostUsd: Object.values(sequential.skillResults ?? {}).reduce(
+              (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+              0
+            ),
+          },
+          graph: {
+            complaint:
+              graph.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+            disposition: graph.finalDisposition ?? "",
+            completedSkills: graph.completedSkills ?? [],
+            totalEstimatedCostUsd: Object.values(graph.skillResults ?? {}).reduce(
+              (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+              0
+            ),
+          },
+          sameComplaint:
+            (sequential.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "") ===
+            (graph.skillResults?.identify_chief_complaint?.result?.complaint_id ?? ""),
+          sameDisposition:
+            (sequential.finalDisposition ?? "") === (graph.finalDisposition ?? ""),
+        };
+
+        await appendCompareDiff(diffRecord);
       } catch (err) {
         console.error("[Orchestrator] Compare mode graph run failed:", err);
+        await appendCompareDiff({
+          caseId: initialContext.caseId,
+          siteId: (initialContext.metadata as any)?.siteId ?? "default",
+          compareError: String(err),
+        });
       }
+
       return sequential;
     }
 

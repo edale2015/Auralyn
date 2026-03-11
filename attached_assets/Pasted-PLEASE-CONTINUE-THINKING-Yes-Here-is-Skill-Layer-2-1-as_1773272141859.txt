@@ -1,0 +1,776 @@
+PLEASE CONTINUE THINKING
+
+Yes. Here is Skill Layer 2.1 as the next control-room layer.
+
+This pack adds the missing operational cockpit for the platform layer:
+
+Deployment Readiness card
+
+Release Gate card
+
+Unified Review Queue card
+
+Tenant Cases card
+
+Compare Diffs persistence + viewer
+
+Platform Admin page
+
+Auto-save compare diffs from compare mode
+
+Basic graph path metrics
+
+This turns the backend platform scaffolding into a usable admin console.
+
+Skill Layer 2.1 goals
+
+Turn the current system into an admin-operable platform with:
+
+release readiness visibility
+
+complaint rollout control visibility
+
+compare-mode diff persistence
+
+review queue visibility
+
+tenant case browsing
+
+graph path metrics visibility
+
+Files in this pack
+
+Create these backend files:
+
+server/platform/compareDiffStore.ts
+server/platform/graphMetricsService.ts
+server/routes/platformMetricsRoutes.ts
+
+Create these frontend files:
+
+client/src/lib/platformAdminApi.ts
+client/src/components/platform/DeploymentReadinessCard.tsx
+client/src/components/platform/ReleaseGateCard.tsx
+client/src/components/platform/ReviewQueueCard.tsx
+client/src/components/platform/TenantCasesCard.tsx
+client/src/components/platform/CompareDiffsCard.tsx
+client/src/components/platform/GraphMetricsCard.tsx
+client/src/pages/SkillLayerAdminPage.tsx
+
+Update:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+server/platform/adminOpsRoutes.ts
+1. Persist compare-mode diffs
+server/platform/compareDiffStore.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+}
+
+export async function appendCompareDiff(record: any) {
+  await ensureDir();
+  await fs.appendFile(
+    path.join(RUNTIME_DIR, "compare_mode_diffs.ndjson"),
+    JSON.stringify({
+      ...record,
+      timestamp: new Date().toISOString(),
+    }) + "\n",
+    "utf8"
+  );
+}
+
+export async function listCompareDiffs(limit = 100) {
+  try {
+    const raw = await fs.readFile(
+      path.join(RUNTIME_DIR, "compare_mode_diffs.ndjson"),
+      "utf8"
+    );
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .slice(-limit)
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+Update server/orchestrator/clinicalSkillOrchestrator.ts
+
+Add import:
+
+import { appendCompareDiff } from "../platform/compareDiffStore";
+
+In the compare mode branch, replace the simple console log with persisted diffs:
+
+if (getExecutionMode(initialContext) === "compare") {
+  const sequential = await runSequentialMode(initialContext, runSkill);
+
+  try {
+    const graph = await runGraphMode(
+      {
+        ...initialContext,
+        config: { ...initialContext.config, orchestrationMode: "graph" },
+      },
+      runSkill
+    );
+
+    const diffRecord = {
+      caseId: initialContext.caseId,
+      siteId: initialContext.metadata?.siteId ?? "default",
+      complaintRequested: initialContext.complaintId ?? "",
+      sequential: {
+        complaint:
+          sequential.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+        disposition: sequential.finalDisposition ?? "",
+        completedSkills: sequential.completedSkills ?? [],
+        totalEstimatedCostUsd: Object.values(sequential.skillResults ?? {}).reduce(
+          (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+          0
+        ),
+      },
+      graph: {
+        complaint:
+          graph.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+        disposition: graph.finalDisposition ?? "",
+        completedSkills: graph.completedSkills ?? [],
+        totalEstimatedCostUsd: Object.values(graph.skillResults ?? {}).reduce(
+          (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+          0
+        ),
+      },
+      sameComplaint:
+        (sequential.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "") ===
+        (graph.skillResults?.identify_chief_complaint?.result?.complaint_id ?? ""),
+      sameDisposition:
+        (sequential.finalDisposition ?? "") === (graph.finalDisposition ?? ""),
+    };
+
+    await appendCompareDiff(diffRecord);
+  } catch (err) {
+    console.error("Compare mode graph run failed:", err);
+    await appendCompareDiff({
+      caseId: initialContext.caseId,
+      siteId: initialContext.metadata?.siteId ?? "default",
+      compareError: String(err),
+    });
+  }
+
+  return sequential;
+}
+2. Graph path metrics service
+server/platform/graphMetricsService.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function getGraphMetricsSummary() {
+  const rows = await loadNdjson("graph_trace_log.ndjson");
+
+  const byNode: Record<string, { count: number; totalLatencyMs: number; totalCostUsd: number }> = {};
+  const byEdge: Record<string, number> = {};
+
+  for (const row of rows) {
+    if (row.executedNode) {
+      byNode[row.executedNode] ??= { count: 0, totalLatencyMs: 0, totalCostUsd: 0 };
+      byNode[row.executedNode].count += 1;
+      byNode[row.executedNode].totalLatencyMs += Number(row.latencyMs ?? 0);
+      byNode[row.executedNode].totalCostUsd += Number(row.estimatedCostUsd ?? 0);
+    }
+
+    if (row.chosenEdge?.from && row.chosenEdge?.to) {
+      const edge = `${row.chosenEdge.from} -> ${row.chosenEdge.to}`;
+      byEdge[edge] = (byEdge[edge] ?? 0) + 1;
+    }
+  }
+
+  const nodeRows = Object.entries(byNode)
+    .map(([node, stat]) => ({
+      node,
+      count: stat.count,
+      avgLatencyMs: stat.count ? stat.totalLatencyMs / stat.count : 0,
+      totalCostUsd: stat.totalCostUsd,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const edgeRows = Object.entries(byEdge)
+    .map(([edge, count]) => ({ edge, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalTraceRows: rows.length,
+    nodes: nodeRows,
+    edges: edgeRows,
+  };
+}
+server/routes/platformMetricsRoutes.ts
+import express from "express";
+import { getGraphMetricsSummary } from "../platform/graphMetricsService";
+import { listCompareDiffs } from "../platform/compareDiffStore";
+
+const router = express.Router();
+
+router.get("/api/platform/graph-metrics", async (_req, res) => {
+  try {
+    const result = await getGraphMetricsSummary();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/compare-diffs", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 100);
+    const rows = await listCompareDiffs(limit);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+import platformMetricsRoutes from "./routes/platformMetricsRoutes";
+app.use(platformMetricsRoutes);
+3. Extend platform admin ops routes
+Update server/platform/adminOpsRoutes.ts
+
+Add config and tenant cases endpoints if not already present in current file:
+
+import express from "express";
+import { evaluateReleaseGate } from "./releaseGateService";
+import { getDeploymentReadiness } from "./deploymentReadinessService";
+import { buildUnifiedReviewQueue } from "./reviewQueueService";
+import { getPlatformConfig } from "./platformConfig";
+import { listTenantCaseRecords } from "./tenantCaseStore";
+
+const router = express.Router();
+
+router.get("/api/platform/deployment-readiness", async (_req, res) => {
+  try {
+    const result = await getDeploymentReadiness();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/release-gate/:complaint", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const result = await evaluateReleaseGate(req.params.complaint, siteId);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/review-queue", async (_req, res) => {
+  try {
+    const queue = await buildUnifiedReviewQueue();
+    res.json({ ok: true, queue });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/config", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const config = getPlatformConfig(siteId);
+    res.json({ ok: true, config });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/tenant-cases", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const rows = await listTenantCaseRecords(siteId);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+Update server/platform/tenantCaseStore.ts
+
+Add listing support:
+
+import fs from "fs/promises";
+import path from "path";
+
+const STORE_DIR = path.resolve(process.cwd(), "server/data/runtime/tenant_cases");
+
+async function ensureDir() {
+  await fs.mkdir(STORE_DIR, { recursive: true });
+}
+
+export async function saveTenantCaseRecord(params: {
+  siteId: string;
+  caseId: string;
+  complaintId?: string;
+  disposition?: string;
+  payload: Record<string, any>;
+}) {
+  await ensureDir();
+
+  const filePath = path.join(STORE_DIR, `${params.siteId}__${params.caseId}.json`);
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(
+      {
+        siteId: params.siteId,
+        caseId: params.caseId,
+        complaintId: params.complaintId ?? "",
+        disposition: params.disposition ?? "",
+        payload: params.payload,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  return { ok: true, filePath };
+}
+
+export async function listTenantCaseRecords(siteId = "default") {
+  await ensureDir();
+  const files = await fs.readdir(STORE_DIR);
+
+  const siteFiles = files.filter((f) => f.startsWith(`${siteId}__`) && f.endsWith(".json"));
+  const rows = [];
+
+  for (const file of siteFiles) {
+    try {
+      const raw = await fs.readFile(path.join(STORE_DIR, file), "utf8");
+      rows.push(JSON.parse(raw));
+    } catch {
+      // ignore malformed file
+    }
+  }
+
+  return rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+4. Frontend API wrappers
+client/src/lib/platformAdminApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const platformAdminApi = {
+  getDeploymentReadiness() {
+    return getJson<{ ok: boolean; result: any }>("/api/platform/deployment-readiness");
+  },
+  getReleaseGate(complaint: string, siteId = "default") {
+    return getJson<{ ok: boolean; result: any }>(
+      `/api/platform/release-gate/${encodeURIComponent(complaint)}?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  getReviewQueue() {
+    return getJson<{ ok: boolean; queue: any[] }>("/api/platform/review-queue");
+  },
+  getConfig(siteId = "default") {
+    return getJson<{ ok: boolean; config: any }>(
+      `/api/platform/config?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  getTenantCases(siteId = "default") {
+    return getJson<{ ok: boolean; rows: any[] }>(
+      `/api/platform/tenant-cases?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  getCompareDiffs(limit = 100) {
+    return getJson<{ ok: boolean; rows: any[] }>(
+      `/api/platform/compare-diffs?limit=${limit}`
+    );
+  },
+  getGraphMetrics() {
+    return getJson<{ ok: boolean; result: any }>("/api/platform/graph-metrics");
+  },
+};
+5. Admin cards
+client/src/components/platform/DeploymentReadinessCard.tsx
+import React from "react";
+
+type Props = {
+  result: any;
+};
+
+export default function DeploymentReadinessCard({ result }: Props) {
+  const checks = result?.checks ?? [];
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Deployment Readiness</h2>
+        <span
+          className={`rounded-full px-3 py-1 text-sm font-medium ${
+            result?.ready ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+          }`}
+        >
+          {result?.ready ? "Ready" : "Not ready"}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        {checks.map((check: any, idx: number) => (
+          <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+            <div className="font-medium">{check.name}</div>
+            <div className={check.passed ? "text-green-700" : "text-red-700"}>
+              {check.passed ? "Pass" : "Fail"} | {check.detail}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+client/src/components/platform/ReleaseGateCard.tsx
+import React, { useState } from "react";
+import { platformAdminApi } from "../../lib/platformAdminApi";
+
+export default function ReleaseGateCard() {
+  const [complaint, setComplaint] = useState("sore_throat");
+  const [result, setResult] = useState<any>(null);
+  const [status, setStatus] = useState("");
+
+  async function runGate() {
+    try {
+      setStatus("Checking...");
+      const res = await platformAdminApi.getReleaseGate(complaint);
+      setResult(res.result);
+      setStatus("");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Release Gate</h2>
+
+      <div className="mb-3 flex gap-2">
+        <input
+          value={complaint}
+          onChange={(e) => setComplaint(e.target.value)}
+          className="w-full rounded-xl border px-3 py-2 text-sm"
+        />
+        <button
+          onClick={runGate}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+        >
+          Evaluate
+        </button>
+      </div>
+
+      {!!status && <div className="mb-2 text-sm text-slate-600">{status}</div>}
+
+      {result && (
+        <div className="space-y-2">
+          <div className="text-sm">
+            <span className="font-medium">Complaint:</span> {result.complaint}
+          </div>
+          <div className="text-sm">
+            <span className="font-medium">Passed:</span> {String(result.passed)}
+          </div>
+          <div className="text-sm">
+            <span className="font-medium">Score:</span> {(Number(result.score) * 100).toFixed(1)}%
+          </div>
+
+          {(result.checks ?? []).map((check: any, idx: number) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+              <div className="font-medium">{check.check}</div>
+              <div className={check.passed ? "text-green-700" : "text-red-700"}>
+                {String(check.value)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/ReviewQueueCard.tsx
+import React from "react";
+
+type Props = {
+  queue: any[];
+};
+
+function badgeTone(priority: string) {
+  switch (priority) {
+    case "critical":
+      return "bg-red-100 text-red-800";
+    case "high":
+      return "bg-amber-100 text-amber-800";
+    case "medium":
+      return "bg-blue-100 text-blue-800";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+export default function ReviewQueueCard({ queue }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Unified Review Queue</h2>
+
+      {queue.length === 0 ? (
+        <div className="text-sm text-slate-500">Queue is empty.</div>
+      ) : (
+        <div className="space-y-3">
+          {queue.map((item, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <div className="font-medium text-slate-900">{item.type}</div>
+                <span className={`rounded-full px-2 py-1 text-xs font-medium ${badgeTone(item.priority)}`}>
+                  {item.priority}
+                </span>
+              </div>
+              <div className="text-sm text-slate-700">
+                {item.complaint ? `Complaint: ${item.complaint}` : item.caseId ? `Case: ${item.caseId}` : "—"}
+              </div>
+              <div className="text-xs text-slate-500">{item.createdAt}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/TenantCasesCard.tsx
+import React from "react";
+
+type Props = {
+  rows: any[];
+};
+
+export default function TenantCasesCard({ rows }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Tenant Cases</h2>
+
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500">No tenant cases saved yet.</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.slice(0, 20).map((row, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">{row.caseId}</div>
+              <div className="text-sm text-slate-700">
+                {row.complaintId || "—"} | {row.disposition || "—"}
+              </div>
+              <div className="text-xs text-slate-500">{row.updatedAt}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/CompareDiffsCard.tsx
+import React from "react";
+
+type Props = {
+  rows: any[];
+};
+
+export default function CompareDiffsCard({ rows }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Compare Mode Diffs</h2>
+
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500">No compare diffs recorded yet.</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.slice(0, 20).map((row, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">{row.caseId}</div>
+              <div className="text-sm text-slate-700">
+                Seq: {row.sequential?.complaint || "—"} / {row.sequential?.disposition || "—"}
+              </div>
+              <div className="text-sm text-slate-700">
+                Graph: {row.graph?.complaint || "—"} / {row.graph?.disposition || "—"}
+              </div>
+              <div className="text-xs text-slate-500">
+                sameComplaint: {String(row.sameComplaint)} | sameDisposition: {String(row.sameDisposition)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/GraphMetricsCard.tsx
+import React from "react";
+
+type Props = {
+  result: any;
+};
+
+export default function GraphMetricsCard({ result }: Props) {
+  const nodes = result?.nodes ?? [];
+  const edges = result?.edges ?? [];
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Graph Metrics</h2>
+
+      <div className="mb-3 text-sm text-slate-700">
+        Total trace rows: {result?.totalTraceRows ?? 0}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <div className="mb-2 text-sm font-medium text-slate-700">Top nodes</div>
+          <div className="space-y-2">
+            {nodes.slice(0, 8).map((row: any, idx: number) => (
+              <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+                <div className="font-medium">{row.node}</div>
+                <div className="text-slate-600">
+                  count={row.count} | avgLatency={Number(row.avgLatencyMs).toFixed(1)} ms
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-sm font-medium text-slate-700">Top edges</div>
+          <div className="space-y-2">
+            {edges.slice(0, 8).map((row: any, idx: number) => (
+              <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+                <div className="font-medium">{row.edge}</div>
+                <div className="text-slate-600">count={row.count}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+6. Platform Admin page
+client/src/pages/SkillLayerAdminPage.tsx
+import React, { useEffect, useState } from "react";
+import { platformAdminApi } from "../lib/platformAdminApi";
+import DeploymentReadinessCard from "../components/platform/DeploymentReadinessCard";
+import ReleaseGateCard from "../components/platform/ReleaseGateCard";
+import ReviewQueueCard from "../components/platform/ReviewQueueCard";
+import TenantCasesCard from "../components/platform/TenantCasesCard";
+import CompareDiffsCard from "../components/platform/CompareDiffsCard";
+import GraphMetricsCard from "../components/platform/GraphMetricsCard";
+
+export default function SkillLayerAdminPage() {
+  const [deploymentReadiness, setDeploymentReadiness] = useState<any>(null);
+  const [reviewQueue, setReviewQueue] = useState<any[]>([]);
+  const [tenantCases, setTenantCases] = useState<any[]>([]);
+  const [compareDiffs, setCompareDiffs] = useState<any[]>([]);
+  const [graphMetrics, setGraphMetrics] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setError("");
+      const [dr, rq, tc, cd, gm] = await Promise.all([
+        platformAdminApi.getDeploymentReadiness(),
+        platformAdminApi.getReviewQueue(),
+        platformAdminApi.getTenantCases(),
+        platformAdminApi.getCompareDiffs(),
+        platformAdminApi.getGraphMetrics(),
+      ]);
+
+      setDeploymentReadiness(dr.result);
+      setReviewQueue(rq.queue ?? []);
+      setTenantCases(tc.rows ?? []);
+      setCompareDiffs(cd.rows ?? []);
+      setGraphMetrics(gm.result);
+    } catch (err: any) {
+      setError(err.message ?? "Failed to load platform admin data");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <h1 className="text-2xl font-bold text-slate-900">Skill Layer 2.1 Admin</h1>
+          <p className="text-sm text-slate-600">
+            Platform readiness, release gates, review queues, compare diffs, and graph metrics
+          </p>
+          {!!error && <div className="mt-3 text-sm text-red-700">{error}</div>}
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <DeploymentReadinessCard result={deploymentReadiness} />
+          <ReleaseGateCard />
+          <ReviewQueueCard queue={reviewQueue} />
+          <TenantCasesCard rows={tenantCases} />
+          <CompareDiffsCard rows={compareDiffs} />
+          <GraphMetricsCard result={graphMetrics} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Add route in frontend router:
+
+<Route path="/skill-layer-admin" element={<SkillLayerAdminPage />} />
+7. Auto-save tenant cases on every run
+
+In your POST /api/skill-layer/run route, after you get state, add:
+
+import { saveTenantCaseRecord } from "../platform/tenantCaseStore";
+
+Then after the run:
+
+void saveTenantCaseRecord({
+  siteId: req.body.siteId ?? "default",
+  caseId: state.context.caseId,
+  complaintId:
+    state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+  disposition: state.finalDisposition ?? "",
+  payload: {
+    topDifferential:
+      state.skillResults?.generate_differential?.result?.differential_list?.slice?.(0, 3) ?? [],
+    completedSkills: state.completedSkills ?? [],
+  },
+});
