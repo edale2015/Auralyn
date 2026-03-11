@@ -4,6 +4,7 @@ import { buildChartNoteBlock } from "../services/chartNoteBuilder";
 import { buildDischargeInstructionBlock } from "../services/dischargeInstructionBuilder";
 import { buildAuditTrace } from "../services/auditTraceService";
 import { enqueueCallbackIfNeeded } from "../services/callbackQueueService";
+import { saveTenantCaseRecord } from "../platform/tenantCaseStore";
 
 export const skillLayerRouter = Router();
 
@@ -21,6 +22,27 @@ skillLayerRouter.post("/run", async (req: Request, res: Response) => {
         enableAudit: true,
       },
     });
+
+    const siteId = req.body.siteId ?? "default";
+    const complaintId =
+      state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "";
+    const disposition =
+      state.skillResults?.determine_disposition?.result?.disposition ?? "";
+
+    saveTenantCaseRecord({
+      siteId,
+      caseId: state.context?.caseId ?? "",
+      complaintId,
+      disposition,
+      payload: {
+        complaintId,
+        disposition,
+        orchestrationMode: state.completedSkills?.length ? "completed" : "unknown",
+        topDifferential: (
+          state.skillResults?.generate_differential?.result?.differential_list ?? []
+        ).slice(0, 3),
+      },
+    }).catch(() => {});
 
     res.json({ ok: true, state });
   } catch (err: any) {

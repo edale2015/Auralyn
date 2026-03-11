@@ -1,0 +1,776 @@
+Skill Layer 2.0 roadmap
+Platform goal
+
+Turn the current skill engine into:
+
+Urgent Care Clinical Intelligence Platform
+
+with these production pillars:
+
+Clinical runtime
+
+graph/sequential orchestration
+
+rules + scores + differential + disposition
+
+chart note / discharge / callback outputs
+
+Operations layer
+
+review queues
+
+saved cases
+
+reconciliation
+
+complaint hardening queue
+
+release gates
+
+Platform layer
+
+multi-site config
+
+module toggles
+
+tenant/site separation
+
+environment readiness
+
+deployment health
+
+Governance layer
+
+rule inventory
+
+rule owners
+
+versioning
+
+rollback
+
+golden-case pass thresholds
+
+Learning layer
+
+drift alerts
+
+tuning suggestions
+
+outcome loop
+
+auto-golden generation
+
+graph path comparison
+
+Skill Layer 2.0 implementation pack
+
+Create these files:
+
+docs/SkillLayer2_Roadmap.md
+server/platform/platformTypes.ts
+server/platform/platformConfig.ts
+server/platform/releaseGateService.ts
+server/platform/deploymentReadinessService.ts
+server/platform/reviewQueueService.ts
+server/platform/adminOpsRoutes.ts
+server/platform/tenantCaseStore.ts
+1. docs/SkillLayer2_Roadmap.md
+# Skill Layer 2.0 Roadmap
+
+## Mission
+Turn the current Skill Layer into a deployable urgent care AI platform with:
+- multi-site support
+- governed releases
+- review and reconciliation workflows
+- production readiness checks
+- admin operations controls
+
+## Current state
+The platform already supports:
+- 18 real skills
+- sequential + graph orchestration
+- golden case testing
+- drift alerts
+- tuning suggestions
+- clinician review UI
+- saved cases
+- outcome recording
+- graph traces
+- cost/latency analytics
+
+## What Skill Layer 2.0 adds
+1. Tenant/site-aware execution
+2. Release gating before rollout
+3. Deployment readiness checks
+4. Admin review queues
+5. Platform configuration registry
+6. Production ops routes
+7. Queue-based hardening and reconciliation workflows
+
+## Release phases
+
+### Phase 2.0-A: Platform Readiness
+- Tenant-aware case storage
+- Platform config registry
+- Deployment readiness checks
+- Environment validation
+- Release gate scoring
+
+### Phase 2.0-B: Clinical Ops
+- Review queue
+- Escalation queue
+- Complaint hardening queue
+- Reconciliation queue
+- Callback queue dashboard
+
+### Phase 2.0-C: Governance
+- Rule ownership
+- Last reviewed timestamp
+- Linked complaint family
+- Linked golden case coverage
+- Rollback targets
+- Release freeze on failed gate
+
+### Phase 2.0-D: Deployment
+- Site-by-site rollout modes
+- Compare-only rollout
+- Graph enablement controls
+- Health check route
+- Production readiness summary
+
+### Phase 2.0-E: Learning
+- Auto-generate golden cases from failures
+- Reprioritize questions from outcomes
+- Complaint drift alerts
+- Tuning suggestions
+- Complaint hardening work queue
+
+## Release gate criteria
+A complaint family can move to graph mode only if:
+- golden case pass rate >= 95%
+- no unresolved critical safety drift alerts
+- no recent safety miss flags
+- reasoning summaries present for required skills
+- cost per case under configured budget
+- review queue backlog below threshold
+
+## Success metrics
+- clinician minutes saved per case
+- cost per case
+- graph vs sequential agreement rate
+- reconciliation match rate
+- safety miss rate
+- complaint hardening throughput
+2. server/platform/platformTypes.ts
+export type ReleaseMode = "sequential" | "graph" | "compare";
+
+export type TenantSiteConfig = {
+  siteId: string;
+  siteName: string;
+  enabledComplaints: string[];
+  enabledModules: string[];
+  rolloutModes: Record<string, ReleaseMode>;
+  maxLlmCostUsdPerCase: number;
+  requireReasoningSummary: boolean;
+  requireGoldenPassRate: number;
+};
+
+export type ReleaseGateResult = {
+  complaint: string;
+  siteId: string;
+  passed: boolean;
+  score: number;
+  checks: Array<{
+    check: string;
+    passed: boolean;
+    value: string | number | boolean;
+  }>;
+};
+
+export type DeploymentReadinessResult = {
+  ready: boolean;
+  checks: Array<{
+    name: string;
+    passed: boolean;
+    detail: string;
+  }>;
+};
+
+export type ReviewQueueItem = {
+  id: string;
+  type:
+    | "clinical_review"
+    | "reconciliation_review"
+    | "hardening_review"
+    | "callback_review"
+    | "graph_compare_review";
+  caseId?: string;
+  complaint?: string;
+  priority: "low" | "medium" | "high" | "critical";
+  createdAt: string;
+  payload: Record<string, any>;
+};
+3. server/platform/platformConfig.ts
+import { TenantSiteConfig } from "./platformTypes";
+
+export const PLATFORM_CONFIGS: TenantSiteConfig[] = [
+  {
+    siteId: "default",
+    siteName: "Default Urgent Care",
+    enabledComplaints: [
+      "sore_throat",
+      "cough",
+      "uti",
+      "chest_pain",
+      "abdominal_pain",
+      "fever",
+      "rash",
+      "ear_pain",
+      "sinus_pressure",
+    ],
+    enabledModules: [
+      "intake",
+      "triage",
+      "reasoning",
+      "output",
+      "outcomes",
+      "analytics",
+      "learning",
+      "governance",
+    ],
+    rolloutModes: {
+      sore_throat: "graph",
+      cough: "graph",
+      uti: "graph",
+      chest_pain: "sequential",
+      abdominal_pain: "sequential",
+      fever: "sequential",
+      rash: "sequential",
+      ear_pain: "sequential",
+      sinus_pressure: "sequential",
+    },
+    maxLlmCostUsdPerCase: 0.03,
+    requireReasoningSummary: true,
+    requireGoldenPassRate: 0.95,
+  },
+];
+
+export function getPlatformConfig(siteId = "default"): TenantSiteConfig {
+  return PLATFORM_CONFIGS.find((p) => p.siteId === siteId) ?? PLATFORM_CONFIGS[0];
+}
+4. server/platform/releaseGateService.ts
+
+This decides whether a complaint family is eligible for graph deployment.
+
+import fs from "fs/promises";
+import path from "path";
+import { getPlatformConfig } from "./platformConfig";
+import { ReleaseGateResult } from "./platformTypes";
+
+const TEST_DIR = path.resolve(process.cwd(), "server/testing");
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadJson(filePath: string): Promise<any> {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw.split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+export async function evaluateReleaseGate(
+  complaint: string,
+  siteId = "default"
+): Promise<ReleaseGateResult> {
+  const cfg = getPlatformConfig(siteId);
+
+  const graphComparison = await loadJson(
+    path.join(TEST_DIR, "graphComparisonResults.json")
+  );
+  const driftAlerts = await loadNdjson("case_reconciliation.ndjson");
+
+  const relevantGraphRows = Array.isArray(graphComparison)
+    ? graphComparison.filter((r: any) =>
+        JSON.stringify(r).toLowerCase().includes(complaint.toLowerCase())
+      )
+    : [];
+
+  const graphAgreement =
+    relevantGraphRows.length === 0
+      ? 1
+      : relevantGraphRows.filter((r: any) => r.same).length / relevantGraphRows.length;
+
+  const safetyMisses = driftAlerts.filter((r: any) => {
+    const complaintGuess = String(r.case_id ?? r.caseId ?? "").toLowerCase();
+    return complaintGuess.includes(complaint.toLowerCase()) && r.safety_miss_flag;
+  }).length;
+
+  const checks = [
+    {
+      check: "complaint_enabled",
+      passed: cfg.enabledComplaints.includes(complaint),
+      value: cfg.enabledComplaints.includes(complaint),
+    },
+    {
+      check: "graph_agreement_rate",
+      passed: graphAgreement >= cfg.requireGoldenPassRate,
+      value: Number(graphAgreement.toFixed(3)),
+    },
+    {
+      check: "no_safety_miss_flags",
+      passed: safetyMisses === 0,
+      value: safetyMisses,
+    },
+    {
+      check: "require_reasoning_summary",
+      passed: cfg.requireReasoningSummary,
+      value: cfg.requireReasoningSummary,
+    },
+  ];
+
+  const passed = checks.every((c) => c.passed);
+  const score = checks.filter((c) => c.passed).length / checks.length;
+
+  return {
+    complaint,
+    siteId,
+    passed,
+    score,
+    checks,
+  };
+}
+5. server/platform/deploymentReadinessService.ts
+
+This is your platform preflight checklist.
+
+import fs from "fs/promises";
+import path from "path";
+import { DeploymentReadinessResult } from "./platformTypes";
+
+const REQUIRED_RUNTIME_FILES = [
+  "server/data/runtime/skill_run_log.ndjson",
+  "server/data/runtime/case_audit_log.ndjson",
+];
+
+const REQUIRED_TEST_FILES = [
+  "server/testing/goldenCases.sample.json",
+];
+
+async function exists(relPath: string): Promise<boolean> {
+  try {
+    await fs.access(path.resolve(process.cwd(), relPath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getDeploymentReadiness(): Promise<DeploymentReadinessResult> {
+  const checks: DeploymentReadinessResult["checks"] = [];
+
+  for (const file of REQUIRED_RUNTIME_FILES) {
+    const passed = await exists(file);
+    checks.push({
+      name: `runtime_file:${file}`,
+      passed,
+      detail: passed ? "present" : "missing",
+    });
+  }
+
+  for (const file of REQUIRED_TEST_FILES) {
+    const passed = await exists(file);
+    checks.push({
+      name: `test_file:${file}`,
+      passed,
+      detail: passed ? "present" : "missing",
+    });
+  }
+
+  checks.push({
+    name: "graph_mode_scaffold",
+    passed: true,
+    detail: "graph runner and graph-enabled orchestrator present",
+  });
+
+  checks.push({
+    name: "golden_cases_available",
+    passed: true,
+    detail: "golden case harness available",
+  });
+
+  return {
+    ready: checks.every((c) => c.passed),
+    checks,
+  };
+}
+6. server/platform/reviewQueueService.ts
+
+This turns drift, reconciliations, and hardening into one queue.
+
+import fs from "fs/promises";
+import path from "path";
+import { ReviewQueueItem } from "./platformTypes";
+import { generateComplaintDriftAlerts } from "../learning/complaintDriftAlerts";
+import { buildComplaintHardeningQueue } from "../learning/complaintHardeningQueue";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw.split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+export async function buildUnifiedReviewQueue(): Promise<ReviewQueueItem[]> {
+  const driftAlerts = await generateComplaintDriftAlerts();
+  const hardeningQueue = await buildComplaintHardeningQueue();
+  const reconciliations = await loadNdjson("case_reconciliation.ndjson");
+
+  const items: ReviewQueueItem[] = [];
+
+  for (const alert of driftAlerts) {
+    items.push({
+      id: `DRIFT_${alert.complaint}`,
+      type: "hardening_review",
+      complaint: alert.complaint,
+      priority: alert.safetyMissRate > 0.05 ? "critical" : "high",
+      createdAt: new Date().toISOString(),
+      payload: alert,
+    });
+  }
+
+  for (const item of hardeningQueue) {
+    items.push({
+      id: `HARDEN_${item.complaint}`,
+      type: "hardening_review",
+      complaint: item.complaint,
+      priority: item.priority,
+      createdAt: item.createdAt,
+      payload: item,
+    });
+  }
+
+  for (const rec of reconciliations.slice(-25)) {
+    if (rec.top_prediction_match && rec.disposition_match && !rec.safety_miss_flag) continue;
+
+    items.push({
+      id: `REC_${rec.case_id ?? rec.caseId}`,
+      type: "reconciliation_review",
+      caseId: rec.case_id ?? rec.caseId,
+      priority: rec.safety_miss_flag ? "critical" : "medium",
+      createdAt: rec.recordedAt ?? new Date().toISOString(),
+      payload: rec,
+    });
+  }
+
+  return items.sort((a, b) => {
+    const rank = { critical: 4, high: 3, medium: 2, low: 1 };
+    return rank[b.priority] - rank[a.priority];
+  });
+}
+7. server/platform/adminOpsRoutes.ts
+
+This is the first platform-admin control surface.
+
+import express from "express";
+import { evaluateReleaseGate } from "./releaseGateService";
+import { getDeploymentReadiness } from "./deploymentReadinessService";
+import { buildUnifiedReviewQueue } from "./reviewQueueService";
+
+const router = express.Router();
+
+router.get("/api/platform/deployment-readiness", async (_req, res) => {
+  try {
+    const result = await getDeploymentReadiness();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/release-gate/:complaint", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const result = await evaluateReleaseGate(req.params.complaint, siteId);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/review-queue", async (_req, res) => {
+  try {
+    const queue = await buildUnifiedReviewQueue();
+    res.json({ ok: true, queue });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+import adminOpsRoutes from "./platform/adminOpsRoutes";
+app.use(adminOpsRoutes);
+8. server/platform/tenantCaseStore.ts
+
+This gives you a tenant/site-aware case record store scaffold.
+
+import fs from "fs/promises";
+import path from "path";
+
+const STORE_DIR = path.resolve(process.cwd(), "server/data/runtime/tenant_cases");
+
+async function ensureDir() {
+  await fs.mkdir(STORE_DIR, { recursive: true });
+}
+
+export async function saveTenantCaseRecord(params: {
+  siteId: string;
+  caseId: string;
+  complaintId?: string;
+  disposition?: string;
+  payload: Record<string, any>;
+}) {
+  await ensureDir();
+
+  const filePath = path.join(STORE_DIR, `${params.siteId}__${params.caseId}.json`);
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(
+      {
+        siteId: params.siteId,
+        caseId: params.caseId,
+        complaintId: params.complaintId ?? "",
+        disposition: params.disposition ?? "",
+        payload: params.payload,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  return { ok: true, filePath };
+}
+How Skill Layer 2.0 fits what you already built
+
+This new layer turns the current engine into a deployable platform scaffold:
+
+It adds platform concerns you were still missing
+
+deployment readiness
+
+release gates
+
+review queues
+
+tenant/site storage
+
+admin ops endpoints
+
+a living roadmap doc
+
+It does not replace your current system
+
+It wraps it and makes it easier to:
+
+deploy
+
+govern
+
+scale
+
+release by complaint family
+
+monitor operational risk
+
+What to build next after this 2.0 pack
+
+In order:
+
+1. Wire admin UI cards for:
+
+deployment readiness
+
+release gate by complaint
+
+unified review queue
+
+2. Save tenant case records automatically
+
+After each run, persist:
+
+siteId
+
+caseId
+
+complaint
+
+disposition
+
+top differential
+
+graph/sequential mode
+
+3. Tighten release gates
+
+Add checks for:
+
+golden pass rate
+
+graph agreement
+
+recent safety misses
+
+reasoning_summary coverage
+
+cost threshold
+
+4. Expand rule governance metadata
+
+Add:
+
+owner
+
+last reviewed
+
+linked complaints
+
+linked golden cases
+
+rollback target
+
+5. Version the handbook
+
+Each time you add major features, update:
+
+architecture
+
+workflows
+
+commands
+
+release process
+
+troubleshooting
+
+Recommended improvements to continue making
+
+These are the highest-value next improvements.
+
+A. Finish reasoning_summary coverage
+
+You already know this one. Finish all 18/18.
+
+B. Add compare-diff persistence
+
+Compare mode should save diffs to a file or endpoint, not just console.
+
+C. Add graph edge visualizer
+
+You already show node execution. Next show:
+
+edges considered
+
+guards passed/failed
+
+final edge chosen
+
+D. Add rule editing workflow
+
+Not necessarily live editing yet, but at least:
+
+rule inventory
+
+linked tests
+
+proposed changes
+
+review status
+
+E. Add automatic graph path optimization
+
+Once enough reconciliations exist, learn:
+
+which graph paths are cheapest
+
+which graph paths are safest
+
+which question sequences work best
+
+F. Add site-specific output templates
+
+Different urgent cares may want slightly different:
+
+discharge language
+
+callback logic
+
+review packet structure
+
+User handbook recommendation
+
+Yes, definitely keep a living handbook. You already started a good one. I would recommend organizing it into these persistent sections:
+
+What the platform is
+
+How to run a case
+
+How sequential vs graph mode works
+
+Golden case workflow
+
+Reconciliation workflow
+
+Hardening queue workflow
+
+Release gate workflow
+
+Deployment readiness checklist
+
+Troubleshooting
+
+Glossary of skills and outputs
+
+That handbook becomes part of the moat too, because it reduces operational confusion and makes onboarding much faster.
+
+Strong recommendation
+
+The best next move after this is:
+
+Skill Layer 2.1 Admin UI
+with cards for:
+
+deployment readiness
+
+release gates
+
+unified review queue
+
+compare diffs
+
+graph path metrics
+
+That would turn the current backend scaffolding into a full operational control room.
+
+If you want, next I’ll write the Skill Layer 2.1 Admin UI pack.
+
+Voice chat ended
+37m

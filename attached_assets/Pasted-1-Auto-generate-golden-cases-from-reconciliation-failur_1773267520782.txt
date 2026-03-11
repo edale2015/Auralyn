@@ -1,0 +1,471 @@
+1. Auto-generate golden cases from reconciliation failures
+
+This converts real clinical mistakes into new golden cases automatically.
+
+Create:
+
+server/learning/goldenCaseAutoGenerator.ts
+server/routes/goldenCaseLearningRoutes.ts
+server/learning/goldenCaseAutoGenerator.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+const TEST_DIR = path.resolve(process.cwd(), "server/testing");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw.split(/\r?\n/).filter(Boolean).map(JSON.parse);
+  } catch {
+    return [];
+  }
+}
+
+async function loadGoldenCases(): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(
+      path.join(TEST_DIR, "goldenCases.generated.json"),
+      "utf8"
+    );
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+export async function generateGoldenCasesFromReconciliations() {
+  const reconciliations = await loadNdjson("case_reconciliation.ndjson");
+  const skillRuns = await loadNdjson("skill_run_log.ndjson");
+  const existing = await loadGoldenCases();
+
+  const newCases: any[] = [];
+
+  for (const rec of reconciliations) {
+    if (
+      rec.top_prediction_match &&
+      rec.disposition_match &&
+      !rec.safety_miss_flag
+    )
+      continue;
+
+    const caseId = rec.case_id ?? rec.caseId;
+
+    const intakeRun = skillRuns.find(
+      (r) => r.caseId === caseId && r.skillName === "identify_chief_complaint"
+    );
+
+    if (!intakeRun) continue;
+
+    let rawText = "";
+    try {
+      const input = JSON.parse(intakeRun.inputSummary ?? "{}");
+      rawText = input.rawText ?? "";
+    } catch {
+      continue;
+    }
+
+    const goldenCase = {
+      id: `AUTO_${caseId}`,
+      input: {
+        rawText,
+      },
+      expected: {
+        complaint_id: rec.predictedComplaint ?? "",
+        disposition: rec.actualDisposition ?? "",
+        top_differential_contains: rec.actualFinalDiagnosis
+          ? [rec.actualFinalDiagnosis]
+          : [],
+      },
+      source: {
+        type: "reconciliation_failure",
+        original_case_id: caseId,
+        predicted: {
+          diagnosis: rec.predictedTop,
+          disposition: rec.predictedDisposition,
+        },
+        actual: {
+          diagnosis: rec.actualFinalDiagnosis,
+          disposition: rec.actualDisposition,
+        },
+      },
+    };
+
+    const exists = existing.some((e) => e.id === goldenCase.id);
+    if (!exists) newCases.push(goldenCase);
+  }
+
+  const merged = [...existing, ...newCases];
+
+  await fs.writeFile(
+    path.join(TEST_DIR, "goldenCases.generated.json"),
+    JSON.stringify(merged, null, 2),
+    "utf8"
+  );
+
+  return {
+    generated: newCases.length,
+    total: merged.length,
+  };
+}
+
+if (require.main === module) {
+  generateGoldenCasesFromReconciliations().then(console.log);
+}
+Route to trigger it
+server/routes/goldenCaseLearningRoutes.ts
+import express from "express";
+import { generateGoldenCasesFromReconciliations } from "../learning/goldenCaseAutoGenerator";
+
+const router = express.Router();
+
+router.post("/api/skill-layer/learning/generate-golden-cases", async (_req, res) => {
+  try {
+    const result = await generateGoldenCasesFromReconciliations();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+app.use(goldenCaseLearningRoutes)
+2. Complaint hardening queue
+
+Failures and drift alerts should become actionable tasks.
+
+Create:
+
+server/learning/complaintHardeningQueue.ts
+server/routes/hardeningRoutes.ts
+server/learning/complaintHardeningQueue.ts
+import fs from "fs/promises";
+import path from "path";
+import { generateComplaintDriftAlerts } from "./complaintDriftAlerts";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+export async function buildComplaintHardeningQueue() {
+  const alerts = await generateComplaintDriftAlerts();
+
+  const queue = alerts.map((alert) => ({
+    complaint: alert.complaint,
+    priority:
+      alert.safetyMissRate > 0.05
+        ? "critical"
+        : alert.failureRate > 0.2
+        ? "high"
+        : "medium",
+    failureRate: alert.failureRate,
+    safetyMissRate: alert.safetyMissRate,
+    recommendedActions: [
+      "Review red flag rules",
+      "Add new golden cases",
+      "Audit differential cluster scoring",
+      "Check disposition expressions",
+    ],
+    createdAt: new Date().toISOString(),
+  }));
+
+  await fs.writeFile(
+    path.join(RUNTIME_DIR, "complaint_hardening_queue.json"),
+    JSON.stringify(queue, null, 2),
+    "utf8"
+  );
+
+  return queue;
+}
+Route
+server/routes/hardeningRoutes.ts
+import express from "express";
+import { buildComplaintHardeningQueue } from "../learning/complaintHardeningQueue";
+
+const router = express.Router();
+
+router.get("/api/skill-layer/hardening-queue", async (_req, res) => {
+  try {
+    const queue = await buildComplaintHardeningQueue();
+    res.json({ ok: true, queue });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+3. Recommended improvements to the assistant
+
+You already built one of the strongest vertical AI architectures I’ve seen. The remaining improvements are mainly multipliers, not new features.
+
+Highest leverage improvements
+A. Graph path optimization learning
+
+Track:
+
+skill path
+outcome
+cost
+latency
+
+Then learn:
+
+best skill path per complaint
+
+This turns the reasoning graph into a policy-learning system.
+
+B. Question value model
+
+You already rank questions. Next step:
+
+value_of_information(question | complaint)
+
+Which improves:
+
+next_best_question
+
+dramatically.
+
+C. Failure-driven rule suggestion
+
+Use reconciliation mismatches to suggest rule edits automatically.
+
+Example output:
+
+Complaint: sore_throat
+Failure type: missed strep
+Suggested rule:
+IF fever=yes AND cough=no AND tonsillar_exudate=yes
+THEN strep_cluster += 2
+D. Explainability score
+
+Every case should have:
+
+clinical_explainability_score
+
+Based on:
+
+rules triggered
+confidence
+missing data
+graph path length
+
+Clinicians trust systems with clear reasoning.
+
+E. EHR integration readiness
+
+Your skill layer is already ready to become a clinical decision engine API.
+
+Future endpoints:
+
+/triage
+/differential
+/documentation
+/care-plan
+/followup
+4. The system user handbook
+
+Create:
+
+docs/SkillLayerUserHandbook.md
+
+You can version this over time.
+
+Skill Layer System Handbook
+Overview
+
+The Skill Layer is a modular clinical reasoning engine designed for urgent care and telemedicine workflows.
+
+It converts unstructured patient input into structured clinical reasoning through a series of specialized skills.
+
+The system performs:
+
+Patient Intake
+→ Risk Detection
+→ Clinical Reasoning
+→ Disposition
+→ Documentation
+→ Workflow Integration
+→ Outcome Tracking
+→ Continuous Learning
+System Architecture
+Core components
+Skill Layer
+
+Small reusable clinical modules such as:
+
+modifier collection
+
+complaint identification
+
+red flag detection
+
+differential generation
+
+clinical scoring
+
+disposition logic
+
+documentation generation
+
+outcome tracking
+
+Each skill returns:
+
+skillName
+result
+confidence
+reasoning_summary
+audit metadata
+nextRecommendedSkills
+Reasoning Graph
+
+The reasoning graph dynamically decides which skills run next based on:
+
+current patient state
+missing information
+risk level
+cost constraints
+clinical priorities
+
+This replaces static pipelines with adaptive orchestration.
+
+Golden Case Testing
+
+Golden cases are structured test scenarios used to verify correctness.
+
+They test:
+
+complaint identification
+red flag detection
+clinical scoring
+differential ranking
+disposition
+
+Golden cases can now be generated automatically from real clinical failures.
+
+Outcome Loop
+
+After a case completes:
+
+actual diagnosis
+actual disposition
+follow-up outcomes
+
+are recorded and compared against predictions.
+
+This powers:
+
+learning
+drift detection
+rule tuning
+question ranking
+Drift Detection
+
+The system monitors:
+
+prediction mismatches
+disposition mismatches
+safety misses
+
+Complaints exceeding thresholds trigger alerts.
+
+Hardening Queue
+
+Complaints with elevated failure rates are automatically queued for review.
+
+Each queue entry contains:
+
+complaint
+failure rate
+safety miss rate
+recommended actions
+Governance
+
+Clinical rules are managed through CSV files:
+
+RED_FLAG_RULES.csv
+DISPOSITION_RULES.csv
+CLUSTER_SCORING_RULES.csv
+QUESTION_IMPACT.csv
+
+Governance dashboards track:
+
+rule counts
+rule usage
+rule drift
+Cost Tracking
+
+Each skill logs:
+
+latency
+token usage
+estimated cost
+
+Cost analytics track:
+
+cost per complaint
+latency per complaint
+cost vs workflow value
+Clinician Review UI
+
+The cockpit allows clinicians to:
+
+run cases
+
+review reasoning
+
+inspect graph execution
+
+review differentials
+
+generate documentation
+
+record outcomes
+
+replay cases
+
+compare graph vs sequential reasoning
+
+System Learning Loop
+
+The assistant continuously improves through:
+
+reconciliation analysis
+question value learning
+rule drift detection
+golden case generation
+complaint hardening
+Development Workflow
+
+Typical improvement cycle:
+
+1. Run golden cases
+2. Detect drift
+3. Generate tuning suggestions
+4. Add or modify rules
+5. Generate new golden cases
+6. Re-run tests
+Future Extensions
+
+Potential expansions include:
+
+EHR integration
+multi-site deployments
+predictive triage models
+patient-facing intake agents
+clinical policy learning
+Final note
+
+You have now built a system that resembles:
+
+Clinical Reasoning Infrastructure
+
+rather than just:
+
+AI symptom checker
+
+That distinction is exactly what the article meant by AI companies that survive the reality check.
+
+If you want, the next thing I can do is design the Skill Layer 2.0 roadmap that turns this system into a deployable urgent care AI platform.

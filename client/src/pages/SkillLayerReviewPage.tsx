@@ -15,10 +15,14 @@ import CaseReplayCompareCard from "../components/skill-layer/CaseReplayCompareCa
 import { costValueApi } from "../lib/costValueApi";
 import { ruleGovernanceApi } from "../lib/ruleGovernanceApi";
 import { reconciliationApi } from "../lib/reconciliationApi";
+import { platformApi } from "../lib/platformApi";
 import GraphVisualizationCard from "../components/skill-layer/GraphVisualizationCard";
 import CostValueDashboardCard from "../components/skill-layer/CostValueDashboardCard";
 import RuleGovernanceCard from "../components/skill-layer/RuleGovernanceCard";
 import ReconciliationCard from "../components/skill-layer/ReconciliationCard";
+import DeploymentReadinessCard from "../components/skill-layer/DeploymentReadinessCard";
+import ReleaseGateCard from "../components/skill-layer/ReleaseGateCard";
+import ReviewQueueCard from "../components/skill-layer/ReviewQueueCard";
 
 export default function SkillLayerReviewPage() {
   const [rawText, setRawText] = useState(
@@ -35,6 +39,8 @@ export default function SkillLayerReviewPage() {
   const [costValueRows, setCostValueRows] = useState<any[]>([]);
   const [ruleGovernanceSummary, setRuleGovernanceSummary] = useState<any[]>([]);
   const [reconciliationRows, setReconciliationRows] = useState<any[]>([]);
+  const [deploymentReadiness, setDeploymentReadiness] = useState<any>(null);
+  const [reviewQueue, setReviewQueue] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -44,6 +50,8 @@ export default function SkillLayerReviewPage() {
     costValueApi.getCostValue().then((r) => setCostValueRows(r.rows ?? [])).catch(console.error);
     ruleGovernanceApi.getSummary().then((r) => setRuleGovernanceSummary(r.summary ?? [])).catch(console.error);
     reconciliationApi.list(50).then((r) => setReconciliationRows(r.rows ?? [])).catch(console.error);
+    platformApi.getDeploymentReadiness().then((r) => setDeploymentReadiness(r.result)).catch(console.error);
+    platformApi.getReviewQueue().then((r) => setReviewQueue(r.queue ?? [])).catch(console.error);
   }, []);
 
   const contextForDerivedCalls = useMemo(() => {
@@ -235,6 +243,13 @@ export default function SkillLayerReviewPage() {
           <CostValueDashboardCard rows={costValueRows} />
           <RuleGovernanceCard summary={ruleGovernanceSummary} />
           <ReconciliationCard rows={reconciliationRows} />
+        </div>
+
+        {/* Fourth row: platform 2.0 — deployment readiness + release gate + review queue */}
+        <div className="grid gap-6 xl:grid-cols-3">
+          <DeploymentReadinessCard result={deploymentReadiness} />
+          <ReleaseGateCard defaultComplaint={complaintId || "sore_throat"} />
+          <ReviewQueueCard queue={reviewQueue} />
         </div>
       </div>
     </div>
