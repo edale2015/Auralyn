@@ -1,0 +1,395 @@
+cases returned
+
+summary diagnoses/dispositions look reasonable
+
+Bottom line
+
+This engine adds the missing layer of:
+
+clinical memory
+
+And that is one of the most powerful upgrades you can add before heavy ML.
+
+If you want, next I’ll write the outcome-weighted similarity + differential integration pack so similar prior cases directly influence the ranked differential list.
+
+yes write outcome weighted similarity and differential pack
+
+Absolutely. Here is the Outcome-Weighted Similarity + Differential Integration Pack.
+
+This upgrade does two important things:
+
+weights similar prior cases by outcome quality
+
+**feeds
+
+please continue
+
+Great — let’s finish the Outcome-Weighted Similarity + Differential Integration Pack so your telemedicine assistant actually uses prior cases to influence the ranked differential.
+
+This upgrade adds a clinical memory layer that behaves like an experienced physician remembering prior patients.
+
+It does three things:
+
+Outcome-weighted similarity scoring
+
+Differential vote aggregation from similar cases
+
+Integration into the main reasoning pipeline
+
+No ML training required.
+
+Architecture After This Upgrade
+
+Your reasoning pipeline becomes:
+
+Symptoms
+   ↓
+Rule Engine
+   ↓
+Bayesian / Score Modules
+   ↓
+Outcome-Weighted Similar Cases
+   ↓
+Differential Aggregator
+   ↓
+Final Ranked Differential
+
+Instead of only:
+
+rules → differential
+
+you now have:
+
+rules + memory → differential
+Files Added
+server/similarity/outcomeWeightedSimilarity.ts
+server/similarity/differentialVoteAggregator.ts
+server/similarity/similarityWeightedDifferentialService.ts
+server/routes/similarityDifferentialRoutes.ts
+1. Outcome-Weighted Similarity
+server/similarity/outcomeWeightedSimilarity.ts
+import { scoreCaseSimilarity } from "./similarityScorer"
+
+function outcomeWeight(row:any){
+
+  if(!row.outcome) return 0.5
+
+  let weight = 1
+
+  if(row.outcome.topPredictionMatch)
+    weight += 0.5
+
+  if(row.outcome.dispositionMatch)
+    weight += 0.5
+
+  if(row.outcome.safetyMiss)
+    weight -= 1
+
+  return Math.max(0,weight)
+}
+
+export function scoreOutcomeWeightedSimilarity(
+  current:any,
+  prior:any
+){
+
+  const similarity = scoreCaseSimilarity(current,prior)
+
+  const weight = outcomeWeight(prior)
+
+  return similarity * weight
+}
+
+This means cases with good outcomes count more.
+
+2. Differential Vote Aggregator
+
+Each similar case casts a vote for its final diagnosis.
+
+server/similarity/differentialVoteAggregator.ts
+export function aggregateDifferentialVotes(similarCases:any[]){
+
+  const votes:Record<string,number> = {}
+
+  for(const c of similarCases){
+
+    const diagnosis =
+      c.outcome?.actualDiagnosis ||
+      c.differential?.[0]
+
+    if(!diagnosis) continue
+
+    const weight = c.similarityScore ?? 0
+
+    votes[diagnosis] =
+      (votes[diagnosis] ?? 0) + weight
+  }
+
+  return Object.entries(votes)
+    .map(([diagnosis,score])=>({
+      diagnosis,
+      score
+    }))
+    .sort((a,b)=>b.score-a.score)
+}
+3. Similarity-Weighted Differential Service
+
+This merges:
+
+rule-based differential
+
+similarity-based differential
+
+server/similarity/similarityWeightedDifferentialService.ts
+import { extractCaseFeatures } from "./caseFeatureExtractor"
+import { loadSimilarityIndex } from "./caseSimilarityStore"
+import { scoreOutcomeWeightedSimilarity } from "./outcomeWeightedSimilarity"
+import { aggregateDifferentialVotes } from "./differentialVoteAggregator"
+
+export async function computeSimilarityWeightedDifferential(state:any){
+
+  const current = extractCaseFeatures(state)
+
+  const index = await loadSimilarityIndex()
+
+  const scored = index
+    .map((row:any)=>({
+
+      ...row,
+
+      similarityScore:
+        scoreOutcomeWeightedSimilarity(
+          current,
+          row
+        )
+
+    }))
+    .sort((a:any,b:any)=>
+      b.similarityScore-a.similarityScore
+    )
+    .slice(0,10)
+
+  const votes =
+    aggregateDifferentialVotes(scored)
+
+  return {
+    similarCases:scored,
+    voteDifferential:votes
+  }
+
+}
+4. Route for Similarity Differential
+server/routes/similarityDifferentialRoutes.ts
+import express from "express"
+import { rebuildClinicalState } from "../core/state/clinicalStateProjector"
+import { computeSimilarityWeightedDifferential }
+from "../similarity/similarityWeightedDifferentialService"
+
+const router = express.Router()
+
+router.get(
+  "/api/similarity/differential/:caseId",
+  async(req,res)=>{
+
+    try{
+
+      const state =
+        await rebuildClinicalState(
+          req.params.caseId
+        )
+
+      const result =
+        await computeSimilarityWeightedDifferential(
+          state
+        )
+
+      res.json({
+        ok:true,
+        result
+      })
+
+    }catch(err:any){
+
+      res.status(500).json({
+        ok:false,
+        error:err.message
+      })
+
+    }
+
+})
+
+export default router
+
+Register:
+
+app.use(similarityDifferentialRoutes)
+5. Integrating With Your Differential Engine
+
+Now modify your differential aggregator.
+
+Before
+rules → differential
+After
+rules + similarity votes → differential
+
+Example integration:
+
+import { computeSimilarityWeightedDifferential }
+from "../similarity/similarityWeightedDifferentialService"
+
+const sim =
+  await computeSimilarityWeightedDifferential(state)
+
+const ruleDifferential =
+  generateDifferential({
+    complaint:state.complaint,
+    symptoms:state.symptoms
+  })
+
+const combined:any = {}
+
+for(const d of ruleDifferential){
+
+  combined[d.diagnosis] =
+    (combined[d.diagnosis] ?? 0) +
+    d.score
+}
+
+for(const v of sim.voteDifferential){
+
+  combined[v.diagnosis] =
+    (combined[v.diagnosis] ?? 0) +
+    v.score
+}
+
+const final =
+  Object.entries(combined)
+    .map(([diagnosis,score])=>({
+      diagnosis,
+      score
+    }))
+    .sort((a,b)=>b.score-a.score)
+6. UI Upgrade
+
+Add a Similarity Influence Panel.
+
+Example:
+
+Differential
+--------------------------------
+1. Pneumonia (rules 0.6 + similar cases 0.8)
+2. Viral bronchitis
+3. COVID
+
+Similar Prior Cases
+--------------------------------
+Case #128 – pneumonia – admitted
+Case #203 – pneumonia – antibiotics
+Case #147 – bronchitis – home care
+
+Doctors love seeing similar patient outcomes.
+
+Why This Upgrade Is Powerful
+
+Before:
+
+rules → diagnosis
+
+After:
+
+rules + memory → diagnosis
+
+This mimics how physicians actually reason.
+
+“I saw three patients like this last month and they all had pneumonia.”
+
+Next Upgrade (Highly Recommended)
+
+Now that you have:
+
+rules
+scores
+similar cases
+
+The next big step is:
+
+Adaptive Question Selection
+
+Instead of static questions:
+
+cough → ask SOB
+
+The system learns:
+
+which question changes diagnosis probability the most
+
+This dramatically improves telemedicine reasoning.
+
+Final Result
+
+Your system now has:
+
+Event-Sourced Clinical State
+Graph Reasoning
+Safety Rules
+Medication Safety
+Care Pathways
+Outcome Learning
+Case Similarity Engine
+Outcome-Weighted Differential
+
+This is extremely close to how modern clinical reasoning platforms operate internally.
+
+If you'd like, I can next write the Adaptive Question Selection Engine that will make your telemedicine assistant much smarter diagnostically without machine learning models.
+
+Here's a complete summary of what's working:
+
+Metrics fixed and verified:
+
+visits: 3 — every case processed through the UCSM orchestrator is now counted
+erDispositions: 2 — ER dispositions tracked for both the locked safety path and the hybrid reasoning path
+urgentCareDispositions: 1 — the mild sore throat correctly landed urgent care (not ER)
+alerts: 2 — safety alerts recorded when locked rules trigger
+carePathwaysExecuted: 2 — care pathways tracked after each final disposition
+avgConfidence: 0.27 — confidence sampling from the hybrid reasoning layer
+Root cause of the zero counts: The metrics hooks were wired into reasoningWorker.ts (the WhatsApp/Telegram path) but the frontend UCSM console uses a different path — clinicalStateOrchestrator.ts. I added the same metric recording calls to all the key decision points in the orchestrator: on visit entry, when locked safety rules fire, when hybrid reasoning sets a disposition, and when care pathways execute.
+
+Clinical correctness confirmed:
+
+Mild sore throat → urgent_care (correct, no red flags)
+Thunderclap headache + stiff neck → er_now, flags SR-006 + SR-007 (subarachnoid hemorrhage red flags)
+Crushing chest pain + radiation + diaphoresis → er_now, flag SR-002 (ACS red flag)
+The platform metrics dashboard in the UCSM console will now show accurate real-time counts across all 17 cases in the event stream.
+ yes please the adaptive question selection engineHere's a complete summary of what's working:
+
+Metrics fixed and verified:
+
+visits: 3 — every case processed through the UCSM orchestrator is now counted
+erDispositions: 2 — ER dispositions tracked for both the locked safety path and the hybrid reasoning path
+urgentCareDispositions: 1 — the mild sore throat correctly landed urgent care (not ER)
+alerts: 2 — safety alerts recorded when locked rules trigger
+carePathwaysExecuted: 2 — care pathways tracked after each final disposition
+avgConfidence: 0.27 — confidence sampling from the hybrid reasoning layer
+Root cause of the zero counts: The metrics hooks were wired into reasoningWorker.ts (the WhatsApp/Telegram path) but the frontend UCSM console uses a different path — clinicalStateOrchestrator.ts. I added the same metric recording calls to all the key decision points in the orchestrator: on visit entry, when locked safety rules fire, when hybrid reasoning sets a disposition, and when care pathways execute.
+
+Clinical correctness confirmed:
+
+Mild sore throat → urgent_care (correct, no red flags)
+Thunderclap headache + stiff neck → er_now, flags SR-006 + SR-007 (subarachnoid hemorrhage red flags)
+Crushing chest pain + radiation + diaphoresis → er_now, flag SR-002 (ACS red flag)
+The platform metrics dashboard in the UCSM console will now show accurate real-time counts across all 17 cases in the event stream.
+ engine
+Adaptive Question Selection Engin please build this
+
+Below is a complete Adaptive Question Selection Engine that plugs directly into your UCSM event-sourced architecture and telemedicine assistant.
+
+The goal is simple:
+
+Ask the single question that will reduce diagnostic uncertainty the most.
+
+This mimics how experienced clinicians reason.
+
+Instead of:
+
+compl
