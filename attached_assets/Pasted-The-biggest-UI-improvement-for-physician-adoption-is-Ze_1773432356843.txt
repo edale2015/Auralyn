@@ -1,0 +1,517 @@
+The biggest UI improvement for physician adoption is:
+
+Zero-friction Rapid Mode
+
+Paste the patient message, and the console:
+
+auto-analyzes
+
+keeps the cursor in the input box
+
+lets you use keyboard shortcuts
+
+lets you append suggested questions with one key
+
+lets you copy the note/discharge instantly
+
+That removes the “click-tax” that makes doctors abandon tools.
+
+Below is a drop-in upgraded one-screen console.
+
+File
+
+client/src/pages/RapidTelemedicineConsole.tsx
+
+import React, { useEffect, useMemo, useRef, useState } from "react"
+
+type DifferentialRow = {
+  diagnosis: string
+  score: number
+}
+
+type AssistantResult = {
+  complaint?: string
+  triage?: { level: string; reason?: string }
+  differential?: DifferentialRow[]
+  nextQuestions?: string[]
+  resources?: { recommendedActions?: any[] }
+  contradictions?: { diagnosis: string; conflict: string }[]
+}
+
+const COMPLAINT_CHIPS = [
+  "cough",
+  "sore throat",
+  "UTI symptoms",
+  "rash",
+  "ear pain",
+  "sinus pressure",
+  "fever",
+  "chest pain",
+  "abdominal pain",
+]
+
+export default function RapidTelemedicineConsole() {
+  const [caseId] = useState(`visit_${Date.now()}`)
+  const [message, setMessage] = useState("")
+  const [result, setResult] = useState<AssistantResult | null>(null)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [lastCopied, setLastCopied] = useState<"" | "note" | "discharge">("")
+  const [status, setStatus] = useState("Ready")
+  const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0)
+
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
+  const debounceRef = useRef<number | null>(null)
+
+  async function analyze() {
+    const trimmed = message.trim()
+    if (!trimmed) return
+
+    try {
+      setIsAnalyzing(true)
+      setStatus("Analyzing...")
+
+      const res = await fetch("/api/telemed/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caseId, message: trimmed }),
+      })
+
+      const data = await res.json()
+      setResult(data.result)
+      setStatus("Updated")
+      setSelectedQuestionIndex(0)
+    } catch (err: any) {
+      setStatus(err?.message || "Analysis failed")
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  function scheduleAnalyze() {
+    if (debounceRef.current) {
+      window.clearTimeout(debounceRef.current)
+    }
+
+    debounceRef.current = window.setTimeout(() => {
+      analyze()
+    }, 450)
+  }
+
+  function insertText(snippet: string) {
+    setMessage((m) => `${m}${m.trim() ? " " : ""}${snippet}`.trim())
+    setStatus(`Added: ${snippet}`)
+    textAreaRef.current?.focus()
+  }
+
+  function appendSuggestedQuestion(question: string) {
+    insertText(question)
+  }
+
+  async function copyText(kind: "note" | "discharge", text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setLastCopied(kind)
+      setStatus(`Copied ${kind}`)
+      window.setTimeout(() => setLastCopied(""), 1200)
+    } catch {
+      setStatus(`Copy failed: ${kind}`)
+    }
+  }
+
+  const note = useMemo(() => {
+    return `Chief Complaint:
+${result?.complaint ?? ""}
+
+History:
+${message}
+
+Assessment:
+${result?.differential?.[0]?.diagnosis ?? ""}
+
+Plan:
+${result?.resources?.recommendedActions?.map((a: any) => a.diagnosis).join("\n") ?? ""}
+
+Disposition:
+${result?.triage?.level ?? ""}`
+  }, [message, result])
+
+  const discharge = useMemo(() => {
+    return `Based on our visit, your symptoms are most consistent with:
+
+${result?.differential?.[0]?.diagnosis ?? ""}
+
+Recommended care:
+${result?.resources?.recommendedActions?.map((a: any) => a.diagnosis).join("\n") ?? ""}
+
+Return immediately if:
+- worsening shortness of breath
+- severe chest pain
+- persistent high fever
+- worsening symptoms
+
+Follow up as advised.`
+  }, [result])
+
+  useEffect(() => {
+    if (!message.trim()) return
+    scheduleAnalyze()
+
+    return () => {
+      if (debounceRef.current) {
+        window.clearTimeout(debounceRef.current)
+      }
+    }
+  }, [message])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const isMod = e.ctrlKey || e.metaKey
+
+      if (isMod && e.key === "Enter") {
+        e.preventDefault()
+        analyze()
+        return
+      }
+
+      if (isMod && e.key.toLowerCase() === "n") {
+        e.preventDefault()
+        copyText("note", note)
+        return
+      }
+
+      if (isMod && e.key.toLowerCase() === "d") {
+        e.preventDefault()
+        copyText("discharge", discharge)
+        return
+      }
+
+      if (isMod && e.key.toLowerCase() === "l") {
+        e.preventDefault()
+        textAreaRef.current?.focus()
+        return
+      }
+
+      if (e.altKey && e.key === "ArrowDown") {
+        e.preventDefault()
+        setSelectedQuestionIndex((i) =>
+          Math.min(i + 1, Math.max((result?.nextQuestions?.length ?? 1) - 1, 0))
+        )
+        return
+      }
+
+      if (e.altKey && e.key === "ArrowUp") {
+        e.preventDefault()
+        setSelectedQuestionIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+
+      if (e.altKey && e.key === "Enter") {
+        e.preventDefault()
+        const q = result?.nextQuestions?.[selectedQuestionIndex]
+        if (q) appendSuggestedQuestion(q)
+        return
+      }
+
+      if (e.altKey && /^[1-9]$/.test(e.key)) {
+        const idx = Number(e.key) - 1
+        const q = result?.nextQuestions?.[idx]
+        if (q) {
+          e.preventDefault()
+          appendSuggestedQuestion(q)
+        }
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [result, selectedQuestionIndex, note, discharge])
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "2.2fr 1.2fr 1.3fr",
+        gap: 16,
+        padding: 16,
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      {/* LEFT: INPUT + QUESTIONS */}
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0 }}>Rapid Telemedicine Console</h2>
+          <div style={{ fontSize: 12, color: "#555" }}>
+            {isAnalyzing ? "Analyzing..." : status}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
+          Shortcuts: Ctrl/Cmd+Enter analyze • Ctrl/Cmd+N copy note • Ctrl/Cmd+D copy discharge • Alt+1..9 add suggested question
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <textarea
+            ref={textAreaRef}
+            style={{
+              width: "100%",
+              height: 160,
+              padding: 12,
+              borderRadius: 10,
+              border: "1px solid #ccc",
+              fontSize: 15,
+              lineHeight: 1.4,
+            }}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Paste the patient message from Telegram / WhatsApp here"
+          />
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {COMPLAINT_CHIPS.map((chip) => (
+            <button
+              key={chip}
+              onClick={() => insertText(chip)}
+              style={{
+                border: "1px solid #ccc",
+                borderRadius: 999,
+                padding: "6px 10px",
+                background: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+          <button
+            onClick={analyze}
+            style={{
+              background: "#2c7be5",
+              color: "white",
+              padding: "10px 14px",
+              border: "none",
+              borderRadius: 10,
+              cursor: "pointer",
+            }}
+          >
+            Analyze Now
+          </button>
+
+          <button
+            onClick={() => {
+              setMessage("")
+              setResult(null)
+              setStatus("Cleared")
+              textAreaRef.current?.focus()
+            }}
+            style={{
+              background: "#f5f5f5",
+              color: "#222",
+              padding: "10px 14px",
+              border: "1px solid #ddd",
+              borderRadius: 10,
+              cursor: "pointer",
+            }}
+          >
+            Clear
+          </button>
+        </div>
+
+        <h3 style={{ marginTop: 20 }}>Next Best Questions</h3>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          {(result?.nextQuestions ?? []).map((q, i) => {
+            const active = i === selectedQuestionIndex
+            return (
+              <button
+                key={q}
+                onClick={() => appendSuggestedQuestion(q)}
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderRadius: 10,
+                  border: active ? "2px solid #2c7be5" : "1px solid #ddd",
+                  background: active ? "#eef5ff" : "#fafafa",
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontSize: 12, color: "#666" }}>
+                  Alt+{i + 1}
+                </div>
+                <div>{q}</div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* MIDDLE: REASONING */}
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Reasoning</h3>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666" }}>Chief complaint</div>
+          <div style={{ fontWeight: 600 }}>{result?.complaint || "—"}</div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666" }}>Triage</div>
+          <div style={{ fontWeight: 700, color: result?.triage?.level === "critical" ? "#b00020" : "#222" }}>
+            {result?.triage?.level || "—"}
+          </div>
+          <div style={{ fontSize: 12, color: "#666" }}>
+            {result?.triage?.reason || ""}
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Differential</div>
+          {(result?.differential ?? []).map((d) => (
+            <div
+              key={d.diagnosis}
+              style={{
+                marginBottom: 8,
+                padding: 10,
+                borderRadius: 10,
+                background: "#f8f8f8",
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>{d.diagnosis}</div>
+              <div style={{ fontSize: 12, color: "#666" }}>
+                Confidence {Math.round(d.score * 100)}%
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {!!result?.contradictions?.length && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Contradictions</div>
+            {result.contradictions.map((c, i) => (
+              <div
+                key={`${c.diagnosis}-${i}`}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  background: "#fff4e5",
+                  border: "1px solid #f2c27b",
+                  marginBottom: 8,
+                }}
+              >
+                <strong>{c.diagnosis}</strong> conflicts with: {c.conflict}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* RIGHT: NOTE + DISCHARGE + ACTIONS */}
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Actions</h3>
+
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Recommended actions</div>
+          {(result?.resources?.recommendedActions ?? []).map((a: any, i: number) => (
+            <div
+              key={`${a.diagnosis}-${i}`}
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                background: "#f8f8f8",
+                marginBottom: 8,
+              }}
+            >
+              {a.diagnosis}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h4 style={{ margin: 0 }}>Chart Note</h4>
+            <button
+              onClick={() => copyText("note", note)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 8,
+                border: "1px solid #ccc",
+                background: lastCopied === "note" ? "#e9f7ef" : "#fff",
+                cursor: "pointer",
+              }}
+            >
+              {lastCopied === "note" ? "Copied" : "Copy"}
+            </button>
+          </div>
+
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              background: "#f5f5f5",
+              padding: 10,
+              borderRadius: 10,
+              marginTop: 8,
+              fontSize: 12,
+            }}
+          >
+            {note}
+          </pre>
+        </div>
+
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h4 style={{ margin: 0 }}>Discharge</h4>
+            <button
+              onClick={() => copyText("discharge", discharge)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 8,
+                border: "1px solid #ccc",
+                background: lastCopied === "discharge" ? "#e9f7ef" : "#fff",
+                cursor: "pointer",
+              }}
+            >
+              {lastCopied === "discharge" ? "Copied" : "Copy"}
+            </button>
+          </div>
+
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              background: "#f5f5f5",
+              padding: 10,
+              borderRadius: 10,
+              marginTop: 8,
+              fontSize: 12,
+            }}
+          >
+            {discharge}
+          </pre>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+Why this improves adoption
+
+This removes the friction that makes tools feel slow:
+
+No need to click Analyze every time
+It auto-runs after you type/paste.
+
+Suggested questions are one-key actions
+Alt+1..9 inserts them instantly.
+
+Copy note and discharge are one shortcut away
+Ctrl/Cmd+N and Ctrl/Cmd+D.
+
+Everything is visible on one screen
+No tab-hopping, no page-hopping.
+
+The cursor stays where the doctor works
+In the patient message box.
+
+That’s the kind of design doctors actually keep open during visits.

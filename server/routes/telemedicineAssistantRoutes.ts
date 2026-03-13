@@ -1,4 +1,7 @@
 import { Router } from "express";
+import { runTelemedicineAssistant } from "../assistant/telemedicineAssistantService";
+import { generateChartNoteFromResult } from "../assistant/chartNoteGenerator";
+import { generateDischargeFromResult } from "../assistant/dischargeGenerator";
 import { createSession, getSession, updateSession, listActiveSessions, listAllSessions, closeSession } from "../assistant/telemedicineSessionService";
 import { checkSafetyAlerts } from "../assistant/telemedicineSafetyService";
 import { getUpdatedDifferential } from "../assistant/telemedicineDifferentialService";
@@ -9,6 +12,42 @@ import { getReturnPrecautions, formatDischargeMessage } from "../assistant/telem
 import { generateChartNote } from "../assistant/telemedicineNoteService";
 
 const router = Router();
+
+// ─── Unified Assistant Endpoint ────────────────────────────────────────────
+router.post("/api/telemed/assistant", async (req, res) => {
+  try {
+    const { caseId, message } = req.body;
+    if (!caseId) return res.status(400).json({ error: "caseId required" });
+    const result = await runTelemedicineAssistant(caseId, message);
+    res.json({ ok: true, result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/api/telemed/assistant/note", async (req, res) => {
+  try {
+    const { caseId, message = "" } = req.body;
+    if (!caseId) return res.status(400).json({ error: "caseId required" });
+    const result = await runTelemedicineAssistant(caseId);
+    const note = generateChartNoteFromResult(result, message);
+    res.json({ ok: true, note });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/api/telemed/assistant/discharge", async (req, res) => {
+  try {
+    const { caseId, patientName } = req.body;
+    if (!caseId) return res.status(400).json({ error: "caseId required" });
+    const result = await runTelemedicineAssistant(caseId);
+    const discharge = generateDischargeFromResult(result, patientName);
+    res.json({ ok: true, discharge });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 router.post("/api/telemed/session/start", (req, res) => {
   const { caseId, patientInfo } = req.body;
