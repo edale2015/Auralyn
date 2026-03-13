@@ -1,0 +1,566 @@
+{
+  "caseId": "GUIDED_004",
+  "sessionId": "sess_1773423114101_eoud5",
+  "createdAt": "2026-03-13T17:31:54.101Z",
+  "updatedAt": "2026-03-13T17:31:54.200Z",
+  "events": [
+    {
+      "type": "SESSION_STARTED",
+      "timestamp": "2026-03-13T17:31:54.102Z",
+      "data": {
+        "patient": {
+          "age": 55,
+          "sex": "male"
+        },
+        "complaint": "chest_pain"
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T17:31:54.191Z",
+      "data": {
+        "message": "I have some chest discomfort"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T17:31:54.199Z",
+      "data": {
+        "result": {
+          "disposition": "home_care",
+          "confidence": 0.16,
+          "topDiagnosis": "GERD",
+          "uncertaintyScore": 0.64,
+          "triggered_flags": [],
+          "explanation": "The symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+          "reasoning_path": [
+            "L1 Safety: Pass",
+            "L2 Similarity: 5 cases found, top Dx: GERD",
+            "L3 Bayes: top Dx pulmonary_embolism (3%), entropy=0.64",
+            "Ensemble: top GERD (combined=0.16)",
+            "Disposition: home_care (confidence=16%)"
+          ],
+          "extractionConfidence": 0.3,
+          "featuresExtracted": 0,
+          "missingFields": [
+            "complaint",
+            "symptoms"
+          ]
+        },
+        "timestamp": "2026-03-13T17:31:54.199Z"
+      }
+    },
+    {
+      "type": "DIFFERENTIAL_UPDATED",
+      "timestamp": "2026-03-13T17:31:54.199Z",
+      "data": {
+        "differential": [
+          {
+            "diagnosis": "GERD",
+            "confidence": 0.161
+          },
+          {
+            "diagnosis": "acute_coronary_syndrome",
+            "confidence": 0.135
+          },
+          {
+            "diagnosis": "pulmonary_embolism",
+            "confidence": 0.075
+          },
+          {
+            "diagnosis": "viral_URI",
+            "confidence": 0.014
+          },
+          {
+            "diagnosis": "otitis_externa",
+            "confidence": 0.014
+          },
+          {
+            "diagnosis": "pneumonia",
+            "confidence": 0.013
+          }
+        ]
+      }
+    },
+    {
+      "type": "DISPOSITION_SET",
+      "timestamp": "2026-03-13T17:31:54.199Z",
+      "data": {
+        "disposition": "home_care"
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T17:31:54.199Z",
+      "data": {
+        "pathway": {
+          "pathway": {
+            "complaint": "chest_pain",
+            "disposition": "ED",
+            "title": "Chest Pain ED Evaluation Pathway",
+            "description": "Any chest pain requiring urgent emergency evaluation — rule out ACS, PE, aortic dissection.",
+            "expectedDuration": "Immediate → 4–24h ED stay",
+            "steps": [
+              {
+                "type": "lab",
+                "action": "12-lead ECG within 10 minutes of arrival",
+                "rationale": "STEMI identification — time-critical",
+                "timing": "Stat — within 10 min",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "Troponin I or T × 2 (at 0h and 3h)",
+                "rationale": "Rule out myocardial injury",
+                "timing": "Stat, repeat at 3h",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "CBC, BMP, coagulation studies, BNP",
+                "rationale": "Assess for heart failure, metabolic causes, coagulation baseline",
+                "timing": "Stat",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "Chest X-ray (PA + lateral)",
+                "rationale": "Pneumothorax, aortic widening, pulmonary edema",
+                "timing": "Stat",
+                "priority": "stat"
+              },
+              {
+                "type": "medication",
+                "action": "Aspirin 325mg PO STAT (if ACS suspected, no contraindication)",
+                "rationale": "Antiplatelet — reduces platelet aggregation in ACS",
+                "timing": "Stat",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "CT-PA if PERC positive or Wells score ≥2 (PE evaluation)",
+                "rationale": "Rule out pulmonary embolism",
+                "timing": "Urgent",
+                "priority": "urgent",
+                "conditions": "PERC positive or clinical suspicion"
+              },
+              {
+                "type": "monitoring",
+                "action": "Continuous cardiac monitoring, O2 saturation monitoring, IV access",
+                "rationale": "Hemodynamic monitoring and immediate intervention readiness",
+                "timing": "Continuous",
+                "priority": "stat"
+              },
+              {
+                "type": "referral",
+                "action": "Cardiology consult if ECG changes, elevated troponin, or hemodynamic instability",
+                "rationale": "Specialist evaluation for possible ACS/STEMI",
+                "timing": "Urgent if positive findings",
+                "priority": "stat"
+              }
+            ],
+            "contraindications": [
+              "Aspirin: active GI bleeding, allergy, anticoagulation with recent hemorrhagic stroke"
+            ],
+            "escalationCriteria": [
+              "STEMI on ECG → cath lab activation",
+              "Hemodynamic instability → ICU",
+              "Aortic dissection → surgical emergency"
+            ],
+            "outcomeGoals": [
+              "Door-to-ECG <10 min",
+              "Troponin result within 1h",
+              "ACS ruled in or out within 3h"
+            ]
+          },
+          "executedAt": "2026-03-13T17:31:54.199Z",
+          "caseId": "GUIDED_004",
+          "statSummary": {
+            "totalSteps": 8,
+            "labsOrdered": [
+              "12-lead ECG within 10 minutes of arrival",
+              "Troponin I or T × 2 (at 0h and 3h)",
+              "CBC, BMP, coagulation studies, BNP",
+              "Chest X-ray (PA + lateral)",
+              "CT-PA if PERC positive or Wells score ≥2 (PE evaluation)"
+            ],
+            "medicationsPrescribed": [
+              "Aspirin 325mg PO STAT (if ACS suspected, no contraindication)"
+            ],
+            "referralsPlaced": [
+              "Cardiology consult if ECG changes, elevated troponin, or hemodynamic instability"
+            ],
+            "followupScheduled": [],
+            "contraindications": [
+              "Aspirin: active GI bleeding, allergy, anticoagulation with recent hemorrhagic stroke"
+            ],
+            "escalationCriteria": [
+              "STEMI on ECG → cath lab activation",
+              "Hemodynamic instability → ICU",
+              "Aortic dissection → surgical emergency"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "CARE_PATHWAY_STARTED",
+      "timestamp": "2026-03-13T17:31:54.199Z",
+      "data": {
+        "complaint": "chest_pain",
+        "disposition": "home_care",
+        "pathway": {
+          "complaint": "chest_pain",
+          "disposition": "ED",
+          "title": "Chest Pain ED Evaluation Pathway",
+          "description": "Any chest pain requiring urgent emergency evaluation — rule out ACS, PE, aortic dissection.",
+          "expectedDuration": "Immediate → 4–24h ED stay",
+          "steps": [
+            {
+              "type": "lab",
+              "action": "12-lead ECG within 10 minutes of arrival",
+              "rationale": "STEMI identification — time-critical",
+              "timing": "Stat — within 10 min",
+              "priority": "stat"
+            },
+            {
+              "type": "lab",
+              "action": "Troponin I or T × 2 (at 0h and 3h)",
+              "rationale": "Rule out myocardial injury",
+              "timing": "Stat, repeat at 3h",
+              "priority": "stat"
+            },
+            {
+              "type": "lab",
+              "action": "CBC, BMP, coagulation studies, BNP",
+              "rationale": "Assess for heart failure, metabolic causes, coagulation baseline",
+              "timing": "Stat",
+              "priority": "stat"
+            },
+            {
+              "type": "lab",
+              "action": "Chest X-ray (PA + lateral)",
+              "rationale": "Pneumothorax, aortic widening, pulmonary edema",
+              "timing": "Stat",
+              "priority": "stat"
+            },
+            {
+              "type": "medication",
+              "action": "Aspirin 325mg PO STAT (if ACS suspected, no contraindication)",
+              "rationale": "Antiplatelet — reduces platelet aggregation in ACS",
+              "timing": "Stat",
+              "priority": "stat"
+            },
+            {
+              "type": "lab",
+              "action": "CT-PA if PERC positive or Wells score ≥2 (PE evaluation)",
+              "rationale": "Rule out pulmonary embolism",
+              "timing": "Urgent",
+              "priority": "urgent",
+              "conditions": "PERC positive or clinical suspicion"
+            },
+            {
+              "type": "monitoring",
+              "action": "Continuous cardiac monitoring, O2 saturation monitoring, IV access",
+              "rationale": "Hemodynamic monitoring and immediate intervention readiness",
+              "timing": "Continuous",
+              "priority": "stat"
+            },
+            {
+              "type": "referral",
+              "action": "Cardiology consult if ECG changes, elevated troponin, or hemodynamic instability",
+              "rationale": "Specialist evaluation for possible ACS/STEMI",
+              "timing": "Urgent if positive findings",
+              "priority": "stat"
+            }
+          ],
+          "contraindications": [
+            "Aspirin: active GI bleeding, allergy, anticoagulation with recent hemorrhagic stroke"
+          ],
+          "escalationCriteria": [
+            "STEMI on ECG → cath lab activation",
+            "Hemodynamic instability → ICU",
+            "Aortic dissection → surgical emergency"
+          ],
+          "outcomeGoals": [
+            "Door-to-ECG <10 min",
+            "Troponin result within 1h",
+            "ACS ruled in or out within 3h"
+          ]
+        }
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T17:31:54.199Z",
+      "data": {
+        "result": {
+          "pathway": {
+            "complaint": "chest_pain",
+            "disposition": "ED",
+            "title": "Chest Pain ED Evaluation Pathway",
+            "description": "Any chest pain requiring urgent emergency evaluation — rule out ACS, PE, aortic dissection.",
+            "expectedDuration": "Immediate → 4–24h ED stay",
+            "steps": [
+              {
+                "type": "lab",
+                "action": "12-lead ECG within 10 minutes of arrival",
+                "rationale": "STEMI identification — time-critical",
+                "timing": "Stat — within 10 min",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "Troponin I or T × 2 (at 0h and 3h)",
+                "rationale": "Rule out myocardial injury",
+                "timing": "Stat, repeat at 3h",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "CBC, BMP, coagulation studies, BNP",
+                "rationale": "Assess for heart failure, metabolic causes, coagulation baseline",
+                "timing": "Stat",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "Chest X-ray (PA + lateral)",
+                "rationale": "Pneumothorax, aortic widening, pulmonary edema",
+                "timing": "Stat",
+                "priority": "stat"
+              },
+              {
+                "type": "medication",
+                "action": "Aspirin 325mg PO STAT (if ACS suspected, no contraindication)",
+                "rationale": "Antiplatelet — reduces platelet aggregation in ACS",
+                "timing": "Stat",
+                "priority": "stat"
+              },
+              {
+                "type": "lab",
+                "action": "CT-PA if PERC positive or Wells score ≥2 (PE evaluation)",
+                "rationale": "Rule out pulmonary embolism",
+                "timing": "Urgent",
+                "priority": "urgent",
+                "conditions": "PERC positive or clinical suspicion"
+              },
+              {
+                "type": "monitoring",
+                "action": "Continuous cardiac monitoring, O2 saturation monitoring, IV access",
+                "rationale": "Hemodynamic monitoring and immediate intervention readiness",
+                "timing": "Continuous",
+                "priority": "stat"
+              },
+              {
+                "type": "referral",
+                "action": "Cardiology consult if ECG changes, elevated troponin, or hemodynamic instability",
+                "rationale": "Specialist evaluation for possible ACS/STEMI",
+                "timing": "Urgent if positive findings",
+                "priority": "stat"
+              }
+            ],
+            "contraindications": [
+              "Aspirin: active GI bleeding, allergy, anticoagulation with recent hemorrhagic stroke"
+            ],
+            "escalationCriteria": [
+              "STEMI on ECG → cath lab activation",
+              "Hemodynamic instability → ICU",
+              "Aortic dissection → surgical emergency"
+            ],
+            "outcomeGoals": [
+              "Door-to-ECG <10 min",
+              "Troponin result within 1h",
+              "ACS ruled in or out within 3h"
+            ]
+          },
+          "executedAt": "2026-03-13T17:31:54.199Z",
+          "caseId": "GUIDED_004",
+          "statSummary": {
+            "totalSteps": 8,
+            "labsOrdered": [
+              "12-lead ECG within 10 minutes of arrival",
+              "Troponin I or T × 2 (at 0h and 3h)",
+              "CBC, BMP, coagulation studies, BNP",
+              "Chest X-ray (PA + lateral)",
+              "CT-PA if PERC positive or Wells score ≥2 (PE evaluation)"
+            ],
+            "medicationsPrescribed": [
+              "Aspirin 325mg PO STAT (if ACS suspected, no contraindication)"
+            ],
+            "referralsPlaced": [
+              "Cardiology consult if ECG changes, elevated troponin, or hemodynamic instability"
+            ],
+            "followupScheduled": [],
+            "contraindications": [
+              "Aspirin: active GI bleeding, allergy, anticoagulation with recent hemorrhagic stroke"
+            ],
+            "escalationCriteria": [
+              "STEMI on ECG → cath lab activation",
+              "Hemodynamic instability → ICU",
+              "Aortic dissection → surgical emergency"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T17:31:54.200Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 55yo male\nChief Complaint: chest pain\n\nSubjective:\nI have some chest discomfort\n\nDifferential Diagnosis:\n  1. GERD (16%)\n  2. acute coronary syndrome (14%)\n  3. pulmonary embolism (8%)\n  4. viral URI (1%)\n  5. otitis externa (1%)\n\nDisposition: HOME CARE\n\nClinical Reasoning:\nThe symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T17:31:54.200Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\nYour symptoms can be managed at home. Rest, stay hydrated, and take OTC medications as needed.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "I have some chest discomfort",
+      "timestamp": "2026-03-13T17:31:54.191Z"
+    }
+  ],
+  "patient": {
+    "age": 55,
+    "sex": "male"
+  },
+  "complaint": "chest_pain",
+  "symptoms": "I have some chest discomfort",
+  "hybridResult": {
+    "disposition": "home_care",
+    "confidence": 0.16,
+    "topDiagnosis": "GERD",
+    "uncertaintyScore": 0.64,
+    "triggered_flags": [],
+    "explanation": "The symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+    "reasoning_path": [
+      "L1 Safety: Pass",
+      "L2 Similarity: 5 cases found, top Dx: GERD",
+      "L3 Bayes: top Dx pulmonary_embolism (3%), entropy=0.64",
+      "Ensemble: top GERD (combined=0.16)",
+      "Disposition: home_care (confidence=16%)"
+    ],
+    "extractionConfidence": 0.3,
+    "featuresExtracted": 0,
+    "missingFields": [
+      "complaint",
+      "symptoms"
+    ]
+  },
+  "lastHybridEvalAt": "2026-03-13T17:31:54.199Z",
+  "disposition": "home_care",
+  "differential": [
+    {
+      "diagnosis": "GERD",
+      "confidence": 0.161
+    },
+    {
+      "diagnosis": "acute_coronary_syndrome",
+      "confidence": 0.135
+    },
+    {
+      "diagnosis": "pulmonary_embolism",
+      "confidence": 0.075
+    },
+    {
+      "diagnosis": "viral_URI",
+      "confidence": 0.014
+    },
+    {
+      "diagnosis": "otitis_externa",
+      "confidence": 0.014
+    },
+    {
+      "diagnosis": "pneumonia",
+      "confidence": 0.013
+    }
+  ],
+  "carePathway": {
+    "complaint": "chest_pain",
+    "disposition": "ED",
+    "title": "Chest Pain ED Evaluation Pathway",
+    "description": "Any chest pain requiring urgent emergency evaluation — rule out ACS, PE, aortic dissection.",
+    "expectedDuration": "Immediate → 4–24h ED stay",
+    "steps": [
+      {
+        "type": "lab",
+        "action": "12-lead ECG within 10 minutes of arrival",
+        "rationale": "STEMI identification — time-critical",
+        "timing": "Stat — within 10 min",
+        "priority": "stat"
+      },
+      {
+        "type": "lab",
+        "action": "Troponin I or T × 2 (at 0h and 3h)",
+        "rationale": "Rule out myocardial injury",
+        "timing": "Stat, repeat at 3h",
+        "priority": "stat"
+      },
+      {
+        "type": "lab",
+        "action": "CBC, BMP, coagulation studies, BNP",
+        "rationale": "Assess for heart failure, metabolic causes, coagulation baseline",
+        "timing": "Stat",
+        "priority": "stat"
+      },
+      {
+        "type": "lab",
+        "action": "Chest X-ray (PA + lateral)",
+        "rationale": "Pneumothorax, aortic widening, pulmonary edema",
+        "timing": "Stat",
+        "priority": "stat"
+      },
+      {
+        "type": "medication",
+        "action": "Aspirin 325mg PO STAT (if ACS suspected, no contraindication)",
+        "rationale": "Antiplatelet — reduces platelet aggregation in ACS",
+        "timing": "Stat",
+        "priority": "stat"
+      },
+      {
+        "type": "lab",
+        "action": "CT-PA if PERC positive or Wells score ≥2 (PE evaluation)",
+        "rationale": "Rule out pulmonary embolism",
+        "timing": "Urgent",
+        "priority": "urgent",
+        "conditions": "PERC positive or clinical suspicion"
+      },
+      {
+        "type": "monitoring",
+        "action": "Continuous cardiac monitoring, O2 saturation monitoring, IV access",
+        "rationale": "Hemodynamic monitoring and immediate intervention readiness",
+        "timing": "Continuous",
+        "priority": "stat"
+      },
+      {
+        "type": "referral",
+        "action": "Cardiology consult if ECG changes, elevated troponin, or hemodynamic instability",
+        "rationale": "Specialist evaluation for possible ACS/STEMI",
+        "timing": "Urgent if positive findings",
+        "priority": "stat"
+      }
+    ],
+    "contraindications": [
+      "Aspirin: active GI bleeding, allergy, anticoagulation with recent hemorrhagic stroke"
+    ],
+    "escalationCriteria": [
+      "STEMI on ECG → cath lab activation",
+      "Hemodynamic instability → ICU",
+      "Aortic dissection → surgical emergency"
+    ],
+    "outcomeGoals": [
+      "Door-to-ECG <10 min",
+      "Troponin result within 1h",
+      "ACS ruled in or out within 3h"
+    ]
+  },
+  "chartNote": "VISIT NOTE — March 13, 2026\nPatient: 55yo male\nChief Complaint: chest pain\n\nSubjective:\nI have some chest discomfort\n\nDifferential Diagnosis:\n  1. GERD (16%)\n  2. acute coronary syndrome (14%)\n  3. pulmonary embolism (8%)\n  4. viral URI (1%)\n  5. otitis externa (1%)\n\nDisposition: HOME CARE\n\nClinical Reasoning:\nThe symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\nYour symptoms can be managed at home. Rest, stay hydrated, and take OTC medications as needed.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T17:31:54.200Z"
+}

@@ -3,6 +3,8 @@ import { emitClinicalEvent } from "../../state/clinicalEventBus";
 import { evaluateCase } from "../../hybrid-reasoning/hybridController";
 import { runExtractionConfidence } from "../../hybrid-reasoning/extractionConfidence";
 import { checkLockedRules } from "../../hybrid-reasoning/lockedSafetyRegistry";
+import { getNextQuestion } from "../../hybrid-reasoning/followUpEngine";
+import { executeCarePathway } from "../../pathways/pathwayExecutor";
 
 const COMPLAINT_KEYWORDS: Record<string, string[]> = {
   chest_pain:     ["chest pain","chest tightness","chest pressure","palpitations","heart pain"],
@@ -135,19 +137,43 @@ export async function runClinicalOrchestrator(
     state.patient?.sex
   );
 
-  if (!extraction.canProceed) {
-    emitClinicalEvent(caseId, "UNCERTAINTY_DETECTED", {
-      nextQuestion: extraction.nextQuestion,
-      entropy: 99,
-      blockReason: extraction.blockReason,
-      missingFields: extraction.missingFields,
-      extractionConfidence: extraction.confidence,
-    });
-    setClinicalState(caseId, {
-      disposition: "need_more_info" as any,
-      followUpQuestions: [extraction.nextQuestion],
-      orchestratorRunAt: new Date().toISOString(),
-    });
+  const registeredComplaint = state.complaint;
+  const resolvedComplaint = extraction.complaint !== "unknown"
+    ? extraction.complaint
+    : registeredComplaint ?? detectComplaint(state.symptoms);
+
+  const canProceed = extraction.canProceed || (resolvedComplaint !== "unknown");
+
+  if (!canProceed) {
+    const answeredIds: string[] = (state as any).answeredQuestionIds ?? [];
+    const fallbackQ = getNextQuestion(resolvedComplaint, answeredIds, extraction.features);
+    const questionText = fallbackQ.hasQuestion ? fallbackQ.question!.text : extraction.nextQuestion;
+
+    if (fallbackQ.hasQuestion) {
+      emitClinicalEvent(caseId, "FOLLOWUP_QUESTION_SUGGESTED" as any, {
+        question: fallbackQ.question,
+        questionsRemaining: fallbackQ.questionsRemaining,
+        questionsAsked: fallbackQ.questionsAsked,
+      });
+      setClinicalState(caseId, {
+        pendingQuestion: fallbackQ.question as any,
+        disposition: "need_more_info" as any,
+        orchestratorRunAt: new Date().toISOString(),
+      });
+    } else {
+      emitClinicalEvent(caseId, "UNCERTAINTY_DETECTED", {
+        nextQuestion: questionText,
+        entropy: 99,
+        blockReason: extraction.blockReason,
+        missingFields: extraction.missingFields,
+        extractionConfidence: extraction.confidence,
+      });
+      setClinicalState(caseId, {
+        disposition: "need_more_info" as any,
+        followUpQuestions: [questionText],
+        orchestratorRunAt: new Date().toISOString(),
+      });
+    }
     return {
       ...getClinicalState(caseId),
       _meta: {
@@ -155,14 +181,12 @@ export async function runClinicalOrchestrator(
         confidence: extraction.confidence,
         missingFields: extraction.missingFields,
         blockReason: extraction.blockReason,
-        nextQuestion: extraction.nextQuestion,
+        nextQuestion: questionText,
       },
     };
   }
 
-  const complaint = extraction.complaint !== "unknown"
-    ? extraction.complaint
-    : detectComplaint(state.symptoms);
+  const complaint = resolvedComplaint;
 
   if (complaint !== "unknown" && !state.complaint) {
     emitClinicalEvent(caseId, "COMPLAINT_IDENTIFIED", { complaint });
@@ -183,6 +207,11 @@ export async function runClinicalOrchestrator(
       alerts: lockedCheck.rules.map(r => `🔒 [${r.id}] ${r.rationale}`),
     });
     emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: "er_now" });
+    const pathwayResult = executeCarePathway(activeComplaint, "er_now", caseId);
+    if (pathwayResult) {
+      emitClinicalEvent(caseId, "CARE_PATHWAY_STARTED" as any, { complaint: activeComplaint, disposition: "er_now", pathway: pathwayResult.pathway });
+      emitClinicalEvent(caseId, "PATHWAY_EXECUTED", { result: pathwayResult });
+    }
     const note = buildSimpleNote({ ...getClinicalState(caseId), disposition: "er_now" as any, redFlags: lockedCheck.rules.map(r => r.id) });
     emitClinicalEvent(caseId, "NOTE_READY", { note });
     emitClinicalEvent(caseId, "DISCHARGE_READY", { text: buildDischargeText({ ...getClinicalState(caseId), disposition: "er_now" as any }) });
@@ -242,13 +271,45 @@ export async function runClinicalOrchestrator(
     });
   }
 
-  if (hybrid.need_more_info && hybrid.next_question) {
-    emitClinicalEvent(caseId, "UNCERTAINTY_DETECTED", {
-      nextQuestion: hybrid.next_question,
-      entropy: hybrid.layer3_probabilistic.uncertaintyScore,
-    });
-  } else if (hybrid.disposition && hybrid.disposition !== "need_more_info") {
+  const needsInterview = hybrid.need_more_info || hybrid.disposition === "uncertain" || hybrid.disposition === "need_more_info";
+
+  if (needsInterview) {
+    const answeredIds: string[] = (state as any).answeredQuestionIds ?? [];
+    const existingFeatures = Object.keys((state as any).structuredFacts ?? {});
+    const allFeatures = [...new Set([...features, ...existingFeatures])];
+    const followUpResult = getNextQuestion(activeComplaint, answeredIds, allFeatures);
+
+    if (followUpResult.hasQuestion) {
+      emitClinicalEvent(caseId, "FOLLOWUP_QUESTION_SUGGESTED" as any, {
+        question: followUpResult.question,
+        questionsRemaining: followUpResult.questionsRemaining,
+        questionsAsked: followUpResult.questionsAsked,
+      });
+      setClinicalState(caseId, {
+        pendingQuestion: followUpResult.question as any,
+        disposition: "need_more_info" as any,
+        interviewComplete: false,
+      });
+    } else if (!followUpResult.hasQuestion && followUpResult.interviewComplete) {
+      setClinicalState(caseId, { interviewComplete: true, pendingQuestion: null });
+      emitClinicalEvent(caseId, "UNCERTAINTY_DETECTED", {
+        nextQuestion: hybrid.next_question ?? "Please describe any other symptoms you have.",
+        entropy: hybrid.layer3_probabilistic.uncertaintyScore,
+        interviewComplete: true,
+      });
+    } else if (hybrid.next_question) {
+      emitClinicalEvent(caseId, "UNCERTAINTY_DETECTED", {
+        nextQuestion: hybrid.next_question,
+        entropy: hybrid.layer3_probabilistic.uncertaintyScore,
+      });
+    }
+  } else if (hybrid.disposition && hybrid.disposition !== "need_more_info" && hybrid.disposition !== "uncertain") {
     emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: hybrid.disposition });
+    const pathwayResult = executeCarePathway(activeComplaint, hybrid.disposition, caseId);
+    if (pathwayResult) {
+      emitClinicalEvent(caseId, "CARE_PATHWAY_STARTED" as any, { complaint: activeComplaint, disposition: hybrid.disposition, pathway: pathwayResult.pathway });
+      emitClinicalEvent(caseId, "PATHWAY_EXECUTED", { result: pathwayResult });
+    }
   }
 
   const note = buildSimpleNote(getClinicalState(caseId));

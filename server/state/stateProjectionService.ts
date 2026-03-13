@@ -78,5 +78,30 @@ export function projectEvent(caseId: string, event: { type: string; data: Record
     case "REWARD_COMPUTED":
       state.outcomeData = { ...(state.outcomeData ?? {}), reward: event.data.reward };
       break;
+    case "FOLLOWUP_QUESTION_SUGGESTED":
+      state.pendingQuestion = event.data.question ?? null;
+      if (event.data.question?.text) {
+        state.followUpQuestions = [...(state.followUpQuestions ?? []), event.data.question.text];
+      }
+      break;
+    case "FOLLOWUP_QUESTION_ANSWERED":
+      state.pendingQuestion = null;
+      state.answeredQuestionIds = [...(state.answeredQuestionIds ?? []), event.data.questionId];
+      state.answeredQuestions = [...(state.answeredQuestions ?? []), {
+        questionId: event.data.questionId,
+        answer: event.data.answer,
+        featuresExtracted: event.data.featuresExtracted ?? [],
+      }];
+      if (event.data.featuresExtracted?.length) {
+        const existing = state.structuredFacts ?? {};
+        for (const f of event.data.featuresExtracted) {
+          existing[f] = true;
+        }
+        state.structuredFacts = existing;
+      }
+      break;
+    case "CARE_PATHWAY_STARTED":
+      state.carePathway = event.data.pathway ?? null;
+      break;
   }
 }

@@ -1,0 +1,270 @@
+{
+  "caseId": "FRESH_001",
+  "sessionId": "sess_1773423288812_8btux",
+  "createdAt": "2026-03-13T17:34:48.812Z",
+  "updatedAt": "2026-03-13T17:35:04.209Z",
+  "events": [
+    {
+      "type": "SESSION_STARTED",
+      "timestamp": "2026-03-13T17:34:48.812Z",
+      "data": {
+        "patient": {
+          "age": 38,
+          "sex": "female"
+        },
+        "complaint": "headache"
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T17:34:48.905Z",
+      "data": {
+        "message": "I have a headache"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T17:34:48.915Z",
+      "data": {
+        "result": {
+          "disposition": "uncertain",
+          "confidence": 0.14,
+          "topDiagnosis": "increased_intracranial_pressure",
+          "uncertaintyScore": 0.64,
+          "triggered_flags": [],
+          "explanation": "The symptom pattern of  associated with headache is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+          "reasoning_path": [
+            "L1 Safety: Pass",
+            "L2 Similarity: 5 cases found, top Dx: increased_intracranial_pressure",
+            "L3 Bayes: top Dx pulmonary_embolism (3%), entropy=0.64",
+            "Ensemble: top increased_intracranial_pressure (combined=0.14)",
+            "Disposition: uncertain (confidence=14%)"
+          ],
+          "extractionConfidence": 0.7,
+          "featuresExtracted": 0,
+          "missingFields": [
+            "symptoms"
+          ]
+        },
+        "timestamp": "2026-03-13T17:34:48.915Z"
+      }
+    },
+    {
+      "type": "DIFFERENTIAL_UPDATED",
+      "timestamp": "2026-03-13T17:34:48.915Z",
+      "data": {
+        "differential": [
+          {
+            "diagnosis": "increased_intracranial_pressure",
+            "confidence": 0.143
+          },
+          {
+            "diagnosis": "giant_cell_arteritis",
+            "confidence": 0.072
+          },
+          {
+            "diagnosis": "bacterial_meningitis",
+            "confidence": 0.072
+          },
+          {
+            "diagnosis": "intracranial_hemorrhage",
+            "confidence": 0.064
+          },
+          {
+            "diagnosis": "pulmonary_embolism",
+            "confidence": 0.021
+          },
+          {
+            "diagnosis": "viral_URI",
+            "confidence": 0.014
+          }
+        ]
+      }
+    },
+    {
+      "type": "FOLLOWUP_QUESTION_SUGGESTED",
+      "timestamp": "2026-03-13T17:34:48.915Z",
+      "data": {
+        "question": {
+          "id": "ha_severity",
+          "text": "On a scale of 1–10, how severe is the headache right now?",
+          "complaint": "headache",
+          "targetFeature": "severity",
+          "priority": 1,
+          "expectedAnswerType": "number"
+        },
+        "questionsRemaining": 7,
+        "questionsAsked": 0
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T17:34:48.916Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 38yo female\nChief Complaint: headache\n\nSubjective:\nI have a headache\n\nDifferential Diagnosis:\n  1. increased intracranial pressure (14%)\n  2. giant cell arteritis (7%)\n  3. bacterial meningitis (7%)\n  4. intracranial hemorrhage (6%)\n  5. pulmonary embolism (2%)\n\nDisposition: NEED MORE INFO\n\nClinical Reasoning:\nThe symptom pattern of  associated with headache is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T17:34:48.916Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\nPlease provide the requested information so we can complete your triage assessment.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    },
+    {
+      "type": "FOLLOWUP_QUESTION_ANSWERED",
+      "timestamp": "2026-03-13T17:35:04.208Z",
+      "data": {
+        "questionId": "ha_severity",
+        "questionText": "On a scale of 1–10, how severe is the headache right now?",
+        "answer": "10, worst headache of my life, came on suddenly",
+        "featuresExtracted": [
+          "severe_headache"
+        ]
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T17:35:04.208Z",
+      "data": {
+        "message": "10, worst headache of my life, came on suddenly"
+      }
+    },
+    {
+      "type": "RED_FLAG_DETECTED",
+      "timestamp": "2026-03-13T17:35:04.209Z",
+      "data": {
+        "flags": [
+          "SR-006"
+        ],
+        "source": "locked_safety_registry"
+      }
+    },
+    {
+      "type": "ALERTS_UPDATED",
+      "timestamp": "2026-03-13T17:35:04.209Z",
+      "data": {
+        "alerts": [
+          "🔒 [SR-006] Thunderclap / worst-ever headache must be treated as subarachnoid hemorrhage until proven otherwise."
+        ]
+      }
+    },
+    {
+      "type": "DISPOSITION_SET",
+      "timestamp": "2026-03-13T17:35:04.209Z",
+      "data": {
+        "disposition": "er_now"
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T17:35:04.209Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 38yo female\nChief Complaint: headache\n\nSubjective:\nI have a headache 10, worst headache of my life, came on suddenly 10, worst headache of my life, came on suddenly\n\nRed Flags Detected: SR-006\n\nDifferential Diagnosis:\n  1. increased intracranial pressure (14%)\n  2. giant cell arteritis (7%)\n  3. bacterial meningitis (7%)\n  4. intracranial hemorrhage (6%)\n  5. pulmonary embolism (2%)\n\nDisposition: ER NOW\n\nClinical Reasoning:\nThe symptom pattern of  associated with headache is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T17:35:04.209Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\n⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "I have a headache",
+      "timestamp": "2026-03-13T17:34:48.905Z"
+    },
+    {
+      "role": "patient",
+      "content": "10, worst headache of my life, came on suddenly",
+      "timestamp": "2026-03-13T17:35:04.208Z"
+    }
+  ],
+  "patient": {
+    "age": 38,
+    "sex": "female"
+  },
+  "complaint": "headache",
+  "symptoms": "I have a headache 10, worst headache of my life, came on suddenly 10, worst headache of my life, came on suddenly",
+  "hybridResult": {
+    "disposition": "uncertain",
+    "confidence": 0.14,
+    "topDiagnosis": "increased_intracranial_pressure",
+    "uncertaintyScore": 0.64,
+    "triggered_flags": [],
+    "explanation": "The symptom pattern of  associated with headache is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+    "reasoning_path": [
+      "L1 Safety: Pass",
+      "L2 Similarity: 5 cases found, top Dx: increased_intracranial_pressure",
+      "L3 Bayes: top Dx pulmonary_embolism (3%), entropy=0.64",
+      "Ensemble: top increased_intracranial_pressure (combined=0.14)",
+      "Disposition: uncertain (confidence=14%)"
+    ],
+    "extractionConfidence": 0.7,
+    "featuresExtracted": 0,
+    "missingFields": [
+      "symptoms"
+    ]
+  },
+  "lastHybridEvalAt": "2026-03-13T17:34:48.915Z",
+  "disposition": "er_now",
+  "differential": [
+    {
+      "diagnosis": "increased_intracranial_pressure",
+      "confidence": 0.143
+    },
+    {
+      "diagnosis": "giant_cell_arteritis",
+      "confidence": 0.072
+    },
+    {
+      "diagnosis": "bacterial_meningitis",
+      "confidence": 0.072
+    },
+    {
+      "diagnosis": "intracranial_hemorrhage",
+      "confidence": 0.064
+    },
+    {
+      "diagnosis": "pulmonary_embolism",
+      "confidence": 0.021
+    },
+    {
+      "diagnosis": "viral_URI",
+      "confidence": 0.014
+    }
+  ],
+  "pendingQuestion": null,
+  "followUpQuestions": [
+    "On a scale of 1–10, how severe is the headache right now?"
+  ],
+  "interviewComplete": false,
+  "chartNote": "VISIT NOTE — March 13, 2026\nPatient: 38yo female\nChief Complaint: headache\n\nSubjective:\nI have a headache 10, worst headache of my life, came on suddenly 10, worst headache of my life, came on suddenly\n\nRed Flags Detected: SR-006\n\nDifferential Diagnosis:\n  1. increased intracranial pressure (14%)\n  2. giant cell arteritis (7%)\n  3. bacterial meningitis (7%)\n  4. intracranial hemorrhage (6%)\n  5. pulmonary embolism (2%)\n\nDisposition: ER NOW\n\nClinical Reasoning:\nThe symptom pattern of  associated with headache is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\n⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T17:35:04.209Z",
+  "answeredQuestionIds": [
+    "ha_severity",
+    "ha_severity"
+  ],
+  "answeredQuestions": [
+    {
+      "questionId": "ha_severity",
+      "answer": "10, worst headache of my life, came on suddenly",
+      "featuresExtracted": [
+        "severe_headache"
+      ]
+    }
+  ],
+  "structuredFacts": {
+    "severe_headache": true
+  },
+  "redFlags": [
+    "SR-006"
+  ],
+  "alerts": [
+    "🔒 [SR-006] Thunderclap / worst-ever headache must be treated as subarachnoid hemorrhage until proven otherwise."
+  ]
+}

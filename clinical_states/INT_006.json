@@ -1,0 +1,472 @@
+{
+  "caseId": "INT_006",
+  "sessionId": "sess_1773423141875_2tuke",
+  "createdAt": "2026-03-13T17:32:21.875Z",
+  "updatedAt": "2026-03-13T17:32:21.978Z",
+  "events": [
+    {
+      "type": "SESSION_STARTED",
+      "timestamp": "2026-03-13T17:32:21.875Z",
+      "data": {
+        "patient": {
+          "age": 28,
+          "sex": "male"
+        },
+        "complaint": "fever"
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T17:32:21.975Z",
+      "data": {
+        "message": "I have a fever, stiff neck, and worst headache of my life"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "result": {
+          "disposition": "er_now",
+          "confidence": 1,
+          "topDiagnosis": "bacterial_meningitis",
+          "uncertaintyScore": 1.34,
+          "triggered_flags": [
+            "neck_stiffness"
+          ],
+          "explanation": "⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required.",
+          "reasoning_path": [
+            "L1 Safety: OVERRIDE → er_now",
+            "L2 Similarity: 5 cases found, top Dx: bacterial_meningitis",
+            "L3 Bayes: top Dx bacterial_meningitis (16%), entropy=1.34",
+            "Safety override applied → ER_NOW"
+          ],
+          "extractionConfidence": 1,
+          "featuresExtracted": 3,
+          "missingFields": []
+        },
+        "timestamp": "2026-03-13T17:32:21.978Z"
+      }
+    },
+    {
+      "type": "RED_FLAG_DETECTED",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "flags": [
+          "neck_stiffness"
+        ]
+      }
+    },
+    {
+      "type": "ALERTS_UPDATED",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "alerts": [
+          "⚠ Safety flag: neck stiffness"
+        ]
+      }
+    },
+    {
+      "type": "DISPOSITION_SET",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "disposition": "er_now"
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "pathway": {
+          "pathway": {
+            "complaint": "fever",
+            "disposition": "Home Care",
+            "title": "Viral Fever / URTI Pathway",
+            "description": "Uncomplicated fever <5 days without red flags — likely viral etiology.",
+            "expectedDuration": "3–7 days",
+            "steps": [
+              {
+                "type": "instruction",
+                "action": "Maintain oral hydration — 2L/day minimum",
+                "rationale": "Fever causes increased insensible fluid losses",
+                "timing": "Ongoing",
+                "priority": "urgent"
+              },
+              {
+                "type": "medication",
+                "action": "Acetaminophen 500–1000mg q6h PRN (temp >101°F / discomfort)",
+                "rationale": "First-line antipyretic and analgesic",
+                "timing": "PRN",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Ibuprofen 400mg q6h with food PRN (alternating with acetaminophen)",
+                "rationale": "NSAID antipyretic — can alternate for better fever control",
+                "timing": "PRN, avoid in renal impairment, GI disease",
+                "priority": "routine"
+              },
+              {
+                "type": "instruction",
+                "action": "Light clothing, cool environment, tepid sponge bath if very high fever",
+                "rationale": "Non-pharmacological cooling",
+                "timing": "As needed",
+                "priority": "routine"
+              },
+              {
+                "type": "monitoring",
+                "action": "Monitor temperature q4h — return if >103.5°F or not improving in 5 days",
+                "rationale": "Detect worsening or secondary bacterial infection",
+                "timing": "Q4h",
+                "priority": "urgent"
+              },
+              {
+                "type": "followup",
+                "action": "Return if fever persists >5 days, rash develops, stiff neck, or confusion",
+                "rationale": "Rule out serious infection",
+                "timing": "Day 5 or sooner if red flags",
+                "priority": "urgent"
+              }
+            ],
+            "contraindications": [
+              "Aspirin: children/adolescents (Reye syndrome)",
+              "Ibuprofen: GI bleed history, CKD, pregnancy third trimester"
+            ],
+            "escalationCriteria": [
+              "Fever >104°F",
+              "Febrile seizure",
+              "Stiff neck",
+              "Petechial rash",
+              "Altered mental status"
+            ],
+            "outcomeGoals": [
+              "Afebrile within 48–72h",
+              "Return to baseline activity"
+            ]
+          },
+          "executedAt": "2026-03-13T17:32:21.978Z",
+          "caseId": "INT_006",
+          "statSummary": {
+            "totalSteps": 6,
+            "labsOrdered": [],
+            "medicationsPrescribed": [
+              "Acetaminophen 500–1000mg q6h PRN (temp >101°F / discomfort)",
+              "Ibuprofen 400mg q6h with food PRN (alternating with acetaminophen)"
+            ],
+            "referralsPlaced": [],
+            "followupScheduled": [
+              "Return if fever persists >5 days, rash develops, stiff neck, or confusion"
+            ],
+            "contraindications": [
+              "Aspirin: children/adolescents (Reye syndrome)",
+              "Ibuprofen: GI bleed history, CKD, pregnancy third trimester"
+            ],
+            "escalationCriteria": [
+              "Fever >104°F",
+              "Febrile seizure",
+              "Stiff neck",
+              "Petechial rash",
+              "Altered mental status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "CARE_PATHWAY_STARTED",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "complaint": "fever",
+        "disposition": "er_now",
+        "pathway": {
+          "complaint": "fever",
+          "disposition": "Home Care",
+          "title": "Viral Fever / URTI Pathway",
+          "description": "Uncomplicated fever <5 days without red flags — likely viral etiology.",
+          "expectedDuration": "3–7 days",
+          "steps": [
+            {
+              "type": "instruction",
+              "action": "Maintain oral hydration — 2L/day minimum",
+              "rationale": "Fever causes increased insensible fluid losses",
+              "timing": "Ongoing",
+              "priority": "urgent"
+            },
+            {
+              "type": "medication",
+              "action": "Acetaminophen 500–1000mg q6h PRN (temp >101°F / discomfort)",
+              "rationale": "First-line antipyretic and analgesic",
+              "timing": "PRN",
+              "priority": "routine"
+            },
+            {
+              "type": "medication",
+              "action": "Ibuprofen 400mg q6h with food PRN (alternating with acetaminophen)",
+              "rationale": "NSAID antipyretic — can alternate for better fever control",
+              "timing": "PRN, avoid in renal impairment, GI disease",
+              "priority": "routine"
+            },
+            {
+              "type": "instruction",
+              "action": "Light clothing, cool environment, tepid sponge bath if very high fever",
+              "rationale": "Non-pharmacological cooling",
+              "timing": "As needed",
+              "priority": "routine"
+            },
+            {
+              "type": "monitoring",
+              "action": "Monitor temperature q4h — return if >103.5°F or not improving in 5 days",
+              "rationale": "Detect worsening or secondary bacterial infection",
+              "timing": "Q4h",
+              "priority": "urgent"
+            },
+            {
+              "type": "followup",
+              "action": "Return if fever persists >5 days, rash develops, stiff neck, or confusion",
+              "rationale": "Rule out serious infection",
+              "timing": "Day 5 or sooner if red flags",
+              "priority": "urgent"
+            }
+          ],
+          "contraindications": [
+            "Aspirin: children/adolescents (Reye syndrome)",
+            "Ibuprofen: GI bleed history, CKD, pregnancy third trimester"
+          ],
+          "escalationCriteria": [
+            "Fever >104°F",
+            "Febrile seizure",
+            "Stiff neck",
+            "Petechial rash",
+            "Altered mental status"
+          ],
+          "outcomeGoals": [
+            "Afebrile within 48–72h",
+            "Return to baseline activity"
+          ]
+        }
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "result": {
+          "pathway": {
+            "complaint": "fever",
+            "disposition": "Home Care",
+            "title": "Viral Fever / URTI Pathway",
+            "description": "Uncomplicated fever <5 days without red flags — likely viral etiology.",
+            "expectedDuration": "3–7 days",
+            "steps": [
+              {
+                "type": "instruction",
+                "action": "Maintain oral hydration — 2L/day minimum",
+                "rationale": "Fever causes increased insensible fluid losses",
+                "timing": "Ongoing",
+                "priority": "urgent"
+              },
+              {
+                "type": "medication",
+                "action": "Acetaminophen 500–1000mg q6h PRN (temp >101°F / discomfort)",
+                "rationale": "First-line antipyretic and analgesic",
+                "timing": "PRN",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Ibuprofen 400mg q6h with food PRN (alternating with acetaminophen)",
+                "rationale": "NSAID antipyretic — can alternate for better fever control",
+                "timing": "PRN, avoid in renal impairment, GI disease",
+                "priority": "routine"
+              },
+              {
+                "type": "instruction",
+                "action": "Light clothing, cool environment, tepid sponge bath if very high fever",
+                "rationale": "Non-pharmacological cooling",
+                "timing": "As needed",
+                "priority": "routine"
+              },
+              {
+                "type": "monitoring",
+                "action": "Monitor temperature q4h — return if >103.5°F or not improving in 5 days",
+                "rationale": "Detect worsening or secondary bacterial infection",
+                "timing": "Q4h",
+                "priority": "urgent"
+              },
+              {
+                "type": "followup",
+                "action": "Return if fever persists >5 days, rash develops, stiff neck, or confusion",
+                "rationale": "Rule out serious infection",
+                "timing": "Day 5 or sooner if red flags",
+                "priority": "urgent"
+              }
+            ],
+            "contraindications": [
+              "Aspirin: children/adolescents (Reye syndrome)",
+              "Ibuprofen: GI bleed history, CKD, pregnancy third trimester"
+            ],
+            "escalationCriteria": [
+              "Fever >104°F",
+              "Febrile seizure",
+              "Stiff neck",
+              "Petechial rash",
+              "Altered mental status"
+            ],
+            "outcomeGoals": [
+              "Afebrile within 48–72h",
+              "Return to baseline activity"
+            ]
+          },
+          "executedAt": "2026-03-13T17:32:21.978Z",
+          "caseId": "INT_006",
+          "statSummary": {
+            "totalSteps": 6,
+            "labsOrdered": [],
+            "medicationsPrescribed": [
+              "Acetaminophen 500–1000mg q6h PRN (temp >101°F / discomfort)",
+              "Ibuprofen 400mg q6h with food PRN (alternating with acetaminophen)"
+            ],
+            "referralsPlaced": [],
+            "followupScheduled": [
+              "Return if fever persists >5 days, rash develops, stiff neck, or confusion"
+            ],
+            "contraindications": [
+              "Aspirin: children/adolescents (Reye syndrome)",
+              "Ibuprofen: GI bleed history, CKD, pregnancy third trimester"
+            ],
+            "escalationCriteria": [
+              "Fever >104°F",
+              "Febrile seizure",
+              "Stiff neck",
+              "Petechial rash",
+              "Altered mental status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 28yo male\nChief Complaint: fever\n\nSubjective:\nI have a fever, stiff neck, and worst headache of my life\n\nRed Flags Detected: neck_stiffness\n\nDisposition: ER NOW\n\nClinical Reasoning:\n⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T17:32:21.978Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\n⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "I have a fever, stiff neck, and worst headache of my life",
+      "timestamp": "2026-03-13T17:32:21.975Z"
+    }
+  ],
+  "patient": {
+    "age": 28,
+    "sex": "male"
+  },
+  "complaint": "fever",
+  "symptoms": "I have a fever, stiff neck, and worst headache of my life",
+  "hybridResult": {
+    "disposition": "er_now",
+    "confidence": 1,
+    "topDiagnosis": "bacterial_meningitis",
+    "uncertaintyScore": 1.34,
+    "triggered_flags": [
+      "neck_stiffness"
+    ],
+    "explanation": "⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required.",
+    "reasoning_path": [
+      "L1 Safety: OVERRIDE → er_now",
+      "L2 Similarity: 5 cases found, top Dx: bacterial_meningitis",
+      "L3 Bayes: top Dx bacterial_meningitis (16%), entropy=1.34",
+      "Safety override applied → ER_NOW"
+    ],
+    "extractionConfidence": 1,
+    "featuresExtracted": 3,
+    "missingFields": []
+  },
+  "lastHybridEvalAt": "2026-03-13T17:32:21.978Z",
+  "disposition": "er_now",
+  "redFlags": [
+    "neck_stiffness"
+  ],
+  "alerts": [
+    "⚠ Safety flag: neck stiffness"
+  ],
+  "carePathway": {
+    "complaint": "fever",
+    "disposition": "Home Care",
+    "title": "Viral Fever / URTI Pathway",
+    "description": "Uncomplicated fever <5 days without red flags — likely viral etiology.",
+    "expectedDuration": "3–7 days",
+    "steps": [
+      {
+        "type": "instruction",
+        "action": "Maintain oral hydration — 2L/day minimum",
+        "rationale": "Fever causes increased insensible fluid losses",
+        "timing": "Ongoing",
+        "priority": "urgent"
+      },
+      {
+        "type": "medication",
+        "action": "Acetaminophen 500–1000mg q6h PRN (temp >101°F / discomfort)",
+        "rationale": "First-line antipyretic and analgesic",
+        "timing": "PRN",
+        "priority": "routine"
+      },
+      {
+        "type": "medication",
+        "action": "Ibuprofen 400mg q6h with food PRN (alternating with acetaminophen)",
+        "rationale": "NSAID antipyretic — can alternate for better fever control",
+        "timing": "PRN, avoid in renal impairment, GI disease",
+        "priority": "routine"
+      },
+      {
+        "type": "instruction",
+        "action": "Light clothing, cool environment, tepid sponge bath if very high fever",
+        "rationale": "Non-pharmacological cooling",
+        "timing": "As needed",
+        "priority": "routine"
+      },
+      {
+        "type": "monitoring",
+        "action": "Monitor temperature q4h — return if >103.5°F or not improving in 5 days",
+        "rationale": "Detect worsening or secondary bacterial infection",
+        "timing": "Q4h",
+        "priority": "urgent"
+      },
+      {
+        "type": "followup",
+        "action": "Return if fever persists >5 days, rash develops, stiff neck, or confusion",
+        "rationale": "Rule out serious infection",
+        "timing": "Day 5 or sooner if red flags",
+        "priority": "urgent"
+      }
+    ],
+    "contraindications": [
+      "Aspirin: children/adolescents (Reye syndrome)",
+      "Ibuprofen: GI bleed history, CKD, pregnancy third trimester"
+    ],
+    "escalationCriteria": [
+      "Fever >104°F",
+      "Febrile seizure",
+      "Stiff neck",
+      "Petechial rash",
+      "Altered mental status"
+    ],
+    "outcomeGoals": [
+      "Afebrile within 48–72h",
+      "Return to baseline activity"
+    ]
+  },
+  "chartNote": "VISIT NOTE — March 13, 2026\nPatient: 28yo male\nChief Complaint: fever\n\nSubjective:\nI have a fever, stiff neck, and worst headache of my life\n\nRed Flags Detected: neck_stiffness\n\nDisposition: ER NOW\n\nClinical Reasoning:\n⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\n⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T17:32:21.978Z"
+}

@@ -9,18 +9,58 @@ import {
 } from "../state/clinicalStateStore";
 import { emitClinicalEvent, getEventLog, getEventsByType } from "../state/clinicalEventBus";
 import { runClinicalOrchestrator } from "../core/orchestrator/clinicalStateOrchestrator";
+import { runReasoningWorker, isWorkerRunning } from "../core/workers/reasoningWorker";
+import { extractFeaturesFromAnswer } from "../hybrid-reasoning/followUpEngine";
+import { getStreamStats, getEventTimeline, readEventsByCaseId } from "../core/events/eventStream";
 
 const router = Router();
 
 router.post("/message", async (req: Request, res: Response) => {
-  const { caseId, message, patient } = req.body;
+  const { caseId, message, patient, async: asyncMode } = req.body;
   if (!caseId || !message) return res.status(400).json({ error: "caseId and message required" });
 
   if (patient) setClinicalState(caseId, { patient });
 
   try {
-    const state = await runClinicalOrchestrator(caseId, message);
-    res.json({ ok: true, state });
+    if (asyncMode) {
+      runReasoningWorker(caseId).catch(() => {});
+      emitClinicalEvent(caseId, "PATIENT_MESSAGE", { message, timestamp: new Date().toISOString() });
+      res.json({ ok: true, processing: true, caseId, state: getClinicalState(caseId) });
+    } else {
+      const state = await runClinicalOrchestrator(caseId, message);
+      res.json({ ok: true, state });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/:caseId/answer", async (req: Request, res: Response) => {
+  const { caseId } = req.params;
+  const { answer } = req.body;
+  if (!answer) return res.status(400).json({ error: "answer required" });
+
+  const state = getClinicalState(caseId);
+  const pending = state.pendingQuestion;
+  if (!pending) return res.status(400).json({ error: "No pending follow-up question for this case" });
+
+  const extracted = extractFeaturesFromAnswer(pending as any, answer);
+
+  emitClinicalEvent(caseId, "FOLLOWUP_QUESTION_ANSWERED" as ClinicalEventType, {
+    questionId: pending.id,
+    questionText: pending.text,
+    answer,
+    featuresExtracted: extracted,
+  });
+
+  setClinicalState(caseId, {
+    symptoms: ((state.symptoms ?? "") + " " + answer).trim(),
+    answeredQuestionIds: [...(state.answeredQuestionIds ?? []), pending.id],
+  });
+
+  try {
+    const updatedState = await runClinicalOrchestrator(caseId, answer);
+    res.json({ ok: true, questionAnswered: pending.id, featuresExtracted: extracted, state: updatedState });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -42,13 +82,27 @@ router.get("/sessions", (_req: Request, res: Response) => {
   res.json(listActiveSessions());
 });
 
+router.get("/stream/stats", async (_req: Request, res: Response) => {
+  const stats = await getStreamStats();
+  res.json(stats);
+});
+
+router.get("/stream/events", async (req: Request, res: Response) => {
+  const { caseId, limit } = req.query;
+  const events = caseId
+    ? await readEventsByCaseId(caseId as string)
+    : await getEventTimeline();
+  const limited = limit ? events.slice(-Number(limit)) : events.slice(-500);
+  res.json(limited);
+});
+
 router.get("/:caseId", async (req: Request, res: Response) => {
   let state = getClinicalState(req.params.caseId);
   if (state.events.length === 0) {
     const persisted = await loadPersistedState(req.params.caseId);
     if (persisted) state = persisted;
   }
-  res.json(state);
+  res.json({ ...state, workerRunning: isWorkerRunning(req.params.caseId) });
 });
 
 router.get("/:caseId/events", (req: Request, res: Response) => {
@@ -58,6 +112,11 @@ router.get("/:caseId/events", (req: Request, res: Response) => {
   } else {
     res.json(getEventLog(req.params.caseId));
   }
+});
+
+router.get("/:caseId/stream", async (req: Request, res: Response) => {
+  const events = await readEventsByCaseId(req.params.caseId);
+  res.json({ caseId: req.params.caseId, total: events.length, events });
 });
 
 router.post("/:caseId/event", (req: Request, res: Response) => {

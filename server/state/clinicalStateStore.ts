@@ -19,6 +19,9 @@ export type ClinicalEventType =
   | "HYBRID_REASONING_COMPLETE"
   | "UNCERTAINTY_DETECTED"
   | "FOLLOW_UP_QUESTION_ASKED"
+  | "FOLLOWUP_QUESTION_SUGGESTED"
+  | "FOLLOWUP_QUESTION_ANSWERED"
+  | "CARE_PATHWAY_STARTED"
   | "DISCHARGE_READY"
   | "NOTE_READY"
   | "OUTCOME_RECORDED"
@@ -81,6 +84,11 @@ export interface ClinicalState {
   };
   lastHybridEvalAt?: string;
   orchestratorRunAt?: string;
+  pendingQuestion?: { id: string; text: string; complaint: string; targetFeature: string; expectedAnswerType: string; choices?: string[] } | null;
+  answeredQuestionIds?: string[];
+  answeredQuestions?: { questionId: string; answer: string; featuresExtracted: string[] }[];
+  interviewComplete?: boolean;
+  carePathway?: any;
   outcomeData?: {
     actualDisposition?: string;
     followupStatus?: string;

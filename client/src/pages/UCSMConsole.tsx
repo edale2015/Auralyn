@@ -32,9 +32,12 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   SCORE_COMPUTED:            "bg-cyan-100 text-cyan-800 border-cyan-200",
   RISK_ASSESSED:             "bg-orange-100 text-orange-800 border-orange-200",
   COPILOT_SUGGESTION:        "bg-sky-100 text-sky-800 border-sky-200",
-  OUTCOME_RECORDED:          "bg-lime-100 text-lime-800 border-lime-200",
-  REWARD_COMPUTED:           "bg-lime-100 text-lime-800 border-lime-200",
-  MEDICATION_PLAN:           "bg-pink-100 text-pink-800 border-pink-200",
+  OUTCOME_RECORDED:               "bg-lime-100 text-lime-800 border-lime-200",
+  REWARD_COMPUTED:                "bg-lime-100 text-lime-800 border-lime-200",
+  MEDICATION_PLAN:                "bg-pink-100 text-pink-800 border-pink-200",
+  FOLLOWUP_QUESTION_SUGGESTED:    "bg-amber-100 text-amber-800 border-amber-200",
+  FOLLOWUP_QUESTION_ANSWERED:     "bg-green-100 text-green-800 border-green-200",
+  CARE_PATHWAY_STARTED:           "bg-teal-100 text-teal-800 border-teal-200",
 };
 
 const EVENT_ICONS: Record<string, string> = {
@@ -46,6 +49,8 @@ const EVENT_ICONS: Record<string, string> = {
   COPILOT_SUGGESTION: "💡", OUTCOME_RECORDED: "🎓", REWARD_COMPUTED: "🏅",
   MEDICATION_PLAN: "💊", MODIFIER_CAPTURED: "🔧", PATHWAY_EXECUTED: "🛤",
   FOLLOW_UP_QUESTION_ASKED: "❓",
+  FOLLOWUP_QUESTION_SUGGESTED: "🗣", FOLLOWUP_QUESTION_ANSWERED: "✔",
+  CARE_PATHWAY_STARTED: "🛤",
 };
 
 function dispositionBadge(d?: string) {
@@ -152,7 +157,39 @@ function StateViewer({ state }: { state: any }) {
         </div>
       )}
 
-      {state.followUpQuestions?.length > 0 && (
+      {state.pendingQuestion && (
+        <div className="border-2 rounded-md p-2.5 bg-amber-50 border-amber-300 animate-pulse-once">
+          <div className="text-[10px] text-amber-700 uppercase tracking-wide mb-1 font-semibold">🗣 Follow-Up Question (Guided Interview)</div>
+          <p className="text-xs text-amber-900 font-medium">{state.pendingQuestion.text}</p>
+          {state.pendingQuestion.choices && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {state.pendingQuestion.choices.map((c: string) => (
+                <Badge key={c} variant="outline" className="text-[10px] text-amber-700 border-amber-300">{c}</Badge>
+              ))}
+            </div>
+          )}
+          <div className="text-[10px] text-amber-600 mt-1">Expected: {state.pendingQuestion.expectedAnswerType} · Feature: {state.pendingQuestion.targetFeature}</div>
+        </div>
+      )}
+
+      {state.answeredQuestions?.length > 0 && (
+        <div className="border rounded-md p-2.5 bg-green-50/50 border-green-200">
+          <div className="text-[10px] text-green-700 uppercase tracking-wide mb-1">✔ Interview Transcript ({state.answeredQuestions.length} answered)</div>
+          <div className="space-y-1.5">
+            {state.answeredQuestions.map((aq: any, i: number) => (
+              <div key={i} className="text-xs">
+                <span className="text-green-800 font-medium">Q ({aq.questionId}):</span>{" "}
+                <span className="text-green-900">{aq.answer}</span>
+                {aq.featuresExtracted?.length > 0 && (
+                  <div className="text-[10px] text-green-600">→ {aq.featuresExtracted.join(", ")}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!state.pendingQuestion && state.followUpQuestions?.length > 0 && !state.answeredQuestions?.length && (
         <div className="border rounded-md p-2.5 bg-yellow-50 border-yellow-200">
           <div className="text-[10px] text-yellow-700 uppercase tracking-wide mb-1">❓ Pending Questions</div>
           <ul className="space-y-0.5">
@@ -160,6 +197,22 @@ function StateViewer({ state }: { state: any }) {
               <li key={i} className="text-xs text-yellow-900">{q}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {state.carePathway && (
+        <div className="border rounded-md p-2.5 bg-teal-50/50 border-teal-200">
+          <div className="text-[10px] text-teal-700 uppercase tracking-wide mb-1 font-semibold">🛤 Care Pathway — {state.carePathway.title ?? "Active"}</div>
+          {state.carePathway.description && <p className="text-xs text-teal-800 mb-1.5">{state.carePathway.description}</p>}
+          <div className="space-y-1">
+            {(state.carePathway.steps ?? []).slice(0, 5).map((step: any, i: number) => (
+              <div key={i} className="flex items-start gap-1.5 text-xs">
+                <Badge variant="outline" className="text-[10px] shrink-0 border-teal-300 text-teal-700 capitalize">{step.type}</Badge>
+                <span className="text-teal-900">{step.action}</span>
+                {step.priority === "urgent" && <Badge className="text-[10px] bg-red-100 text-red-700 border-red-200 shrink-0">urgent</Badge>}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -184,6 +237,7 @@ function ConversationPanel({ caseId }: { caseId: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [message, setMessage] = useState("");
+  const [answerText, setAnswerText] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const { data: state, isLoading } = useQuery({
@@ -202,49 +256,105 @@ function ConversationPanel({ caseId }: { caseId: string }) {
     onError: () => toast({ title: "Failed to send message", variant: "destructive" }),
   });
 
+  const answerMut = useMutation({
+    mutationFn: (ans: string) => apiRequest("POST", `/api/ucsm/${caseId}/answer`, { answer: ans }).then(r => r.json()),
+    onSuccess: (data) => {
+      setAnswerText("");
+      qc.invalidateQueries({ queryKey: ["/api/ucsm", caseId] });
+      if (data.featuresExtracted?.length) {
+        toast({ title: `Answer processed — features: ${data.featuresExtracted.join(", ")}` });
+      }
+    },
+    onError: () => toast({ title: "Failed to submit answer", variant: "destructive" }),
+  });
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [state?.intakeMessages?.length]);
 
   const messages: any[] = state?.intakeMessages ?? [];
+  const pendingQuestion = state?.pendingQuestion;
 
   return (
-    <div className="flex flex-col h-[500px]">
-      <div className="flex-1 overflow-y-auto space-y-2 p-3 border rounded-t-md bg-muted/20">
-        {messages.length === 0 && (
-          <div className="text-center text-xs text-muted-foreground py-8">
-            Send a message to start the clinical pipeline. The AI will process it through all 4 reasoning layers.
+    <div className="flex flex-col gap-2">
+      {pendingQuestion && (
+        <div className="border-2 border-amber-300 rounded-md p-3 bg-amber-50">
+          <div className="text-[10px] text-amber-700 font-semibold uppercase tracking-wide mb-1.5">
+            🗣 Guided Interview — System is asking:
           </div>
-        )}
-        {messages.map((m: any, i: number) => (
-          <div key={i} className={`flex ${m.role === "patient" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[80%] rounded-lg px-3 py-2 text-xs ${m.role === "patient" ? "bg-primary text-primary-foreground" : "bg-background border"}`}>
-              {m.content}
+          <p className="text-sm font-medium text-amber-900 mb-2">{pendingQuestion.text}</p>
+          {pendingQuestion.choices && (
+            <div className="flex flex-wrap gap-1 mb-2">
+              {pendingQuestion.choices.map((c: string) => (
+                <button
+                  key={c}
+                  className="text-xs px-2 py-1 border border-amber-300 rounded bg-white hover:bg-amber-100 text-amber-800"
+                  onClick={() => setAnswerText(c)}
+                  data-testid={`choice-${c.toLowerCase().replace(/\s/g,"-")}`}
+                >{c}</button>
+              ))}
             </div>
+          )}
+          <div className="flex gap-2">
+            <Input
+              className="text-xs h-8 flex-1 border-amber-300 bg-white"
+              placeholder={`Answer (${pendingQuestion.expectedAnswerType})…`}
+              value={answerText}
+              onChange={e => setAnswerText(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && answerText.trim()) answerMut.mutate(answerText.trim()); }}
+              disabled={answerMut.isPending}
+              data-testid="input-followup-answer"
+            />
+            <Button
+              size="sm"
+              className="h-8 bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => { if (answerText.trim()) answerMut.mutate(answerText.trim()); }}
+              disabled={answerMut.isPending || !answerText.trim()}
+              data-testid="button-submit-answer"
+            >
+              {answerMut.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+            </Button>
           </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
+        </div>
+      )}
 
-      <div className="flex gap-2 p-2 border border-t-0 rounded-b-md bg-background">
-        <Input
-          className="text-xs h-8 flex-1"
-          placeholder='e.g. "I have chest pain radiating to my left arm with sweating"'
-          value={message}
-          onChange={e => setMessage(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (message.trim()) sendMut.mutate(message.trim()); }}}
-          disabled={sendMut.isPending}
-          data-testid="input-patient-message"
-        />
-        <Button
-          size="sm"
-          className="h-8"
-          onClick={() => { if (message.trim()) sendMut.mutate(message.trim()); }}
-          disabled={sendMut.isPending || !message.trim()}
-          data-testid="button-send-message"
-        >
-          {sendMut.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-        </Button>
+      <div className="flex flex-col h-[420px]">
+        <div className="flex-1 overflow-y-auto space-y-2 p-3 border rounded-t-md bg-muted/20">
+          {messages.length === 0 && (
+            <div className="text-center text-xs text-muted-foreground py-8">
+              Send a message to start the clinical pipeline. The AI will process it through all 4 reasoning layers.
+            </div>
+          )}
+          {messages.map((m: any, i: number) => (
+            <div key={i} className={`flex ${m.role === "patient" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[80%] rounded-lg px-3 py-2 text-xs ${m.role === "patient" ? "bg-primary text-primary-foreground" : "bg-background border"}`}>
+                {m.content}
+              </div>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+
+        <div className="flex gap-2 p-2 border border-t-0 rounded-b-md bg-background">
+          <Input
+            className="text-xs h-8 flex-1"
+            placeholder='e.g. "I have chest pain radiating to my left arm with sweating"'
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (message.trim()) sendMut.mutate(message.trim()); }}}
+            disabled={sendMut.isPending}
+            data-testid="input-patient-message"
+          />
+          <Button
+            size="sm"
+            className="h-8"
+            onClick={() => { if (message.trim()) sendMut.mutate(message.trim()); }}
+            disabled={sendMut.isPending || !message.trim()}
+            data-testid="button-send-message"
+          >
+            {sendMut.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+          </Button>
+        </div>
       </div>
 
       {isLoading && <div className="text-xs text-muted-foreground text-center py-1">Loading state...</div>}
@@ -436,6 +546,10 @@ export default function UCSMConsole() {
                 <TabsTrigger value="conversation" className="text-xs" data-testid="tab-ucsm-conversation"><MessageSquare className="h-3 w-3 mr-1" />Conversation</TabsTrigger>
                 <TabsTrigger value="state" className="text-xs" data-testid="tab-ucsm-state"><Brain className="h-3 w-3 mr-1" />Clinical State</TabsTrigger>
                 <TabsTrigger value="events" className="text-xs" data-testid="tab-ucsm-events"><Clock className="h-3 w-3 mr-1" />Event Log ({events?.length ?? 0})</TabsTrigger>
+                <TabsTrigger value="interview" className="text-xs" data-testid="tab-ucsm-interview">
+                  🗣 Interview {state?.pendingQuestion ? <Badge className="ml-1 text-[9px] bg-amber-500 text-white px-1 py-0">Q</Badge> : null}
+                </TabsTrigger>
+                <TabsTrigger value="pathway" className="text-xs" data-testid="tab-ucsm-pathway">🛤 Pathway</TabsTrigger>
                 <TabsTrigger value="emit" className="text-xs" data-testid="tab-ucsm-emit"><Zap className="h-3 w-3 mr-1" />Emit Event</TabsTrigger>
               </TabsList>
 
@@ -455,6 +569,116 @@ export default function UCSMConsole() {
                 <Card>
                   <CardContent className="p-3">
                     <EventTimeline events={events ?? []} />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="interview" className="mt-3">
+                <Card>
+                  <CardContent className="p-3 space-y-3">
+                    {!state?.pendingQuestion && !state?.answeredQuestions?.length && (
+                      <div className="text-xs text-muted-foreground text-center py-6">
+                        No guided interview active. Send a message with a specific complaint (e.g. "I have chest pain") to start the interview.
+                      </div>
+                    )}
+                    {state?.pendingQuestion && (
+                      <div className="border-2 border-amber-300 rounded-md p-3 bg-amber-50">
+                        <div className="text-[10px] text-amber-700 font-semibold uppercase tracking-wide mb-1.5">🗣 Current Question</div>
+                        <p className="text-sm font-medium text-amber-900 mb-2">{state.pendingQuestion.text}</p>
+                        <div className="text-[10px] text-amber-600">Type: {state.pendingQuestion.expectedAnswerType} · Feature: {state.pendingQuestion.targetFeature}</div>
+                        {state.pendingQuestion.choices && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {state.pendingQuestion.choices.map((c: string) => (
+                              <Badge key={c} variant="outline" className="text-xs text-amber-700 border-amber-300">{c}</Badge>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-[10px] text-amber-700 mt-2">→ Answer in the Conversation tab or type below and click Submit.</p>
+                      </div>
+                    )}
+                    {state?.answeredQuestions?.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold mb-2 text-green-700">✔ Interview Transcript</div>
+                        <div className="space-y-2">
+                          {state.answeredQuestions.map((aq: any, i: number) => (
+                            <div key={i} className="border rounded-md p-2 bg-green-50/50 border-green-200">
+                              <div className="text-[10px] text-green-700 font-semibold mb-0.5">Q{i+1}: {aq.questionId?.replace(/_/g," ")}</div>
+                              <div className="text-xs text-green-900">{aq.answer}</div>
+                              {aq.featuresExtracted?.length > 0 && (
+                                <div className="text-[10px] text-green-600 mt-0.5">
+                                  Features extracted: {aq.featuresExtracted.join(", ")}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {state?.structuredFacts && Object.keys(state.structuredFacts).length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold mb-1.5">Structured Clinical Features</div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.keys(state.structuredFacts).map((k: string) => (
+                            <Badge key={k} className="text-[10px] bg-blue-100 text-blue-700 border-blue-200">{k.replace(/_/g," ")}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {state?.interviewComplete && (
+                      <Alert>
+                        <CheckCircle className="h-4 w-4" />
+                        <AlertDescription className="text-xs">Interview complete — all diagnostic features collected. Running final hybrid reasoning.</AlertDescription>
+                      </Alert>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="pathway" className="mt-3">
+                <Card>
+                  <CardContent className="p-3 space-y-3">
+                    {!state?.carePathway && !state?.pathway && (
+                      <div className="text-xs text-muted-foreground text-center py-6">
+                        No care pathway active. A pathway is automatically triggered when a disposition is set.
+                      </div>
+                    )}
+                    {(state?.carePathway ?? state?.pathway) && (() => {
+                      const pw = state.carePathway ?? state.pathway;
+                      return (
+                        <div className="space-y-3">
+                          <div className="border rounded-md p-3 bg-teal-50/50 border-teal-200">
+                            <div className="text-sm font-semibold text-teal-900">{pw.title ?? pw.pathway?.title}</div>
+                            <div className="text-xs text-teal-700 mt-0.5">{pw.description ?? pw.pathway?.description}</div>
+                            {pw.expectedDuration && <div className="text-[10px] text-teal-600 mt-1">Duration: {pw.expectedDuration}</div>}
+                          </div>
+                          <div className="space-y-1.5">
+                            {(pw.steps ?? pw.pathway?.steps ?? []).map((step: any, i: number) => (
+                              <div key={i} className={`border rounded-md px-3 py-2 flex items-start gap-2 ${step.priority === "urgent" ? "border-red-200 bg-red-50/50" : step.priority === "stat" ? "border-red-300 bg-red-100/50" : "border-border bg-background"}`}>
+                                <Badge variant="outline" className={`text-[10px] shrink-0 capitalize ${step.priority === "urgent" || step.priority === "stat" ? "border-red-300 text-red-700" : "text-teal-700 border-teal-300"}`}>{step.type}</Badge>
+                                <div className="flex-1">
+                                  <div className="text-xs font-medium">{step.action}</div>
+                                  <div className="text-[10px] text-muted-foreground mt-0.5">{step.rationale}</div>
+                                  <div className="text-[10px] text-blue-600 mt-0.5">⏱ {step.timing}</div>
+                                </div>
+                                {(step.priority === "urgent" || step.priority === "stat") && (
+                                  <Badge className="text-[10px] bg-red-100 text-red-700 border-red-200 shrink-0">{step.priority}</Badge>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          {(pw.escalationCriteria ?? pw.pathway?.escalationCriteria)?.length > 0 && (
+                            <div className="border rounded-md p-2.5 bg-red-50/50 border-red-200">
+                              <div className="text-[10px] text-red-700 font-semibold mb-1">⚠ Escalation Criteria</div>
+                              <ul className="space-y-0.5">
+                                {(pw.escalationCriteria ?? pw.pathway?.escalationCriteria).map((c: string, i: number) => (
+                                  <li key={i} className="text-xs text-red-900">{c}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               </TabsContent>

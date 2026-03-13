@@ -1,5 +1,6 @@
 import { getClinicalState, setClinicalState, type ClinicalEventType } from "./clinicalStateStore";
 import { projectEvent } from "./stateProjectionService";
+import { appendEvent } from "../core/events/eventStream";
 
 export interface EmitOptions {
   persist?: boolean;
@@ -16,6 +17,7 @@ export function emitClinicalEvent(
   state.events.push(event);
   projectEvent(caseId, event);
   state.updatedAt = event.timestamp;
+  appendEvent({ caseId, type, data, timestamp: event.timestamp }).catch(() => {});
 }
 
 export function getEventLog(caseId: string): any[] {
