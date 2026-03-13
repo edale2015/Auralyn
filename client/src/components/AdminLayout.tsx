@@ -23,7 +23,7 @@ import {
   FlaskConical, Eye, AlertTriangle, Users, Settings, Search,
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
-  BrainCircuit, MapPin,
+  BrainCircuit, MapPin, Brain,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -119,6 +119,12 @@ const NAV_SECTIONS = [
       { path: "/care-pathways", label: "Care Pathways", icon: MapPin },
       { path: "/clinical-copilot", label: "Clinician Copilot", icon: Lightbulb },
       { path: "/predictive-risk", label: "Predictive Risk", icon: Activity },
+    ],
+  },
+  {
+    label: "Self-Developing AI",
+    items: [
+      { path: "/self-improve", label: "Improvement Engine", icon: Brain },
     ],
   },
   {
