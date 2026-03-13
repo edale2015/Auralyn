@@ -11,6 +11,13 @@ Preferred communication style: Simple, everyday language.
 ### Core Architecture
 The system utilizes a constrained agent architecture for deterministic medical triage, featuring a next-action picker, action execution with trace capture, and a plan/act/observe agent loop. A multi-system triage pipeline uses canonical keys and a unified sheets registry for data configuration and diagnostic candidate generation. A clinical state builder deterministically assembles an auditable clinical state, and a modular, skill-based orchestration layer handles clinical triage. The platform includes an active control plane for managing rollouts and rule governance, and an intelligence layer for explainability and failure-driven rule suggestions. An extended learning loop uses patient outcomes to continuously improve the system.
 
+### 10× Architectural Upgrade — Clinical State Model (CSM) + Event Bus
+A unified clinical state model (`server/state/`) powers all completion modules:
+- `clinicalStateStore.ts` — in-memory + file-persisted per-case state (ClinicalState object)
+- `clinicalEventBus.ts` — emits typed events (SESSION_STARTED, SYMPTOMS_RECORDED, COMPLAINT_IDENTIFIED, RED_FLAG_DETECTED, DIFFERENTIAL_UPDATED, SCORE_COMPUTED, DISPOSITION_SET, PATHWAY_EXECUTED, COPILOT_SUGGESTION, RISK_ASSESSED, OUTCOME_RECORDED, REWARD_COMPUTED)
+- `stateProjectionService.ts` — maps events onto state fields deterministically
+- REST: GET/POST/PATCH/DELETE `/api/state/:caseId`, GET `/api/state/:caseId/events`
+
 ### Frontend
 Built with React 18 and TypeScript, using `shadcn/ui` with Tailwind CSS, the frontend supports physician login, patient intake, case status, visit summaries, and a physician dashboard, along with administrative consoles for platform management.
 
@@ -29,6 +36,46 @@ The agent system orchestrates patient flow through routing states using a pipeli
 ### Clinical Capabilities
 The system supports advanced triage logic including subtype expansions, cross-complaint boosts, and generation of ranked diagnostic candidates. It integrates clinical scoring systems (e.g., PERC, WELLS_PE, CENTOR) configured via CSV. A medication safety layer includes a patient constraint engine, drug interaction checker, and dose adjusters. It also features FHIR-lite structured output endpoints for full triage results, differential diagnoses, clinical documentation, and care plans.
 
+### 5 Completion Modules
+
+#### 1. Autonomous Intake System (`/autonomous-intake`)
+- `server/intake/autonomousIntakeEngine.ts` — multi-turn NLP intake for 9 complaints
+- Compound red-flag detection (requires ≥60% pattern match to avoid false positives)
+- Dynamic follow-up question selection per complaint (6 questions each)
+- Triage levels: low / moderate / high / critical
+- REST: POST `/api/autonomous-intake/start`, POST `/api/autonomous-intake/message`, GET `/api/autonomous-intake/session/:caseId`
+
+#### 2. Reinforcement Learning Policy Trainer (`/rl-policy`)
+- `server/learning/reinforcementPolicyService.ts` — reward function: +1 correct disposition, +1 improved, −1 worsened, −2 safety miss
+- Persists policy to `rl_policy.json` + history to `rl_policy_history.ndjson`
+- Per-complaint avg reward, win rate, safety misses, trend (improving/stable/degrading)
+- REST: GET `/api/rl/policy`, POST `/api/rl/train`, GET `/api/rl/policy-history`
+
+#### 3. Care Pathway Automation (`/care-pathways`)
+- `server/pathways/pathwayRegistry.ts` — 11 pathways across 9 complaints with labs, meds, referrals, follow-ups, monitoring, contraindications, escalation criteria, outcome goals
+- `server/pathways/pathwayExecutor.ts` — executes pathway and emits PATHWAY_EXECUTED CSM event
+- REST: GET `/api/pathways`, GET `/api/pathways/:complaint`, POST `/api/pathways/execute`
+
+#### 4. Clinician Copilot (`/clinical-copilot`)
+- `server/copilot/clinicalCopilotService.ts` — 7 suggestion categories: scoring hints (CENTOR, CURB-65, HEART, qSOFA), differential DDx, red flag reminders, pending questions, documentation hints, safety checks, pathway suggestions
+- Documentation templates for HPI, Assessment, Plan per complaint (copy-to-clipboard)
+- Risk indicator: green/yellow/orange/red gauge
+- REST: POST `/api/copilot/suggestions`, GET `/api/copilot/presets`
+
+#### 5. Predictive Risk Modeling (`/predictive-risk`)
+- `server/predictive/riskModelService.ts` — multi-factor scoring: admission risk, deterioration risk, 30-day readmission risk
+- `server/predictive/riskFactorLibrary.ts` — per-complaint factor library with weights (5 complaints × 5–8 factors each)
+- Keyword extraction from free-text clinical notes
+- REST: POST `/api/predictive/admission-risk`, GET `/api/predictive/risk-factors/:complaint`
+
+### Skill Layers 3–8 (sidebar: "Skill Layers 3–8")
+- **SL3** (`/sl3-outcomes`) — Patient outcome feedback: log outcomes, compare vs engine disposition, mismatch flagging
+- **SL4** (`/sl4-provider-analytics`) — Provider performance: cases reviewed, approval rate, time-to-review, override rate
+- **SL5** (`/sl5-population-health`) — Population health: 7-week complaint trends, drift detection >20% WoW
+- **SL6** (`/sl6-clinical-coding`) — ICD-10/CPT mapping with RVU values per complaint+disposition
+- **SL7** (`/sl7-comm-hub`) — Message template editor for WhatsApp/SMS/Telegram with delivery log
+- **SL8** (`/sl8-tenant-orchestration`) — Multi-tenant CRUD: feature flags, complaint access, branding, limits
+
 ### Case Management and Review
 A Firestore-backed state machine manages the case lifecycle. A physician review and signoff system facilitates review, manages queues, assigns reviewers, and orchestrates signoffs.
 
@@ -41,8 +88,31 @@ The system supports full multi-tenant provisioning and configuration with CRUD o
 ### Analytics and Monitoring
 Features patient outcome feedback loops, provider performance analytics (cases reviewed, approval rates), and population health monitoring with complaint and disposition analytics, including drift detection.
 
-## External Dependencies
+## Navigation Structure
+Sidebar sections:
+1. Clinical Operations — Visit Copilot, Complaint Control Center, Review Queue, etc.
+2. Diagnostics & Scoring — Next Best Question, Override Patterns, Decision Graphs, etc.
+3. Medications — Formulary
+4. Outcomes & Monitoring — Outcome Capture, Outcome Monitoring
+5. Data & Learning — Reconciliation, Rule Governance, Performance Stats
+6. Platform & Ops — Site Management, Release Governance, Audit Reports
+7. Intelligence Layer — Trace Viewer, Graph Heatmaps, Shadow Mode
+8. Validation Tools — Synthetic Testing, Gold Reviews, Rule Suggestions
+9. Skill Layers 3–8 — SL3 through SL8
+10. **Completion Modules** — Autonomous Intake, RL Policy Trainer, Care Pathways, Clinician Copilot, Predictive Risk
+11. Administration — Organizations, Audit Reports, Performance
 
+## Key File Paths
+- `server/state/` — Clinical State Model + Event Bus
+- `server/intake/autonomousIntakeEngine.ts` — Autonomous Intake
+- `server/learning/reinforcementPolicyService.ts` — RL Policy
+- `server/pathways/` — Care Pathway registry + executor
+- `server/copilot/clinicalCopilotService.ts` — Clinician Copilot
+- `server/predictive/` — Predictive Risk models + factor library
+- `server/routes/sl3Routes.ts` through `sl8Routes.ts` — Skill Layer API routes
+- `client/src/pages/` — All frontend pages
+
+## External Dependencies
 -   **AI Integration**: OpenAI API
 -   **Messaging Integration**: Twilio for WhatsApp
 -   **Database**: Firebase Firestore

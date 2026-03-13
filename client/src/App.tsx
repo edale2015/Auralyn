@@ -59,6 +59,11 @@ import SL5PopulationHealthPage from "@/pages/SL5PopulationHealthPage";
 import SL6ClinicalCodingPage from "@/pages/SL6ClinicalCodingPage";
 import SL7CommHubPage from "@/pages/SL7CommHubPage";
 import SL8TenantOrchestrationPage from "@/pages/SL8TenantOrchestrationPage";
+import AutonomousIntakePage from "@/pages/AutonomousIntakePage";
+import RLPolicyPage from "@/pages/RLPolicyPage";
+import CarePathwayPage from "@/pages/CarePathwayPage";
+import ClinicalCopilotPage from "@/pages/ClinicalCopilotPage";
+import PredictiveRiskPage from "@/pages/PredictiveRiskPage";
 import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import NotFound from "@/pages/not-found";
@@ -130,6 +135,11 @@ function Router() {
       <Route path="/sl6-clinical-coding">{() => <AdminPage component={SL6ClinicalCodingPage} />}</Route>
       <Route path="/sl7-comm-hub">{() => <AdminPage component={SL7CommHubPage} />}</Route>
       <Route path="/sl8-tenant-orchestration">{() => <AdminPage component={SL8TenantOrchestrationPage} />}</Route>
+      <Route path="/autonomous-intake">{() => <AdminPage component={AutonomousIntakePage} />}</Route>
+      <Route path="/rl-policy">{() => <AdminPage component={RLPolicyPage} />}</Route>
+      <Route path="/care-pathways">{() => <AdminPage component={CarePathwayPage} />}</Route>
+      <Route path="/clinical-copilot">{() => <AdminPage component={ClinicalCopilotPage} />}</Route>
+      <Route path="/predictive-risk">{() => <AdminPage component={PredictiveRiskPage} />}</Route>
       <Route path="/debug/traces">{() => <AdminPage component={TraceViewer} />}</Route>
       <Route component={NotFound} />
     </Switch>
