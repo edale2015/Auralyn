@@ -1,0 +1,709 @@
+Below is the completion of the Telegram / WhatsApp split-pane telemedicine workflow and the supporting backend pieces that make it usable during real visits.
+
+The goal is to make the system behave like a clinical copilot next to the chat conversation, not a separate tool.
+
+Doctors will see:
+
+Left panel   → patient chat
+Right panel  → clinical reasoning assistant
+
+As new messages arrive, the assistant updates automatically.
+
+1. Telegram / WhatsApp Conversation Bridge
+
+We first create a conversation store so chat messages and UCSM events stay synchronized.
+
+server/integrations/conversationStore.ts
+type ChatMessage = {
+  role: "patient" | "doctor" | "assistant"
+  text: string
+  timestamp: string
+}
+
+const conversations:Record<string,ChatMessage[]> = {}
+
+export function addMessage(
+  caseId:string,
+  role:"patient"|"doctor"|"assistant",
+  text:string
+){
+
+  conversations[caseId] ??= []
+
+  conversations[caseId].push({
+    role,
+    text,
+    timestamp:new Date().toISOString()
+  })
+
+}
+
+export function getConversation(caseId:string){
+
+  return conversations[caseId] ?? []
+
+}
+2. Telegram Webhook Integration
+server/routes/telegramWebhook.ts
+import express from "express"
+
+import { addMessage }
+from "../integrations/conversationStore"
+
+import { publishEvent }
+from "../core/events/eventPublisher"
+
+import { runTelemedicineAssistant }
+from "../assistant/telemedicineAssistantService"
+
+const router = express.Router()
+
+router.post("/telegram/webhook", async(req,res)=>{
+
+  const message =
+    req.body.message?.text
+
+  const chatId =
+    req.body.message?.chat?.id
+
+  const caseId =
+    `tg_${chatId}`
+
+  addMessage(caseId,"patient",message)
+
+  await publishEvent(
+    caseId,
+    "PATIENT_MESSAGE",
+    { message }
+  )
+
+  const result =
+    await runTelemedicineAssistant(caseId)
+
+  addMessage(
+    caseId,
+   
+pplease continue
+please continue
+You're giving feedback on a new version of ChatGPT.
+Which response do you prefer? Responses may take a moment to load.
+ChatGPT
+Response 1
+
+Continuing the split-pane workflow, here is the rest of the code to make it usable in practice.
+
+2. Telegram Webhook Integration, continued
+server/routes/telegramWebhook.ts
+import express from "express"
+import { addMessage } from "../integrations/conversationStore"
+import { publishEvent } from "../core/events/eventPublisher"
+import { runTelemedicineAssistant } from "../assistant/telemedicineAssistantService"
+import { sendTelegramMessage } from "../integrations/telegramAdapter"
+
+const router = express.Router()
+
+function formatAssistantReply(result: any) {
+  const top = result?.differential?.[0]
+
+  return [
+    `Possible diagnosis: ${top?.diagnosis ?? "unknown"}`,
+    `Urgency: ${result?.triage?.level ?? "unknown"}`,
+    "",
+    "Suggested questions:",
+    ...(result?.nextQuestions ?? []).map((q: string) => `• ${q}`),
+    "",
+    "Recommended actions:",
+    ...((result?.resources?.recommendedActions ?? []).map((a: any) => `• ${a.diagnosis}`)),
+  ].join("\n")
+}
+
+router.post("/telegram/webhook", async (req, res) => {
+  try {
+    const message = req.body.message?.text ?? ""
+    const chatId = String(req.body.message?.chat?.id ?? "")
+    const caseId = `tg_${chatId}`
+
+    if (!chatId || !message.trim()) {
+      res.sendStatus(200)
+      return
+    }
+
+    addMessage(caseId, "patient", message)
+
+    await publishEvent(caseId, "PATIENT_MESSAGE", { message })
+
+    const result = await runTelemedicineAssistant(caseId)
+    const reply = formatAssistantReply(result)
+
+    addMessage(caseId, "assistant", reply)
+
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+      await sendTelegramMessage(process.env.TELEGRAM_BOT_TOKEN, chatId, reply)
+    }
+
+    res.sendStatus(200)
+  } catch (err) {
+    console.error("telegram webhook error", err)
+    res.sendStatus(500)
+  }
+})
+
+export default router
+
+Register it:
+
+import telegramWebhook from "./routes/telegramWebhook"
+app.use(telegramWebhook)
+3. WhatsApp Webhook Integration
+
+This example assumes a generic webhook shape and outbound sender. You can adapt it to Twilio or Meta later.
+
+server/integrations/whatsappAdapter.ts
+import fetch from "node-fetch"
+
+export async function sendWhatsAppMessage(params: {
+  endpoint: string
+  token?: string
+  to: string
+  text: string
+}) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+
+  if (params.token) {
+    headers["Authorization"] = `Bearer ${params.token}`
+  }
+
+  await fetch(params.endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      to: params.to,
+      text: params.text,
+    }),
+  })
+}
+server/routes/whatsappWebhook.ts
+import express from "express"
+import { addMessage } from "../integrations/conversationStore"
+import { publishEvent } from "../core/events/eventPublisher"
+import { runTelemedicineAssistant } from "../assistant/telemedicineAssistantService"
+import { sendWhatsAppMessage } from "../integrations/whatsappAdapter"
+
+const router = express.Router()
+
+function formatAssistantReply(result: any) {
+  const top = result?.differential?.[0]
+
+  return [
+    `Possible diagnosis: ${top?.diagnosis ?? "unknown"}`,
+    `Urgency: ${result?.triage?.level ?? "unknown"}`,
+    "",
+    "Suggested questions:",
+    ...(result?.nextQuestions ?? []).map((q: string) => `• ${q}`),
+    "",
+    "Recommended actions:",
+    ...((result?.resources?.recommendedActions ?? []).map((a: any) => `• ${a.diagnosis}`)),
+  ].join("\n")
+}
+
+router.post("/whatsapp/webhook", async (req, res) => {
+  try {
+    const from = String(req.body.from ?? "")
+    const message = String(req.body.text ?? "")
+    const caseId = `wa_${from}`
+
+    if (!from || !message.trim()) {
+      res.sendStatus(200)
+      return
+    }
+
+    addMessage(caseId, "patient", message)
+
+    await publishEvent(caseId, "PATIENT_MESSAGE", { message })
+
+    const result = await runTelemedicineAssistant(caseId)
+    const reply = formatAssistantReply(result)
+
+    addMessage(caseId, "assistant", reply)
+
+    if (process.env.WHATSAPP_SEND_ENDPOINT) {
+      await sendWhatsAppMessage({
+        endpoint: process.env.WHATSAPP_SEND_ENDPOINT,
+        token: process.env.WHATSAPP_SEND_TOKEN,
+        to: from,
+        text: reply,
+      })
+    }
+
+    res.sendStatus(200)
+  } catch (err) {
+    console.error("whatsapp webhook error", err)
+    res.sendStatus(500)
+  }
+})
+
+export default router
+
+Register it:
+
+import whatsappWebhook from "./routes/whatsappWebhook"
+app.use(whatsappWebhook)
+4. Conversation Routes for the Doctor UI
+server/routes/conversationRoutes.ts
+import express from "express"
+import { addMessage, getConversation } from "../integrations/conversationStore"
+import { publishEvent } from "../core/events/eventPublisher"
+import { runTelemedicineAssistant } from "../assistant/telemedicineAssistantService"
+
+const router = express.Router()
+
+router.get("/api/conversations/:caseId", (req, res) => {
+  res.json({
+    ok: true,
+    messages: getConversation(req.params.caseId),
+  })
+})
+
+router.post("/api/conversations/:caseId/doctor-message", async (req, res) => {
+  try {
+    const caseId = req.params.caseId
+    const text = String(req.body.text ?? "").trim()
+
+    if (!text) {
+      res.status(400).json({ ok: false, error: "Missing text" })
+      return
+    }
+
+    addMessage(caseId, "doctor", text)
+
+    await publishEvent(caseId, "DOCTOR_MESSAGE", { message: text })
+
+    const result = await runTelemedicineAssistant(caseId)
+
+    res.json({
+      ok: true,
+      result,
+      messages: getConversation(caseId),
+    })
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+router.get("/api/conversations", (_req, res) => {
+  res.json({ ok: true, note: "Implement case listing if needed from event log or session store." })
+})
+
+export default router
+
+Register it:
+
+import conversationRoutes from "./routes/conversationRoutes"
+app.use(conversationRoutes)
+5. Split-Pane Doctor Console
+client/src/pages/TelemedicineSplitPaneConsole.tsx
+import React, { useEffect, useMemo, useRef, useState } from "react"
+
+type ChatMessage = {
+  role: "patient" | "doctor" | "assistant"
+  text: string
+  timestamp: string
+}
+
+type AssistantResult = {
+  complaint?: string
+  triage?: { level: string; reason?: string }
+  differential?: { diagnosis: string; score: number }[]
+  nextQuestions?: string[]
+  resources?: { recommendedActions?: any[] }
+  contradictions?: { diagnosis: string; conflict: string }[]
+  pathway?: { labs?: string[]; medications?: string[]; followup?: string[] }
+}
+
+export default function TelemedicineSplitPaneConsole() {
+  const [caseId, setCaseId] = useState("tg_demo_1")
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [doctorText, setDoctorText] = useState("")
+  const [assistantResult, setAssistantResult] = useState<AssistantResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const listRef = useRef<HTMLDivElement | null>(null)
+
+  async function loadConversation() {
+    const res = await fetch(`/api/conversations/${encodeURIComponent(caseId)}`)
+    const data = await res.json()
+    setMessages(data.messages ?? [])
+  }
+
+  async function sendDoctorMessage(text?: string) {
+    const nextText = (text ?? doctorText).trim()
+    if (!nextText) return
+
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(caseId)}/doctor-message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: nextText }),
+      })
+      const data = await res.json()
+
+      setMessages(data.messages ?? [])
+      setAssistantResult(data.result ?? null)
+      setDoctorText("")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function appendSuggestedQuestion(q: string) {
+    const text = `${q}`
+    void sendDoctorMessage(text)
+  }
+
+  useEffect(() => {
+    void loadConversation()
+  }, [caseId])
+
+  useEffect(() => {
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight
+    }
+  }, [messages])
+
+  const chartNote = useMemo(() => {
+    return `Chief Complaint:
+${assistantResult?.complaint ?? ""}
+
+Conversation Summary:
+${messages.map((m) => `[${m.role}] ${m.text}`).join("\n")}
+
+Assessment:
+${assistantResult?.differential?.[0]?.diagnosis ?? ""}
+
+Plan:
+${assistantResult?.resources?.recommendedActions?.map((a: any) => a.diagnosis).join("\n") ?? ""}
+
+Disposition:
+${assistantResult?.triage?.level ?? ""}`
+  }, [assistantResult, messages])
+
+  const discharge = useMemo(() => {
+    return `Based on our telemedicine visit, the most likely diagnosis is:
+
+${assistantResult?.differential?.[0]?.diagnosis ?? ""}
+
+Recommended care:
+${assistantResult?.resources?.recommendedActions?.map((a: any) => a.diagnosis).join("\n") ?? ""}
+
+Please seek urgent care immediately if symptoms worsen, severe chest pain develops, breathing worsens, or fever persists.`
+  }, [assistantResult])
+
+  async function copyText(text: string) {
+    await navigator.clipboard.writeText(text)
+  }
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1.2fr 1fr",
+        gap: 16,
+        padding: 16,
+        height: "100vh",
+        boxSizing: "border-box",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      {/* LEFT: CHAT */}
+      <div
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: 12,
+          display: "grid",
+          gridTemplateRows: "auto 1fr auto",
+          minHeight: 0,
+        }}
+      >
+        <div style={{ padding: 12, borderBottom: "1px solid #eee", display: "flex", gap: 8 }}>
+          <input
+            value={caseId}
+            onChange={(e) => setCaseId(e.target.value)}
+            style={{ flex: 1, padding: 8, borderRadius: 8, border: "1px solid #ccc" }}
+            placeholder="Case ID / tg_xxx / wa_xxx"
+          />
+          <button onClick={() => void loadConversation()}>Load</button>
+        </div>
+
+        <div
+          ref={listRef}
+          style={{
+            overflowY: "auto",
+            padding: 12,
+            background: "#fafafa",
+          }}
+        >
+          {messages.map((m, idx) => (
+            <div
+              key={`${m.timestamp}-${idx}`}
+              style={{
+                marginBottom: 10,
+                display: "flex",
+                justifyContent:
+                  m.role === "patient" ? "flex-start" : m.role === "doctor" ? "flex-end" : "center",
+              }}
+            >
+              <div
+                style={{
+                  maxWidth: "78%",
+                  padding: 10,
+                  borderRadius: 10,
+                  background:
+                    m.role === "patient" ? "#ffffff" : m.role === "doctor" ? "#dff2ff" : "#eef5e9",
+                  border: "1px solid #ddd",
+                }}
+              >
+                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                  {m.role} • {new Date(m.timestamp).toLocaleTimeString()}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{m.text}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: 12, borderTop: "1px solid #eee" }}>
+          <textarea
+            value={doctorText}
+            onChange={(e) => setDoctorText(e.target.value)}
+            placeholder="Type the message you want to send / ask..."
+            style={{
+              width: "100%",
+              minHeight: 80,
+              padding: 10,
+              borderRadius: 10,
+              border: "1px solid #ccc",
+              boxSizing: "border-box",
+            }}
+          />
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <button disabled={loading} onClick={() => void sendDoctorMessage()}>
+              {loading ? "Sending..." : "Send / Analyze"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* RIGHT: CLINICAL COPILOT */}
+      <div
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: 12,
+          padding: 12,
+          overflowY: "auto",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Clinical Copilot</h2>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666" }}>Complaint</div>
+          <div style={{ fontWeight: 700 }}>{assistantResult?.complaint ?? "—"}</div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666" }}>Triage</div>
+          <div style={{ fontWeight: 700 }}>{assistantResult?.triage?.level ?? "—"}</div>
+          <div style={{ fontSize: 12, color: "#666" }}>{assistantResult?.triage?.reason ?? ""}</div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Differential</div>
+          {(assistantResult?.differential ?? []).map((d) => (
+            <div key={d.diagnosis} style={{ padding: 10, background: "#f7f7f7", borderRadius: 10, marginBottom: 8 }}>
+              <div style={{ fontWeight: 700 }}>{d.diagnosis}</div>
+              <div style={{ fontSize: 12, color: "#666" }}>
+                Confidence {Math.round(d.score * 100)}%
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {!!assistantResult?.contradictions?.length && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Warnings</div>
+            {assistantResult.contradictions.map((c, i) => (
+              <div
+                key={`${c.diagnosis}-${i}`}
+                style={{
+                  background: "#fff4e5",
+                  border: "1px solid #f2c27b",
+                  borderRadius: 10,
+                  padding: 10,
+                  marginBottom: 8,
+                }}
+              >
+                <strong>{c.diagnosis}</strong> conflicts with: {c.conflict}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Suggested Questions</div>
+          {(assistantResult?.nextQuestions ?? []).map((q) => (
+            <button
+              key={q}
+              onClick={() => appendSuggestedQuestion(q)}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: 10,
+                borderRadius: 10,
+                border: "1px solid #ddd",
+                background: "#fafafa",
+                marginBottom: 8,
+                cursor: "pointer",
+              }}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Recommended Actions</div>
+          {(assistantResult?.resources?.recommendedActions ?? []).map((a: any, i: number) => (
+            <div key={`${a.diagnosis}-${i}`} style={{ padding: 10, background: "#f7f7f7", borderRadius: 10, marginBottom: 8 }}>
+              {a.diagnosis}
+            </div>
+          ))}
+        </div>
+
+        {!!assistantResult?.pathway && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Care Pathway</div>
+            <div style={{ padding: 10, background: "#f7f7f7", borderRadius: 10 }}>
+              <div><strong>Labs:</strong> {(assistantResult.pathway.labs ?? []).join(", ") || "—"}</div>
+              <div><strong>Meds:</strong> {(assistantResult.pathway.medications ?? []).join(", ") || "—"}</div>
+              <div><strong>Follow-up:</strong> {(assistantResult.pathway.followup ?? []).join(", ") || "—"}</div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ margin: 0 }}>Chart Note</h3>
+            <button onClick={() => void copyText(chartNote)}>Copy</button>
+          </div>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: 10, borderRadius: 10 }}>
+            {chartNote}
+          </pre>
+        </div>
+
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ margin: 0 }}>Discharge</h3>
+            <button onClick={() => void copyText(discharge)}>Copy</button>
+          </div>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#f5f5f5", padding: 10, borderRadius: 10 }}>
+            {discharge}
+          </pre>
+        </div>
+      </div>
+    </div>
+  )
+}
+6. Recommended Practical Additions
+
+These are not new “engines,” just high-value usability improvements.
+
+A. Auto-refresh conversation
+
+Poll every 2–5 seconds so incoming Telegram/WhatsApp messages appear live.
+
+Add to the split-pane page:
+
+useEffect(() => {
+  const id = window.setInterval(() => {
+    void loadConversation()
+  }, 3000)
+
+  return () => window.clearInterval(id)
+}, [caseId])
+B. Assistant reply drafts instead of auto-send
+
+For physician-supervised telemedicine, you often want the assistant to draft messages but not send them automatically.
+
+Add:
+
+“Draft Reply”
+
+“Send Reply”
+
+C. One-click canned doctor messages
+
+Examples:
+
+“Any shortness of breath?”
+
+“Any fever?”
+
+“Please tell me if you have chest pain.”
+
+D. Session state badge
+
+Show:
+
+active
+
+waiting for patient
+
+doctor reviewing
+
+discharged
+
+E. Keyboard shortcuts
+
+Examples:
+
+Ctrl/Cmd+Enter: send doctor message
+
+Ctrl/Cmd+N: copy chart note
+
+Ctrl/Cmd+D: copy discharge
+
+7. What this gives you now
+
+At this point, the system is no longer just a reasoning backend. It becomes a usable telemedicine cockpit:
+
+Live patient chat
+        +
+Real-time clinical reasoning
+        +
+Suggested questions
+        +
+Differential
+        +
+Triage
+        +
+Actions
+        +
+Note
+        +
+Discharge
+
+That is the shape of something a physician can actually use.
+
+8. Best next move
+
+The next best improvement is supervised reply drafting:
+
+assistant drafts the next patient message
+
+doctor can edit it
+
+then send it to Telegram/WhatsApp
+
+That’s usually the sweet spot between automation and control in telemedicine.
