@@ -7,6 +7,8 @@ import { updateQ, getPolicyStats, computeReward, bestAction } from "../self-impr
 import { addEdge, rankDiagnoses, getGraphStats } from "../self-improve/reasoningGraph";
 import { scoreRisk, trainModel, getModelStats } from "../self-improve/riskModel";
 import { runImprovementCycle, getOrchestratorStatus } from "../self-improve/improvementOrchestrator";
+import { runSystemAudit, auditComponent } from "../self-improve/auditEngine";
+import { ALL_CONTRACTS } from "../self-improve/componentContracts";
 
 const router = Router();
 
@@ -321,6 +323,31 @@ router.post("/pipeline/run", async (req: Request, res: Response) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Self-Improvement Audit Engine ─────────────────────────────────────────────
+router.get("/audit", (_req: Request, res: Response) => {
+  try {
+    const report = runSystemAudit();
+    res.json(report);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get("/audit/component/:name", (req: Request, res: Response) => {
+  try {
+    const contract = ALL_CONTRACTS.find(c => c.component_name === req.params.name);
+    if (!contract) return res.status(404).json({ error: "Component not found" });
+    const result = auditComponent(contract);
+    res.json({ contract, result });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get("/audit/contracts", (_req: Request, res: Response) => {
+  res.json({ contracts: ALL_CONTRACTS, total: ALL_CONTRACTS.length });
 });
 
 export default router;

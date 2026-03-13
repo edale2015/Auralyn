@@ -1,0 +1,360 @@
+Great idea. What you want is essentially a Self-Improvement Audit Engine that inspects every component in the system and answers:
+
+“Is this agent / skill / layer actually capable of learning and improving?”
+
+This is not the same as the improvement engine itself.
+It is more like a medical QA inspector walking through the hospital and checking whether each department has the machinery required to learn.
+
+Below is a practical implementation that works with the architecture we discussed.
+
+Concept
+
+Every component declares a Self-Improvement Contract.
+
+The audit engine then verifies:
+
+The component produces trace data
+
+The component has tunable parameters
+
+The component has proposal targets
+
+The component has regression tests
+
+The component participates in learning updates
+
+The component has safety gating
+
+If any of those are missing, the system flags it.
+
+1. Self-Improvement Contract Schema
+
+Every agent/skill/layer exposes this.
+
+# improvement/contract.py
+
+from dataclasses import dataclass
+from typing import List
+
+
+@dataclass
+class ImprovementContract:
+
+    component_name: str
+
+    emits_trace: bool
+
+    tunable_parameters: List[str]
+
+    proposal_targets: List[str]
+
+    regression_suite: List[str]
+
+    learning_enabled: bool
+
+    safety_guard: bool
+2. Example Contracts
+Intake Skill
+# skills/intake_contract.py
+
+from improvement.contract import ImprovementContract
+
+INTAKE_CONTRACT = ImprovementContract(
+
+    component_name="intake_skill",
+
+    emits_trace=True,
+
+    tunable_parameters=[
+        "modifier_priority",
+        "modifier_followups"
+    ],
+
+    proposal_targets=[
+        "GLOBAL_MODIFIERS",
+        "FOLLOWUP_QUESTIONS"
+    ],
+
+    regression_suite=[
+        "chest_pain",
+        "sore_throat",
+        "cough"
+    ],
+
+    learning_enabled=True,
+
+    safety_guard=True
+)
+Differential Skill
+# skills/differential_contract.py
+
+from improvement.contract import ImprovementContract
+
+DIFFERENTIAL_CONTRACT = ImprovementContract(
+
+    component_name="differential_skill",
+
+    emits_trace=True,
+
+    tunable_parameters=[
+        "diagnosis_weights",
+        "graph_edge_weights",
+        "score_threshold"
+    ],
+
+    proposal_targets=[
+        "CLUSTER_SCORING_RULES",
+        "KNOWLEDGE_GRAPH"
+    ],
+
+    regression_suite=[
+        "chest_pain",
+        "abdominal_pain",
+        "cough"
+    ],
+
+    learning_enabled=True,
+
+    safety_guard=True
+)
+Disposition Layer
+# layers/disposition_contract.py
+
+from improvement.contract import ImprovementContract
+
+DISPOSITION_CONTRACT = ImprovementContract(
+
+    component_name="disposition_layer",
+
+    emits_trace=True,
+
+    tunable_parameters=[
+        "triage_thresholds"
+    ],
+
+    proposal_targets=[
+        "DISP_RULES"
+    ],
+
+    regression_suite=[
+        "stroke",
+        "chest_pain",
+        "sepsis"
+    ],
+
+    learning_enabled=True,
+
+    safety_guard=True
+)
+Patient Interface Agent
+
+Yes — the interface should also learn.
+
+Example things it can improve:
+
+• question wording
+• reading level
+• patient comprehension
+• response speed
+• abandonment rate
+
+# agents/interface_contract.py
+
+from improvement.contract import ImprovementContract
+
+INTERFACE_CONTRACT = ImprovementContract(
+
+    component_name="patient_interface_agent",
+
+    emits_trace=True,
+
+    tunable_parameters=[
+        "question_wording",
+        "reading_level",
+        "response_length"
+    ],
+
+    proposal_targets=[
+        "OUTPUT_TEMPLATES",
+        "QUESTION_WORDING"
+    ],
+
+    regression_suite=[
+        "readability_tests",
+        "completion_rate"
+    ],
+
+    learning_enabled=True,
+
+    safety_guard=False
+)
+3. Component Registry
+
+The audit engine needs to know all components.
+
+# improvement/component_registry.py
+
+from skills.intake_contract import INTAKE_CONTRACT
+from skills.differential_contract import DIFFERENTIAL_CONTRACT
+from layers.disposition_contract import DISPOSITION_CONTRACT
+from agents.interface_contract import INTERFACE_CONTRACT
+
+
+COMPONENT_REGISTRY = [
+
+    INTAKE_CONTRACT,
+
+    DIFFERENTIAL_CONTRACT,
+
+    DISPOSITION_CONTRACT,
+
+    INTERFACE_CONTRACT
+]
+4. Self-Improvement Audit Engine
+
+This checks if each component meets the requirements.
+
+# improvement/self_improvement_audit.py
+
+class SelfImprovementAudit:
+
+    REQUIRED_FIELDS = [
+        "emits_trace",
+        "tunable_parameters",
+        "proposal_targets",
+        "regression_suite",
+        "learning_enabled",
+        "safety_guard"
+    ]
+
+    def evaluate_component(self, contract):
+
+        results = {}
+
+        results["trace"] = contract.emits_trace
+
+        results["tunable"] = len(contract.tunable_parameters) > 0
+
+        results["proposal_targets"] = len(contract.proposal_targets) > 0
+
+        results["regression"] = len(contract.regression_suite) > 0
+
+        results["learning"] = contract.learning_enabled
+
+        results["safety"] = contract.safety_guard
+
+        score = sum(results.values())
+
+        return {
+            "component": contract.component_name,
+            "results": results,
+            "score": score,
+            "max_score": len(results),
+            "self_improving": score >= 5
+        }
+5. System-Wide Audit Runner
+# improvement/run_audit.py
+
+from improvement.component_registry import COMPONENT_REGISTRY
+from improvement.self_improvement_audit import SelfImprovementAudit
+
+
+def run_audit():
+
+    audit = SelfImprovementAudit()
+
+    report = []
+
+    for contract in COMPONENT_REGISTRY:
+
+        result = audit.evaluate_component(contract)
+
+        report.append(result)
+
+    return report
+
+
+if __name__ == "__main__":
+
+    results = run_audit()
+
+    for r in results:
+
+        print("Component:", r["component"])
+        print("Score:", r["score"], "/", r["max_score"])
+        print("Self Improving:", r["self_improving"])
+        print()
+Example Output
+Component: intake_skill
+Score: 6 / 6
+Self Improving: True
+
+Component: differential_skill
+Score: 6 / 6
+Self Improving: True
+
+Component: disposition_layer
+Score: 6 / 6
+Self Improving: True
+
+Component: patient_interface_agent
+Score: 5 / 6
+Self Improving: True
+6. Visual Dashboard Output (Optional)
+# improvement/dashboard.py
+
+import pandas as pd
+from improvement.run_audit import run_audit
+
+def dashboard():
+
+    results = run_audit()
+
+    df = pd.DataFrame(results)
+
+    print(df[["component", "score", "self_improving"]])
+
+    return df
+What This Gives You
+
+This audit system tells you instantly:
+
+• which components can learn
+• which cannot
+• what capability is missing
+
+It turns the question:
+
+“Is the system self improving?”
+
+into a measurable score.
+
+Important Insight
+
+A medical AI system usually contains four learning domains:
+
+Clinical reasoning
+
+diagnosis + triage
+
+Conversation interface
+
+question wording + flow
+
+Risk prediction
+
+admission / deterioration
+
+Workflow optimization
+
+visit completion + documentation
+
+Your audit system should check all four.
+
+What Your Next Step Should Be
+
+Run the audit and look for components scoring below 5 / 6.
+
+Those are your non-learning organs.
+
+Fix those and the entire platform becomes fully self-optimizing.

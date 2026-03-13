@@ -774,6 +774,385 @@ function RLPanel() {
   );
 }
 
+// ── Audit Panel ───────────────────────────────────────────────────────────────
+
+const DOMAIN_META: Record<string, { label: string; color: string }> = {
+  clinical_reasoning:       { label: "Clinical Reasoning",       color: "bg-blue-100 text-blue-800 border-blue-200" },
+  conversation_interface:   { label: "Conversation Interface",   color: "bg-purple-100 text-purple-800 border-purple-200" },
+  risk_prediction:          { label: "Risk Prediction",          color: "bg-amber-100 text-amber-800 border-amber-200" },
+  workflow_optimization:    { label: "Workflow Optimization",     color: "bg-green-100 text-green-800 border-green-200" },
+  safety_gating:            { label: "Safety Gating",            color: "bg-red-100 text-red-800 border-red-200" },
+  billing_documentation:    { label: "Billing & Documentation",  color: "bg-slate-100 text-slate-700 border-slate-200" },
+};
+
+const STATUS_META: Record<string, { label: string; color: string; dot: string }> = {
+  fully_capable: { label: "Fully Capable", color: "bg-green-100 text-green-800 border-green-200",  dot: "bg-green-500"  },
+  capable:       { label: "Capable",        color: "bg-blue-100 text-blue-800 border-blue-200",    dot: "bg-blue-500"   },
+  partial:       { label: "Partial",        color: "bg-amber-100 text-amber-800 border-amber-200", dot: "bg-amber-500"  },
+  not_capable:   { label: "Not Capable",    color: "bg-red-100 text-red-800 border-red-200",       dot: "bg-red-500"    },
+};
+
+const PRIORITY_COLOR: Record<string, string> = {
+  critical: "text-red-600 font-bold",
+  high:     "text-amber-600 font-semibold",
+  medium:   "text-slate-600",
+  low:      "text-slate-400",
+};
+
+const CHECK_ICONS: Record<string, { label: string; abbr: string }> = {
+  emits_trace:              { label: "Emits Trace",          abbr: "T" },
+  has_tunable_parameters:   { label: "Tunable Parameters",   abbr: "P" },
+  has_proposal_targets:     { label: "Proposal Targets",     abbr: "Pr" },
+  has_regression_suite:     { label: "Regression Suite",     abbr: "R" },
+  learning_enabled:         { label: "Learning Enabled",     abbr: "L" },
+  has_safety_guard:         { label: "Safety Guard",         abbr: "S" },
+};
+
+function ScoreBar({ score, max }: { score: number; max: number }) {
+  const pct = Math.round((score / max) * 100);
+  const color = pct === 100 ? "bg-green-500" : pct >= 83 ? "bg-blue-500" : pct >= 50 ? "bg-amber-500" : "bg-red-400";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-slate-100">
+        <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs font-mono text-slate-600 w-10 shrink-0">{score}/{max}</span>
+    </div>
+  );
+}
+
+function CheckBadge({ checked, label }: { checked: boolean; label: string }) {
+  return (
+    <span
+      title={label}
+      className={`inline-flex items-center justify-center h-5 px-1.5 rounded text-[10px] font-bold border ${
+        checked
+          ? "bg-green-50 border-green-300 text-green-700"
+          : "bg-red-50 border-red-200 text-red-500 line-through opacity-60"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function AuditPanel() {
+  const [domainFilter, setDomainFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const { data: report, isLoading, refetch } = useQuery<any>({
+    queryKey: ["/api/self-improve/audit"],
+    queryFn: () => fetch("/api/self-improve/audit").then(r => r.json()),
+  });
+
+  if (isLoading) return (
+    <Card><CardContent className="py-12 text-center text-muted-foreground">
+      <Shield className="h-8 w-8 mx-auto mb-2 opacity-40 animate-pulse" />
+      <p>Running component audit…</p>
+    </CardContent></Card>
+  );
+
+  if (!report) return null;
+
+  const filteredResults = (report.results ?? []).filter((r: any) => {
+    if (domainFilter !== "all" && r.domain !== domainFilter) return false;
+    if (statusFilter !== "all" && r.status !== statusFilter) return false;
+    return true;
+  });
+
+  const selectedResult = selected ? (report.results ?? []).find((r: any) => r.component_name === selected) : null;
+
+  const systemPct = report.system_pct ?? 0;
+  const systemColor = systemPct >= 90 ? "text-green-600" : systemPct >= 75 ? "text-blue-600" : systemPct >= 60 ? "text-amber-600" : "text-red-600";
+
+  return (
+    <div className="space-y-5">
+
+      {/* System summary */}
+      <div className="grid grid-cols-6 gap-3">
+        <Card className="col-span-2 bg-gradient-to-br from-slate-800 to-slate-900 text-white border-0">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Shield className="h-4 w-4 text-slate-400" />
+              <span className="text-xs text-slate-400 uppercase tracking-widest">System Self-Improvement Score</span>
+            </div>
+            <div className={`text-4xl font-black ${systemColor.replace("text-", "text-")} mb-1`}>
+              {systemPct}%
+            </div>
+            <div className="h-2 rounded-full bg-slate-700 mb-2">
+              <div
+                className={`h-2 rounded-full ${systemPct >= 90 ? "bg-green-400" : systemPct >= 75 ? "bg-blue-400" : systemPct >= 60 ? "bg-amber-400" : "bg-red-400"}`}
+                style={{ width: `${systemPct}%` }}
+              />
+            </div>
+            <div className="text-xs text-slate-400">{report.system_score} / {report.system_max} capability points</div>
+            <div className={`mt-1 text-xs font-bold ${report.system_self_improving ? "text-green-400" : "text-amber-400"}`}>
+              {report.system_self_improving ? "✓ System is self-improving" : "⚠ Not yet fully self-improving"}
+            </div>
+          </CardContent>
+        </Card>
+
+        <StatCard icon={CheckCircle} label="Fully Capable" value={report.fully_capable} color="green" />
+        <StatCard icon={Activity}     label="Capable"       value={report.capable}        color="blue" />
+        <StatCard icon={AlertTriangle} label="Partial"      value={report.partial}        color="orange" />
+        <StatCard icon={XCircle}       label="Not Capable"  value={report.not_capable}    color="red" />
+      </div>
+
+      {/* Domain breakdown */}
+      <Card>
+        <CardHeader className="pb-2 pt-4 px-4">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <BarChart3 className="h-4 w-4" /> Learning Domain Coverage
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pb-4">
+          <div className="grid grid-cols-3 gap-3">
+            {Object.entries(report.by_domain ?? {}).map(([domain, d]: [string, any]) => {
+              const meta = DOMAIN_META[domain] ?? { label: domain, color: "bg-slate-100 text-slate-700 border-slate-200" };
+              const pct = Math.round(d.avg_score * 100);
+              return (
+                <div key={domain} className="rounded-xl border p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.color}`}>{meta.label}</span>
+                    <span className="text-xs text-slate-500">{d.count} components</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100">
+                      <div
+                        className={`h-1.5 rounded-full ${pct >= 90 ? "bg-green-500" : pct >= 75 ? "bg-blue-500" : pct >= 60 ? "bg-amber-500" : "bg-red-400"}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono text-slate-600 w-8 shrink-0">{pct}%</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 leading-relaxed">{d.components.join(", ")}</div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Top gaps */}
+      {(report.top_gaps ?? []).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2 pt-4 px-4">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" /> Top System Gaps
+              <span className="ml-auto text-xs text-muted-foreground font-normal">Sorted by components affected</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-2">
+            {report.top_gaps.slice(0, 8).map((g: any, i: number) => (
+              <div key={i} data-testid={`text-gap-${i}`} className="flex items-start gap-3 text-sm">
+                <span className="shrink-0 flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold">{g.count}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-slate-800 text-xs">{g.gap}</p>
+                  <p className="text-[10px] text-slate-400 truncate">{g.components_affected.join(", ")}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Critical missing */}
+      {(report.critical_missing ?? []).length > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-center gap-2 text-red-800 font-semibold text-sm mb-2">
+            <AlertTriangle className="h-4 w-4" /> Critical Priority Components Not Self-Improving
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {report.critical_missing.map((c: string) => (
+              <span key={c} className="rounded-full bg-red-100 border border-red-300 px-2.5 py-0.5 text-xs font-medium text-red-800">{c}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Component table */}
+      <Card>
+        <CardHeader className="pb-2 pt-4 px-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Target className="h-4 w-4" /> Component Audit Results
+            </CardTitle>
+            <div className="flex items-center gap-2 ml-auto flex-wrap">
+              <select
+                data-testid="select-domain-filter"
+                value={domainFilter}
+                onChange={e => setDomainFilter(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 bg-white"
+              >
+                <option value="all">All domains</option>
+                {Object.entries(DOMAIN_META).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+              <select
+                data-testid="select-status-filter"
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 bg-white"
+              >
+                <option value="all">All statuses</option>
+                <option value="fully_capable">Fully Capable</option>
+                <option value="capable">Capable</option>
+                <option value="partial">Partial</option>
+                <option value="not_capable">Not Capable</option>
+              </select>
+              <Button size="sm" variant="outline" onClick={() => refetch()} data-testid="button-refresh-audit">
+                <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="px-4 py-2 text-left font-semibold text-slate-500 uppercase tracking-wide">Component</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-500 uppercase tracking-wide">Domain</th>
+                  <th className="px-3 py-2 text-center font-semibold text-slate-500 uppercase tracking-wide">T</th>
+                  <th className="px-3 py-2 text-center font-semibold text-slate-500 uppercase tracking-wide">P</th>
+                  <th className="px-3 py-2 text-center font-semibold text-slate-500 uppercase tracking-wide">Pr</th>
+                  <th className="px-3 py-2 text-center font-semibold text-slate-500 uppercase tracking-wide">R</th>
+                  <th className="px-3 py-2 text-center font-semibold text-slate-500 uppercase tracking-wide">L</th>
+                  <th className="px-3 py-2 text-center font-semibold text-slate-500 uppercase tracking-wide">S</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-500 uppercase tracking-wide">Score</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-500 uppercase tracking-wide">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-500 uppercase tracking-wide">Priority</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredResults.map((r: any) => {
+                  const sm = STATUS_META[r.status] ?? STATUS_META.not_capable;
+                  const dm = DOMAIN_META[r.domain] ?? { label: r.domain, color: "bg-slate-100 text-slate-700 border-slate-200" };
+                  const isSelected = selected === r.component_name;
+                  return (
+                    <>
+                      <tr
+                        key={r.component_name}
+                        data-testid={`row-component-${r.component_name}`}
+                        onClick={() => setSelected(isSelected ? null : r.component_name)}
+                        className={`border-b border-slate-100 cursor-pointer transition-colors ${
+                          isSelected ? "bg-slate-50" : "hover:bg-slate-50/60"
+                        }`}
+                      >
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className={`h-2 w-2 rounded-full shrink-0 ${sm.dot}`} />
+                            <span className="font-medium text-slate-800">{r.display_name}</span>
+                          </div>
+                          <div className="pl-4 text-[10px] text-slate-400">{r.layer}</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${dm.color}`}>{dm.label}</span>
+                        </td>
+                        {["emits_trace","has_tunable_parameters","has_proposal_targets","has_regression_suite","learning_enabled","has_safety_guard"].map(k => (
+                          <td key={k} className="px-3 py-2.5 text-center">
+                            {r.checks[k]
+                              ? <span className="text-green-600 font-bold">✓</span>
+                              : <span className="text-red-400">✗</span>
+                            }
+                          </td>
+                        ))}
+                        <td className="px-3 py-2.5 w-32">
+                          <ScoreBar score={r.score} max={r.max_score} />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sm.color}`}>{sm.label}</span>
+                        </td>
+                        <td className={`px-3 py-2.5 text-[10px] uppercase ${PRIORITY_COLOR[r.improvement_priority]}`}>
+                          {r.improvement_priority}
+                        </td>
+                      </tr>
+                      {isSelected && selectedResult && (
+                        <tr key={`${r.component_name}-detail`}>
+                          <td colSpan={11} className="px-4 pb-4 pt-1 bg-slate-50">
+                            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                              <div className="text-sm font-semibold text-slate-800">{selectedResult.display_name}</div>
+                              <div className="text-xs text-slate-500">{selectedResult.layer}</div>
+
+                              <div className="grid grid-cols-3 gap-3">
+                                {Object.entries(CHECK_ICONS).map(([k, v]) => (
+                                  <div key={k} className={`rounded-lg border p-2 flex items-center gap-2 text-xs ${
+                                    selectedResult.checks[k] ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
+                                  }`}>
+                                    {selectedResult.checks[k]
+                                      ? <CheckCircle className="h-3.5 w-3.5 text-green-600 shrink-0" />
+                                      : <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                                    }
+                                    <span className={selectedResult.checks[k] ? "text-green-800" : "text-red-700"}>{v.label}</span>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {selectedResult.known_gaps.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Known Gaps</div>
+                                  <ul className="space-y-1">
+                                    {selectedResult.known_gaps.map((gap: string, i: number) => (
+                                      <li key={i} className="flex items-start gap-2 text-xs text-amber-800">
+                                        <span className="shrink-0 text-amber-500 mt-0.5">⚠</span>
+                                        {gap}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {selectedResult.missing_capabilities.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Missing Capabilities</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {selectedResult.missing_capabilities.map((mc: string) => (
+                                      <span key={mc} className="rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[10px] text-red-700">{mc}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {selectedResult.missing_capabilities.length === 0 && selectedResult.known_gaps.length === 0 && (
+                                <div className="text-xs text-green-700 font-semibold flex items-center gap-1.5">
+                                  <CheckCircle className="h-3.5 w-3.5" /> No gaps detected — fully self-improving
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {filteredResults.length === 0 && (
+            <div className="py-8 text-center text-muted-foreground text-sm">
+              <Shield className="h-6 w-6 mx-auto mb-2 opacity-30" />
+              No components match the current filters.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="flex items-center gap-4 flex-wrap text-[10px] text-slate-500 border-t pt-4">
+        <span className="font-bold uppercase tracking-wide">Column key:</span>
+        <span><b>T</b> = Emits Trace</span>
+        <span><b>P</b> = Tunable Parameters</span>
+        <span><b>Pr</b> = Proposal Targets</span>
+        <span><b>R</b> = Regression Suite</span>
+        <span><b>L</b> = Learning Enabled</span>
+        <span><b>S</b> = Safety Guard</span>
+        <span className="ml-auto">Click any row to expand gaps and missing capabilities</span>
+      </div>
+    </div>
+  );
+}
+
 export default function SelfImproveDashboard() {
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -804,7 +1183,7 @@ export default function SelfImproveDashboard() {
       </div>
 
       <Tabs defaultValue="orchestrator">
-        <TabsList className="grid grid-cols-7 w-full">
+        <TabsList className="grid grid-cols-8 w-full">
           <TabsTrigger value="orchestrator" data-testid="tab-orchestrator"><Zap className="h-3 w-3 mr-1" />Orchestrator</TabsTrigger>
           <TabsTrigger value="traces" data-testid="tab-traces"><Database className="h-3 w-3 mr-1" />Traces</TabsTrigger>
           <TabsTrigger value="gold" data-testid="tab-gold"><BookOpen className="h-3 w-3 mr-1" />Gold Cases</TabsTrigger>
@@ -812,6 +1191,7 @@ export default function SelfImproveDashboard() {
           <TabsTrigger value="proposals" data-testid="tab-proposals"><Lightbulb className="h-3 w-3 mr-1" />Proposals</TabsTrigger>
           <TabsTrigger value="graph" data-testid="tab-graph"><Network className="h-3 w-3 mr-1" />Graph</TabsTrigger>
           <TabsTrigger value="risk" data-testid="tab-risk"><BarChart3 className="h-3 w-3 mr-1" />Risk + RL</TabsTrigger>
+          <TabsTrigger value="audit" data-testid="tab-audit"><Shield className="h-3 w-3 mr-1" />Audit</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orchestrator" className="mt-4"><OrchestratorPanel /></TabsContent>
@@ -832,6 +1212,7 @@ export default function SelfImproveDashboard() {
             </div>
           </div>
         </TabsContent>
+        <TabsContent value="audit" className="mt-4"><AuditPanel /></TabsContent>
       </Tabs>
     </div>
   );
