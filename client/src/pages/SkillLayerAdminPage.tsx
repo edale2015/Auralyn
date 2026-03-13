@@ -6,6 +6,9 @@ import ReviewQueueCard from "../components/platform/ReviewQueueCard";
 import TenantCasesCard from "../components/platform/TenantCasesCard";
 import CompareDiffsCard from "../components/platform/CompareDiffsCard";
 import GraphMetricsCard from "../components/platform/GraphMetricsCard";
+import ComplaintRolloutManagerCard from "../components/platform/ComplaintRolloutManagerCard";
+import RuleGovernanceEditorCard from "../components/platform/RuleGovernanceEditorCard";
+import CompareDiffExplorerCard from "../components/platform/CompareDiffExplorerCard";
 
 export default function SkillLayerAdminPage() {
   const [deploymentReadiness, setDeploymentReadiness] = useState<any>(null);
@@ -50,9 +53,9 @@ export default function SkillLayerAdminPage() {
         <div className="rounded-3xl bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Skill Layer 2.1 Admin</h1>
+              <h1 className="text-2xl font-bold text-slate-900">Skill Layer 2.2 Admin</h1>
               <p className="mt-1 text-sm text-slate-600">
-                Platform readiness, release gates, review queues, compare diffs, and graph metrics
+                Platform readiness · rollout control · rule governance · compare diff explorer · graph metrics
               </p>
             </div>
             <button
@@ -64,7 +67,6 @@ export default function SkillLayerAdminPage() {
               {loading ? "Loading…" : "Refresh"}
             </button>
           </div>
-
           {!!error && (
             <div className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div>
           )}
@@ -77,7 +79,11 @@ export default function SkillLayerAdminPage() {
           <TenantCasesCard rows={tenantCases} />
           <CompareDiffsCard rows={compareDiffs} />
           <GraphMetricsCard result={graphMetrics} />
+          <ComplaintRolloutManagerCard />
+          <RuleGovernanceEditorCard />
         </div>
+
+        <CompareDiffExplorerCard />
       </div>
     </div>
   );

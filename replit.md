@@ -29,6 +29,26 @@ The agent system orchestrates patient flow through routing states using a pipeli
 ### Skill Layer 2.0 (Platform Layer)
 This production platform layer wraps the clinical skill engine, managing tenant-specific configurations, release gates, deployment readiness checks, and a unified review queue. It also provides an admin REST API for platform operations and a system for hardening complaints based on prediction/disposition failures. Graph trace logging and golden case comparisons are integral for validation.
 
+Key services: `deploymentReadinessService`, `releaseGateService`, `reviewQueueService`, `tenantCaseStore`, `complaintHardeningQueue`, `adminOpsRoutes`. Graph trace logging to `graph_trace_log.ndjson` (243 entries). 7/7 graph golden cases validated.
+
+### Skill Layer 2.1 — Platform Admin Console
+Adds the operational admin cockpit at `/skill-layer-admin`:
+- **`compareDiffStore.ts`** — persists compare-mode diffs to `compare_mode_diffs.ndjson`; reads back last N reversed
+- **`graphMetricsService.ts`** — aggregates node/edge stats from `graph_trace_log.ndjson`
+- **`platformMetricsRoutes.ts`** — `GET /api/platform/graph-metrics`, `GET /api/platform/compare-diffs`
+- Orchestrator updated to persist compare-mode diffs instead of console.log only
+- Frontend cards: `DeploymentReadinessCard`, `ReleaseGateCard`, `ReviewQueueCard`, `TenantCasesCard`, `CompareDiffsCard`, `GraphMetricsCard`
+- Admin page: `SkillLayerAdminPage.tsx` at `/skill-layer-admin` (Settings icon in sidebar)
+
+### Skill Layer 2.2 — Active Control Plane
+Makes the platform actively steerable (not just observable). Services at `server/platform/`:
+- **`rolloutManagerService.ts`** — `getRolloutModes(siteId)` merges base config + `rollout_overrides.json`; `setRolloutMode({complaint, mode})` persists overrides
+- **`ruleGovernanceEditorService.ts`** — CRUD for `rule_governance_metadata.json`: owner, status, lastReviewedAt, linkedComplaints, notes; seeded for RED_FLAG_RULES.csv and DISPOSITION_RULES.csv
+- **`compareDiffExplorerService.ts`** — filters diffs by complaint substring, sameDisposition, sameComplaint
+- Routes: `GET/POST /api/platform/rollout-modes`, `GET/POST /api/platform/rule-governance-metadata`, `GET /api/platform/compare-diff-explorer`
+- Frontend cards: `ComplaintRolloutManagerCard` (live per-complaint dropdowns), `RuleGovernanceEditorCard` (owner/status/notes form), `CompareDiffExplorerCard` (3-filter search)
+- Admin page at `/skill-layer-admin` now shows all 9 cards in a 2-col grid + full-width diff explorer
+
 ### Generic Complaint Engine (GENERIC_V1)
 This data-driven engine allows new complaints to be added without code changes by using CSV-configured rules, replacing TypeScript scoring modules.
 

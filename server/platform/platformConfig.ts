@@ -24,6 +24,7 @@ export const PLATFORM_CONFIGS: TenantSiteConfig[] = [
       "analytics",
       "learning",
       "governance",
+      "platform",
     ],
     rolloutModes: {
       sore_throat: "graph",

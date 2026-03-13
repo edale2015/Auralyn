@@ -1,0 +1,1865 @@
+Yes. Here is Skill Layer 2.1 as the next control-room layer.
+
+This pack adds the missing operational cockpit for the platform layer:
+
+Deployment Readiness card
+
+Release Gate card
+
+Unified Review Queue card
+
+Tenant Cases card
+
+Compare Diffs persistence + viewer
+
+Platform Admin page
+
+Auto-save compare diffs from compare mode
+
+Basic graph path metrics
+
+This turns the backend platform scaffolding into a usable admin console.
+
+Skill Layer 2.1 goals
+
+Turn the current system into an admin-operable platform with:
+
+release readiness visibility
+
+complaint rollout control visibility
+
+compare-mode diff persistence
+
+review queue visibility
+
+tenant case browsing
+
+graph path metrics visibility
+
+Files in this pack
+
+Create these backend files:
+
+server/platform/compareDiffStore.ts
+server/platform/graphMetricsService.ts
+server/routes/platformMetricsRoutes.ts
+
+Create these frontend files:
+
+client/src/lib/platformAdminApi.ts
+client/src/components/platform/DeploymentReadinessCard.tsx
+client/src/components/platform/ReleaseGateCard.tsx
+client/src/components/platform/ReviewQueueCard.tsx
+client/src/components/platform/TenantCasesCard.tsx
+client/src/components/platform/CompareDiffsCard.tsx
+client/src/components/platform/GraphMetricsCard.tsx
+client/src/pages/SkillLayerAdminPage.tsx
+
+Update:
+
+server/orchestrator/clinicalSkillOrchestrator.ts
+server/platform/adminOpsRoutes.ts
+1. Persist compare-mode diffs
+server/platform/compareDiffStore.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function ensureDir() {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+}
+
+export async function appendCompareDiff(record: any) {
+  await ensureDir();
+  await fs.appendFile(
+    path.join(RUNTIME_DIR, "compare_mode_diffs.ndjson"),
+    JSON.stringify({
+      ...record,
+      timestamp: new Date().toISOString(),
+    }) + "\n",
+    "utf8"
+  );
+}
+
+export async function listCompareDiffs(limit = 100) {
+  try {
+    const raw = await fs.readFile(
+      path.join(RUNTIME_DIR, "compare_mode_diffs.ndjson"),
+      "utf8"
+    );
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .slice(-limit)
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+Update server/orchestrator/clinicalSkillOrchestrator.ts
+
+Add import:
+
+import { appendCompareDiff } from "../platform/compareDiffStore";
+
+In the compare mode branch, replace the simple console log with persisted diffs:
+
+if (getExecutionMode(initialContext) === "compare") {
+  const sequential = await runSequentialMode(initialContext, runSkill);
+
+  try {
+    const graph = await runGraphMode(
+      {
+        ...initialContext,
+        config: { ...initialContext.config, orchestrationMode: "graph" },
+      },
+      runSkill
+    );
+
+    const diffRecord = {
+      caseId: initialContext.caseId,
+      siteId: initialContext.metadata?.siteId ?? "default",
+      complaintRequested: initialContext.complaintId ?? "",
+      sequential: {
+        complaint:
+          sequential.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+        disposition: sequential.finalDisposition ?? "",
+        completedSkills: sequential.completedSkills ?? [],
+        totalEstimatedCostUsd: Object.values(sequential.skillResults ?? {}).reduce(
+          (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+          0
+        ),
+      },
+      graph: {
+        complaint:
+          graph.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+        disposition: graph.finalDisposition ?? "",
+        completedSkills: graph.completedSkills ?? [],
+        totalEstimatedCostUsd: Object.values(graph.skillResults ?? {}).reduce(
+          (sum: number, r: any) => sum + Number(r?.audit?.estimatedCostUsd ?? 0),
+          0
+        ),
+      },
+      sameComplaint:
+        (sequential.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "") ===
+        (graph.skillResults?.identify_chief_complaint?.result?.complaint_id ?? ""),
+      sameDisposition:
+        (sequential.finalDisposition ?? "") === (graph.finalDisposition ?? ""),
+    };
+
+    await appendCompareDiff(diffRecord);
+  } catch (err) {
+    console.error("Compare mode graph run failed:", err);
+    await appendCompareDiff({
+      caseId: initialContext.caseId,
+      siteId: initialContext.metadata?.siteId ?? "default",
+      compareError: String(err),
+    });
+  }
+
+  return sequential;
+}
+2. Graph path metrics service
+server/platform/graphMetricsService.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+
+async function loadNdjson(fileName: string): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(path.join(RUNTIME_DIR, fileName), "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+export async function getGraphMetricsSummary() {
+  const rows = await loadNdjson("graph_trace_log.ndjson");
+
+  const byNode: Record<string, { count: number; totalLatencyMs: number; totalCostUsd: number }> = {};
+  const byEdge: Record<string, number> = {};
+
+  for (const row of rows) {
+    if (row.executedNode) {
+      byNode[row.executedNode] ??= { count: 0, totalLatencyMs: 0, totalCostUsd: 0 };
+      byNode[row.executedNode].count += 1;
+      byNode[row.executedNode].totalLatencyMs += Number(row.latencyMs ?? 0);
+      byNode[row.executedNode].totalCostUsd += Number(row.estimatedCostUsd ?? 0);
+    }
+
+    if (row.chosenEdge?.from && row.chosenEdge?.to) {
+      const edge = `${row.chosenEdge.from} -> ${row.chosenEdge.to}`;
+      byEdge[edge] = (byEdge[edge] ?? 0) + 1;
+    }
+  }
+
+  const nodeRows = Object.entries(byNode)
+    .map(([node, stat]) => ({
+      node,
+      count: stat.count,
+      avgLatencyMs: stat.count ? stat.totalLatencyMs / stat.count : 0,
+      totalCostUsd: stat.totalCostUsd,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const edgeRows = Object.entries(byEdge)
+    .map(([edge, count]) => ({ edge, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalTraceRows: rows.length,
+    nodes: nodeRows,
+    edges: edgeRows,
+  };
+}
+server/routes/platformMetricsRoutes.ts
+import express from "express";
+import { getGraphMetricsSummary } from "../platform/graphMetricsService";
+import { listCompareDiffs } from "../platform/compareDiffStore";
+
+const router = express.Router();
+
+router.get("/api/platform/graph-metrics", async (_req, res) => {
+  try {
+    const result = await getGraphMetricsSummary();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/compare-diffs", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 100);
+    const rows = await listCompareDiffs(limit);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+import platformMetricsRoutes from "./routes/platformMetricsRoutes";
+app.use(platformMetricsRoutes);
+3. Extend platform admin ops routes
+Update server/platform/adminOpsRoutes.ts
+
+Add config and tenant cases endpoints if not already present in current file:
+
+import express from "express";
+import { evaluateReleaseGate } from "./releaseGateService";
+import { getDeploymentReadiness } from "./deploymentReadinessService";
+import { buildUnifiedReviewQueue } from "./reviewQueueService";
+import { getPlatformConfig } from "./platformConfig";
+import { listTenantCaseRecords } from "./tenantCaseStore";
+
+const router = express.Router();
+
+router.get("/api/platform/deployment-readiness", async (_req, res) => {
+  try {
+    const result = await getDeploymentReadiness();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/release-gate/:complaint", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const result = await evaluateReleaseGate(req.params.complaint, siteId);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/review-queue", async (_req, res) => {
+  try {
+    const queue = await buildUnifiedReviewQueue();
+    res.json({ ok: true, queue });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/config", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const config = getPlatformConfig(siteId);
+    res.json({ ok: true, config });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/platform/tenant-cases", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const rows = await listTenantCaseRecords(siteId);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+Update server/platform/tenantCaseStore.ts
+
+Add listing support:
+
+import fs from "fs/promises";
+import path from "path";
+
+const STORE_DIR = path.resolve(process.cwd(), "server/data/runtime/tenant_cases");
+
+async function ensureDir() {
+  await fs.mkdir(STORE_DIR, { recursive: true });
+}
+
+export async function saveTenantCaseRecord(params: {
+  siteId: string;
+  caseId: string;
+  complaintId?: string;
+  disposition?: string;
+  payload: Record<string, any>;
+}) {
+  await ensureDir();
+
+  const filePath = path.join(STORE_DIR, `${params.siteId}__${params.caseId}.json`);
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(
+      {
+        siteId: params.siteId,
+        caseId: params.caseId,
+        complaintId: params.complaintId ?? "",
+        disposition: params.disposition ?? "",
+        payload: params.payload,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  return { ok: true, filePath };
+}
+
+export async function listTenantCaseRecords(siteId = "default") {
+  await ensureDir();
+  const files = await fs.readdir(STORE_DIR);
+
+  const siteFiles = files.filter((f) => f.startsWith(`${siteId}__`) && f.endsWith(".json"));
+  const rows = [];
+
+  for (const file of siteFiles) {
+    try {
+      const raw = await fs.readFile(path.join(STORE_DIR, file), "utf8");
+      rows.push(JSON.parse(raw));
+    } catch {
+      // ignore malformed file
+    }
+  }
+
+  return rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+4. Frontend API wrappers
+client/src/lib/platformAdminApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${url}`);
+  }
+  return res.json();
+}
+
+export const platformAdminApi = {
+  getDeploymentReadiness() {
+    return getJson<{ ok: boolean; result: any }>("/api/platform/deployment-readiness");
+  },
+  getReleaseGate(complaint: string, siteId = "default") {
+    return getJson<{ ok: boolean; result: any }>(
+      `/api/platform/release-gate/${encodeURIComponent(complaint)}?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  getReviewQueue() {
+    return getJson<{ ok: boolean; queue: any[] }>("/api/platform/review-queue");
+  },
+  getConfig(siteId = "default") {
+    return getJson<{ ok: boolean; config: any }>(
+      `/api/platform/config?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  getTenantCases(siteId = "default") {
+    return getJson<{ ok: boolean; rows: any[] }>(
+      `/api/platform/tenant-cases?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  getCompareDiffs(limit = 100) {
+    return getJson<{ ok: boolean; rows: any[] }>(
+      `/api/platform/compare-diffs?limit=${limit}`
+    );
+  },
+  getGraphMetrics() {
+    return getJson<{ ok: boolean; result: any }>("/api/platform/graph-metrics");
+  },
+};
+5. Admin cards
+client/src/components/platform/DeploymentReadinessCard.tsx
+import React from "react";
+
+type Props = {
+  result: any;
+};
+
+export default function DeploymentReadinessCard({ result }: Props) {
+  const checks = result?.checks ?? [];
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Deployment Readiness</h2>
+        <span
+          className={`rounded-full px-3 py-1 text-sm font-medium ${
+            result?.ready ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+          }`}
+        >
+          {result?.ready ? "Ready" : "Not ready"}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        {checks.map((check: any, idx: number) => (
+          <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+            <div className="font-medium">{check.name}</div>
+            <div className={check.passed ? "text-green-700" : "text-red-700"}>
+              {check.passed ? "Pass" : "Fail"} | {check.detail}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+client/src/components/platform/ReleaseGateCard.tsx
+import React, { useState } from "react";
+import { platformAdminApi } from "../../lib/platformAdminApi";
+
+export default function ReleaseGateCard() {
+  const [complaint, setComplaint] = useState("sore_throat");
+  const [result, setResult] = useState<any>(null);
+  const [status, setStatus] = useState("");
+
+  async function runGate() {
+    try {
+      setStatus("Checking...");
+      const res = await platformAdminApi.getReleaseGate(complaint);
+      setResult(res.result);
+      setStatus("");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Release Gate</h2>
+
+      <div className="mb-3 flex gap-2">
+        <input
+          value={complaint}
+          onChange={(e) => setComplaint(e.target.value)}
+          className="w-full rounded-xl border px-3 py-2 text-sm"
+        />
+        <button
+          onClick={runGate}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+        >
+          Evaluate
+        </button>
+      </div>
+
+      {!!status && <div className="mb-2 text-sm text-slate-600">{status}</div>}
+
+      {result && (
+        <div className="space-y-2">
+          <div className="text-sm">
+            <span className="font-medium">Complaint:</span> {result.complaint}
+          </div>
+          <div className="text-sm">
+            <span className="font-medium">Passed:</span> {String(result.passed)}
+          </div>
+          <div className="text-sm">
+            <span className="font-medium">Score:</span> {(Number(result.score) * 100).toFixed(1)}%
+          </div>
+
+          {(result.checks ?? []).map((check: any, idx: number) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+              <div className="font-medium">{check.check}</div>
+              <div className={check.passed ? "text-green-700" : "text-red-700"}>
+                {String(check.value)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/ReviewQueueCard.tsx
+import React from "react";
+
+type Props = {
+  queue: any[];
+};
+
+function badgeTone(priority: string) {
+  switch (priority) {
+    case "critical":
+      return "bg-red-100 text-red-800";
+    case "high":
+      return "bg-amber-100 text-amber-800";
+    case "medium":
+      return "bg-blue-100 text-blue-800";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+export default function ReviewQueueCard({ queue }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Unified Review Queue</h2>
+
+      {queue.length === 0 ? (
+        <div className="text-sm text-slate-500">Queue is empty.</div>
+      ) : (
+        <div className="space-y-3">
+          {queue.map((item, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <div className="font-medium text-slate-900">{item.type}</div>
+                <span className={`rounded-full px-2 py-1 text-xs font-medium ${badgeTone(item.priority)}`}>
+                  {item.priority}
+                </span>
+              </div>
+              <div className="text-sm text-slate-700">
+                {item.complaint ? `Complaint: ${item.complaint}` : item.caseId ? `Case: ${item.caseId}` : "—"}
+              </div>
+              <div className="text-xs text-slate-500">{item.createdAt}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/TenantCasesCard.tsx
+import React from "react";
+
+type Props = {
+  rows: any[];
+};
+
+export default function TenantCasesCard({ rows }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Tenant Cases</h2>
+
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500">No tenant cases saved yet.</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.slice(0, 20).map((row, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">{row.caseId}</div>
+              <div className="text-sm text-slate-700">
+                {row.complaintId || "—"} | {row.disposition || "—"}
+              </div>
+              <div className="text-xs text-slate-500">{row.updatedAt}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/CompareDiffsCard.tsx
+import React from "react";
+
+type Props = {
+  rows: any[];
+};
+
+export default function CompareDiffsCard({ rows }: Props) {
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Compare Mode Diffs</h2>
+
+      {rows.length === 0 ? (
+        <div className="text-sm text-slate-500">No compare diffs recorded yet.</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.slice(0, 20).map((row, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-50 p-3">
+              <div className="font-medium text-slate-900">{row.caseId}</div>
+              <div className="text-sm text-slate-700">
+                Seq: {row.sequential?.complaint || "—"} / {row.sequential?.disposition || "—"}
+              </div>
+              <div className="text-sm text-slate-700">
+                Graph: {row.graph?.complaint || "—"} / {row.graph?.disposition || "—"}
+              </div>
+              <div className="text-xs text-slate-500">
+                sameComplaint: {String(row.sameComplaint)} | sameDisposition: {String(row.sameDisposition)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+client/src/components/platform/GraphMetricsCard.tsx
+import React from "react";
+
+type Props = {
+  result: any;
+};
+
+export default function GraphMetricsCard({ result }: Props) {
+  const nodes = result?.nodes ?? [];
+  const edges = result?.edges ?? [];
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Graph Metrics</h2>
+
+      <div className="mb-3 text-sm text-slate-700">
+        Total trace rows: {result?.totalTraceRows ?? 0}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <div className="mb-2 text-sm font-medium text-slate-700">Top nodes</div>
+          <div className="space-y-2">
+            {nodes.slice(0, 8).map((row: any, idx: number) => (
+              <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+                <div className="font-medium">{row.node}</div>
+                <div className="text-slate-600">
+                  count={row.count} | avgLatency={Number(row.avgLatencyMs).toFixed(1)} ms
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-sm font-medium text-slate-700">Top edges</div>
+          <div className="space-y-2">
+            {edges.slice(0, 8).map((row: any, idx: number) => (
+              <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+                <div className="font-medium">{row.edge}</div>
+                <div className="text-slate-600">count={row.count}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+6. Platform Admin page
+client/src/pages/SkillLayerAdminPage.tsx
+import React, { useEffect, useState } from "react";
+import { platformAdminApi } from "../lib/platformAdminApi";
+import DeploymentReadinessCard from "../components/platform/DeploymentReadinessCard";
+import ReleaseGateCard from "../components/platform/ReleaseGateCard";
+import ReviewQueueCard from "../components/platform/ReviewQueueCard";
+import TenantCasesCard from "../components/platform/TenantCasesCard";
+import CompareDiffsCard from "../components/platform/CompareDiffsCard";
+import GraphMetricsCard from "../components/platform/GraphMetricsCard";
+
+export default function SkillLayerAdminPage() {
+  const [deploymentReadiness, setDeploymentReadiness] = useState<any>(null);
+  const [reviewQueue, setReviewQueue] = useState<any[]>([]);
+  const [tenantCases, setTenantCases] = useState<any[]>([]);
+  const [compareDiffs, setCompareDiffs] = useState<any[]>([]);
+  const [graphMetrics, setGraphMetrics] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setError("");
+      const [dr, rq, tc, cd, gm] = await Promise.all([
+        platformAdminApi.getDeploymentReadiness(),
+        platformAdminApi.getReviewQueue(),
+        platformAdminApi.getTenantCases(),
+        platformAdminApi.getCompareDiffs(),
+        platformAdminApi.getGraphMetrics(),
+      ]);
+
+      setDeploymentReadiness(dr.result);
+      setReviewQueue(rq.queue ?? []);
+      setTenantCases(tc.rows ?? []);
+      setCompareDiffs(cd.rows ?? []);
+      setGraphMetrics(gm.result);
+    } catch (err: any) {
+      setError(err.message ?? "Failed to load platform admin data");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <h1 className="text-2xl font-bold text-slate-900">Skill Layer 2.1 Admin</h1>
+          <p className="text-sm text-slate-600">
+            Platform readiness, release gates, review queues, compare diffs, and graph metrics
+          </p>
+          {!!error && <div className="mt-3 text-sm text-red-700">{error}</div>}
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <DeploymentReadinessCard result={deploymentReadiness} />
+          <ReleaseGateCard />
+          <ReviewQueueCard queue={reviewQueue} />
+          <TenantCasesCard rows={tenantCases} />
+          <CompareDiffsCard rows={compareDiffs} />
+          <GraphMetricsCard result={graphMetrics} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Add route in frontend router:
+
+<Route path="/skill-layer-admin" element={<SkillLayerAdminPage />} />
+7. Auto-save tenant cases on every run
+
+In your POST /api/skill-layer/run route, after you get state, add:
+
+import { saveTenantCaseRecord } from "../platform/tenantCaseStore";
+
+Then after the run:
+
+void saveTenantCaseRecord({
+  siteId: req.body.siteId ?? "default",
+  caseId: state.context.caseId,
+  complaintId:
+    state.skillResults?.identify_chief_complaint?.result?.complaint_id ?? "",
+  disposition: state.finalDisposition ?? "",
+  payload: {
+    topDifferential:
+      state.skillResults?.generate_differential?.result?.differential_list?.slice?.(0, 3) ?? [],
+    completedSkills: state.completedSkills ?? [],
+  },
+});
+8. What to do next after 2.1
+
+Now that 2.1 exists, here is the best order:
+
+Immediate
+
+open /skill-layer-admin
+
+verify all 6 cards populate
+
+run a few compare-mode cases so compare diffs fill
+
+confirm tenant cases auto-populate
+
+Next
+
+finish reasoning_summary on all 18 skills
+
+add rule-owner / last-reviewed metadata
+
+persist graph comparison mismatches as review queue items
+
+add complaint hardening queue card to admin page
+
+add graph edge/guard visualization beyond top edge counts
+
+Then
+
+build Skill Layer 2.2
+
+rule governance editor
+
+complaint rollout manager
+
+compare diff explorer
+
+graph path debugger
+
+hardening queue manager
+
+Recommended continuing improvements
+
+Here’s what I’d keep improving over the next iterations.
+
+Most important
+
+Finish reasoning_summary everywhere
+
+Link hardening queue items to real case IDs and reconciliations
+
+Add compare diff persistence by complaint family
+
+Add graph pass/fail trends by complaint
+
+Add rule ownership metadata
+
+Add auto-generated golden cases to the admin page
+
+Strong medium-term
+
+Graph policy optimization by cost and outcome
+
+Rule suggestion engine from reconciliations
+
+Complaint rollout UI with “sequential / compare / graph” toggles
+
+Tenant/site-specific discharge templates
+
+Golden-case coverage map by complaint
+
+Long-term moat builders
+
+Outcome-driven graph path optimization
+
+Skill confidence calibration by complaint
+
+Per-site model/cost policy tuning
+
+EHR integration layer
+
+Multi-clinic benchmarking dashboard
+
+User handbook recommendation
+
+Yes, keep the handbook as a living document and rewrite it continuously.
+
+I would now split it into:
+
+docs/SkillLayerUserHandbook.md
+day-to-day usage
+
+docs/SkillLayer2_Roadmap.md
+architecture + roadmap
+
+docs/SkillLayerAdminGuide.md
+platform/admin operations
+
+That last one should include:
+
+deployment readiness
+
+release gates
+
+review queue
+
+compare diffs
+
+graph metrics
+
+tenant cases
+
+reconciliation workflow
+
+hardening workflow
+
+That makes the system much easier to operate and onboard others into.
+
+Strongest next move
+
+The strongest next move after this pack is:
+
+Skill Layer 2.2: complaint rollout manager + rule governance editor + compare diff explorer
+
+Because that turns the platform from “instrumented” into “actively steerable.”
+
+I can write that next.
+
+JPLEAE MAKE 2.2
+
+Absolutely. Here is Skill Layer 2.2.
+
+This pack adds the three things that make the platform actively steerable:
+
+Complaint Rollout Manager
+
+Rule Governance Editor
+
+Compare Diff Explorer
+
+It is designed to sit on top of 2.1 cleanly and give you a real admin control deck.
+
+Skill Layer 2.2 goals
+
+Turn the platform from:
+
+instrumented
+
+observable
+
+testable
+
+into:
+
+configurable
+
+governable
+
+reviewable
+
+steerable by complaint family
+
+Files in this pack
+
+Create these backend files:
+
+server/platform/rolloutManagerService.ts
+server/platform/ruleGovernanceEditorService.ts
+server/platform/compareDiffExplorerService.ts
+server/routes/rolloutManagerRoutes.ts
+server/routes/ruleGovernanceEditorRoutes.ts
+server/routes/compareDiffExplorerRoutes.ts
+
+Create these frontend files:
+
+client/src/lib/rolloutManagerApi.ts
+client/src/lib/ruleEditorApi.ts
+client/src/lib/compareDiffExplorerApi.ts
+client/src/components/platform/ComplaintRolloutManagerCard.tsx
+client/src/components/platform/RuleGovernanceEditorCard.tsx
+client/src/components/platform/CompareDiffExplorerCard.tsx
+
+Update:
+
+server/platform/platformConfig.ts
+client/src/pages/SkillLayerAdminPage.tsx
+1. Complaint rollout manager
+
+This lets you view and update:
+
+sequential
+
+graph
+
+compare
+
+per complaint family.
+
+server/platform/rolloutManagerService.ts
+import fs from "fs/promises";
+import path from "path";
+import { getPlatformConfig } from "./platformConfig";
+
+const OVERRIDE_DIR = path.resolve(process.cwd(), "server/data/runtime");
+const OVERRIDE_FILE = path.join(OVERRIDE_DIR, "rollout_overrides.json");
+
+async function ensureDir() {
+  await fs.mkdir(OVERRIDE_DIR, { recursive: true });
+}
+
+async function loadOverrides(): Promise<Record<string, Record<string, string>>> {
+  try {
+    const raw = await fs.readFile(OVERRIDE_FILE, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveOverrides(data: Record<string, Record<string, string>>) {
+  await ensureDir();
+  await fs.writeFile(OVERRIDE_FILE, JSON.stringify(data, null, 2), "utf8");
+}
+
+export async function getRolloutModes(siteId = "default") {
+  const cfg = getPlatformConfig(siteId);
+  const overrides = await loadOverrides();
+  const siteOverrides = overrides[siteId] ?? {};
+
+  const merged: Record<string, string> = {};
+  for (const complaint of cfg.enabledComplaints) {
+    merged[complaint] =
+      siteOverrides[complaint] ??
+      cfg.rolloutModes?.[complaint] ??
+      "sequential";
+  }
+
+  return {
+    siteId,
+    modes: merged,
+  };
+}
+
+export async function setRolloutMode(params: {
+  siteId?: string;
+  complaint: string;
+  mode: "sequential" | "graph" | "compare";
+}) {
+  const siteId = params.siteId ?? "default";
+  const overrides = await loadOverrides();
+
+  overrides[siteId] ??= {};
+  overrides[siteId][params.complaint] = params.mode;
+
+  await saveOverrides(overrides);
+
+  return {
+    ok: true,
+    siteId,
+    complaint: params.complaint,
+    mode: params.mode,
+  };
+}
+server/routes/rolloutManagerRoutes.ts
+import express from "express";
+import { getRolloutModes, setRolloutMode } from "../platform/rolloutManagerService";
+
+const router = express.Router();
+
+router.get("/api/platform/rollout-modes", async (req, res) => {
+  try {
+    const siteId = String(req.query.siteId ?? "default");
+    const result = await getRolloutModes(siteId);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/api/platform/rollout-modes", async (req, res) => {
+  try {
+    const result = await setRolloutMode({
+      siteId: req.body.siteId ?? "default",
+      complaint: req.body.complaint,
+      mode: req.body.mode,
+    });
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+import rolloutManagerRoutes from "./routes/rolloutManagerRoutes";
+app.use(rolloutManagerRoutes);
+2. Rule governance editor
+
+This is a lightweight editor for governance metadata, not direct CSV mutation yet. It tracks:
+
+owner
+
+status
+
+last reviewed
+
+linked complaints
+
+notes
+
+server/platform/ruleGovernanceEditorService.ts
+import fs from "fs/promises";
+import path from "path";
+
+const RUNTIME_DIR = path.resolve(process.cwd(), "server/data/runtime");
+const GOVERNANCE_FILE = path.join(RUNTIME_DIR, "rule_governance_metadata.json");
+
+async function ensureDir() {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+}
+
+async function loadMetadata(): Promise<Record<string, any>> {
+  try {
+    const raw = await fs.readFile(GOVERNANCE_FILE, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveMetadata(data: Record<string, any>) {
+  await ensureDir();
+  await fs.writeFile(GOVERNANCE_FILE, JSON.stringify(data, null, 2), "utf8");
+}
+
+export async function getRuleGovernanceMetadata() {
+  return loadMetadata();
+}
+
+export async function updateRuleGovernanceMetadata(params: {
+  ruleKey: string;
+  owner?: string;
+  status?: string;
+  lastReviewedAt?: string;
+  linkedComplaints?: string[];
+  notes?: string;
+}) {
+  const all = await loadMetadata();
+
+  all[params.ruleKey] = {
+    ...(all[params.ruleKey] ?? {}),
+    owner: params.owner ?? all[params.ruleKey]?.owner ?? "",
+    status: params.status ?? all[params.ruleKey]?.status ?? "active",
+    lastReviewedAt:
+      params.lastReviewedAt ??
+      all[params.ruleKey]?.lastReviewedAt ??
+      new Date().toISOString(),
+    linkedComplaints:
+      params.linkedComplaints ?? all[params.ruleKey]?.linkedComplaints ?? [],
+    notes: params.notes ?? all[params.ruleKey]?.notes ?? "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  await saveMetadata(all);
+
+  return {
+    ok: true,
+    ruleKey: params.ruleKey,
+    record: all[params.ruleKey],
+  };
+}
+server/routes/ruleGovernanceEditorRoutes.ts
+import express from "express";
+import {
+  getRuleGovernanceMetadata,
+  updateRuleGovernanceMetadata,
+} from "../platform/ruleGovernanceEditorService";
+
+const router = express.Router();
+
+router.get("/api/platform/rule-governance-metadata", async (_req, res) => {
+  try {
+    const result = await getRuleGovernanceMetadata();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/api/platform/rule-governance-metadata", async (req, res) => {
+  try {
+    const result = await updateRuleGovernanceMetadata(req.body);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+import ruleGovernanceEditorRoutes from "./routes/ruleGovernanceEditorRoutes";
+app.use(ruleGovernanceEditorRoutes);
+3. Compare diff explorer
+
+This gives you filterable compare-mode diffs by complaint and mismatch type.
+
+server/platform/compareDiffExplorerService.ts
+import { listCompareDiffs } from "./compareDiffStore";
+
+export async function exploreCompareDiffs(params: {
+  limit?: number;
+  complaint?: string;
+  sameDisposition?: boolean;
+  sameComplaint?: boolean;
+}) {
+  const rows = await listCompareDiffs(params.limit ?? 200);
+
+  return rows.filter((row: any) => {
+    if (params.complaint) {
+      const complaint = params.complaint.toLowerCase();
+      const seqComplaint = String(row.sequential?.complaint ?? "").toLowerCase();
+      const graphComplaint = String(row.graph?.complaint ?? "").toLowerCase();
+      if (!seqComplaint.includes(complaint) && !graphComplaint.includes(complaint)) {
+        return false;
+      }
+    }
+
+    if (typeof params.sameDisposition === "boolean") {
+      if (Boolean(row.sameDisposition) !== params.sameDisposition) return false;
+    }
+
+    if (typeof params.sameComplaint === "boolean") {
+      if (Boolean(row.sameComplaint) !== params.sameComplaint) return false;
+    }
+
+    return true;
+  });
+}
+server/routes/compareDiffExplorerRoutes.ts
+import express from "express";
+import { exploreCompareDiffs } from "../platform/compareDiffExplorerService";
+
+const router = express.Router();
+
+router.get("/api/platform/compare-diff-explorer", async (req, res) => {
+  try {
+    const result = await exploreCompareDiffs({
+      limit: Number(req.query.limit ?? 200),
+      complaint: req.query.complaint ? String(req.query.complaint) : undefined,
+      sameDisposition:
+        req.query.sameDisposition === undefined
+          ? undefined
+          : String(req.query.sameDisposition) === "true",
+      sameComplaint:
+        req.query.sameComplaint === undefined
+          ? undefined
+          : String(req.query.sameComplaint) === "true",
+    });
+
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+Register it:
+
+import compareDiffExplorerRoutes from "./routes/compareDiffExplorerRoutes";
+app.use(compareDiffExplorerRoutes);
+4. Update platform config to support rollout overrides
+server/platform/platformConfig.ts
+
+Replace getPlatformConfig with this version so overrides can be layered later without breaking callers.
+
+import { TenantSiteConfig } from "./platformTypes";
+
+export const PLATFORM_CONFIGS: TenantSiteConfig[] = [
+  {
+    siteId: "default",
+    siteName: "Default Urgent Care",
+    enabledComplaints: [
+      "sore_throat",
+      "cough",
+      "uti",
+      "chest_pain",
+      "abdominal_pain",
+      "fever",
+      "rash",
+      "ear_pain",
+      "sinus_pressure",
+    ],
+    enabledModules: [
+      "intake",
+      "triage",
+      "reasoning",
+      "output",
+      "outcomes",
+      "analytics",
+      "learning",
+      "governance",
+      "platform",
+    ],
+    rolloutModes: {
+      sore_throat: "graph",
+      cough: "graph",
+      uti: "graph",
+      chest_pain: "sequential",
+      abdominal_pain: "sequential",
+      fever: "sequential",
+      rash: "sequential",
+      ear_pain: "sequential",
+      sinus_pressure: "sequential",
+    },
+    maxLlmCostUsdPerCase: 0.03,
+    requireReasoningSummary: true,
+    requireGoldenPassRate: 0.95,
+  },
+];
+
+export function getPlatformConfig(siteId = "default"): TenantSiteConfig {
+  return PLATFORM_CONFIGS.find((p) => p.siteId === siteId) ?? PLATFORM_CONFIGS[0];
+}
+5. Frontend API wrappers
+client/src/lib/rolloutManagerApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function postJson<T>(url: string, body: any): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export const rolloutManagerApi = {
+  getModes(siteId = "default") {
+    return getJson<{ ok: boolean; result: any }>(
+      `/api/platform/rollout-modes?siteId=${encodeURIComponent(siteId)}`
+    );
+  },
+  setMode(payload: { siteId?: string; complaint: string; mode: string }) {
+    return postJson<{ ok: boolean; result: any }>(
+      "/api/platform/rollout-modes",
+      payload
+    );
+  },
+};
+client/src/lib/ruleEditorApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function postJson<T>(url: string, body: any): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export const ruleEditorApi = {
+  getMetadata() {
+    return getJson<{ ok: boolean; result: Record<string, any> }>(
+      "/api/platform/rule-governance-metadata"
+    );
+  },
+  updateMetadata(payload: any) {
+    return postJson<{ ok: boolean; result: any }>(
+      "/api/platform/rule-governance-metadata",
+      payload
+    );
+  },
+};
+client/src/lib/compareDiffExplorerApi.ts
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export const compareDiffExplorerApi = {
+  query(params: {
+    complaint?: string;
+    sameDisposition?: boolean;
+    sameComplaint?: boolean;
+    limit?: number;
+  }) {
+    const qs = new URLSearchParams();
+    if (params.complaint) qs.set("complaint", params.complaint);
+    if (params.sameDisposition !== undefined) qs.set("sameDisposition", String(params.sameDisposition));
+    if (params.sameComplaint !== undefined) qs.set("sameComplaint", String(params.sameComplaint));
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+
+    return getJson<{ ok: boolean; result: any[] }>(
+      `/api/platform/compare-diff-explorer?${qs.toString()}`
+    );
+  },
+};
+6. Frontend cards
+client/src/components/platform/ComplaintRolloutManagerCard.tsx
+import React, { useEffect, useState } from "react";
+import { rolloutManagerApi } from "../../lib/rolloutManagerApi";
+
+export default function ComplaintRolloutManagerCard() {
+  const [modes, setModes] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState("");
+
+  async function load() {
+    try {
+      const res = await rolloutManagerApi.getModes();
+      setModes(res.result?.modes ?? {});
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed to load rollout modes");
+    }
+  }
+
+  async function updateMode(complaint: string, mode: string) {
+    try {
+      setStatus(`Saving ${complaint}...`);
+      await rolloutManagerApi.setMode({ complaint, mode });
+      await load();
+      setStatus("Saved.");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed to save rollout mode");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Complaint Rollout Manager</h2>
+
+      <div className="space-y-3">
+        {Object.entries(modes).map(([complaint, mode]) => (
+          <div key={complaint} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 p-3">
+            <div className="font-medium text-slate-900">{complaint}</div>
+            <select
+              value={mode}
+              onChange={(e) => updateMode(complaint, e.target.value)}
+              className="rounded-xl border px-3 py-2 text-sm"
+            >
+              <option value="sequential">sequential</option>
+              <option value="compare">compare</option>
+              <option value="graph">graph</option>
+            </select>
+          </div>
+        ))}
+      </div>
+
+      {!!status && <div className="mt-3 text-sm text-slate-600">{status}</div>}
+    </div>
+  );
+}
+client/src/components/platform/RuleGovernanceEditorCard.tsx
+import React, { useEffect, useState } from "react";
+import { ruleEditorApi } from "../../lib/ruleEditorApi";
+
+export default function RuleGovernanceEditorCard() {
+  const [metadata, setMetadata] = useState<Record<string, any>>({});
+  const [ruleKey, setRuleKey] = useState("RED_FLAG_RULES.csv");
+  const [owner, setOwner] = useState("");
+  const [statusText, setStatusText] = useState("active");
+  const [complaintsText, setComplaintsText] = useState("");
+  const [notes, setNotes] = useState("");
+  const [status, setStatus] = useState("");
+
+  async function load() {
+    try {
+      const res = await ruleEditorApi.getMetadata();
+      setMetadata(res.result ?? {});
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed to load governance metadata");
+    }
+  }
+
+  async function save() {
+    try {
+      setStatus("Saving...");
+      await ruleEditorApi.updateMetadata({
+        ruleKey,
+        owner,
+        status: statusText,
+        linkedComplaints: complaintsText
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        notes,
+      });
+      await load();
+      setStatus("Saved.");
+    } catch (err: any) {
+      setStatus(err.message ?? "Failed to save metadata");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Rule Governance Editor</h2>
+
+      <div className="space-y-3">
+        <input
+          value={ruleKey}
+          onChange={(e) => setRuleKey(e.target.value)}
+          className="w-full rounded-xl border px-3 py-2 text-sm"
+          placeholder="Rule key"
+        />
+        <input
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+          className="w-full rounded-xl border px-3 py-2 text-sm"
+          placeholder="Owner"
+        />
+        <input
+          value={statusText}
+          onChange={(e) => setStatusText(e.target.value)}
+          className="w-full rounded-xl border px-3 py-2 text-sm"
+          placeholder="Status"
+        />
+        <input
+          value={complaintsText}
+          onChange={(e) => setComplaintsText(e.target.value)}
+          className="w-full rounded-xl border px-3 py-2 text-sm"
+          placeholder="Linked complaints comma-separated"
+        />
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          className="min-h-[90px] w-full rounded-xl border px-3 py-2 text-sm"
+          placeholder="Notes"
+        />
+        <button
+          onClick={save}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+        >
+          Save
+        </button>
+      </div>
+
+      {!!status && <div className="mt-3 text-sm text-slate-600">{status}</div>}
+
+      <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs">
+        <pre className="overflow-auto">{JSON.stringify(metadata, null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
+client/src/components/platform/CompareDiffExplorerCard.tsx
+import React, { useState } from "react";
+import { compareDiffExplorerApi } from "../../lib/compareDiffExplorerApi";
+
+export default function CompareDiffExplorerCard() {
+  const [complaint, setComplaint] = useState("");
+  const [sameDisposition, setSameDisposition] = useState("");
+  const [sameComplaint, setSameComplaint] = useState("");
+  const [rows, setRows] = useState<any[]>([]);
+  const [status, setStatus] = useState("");
+
+  async function runSearch() {
+    try {
+      setStatus("Searching...");
+      const res = await compareDiffExplorerApi.query({
+        complaint: complaint || undefined,
+        sameDisposition:
+          sameDisposition === "" ? undefined : sameDisposition === "true",
+        sameComplaint:
+          sameComplaint === "" ? undefined : sameComplaint === "true",
+        limit: 100,
+      });
+      setRows(res.result ?? []);
+      setStatus(`Found ${res.result?.length ?? 0} rows.`);
+    } catch (err: any) {
+      setStatus(err.message ?? "Search failed");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-lg font-semibold">Compare Diff Explorer</h2>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <input
+          value={complaint}
+          onChange={(e) => setComplaint(e.target.value)}
+          className="rounded-xl border px-3 py-2 text-sm"
+          placeholder="Complaint filter"
+        />
+        <select
+          value={sameDisposition}
+          onChange={(e) => setSameDisposition(e.target.value)}
+          className="rounded-xl border px-3 py-2 text-sm"
+        >
+          <option value="">Any disposition match</option>
+          <option value="true">Same disposition</option>
+          <option value="false">Different disposition</option>
+        </select>
+        <select
+          value={sameComplaint}
+          onChange={(e) => setSameComplaint(e.target.value)}
+          className="rounded-xl border px-3 py-2 text-sm"
+        >
+          <option value="">Any complaint match</option>
+          <option value="true">Same complaint</option>
+          <option value="false">Different complaint</option>
+        </select>
+      </div>
+
+      <div className="mt-3">
+        <button
+          onClick={runSearch}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+        >
+          Search
+        </button>
+      </div>
+
+      {!!status && <div className="mt-3 text-sm text-slate-600">{status}</div>}
+
+      <div className="mt-4 space-y-3">
+        {rows.slice(0, 20).map((row, idx) => (
+          <div key={idx} className="rounded-xl bg-slate-50 p-3 text-sm">
+            <div className="font-medium">{row.caseId}</div>
+            <div>Seq: {row.sequential?.complaint || "—"} / {row.sequential?.disposition || "—"}</div>
+            <div>Graph: {row.graph?.complaint || "—"} / {row.graph?.disposition || "—"}</div>
+            <div className="text-xs text-slate-500">
+              sameComplaint={String(row.sameComplaint)} | sameDisposition={String(row.sameDisposition)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+7. Admin page update
+client/src/pages/SkillLayerAdminPage.tsx
+
+Replace with this expanded version.
+
+import React, { useEffect, useState } from "react";
+import { platformAdminApi } from "../lib/platformAdminApi";
+import DeploymentReadinessCard from "../components/platform/DeploymentReadinessCard";
+import ReleaseGateCard from "../components/platform/ReleaseGateCard";
+import ReviewQueueCard from "../components/platform/ReviewQueueCard";
+import TenantCasesCard from "../components/platform/TenantCasesCard";
+import CompareDiffsCard from "../components/platform/CompareDiffsCard";
+import GraphMetricsCard from "../components/platform/GraphMetricsCard";
+import ComplaintRolloutManagerCard from "../components/platform/ComplaintRolloutManagerCard";
+import RuleGovernanceEditorCard from "../components/platform/RuleGovernanceEditorCard";
+import CompareDiffExplorerCard from "../components/platform/CompareDiffExplorerCard";
+
+export default function SkillLayerAdminPage() {
+  const [deploymentReadiness, setDeploymentReadiness] = useState<any>(null);
+  const [reviewQueue, setReviewQueue] = useState<any[]>([]);
+  const [tenantCases, setTenantCases] = useState<any[]>([]);
+  const [compareDiffs, setCompareDiffs] = useState<any[]>([]);
+  const [graphMetrics, setGraphMetrics] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setError("");
+      const [dr, rq, tc, cd, gm] = await Promise.all([
+        platformAdminApi.getDeploymentReadiness(),
+        platformAdminApi.getReviewQueue(),
+        platformAdminApi.getTenantCases(),
+        platformAdminApi.getCompareDiffs(),
+        platformAdminApi.getGraphMetrics(),
+      ]);
+
+      setDeploymentReadiness(dr.result);
+      setReviewQueue(rq.queue ?? []);
+      setTenantCases(tc.rows ?? []);
+      setCompareDiffs(cd.rows ?? []);
+      setGraphMetrics(gm.result);
+    } catch (err: any) {
+      setError(err.message ?? "Failed to load platform admin data");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="rounded-3xl bg-white p-6 shadow-sm">
+          <h1 className="text-2xl font-bold text-slate-900">Skill Layer 2.2 Admin</h1>
+          <p className="text-sm text-slate-600">
+            Platform readiness, rollout control, compare diffs, rule governance, and graph metrics
+          </p>
+          {!!error && <div className="mt-3 text-sm text-red-700">{error}</div>}
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <DeploymentReadinessCard result={deploymentReadiness} />
+          <ReleaseGateCard />
+          <ReviewQueueCard queue={reviewQueue} />
+          <TenantCasesCard rows={tenantCases} />
+          <CompareDiffsCard rows={compareDiffs} />
+          <GraphMetricsCard result={graphMetrics} />
+          <ComplaintRolloutManagerCard />
+          <RuleGovernanceEditorCard />
+        </div>
+
+        <CompareDiffExplorerCard />
+      </div>
+    </div>
+  );
+}
+What Skill Layer 2.2 gives you
+
+You now get a real control plane for:
+
+rollout management
+
+You can switch complaints between:
+
+sequential
+
+compare
+
+graph
+
+governance editing
+
+You can assign:
+
+owner
+
+status
+
+linked complaints
+
+notes
+
+diff exploration
+
+You can query compare-mode drift by:
+
+complaint
+
+same vs different complaint
+
+same vs different disposition
+
+That means the platform is becoming actively steerable, not just observable.
+
+What to do right after 2.2
+
+In order:
+
+1. Verify the new endpoints
+
+GET /api/platform/rollout-modes
+
+POST /api/platform/rollout-modes
+
+GET /api/platform/rule-governance-metadata
+
+POST /api/platform/rule-governance-metadata
+
+GET /api/platform/compare-diff-explorer
+
+2. Open /skill-layer-admin
+
+Verify:
+
+rollout manager loads
+
+rule editor saves
+
+diff explorer queries
+
+compare diffs still populate
+
+tenant cases still populate
+
+3. Move one complaint to compare mode
+
+Try:
+
+ear_pain
+or
+
+sinus_pressure
+
+Then run a few cases and inspect compare diffs.
+
+4. Populate governance metadata
+
+Start with:
+
+RED_FLAG_RULES.csv
+
+DISPOSITION_RULES.csv
+
+CLUSTER_SCORING_RULES.csv
+
+QUESTION_IMPACT.csv
+
+Assign:
+
+owner
+
+linked complaints
+
+review notes
+
+Best next moves after 2.2
+
+The strongest next pack would be 2.3, focused on turning platform control into platform process:
+
+Skill Layer 2.3 should add
+
+complaint hardening queue UI
+
+auto-generated golden case review UI
+
+compare diff to review-queue promotion
+
+graph edge/guard visualizer
+
+rule last-reviewed / stale-rule warnings
+
+release gate history log
+
+That would make the platform not just steerable, but operationally disciplined.
+
+Highest-value continuing improvements
+
+finish reasoning_summary on all remaining skills
+
+persist compare mismatches into review queue automatically
+
+add edge-level graph visualization
+
+add stale rule warnings in governance
+
+add graph agreement trends over time
+
+add golden-case coverage heatmap by complaint
+
+Handbook recommendation
+
+Yes, definitely keep the handbook and rewrite it continuously.
+
+At this point, I’d recommend three docs:
+
+docs/SkillLayerUserHandbook.md
+
+docs/SkillLayerAdminGuide.md
+
+docs/SkillLayer2_Roadmap.md
+
+And for 2.2 specifically, add a section to the admin guide covering:
+
+rollout manager
+
+rule governance editor
+
+compare diff explorer
+
+tenant case records
+
+release gate workflow
+
+That documentation becomes part of the system’s operating memory.
+
+If you want, next I’ll write Skill Layer 2.3 with the hardening queue UI, auto-generated golden case review UI, and graph edge/guard visualizer.
