@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import CaseSimilarityCard from "@/components/telemedicine/CaseSimilarityCard";
+import DiagnosticConfidenceCard from "@/components/telemedicine/DiagnosticConfidenceCard";
+import AdaptiveQuestionPanel from "@/components/telemedicine/AdaptiveQuestionPanel";
 import { caseSimilarityApi } from "@/lib/caseSimilarityApi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -560,6 +562,7 @@ export default function UCSMConsole() {
                 <TabsTrigger value="emit" className="text-xs" data-testid="tab-ucsm-emit"><Zap className="h-3 w-3 mr-1" />Emit Event</TabsTrigger>
                 <TabsTrigger value="similarity" className="text-xs" data-testid="tab-ucsm-similarity">🔗 Similar Cases</TabsTrigger>
                 <TabsTrigger value="adaptive" className="text-xs" data-testid="tab-ucsm-adaptive">🎯 Adaptive Q</TabsTrigger>
+                <TabsTrigger value="confidence" className="text-xs" data-testid="tab-ucsm-confidence">📊 Confidence</TabsTrigger>
               </TabsList>
 
               <TabsContent value="conversation" className="mt-3">
@@ -985,6 +988,23 @@ export default function UCSMConsole() {
                       )}
                     </CardContent>
                   </Card>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="confidence" className="mt-3">
+                <div className="space-y-3">
+                  {!activeCaseId ? (
+                    <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                  ) : (
+                    <>
+                      <DiagnosticConfidenceCard caseId={activeCaseId} />
+                      <AdaptiveQuestionPanel
+                        caseId={activeCaseId}
+                        state={state}
+                        onAnswered={() => {}}
+                      />
+                    </>
+                  )}
                 </div>
               </TabsContent>
             </Tabs>

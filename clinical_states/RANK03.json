@@ -1,0 +1,695 @@
+{
+  "caseId": "RANK03",
+  "sessionId": "sess_1773428546863_7a8ax",
+  "createdAt": "2026-03-13T19:02:26.863Z",
+  "updatedAt": "2026-03-13T19:02:26.911Z",
+  "events": [
+    {
+      "type": "SESSION_STARTED",
+      "timestamp": "2026-03-13T19:02:26.863Z",
+      "data": {
+        "patient": {
+          "age": 24,
+          "sex": "male"
+        },
+        "complaint": "sore_throat"
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T19:02:26.906Z",
+      "data": {
+        "message": "severe sore throat difficulty opening mouth jaw stiffness fever 3 days"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T19:02:26.909Z",
+      "data": {
+        "result": {
+          "disposition": "urgent_care",
+          "confidence": 0.27,
+          "topDiagnosis": "strep_pharyngitis",
+          "uncertaintyScore": 1.21,
+          "triggered_flags": [],
+          "explanation": "The symptom pattern of fever, duration_3_days associated with sore throat is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+          "reasoning_path": [
+            "L1 Safety: Pass",
+            "L2 Similarity: 5 cases found, top Dx: strep_pharyngitis",
+            "L3 Bayes: top Dx pneumonia (10%), entropy=1.21",
+            "Ensemble: top strep_pharyngitis (combined=0.27)",
+            "Disposition: urgent_care (confidence=27%)"
+          ],
+          "extractionConfidence": 0.9,
+          "featuresExtracted": 2,
+          "missingFields": []
+        },
+        "timestamp": "2026-03-13T19:02:26.909Z"
+      }
+    },
+    {
+      "type": "DIFFERENTIAL_UPDATED",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "differential": [
+          {
+            "diagnosis": "strep_pharyngitis",
+            "confidence": 0.265
+          },
+          {
+            "diagnosis": "infectious_mononucleosis",
+            "confidence": 0.088
+          },
+          {
+            "diagnosis": "pneumonia",
+            "confidence": 0.062
+          },
+          {
+            "diagnosis": "peritonsillar_abscess",
+            "confidence": 0.059
+          },
+          {
+            "diagnosis": "meningococcemia",
+            "confidence": 0.047
+          },
+          {
+            "diagnosis": "viral_URI",
+            "confidence": 0.044
+          }
+        ]
+      }
+    },
+    {
+      "type": "DISPOSITION_SET",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "disposition": "urgent_care"
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "pathway": {
+          "pathway": {
+            "complaint": "sore_throat",
+            "disposition": "Prescription",
+            "title": "Bacterial Pharyngitis (Strep) Pathway",
+            "description": "Centor score ≥3 — treat empirically or after rapid strep test.",
+            "expectedDuration": "7–10 days",
+            "steps": [
+              {
+                "type": "lab",
+                "action": "Rapid Strep Antigen Test (RADT)",
+                "rationale": "Confirms Group A Streptococcus",
+                "timing": "Immediate, at point of care",
+                "priority": "urgent"
+              },
+              {
+                "type": "medication",
+                "action": "Amoxicillin 500mg PO TID × 10 days (adult)",
+                "rationale": "First-line treatment for GAS pharyngitis",
+                "timing": "Start same day if RADT positive or Centor ≥4",
+                "priority": "urgent",
+                "conditions": "Positive RADT or Centor ≥4"
+              },
+              {
+                "type": "medication",
+                "action": "Azithromycin 500mg PO Day 1, then 250mg × 4 days (penicillin allergy)",
+                "rationale": "Alternative for penicillin allergy",
+                "timing": "Same day",
+                "priority": "urgent",
+                "conditions": "Penicillin allergy"
+              },
+              {
+                "type": "medication",
+                "action": "Ibuprofen 400mg q6h PRN or Acetaminophen 650mg q6h PRN",
+                "rationale": "Symptom relief — pain and fever",
+                "timing": "Concurrent",
+                "priority": "routine"
+              },
+              {
+                "type": "instruction",
+                "action": "Rest, hydration, warm liquids, throat lozenges",
+                "rationale": "Supportive care",
+                "timing": "Ongoing",
+                "priority": "routine"
+              },
+              {
+                "type": "followup",
+                "action": "Return if symptoms not improving after 48–72h of antibiotics",
+                "rationale": "Rule out peritonsillar abscess or resistant organism",
+                "timing": "48–72h",
+                "priority": "routine"
+              },
+              {
+                "type": "monitoring",
+                "action": "Monitor for rash (scarlet fever) or difficulty breathing",
+                "rationale": "Complication detection",
+                "timing": "Daily",
+                "priority": "urgent"
+              }
+            ],
+            "contraindications": [
+              "Concurrent mononucleosis (avoid amoxicillin → rash risk)"
+            ],
+            "escalationCriteria": [
+              "Uvular deviation or trismus (peritonsillar abscess)",
+              "Stridor or drooling (epiglottitis)",
+              "Unable to swallow saliva"
+            ],
+            "outcomeGoals": [
+              "Fever resolution in 24–48h",
+              "Throat pain improvement by day 3",
+              "Full course completion"
+            ]
+          },
+          "executedAt": "2026-03-13T19:02:26.910Z",
+          "caseId": "RANK03",
+          "statSummary": {
+            "totalSteps": 7,
+            "labsOrdered": [
+              "Rapid Strep Antigen Test (RADT)"
+            ],
+            "medicationsPrescribed": [
+              "Amoxicillin 500mg PO TID × 10 days (adult)",
+              "Azithromycin 500mg PO Day 1, then 250mg × 4 days (penicillin allergy)",
+              "Ibuprofen 400mg q6h PRN or Acetaminophen 650mg q6h PRN"
+            ],
+            "referralsPlaced": [],
+            "followupScheduled": [
+              "Return if symptoms not improving after 48–72h of antibiotics"
+            ],
+            "contraindications": [
+              "Concurrent mononucleosis (avoid amoxicillin → rash risk)"
+            ],
+            "escalationCriteria": [
+              "Uvular deviation or trismus (peritonsillar abscess)",
+              "Stridor or drooling (epiglottitis)",
+              "Unable to swallow saliva"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "CARE_PATHWAY_STARTED",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "complaint": "sore_throat",
+        "disposition": "urgent_care",
+        "pathway": {
+          "complaint": "sore_throat",
+          "disposition": "Prescription",
+          "title": "Bacterial Pharyngitis (Strep) Pathway",
+          "description": "Centor score ≥3 — treat empirically or after rapid strep test.",
+          "expectedDuration": "7–10 days",
+          "steps": [
+            {
+              "type": "lab",
+              "action": "Rapid Strep Antigen Test (RADT)",
+              "rationale": "Confirms Group A Streptococcus",
+              "timing": "Immediate, at point of care",
+              "priority": "urgent"
+            },
+            {
+              "type": "medication",
+              "action": "Amoxicillin 500mg PO TID × 10 days (adult)",
+              "rationale": "First-line treatment for GAS pharyngitis",
+              "timing": "Start same day if RADT positive or Centor ≥4",
+              "priority": "urgent",
+              "conditions": "Positive RADT or Centor ≥4"
+            },
+            {
+              "type": "medication",
+              "action": "Azithromycin 500mg PO Day 1, then 250mg × 4 days (penicillin allergy)",
+              "rationale": "Alternative for penicillin allergy",
+              "timing": "Same day",
+              "priority": "urgent",
+              "conditions": "Penicillin allergy"
+            },
+            {
+              "type": "medication",
+              "action": "Ibuprofen 400mg q6h PRN or Acetaminophen 650mg q6h PRN",
+              "rationale": "Symptom relief — pain and fever",
+              "timing": "Concurrent",
+              "priority": "routine"
+            },
+            {
+              "type": "instruction",
+              "action": "Rest, hydration, warm liquids, throat lozenges",
+              "rationale": "Supportive care",
+              "timing": "Ongoing",
+              "priority": "routine"
+            },
+            {
+              "type": "followup",
+              "action": "Return if symptoms not improving after 48–72h of antibiotics",
+              "rationale": "Rule out peritonsillar abscess or resistant organism",
+              "timing": "48–72h",
+              "priority": "routine"
+            },
+            {
+              "type": "monitoring",
+              "action": "Monitor for rash (scarlet fever) or difficulty breathing",
+              "rationale": "Complication detection",
+              "timing": "Daily",
+              "priority": "urgent"
+            }
+          ],
+          "contraindications": [
+            "Concurrent mononucleosis (avoid amoxicillin → rash risk)"
+          ],
+          "escalationCriteria": [
+            "Uvular deviation or trismus (peritonsillar abscess)",
+            "Stridor or drooling (epiglottitis)",
+            "Unable to swallow saliva"
+          ],
+          "outcomeGoals": [
+            "Fever resolution in 24–48h",
+            "Throat pain improvement by day 3",
+            "Full course completion"
+          ]
+        }
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "result": {
+          "pathway": {
+            "complaint": "sore_throat",
+            "disposition": "Prescription",
+            "title": "Bacterial Pharyngitis (Strep) Pathway",
+            "description": "Centor score ≥3 — treat empirically or after rapid strep test.",
+            "expectedDuration": "7–10 days",
+            "steps": [
+              {
+                "type": "lab",
+                "action": "Rapid Strep Antigen Test (RADT)",
+                "rationale": "Confirms Group A Streptococcus",
+                "timing": "Immediate, at point of care",
+                "priority": "urgent"
+              },
+              {
+                "type": "medication",
+                "action": "Amoxicillin 500mg PO TID × 10 days (adult)",
+                "rationale": "First-line treatment for GAS pharyngitis",
+                "timing": "Start same day if RADT positive or Centor ≥4",
+                "priority": "urgent",
+                "conditions": "Positive RADT or Centor ≥4"
+              },
+              {
+                "type": "medication",
+                "action": "Azithromycin 500mg PO Day 1, then 250mg × 4 days (penicillin allergy)",
+                "rationale": "Alternative for penicillin allergy",
+                "timing": "Same day",
+                "priority": "urgent",
+                "conditions": "Penicillin allergy"
+              },
+              {
+                "type": "medication",
+                "action": "Ibuprofen 400mg q6h PRN or Acetaminophen 650mg q6h PRN",
+                "rationale": "Symptom relief — pain and fever",
+                "timing": "Concurrent",
+                "priority": "routine"
+              },
+              {
+                "type": "instruction",
+                "action": "Rest, hydration, warm liquids, throat lozenges",
+                "rationale": "Supportive care",
+                "timing": "Ongoing",
+                "priority": "routine"
+              },
+              {
+                "type": "followup",
+                "action": "Return if symptoms not improving after 48–72h of antibiotics",
+                "rationale": "Rule out peritonsillar abscess or resistant organism",
+                "timing": "48–72h",
+                "priority": "routine"
+              },
+              {
+                "type": "monitoring",
+                "action": "Monitor for rash (scarlet fever) or difficulty breathing",
+                "rationale": "Complication detection",
+                "timing": "Daily",
+                "priority": "urgent"
+              }
+            ],
+            "contraindications": [
+              "Concurrent mononucleosis (avoid amoxicillin → rash risk)"
+            ],
+            "escalationCriteria": [
+              "Uvular deviation or trismus (peritonsillar abscess)",
+              "Stridor or drooling (epiglottitis)",
+              "Unable to swallow saliva"
+            ],
+            "outcomeGoals": [
+              "Fever resolution in 24–48h",
+              "Throat pain improvement by day 3",
+              "Full course completion"
+            ]
+          },
+          "executedAt": "2026-03-13T19:02:26.910Z",
+          "caseId": "RANK03",
+          "statSummary": {
+            "totalSteps": 7,
+            "labsOrdered": [
+              "Rapid Strep Antigen Test (RADT)"
+            ],
+            "medicationsPrescribed": [
+              "Amoxicillin 500mg PO TID × 10 days (adult)",
+              "Azithromycin 500mg PO Day 1, then 250mg × 4 days (penicillin allergy)",
+              "Ibuprofen 400mg q6h PRN or Acetaminophen 650mg q6h PRN"
+            ],
+            "referralsPlaced": [],
+            "followupScheduled": [
+              "Return if symptoms not improving after 48–72h of antibiotics"
+            ],
+            "contraindications": [
+              "Concurrent mononucleosis (avoid amoxicillin → rash risk)"
+            ],
+            "escalationCriteria": [
+              "Uvular deviation or trismus (peritonsillar abscess)",
+              "Stridor or drooling (epiglottitis)",
+              "Unable to swallow saliva"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 24yo male\nChief Complaint: sore throat\n\nSubjective:\nsevere sore throat difficulty opening mouth jaw stiffness fever 3 days\n\nDifferential Diagnosis:\n  1. strep pharyngitis (27%)\n  2. infectious mononucleosis (9%)\n  3. pneumonia (6%)\n  4. peritonsillar abscess (6%)\n  5. meningococcemia (5%)\n\nDisposition: URGENT CARE\n\nClinical Reasoning:\nThe symptom pattern of fever, duration_3_days associated with sore throat is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\nPlease visit an Urgent Care clinic within the next 2-4 hours.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    },
+    {
+      "type": "ADAPTIVE_QUESTIONS_READY",
+      "timestamp": "2026-03-13T19:02:26.910Z",
+      "data": {
+        "complaint": "sore_throat",
+        "entropy": 1.227,
+        "topDiagnosis": "Peritonsillar Abscess",
+        "topProbability": 0.769,
+        "questions": [
+          {
+            "id": "st_drooling",
+            "text": "Are you drooling or having trouble managing saliva?",
+            "feature": "drooling",
+            "expectedInfoGain": 0.10337293417151638,
+            "rationale": "Drooling is a red flag for epiglottitis",
+            "currentEntropy": 1.227,
+            "entropyIfYes": 0.792,
+            "entropyIfNo": 1.287,
+            "pYes": 0.33
+          },
+          {
+            "id": "st_exudate",
+            "text": "Do you see any white patches or pus on your tonsils?",
+            "feature": "exudate",
+            "expectedInfoGain": 0.09228030685056932,
+            "rationale": "Tonsillar exudate strongly favors strep over viral pharyngitis",
+            "currentEntropy": 1.227,
+            "entropyIfYes": 0.76,
+            "entropyIfNo": 1.564,
+            "pYes": 0.533
+          },
+          {
+            "id": "st_swallow",
+            "text": "Does swallowing feel blocked or extremely painful?",
+            "feature": "difficulty_swallowing",
+            "expectedInfoGain": 0.08401792497898741,
+            "rationale": "Severe odynophagia differentiates abscess from pharyngitis",
+            "currentEntropy": 1.227,
+            "entropyIfYes": 0.969,
+            "entropyIfNo": 1.803,
+            "pYes": 0.791
+          },
+          {
+            "id": "st_fatigue",
+            "text": "Have you been unusually tired or fatigued?",
+            "feature": "fatigue",
+            "expectedInfoGain": 0.06236456235162091,
+            "rationale": "Profound fatigue in a young patient raises concern for mono",
+            "currentEntropy": 1.227,
+            "entropyIfYes": 1.484,
+            "entropyIfNo": 1.003,
+            "pYes": 0.337
+          },
+          {
+            "id": "st_nodes",
+            "text": "Are the glands in your neck swollen or tender?",
+            "feature": "swollen_lymph_nodes",
+            "expectedInfoGain": 0.05625151088405156,
+            "rationale": "Significant adenopathy raises concern for mono vs strep",
+            "currentEntropy": 1.227,
+            "entropyIfYes": 1.192,
+            "entropyIfNo": 1.154,
+            "pYes": 0.453
+          }
+        ],
+        "differential": [
+          {
+            "diagnosis": "Peritonsillar Abscess",
+            "probability": 0.769
+          },
+          {
+            "diagnosis": "Strep Pharyngitis",
+            "probability": 0.074
+          },
+          {
+            "diagnosis": "Epiglottitis",
+            "probability": 0.074
+          },
+          {
+            "diagnosis": "Infectious Mononucleosis",
+            "probability": 0.05
+          },
+          {
+            "diagnosis": "Viral Pharyngitis",
+            "probability": 0.033
+          }
+        ]
+      }
+    },
+    {
+      "type": "DIAGNOSTIC_CONFIDENCE_READY",
+      "timestamp": "2026-03-13T19:02:26.911Z",
+      "data": {
+        "results": [
+          {
+            "diagnosis": "strep_pharyngitis",
+            "probability": 0.3162999929711112,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.189,
+            "explanation": [
+              "fever present",
+              "trismus"
+            ]
+          },
+          {
+            "diagnosis": "pneumonia",
+            "probability": 0.26358332747592605,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.18000000000000002,
+            "explanation": [
+              "fever present",
+              "trismus"
+            ]
+          },
+          {
+            "diagnosis": "viral_URI",
+            "probability": 0.14760666338651857,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.1602,
+            "explanation": [
+              "fever present",
+              "trismus"
+            ]
+          },
+          {
+            "diagnosis": "peritonsillar_abscess",
+            "probability": 0.09678779784916004,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15152400000000002,
+            "explanation": [
+              "fever present",
+              "trismus"
+            ]
+          },
+          {
+            "diagnosis": "infectious_mononucleosis",
+            "probability": 0.08786110915864202,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "fever present",
+              "trismus"
+            ]
+          },
+          {
+            "diagnosis": "meningococcemia",
+            "probability": 0.08786110915864202,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "fever present",
+              "trismus"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "severe sore throat difficulty opening mouth jaw stiffness fever 3 days",
+      "timestamp": "2026-03-13T19:02:26.906Z"
+    }
+  ],
+  "patient": {
+    "age": 24,
+    "sex": "male"
+  },
+  "complaint": "sore_throat",
+  "symptoms": "severe sore throat difficulty opening mouth jaw stiffness fever 3 days",
+  "hybridResult": {
+    "disposition": "urgent_care",
+    "confidence": 0.27,
+    "topDiagnosis": "strep_pharyngitis",
+    "uncertaintyScore": 1.21,
+    "triggered_flags": [],
+    "explanation": "The symptom pattern of fever, duration_3_days associated with sore throat is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+    "reasoning_path": [
+      "L1 Safety: Pass",
+      "L2 Similarity: 5 cases found, top Dx: strep_pharyngitis",
+      "L3 Bayes: top Dx pneumonia (10%), entropy=1.21",
+      "Ensemble: top strep_pharyngitis (combined=0.27)",
+      "Disposition: urgent_care (confidence=27%)"
+    ],
+    "extractionConfidence": 0.9,
+    "featuresExtracted": 2,
+    "missingFields": []
+  },
+  "lastHybridEvalAt": "2026-03-13T19:02:26.909Z",
+  "disposition": "urgent_care",
+  "differential": [
+    {
+      "diagnosis": "strep_pharyngitis",
+      "confidence": 0.265
+    },
+    {
+      "diagnosis": "infectious_mononucleosis",
+      "confidence": 0.088
+    },
+    {
+      "diagnosis": "pneumonia",
+      "confidence": 0.062
+    },
+    {
+      "diagnosis": "peritonsillar_abscess",
+      "confidence": 0.059
+    },
+    {
+      "diagnosis": "meningococcemia",
+      "confidence": 0.047
+    },
+    {
+      "diagnosis": "viral_URI",
+      "confidence": 0.044
+    }
+  ],
+  "carePathway": {
+    "complaint": "sore_throat",
+    "disposition": "Prescription",
+    "title": "Bacterial Pharyngitis (Strep) Pathway",
+    "description": "Centor score ≥3 — treat empirically or after rapid strep test.",
+    "expectedDuration": "7–10 days",
+    "steps": [
+      {
+        "type": "lab",
+        "action": "Rapid Strep Antigen Test (RADT)",
+        "rationale": "Confirms Group A Streptococcus",
+        "timing": "Immediate, at point of care",
+        "priority": "urgent"
+      },
+      {
+        "type": "medication",
+        "action": "Amoxicillin 500mg PO TID × 10 days (adult)",
+        "rationale": "First-line treatment for GAS pharyngitis",
+        "timing": "Start same day if RADT positive or Centor ≥4",
+        "priority": "urgent",
+        "conditions": "Positive RADT or Centor ≥4"
+      },
+      {
+        "type": "medication",
+        "action": "Azithromycin 500mg PO Day 1, then 250mg × 4 days (penicillin allergy)",
+        "rationale": "Alternative for penicillin allergy",
+        "timing": "Same day",
+        "priority": "urgent",
+        "conditions": "Penicillin allergy"
+      },
+      {
+        "type": "medication",
+        "action": "Ibuprofen 400mg q6h PRN or Acetaminophen 650mg q6h PRN",
+        "rationale": "Symptom relief — pain and fever",
+        "timing": "Concurrent",
+        "priority": "routine"
+      },
+      {
+        "type": "instruction",
+        "action": "Rest, hydration, warm liquids, throat lozenges",
+        "rationale": "Supportive care",
+        "timing": "Ongoing",
+        "priority": "routine"
+      },
+      {
+        "type": "followup",
+        "action": "Return if symptoms not improving after 48–72h of antibiotics",
+        "rationale": "Rule out peritonsillar abscess or resistant organism",
+        "timing": "48–72h",
+        "priority": "routine"
+      },
+      {
+        "type": "monitoring",
+        "action": "Monitor for rash (scarlet fever) or difficulty breathing",
+        "rationale": "Complication detection",
+        "timing": "Daily",
+        "priority": "urgent"
+      }
+    ],
+    "contraindications": [
+      "Concurrent mononucleosis (avoid amoxicillin → rash risk)"
+    ],
+    "escalationCriteria": [
+      "Uvular deviation or trismus (peritonsillar abscess)",
+      "Stridor or drooling (epiglottitis)",
+      "Unable to swallow saliva"
+    ],
+    "outcomeGoals": [
+      "Fever resolution in 24–48h",
+      "Throat pain improvement by day 3",
+      "Full course completion"
+    ]
+  },
+  "chartNote": "VISIT NOTE — March 13, 2026\nPatient: 24yo male\nChief Complaint: sore throat\n\nSubjective:\nsevere sore throat difficulty opening mouth jaw stiffness fever 3 days\n\nDifferential Diagnosis:\n  1. strep pharyngitis (27%)\n  2. infectious mononucleosis (9%)\n  3. pneumonia (6%)\n  4. peritonsillar abscess (6%)\n  5. meningococcemia (5%)\n\nDisposition: URGENT CARE\n\nClinical Reasoning:\nThe symptom pattern of fever, duration_3_days associated with sore throat is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\nPlease visit an Urgent Care clinic within the next 2-4 hours.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T19:02:26.911Z"
+}

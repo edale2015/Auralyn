@@ -1,0 +1,655 @@
+{
+  "caseId": "FV002",
+  "sessionId": "sess_1773428462260_hkewv",
+  "createdAt": "2026-03-13T19:01:02.260Z",
+  "updatedAt": "2026-03-13T19:01:02.324Z",
+  "events": [
+    {
+      "type": "SESSION_STARTED",
+      "timestamp": "2026-03-13T19:01:02.260Z",
+      "data": {
+        "patient": {
+          "age": 28,
+          "sex": "female"
+        },
+        "complaint": "cough"
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T19:01:02.313Z",
+      "data": {
+        "message": "productive cough with fever for 3 days"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "result": {
+          "disposition": "urgent_care",
+          "confidence": 0.33,
+          "topDiagnosis": "pneumonia",
+          "uncertaintyScore": 1.25,
+          "triggered_flags": [],
+          "explanation": "The symptom pattern of fever, cough, productive_cough associated with cough is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+          "reasoning_path": [
+            "L1 Safety: Pass",
+            "L2 Similarity: 5 cases found, top Dx: pneumonia",
+            "L3 Bayes: top Dx pneumonia (28%), entropy=1.25",
+            "Ensemble: top pneumonia (combined=0.33)",
+            "Disposition: urgent_care (confidence=33%)"
+          ],
+          "extractionConfidence": 1,
+          "featuresExtracted": 4,
+          "missingFields": []
+        },
+        "timestamp": "2026-03-13T19:01:02.323Z"
+      }
+    },
+    {
+      "type": "DIFFERENTIAL_UPDATED",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "differential": [
+          {
+            "diagnosis": "pneumonia",
+            "confidence": 0.33
+          },
+          {
+            "diagnosis": "allergic_cough",
+            "confidence": 0.137
+          },
+          {
+            "diagnosis": "viral_URI",
+            "confidence": 0.128
+          },
+          {
+            "diagnosis": "asthma",
+            "confidence": 0.078
+          },
+          {
+            "diagnosis": "meningococcemia",
+            "confidence": 0.028
+          },
+          {
+            "diagnosis": "strep_pharyngitis",
+            "confidence": 0.027
+          }
+        ]
+      }
+    },
+    {
+      "type": "DISPOSITION_SET",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "disposition": "urgent_care"
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "pathway": {
+          "pathway": {
+            "complaint": "cough",
+            "disposition": "Home Care",
+            "title": "Acute Viral URTI / Cough Pathway",
+            "description": "Cough <3 weeks without red flags — likely viral, supportive care.",
+            "expectedDuration": "2–3 weeks",
+            "steps": [
+              {
+                "type": "instruction",
+                "action": "Honey 1–2 tsp PRN (adults), warm beverages, humidifier",
+                "rationale": "Evidence-based cough suppression",
+                "timing": "Ongoing",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Guaifenesin 400mg q4h PRN (expectorant for productive cough)",
+                "rationale": "Thins secretions",
+                "timing": "PRN",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Dextromethorphan 15–30mg q6-8h PRN (dry cough)",
+                "rationale": "Centrally acting cough suppressant",
+                "timing": "PRN, avoid if using MAOIs",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Ibuprofen or Acetaminophen PRN for fever/myalgias",
+                "rationale": "Symptom relief",
+                "timing": "PRN",
+                "priority": "routine"
+              },
+              {
+                "type": "instruction",
+                "action": "Hand hygiene, mask use around vulnerable individuals, rest",
+                "rationale": "Infection control",
+                "timing": "Ongoing",
+                "priority": "routine"
+              },
+              {
+                "type": "followup",
+                "action": "Return if cough >3 weeks, hemoptysis, fever >5 days, or SOB",
+                "rationale": "Rule out pneumonia, pertussis, or sinusitis",
+                "timing": "PRN",
+                "priority": "routine"
+              }
+            ],
+            "contraindications": [
+              "Dextromethorphan: MAOI use, certain SSRIs (serotonin syndrome risk)"
+            ],
+            "escalationCriteria": [
+              "Cough >3 weeks",
+              "Hemoptysis",
+              "Night sweats + weight loss (TB/malignancy)",
+              "Fever >5 days"
+            ],
+            "outcomeGoals": [
+              "Symptom improvement by week 2",
+              "Complete resolution by week 3"
+            ]
+          },
+          "executedAt": "2026-03-13T19:01:02.323Z",
+          "caseId": "FV002",
+          "statSummary": {
+            "totalSteps": 6,
+            "labsOrdered": [],
+            "medicationsPrescribed": [
+              "Guaifenesin 400mg q4h PRN (expectorant for productive cough)",
+              "Dextromethorphan 15–30mg q6-8h PRN (dry cough)",
+              "Ibuprofen or Acetaminophen PRN for fever/myalgias"
+            ],
+            "referralsPlaced": [],
+            "followupScheduled": [
+              "Return if cough >3 weeks, hemoptysis, fever >5 days, or SOB"
+            ],
+            "contraindications": [
+              "Dextromethorphan: MAOI use, certain SSRIs (serotonin syndrome risk)"
+            ],
+            "escalationCriteria": [
+              "Cough >3 weeks",
+              "Hemoptysis",
+              "Night sweats + weight loss (TB/malignancy)",
+              "Fever >5 days"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "CARE_PATHWAY_STARTED",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "complaint": "cough",
+        "disposition": "urgent_care",
+        "pathway": {
+          "complaint": "cough",
+          "disposition": "Home Care",
+          "title": "Acute Viral URTI / Cough Pathway",
+          "description": "Cough <3 weeks without red flags — likely viral, supportive care.",
+          "expectedDuration": "2–3 weeks",
+          "steps": [
+            {
+              "type": "instruction",
+              "action": "Honey 1–2 tsp PRN (adults), warm beverages, humidifier",
+              "rationale": "Evidence-based cough suppression",
+              "timing": "Ongoing",
+              "priority": "routine"
+            },
+            {
+              "type": "medication",
+              "action": "Guaifenesin 400mg q4h PRN (expectorant for productive cough)",
+              "rationale": "Thins secretions",
+              "timing": "PRN",
+              "priority": "routine"
+            },
+            {
+              "type": "medication",
+              "action": "Dextromethorphan 15–30mg q6-8h PRN (dry cough)",
+              "rationale": "Centrally acting cough suppressant",
+              "timing": "PRN, avoid if using MAOIs",
+              "priority": "routine"
+            },
+            {
+              "type": "medication",
+              "action": "Ibuprofen or Acetaminophen PRN for fever/myalgias",
+              "rationale": "Symptom relief",
+              "timing": "PRN",
+              "priority": "routine"
+            },
+            {
+              "type": "instruction",
+              "action": "Hand hygiene, mask use around vulnerable individuals, rest",
+              "rationale": "Infection control",
+              "timing": "Ongoing",
+              "priority": "routine"
+            },
+            {
+              "type": "followup",
+              "action": "Return if cough >3 weeks, hemoptysis, fever >5 days, or SOB",
+              "rationale": "Rule out pneumonia, pertussis, or sinusitis",
+              "timing": "PRN",
+              "priority": "routine"
+            }
+          ],
+          "contraindications": [
+            "Dextromethorphan: MAOI use, certain SSRIs (serotonin syndrome risk)"
+          ],
+          "escalationCriteria": [
+            "Cough >3 weeks",
+            "Hemoptysis",
+            "Night sweats + weight loss (TB/malignancy)",
+            "Fever >5 days"
+          ],
+          "outcomeGoals": [
+            "Symptom improvement by week 2",
+            "Complete resolution by week 3"
+          ]
+        }
+      }
+    },
+    {
+      "type": "PATHWAY_EXECUTED",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "result": {
+          "pathway": {
+            "complaint": "cough",
+            "disposition": "Home Care",
+            "title": "Acute Viral URTI / Cough Pathway",
+            "description": "Cough <3 weeks without red flags — likely viral, supportive care.",
+            "expectedDuration": "2–3 weeks",
+            "steps": [
+              {
+                "type": "instruction",
+                "action": "Honey 1–2 tsp PRN (adults), warm beverages, humidifier",
+                "rationale": "Evidence-based cough suppression",
+                "timing": "Ongoing",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Guaifenesin 400mg q4h PRN (expectorant for productive cough)",
+                "rationale": "Thins secretions",
+                "timing": "PRN",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Dextromethorphan 15–30mg q6-8h PRN (dry cough)",
+                "rationale": "Centrally acting cough suppressant",
+                "timing": "PRN, avoid if using MAOIs",
+                "priority": "routine"
+              },
+              {
+                "type": "medication",
+                "action": "Ibuprofen or Acetaminophen PRN for fever/myalgias",
+                "rationale": "Symptom relief",
+                "timing": "PRN",
+                "priority": "routine"
+              },
+              {
+                "type": "instruction",
+                "action": "Hand hygiene, mask use around vulnerable individuals, rest",
+                "rationale": "Infection control",
+                "timing": "Ongoing",
+                "priority": "routine"
+              },
+              {
+                "type": "followup",
+                "action": "Return if cough >3 weeks, hemoptysis, fever >5 days, or SOB",
+                "rationale": "Rule out pneumonia, pertussis, or sinusitis",
+                "timing": "PRN",
+                "priority": "routine"
+              }
+            ],
+            "contraindications": [
+              "Dextromethorphan: MAOI use, certain SSRIs (serotonin syndrome risk)"
+            ],
+            "escalationCriteria": [
+              "Cough >3 weeks",
+              "Hemoptysis",
+              "Night sweats + weight loss (TB/malignancy)",
+              "Fever >5 days"
+            ],
+            "outcomeGoals": [
+              "Symptom improvement by week 2",
+              "Complete resolution by week 3"
+            ]
+          },
+          "executedAt": "2026-03-13T19:01:02.323Z",
+          "caseId": "FV002",
+          "statSummary": {
+            "totalSteps": 6,
+            "labsOrdered": [],
+            "medicationsPrescribed": [
+              "Guaifenesin 400mg q4h PRN (expectorant for productive cough)",
+              "Dextromethorphan 15–30mg q6-8h PRN (dry cough)",
+              "Ibuprofen or Acetaminophen PRN for fever/myalgias"
+            ],
+            "referralsPlaced": [],
+            "followupScheduled": [
+              "Return if cough >3 weeks, hemoptysis, fever >5 days, or SOB"
+            ],
+            "contraindications": [
+              "Dextromethorphan: MAOI use, certain SSRIs (serotonin syndrome risk)"
+            ],
+            "escalationCriteria": [
+              "Cough >3 weeks",
+              "Hemoptysis",
+              "Night sweats + weight loss (TB/malignancy)",
+              "Fever >5 days"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 28yo female\nChief Complaint: cough\n\nSubjective:\nproductive cough with fever for 3 days\n\nDifferential Diagnosis:\n  1. pneumonia (33%)\n  2. allergic cough (14%)\n  3. viral URI (13%)\n  4. asthma (8%)\n  5. meningococcemia (3%)\n\nDisposition: URGENT CARE\n\nClinical Reasoning:\nThe symptom pattern of fever, cough, productive_cough associated with cough is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T19:01:02.323Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\nPlease visit an Urgent Care clinic within the next 2-4 hours.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    },
+    {
+      "type": "ADAPTIVE_QUESTIONS_READY",
+      "timestamp": "2026-03-13T19:01:02.324Z",
+      "data": {
+        "complaint": "cough",
+        "entropy": 1.884,
+        "topDiagnosis": "Community Acquired Pneumonia",
+        "topProbability": 0.421,
+        "questions": [
+          {
+            "id": "co_sob",
+            "text": "Are you short of breath or struggling to breathe at rest?",
+            "feature": "shortness_of_breath",
+            "expectedInfoGain": 0.21583593848611682,
+            "rationale": "SOB is the key differentiator — pneumonia vs asthma vs bronchitis",
+            "currentEntropy": 1.884,
+            "entropyIfYes": 1.425,
+            "entropyIfNo": 1.848,
+            "pYes": 0.425
+          },
+          {
+            "id": "co_smell",
+            "text": "Have you lost your sense of smell or taste?",
+            "feature": "loss_of_smell",
+            "expectedInfoGain": 0.12312018029547755,
+            "rationale": "Anosmia is a specific marker for COVID-19",
+            "currentEntropy": 1.884,
+            "entropyIfYes": 1.866,
+            "entropyIfNo": 1.747,
+            "pYes": 0.114
+          },
+          {
+            "id": "co_chest",
+            "text": "Do you have chest pain, especially when breathing deeply?",
+            "feature": "chest_pain",
+            "expectedInfoGain": 0.09046522092915876,
+            "rationale": "Pleuritic pain raises concern for pneumonia or pulmonary embolism",
+            "currentEntropy": 1.884,
+            "entropyIfYes": 1.403,
+            "entropyIfNo": 1.952,
+            "pYes": 0.288
+          },
+          {
+            "id": "co_night",
+            "text": "Is the cough worse at night or does it wake you up?",
+            "feature": "night_symptoms",
+            "expectedInfoGain": 0.025858797297885205,
+            "rationale": "Nocturnal cough pattern is the hallmark of asthma",
+            "currentEntropy": 1.884,
+            "entropyIfYes": 1.901,
+            "entropyIfNo": 1.846,
+            "pYes": 0.219
+          },
+          {
+            "id": "co_whoop",
+            "text": "Do you have episodes of forceful coughing followed by a whooping sound?",
+            "feature": "whoop",
+            "expectedInfoGain": 0.02426414465903126,
+            "rationale": "Whooping cough is pathognomonic for pertussis",
+            "currentEntropy": 1.884,
+            "entropyIfYes": 2.194,
+            "entropyIfNo": 1.851,
+            "pYes": 0.025
+          }
+        ],
+        "differential": [
+          {
+            "diagnosis": "Community Acquired Pneumonia",
+            "probability": 0.421
+          },
+          {
+            "diagnosis": "Viral Bronchitis",
+            "probability": 0.318
+          },
+          {
+            "diagnosis": "Viral URI",
+            "probability": 0.165
+          },
+          {
+            "diagnosis": "COVID-19",
+            "probability": 0.08
+          },
+          {
+            "diagnosis": "Asthma Exacerbation",
+            "probability": 0.009
+          },
+          {
+            "diagnosis": "Pertussis",
+            "probability": 0.007
+          }
+        ]
+      }
+    },
+    {
+      "type": "DIAGNOSTIC_CONFIDENCE_READY",
+      "timestamp": "2026-03-13T19:01:02.324Z",
+      "data": {
+        "results": [
+          {
+            "diagnosis": "viral_URI",
+            "probability": 0.3063457330415755,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.1665,
+            "explanation": [
+              "fever present"
+            ]
+          },
+          {
+            "diagnosis": "pneumonia",
+            "probability": 0.2231947483588622,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15795,
+            "explanation": [
+              "fever present"
+            ]
+          },
+          {
+            "diagnosis": "allergic_cough",
+            "probability": 0.14587892049598836,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "fever present"
+            ]
+          },
+          {
+            "diagnosis": "asthma",
+            "probability": 0.14587892049598836,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "fever present"
+            ]
+          },
+          {
+            "diagnosis": "meningococcemia",
+            "probability": 0.14587892049598836,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "fever present"
+            ]
+          },
+          {
+            "diagnosis": "strep_pharyngitis",
+            "probability": 0.03282275711159738,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.138375,
+            "explanation": [
+              "fever present"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "productive cough with fever for 3 days",
+      "timestamp": "2026-03-13T19:01:02.313Z"
+    }
+  ],
+  "patient": {
+    "age": 28,
+    "sex": "female"
+  },
+  "complaint": "cough",
+  "symptoms": "productive cough with fever for 3 days",
+  "hybridResult": {
+    "disposition": "urgent_care",
+    "confidence": 0.33,
+    "topDiagnosis": "pneumonia",
+    "uncertaintyScore": 1.25,
+    "triggered_flags": [],
+    "explanation": "The symptom pattern of fever, cough, productive_cough associated with cough is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+    "reasoning_path": [
+      "L1 Safety: Pass",
+      "L2 Similarity: 5 cases found, top Dx: pneumonia",
+      "L3 Bayes: top Dx pneumonia (28%), entropy=1.25",
+      "Ensemble: top pneumonia (combined=0.33)",
+      "Disposition: urgent_care (confidence=33%)"
+    ],
+    "extractionConfidence": 1,
+    "featuresExtracted": 4,
+    "missingFields": []
+  },
+  "lastHybridEvalAt": "2026-03-13T19:01:02.323Z",
+  "disposition": "urgent_care",
+  "differential": [
+    {
+      "diagnosis": "pneumonia",
+      "confidence": 0.33
+    },
+    {
+      "diagnosis": "allergic_cough",
+      "confidence": 0.137
+    },
+    {
+      "diagnosis": "viral_URI",
+      "confidence": 0.128
+    },
+    {
+      "diagnosis": "asthma",
+      "confidence": 0.078
+    },
+    {
+      "diagnosis": "meningococcemia",
+      "confidence": 0.028
+    },
+    {
+      "diagnosis": "strep_pharyngitis",
+      "confidence": 0.027
+    }
+  ],
+  "carePathway": {
+    "complaint": "cough",
+    "disposition": "Home Care",
+    "title": "Acute Viral URTI / Cough Pathway",
+    "description": "Cough <3 weeks without red flags — likely viral, supportive care.",
+    "expectedDuration": "2–3 weeks",
+    "steps": [
+      {
+        "type": "instruction",
+        "action": "Honey 1–2 tsp PRN (adults), warm beverages, humidifier",
+        "rationale": "Evidence-based cough suppression",
+        "timing": "Ongoing",
+        "priority": "routine"
+      },
+      {
+        "type": "medication",
+        "action": "Guaifenesin 400mg q4h PRN (expectorant for productive cough)",
+        "rationale": "Thins secretions",
+        "timing": "PRN",
+        "priority": "routine"
+      },
+      {
+        "type": "medication",
+        "action": "Dextromethorphan 15–30mg q6-8h PRN (dry cough)",
+        "rationale": "Centrally acting cough suppressant",
+        "timing": "PRN, avoid if using MAOIs",
+        "priority": "routine"
+      },
+      {
+        "type": "medication",
+        "action": "Ibuprofen or Acetaminophen PRN for fever/myalgias",
+        "rationale": "Symptom relief",
+        "timing": "PRN",
+        "priority": "routine"
+      },
+      {
+        "type": "instruction",
+        "action": "Hand hygiene, mask use around vulnerable individuals, rest",
+        "rationale": "Infection control",
+        "timing": "Ongoing",
+        "priority": "routine"
+      },
+      {
+        "type": "followup",
+        "action": "Return if cough >3 weeks, hemoptysis, fever >5 days, or SOB",
+        "rationale": "Rule out pneumonia, pertussis, or sinusitis",
+        "timing": "PRN",
+        "priority": "routine"
+      }
+    ],
+    "contraindications": [
+      "Dextromethorphan: MAOI use, certain SSRIs (serotonin syndrome risk)"
+    ],
+    "escalationCriteria": [
+      "Cough >3 weeks",
+      "Hemoptysis",
+      "Night sweats + weight loss (TB/malignancy)",
+      "Fever >5 days"
+    ],
+    "outcomeGoals": [
+      "Symptom improvement by week 2",
+      "Complete resolution by week 3"
+    ]
+  },
+  "chartNote": "VISIT NOTE — March 13, 2026\nPatient: 28yo female\nChief Complaint: cough\n\nSubjective:\nproductive cough with fever for 3 days\n\nDifferential Diagnosis:\n  1. pneumonia (33%)\n  2. allergic cough (14%)\n  3. viral URI (13%)\n  4. asthma (8%)\n  5. meningococcemia (3%)\n\nDisposition: URGENT CARE\n\nClinical Reasoning:\nThe symptom pattern of fever, cough, productive_cough associated with cough is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\nPlease visit an Urgent Care clinic within the next 2-4 hours.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T19:01:02.324Z"
+}

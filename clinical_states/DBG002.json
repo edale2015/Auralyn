@@ -1,0 +1,356 @@
+{
+  "caseId": "DBG002",
+  "sessionId": "sess_1773428375826_46k88",
+  "createdAt": "2026-03-13T18:59:35.826Z",
+  "updatedAt": "2026-03-13T18:59:35.838Z",
+  "events": [
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T18:59:35.826Z",
+      "data": {
+        "message": "chest pain radiating to arm"
+      }
+    },
+    {
+      "type": "COMPLAINT_IDENTIFIED",
+      "timestamp": "2026-03-13T18:59:35.826Z",
+      "data": {
+        "complaint": "chest_pain"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T18:59:35.834Z",
+      "data": {
+        "result": {
+          "disposition": "uncertain",
+          "confidence": 0.14,
+          "topDiagnosis": "GERD",
+          "uncertaintyScore": 0.64,
+          "triggered_flags": [],
+          "explanation": "The symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+          "reasoning_path": [
+            "L1 Safety: Pass",
+            "L2 Similarity: 5 cases found, top Dx: GERD",
+            "L3 Bayes: top Dx pulmonary_embolism (3%), entropy=0.64",
+            "Ensemble: top GERD (combined=0.14)",
+            "Disposition: uncertain (confidence=14%)"
+          ],
+          "extractionConfidence": 0.4,
+          "featuresExtracted": 0,
+          "missingFields": [
+            "symptoms",
+            "age",
+            "sex"
+          ]
+        },
+        "timestamp": "2026-03-13T18:59:35.834Z"
+      }
+    },
+    {
+      "type": "DIFFERENTIAL_UPDATED",
+      "timestamp": "2026-03-13T18:59:35.834Z",
+      "data": {
+        "differential": [
+          {
+            "diagnosis": "GERD",
+            "confidence": 0.14
+          },
+          {
+            "diagnosis": "acute_coronary_syndrome",
+            "confidence": 0.14
+          },
+          {
+            "diagnosis": "pulmonary_embolism",
+            "confidence": 0.091
+          },
+          {
+            "diagnosis": "viral_URI",
+            "confidence": 0.014
+          },
+          {
+            "diagnosis": "otitis_externa",
+            "confidence": 0.014
+          },
+          {
+            "diagnosis": "pneumonia",
+            "confidence": 0.013
+          }
+        ]
+      }
+    },
+    {
+      "type": "FOLLOWUP_QUESTION_SUGGESTED",
+      "timestamp": "2026-03-13T18:59:35.834Z",
+      "data": {
+        "question": {
+          "id": "cp_duration",
+          "text": "How long have you had this chest pain?",
+          "complaint": "chest_pain",
+          "targetFeature": "duration",
+          "priority": 1,
+          "expectedAnswerType": "text",
+          "extractedFeatureIfYes": "duration_known"
+        },
+        "questionsRemaining": 6,
+        "questionsAsked": 0
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T18:59:35.835Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nChief Complaint: chest pain\n\nSubjective:\nchest pain radiating to arm\n\nDifferential Diagnosis:\n  1. GERD (14%)\n  2. acute coronary syndrome (14%)\n  3. pulmonary embolism (9%)\n  4. viral URI (1%)\n  5. otitis externa (1%)\n\nDisposition: NEED MORE INFO\n\nClinical Reasoning:\nThe symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T18:59:35.835Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\nPlease provide the requested information so we can complete your triage assessment.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    },
+    {
+      "type": "ADAPTIVE_QUESTIONS_READY",
+      "timestamp": "2026-03-13T18:59:35.836Z",
+      "data": {
+        "complaint": "chest_pain",
+        "entropy": 1.882,
+        "topDiagnosis": "Acute Coronary Syndrome",
+        "topProbability": 0.575,
+        "questions": [
+          {
+            "id": "cp_sweat",
+            "text": "Are you sweating or feeling clammy?",
+            "feature": "diaphoresis",
+            "expectedInfoGain": 0.2139988758209801,
+            "rationale": "Diaphoresis is an autonomic marker for ACS or massive PE",
+            "currentEntropy": 1.882,
+            "entropyIfYes": 0.783,
+            "entropyIfNo": 2.241,
+            "pYes": 0.393
+          },
+          {
+            "id": "cp_repro",
+            "text": "Does pressing on your chest wall reproduce or worsen the pain?",
+            "feature": "reproducible",
+            "expectedInfoGain": 0.21218366723419724,
+            "rationale": "Reproducibility on palpation strongly favors musculoskeletal",
+            "currentEntropy": 1.882,
+            "entropyIfYes": 1.602,
+            "entropyIfNo": 1.681,
+            "pYes": 0.135
+          },
+          {
+            "id": "cp_breath",
+            "text": "Does the pain get worse when you breathe in deeply?",
+            "feature": "pleuritic",
+            "expectedInfoGain": 0.200979594161107,
+            "rationale": "Pleuritic pain raises concern for PE, pericarditis, or pneumothorax",
+            "currentEntropy": 1.882,
+            "entropyIfYes": 2.315,
+            "entropyIfNo": 1.53,
+            "pYes": 0.192
+          },
+          {
+            "id": "cp_fever",
+            "text": "Do you have a fever or recent viral illness?",
+            "feature": "fever",
+            "expectedInfoGain": 0.150421290290222,
+            "rationale": "Fever + chest pain raises concern for pericarditis",
+            "currentEntropy": 1.882,
+            "entropyIfYes": 1.745,
+            "entropyIfNo": 1.73,
+            "pYes": 0.152
+          },
+          {
+            "id": "cp_sob",
+            "text": "Are you short of breath at rest?",
+            "feature": "sob",
+            "expectedInfoGain": 0.1441885314250435,
+            "rationale": "SOB at rest differentiates serious from benign causes",
+            "currentEntropy": 1.882,
+            "entropyIfYes": 1.409,
+            "entropyIfNo": 1.99,
+            "pYes": 0.433
+          }
+        ],
+        "differential": [
+          {
+            "diagnosis": "Acute Coronary Syndrome",
+            "probability": 0.575
+          },
+          {
+            "diagnosis": "Gastroesophageal Reflux",
+            "probability": 0.147
+          },
+          {
+            "diagnosis": "Musculoskeletal Chest Pain",
+            "probability": 0.103
+          },
+          {
+            "diagnosis": "Pericarditis",
+            "probability": 0.094
+          },
+          {
+            "diagnosis": "Pulmonary Embolism",
+            "probability": 0.059
+          },
+          {
+            "diagnosis": "Pneumothorax",
+            "probability": 0.021
+          }
+        ]
+      }
+    },
+    {
+      "type": "DIAGNOSTIC_CONFIDENCE_READY",
+      "timestamp": "2026-03-13T18:59:35.837Z",
+      "data": {
+        "results": [
+          {
+            "diagnosis": "viral_URI",
+            "probability": 0.49999999999999994,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.24,
+            "explanation": [
+              "chest pain",
+              "radiation"
+            ]
+          },
+          {
+            "diagnosis": "pneumonia",
+            "probability": 0.2142857142857143,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.18000000000000002,
+            "explanation": [
+              "chest pain",
+              "radiation"
+            ]
+          },
+          {
+            "diagnosis": "GERD",
+            "probability": 0.07142857142857142,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "chest pain",
+              "radiation"
+            ]
+          },
+          {
+            "diagnosis": "acute_coronary_syndrome",
+            "probability": 0.07142857142857142,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "chest pain",
+              "radiation"
+            ]
+          },
+          {
+            "diagnosis": "pulmonary_embolism",
+            "probability": 0.07142857142857142,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "chest pain",
+              "radiation"
+            ]
+          },
+          {
+            "diagnosis": "otitis_externa",
+            "probability": 0.07142857142857142,
+            "ruleScore": 0.3,
+            "similarityScore": 0,
+            "confidence": 0.15000000000000002,
+            "explanation": [
+              "chest pain",
+              "radiation"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "chest pain radiating to arm",
+      "timestamp": "2026-03-13T18:59:35.826Z"
+    }
+  ],
+  "symptoms": "chest pain radiating to arm",
+  "complaint": "chest_pain",
+  "hybridResult": {
+    "disposition": "uncertain",
+    "confidence": 0.14,
+    "topDiagnosis": "GERD",
+    "uncertaintyScore": 0.64,
+    "triggered_flags": [],
+    "explanation": "The symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+    "reasoning_path": [
+      "L1 Safety: Pass",
+      "L2 Similarity: 5 cases found, top Dx: GERD",
+      "L3 Bayes: top Dx pulmonary_embolism (3%), entropy=0.64",
+      "Ensemble: top GERD (combined=0.14)",
+      "Disposition: uncertain (confidence=14%)"
+    ],
+    "extractionConfidence": 0.4,
+    "featuresExtracted": 0,
+    "missingFields": [
+      "symptoms",
+      "age",
+      "sex"
+    ]
+  },
+  "lastHybridEvalAt": "2026-03-13T18:59:35.834Z",
+  "disposition": "need_more_info",
+  "differential": [
+    {
+      "diagnosis": "GERD",
+      "confidence": 0.14
+    },
+    {
+      "diagnosis": "acute_coronary_syndrome",
+      "confidence": 0.14
+    },
+    {
+      "diagnosis": "pulmonary_embolism",
+      "confidence": 0.091
+    },
+    {
+      "diagnosis": "viral_URI",
+      "confidence": 0.014
+    },
+    {
+      "diagnosis": "otitis_externa",
+      "confidence": 0.014
+    },
+    {
+      "diagnosis": "pneumonia",
+      "confidence": 0.013
+    }
+  ],
+  "pendingQuestion": {
+    "id": "cp_duration",
+    "text": "How long have you had this chest pain?",
+    "complaint": "chest_pain",
+    "targetFeature": "duration",
+    "priority": 1,
+    "expectedAnswerType": "text",
+    "extractedFeatureIfYes": "duration_known"
+  },
+  "followUpQuestions": [
+    "How long have you had this chest pain?"
+  ],
+  "interviewComplete": false,
+  "chartNote": "VISIT NOTE — March 13, 2026\nChief Complaint: chest pain\n\nSubjective:\nchest pain radiating to arm\n\nDifferential Diagnosis:\n  1. GERD (14%)\n  2. acute coronary syndrome (14%)\n  3. pulmonary embolism (9%)\n  4. viral URI (1%)\n  5. otitis externa (1%)\n\nDisposition: NEED MORE INFO\n\nClinical Reasoning:\nThe symptom pattern of  associated with chest pain is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\nPlease provide the requested information so we can complete your triage assessment.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T18:59:35.838Z"
+}

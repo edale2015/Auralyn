@@ -6,6 +6,9 @@ import { checkLockedRules } from "../../hybrid-reasoning/lockedSafetyRegistry";
 import { getNextQuestion } from "../../hybrid-reasoning/followUpEngine";
 import { executeCarePathway } from "../../pathways/pathwayExecutor";
 import { recordVisit, recordAlert, recordDisposition, recordConfidence, recordFollowUpQuestion, recordCarePathway } from "../../core/monitoring/metrics";
+import { computeAdaptiveQuestions, extractPresentFeatures } from "../../assistant/adaptiveQuestionEngine";
+import { computeDiagnosticConfidence } from "../../diagnostics/diagnosticConfidenceService";
+import { computeSimilarityWeightedDifferential } from "../../similarity/similarityWeightedDifferentialService";
 
 const COMPLAINT_KEYWORDS: Record<string, string[]> = {
   chest_pain:     ["chest pain","chest tightness","chest pressure","palpitations","heart pain"],
@@ -219,6 +222,18 @@ export async function runClinicalOrchestrator(
     const note = buildSimpleNote({ ...getClinicalState(caseId), disposition: "er_now" as any, redFlags: lockedCheck.rules.map(r => r.id) });
     emitClinicalEvent(caseId, "NOTE_READY", { note });
     emitClinicalEvent(caseId, "DISCHARGE_READY", { text: buildDischargeText({ ...getClinicalState(caseId), disposition: "er_now" as any }) });
+
+    const lockedSymptomsText = (state.symptoms ?? "") + " " + message;
+    const lockedPresentFeatures = extractPresentFeatures(lockedSymptomsText, activeComplaint);
+    const lockedAdaptive = computeAdaptiveQuestions(activeComplaint, lockedPresentFeatures, []);
+    const lockedConfidence = computeDiagnosticConfidence({ ...getClinicalState(caseId), symptoms: lockedSymptomsText });
+    emitClinicalEvent(caseId, "ADAPTIVE_QUESTIONS_READY" as any, {
+      complaint: activeComplaint, entropy: lockedAdaptive.currentEntropy,
+      topDiagnosis: lockedAdaptive.topDiagnosis, topProbability: lockedAdaptive.topProbability,
+      questions: lockedAdaptive.questions.slice(0, 5), differential: lockedAdaptive.differential,
+    });
+    emitClinicalEvent(caseId, "DIAGNOSTIC_CONFIDENCE_READY" as any, { results: lockedConfidence });
+
     setClinicalState(caseId, { orchestratorRunAt: new Date().toISOString() });
     return {
       ...getClinicalState(caseId),
@@ -226,6 +241,10 @@ export async function runClinicalOrchestrator(
         lockedRulesTriggered: true,
         rules: lockedCheck.rules.map(r => r.id),
         extractionConfidence: extraction.confidence,
+        adaptiveEntropy: lockedAdaptive.currentEntropy,
+        topAdaptiveDx: lockedAdaptive.topDiagnosis,
+        adaptiveQuestions: lockedAdaptive.questions.slice(0, 3).map(q => q.text),
+        diagnosticConfidence: lockedConfidence.slice(0, 3),
       },
     };
   }
@@ -325,6 +344,54 @@ export async function runClinicalOrchestrator(
   const discharge = buildDischargeText(getClinicalState(caseId));
   emitClinicalEvent(caseId, "DISCHARGE_READY", { text: discharge });
 
+  const currentState = getClinicalState(caseId);
+
+  const symptomsText = (currentState.symptoms ?? "") + " " + message;
+  const presentFeatures = extractPresentFeatures(symptomsText, activeComplaint);
+  const adaptiveResult = computeAdaptiveQuestions(
+    activeComplaint,
+    presentFeatures,
+    [],
+    (currentState.differential as any[]) ?? []
+  );
+  emitClinicalEvent(caseId, "ADAPTIVE_QUESTIONS_READY" as any, {
+    complaint: activeComplaint,
+    entropy: adaptiveResult.currentEntropy,
+    topDiagnosis: adaptiveResult.topDiagnosis,
+    topProbability: adaptiveResult.topProbability,
+    questions: adaptiveResult.questions.slice(0, 5),
+    differential: adaptiveResult.differential,
+  });
+
+  const confidenceResults = computeDiagnosticConfidence({
+    ...currentState,
+    symptoms: symptomsText,
+  });
+  emitClinicalEvent(caseId, "DIAGNOSTIC_CONFIDENCE_READY" as any, {
+    results: confidenceResults,
+  });
+
+  computeSimilarityWeightedDifferential(currentState).then((simResult) => {
+    if (simResult.voteDifferential?.length) {
+      const combinedMap: Record<string, number> = {};
+      for (const d of (currentState.differential ?? []) as any[]) {
+        const dx = typeof d === "string" ? d : d.diagnosis;
+        const sc = typeof d === "string" ? 0.3 : d.score ?? d.probability ?? 0.3;
+        combinedMap[dx] = (combinedMap[dx] ?? 0) + sc * 0.6;
+      }
+      for (const v of simResult.voteDifferential) {
+        combinedMap[v.diagnosis] = (combinedMap[v.diagnosis] ?? 0) + v.score * 0.4;
+      }
+      const mergedDifferential = Object.entries(combinedMap)
+        .map(([diagnosis, score]) => ({ diagnosis, score }))
+        .sort((a, b) => b.score - a.score);
+      emitClinicalEvent(caseId, "SIMILARITY_DIFFERENTIAL_READY" as any, {
+        similarCases: simResult.similarCases.length,
+        mergedDifferential: mergedDifferential.slice(0, 6),
+      });
+    }
+  }).catch(() => {});
+
   setClinicalState(caseId, { orchestratorRunAt: new Date().toISOString() });
 
   return {
@@ -334,6 +401,10 @@ export async function runClinicalOrchestrator(
       featuresExtracted: features.length,
       missingFields: extraction.missingFields,
       lockedRulesTriggered: false,
+      adaptiveEntropy: adaptiveResult.currentEntropy,
+      topAdaptiveDx: adaptiveResult.topDiagnosis,
+      adaptiveQuestions: adaptiveResult.questions.slice(0, 3).map((q) => q.text),
+      diagnosticConfidence: confidenceResults.slice(0, 3),
     },
   };
 }
