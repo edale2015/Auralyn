@@ -1,0 +1,330 @@
+Level 1 — Trace Capture (The Black Box)
+
+Goal: Record exactly what the system did during every case.
+
+Without this, learning is impossible.
+
+Capabilities
+
+• capture questions asked
+• answers given
+• rules triggered
+• diagnoses considered
+• disposition chosen
+• timing / ordering
+
+Trace schema
+# schemas/trace_schema.py
+from dataclasses import dataclass
+from typing import List, Dict
+
+@dataclass
+class Trace:
+    case_id: str
+    complaint: str
+    modifiers: Dict
+    questions: List[Dict]
+    rules_triggered: List[str]
+    differential: List[str]
+    disposition: str
+    confidence: float
+Trace store
+# learning/trace_store.py
+import json, os
+
+class TraceStore:
+
+    DIR = "traces"
+
+    def save(self, trace):
+
+        os.makedirs(self.DIR, exist_ok=True)
+
+        path = f"{self.DIR}/{trace['case_id']}.json"
+
+        with open(path, "w") as f:
+            json.dump(trace, f, indent=2)
+
+    def load_all(self):
+
+        traces = []
+
+        for f in os.listdir(self.DIR):
+            with open(f"{self.DIR}/{f}") as file:
+                traces.append(json.load(file))
+
+        return traces
+Level 2 — Gold Case Evaluation
+
+Goal: Determine if the system performed correctly.
+
+Golden case schema
+# learning/golden_case_store.py
+import json
+
+class GoldenCaseStore:
+
+    def __init__(self):
+        with open("config/golden_cases.json") as f:
+            self.cases = json.load(f)
+
+    def get(self, case_id):
+        return self.cases.get(case_id)
+Evaluation agent
+# agents/evaluation_agent.py
+class EvaluationAgent:
+
+    def __init__(self, gold_store):
+        self.gold = gold_store
+
+    def evaluate(self, trace):
+
+        gold = self.gold.get(trace["case_id"])
+
+        if not gold:
+            return {"passed": True}
+
+        dispo_match = trace["disposition"] == gold["expected_disposition"]
+
+        dx_match = gold["expected_dx"] in trace["differential"]
+
+        return {
+            "passed": dispo_match and dx_match,
+            "disposition_match": dispo_match,
+            "diagnosis_match": dx_match
+        }
+Level 3 — Failure Classification
+
+Goal: Explain WHY a case failed.
+
+Failure categories
+missing_question
+missed_red_flag
+undertriage
+overtriage
+differential_missing
+rule_conflict
+Failure classifier
+# learning/failure_classifier.py
+class FailureClassifier:
+
+    def classify(self, trace, evaluation):
+
+        if not evaluation["disposition_match"]:
+            return "undertriage"
+
+        if not evaluation["diagnosis_match"]:
+            return "differential_missing"
+
+        return "unknown"
+Level 4 — Proposal Generator
+
+Goal: Generate structured improvements.
+
+Example proposals
+add question
+adjust rule threshold
+add diagnosis cluster
+reorder questions
+update template
+Proposal engine
+# learning/proposal_engine.py
+class ProposalEngine:
+
+    def propose(self, failure):
+
+        if failure == "missing_question":
+            return {
+                "type": "add_question",
+                "target": "CORE_QUESTIONS"
+            }
+
+        if failure == "undertriage":
+            return {
+                "type": "strengthen_disp_rule",
+                "target": "DISP_RULES"
+            }
+
+        return None
+Level 5 — Regression Safety Testing
+
+Goal: Prevent dangerous changes.
+
+Regression runner
+# learning/regression_runner.py
+class RegressionRunner:
+
+    def __init__(self, controller):
+        self.controller = controller
+
+    def test(self, proposal):
+
+        cases = load_golden_cases()
+
+        failures = 0
+
+        for case in cases:
+
+            result = self.controller.simulate(case, proposal)
+
+            if not result["safe"]:
+                failures += 1
+
+        return failures == 0
+Level 6 — Rule Promotion
+
+Goal: Move safe proposals into production rules.
+
+# learning/rule_updater.py
+import json
+
+class RuleUpdater:
+
+    def apply(self, proposal):
+
+        path = f"config/{proposal['target']}.json"
+
+        with open(path) as f:
+            rules = json.load(f)
+
+        rules.append(proposal)
+
+        with open(path, "w") as f:
+            json.dump(rules, f, indent=2)
+Level 7 — Reinforcement Learning
+
+Goal: Learn which decision paths work best.
+
+# optimization/reinforcement_engine.py
+class ReinforcementEngine:
+
+    def __init__(self):
+        self.q = {}
+
+    def update(self, state, action, reward):
+
+        key = (state, action)
+
+        old = self.q.get(key, 0)
+
+        self.q[key] = old + 0.1*(reward-old)
+
+    def best(self, state, actions):
+
+        values = [self.q.get((state,a),0) for a in actions]
+
+        return actions[values.index(max(values))]
+Level 8 — Clinical Knowledge Graph
+
+Goal: Learn symptom → diagnosis relationships.
+
+# optimization/reasoning_graph.py
+class ReasoningGraph:
+
+    def __init__(self):
+        self.graph = {}
+
+    def add(self, symptom, diagnosis):
+
+        if symptom not in self.graph:
+            self.graph[symptom] = {}
+
+        self.graph[symptom][diagnosis] = \
+            self.graph[symptom].get(diagnosis,0)+1
+
+    def rank(self, symptoms):
+
+        scores = {}
+
+        for s in symptoms:
+            if s not in self.graph:
+                continue
+
+            for dx,w in self.graph[s].items():
+                scores[dx] = scores.get(dx,0)+w
+
+        return sorted(scores,key=scores.get,reverse=True)
+Level 9 — Predictive Risk Modeling
+
+Goal: Predict dangerous outcomes early.
+
+# prediction/risk_model.py
+class RiskModel:
+
+    def __init__(self):
+        self.weights={}
+
+    def train(self,features,outcome):
+
+        for f in features:
+            self.weights[f]=self.weights.get(f,0)+outcome
+
+    def score(self,features):
+
+        return sum(self.weights.get(f,0) for f in features)
+Level 10 — Autonomous Improvement Orchestrator
+
+Goal: Run the entire learning loop automatically.
+
+# orchestration/improvement_scheduler.py
+class ImprovementScheduler:
+
+    def __init__(self, controller):
+        self.controller = controller
+
+    def run_cycle(self):
+
+        traces = load_recent_traces()
+
+        for trace in traces:
+
+            evaluation = self.controller.evaluate(trace)
+
+            if not evaluation["passed"]:
+
+                failure = self.controller.classify(trace,evaluation)
+
+                proposal = self.controller.propose(failure)
+
+                if self.controller.regression_test(proposal):
+
+                    self.controller.promote(proposal)
+Continuous Learning Loop
+# scheduler.py
+import time
+from orchestration.improvement_scheduler import ImprovementScheduler
+
+scheduler = ImprovementScheduler(controller)
+
+while True:
+
+    scheduler.run_cycle()
+
+    time.sleep(3600)
+
+The system improves every hour.
+
+What the System Now Does
+
+After Levels 1–10 your assistant can:
+
+Capability	Description
+Trace capture	records reasoning
+Gold case evaluation	measures correctness
+Failure analysis	diagnoses errors
+Proposal generation	drafts fixes
+Regression testing	prevents harm
+Rule promotion	updates system
+Reinforcement learning	optimizes decisions
+Knowledge graph	learns medicine patterns
+Risk modeling	predicts dangerous cases
+Autonomous improvement	continuous evolution
+Realistic Scale
+
+A full production version would likely include:
+
+30–50 agents
+60–100 modules
+40k–80k lines of code
+
+But the framework above contains the core intelligence mechanisms
