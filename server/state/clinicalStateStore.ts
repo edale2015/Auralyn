@@ -3,16 +3,24 @@ import * as path from "path";
 
 export type ClinicalEventType =
   | "SESSION_STARTED"
+  | "PATIENT_MESSAGE"
   | "SYMPTOMS_RECORDED"
   | "COMPLAINT_IDENTIFIED"
   | "MODIFIER_CAPTURED"
   | "RED_FLAG_DETECTED"
   | "DIFFERENTIAL_UPDATED"
+  | "ALERTS_UPDATED"
   | "SCORE_COMPUTED"
+  | "MEDICATION_PLAN"
   | "DISPOSITION_SET"
   | "PATHWAY_EXECUTED"
   | "COPILOT_SUGGESTION"
   | "RISK_ASSESSED"
+  | "HYBRID_REASONING_COMPLETE"
+  | "UNCERTAINTY_DETECTED"
+  | "FOLLOW_UP_QUESTION_ASKED"
+  | "DISCHARGE_READY"
+  | "NOTE_READY"
   | "OUTCOME_RECORDED"
   | "REWARD_COMPUTED";
 
@@ -51,6 +59,28 @@ export interface ClinicalState {
     factors: string[];
   };
   copilotSuggestions?: string[];
+  followUpQuestions?: string[];
+  alerts?: string[];
+  medicationPlan?: {
+    drug: string;
+    dose: string;
+    route: string;
+    frequency: string;
+    duration: string;
+  } | null;
+  dischargeText?: string;
+  chartNote?: any;
+  hybridResult?: {
+    disposition: string;
+    confidence: number;
+    topDiagnosis: string;
+    uncertaintyScore: number;
+    triggered_flags: string[];
+    explanation: string;
+    reasoning_path: string[];
+  };
+  lastHybridEvalAt?: string;
+  orchestratorRunAt?: string;
   outcomeData?: {
     actualDisposition?: string;
     followupStatus?: string;

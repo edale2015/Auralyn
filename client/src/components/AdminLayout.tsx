@@ -126,6 +126,7 @@ const NAV_SECTIONS = [
     items: [
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
+      { path: "/ucsm", label: "Clinical State Model", icon: Activity },
     ],
   },
   {

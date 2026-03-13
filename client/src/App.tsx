@@ -55,6 +55,7 @@ import TelemedicineConsole from "@/pages/TelemedicineConsole";
 import TelemedicineDoctorDashboard from "@/pages/TelemedicineDoctorDashboard";
 import SelfImproveDashboard from "@/pages/SelfImproveDashboard";
 import HybridReasoningConsole from "@/pages/HybridReasoningConsole";
+import UCSMConsole from "@/pages/UCSMConsole";
 import SiteManagementPage from "@/pages/SiteManagementPage";
 import SL3OutcomePage from "@/pages/SL3OutcomePage";
 import SL4ProviderAnalyticsPage from "@/pages/SL4ProviderAnalyticsPage";
@@ -134,6 +135,7 @@ function Router() {
       <Route path="/telemed-doctor-dashboard">{() => <AdminPage component={TelemedicineDoctorDashboard} />}</Route>
       <Route path="/self-improve">{() => <AdminPage component={SelfImproveDashboard} />}</Route>
       <Route path="/hybrid-reasoning">{() => <AdminPage component={HybridReasoningConsole} />}</Route>
+      <Route path="/ucsm">{() => <AdminPage component={UCSMConsole} />}</Route>
       <Route path="/site-management">{() => <AdminPage component={SiteManagementPage} />}</Route>
       <Route path="/sl3-outcomes">{() => <AdminPage component={SL3OutcomePage} />}</Route>
       <Route path="/sl4-provider-analytics">{() => <AdminPage component={SL4ProviderAnalyticsPage} />}</Route>

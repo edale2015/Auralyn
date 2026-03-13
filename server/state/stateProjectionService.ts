@@ -42,6 +42,36 @@ export function projectEvent(caseId: string, event: { type: string; data: Record
     case "COPILOT_SUGGESTION":
       state.copilotSuggestions = event.data.suggestions;
       break;
+    case "PATIENT_MESSAGE":
+      state.symptoms = ((state.symptoms ?? "") + " " + event.data.message).trim();
+      state.intakeMessages = state.intakeMessages ?? [];
+      state.intakeMessages.push({ role: "patient", content: event.data.message, timestamp: event.data.timestamp ?? new Date().toISOString() });
+      break;
+    case "ALERTS_UPDATED":
+      state.alerts = event.data.alerts ?? [];
+      break;
+    case "MEDICATION_PLAN":
+      state.medicationPlan = event.data.medication ?? null;
+      break;
+    case "FOLLOW_UP_QUESTION_ASKED":
+      state.followUpQuestions = [...(state.followUpQuestions ?? []), event.data.question];
+      break;
+    case "UNCERTAINTY_DETECTED":
+      state.followUpQuestions = [...(state.followUpQuestions ?? []), event.data.nextQuestion];
+      break;
+    case "HYBRID_REASONING_COMPLETE":
+      state.hybridResult = event.data.result;
+      state.lastHybridEvalAt = event.data.timestamp ?? new Date().toISOString();
+      if (event.data.result?.disposition && !state.disposition) {
+        state.disposition = event.data.result.disposition;
+      }
+      break;
+    case "DISCHARGE_READY":
+      state.dischargeText = event.data.text;
+      break;
+    case "NOTE_READY":
+      state.chartNote = event.data.note;
+      break;
     case "OUTCOME_RECORDED":
       state.outcomeData = { ...(state.outcomeData ?? {}), ...event.data };
       break;
