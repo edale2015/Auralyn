@@ -53,6 +53,12 @@ import SkillLayerReviewPage from "@/pages/SkillLayerReviewPage";
 import SkillLayerAdminPage from "@/pages/SkillLayerAdminPage";
 import TelemedicineConsole from "@/pages/TelemedicineConsole";
 import SiteManagementPage from "@/pages/SiteManagementPage";
+import SL3OutcomePage from "@/pages/SL3OutcomePage";
+import SL4ProviderAnalyticsPage from "@/pages/SL4ProviderAnalyticsPage";
+import SL5PopulationHealthPage from "@/pages/SL5PopulationHealthPage";
+import SL6ClinicalCodingPage from "@/pages/SL6ClinicalCodingPage";
+import SL7CommHubPage from "@/pages/SL7CommHubPage";
+import SL8TenantOrchestrationPage from "@/pages/SL8TenantOrchestrationPage";
 import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import NotFound from "@/pages/not-found";
@@ -118,6 +124,12 @@ function Router() {
       <Route path="/skill-layer-admin">{() => <AdminPage component={SkillLayerAdminPage} />}</Route>
       <Route path="/telemedicine">{() => <AdminPage component={TelemedicineConsole} />}</Route>
       <Route path="/site-management">{() => <AdminPage component={SiteManagementPage} />}</Route>
+      <Route path="/sl3-outcomes">{() => <AdminPage component={SL3OutcomePage} />}</Route>
+      <Route path="/sl4-provider-analytics">{() => <AdminPage component={SL4ProviderAnalyticsPage} />}</Route>
+      <Route path="/sl5-population-health">{() => <AdminPage component={SL5PopulationHealthPage} />}</Route>
+      <Route path="/sl6-clinical-coding">{() => <AdminPage component={SL6ClinicalCodingPage} />}</Route>
+      <Route path="/sl7-comm-hub">{() => <AdminPage component={SL7CommHubPage} />}</Route>
+      <Route path="/sl8-tenant-orchestration">{() => <AdminPage component={SL8TenantOrchestrationPage} />}</Route>
       <Route path="/debug/traces">{() => <AdminPage component={TraceViewer} />}</Route>
       <Route component={NotFound} />
     </Switch>

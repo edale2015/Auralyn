@@ -22,6 +22,7 @@ import {
   MessageSquare, Bot, Cpu, Sparkles, GitBranch, Rocket, Gauge,
   FlaskConical, Eye, AlertTriangle, Users, Settings, Search,
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
+  ClipboardList, LineChart, Code2, MessageCircle, Building2,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -95,6 +96,17 @@ const NAV_SECTIONS = [
       { path: "/skill-layer-review", label: "Clinician Review", icon: Eye },
       { path: "/skill-layer-admin", label: "Platform Admin 2.x", icon: Settings },
       { path: "/site-management", label: "Site Management", icon: Globe },
+    ],
+  },
+  {
+    label: "Skill Layers 3–8",
+    items: [
+      { path: "/sl3-outcomes", label: "SL3 Outcome Feedback", icon: ClipboardList },
+      { path: "/sl4-provider-analytics", label: "SL4 Provider Analytics", icon: Users },
+      { path: "/sl5-population-health", label: "SL5 Population Health", icon: LineChart },
+      { path: "/sl6-clinical-coding", label: "SL6 Clinical Coding", icon: Code2 },
+      { path: "/sl7-comm-hub", label: "SL7 Comm Hub", icon: MessageCircle },
+      { path: "/sl8-tenant-orchestration", label: "SL8 Tenant Orchestration", icon: Building2 },
     ],
   },
   {
