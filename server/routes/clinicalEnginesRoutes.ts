@@ -20,6 +20,7 @@ import { calibrateWithOutcomes } from "../diagnostics/confidenceCalibrationEngin
 import { calibrateDifferential } from "../diagnostics/differentialCalibrationEngine"
 import { rebuildSimilarityIndexFromOutcomes } from "../similarity/caseMemoryIndexer"
 import { getOutcomeStats } from "../similarity/outcomeCaseMemory"
+import { computeContradictionReport } from "../diagnostics/differentialContradictionEngine"
 
 const router = express.Router()
 
@@ -292,6 +293,38 @@ router.post("/api/clinical/rebuild-memory-index", async (req, res) => {
   try {
     const count = await rebuildSimilarityIndexFromOutcomes()
     res.json({ ok: true, count, message: `Rebuilt index with ${count} outcome cases` })
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// ─── Differential Contradiction / Missing Evidence ─────────────────────────
+router.get("/api/clinical/contradiction/:caseId", async (req, res) => {
+  try {
+    const state = getClinicalState(req.params.caseId)
+    const differential = state.differential ?? []
+    const presentSymptoms = state.presentSymptoms ?? []
+    const answeredQuestions = state.answeredQuestions ?? []
+    const topDiagnosis =
+      differential[0]?.diagnosis ??
+      state._meta?.diagnosticConfidence?.[0]?.diagnosis ??
+      "unknown"
+
+    if (topDiagnosis === "unknown") {
+      return res.json({ ok: true, report: null, message: "No top diagnosis yet" })
+    }
+
+    const report = computeContradictionReport({
+      topDiagnosis,
+      differential,
+      presentSymptoms,
+      answeredQuestions: answeredQuestions.map((q: any) => ({
+        questionId: q.questionId ?? q.id ?? "",
+        answer: String(q.answer ?? ""),
+      })),
+    })
+
+    res.json({ ok: true, report })
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message })
   }

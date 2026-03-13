@@ -8,6 +8,7 @@ import DiagnosticConsensusCard from "@/components/telemedicine/DiagnosticConsens
 import ResourceRecommendationCard from "@/components/telemedicine/ResourceRecommendationCard";
 import EpidemiologyPanel from "@/components/telemedicine/EpidemiologyPanel";
 import PhysicianFeedbackPanel from "@/components/telemedicine/PhysicianFeedbackPanel";
+import ContradictionPanel from "@/components/telemedicine/ContradictionPanel";
 import { caseSimilarityApi } from "@/lib/caseSimilarityApi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -575,6 +576,7 @@ export default function UCSMConsole() {
                 <TabsTrigger value="resources" className="text-xs" data-testid="tab-ucsm-resources">🧪 Resources</TabsTrigger>
                 <TabsTrigger value="epi" className="text-xs" data-testid="tab-ucsm-epi">📈 Epi</TabsTrigger>
                 <TabsTrigger value="feedback" className="text-xs" data-testid="tab-ucsm-feedback">👨‍⚕️ Feedback</TabsTrigger>
+                <TabsTrigger value="contradiction" className="text-xs" data-testid="tab-ucsm-contradiction">🔍 Gaps</TabsTrigger>
               </TabsList>
 
               <TabsContent value="conversation" className="mt-3">
@@ -1070,6 +1072,14 @@ export default function UCSMConsole() {
                     systemDiagnosis={state?._meta?.diagnosticConfidence?.[0]?.diagnosis}
                     systemDisposition={state?.disposition}
                   />
+                )}
+              </TabsContent>
+
+              <TabsContent value="contradiction" className="mt-3">
+                {!activeCaseId ? (
+                  <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                ) : (
+                  <ContradictionPanel caseId={activeCaseId} />
                 )}
               </TabsContent>
             </Tabs>
