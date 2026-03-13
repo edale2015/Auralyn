@@ -1,6 +1,7 @@
 import { appendEvent } from "./eventStream"
 import type { ClinicalEventType, ClinicalEvent } from "./eventTypes"
 import { invalidateState } from "../state/clinicalStateCache"
+import { emitToSubscribers } from "./eventSubscriber"
 
 export async function publishEvent(
   caseId: string,
@@ -15,5 +16,6 @@ export async function publishEvent(
   }
   await appendEvent(event)
   invalidateState(caseId)
+  emitToSubscribers(event)
   return event
 }

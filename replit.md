@@ -14,6 +14,18 @@ The system employs a constrained agent architecture for deterministic medical tr
 ### Clinical State Model (CSM) + Event Bus
 A unified Clinical State Model (`server/state/`) based on an in-memory and file-persisted `ClinicalState` object drives all completion modules. It utilizes a `clinicalEventBus.ts` to emit typed events (e.g., `SESSION_STARTED`, `SYMPTOMS_RECORDED`, `DISPOSITION_SET`) and a `stateProjectionService.ts` to deterministically map events onto state fields. REST endpoints (`/api/state/:caseId`, `/api/state/:caseId/events`) provide access to the clinical state and its events.
 
+**Event Subscriber** (`server/core/events/eventSubscriber.ts`): Full pub/sub layer with `subscribe/once/unsubscribe/emitToSubscribers`. All `publishEvent()` calls auto-notify registered subscribers. Use `onClinicalEvent(type, handler)` for persistent subscriptions, `onceClinicalEvent(type, handler)` for one-shot handlers.
+
+### Adaptive Question Selection Engine
+`server/assistant/adaptiveQuestionEngine.ts` implements Bayesian optimal question selection with Shannon entropy minimization. Features:
+- 6 complaint specs: `sore_throat`, `cough`, `chest_pain`, `headache`, `abdominal_pain`, `fever/uti`
+- Each spec has priors, feature likelihoods, and an 8-question bank
+- `computeAdaptiveQuestions()` uses Shannon entropy + Expected Information Gain (EIG) ranking
+- Bayesian posterior updates from extracted features; blends 60% Bayes + 40% external differential
+- Routes: `GET /api/similarity/adaptive-questions/:caseId` and `POST /api/similarity/adaptive-questions/from-state`
+- UI: "🎯 Adaptive Q" tab in UCSM Console with entropy display, differential bars, interactive Yes/No buttons
+- Clinical validation: thunderclap+stiff neck+fever → Meningitis 78%, entropy 0.874; trismus+fever → PTA 77%, entropy 1.227
+
 ### Frontend
 The frontend is built with React 18 and TypeScript, using `shadcn/ui` with Tailwind CSS. It provides interfaces for physician login, patient intake, case status, visit summaries, a physician dashboard, and administrative consoles.
 

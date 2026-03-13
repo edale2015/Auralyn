@@ -391,6 +391,9 @@ export default function UCSMConsole() {
   const [manualEventData, setManualEventData] = useState('{"symptoms":"fever and cough for 3 days"}');
   const [similarityResult, setSimilarityResult] = useState<any>(null);
   const [similarityLoading, setSimilarityLoading] = useState(false);
+  const [adaptiveResult, setAdaptiveResult] = useState<any>(null);
+  const [adaptiveLoading, setAdaptiveLoading] = useState(false);
+  const [adaptiveAbsent, setAdaptiveAbsent] = useState<string[]>([]);
 
   const { data: sessions, refetch: refetchSessions } = useQuery({
     queryKey: ["/api/ucsm/sessions"],
@@ -556,6 +559,7 @@ export default function UCSMConsole() {
                 <TabsTrigger value="pathway" className="text-xs" data-testid="tab-ucsm-pathway">🛤 Pathway</TabsTrigger>
                 <TabsTrigger value="emit" className="text-xs" data-testid="tab-ucsm-emit"><Zap className="h-3 w-3 mr-1" />Emit Event</TabsTrigger>
                 <TabsTrigger value="similarity" className="text-xs" data-testid="tab-ucsm-similarity">🔗 Similar Cases</TabsTrigger>
+                <TabsTrigger value="adaptive" className="text-xs" data-testid="tab-ucsm-adaptive">🎯 Adaptive Q</TabsTrigger>
               </TabsList>
 
               <TabsContent value="conversation" className="mt-3">
@@ -797,6 +801,190 @@ export default function UCSMConsole() {
                     result={similarityResult}
                     isLoading={similarityLoading}
                   />
+                </div>
+              </TabsContent>
+
+              <TabsContent value="adaptive" className="mt-3">
+                <div className="space-y-3">
+                  <Card>
+                    <CardHeader className="p-3 pb-2">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        🎯 Adaptive Question Selection
+                        <Badge variant="outline" className="text-[10px] font-normal">Expected Information Gain</Badge>
+                      </CardTitle>
+                      <p className="text-[11px] text-muted-foreground">
+                        Ranks the next best question to ask based on which answer would most reduce diagnostic uncertainty. Uses Bayesian entropy reduction.
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-3 pt-0 space-y-3">
+                      <div className="flex gap-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs"
+                          disabled={adaptiveLoading}
+                          data-testid="button-compute-adaptive"
+                          onClick={async () => {
+                            setAdaptiveLoading(true);
+                            try {
+                              const res = await fetch("/api/similarity/adaptive-questions/from-state", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ state, absentFeatures: adaptiveAbsent }),
+                              });
+                              const data = await res.json();
+                              if (data.ok) setAdaptiveResult(data.result);
+                            } catch { /* ignore */ } finally {
+                              setAdaptiveLoading(false);
+                            }
+                          }}
+                        >
+                          {adaptiveLoading ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : "🎯"} Compute Best Questions
+                        </Button>
+                        {adaptiveResult && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs text-muted-foreground"
+                            onClick={() => { setAdaptiveResult(null); setAdaptiveAbsent([]); }}
+                          >
+                            Clear
+                          </Button>
+                        )}
+                      </div>
+
+                      {!state?.complaint && (
+                        <div className="text-xs text-muted-foreground text-center py-4 border rounded-md bg-muted/30">
+                          Start a case with a specific complaint first, then compute adaptive questions.
+                        </div>
+                      )}
+
+                      {adaptiveResult && (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div className="border rounded-md p-2 text-center">
+                              <div className="text-[10px] text-muted-foreground uppercase">Entropy</div>
+                              <div className="text-sm font-bold text-amber-600">{adaptiveResult.currentEntropy?.toFixed(3)}</div>
+                              <div className="text-[9px] text-muted-foreground">bits of uncertainty</div>
+                            </div>
+                            <div className="border rounded-md p-2 text-center">
+                              <div className="text-[10px] text-muted-foreground uppercase">Top Dx</div>
+                              <div className="text-xs font-semibold truncate">{adaptiveResult.topDiagnosis}</div>
+                              <div className="text-[9px] text-muted-foreground">{Math.round((adaptiveResult.topProbability ?? 0) * 100)}% probability</div>
+                            </div>
+                            <div className="border rounded-md p-2 text-center">
+                              <div className="text-[10px] text-muted-foreground uppercase">Complaint</div>
+                              <div className="text-xs font-semibold">{adaptiveResult.complaint?.replace(/_/g, " ")}</div>
+                              <div className="text-[9px] text-muted-foreground">{adaptiveResult.questions?.length} q's ranked</div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2 font-medium">
+                              Bayesian Differential
+                            </div>
+                            <div className="space-y-1">
+                              {(adaptiveResult.differential ?? []).slice(0, 6).map((d: any, i: number) => (
+                                <div key={i} className="flex items-center gap-2 text-xs" data-testid={`adaptive-diff-${i}`}>
+                                  <span className="w-4 text-right text-muted-foreground font-mono">{i + 1}.</span>
+                                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${i === 0 ? "bg-primary" : "bg-primary/50"}`}
+                                      style={{ width: `${Math.round((d.probability ?? 0) * 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className="truncate max-w-[130px]">{d.diagnosis}</span>
+                                  <span className="font-mono text-muted-foreground w-9 text-right">{Math.round((d.probability ?? 0) * 100)}%</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2 font-medium flex items-center gap-1">
+                              Ranked Questions by Expected Information Gain
+                              <Badge variant="outline" className="text-[9px] ml-1">higher = ask first</Badge>
+                            </div>
+                            <div className="space-y-2">
+                              {(adaptiveResult.questions ?? []).map((q: any, i: number) => (
+                                <div key={i} className={`border rounded-md p-2.5 ${i === 0 ? "border-primary/30 bg-primary/5" : "bg-muted/20"}`} data-testid={`adaptive-question-${i}`}>
+                                  <div className="flex items-start justify-between gap-2 mb-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${i === 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                                        #{i + 1}
+                                      </span>
+                                      <span className="text-xs font-medium">{q.text}</span>
+                                    </div>
+                                    <Badge variant="outline" className={`text-[10px] shrink-0 ${i === 0 ? "border-primary/40 text-primary" : ""}`}>
+                                      EIG: {q.expectedInfoGain?.toFixed(3)}
+                                    </Badge>
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground italic mb-1.5">{q.rationale}</div>
+                                  <div className="flex items-center gap-3 text-[10px]">
+                                    <span className="text-muted-foreground">P(yes): <span className="font-mono font-medium">{Math.round((q.pYes ?? 0) * 100)}%</span></span>
+                                    <span className="text-green-700">H(yes): <span className="font-mono">{q.entropyIfYes?.toFixed(2)}</span> bits</span>
+                                    <span className="text-orange-700">H(no): <span className="font-mono">{q.entropyIfNo?.toFixed(2)}</span> bits</span>
+                                  </div>
+                                  <div className="mt-1.5 h-1 bg-muted rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${i === 0 ? "bg-primary" : "bg-primary/40"}`}
+                                      style={{ width: `${Math.min(100, Math.round((q.expectedInfoGain ?? 0) * 100))}%` }}
+                                    />
+                                  </div>
+                                  <div className="flex gap-1.5 mt-2">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-5 px-2 text-[10px] text-green-700 hover:bg-green-50"
+                                      onClick={async () => {
+                                        setAdaptiveAbsent(prev => prev.filter(f => f !== q.feature));
+                                        setAdaptiveLoading(true);
+                                        try {
+                                          const res = await fetch("/api/similarity/adaptive-questions/from-state", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({
+                                              state: { ...state, symptoms: (state?.symptoms ?? "") + ` ${q.feature.replace(/_/g, " ")} present` },
+                                              absentFeatures: adaptiveAbsent.filter(f => f !== q.feature),
+                                            }),
+                                          });
+                                          const data = await res.json();
+                                          if (data.ok) setAdaptiveResult(data.result);
+                                        } catch { /* ignore */ } finally {
+                                          setAdaptiveLoading(false);
+                                        }
+                                      }}
+                                    >✓ Yes</Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-5 px-2 text-[10px] text-red-700 hover:bg-red-50"
+                                      onClick={async () => {
+                                        const newAbsent = [...adaptiveAbsent.filter(f => f !== q.feature), q.feature];
+                                        setAdaptiveAbsent(newAbsent);
+                                        setAdaptiveLoading(true);
+                                        try {
+                                          const res = await fetch("/api/similarity/adaptive-questions/from-state", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ state, absentFeatures: newAbsent }),
+                                          });
+                                          const data = await res.json();
+                                          if (data.ok) setAdaptiveResult(data.result);
+                                        } catch { /* ignore */ } finally {
+                                          setAdaptiveLoading(false);
+                                        }
+                                      }}
+                                    >✗ No</Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
               </TabsContent>
             </Tabs>
