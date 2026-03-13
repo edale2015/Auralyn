@@ -1,0 +1,381 @@
+Great — we’ll continue and finish the Unified Clinical State Model (UCSM) implementation so your telemedicine assistant becomes much easier to maintain and extend.
+
+The idea is simple:
+
+Instead of every module passing its own data structures around, every module reads and writes to one shared clinical state object.
+
+Your pipeline becomes:
+
+Telegram / WhatsApp message
+        ↓
+Clinical Event
+        ↓
+Clinical State
+        ↓
+Reasoning modules update state
+        ↓
+UI + discharge + notes read state
+        ↓
+Audit + learning read same state
+
+
+That eliminates duplicated data handling across modules.
+
+Folder Structure
+
+Create a new core layer:
+
+server/
+ ├─ core/
+ │   ├─ state/
+ │   │   ├─ clinicalStateStore.ts
+ │   │   ├─ clinicalEventBus.ts
+ │   │   ├─ clinicalStateProjector.ts
+ │   │   └─ clinicalStateTypes.ts
+ │   └─ orchestrator/
+ │       └─ clinicalStateOrchestrator.ts
+
+
+Everything else plugs into this.
+
+1. Clinical State Types
+clinicalStateTypes.ts
+export type ClinicalEvent = {
+  type: string
+  payload?: any
+  timestamp?: string
+}
+
+export type Differential = {
+  diagnosis: string
+  confidence: number
+  reasons?: string[]
+}
+
+export type MedicationSuggestion = {
+  drug: string
+  dose: string
+  route: string
+  frequency: string
+  duration: string
+}
+
+export type ClinicalState = {
+
+  caseId: string
+
+  patient?: {
+    age?: number
+    sex?: "male" | "female"
+    pregnant?: boolean
+    allergies?: string[]
+    medications?: string[]
+    pmh?: string[]
+  }
+
+  symptoms?: string
+  complaint?: string
+
+  followUpQuestions?: string[]
+
+  differential?: Differential[]
+
+  alerts?: string[]
+
+  medicationPlan?: MedicationSuggestion | null
+
+  disposition?: string
+
+  dischargeText?: string
+
+  chartNote?: any
+
+  events: ClinicalEvent[]
+
+}
+
+2. Clinical State Store
+clinicalStateStore.ts
+import { ClinicalState } from "./clinicalStateTypes"
+
+const stateStore: Record<string, ClinicalState> = {}
+
+export function getClinicalState(caseId: string): ClinicalState {
+
+  stateStore[caseId] ??= {
+    caseId,
+    events: []
+  }
+
+  return stateStore[caseId]
+}
+
+export function updateClinicalState(
+  caseId: string,
+  update: Partial<ClinicalState>
+) {
+
+  const state = getClinicalState(caseId)
+
+  Object.assign(state, update)
+
+  return state
+}
+
+3. Clinical Event Bus
+
+Every action in the visit becomes an event.
+
+clinicalEventBus.ts
+import { getClinicalState } from "./clinicalStateStore"
+import { ClinicalEvent } from "./clinicalStateTypes"
+import { projectEvent } from "./clinicalStateProjector"
+
+export function emitClinicalEvent(caseId: string, event: ClinicalEvent) {
+
+  const state = getClinicalState(caseId)
+
+  const fullEvent = {
+    ...event,
+    timestamp: new Date().toISOString()
+  }
+
+  state.events.push(fullEvent)
+
+  projectEvent(caseId, fullEvent)
+}
+
+4. State Projection Engine
+
+This translates events into state updates.
+
+clinicalStateProjector.ts
+import { getClinicalState } from "./clinicalStateStore"
+import { ClinicalEvent } from "./clinicalStateTypes"
+
+export function projectEvent(caseId: string, event: ClinicalEvent) {
+
+  const state = getClinicalState(caseId)
+
+  switch (event.type) {
+
+    case "PATIENT_MESSAGE":
+
+      state.symptoms =
+        (state.symptoms ?? "") +
+        " " +
+        event.payload.message
+
+      break
+
+    case "COMPLAINT_IDENTIFIED":
+
+      state.complaint = event.payload.complaint
+
+      break
+
+    case "DIFFERENTIAL_UPDATED":
+
+      state.differential = event.payload.differential
+
+      break
+
+    case "ALERTS_UPDATED":
+
+      state.alerts = event.payload.alerts
+
+      break
+
+    case "MEDICATION_PLAN":
+
+      state.medicationPlan = event.payload.medication
+
+      break
+
+    case "DISPOSITION_SET":
+
+      state.disposition = event.payload.disposition
+
+      break
+
+    case "DISCHARGE_READY":
+
+      state.dischargeText = event.payload.text
+
+      break
+
+    case "NOTE_READY":
+
+      state.chartNote = event.payload.note
+
+      break
+  }
+
+}
+
+5. Clinical State Orchestrator
+
+This is the layer that calls your modules in sequence.
+
+clinicalStateOrchestrator.ts
+import { emitClinicalEvent } from "../state/clinicalEventBus"
+import { getClinicalState } from "../state/clinicalStateStore"
+
+import { generateDifferential } from "../../assistant/telemedicineDifferentialService"
+import { checkSafetyAlerts } from "../../assistant/telemedicineSafetyService"
+import { generatePrescription } from "../../assistant/telemedicinePrescriptionService"
+import { generateTelemedicineNote } from "../../assistant/telemedicineNoteService"
+
+export async function runClinicalReasoning(caseId: string) {
+
+  const state = getClinicalState(caseId)
+
+  if (!state.symptoms) return state
+
+  // complaint detection
+  const complaint =
+    state.symptoms.includes("cough")
+      ? "cough"
+      : state.symptoms.includes("throat")
+      ? "sore_throat"
+      : "unknown"
+
+  emitClinicalEvent(caseId, {
+    type: "COMPLAINT_IDENTIFIED",
+    payload: { complaint }
+  })
+
+  const differential = generateDifferential({
+    complaint,
+    symptoms: state.symptoms
+  })
+
+  emitClinicalEvent(caseId, {
+    type: "DIFFERENTIAL_UPDATED",
+    payload: { differential }
+  })
+
+  const alerts = checkSafetyAlerts(state.symptoms)
+
+  emitClinicalEvent(caseId, {
+    type: "ALERTS_UPDATED",
+    payload: { alerts }
+  })
+
+  const med = generatePrescription({
+    complaint
+  })
+
+  emitClinicalEvent(caseId, {
+    type: "MEDICATION_PLAN",
+    payload: { medication: med }
+  })
+
+  const note = generateTelemedicineNote(caseId)
+
+  emitClinicalEvent(caseId, {
+    type: "NOTE_READY",
+    payload: { note }
+  })
+
+  return getClinicalState(caseId)
+}
+
+6. Telemedicine Route using Clinical State
+telemedicineRoutes.ts
+import express from "express"
+import { emitClinicalEvent } from "../core/state/clinicalEventBus"
+import { runClinicalReasoning } from "../core/orchestrator/clinicalStateOrchestrator"
+
+const router = express.Router()
+
+router.post("/api/telemed/message", async (req, res) => {
+
+  const { caseId, message } = req.body
+
+  emitClinicalEvent(caseId, {
+    type: "PATIENT_MESSAGE",
+    payload: { message }
+  })
+
+  const state = await runClinicalReasoning(caseId)
+
+  res.json({
+    ok: true,
+    state
+  })
+
+})
+
+export default router
+
+What this architectural change accomplishes
+
+Previously:
+
+symptoms
+  ↓
+differential service
+  ↓
+alerts service
+  ↓
+medication service
+  ↓
+note service
+
+
+Each module had separate inputs/outputs.
+
+Now:
+
+events
+   ↓
+clinical state
+   ↓
+modules update state
+   ↓
+UI reads state
+
+
+Everything is consistent and centralized.
+
+Why this matters
+
+This architecture unlocks:
+
+Simpler reasoning modules
+
+Modules only need:
+
+caseId
+
+
+They read state directly.
+
+Real-time telemedicine updates
+
+As messages arrive:
+
+emit event
+update reasoning
+update UI
+
+Perfect audit trail
+
+Every event is stored:
+
+PATIENT_MESSAGE
+DIFFERENTIAL_UPDATED
+MEDICATION_PLAN
+DISPOSITION_SET
+
+
+You now have full clinical traceability.
+
+Easier reinforcement learning
+
+Learning systems can analyze:
+
+events
+state transitions
+outcomes
