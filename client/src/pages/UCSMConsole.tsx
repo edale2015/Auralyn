@@ -2,6 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import CaseSimilarityCard from "@/components/telemedicine/CaseSimilarityCard";
 import DiagnosticConfidenceCard from "@/components/telemedicine/DiagnosticConfidenceCard";
 import AdaptiveQuestionPanel from "@/components/telemedicine/AdaptiveQuestionPanel";
+import ClinicalTimelinePanel from "@/components/telemedicine/ClinicalTimelinePanel";
+import DispositionRiskCard from "@/components/telemedicine/DispositionRiskCard";
+import DiagnosticConsensusCard from "@/components/telemedicine/DiagnosticConsensusCard";
+import ResourceRecommendationCard from "@/components/telemedicine/ResourceRecommendationCard";
+import EpidemiologyPanel from "@/components/telemedicine/EpidemiologyPanel";
+import PhysicianFeedbackPanel from "@/components/telemedicine/PhysicianFeedbackPanel";
 import { caseSimilarityApi } from "@/lib/caseSimilarityApi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -563,6 +569,12 @@ export default function UCSMConsole() {
                 <TabsTrigger value="similarity" className="text-xs" data-testid="tab-ucsm-similarity">🔗 Similar Cases</TabsTrigger>
                 <TabsTrigger value="adaptive" className="text-xs" data-testid="tab-ucsm-adaptive">🎯 Adaptive Q</TabsTrigger>
                 <TabsTrigger value="confidence" className="text-xs" data-testid="tab-ucsm-confidence">📊 Confidence</TabsTrigger>
+                <TabsTrigger value="timeline" className="text-xs" data-testid="tab-ucsm-timeline">🕒 Timeline</TabsTrigger>
+                <TabsTrigger value="risk" className="text-xs" data-testid="tab-ucsm-risk">⚠️ Risk</TabsTrigger>
+                <TabsTrigger value="consensus" className="text-xs" data-testid="tab-ucsm-consensus">🗺 Consensus</TabsTrigger>
+                <TabsTrigger value="resources" className="text-xs" data-testid="tab-ucsm-resources">🧪 Resources</TabsTrigger>
+                <TabsTrigger value="epi" className="text-xs" data-testid="tab-ucsm-epi">📈 Epi</TabsTrigger>
+                <TabsTrigger value="feedback" className="text-xs" data-testid="tab-ucsm-feedback">👨‍⚕️ Feedback</TabsTrigger>
               </TabsList>
 
               <TabsContent value="conversation" className="mt-3">
@@ -1006,6 +1018,59 @@ export default function UCSMConsole() {
                     </>
                   )}
                 </div>
+              </TabsContent>
+
+              <TabsContent value="timeline" className="mt-3">
+                {!activeCaseId ? (
+                  <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                ) : (
+                  <ClinicalTimelinePanel caseId={activeCaseId} />
+                )}
+              </TabsContent>
+
+              <TabsContent value="risk" className="mt-3">
+                <div className="space-y-3">
+                  {!activeCaseId ? (
+                    <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                  ) : (
+                    <>
+                      <DispositionRiskCard caseId={activeCaseId} />
+                      <ResourceRecommendationCard caseId={activeCaseId} />
+                    </>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="consensus" className="mt-3">
+                {!activeCaseId ? (
+                  <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                ) : (
+                  <DiagnosticConsensusCard caseId={activeCaseId} />
+                )}
+              </TabsContent>
+
+              <TabsContent value="resources" className="mt-3">
+                {!activeCaseId ? (
+                  <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                ) : (
+                  <ResourceRecommendationCard caseId={activeCaseId} />
+                )}
+              </TabsContent>
+
+              <TabsContent value="epi" className="mt-3">
+                <EpidemiologyPanel />
+              </TabsContent>
+
+              <TabsContent value="feedback" className="mt-3">
+                {!activeCaseId ? (
+                  <Card><CardContent className="pt-4 text-sm text-muted-foreground">Start a case first.</CardContent></Card>
+                ) : (
+                  <PhysicianFeedbackPanel
+                    caseId={activeCaseId}
+                    systemDiagnosis={state?._meta?.diagnosticConfidence?.[0]?.diagnosis}
+                    systemDisposition={state?.disposition}
+                  />
+                )}
               </TabsContent>
             </Tabs>
           )}
