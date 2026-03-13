@@ -1,0 +1,29 @@
+export type ClinicalEventType =
+  | "SESSION_STARTED"
+  | "PATIENT_MESSAGE"
+  | "COMPLAINT_IDENTIFIED"
+  | "DIFFERENTIAL_UPDATED"
+  | "ALERTS_UPDATED"
+  | "RED_FLAG_DETECTED"
+  | "MEDICATION_PLAN"
+  | "DISPOSITION_SET"
+  | "NOTE_READY"
+  | "DISCHARGE_READY"
+  | "OUTCOME_RECORDED"
+  | "HYBRID_REASONING_COMPLETE"
+  | "UNCERTAINTY_DETECTED"
+  | "FOLLOWUP_QUESTION_SUGGESTED"
+  | "FOLLOWUP_QUESTION_ANSWERED"
+  | "CARE_PATHWAY_STARTED"
+  | "PATHWAY_EXECUTED"
+  | "SIMILARITY_COMPUTED"
+  | "WORKER_STARTED"
+  | "WORKER_COMPLETE"
+
+export interface ClinicalEvent {
+  caseId: string
+  type: ClinicalEventType
+  payload?: Record<string, any>
+  timestamp: string
+  seq?: number
+}

@@ -136,3 +136,18 @@ export async function getStreamStats(): Promise<{ totalEvents: number; totalCase
 export async function getEventTimeline(caseId?: string): Promise<PersistedEvent[]> {
   return caseId ? readEventsByCaseId(caseId) : readAllEvents();
 }
+
+export async function readEvents(caseId?: string): Promise<PersistedEvent[]> {
+  return caseId ? readEventsByCaseId(caseId) : readAllEvents();
+}
+
+export async function readEventsSince(offset: number, caseId?: string): Promise<PersistedEvent[]> {
+  const all = await readAllEvents();
+  const filtered = caseId ? all.filter(e => e.caseId === caseId) : all;
+  return filtered.filter(e => (e.seq ?? 0) > offset);
+}
+
+export async function getLastSeq(): Promise<number> {
+  const all = await readAllEvents();
+  return all.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
+}

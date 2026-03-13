@@ -5,6 +5,7 @@ import { runExtractionConfidence } from "../../hybrid-reasoning/extractionConfid
 import { checkLockedRules } from "../../hybrid-reasoning/lockedSafetyRegistry";
 import { getNextQuestion } from "../../hybrid-reasoning/followUpEngine";
 import { executeCarePathway } from "../../pathways/pathwayExecutor";
+import { recordVisit, recordAlert, recordDisposition, recordConfidence, recordFollowUpQuestion, recordCarePathway } from "../../core/monitoring/metrics";
 
 const COMPLAINT_KEYWORDS: Record<string, string[]> = {
   chest_pain:     ["chest pain","chest tightness","chest pressure","palpitations","heart pain"],
@@ -130,6 +131,7 @@ export async function runClinicalOrchestrator(
 
   const state = getClinicalState(caseId);
   if (!state.symptoms) return state;
+  recordVisit();
 
   const extraction = runExtractionConfidence(
     state.symptoms,
@@ -207,10 +209,12 @@ export async function runClinicalOrchestrator(
       alerts: lockedCheck.rules.map(r => `🔒 [${r.id}] ${r.rationale}`),
     });
     emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: "er_now" });
+    recordAlert(); recordDisposition("er_now");
     const pathwayResult = executeCarePathway(activeComplaint, "er_now", caseId);
     if (pathwayResult) {
       emitClinicalEvent(caseId, "CARE_PATHWAY_STARTED" as any, { complaint: activeComplaint, disposition: "er_now", pathway: pathwayResult.pathway });
       emitClinicalEvent(caseId, "PATHWAY_EXECUTED", { result: pathwayResult });
+      recordCarePathway();
     }
     const note = buildSimpleNote({ ...getClinicalState(caseId), disposition: "er_now" as any, redFlags: lockedCheck.rules.map(r => r.id) });
     emitClinicalEvent(caseId, "NOTE_READY", { note });
@@ -305,10 +309,13 @@ export async function runClinicalOrchestrator(
     }
   } else if (hybrid.disposition && hybrid.disposition !== "need_more_info" && hybrid.disposition !== "uncertain") {
     emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: hybrid.disposition });
+    recordDisposition(hybrid.disposition);
+    recordConfidence(hybrid.confidence ?? 0);
     const pathwayResult = executeCarePathway(activeComplaint, hybrid.disposition, caseId);
     if (pathwayResult) {
       emitClinicalEvent(caseId, "CARE_PATHWAY_STARTED" as any, { complaint: activeComplaint, disposition: hybrid.disposition, pathway: pathwayResult.pathway });
       emitClinicalEvent(caseId, "PATHWAY_EXECUTED", { result: pathwayResult });
+      recordCarePathway();
     }
   }
 

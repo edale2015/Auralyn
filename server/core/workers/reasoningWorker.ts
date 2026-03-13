@@ -5,6 +5,7 @@ import { runExtractionConfidence } from "../../hybrid-reasoning/extractionConfid
 import { checkLockedRules } from "../../hybrid-reasoning/lockedSafetyRegistry";
 import { getNextQuestion } from "../../hybrid-reasoning/followUpEngine";
 import { executeCarePathway } from "../../pathways/pathwayExecutor";
+import { recordVisit, recordAlert, recordDisposition, recordConfidence, recordWorkerError, recordFollowUpQuestion, recordCarePathway } from "../../core/monitoring/metrics";
 
 export interface WorkerResult {
   caseId: string;
@@ -28,6 +29,7 @@ export async function runReasoningWorker(caseId: string): Promise<WorkerResult> 
   }
 
   runningWorkers.add(caseId);
+  recordVisit();
 
   try {
     const state = getClinicalState(caseId);
@@ -58,11 +60,14 @@ export async function runReasoningWorker(caseId: string): Promise<WorkerResult> 
       emitClinicalEvent(caseId, "RED_FLAG_DETECTED", { flags: lockedCheck.rules.map(r => r.id), source: "locked_safety_registry" });
       emitClinicalEvent(caseId, "ALERTS_UPDATED", { alerts: lockedCheck.rules.map(r => `🔒 ${r.rationale}`) });
       emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: "er_now" });
+      recordAlert();
+      recordDisposition("er_now");
 
       const pathwayResult = executeCarePathway(complaint, "er_now", caseId);
       if (pathwayResult) {
         emitClinicalEvent(caseId, "CARE_PATHWAY_STARTED" as any, { complaint, disposition: "er_now", pathway: pathwayResult.pathway });
         emitClinicalEvent(caseId, "PATHWAY_EXECUTED", { result: pathwayResult });
+        recordCarePathway();
       }
 
       runningWorkers.delete(caseId);
@@ -110,17 +115,21 @@ export async function runReasoningWorker(caseId: string): Promise<WorkerResult> 
         followUpQuestions: [(followUpResult.question!.text)],
         orchestratorRunAt: new Date().toISOString(),
       });
+      recordFollowUpQuestion();
       runningWorkers.delete(caseId);
       return { caseId, status: "complete", disposition: "need_more_info", followUpQuestion: followUpResult.question!.text };
     }
 
     if (hybrid.disposition && hybrid.disposition !== "need_more_info") {
       emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: hybrid.disposition });
+      recordDisposition(hybrid.disposition);
+      recordConfidence(hybrid.confidence ?? 0);
 
       const pathwayResult = executeCarePathway(complaint, hybrid.disposition, caseId);
       if (pathwayResult) {
         emitClinicalEvent(caseId, "CARE_PATHWAY_STARTED" as any, { complaint, disposition: hybrid.disposition, pathway: pathwayResult.pathway });
         emitClinicalEvent(caseId, "PATHWAY_EXECUTED", { result: pathwayResult });
+        recordCarePathway();
       }
     }
 
@@ -139,6 +148,7 @@ export async function runReasoningWorker(caseId: string): Promise<WorkerResult> 
     };
   } catch (err: any) {
     runningWorkers.delete(caseId);
+    recordWorkerError();
     return { caseId, status: "error", error: err.message };
   }
 }

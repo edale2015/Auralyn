@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import CaseSimilarityCard from "@/components/telemedicine/CaseSimilarityCard";
+import { caseSimilarityApi } from "@/lib/caseSimilarityApi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -387,6 +389,8 @@ export default function UCSMConsole() {
   const [patientSex, setPatientSex] = useState("male");
   const [manualEventType, setManualEventType] = useState("SYMPTOMS_RECORDED");
   const [manualEventData, setManualEventData] = useState('{"symptoms":"fever and cough for 3 days"}');
+  const [similarityResult, setSimilarityResult] = useState<any>(null);
+  const [similarityLoading, setSimilarityLoading] = useState(false);
 
   const { data: sessions, refetch: refetchSessions } = useQuery({
     queryKey: ["/api/ucsm/sessions"],
@@ -551,6 +555,7 @@ export default function UCSMConsole() {
                 </TabsTrigger>
                 <TabsTrigger value="pathway" className="text-xs" data-testid="tab-ucsm-pathway">🛤 Pathway</TabsTrigger>
                 <TabsTrigger value="emit" className="text-xs" data-testid="tab-ucsm-emit"><Zap className="h-3 w-3 mr-1" />Emit Event</TabsTrigger>
+                <TabsTrigger value="similarity" className="text-xs" data-testid="tab-ucsm-similarity">🔗 Similar Cases</TabsTrigger>
               </TabsList>
 
               <TabsContent value="conversation" className="mt-3">
@@ -745,6 +750,54 @@ export default function UCSMConsole() {
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+
+              <TabsContent value="similarity" className="mt-3">
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      disabled={similarityLoading}
+                      data-testid="button-fetch-similar"
+                      onClick={async () => {
+                        setSimilarityLoading(true);
+                        try {
+                          const res = await caseSimilarityApi.getByCaseId(activeCaseId);
+                          setSimilarityResult(res.result);
+                        } catch { /* ignore */ } finally {
+                          setSimilarityLoading(false);
+                        }
+                      }}
+                    >
+                      🔗 Find Similar Cases
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-xs"
+                      disabled={similarityLoading}
+                      data-testid="button-rebuild-index"
+                      onClick={async () => {
+                        setSimilarityLoading(true);
+                        try {
+                          await caseSimilarityApi.rebuildIndex();
+                          const res = await caseSimilarityApi.getByCaseId(activeCaseId);
+                          setSimilarityResult(res.result);
+                        } catch { /* ignore */ } finally {
+                          setSimilarityLoading(false);
+                        }
+                      }}
+                    >
+                      ↻ Rebuild Index
+                    </Button>
+                  </div>
+                  <CaseSimilarityCard
+                    result={similarityResult}
+                    isLoading={similarityLoading}
+                  />
+                </div>
               </TabsContent>
             </Tabs>
           )}
