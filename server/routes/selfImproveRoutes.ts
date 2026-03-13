@@ -9,6 +9,16 @@ import { scoreRisk, trainModel, getModelStats } from "../self-improve/riskModel"
 import { runImprovementCycle, getOrchestratorStatus } from "../self-improve/improvementOrchestrator";
 import { runSystemAudit, auditComponent } from "../self-improve/auditEngine";
 import { ALL_CONTRACTS } from "../self-improve/componentContracts";
+import {
+  recordOutcome, updateWeight, getWeight,
+  getComponentWeights, getAllComponentSummaries, getAdapterStats,
+  learnClinicalScoring, learnCarePathway, learnInterfaceWording,
+  learnTelemedicineSession, learnCopilotHint,
+  learnGoldCaseEval, learnFailureClassifier, learnProposalEngine,
+} from "../self-improve/learningAdapter";
+import {
+  findSimilarCases, storeCaseMemory, getMemoryStats, seedDemoMemory,
+} from "../self-improve/caseSimilarityMemory";
 
 const router = Router();
 
@@ -323,6 +333,140 @@ router.post("/pipeline/run", async (req: Request, res: Response) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Universal Learning Adapter ────────────────────────────────────────────────
+
+router.get("/learning/stats", async (_req: Request, res: Response) => {
+  try { res.json(await getAdapterStats()); } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/learning/summaries", async (_req: Request, res: Response) => {
+  try { res.json({ summaries: await getAllComponentSummaries() }); } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/learning/weights/:component", async (req: Request, res: Response) => {
+  try { res.json({ weights: await getComponentWeights(req.params.component) }); } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/outcome", async (req: Request, res: Response) => {
+  try {
+    const { caseId, component, features, reward } = req.body;
+    if (!caseId || !component || !features || reward == null)
+      return res.status(400).json({ error: "caseId, component, features, reward required" });
+    const record = await recordOutcome(caseId, component, features, reward);
+    res.json({ ok: true, record });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/clinical-scoring", async (req: Request, res: Response) => {
+  try {
+    const { features, outcomeReward } = req.body;
+    const weights = await learnClinicalScoring(features ?? [], outcomeReward ?? 0);
+    res.json({ ok: true, updatedWeights: weights });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/care-pathway", async (req: Request, res: Response) => {
+  try {
+    const { fromStep, toStep, reward } = req.body;
+    const weight = await learnCarePathway(fromStep, toStep, reward ?? 0);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/interface-wording", async (req: Request, res: Response) => {
+  try {
+    const { questionText, patientUnderstood } = req.body;
+    const weight = await learnInterfaceWording(questionText, patientUnderstood);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/telemed-session", async (req: Request, res: Response) => {
+  try {
+    const { complaint, disposition, outcomeReward } = req.body;
+    const weight = await learnTelemedicineSession(complaint, disposition, outcomeReward ?? 0);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/copilot-hint", async (req: Request, res: Response) => {
+  try {
+    const { hintCategory, accepted } = req.body;
+    const weight = await learnCopilotHint(hintCategory, accepted);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/gold-eval", async (req: Request, res: Response) => {
+  try {
+    const { failureType, wasCorrectlyCaught } = req.body;
+    const weight = await learnGoldCaseEval(failureType, wasCorrectlyCaught);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/failure-classifier", async (req: Request, res: Response) => {
+  try {
+    const { predictedType, wasCorrect } = req.body;
+    const weight = await learnFailureClassifier(predictedType, wasCorrect);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/learning/proposal-engine", async (req: Request, res: Response) => {
+  try {
+    const { proposalType, wasAccepted } = req.body;
+    const weight = await learnProposalEngine(proposalType, wasAccepted);
+    res.json({ ok: true, weight });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Case Similarity Memory ─────────────────────────────────────────────────────
+
+router.get("/similarity/stats", async (_req: Request, res: Response) => {
+  try { res.json(await getMemoryStats()); } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/similarity/seed", async (_req: Request, res: Response) => {
+  try {
+    const seeded = await seedDemoMemory();
+    res.json({ ok: true, seeded, message: seeded > 0 ? `Seeded ${seeded} demo cases` : "Memory already seeded" });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/similarity/store", async (req: Request, res: Response) => {
+  try {
+    const { caseId, complaint, features, disposition, topDiagnosis, diagnosisList } = req.body;
+    if (!caseId || !complaint || !topDiagnosis)
+      return res.status(400).json({ error: "caseId, complaint, topDiagnosis required" });
+    await storeCaseMemory({
+      caseId, complaint,
+      features: features ?? [],
+      disposition: disposition ?? "unknown",
+      topDiagnosis,
+      diagnosisList: diagnosisList ?? [topDiagnosis],
+      timestamp: new Date().toISOString(),
+    });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/similarity/find", async (req: Request, res: Response) => {
+  try {
+    const { caseId, complaint, features, topK, minSimilarity } = req.body;
+    if (!complaint || !features)
+      return res.status(400).json({ error: "complaint and features required" });
+    const report = await findSimilarCases(
+      caseId ?? `QUERY_${Date.now()}`,
+      complaint,
+      features,
+      topK ?? 5,
+      minSimilarity ?? 0.1
+    );
+    res.json({ ok: true, ...report });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Self-Improvement Audit Engine ─────────────────────────────────────────────

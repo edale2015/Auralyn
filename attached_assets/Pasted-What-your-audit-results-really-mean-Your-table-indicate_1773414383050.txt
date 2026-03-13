@@ -1,0 +1,210 @@
+What your audit results really mean
+
+Your table indicates three maturity tiers:
+
+Fully capable (6/6)
+
+These components can already evolve safely.
+
+Typical examples:
+
+Differential engine
+
+Risk model
+
+Knowledge graph
+
+RL policy trainer
+
+Trace recorder
+
+These components already have:
+
+Trace → Outcome → Update → Regression → Promotion
+
+They are true self-improving modules.
+
+Capable (5/6)
+
+These components can evolve but are missing one element.
+
+Most likely missing:
+
+Learning from outcomes
+
+They have:
+
+Trace → Proposal → Regression → Promotion
+
+but no parameter update loop yet.
+
+These are easy to upgrade.
+
+Partial (3–4/6)
+
+These modules need moderate work.
+
+Usually missing:
+
+regression tests
+
+proposal targets
+
+safety guards
+
+They can improve manually but not automatically.
+
+Not capable (<3/6)
+
+You said only two fall here.
+
+These likely are interface or documentation layers, which historically are the hardest to wire into learning loops.
+
+The biggest gap you identified: learning enabled
+
+You said 13 components lack outcome learning.
+
+That means they currently operate like:
+
+observe → report → propose
+
+but not:
+
+observe → outcome → update weights
+
+This is the key upgrade.
+
+The upgrade to apply across those 13 components
+
+You want a shared learning adapter.
+
+Instead of each component implementing its own RL engine, create one universal learning module.
+
+Example:
+
+# learning/learning_adapter.py
+
+class LearningAdapter:
+
+    def __init__(self):
+        self.learning_rate = 0.1
+
+    def update_weight(self, component, parameter, reward):
+
+        current = component.parameters.get(parameter, 0)
+
+        new_value = current + self.learning_rate * reward
+
+        component.parameters[parameter] = new_value
+
+        return new_value
+
+Then every component can call this.
+
+Example: enabling learning for clinical scoring
+
+Your clinical scoring system likely has weights like:
+
+fever = +2
+tachycardia = +3
+hypotension = +5
+
+Add learning like this:
+
+# clinical_scoring.py
+
+class ClinicalScoring:
+
+    def __init__(self):
+        self.weights = {
+            "fever": 2,
+            "tachycardia": 3,
+            "hypotension": 5
+        }
+
+    def update_from_outcome(self, features, outcome_reward):
+
+        for f in features:
+
+            if f not in self.weights:
+                self.weights[f] = 0
+
+            self.weights[f] += 0.1 * outcome_reward
+
+Now the scoring engine evolves.
+
+Example: enabling learning for care pathways
+
+Care pathways decide what happens next.
+
+Example learning:
+
+class CarePathway:
+
+    def __init__(self):
+        self.transition_weights = {}
+
+    def learn(self, step, next_step, reward):
+
+        key = (step, next_step)
+
+        if key not in self.transition_weights:
+            self.transition_weights[key] = 0
+
+        self.transition_weights[key] += 0.1 * reward
+
+This lets the system learn which pathways actually worked.
+
+Example: interface learning
+
+Your patient interface agent can also learn.
+
+Example:
+
+class InterfaceLearner:
+
+    def __init__(self):
+        self.wording_scores = {}
+
+    def record(self, question_text, patient_understanding):
+
+        score = 1 if patient_understanding else -1
+
+        self.wording_scores[question_text] = \
+            self.wording_scores.get(question_text, 0) + score
+
+Now the interface improves readability.
+
+What your system maturity now looks like
+
+Based on your numbers:
+
+System maturity ≈ 0.75
+
+Once you enable learning in those 13 components:
+
+System maturity ≈ 0.90–0.95
+
+At that point the system becomes a true adaptive clinical assistant.
+
+The one thing I would add next
+
+You already have:
+
+trace capture
+
+outcome evaluation
+
+proposal generation
+
+audit engine
+
+The next powerful upgrade is a Case Similarity Memory.
+
+This lets the AI say:
+
+"This patient resembles 14 previous cases.
+11 were viral URI.
+3 were pneumonia."
+
+This dramatically improves reasoning in telemedicine.

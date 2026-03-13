@@ -774,6 +774,573 @@ function RLPanel() {
   );
 }
 
+// ── Learning Adapter Panel ────────────────────────────────────────────────────
+
+const COMPONENT_DISPLAY: Record<string, string> = {
+  clinical_scoring: "Clinical Scoring",
+  care_pathway_executor: "Care Pathway",
+  patient_interface_agent: "Patient Interface",
+  telemedicine_session: "Telemedicine Session",
+  clinician_copilot: "Clinician Copilot",
+  gold_case_evaluator: "Gold Case Evaluator",
+  failure_classifier: "Failure Classifier",
+  proposal_engine: "Proposal Engine",
+};
+
+const REWARD_OPTIONS = [
+  { label: "+1 Correct disposition", value: 1 },
+  { label: "+0.5 Improvement", value: 0.5 },
+  { label: "−0.5 Minor error", value: -0.5 },
+  { label: "−1 Worsened outcome", value: -1 },
+  { label: "−2 Dangerous miss", value: -2 },
+];
+
+function LearningAdapterPanel() {
+  const { toast } = useToast();
+  const [component, setComponent] = useState("clinical_scoring");
+  const [featuresRaw, setFeaturesRaw] = useState("");
+  const [reward, setReward] = useState(1);
+  const [caseId, setCaseId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const { data: stats, refetch: refetchStats } = useQuery<any>({
+    queryKey: ["/api/self-improve/learning/stats"],
+    queryFn: () => fetch("/api/self-improve/learning/stats").then(r => r.json()),
+  });
+
+  const { data: summariesData, refetch: refetchSummaries } = useQuery<any>({
+    queryKey: ["/api/self-improve/learning/summaries"],
+    queryFn: () => fetch("/api/self-improve/learning/summaries").then(r => r.json()),
+  });
+
+  async function submitOutcome() {
+    const features = featuresRaw.split(",").map(s => s.trim()).filter(Boolean);
+    if (!features.length) { toast({ title: "Add at least one feature", variant: "destructive" }); return; }
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/self-improve/learning/outcome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caseId: caseId || `MANUAL_${Date.now()}`, component, features, reward }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error);
+      toast({ title: `Updated ${features.length} weight${features.length > 1 ? "s" : ""} for ${COMPONENT_DISPLAY[component] ?? component}` });
+      setFeaturesRaw("");
+      setCaseId("");
+      refetchStats();
+      refetchSummaries();
+    } catch (e: any) {
+      toast({ title: e.message, variant: "destructive" });
+    } finally { setSubmitting(false); }
+  }
+
+  const summaries: any[] = summariesData?.summaries ?? [];
+
+  return (
+    <div className="space-y-5">
+      {/* Stats */}
+      {stats && (
+        <div className="grid grid-cols-4 gap-3">
+          <StatCard icon={Brain}       label="Learned Weights"       value={stats.totalWeights}          color="purple" />
+          <StatCard icon={Activity}    label="Outcomes Recorded"     value={stats.totalOutcomes}         color="blue" />
+          <StatCard icon={Network}     label="Components Learning"   value={stats.componentsWithWeights} color="green" />
+          <StatCard icon={TrendingUp}  label="Learning Rate"         value={`α = ${stats.learningRate}`} color="orange" />
+        </div>
+      )}
+
+      <div className="grid gap-5 lg:grid-cols-[1fr_380px]">
+        {/* Component weight summaries */}
+        <div className="space-y-3">
+          <div className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+            <Brain className="h-4 w-4" /> Learned Weights by Component
+          </div>
+          {summaries.length === 0 ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground">
+              <Brain className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No weights learned yet. Record an outcome below to start.</p>
+            </CardContent></Card>
+          ) : summaries.map((s: any) => (
+            <Card key={s.component}>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <div className="font-semibold text-sm text-slate-800">{COMPONENT_DISPLAY[s.component] ?? s.component}</div>
+                    <div className="text-xs text-slate-500">{s.totalUpdates} updates · avg reward {s.avgReward > 0 ? "+" : ""}{s.avgReward}</div>
+                  </div>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${s.avgReward >= 0 ? "bg-green-100 text-green-700 border-green-200" : "bg-red-100 text-red-700 border-red-200"}`}>
+                    {s.avgReward >= 0 ? "↑ Improving" : "↓ Degrading"}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {s.parameters.slice(0, 6).map((p: any) => (
+                    <div key={p.parameter} data-testid={`weight-${s.component}-${p.parameter}`} className="flex items-center gap-3">
+                      <div className="flex-1 min-w-0 text-xs text-slate-700 truncate">{p.parameter}</div>
+                      <div className="w-24 h-1.5 rounded-full bg-slate-100 shrink-0">
+                        <div
+                          className={`h-1.5 rounded-full ${p.value >= 0 ? "bg-green-500" : "bg-red-400"}`}
+                          style={{ width: `${Math.min(100, Math.abs(p.value) * 10)}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-mono w-12 text-right shrink-0 ${p.value > 0 ? "text-green-700" : p.value < 0 ? "text-red-600" : "text-slate-400"}`}>
+                        {p.value > 0 ? "+" : ""}{p.value.toFixed(2)}
+                      </span>
+                      <span className="text-[10px] text-slate-400 shrink-0">×{p.updateCount}</span>
+                    </div>
+                  ))}
+                  {s.parameters.length > 6 && (
+                    <div className="text-[10px] text-slate-400">+{s.parameters.length - 6} more parameters</div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+
+          {/* Top gainers / losers */}
+          {stats && (stats.topGainers?.length > 0 || stats.topLosers?.length > 0) && (
+            <div className="grid grid-cols-2 gap-3">
+              <Card>
+                <CardHeader className="pb-2 pt-3 px-4">
+                  <CardTitle className="text-xs font-semibold text-green-700">↑ Top Reinforced Parameters</CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-3 space-y-1">
+                  {(stats.topGainers ?? []).map((g: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-700 truncate max-w-[70%]">{g.parameter}</span>
+                      <span className="text-green-700 font-mono font-bold">+{g.value.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2 pt-3 px-4">
+                  <CardTitle className="text-xs font-semibold text-red-600">↓ Most Penalized Parameters</CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-3 space-y-1">
+                  {(stats.topLosers ?? []).map((g: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-700 truncate max-w-[70%]">{g.parameter}</span>
+                      <span className="text-red-600 font-mono font-bold">{g.value.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </div>
+
+        {/* Record outcome form */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Zap className="h-4 w-4" /> Record Outcome
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">Tell the adapter which features led to a good or bad outcome. It updates the component's weights accordingly.</p>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 space-y-3">
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Component</div>
+                <select
+                  data-testid="select-learning-component"
+                  value={component}
+                  onChange={e => setComponent(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 bg-white"
+                >
+                  {Object.entries(COMPONENT_DISPLAY).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Features / Parameters (comma-separated)</div>
+                <Input
+                  data-testid="input-learning-features"
+                  value={featuresRaw}
+                  onChange={e => setFeaturesRaw(e.target.value)}
+                  placeholder="e.g. Fever, Sore throat, Exudate"
+                  className="text-sm"
+                />
+                <div className="text-[10px] text-slate-400 mt-1">Each feature weight is updated by: w += α × reward</div>
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Outcome Reward</div>
+                <div className="space-y-1.5">
+                  {REWARD_OPTIONS.map(r => (
+                    <label key={r.value} className="flex items-center gap-2.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        data-testid={`radio-reward-${r.value}`}
+                        name="reward"
+                        checked={reward === r.value}
+                        onChange={() => setReward(r.value)}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className={`text-xs font-medium ${r.value > 0 ? "text-green-700" : r.value < 0 ? "text-red-700" : "text-slate-700"}`}>
+                        {r.label}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Case ID (optional)</div>
+                <Input
+                  data-testid="input-learning-case-id"
+                  value={caseId}
+                  onChange={e => setCaseId(e.target.value)}
+                  placeholder="CASE_001"
+                  className="text-sm"
+                />
+              </div>
+
+              <Button
+                data-testid="button-submit-outcome"
+                onClick={submitOutcome}
+                disabled={submitting || !featuresRaw.trim()}
+                className="w-full"
+              >
+                {submitting ? "Updating weights…" : "Submit Outcome"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-slate-50 border-slate-200">
+            <CardContent className="p-4">
+              <div className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2">How it works</div>
+              <div className="space-y-1.5 text-xs text-slate-700">
+                <div className="flex gap-2"><span className="text-green-600 font-bold">+1</span> Correct → reinforces all active features</div>
+                <div className="flex gap-2"><span className="text-red-600 font-bold">−1</span> Wrong → penalizes all active features</div>
+                <div className="flex gap-2"><span className="text-slate-500 font-bold">α</span> Learning rate = 0.1 per update</div>
+                <div className="flex gap-2"><span className="text-slate-500 font-bold">⟳</span> Weights clamped to [−10, +10]</div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Case Similarity Memory Panel ──────────────────────────────────────────────
+
+const COMPLAINT_LIST = ["cough","sore_throat","sinus_pressure","ear_pain","uti","rash","fever","chest_pain","abdominal_pain"];
+
+function SimilarityMemoryPanel() {
+  const { toast } = useToast();
+  const [complaint, setComplaint] = useState("sore_throat");
+  const [featuresRaw, setFeaturesRaw] = useState("Fever, Exudate, No Cough, Swollen glands");
+  const [topK, setTopK] = useState(5);
+  const [searching, setSearching] = useState(false);
+  const [report, setReport] = useState<any>(null);
+  const [seeding, setSeeding] = useState(false);
+
+  const [storeComplaint, setStoreComplaint] = useState("sore_throat");
+  const [storeFeaturesRaw, setStoreFeaturesRaw] = useState("");
+  const [storeDisposition, setStoreDisposition] = useState("routine");
+  const [storeTopDx, setStoreTopDx] = useState("");
+  const [storing, setStoring] = useState(false);
+
+  const { data: memStats, refetch: refetchStats } = useQuery<any>({
+    queryKey: ["/api/self-improve/similarity/stats"],
+    queryFn: () => fetch("/api/self-improve/similarity/stats").then(r => r.json()),
+  });
+
+  async function seed() {
+    setSeeding(true);
+    try {
+      const r = await fetch("/api/self-improve/similarity/seed", { method: "POST" });
+      const d = await r.json();
+      toast({ title: d.message });
+      refetchStats();
+    } catch (e: any) { toast({ title: e.message, variant: "destructive" }); } finally { setSeeding(false); }
+  }
+
+  async function search() {
+    const features = featuresRaw.split(",").map(s => s.trim()).filter(Boolean);
+    if (!features.length) { toast({ title: "Enter at least one feature", variant: "destructive" }); return; }
+    setSearching(true);
+    try {
+      const r = await fetch("/api/self-improve/similarity/find", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ complaint, features, topK }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error);
+      setReport(d);
+    } catch (e: any) { toast({ title: e.message, variant: "destructive" }); } finally { setSearching(false); }
+  }
+
+  async function storeCase() {
+    if (!storeTopDx.trim()) { toast({ title: "Top diagnosis required", variant: "destructive" }); return; }
+    setStoring(true);
+    try {
+      const r = await fetch("/api/self-improve/similarity/store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          caseId: `MANUAL_${Date.now()}`,
+          complaint: storeComplaint,
+          features: storeFeaturesRaw.split(",").map(s => s.trim()).filter(Boolean),
+          disposition: storeDisposition,
+          topDiagnosis: storeTopDx.trim(),
+          diagnosisList: [storeTopDx.trim()],
+        }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error);
+      toast({ title: "Case stored in memory" });
+      setStoreFeaturesRaw(""); setStoreTopDx("");
+      refetchStats();
+    } catch (e: any) { toast({ title: e.message, variant: "destructive" }); } finally { setStoring(false); }
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Stats + seed */}
+      <div className="flex items-start gap-4 flex-wrap">
+        <div className="grid grid-cols-4 gap-3 flex-1 min-w-0">
+          <StatCard icon={BookOpen}   label="Cases in Memory"  value={memStats?.totalCases ?? 0}                                    color="blue" />
+          <StatCard icon={Brain}      label="Complaints"       value={Object.keys(memStats?.byComplaint ?? {}).length}              color="purple" />
+          <StatCard icon={Activity}   label="Most Common Dx"  value={Object.entries(memStats?.byComplaint ?? {}).sort((a:any,b:any)=>b[1]-a[1])[0]?.[0]?.replace(/_/g," ") ?? "—"} color="green" />
+          <StatCard icon={CheckCircle} label="Data Points"    value={(memStats?.totalCases ?? 0) * 4}                              color="orange" />
+        </div>
+        <Button
+          data-testid="button-seed-memory"
+          variant="outline"
+          onClick={seed}
+          disabled={seeding}
+          className="shrink-0"
+        >
+          {seeding ? "Seeding…" : "Seed 15 Demo Cases"}
+        </Button>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        {/* Search panel */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Search className="h-4 w-4" /> Find Similar Cases
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">Retrieve the most similar historical cases by complaint + symptom overlap (Jaccard similarity).</p>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 space-y-3">
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Complaint</div>
+                <select
+                  data-testid="select-similarity-complaint"
+                  value={complaint}
+                  onChange={e => setComplaint(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 bg-white"
+                >
+                  {COMPLAINT_LIST.map(c => (
+                    <option key={c} value={c}>{c.replace(/_/g," ")}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Features (comma-separated)</div>
+                <Textarea
+                  data-testid="textarea-similarity-features"
+                  value={featuresRaw}
+                  onChange={e => setFeaturesRaw(e.target.value)}
+                  rows={3}
+                  placeholder="Fever, Exudate, No Cough, Swollen glands…"
+                  className="text-sm"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="text-xs font-semibold text-slate-600">Top K</div>
+                <select
+                  data-testid="select-similarity-topk"
+                  value={topK}
+                  onChange={e => setTopK(Number(e.target.value))}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-700 bg-white"
+                >
+                  {[3,5,8,10].map(k => <option key={k} value={k}>{k} results</option>)}
+                </select>
+              </div>
+              <Button
+                data-testid="button-find-similar"
+                onClick={search}
+                disabled={searching}
+                className="w-full"
+              >
+                {searching ? "Searching…" : "Find Similar Cases"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Results */}
+          {report && (
+            <div className="space-y-3">
+              {/* Insight */}
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                <div className="flex items-center gap-2 text-blue-800 font-semibold text-sm mb-1">
+                  <Brain className="h-4 w-4" /> Case Memory Insight
+                </div>
+                <p data-testid="text-similarity-insight" className="text-sm text-blue-900">{report.insight}</p>
+                <div className="mt-2 text-xs text-blue-600">Searched {report.totalCasesSearched} cases · {report.similarCases.length} matches found</div>
+              </div>
+
+              {/* Diagnosis votes */}
+              {report.topDiagnosisVotes?.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-1 pt-3 px-4">
+                    <CardTitle className="text-xs font-semibold">Diagnosis Votes Across Similar Cases</CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 pb-3 space-y-2">
+                    {report.topDiagnosisVotes.map((v: any, i: number) => (
+                      <div key={i} data-testid={`text-dx-vote-${i}`} className="flex items-center gap-3">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-600">{i+1}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium text-slate-800 truncate">{v.diagnosis}</div>
+                          <div className="mt-0.5 h-1.5 w-full rounded-full bg-slate-100">
+                            <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${v.pct}%` }} />
+                          </div>
+                        </div>
+                        <span className="text-xs font-bold text-blue-700 shrink-0">{v.pct}%</span>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Similar case cards */}
+              {report.similarCases?.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Similar Cases</div>
+                  {report.similarCases.map((c: any) => (
+                    <div key={c.caseId} data-testid={`card-similar-${c.caseId}`} className="rounded-xl border bg-white p-3">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <div>
+                          <span className="text-xs font-semibold text-slate-800">{c.topDiagnosis}</span>
+                          <span className="ml-2 text-[10px] text-slate-400">{c.caseId}</span>
+                        </div>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${c.similarity >= 0.7 ? "bg-green-100 text-green-700 border-green-200" : c.similarity >= 0.4 ? "bg-blue-100 text-blue-700 border-blue-200" : "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                          {(c.similarity * 100).toFixed(0)}% match
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500">{c.complaint.replace(/_/g," ")} · {c.disposition}</div>
+                      {c.matchedFeatures.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {c.matchedFeatures.map((f: string) => (
+                            <span key={f} className="rounded-full bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[10px] text-blue-700">{f}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Store case + breakdown */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <BookOpen className="h-4 w-4" /> Store New Case in Memory
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">Add a reviewed case to the memory so future similar cases can reference it.</p>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs font-semibold text-slate-600 mb-1.5">Complaint</div>
+                  <select
+                    data-testid="select-store-complaint"
+                    value={storeComplaint}
+                    onChange={e => setStoreComplaint(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2 py-2 text-xs text-slate-700 bg-white"
+                  >
+                    {COMPLAINT_LIST.map(c => <option key={c} value={c}>{c.replace(/_/g," ")}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-600 mb-1.5">Disposition</div>
+                  <select
+                    data-testid="select-store-disposition"
+                    value={storeDisposition}
+                    onChange={e => setStoreDisposition(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2 py-2 text-xs text-slate-700 bg-white"
+                  >
+                    {["home_care","routine","urgent_care","er_now","prescription"].map(d => (
+                      <option key={d} value={d}>{d.replace(/_/g," ")}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Top Diagnosis</div>
+                <Input
+                  data-testid="input-store-top-dx"
+                  value={storeTopDx}
+                  onChange={e => setStoreTopDx(e.target.value)}
+                  placeholder="e.g. Group A Strep Pharyngitis"
+                  className="text-sm"
+                />
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-600 mb-1.5">Features (comma-separated)</div>
+                <Input
+                  data-testid="input-store-features"
+                  value={storeFeaturesRaw}
+                  onChange={e => setStoreFeaturesRaw(e.target.value)}
+                  placeholder="Fever, Exudate, No Cough…"
+                  className="text-sm"
+                />
+              </div>
+              <Button
+                data-testid="button-store-case"
+                onClick={storeCase}
+                disabled={storing || !storeTopDx.trim()}
+                className="w-full"
+              >
+                {storing ? "Storing…" : "Store Case"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Memory breakdown by complaint */}
+          {memStats && Object.keys(memStats.byComplaint ?? {}).length > 0 && (
+            <Card>
+              <CardHeader className="pb-2 pt-3 px-4">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Memory Breakdown by Complaint</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-3 space-y-2">
+                {Object.entries(memStats.byComplaint as Record<string,number>)
+                  .sort((a,b) => b[1]-a[1])
+                  .map(([c, count]) => {
+                    const pct = Math.round((count / (memStats.totalCases || 1)) * 100);
+                    return (
+                      <div key={c} data-testid={`memory-breakdown-${c}`} className="flex items-center gap-3">
+                        <div className="w-28 text-xs text-slate-700 truncate">{c.replace(/_/g," ")}</div>
+                        <div className="flex-1 h-1.5 rounded-full bg-slate-100">
+                          <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-500 w-8 text-right">{count}</span>
+                      </div>
+                    );
+                  })
+                }
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Audit Panel ───────────────────────────────────────────────────────────────
 
 const DOMAIN_META: Record<string, { label: string; color: string }> = {
@@ -1183,15 +1750,17 @@ export default function SelfImproveDashboard() {
       </div>
 
       <Tabs defaultValue="orchestrator">
-        <TabsList className="grid grid-cols-8 w-full">
-          <TabsTrigger value="orchestrator" data-testid="tab-orchestrator"><Zap className="h-3 w-3 mr-1" />Orchestrator</TabsTrigger>
-          <TabsTrigger value="traces" data-testid="tab-traces"><Database className="h-3 w-3 mr-1" />Traces</TabsTrigger>
-          <TabsTrigger value="gold" data-testid="tab-gold"><BookOpen className="h-3 w-3 mr-1" />Gold Cases</TabsTrigger>
-          <TabsTrigger value="failures" data-testid="tab-failures"><AlertTriangle className="h-3 w-3 mr-1" />Failures</TabsTrigger>
-          <TabsTrigger value="proposals" data-testid="tab-proposals"><Lightbulb className="h-3 w-3 mr-1" />Proposals</TabsTrigger>
-          <TabsTrigger value="graph" data-testid="tab-graph"><Network className="h-3 w-3 mr-1" />Graph</TabsTrigger>
-          <TabsTrigger value="risk" data-testid="tab-risk"><BarChart3 className="h-3 w-3 mr-1" />Risk + RL</TabsTrigger>
-          <TabsTrigger value="audit" data-testid="tab-audit"><Shield className="h-3 w-3 mr-1" />Audit</TabsTrigger>
+        <TabsList className="flex flex-wrap h-auto gap-1 bg-muted p-1 rounded-lg">
+          <TabsTrigger value="orchestrator" data-testid="tab-orchestrator" className="text-xs"><Zap className="h-3 w-3 mr-1" />Orchestrator</TabsTrigger>
+          <TabsTrigger value="traces" data-testid="tab-traces" className="text-xs"><Database className="h-3 w-3 mr-1" />Traces</TabsTrigger>
+          <TabsTrigger value="gold" data-testid="tab-gold" className="text-xs"><BookOpen className="h-3 w-3 mr-1" />Gold Cases</TabsTrigger>
+          <TabsTrigger value="failures" data-testid="tab-failures" className="text-xs"><AlertTriangle className="h-3 w-3 mr-1" />Failures</TabsTrigger>
+          <TabsTrigger value="proposals" data-testid="tab-proposals" className="text-xs"><Lightbulb className="h-3 w-3 mr-1" />Proposals</TabsTrigger>
+          <TabsTrigger value="graph" data-testid="tab-graph" className="text-xs"><Network className="h-3 w-3 mr-1" />Graph</TabsTrigger>
+          <TabsTrigger value="risk" data-testid="tab-risk" className="text-xs"><BarChart3 className="h-3 w-3 mr-1" />Risk + RL</TabsTrigger>
+          <TabsTrigger value="learning" data-testid="tab-learning" className="text-xs"><Brain className="h-3 w-3 mr-1" />Learning</TabsTrigger>
+          <TabsTrigger value="memory" data-testid="tab-memory" className="text-xs"><Search className="h-3 w-3 mr-1" />Case Memory</TabsTrigger>
+          <TabsTrigger value="audit" data-testid="tab-audit" className="text-xs"><Shield className="h-3 w-3 mr-1" />Audit</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orchestrator" className="mt-4"><OrchestratorPanel /></TabsContent>
@@ -1212,6 +1781,8 @@ export default function SelfImproveDashboard() {
             </div>
           </div>
         </TabsContent>
+        <TabsContent value="learning" className="mt-4"><LearningAdapterPanel /></TabsContent>
+        <TabsContent value="memory" className="mt-4"><SimilarityMemoryPanel /></TabsContent>
         <TabsContent value="audit" className="mt-4"><AuditPanel /></TabsContent>
       </Tabs>
     </div>
