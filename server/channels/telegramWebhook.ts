@@ -4,6 +4,12 @@ import { processMessage } from "./messageOrchestrator";
 import { sendReply } from "./channelAdapter";
 import { buildConversationId } from "./messageEvent";
 import { getChannelFlags } from "./featureFlags";
+import {
+  addMessage as convStoreAdd,
+  caseIdFromChannel,
+  ensureConversation,
+} from "../integrations/conversationStore";
+import { addPatientMessage } from "../assistant/telemedicineSessionService";
 
 function validateTelegramSecret(req: Request): boolean {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -107,6 +113,15 @@ export function registerTelegramWebhook(router: Router) {
         }
         return;
       }
+
+      // ── Bridge to conversation store + telemed session ────────────────────
+      try {
+        const tgCaseId = caseIdFromChannel("telegram", event.externalUserId)
+        ensureConversation(tgCaseId, "telegram", event.externalUserId)
+        convStoreAdd(tgCaseId, "patient", event.text, "telegram")
+        addPatientMessage(tgCaseId, event.text)
+      } catch { /* non-blocking */ }
+      // ────────────────────────────────────────────────────────────────────
 
       const result = await processMessage(event);
 

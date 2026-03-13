@@ -54,6 +54,7 @@ import SkillLayerAdminPage from "@/pages/SkillLayerAdminPage";
 import TelemedicineConsole from "@/pages/TelemedicineConsole";
 import TelemedicineDoctorDashboard from "@/pages/TelemedicineDoctorDashboard";
 import RapidTelemedicineConsole from "@/pages/RapidTelemedicineConsole";
+import TelemedicineSplitPaneConsole from "@/pages/TelemedicineSplitPaneConsole";
 import SelfImproveDashboard from "@/pages/SelfImproveDashboard";
 import HybridReasoningConsole from "@/pages/HybridReasoningConsole";
 import UCSMConsole from "@/pages/UCSMConsole";
@@ -136,6 +137,7 @@ function Router() {
       <Route path="/telemedicine">{() => <AdminPage component={TelemedicineConsole} />}</Route>
       <Route path="/telemed-doctor-dashboard">{() => <AdminPage component={TelemedicineDoctorDashboard} />}</Route>
       <Route path="/rapid-telemed">{() => <AdminPage component={RapidTelemedicineConsole} />}</Route>
+      <Route path="/telemed-split">{() => <AdminPage component={TelemedicineSplitPaneConsole} />}</Route>
       <Route path="/self-improve">{() => <AdminPage component={SelfImproveDashboard} />}</Route>
       <Route path="/hybrid-reasoning">{() => <AdminPage component={HybridReasoningConsole} />}</Route>
       <Route path="/ucsm">{() => <AdminPage component={UCSMConsole} />}</Route>
