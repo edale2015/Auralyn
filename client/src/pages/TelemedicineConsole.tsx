@@ -53,6 +53,15 @@ function safeArr(val: any): any[] {
   return Array.isArray(val) ? val : [];
 }
 
+const SEVERITY_BADGE: Record<string, string> = {
+  critical: "bg-red-100 border-red-300 text-red-800",
+  urgent: "bg-amber-100 border-amber-300 text-amber-800",
+  warning: "bg-yellow-50 border-yellow-200 text-yellow-700",
+  major: "bg-orange-100 border-orange-300 text-orange-800",
+  moderate: "bg-yellow-50 border-yellow-200 text-yellow-700",
+  minor: "bg-slate-100 border-slate-200 text-slate-600",
+};
+
 export default function TelemedicineConsole() {
   const [selectedComplaint, setSelectedComplaint] = useState<string>("");
   const [rawText, setRawText] = useState("");
@@ -64,6 +73,13 @@ export default function TelemedicineConsole() {
   const [listening, setListening] = useState(false);
   const noteRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+
+  const [selectedDisposition, setSelectedDisposition] = useState<string>("");
+  const [telemedResult, setTelemedResult] = useState<any>(null);
+  const [telemedRunning, setTelemedRunning] = useState(false);
+  const [telemedError, setTelemedError] = useState("");
+  const [copiedDischarge, setCopiedDischarge] = useState(false);
+  const caseIdRef = useRef<string>(`TM_${Date.now()}`);
 
   const toggleVoice = useCallback(() => {
     const SpeechRecognition =
@@ -132,12 +148,46 @@ export default function TelemedicineConsole() {
     return `${base} Reports: ${syms.join(", ")}.`;
   }
 
+  async function runTelemedAnalysis() {
+    if (!selectedComplaint) return;
+    try {
+      setTelemedRunning(true);
+      setTelemedError("");
+      const symptoms = Array.from(checkedSymptoms);
+      const r = await fetch("/api/telemed/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          caseId: caseIdRef.current,
+          complaint: selectedComplaint,
+          symptoms,
+          disposition: selectedDisposition,
+          patientText: rawText,
+        }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error ?? "Analysis failed");
+      setTelemedResult(d);
+    } catch (e: any) {
+      setTelemedError(e.message);
+    } finally {
+      setTelemedRunning(false);
+    }
+  }
+
+  async function copyDischarge() {
+    const msg = telemedResult?.returnPrecautions?.dischargeMessage ?? "";
+    try { await navigator.clipboard.writeText(msg); setCopiedDischarge(true); setTimeout(() => setCopiedDischarge(false), 2000); } catch {}
+  }
+
   async function runAnalysis() {
     if (!selectedComplaint && !rawText.trim()) return;
+    caseIdRef.current = `TM_${Date.now()}`;
     try {
       setRunning(true);
       setError("");
       setResult(null);
+      setTelemedResult(null);
 
       const res = await fetch("/api/skill-layer/run", {
         method: "POST",
@@ -320,6 +370,27 @@ export default function TelemedicineConsole() {
               />
             </div>
 
+            {/* Disposition picker */}
+            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+              <div className="mb-2 text-sm font-semibold text-slate-700">Disposition (for Intelligence Layer)</div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {["Home Care", "Prescription", "Urgent Care", "ED", "Telehealth Follow-up"].map(d => (
+                  <button
+                    key={d}
+                    data-testid={`button-disposition-${d.replace(/\s+/g, "-").toLowerCase()}`}
+                    onClick={() => setSelectedDisposition(prev => prev === d ? "" : d)}
+                    className={`rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-all ${
+                      selectedDisposition === d
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Analyze button */}
             <button
               data-testid="button-run-analysis"
@@ -330,8 +401,20 @@ export default function TelemedicineConsole() {
               {running ? "Analyzing…" : "Run Clinical Analysis"}
             </button>
 
+            <button
+              data-testid="button-run-telemed-intelligence"
+              onClick={runTelemedAnalysis}
+              disabled={telemedRunning || !selectedComplaint}
+              className="w-full rounded-2xl border border-slate-300 bg-white py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 disabled:opacity-40"
+            >
+              {telemedRunning ? "Loading Intelligence…" : "Get Medication Safety + Codes + Discharge"}
+            </button>
+
             {error && (
               <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</div>
+            )}
+            {telemedError && (
+              <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">{telemedError}</div>
             )}
           </div>
 
@@ -536,6 +619,196 @@ export default function TelemedicineConsole() {
                       className="whitespace-pre-wrap text-sm text-slate-700"
                     >
                       {discharge}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* INTELLIGENCE LAYER — Medication Safety, ICD/CPT, Return Precautions, Discharge */}
+            {telemedResult && (
+              <>
+                <div className="flex items-center gap-3 pt-2">
+                  <div className="h-px flex-1 bg-slate-200" />
+                  <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Intelligence Layer</span>
+                  <div className="h-px flex-1 bg-slate-200" />
+                </div>
+
+                {/* Safety Alerts */}
+                {safeArr(telemedResult.safetyAlerts).length > 0 && (
+                  <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-700">Safety Alerts</div>
+                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">
+                        {safeArr(telemedResult.safetyAlerts).length} alert{safeArr(telemedResult.safetyAlerts).length > 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {safeArr(telemedResult.safetyAlerts).map((a: any, i: number) => (
+                        <div
+                          key={i}
+                          data-testid={`text-safety-alert-${i}`}
+                          className={`rounded-xl border p-3 text-sm ${SEVERITY_BADGE[a.severity] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}
+                        >
+                          <div className="font-semibold">{a.severity === "critical" ? "🔴" : a.severity === "urgent" ? "🟠" : "🟡"} {a.message}</div>
+                          <div className="mt-1 text-xs opacity-80">{a.recommendation}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Differential */}
+                {safeArr(telemedResult.differential).length > 0 && (
+                  <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="mb-3 text-sm font-semibold text-slate-700">Live Differential (updated)</div>
+                    <ol className="space-y-2">
+                      {safeArr(telemedResult.differential).slice(0, 5).map((d: any, i: number) => (
+                        <li key={i} data-testid={`text-live-differential-${i}`} className="flex items-center gap-3">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">{i + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm font-medium text-slate-800 truncate">{d.diagnosis}</span>
+                              <span className="text-xs text-slate-400 shrink-0">{(d.confidence * 100).toFixed(0)}%</span>
+                            </div>
+                            <div className="mt-0.5 h-1.5 w-full rounded-full bg-slate-100">
+                              <div className="h-1.5 rounded-full bg-slate-500" style={{ width: `${Math.min(100, d.confidence * 100)}%` }} />
+                            </div>
+                            {d.rulingIn?.length > 0 && (
+                              <div className="mt-1 text-xs text-slate-400 truncate">↑ {d.rulingIn.slice(0, 2).join(", ")}</div>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+
+                {/* Medication Suggestions + Safety */}
+                <div className="grid gap-4 md:grid-cols-2">
+                  {safeArr(telemedResult.medicationSuggestions).length > 0 && (
+                    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                      <div className="mb-3 text-sm font-semibold text-slate-700">Medication Suggestions</div>
+                      <div className="space-y-2">
+                        {safeArr(telemedResult.medicationSuggestions).map((m: any, i: number) => (
+                          <div key={i} data-testid={`text-med-suggestion-${i}`}
+                            className="rounded-xl bg-slate-50 border border-slate-200 p-2.5 text-xs text-slate-800">
+                            <div className="font-semibold text-slate-900">{m.name}
+                              <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${m.category === "first-line" ? "bg-green-100 text-green-800" : m.category === "alternative" ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600"}`}>
+                                {m.category}
+                              </span>
+                            </div>
+                            <div className="text-slate-500 mt-0.5">{m.dose} · {m.route} · {m.frequency} · {m.duration}</div>
+                            <div className="text-slate-400 mt-0.5 italic">{m.indication}</div>
+                            {m.caveat && <div className="mt-1 text-amber-700 font-medium">⚠ {m.caveat}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {safeArr(telemedResult.medicationAlerts).length > 0 && (
+                    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                      <div className="mb-3 flex items-center justify-between">
+                        <div className="text-sm font-semibold text-slate-700">Medication Safety</div>
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">
+                          {safeArr(telemedResult.medicationAlerts).length}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {safeArr(telemedResult.medicationAlerts).map((a: any, i: number) => (
+                          <div key={i} data-testid={`text-med-alert-${i}`}
+                            className={`rounded-xl border p-2.5 text-xs ${SEVERITY_BADGE[a.severity] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
+                            <div className="font-semibold">{a.medication} — {a.type}</div>
+                            <div className="mt-0.5 opacity-80">{a.concern}</div>
+                            <div className="mt-1 font-medium">{a.recommendation}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ICD-10 + CPT Codes */}
+                {(safeArr(telemedResult.codes?.icd10).length > 0 || safeArr(telemedResult.codes?.cpt).length > 0) && (
+                  <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="mb-3 text-sm font-semibold text-slate-700">Billing Codes — ICD-10 & CPT</div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {safeArr(telemedResult.codes?.icd10).length > 0 && (
+                        <div>
+                          <div className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400">ICD-10 Diagnosis</div>
+                          <div className="space-y-1.5">
+                            {safeArr(telemedResult.codes.icd10).map((c: any, i: number) => (
+                              <div key={i} data-testid={`text-icd10-${i}`}
+                                className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-200 p-2.5">
+                                <div>
+                                  <span className="font-mono text-sm font-bold text-slate-900">{c.code}</span>
+                                  <div className="text-xs text-slate-500 mt-0.5 leading-tight">{c.description}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {safeArr(telemedResult.codes?.cpt).length > 0 && (
+                        <div>
+                          <div className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400">CPT Procedure</div>
+                          <div className="space-y-1.5">
+                            {safeArr(telemedResult.codes.cpt).map((c: any, i: number) => (
+                              <div key={i} data-testid={`text-cpt-${i}`}
+                                className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-200 p-2.5">
+                                <div>
+                                  <span className="font-mono text-sm font-bold text-slate-900">{c.code}</span>
+                                  <div className="text-xs text-slate-500 mt-0.5 leading-tight">{c.description}</div>
+                                  {c.rvu > 0 && <div className="text-xs text-slate-400 mt-0.5">{c.rvu} RVU</div>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Return Precautions + Discharge */}
+                {telemedResult.returnPrecautions && (
+                  <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-700">Return Precautions & Discharge</div>
+                      <button
+                        data-testid="button-copy-discharge"
+                        onClick={copyDischarge}
+                        className="rounded-xl border px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        {copiedDischarge ? "Copied!" : "Copy Message"}
+                      </button>
+                    </div>
+
+                    <div className="mb-3">
+                      <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Return to ER Immediately If:</div>
+                      <div className="space-y-1.5">
+                        {safeArr(telemedResult.returnPrecautions.immediateReturn).map((p: string, i: number) => (
+                          <div key={i} data-testid={`text-return-precaution-${i}`}
+                            className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+                            <span className="shrink-0 mt-0.5">⚠</span><span>{p}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {telemedResult.returnPrecautions.expectedCourse && (
+                      <div className="mb-3 rounded-xl bg-slate-50 border border-slate-200 p-2.5 text-xs text-slate-700">
+                        <span className="font-semibold">Expected course:</span> {telemedResult.returnPrecautions.expectedCourse}
+                      </div>
+                    )}
+
+                    <div className="rounded-xl bg-green-50 border border-green-200 p-3">
+                      <div className="text-xs font-bold uppercase tracking-widest text-green-700 mb-1.5">Patient Discharge Message (WhatsApp / Telegram)</div>
+                      <div data-testid="text-patient-discharge-message"
+                        className="whitespace-pre-wrap text-sm text-slate-800 leading-relaxed">
+                        {telemedResult.returnPrecautions.dischargeMessage}
+                      </div>
                     </div>
                   </div>
                 )}

@@ -31,6 +31,7 @@ const NAV_SECTIONS = [
     label: "Clinical Operations",
     items: [
       { path: "/telemedicine", label: "Visit Copilot", icon: Video },
+      { path: "/telemed-doctor-dashboard", label: "Doctor Dashboard", icon: BrainCircuit },
       { path: "/complaint-control-center", label: "Complaint Control Center", icon: LayoutDashboard },
       { path: "/review-queue-v2", label: "Review Queue", icon: ClipboardCheck },
       { path: "/complaint-qa", label: "Complaint QA", icon: BarChart3 },

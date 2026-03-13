@@ -88,6 +88,22 @@ The system supports full multi-tenant provisioning and configuration with CRUD o
 ### Analytics and Monitoring
 Features patient outcome feedback loops, provider performance analytics (cases reviewed, approval rates), and population health monitoring with complaint and disposition analytics, including drift detection.
 
+### Telemedicine Reasoning Assistant (server/assistant/)
+A real-time intelligence layer for WhatsApp/Telegram text-based telemedicine visits:
+- `telemedicineSessionService.ts` — in-memory session store per case (patientMessages, complaint, differential, safety alerts, medications, codes, return precautions, status)
+- `telemedicineSafetyService.ts` — 12 compound safety rules (cardiac, respiratory, neurologic, obstetric, immunologic, medication, age) with severity and recommendation
+- `telemedicineDifferentialService.ts` — per-complaint ranked differential with ruling-in / ruling-out factor updates per symptom; 9 complaint sets (50+ diagnoses)
+- `telemedicineMedicationSuggestionService.ts` — first-line / alternative / adjunct medications per complaint with dose, route, frequency, duration, indication, caveat
+- `telemedicineMedicationSafetyService.ts` — allergy cross-reaction detection, pregnancy contraindications, renal impairment warnings, 11 drug-drug interaction rules
+- `telemedicineCodingService.ts` — ICD-10 + CPT auto-coding by complaint × disposition; telemedicine modifier (95); lab CPT codes (strep rapid test, UA)
+- `telemedicineReturnPrecautionService.ts` — per-complaint × disposition return precautions, expected course, follow-up, and formatted WhatsApp/Telegram discharge message
+- `telemedicineNoteService.ts` — auto-generate HPI, assessment, plan, disposition, safety netting chart note
+- REST: POST `/api/telemed/session/start`, GET `/api/telemed/sessions`, GET `/api/telemed/sessions/all`, GET `/api/telemed/session/:caseId`, POST `/api/telemed/session/:caseId/message`, POST `/api/telemed/analyze`, POST `/api/telemed/note/:caseId`, POST `/api/telemed/discharge/:caseId`, POST `/api/telemed/codes`, POST `/api/telemed/medication-safety`
+
+### Telemedicine Console + Doctor Dashboard (Frontend)
+- `TelemedicineConsole.tsx` — enhanced with: disposition picker, "Get Intelligence" button, live differential update panel, safety alerts, medication suggestions with category badges, medication safety alerts, ICD-10/CPT billing codes, return precautions, one-click patient discharge message (copy for WhatsApp/Telegram)
+- `TelemedicineDoctorDashboard.tsx` — 3-column layout: (1) session list with new session creation, (2) quick analysis panel per session, (3) session detail with 6 tabs: Overview, Medications, ICD/CPT, Precautions, Chart Note, Discharge
+
 ## Navigation Structure
 Sidebar sections:
 1. Clinical Operations — Visit Copilot, Complaint Control Center, Review Queue, etc.
