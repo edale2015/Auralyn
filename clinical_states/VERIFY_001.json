@@ -1,0 +1,134 @@
+{
+  "caseId": "VERIFY_001",
+  "sessionId": "sess_1773421527241_z6km1",
+  "createdAt": "2026-03-13T17:05:27.241Z",
+  "updatedAt": "2026-03-13T17:05:27.312Z",
+  "events": [
+    {
+      "type": "SESSION_STARTED",
+      "timestamp": "2026-03-13T17:05:27.242Z",
+      "data": {
+        "patient": {
+          "age": 34,
+          "sex": "male"
+        },
+        "complaint": "fever"
+      }
+    },
+    {
+      "type": "PATIENT_MESSAGE",
+      "timestamp": "2026-03-13T17:05:27.300Z",
+      "data": {
+        "message": "I have high fever, neck stiffness, and a headache for 2 days"
+      }
+    },
+    {
+      "type": "HYBRID_REASONING_COMPLETE",
+      "timestamp": "2026-03-13T17:05:27.311Z",
+      "data": {
+        "result": {
+          "disposition": "er_now",
+          "confidence": 1,
+          "topDiagnosis": "bacterial_meningitis",
+          "uncertaintyScore": 1.27,
+          "triggered_flags": [
+            "neck_stiffness"
+          ],
+          "explanation": "⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required.",
+          "reasoning_path": [
+            "L1 Safety: OVERRIDE → er_now",
+            "L2 Similarity: 5 cases found, top Dx: bacterial_meningitis",
+            "L3 Bayes: top Dx bacterial_meningitis (18%), entropy=1.27",
+            "Safety override applied → ER_NOW"
+          ],
+          "extractionConfidence": 0.9,
+          "featuresExtracted": 2,
+          "missingFields": []
+        },
+        "timestamp": "2026-03-13T17:05:27.311Z"
+      }
+    },
+    {
+      "type": "RED_FLAG_DETECTED",
+      "timestamp": "2026-03-13T17:05:27.311Z",
+      "data": {
+        "flags": [
+          "neck_stiffness"
+        ]
+      }
+    },
+    {
+      "type": "ALERTS_UPDATED",
+      "timestamp": "2026-03-13T17:05:27.311Z",
+      "data": {
+        "alerts": [
+          "⚠ Safety flag: neck stiffness"
+        ]
+      }
+    },
+    {
+      "type": "DISPOSITION_SET",
+      "timestamp": "2026-03-13T17:05:27.311Z",
+      "data": {
+        "disposition": "er_now"
+      }
+    },
+    {
+      "type": "NOTE_READY",
+      "timestamp": "2026-03-13T17:05:27.312Z",
+      "data": {
+        "note": "VISIT NOTE — March 13, 2026\nPatient: 34yo male\nChief Complaint: fever\n\nSubjective:\nI have high fever, neck stiffness, and a headache for 2 days\n\nRed Flags Detected: neck_stiffness\n\nDisposition: ER NOW\n\nClinical Reasoning:\n⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required."
+      }
+    },
+    {
+      "type": "DISCHARGE_READY",
+      "timestamp": "2026-03-13T17:05:27.312Z",
+      "data": {
+        "text": "DISCHARGE INSTRUCTIONS\n\n⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation."
+      }
+    }
+  ],
+  "intakeMessages": [
+    {
+      "role": "patient",
+      "content": "I have high fever, neck stiffness, and a headache for 2 days",
+      "timestamp": "2026-03-13T17:05:27.300Z"
+    }
+  ],
+  "patient": {
+    "age": 34,
+    "sex": "male"
+  },
+  "complaint": "fever",
+  "symptoms": "I have high fever, neck stiffness, and a headache for 2 days",
+  "hybridResult": {
+    "disposition": "er_now",
+    "confidence": 1,
+    "topDiagnosis": "bacterial_meningitis",
+    "uncertaintyScore": 1.27,
+    "triggered_flags": [
+      "neck_stiffness"
+    ],
+    "explanation": "⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required.",
+    "reasoning_path": [
+      "L1 Safety: OVERRIDE → er_now",
+      "L2 Similarity: 5 cases found, top Dx: bacterial_meningitis",
+      "L3 Bayes: top Dx bacterial_meningitis (18%), entropy=1.27",
+      "Safety override applied → ER_NOW"
+    ],
+    "extractionConfidence": 0.9,
+    "featuresExtracted": 2,
+    "missingFields": []
+  },
+  "lastHybridEvalAt": "2026-03-13T17:05:27.311Z",
+  "disposition": "er_now",
+  "redFlags": [
+    "neck_stiffness"
+  ],
+  "alerts": [
+    "⚠ Safety flag: neck stiffness"
+  ],
+  "chartNote": "VISIT NOTE — March 13, 2026\nPatient: 34yo male\nChief Complaint: fever\n\nSubjective:\nI have high fever, neck stiffness, and a headache for 2 days\n\nRed Flags Detected: neck_stiffness\n\nDisposition: ER NOW\n\nClinical Reasoning:\n⚠ Safety red flag(s) triggered: neck_stiffness. Immediate emergency evaluation required.",
+  "dischargeText": "DISCHARGE INSTRUCTIONS\n\n⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.\n\nRETURN PRECAUTIONS — Return to care immediately if you develop:\n• Chest pain or severe difficulty breathing\n• High fever (>39°C / 102°F)\n• Confusion, severe headache, or stiff neck\n• Severe worsening of any symptom\n\nThis assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  "orchestratorRunAt": "2026-03-13T17:05:27.312Z"
+}
