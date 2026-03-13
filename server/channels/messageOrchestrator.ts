@@ -5,6 +5,7 @@ import { getConversationStateStore, type ConversationState, hashBody } from "./c
 import { sendReply } from "./channelAdapter";
 import { getConversationLog, detectFrictionSignals } from "../traces/conversationLog";
 import { isStaffCommand, handleStaffCommand } from "../whatsapp/staffCommands";
+import { formatTriageResult, formatRedFlagAlert, type Channel as BotChannel } from "./botMessageFormatter";
 import {
   routeFlowFromText,
   flowFromMenuChoice,
@@ -363,9 +364,34 @@ export async function processMessage(event: MessageEvent): Promise<OrchestratorR
           chiefComplaint: "Flu-like symptoms / URI",
           aiDisposition: proposal.disposition,
         });
-        responseMessage = proposal.redFlag
-          ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room. A physician will also review your case."
-          : "Thank you for completing the assessment. Your case has been sent to a physician for review. If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.";
+        const botChannel: BotChannel = (event.channel === "telegram" || event.channel === "whatsapp" || event.channel === "sms") ? event.channel as BotChannel : "whatsapp";
+        if (proposal.redFlag) {
+          const redFlags: string[] = [];
+          if (answers["RF_SOB"] === true) redFlags.push("Trouble breathing at rest");
+          if (answers["RF_CP"] === true) redFlags.push("Chest pain or pressure");
+          if (answers["RF_NEURO"] === true) redFlags.push("Confusion or severe weakness");
+          if (answers["RF_DEHY"] === true) redFlags.push("Unable to keep fluids down");
+          const alertMsg = formatRedFlagAlert(redFlags.length > 0 ? redFlags : ["Red flag symptoms detected"], botChannel);
+          responseMessage = alertMsg.text;
+        } else {
+          const mockState = {
+            caseId: String(encounter.id),
+            complaint: "flu_like_symptoms",
+            symptoms: "",
+            disposition: (proposal.disposition ?? "routine") as any,
+            hybridResult: { topDiagnosis: proposal.disposition ?? "flu_like_illness", confidence: 0.7, triggered_flags: [], explanation: proposal.rationale ?? "" } as any,
+            redFlags: [],
+            differential: [],
+            alerts: [],
+            followUpQuestions: [],
+            patient: {},
+            events: [{ type: "SESSION_STARTED" } as any],
+            intakeMessages: [],
+            scores: {},
+          } as any;
+          const formatted = formatTriageResult(mockState, botChannel);
+          responseMessage = formatted.text;
+        }
       } else {
         const nextQuestion = flow[flowIndex];
         responseMessage = nextQuestion.text;

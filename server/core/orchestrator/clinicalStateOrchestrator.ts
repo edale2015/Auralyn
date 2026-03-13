@@ -1,38 +1,58 @@
 import { getClinicalState, setClinicalState, type ClinicalState } from "../../state/clinicalStateStore";
 import { emitClinicalEvent } from "../../state/clinicalEventBus";
 import { evaluateCase } from "../../hybrid-reasoning/hybridController";
+import { runExtractionConfidence } from "../../hybrid-reasoning/extractionConfidence";
+import { checkLockedRules } from "../../hybrid-reasoning/lockedSafetyRegistry";
 
 const COMPLAINT_KEYWORDS: Record<string, string[]> = {
-  chest_pain:     ["chest pain","chest tightness","chest pressure","palpitations","heart"],
-  sore_throat:    ["sore throat","throat pain","throat","swallowing","tonsil"],
-  cough:          ["cough","coughing","phlegm","sputum","bronchitis"],
-  abdominal_pain: ["abdominal","stomach pain","belly","nausea","vomiting","diarrhea","bowel"],
-  fever:          ["fever","temperature","hot","chills","rigors","sweating","night sweat"],
-  uti:            ["burning urine","frequency","dysuria","urinary","bladder","urine pain"],
-  ear_pain:       ["ear pain","earache","ear discharge","hearing loss","ear"],
-  rash:           ["rash","itching","hives","skin lesion","red spots","blotches"],
-  sinus_pressure: ["sinus","nasal","congestion","stuffed","facial pressure","runny nose"],
-  headache:       ["headache","migraine","head pain","head pressure"],
-  dizziness:      ["dizziness","dizzy","vertigo","lightheaded","spinning"],
-  back_pain:      ["back pain","back ache","lumbar","spine","sciatica"],
-  anxiety:        ["anxiety","panic","anxious","nervous","stress","worry"],
+  chest_pain:     ["chest pain","chest tightness","chest pressure","palpitations","heart pain"],
+  sore_throat:    ["sore throat","throat pain","throat","tonsil","swallowing hurts"],
+  cough:          ["cough","coughing","phlegm","sputum","bronchitis","whooping"],
+  abdominal_pain: ["abdominal","stomach pain","belly","nausea","vomiting","diarrhea","bowel","gut pain"],
+  fever:          ["fever","temperature","hot","chills","rigors","sweating","night sweat","febrile"],
+  uti:            ["burning urine","frequency","dysuria","urinary","bladder","urine pain","pee hurts"],
+  ear_pain:       ["ear pain","earache","ear discharge","hearing loss","ear hurts","ringing in ear"],
+  rash:           ["rash","itching","hives","skin lesion","red spots","blotches","lesion"],
+  sinus_pressure: ["sinus","nasal","congestion","stuffed","facial pressure","runny nose","stuffy"],
+  headache:       ["headache","migraine","head pain","head pressure","head hurts"],
+  dizziness:      ["dizziness","dizzy","vertigo","lightheaded","spinning","unsteady"],
+  back_pain:      ["back pain","back ache","lumbar","spine","sciatica","lower back"],
+  anxiety:        ["anxiety","panic","anxious","nervous","stress","worry","panic attack"],
+  syncope:        ["fainted","passed out","blackout","syncope","loss of consciousness"],
+  edema:          ["swelling","swollen","edema","puffy","swollen ankles","bloated legs"],
+  shortness_of_breath: ["short of breath","can't breathe","breathless","difficulty breathing"],
+  palpitations:   ["palpitations","heart racing","fast heart","irregular heartbeat"],
+  vomiting:       ["vomiting","throwing up","puking","emesis","retching"],
+  eye_pain:       ["eye pain","eye red","vision","blurry vision","eye discharge"],
+  toothache:      ["tooth pain","toothache","jaw pain","dental","gum pain"],
 };
 
 const SYMPTOM_KEYWORDS: Record<string, string[]> = {
-  fever:          ["fever","high temperature","hot","burning up"],
-  cough:          ["cough","coughing"],
+  fever:               ["fever","high temperature","hot","burning up","febrile"],
+  cough:               ["cough","coughing","whooping"],
   shortness_of_breath: ["short of breath","trouble breathing","breathless","can't breathe","wheezing"],
-  chest_tightness:["tightness","pressure in chest","chest tight"],
-  radiates_left_arm: ["arm pain","radiates to arm","left arm"],
-  diaphoresis:    ["sweating","drenched","diaphoresis","clammy"],
-  drooling:       ["drooling","can't swallow saliva"],
-  muffled_voice:  ["muffled","hot potato voice","voice changed"],
-  neck_stiffness: ["stiff neck","neck stiffness","can't bend neck"],
-  confusion:      ["confused","disoriented","not making sense","altered"],
-  vomiting:       ["vomiting","throwing up","nausea"],
-  diarrhea:       ["diarrhea","loose stool","watery stool"],
-  rash:           ["rash","red spots","skin lesion"],
-  petechiae:      ["petechiae","non-blanching","purple dots"],
+  chest_tightness:     ["tightness","pressure in chest","chest tight","squeezing"],
+  radiates_left_arm:   ["arm pain","radiates to arm","left arm","jaw pain"],
+  diaphoresis:         ["sweating","drenched","diaphoresis","clammy","soaking"],
+  drooling:            ["drooling","can't swallow saliva","excess saliva"],
+  muffled_voice:       ["muffled","hot potato voice","voice changed","hoarse"],
+  neck_stiffness:      ["stiff neck","neck stiffness","can't bend neck","neck pain"],
+  confusion:           ["confused","disoriented","not making sense","altered","delirious"],
+  vomiting:            ["vomiting","throwing up","nausea","puking"],
+  diarrhea:            ["diarrhea","loose stool","watery stool"],
+  rash:                ["rash","red spots","skin lesion","hives"],
+  petechiae:           ["petechiae","non-blanching","purple dots"],
+  worst_headache:      ["worst headache","thunderclap","sudden severe headache","worst of my life"],
+  vision_changes:      ["blurry vision","double vision","vision loss","visual"],
+  tachycardia:         ["fast heart","racing heart","palpitations","rapid pulse"],
+  hypoxia:             ["low oxygen","oxygen level","fingertips blue","bluish"],
+  abdominal_rigidity:  ["rigid","board-like","guarding","rebound"],
+  positive_pregnancy_test: ["pregnant","pregnancy test positive","could be pregnant"],
+  vaginal_bleeding:    ["vaginal bleeding","spotting","abnormal bleeding"],
+  productive_cough:    ["productive cough","yellow phlegm","green phlegm","sputum"],
+  pleuritic_pain:      ["worse with breathing","sharp on inhale","pleuritic"],
+  recent_immobility:   ["long flight","bed rest","immobile","didn't move","sitting for hours"],
+  unilateral_leg_swelling: ["leg swelling","one leg swollen","swollen calf"],
 };
 
 function detectComplaint(symptoms: string): string {
@@ -48,95 +68,134 @@ function detectComplaint(symptoms: string): string {
 
 function extractFeatures(symptoms: string): string[] {
   const lower = symptoms.toLowerCase();
-  const found: string[] = [];
-  for (const [feature, keywords] of Object.entries(SYMPTOM_KEYWORDS)) {
-    if (keywords.some(k => lower.includes(k))) found.push(feature);
-  }
-  return found;
+  return Object.entries(SYMPTOM_KEYWORDS)
+    .filter(([, keywords]) => keywords.some(k => lower.includes(k)))
+    .map(([feature]) => feature);
 }
 
 function buildSimpleNote(state: ClinicalState): string {
-  const lines: string[] = [
-    `TELEMEDICINE CLINICAL NOTE`,
-    `Case ID: ${state.caseId}`,
-    `Date: ${new Date().toISOString().split("T")[0]}`,
-    ``,
-    `CHIEF COMPLAINT: ${state.complaint?.replace(/_/g," ") ?? "Not identified"}`,
-    ``,
-    `HISTORY OF PRESENT ILLNESS:`,
-    state.symptoms ?? "Patient symptoms not recorded.",
-    ``,
-    `ASSESSMENT:`,
-  ];
-
-  if (state.hybridResult) {
-    lines.push(`Top diagnosis: ${state.hybridResult.topDiagnosis.replace(/_/g," ")}`);
-    lines.push(`Confidence: ${Math.round(state.hybridResult.confidence * 100)}%`);
-    lines.push(`Reasoning: ${state.hybridResult.explanation}`);
-  }
-
+  const lines: string[] = [];
+  const d = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  lines.push(`VISIT NOTE — ${d}`);
+  if (state.patient?.age) lines.push(`Patient: ${state.patient.age}yo ${state.patient.sex ?? ""}`);
+  if (state.complaint) lines.push(`Chief Complaint: ${state.complaint.replace(/_/g," ")}`);
+  if (state.symptoms) lines.push(`\nSubjective:\n${state.symptoms}`);
+  if (state.redFlags?.length) lines.push(`\nRed Flags Detected: ${state.redFlags.join(", ")}`);
   if (state.differential?.length) {
-    lines.push(`\nDIFFERENTIAL DIAGNOSIS:`);
-    for (const d of state.differential.slice(0, 5)) {
-      lines.push(`  - ${d.diagnosis.replace(/_/g," ")} (${Math.round(d.confidence * 100)}%)`);
-    }
+    lines.push(`\nDifferential Diagnosis:`);
+    state.differential.slice(0, 5).forEach((d: any, i: number) => {
+      lines.push(`  ${i + 1}. ${d.diagnosis?.replace(/_/g," ")} (${Math.round((d.confidence ?? 0) * 100)}%)`);
+    });
   }
-
-  if (state.redFlags?.length) {
-    lines.push(`\nRED FLAGS: ${state.redFlags.join(", ")}`);
-  }
-
-  lines.push(`\nDISPOSITION: ${state.disposition?.replace(/_/g," ").toUpperCase() ?? "Pending"}`);
-
+  if (state.disposition) lines.push(`\nDisposition: ${state.disposition.replace(/_/g," ").toUpperCase()}`);
+  if (state.hybridResult?.explanation) lines.push(`\nClinical Reasoning:\n${state.hybridResult.explanation}`);
   return lines.join("\n");
 }
 
 function buildDischargeText(state: ClinicalState): string {
-  const disp = state.disposition ?? "home_care";
-  const complaint = state.complaint?.replace(/_/g," ") ?? "your complaint";
-
-  const instructions: Record<string, string> = {
-    er_now:       `IMPORTANT: Please go to the Emergency Room immediately. Do not delay. Call 911 if you cannot get there safely.`,
-    urgent_care:  `Please visit an Urgent Care clinic within the next 2–4 hours. Bring this summary with you.`,
-    routine:      `Please schedule a follow-up with your primary care physician within 2–3 days.`,
-    home_care:    `You may manage your ${complaint} at home. Rest, stay hydrated, and take over-the-counter medications as appropriate.`,
-    uncertain:    `Your symptoms require further evaluation. Please contact your physician for guidance.`,
+  const disp = state.disposition ?? "uncertain";
+  const dispMessages: Record<string, string> = {
+    er_now: "⚠ EMERGENCY: Go to the nearest Emergency Room or call 911 immediately. Do not delay.",
+    urgent_care: "Please visit an Urgent Care clinic within the next 2-4 hours.",
+    routine: "Please follow up with your primary care physician within 2-3 days.",
+    home_care: "Your symptoms can be managed at home. Rest, stay hydrated, and take OTC medications as needed.",
+    need_more_info: "Please provide the requested information so we can complete your triage assessment.",
+    uncertain: "Please consult with a healthcare provider for proper evaluation.",
   };
-
-  return [
-    `DISCHARGE INSTRUCTIONS`,
-    `─────────────────────`,
-    instructions[disp] ?? instructions.home_care,
-    ``,
-    `RETURN PRECAUTIONS — Come back or call 911 if you develop:`,
-    `  • Chest pain or difficulty breathing`,
-    `  • High fever (>39°C / 102°F)`,
-    `  • Confusion or cannot be woken`,
-    `  • Severe worsening of any symptom`,
-    ``,
-    `This summary was generated by an AI assistant and reviewed by the clinical system.`,
-  ].join("\n");
+  const lines = [
+    "DISCHARGE INSTRUCTIONS",
+    "",
+    dispMessages[disp] ?? dispMessages.uncertain,
+    "",
+    "RETURN PRECAUTIONS — Return to care immediately if you develop:",
+    "• Chest pain or severe difficulty breathing",
+    "• High fever (>39°C / 102°F)",
+    "• Confusion, severe headache, or stiff neck",
+    "• Severe worsening of any symptom",
+    "",
+    "This assessment is for triage guidance only and does not replace in-person medical evaluation.",
+  ];
+  return lines.join("\n");
 }
 
 export async function runClinicalOrchestrator(
   caseId: string,
   message?: string
-): Promise<ClinicalState> {
+): Promise<ClinicalState & { _meta?: Record<string, unknown> }> {
   if (message) {
     emitClinicalEvent(caseId, "PATIENT_MESSAGE", { message });
   }
 
   const state = getClinicalState(caseId);
-
   if (!state.symptoms) return state;
 
-  const complaint = detectComplaint(state.symptoms);
+  const extraction = runExtractionConfidence(
+    state.symptoms,
+    state.patient?.age,
+    state.patient?.sex
+  );
+
+  if (!extraction.canProceed) {
+    emitClinicalEvent(caseId, "UNCERTAINTY_DETECTED", {
+      nextQuestion: extraction.nextQuestion,
+      entropy: 99,
+      blockReason: extraction.blockReason,
+      missingFields: extraction.missingFields,
+      extractionConfidence: extraction.confidence,
+    });
+    setClinicalState(caseId, {
+      disposition: "need_more_info" as any,
+      followUpQuestions: [extraction.nextQuestion],
+      orchestratorRunAt: new Date().toISOString(),
+    });
+    return {
+      ...getClinicalState(caseId),
+      _meta: {
+        extractionBlocked: true,
+        confidence: extraction.confidence,
+        missingFields: extraction.missingFields,
+        blockReason: extraction.blockReason,
+        nextQuestion: extraction.nextQuestion,
+      },
+    };
+  }
+
+  const complaint = extraction.complaint !== "unknown"
+    ? extraction.complaint
+    : detectComplaint(state.symptoms);
+
   if (complaint !== "unknown" && !state.complaint) {
     emitClinicalEvent(caseId, "COMPLAINT_IDENTIFIED", { complaint });
   }
   const activeComplaint = state.complaint ?? complaint;
 
-  const features = extractFeatures(state.symptoms);
+  const features = extraction.features.length > 0
+    ? extraction.features
+    : extractFeatures(state.symptoms);
+
+  const lockedCheck = await checkLockedRules(activeComplaint, features);
+  if (lockedCheck.triggered) {
+    emitClinicalEvent(caseId, "RED_FLAG_DETECTED", {
+      flags: lockedCheck.rules.map(r => r.id),
+      source: "locked_safety_registry",
+    });
+    emitClinicalEvent(caseId, "ALERTS_UPDATED", {
+      alerts: lockedCheck.rules.map(r => `🔒 [${r.id}] ${r.rationale}`),
+    });
+    emitClinicalEvent(caseId, "DISPOSITION_SET", { disposition: "er_now" });
+    const note = buildSimpleNote({ ...getClinicalState(caseId), disposition: "er_now" as any, redFlags: lockedCheck.rules.map(r => r.id) });
+    emitClinicalEvent(caseId, "NOTE_READY", { note });
+    emitClinicalEvent(caseId, "DISCHARGE_READY", { text: buildDischargeText({ ...getClinicalState(caseId), disposition: "er_now" as any }) });
+    setClinicalState(caseId, { orchestratorRunAt: new Date().toISOString() });
+    return {
+      ...getClinicalState(caseId),
+      _meta: {
+        lockedRulesTriggered: true,
+        rules: lockedCheck.rules.map(r => r.id),
+        extractionConfidence: extraction.confidence,
+      },
+    };
+  }
 
   const hybrid = await evaluateCase({
     caseId,
@@ -155,6 +214,9 @@ export async function runClinicalOrchestrator(
     triggered_flags: hybrid.layer1_safety.triggered_flags,
     explanation: hybrid.layer4_explanation,
     reasoning_path: hybrid.reasoning_path,
+    extractionConfidence: extraction.confidence,
+    featuresExtracted: features.length,
+    missingFields: extraction.missingFields,
   };
 
   emitClinicalEvent(caseId, "HYBRID_REASONING_COMPLETE", {
@@ -197,5 +259,13 @@ export async function runClinicalOrchestrator(
 
   setClinicalState(caseId, { orchestratorRunAt: new Date().toISOString() });
 
-  return getClinicalState(caseId);
+  return {
+    ...getClinicalState(caseId),
+    _meta: {
+      extractionConfidence: extraction.confidence,
+      featuresExtracted: features.length,
+      missingFields: extraction.missingFields,
+      lockedRulesTriggered: false,
+    },
+  };
 }

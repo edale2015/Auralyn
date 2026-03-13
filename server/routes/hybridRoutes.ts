@@ -5,6 +5,9 @@ import { runSafetyCheck, getAllRedFlags } from "../hybrid-reasoning/safetyLayer"
 import { addTimelineEvent, getCaseProgression, getAllTimelines } from "../hybrid-reasoning/symptomTimeline";
 import { recordPrediction, getCalibrationReport, recordDriftSnapshot, getDriftReport } from "../hybrid-reasoning/calibrationChecker";
 import { recordOverride, getOverrideStats } from "../hybrid-reasoning/overrideLearning";
+import { runExtractionConfidence } from "../hybrid-reasoning/extractionConfidence";
+import { getLockedRegistry, checkLockedRules, verifyRuleIntegrity } from "../hybrid-reasoning/lockedSafetyRegistry";
+import { recordOutcomeFeedback, getOutcomeFeedbackStats, getRecentFeedbacks } from "../hybrid-reasoning/outcomeFeedback";
 import * as fs from "fs/promises";
 import * as path from "path";
 
@@ -39,7 +42,7 @@ router.get("/dataset/stats", async (_req: Request, res: Response) => {
   res.json(await getDatasetStats());
 });
 
-router.get("/dataset", async (_req: Request, res: Response) => {
+router.get("/dataset", async (req: Request, res: Response) => {
   const ds = await loadDataset();
   const page = parseInt(String(req.query.page ?? "1"));
   const limit = parseInt(String(req.query.limit ?? "20"));
@@ -143,6 +146,71 @@ router.post("/outcome", async (req: Request, res: Response) => {
   if (!symptoms || !final_diagnosis) return res.status(400).json({ error: "symptoms and final_diagnosis required" });
   updateProbabilisticFromOutcome(symptoms, final_diagnosis);
   res.json({ ok: true });
+});
+
+router.post("/extract", async (req: Request, res: Response) => {
+  try {
+    const { text, age, sex } = req.body;
+    if (!text) return res.status(400).json({ error: "text is required" });
+    const result = runExtractionConfidence(text, age, sex);
+    res.json(result);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/safety-registry", async (_req: Request, res: Response) => {
+  try {
+    const registry = await getLockedRegistry();
+    res.json(registry);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/safety-registry/check", async (req: Request, res: Response) => {
+  try {
+    const { complaint, features } = req.body;
+    if (!complaint || !Array.isArray(features)) {
+      return res.status(400).json({ error: "complaint and features[] required" });
+    }
+    const result = await checkLockedRules(complaint, features);
+    res.json(result);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/safety-registry/verify", async (_req: Request, res: Response) => {
+  try {
+    const result = await verifyRuleIntegrity();
+    res.json(result);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/outcome-feedback", async (req: Request, res: Response) => {
+  try {
+    const { caseId, complaint, symptoms, aiDisposition, aiTopDiagnosis, aiConfidence, finalDisposition, finalDiagnosis, overrideReason } = req.body;
+    if (!caseId || !complaint || !symptoms || !aiDisposition || !finalDisposition) {
+      return res.status(400).json({ error: "caseId, complaint, symptoms, aiDisposition, finalDisposition are required" });
+    }
+    const feedback = await recordOutcomeFeedback({
+      caseId, complaint, symptoms: Array.isArray(symptoms) ? symptoms : [symptoms],
+      aiDisposition, aiTopDiagnosis: aiTopDiagnosis ?? "unknown",
+      aiConfidence: aiConfidence ?? 0.5,
+      finalDisposition, finalDiagnosis: finalDiagnosis ?? "unknown", overrideReason,
+    });
+    res.json({ ok: true, feedback });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/outcome-feedback/stats", async (_req: Request, res: Response) => {
+  try {
+    const stats = await getOutcomeFeedbackStats();
+    res.json(stats);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/outcome-feedback/recent", async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "20"));
+    const feedbacks = await getRecentFeedbacks(limit);
+    res.json(feedbacks);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 export default router;
