@@ -49,6 +49,40 @@ Makes the platform actively steerable (not just observable). Services at `server
 - Frontend cards: `ComplaintRolloutManagerCard` (live per-complaint dropdowns), `RuleGovernanceEditorCard` (owner/status/notes form), `CompareDiffExplorerCard` (3-filter search)
 - Admin page at `/skill-layer-admin` now shows all 9 cards in a 2-col grid + full-width diff explorer
 
+### Skill Layer 2.3 — Hardening & Learning Automation
+Converts failures into improvement actions automatically:
+- **`complaintHardeningQueue.ts`** — builds priority queue from reconciliation failures; persisted to `complaint_hardening_queue.json`
+- **`goldenCaseAutoGenerator.ts`** — auto-generates golden test cases from reconciliation failures; saved to `goldenCases.generated.json`
+- **`releaseGateHistoryStore.ts`** — persists every gate evaluation to `release_gate_history.ndjson`; updated `releaseGateService` to log history after each evaluation
+- **`ruleGovernanceEditorService`** — now annotates rules with `isStale`, `daysSinceReview`, `staleWarning` (30-day threshold)
+- New routes: `GET /api/platform/hardening-queue`, `GET /api/platform/release-gate-history`, `GET /api/platform/rule-governance-metadata/stale`, `POST /api/skill-layer/learning/generate-golden-cases`, `GET /api/skill-layer/learning/generated-golden-cases`
+- Frontend cards: `ComplaintHardeningQueueCard`, `GoldenCaseAutoGeneratorCard`, `ReleaseGateHistoryCard`, `RuleSuggestionCard`
+- Admin page at `/skill-layer-admin` has 3 tabbed sections: 2.0–2.2 Core, 2.3 Hardening, 2.4–2.6 Intelligence
+
+### Skill Layer 2.4–2.6 — Intelligence Layer
+- **`explainabilityScorer.ts`** — computes 0–100 case explainability score from: avg confidence, reasoning coverage, skill depth, graph path length
+- **`failureDrivenRuleSuggester.ts`** — generates structured rule suggestions (IF/THEN format) from reconciliation mismatches; groups by complaint + failure type
+- New routes: `GET /api/skill-layer/learning/rule-suggestions`, `GET /api/skill-layer/learning/explainability`, `GET /api/skill-layer/learning/explainability/:caseId`
+- Frontend cards: `ExplainabilityScoreCard` (batch scoring with level distribution), `GraphEdgeGuardCard` (edge traversal + node latency visualizer)
+
+### Skill Layer 2.7 — Clinical API (EHR Readiness)
+FHIR-lite structured output endpoints:
+- `POST /api/clinical/triage` — full triage result in FHIR-lite format
+- `POST /api/clinical/differential` — differential diagnosis only
+- `POST /api/clinical/documentation` — HPI + Assessment + Plan + Discharge
+- `POST /api/clinical/care-plan` — structured care plan
+
+### Skill Layer 2.8 — Site Management
+- `/site-management` page — shows per-complaint rollout modes, site configuration (maxCost, goldenThreshold, modules), per-site mode override UI
+- Clinical API reference panel with example request bodies
+
+### Telemedicine Visit Copilot
+Real-time clinical reasoning assistant at `/telemedicine`:
+- 9-complaint button grid, quick symptom checklist, free-text patient input
+- Voice input via Web Speech API (microphone button toggles continuous dictation)
+- Runs 18-skill clinical pipeline: red flags, differential, next questions, chart note, discharge
+- Auto-generated chart note with copy-to-clipboard
+
 ### Generic Complaint Engine (GENERIC_V1)
 This data-driven engine allows new complaints to be added without code changes by using CSV-configured rules, replacing TypeScript scoring modules.
 

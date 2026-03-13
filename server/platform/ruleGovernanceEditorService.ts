@@ -22,8 +22,44 @@ async function saveMetadata(data: Record<string, any>) {
   await fs.writeFile(GOVERNANCE_FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
+const STALE_THRESHOLD_DAYS = 30;
+
+function isStale(lastReviewedAt?: string): boolean {
+  if (!lastReviewedAt) return true;
+  const last = new Date(lastReviewedAt).getTime();
+  const now = Date.now();
+  const daysDiff = (now - last) / (1000 * 60 * 60 * 24);
+  return daysDiff > STALE_THRESHOLD_DAYS;
+}
+
 export async function getRuleGovernanceMetadata() {
   return loadMetadata();
+}
+
+export async function getRuleGovernanceMetadataWithStaleWarnings() {
+  const all = await loadMetadata();
+  const annotated: Record<string, any> = {};
+
+  for (const [key, val] of Object.entries(all)) {
+    const stale = isStale(val.lastReviewedAt);
+    const daysSinceReview = val.lastReviewedAt
+      ? Math.floor(
+          (Date.now() - new Date(val.lastReviewedAt).getTime()) /
+            (1000 * 60 * 60 * 24)
+        )
+      : null;
+
+    annotated[key] = {
+      ...val,
+      isStale: stale,
+      daysSinceReview,
+      staleWarning: stale
+        ? `Not reviewed in ${daysSinceReview ?? "?"} days (threshold: ${STALE_THRESHOLD_DAYS})`
+        : null,
+    };
+  }
+
+  return annotated;
 }
 
 export async function updateRuleGovernanceMetadata(params: {

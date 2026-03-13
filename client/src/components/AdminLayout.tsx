@@ -21,13 +21,14 @@ import {
   ClipboardCheck, Zap, FileCheck, Package, Bell, Building, Pill,
   MessageSquare, Bot, Cpu, Sparkles, GitBranch, Rocket, Gauge,
   FlaskConical, Eye, AlertTriangle, Users, Settings, Search,
-  TrendingUp, Layers, HeartPulse, Lightbulb,
+  TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
   {
     label: "Clinical Operations",
     items: [
+      { path: "/telemedicine", label: "Visit Copilot", icon: Video },
       { path: "/complaint-control-center", label: "Complaint Control Center", icon: LayoutDashboard },
       { path: "/review-queue-v2", label: "Review Queue", icon: ClipboardCheck },
       { path: "/complaint-qa", label: "Complaint QA", icon: BarChart3 },
@@ -92,7 +93,8 @@ const NAV_SECTIONS = [
       { path: "/gold-reviews", label: "Gold Reviews", icon: ClipboardCheck },
       { path: "/rule-suggestions", label: "Rule Suggestions", icon: Lightbulb },
       { path: "/skill-layer-review", label: "Clinician Review", icon: Eye },
-      { path: "/skill-layer-admin", label: "Platform Admin 2.1", icon: Settings },
+      { path: "/skill-layer-admin", label: "Platform Admin 2.x", icon: Settings },
+      { path: "/site-management", label: "Site Management", icon: Globe },
     ],
   },
   {

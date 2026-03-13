@@ -85,5 +85,14 @@ export async function evaluateReleaseGate(
   const passed = checks.every((c) => c.passed);
   const score = checks.filter((c) => c.passed).length / checks.length;
 
-  return { complaint, siteId, passed, score, checks };
+  const result: ReleaseGateResult = { complaint, siteId, passed, score, checks };
+
+  try {
+    const { appendReleaseGateHistory } = await import("./releaseGateHistoryStore");
+    await appendReleaseGateHistory(result);
+  } catch {
+    // history logging is non-critical
+  }
+
+  return result;
 }

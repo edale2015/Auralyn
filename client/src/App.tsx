@@ -51,6 +51,8 @@ import GoldReviewWorkbench from "@/pages/GoldReviewWorkbench";
 import RuleSuggestions from "@/pages/RuleSuggestions";
 import SkillLayerReviewPage from "@/pages/SkillLayerReviewPage";
 import SkillLayerAdminPage from "@/pages/SkillLayerAdminPage";
+import TelemedicineConsole from "@/pages/TelemedicineConsole";
+import SiteManagementPage from "@/pages/SiteManagementPage";
 import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import NotFound from "@/pages/not-found";
@@ -114,6 +116,8 @@ function Router() {
       <Route path="/gold-reviews">{() => <AdminPage component={GoldReviewWorkbench} />}</Route>
       <Route path="/skill-layer-review">{() => <AdminPage component={SkillLayerReviewPage} />}</Route>
       <Route path="/skill-layer-admin">{() => <AdminPage component={SkillLayerAdminPage} />}</Route>
+      <Route path="/telemedicine">{() => <AdminPage component={TelemedicineConsole} />}</Route>
+      <Route path="/site-management">{() => <AdminPage component={SiteManagementPage} />}</Route>
       <Route path="/debug/traces">{() => <AdminPage component={TraceViewer} />}</Route>
       <Route component={NotFound} />
     </Switch>
