@@ -125,6 +125,7 @@ const NAV_SECTIONS = [
     label: "Self-Developing AI",
     items: [
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
+      { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
     ],
   },
   {
