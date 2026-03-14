@@ -1,0 +1,339 @@
+1. Clinical Brain Engine
+
+Create a new file:
+
+server/core/clinicalBrainEngine.ts
+
+:::
+
+import { findSimilarCasesForState } from "../assistant/caseSimilarityService";
+import { computeDifferentialProbabilities } from "../assistant/differentialProbabilityEngine";
+import { selectNextBestQuestion } from "../assistant/nextBestQuestionEngine";
+import { detectRedFlags } from "../agent/safety/redFlags";
+
+export interface BrainInput {
+  complaint: string;
+  answers: Record<string, any>;
+  state: any;
+  differentialCandidates: { clusterId: string; score: number }[];
+  availableQuestions: string[];
+}
+
+export interface BrainOutput {
+  similarity?: any;
+  differentials?: any[];
+  nextQuestion?: string | null;
+  questionRankings?: any[];
+  redFlags?: any[];
+  disposition?: string;
+}
+
+export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> {
+
+  const { state, answers, differentialCandidates, availableQuestions } = input;
+
+  const result: BrainOutput = {};
+
+  // ----------------------------
+  // 1️⃣ Case Similarity Engine
+  // ----------------------------
+
+  try {
+
+    const sim = await findSimilarCasesForState(state, 5);
+
+    result.similarity = sim;
+
+    if (sim.summary?.safetyWarnings?.length > 0) {
+      state.safetyWarnings = sim.summary.safetyWarnings;
+    }
+
+  } catch (err) {
+    console.warn("Similarity engine failed", err);
+  }
+
+  // ----------------------------
+  // 2️⃣ Bayesian Differential Engine
+  // ----------------------------
+
+  let differentials;
+
+  try {
+
+    differentials = computeDifferentialProbabilities(
+      differentialCandidates,
+      answers
+    );
+
+    result.differentials = differentials;
+
+  } catch (err) {
+    console.warn("Differential engine failed", err);
+  }
+
+  // ----------------------------
+  // 3️⃣ Next Best Question Engine
+  // ----------------------------
+
+  try {
+
+    const nbq = selectNextBestQuestion(
+      differentialCandidates,
+      answers,
+      availableQuestions
+    );
+
+    result.nextQuestion = nbq.bestQuestion;
+    result.questionRankings = nbq.rankings;
+
+  } catch (err) {
+    console.warn("Next question engine failed", err);
+  }
+
+  // ----------------------------
+  // 4️⃣ Red Flag Safety Layer
+  // ----------------------------
+
+  try {
+
+    const flags = detectRedFlags(state);
+
+    result.redFlags = flags;
+
+    if (flags?.length > 0) {
+      result.disposition = "ER_NOW";
+      return result;
+    }
+
+  } catch (err) {
+    console.warn("Red flag engine failed", err);
+  }
+
+  // ----------------------------
+  // 5️⃣ Disposition Logic
+  // ----------------------------
+
+  if (differentials && differentials.length > 0) {
+
+    const topDx = differentials[0];
+
+    if (topDx.posteriorProbability > 0.6) {
+      result.disposition = "LIKELY_OUTPATIENT";
+    } else if (topDx.posteriorProbability > 0.3) {
+      result.disposition = "URGENT_CARE";
+    } else {
+      result.disposition = "NEEDS_MORE_INFO";
+    }
+
+  }
+
+  return result;
+}
+
+:::
+
+2. Modify the Clinical Pipeline
+
+Open:
+
+server/agent/pipeline.ts
+
+Add import at top:
+
+import { runClinicalBrain } from "../core/clinicalBrainEngine";
+
+Then inside the pipeline after the clinical state is assembled, insert:
+
+// CLINICAL BRAIN ENGINE
+
+const brainOutput = await runClinicalBrain({
+  complaint: state.complaint,
+  answers: state.answers || {},
+  state,
+  differentialCandidates: state.differentialCandidates || [],
+  availableQuestions: state.availableQuestions || []
+});
+
+state.similarity = brainOutput.similarity;
+state.differentials = brainOutput.differentials;
+state.nextBestQuestion = brainOutput.nextQuestion;
+state.questionRankings = brainOutput.questionRankings;
+state.redFlags = brainOutput.redFlags;
+state.disposition = brainOutput.disposition;
+3. Bayesian Upgrade (Recommendation 8)
+
+Replace your probability engine with this improved version.
+
+File:
+
+server/assistant/differentialProbabilityEngine.ts
+
+:::
+
+export interface DifferentialCandidate {
+  clusterId: string;
+  priorProbability: number;
+  posteriorProbability: number;
+  evidenceFor: string[];
+  evidenceAgainst: string[];
+}
+
+function likelihood(symptom: string, clusterId: string): number {
+
+  const heuristicMap: Record<string, Record<string, number>> = {
+
+    fever: { pneumonia: 3, flu: 2 },
+    pleuritic_pain: { pulmonary_embolism: 4, pneumonia: 2 },
+    dysuria: { uti: 4 }
+
+  };
+
+  return heuristicMap[symptom]?.[clusterId] || 1;
+}
+
+export function computeDifferentialProbabilities(
+  dxCandidates: Array<{ clusterId: string; score: number }>,
+  answers: Record<string, unknown>
+): DifferentialCandidate[] {
+
+  const totalScore = dxCandidates.reduce((s, d) => s + Math.max(0, d.score), 0) || 1;
+
+  return dxCandidates.map((d) => {
+
+    const prior = Math.max(0, d.score) / totalScore;
+
+    let posterior = prior;
+
+    for (const key of Object.keys(answers)) {
+      if (answers[key]) {
+        posterior *= likelihood(key, d.clusterId);
+      }
+    }
+
+    return {
+      clusterId: d.clusterId,
+      priorProbability: prior,
+      posteriorProbability: posterior,
+      evidenceFor: Object.keys(answers),
+      evidenceAgainst: []
+    };
+
+  }).sort((a, b) => b.posteriorProbability - a.posteriorProbability);
+}
+
+:::
+
+4. Improve Case Similarity Index
+
+Add optional caching:
+
+server/assistant/similarityIndexCache.ts
+let cachedIndex: any = null;
+
+export function getSimilarityIndex() {
+
+  if (!cachedIndex) {
+    cachedIndex = require("../data/similarityIndex.json");
+  }
+
+  return cachedIndex;
+}
+
+Then modify your similarity service to use it.
+
+5. Telemedicine Integration
+
+Add to your telemedicine session service:
+
+telemedicineSessionService.ts
+import { runClinicalBrain } from "../core/clinicalBrainEngine";
+
+Then:
+
+const reasoning = await runClinicalBrain({
+  complaint,
+  answers,
+  state,
+  differentialCandidates,
+  availableQuestions
+});
+
+Now every telemedicine visit runs the brain.
+
+6. Logging + Learning (Recommendation 9)
+
+Create:
+
+server/core/brainAuditLog.ts
+import fs from "fs";
+
+export function logBrainDecision(data: any) {
+
+  const line = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...data
+  });
+
+  fs.appendFileSync("brain_decisions.ndjson", line + "\n");
+}
+
+Call inside brain engine:
+
+import { logBrainDecision } from "./brainAuditLog";
+
+At end:
+
+logBrainDecision({
+  differentials: result.differentials,
+  disposition: result.disposition
+});
+7. Resulting System Architecture
+
+Your assistant now operates like this:
+
+User message
+     ↓
+Normalizer
+     ↓
+Complaint Router
+     ↓
+Clinical State Builder
+     ↓
+CLINICAL BRAIN ENGINE
+   ├ similarity reasoning
+   ├ Bayesian differential
+   ├ next question selector
+   ├ red flag safety
+   └ disposition logic
+     ↓
+Question generator
+     ↓
+Telemedicine services
+     ↓
+Response to patient
+8. Why this is powerful
+
+You now have a hybrid reasoning system:
+
+Deterministic rules
++
+Case similarity reasoning
++
+Bayesian differential reasoning
++
+Information-gain questioning
+
+That is exactly how advanced clinical decision systems work.
+
+9. Honest evaluation
+
+Your system is now far beyond a chatbot.
+
+It resembles:
+
+• Isabel
+• VisualDx
+• UpToDate triage logic
+• Ada Health symptom engine
+
+But modular and controllable.

@@ -125,6 +125,62 @@ export function addSystemMessage(caseId: string, text: string): ConversationMess
   return msg
 }
 
+export async function runBrainForSession(caseId: string): Promise<void> {
+  const s = getSession(caseId);
+
+  // Lazily import to avoid circular deps at module load time
+  const { runClinicalBrain } = await import("../core/clinicalBrainEngine");
+
+  // Map session data into the brain's expected format
+  const differentialCandidates = (s.differential ?? []).map((d) => ({
+    clusterId: d.diagnosis,
+    score: d.confidence,
+  }));
+
+  const answers: Record<string, unknown> = {};
+  for (const sym of s.checkedSymptoms) {
+    answers[sym] = true;
+  }
+
+  // Minimal state stub for red-flag detection and similarity
+  const stateStub: any = {
+    chiefComplaint: s.complaint ?? "",
+    answers,
+    redFlags: s.redFlags,
+    modifiers: {},
+    demographics: {},
+  };
+
+  const brain = await runClinicalBrain({
+    complaint: s.complaint ?? "",
+    answers,
+    state: stateStub,
+    differentialCandidates,
+    availableQuestions: [],
+  });
+
+  // Merge brain results back into the session
+  const patch: Partial<TelemedicineSession> = {};
+
+  if (brain.redFlags?.length) {
+    patch.redFlags = [...new Set([...s.redFlags, ...brain.redFlags])];
+  }
+  if (brain.disposition) {
+    patch.disposition = brain.disposition;
+  }
+  if (brain.differentials?.length) {
+    patch.differential = brain.differentials.map((d) => ({
+      diagnosis: d.clusterId,
+      confidence: d.posteriorProbability,
+      reasoning: d.evidenceFor.join(", ") || undefined,
+    }));
+  }
+
+  if (Object.keys(patch).length > 0) {
+    updateSession(caseId, patch);
+  }
+}
+
 export function listActiveSessions(): TelemedicineSession[] {
   return Object.values(sessions)
     .filter((s) => s.status === "active")

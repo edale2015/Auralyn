@@ -13,6 +13,7 @@ import { runObesityAgent } from "../agents/obesity/obesityAgent";
 import { registerDynamicQuestion } from "./router";
 import { buildClinicalState } from "../services/clinicalStateBuilder";
 import { runCrossoverHooks } from "../agents/crossoverHooks";
+import { runClinicalBrain } from "../core/clinicalBrainEngine";
 
 export interface PipelineResult {
   state: CaseState;
@@ -316,6 +317,41 @@ export async function initializePipeline(
         message: `Failed to build question queue: ${err.message}`,
       });
     }
+  }
+
+  // ─── CLINICAL BRAIN ENGINE ────────────────────────────────────────────────
+  try {
+    const differentialCandidates = updated.activeClusters.map((id) => ({ clusterId: id, score: 1 }));
+    const availableQuestions = updated.questionQueue
+      .filter((q) => !q.answered)
+      .map((q) => q.questionId);
+
+    const brainOutput = await runClinicalBrain({
+      complaint: updated.chiefComplaint ?? updated.normalizedComplaint ?? "",
+      answers: updated.answers || {},
+      state: updated,
+      differentialCandidates,
+      availableQuestions,
+    });
+
+    if (brainOutput.similarity)      updated.similarity        = brainOutput.similarity;
+    if (brainOutput.differentials)   updated.differentials     = brainOutput.differentials;
+    if (brainOutput.nextQuestion !== undefined) updated.nextBestQuestion = brainOutput.nextQuestion;
+    if (brainOutput.questionRankings) updated.questionRankings = brainOutput.questionRankings;
+    if (brainOutput.redFlags?.length) updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];
+    if (brainOutput.disposition)     updated.disposition       = brainOutput.disposition;
+
+    events.push({
+      type: "CLINICAL_BRAIN_COMPLETE",
+      severity: "info",
+      message: `Brain: ${brainOutput.differentials?.length ?? 0} differentials, disposition=${brainOutput.disposition ?? "none"}, nextQ=${brainOutput.nextQuestion ?? "none"}`,
+    });
+  } catch (err: any) {
+    events.push({
+      type: "CLINICAL_BRAIN_ERROR",
+      severity: "warn",
+      message: `Clinical brain failed: ${err.message}`,
+    });
   }
 
   if (!updated.redFlagGate || !updated.redFlagGate.evaluated) {

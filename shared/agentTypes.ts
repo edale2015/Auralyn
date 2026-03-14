@@ -111,6 +111,14 @@ export const CaseStateSchema = z.object({
   })).default([]),
 
   redFlags: z.array(z.string()).default([]),
+
+  // Clinical Brain Engine outputs
+  similarity: z.any().optional(),
+  differentials: z.array(z.any()).optional(),
+  nextBestQuestion: z.string().nullable().optional(),
+  questionRankings: z.array(z.any()).optional(),
+  safetyWarnings: z.array(z.any()).optional(),
+
   requiredQuestionIdsMissing: z.array(z.string()).default([]),
   recommendedActions: z.array(z.object({
     type: z.string(),
