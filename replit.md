@@ -50,6 +50,36 @@ A unified Clinical State Model (`server/state/`) based on an in-memory and file-
 
 **Event Subscriber** (`server/core/events/eventSubscriber.ts`): Full pub/sub layer with `subscribe/once/unsubscribe/emitToSubscribers`. All `publishEvent()` calls auto-notify registered subscribers. Use `onClinicalEvent(type, handler)` for persistent subscriptions, `onceClinicalEvent(type, handler)` for one-shot handlers.
 
+### Clinical Brain Engine — 20-Step Pipeline
+`server/core/clinicalBrainEngine.ts` runs every inference call through a deterministic 20-step pipeline:
+
+| Step | Engine | File |
+|------|--------|------|
+| 1 | Symptom Normalization | `symptomNormalizationEngine.ts` |
+| 2 | Contradiction Detection (24 rules) | `contradictionEngine.ts` |
+| 3 | Clinical Safety Guard (hard overrides) | `clinicalSafetyGuard.ts` |
+| 3b | Memory Retrieval | `clinicalMemoryEngine.ts` |
+| 4 | Case Similarity | `caseSimilarityService.ts` |
+| 5 | Knowledge Graph Evidence | `clinicalGraphEngine.ts` |
+| 6 | Bayesian Differential | `differentialProbabilityEngine.ts` |
+| 6b | Evidence Aggregator (Bayes 50% + sim 30% + graph 20%) | `evidenceAggregatorEngine.ts` |
+| 6c | Temporal Progression + Risk Stratification boosts | `temporalProgressionEngine.ts`, `riskStratificationEngine.ts` |
+| 7 | Uncertainty / Entropy | `uncertaintyEngine.ts` |
+| 8 | Red Flag Safety Layer | `redFlags.ts` |
+| 9 | Next-Best-Question Selector | `nextBestQuestionEngine.ts` |
+| 10 | Disposition Logic | inline |
+| 10b | Guideline Adherence (16 rules, 6 complaints) | `guidelineAdherenceEngine.ts` |
+| 11 | Complaint Completeness Gate | `complaintCompletenessEngine.ts` |
+| 11b | Treatment & Test Recommendations | `treatmentEngine.ts`, `testRecommendationEngine.ts` |
+| 11c | Test Yield Scoring | `testYieldEngine.ts` |
+| 11d | Medication Safety Screening | `medicationSafetyEngine.ts` |
+| 12 | Clinical Governance + Physician Packet | `clinicalGovernanceEngine.ts`, `physicianReviewPacketEngine.ts` |
+| 12b | Disposition Calibration (final arbiter) | `dispositionCalibrationEngine.ts` |
+| 12c | Physician Feedback Learning Stats | `physicianFeedbackLearningEngine.ts` |
+| 13 | Store in Clinical Memory | `clinicalMemoryEngine.ts` |
+
+**Shared constants**: `shared/complaints.ts` (143 canonical complaint slugs), `server/data/complaintAliasRegistry.ts` (152 intake aliases → canonical slugs).
+
 ### Adaptive Question Selection Engine
 `server/assistant/adaptiveQuestionEngine.ts` implements Bayesian optimal question selection with Shannon entropy minimization. Features:
 - 6 complaint specs: `sore_throat`, `cough`, `chest_pain`, `headache`, `abdominal_pain`, `fever/uti`

@@ -345,6 +345,11 @@ export async function initializePipeline(
     if (brainOutput.risk)                   updated.risk                     = brainOutput.risk;
     if (brainOutput.guideline)              updated.guideline                = brainOutput.guideline;
     if (brainOutput.physicianPacket)        updated.physicianPacket          = brainOutput.physicianPacket;
+    if (brainOutput.completeness)           updated.completeness             = brainOutput.completeness;
+    if (brainOutput.testYield)              updated.testYield                = brainOutput.testYield;
+    if (brainOutput.medicationSafety)       updated.medicationSafety         = brainOutput.medicationSafety;
+    if (brainOutput.calibration)            updated.calibration              = brainOutput.calibration;
+    if (brainOutput.feedbackStats)          updated.feedbackStats            = brainOutput.feedbackStats;
     if (brainOutput.nextQuestion !== undefined) updated.nextBestQuestion = brainOutput.nextQuestion;
     if (brainOutput.questionRankings)     updated.questionRankings      = brainOutput.questionRankings;
     if (brainOutput.redFlags?.length)     updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];

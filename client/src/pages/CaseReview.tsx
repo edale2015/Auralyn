@@ -14,23 +14,20 @@ import {
   XCircle,
   Loader2,
   Keyboard,
+  ClipboardSignature,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 export default function CaseReview({ params }: { params: { caseId: string } }) {
-  const { caseId } = params;
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [notes, setNotes] = useState("");
+  const { caseId }     = params;
+  const queryClient    = useQueryClient();
+  const { toast }      = useToast();
+  const [notes, setNotes]               = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
   const notesRef = useRef<HTMLTextAreaElement>(null);
 
-  const {
-    data: c,
-    isLoading,
-    error,
-  } = useQuery<any>({
+  const { data: c, isLoading, error } = useQuery<any>({
     queryKey: ["/api/review/case", caseId],
     queryFn: async () => {
       const res = await fetch(`/api/review/case/${caseId}`);
@@ -46,8 +43,8 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
         status,
         notes,
         finalDisposition: c?.triage?.disposition ?? null,
-        finalDx: c?.triage?.topCluster ?? null,
-        reviewer: { id: "phys1", name: "Physician" },
+        finalDx:          c?.triage?.topCluster  ?? null,
+        reviewer:         { id: "phys1", name: "Physician" },
       });
     },
     onSuccess: (_data, status) => {
@@ -57,6 +54,7 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
     },
   });
 
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
@@ -72,7 +70,12 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
         case "r":
           e.preventDefault();
           reviewMutation.mutate("MODIFIED");
-          toast({ title: "⌨️ Modify", description: "Keyboard shortcut: R" });
+          toast({ title: "⌨️ Modify / Request Changes", description: "Keyboard shortcut: R" });
+          break;
+        case "s":
+          e.preventDefault();
+          reviewMutation.mutate("SIGNED_OFF");
+          toast({ title: "⌨️ Signed Off", description: "Keyboard shortcut: S" });
           break;
         case "e":
           e.preventDefault();
@@ -98,9 +101,10 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [c, reviewMutation.isPending]);
 
+  // ── Loading / error states ─────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen" data-testid="text-loading">
+      <div className="flex items-center justify-center min-h-[60vh]" data-testid="text-loading">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
       </div>
     );
@@ -108,7 +112,7 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
 
   if (error || !c) {
     return (
-      <div className="min-h-screen bg-background p-6">
+      <div className="min-h-screen bg-background p-4 sm:p-6">
         <div className="max-w-3xl mx-auto">
           <Link href="/review" className="text-primary underline" data-testid="link-back">
             <ArrowLeft className="inline h-4 w-4 mr-1" />
@@ -124,13 +128,17 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
     );
   }
 
+  // ── Main render ────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-background p-6" data-testid="page-case-review">
+    <div className="min-h-screen bg-background p-4 sm:p-6" data-testid="page-case-review">
       <div className="max-w-3xl mx-auto space-y-4">
-        <div className="flex items-center justify-between">
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between gap-2">
           <Link href="/review" className="text-primary underline text-sm" data-testid="link-back">
             <ArrowLeft className="inline h-4 w-4 mr-1" />
-            Back to Queue
+            <span className="hidden sm:inline">Back to Queue</span>
+            <span className="sm:hidden">Queue</span>
           </Link>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -141,24 +149,27 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
                 data-testid="button-shortcuts"
                 className="text-muted-foreground text-xs gap-1"
               >
-                <Keyboard className="w-3.5 h-3.5" /> Shortcuts (?)
+                <Keyboard className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Shortcuts (?)</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent>Toggle keyboard shortcuts reference</TooltipContent>
           </Tooltip>
         </div>
 
+        {/* Shortcuts panel */}
         {showShortcuts && (
           <Card className="border-dashed bg-muted/30" data-testid="card-shortcuts">
             <CardContent className="pt-4">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
                 {[
                   { key: "A", action: "Approve case" },
-                  { key: "R", action: "Modify/request changes" },
+                  { key: "R", action: "Request changes" },
+                  { key: "S", action: "Sign-off" },
                   { key: "E", action: "Escalate" },
                   { key: "X", action: "Reject" },
-                  { key: "N", action: "Focus notes input" },
-                  { key: "?", action: "Toggle this panel" },
+                  { key: "N", action: "Focus notes" },
+                  { key: "?", action: "Toggle shortcuts" },
                 ].map(({ key, action }) => (
                   <div key={key} className="flex items-center gap-2">
                     <kbd className="bg-background border rounded px-1.5 py-0.5 font-mono text-xs font-bold">{key}</kbd>
@@ -170,15 +181,20 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
           </Card>
         )}
 
+        {/* Case summary */}
         <Card>
           <CardHeader>
-            <CardTitle className="font-mono text-lg" data-testid="text-case-id">{c.caseId}</CardTitle>
+            <CardTitle className="font-mono text-base sm:text-lg break-all" data-testid="text-case-id">
+              {c.caseId}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
               <div>
                 <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Complaint</span>
-                <p data-testid="text-complaint" className="font-medium">{c.complaint?.display ?? c.complaint?.slug ?? "—"}</p>
+                <p data-testid="text-complaint" className="font-medium">
+                  {c.complaint?.display ?? c.complaint?.slug ?? "—"}
+                </p>
               </div>
               <div>
                 <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">State</span>
@@ -186,7 +202,14 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
               </div>
               <div>
                 <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Disposition</span>
-                <p><Badge variant={c.triage?.disposition === "er_send" ? "destructive" : "secondary"} data-testid="badge-disposition">{c.triage?.disposition ?? "—"}</Badge></p>
+                <p>
+                  <Badge
+                    variant={c.triage?.disposition === "er_send" ? "destructive" : "secondary"}
+                    data-testid="badge-disposition"
+                  >
+                    {c.triage?.disposition ?? "—"}
+                  </Badge>
+                </p>
               </div>
               <div>
                 <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Top Cluster</span>
@@ -196,7 +219,10 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
                 <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Confidence</span>
                 <p>
                   <Badge
-                    variant={c.triage?.confidence === "HIGH" ? "default" : c.triage?.confidence === "MODERATE" ? "secondary" : "destructive"}
+                    variant={
+                      c.triage?.confidence === "HIGH" ? "default" :
+                      c.triage?.confidence === "MODERATE" ? "secondary" : "destructive"
+                    }
                     data-testid="badge-confidence"
                   >
                     {c.triage?.confidence ?? "—"}
@@ -205,12 +231,15 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
               </div>
               <div>
                 <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Tie-Break</span>
-                <p data-testid="text-tiebreak" className="text-xs text-muted-foreground">{c.triage?.tieBreak ?? "—"} (margin {c.triage?.margin ?? "—"})</p>
+                <p data-testid="text-tiebreak" className="text-xs text-muted-foreground">
+                  {c.triage?.tieBreak ?? "—"} (margin {c.triage?.margin ?? "—"})
+                </p>
               </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Answers */}
         <Card>
           <CardHeader><CardTitle className="text-base">Answers</CardTitle></CardHeader>
           <CardContent>
@@ -220,6 +249,7 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
           </CardContent>
         </Card>
 
+        {/* Scoring */}
         <Card>
           <CardHeader><CardTitle className="text-base">Scoring Explanation</CardTitle></CardHeader>
           <CardContent>
@@ -229,10 +259,11 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
           </CardContent>
         </Card>
 
+        {/* Review actions */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base flex items-center justify-between">
-              Physician Review
+            <CardTitle className="text-base flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+              <span>Physician Review</span>
               <span className="text-xs font-normal text-muted-foreground">Use keyboard shortcuts (?) for faster review</span>
             </CardTitle>
           </CardHeader>
@@ -248,16 +279,22 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={4}
-              placeholder="Physician notes... (press N to focus)"
+              placeholder="Physician notes… (press N to focus)"
               data-testid="input-notes"
             />
 
-            <div className="flex gap-2 flex-wrap">
+            {/* Action buttons — wrap on mobile */}
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button onClick={() => reviewMutation.mutate("APPROVED")} disabled={reviewMutation.isPending} data-testid="button-approve">
+                  <Button
+                    className="w-full sm:w-auto"
+                    onClick={() => reviewMutation.mutate("APPROVED")}
+                    disabled={reviewMutation.isPending}
+                    data-testid="button-approve"
+                  >
                     <CheckCircle className="mr-1 h-4 w-4" /> Approve
-                    <kbd className="ml-2 text-xs bg-white/20 px-1 rounded">A</kbd>
+                    <kbd className="ml-2 text-xs bg-white/20 px-1 rounded hidden sm:inline">A</kbd>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Approve case (press A)</TooltipContent>
@@ -265,19 +302,47 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
 
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="secondary" onClick={() => reviewMutation.mutate("MODIFIED")} disabled={reviewMutation.isPending} data-testid="button-modify">
-                    <Edit className="mr-1 h-4 w-4" /> Modify
-                    <kbd className="ml-2 text-xs bg-black/10 px-1 rounded">R</kbd>
+                  <Button
+                    variant="secondary"
+                    className="w-full sm:w-auto"
+                    onClick={() => reviewMutation.mutate("MODIFIED")}
+                    disabled={reviewMutation.isPending}
+                    data-testid="button-modify"
+                  >
+                    <Edit className="mr-1 h-4 w-4" /> Request Changes
+                    <kbd className="ml-2 text-xs bg-black/10 px-1 rounded hidden sm:inline">R</kbd>
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Modify/request changes (press R)</TooltipContent>
+                <TooltipContent>Request changes (press R)</TooltipContent>
               </Tooltip>
 
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="outline" onClick={() => reviewMutation.mutate("ESCALATED")} disabled={reviewMutation.isPending} data-testid="button-escalate">
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    onClick={() => reviewMutation.mutate("SIGNED_OFF")}
+                    disabled={reviewMutation.isPending}
+                    data-testid="button-signoff"
+                  >
+                    <ClipboardSignature className="mr-1 h-4 w-4" /> Sign-off
+                    <kbd className="ml-2 text-xs bg-black/5 px-1 rounded hidden sm:inline">S</kbd>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Sign-off case (press S)</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    onClick={() => reviewMutation.mutate("ESCALATED")}
+                    disabled={reviewMutation.isPending}
+                    data-testid="button-escalate"
+                  >
                     <AlertTriangle className="mr-1 h-4 w-4" /> Escalate
-                    <kbd className="ml-2 text-xs bg-black/5 px-1 rounded">E</kbd>
+                    <kbd className="ml-2 text-xs bg-black/5 px-1 rounded hidden sm:inline">E</kbd>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Escalate case (press E)</TooltipContent>
@@ -285,15 +350,23 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
 
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="destructive" onClick={() => reviewMutation.mutate("REJECTED")} disabled={reviewMutation.isPending} data-testid="button-reject">
+                  <Button
+                    variant="destructive"
+                    className="w-full sm:w-auto"
+                    onClick={() => reviewMutation.mutate("REJECTED")}
+                    disabled={reviewMutation.isPending}
+                    data-testid="button-reject"
+                  >
                     <XCircle className="mr-1 h-4 w-4" /> Reject
-                    <kbd className="ml-2 text-xs bg-white/20 px-1 rounded">X</kbd>
+                    <kbd className="ml-2 text-xs bg-white/20 px-1 rounded hidden sm:inline">X</kbd>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Reject case (press X)</TooltipContent>
               </Tooltip>
 
-              {reviewMutation.isPending && <Loader2 className="h-5 w-5 animate-spin self-center" />}
+              {reviewMutation.isPending && (
+                <Loader2 className="h-5 w-5 animate-spin self-center col-span-2 sm:col-span-1" />
+              )}
             </div>
 
             <div className="text-sm text-muted-foreground" data-testid="text-review-status">

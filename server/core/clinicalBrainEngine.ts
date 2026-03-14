@@ -18,6 +18,11 @@ import { temporalProgressionEngine, type TemporalOutput } from "./temporalProgre
 import { riskStratificationEngine, type RiskOutput } from "./riskStratificationEngine";
 import { guidelineAdherenceEngine, type GuidelineOutput } from "./guidelineAdherenceEngine";
 import { physicianReviewPacketEngine, type PhysicianReviewPacket } from "./physicianReviewPacketEngine";
+import { dispositionCalibrationEngine } from "./dispositionCalibrationEngine";
+import { complaintCompletenessEngine } from "./complaintCompletenessEngine";
+import { medicationSafetyEngine } from "./medicationSafetyEngine";
+import { testYieldEngine } from "./testYieldEngine";
+import { physicianFeedbackLearningEngine } from "./physicianFeedbackLearningEngine";
 
 export interface BrainInput {
   complaint: string;
@@ -304,7 +309,23 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Guideline engine failed:", (err as Error).message);
   }
 
-  // ─── 11. Treatment & Test Recommendations ─────────────────────────────────
+  // ─── 11. Complaint Completeness — gate soft-discharges on missing data ──────
+  try {
+    const completeness = complaintCompletenessEngine({
+      complaint:          input.complaint,
+      answeredQuestions:  answers,
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+    });
+    result.completeness = completeness;
+    if (!completeness.complete &&
+        ["home_care", "routine_followup", "LIKELY_OUTPATIENT"].includes(result.disposition ?? "")) {
+      result.disposition = "NEEDS_MORE_INFO";
+    }
+  } catch (err) {
+    console.warn("[Brain] Completeness engine failed:", (err as Error).message);
+  }
+
+  // ─── 11b. Treatment & Test Recommendations ────────────────────────────────
   try {
     const topDx = (differentials ?? []).slice(0, 5);
     result.treatments = getBulkRecommendations(topDx);
@@ -312,6 +333,40 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     result.returnPrecautions = generateBulkReturnPrecautions(topDx);
   } catch (err) {
     console.warn("[Brain] Recommendation engines failed:", (err as Error).message);
+  }
+
+  // ─── 11c. Test Yield Scoring ───────────────────────────────────────────────
+  try {
+    const rankedDx = (result.aggregatedDifferentials ?? []).map((d) => ({
+      diagnosis: d.diagnosis,
+      score:     d.score,
+    }));
+    const proposedTests = (result.tests ?? []).map((t) => ({
+      name:    t.test ?? "",
+      urgency: (t.priority ?? "routine") as "urgent" | "routine",
+    }));
+    result.testYield = testYieldEngine({
+      complaint:       input.complaint,
+      rankedDiagnoses: rankedDx,
+      proposedTests,
+    });
+  } catch (err) {
+    console.warn("[Brain] Test yield engine failed:", (err as Error).message);
+  }
+
+  // ─── 11d. Medication Safety Screening ─────────────────────────────────────
+  try {
+    const candidates = (result.treatments ?? []).map((t) => ({ name: t.treatmentName ?? "" }));
+    const medSafety = medicationSafetyEngine({
+      complaint:            input.complaint,
+      topDiagnoses:         (result.aggregatedDifferentials ?? []).slice(0, 3).map((d) => d.diagnosis),
+      candidateMedications: candidates,
+      answeredQuestions:    answers,
+      allergies:            answers?.allergies ?? [],
+    });
+    result.medicationSafety = medSafety;
+  } catch (err) {
+    console.warn("[Brain] Medication safety engine failed:", (err as Error).message);
   }
 
   // ─── 12. Clinical Governance — supervisor decision + audit tags ───────────
@@ -400,6 +455,35 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     }
   } catch (err) {
     console.warn("[Brain] Governance engine failed:", (err as Error).message);
+  }
+
+  // ─── 12b. Disposition Calibration — final arbiter of disposition ──────────
+  try {
+    const calibration = dispositionCalibrationEngine({
+      complaint:               input.complaint,
+      proposedDisposition:     result.disposition ?? "needs_workup",
+      aggregatedDifferentials: (result.aggregatedDifferentials ?? []).map((d) => ({
+        diagnosis: d.diagnosis,
+        score:     d.score,
+      })),
+      entropy:                 result.uncertainty?.entropy,
+      redFlags:                result.redFlags ?? [],
+      supervisorDecision:      result.governance?.supervisorDecision,
+      riskLevel:               result.risk?.overallRisk,
+      guidelinePassed:         result.guideline?.passed,
+      contradictionHasErrors:  result.contradictions?.hasErrors,
+    });
+    result.calibration   = calibration;
+    result.disposition   = calibration.finalDisposition;
+  } catch (err) {
+    console.warn("[Brain] Calibration engine failed:", (err as Error).message);
+  }
+
+  // ─── 12c. Physician Feedback Learning Stats (async, dashboard only) ────────
+  try {
+    result.feedbackStats = physicianFeedbackLearningEngine();
+  } catch {
+    // non-critical — silently ignore
   }
 
   // ─── 13. Store in Clinical Memory ─────────────────────────────────────────
