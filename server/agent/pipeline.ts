@@ -340,6 +340,7 @@ export async function initializePipeline(
     if (brainOutput.evidenceResults)         updated.evidenceResults          = brainOutput.evidenceResults;
     if (brainOutput.aggregatedDifferentials) updated.aggregatedDifferentials  = brainOutput.aggregatedDifferentials;
     if (brainOutput.contradictions)          updated.contradictions           = brainOutput.contradictions;
+    if (brainOutput.governance)              updated.governance               = brainOutput.governance;
     if (brainOutput.nextQuestion !== undefined) updated.nextBestQuestion = brainOutput.nextQuestion;
     if (brainOutput.questionRankings)     updated.questionRankings      = brainOutput.questionRankings;
     if (brainOutput.redFlags?.length)     updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];

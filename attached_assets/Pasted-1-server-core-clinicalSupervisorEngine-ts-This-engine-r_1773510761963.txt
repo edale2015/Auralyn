@@ -1,0 +1,764 @@
+1. server/core/clinicalSupervisorEngine.ts
+
+This engine:
+
+reviews safety overrides
+
+checks uncertainty
+
+checks red flags
+
+checks missing critical questions
+
+checks weak evidence
+
+checks dangerous diagnosis patterns
+
+decides final status:
+
+ER_NOW
+
+NEEDS_PHYSICIAN_REVIEW
+
+NEEDS_WORKUP
+
+SAFE_FOR_PROTOCOLIZED_CARE
+
+// server/core/clinicalSupervisorEngine.ts
+
+export type RankedDiagnosis = {
+  diagnosis: string
+  probability?: number
+  score?: number
+}
+
+export type SupervisorInput = {
+  caseId?: string
+  complaint: string
+  normalizedSymptoms: string[]
+  answeredQuestions?: Record<string, any>
+  unansweredQuestions?: string[]
+  graphDifferential?: RankedDiagnosis[]
+  bayesianDifferential?: RankedDiagnosis[]
+  combinedDifferential?: RankedDiagnosis[]
+  treatments?: string[]
+  tests?: { name: string; urgency: "urgent" | "routine" }[]
+  returnPrecautions?: string[]
+  safetyOverride?: {
+    triggered: boolean
+    ruleId?: string
+    reason?: string
+    disposition?: string
+  } | null
+  redFlags?: string[]
+  entropy?: number
+  disposition?: string
+}
+
+export type SupervisorOutput = {
+  supervisorDecision:
+    | "ER_NOW"
+    | "NEEDS_PHYSICIAN_REVIEW"
+    | "NEEDS_WORKUP"
+    | "SAFE_FOR_PROTOCOLIZED_CARE"
+  reasons: string[]
+  blockers: string[]
+  physicianReviewReasons: string[]
+  confidenceBand: "very_low" | "low" | "moderate" | "high"
+  topDiagnosis?: string
+  topProbability?: number
+  allowedToAutoTreat: boolean
+  allowedToAutoDischarge: boolean
+  escalationRecommended: boolean
+}
+
+const HIGH_RISK_DIAGNOSES = new Set([
+  "acute_coronary_syndrome",
+  "pulmonary_embolism",
+  "stroke",
+  "subarachnoid_hemorrhage",
+  "meningitis",
+  "ectopic_pregnancy",
+  "ovarian_torsion",
+  "testicular_torsion",
+  "appendicitis",
+  "sepsis",
+  "anaphylaxis",
+  "aortic_dissection",
+  "pneumothorax",
+  "gi_bleed",
+  "bowel_obstruction",
+])
+
+const CRITICAL_QUESTION_MAP: Record<string, string[]> = {
+  chest_pain: ["sob", "exertional", "radiation", "diaphoresis", "syncope"],
+  headache: ["thunderclap", "neuro_deficit", "neck_stiffness", "fever"],
+  abdominal_pain: ["pregnant", "rebound", "vomiting", "bloody_stool", "testicular_pain"],
+  shortness_of_breath: ["chest_pain", "hypoxia", "wheeze", "leg_swelling", "fever"],
+  sore_throat: ["drooling", "stridor", "muffled_voice", "trismus"],
+  dysuria: ["fever", "flank_pain", "pregnant", "vomiting"],
+}
+
+function getTopDx(list?: RankedDiagnosis[]): RankedDiagnosis | undefined {
+  if (!list || list.length === 0) return undefined
+  return [...list].sort((a, b) => (b.probability ?? b.score ?? 0) - (a.probability ?? a.score ?? 0))[0]
+}
+
+function confidenceBandFromProbability(p?: number): "very_low" | "low" | "moderate" | "high" {
+  if (p == null) return "very_low"
+  if (p >= 0.8) return "high"
+  if (p >= 0.55) return "moderate"
+  if (p >= 0.35) return "low"
+  return "very_low"
+}
+
+export function clinicalSupervisorEngine(input: SupervisorInput): SupervisorOutput {
+  const reasons: string[] = []
+  const blockers: string[] = []
+  const physicianReviewReasons: string[] = []
+
+  const top = getTopDx(input.combinedDifferential) ||
+              getTopDx(input.bayesianDifferential) ||
+              getTopDx(input.graphDifferential)
+
+  const topDiagnosis = top?.diagnosis
+  const topProbability = top?.probability ?? top?.score ?? 0
+  const confidenceBand = confidenceBandFromProbability(topProbability)
+
+  if (input.safetyOverride?.triggered) {
+    reasons.push(`Safety override triggered: ${input.safetyOverride.ruleId || "unknown_rule"}`)
+    blockers.push(input.safetyOverride.reason || "Emergency rule triggered")
+    return {
+      supervisorDecision: "ER_NOW",
+      reasons,
+      blockers,
+      physicianReviewReasons,
+      confidenceBand,
+      topDiagnosis,
+      topProbability,
+      allowedToAutoTreat: false,
+      allowedToAutoDischarge: false,
+      escalationRecommended: true,
+    }
+  }
+
+  if ((input.redFlags || []).length > 0) {
+    reasons.push("Red flag symptoms present")
+    physicianReviewReasons.push(...(input.redFlags || []).map(f => `Red flag: ${f}`))
+  }
+
+  if (topDiagnosis && HIGH_RISK_DIAGNOSES.has(topDiagnosis)) {
+    reasons.push(`High-risk diagnosis in differential: ${topDiagnosis}`)
+    physicianReviewReasons.push(`High-risk diagnosis requires clinician review: ${topDiagnosis}`)
+  }
+
+  if ((input.entropy ?? 0) >= 1.0) {
+    reasons.push(`High diagnostic uncertainty (entropy=${input.entropy?.toFixed(2)})`)
+    blockers.push("Differential remains too uncertain")
+  }
+
+  const criticalQuestions = CRITICAL_QUESTION_MAP[input.complaint] || []
+  const unansweredSet = new Set(input.unansweredQuestions || [])
+  const missingCritical = criticalQuestions.filter(q => unansweredSet.has(q))
+
+  if (missingCritical.length > 0) {
+    reasons.push(`Missing critical complaint questions: ${missingCritical.join(", ")}`)
+    blockers.push("Critical history incomplete")
+  }
+
+  const urgentTests = (input.tests || []).filter(t => t.urgency === "urgent")
+  if (urgentTests.length > 0) {
+    reasons.push(`Urgent testing recommended: ${urgentTests.map(t => t.name).join(", ")}`)
+    physicianReviewReasons.push("Urgent tests suggest need for higher level review")
+  }
+
+  const lowEvidence =
+    !topDiagnosis ||
+    topProbability < 0.45 ||
+    (input.combinedDifferential?.length || 0) === 0
+
+  if (lowEvidence) {
+    reasons.push("Evidence insufficient for confident protocolized disposition")
+    blockers.push("Weak top diagnosis / low evidence")
+  }
+
+  const treatmentCount = (input.treatments || []).length
+  if (treatmentCount === 0 && topDiagnosis) {
+    reasons.push("No treatment options generated for top diagnosis")
+    blockers.push("Treatment plan incomplete")
+  }
+
+  const precautionsCount = (input.returnPrecautions || []).length
+  if (precautionsCount === 0) {
+    reasons.push("No return precautions generated")
+    blockers.push("Safety discharge instructions incomplete")
+  }
+
+  const physicianReviewNeeded =
+    physicianReviewReasons.length > 0 ||
+    HIGH_RISK_DIAGNOSES.has(topDiagnosis || "") ||
+    urgentTests.length > 0
+
+  const needsWorkup =
+    (input.entropy ?? 0) >= 1.0 ||
+    missingCritical.length > 0 ||
+    lowEvidence
+
+  if (physicianReviewNeeded && !needsWorkup) {
+    return {
+      supervisorDecision: "NEEDS_PHYSICIAN_REVIEW",
+      reasons,
+      blockers,
+      physicianReviewReasons,
+      confidenceBand,
+      topDiagnosis,
+      topProbability,
+      allowedToAutoTreat: false,
+      allowedToAutoDischarge: false,
+      escalationRecommended: true,
+    }
+  }
+
+  if (needsWorkup) {
+    return {
+      supervisorDecision: "NEEDS_WORKUP",
+      reasons,
+      blockers,
+      physicianReviewReasons,
+      confidenceBand,
+      topDiagnosis,
+      topProbability,
+      allowedToAutoTreat: false,
+      allowedToAutoDischarge: false,
+      escalationRecommended: true,
+    }
+  }
+
+  return {
+    supervisorDecision: "SAFE_FOR_PROTOCOLIZED_CARE",
+    reasons,
+    blockers,
+    physicianReviewReasons,
+    confidenceBand,
+    topDiagnosis,
+    topProbability,
+    allowedToAutoTreat: true,
+    allowedToAutoDischarge: true,
+    escalationRecommended: false,
+  }
+}
+2. server/core/knowledgeGraphExpansionEngine.ts
+
+This engine:
+
+ingests structured rows from multiple datasets
+
+creates nodes and edges
+
+deduplicates aliases/synonyms
+
+expands graph from:
+
+complaint registry
+
+scoring rules
+
+diagnosis clusters
+
+output templates
+
+medications
+
+test rules
+
+red flags
+
+symptom synonyms
+
+// server/core/knowledgeGraphExpansionEngine.ts
+
+export type KGNodeType =
+  | "symptom"
+  | "diagnosis"
+  | "complaint"
+  | "question"
+  | "test"
+  | "treatment"
+  | "red_flag"
+  | "disposition"
+  | "medication"
+  | "alias"
+
+export type KGNode = {
+  id: string
+  type: KGNodeType
+  label?: string
+  metadata?: Record<string, any>
+}
+
+export type KGEdge = {
+  from: string
+  to: string
+  relation: string
+  weight?: number
+  source?: string
+  metadata?: Record<string, any>
+}
+
+export type ClinicalKnowledgeGraph = {
+  nodes: KGNode[]
+  edges: KGEdge[]
+}
+
+export type ExpansionDatasets = {
+  complaintRegistry?: any[]
+  clusterScoringRules?: any[]
+  redFlagRules?: any[]
+  diagnosisClusters?: any[]
+  outputTemplates?: any[]
+  medicationRules?: any[]
+  testRules?: any[]
+  symptomSynonyms?: any[]
+}
+
+function slug(v: string): string {
+  return String(v || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+class GraphBuilder {
+  private nodeMap = new Map<string, KGNode>()
+  private edgeSet = new Set<string>()
+  private edges: KGEdge[] = []
+
+  addNode(id: string, type: KGNodeType, label?: string, metadata?: Record<string, any>) {
+    if (!id) return
+    const existing = this.nodeMap.get(id)
+    if (!existing) {
+      this.nodeMap.set(id, { id, type, label, metadata })
+      return
+    }
+    this.nodeMap.set(id, {
+      ...existing,
+      label: existing.label || label,
+      metadata: { ...(existing.metadata || {}), ...(metadata || {}) },
+    })
+  }
+
+  addEdge(from: string, to: string, relation: string, weight = 1, source?: string, metadata?: Record<string, any>) {
+    if (!from || !to || !relation) return
+    const key = `${from}|${relation}|${to}|${source || ""}`
+    if (this.edgeSet.has(key)) return
+    this.edgeSet.add(key)
+    this.edges.push({ from, to, relation, weight, source, metadata })
+  }
+
+  build(): ClinicalKnowledgeGraph {
+    return {
+      nodes: [...this.nodeMap.values()],
+      edges: this.edges,
+    }
+  }
+}
+
+export function knowledgeGraphExpansionEngine(data: ExpansionDatasets): ClinicalKnowledgeGraph {
+  const g = new GraphBuilder()
+
+  for (const row of data.complaintRegistry || []) {
+    const complaint = slug(row.complaint || row.chief_complaint || row.cc)
+    const symptom = slug(row.symptom || row.trigger_symptom || row.key_symptom)
+    if (complaint) g.addNode(complaint, "complaint", row.complaint || row.chief_complaint)
+    if (symptom) g.addNode(symptom, "symptom", row.symptom || row.trigger_symptom)
+    if (complaint && symptom) g.addEdge(complaint, symptom, "has_typical_symptom", 1, "complaint_registry")
+  }
+
+  for (const row of data.clusterScoringRules || []) {
+    const symptom = slug(row.symptom || row.feature)
+    const diagnosis = slug(row.diagnosis || row.cluster || row.target_diagnosis)
+    const weight = Number(row.weight || row.score || 1)
+    if (symptom) g.addNode(symptom, "symptom", row.symptom || row.feature)
+    if (diagnosis) g.addNode(diagnosis, "diagnosis", row.diagnosis || row.cluster)
+    if (symptom && diagnosis) {
+      g.addEdge(symptom, diagnosis, "supports_diagnosis", weight, "cluster_scoring_rules")
+      g.addEdge(diagnosis, symptom, "supported_by_symptom", weight, "cluster_scoring_rules")
+    }
+  }
+
+  for (const row of data.redFlagRules || []) {
+    const diagnosis = slug(row.diagnosis || row.cluster)
+    const redFlag = slug(row.red_flag || row.flag || row.trigger)
+    const disposition = slug(row.disposition || "er_now")
+    if (diagnosis) g.addNode(diagnosis, "diagnosis", row.diagnosis || row.cluster)
+    if (redFlag) g.addNode(redFlag, "red_flag", row.red_flag || row.flag)
+    if (disposition) g.addNode(disposition, "disposition", row.disposition || "ER_NOW")
+    if (diagnosis && redFlag) g.addEdge(diagnosis, redFlag, "has_red_flag", 1, "red_flag_rules")
+    if (redFlag && disposition) g.addEdge(redFlag, disposition, "implies_disposition", 1, "red_flag_rules")
+  }
+
+  for (const row of data.diagnosisClusters || []) {
+    const complaint = slug(row.complaint || row.chief_complaint)
+    const diagnosis = slug(row.diagnosis || row.cluster_name || row.cluster)
+    const question = slug(row.question || row.key_question || row.secondary_question)
+    if (complaint) g.addNode(complaint, "complaint", row.complaint || row.chief_complaint)
+    if (diagnosis) g.addNode(diagnosis, "diagnosis", row.diagnosis || row.cluster_name || row.cluster)
+    if (question) g.addNode(question, "question", row.question || row.key_question || row.secondary_question)
+    if (complaint && diagnosis) g.addEdge(complaint, diagnosis, "has_differential", 1, "diagnosis_clusters")
+    if (diagnosis && question) g.addEdge(diagnosis, question, "confirmed_by_question", 1, "diagnosis_clusters")
+  }
+
+  for (const row of data.outputTemplates || []) {
+    const diagnosis = slug(row.diagnosis || row.cluster)
+    const disposition = slug(row.disposition || row.output_disposition)
+    if (diagnosis) g.addNode(diagnosis, "diagnosis", row.diagnosis || row.cluster)
+    if (disposition) g.addNode(disposition, "disposition", row.disposition || row.output_disposition)
+    if (diagnosis && disposition) g.addEdge(diagnosis, disposition, "suggests_disposition", 1, "output_templates")
+  }
+
+  for (const row of data.medicationRules || []) {
+    const diagnosis = slug(row.diagnosis || row.cluster)
+    const medication = slug(row.medication || row.treatment || row.drug)
+    if (diagnosis) g.addNode(diagnosis, "diagnosis", row.diagnosis || row.cluster)
+    if (medication) g.addNode(medication, "medication", row.medication || row.treatment || row.drug, {
+      dosage: row.dose,
+      route: row.route,
+    })
+    if (diagnosis && medication) g.addEdge(diagnosis, medication, "treated_with", 1, "medication_rules")
+  }
+
+  for (const row of data.testRules || []) {
+    const diagnosis = slug(row.diagnosis || row.cluster)
+    const test = slug(row.test || row.study || row.recommended_test)
+    const urgency = slug(row.urgency || "routine")
+    if (diagnosis) g.addNode(diagnosis, "diagnosis", row.diagnosis || row.cluster)
+    if (test) g.addNode(test, "test", row.test || row.study || row.recommended_test, { urgency })
+    if (diagnosis && test) {
+      g.addEdge(diagnosis, test, "evaluated_by_test", 1, "test_rules", { urgency })
+    }
+  }
+
+  for (const row of data.symptomSynonyms || []) {
+    const canonical = slug(row.canonical || row.symptom)
+    const alias = slug(row.alias || row.synonym || row.input)
+    if (canonical) g.addNode(canonical, "symptom", row.canonical || row.symptom)
+    if (alias) g.addNode(alias, "alias", row.alias || row.synonym || row.input)
+    if (alias && canonical) g.addEdge(alias, canonical, "maps_to", 1, "symptom_synonyms")
+  }
+
+  return g.build()
+}
+3. scripts/buildExpandedClinicalKnowledgeGraph.ts
+
+This script loads your CSVs and writes one merged graph JSON.
+
+// scripts/buildExpandedClinicalKnowledgeGraph.ts
+
+import fs from "fs"
+import path from "path"
+import csv from "csv-parser"
+import { knowledgeGraphExpansionEngine } from "../server/core/knowledgeGraphExpansionEngine"
+
+function readCsv(filePath: string): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const rows: any[] = []
+    if (!fs.existsSync(filePath)) return resolve(rows)
+
+    fs.createReadStream(filePath)
+      .pipe(csv())
+      .on("data", (row) => rows.push(row))
+      .on("end", () => resolve(rows))
+      .on("error", reject)
+  })
+}
+
+async function main() {
+  const base = path.resolve("server/data/csv")
+
+  const datasets = {
+    complaintRegistry: await readCsv(path.join(base, "COMPLAINT_REGISTRY.csv")),
+    clusterScoringRules: await readCsv(path.join(base, "CLUSTER_SCORING_RULES.csv")),
+    redFlagRules: await readCsv(path.join(base, "RED_FLAGS.csv")),
+    diagnosisClusters: await readCsv(path.join(base, "DIAGNOSIS_CLUSTERS.csv")),
+    outputTemplates: await readCsv(path.join(base, "OUTPUT_TEMPLATES.csv")),
+    medicationRules: await readCsv(path.join(base, "MEDICATION_RULES.csv")),
+    testRules: await readCsv(path.join(base, "TEST_RECOMMENDATIONS.csv")),
+    symptomSynonyms: await readCsv(path.join(base, "SYMPTOM_SYNONYMS.csv")),
+  }
+
+  const graph = knowledgeGraphExpansionEngine(datasets)
+
+  fs.writeFileSync(
+    path.resolve("server/data/expandedClinicalKnowledgeGraph.json"),
+    JSON.stringify(graph, null, 2),
+    "utf8"
+  )
+
+  console.log(`Expanded graph written.`)
+  console.log(`Nodes: ${graph.nodes.length}`)
+  console.log(`Edges: ${graph.edges.length}`)
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
+4. server/data/loadExpandedClinicalKnowledgeGraph.ts
+// server/data/loadExpandedClinicalKnowledgeGraph.ts
+
+import fs from "fs"
+import path from "path"
+import type { ClinicalKnowledgeGraph } from "../core/knowledgeGraphExpansionEngine"
+
+export function loadExpandedClinicalKnowledgeGraph(): ClinicalKnowledgeGraph {
+  const filePath = path.resolve("server/data/expandedClinicalKnowledgeGraph.json")
+  const raw = fs.readFileSync(filePath, "utf8")
+  return JSON.parse(raw)
+}
+5. server/core/graphTraversalEngine.ts
+
+This lets you query the graph like a clinical subway map.
+
+// server/core/graphTraversalEngine.ts
+
+import type { ClinicalKnowledgeGraph, KGEdge } from "./knowledgeGraphExpansionEngine"
+
+export function getOutgoingEdges(graph: ClinicalKnowledgeGraph, from: string, relation?: string): KGEdge[] {
+  return graph.edges.filter(e => e.from === from && (!relation || e.relation === relation))
+}
+
+export function getIncomingEdges(graph: ClinicalKnowledgeGraph, to: string, relation?: string): KGEdge[] {
+  return graph.edges.filter(e => e.to === to && (!relation || e.relation === relation))
+}
+
+export function getNeighbors(graph: ClinicalKnowledgeGraph, nodeId: string, relation?: string): string[] {
+  return getOutgoingEdges(graph, nodeId, relation).map(e => e.to)
+}
+
+export function multiHopExpand(
+  graph: ClinicalKnowledgeGraph,
+  startNodes: string[],
+  maxDepth = 2
+): { node: string; depth: number; path: string[] }[] {
+  const visited = new Set<string>()
+  const queue: { node: string; depth: number; path: string[] }[] = startNodes.map(n => ({
+    node: n,
+    depth: 0,
+    path: [n],
+  }))
+  const results: { node: string; depth: number; path: string[] }[] = []
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (visited.has(current.node)) continue
+    visited.add(current.node)
+    results.push(current)
+
+    if (current.depth >= maxDepth) continue
+
+    const neighbors = getNeighbors(graph, current.node)
+    for (const next of neighbors) {
+      queue.push({
+        node: next,
+        depth: current.depth + 1,
+        path: [...current.path, next],
+      })
+    }
+  }
+
+  return results
+}
+6. server/core/clinicalGovernanceEngine.ts
+
+This is a tiny wrapper joining supervisor + auditability.
+
+// server/core/clinicalGovernanceEngine.ts
+
+import { clinicalSupervisorEngine, type SupervisorInput, type SupervisorOutput } from "./clinicalSupervisorEngine"
+
+export type GovernanceOutput = SupervisorOutput & {
+  autoAllowed: boolean
+  auditTags: string[]
+}
+
+export function clinicalGovernanceEngine(input: SupervisorInput): GovernanceOutput {
+  const supervisor = clinicalSupervisorEngine(input)
+
+  const auditTags: string[] = [
+    `decision:${supervisor.supervisorDecision}`,
+    `confidence:${supervisor.confidenceBand}`,
+  ]
+
+  if (supervisor.topDiagnosis) auditTags.push(`top_dx:${supervisor.topDiagnosis}`)
+  if (supervisor.escalationRecommended) auditTags.push("escalation:true")
+  if (!supervisor.allowedToAutoTreat) auditTags.push("auto_treat:false")
+  if (!supervisor.allowedToAutoDischarge) auditTags.push("auto_discharge:false")
+
+  return {
+    ...supervisor,
+    autoAllowed:
+      supervisor.allowedToAutoTreat &&
+      supervisor.allowedToAutoDischarge &&
+      supervisor.supervisorDecision === "SAFE_FOR_PROTOCOLIZED_CARE",
+    auditTags,
+  }
+}
+7. Wiring it into the Clinical Brain
+
+Here is the core integration pattern for your clinicalBrainEngine.ts.
+
+// inside server/core/clinicalBrainEngine.ts
+
+import { clinicalGovernanceEngine } from "./clinicalGovernanceEngine"
+
+// after you already have:
+// normalizedSymptoms
+// safetyOverride
+// graphDifferential
+// bayesianDifferential
+// combinedDifferential
+// entropy
+// tests
+// treatments
+// returnPrecautions
+// redFlags
+// disposition
+// unansweredQuestions
+
+const governance = clinicalGovernanceEngine({
+  caseId,
+  complaint,
+  normalizedSymptoms,
+  answeredQuestions,
+  unansweredQuestions,
+  graphDifferential,
+  bayesianDifferential,
+  combinedDifferential,
+  treatments,
+  tests,
+  returnPrecautions,
+  safetyOverride,
+  redFlags,
+  entropy,
+  disposition,
+})
+
+return {
+  normalizedSymptoms,
+  safetyOverride,
+  graphDifferential,
+  bayesianDifferential,
+  combinedDifferential,
+  entropy,
+  tests,
+  treatments,
+  returnPrecautions,
+  redFlags,
+  disposition,
+  governance,
+}
+8. Example of final disposition override logic
+
+In your final pipeline, let governance become the boss:
+
+const finalDisposition =
+  governance.supervisorDecision === "ER_NOW"
+    ? "er_now"
+    : governance.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW"
+    ? "needs_physician_review"
+    : governance.supervisorDecision === "NEEDS_WORKUP"
+    ? "needs_workup"
+    : disposition
+
+And prevent autonomous plan generation when not safe:
+
+const finalTreatments = governance.allowedToAutoTreat ? treatments : []
+const finalDischargeInstructions = governance.allowedToAutoDischarge ? returnPrecautions : []
+9. What the supervisor actually adds conceptually
+
+Before, your engine was:
+
+smart
+
+Now it becomes:
+
+smart + governable
+
+That matters because a telemedicine engine does not fail mainly by being dumb. It fails by being overconfident in the wrong place.
+
+The supervisor stops that.
+
+10. What the expansion engine adds conceptually
+
+Before, your graph was a handcrafted garden.
+
+Now it becomes a construction crane:
+
+pull rows from Sheets
+
+convert to nodes/edges
+
+rebuild graph nightly
+
+eventually ingest literature and protocols
+
+That means you can scale complaint by complaint without rewriting engine logic every time.
+
+11. The next upgrades I recommend, in order
+
+After these two, the next strongest 6 are:
+
+Contradiction Engine
+Detects when evidence conflicts, like viral URI symptoms plus focal neuro deficits.
+
+Coverage Gap Engine
+Finds which complaints lack enough nodes, questions, tests, or treatments.
+
+Guideline Adherence Engine
+Checks if recommendations match your approved standard-of-care rules.
+
+Temporal Progression Engine
+Uses course over time, sudden vs gradual, worsening vs improving.
+
+Patient Risk Stratification Engine
+Age, pregnancy, immunocompromise, anticoagulation, COPD, CHF, etc.
+
+Physician Review Packet Engine
+Creates a one-screen handoff summary for the clinician.
+
+That set would make the system feel much more like real urgent-care workflow instead of just differential ranking.
+
+12. One more thing: yes, upload Sheets
+
+Yes, for this project, uploading the key Google Sheet exports here is highly useful. Best ones first:
+
+COMPLAINT_REGISTRY
+
+CLUSTER_SCORING_RULES
+
+RED_FLAGS
+
+DIAGNOSIS_CLUSTERS
+
+OUTPUT_TEMPLATES
+
+MEDICATION_RULES
+
+TEST_RECOMMENDATIONS
+
+SYMPTOM_SYNONYMS
+
+With those, I can help you build:
+
+a stronger graph builder
+
+gap detection
+
+supervisor rules tied to your actual complaints
+
+graph coverage reports
+
+complaint-by-complaint expansion
+
+If you upload them, I’d start by turning them into one unified schema and then build the Coverage Gap + Contradiction Engine next.

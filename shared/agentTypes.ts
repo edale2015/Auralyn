@@ -119,6 +119,7 @@ export const CaseStateSchema = z.object({
   aggregatedDifferentials: z.array(z.any()).optional(),
   memoryCases: z.array(z.any()).optional(),
   contradictions: z.any().optional(),
+  governance: z.any().optional(),
   nextBestQuestion: z.string().nullable().optional(),
   questionRankings: z.array(z.any()).optional(),
   safetyWarnings: z.array(z.any()).optional(),

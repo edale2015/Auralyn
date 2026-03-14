@@ -13,6 +13,7 @@ import { prioritizeTests } from "./testRecommendationEngine";
 import { generateBulkReturnPrecautions } from "./returnPrecautionEngine";
 import { contradictionEngine, type ContradictionResult } from "./contradictionEngine";
 import { evidenceAggregatorEngine, type AggregatedDifferential } from "./evidenceAggregatorEngine";
+import { clinicalGovernanceEngine, type GovernanceOutput } from "./clinicalGovernanceEngine";
 
 export interface BrainInput {
   complaint: string;
@@ -50,6 +51,9 @@ export interface BrainOutput {
 
   // Aggregated final differential (Bayesian + similarity + graph merged)
   aggregatedDifferentials?: AggregatedDifferential[];
+
+  // Clinical Governance (supervisor decision + audit tags)
+  governance?: GovernanceOutput;
 }
 
 export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> {
@@ -237,7 +241,68 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Recommendation engines failed:", (err as Error).message);
   }
 
-  // ─── 12. Store in Clinical Memory ─────────────────────────────────────────
+  // ─── 12. Clinical Governance — supervisor decision + audit tags ───────────
+  try {
+    const topBayesian = (result.differentials ?? []).map((d) => ({
+      diagnosis: d.clusterId,
+      probability: d.posteriorProbability,
+    }));
+    const topGraph = (result.evidenceResults ?? []).map((e) => ({
+      diagnosis: e.diagnosis,
+      score: e.combinedScore,
+    }));
+    const combined = (result.aggregatedDifferentials ?? []).map((a) => ({
+      diagnosis: a.diagnosis,
+      score: a.score,
+    }));
+    const treatmentNames = (result.treatments ?? []).map((t) => t.treatmentName ?? "");
+    const testsList = (result.tests ?? []).map((t) => ({
+      name: t.test ?? "",
+      urgency: t.priority ?? "routine",
+    }));
+    const precautionsList = (result.returnPrecautions ?? []).flatMap(
+      (r) => r.precautions ?? []
+    );
+
+    const governance = clinicalGovernanceEngine({
+      caseId: state?.sessionId ?? undefined,
+      complaint: input.complaint,
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+      answeredQuestions: answers,
+      unansweredQuestions: availableQuestions,
+      graphDifferential: topGraph,
+      bayesianDifferential: topBayesian,
+      combinedDifferential: combined,
+      treatments: treatmentNames,
+      tests: testsList,
+      returnPrecautions: precautionsList,
+      safetyOverride: result.safetyGuardTrigger
+        ? { triggered: true, ruleId: result.safetyGuardTrigger }
+        : null,
+      redFlags: result.redFlags ?? [],
+      entropy: result.uncertainty?.entropy,
+      disposition: result.disposition,
+    });
+
+    result.governance = governance;
+
+    // Let governance override disposition when it escalates
+    if (
+      governance.supervisorDecision === "ER_NOW" &&
+      result.disposition !== "ER_NOW"
+    ) {
+      result.disposition = "ER_NOW";
+    } else if (
+      governance.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW" &&
+      !result.disposition?.startsWith("ER")
+    ) {
+      result.disposition = "NEEDS_PHYSICIAN_REVIEW";
+    }
+  } catch (err) {
+    console.warn("[Brain] Governance engine failed:", (err as Error).message);
+  }
+
+  // ─── 13. Store in Clinical Memory ─────────────────────────────────────────
   try {
     storeClinicalCase({
       complaint: input.complaint,
