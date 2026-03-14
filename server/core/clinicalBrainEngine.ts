@@ -11,6 +11,8 @@ import { computeUncertainty, type UncertaintyResult } from "./uncertaintyEngine"
 import { getBulkRecommendations, type TreatmentRecommendation } from "./treatmentEngine";
 import { prioritizeTests } from "./testRecommendationEngine";
 import { generateBulkReturnPrecautions } from "./returnPrecautionEngine";
+import { contradictionEngine, type ContradictionResult } from "./contradictionEngine";
+import { evidenceAggregatorEngine, type AggregatedDifferential } from "./evidenceAggregatorEngine";
 
 export interface BrainInput {
   complaint: string;
@@ -42,6 +44,12 @@ export interface BrainOutput {
   // Safety guard
   safetyGuardTrigger?: string | null;
   normalizedSymptoms?: string[];
+
+  // Contradiction engine
+  contradictions?: ContradictionResult;
+
+  // Aggregated final differential (Bayesian + similarity + graph merged)
+  aggregatedDifferentials?: AggregatedDifferential[];
 }
 
 export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> {
@@ -54,7 +62,24 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
   const normalizedSyms = normalizeSymptoms(rawSymptoms);
   result.normalizedSymptoms = normalizedSyms;
 
-  // ─── 2. Clinical Safety Guard — hard overrides before any reasoning ────────
+  // ─── 2. Contradiction Engine — detect impossible symptom combos ────────────
+  try {
+    const contradictions = contradictionEngine(normalizedSyms);
+    result.contradictions = contradictions;
+    if (contradictions.hasErrors) {
+      // Hard-error contradictions (e.g. male + pregnancy) route to physician review
+      // before running probabilistic reasoning — we still continue so the brain
+      // can flag contradictions in the audit log.
+      logBrainDecision({
+        disposition: "NEEDS_REVIEW",
+        contradictions: contradictions.conflicts.map((c) => c.message),
+      });
+    }
+  } catch (err) {
+    console.warn("[Brain] Contradiction engine failed:", (err as Error).message);
+  }
+
+  // ─── 3. Clinical Safety Guard — hard overrides before any reasoning ────────
   try {
     const guard = safetyGuard(normalizedSyms);
     if (guard.disposition === "ER_NOW") {
@@ -121,6 +146,29 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     result.differentials = differentials;
   } catch (err) {
     console.warn("[Brain] Differential engine failed:", (err as Error).message);
+  }
+
+  // ─── 6b. Evidence Aggregator — merge Bayesian + similarity + graph ─────────
+  try {
+    const bayesianScores = (differentials ?? []).map((d) => ({
+      diagnosis: d.clusterId,
+      score: d.posteriorProbability,
+    }));
+    const similarityScores = (result.similarity?.topMatches ?? []).map((m: any) => ({
+      diagnosis: m.clusterId ?? m.complaint ?? "",
+      score: m.score ?? 0,
+    }));
+    const graphScores = (result.evidenceResults ?? []).map((e) => ({
+      diagnosis: e.diagnosis,
+      score: e.combinedScore,
+    }));
+    result.aggregatedDifferentials = evidenceAggregatorEngine(
+      bayesianScores,
+      similarityScores,
+      graphScores
+    );
+  } catch (err) {
+    console.warn("[Brain] Evidence aggregator failed:", (err as Error).message);
   }
 
   // ─── 7. Uncertainty Engine — decide if we need more information ────────────

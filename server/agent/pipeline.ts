@@ -334,10 +334,12 @@ export async function initializePipeline(
       availableQuestions,
     });
 
-    if (brainOutput.similarity)           updated.similarity            = brainOutput.similarity;
-    if (brainOutput.memoryCases)          updated.memoryCases           = brainOutput.memoryCases;
-    if (brainOutput.differentials)        updated.differentials         = brainOutput.differentials;
-    if (brainOutput.evidenceResults)      updated.evidenceResults       = brainOutput.evidenceResults;
+    if (brainOutput.similarity)              updated.similarity               = brainOutput.similarity;
+    if (brainOutput.memoryCases)             updated.memoryCases              = brainOutput.memoryCases;
+    if (brainOutput.differentials)           updated.differentials            = brainOutput.differentials;
+    if (brainOutput.evidenceResults)         updated.evidenceResults          = brainOutput.evidenceResults;
+    if (brainOutput.aggregatedDifferentials) updated.aggregatedDifferentials  = brainOutput.aggregatedDifferentials;
+    if (brainOutput.contradictions)          updated.contradictions           = brainOutput.contradictions;
     if (brainOutput.nextQuestion !== undefined) updated.nextBestQuestion = brainOutput.nextQuestion;
     if (brainOutput.questionRankings)     updated.questionRankings      = brainOutput.questionRankings;
     if (brainOutput.redFlags?.length)     updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];
