@@ -68,6 +68,9 @@ export const encounters = pgTable("encounters", {
   intakeCaseId: text("intake_case_id"), // links to intake case from portal workflow
   intakeLinkEvents: text("intake_link_events"), // JSON array of link/unlink audit events
   intakeLinkedAt: timestamp("intake_linked_at"), // when the intake case was last linked
+  intakeToken: text("intake_token"), // token for patient intake link
+  intakeCode: text("intake_code"), // 6-digit verification code for intake
+  intakeExpiresAt: text("intake_expires_at"), // expiration timestamp for intake link
 });
 
 export const insertEncounterSchema = createInsertSchema(encounters).omit({

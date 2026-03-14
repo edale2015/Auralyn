@@ -78,7 +78,10 @@ export default function PredictiveRiskPage() {
   });
 
   const riskMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/predictive/admission-risk", { complaint, symptoms }),
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/predictive/admission-risk", { complaint, symptoms });
+      return await res.json() as RiskAssessment;
+    },
     onSuccess: (data: RiskAssessment) => setResult(data),
   });
 

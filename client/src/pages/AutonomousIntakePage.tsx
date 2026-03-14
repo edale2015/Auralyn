@@ -51,7 +51,10 @@ export default function AutonomousIntakePage() {
   }, [messages]);
 
   const startMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/autonomous-intake/start", { caseId }),
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/autonomous-intake/start", { caseId });
+      return await res.json();
+    },
     onSuccess: (data: any) => {
       setStarted(true);
       setMessages([{ role: "system", content: data.reply, timestamp: new Date().toISOString() }]);
@@ -59,7 +62,10 @@ export default function AutonomousIntakePage() {
   });
 
   const sendMutation = useMutation({
-    mutationFn: (message: string) => apiRequest("POST", "/api/autonomous-intake/message", { caseId, message }),
+    mutationFn: async (message: string) => {
+      const res = await apiRequest("POST", "/api/autonomous-intake/message", { caseId, message });
+      return await res.json() as IntakeResult;
+    },
     onSuccess: (data: IntakeResult) => {
       setMessages(prev => [...prev, { role: "system", content: data.reply, timestamp: new Date().toISOString() }]);
       setTriage(data.triageLevel);

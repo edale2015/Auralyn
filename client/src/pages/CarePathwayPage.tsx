@@ -62,10 +62,13 @@ export default function CarePathwayPage() {
   });
 
   const executeMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/pathways/execute", {
-      complaint: selectedComplaint,
-      disposition: selectedDisposition,
-    }),
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/pathways/execute", {
+        complaint: selectedComplaint,
+        disposition: selectedDisposition,
+      });
+      return await res.json();
+    },
     onSuccess: (data: any) => setExecuted(data),
   });
 

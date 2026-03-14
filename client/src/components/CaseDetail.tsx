@@ -82,8 +82,6 @@ type ApprovalForm = z.infer<typeof approvalSchema>;
 interface EncounterWithDetails extends Encounter {
   messages?: WhatsappMessage[];
   orders?: Order[];
-  intakeCaseId?: string;
-  intakeLinkedAt?: string;
 }
 
 const CLARIFICATION_TEMPLATES = [

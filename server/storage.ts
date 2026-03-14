@@ -175,6 +175,12 @@ export class MemStorage implements IStorage {
       answers: encounter.answers || null,
       proposal: encounter.proposal || null,
       physicianSummary: encounter.physicianSummary || null,
+      intakeCaseId: encounter.intakeCaseId || null,
+      intakeLinkEvents: encounter.intakeLinkEvents || null,
+      intakeLinkedAt: encounter.intakeLinkedAt || null,
+      intakeToken: encounter.intakeToken || null,
+      intakeCode: encounter.intakeCode || null,
+      intakeExpiresAt: encounter.intakeExpiresAt || null,
     };
     this.encounters.set(id, newEncounter);
     return newEncounter;
@@ -559,6 +565,12 @@ export class FirebaseStorage implements IStorage {
       answers: data.answers || null,
       proposal: data.proposal || null,
       physicianSummary: data.physicianSummary || null,
+      intakeCaseId: data.intakeCaseId || null,
+      intakeLinkEvents: data.intakeLinkEvents || null,
+      intakeLinkedAt: data.intakeLinkedAt?.toDate?.() || null,
+      intakeToken: data.intakeToken || null,
+      intakeCode: data.intakeCode || null,
+      intakeExpiresAt: data.intakeExpiresAt || null,
     };
   }
 
@@ -630,6 +642,12 @@ export class FirebaseStorage implements IStorage {
       answers: encounter.answers || null,
       proposal: encounter.proposal || null,
       physicianSummary: encounter.physicianSummary || null,
+      intakeCaseId: encounter.intakeCaseId || null,
+      intakeLinkEvents: encounter.intakeLinkEvents || null,
+      intakeLinkedAt: encounter.intakeLinkedAt || null,
+      intakeToken: encounter.intakeToken || null,
+      intakeCode: encounter.intakeCode || null,
+      intakeExpiresAt: encounter.intakeExpiresAt || null,
     };
     
     const firestoreData = {

@@ -6,6 +6,7 @@ export interface QuestionPolicy {
   timesImproved: number
   avgEntropyReduction: number
   avgDiagnosisShift: number
+  impactScore: number
   lastUpdated: string
 }
 

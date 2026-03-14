@@ -5,7 +5,8 @@ export type CaseStatus =
   | "SIGNED_OFF"
   | "NEEDS_MORE_INFO"
   | "ESCALATED"
-  | "CLOSED";
+  | "CLOSED"
+  | "EXPORTED";
 
 export type SourceChannel =
   | "telegram"
@@ -21,7 +22,9 @@ export type ReviewStatus =
   | "REVIEWING"
   | "APPROVED"
   | "OVERRIDDEN"
-  | "REJECTED";
+  | "REJECTED"
+  | "SIGNED_OFF"
+  | "AWAITING_REVIEW";
 
 export type EngineDisposition =
   | "ER_SEND"
@@ -113,6 +116,7 @@ export interface CaseRecord {
   signoffId?: string;
   signoffRequired: boolean;
   exportedToEcw?: boolean;
+  exportedAt?: string;
 
   tags?: string[];
   metadata?: Record<string, unknown>;

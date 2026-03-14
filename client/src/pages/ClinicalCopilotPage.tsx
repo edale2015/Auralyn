@@ -81,13 +81,16 @@ export default function ClinicalCopilotPage() {
   const [output, setOutput] = useState<CopilotOutput | null>(null);
 
   const copilotMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/copilot/suggestions", {
-      caseId,
-      complaint,
-      disposition,
-      symptoms,
-      redFlags: redFlagsInput.trim() ? redFlagsInput.split(",").map(s => s.trim()).filter(Boolean) : [],
-    }),
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/copilot/suggestions", {
+        caseId,
+        complaint,
+        disposition,
+        symptoms,
+        redFlags: redFlagsInput.trim() ? redFlagsInput.split(",").map(s => s.trim()).filter(Boolean) : [],
+      });
+      return await res.json() as CopilotOutput;
+    },
     onSuccess: (data: CopilotOutput) => setOutput(data),
     onError: () => toast({ title: "Copilot error", variant: "destructive" }),
   });
