@@ -14,6 +14,10 @@ import { generateBulkReturnPrecautions } from "./returnPrecautionEngine";
 import { contradictionEngine, type ContradictionResult } from "./contradictionEngine";
 import { evidenceAggregatorEngine, type AggregatedDifferential } from "./evidenceAggregatorEngine";
 import { clinicalGovernanceEngine, type GovernanceOutput } from "./clinicalGovernanceEngine";
+import { temporalProgressionEngine, type TemporalOutput } from "./temporalProgressionEngine";
+import { riskStratificationEngine, type RiskOutput } from "./riskStratificationEngine";
+import { guidelineAdherenceEngine, type GuidelineOutput } from "./guidelineAdherenceEngine";
+import { physicianReviewPacketEngine, type PhysicianReviewPacket } from "./physicianReviewPacketEngine";
 
 export interface BrainInput {
   complaint: string;
@@ -54,6 +58,16 @@ export interface BrainOutput {
 
   // Clinical Governance (supervisor decision + audit tags)
   governance?: GovernanceOutput;
+
+  // Temporal + Risk stratification
+  temporal?: TemporalOutput;
+  risk?: RiskOutput;
+
+  // Guideline adherence
+  guideline?: GuidelineOutput;
+
+  // Physician handoff packet
+  physicianPacket?: PhysicianReviewPacket;
 }
 
 export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> {
@@ -175,6 +189,39 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Evidence aggregator failed:", (err as Error).message);
   }
 
+  // ─── 6c. Temporal Progression + Risk Stratification ──────────────────────
+  //        Boost aggregated differentials with clinical context signals
+  try {
+    const temporal = temporalProgressionEngine({
+      complaint:          input.complaint,
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+      answeredQuestions:  answers,
+    });
+    result.temporal = temporal;
+
+    const risk = riskStratificationEngine({
+      complaint:          input.complaint,
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+      answeredQuestions:  answers,
+    });
+    result.risk = risk;
+
+    // Apply temporal + risk boosts to aggregated differentials (15 % each)
+    if (result.aggregatedDifferentials?.length) {
+      result.aggregatedDifferentials = result.aggregatedDifferentials
+        .map((d) => ({
+          ...d,
+          score:
+            d.score +
+            (temporal.diagnosisBoosts[d.diagnosis] ?? 0) * 0.15 +
+            (risk.diagnosisBoosts[d.diagnosis]    ?? 0) * 0.15,
+        }))
+        .sort((a, b) => b.score - a.score);
+    }
+  } catch (err) {
+    console.warn("[Brain] Temporal/Risk engines failed:", (err as Error).message);
+  }
+
   // ─── 7. Uncertainty Engine — decide if we need more information ────────────
   try {
     const uncertainty = computeUncertainty(differentials ?? []);
@@ -231,6 +278,32 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     }
   }
 
+  // ─── 10b. Guideline Adherence Check ───────────────────────────────────────
+  try {
+    const topDx     = result.aggregatedDifferentials?.[0]?.diagnosis
+                   ?? result.differentials?.[0]?.clusterId;
+    const testsList = (result.tests ?? []).map((t) => ({
+      name:    t.test ?? "",
+      urgency: (t.priority ?? "routine") as "urgent" | "routine",
+    }));
+    const guideline = guidelineAdherenceEngine({
+      complaint:          input.complaint,
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+      answeredQuestions:  answers,
+      topDiagnosis:       topDx,
+      proposedDisposition: result.disposition,
+      proposedTests:      testsList,
+    });
+    result.guideline = guideline;
+
+    // Guideline violations escalate disposition
+    if (!guideline.passed && result.disposition === "LIKELY_OUTPATIENT") {
+      result.disposition = "NEEDS_PHYSICIAN_REVIEW";
+    }
+  } catch (err) {
+    console.warn("[Brain] Guideline engine failed:", (err as Error).message);
+  }
+
   // ─── 11. Treatment & Test Recommendations ─────────────────────────────────
   try {
     const topDx = (differentials ?? []).slice(0, 5);
@@ -285,6 +358,33 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     });
 
     result.governance = governance;
+
+    // Generate physician review packet now that all signals are available
+    try {
+      result.physicianPacket = physicianReviewPacketEngine({
+        caseId:                 state?.sessionId,
+        complaint:              input.complaint,
+        normalizedSymptoms:     result.normalizedSymptoms ?? [],
+        answeredQuestions:      answers,
+        contradiction:          result.contradictions ?? null,
+        safetyOverride:         result.safetyGuardTrigger
+          ? { triggered: true, ruleId: result.safetyGuardTrigger }
+          : null,
+        risk:                   result.risk,
+        temporal:               result.temporal,
+        aggregatedDifferentials: result.aggregatedDifferentials,
+        tests:                  (result.tests ?? []).map((t) => ({
+          name: t.test ?? "",
+          urgency: (t.priority ?? "routine") as "urgent" | "routine",
+        })),
+        treatments:             (result.treatments ?? []).map((t) => t.treatmentName ?? ""),
+        returnPrecautions:      (result.returnPrecautions ?? []).flatMap((r) => r.precautions ?? []),
+        supervisor:             governance,
+        guideline:              result.guideline,
+      });
+    } catch (pkgErr) {
+      console.warn("[Brain] Physician packet failed:", (pkgErr as Error).message);
+    }
 
     // Let governance override disposition when it escalates
     if (

@@ -1,0 +1,705 @@
+server/core/temporalProgressionEngine.ts
+// server/core/temporalProgressionEngine.ts
+
+export type TemporalInput = {
+  complaint: string
+  normalizedSymptoms: string[]
+  answeredQuestions?: Record<string, any>
+}
+
+export type TemporalSignal = {
+  label: string
+  weight: number
+  reason: string
+  diagnoses?: string[]
+}
+
+export type TemporalOutput = {
+  onsetCategory: "hyperacute" | "acute" | "subacute" | "chronic" | "unknown"
+  trajectory: "improving" | "stable" | "worsening" | "fluctuating" | "unknown"
+  temporalSignals: TemporalSignal[]
+  diagnosisBoosts: Record<string, number>
+  warnings: string[]
+}
+
+function hoursFromAnswers(a: Record<string, any>): number | null {
+  const h = a.duration_hours
+  const d = a.duration_days
+  const w = a.duration_weeks
+
+  if (typeof h === "number") return h
+  if (typeof d === "number") return d * 24
+  if (typeof w === "number") return w * 24 * 7
+
+  const duration = String(a.duration || "").toLowerCase()
+  if (!duration) return null
+
+  if (duration.includes("hour")) {
+    const n = Number(duration.match(/\d+/)?.[0] || "")
+    return Number.isFinite(n) ? n : null
+  }
+  if (duration.includes("day")) {
+    const n = Number(duration.match(/\d+/)?.[0] || "")
+    return Number.isFinite(n) ? n * 24 : null
+  }
+  if (duration.includes("week")) {
+    const n = Number(duration.match(/\d+/)?.[0] || "")
+    return Number.isFinite(n) ? n * 24 * 7 : null
+  }
+
+  return null
+}
+
+function addBoost(map: Record<string, number>, dxs: string[], weight: number) {
+  for (const dx of dxs) {
+    map[dx] = (map[dx] || 0) + weight
+  }
+}
+
+export function temporalProgressionEngine(input: TemporalInput): TemporalOutput {
+  const a = input.answeredQuestions || {}
+  const temporalSignals: TemporalSignal[] = []
+  const diagnosisBoosts: Record<string, number> = {}
+  const warnings: string[] = []
+
+  const hours = hoursFromAnswers(a)
+  const worsening = !!a.worsening || String(a.course || "").toLowerCase().includes("worsen")
+  const improving = !!a.improving || String(a.course || "").toLowerCase().includes("improv")
+  const sudden = !!a.sudden_onset || input.normalizedSymptoms.includes("sudden_onset")
+  const gradual = !!a.gradual_onset || input.normalizedSymptoms.includes("gradual_onset")
+  const intermittent = !!a.intermittent || String(a.course || "").toLowerCase().includes("intermittent")
+
+  let onsetCategory: TemporalOutput["onsetCategory"] = "unknown"
+  if (hours != null) {
+    if (hours <= 6) onsetCategory = "hyperacute"
+    else if (hours <= 72) onsetCategory = "acute"
+    else if (hours <= 24 * 28) onsetCategory = "subacute"
+    else onsetCategory = "chronic"
+  }
+
+  let trajectory: TemporalOutput["trajectory"] = "unknown"
+  if (worsening) trajectory = "worsening"
+  else if (improving) trajectory = "improving"
+  else if (intermittent) trajectory = "fluctuating"
+  else if (hours != null) trajectory = "stable"
+
+  // Headache
+  if (input.complaint === "headache" && (sudden || onsetCategory === "hyperacute")) {
+    temporalSignals.push({
+      label: "hyperacute_headache",
+      weight: 1.0,
+      reason: "Sudden or hyperacute headache onset",
+      diagnoses: ["subarachnoid_hemorrhage", "stroke", "meningitis"],
+    })
+    addBoost(diagnosisBoosts, ["subarachnoid_hemorrhage", "stroke", "meningitis"], 1.0)
+  }
+
+  // Chest pain / SOB
+  if ((input.complaint === "chest_pain" || input.complaint === "shortness_of_breath") && sudden) {
+    temporalSignals.push({
+      label: "sudden_cardiopulmonary_onset",
+      weight: 0.9,
+      reason: "Sudden onset cardiopulmonary symptoms",
+      diagnoses: ["pulmonary_embolism", "pneumothorax", "acute_coronary_syndrome", "aortic_dissection"],
+    })
+    addBoost(diagnosisBoosts, ["pulmonary_embolism", "pneumothorax", "acute_coronary_syndrome", "aortic_dissection"], 0.9)
+  }
+
+  // URI / sinus / cough
+  if (["cough", "sinus_pressure", "sore_throat"].includes(input.complaint) && hours != null && hours > 24 * 14) {
+    temporalSignals.push({
+      label: "prolonged_upper_respiratory_course",
+      weight: 0.6,
+      reason: "Prolonged upper respiratory symptoms",
+      diagnoses: ["bacterial_sinusitis", "post_viral_cough", "asthma", "allergic_rhinitis"],
+    })
+    addBoost(diagnosisBoosts, ["bacterial_sinusitis", "post_viral_cough", "asthma", "allergic_rhinitis"], 0.6)
+  }
+
+  // Dysuria
+  if (input.complaint === "dysuria" && worsening && hours != null && hours > 24) {
+    temporalSignals.push({
+      label: "progressive_urinary_course",
+      weight: 0.7,
+      reason: "Urinary symptoms worsening over >24h",
+      diagnoses: ["uti", "pyelonephritis", "prostatitis"],
+    })
+    addBoost(diagnosisBoosts, ["uti", "pyelonephritis", "prostatitis"], 0.7)
+  }
+
+  // Abdominal pain
+  if (input.complaint === "abdominal_pain" && worsening) {
+    temporalSignals.push({
+      label: "worsening_abdominal_pain",
+      weight: 0.8,
+      reason: "Worsening abdominal pain raises concern for surgical pathology",
+      diagnoses: ["appendicitis", "bowel_obstruction", "ectopic_pregnancy", "ovarian_torsion"],
+    })
+    addBoost(diagnosisBoosts, ["appendicitis", "bowel_obstruction", "ectopic_pregnancy", "ovarian_torsion"], 0.8)
+  }
+
+  if (sudden && gradual) {
+    warnings.push("Both sudden and gradual onset present")
+  }
+  if (improving && worsening) {
+    warnings.push("Both improving and worsening trajectory present")
+  }
+
+  return {
+    onsetCategory,
+    trajectory,
+    temporalSignals,
+    diagnosisBoosts,
+    warnings,
+  }
+}
+server/core/riskStratificationEngine.ts
+// server/core/riskStratificationEngine.ts
+
+export type RiskFactor = {
+  label: string
+  severity: "low" | "moderate" | "high"
+  reason: string
+  diagnoses?: string[]
+}
+
+export type RiskInput = {
+  complaint: string
+  normalizedSymptoms: string[]
+  answeredQuestions?: Record<string, any>
+}
+
+export type RiskOutput = {
+  overallRisk: "low" | "moderate" | "high"
+  riskFactors: RiskFactor[]
+  diagnosisBoosts: Record<string, number>
+  supervisionFlags: string[]
+}
+
+function addBoost(map: Record<string, number>, dxs: string[], weight: number) {
+  for (const dx of dxs) map[dx] = (map[dx] || 0) + weight
+}
+
+export function riskStratificationEngine(input: RiskInput): RiskOutput {
+  const a = input.answeredQuestions || {}
+  const riskFactors: RiskFactor[] = []
+  const diagnosisBoosts: Record<string, number> = {}
+  const supervisionFlags: string[] = []
+
+  const age = Number(a.age)
+  const pregnant = !!a.pregnant
+  const immunocompromised = !!a.immunocompromised
+  const anticoagulated = !!a.anticoagulated
+  const copd = !!a.copd
+  const chf = !!a.chf
+  const diabetes = !!a.diabetes
+  const cancer = !!a.active_cancer
+  const recentSurgery = !!a.recent_surgery
+  const recentTravel = !!a.recent_travel
+  const kidneyDisease = !!a.ckd
+
+  if (Number.isFinite(age) && age >= 65) {
+    riskFactors.push({
+      label: "older_age",
+      severity: "moderate",
+      reason: "Age 65+ increases acuity risk and lowers reserve",
+    })
+    supervisionFlags.push("older_age")
+  }
+
+  if (pregnant) {
+    riskFactors.push({
+      label: "pregnancy",
+      severity: "high",
+      reason: "Pregnancy changes differential and disposition thresholds",
+      diagnoses: ["ectopic_pregnancy", "preeclampsia", "pyelonephritis"],
+    })
+    addBoost(diagnosisBoosts, ["ectopic_pregnancy", "preeclampsia", "pyelonephritis"], 1.0)
+    supervisionFlags.push("pregnancy")
+  }
+
+  if (immunocompromised) {
+    riskFactors.push({
+      label: "immunocompromised",
+      severity: "high",
+      reason: "Lower threshold for severe infection and complications",
+      diagnoses: ["sepsis", "pneumonia", "meningitis"],
+    })
+    addBoost(diagnosisBoosts, ["sepsis", "pneumonia", "meningitis"], 1.0)
+    supervisionFlags.push("immunocompromised")
+  }
+
+  if (anticoagulated) {
+    riskFactors.push({
+      label: "anticoagulated",
+      severity: "high",
+      reason: "Bleeding risk and higher danger from trauma/headache/falls",
+      diagnoses: ["intracranial_bleed", "gi_bleed"],
+    })
+    addBoost(diagnosisBoosts, ["intracranial_bleed", "gi_bleed"], 0.9)
+    supervisionFlags.push("anticoagulated")
+  }
+
+  if (copd || chf) {
+    riskFactors.push({
+      label: "cardiopulmonary_comorbidity",
+      severity: "moderate",
+      reason: "Respiratory complaints more dangerous with COPD/CHF",
+      diagnoses: ["pneumonia", "copd_exacerbation", "heart_failure_exacerbation"],
+    })
+    addBoost(diagnosisBoosts, ["pneumonia", "copd_exacerbation", "heart_failure_exacerbation"], 0.8)
+  }
+
+  if (diabetes) {
+    riskFactors.push({
+      label: "diabetes",
+      severity: "moderate",
+      reason: "Raises infection risk and complication risk",
+      diagnoses: ["uti", "pyelonephritis", "cellulitis", "sepsis"],
+    })
+    addBoost(diagnosisBoosts, ["uti", "pyelonephritis", "cellulitis", "sepsis"], 0.6)
+  }
+
+  if (cancer || recentSurgery || recentTravel) {
+    riskFactors.push({
+      label: "vte_risk_context",
+      severity: "high",
+      reason: "Cancer/surgery/travel increase clot risk",
+      diagnoses: ["pulmonary_embolism", "dvt"],
+    })
+    addBoost(diagnosisBoosts, ["pulmonary_embolism", "dvt"], 1.0)
+    supervisionFlags.push("vte_risk_context")
+  }
+
+  if (kidneyDisease) {
+    riskFactors.push({
+      label: "kidney_disease",
+      severity: "moderate",
+      reason: "Affects dehydration tolerance and medication safety",
+      diagnoses: ["aki", "pyelonephritis"],
+    })
+    addBoost(diagnosisBoosts, ["aki", "pyelonephritis"], 0.5)
+  }
+
+  const highCount = riskFactors.filter(r => r.severity === "high").length
+  const moderateCount = riskFactors.filter(r => r.severity === "moderate").length
+
+  let overallRisk: RiskOutput["overallRisk"] = "low"
+  if (highCount >= 1 || moderateCount >= 3) overallRisk = "high"
+  else if (moderateCount >= 1) overallRisk = "moderate"
+
+  return {
+    overallRisk,
+    riskFactors,
+    diagnosisBoosts,
+    supervisionFlags,
+  }
+}
+server/core/guidelineAdherenceEngine.ts
+// server/core/guidelineAdherenceEngine.ts
+
+export type GuidelineRule = {
+  id: string
+  complaint: string
+  whenTopDiagnosis?: string
+  requiresSymptoms?: string[]
+  requiresQuestionsAnswered?: string[]
+  requiresTests?: string[]
+  forbidsDisposition?: string[]
+  recommendedDisposition?: string
+  mustReviewIf?: string[]
+  note?: string
+}
+
+export type GuidelineInput = {
+  complaint: string
+  normalizedSymptoms: string[]
+  answeredQuestions?: Record<string, any>
+  topDiagnosis?: string
+  proposedDisposition?: string
+  proposedTests?: { name: string; urgency: "urgent" | "routine" }[]
+}
+
+export type GuidelineOutput = {
+  passed: boolean
+  matches: string[]
+  violations: string[]
+  reviewFlags: string[]
+}
+
+const RULES: GuidelineRule[] = [
+  {
+    id: "GL_SORE_THROAT_AIRWAY",
+    complaint: "sore_throat",
+    requiresSymptoms: ["drooling"],
+    forbidsDisposition: ["home_care", "routine_followup"],
+    recommendedDisposition: "er_now",
+    note: "Drooling with sore throat is airway danger until proven otherwise",
+  },
+  {
+    id: "GL_CHEST_PAIN_ACS_WORKUP",
+    complaint: "chest_pain",
+    whenTopDiagnosis: "acute_coronary_syndrome",
+    requiresTests: ["ecg", "troponin"],
+    forbidsDisposition: ["home_care"],
+  },
+  {
+    id: "GL_DYSURIA_PYELO_ESCALATE",
+    complaint: "dysuria",
+    whenTopDiagnosis: "pyelonephritis",
+    requiresSymptoms: ["fever"],
+    forbidsDisposition: ["home_care"],
+    recommendedDisposition: "needs_workup",
+  },
+  {
+    id: "GL_HEADACHE_THUNDERCLAP",
+    complaint: "headache",
+    requiresSymptoms: ["thunderclap_headache"],
+    forbidsDisposition: ["home_care"],
+    recommendedDisposition: "er_now",
+  },
+]
+
+function hasAll(source: string[], needed: string[] = []) {
+  return needed.every(n => source.includes(n))
+}
+
+export function guidelineAdherenceEngine(input: GuidelineInput): GuidelineOutput {
+  const matches: string[] = []
+  const violations: string[] = []
+  const reviewFlags: string[] = []
+  const testNames = (input.proposedTests || []).map(t => t.name)
+
+  for (const rule of RULES) {
+    if (rule.complaint !== input.complaint) continue
+    if (rule.whenTopDiagnosis && rule.whenTopDiagnosis !== input.topDiagnosis) continue
+    if (!hasAll(input.normalizedSymptoms, rule.requiresSymptoms)) continue
+
+    matches.push(rule.id)
+
+    if (rule.requiresQuestionsAnswered?.length) {
+      const a = input.answeredQuestions || {}
+      for (const q of rule.requiresQuestionsAnswered) {
+        if (a[q] == null || a[q] === "") {
+          violations.push(`${rule.id}: missing required question ${q}`)
+        }
+      }
+    }
+
+    if (rule.requiresTests?.length) {
+      for (const test of rule.requiresTests) {
+        if (!testNames.includes(test)) {
+          violations.push(`${rule.id}: missing required test ${test}`)
+        }
+      }
+    }
+
+    if (rule.forbidsDisposition?.includes(input.proposedDisposition || "")) {
+      violations.push(`${rule.id}: disposition ${input.proposedDisposition} is not allowed`)
+    }
+
+    if (rule.recommendedDisposition && input.proposedDisposition && rule.recommendedDisposition !== input.proposedDisposition) {
+      reviewFlags.push(`${rule.id}: preferred disposition is ${rule.recommendedDisposition}, got ${input.proposedDisposition}`)
+    }
+  }
+
+  return {
+    passed: violations.length === 0,
+    matches,
+    violations,
+    reviewFlags,
+  }
+}
+server/core/physicianReviewPacketEngine.ts
+// server/core/physicianReviewPacketEngine.ts
+
+export type ReviewPacketInput = {
+  caseId?: string
+  complaint: string
+  normalizedSymptoms: string[]
+  answeredQuestions?: Record<string, any>
+  contradiction?: {
+    hasErrors: boolean
+    errors?: string[]
+    hasWarnings?: boolean
+    warnings?: string[]
+  }
+  safetyOverride?: {
+    triggered: boolean
+    ruleId?: string
+    reason?: string
+    disposition?: string
+  } | null
+  risk?: {
+    overallRisk: string
+    riskFactors: { label: string; severity: string; reason: string }[]
+  }
+  temporal?: {
+    onsetCategory: string
+    trajectory: string
+    temporalSignals: { label: string; weight: number; reason: string }[]
+  }
+  aggregatedDifferentials?: { diagnosis: string; score: number }[]
+  tests?: { name: string; urgency: "urgent" | "routine" }[]
+  treatments?: string[]
+  returnPrecautions?: string[]
+  supervisor?: {
+    supervisorDecision: string
+    reasons: string[]
+    blockers: string[]
+    physicianReviewReasons: string[]
+  }
+  guideline?: {
+    passed: boolean
+    violations: string[]
+    reviewFlags: string[]
+  }
+}
+
+export type PhysicianReviewPacket = {
+  summary: string
+  acuityBanner: string
+  topDifferential: string[]
+  criticalFindings: string[]
+  testsToConsider: string[]
+  candidateTreatments: string[]
+  dischargeLimits: string[]
+  physicianQuestions: string[]
+}
+
+export function physicianReviewPacketEngine(input: ReviewPacketInput): PhysicianReviewPacket {
+  const topDifferential = (input.aggregatedDifferentials || [])
+    .slice(0, 5)
+    .map(d => `${d.diagnosis} (${d.score.toFixed(3)})`)
+
+  const criticalFindings: string[] = []
+
+  if (input.contradiction?.hasErrors) {
+    criticalFindings.push(...(input.contradiction.errors || []).map(e => `Contradiction: ${e}`))
+  }
+
+  if (input.safetyOverride?.triggered) {
+    criticalFindings.push(`Safety override: ${input.safetyOverride.ruleId} - ${input.safetyOverride.reason || "emergency trigger"}`)
+  }
+
+  for (const rf of input.risk?.riskFactors || []) {
+    if (rf.severity === "high") criticalFindings.push(`Risk: ${rf.label} - ${rf.reason}`)
+  }
+
+  for (const v of input.guideline?.violations || []) {
+    criticalFindings.push(`Guideline violation: ${v}`)
+  }
+
+  const testsToConsider = (input.tests || []).map(t => `${t.name} [${t.urgency}]`)
+  const candidateTreatments = input.treatments || []
+
+  const dischargeLimits: string[] = []
+  if (input.supervisor?.supervisorDecision !== "SAFE_FOR_PROTOCOLIZED_CARE") {
+    dischargeLimits.push(`Supervisor decision: ${input.supervisor?.supervisorDecision}`)
+  }
+  for (const b of input.supervisor?.blockers || []) dischargeLimits.push(b)
+  for (const f of input.supervisor?.physicianReviewReasons || []) dischargeLimits.push(f)
+
+  const physicianQuestions: string[] = []
+  if (input.temporal?.onsetCategory === "hyperacute") physicianQuestions.push("Does the onset timing imply vascular or other emergent pathology?")
+  if (input.risk?.overallRisk === "high") physicianQuestions.push("Do comorbidities lower the threshold for escalation or imaging?")
+  if (input.guideline && !input.guideline.passed) physicianQuestions.push("Does the plan need to be adjusted to match approved protocol?")
+  if ((input.aggregatedDifferentials || []).length >= 2) physicianQuestions.push("What is the safest disposition given the top competing differentials?")
+
+  const acuityBanner =
+    input.safetyOverride?.triggered ? "EMERGENT" :
+    input.risk?.overallRisk === "high" ? "HIGH RISK" :
+    input.supervisor?.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW" ? "PHYSICIAN REVIEW" :
+    input.supervisor?.supervisorDecision === "NEEDS_WORKUP" ? "WORKUP NEEDED" :
+    "LOWER ACUITY"
+
+  const summary =
+    `Complaint: ${input.complaint}. ` +
+    `Top differential: ${topDifferential[0] || "none"}. ` +
+    `Acuity: ${acuityBanner}. ` +
+    `Supervisor: ${input.supervisor?.supervisorDecision || "unknown"}.`
+
+  return {
+    summary,
+    acuityBanner,
+    topDifferential,
+    criticalFindings,
+    testsToConsider,
+    candidateTreatments,
+    dischargeLimits,
+    physicianQuestions,
+  }
+}
+server/core/coverageGapEngine.ts
+
+This one is less patient-facing and more system-facing. It tells you where the KB is thin.
+
+// server/core/coverageGapEngine.ts
+
+type GraphLike = {
+  getNeighbors(nodeId: string, relation?: string): string[]
+}
+
+export type CoverageGapOutput = {
+  complaint: string
+  missingAreas: string[]
+  score: number
+}
+
+export function coverageGapEngine(graph: GraphLike, complaint: string): CoverageGapOutput {
+  const missingAreas: string[] = []
+
+  const dx = graph.getNeighbors(complaint, "has_differential")
+  const sx = graph.getNeighbors(complaint, "has_typical_symptom")
+
+  let tests = 0
+  let treatments = 0
+  let redFlags = 0
+  let questions = 0
+
+  for (const d of dx) {
+    tests += graph.getNeighbors(d, "evaluated_by_test").length
+    treatments += graph.getNeighbors(d, "treated_with").length
+    redFlags += graph.getNeighbors(d, "has_red_flag").length
+    questions += graph.getNeighbors(d, "confirmed_by_question").length
+  }
+
+  if (dx.length === 0) missingAreas.push("no_differentials")
+  if (sx.length === 0) missingAreas.push("no_typical_symptoms")
+  if (questions === 0) missingAreas.push("no_confirmation_questions")
+  if (tests === 0) missingAreas.push("no_tests")
+  if (treatments === 0) missingAreas.push("no_treatments")
+  if (redFlags === 0) missingAreas.push("no_red_flags")
+
+  const score = Math.max(0, 1 - missingAreas.length / 6)
+
+  return {
+    complaint,
+    missingAreas,
+    score,
+  }
+}
+Brain pipeline integration
+
+Add these into your brain after normalization / contradiction / safety and before final supervisor.
+
+import { temporalProgressionEngine } from "./temporalProgressionEngine"
+import { riskStratificationEngine } from "./riskStratificationEngine"
+import { guidelineAdherenceEngine } from "./guidelineAdherenceEngine"
+import { physicianReviewPacketEngine } from "./physicianReviewPacketEngine"
+
+Then wire:
+
+const temporal = temporalProgressionEngine({
+  complaint,
+  normalizedSymptoms,
+  answeredQuestions,
+})
+
+const risk = riskStratificationEngine({
+  complaint,
+  normalizedSymptoms,
+  answeredQuestions,
+})
+
+Blend their boosts into your aggregated differential before ranking:
+
+const boostedAggregatedDifferentials = aggregatedDifferentials.map((d) => {
+  const temporalBoost = temporal.diagnosisBoosts[d.diagnosis] || 0
+  const riskBoost = risk.diagnosisBoosts[d.diagnosis] || 0
+
+  return {
+    ...d,
+    score: d.score + temporalBoost * 0.15 + riskBoost * 0.15,
+  }
+}).sort((a, b) => b.score - a.score)
+
+Then guideline check:
+
+const guideline = guidelineAdherenceEngine({
+  complaint,
+  normalizedSymptoms,
+  answeredQuestions,
+  topDiagnosis: boostedAggregatedDifferentials[0]?.diagnosis,
+  proposedDisposition: disposition,
+  proposedTests: tests,
+})
+
+Then pass temporal, risk, guideline into supervisor logic or governance logic.
+
+Finally create packet:
+
+const physicianPacket = physicianReviewPacketEngine({
+  caseId,
+  complaint,
+  normalizedSymptoms,
+  answeredQuestions,
+  contradiction,
+  safetyOverride,
+  risk,
+  temporal,
+  aggregatedDifferentials: boostedAggregatedDifferentials,
+  tests,
+  treatments,
+  returnPrecautions,
+  supervisor: governance,
+  guideline,
+})
+
+Return:
+
+return {
+  normalizedSymptoms,
+  contradiction,
+  safetyOverride,
+  temporal,
+  risk,
+  graphDifferential,
+  bayesianDifferential,
+  similarityDifferential,
+  aggregatedDifferentials: boostedAggregatedDifferentials,
+  entropy,
+  tests,
+  treatments,
+  returnPrecautions,
+  guideline,
+  governance,
+  physicianPacket,
+}
+What these layers buy you
+
+Temporal engine
+Adds “story shape,” which is a huge part of medicine. A thunderclap headache and a headache for 3 weeks are different animals wearing the same hat.
+
+Risk engine
+Makes the same symptom set behave differently in a healthy 22-year-old versus a pregnant, anticoagulated 68-year-old.
+
+Guideline engine
+Prevents the brain from becoming a jazz musician at the wrong moment.
+
+Physician packet
+Turns the system from “interesting output” into “reviewable clinical workflow.”
+
+Coverage gap engine
+Shows where your Sheets need more rows before you scale from dozens to hundreds of complaints.
+
+The next best 5 after these
+
+In order:
+
+Disposition Calibration Engine
+Learns when the model over-triages or under-triages.
+
+Complaint Completeness Engine
+Enforces minimum required questions per complaint before any disposition is allowed.
+
+Medication Safety Engine
+Checks allergies, pregnancy, renal function, age, contraindications.
+
+Test Yield Engine
+Ranks which test actually changes management versus adding noise.
+
+Physician Feedback Learning Engine
+Captures attending corrections and feeds them back into weights/rules.
+
+That set would make the urgent care system feel dramatically closer to real telemedicine operations.
