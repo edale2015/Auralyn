@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Star, Trash2, Plus, BarChart2, List } from "lucide-react";
+import { Loader2, Star, Trash2, Plus, BarChart2, List, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, Cell,
@@ -20,22 +20,57 @@ import {
 } from "recharts";
 
 const COMPLAINTS = [
-  "cough", "sore_throat", "dysuria", "headache", "chest_pain", "abdominal_pain",
-  "back_pain", "joint_pain", "rash", "dizziness", "shortness_of_breath", "fever",
-  "nausea_vomiting", "diarrhea", "ear_pain", "sinus_pressure", "eye_pain",
-  "palpitations", "fatigue", "anxiety", "depression", "insomnia", "urinary_retention",
-  "hematuria", "flank_pain", "vaginal_bleeding", "pelvic_pain", "testicular_pain",
-  "seizure", "syncope", "confusion", "weakness_numbness", "vision_loss", "red_eye",
-  "epistaxis", "nasal_congestion", "wheezing", "hemoptysis", "chest_tightness",
-  "constipation", "dysphagia", "jaundice", "gi_bleeding", "laceration",
-  "fracture_dislocation", "head_injury", "sprain_injury", "cellulitis",
-  "allergic_reaction", "overdose_intoxication", "poisoning_exposure", "withdrawal",
-  "agitation_psychosis", "suicidal_ideation", "hyperglycemia", "hypoglycemia",
-  "thyroid_symptoms", "flu_like", "animal_bite", "heat_illness",
-  "hypothermia_cold_exposure", "uti_symptoms", "sti_exposure", "generalized_weakness",
-  "nausea_malaise", "leg_swelling", "pancreatitis_like", "dental_pain",
-  "pelvic_pain_ovarian_torsion", "prostatitis",
-];
+  // ENT
+  "sore_throat", "ear_pain", "sinus_pressure", "hoarseness", "epistaxis",
+  "nasal_congestion", "tinnitus", "hearing_loss", "stridor", "neck_mass",
+  "peritonsillar_abscess", "foreign_body_ear", "foreign_body_nose", "vertigo",
+  // Pulmonary
+  "cough", "shortness_of_breath", "wheezing", "asthma_exacerbation",
+  "copd_exacerbation", "pneumonia", "bronchitis", "hemoptysis", "pleurisy",
+  "hypoxia", "sleep_disordered_breathing",
+  // Cardiac
+  "chest_pain", "palpitations", "syncope", "atrial_fibrillation",
+  "hypertensive_urgency", "decompensated_heart_failure", "leg_swelling", "bradycardia",
+  // GI
+  "abdominal_pain", "nausea_vomiting", "diarrhea", "constipation", "dysphagia",
+  "jaundice", "gi_bleeding", "rectal_bleeding", "appendicitis_like",
+  "cholecystitis_like", "pancreatitis_like", "bowel_obstruction", "gerd_esophageal",
+  // GU / Renal
+  "uti", "hematuria", "flank_pain", "urinary_retention", "testicular_pain",
+  "vaginal_bleeding", "pelvic_pain", "pelvic_pain_ovarian_torsion", "sti_exposure",
+  "ectopic_pregnancy_concern", "urinary_incontinence", "prostatitis",
+  // Neurology
+  "headache", "headache_thunderclap", "dizziness", "weakness_numbness", "confusion",
+  "seizure", "stroke_like", "vision_loss", "facial_droop", "tremor", "ataxia",
+  "meningitis_concern", "diplopia",
+  // MSK
+  "back_pain", "joint_pain", "shoulder_pain", "knee_pain", "ankle_sprain",
+  "neck_pain", "hip_pain", "fracture_dislocation", "gout_flare",
+  "muscle_weakness", "compartment_syndrome_concern", "wrist_pain",
+  // Dermatology
+  "rash", "cellulitis", "abscess_skin", "urticaria", "shingles", "burns",
+  "wound_infection", "laceration", "insect_bite_reaction", "pressure_ulcer",
+  // Psychiatric / Behavioral
+  "anxiety", "depression", "suicidal_ideation", "agitation_psychosis", "panic_attack",
+  "substance_intoxication", "withdrawal",
+  // Endocrine / Metabolic
+  "hyperglycemia", "hypoglycemia", "thyroid_symptoms", "adrenal_crisis",
+  "metabolic_derangement",
+  // Infections / Systemic
+  "fever", "flu_like", "sepsis_concern", "covid_like", "mononucleosis",
+  "lyme_concern", "animal_bite",
+  // Trauma / Environmental
+  "head_injury", "facial_trauma", "eye_pain", "eye_trauma", "pelvic_fracture",
+  "penetrating_wound", "overdose_intoxication", "poisoning_exposure",
+  "heat_illness", "hypothermia_cold_exposure", "allergic_reaction",
+  // Ophthalmology
+  "red_eye", "acute_glaucoma",
+  // OB / GYN
+  "pregnancy_complication", "postpartum_complication",
+  // General
+  "fatigue", "generalized_weakness", "insomnia", "dental_pain",
+  "foreign_body_ingestion", "cancer_related_symptom",
+].sort();
 
 const DISPOSITIONS = ["ED_IMMEDIATE", "ED_URGENT", "URGENT_CARE", "OFFICE_VISIT", "HOME_CARE", "TELEHEALTH"];
 const CONFIDENCE_LEVELS = ["HIGH", "MEDIUM", "LOW"];
@@ -196,10 +231,38 @@ export default function GoldReviewWorkbench() {
           <h2 className="text-xl font-semibold">Gold Review Workbench</h2>
           <Badge variant="secondary" data-testid="badge-total-golds">{totalGolds} total</Badge>
         </div>
-        <Button onClick={() => setShowForm(!showForm)} data-testid="button-toggle-form">
-          <Plus className="w-4 h-4 mr-2" />
-          {showForm ? "Hide Form" : "New Gold Review"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const url = filterComplaint !== "all"
+                ? `/api/goldReviews/export?format=csv&complaintId=${filterComplaint}`
+                : "/api/goldReviews/export?format=csv";
+              window.open(url, "_blank");
+            }}
+            data-testid="button-export-csv"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5" /> Export CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const url = filterComplaint !== "all"
+                ? `/api/goldReviews/export?format=json&complaintId=${filterComplaint}`
+                : "/api/goldReviews/export?format=json";
+              window.open(url, "_blank");
+            }}
+            data-testid="button-export-json"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5" /> Export JSON
+          </Button>
+          <Button onClick={() => setShowForm(!showForm)} data-testid="button-toggle-form">
+            <Plus className="w-4 h-4 mr-2" />
+            {showForm ? "Hide Form" : "New Gold Review"}
+          </Button>
+        </div>
       </div>
 
       {showForm && (

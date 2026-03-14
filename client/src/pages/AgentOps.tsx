@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Bot, Wrench, ChevronDown, ChevronRight, Link, Play, Plus, Trash2 } from "lucide-react";
+import { Loader2, Bot, Wrench, ChevronDown, ChevronRight, Link, Play, Plus, Trash2, History, RefreshCw } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 
 type Task = {
@@ -92,6 +93,120 @@ function TaskCard({ task }: { task: Task }) {
             {task.error && (
               <div className="text-xs text-destructive bg-destructive/10 rounded-md p-2">{task.error}</div>
             )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface ChainHistoryEntry {
+  id: string;
+  type: "tool" | "chain";
+  tool?: string;
+  steps?: Array<{ tool: string; input: unknown }>;
+  result: unknown;
+  latencyMs: number;
+  error?: string;
+  timestamp: string | null;
+}
+
+function ChainHistory() {
+  const { data, isLoading, refetch, isFetching } = useQuery<{ count: number; history: ChainHistoryEntry[] }>({
+    queryKey: ["/api/langchain/history"],
+    refetchInterval: 60_000,
+  });
+
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const entries = data?.history ?? [];
+
+  return (
+    <Card data-testid="card-chain-history">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <History className="w-4 h-4" /> Chain Run History
+            {entries.length > 0 && (
+              <Badge variant="secondary" className="text-xs">{entries.length}</Badge>
+            )}
+          </CardTitle>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => refetch()} disabled={isFetching} data-testid="button-refresh-chain-history">
+                <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Refresh history</TooltipContent>
+          </Tooltip>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading history…
+          </div>
+        ) : entries.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">No chain runs recorded yet. Run a chain above to see history.</p>
+        ) : (
+          <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+            {entries.map((entry) => {
+              const label = entry.type === "tool" ? entry.tool : `chain (${entry.steps?.length ?? 0} steps)`;
+              const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "—";
+              return (
+                <div
+                  key={entry.id}
+                  className="border rounded-md overflow-hidden"
+                  data-testid={`chain-history-entry-${entry.id}`}
+                >
+                  <button
+                    className="w-full text-left px-3 py-2 flex items-center justify-between hover:bg-muted/40 transition-colors"
+                    onClick={() => setExpanded(expanded === entry.id ? null : entry.id)}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Badge variant={entry.error ? "destructive" : "outline"} className="text-xs font-mono shrink-0">
+                        {entry.type}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground truncate font-mono">{label}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                      <span className="text-xs text-muted-foreground">{entry.latencyMs}ms</span>
+                      <span className="text-xs text-muted-foreground">{ts}</span>
+                      {entry.steps && entry.steps.length > 0 && (
+                        <Badge variant="secondary" className="text-xs">{entry.steps.length} steps</Badge>
+                      )}
+                      {expanded === entry.id ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                    </div>
+                  </button>
+                  {expanded === entry.id && (
+                    <div className="border-t px-3 py-2 space-y-2 bg-muted/20">
+                      {entry.error ? (
+                        <div className="text-xs text-destructive bg-destructive/10 rounded p-2">{entry.error}</div>
+                      ) : (
+                        <div>
+                          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Result</div>
+                          <pre className="text-xs bg-background rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">
+                            {typeof entry.result === "string" ? entry.result : JSON.stringify(entry.result, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                      {entry.steps && entry.steps.length > 0 && (
+                        <div>
+                          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Steps</div>
+                          <div className="space-y-1">
+                            {entry.steps.map((step, i) => (
+                              <div key={i} className="text-xs bg-background rounded p-1.5 flex items-start gap-2">
+                                <span className="font-mono font-semibold text-primary">{step.tool}</span>
+                                <span className="text-muted-foreground truncate">{JSON.stringify(step.input).slice(0, 60)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -378,6 +493,8 @@ export default function AgentOps() {
               </div>
             </CardContent>
           </Card>
+
+          <ChainHistory />
         </TabsContent>
       </Tabs>
     </div>

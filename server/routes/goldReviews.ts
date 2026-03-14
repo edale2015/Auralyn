@@ -33,13 +33,37 @@ goldReviewsRouter.post("/", requireRole(["admin", "physician"]), async (req, res
   }
 });
 
-goldReviewsRouter.get("/", requireRole(["admin", "physician"]), async (req, res) => {
+goldReviewsRouter.get("/export", requireRole(["admin", "physician"]), async (req, res) => {
   try {
+    const format = (req.query.format as string) || "json";
     const complaintId = req.query.complaintId as string | undefined;
     const reviews = await goldReviewStore.list(complaintId);
-    res.json({ count: reviews.length, reviews });
+
+    if (format === "csv") {
+      const headers = [
+        "reviewId", "complaintId", "caseId", "disposition", "topDiagnosis",
+        "mustAskNext", "optionalAskNext", "enoughInfoNow", "tests",
+        "medsConsidered", "medsAvoid", "redFlags", "confidence", "rationale",
+        "createdBy", "createdAt",
+      ];
+      const escape = (v: unknown) => {
+        const s = Array.isArray(v) ? v.join("; ") : String(v ?? "");
+        return `"${s.replace(/"/g, '""')}"`;
+      };
+      const rows = reviews.map((r: any) =>
+        headers.map((h) => escape(r[h])).join(",")
+      );
+      const csv = [headers.join(","), ...rows].join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="gold-reviews-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send(csv);
+    } else {
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="gold-reviews-${new Date().toISOString().slice(0, 10)}.json"`);
+      res.json({ exportedAt: new Date().toISOString(), count: reviews.length, reviews });
+    }
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to list gold reviews" });
+    res.status(500).json({ error: err?.message ?? "Failed to export gold reviews" });
   }
 });
 
@@ -49,6 +73,16 @@ goldReviewsRouter.get("/counts", requireRole(["admin", "physician"]), async (_re
     res.json({ counts });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? "Failed to get counts" });
+  }
+});
+
+goldReviewsRouter.get("/", requireRole(["admin", "physician"]), async (req, res) => {
+  try {
+    const complaintId = req.query.complaintId as string | undefined;
+    const reviews = await goldReviewStore.list(complaintId);
+    res.json({ count: reviews.length, reviews });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Failed to list gold reviews" });
   }
 });
 

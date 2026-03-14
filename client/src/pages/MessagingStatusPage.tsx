@@ -1,11 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, Cell } from "recharts";
-import { MessageSquare, Send, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Zap, RotateCcw } from "lucide-react";
+import { MessageSquare, Send, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Zap, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface ChannelMetrics {
@@ -137,13 +140,51 @@ function ChannelCard({ name, status, icon }: { name: string; status: ChannelStat
   );
 }
 
+interface AlertThresholds {
+  maxFrictionEscalations: number;
+  maxLlmBudgetHits: number;
+  maxInboundPerChannel: number;
+  maxCircuitBreakerActivations: number;
+}
+
+interface MessagingStatusWithAlerts extends MessagingStatus {
+  alerts?: string[];
+  thresholds?: AlertThresholds;
+}
+
 export default function MessagingStatusPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [showThresholds, setShowThresholds] = useState(false);
+  const [localThresholds, setLocalThresholds] = useState<AlertThresholds>({
+    maxFrictionEscalations: 10,
+    maxLlmBudgetHits: 5,
+    maxInboundPerChannel: 1000,
+    maxCircuitBreakerActivations: 3,
+  });
 
-  const { data, isLoading, refetch } = useQuery<MessagingStatus>({
+  const { data, isLoading, refetch } = useQuery<MessagingStatusWithAlerts>({
     queryKey: ["/api/messaging/status"],
     refetchInterval: 30_000,
+  });
+
+  useEffect(() => {
+    if (data?.thresholds && !showThresholds) {
+      setLocalThresholds(data.thresholds);
+    }
+  }, [data?.thresholds]);
+
+  const saveThresholdsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/messaging/thresholds", localThresholds);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Alert thresholds saved" });
+      qc.invalidateQueries({ queryKey: ["/api/messaging/status"] });
+      setShowThresholds(false);
+    },
+    onError: (e: any) => toast({ title: "Failed to save thresholds", description: e?.message, variant: "destructive" }),
   });
 
   const resetMutation = useMutation({
@@ -188,8 +229,60 @@ export default function MessagingStatusPage() {
           <Button variant="outline" size="sm" onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending} data-testid="button-reset-metrics">
             <RotateCcw className="w-4 h-4 mr-1" /> Reset Metrics
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowThresholds((v) => !v)} data-testid="button-thresholds">
+            <SlidersHorizontal className="w-4 h-4 mr-1" /> Thresholds
+          </Button>
         </div>
       </div>
+
+      {showThresholds && (
+        <Card data-testid="card-thresholds">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <SlidersHorizontal className="w-4 h-4" /> Alert Thresholds
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { key: "maxFrictionEscalations", label: "Max Friction Escalations" },
+                { key: "maxLlmBudgetHits", label: "Max LLM Budget Hits" },
+                { key: "maxInboundPerChannel", label: "Max Inbound / Channel" },
+                { key: "maxCircuitBreakerActivations", label: "Max CB Activations" },
+              ].map(({ key, label }) => (
+                <div key={key} className="space-y-1">
+                  <Label className="text-xs">{label}</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={(localThresholds as any)[key]}
+                    onChange={(e) => setLocalThresholds({ ...localThresholds, [key]: Number(e.target.value) })}
+                    className="h-8 text-sm"
+                    data-testid={`input-threshold-${key}`}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-3">
+              <Button size="sm" onClick={() => saveThresholdsMutation.mutate()} disabled={saveThresholdsMutation.isPending} data-testid="button-save-thresholds">
+                Save Thresholds
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowThresholds(false)}>Cancel</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {data?.alerts && data.alerts.length > 0 && (
+        <div className="space-y-1.5" data-testid="section-alerts">
+          {data.alerts.map((alert, i) => (
+            <div key={i} className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2" data-testid={`alert-${i}`}>
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              {alert}
+            </div>
+          ))}
+        </div>
+      )}
 
       {data && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

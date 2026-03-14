@@ -117,6 +117,8 @@ import adaptiveQuestionLearningRoutes from "./routes/adaptiveQuestionLearningRou
 import clinicalEnginesRoutes from "./routes/clinicalEnginesRoutes";
 import { messagingStatusRouter } from "./routes/messagingStatus";
 import { langchainRouter } from "./routes/langchainRoutes";
+import { sseQueueRouter } from "./routes/sseQueue";
+import { physicianAnalyticsRouter } from "./routes/physicianAnalytics";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -339,6 +341,8 @@ app.use(adaptiveQuestionLearningRoutes);
 app.use(clinicalEnginesRoutes);
 app.use(messagingStatusRouter);
 app.use(langchainRouter);
+app.use(sseQueueRouter);
+app.use(physicianAnalyticsRouter);
 console.log("[ClinicalEngines] Temporal, Risk, Timeline, Consensus, Resources, Epi, Triage, Feedback routes registered");
 console.log("[Completion Modules] State, Intake, Pathways, Copilot, Predictive, RL, Telemedicine, Self-Improve routes registered");
 app.use("/telegram", telegramRouter);
