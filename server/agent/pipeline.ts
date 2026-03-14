@@ -334,12 +334,20 @@ export async function initializePipeline(
       availableQuestions,
     });
 
-    if (brainOutput.similarity)      updated.similarity        = brainOutput.similarity;
-    if (brainOutput.differentials)   updated.differentials     = brainOutput.differentials;
+    if (brainOutput.similarity)           updated.similarity            = brainOutput.similarity;
+    if (brainOutput.memoryCases)          updated.memoryCases           = brainOutput.memoryCases;
+    if (brainOutput.differentials)        updated.differentials         = brainOutput.differentials;
+    if (brainOutput.evidenceResults)      updated.evidenceResults       = brainOutput.evidenceResults;
     if (brainOutput.nextQuestion !== undefined) updated.nextBestQuestion = brainOutput.nextQuestion;
-    if (brainOutput.questionRankings) updated.questionRankings = brainOutput.questionRankings;
-    if (brainOutput.redFlags?.length) updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];
-    if (brainOutput.disposition)     updated.disposition       = brainOutput.disposition;
+    if (brainOutput.questionRankings)     updated.questionRankings      = brainOutput.questionRankings;
+    if (brainOutput.redFlags?.length)     updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];
+    if (brainOutput.disposition)          updated.disposition           = brainOutput.disposition;
+    if (brainOutput.uncertainty)          updated.clinicalUncertainty   = brainOutput.uncertainty;
+    if (brainOutput.normalizedSymptoms)   updated.normalizedSymptoms    = brainOutput.normalizedSymptoms;
+    if (brainOutput.safetyGuardTrigger !== undefined) updated.safetyGuardTrigger = brainOutput.safetyGuardTrigger;
+    if (brainOutput.treatments)           updated.treatments            = brainOutput.treatments;
+    if (brainOutput.tests)                updated.tests                 = brainOutput.tests;
+    if (brainOutput.returnPrecautions)    updated.returnPrecautions     = brainOutput.returnPrecautions;
 
     events.push({
       type: "CLINICAL_BRAIN_COMPLETE",

@@ -1,0 +1,178 @@
+const SYNONYM_MAP: Record<string, string> = {
+  // Chest / Cardiac
+  "chest tightness":              "chest_pain",
+  "chest pressure":               "chest_pain",
+  "pressure in chest":            "chest_pain",
+  "tightness in chest":           "chest_pain",
+  "chest squeezing":              "chest_pain",
+  "heavy chest":                  "chest_pain",
+  "substernal pain":              "chest_pain",
+  "left arm pain":                "left_arm_radiation",
+  "arm radiation":                "left_arm_radiation",
+  "jaw pain":                     "left_arm_radiation",
+  "sweating":                     "diaphoresis",
+  "sweaty":                       "diaphoresis",
+  "palpitations":                 "palpitations",
+  "heart racing":                 "palpitations",
+  "heart pounding":               "palpitations",
+  "rapid heartbeat":              "palpitations",
+  "irregular heartbeat":          "palpitations",
+  "passing out":                  "syncope",
+  "loss of consciousness":        "syncope",
+  "blacked out":                  "syncope",
+  "fainting":                     "syncope",
+
+  // Respiratory
+  "can't breathe":                "dyspnea",
+  "trouble breathing":            "dyspnea",
+  "short of breath":              "dyspnea",
+  "shortness of breath":          "dyspnea",
+  "breathlessness":               "dyspnea",
+  "winded":                       "dyspnea",
+  "noisy breathing":              "wheezing",
+  "whistling breath":             "wheezing",
+  "blood in sputum":              "hemoptysis",
+  "coughing up blood":            "hemoptysis",
+  "coughing up mucus":            "productive_cough",
+  "wet cough":                    "productive_cough",
+  "productive cough":             "productive_cough",
+  "dry cough":                    "cough",
+  "pleurisy":                     "pleuritic_pain",
+  "sharp chest pain breathing":   "pleuritic_pain",
+
+  // ENT
+  "sore throat":                  "sore_throat",
+  "throat pain":                  "sore_throat",
+  "painful swallowing":           "sore_throat",
+  "can't swallow":                "dysphagia",
+  "runny nose":                   "nasal_congestion",
+  "stuffy nose":                  "nasal_congestion",
+  "nose blocked":                 "nasal_congestion",
+  "congestion":                   "nasal_congestion",
+  "sinus pain":                   "facial_pain",
+  "sinus pressure":               "facial_pain",
+  "yellow discharge nose":        "purulent_discharge",
+  "green mucus":                  "purulent_discharge",
+  "ear ache":                     "ear_pain",
+  "ear hurts":                    "ear_pain",
+  "ear draining":                 "ear_discharge",
+  "can't hear":                   "hearing_loss",
+  "muffled hearing":              "hearing_loss",
+  "drooling":                     "drooling",
+  "noisy throat":                 "stridor",
+  "high-pitched breathing":       "stridor",
+  "hoarse voice":                 "hoarseness",
+  "voice change":                 "hoarseness",
+
+  // GI
+  "throwing up":                  "vomiting",
+  "nausea and vomiting":          "vomiting",
+  "stomach pain":                 "abdominal_pain",
+  "belly pain":                   "abdominal_pain",
+  "abdominal cramps":             "abdominal_pain",
+  "loose stool":                  "diarrhea",
+  "watery stool":                 "diarrhea",
+  "frequent stool":               "diarrhea",
+  "blood in stool":               "bloody_diarrhea",
+  "bloody stool":                 "bloody_diarrhea",
+  "right side pain":              "right_lower_quadrant",
+  "lower right pain":             "right_lower_quadrant",
+  "upper right pain":             "right_upper_quadrant",
+  "tenderness on pressure":       "rebound_tenderness",
+
+  // GU
+  "burning urination":            "dysuria",
+  "pain when peeing":             "dysuria",
+  "burning when peeing":          "dysuria",
+  "painful urination":            "dysuria",
+  "frequent urination":           "urinary_frequency",
+  "urge to urinate":              "urinary_urgency",
+  "blood in urine":               "hematuria",
+  "pink urine":                   "hematuria",
+  "flank pain":                   "back_pain",
+  "groin pain":                   "testicular_pain",
+  "testicle pain":                "testicular_pain",
+  "testicular swelling":          "testicular_pain",
+  "pelvic pressure":              "pelvic_pain",
+  "lower pelvic pain":            "pelvic_pain",
+
+  // Neuro
+  "headache":                     "headache",
+  "head pain":                    "headache",
+  "worst headache of my life":    "thunderclap_headache",
+  "thunderclap":                  "thunderclap_headache",
+  "sudden severe headache":       "thunderclap_headache",
+  "stiff neck":                   "neck_stiffness",
+  "neck stiff":                   "neck_stiffness",
+  "light sensitivity":            "photophobia",
+  "sensitive to light":           "photophobia",
+  "weak arm":                     "focal_weakness",
+  "weak leg":                     "focal_weakness",
+  "face drooping":                "facial_droop",
+  "face droop":                   "facial_droop",
+  "slurred speech":               "speech_difficulty",
+  "trouble speaking":             "speech_difficulty",
+  "vision changes":               "sudden_vision_change",
+  "blurry vision":                "sudden_vision_change",
+  "double vision":                "sudden_vision_change",
+  "seizure":                      "seizure",
+  "convulsion":                   "seizure",
+  "confusion":                    "altered_mentation",
+  "disoriented":                  "altered_mentation",
+  "altered mental status":        "altered_mentation",
+
+  // Eye
+  "red eye":                      "eye_redness",
+  "pink eye":                     "eye_redness",
+  "eye discharge":                "eye_discharge",
+  "eye goop":                     "eye_discharge",
+  "crusty eye":                   "eye_discharge",
+  "eye hurts":                    "eye_pain",
+  "painful eye":                  "eye_pain",
+  "can't see":                    "vision_loss",
+  "lost vision":                  "vision_loss",
+
+  // Skin
+  "hives":                        "urticaria",
+  "itchy skin":                   "urticaria",
+  "blister":                      "vesicular_rash",
+  "blisters":                     "vesicular_rash",
+  "bull's eye rash":              "erythema_migrans",
+  "ring rash":                    "erythema_migrans",
+  "pinpoint spots":               "petechiae",
+
+  // Constitutional
+  "high fever":                   "high_fever",
+  "temperature":                  "fever",
+  "chills":                       "fever",
+  "dizziness":                    "dizziness",
+  "dizzy":                        "dizziness",
+  "room spinning":                "vertigo",
+  "spinning":                     "vertigo",
+  "spinning sensation":           "vertigo",
+  "fatigue":                      "fatigue",
+  "tired":                        "fatigue",
+  "weight loss":                  "weight_loss",
+  "losing weight":                "weight_loss",
+  "increased thirst":             "polydipsia",
+  "urinating a lot":              "polyuria",
+
+  // Allergic
+  "throat closing":               "throat_tightness",
+  "throat swelling":              "throat_tightness",
+  "tongue swelling":              "tongue_swelling",
+  "swollen tongue":               "tongue_swelling",
+};
+
+export function normalizeSymptom(input: string): string {
+  const lower = input.toLowerCase().trim();
+  return SYNONYM_MAP[lower] ?? lower.replace(/\s+/g, "_");
+}
+
+export function normalizeSymptoms(inputs: string[]): string[] {
+  return inputs.map(normalizeSymptom);
+}
+
+export function getSynonymMap(): Record<string, string> {
+  return { ...SYNONYM_MAP };
+}

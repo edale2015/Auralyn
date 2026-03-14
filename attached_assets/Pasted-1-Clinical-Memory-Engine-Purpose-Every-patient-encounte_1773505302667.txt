@@ -1,0 +1,383 @@
+1. Clinical Memory Engine
+
+Purpose:
+
+Every patient encounter becomes a learning case.
+
+It stores
+
+symptoms
+
+answers
+
+differential
+
+final outcome
+
+correctness
+
+similar cases
+
+Later the system can:
+
+retrieve similar cases
+
+adjust priors
+
+learn question usefulness
+
+improve disposition accuracy
+
+Think of this as your system’s long-term medical memory.
+
+Create File
+server/core/clinicalMemoryEngine.ts
+import fs from "fs";
+import path from "path";
+
+const MEMORY_PATH = path.join(process.cwd(), "clinical_memory.ndjson");
+
+export interface ClinicalCase {
+
+  complaint: string
+
+  answers: Record<string, any>
+
+  predictedDifferentials: any[]
+
+  predictedDisposition: string
+
+  finalDiagnosis?: string
+
+  finalDisposition?: string
+
+  outcomeKnown?: boolean
+
+  timestamp: string
+}
+
+export function storeClinicalCase(caseData: ClinicalCase) {
+
+  const line = JSON.stringify(caseData)
+
+  fs.appendFileSync(MEMORY_PATH, line + "\n")
+}
+
+export function loadClinicalMemory(): ClinicalCase[] {
+
+  if (!fs.existsSync(MEMORY_PATH)) return []
+
+  const lines = fs.readFileSync(MEMORY_PATH, "utf8").split("\n")
+
+  return lines
+    .filter(Boolean)
+    .map(l => JSON.parse(l))
+}
+
+export function findSimilarMemoryCases(
+  complaint: string,
+  answers: Record<string, any>,
+  limit = 5
+) {
+
+  const cases = loadClinicalMemory()
+
+  const scored = cases.map(c => {
+
+    let score = 0
+
+    if (c.complaint === complaint) score += 2
+
+    for (const k of Object.keys(answers)) {
+
+      if (answers[k] === c.answers[k]) score += 1
+    }
+
+    return { case: c, score }
+  })
+
+  return scored
+    .sort((a,b)=>b.score-a.score)
+    .slice(0,limit)
+}
+2. Connect Memory to Clinical Brain
+
+Update clinicalBrainEngine.ts
+
+Add:
+
+import { storeClinicalCase } from "./clinicalMemoryEngine"
+import { findSimilarMemoryCases } from "./clinicalMemoryEngine"
+
+Inside engine before reasoning:
+
+const memoryCases = findSimilarMemoryCases(
+  input.complaint,
+  input.answers
+)
+
+state.memorySimilarCases = memoryCases
+
+At end of visit:
+
+storeClinicalCase({
+
+ complaint: input.complaint,
+
+ answers: input.answers,
+
+ predictedDifferentials: result.differentials,
+
+ predictedDisposition: result.disposition,
+
+ timestamp: new Date().toISOString()
+
+})
+
+Now the system learns from every case.
+
+3. Improve Self-Improving Module
+
+Your system already has
+
+adaptiveQuestionEngine
+learn-token-aliases
+calibration-report
+close-the-loop-report
+
+That’s great. But the learning loop is incomplete.
+
+A full clinical learning loop requires:
+
+prediction
+↓
+outcome
+↓
+comparison
+↓
+model adjustment
+
+Add this module:
+
+server/core/outcomeLearningEngine.ts
+import { loadClinicalMemory } from "./clinicalMemoryEngine"
+
+export function generateLearningReport() {
+
+  const cases = loadClinicalMemory()
+
+  let correct = 0
+
+  let total = 0
+
+  for (const c of cases) {
+
+    if (!c.outcomeKnown) continue
+
+    total++
+
+    if (c.finalDisposition === c.predictedDisposition) {
+      correct++
+    }
+  }
+
+  return {
+
+    totalCases: total,
+
+    accuracy: total ? correct / total : 0
+  }
+}
+
+This powers model improvement dashboards.
+
+4. Critical Upgrades for Urgent Care Telemedicine
+
+Before adding more complaints, you must stabilize clinical reliability layers.
+
+These matter far more.
+
+1️⃣ Symptom ontology
+
+Right now answers are raw text.
+
+You need normalized tokens.
+
+Example
+
+shortness_of_breath
+pleuritic_pain
+exertional_chest_pain
+burning_urination
+
+Create
+
+server/data/symptomOntology.ts
+
+This dramatically improves reasoning.
+
+2️⃣ Complaint bundles
+
+Your Google Sheets already contain:
+
+complaint
+differentials
+red flags
+questions
+medications
+disposition rules
+
+But they must compile into runtime objects.
+
+Add compiler:
+
+scripts/compileSheetsToClinicalBundles.ts
+
+Outputs
+
+server/data/complaintBundles.json
+
+Then pipeline loads bundles dynamically.
+
+3️⃣ Uncertainty engine
+
+Doctors escalate when uncertain.
+
+Add entropy calculation.
+
+Example:
+
+function entropy(probabilities:number[]) {
+
+ let e = 0
+
+ for (const p of probabilities){
+
+   if (p>0) e -= p*Math.log(p)
+ }
+
+ return e
+}
+
+If entropy high → ask more questions.
+
+4️⃣ Disposition guardrail layer
+
+Add rule:
+
+high risk symptoms → ER override
+
+Examples:
+
+chest pain + diaphoresis
+severe headache + neuro deficit
+testicular pain sudden onset
+
+These must bypass reasoning.
+
+5. Should You Add More Complaints?
+
+Short answer:
+
+Yes, but only after stabilizing reasoning.
+
+Your system should reach:
+
+20 complaints working perfectly
+
+before expanding to
+
+100 complaints
+Best urgent care complaint set
+
+Start with these 20:
+
+chest pain
+shortness of breath
+cough
+sore throat
+sinus pressure
+fever
+abdominal pain
+vomiting
+diarrhea
+headache
+dizziness
+back pain
+pelvic pain
+testicular pain
+UTI symptoms
+rash
+ear pain
+eye redness
+dental pain
+medication refill
+
+You already have most of these.
+
+6. Expand Google Sheets Usage
+
+Your Sheets likely contain unused data.
+
+You should import:
+
+red flags
+differential clusters
+scoring rules
+medication suggestions
+follow-up intervals
+return precautions
+
+These become:
+
+clinical knowledge graph
+7. Architecture After Upgrades
+
+Your system becomes:
+
+User
+↓
+Normalizer
+↓
+Complaint Bundle
+↓
+Clinical Brain
+   ├ similarity
+   ├ Bayesian differential
+   ├ memory retrieval
+   ├ red flag safety
+   ├ uncertainty calculation
+   └ next question
+↓
+Telemedicine Layer
+   ├ note generation
+   ├ medication safety
+   ├ coding
+   └ discharge instructions
+↓
+Memory Storage
+↓
+Learning Engine
+8. Broadening to Other Fields
+
+You actually designed a general decision intelligence engine.
+
+It can run:
+
+medicine
+legal triage
+technical support
+financial advising
+education tutoring
+
+Because the structure is:
+
+knowledge graph
++
+question engine
++
+probability engine
++
+memory
+
+This is a universal reasoning architecture.

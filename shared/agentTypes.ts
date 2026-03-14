@@ -115,9 +115,17 @@ export const CaseStateSchema = z.object({
   // Clinical Brain Engine outputs
   similarity: z.any().optional(),
   differentials: z.array(z.any()).optional(),
+  evidenceResults: z.array(z.any()).optional(),
+  memoryCases: z.array(z.any()).optional(),
   nextBestQuestion: z.string().nullable().optional(),
   questionRankings: z.array(z.any()).optional(),
   safetyWarnings: z.array(z.any()).optional(),
+  normalizedSymptoms: z.array(z.string()).optional(),
+  safetyGuardTrigger: z.string().nullable().optional(),
+  clinicalUncertainty: z.any().optional(),
+  treatments: z.array(z.any()).optional(),
+  tests: z.array(z.any()).optional(),
+  returnPrecautions: z.array(z.any()).optional(),
 
   requiredQuestionIdsMissing: z.array(z.string()).default([]),
   recommendedActions: z.array(z.object({

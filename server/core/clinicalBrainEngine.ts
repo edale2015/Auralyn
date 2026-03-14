@@ -3,6 +3,14 @@ import { computeDifferentialProbabilities, type DifferentialCandidate } from "..
 import { selectNextBestQuestion, type NextBestQuestionResult } from "../services/diagnostic/nextBestQuestionEngine";
 import { detectRedFlags } from "../agent/safety/redFlags";
 import { logBrainDecision } from "./brainAuditLog";
+import { storeClinicalCase, findSimilarMemoryCases } from "./clinicalMemoryEngine";
+import { normalizeSymptoms } from "./symptomNormalizationEngine";
+import { safetyGuard } from "./clinicalSafetyGuard";
+import { diagnosticEvidenceEngine, type EvidenceResult } from "./diagnosticEvidenceEngine";
+import { computeUncertainty, type UncertaintyResult } from "./uncertaintyEngine";
+import { getBulkRecommendations, type TreatmentRecommendation } from "./treatmentEngine";
+import { prioritizeTests } from "./testRecommendationEngine";
+import { generateBulkReturnPrecautions } from "./returnPrecautionEngine";
 
 export interface BrainInput {
   complaint: string;
@@ -13,19 +21,72 @@ export interface BrainInput {
 }
 
 export interface BrainOutput {
+  // Core reasoning
   similarity?: any;
+  memoryCases?: Array<{ case: any; score: number }>;
   differentials?: DifferentialCandidate[];
+  evidenceResults?: EvidenceResult[];
   nextQuestion?: string | null;
   questionRankings?: NextBestQuestionResult["rankings"];
   redFlags?: string[];
   disposition?: string;
+
+  // Uncertainty
+  uncertainty?: UncertaintyResult;
+
+  // Clinical recommendations
+  treatments?: TreatmentRecommendation[];
+  tests?: Array<{ test: string; priority: "urgent" | "routine"; supportingDx: string[] }>;
+  returnPrecautions?: Array<{ diagnosis: string; precautions: string[] }>;
+
+  // Safety guard
+  safetyGuardTrigger?: string | null;
+  normalizedSymptoms?: string[];
 }
 
 export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> {
   const { state, answers, differentialCandidates, availableQuestions } = input;
   const result: BrainOutput = {};
+  const timestamp = new Date().toISOString();
 
-  // ─── 1. Case Similarity Engine ─────────────────────────────────────────────
+  // ─── 1. Symptom Normalization ───────────────────────────────────────────────
+  const rawSymptoms = Object.keys(answers).filter((k) => answers[k] === true || answers[k] === "yes");
+  const normalizedSyms = normalizeSymptoms(rawSymptoms);
+  result.normalizedSymptoms = normalizedSyms;
+
+  // ─── 2. Clinical Safety Guard — hard overrides before any reasoning ────────
+  try {
+    const guard = safetyGuard(normalizedSyms);
+    if (guard.disposition === "ER_NOW") {
+      result.disposition = "ER_NOW";
+      result.safetyGuardTrigger = guard.triggerRule;
+      result.redFlags = guard.matchedSymptoms;
+      logBrainDecision({ disposition: "ER_NOW", safetyRule: guard.triggerRule, symptoms: normalizedSyms });
+      storeClinicalCase({
+        complaint: input.complaint,
+        answers,
+        predictedDifferentials: [],
+        predictedDisposition: "ER_NOW",
+        timestamp,
+      });
+      return result;
+    }
+  } catch (err) {
+    console.warn("[Brain] Safety guard failed:", (err as Error).message);
+  }
+
+  // ─── 3. Memory Retrieval — learn from past similar cases ──────────────────
+  try {
+    const memoryCases = findSimilarMemoryCases(input.complaint, answers, 5);
+    result.memoryCases = memoryCases;
+    if (memoryCases.length > 0) {
+      state.memorySimilarCases = memoryCases;
+    }
+  } catch (err) {
+    console.warn("[Brain] Memory retrieval failed:", (err as Error).message);
+  }
+
+  // ─── 4. Case Similarity Engine — vector-style case matching ───────────────
   try {
     const sim = await findSimilarCasesForState(state, 5);
     result.similarity = sim;
@@ -36,7 +97,24 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Similarity engine failed:", (err as Error).message);
   }
 
-  // ─── 2. Bayesian Differential Engine ───────────────────────────────────────
+  // ─── 5. Knowledge Graph Evidence Engine ───────────────────────────────────
+  try {
+    const evidenceResults = diagnosticEvidenceEngine(normalizedSyms, answers);
+    result.evidenceResults = evidenceResults;
+    // Augment differentialCandidates with graph results for Bayesian step
+    for (const ev of evidenceResults) {
+      if (!differentialCandidates.some((d) => d.clusterId === ev.diagnosis)) {
+        differentialCandidates.push({ clusterId: ev.diagnosis, score: ev.graphScore });
+      } else {
+        const existing = differentialCandidates.find((d) => d.clusterId === ev.diagnosis)!;
+        existing.score = Math.max(existing.score, ev.graphScore);
+      }
+    }
+  } catch (err) {
+    console.warn("[Brain] Evidence engine failed:", (err as Error).message);
+  }
+
+  // ─── 6. Bayesian Differential Engine ──────────────────────────────────────
   let differentials: DifferentialCandidate[] | undefined;
   try {
     differentials = computeDifferentialProbabilities(differentialCandidates, answers);
@@ -45,32 +123,54 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Differential engine failed:", (err as Error).message);
   }
 
-  // ─── 3. Next-Best-Question Selector ────────────────────────────────────────
+  // ─── 7. Uncertainty Engine — decide if we need more information ────────────
   try {
-    const nbq = selectNextBestQuestion(differentialCandidates, answers, availableQuestions);
-    result.nextQuestion = nbq.bestQuestion;
-    result.questionRankings = nbq.rankings;
+    const uncertainty = computeUncertainty(differentials ?? []);
+    result.uncertainty = uncertainty;
+    state.clinicalUncertainty = uncertainty;
   } catch (err) {
-    console.warn("[Brain] Next-question engine failed:", (err as Error).message);
+    console.warn("[Brain] Uncertainty engine failed:", (err as Error).message);
   }
 
-  // ─── 4. Red Flag Safety Layer ──────────────────────────────────────────────
+  // ─── 8. Red Flag Safety Layer (rule-based, using full state) ──────────────
   try {
     const flags = detectRedFlags(state);
     result.redFlags = flags;
     if (flags?.length > 0) {
       result.disposition = "ER_NOW";
-      logBrainDecision({ differentials: result.differentials, disposition: result.disposition, redFlags: flags });
+      logBrainDecision({ differentials: result.differentials, disposition: "ER_NOW", redFlags: flags });
+      storeClinicalCase({
+        complaint: input.complaint,
+        answers,
+        predictedDifferentials: result.differentials ?? [],
+        predictedDisposition: "ER_NOW",
+        timestamp,
+      });
       return result;
     }
   } catch (err) {
     console.warn("[Brain] Red flag engine failed:", (err as Error).message);
   }
 
-  // ─── 5. Disposition Logic ──────────────────────────────────────────────────
+  // ─── 9. Next-Best-Question Selector ───────────────────────────────────────
+  try {
+    // Only ask more questions if uncertain or no strong leading diagnosis
+    const shouldAsk = result.uncertainty?.recommendation !== "confident";
+    if (shouldAsk && availableQuestions.length > 0) {
+      const nbq = selectNextBestQuestion(differentialCandidates, answers, availableQuestions);
+      result.nextQuestion = nbq.bestQuestion;
+      result.questionRankings = nbq.rankings;
+    }
+  } catch (err) {
+    console.warn("[Brain] Next-question engine failed:", (err as Error).message);
+  }
+
+  // ─── 10. Disposition Logic ─────────────────────────────────────────────────
   if (differentials && differentials.length > 0) {
     const top = differentials[0];
-    if (top.posteriorProbability > 0.6) {
+    if (result.uncertainty?.recommendation === "ask_more") {
+      result.disposition = "NEEDS_MORE_INFO";
+    } else if (top.posteriorProbability > 0.6) {
       result.disposition = "LIKELY_OUTPATIENT";
     } else if (top.posteriorProbability > 0.3) {
       result.disposition = "URGENT_CARE";
@@ -79,6 +179,35 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     }
   }
 
-  logBrainDecision({ differentials: result.differentials, disposition: result.disposition });
+  // ─── 11. Treatment & Test Recommendations ─────────────────────────────────
+  try {
+    const topDx = (differentials ?? []).slice(0, 5);
+    result.treatments = getBulkRecommendations(topDx);
+    result.tests = prioritizeTests(topDx);
+    result.returnPrecautions = generateBulkReturnPrecautions(topDx);
+  } catch (err) {
+    console.warn("[Brain] Recommendation engines failed:", (err as Error).message);
+  }
+
+  // ─── 12. Store in Clinical Memory ─────────────────────────────────────────
+  try {
+    storeClinicalCase({
+      complaint: input.complaint,
+      answers,
+      predictedDifferentials: result.differentials ?? [],
+      predictedDisposition: result.disposition ?? "UNKNOWN",
+      timestamp,
+    });
+  } catch (err) {
+    console.warn("[Brain] Memory store failed:", (err as Error).message);
+  }
+
+  logBrainDecision({
+    differentials: result.differentials?.slice(0, 3),
+    disposition: result.disposition,
+    uncertainty: result.uncertainty?.entropy,
+    safetyGuardTrigger: result.safetyGuardTrigger,
+  });
+
   return result;
 }
