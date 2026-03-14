@@ -78,6 +78,7 @@ import RLPolicyPage from "@/pages/RLPolicyPage";
 import CarePathwayPage from "@/pages/CarePathwayPage";
 import ClinicalCopilotPage from "@/pages/ClinicalCopilotPage";
 import PredictiveRiskPage from "@/pages/PredictiveRiskPage";
+import MessagingStatusPage from "@/pages/MessagingStatusPage";
 import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import NotFound from "@/pages/not-found";
@@ -169,6 +170,7 @@ function Router() {
       <Route path="/clinical-copilot">{() => <AdminPage component={ClinicalCopilotPage} />}</Route>
       <Route path="/predictive-risk">{() => <AdminPage component={PredictiveRiskPage} />}</Route>
       <Route path="/debug/traces">{() => <AdminPage component={TraceViewer} />}</Route>
+      <Route path="/messaging-status">{() => <AdminPage component={MessagingStatusPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

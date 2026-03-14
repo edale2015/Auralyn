@@ -6,6 +6,40 @@
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
+## Recent Enhancements (March 2026)
+
+### GoldReviewWorkbench Visual Analytics (`/gold-reviews`)
+- Added "Browse" / "Visualize" tab split using shadcn Tabs
+- Visualize tab includes: disposition distribution bar chart (colored by severity), confidence level pie chart, reviews-by-complaint bar chart (top 12), and top diagnoses frequency table
+- All charts powered by `recharts`, computed from `useMemo` over all gold reviews
+
+### MicrosoftAgentOps Rebuild (`/ms-agent-ops`)
+- Complete rebuild with 4-tab interface: Sessions | Clinical Reasoning | Case Review | Chart Builder
+- Sessions tab: lists all agent sessions with step trace expansion
+- Clinical Reasoning tab: symptom/history input → POST `/api/msAgentTasks/reason` → confidence bar + evidence lists
+- Case Review tab: case ID input → POST `/api/msAgentTasks/review/:caseId` → priority-badged suggestion list
+- Chart Builder tab: case ID input → POST `/api/msAgentTasks/chart/:caseId` → structured chart sections
+
+### AgentOps Rebuild (`/agent-ops`)
+- Rebuilt with 3 tabs: Tasks | Tool Registry | LangChain
+- Tasks tab: instruction input + expandable task cards with tool call traces and JSON results
+- Tool Registry tab: grid of registered clinical agent tools with category color badges
+- LangChain tab: single tool runner (tool selection + JSON input) and multi-step chain builder
+
+### Messaging Status Dashboard (`/messaging-status`)
+- New page accessible from Operations sidebar under "Channel Status"
+- Shows WhatsApp and Telegram channel configuration and runtime metrics from `getChannelOpsTracker()`
+- Summary stats: total inbound, friction escalations, circuit breaker status
+- Channel metrics: inbound count, LLM calls, avg/P95 latency, friction escalations, CB activations, tokens, budget hits
+- Bar chart of message volume per channel; auto-refreshes every 30s
+- Backend: `GET /api/messaging/status` and `POST /api/messaging/reset-metrics`
+
+### LangChain-Compatible API (`/api/langchain/...`)
+- `server/langchain/triageTools.ts`: LangChain-schema tool definitions for clinical_reasoning, get_case_summary, list_recent_cases, analyze_complaint, plus all registered agent tools
+- `GET /api/langchain/tools`: returns tools in LangChain JSON Schema format
+- `POST /api/langchain/run`: execute a single tool with input
+- `POST /api/langchain/chain`: execute a sequential chain of up to 10 tools
+
 ## System Architecture
 
 ### Core Architecture

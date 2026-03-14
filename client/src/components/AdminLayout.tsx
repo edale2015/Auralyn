@@ -95,6 +95,7 @@ const NAV_SECTIONS = [
       { path: "/runtime-analytics", label: "Runtime Analytics", icon: TrendingUp },
       { path: "/notifications", label: "Notifications", icon: Bell },
       { path: "/message-ops", label: "Messages", icon: MessageSquare },
+      { path: "/messaging-status", label: "Channel Status", icon: MessageSquare },
       { path: "/shadow-mode-ops", label: "Shadow Mode", icon: Eye },
     ],
   },
