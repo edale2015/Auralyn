@@ -1,0 +1,118 @@
+We have completed the development of the telemedicine operations cockpit module.
+
+Do NOT rewrite existing working code.
+
+Add the following features exactly as described.
+
+System stack:
+Node + Express backend
+React frontend
+Drizzle ORM
+Postgres
+TypeScript
+
+Goals of this update:
+1. production readiness validation
+2. staging validation runner
+3. template recommendation analytics
+4. multilingual template library
+5. translation provider integration
+6. EHR retry/dead-letter worker
+7. reminder suppression
+8. bulk preview safety layer
+
+Create or update these files exactly.
+
+BACKEND FILES
+
+server/config/env.ts
+server/config/startupChecks.ts
+server/config/providerKeys.ts
+
+server/lib/apiError.ts
+server/lib/retry.ts
+server/lib/auditHash.ts
+
+server/middleware/
+  validateBody.ts
+  rateLimit.ts
+  idempotency.ts
+  errorHandler.ts
+  notFoundHandler.ts
+
+server/services/
+  translationAdapter.ts
+  ehrAdapter.ts
+  dispatchSyncService.ts
+  providerHealthService.ts
+  migrationCheckService.ts
+  healthBundleService.ts
+  templateSeedRunnerService.ts
+  stagingValidationService.ts
+  workflowSmokeTestService.ts
+  stagingValidationRunnerService.ts
+  recommendationAnalyticsService.ts
+  translationProviderConfigService.ts
+  ehrDeadLetterService.ts
+  reminderTimelineService.ts
+  multilingualTemplateCrudService.ts
+  templateRankingV2Service.ts
+  translationRealProviderService.ts
+  multilingualTemplateLibraryService.ts
+  ehrRetryService.ts
+  bulkActionPreviewService.ts
+
+server/routes/
+  health.ts
+  productionReadiness.ts
+  stagingValidationRunner.ts
+  recommendationAnalytics.ts
+  translationProviderConfig.ts
+  ehrDeadLetter.ts
+  reminderTimeline.ts
+  multilingualTemplateCrud.ts
+  templateRankingV2.ts
+  multilingualTemplates.ts
+  ehrRetry.ts
+  bulkActionPreview.ts
+  bulkMessaging.ts
+  smartReminderSuppression.ts
+
+FRONTEND FILES
+
+client/src/components/
+  ErrorBoundary.tsx
+  LoadingCardSkeleton.tsx
+  EmptyState.tsx
+  PageShell.tsx
+  ToastProvider.tsx
+  useKeyboardShortcuts.ts
+  useCockpitAutoRefresh.ts
+  StatusChip.tsx
+  SectionHeader.tsx
+  CompactMetricRow.tsx
+  CardGrid.tsx
+  BulkActionPreviewModal.tsx
+  TemplateRecommendationsPanel.tsx
+  PatientLanguagePanel.tsx
+  BulkQueueActionsBar.tsx
+  MiniSparklineStrip.tsx
+
+client/src/pages/
+  ProductionReadinessPage.tsx
+  RecommendationAnalyticsDashboardPage.tsx
+  EhrDeadLetterReviewPage.tsx
+  ReminderTimelineInspectorPage.tsx
+  MultilingualTemplateAuthoringPage.tsx
+  OperationsCockpitPage.tsx
+
+scripts/
+  staging_smoke_test.mjs
+
+Add the staging validation button to the Production Readiness page.
+
+Ensure all routes are registered in server/routes.ts.
+
+Do NOT remove any existing routes.
+
+After writing the files, run a compile check.

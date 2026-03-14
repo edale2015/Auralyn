@@ -56,6 +56,12 @@ import TelemedicineDoctorDashboard from "@/pages/TelemedicineDoctorDashboard";
 import RapidTelemedicineConsole from "@/pages/RapidTelemedicineConsole";
 import TelemedicineSplitPaneConsole from "@/pages/TelemedicineSplitPaneConsole";
 import AcceptanceSlaDashboardPage from "@/pages/AcceptanceSlaDashboardPage";
+import ProductionReadinessPage from "@/pages/ProductionReadinessPage";
+import RecommendationAnalyticsDashboardPage from "@/pages/RecommendationAnalyticsDashboardPage";
+import EhrDeadLetterReviewPage from "@/pages/EhrDeadLetterReviewPage";
+import ReminderTimelineInspectorPage from "@/pages/ReminderTimelineInspectorPage";
+import MultilingualTemplateAuthoringPage from "@/pages/MultilingualTemplateAuthoringPage";
+import OperationsCockpitPage from "@/pages/OperationsCockpitPage";
 import SelfImproveDashboard from "@/pages/SelfImproveDashboard";
 import HybridReasoningConsole from "@/pages/HybridReasoningConsole";
 import UCSMConsole from "@/pages/UCSMConsole";
@@ -140,6 +146,12 @@ function Router() {
       <Route path="/rapid-telemed">{() => <AdminPage component={RapidTelemedicineConsole} />}</Route>
       <Route path="/telemed-split">{() => <AdminPage component={TelemedicineSplitPaneConsole} />}</Route>
       <Route path="/acceptance-sla">{() => <AdminPage component={AcceptanceSlaDashboardPage} />}</Route>
+      <Route path="/production-readiness">{() => <AdminPage component={ProductionReadinessPage} />}</Route>
+      <Route path="/recommendation-analytics">{() => <AdminPage component={RecommendationAnalyticsDashboardPage} />}</Route>
+      <Route path="/ehr-dead-letter">{() => <AdminPage component={EhrDeadLetterReviewPage} />}</Route>
+      <Route path="/reminder-timeline">{() => <AdminPage component={ReminderTimelineInspectorPage} />}</Route>
+      <Route path="/multilingual-templates">{() => <AdminPage component={MultilingualTemplateAuthoringPage} />}</Route>
+      <Route path="/operations-cockpit">{() => <AdminPage component={OperationsCockpitPage} />}</Route>
       <Route path="/self-improve">{() => <AdminPage component={SelfImproveDashboard} />}</Route>
       <Route path="/hybrid-reasoning">{() => <AdminPage component={HybridReasoningConsole} />}</Route>
       <Route path="/ucsm">{() => <AdminPage component={UCSMConsole} />}</Route>
