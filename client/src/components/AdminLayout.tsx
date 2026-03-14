@@ -34,6 +34,7 @@ const NAV_SECTIONS = [
       { path: "/telemed-doctor-dashboard", label: "Doctor Dashboard", icon: BrainCircuit },
       { path: "/rapid-telemed", label: "Rapid Telemed Console", icon: Zap },
       { path: "/telemed-split", label: "Split Pane (Telegram/WA)", icon: Zap },
+      { path: "/acceptance-sla", label: "Acceptance + SLA Dashboard", icon: Zap },
       { path: "/complaint-control-center", label: "Complaint Control Center", icon: LayoutDashboard },
       { path: "/review-queue-v2", label: "Review Queue", icon: ClipboardCheck },
       { path: "/complaint-qa", label: "Complaint QA", icon: BarChart3 },

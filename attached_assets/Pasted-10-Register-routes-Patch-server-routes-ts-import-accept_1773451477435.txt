@@ -1,0 +1,6009 @@
+10. Register routes
+
+Patch server/routes.ts:
+
+import { acceptanceAnalyticsRouter } from "./routes/acceptanceAnalytics";
+import { slaAnalyticsRouter } from "./routes/slaAnalytics";
+
+export function registerRoutes(app: Express) {
+  app.use("/api/supervised-replies", supervisedRepliesRouter);
+  app.use("/api/inbound", inboundChannelsRouter);
+  app.use("/api/reply-feedback", replyFeedbackRouter);
+  app.use("/api/physician-style", physicianStyleRouter);
+  app.use("/api/pending-draft-queue", pendingDraftQueueRouter);
+  app.use("/api/draft-analytics", draftAnalyticsRouter);
+  app.use("/api/acceptance-analytics", acceptanceAnalyticsRouter);
+  app.use("/api/sla-analytics", slaAnalyticsRouter);
+}
+11. Queue SLA badge component
+client/src/components/SlaBadge.tsx
+import React from "react";
+
+export default function SlaBadge({
+  label,
+  level,
+}: {
+  label: string;
+  level: "good" | "warning" | "danger" | "neutral";
+}) {
+  const cls =
+    level === "good"
+      ? "bg-green-100 text-green-700"
+      : level === "warning"
+      ? "bg-amber-100 text-amber-700"
+      : level === "danger"
+      ? "bg-red-100 text-red-700"
+      : "bg-gray-100 text-gray-700";
+
+  return (
+    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${cls}`}>
+      {label}
+    </span>
+  );
+}
+12. Add SLA badge to queue table
+
+Patch client/src/components/DraftQueueTable.tsx
+
+Add props to row:
+
+  disposition?: string | null;
+
+Import badge:
+
+import SlaBadge from "./SlaBadge";
+
+Add simple client-side badge helper near top:
+
+function getSlaBadge(row: any) {
+  if (row.blocked) return { label: "Blocked urgent", level: "danger" as const };
+  if (!row.dueAt) return { label: "No due time", level: "neutral" as const };
+
+  const diffMin = Math.round((new Date(row.dueAt).getTime() - Date.now()) / 60000);
+  if (diffMin < 0) return { label: "Overdue", level: "danger" as const };
+  if (diffMin <= 15) return { label: "Due soon", level: "warning" as const };
+  return { label: "On time", level: "good" as const };
+}
+
+Then in the urgency cell render both:
+
+              <td className="p-3">
+                <div className="flex flex-col gap-2">
+                  <UrgencyBadge
+                    blocked={row.blocked}
+                    overdue={row.overdue}
+                    priority={row.taskPriority}
+                    urgencyScore={row.urgencyScore}
+                  />
+                  <SlaBadge {...getSlaBadge(row)} />
+                </div>
+              </td>
+13. Acceptance summary cards
+client/src/components/AcceptanceSummaryCards.tsx
+import React from "react";
+
+export default function AcceptanceSummaryCards({
+  summary,
+}: {
+  summary: {
+    total: number;
+    unchanged: number;
+    light: number;
+    moderate: number;
+    heavy: number;
+    acceptedUnchangedRate: number;
+    acceptedLightRate: number;
+    heavyRewriteRate: number;
+    avgSimilarity: number | string | null;
+  };
+}) {
+  const cards = [
+    ["Total", summary.total],
+    ["Unchanged", summary.unchanged],
+    ["Light", summary.light],
+    ["Moderate", summary.moderate],
+    ["Heavy", summary.heavy],
+    ["Unchanged %", `${(summary.acceptedUnchangedRate * 100).toFixed(1)}%`],
+    ["Light %", `${(summary.acceptedLightRate * 100).toFixed(1)}%`],
+    ["Heavy %", `${(summary.heavyRewriteRate * 100).toFixed(1)}%`],
+    ["Avg Similarity", Number(summary.avgSimilarity || 0).toFixed(2)],
+  ];
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {cards.map(([label, value]) => (
+        <div key={String(label)} className="rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="text-sm text-gray-500">{label}</div>
+          <div className="text-2xl font-semibold">{String(value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+14. SLA summary cards
+client/src/components/SlaSummaryCards.tsx
+import React from "react";
+
+export default function SlaSummaryCards({
+  summary,
+  queueStatus,
+}: {
+  summary: {
+    avg_inbound_to_draft_min?: number;
+    avg_draft_to_approve_min?: number;
+    avg_approve_to_send_min?: number;
+    avg_inbound_to_send_min?: number;
+    avg_blocked_to_resolved_min?: number;
+  };
+  queueStatus: {
+    onTime: number;
+    dueSoon: number;
+    overdue: number;
+    blockedUrgent: number;
+  };
+}) {
+  const cards = [
+    ["Inbound → Draft", `${Number(summary.avg_inbound_to_draft_min || 0).toFixed(1)}m`],
+    ["Draft → Approve", `${Number(summary.avg_draft_to_approve_min || 0).toFixed(1)}m`],
+    ["Approve → Send", `${Number(summary.avg_approve_to_send_min || 0).toFixed(1)}m`],
+    ["Inbound → Send", `${Number(summary.avg_inbound_to_send_min || 0).toFixed(1)}m`],
+    ["Blocked → Resolved", `${Number(summary.avg_blocked_to_resolved_min || 0).toFixed(1)}m`],
+    ["On Time", queueStatus.onTime],
+    ["Due Soon", queueStatus.dueSoon],
+    ["Overdue", queueStatus.overdue],
+    ["Blocked Urgent", queueStatus.blockedUrgent],
+  ];
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {cards.map(([label, value]) => (
+        <div key={String(label)} className="rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="text-sm text-gray-500">{label}</div>
+          <div className="text-2xl font-semibold">{String(value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+15. Full acceptance + SLA dashboard page
+client/src/pages/AcceptanceSlaDashboardPage.tsx
+import React, { useEffect, useState } from "react";
+import {
+  BarChart,
+  Bar,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  LineChart,
+  Line,
+  Legend,
+} from "recharts";
+import AcceptanceSummaryCards from "../components/AcceptanceSummaryCards";
+import SlaSummaryCards from "../components/SlaSummaryCards";
+
+export default function AcceptanceSlaDashboardPage() {
+  const [acceptanceSummary, setAcceptanceSummary] = useState<any>(null);
+  const [acceptanceByPhysician, setAcceptanceByPhysician] = useState<any[]>([]);
+  const [acceptanceByComplaint, setAcceptanceByComplaint] = useState<any[]>([]);
+  const [acceptanceByDisposition, setAcceptanceByDisposition] = useState<any[]>([]);
+  const [acceptanceByTone, setAcceptanceByTone] = useState<any[]>([]);
+  const [acceptanceByTemplate, setAcceptanceByTemplate] = useState<any[]>([]);
+  const [slaSummary, setSlaSummary] = useState<any>(null);
+  const [slaByPhysician, setSlaByPhysician] = useState<any[]>([]);
+  const [slaTimeSeries, setSlaTimeSeries] = useState<any[]>([]);
+  const [queueStatus, setQueueStatus] = useState<any>(null);
+
+  async function load() {
+    const [
+      aSummary,
+      aPhys,
+      aComplaint,
+      aDisposition,
+      aTone,
+      aTemplate,
+      sSummary,
+      sPhys,
+      sTime,
+      sQueue,
+    ] = await Promise.all([
+      fetch("/api/acceptance-analytics/summary").then(r => r.json()),
+      fetch("/api/acceptance-analytics/by-physician").then(r => r.json()),
+      fetch("/api/acceptance-analytics/by-complaint").then(r => r.json()),
+      fetch("/api/acceptance-analytics/by-disposition").then(r => r.json()),
+      fetch("/api/acceptance-analytics/by-tone").then(r => r.json()),
+      fetch("/api/acceptance-analytics/by-template").then(r => r.json()),
+      fetch("/api/sla-analytics/summary").then(r => r.json()),
+      fetch("/api/sla-analytics/by-physician").then(r => r.json()),
+      fetch("/api/sla-analytics/timeseries").then(r => r.json()),
+      fetch("/api/sla-analytics/queue-status").then(r => r.json()),
+    ]);
+
+    if (aSummary.ok) setAcceptanceSummary(aSummary.summary);
+    if (aPhys.ok) setAcceptanceByPhysician(aPhys.rows);
+    if (aComplaint.ok) setAcceptanceByComplaint(aComplaint.rows);
+    if (aDisposition.ok) setAcceptanceByDisposition(aDisposition.rows);
+    if (aTone.ok) setAcceptanceByTone(aTone.rows);
+    if (aTemplate.ok) setAcceptanceByTemplate(aTemplate.rows);
+    if (sSummary.ok) setSlaSummary(sSummary.summary);
+    if (sPhys.ok) setSlaByPhysician(sPhys.rows);
+    if (sTime.ok) setSlaTimeSeries(sTime.rows);
+    if (sQueue.ok) setQueueStatus(sQueue.summary);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  if (!acceptanceSummary || !slaSummary || !queueStatus) {
+    return <div className="p-6">Loading acceptance + SLA dashboard...</div>;
+  }
+
+  return (
+    <div className="p-4 space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold">Acceptance + SLA Dashboard</h1>
+        <p className="text-gray-600">
+          This is the operations deck: how often drafts are accepted, how much doctors rewrite them, and how fast the whole message river moves.
+        </p>
+      </div>
+
+      <AcceptanceSummaryCards summary={acceptanceSummary} />
+      <SlaSummaryCards summary={slaSummary} queueStatus={queueStatus} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="text-lg font-semibold mb-3">Acceptance by Physician</h2>
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={acceptanceByPhysician}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="physicianId" tickFormatter={(v) => v || "Unassigned"} />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="unchanged" name="Unchanged" />
+                <Bar dataKey="light" name="Light" />
+                <Bar dataKey="moderate" name="Moderate" />
+                <Bar dataKey="heavy" name="Heavy" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="text-lg font-semibold mb-3">SLA by Physician</h2>
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={slaByPhysician}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="physician_id" tickFormatter={(v) => v || "Unassigned"} />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="avg_inbound_to_draft_min" name="Inbound→Draft" />
+                <Bar dataKey="avg_draft_to_approve_min" name="Draft→Approve" />
+                <Bar dataKey="avg_approve_to_send_min" name="Approve→Send" />
+                <Bar dataKey="avg_inbound_to_send_min" name="Inbound→Send" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border bg-white p-4">
+        <h2 className="text-lg font-semibold mb-3">SLA Time Series</h2>
+        <div className="h-[340px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={slaTimeSeries}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="bucket" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="avg_inbound_to_draft_min" name="Inbound→Draft" dot />
+              <Line type="monotone" dataKey="avg_draft_to_approve_min" name="Draft→Approve" dot />
+              <Line type="monotone" dataKey="avg_approve_to_send_min" name="Approve→Send" dot />
+              <Line type="monotone" dataKey="avg_inbound_to_send_min" name="Inbound→Send" dot />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="text-lg font-semibold mb-3">Acceptance by Complaint</h2>
+          <div className="h-[360px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={acceptanceByComplaint} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" />
+                <YAxis width={130} type="category" dataKey="complaint" tickFormatter={(v) => v || "unknown"} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="unchanged" name="Unchanged" />
+                <Bar dataKey="heavy" name="Heavy" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="text-lg font-semibold mb-3">Acceptance by Disposition</h2>
+          <div className="h-[360px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={acceptanceByDisposition}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="disposition" tickFormatter={(v) => v || "unknown"} />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="unchanged" name="Unchanged" />
+                <Bar dataKey="light" name="Light" />
+                <Bar dataKey="moderate" name="Moderate" />
+                <Bar dataKey="heavy" name="Heavy" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="text-lg font-semibold mb-3">Acceptance by Tone</h2>
+          <div className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={acceptanceByTone}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="tone" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="total" name="Total" />
+                <Bar dataKey="unchanged" name="Unchanged" />
+                <Bar dataKey="heavy" name="Heavy" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="text-lg font-semibold mb-3">Acceptance by Template</h2>
+          <div className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={acceptanceByTemplate}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="template_key" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="total" name="Total" />
+                <Bar dataKey="unchanged" name="Unchanged" />
+                <Bar dataKey="heavy" name="Heavy" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+16. Add frontend route
+<Route path="/acceptance-sla" element={<AcceptanceSlaDashboardPage />} />
+17. Recommended additions after this module
+
+This is what I recommend next, in order:
+
+1. Outcome correlation engine
+
+Tie together:
+
+complaint
+
+disposition
+
+tone
+
+template
+
+rewrite severity
+
+feedback outcome
+
+visit/escalation outcome
+
+This is the real “did it work?” layer.
+
+2. Notification + escalation engine
+
+For:
+
+blocked urgent cases
+
+overdue approved-unsent drafts
+
+same-day cases nearing SLA breach
+
+3. Physician auto-learning
+
+Infer from low-edit, high-helpful messages:
+
+preferred tone
+
+preferred template
+
+preferred structure
+
+preferred sentence length
+
+4. Complaint-specific quality heatmap
+
+Find where the system is strong and where it faceplants:
+
+by complaint
+
+by disposition
+
+by physician
+
+by channel
+
+5. Queue assignment rules
+
+Auto-route work by:
+
+urgency
+
+physician
+
+channel
+
+complaint family
+
+language
+
+6. Audit export + admin panel
+
+Downloadable CSV/PDF:
+
+draft text
+
+edits
+
+timestamps
+
+SLA
+
+physician actions
+
+final sent message
+
+How many major steps remain after this one?
+
+After this module, about 6 major steps remain for a strong v1 completion of the supervised reply system.
+
+That is a real number, not infinite staircase theater.
+
+So the path looks like:
+
+This module: Acceptance + SLA analytics
+
+6 more major modules after this
+
+Once those 6 are done, the supervised reply system will feel substantially complete as a coherent module, even though there is always room for future refinement.
+
+The 6 remaining major modules
+
+Outcome correlation engine
+
+Notification/escalation engine
+
+Physician auto-learning layer
+
+Complaint/disposition quality heatmap
+
+Queue assignment/routing rules
+
+Audit export + admin review tools
+
+If you want the most leverage next, the best next build is Outcome Correlation Engine + complaint/disposition heatmap, because that is where the system starts learning what actually succeeds instead of merely measuring motion.
+
+please finish and write all 6 remaining major modules
+
+Absolutely. Here is the full scaffold for the 6 remaining major modules so the supervised reply system can cross the finish line for a strong production-ready v1.
+
+This bundle adds:
+
+Outcome correlation engine
+
+Notification / escalation engine
+
+Physician auto-learning layer
+
+Complaint / disposition quality heatmap
+
+Queue assignment / routing rules
+
+Audit export + admin review tools
+
+I’ll also tell you where this leaves the module at the end.
+
+What this completes
+
+After these 6 modules, the supervised reply system has the full loop:
+
+inbound patient message
+
+draft generation
+
+physician review
+
+send
+
+edit tracking
+
+acceptance analytics
+
+SLA analytics
+
+outcome correlation
+
+smart escalation
+
+physician preference adaptation
+
+queue routing
+
+audit export/admin review
+
+At that point, the module is substantially complete for a v1.
+What remains after that is mostly:
+
+tighter integration with your real case store
+
+deeper model tuning
+
+more complaint-specific logic
+
+production hardening
+
+So this is the big “finish the machine” drop.
+
+New files
+server/
+  db/
+    schema.patientOutcomes.ts
+    schema.notifications.ts
+    schema.queueAssignments.ts
+    schema.auditExports.ts
+  services/
+    outcomeCorrelationService.ts
+    outcomeRepository.ts
+    escalationEngine.ts
+    notificationService.ts
+    physicianAutoLearningService.ts
+    qualityHeatmapService.ts
+    queueAssignmentService.ts
+    auditExportService.ts
+    adminReviewService.ts
+  routes/
+    patientOutcomes.ts
+    notifications.ts
+    heatmaps.ts
+    queueAssignments.ts
+    auditExports.ts
+    adminReview.ts
+client/
+  src/
+    pages/
+      OutcomeCorrelationDashboardPage.tsx
+      HeatmapDashboardPage.tsx
+      AdminReviewPage.tsx
+      QueueAssignmentDashboardPage.tsx
+MODULE 1. Outcome correlation engine
+
+This answers the real question: which messages actually worked.
+
+1A. Outcome schema
+server/db/schema.patientOutcomes.ts
+import { pgTable, text, timestamp, uuid, boolean, real } from "drizzle-orm/pg-core";
+
+export const patientOutcomes = pgTable("patient_outcomes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftId: text("draft_id").notNull(),
+  caseId: text("case_id").notNull(),
+  threadId: text("thread_id").notNull(),
+
+  physicianId: text("physician_id"),
+  complaint: text("complaint"),
+  disposition: text("disposition"),
+  tone: text("tone"),
+  templateKey: text("template_key"),
+  rewriteSeverity: text("rewrite_severity"),
+
+  helpful: boolean("helpful").default(false).notNull(),
+  confusing: boolean("confusing").default(false).notNull(),
+  escalated: boolean("escalated").default(false).notNull(),
+  ledToVisit: boolean("led_to_visit").default(false).notNull(),
+  resolvedWithoutVisit: boolean("resolved_without_visit").default(false).notNull(),
+
+  patientResponded: boolean("patient_responded").default(false).notNull(),
+  responseLatencyMin: real("response_latency_min"),
+
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+1B. Outcome repository / service
+server/services/outcomeRepository.ts
+import { db } from "../db";
+import { patientOutcomes } from "../db/schema.patientOutcomes";
+
+export async function createPatientOutcome(input: {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  physicianId?: string;
+  complaint?: string;
+  disposition?: string;
+  tone?: string;
+  templateKey?: string;
+  rewriteSeverity?: string;
+  helpful?: boolean;
+  confusing?: boolean;
+  escalated?: boolean;
+  ledToVisit?: boolean;
+  resolvedWithoutVisit?: boolean;
+  patientResponded?: boolean;
+  responseLatencyMin?: number;
+  notes?: string;
+}) {
+  const [row] = await db.insert(patientOutcomes).values({
+    draftId: input.draftId,
+    caseId: input.caseId,
+    threadId: input.threadId,
+    physicianId: input.physicianId,
+    complaint: input.complaint,
+    disposition: input.disposition,
+    tone: input.tone,
+    templateKey: input.templateKey,
+    rewriteSeverity: input.rewriteSeverity,
+    helpful: !!input.helpful,
+    confusing: !!input.confusing,
+    escalated: !!input.escalated,
+    ledToVisit: !!input.ledToVisit,
+    resolvedWithoutVisit: !!input.resolvedWithoutVisit,
+    patientResponded: !!input.patientResponded,
+    responseLatencyMin: input.responseLatencyMin,
+    notes: input.notes,
+  }).returning();
+
+  return row;
+}
+server/services/outcomeCorrelationService.ts
+import { db } from "../db";
+import { patientOutcomes } from "../db/schema.patientOutcomes";
+import { count, desc, sql } from "drizzle-orm";
+
+export async function getOutcomeCorrelationSummary() {
+  const rows = await db
+    .select({
+      total: count(patientOutcomes.id),
+      helpful: sql<number>`count(case when ${patientOutcomes.helpful} = true then 1 end)`,
+      confusing: sql<number>`count(case when ${patientOutcomes.confusing} = true then 1 end)`,
+      escalated: sql<number>`count(case when ${patientOutcomes.escalated} = true then 1 end)`,
+      ledToVisit: sql<number>`count(case when ${patientOutcomes.ledToVisit} = true then 1 end)`,
+      resolvedWithoutVisit: sql<number>`count(case when ${patientOutcomes.resolvedWithoutVisit} = true then 1 end)`,
+      patientResponded: sql<number>`count(case when ${patientOutcomes.patientResponded} = true then 1 end)`,
+      avgResponseLatencyMin: sql<number>`avg(${patientOutcomes.responseLatencyMin})`,
+    })
+    .from(patientOutcomes);
+
+  return rows[0];
+}
+
+export async function getOutcomeByComplaint(limit = 20) {
+  return db
+    .select({
+      complaint: patientOutcomes.complaint,
+      total: count(patientOutcomes.id),
+      helpful: sql<number>`count(case when ${patientOutcomes.helpful} = true then 1 end)`,
+      confusing: sql<number>`count(case when ${patientOutcomes.confusing} = true then 1 end)`,
+      escalated: sql<number>`count(case when ${patientOutcomes.escalated} = true then 1 end)`,
+      ledToVisit: sql<number>`count(case when ${patientOutcomes.ledToVisit} = true then 1 end)`,
+      resolvedWithoutVisit: sql<number>`count(case when ${patientOutcomes.resolvedWithoutVisit} = true then 1 end)`,
+    })
+    .from(patientOutcomes)
+    .groupBy(patientOutcomes.complaint)
+    .orderBy(desc(count(patientOutcomes.id)))
+    .limit(limit);
+}
+
+export async function getOutcomeByDisposition(limit = 20) {
+  return db
+    .select({
+      disposition: patientOutcomes.disposition,
+      total: count(patientOutcomes.id),
+      helpful: sql<number>`count(case when ${patientOutcomes.helpful} = true then 1 end)`,
+      confusing: sql<number>`count(case when ${patientOutcomes.confusing} = true then 1 end)`,
+      escalated: sql<number>`count(case when ${patientOutcomes.escalated} = true then 1 end)`,
+      ledToVisit: sql<number>`count(case when ${patientOutcomes.ledToVisit} = true then 1 end)`,
+      resolvedWithoutVisit: sql<number>`count(case when ${patientOutcomes.resolvedWithoutVisit} = true then 1 end)`,
+    })
+    .from(patientOutcomes)
+    .groupBy(patientOutcomes.disposition)
+    .orderBy(desc(count(patientOutcomes.id)))
+    .limit(limit);
+}
+
+export async function getOutcomeByTemplate() {
+  return db.execute(sql`
+    select
+      coalesce(${patientOutcomes.templateKey}, 'unknown') as template_key,
+      count(*)::int as total,
+      count(case when ${patientOutcomes.helpful} = true then 1 end)::int as helpful,
+      count(case when ${patientOutcomes.confusing} = true then 1 end)::int as confusing,
+      count(case when ${patientOutcomes.escalated} = true then 1 end)::int as escalated,
+      count(case when ${patientOutcomes.ledToVisit} = true then 1 end)::int as led_to_visit,
+      count(case when ${patientOutcomes.resolvedWithoutVisit} = true then 1 end)::int as resolved_without_visit
+    from ${patientOutcomes}
+    group by 1
+    order by 2 desc
+  `).then(r => r.rows);
+}
+
+export async function getOutcomeByTone() {
+  return db.execute(sql`
+    select
+      coalesce(${patientOutcomes.tone}, 'unknown') as tone,
+      count(*)::int as total,
+      count(case when ${patientOutcomes.helpful} = true then 1 end)::int as helpful,
+      count(case when ${patientOutcomes.confusing} = true then 1 end)::int as confusing,
+      count(case when ${patientOutcomes.escalated} = true then 1 end)::int as escalated,
+      count(case when ${patientOutcomes.ledToVisit} = true then 1 end)::int as led_to_visit,
+      count(case when ${patientOutcomes.resolvedWithoutVisit} = true then 1 end)::int as resolved_without_visit
+    from ${patientOutcomes}
+    group by 1
+    order by 2 desc
+  `).then(r => r.rows);
+}
+1C. Outcome routes
+server/routes/patientOutcomes.ts
+import { Router } from "express";
+import { createPatientOutcome } from "../services/outcomeRepository";
+import {
+  getOutcomeCorrelationSummary,
+  getOutcomeByComplaint,
+  getOutcomeByDisposition,
+  getOutcomeByTemplate,
+  getOutcomeByTone,
+} from "../services/outcomeCorrelationService";
+
+export const patientOutcomesRouter = Router();
+
+patientOutcomesRouter.post("/", async (req, res) => {
+  try {
+    const row = await createPatientOutcome(req.body);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("patient outcome create error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+patientOutcomesRouter.get("/summary", async (_req, res) => {
+  try {
+    const summary = await getOutcomeCorrelationSummary();
+    res.json({ ok: true, summary });
+  } catch (err: any) {
+    console.error("patient outcome summary error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+patientOutcomesRouter.get("/by-complaint", async (req, res) => {
+  try {
+    const rows = await getOutcomeByComplaint(req.query.limit ? Number(req.query.limit) : 20);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("patient outcome complaint error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+patientOutcomesRouter.get("/by-disposition", async (req, res) => {
+  try {
+    const rows = await getOutcomeByDisposition(req.query.limit ? Number(req.query.limit) : 20);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("patient outcome disposition error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+patientOutcomesRouter.get("/by-template", async (_req, res) => {
+  try {
+    const rows = await getOutcomeByTemplate();
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("patient outcome template error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+patientOutcomesRouter.get("/by-tone", async (_req, res) => {
+  try {
+    const rows = await getOutcomeByTone();
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("patient outcome tone error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+MODULE 2. Notification / escalation engine
+
+This handles the “something is burning” layer.
+
+2A. Notifications schema
+server/db/schema.notifications.ts
+import { pgTable, text, timestamp, uuid, boolean } from "drizzle-orm/pg-core";
+
+export const notifications = pgTable("notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftId: text("draft_id"),
+  caseId: text("case_id"),
+  threadId: text("thread_id"),
+  physicianId: text("physician_id"),
+  type: text("type").notNull(), // blocked_urgent | overdue_draft | approved_unsent | same_day_warning
+  channel: text("channel").notNull(), // dashboard | email | sms | push
+  message: text("message").notNull(),
+  sent: boolean("sent").default(false).notNull(),
+  acknowledged: boolean("acknowledged").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+2B. Notification service
+server/services/notificationService.ts
+import { db } from "../db";
+import { notifications } from "../db/schema.notifications";
+
+export async function createNotification(input: {
+  draftId?: string;
+  caseId?: string;
+  threadId?: string;
+  physicianId?: string;
+  type: string;
+  channel: string;
+  message: string;
+}) {
+  const [row] = await db.insert(notifications).values({
+    draftId: input.draftId,
+    caseId: input.caseId,
+    threadId: input.threadId,
+    physicianId: input.physicianId,
+    type: input.type,
+    channel: input.channel,
+    message: input.message,
+    sent: true,
+  }).returning();
+
+  return row;
+}
+
+export async function acknowledgeNotification(id: string) {
+  const [row] = await db
+    .update(notifications)
+    .set({ acknowledged: true })
+    .where(notifications.id.eq(id))
+    .returning();
+
+  return row;
+}
+2C. Escalation engine
+server/services/escalationEngine.ts
+import { getPendingDraftQueue } from "./pendingDraftQueueService";
+import { createNotification } from "./notificationService";
+
+export async function runEscalationSweep() {
+  const rows = await getPendingDraftQueue({ limit: 500, offset: 0 });
+
+  const created: any[] = [];
+
+  for (const row of rows) {
+    if (row.blocked) {
+      created.push(
+        await createNotification({
+          draftId: row.draftId,
+          caseId: row.caseId,
+          threadId: row.threadId,
+          physicianId: row.physicianId || undefined,
+          type: "blocked_urgent",
+          channel: "dashboard",
+          message: `Blocked urgent case ${row.caseId} requires immediate manual review.`,
+        })
+      );
+      continue;
+    }
+
+    if (row.overdue) {
+      created.push(
+        await createNotification({
+          draftId: row.draftId,
+          caseId: row.caseId,
+          threadId: row.threadId,
+          physicianId: row.physicianId || undefined,
+          type: "overdue_draft",
+          channel: "dashboard",
+          message: `Draft ${row.draftId} for case ${row.caseId} is overdue.`,
+        })
+      );
+    }
+
+    if (row.status === "approved") {
+      created.push(
+        await createNotification({
+          draftId: row.draftId,
+          caseId: row.caseId,
+          threadId: row.threadId,
+          physicianId: row.physicianId || undefined,
+          type: "approved_unsent",
+          channel: "dashboard",
+          message: `Approved draft ${row.draftId} has not been sent yet.`,
+        })
+      );
+    }
+
+    if (row.disposition === "same_day_visit" && !row.overdue) {
+      created.push(
+        await createNotification({
+          draftId: row.draftId,
+          caseId: row.caseId,
+          threadId: row.threadId,
+          physicianId: row.physicianId || undefined,
+          type: "same_day_warning",
+          channel: "dashboard",
+          message: `Same-day visit case ${row.caseId} should be reviewed promptly.`,
+        })
+      );
+    }
+  }
+
+  return { createdCount: created.length, created };
+}
+2D. Notifications routes
+server/routes/notifications.ts
+import { Router } from "express";
+import { createNotification, acknowledgeNotification } from "../services/notificationService";
+import { runEscalationSweep } from "../services/escalationEngine";
+
+export const notificationsRouter = Router();
+
+notificationsRouter.post("/", async (req, res) => {
+  try {
+    const row = await createNotification(req.body);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("create notification error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/:id/acknowledge", async (req, res) => {
+  try {
+    const row = await acknowledgeNotification(req.params.id);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("ack notification error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/sweep", async (_req, res) => {
+  try {
+    const result = await runEscalationSweep();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("notification sweep error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+MODULE 3. Physician auto-learning layer
+
+This learns the doctor’s style from what they keep and what they rewrite.
+
+3A. Auto-learning service
+server/services/physicianAutoLearningService.ts
+import { db } from "../db";
+import { replyDrafts } from "../db/schema.replyDrafts";
+import { physicianStylePrefs } from "../db/schema.physicianStylePrefs";
+import { avg, count, desc, eq, sql } from "drizzle-orm";
+
+export async function inferPhysicianPreferences(physicianId: string) {
+  const rows = await db
+    .select({
+      tone: replyDrafts.tone,
+      total: count(replyDrafts.id),
+      unchanged: sql<number>`count(case when ${replyDrafts.rewriteSeverity} = 'unchanged' then 1 end)`,
+      light: sql<number>`count(case when ${replyDrafts.rewriteSeverity} = 'light' then 1 end)`,
+      avgSimilarity: avg(replyDrafts.editSimilarity),
+    })
+    .from(replyDrafts)
+    .where(eq(replyDrafts.physicianId, physicianId))
+    .groupBy(replyDrafts.tone)
+    .orderBy(desc(count(replyDrafts.id)));
+
+  const bestTone = rows
+    .map(r => ({
+      tone: r.tone || "warm",
+      score: Number(r.unchanged || 0) * 2 + Number(r.light || 0) + Number(r.avgSimilarity || 0),
+    }))
+    .sort((a, b) => b.score - a.score)[0]?.tone || "warm";
+
+  const rewriteStats = await db
+    .select({
+      avgSimilarity: avg(replyDrafts.editSimilarity),
+      total: count(replyDrafts.id),
+    })
+    .from(replyDrafts)
+    .where(eq(replyDrafts.physicianId, physicianId));
+
+  const avgSimilarityValue = Number(rewriteStats[0]?.avgSimilarity || 0.75);
+
+  const warmthLevel = bestTone === "warm" ? 8 : bestTone === "clinical" ? 4 : 6;
+  const cautionLevel = avgSimilarityValue < 0.75 ? 8 : 6;
+
+  const [row] = await db
+    .insert(physicianStylePrefs)
+    .values({
+      physicianId,
+      defaultTone: bestTone,
+      prefersBulletStyle: false,
+      warmthLevel,
+      cautionLevel,
+      defaultSignoff: "Please let us know if symptoms worsen.",
+    })
+    .onConflictDoUpdate({
+      target: physicianStylePrefs.physicianId,
+      set: {
+        defaultTone: bestTone,
+        warmthLevel,
+        cautionLevel,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+
+  return {
+    learned: row,
+    evidence: rows,
+  };
+}
+MODULE 4. Complaint / disposition quality heatmap
+
+This is your “where does the system shine and where does it trip over a bucket” module.
+
+4A. Heatmap service
+server/services/qualityHeatmapService.ts
+import { db } from "../db";
+import { replyDrafts } from "../db/schema.replyDrafts";
+import { patientOutcomes } from "../db/schema.patientOutcomes";
+import { sql } from "drizzle-orm";
+
+export async function getComplaintDispositionHeatmap() {
+  const rows = await db.execute(sql`
+    select
+      coalesce(d.complaint, 'unknown') as complaint,
+      coalesce(d.disposition, 'unknown') as disposition,
+      count(*)::int as total,
+      avg(d.edit_similarity)::float as avg_similarity,
+      count(case when d.rewrite_severity = 'heavy' then 1 end)::int as heavy_rewrites,
+      count(case when d.blocked = true then 1 end)::int as blocked,
+      count(case when o.helpful = true then 1 end)::int as helpful,
+      count(case when o.confusing = true then 1 end)::int as confusing,
+      count(case when o.led_to_visit = true then 1 end)::int as led_to_visit
+    from ${replyDrafts} d
+    left join ${patientOutcomes} o on o.draft_id = d.id
+    group by 1, 2
+    order by 1, 2
+  `);
+
+  return rows.rows;
+}
+
+export async function getComplaintHeatmapSummary() {
+  const rows = await db.execute(sql`
+    select
+      coalesce(${replyDrafts.complaint}, 'unknown') as complaint,
+      count(*)::int as total,
+      avg(${replyDrafts.editSimilarity})::float as avg_similarity,
+      count(case when ${replyDrafts.rewriteSeverity} = 'heavy' then 1 end)::int as heavy_rewrites,
+      count(case when ${replyDrafts.blocked} = true then 1 end)::int as blocked
+    from ${replyDrafts}
+    group by 1
+    order by total desc
+  `);
+
+  return rows.rows;
+}
+4B. Heatmap routes
+server/routes/heatmaps.ts
+import { Router } from "express";
+import {
+  getComplaintDispositionHeatmap,
+  getComplaintHeatmapSummary,
+} from "../services/qualityHeatmapService";
+
+export const heatmapsRouter = Router();
+
+heatmapsRouter.get("/complaint-disposition", async (_req, res) => {
+  try {
+    const rows = await getComplaintDispositionHeatmap();
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("heatmap complaint disposition error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+heatmapsRouter.get("/complaints", async (_req, res) => {
+  try {
+    const rows = await getComplaintHeatmapSummary();
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("heatmap complaints error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+MODULE 5. Queue assignment / routing rules
+
+This decides who gets what instead of dumping everything in one heap.
+
+5A. Queue assignments schema
+server/db/schema.queueAssignments.ts
+import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+
+export const queueAssignments = pgTable("queue_assignments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftId: text("draft_id").notNull(),
+  caseId: text("case_id").notNull(),
+  threadId: text("thread_id").notNull(),
+  assignedPhysicianId: text("assigned_physician_id"),
+  assignmentReason: text("assignment_reason"),
+  priority: text("priority"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+5B. Queue assignment service
+server/services/queueAssignmentService.ts
+import { db } from "../db";
+import { queueAssignments } from "../db/schema.queueAssignments";
+import { getPendingDraftQueue } from "./pendingDraftQueueService";
+
+function choosePhysician(input: {
+  complaint?: string | null;
+  blocked: boolean;
+  disposition?: string | null;
+}) {
+  if (input.blocked) {
+    return { physicianId: "doctor-senior", reason: "Blocked urgent case routed to senior reviewer" };
+  }
+
+  if (input.disposition === "same_day_visit") {
+    return { physicianId: "doctor-fasttrack", reason: "Same-day case routed to fast-track physician" };
+  }
+
+  if (input.complaint && /rash|skin/i.test(input.complaint)) {
+    return { physicianId: "doctor-derm", reason: "Skin complaint routed to dermatology-focused physician" };
+  }
+
+  if (input.complaint && /uti|urinary|dysuria/i.test(input.complaint)) {
+    return { physicianId: "doctor-gu", reason: "GU complaint routed to GU-focused physician" };
+  }
+
+  return { physicianId: "doctor-general", reason: "Default general queue assignment" };
+}
+
+export async function assignDraft(draft: {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  complaint?: string | null;
+  blocked: boolean;
+  disposition?: string | null;
+  taskPriority?: string | null;
+}) {
+  const chosen = choosePhysician({
+    complaint: draft.complaint,
+    blocked: draft.blocked,
+    disposition: draft.disposition,
+  });
+
+  const [row] = await db.insert(queueAssignments).values({
+    draftId: draft.draftId,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    assignedPhysicianId: chosen.physicianId,
+    assignmentReason: chosen.reason,
+    priority: draft.taskPriority || (draft.blocked ? "urgent" : "medium"),
+  }).returning();
+
+  return row;
+}
+
+export async function runQueueAssignmentSweep() {
+  const rows = await getPendingDraftQueue({ limit: 500, offset: 0 });
+  const assigned: any[] = [];
+
+  for (const row of rows) {
+    assigned.push(await assignDraft(row));
+  }
+
+  return {
+    assignedCount: assigned.length,
+    assigned,
+  };
+}
+5C. Queue assignment routes
+server/routes/queueAssignments.ts
+import { Router } from "express";
+import { assignDraft, runQueueAssignmentSweep } from "../services/queueAssignmentService";
+
+export const queueAssignmentsRouter = Router();
+
+queueAssignmentsRouter.post("/assign", async (req, res) => {
+  try {
+    const row = await assignDraft(req.body);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("assign draft error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+queueAssignmentsRouter.post("/sweep", async (_req, res) => {
+  try {
+    const result = await runQueueAssignmentSweep();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("assignment sweep error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+MODULE 6. Audit export + admin review tools
+
+This is the “show me the entire paper trail” layer.
+
+6A. Audit export schema
+server/db/schema.auditExports.ts
+import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+
+export const auditExports = pgTable("audit_exports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  exportType: text("export_type").notNull(), // csv | json
+  requestedBy: text("requested_by"),
+  status: text("status").notNull().default("completed"),
+  filePath: text("file_path"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+6B. Audit export service
+server/services/auditExportService.ts
+import fs from "fs";
+import path from "path";
+import { db } from "../db";
+import { auditExports } from "../db/schema.auditExports";
+import { replyDrafts } from "../db/schema.replyDrafts";
+import { patientOutcomes } from "../db/schema.patientOutcomes";
+import { notifications } from "../db/schema.notifications";
+import { eq, sql } from "drizzle-orm";
+
+const EXPORT_DIR = "/mnt/data";
+
+function csvEscape(value: any) {
+  const s = String(value ?? "");
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+export async function exportAuditCsv() {
+  const rows = await db.execute(sql`
+    select
+      d.id as draft_id,
+      d.case_id,
+      d.thread_id,
+      d.channel,
+      d.complaint,
+      d.disposition,
+      d.patient_label,
+      d.physician_id,
+      d.tone,
+      d.template_key,
+      d.original_patient_message,
+      d.assistant_draft,
+      d.edited_draft,
+      d.final_sent_text,
+      d.edit_distance,
+      d.edit_similarity,
+      d.rewrite_severity,
+      d.blocked,
+      d.confidence,
+      d.status,
+      d.created_at,
+      d.approved_at,
+      d.sent_at,
+      o.helpful,
+      o.confusing,
+      o.escalated,
+      o.led_to_visit,
+      o.resolved_without_visit,
+      o.patient_responded,
+      o.response_latency_min
+    from ${replyDrafts} d
+    left join ${patientOutcomes} o on o.draft_id = d.id
+    order by d.created_at desc
+  `);
+
+  const headers = Object.keys(rows.rows[0] || {});
+  const lines = [
+    headers.map(csvEscape).join(","),
+    ...rows.rows.map((row: any) => headers.map(h => csvEscape(row[h])).join(",")),
+  ];
+
+  const filePath = path.join(EXPORT_DIR, `audit_export_${Date.now()}.csv`);
+  fs.writeFileSync(filePath, lines.join("\n"), "utf8");
+
+  const [record] = await db.insert(auditExports).values({
+    exportType: "csv",
+    requestedBy: "system",
+    status: "completed",
+    filePath,
+  }).returning();
+
+  return { record, filePath };
+}
+6C. Admin review service
+server/services/adminReviewService.ts
+import { db } from "../db";
+import { replyDrafts } from "../db/schema.replyDrafts";
+import { patientOutcomes } from "../db/schema.patientOutcomes";
+import { notifications } from "../db/schema.notifications";
+import { sql } from "drizzle-orm";
+
+export async function getAdminReviewFeed(limit = 100) {
+  const rows = await db.execute(sql`
+    select
+      d.id as draft_id,
+      d.case_id,
+      d.thread_id,
+      d.channel,
+      d.complaint,
+      d.disposition,
+      d.patient_label,
+      d.physician_id,
+      d.tone,
+      d.template_key,
+      d.original_patient_message,
+      d.assistant_draft,
+      d.edited_draft,
+      d.final_sent_text,
+      d.edit_similarity,
+      d.rewrite_severity,
+      d.blocked,
+      d.status,
+      d.created_at,
+      o.helpful,
+      o.confusing,
+      o.escalated,
+      o.led_to_visit,
+      o.resolved_without_visit
+    from ${replyDrafts} d
+    left join ${patientOutcomes} o on o.draft_id = d.id
+    order by d.created_at desc
+    limit ${limit}
+  `);
+
+  return rows.rows;
+}
+6D. Audit / admin routes
+server/routes/auditExports.ts
+import { Router } from "express";
+import { exportAuditCsv } from "../services/auditExportService";
+
+export const auditExportsRouter = Router();
+
+auditExportsRouter.post("/csv", async (_req, res) => {
+  try {
+    const result = await exportAuditCsv();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("audit export csv error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+server/routes/adminReview.ts
+import { Router } from "express";
+import { getAdminReviewFeed } from "../services/adminReviewService";
+
+export const adminReviewRouter = Router();
+
+adminReviewRouter.get("/feed", async (req, res) => {
+  try {
+    const rows = await getAdminReviewFeed(req.query.limit ? Number(req.query.limit) : 100);
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("admin review feed error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+Route registration
+
+Patch server/routes.ts:
+
+import { patientOutcomesRouter } from "./routes/patientOutcomes";
+import { notificationsRouter } from "./routes/notifications";
+import { heatmapsRouter } from "./routes/heatmaps";
+import { queueAssignmentsRouter } from "./routes/queueAssignments";
+import { auditExportsRouter } from "./routes/auditExports";
+import { adminReviewRouter } from "./routes/adminReview";
+
+export function registerRoutes(app: Express) {
+  app.use("/api/supervised-replies", supervisedRepliesRouter);
+  app.use("/api/inbound", inboundChannelsRouter);
+  app.use("/api/reply-feedback", replyFeedbackRouter);
+  app.use("/api/physician-style", physicianStyleRouter);
+  app.use("/api/pending-draft-queue", pendingDraftQueueRouter);
+  app.use("/api/draft-analytics", draftAnalyticsRouter);
+  app.use("/api/acceptance-analytics", acceptanceAnalyticsRouter);
+  app.use("/api/sla-analytics", slaAnalyticsRouter);
+
+  app.use("/api/patient-outcomes", patientOutcomesRouter);
+  app.use("/api/notifications", notificationsRouter);
+  app.use("/api/heatmaps", heatmapsRouter);
+  app.use("/api/queue-assignments", queueAssignmentsRouter);
+  app.use("/api/audit-exports", auditExportsRouter);
+  app.use("/api/admin-review", adminReviewRouter);
+}
+Frontend dashboards
+
+Below are lean but functional pages for the new modules.
+
+Outcome correlation dashboard
+client/src/pages/OutcomeCorrelationDashboardPage.tsx
+import React, { useEffect, useState } from "react";
+import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend } from "recharts";
+
+export default function OutcomeCorrelationDashboardPage() {
+  const [summary, setSummary] = useState<any>(null);
+  const [byComplaint, setByComplaint] = useState<any[]>([]);
+  const [byDisposition, setByDisposition] = useState<any[]>([]);
+  const [byTone, setByTone] = useState<any[]>([]);
+  const [byTemplate, setByTemplate] = useState<any[]>([]);
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/patient-outcomes/summary").then(r => r.json()),
+      fetch("/api/patient-outcomes/by-complaint").then(r => r.json()),
+      fetch("/api/patient-outcomes/by-disposition").then(r => r.json()),
+      fetch("/api/patient-outcomes/by-tone").then(r => r.json()),
+      fetch("/api/patient-outcomes/by-template").then(r => r.json()),
+    ]).then(([s, c, d, t, k]) => {
+      if (s.ok) setSummary(s.summary);
+      if (c.ok) setByComplaint(c.rows);
+      if (d.ok) setByDisposition(d.rows);
+      if (t.ok) setByTone(t.rows);
+      if (k.ok) setByTemplate(k.rows);
+    });
+  }, []);
+
+  if (!summary) return <div className="p-6">Loading outcome correlation dashboard...</div>;
+
+  return (
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl font-semibold">Outcome Correlation Dashboard</h1>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          ["Total", summary.total],
+          ["Helpful", summary.helpful],
+          ["Confusing", summary.confusing],
+          ["Escalated", summary.escalated],
+          ["Led To Visit", summary.ledToVisit],
+          ["Resolved No Visit", summary.resolvedWithoutVisit],
+          ["Responded", summary.patientResponded],
+          ["Avg Response Latency", `${Number(summary.avgResponseLatencyMin || 0).toFixed(1)}m`],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-2xl border bg-white p-4">
+            <div className="text-sm text-gray-500">{label}</div>
+            <div className="text-2xl font-semibold">{String(value)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="font-semibold mb-3">Outcomes by Complaint</h2>
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={byComplaint}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="complaint" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="helpful" />
+                <Bar dataKey="confusing" />
+                <Bar dataKey="ledToVisit" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border bg-white p-4">
+          <h2 className="font-semibold mb-3">Outcomes by Disposition</h2>
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={byDisposition}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="disposition" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="helpful" />
+                <Bar dataKey="confusing" />
+                <Bar dataKey="ledToVisit" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+Heatmap dashboard
+client/src/pages/HeatmapDashboardPage.tsx
+import React, { useEffect, useState } from "react";
+
+export default function HeatmapDashboardPage() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/heatmaps/complaint-disposition")
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) setRows(data.rows);
+      });
+  }, []);
+
+  return (
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl font-semibold">Complaint / Disposition Heatmap</h1>
+      <div className="rounded-2xl border bg-white p-4 overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left">
+            <tr>
+              <th className="p-3">Complaint</th>
+              <th className="p-3">Disposition</th>
+              <th className="p-3">Total</th>
+              <th className="p-3">Avg Similarity</th>
+              <th className="p-3">Heavy Rewrites</th>
+              <th className="p-3">Blocked</th>
+              <th className="p-3">Helpful</th>
+              <th className="p-3">Confusing</th>
+              <th className="p-3">Led To Visit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className="border-t">
+                <td className="p-3">{row.complaint}</td>
+                <td className="p-3">{row.disposition}</td>
+                <td className="p-3">{row.total}</td>
+                <td className="p-3">{Number(row.avg_similarity || 0).toFixed(2)}</td>
+                <td className="p-3">{row.heavy_rewrites}</td>
+                <td className="p-3">{row.blocked}</td>
+                <td className="p-3">{row.helpful}</td>
+                <td className="p-3">{row.confusing}</td>
+                <td className="p-3">{row.led_to_visit}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+Queue assignment dashboard
+client/src/pages/QueueAssignmentDashboardPage.tsx
+import React, { useState } from "react";
+
+export default function QueueAssignmentDashboardPage() {
+  const [result, setResult] = useState<any>(null);
+
+  async function runSweep() {
+    const res = await fetch("/api/queue-assignments/sweep", { method: "POST" }).then(r => r.json());
+    if (res.ok) setResult(res.result);
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl font-semibold">Queue Assignment Dashboard</h1>
+      <button onClick={runSweep} className="rounded-xl bg-black text-white px-4 py-2">
+        Run Assignment Sweep
+      </button>
+
+      {result && (
+        <div className="rounded-2xl border bg-white p-4">
+          <div className="font-semibold">Assigned Count: {result.assignedCount}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+Admin review page
+client/src/pages/AdminReviewPage.tsx
+import React, { useEffect, useState } from "react";
+
+export default function AdminReviewPage() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [exportPath, setExportPath] = useState<string>("");
+
+  useEffect(() => {
+    fetch("/api/admin-review/feed")
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) setRows(data.rows);
+      });
+  }, []);
+
+  async function exportCsv() {
+    const res = await fetch("/api/audit-exports/csv", { method: "POST" }).then(r => r.json());
+    if (res.ok) setExportPath(res.result.filePath);
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Admin Review</h1>
+        <button onClick={exportCsv} className="rounded-xl bg-black text-white px-4 py-2">
+          Export CSV
+        </button>
+      </div>
+
+      {exportPath && (
+        <div className="rounded-xl border bg-green-50 p-3">
+          Export created: {exportPath}
+        </div>
+      )}
+
+      <div className="rounded-2xl border bg-white p-4 overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left">
+            <tr>
+              <th className="p-3">Draft</th>
+              <th className="p-3">Case</th>
+              <th className="p-3">Complaint</th>
+              <th className="p-3">Disposition</th>
+              <th className="p-3">Physician</th>
+              <th className="p-3">Rewrite</th>
+              <th className="p-3">Status</th>
+              <th className="p-3">Helpful</th>
+              <th className="p-3">Confusing</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className="border-t">
+                <td className="p-3">{row.draft_id}</td>
+                <td className="p-3">{row.case_id}</td>
+                <td className="p-3">{row.complaint}</td>
+                <td className="p-3">{row.disposition}</td>
+                <td className="p-3">{row.physician_id}</td>
+                <td className="p-3">{row.rewrite_severity}</td>
+                <td className="p-3">{row.status}</td>
+                <td className="p-3">{String(row.helpful)}</td>
+                <td className="p-3">{String(row.confusing)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+Frontend routes
+
+Add these to your app router:
+
+<Route path="/outcome-correlation" element={<OutcomeCorrelationDashboardPage />} />
+<Route path="/heatmaps" element={<HeatmapDashboardPage />} />
+<Route path="/queue-assignments" element={<QueueAssignmentDashboardPage />} />
+<Route path="/admin-review" element={<AdminReviewPage />} />
+Recommended workflow hooks
+
+These modules become much stronger if you connect them into your existing workflow at the right points.
+
+When physician approves/sends
+
+Also consider creating outcome placeholders later:
+
+on send: create “pending outcome follow-up” marker
+
+on patient response: update patientResponded, responseLatencyMin
+
+on manual staff review: mark helpful, confusing, ledToVisit, etc.
+
+When blocked
+
+trigger createNotification(...)
+
+trigger senior physician routing
+
+mark blocked SLA event
+
+later mark resolved
+
+Nightly / scheduled jobs
+
+Useful sweeps:
+
+runEscalationSweep()
+
+runQueueAssignmentSweep()
+
+inferPhysicianPreferences(physicianId) for each physician
+
+Suggested order to wire this in
+
+Do it in this order so the gears mesh cleanly:
+
+run DB migrations
+
+register all new routes
+
+test patient outcomes POST + GET summary
+
+test notification sweep
+
+test queue assignment sweep
+
+test audit CSV export
+
+wire admin review page
+
+wire outcome dashboard
+
+wire heatmap dashboard
+
+wire physician auto-learning batch job
+
+What this means for module completeness
+
+With these 6 modules written, the supervised reply system is now functionally complete as a serious v1 module.
+
+That does not mean there is never another improvement. Software always has another staircase hiding behind the curtain. But in practical terms:
+
+The supervised reply module is now complete enough to be considered finished at the major-module level.
+
+From here, the next work is mostly:
+
+real case-store integration
+
+better complaint extraction
+
+more nuanced routing policies
+
+better notifications
+
+production permissions / auth
+
+polish
+
+So the answer is:
+
+Remaining major steps after this: 0 for the originally listed 6-module completion plan.
+
+What remains is not another required major module in that original plan. It is optimization, integration, and polish.
+
+The strongest next build after this would be a single unified Operations Cockpit page that combines:
+
+queue
+
+SLA
+
+acceptance
+
+outcomes
+
+notifications
+
+routing
+
+admin review
+
+into one screen. That would be the crown on top of the machine.
+
+please write the code for this single unified operations cockpit page
+
+Yes. Here is the code for a single unified Operations Cockpit page that pulls together:
+
+pending draft queue
+
+queue summary counts
+
+selected draft review pane
+
+acceptance summary
+
+SLA summary
+
+notifications
+
+outcome summary
+
+physician assignment sweep trigger
+
+escalation sweep trigger
+
+audit export trigger
+
+This is the “bridge of the ship” page 🚢
+One screen, many levers.
+
+What this page assumes already exists
+
+It uses the backend routes we scaffolded earlier:
+
+GET /api/pending-draft-queue
+
+GET /api/pending-draft-queue/counts
+
+GET /api/acceptance-analytics/summary
+
+GET /api/sla-analytics/summary
+
+GET /api/sla-analytics/queue-status
+
+GET /api/patient-outcomes/summary
+
+GET /api/admin-review/feed
+
+POST /api/notifications/sweep
+
+POST /api/queue-assignments/sweep
+
+POST /api/audit-exports/csv
+
+And it reuses your existing:
+
+SupervisedReplyComposer
+
+DraftQueueFilters
+
+DraftQueueTable
+
+QueueSummaryCards
+
+AcceptanceSummaryCards
+
+SlaSummaryCards
+
+New page
+client/src/pages/OperationsCockpitPage.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+
+import QueueSummaryCards from "../components/QueueSummaryCards";
+import DraftQueueFilters, { QueueFilters } from "../components/DraftQueueFilters";
+import DraftQueueTable from "../components/DraftQueueTable";
+import AcceptanceSummaryCards from "../components/AcceptanceSummaryCards";
+import SlaSummaryCards from "../components/SlaSummaryCards";
+import SupervisedReplyComposer from "./SupervisedReplyComposer";
+
+type QueueCounts = {
+  total: number;
+  blocked: number;
+  drafted: number;
+  approved: number;
+  overdue: number;
+  urgent: number;
+  high: number;
+  telegram: number;
+  whatsapp: number;
+};
+
+type QueueRow = {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  channel: "telegram" | "whatsapp";
+  channelThreadExternalId: string;
+  complaint?: string | null;
+  disposition?: string | null;
+  patientLabel?: string | null;
+  originalPatientMessage: string;
+  assistantDraft: string;
+  editedDraft?: string | null;
+  status: string;
+  blocked: boolean;
+  confidence?: number | null;
+  physicianId?: string | null;
+  dueAt?: string | null;
+  overdue: boolean;
+  urgencyScore: number;
+  taskPriority?: string | null;
+  safetyFlags: string[];
+  medicationWarnings: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AcceptanceSummary = {
+  total: number;
+  unchanged: number;
+  light: number;
+  moderate: number;
+  heavy: number;
+  acceptedUnchangedRate: number;
+  acceptedLightRate: number;
+  heavyRewriteRate: number;
+  avgSimilarity: number | string | null;
+};
+
+type SlaSummary = {
+  avg_inbound_to_draft_min?: number;
+  avg_draft_to_approve_min?: number;
+  avg_approve_to_send_min?: number;
+  avg_inbound_to_send_min?: number;
+  avg_blocked_to_resolved_min?: number;
+};
+
+type QueueSlaStatus = {
+  onTime: number;
+  dueSoon: number;
+  overdue: number;
+  blockedUrgent: number;
+};
+
+type OutcomeSummary = {
+  total: number;
+  helpful: number;
+  confusing: number;
+  escalated: number;
+  ledToVisit: number;
+  resolvedWithoutVisit: number;
+  patientResponded: number;
+  avgResponseLatencyMin: number;
+};
+
+type AdminReviewRow = {
+  draft_id: string;
+  case_id: string;
+  thread_id: string;
+  complaint?: string | null;
+  disposition?: string | null;
+  physician_id?: string | null;
+  rewrite_severity?: string | null;
+  status: string;
+  helpful?: boolean | null;
+  confusing?: boolean | null;
+  led_to_visit?: boolean | null;
+  blocked?: boolean | null;
+  created_at?: string;
+};
+
+const DEFAULT_COUNTS: QueueCounts = {
+  total: 0,
+  blocked: 0,
+  drafted: 0,
+  approved: 0,
+  overdue: 0,
+  urgent: 0,
+  high: 0,
+  telegram: 0,
+  whatsapp: 0,
+};
+
+const DEFAULT_ACCEPTANCE: AcceptanceSummary = {
+  total: 0,
+  unchanged: 0,
+  light: 0,
+  moderate: 0,
+  heavy: 0,
+  acceptedUnchangedRate: 0,
+  acceptedLightRate: 0,
+  heavyRewriteRate: 0,
+  avgSimilarity: 0,
+};
+
+const DEFAULT_SLA: SlaSummary = {
+  avg_inbound_to_draft_min: 0,
+  avg_draft_to_approve_min: 0,
+  avg_approve_to_send_min: 0,
+  avg_inbound_to_send_min: 0,
+  avg_blocked_to_resolved_min: 0,
+};
+
+const DEFAULT_QUEUE_SLA: QueueSlaStatus = {
+  onTime: 0,
+  dueSoon: 0,
+  overdue: 0,
+  blockedUrgent: 0,
+};
+
+const DEFAULT_OUTCOMES: OutcomeSummary = {
+  total: 0,
+  helpful: 0,
+  confusing: 0,
+  escalated: 0,
+  ledToVisit: 0,
+  resolvedWithoutVisit: 0,
+  patientResponded: 0,
+  avgResponseLatencyMin: 0,
+};
+
+const DEFAULT_FILTERS: QueueFilters = {
+  search: "",
+  status: "",
+  channel: "",
+  blocked: "",
+  priority: "",
+  complaint: "",
+  disposition: "",
+  overdueOnly: false,
+};
+
+function SmallMetricCard({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "default" | "green" | "amber" | "red" | "blue";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "bg-green-50 border-green-200"
+      : tone === "amber"
+      ? "bg-amber-50 border-amber-200"
+      : tone === "red"
+      ? "bg-red-50 border-red-200"
+      : tone === "blue"
+      ? "bg-blue-50 border-blue-200"
+      : "bg-white";
+
+  return (
+    <div className={`rounded-2xl border p-4 shadow-sm ${toneClass}`}>
+      <div className="text-sm text-gray-500">{label}</div>
+      <div className="text-2xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  right,
+  children,
+}: {
+  title: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {right}
+      </div>
+      <div className="p-4">{children}</div>
+    </div>
+  );
+}
+
+export default function OperationsCockpitPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [queueCounts, setQueueCounts] = useState<QueueCounts>(DEFAULT_COUNTS);
+  const [queueRows, setQueueRows] = useState<QueueRow[]>([]);
+  const [selectedRow, setSelectedRow] = useState<QueueRow | null>(null);
+
+  const [filters, setFilters] = useState<QueueFilters>(DEFAULT_FILTERS);
+
+  const [acceptanceSummary, setAcceptanceSummary] =
+    useState<AcceptanceSummary>(DEFAULT_ACCEPTANCE);
+  const [slaSummary, setSlaSummary] = useState<SlaSummary>(DEFAULT_SLA);
+  const [queueSlaStatus, setQueueSlaStatus] =
+    useState<QueueSlaStatus>(DEFAULT_QUEUE_SLA);
+  const [outcomeSummary, setOutcomeSummary] =
+    useState<OutcomeSummary>(DEFAULT_OUTCOMES);
+
+  const [adminRows, setAdminRows] = useState<AdminReviewRow[]>([]);
+  const [loadingQueue, setLoadingQueue] = useState(false);
+  const [loadingTop, setLoadingTop] = useState(false);
+  const [actionBusy, setActionBusy] = useState<string>("");
+
+  useEffect(() => {
+    setFilters({
+      search: searchParams.get("search") || "",
+      status: searchParams.get("status") || "",
+      channel: searchParams.get("channel") || "",
+      blocked: searchParams.get("blocked") || "",
+      priority: searchParams.get("priority") || "",
+      complaint: searchParams.get("complaint") || "",
+      disposition: searchParams.get("disposition") || "",
+      overdueOnly: searchParams.get("overdueOnly") === "true",
+    });
+  }, []);
+
+  const queueQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.channel) params.set("channel", filters.channel);
+    if (filters.blocked) params.set("blocked", filters.blocked);
+    if (filters.priority) params.set("priority", filters.priority);
+    if (filters.complaint) params.set("complaint", filters.complaint);
+    if (filters.disposition) params.set("disposition", filters.disposition);
+    if (filters.overdueOnly) params.set("overdueOnly", "true");
+    params.set("limit", "100");
+    return params.toString();
+  }, [filters]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.channel) params.set("channel", filters.channel);
+    if (filters.blocked) params.set("blocked", filters.blocked);
+    if (filters.priority) params.set("priority", filters.priority);
+    if (filters.complaint) params.set("complaint", filters.complaint);
+    if (filters.disposition) params.set("disposition", filters.disposition);
+    if (filters.overdueOnly) params.set("overdueOnly", "true");
+    setSearchParams(params, { replace: true });
+  }, [filters, setSearchParams]);
+
+  async function loadQueue() {
+    setLoadingQueue(true);
+    try {
+      const [countsRes, rowsRes] = await Promise.all([
+        fetch(`/api/pending-draft-queue/counts?${queueQuery}`).then((r) => r.json()),
+        fetch(`/api/pending-draft-queue?${queueQuery}`).then((r) => r.json()),
+      ]);
+
+      if (countsRes.ok) setQueueCounts(countsRes.counts);
+      if (rowsRes.ok) {
+        setQueueRows(rowsRes.rows);
+        if (rowsRes.rows.length && !selectedRow) {
+          setSelectedRow(rowsRes.rows[0]);
+        }
+      }
+    } finally {
+      setLoadingQueue(false);
+    }
+  }
+
+  async function loadTopPanels() {
+    setLoadingTop(true);
+    try {
+      const [
+        acceptanceRes,
+        slaRes,
+        queueSlaRes,
+        outcomesRes,
+        adminRes,
+      ] = await Promise.all([
+        fetch("/api/acceptance-analytics/summary").then((r) => r.json()),
+        fetch("/api/sla-analytics/summary").then((r) => r.json()),
+        fetch("/api/sla-analytics/queue-status").then((r) => r.json()),
+        fetch("/api/patient-outcomes/summary").then((r) => r.json()),
+        fetch("/api/admin-review/feed?limit=8").then((r) => r.json()),
+      ]);
+
+      if (acceptanceRes.ok) setAcceptanceSummary(acceptanceRes.summary);
+      if (slaRes.ok) setSlaSummary(slaRes.summary);
+      if (queueSlaRes.ok) setQueueSlaStatus(queueSlaRes.summary);
+      if (outcomesRes.ok) setOutcomeSummary(outcomesRes.summary);
+      if (adminRes.ok) setAdminRows(adminRes.rows || []);
+    } finally {
+      setLoadingTop(false);
+    }
+  }
+
+  async function openDraft(draftId: string) {
+    const res = await fetch(`/api/pending-draft-queue/${draftId}`).then((r) => r.json());
+    if (res.ok) {
+      setSelectedRow(res.row);
+    }
+  }
+
+  async function runEscalationSweep() {
+    setActionBusy("escalation");
+    try {
+      const res = await fetch("/api/notifications/sweep", {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Escalation sweep failed");
+      await Promise.all([loadQueue(), loadTopPanels()]);
+      alert(`Escalation sweep complete. Created ${res.result?.createdCount ?? 0} notifications.`);
+    } catch (err: any) {
+      alert(err.message || "Escalation sweep failed");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function runAssignmentSweep() {
+    setActionBusy("assignment");
+    try {
+      const res = await fetch("/api/queue-assignments/sweep", {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Assignment sweep failed");
+      await Promise.all([loadQueue(), loadTopPanels()]);
+      alert(`Assignment sweep complete. Assigned ${res.result?.assignedCount ?? 0} items.`);
+    } catch (err: any) {
+      alert(err.message || "Assignment sweep failed");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function exportAuditCsv() {
+    setActionBusy("export");
+    try {
+      const res = await fetch("/api/audit-exports/csv", {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Audit export failed");
+      alert(`Audit export created:\n${res.result?.filePath}`);
+    } catch (err: any) {
+      alert(err.message || "Audit export failed");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  useEffect(() => {
+    loadQueue();
+  }, [queueQuery]);
+
+  useEffect(() => {
+    loadTopPanels();
+  }, []);
+
+  const topRightStats = (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <SmallMetricCard
+        label="Blocked Urgent"
+        value={queueSlaStatus.blockedUrgent}
+        tone="red"
+      />
+      <SmallMetricCard
+        label="Due Soon"
+        value={queueSlaStatus.dueSoon}
+        tone="amber"
+      />
+      <SmallMetricCard
+        label="On Time"
+        value={queueSlaStatus.onTime}
+        tone="green"
+      />
+      <SmallMetricCard
+        label="Avg Inbound → Send"
+        value={`${Number(slaSummary.avg_inbound_to_send_min || 0).toFixed(1)}m`}
+        tone="blue"
+      />
+    </div>
+  );
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold">Operations Cockpit</h1>
+          <p className="text-gray-600">
+            One screen for the full supervised messaging system: queue, review, SLA, acceptance, outcomes, and admin controls.
+          </p>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={runEscalationSweep}
+            disabled={actionBusy === "escalation"}
+            className="rounded-xl border px-4 py-2 bg-white hover:bg-gray-50"
+          >
+            {actionBusy === "escalation" ? "Running..." : "Run Escalation Sweep"}
+          </button>
+
+          <button
+            onClick={runAssignmentSweep}
+            disabled={actionBusy === "assignment"}
+            className="rounded-xl border px-4 py-2 bg-white hover:bg-gray-50"
+          >
+            {actionBusy === "assignment" ? "Running..." : "Run Assignment Sweep"}
+          </button>
+
+          <button
+            onClick={exportAuditCsv}
+            disabled={actionBusy === "export"}
+            className="rounded-xl bg-black text-white px-4 py-2"
+          >
+            {actionBusy === "export" ? "Exporting..." : "Export Audit CSV"}
+          </button>
+        </div>
+      </div>
+
+      {topRightStats}
+
+      <SectionCard title="Queue Overview" right={loadingQueue ? <span className="text-sm text-gray-500">Refreshing...</span> : null}>
+        <QueueSummaryCards counts={queueCounts} />
+      </SectionCard>
+
+      <SectionCard title="System Quality + Operations Snapshot" right={loadingTop ? <span className="text-sm text-gray-500">Refreshing...</span> : null}>
+        <div className="space-y-4">
+          <AcceptanceSummaryCards summary={acceptanceSummary} />
+          <SlaSummaryCards summary={slaSummary} queueStatus={queueSlaStatus} />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Outcome Snapshot">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SmallMetricCard label="Outcome Records" value={outcomeSummary.total} />
+          <SmallMetricCard label="Helpful" value={outcomeSummary.helpful} tone="green" />
+          <SmallMetricCard label="Confusing" value={outcomeSummary.confusing} tone="amber" />
+          <SmallMetricCard label="Escalated" value={outcomeSummary.escalated} tone="red" />
+          <SmallMetricCard label="Led To Visit" value={outcomeSummary.ledToVisit} />
+          <SmallMetricCard label="Resolved No Visit" value={outcomeSummary.resolvedWithoutVisit} tone="green" />
+          <SmallMetricCard label="Patient Responded" value={outcomeSummary.patientResponded} />
+          <SmallMetricCard
+            label="Avg Response Latency"
+            value={`${Number(outcomeSummary.avgResponseLatencyMin || 0).toFixed(1)}m`}
+            tone="blue"
+          />
+        </div>
+      </SectionCard>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_1.2fr] gap-4">
+        <SectionCard title="Pending Draft Queue">
+          <div className="space-y-4">
+            <DraftQueueFilters
+              filters={filters}
+              onChange={setFilters}
+              onRefresh={loadQueue}
+            />
+
+            <DraftQueueTable
+              rows={queueRows}
+              onOpen={openDraft}
+            />
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title={
+            selectedRow
+              ? `Case Review: ${selectedRow.caseId}`
+              : "Case Review"
+          }
+          right={
+            selectedRow ? (
+              <div className="text-sm text-gray-500">
+                {selectedRow.complaint || "unknown"} · {selectedRow.disposition || "unknown"}
+              </div>
+            ) : null
+          }
+        >
+          {selectedRow ? (
+            <SupervisedReplyComposer
+              caseId={selectedRow.caseId}
+              threadId={selectedRow.threadId}
+              channel={selectedRow.channel}
+              channelThreadExternalId={selectedRow.channelThreadExternalId}
+              patientMessage={selectedRow.originalPatientMessage}
+              priorMessages={[
+                { role: "patient", text: selectedRow.originalPatientMessage },
+              ]}
+              disposition={selectedRow.disposition || (selectedRow.blocked ? "manual_review" : "follow_up")}
+              triageSummary={
+                selectedRow.safetyFlags?.length
+                  ? selectedRow.safetyFlags.join(", ")
+                  : "No triage summary loaded"
+              }
+              differentialSummary="Pending case-context hydration"
+              redFlags={selectedRow.safetyFlags || []}
+            />
+          ) : (
+            <div className="text-gray-500">Select a queue item to review.</div>
+          )}
+        </SectionCard>
+      </div>
+
+      <SectionCard title="Recent Admin Review Feed">
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left">
+              <tr>
+                <th className="p-3">Draft</th>
+                <th className="p-3">Case</th>
+                <th className="p-3">Complaint</th>
+                <th className="p-3">Disposition</th>
+                <th className="p-3">Physician</th>
+                <th className="p-3">Rewrite</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Helpful</th>
+                <th className="p-3">Confusing</th>
+                <th className="p-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {adminRows.map((row) => (
+                <tr key={row.draft_id} className="border-t">
+                  <td className="p-3 font-mono text-xs">{row.draft_id}</td>
+                  <td className="p-3">{row.case_id}</td>
+                  <td className="p-3">{row.complaint || "unknown"}</td>
+                  <td className="p-3">{row.disposition || "unknown"}</td>
+                  <td className="p-3">{row.physician_id || "Unassigned"}</td>
+                  <td className="p-3">{row.rewrite_severity || "—"}</td>
+                  <td className="p-3">{row.status}</td>
+                  <td className="p-3">{String(!!row.helpful)}</td>
+                  <td className="p-3">{String(!!row.confusing)}</td>
+                  <td className="p-3">
+                    <button
+                      onClick={() => openDraft(row.draft_id)}
+                      className="rounded-xl border px-3 py-2 hover:bg-gray-50"
+                    >
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!adminRows.length && (
+                <tr>
+                  <td colSpan={10} className="p-6 text-center text-gray-500">
+                    No admin review items available.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+Route registration
+
+Add this to your frontend router:
+
+<Route path="/operations-cockpit" element={<OperationsCockpitPage />} />
+Best next additions to this cockpit
+
+These are the highest-value nearby upgrades:
+
+Live notifications panel
+Add a right rail with active blocked/overdue alerts and one-click acknowledge.
+
+Embedded charts strip
+Add tiny sparkline cards for:
+
+inbound volume
+
+blocked count
+
+heavy rewrite rate
+
+SLA breach count
+
+One-click outcome logging
+On the selected case panel, let the reviewer mark:
+
+helpful
+
+confusing
+
+escalated
+
+led to visit
+
+Assignment visibility
+Show assigned physician and assignment reason directly in the queue table.
+
+Real prior thread hydration
+Replace the placeholder one-message thread with your actual message history and case context.
+
+Auto-refresh loop
+Poll every 30 to 60 seconds so the cockpit feels alive instead of museum-frozen.
+
+Permission slices
+Different layouts for:
+
+doctor
+
+supervising physician
+
+admin/reviewer
+
+operations manager
+
+At this point the supervised reply module is no longer a loose collection of tools. It is a real operations surface.
+
+If you want, the next best code to write is the live notifications rail + auto-refresh + one-click outcome logging embedded inside this cockpit.
+
+please write the code for the live notificatyion +++ embedded in the cockpit.  also write code for any other additions you recommend
+
+Yes. Here is the next upgrade: a live notifications rail embedded in the Operations Cockpit, plus the other highest-value additions that belong right next to it:
+
+live notifications rail
+
+auto-refresh loop
+
+one-click outcome logging
+
+assignment visibility in queue
+
+real-time top metrics refresh
+
+acknowledge notification action
+
+quick jump from notification to selected draft
+
+optional lightweight activity pulse
+
+This turns the cockpit from a static dashboard into a breathing command deck.
+
+What this adds
+Backend
+
+list notifications endpoint
+
+acknowledge notification endpoint
+
+optional unread count endpoint
+
+outcome quick-log endpoint already exists, now wired for cockpit use
+
+Frontend
+
+NotificationsRail component
+
+OutcomeQuickLog component
+
+queue table assignment columns
+
+cockpit auto-refresh
+
+top-of-screen activity pulse
+
+one-click open draft from notification
+
+one-click acknowledge notification
+
+one-click log helpful / confusing / escalated / led to visit
+
+1. Backend notification list endpoints
+server/routes/notifications.ts
+
+Replace with this expanded version:
+
+import { Router } from "express";
+import { createNotification, acknowledgeNotification } from "../services/notificationService";
+import { runEscalationSweep } from "../services/escalationEngine";
+import { db } from "../db";
+import { notifications } from "../db/schema.notifications";
+import { and, desc, eq, sql } from "drizzle-orm";
+
+export const notificationsRouter = Router();
+
+notificationsRouter.post("/", async (req, res) => {
+  try {
+    const row = await createNotification(req.body);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("create notification error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/:id/acknowledge", async (req, res) => {
+  try {
+    const row = await acknowledgeNotification(req.params.id);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("ack notification error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/sweep", async (_req, res) => {
+  try {
+    const result = await runEscalationSweep();
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("notification sweep error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.get("/", async (req, res) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+    const acknowledged =
+      req.query.acknowledged === undefined
+        ? undefined
+        : String(req.query.acknowledged).toLowerCase() === "true";
+
+    const whereParts = [];
+    if (typeof acknowledged === "boolean") {
+      whereParts.push(eq(notifications.acknowledged, acknowledged));
+    }
+
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(whereParts.length ? and(...whereParts) : undefined)
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
+
+    res.json({ ok: true, rows });
+  } catch (err: any) {
+    console.error("notification list error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.get("/counts/unread", async (_req, res) => {
+  try {
+    const rows = await db
+      .select({
+        unread: sql<number>`count(*)`,
+      })
+      .from(notifications)
+      .where(eq(notifications.acknowledged, false));
+
+    res.json({ ok: true, unread: Number(rows[0]?.unread || 0) });
+  } catch (err: any) {
+    console.error("notification unread count error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+2. Queue assignment visibility in queue backend
+
+To show assignment info directly in the cockpit queue, join assignments into the queue query.
+
+Patch server/services/pendingDraftQueueService.ts
+
+Add import:
+
+import { queueAssignments } from "../db/schema.queueAssignments";
+
+Update QueueRow type:
+
+  assignedPhysicianId?: string | null;
+  assignmentReason?: string | null;
+
+In select({...}), add:
+
+      assignedPhysicianId: queueAssignments.assignedPhysicianId,
+      assignmentReason: queueAssignments.assignmentReason,
+
+Update the query joins:
+
+    .leftJoin(
+      followUpTasks,
+      and(
+        eq(followUpTasks.draftId, replyDrafts.id),
+        eq(followUpTasks.status, "open")
+      )
+    )
+    .leftJoin(
+      queueAssignments,
+      eq(queueAssignments.draftId, replyDrafts.id)
+    )
+
+And in getDraftQueueDetail, add the same fields:
+
+      assignedPhysicianId: queueAssignments.assignedPhysicianId,
+      assignmentReason: queueAssignments.assignmentReason,
+
+and join:
+
+    .leftJoin(followUpTasks, and(eq(followUpTasks.draftId, replyDrafts.id), eq(followUpTasks.status, "open")))
+    .leftJoin(queueAssignments, eq(queueAssignments.draftId, replyDrafts.id))
+3. Notifications rail component
+client/src/components/NotificationsRail.tsx
+import React from "react";
+
+export type NotificationRow = {
+  id: string;
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+  physicianId?: string | null;
+  type: string;
+  channel: string;
+  message: string;
+  sent: boolean;
+  acknowledged: boolean;
+  createdAt: string;
+};
+
+function notificationTone(type: string) {
+  if (type === "blocked_urgent") {
+    return "bg-red-50 border-red-200 text-red-800";
+  }
+  if (type === "overdue_draft" || type === "same_day_warning") {
+    return "bg-amber-50 border-amber-200 text-amber-800";
+  }
+  if (type === "approved_unsent") {
+    return "bg-blue-50 border-blue-200 text-blue-800";
+  }
+  return "bg-gray-50 border-gray-200 text-gray-800";
+}
+
+export default function NotificationsRail({
+  notifications,
+  unreadCount,
+  onOpenDraft,
+  onAcknowledge,
+  onRefresh,
+}: {
+  notifications: NotificationRow[];
+  unreadCount: number;
+  onOpenDraft: (draftId: string) => void;
+  onAcknowledge: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white shadow-sm h-full flex flex-col">
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div>
+          <h2 className="text-lg font-semibold">Live Notifications</h2>
+          <div className="text-sm text-gray-500">{unreadCount} unread</div>
+        </div>
+        <button
+          onClick={onRefresh}
+          className="rounded-xl border px-3 py-2 hover:bg-gray-50"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <div className="p-3 space-y-3 overflow-auto">
+        {notifications.map((n) => (
+          <div
+            key={n.id}
+            className={`rounded-2xl border p-3 ${notificationTone(n.type)} ${
+              n.acknowledged ? "opacity-60" : ""
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide">
+                  {n.type.replace(/_/g, " ")}
+                </div>
+                <div className="mt-1 text-sm">{n.message}</div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {new Date(n.createdAt).toLocaleString()}
+                </div>
+              </div>
+
+              {!n.acknowledged && (
+                <button
+                  onClick={() => onAcknowledge(n.id)}
+                  className="rounded-lg border px-2 py-1 text-xs hover:bg-white"
+                >
+                  Ack
+                </button>
+              )}
+            </div>
+
+            <div className="mt-3 flex gap-2 flex-wrap">
+              {n.draftId && (
+                <button
+                  onClick={() => onOpenDraft(n.draftId!)}
+                  className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+                >
+                  Open Draft
+                </button>
+              )}
+
+              {n.caseId && (
+                <span className="rounded-lg bg-white/70 border px-2 py-1 text-xs">
+                  {n.caseId}
+                </span>
+              )}
+
+              {n.physicianId && (
+                <span className="rounded-lg bg-white/70 border px-2 py-1 text-xs">
+                  {n.physicianId}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {!notifications.length && (
+          <div className="text-sm text-gray-500 p-3">
+            No live notifications.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+4. One-click outcome logging component
+client/src/components/OutcomeQuickLog.tsx
+import React, { useState } from "react";
+
+export default function OutcomeQuickLog({
+  draftId,
+  caseId,
+  threadId,
+  physicianId,
+  complaint,
+  disposition,
+  tone,
+  templateKey,
+  rewriteSeverity,
+  onLogged,
+}: {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  physicianId?: string | null;
+  complaint?: string | null;
+  disposition?: string | null;
+  tone?: string | null;
+  templateKey?: string | null;
+  rewriteSeverity?: string | null;
+  onLogged?: () => void;
+}) {
+  const [busy, setBusy] = useState("");
+
+  async function quickLog(payload: Record<string, any>, label: string) {
+    setBusy(label);
+    try {
+      const res = await fetch("/api/patient-outcomes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          draftId,
+          caseId,
+          threadId,
+          physicianId,
+          complaint,
+          disposition,
+          tone,
+          templateKey,
+          rewriteSeverity,
+          ...payload,
+        }),
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Outcome log failed");
+      onLogged?.();
+    } catch (err: any) {
+      alert(err.message || "Outcome log failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="text-sm font-semibold mb-3">Quick Outcome Log</div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => quickLog({ helpful: true, patientResponded: true }, "helpful")}
+          disabled={!!busy}
+          className="rounded-xl border px-3 py-2 hover:bg-green-50"
+        >
+          {busy === "helpful" ? "Saving..." : "Helpful"}
+        </button>
+
+        <button
+          onClick={() => quickLog({ confusing: true }, "confusing")}
+          disabled={!!busy}
+          className="rounded-xl border px-3 py-2 hover:bg-amber-50"
+        >
+          {busy === "confusing" ? "Saving..." : "Confusing"}
+        </button>
+
+        <button
+          onClick={() => quickLog({ escalated: true, ledToVisit: true }, "escalated")}
+          disabled={!!busy}
+          className="rounded-xl border px-3 py-2 hover:bg-red-50"
+        >
+          {busy === "escalated" ? "Saving..." : "Escalated"}
+        </button>
+
+        <button
+          onClick={() => quickLog({ ledToVisit: true }, "visit")}
+          disabled={!!busy}
+          className="rounded-xl border px-3 py-2 hover:bg-blue-50"
+        >
+          {busy === "visit" ? "Saving..." : "Led to Visit"}
+        </button>
+
+        <button
+          onClick={() => quickLog({ resolvedWithoutVisit: true }, "resolved")}
+          disabled={!!busy}
+          className="rounded-xl border px-3 py-2 hover:bg-gray-50"
+        >
+          {busy === "resolved" ? "Saving..." : "Resolved No Visit"}
+        </button>
+      </div>
+    </div>
+  );
+}
+5. Add assignment visibility to queue table
+Patch client/src/components/DraftQueueTable.tsx
+
+Update row type:
+
+  assignedPhysicianId?: string | null;
+  assignmentReason?: string | null;
+  disposition?: string | null;
+
+Update header row:
+
+            <th className="p-3">Assignment</th>
+
+Add assignment cell before the final button cell:
+
+              <td className="p-3">
+                <div className="font-medium">
+                  {row.assignedPhysicianId || "Unassigned"}
+                </div>
+                <div className="text-xs text-gray-500 line-clamp-2">
+                  {row.assignmentReason || "—"}
+                </div>
+              </td>
+
+Update colSpan in empty row from 8 to 9.
+
+6. Activity pulse component
+
+This is a small live strip that shows the current queue pulse.
+
+client/src/components/CockpitPulseBar.tsx
+import React from "react";
+
+export default function CockpitPulseBar({
+  blockedUrgent,
+  dueSoon,
+  overdue,
+  unreadNotifications,
+}: {
+  blockedUrgent: number;
+  dueSoon: number;
+  overdue: number;
+  unreadNotifications: number;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white shadow-sm px-4 py-3">
+      <div className="flex flex-wrap gap-3 text-sm">
+        <span className="rounded-full px-3 py-1 bg-red-50 border border-red-200 text-red-700">
+          Blocked urgent: {blockedUrgent}
+        </span>
+        <span className="rounded-full px-3 py-1 bg-amber-50 border border-amber-200 text-amber-700">
+          Due soon: {dueSoon}
+        </span>
+        <span className="rounded-full px-3 py-1 bg-orange-50 border border-orange-200 text-orange-700">
+          Overdue: {overdue}
+        </span>
+        <span className="rounded-full px-3 py-1 bg-blue-50 border border-blue-200 text-blue-700">
+          Unread alerts: {unreadNotifications}
+        </span>
+      </div>
+    </div>
+  );
+}
+7. Full cockpit page patch with live notifications, auto-refresh, quick outcome logging
+Replace client/src/pages/OperationsCockpitPage.tsx with this upgraded version
+import React, { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+
+import QueueSummaryCards from "../components/QueueSummaryCards";
+import DraftQueueFilters, { QueueFilters } from "../components/DraftQueueFilters";
+import DraftQueueTable from "../components/DraftQueueTable";
+import AcceptanceSummaryCards from "../components/AcceptanceSummaryCards";
+import SlaSummaryCards from "../components/SlaSummaryCards";
+import NotificationsRail, { NotificationRow } from "../components/NotificationsRail";
+import OutcomeQuickLog from "../components/OutcomeQuickLog";
+import CockpitPulseBar from "../components/CockpitPulseBar";
+import SupervisedReplyComposer from "./SupervisedReplyComposer";
+
+type QueueCounts = {
+  total: number;
+  blocked: number;
+  drafted: number;
+  approved: number;
+  overdue: number;
+  urgent: number;
+  high: number;
+  telegram: number;
+  whatsapp: number;
+};
+
+type QueueRow = {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  channel: "telegram" | "whatsapp";
+  channelThreadExternalId: string;
+  complaint?: string | null;
+  disposition?: string | null;
+  patientLabel?: string | null;
+  assignedPhysicianId?: string | null;
+  assignmentReason?: string | null;
+  originalPatientMessage: string;
+  assistantDraft: string;
+  editedDraft?: string | null;
+  finalSentText?: string | null;
+  status: string;
+  blocked: boolean;
+  confidence?: number | null;
+  physicianId?: string | null;
+  tone?: string | null;
+  templateKey?: string | null;
+  rewriteSeverity?: string | null;
+  dueAt?: string | null;
+  overdue: boolean;
+  urgencyScore: number;
+  taskPriority?: string | null;
+  safetyFlags: string[];
+  medicationWarnings: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AcceptanceSummary = {
+  total: number;
+  unchanged: number;
+  light: number;
+  moderate: number;
+  heavy: number;
+  acceptedUnchangedRate: number;
+  acceptedLightRate: number;
+  heavyRewriteRate: number;
+  avgSimilarity: number | string | null;
+};
+
+type SlaSummary = {
+  avg_inbound_to_draft_min?: number;
+  avg_draft_to_approve_min?: number;
+  avg_approve_to_send_min?: number;
+  avg_inbound_to_send_min?: number;
+  avg_blocked_to_resolved_min?: number;
+};
+
+type QueueSlaStatus = {
+  onTime: number;
+  dueSoon: number;
+  overdue: number;
+  blockedUrgent: number;
+};
+
+type OutcomeSummary = {
+  total: number;
+  helpful: number;
+  confusing: number;
+  escalated: number;
+  ledToVisit: number;
+  resolvedWithoutVisit: number;
+  patientResponded: number;
+  avgResponseLatencyMin: number;
+};
+
+type AdminReviewRow = {
+  draft_id: string;
+  case_id: string;
+  complaint?: string | null;
+  disposition?: string | null;
+  physician_id?: string | null;
+  rewrite_severity?: string | null;
+  status: string;
+  helpful?: boolean | null;
+  confusing?: boolean | null;
+};
+
+const DEFAULT_COUNTS: QueueCounts = {
+  total: 0,
+  blocked: 0,
+  drafted: 0,
+  approved: 0,
+  overdue: 0,
+  urgent: 0,
+  high: 0,
+  telegram: 0,
+  whatsapp: 0,
+};
+
+const DEFAULT_ACCEPTANCE: AcceptanceSummary = {
+  total: 0,
+  unchanged: 0,
+  light: 0,
+  moderate: 0,
+  heavy: 0,
+  acceptedUnchangedRate: 0,
+  acceptedLightRate: 0,
+  heavyRewriteRate: 0,
+  avgSimilarity: 0,
+};
+
+const DEFAULT_SLA: SlaSummary = {
+  avg_inbound_to_draft_min: 0,
+  avg_draft_to_approve_min: 0,
+  avg_approve_to_send_min: 0,
+  avg_inbound_to_send_min: 0,
+  avg_blocked_to_resolved_min: 0,
+};
+
+const DEFAULT_QUEUE_SLA: QueueSlaStatus = {
+  onTime: 0,
+  dueSoon: 0,
+  overdue: 0,
+  blockedUrgent: 0,
+};
+
+const DEFAULT_OUTCOMES: OutcomeSummary = {
+  total: 0,
+  helpful: 0,
+  confusing: 0,
+  escalated: 0,
+  ledToVisit: 0,
+  resolvedWithoutVisit: 0,
+  patientResponded: 0,
+  avgResponseLatencyMin: 0,
+};
+
+const DEFAULT_FILTERS: QueueFilters = {
+  search: "",
+  status: "",
+  channel: "",
+  blocked: "",
+  priority: "",
+  complaint: "",
+  disposition: "",
+  overdueOnly: false,
+};
+
+function SmallMetricCard({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "default" | "green" | "amber" | "red" | "blue";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "bg-green-50 border-green-200"
+      : tone === "amber"
+      ? "bg-amber-50 border-amber-200"
+      : tone === "red"
+      ? "bg-red-50 border-red-200"
+      : tone === "blue"
+      ? "bg-blue-50 border-blue-200"
+      : "bg-white";
+
+  return (
+    <div className={`rounded-2xl border p-4 shadow-sm ${toneClass}`}>
+      <div className="text-sm text-gray-500">{label}</div>
+      <div className="text-2xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  right,
+  children,
+}: {
+  title: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {right}
+      </div>
+      <div className="p-4">{children}</div>
+    </div>
+  );
+}
+
+export default function OperationsCockpitPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [queueCounts, setQueueCounts] = useState<QueueCounts>(DEFAULT_COUNTS);
+  const [queueRows, setQueueRows] = useState<QueueRow[]>([]);
+  const [selectedRow, setSelectedRow] = useState<QueueRow | null>(null);
+
+  const [filters, setFilters] = useState<QueueFilters>(DEFAULT_FILTERS);
+
+  const [acceptanceSummary, setAcceptanceSummary] =
+    useState<AcceptanceSummary>(DEFAULT_ACCEPTANCE);
+  const [slaSummary, setSlaSummary] = useState<SlaSummary>(DEFAULT_SLA);
+  const [queueSlaStatus, setQueueSlaStatus] =
+    useState<QueueSlaStatus>(DEFAULT_QUEUE_SLA);
+  const [outcomeSummary, setOutcomeSummary] =
+    useState<OutcomeSummary>(DEFAULT_OUTCOMES);
+
+  const [adminRows, setAdminRows] = useState<AdminReviewRow[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRow[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+  const [loadingQueue, setLoadingQueue] = useState(false);
+  const [loadingTop, setLoadingTop] = useState(false);
+  const [actionBusy, setActionBusy] = useState<string>("");
+
+  useEffect(() => {
+    setFilters({
+      search: searchParams.get("search") || "",
+      status: searchParams.get("status") || "",
+      channel: searchParams.get("channel") || "",
+      blocked: searchParams.get("blocked") || "",
+      priority: searchParams.get("priority") || "",
+      complaint: searchParams.get("complaint") || "",
+      disposition: searchParams.get("disposition") || "",
+      overdueOnly: searchParams.get("overdueOnly") === "true",
+    });
+  }, []);
+
+  const queueQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.channel) params.set("channel", filters.channel);
+    if (filters.blocked) params.set("blocked", filters.blocked);
+    if (filters.priority) params.set("priority", filters.priority);
+    if (filters.complaint) params.set("complaint", filters.complaint);
+    if (filters.disposition) params.set("disposition", filters.disposition);
+    if (filters.overdueOnly) params.set("overdueOnly", "true");
+    params.set("limit", "100");
+    return params.toString();
+  }, [filters]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.channel) params.set("channel", filters.channel);
+    if (filters.blocked) params.set("blocked", filters.blocked);
+    if (filters.priority) params.set("priority", filters.priority);
+    if (filters.complaint) params.set("complaint", filters.complaint);
+    if (filters.disposition) params.set("disposition", filters.disposition);
+    if (filters.overdueOnly) params.set("overdueOnly", "true");
+    setSearchParams(params, { replace: true });
+  }, [filters, setSearchParams]);
+
+  async function loadQueue() {
+    setLoadingQueue(true);
+    try {
+      const [countsRes, rowsRes] = await Promise.all([
+        fetch(`/api/pending-draft-queue/counts?${queueQuery}`).then((r) => r.json()),
+        fetch(`/api/pending-draft-queue?${queueQuery}`).then((r) => r.json()),
+      ]);
+
+      if (countsRes.ok) setQueueCounts(countsRes.counts);
+      if (rowsRes.ok) {
+        setQueueRows(rowsRes.rows);
+        if (
+          rowsRes.rows.length &&
+          (!selectedRow || !rowsRes.rows.find((r: QueueRow) => r.draftId === selectedRow.draftId))
+        ) {
+          setSelectedRow(rowsRes.rows[0]);
+        }
+      }
+    } finally {
+      setLoadingQueue(false);
+    }
+  }
+
+  async function loadTopPanels() {
+    setLoadingTop(true);
+    try {
+      const [
+        acceptanceRes,
+        slaRes,
+        queueSlaRes,
+        outcomesRes,
+        adminRes,
+        notificationsRes,
+        unreadRes,
+      ] = await Promise.all([
+        fetch("/api/acceptance-analytics/summary").then((r) => r.json()),
+        fetch("/api/sla-analytics/summary").then((r) => r.json()),
+        fetch("/api/sla-analytics/queue-status").then((r) => r.json()),
+        fetch("/api/patient-outcomes/summary").then((r) => r.json()),
+        fetch("/api/admin-review/feed?limit=8").then((r) => r.json()),
+        fetch("/api/notifications?acknowledged=false&limit=12").then((r) => r.json()),
+        fetch("/api/notifications/counts/unread").then((r) => r.json()),
+      ]);
+
+      if (acceptanceRes.ok) setAcceptanceSummary(acceptanceRes.summary);
+      if (slaRes.ok) setSlaSummary(slaRes.summary);
+      if (queueSlaRes.ok) setQueueSlaStatus(queueSlaRes.summary);
+      if (outcomesRes.ok) setOutcomeSummary(outcomesRes.summary);
+      if (adminRes.ok) setAdminRows(adminRes.rows || []);
+      if (notificationsRes.ok) setNotifications(notificationsRes.rows || []);
+      if (unreadRes.ok) setUnreadNotifications(Number(unreadRes.unread || 0));
+    } finally {
+      setLoadingTop(false);
+    }
+  }
+
+  async function openDraft(draftId: string) {
+    const res = await fetch(`/api/pending-draft-queue/${draftId}`).then((r) => r.json());
+    if (res.ok) {
+      setSelectedRow(res.row);
+    }
+  }
+
+  async function acknowledgeNotification(id: string) {
+    try {
+      const res = await fetch(`/api/notifications/${id}/acknowledge`, {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Acknowledge failed");
+      await loadTopPanels();
+    } catch (err: any) {
+      alert(err.message || "Acknowledge failed");
+    }
+  }
+
+  async function runEscalationSweep() {
+    setActionBusy("escalation");
+    try {
+      const res = await fetch("/api/notifications/sweep", {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Escalation sweep failed");
+      await Promise.all([loadQueue(), loadTopPanels()]);
+      alert(`Escalation sweep complete. Created ${res.result?.createdCount ?? 0} notifications.`);
+    } catch (err: any) {
+      alert(err.message || "Escalation sweep failed");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function runAssignmentSweep() {
+    setActionBusy("assignment");
+    try {
+      const res = await fetch("/api/queue-assignments/sweep", {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Assignment sweep failed");
+      await Promise.all([loadQueue(), loadTopPanels()]);
+      alert(`Assignment sweep complete. Assigned ${res.result?.assignedCount ?? 0} items.`);
+    } catch (err: any) {
+      alert(err.message || "Assignment sweep failed");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function exportAuditCsv() {
+    setActionBusy("export");
+    try {
+      const res = await fetch("/api/audit-exports/csv", {
+        method: "POST",
+      }).then((r) => r.json());
+
+      if (!res.ok) throw new Error(res.error || "Audit export failed");
+      alert(`Audit export created:\n${res.result?.filePath}`);
+    } catch (err: any) {
+      alert(err.message || "Audit export failed");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadQueue(), loadTopPanels()]);
+  }
+
+  useEffect(() => {
+    loadQueue();
+  }, [queueQuery]);
+
+  useEffect(() => {
+    loadTopPanels();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      refreshAll();
+    }, 45000);
+
+    return () => window.clearInterval(timer);
+  }, [queueQuery]);
+
+  const topRightStats = (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <SmallMetricCard
+        label="Blocked Urgent"
+        value={queueSlaStatus.blockedUrgent}
+        tone="red"
+      />
+      <SmallMetricCard
+        label="Due Soon"
+        value={queueSlaStatus.dueSoon}
+        tone="amber"
+      />
+      <SmallMetricCard
+        label="On Time"
+        value={queueSlaStatus.onTime}
+        tone="green"
+      />
+      <SmallMetricCard
+        label="Avg Inbound → Send"
+        value={`${Number(slaSummary.avg_inbound_to_send_min || 0).toFixed(1)}m`}
+        tone="blue"
+      />
+    </div>
+  );
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold">Operations Cockpit</h1>
+          <p className="text-gray-600">
+            A live command deck for supervised telemedicine messaging: queue, alerts, review, outcomes, and operations controls in one place.
+          </p>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={refreshAll}
+            className="rounded-xl border px-4 py-2 bg-white hover:bg-gray-50"
+          >
+            Refresh All
+          </button>
+
+          <button
+            onClick={runEscalationSweep}
+            disabled={actionBusy === "escalation"}
+            className="rounded-xl border px-4 py-2 bg-white hover:bg-gray-50"
+          >
+            {actionBusy === "escalation" ? "Running..." : "Run Escalation Sweep"}
+          </button>
+
+          <button
+            onClick={runAssignmentSweep}
+            disabled={actionBusy === "assignment"}
+            className="rounded-xl border px-4 py-2 bg-white hover:bg-gray-50"
+          >
+            {actionBusy === "assignment" ? "Running..." : "Run Assignment Sweep"}
+          </button>
+
+          <button
+            onClick={exportAuditCsv}
+            disabled={actionBusy === "export"}
+            className="rounded-xl bg-black text-white px-4 py-2"
+          >
+            {actionBusy === "export" ? "Exporting..." : "Export Audit CSV"}
+          </button>
+        </div>
+      </div>
+
+      <CockpitPulseBar
+        blockedUrgent={queueSlaStatus.blockedUrgent}
+        dueSoon={queueSlaStatus.dueSoon}
+        overdue={queueSlaStatus.overdue}
+        unreadNotifications={unreadNotifications}
+      />
+
+      {topRightStats}
+
+      <SectionCard
+        title="Queue Overview"
+        right={loadingQueue ? <span className="text-sm text-gray-500">Refreshing...</span> : null}
+      >
+        <QueueSummaryCards counts={queueCounts} />
+      </SectionCard>
+
+      <SectionCard
+        title="System Quality + Operations Snapshot"
+        right={loadingTop ? <span className="text-sm text-gray-500">Refreshing...</span> : null}
+      >
+        <div className="space-y-4">
+          <AcceptanceSummaryCards summary={acceptanceSummary} />
+          <SlaSummaryCards summary={slaSummary} queueStatus={queueSlaStatus} />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Outcome Snapshot">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SmallMetricCard label="Outcome Records" value={outcomeSummary.total} />
+          <SmallMetricCard label="Helpful" value={outcomeSummary.helpful} tone="green" />
+          <SmallMetricCard label="Confusing" value={outcomeSummary.confusing} tone="amber" />
+          <SmallMetricCard label="Escalated" value={outcomeSummary.escalated} tone="red" />
+          <SmallMetricCard label="Led To Visit" value={outcomeSummary.ledToVisit} />
+          <SmallMetricCard label="Resolved No Visit" value={outcomeSummary.resolvedWithoutVisit} tone="green" />
+          <SmallMetricCard label="Patient Responded" value={outcomeSummary.patientResponded} />
+          <SmallMetricCard
+            label="Avg Response Latency"
+            value={`${Number(outcomeSummary.avgResponseLatencyMin || 0).toFixed(1)}m`}
+            tone="blue"
+          />
+        </div>
+      </SectionCard>
+
+      <div className="grid grid-cols-1 2xl:grid-cols-[1.2fr_1fr_0.72fr] gap-4">
+        <SectionCard title="Pending Draft Queue">
+          <div className="space-y-4">
+            <DraftQueueFilters
+              filters={filters}
+              onChange={setFilters}
+              onRefresh={loadQueue}
+            />
+
+            <DraftQueueTable
+              rows={queueRows}
+              onOpen={openDraft}
+            />
+          </div>
+        </SectionCard>
+
+        <div className="space-y-4">
+          <SectionCard
+            title={
+              selectedRow
+                ? `Case Review: ${selectedRow.caseId}`
+                : "Case Review"
+            }
+            right={
+              selectedRow ? (
+                <div className="text-sm text-gray-500">
+                  {selectedRow.complaint || "unknown"} · {selectedRow.disposition || "unknown"}
+                </div>
+              ) : null
+            }
+          >
+            {selectedRow ? (
+              <div className="space-y-4">
+                <div className="rounded-2xl border bg-gray-50 p-3 text-sm">
+                  <div><strong>Assigned:</strong> {selectedRow.assignedPhysicianId || "Unassigned"}</div>
+                  <div><strong>Assignment reason:</strong> {selectedRow.assignmentReason || "—"}</div>
+                  <div><strong>Tone:</strong> {selectedRow.tone || "—"}</div>
+                  <div><strong>Template:</strong> {selectedRow.templateKey || "—"}</div>
+                  <div><strong>Rewrite severity:</strong> {selectedRow.rewriteSeverity || "—"}</div>
+                </div>
+
+                <OutcomeQuickLog
+                  draftId={selectedRow.draftId}
+                  caseId={selectedRow.caseId}
+                  threadId={selectedRow.threadId}
+                  physicianId={selectedRow.physicianId}
+                  complaint={selectedRow.complaint}
+                  disposition={selectedRow.disposition}
+                  tone={selectedRow.tone}
+                  templateKey={selectedRow.templateKey}
+                  rewriteSeverity={selectedRow.rewriteSeverity}
+                  onLogged={loadTopPanels}
+                />
+
+                <SupervisedReplyComposer
+                  caseId={selectedRow.caseId}
+                  threadId={selectedRow.threadId}
+                  channel={selectedRow.channel}
+                  channelThreadExternalId={selectedRow.channelThreadExternalId}
+                  patientMessage={selectedRow.originalPatientMessage}
+                  priorMessages={[
+                    { role: "patient", text: selectedRow.originalPatientMessage },
+                  ]}
+                  disposition={selectedRow.disposition || (selectedRow.blocked ? "manual_review" : "follow_up")}
+                  triageSummary={
+                    selectedRow.safetyFlags?.length
+                      ? selectedRow.safetyFlags.join(", ")
+                      : "No triage summary loaded"
+                  }
+                  differentialSummary="Pending case-context hydration"
+                  redFlags={selectedRow.safetyFlags || []}
+                />
+              </div>
+            ) : (
+              <div className="text-gray-500">Select a queue item to review.</div>
+            )}
+          </SectionCard>
+
+          <SectionCard title="Recent Admin Review Feed">
+            <div className="overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left">
+                  <tr>
+                    <th className="p-3">Case</th>
+                    <th className="p-3">Complaint</th>
+                    <th className="p-3">Rewrite</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminRows.map((row) => (
+                    <tr key={row.draft_id} className="border-t">
+                      <td className="p-3">{row.case_id}</td>
+                      <td className="p-3">{row.complaint || "unknown"}</td>
+                      <td className="p-3">{row.rewrite_severity || "—"}</td>
+                      <td className="p-3">{row.status}</td>
+                      <td className="p-3">
+                        <button
+                          onClick={() => openDraft(row.draft_id)}
+                          className="rounded-xl border px-3 py-2 hover:bg-gray-50"
+                        >
+                          Open
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!adminRows.length && (
+                    <tr>
+                      <td colSpan={5} className="p-6 text-center text-gray-500">
+                        No admin review items available.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </SectionCard>
+        </div>
+
+        <NotificationsRail
+          notifications={notifications}
+          unreadCount={unreadNotifications}
+          onOpenDraft={openDraft}
+          onAcknowledge={acknowledgeNotification}
+          onRefresh={loadTopPanels}
+        />
+      </div>
+    </div>
+  );
+}
+8. Frontend route
+
+Add or keep:
+
+<Route path="/operations-cockpit" element={<OperationsCockpitPage />} />
+9. Recommended next additions
+
+These are the best next nearby upgrades after the live notifications rail:
+
+A. Real thread hydration
+
+Right now the composer still gets a minimal placeholder thread. The strongest next step is to load:
+
+actual inbound/outbound thread
+
+structured triage summary
+
+disposition notes
+
+prior draft history
+
+That makes the cockpit clinically sharper.
+
+B. Inline notification-generated actions
+
+For each live notification:
+
+“Assign now”
+
+“Mark reviewed”
+
+“Send reminder”
+
+“Escalate to senior”
+
+C. Quick disposition override
+
+Inside selected case panel:
+
+home care
+
+follow-up
+
+same-day visit
+
+ER now
+
+This is powerful when the doctor needs to redirect the case fast.
+
+D. Embedded tiny trend strip
+
+Put four mini charts on top:
+
+queue total
+
+blocked urgent
+
+heavy rewrite rate
+
+overdue count
+
+E. Role-aware cockpit layout
+
+Show different controls for:
+
+doctor
+
+supervising physician
+
+admin
+
+ops manager
+
+F. Notification deduplication
+
+Your sweep can create repetitive alerts if run often. A good production patch is:
+
+do not recreate same notification type for same draft within a window
+
+auto-close notifications when issue resolves
+
+That one is particularly worth doing before heavy use.
+
+The single best next code addition is real thread hydration + inline notification actions + notification deduplication.
+
+please write the code for real thread hydration + inline notification actions + notification deduplication..  also, how many more next best code additions do you think there will be for this set of modules?
+
+Here is the next production hardening pass for the cockpit:
+
+real thread hydration
+
+inline notification actions
+
+notification deduplication
+
+And the direct answer to your second question:
+
+How many more next-best code additions after this?
+
+For this supervised messaging/cockpit module, I think there are about 5 more high-value additions after this one before the module feels deeply polished rather than merely complete.
+
+Those 5 are:
+
+Quick disposition override + clinician action bar
+
+Notification auto-resolution and state syncing
+
+Role-aware cockpit layouts and permissions
+
+Mini trend strip / sparkline analytics at top of cockpit
+
+Real patient/case store hydration for demographics, meds, allergies, and triage trace
+
+After those 5, you are mostly in optimization land, not major-module land.
+
+What this patch adds
+Backend
+
+real thread hydration from message_logs
+
+notification deduplication window
+
+inline notification actions:
+
+assign now
+
+acknowledge
+
+mark reviewed
+
+send reminder
+
+escalate to senior
+
+notification resolution support
+
+queue assignment helper endpoint
+
+thread API for a selected draft/case
+
+Frontend
+
+cockpit loads real prior thread
+
+notifications rail gets action buttons
+
+selecting notification can hydrate selected draft + thread
+
+reminder / escalate / assign actions from the rail
+
+dedup prevents alert spam confetti
+
+1. Notification schema patch
+
+We need status and dedup metadata.
+
+server/db/schema.notifications.ts
+
+Replace with this version:
+
+import { pgTable, text, timestamp, uuid, boolean } from "drizzle-orm/pg-core";
+
+export const notifications = pgTable("notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftId: text("draft_id"),
+  caseId: text("case_id"),
+  threadId: text("thread_id"),
+  physicianId: text("physician_id"),
+
+  type: text("type").notNull(), // blocked_urgent | overdue_draft | approved_unsent | same_day_warning
+  channel: text("channel").notNull(), // dashboard | email | sms | push
+  message: text("message").notNull(),
+
+  dedupeKey: text("dedupe_key"),
+  status: text("status").notNull().default("open"), // open | acknowledged | resolved
+
+  sent: boolean("sent").default(false).notNull(),
+  acknowledged: boolean("acknowledged").default(false).notNull(),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+});
+2. Migration SQL
+migrations/000Z_notifications_status_dedupe.sql
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS dedupe_key text,
+  ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'open',
+  ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+3. Notification service with deduplication
+server/services/notificationService.ts
+
+Replace with:
+
+import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { db } from "../db";
+import { notifications } from "../db/schema.notifications";
+
+const DEFAULT_DEDUPE_MINUTES = 30;
+
+function buildDedupeKey(input: {
+  draftId?: string;
+  caseId?: string;
+  type: string;
+  physicianId?: string;
+}) {
+  return [
+    input.type,
+    input.draftId || "no-draft",
+    input.caseId || "no-case",
+    input.physicianId || "no-physician",
+  ].join("::");
+}
+
+export async function createNotification(input: {
+  draftId?: string;
+  caseId?: string;
+  threadId?: string;
+  physicianId?: string;
+  type: string;
+  channel: string;
+  message: string;
+  dedupeMinutes?: number;
+}) {
+  const dedupeKey = buildDedupeKey(input);
+  const dedupeMinutes = input.dedupeMinutes ?? DEFAULT_DEDUPE_MINUTES;
+  const cutoff = new Date(Date.now() - dedupeMinutes * 60 * 1000);
+
+  const existing = await db
+    .select()
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.dedupeKey, dedupeKey),
+        eq(notifications.status, "open"),
+        gte(notifications.createdAt, cutoff)
+      )
+    )
+    .orderBy(desc(notifications.createdAt))
+    .limit(1);
+
+  if (existing.length) {
+    return {
+      ...existing[0],
+      deduped: true,
+    };
+  }
+
+  const [row] = await db.insert(notifications).values({
+    draftId: input.draftId,
+    caseId: input.caseId,
+    threadId: input.threadId,
+    physicianId: input.physicianId,
+    type: input.type,
+    channel: input.channel,
+    message: input.message,
+    dedupeKey,
+    status: "open",
+    sent: true,
+  }).returning();
+
+  return row;
+}
+
+export async function acknowledgeNotification(id: string) {
+  const [row] = await db
+    .update(notifications)
+    .set({
+      acknowledged: true,
+      status: "acknowledged",
+    })
+    .where(eq(notifications.id, id))
+    .returning();
+
+  return row;
+}
+
+export async function resolveNotification(id: string) {
+  const [row] = await db
+    .update(notifications)
+    .set({
+      status: "resolved",
+      resolvedAt: new Date(),
+      acknowledged: true,
+    })
+    .where(eq(notifications.id, id))
+    .returning();
+
+  return row;
+}
+
+export async function resolveNotificationsByDraftAndType(input: {
+  draftId: string;
+  types?: string[];
+}) {
+  const whereBase = [eq(notifications.draftId, input.draftId), eq(notifications.status, "open")];
+  if (input.types?.length) {
+    whereBase.push(sql`${notifications.type} = any(${input.types})`);
+  }
+
+  return db
+    .update(notifications)
+    .set({
+      status: "resolved",
+      resolvedAt: new Date(),
+      acknowledged: true,
+    })
+    .where(and(...whereBase))
+    .returning();
+}
+4. Real thread hydration service
+
+This pulls the actual message thread from message_logs.
+
+server/services/threadHydrationService.ts
+import { and, asc, desc, eq, or } from "drizzle-orm";
+import { db } from "../db";
+import { messageLogs } from "../db/schema.messageLogs";
+import { getReplyDraftRecord } from "./replyDraftRepository";
+
+export async function getThreadMessagesByDraftId(draftId: string) {
+  const draft = await getReplyDraftRecord(draftId);
+  if (!draft) return null;
+
+  const rows = await db
+    .select()
+    .from(messageLogs)
+    .where(
+      and(
+        eq(messageLogs.caseId, draft.caseId),
+        eq(messageLogs.threadId, draft.threadId)
+      )
+    )
+    .orderBy(asc(messageLogs.createdAt));
+
+  return {
+    draft,
+    messages: rows.map((m) => ({
+      id: m.id,
+      role:
+        m.senderRole === "patient"
+          ? "patient"
+          : m.senderRole === "doctor"
+          ? "doctor"
+          : m.senderRole === "assistant"
+          ? "assistant"
+          : "system",
+      text: m.body,
+      at: m.createdAt,
+      direction: m.direction,
+      channel: m.channel,
+    })),
+  };
+}
+
+export async function getThreadMessagesByCaseThread(input: {
+  caseId: string;
+  threadId: string;
+}) {
+  const rows = await db
+    .select()
+    .from(messageLogs)
+    .where(
+      and(
+        eq(messageLogs.caseId, input.caseId),
+        eq(messageLogs.threadId, input.threadId)
+      )
+    )
+    .orderBy(asc(messageLogs.createdAt));
+
+  return rows.map((m) => ({
+    id: m.id,
+    role:
+      m.senderRole === "patient"
+        ? "patient"
+        : m.senderRole === "doctor"
+        ? "doctor"
+        : m.senderRole === "assistant"
+        ? "assistant"
+        : "system",
+    text: m.body,
+    at: m.createdAt,
+    direction: m.direction,
+    channel: m.channel,
+  }));
+}
+5. Thread hydration routes
+server/routes/threadHydration.ts
+import { Router } from "express";
+import {
+  getThreadMessagesByDraftId,
+  getThreadMessagesByCaseThread,
+} from "../services/threadHydrationService";
+
+export const threadHydrationRouter = Router();
+
+threadHydrationRouter.get("/draft/:draftId", async (req, res) => {
+  try {
+    const result = await getThreadMessagesByDraftId(req.params.draftId);
+    if (!result) {
+      return res.status(404).json({ ok: false, error: "Draft not found" });
+    }
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("thread by draft error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+threadHydrationRouter.get("/case-thread", async (req, res) => {
+  try {
+    const caseId = String(req.query.caseId || "");
+    const threadId = String(req.query.threadId || "");
+    if (!caseId || !threadId) {
+      return res.status(400).json({ ok: false, error: "caseId and threadId required" });
+    }
+
+    const messages = await getThreadMessagesByCaseThread({ caseId, threadId });
+    res.json({ ok: true, messages });
+  } catch (err: any) {
+    console.error("thread by case/thread error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+6. Inline notification actions service
+
+These actions need server-side support.
+
+server/services/notificationActionService.ts
+import { createNotification, resolveNotification } from "./notificationService";
+import { getReplyDraftRecord, updateReplyDraftRecord } from "./replyDraftRepository";
+import { assignDraft } from "./queueAssignmentService";
+
+export async function assignNowFromNotification(notification: {
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+}) {
+  if (!notification.draftId || !notification.caseId || !notification.threadId) {
+    throw new Error("Notification missing draft/case/thread for assignment");
+  }
+
+  const draft = await getReplyDraftRecord(notification.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  return assignDraft({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    complaint: draft.complaint,
+    blocked: !!draft.blocked,
+    disposition: draft.disposition,
+    taskPriority: draft.blocked ? "urgent" : "medium",
+  });
+}
+
+export async function sendReminderFromNotification(notification: {
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+  physicianId?: string | null;
+}) {
+  if (!notification.draftId) {
+    throw new Error("Notification missing draftId");
+  }
+
+  const draft = await getReplyDraftRecord(notification.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  return createNotification({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    physicianId: draft.physicianId || undefined,
+    type: "approved_unsent",
+    channel: "dashboard",
+    message: `Reminder: draft ${draft.id} for case ${draft.caseId} still needs action.`,
+    dedupeMinutes: 10,
+  });
+}
+
+export async function escalateToSeniorFromNotification(notification: {
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+}) {
+  if (!notification.draftId) {
+    throw new Error("Notification missing draftId");
+  }
+
+  const draft = await getReplyDraftRecord(notification.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  await updateReplyDraftRecord(draft.id, {
+    physicianId: "doctor-senior",
+  });
+
+  return createNotification({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    physicianId: "doctor-senior",
+    type: "blocked_urgent",
+    channel: "dashboard",
+    message: `Case ${draft.caseId} escalated to senior reviewer.`,
+    dedupeMinutes: 5,
+  });
+}
+
+export async function markReviewedFromNotification(notificationId: string) {
+  return resolveNotification(notificationId);
+}
+7. Notifications routes with inline actions
+server/routes/notifications.ts
+
+Add imports at the top:
+
+import {
+  assignNowFromNotification,
+  sendReminderFromNotification,
+  escalateToSeniorFromNotification,
+  markReviewedFromNotification,
+} from "../services/notificationActionService";
+
+Add these routes at the bottom:
+
+notificationsRouter.post("/:id/resolve", async (req, res) => {
+  try {
+    const row = await resolveNotification(req.params.id);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("resolve notification error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/:id/action/assign-now", async (req, res) => {
+  try {
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, req.params.id))
+      .limit(1);
+
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: "Notification not found" });
+    }
+
+    const result = await assignNowFromNotification(rows[0]);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("assign-now error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/:id/action/send-reminder", async (req, res) => {
+  try {
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, req.params.id))
+      .limit(1);
+
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: "Notification not found" });
+    }
+
+    const result = await sendReminderFromNotification(rows[0]);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("send-reminder error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/:id/action/escalate-senior", async (req, res) => {
+  try {
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, req.params.id))
+      .limit(1);
+
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: "Notification not found" });
+    }
+
+    const result = await escalateToSeniorFromNotification(rows[0]);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("escalate-senior error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+notificationsRouter.post("/:id/action/mark-reviewed", async (req, res) => {
+  try {
+    const row = await markReviewedFromNotification(req.params.id);
+    res.json({ ok: true, row });
+  } catch (err: any) {
+    console.error("mark-reviewed error", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+8. Auto-resolve notifications when draft is sent
+
+A useful step toward cleaner state.
+
+Patch server/routes/supervisedReplies.ts
+
+Add import:
+
+import { resolveNotificationsByDraftAndType } from "../services/notificationService";
+
+Then in the send route, after successful update:
+
+    await resolveNotificationsByDraftAndType({
+      draftId,
+      types: ["approved_unsent", "overdue_draft", "same_day_warning"],
+    });
+
+And in the approve route, after successful update:
+
+    await resolveNotificationsByDraftAndType({
+      draftId,
+      types: ["overdue_draft"],
+    });
+9. Register thread routes
+Patch server/routes.ts
+
+Add import:
+
+import { threadHydrationRouter } from "./routes/threadHydration";
+
+And register:
+
+  app.use("/api/thread-hydration", threadHydrationRouter);
+10. Notifications rail with inline actions
+Replace client/src/components/NotificationsRail.tsx with this version
+import React, { useState } from "react";
+
+export type NotificationRow = {
+  id: string;
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+  physicianId?: string | null;
+  type: string;
+  channel: string;
+  message: string;
+  sent: boolean;
+  acknowledged: boolean;
+  status?: string;
+  createdAt: string;
+};
+
+function notificationTone(type: string) {
+  if (type === "blocked_urgent") {
+    return "bg-red-50 border-red-200 text-red-800";
+  }
+  if (type === "overdue_draft" || type === "same_day_warning") {
+    return "bg-amber-50 border-amber-200 text-amber-800";
+  }
+  if (type === "approved_unsent") {
+    return "bg-blue-50 border-blue-200 text-blue-800";
+  }
+  return "bg-gray-50 border-gray-200 text-gray-800";
+}
+
+export default function NotificationsRail({
+  notifications,
+  unreadCount,
+  onOpenDraft,
+  onAcknowledge,
+  onResolve,
+  onAssignNow,
+  onSendReminder,
+  onEscalateSenior,
+  onMarkReviewed,
+  onRefresh,
+}: {
+  notifications: NotificationRow[];
+  unreadCount: number;
+  onOpenDraft: (draftId: string) => void;
+  onAcknowledge: (id: string) => void;
+  onResolve: (id: string) => void;
+  onAssignNow: (id: string) => void;
+  onSendReminder: (id: string) => void;
+  onEscalateSenior: (id: string) => void;
+  onMarkReviewed: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  const [busyId, setBusyId] = useState("");
+
+  async function wrap(id: string, fn: (id: string) => Promise<void>) {
+    setBusyId(id);
+    try {
+      await fn(id);
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border bg-white shadow-sm h-full flex flex-col">
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div>
+          <h2 className="text-lg font-semibold">Live Notifications</h2>
+          <div className="text-sm text-gray-500">{unreadCount} unread</div>
+        </div>
+        <button
+          onClick={onRefresh}
+          className="rounded-xl border px-3 py-2 hover:bg-gray-50"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <div className="p-3 space-y-3 overflow-auto">
+        {notifications.map((n) => (
+          <div
+            key={n.id}
+            className={`rounded-2xl border p-3 ${notificationTone(n.type)} ${
+              n.acknowledged ? "opacity-70" : ""
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide">
+                  {n.type.replace(/_/g, " ")}
+                </div>
+                <div className="mt-1 text-sm">{n.message}</div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {new Date(n.createdAt).toLocaleString()}
+                </div>
+              </div>
+
+              {!n.acknowledged && (
+                <button
+                  onClick={() => wrap(n.id, onAcknowledge)}
+                  disabled={busyId === n.id}
+                  className="rounded-lg border px-2 py-1 text-xs hover:bg-white"
+                >
+                  Ack
+                </button>
+              )}
+            </div>
+
+            <div className="mt-3 flex gap-2 flex-wrap">
+              {n.draftId && (
+                <button
+                  onClick={() => onOpenDraft(n.draftId!)}
+                  className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+                >
+                  Open Draft
+                </button>
+              )}
+
+              <button
+                onClick={() => wrap(n.id, onAssignNow)}
+                disabled={busyId === n.id}
+                className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+              >
+                Assign Now
+              </button>
+
+              <button
+                onClick={() => wrap(n.id, onSendReminder)}
+                disabled={busyId === n.id}
+                className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+              >
+                Send Reminder
+              </button>
+
+              <button
+                onClick={() => wrap(n.id, onEscalateSenior)}
+                disabled={busyId === n.id}
+                className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+              >
+                Escalate Senior
+              </button>
+
+              <button
+                onClick={() => wrap(n.id, onMarkReviewed)}
+                disabled={busyId === n.id}
+                className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+              >
+                Mark Reviewed
+              </button>
+
+              <button
+                onClick={() => wrap(n.id, onResolve)}
+                disabled={busyId === n.id}
+                className="rounded-lg bg-white/80 border px-3 py-1.5 text-xs hover:bg-white"
+              >
+                Resolve
+              </button>
+            </div>
+
+            <div className="mt-3 flex gap-2 flex-wrap">
+              {n.caseId && (
+                <span className="rounded-lg bg-white/70 border px-2 py-1 text-xs">
+                  {n.caseId}
+                </span>
+              )}
+              {n.physicianId && (
+                <span className="rounded-lg bg-white/70 border px-2 py-1 text-xs">
+                  {n.physicianId}
+                </span>
+              )}
+              {n.status && (
+                <span className="rounded-lg bg-white/70 border px-2 py-1 text-xs">
+                  {n.status}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {!notifications.length && (
+          <div className="text-sm text-gray-500 p-3">
+            No live notifications.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+11. Real thread hydration in cockpit
+Replace client/src/pages/OperationsCockpitPage.tsx with this version
+import React, { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+
+import QueueSummaryCards from "../components/QueueSummaryCards";
+import DraftQueueFilters, { QueueFilters } from "../components/DraftQueueFilters";
+import DraftQueueTable from "../components/DraftQueueTable";
+import AcceptanceSummaryCards from "../components/AcceptanceSummaryCards";
+import SlaSummaryCards from "../components/SlaSummaryCards";
+import NotificationsRail, { NotificationRow } from "../components/NotificationsRail";
+import OutcomeQuickLog from "../components/OutcomeQuickLog";
+import CockpitPulseBar from "../components/CockpitPulseBar";
+import SupervisedReplyComposer from "./SupervisedReplyComposer";
+
+type QueueCounts = {
+  total: number;
+  blocked: number;
+  drafted: number;
+  approved: number;
+  overdue: number;
+  urgent: number;
+  high: number;
+  telegram: number;
+  whatsapp: number;
+};
+
+type ThreadMessage = {
+  id?: string;
+  role: "patient" | "doctor" | "assistant" | "system";
+  text: string;
+  at?: string;
+  direction?: string;
+  channel?: string;
+};
+
+type QueueRow = {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  channel: "telegram" | "whatsapp";
+  channelThreadExternalId: string;
+  complaint?: string | null;
+  disposition?: string | null;
+  patientLabel?: string | null;
+  assignedPhysicianId?: string | null;
+  assignmentReason?: string | null;
+  originalPatientMessage: string;
+  assistantDraft: string;
+  editedDraft?: string | null;
+  finalSentText?: string | null;
+  status: string;
+  blocked: boolean;
+  confidence?: number | null;
+  physicianId?: string | null;
+  tone?: string | null;
+  templateKey?: string | null;
+  rewriteSeverity?: string | null;
+  dueAt?: string | null;
+  overdue: boolean;
+  urgencyScore: number;
+  taskPriority?: string | null;
+  safetyFlags: string[];
+  medicationWarnings: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AcceptanceSummary = {
+  total: number;
+  unchanged: number;
+  light: number;
+  moderate: number;
+  heavy: number;
+  acceptedUnchangedRate: number;
+  acceptedLightRate: number;
+  heavyRewriteRate: number;
+  avgSimilarity: number | string | null;
+};
+
+type SlaSummary = {
+  avg_inbound_to_draft_min?: number;
+  avg_draft_to_approve_min?: number;
+  avg_approve_to_send_min?: number;
+  avg_inbound_to_send_min?: number;
+  avg_blocked_to_resolved_min?: number;
+};
+
+type QueueSlaStatus = {
+  onTime: number;
+  dueSoon: number;
+  overdue: number;
+  blockedUrgent: number;
+};
+
+type OutcomeSummary = {
+  total: number;
+  helpful: number;
+  confusing: number;
+  escalated: number;
+  ledToVisit: number;
+  resolvedWithoutVisit: number;
+  patientResponded: number;
+  avgResponseLatencyMin: number;
+};
+
+type AdminReviewRow = {
+  draft_id: string;
+  case_id: string;
+  complaint?: string | null;
+  disposition?: string | null;
+  physician_id?: string | null;
+  rewrite_severity?: string | null;
+  status: string;
+  helpful?: boolean | null;
+  confusing?: boolean | null;
+};
+
+const DEFAULT_COUNTS: QueueCounts = {
+  total: 0,
+  blocked: 0,
+  drafted: 0,
+  approved: 0,
+  overdue: 0,
+  urgent: 0,
+  high: 0,
+  telegram: 0,
+  whatsapp: 0,
+};
+
+const DEFAULT_ACCEPTANCE: AcceptanceSummary = {
+  total: 0,
+  unchanged: 0,
+  light: 0,
+  moderate: 0,
+  heavy: 0,
+  acceptedUnchangedRate: 0,
+  acceptedLightRate: 0,
+  heavyRewriteRate: 0,
+  avgSimilarity: 0,
+};
+
+const DEFAULT_SLA: Sla
+Those 5 are:
+
+Quick disposition override + clinician action bar
+
+Notification auto-resolution and state syncing
+
+Role-aware cockpit layouts and permissions
+
+Mini trend strip / sparkline analytics at top of cockpit
+please write these 5 best code addtiions
+Real patient/case store hydration for demographics, meds, allergies, and triage trace
+
+After those 5, you are mostly in optimization land, not major-module land.
+Thought for 3m 28s
+
+Below is the next production layer for the cockpit. It adds all five pieces together in one coherent slice:
+
+Quick disposition override + clinician action bar
+
+Notification auto-resolution and state syncing
+
+Role-aware cockpit layouts and permissions
+
+Mini trend strip / sparkline analytics at the top of the cockpit
+
+Real patient/case store hydration for demographics, meds, allergies, and triage trace
+
+At the end, I’ll answer the “how many more next-best additions” question clearly.
+
+After this layer, how many more next-best additions?
+
+For this supervised messaging and cockpit system, there are about 5 more high-value additions after this one before it feels deeply polished instead of just fully built:
+
+Message template recommendations based on complaint + role + prior acceptance
+
+Smart reminder timing engine
+
+Bulk queue operations
+
+Patient language / translation support
+
+Full EHR / case-store sync hooks
+
+After those 5, you are mostly in optimization and integration territory, not major-module territory.
+
+What this code adds
+Backend
+
+clinician action audit log
+
+disposition override endpoint
+
+assignment endpoint with upsert behavior
+
+real case-store tables and hydration service
+
+thread hydration service using real message_logs
+
+role / permission service
+
+session route for current user + permissions
+
+notification state sync service
+
+notification deduplication and inline actions
+
+cockpit trend service for sparkline strip
+
+Frontend
+
+role-aware OperationsCockpitPage
+
+clinician action bar
+
+real patient/case summary card
+
+real hydrated thread in composer
+
+live notifications rail with inline actions
+
+sparkline strip across the top
+
+permission-aware controls
+
+File map
+server/
+  db/
+    schema.notifications.ts
+    schema.queueAssignments.ts
+    schema.clinicianActions.ts
+    schema.caseStore.ts
+  services/
+    authzService.ts
+    clinicianActionService.ts
+    notificationService.ts
+    notificationStateSyncService.ts
+    notificationActionService.ts
+    threadHydrationService.ts
+    caseStoreHydrationService.ts
+    queueAssignmentService.ts
+    cockpitTrendService.ts
+  routes/
+    session.ts
+    cockpitActions.ts
+    notifications.ts
+    threadHydration.ts
+    caseStoreHydration.ts
+    cockpitTrends.ts
+
+client/
+  src/
+    components/
+      PermissionGate.tsx
+      ClinicianActionBar.tsx
+      PatientCaseSummaryCard.tsx
+      MiniSparklineStrip.tsx
+      NotificationsRail.tsx
+    pages/
+      OperationsCockpitPage.tsx
+1. Role-aware permissions and session user
+
+This is the spine of the cockpit. Without permissions, every button is a loaded confetti cannon.
+
+server/services/authzService.ts
+import { NextFunction, Request, Response } from "express";
+
+export type AppRole = "doctor" | "senior" | "ops" | "admin";
+
+export type AppPermission =
+  | "view_cockpit"
+  | "review_draft"
+  | "override_disposition"
+  | "assign_queue"
+  | "ack_notifications"
+  | "resolve_notifications"
+  | "escalate_notification"
+  | "run_sweeps"
+  | "export_audit"
+  | "log_outcomes"
+  | "view_admin_feed"
+  | "view_case_context";
+
+const ROLE_PERMISSIONS: Record<AppRole, AppPermission[]> = {
+  doctor: [
+    "view_cockpit",
+    "review_draft",
+    "override_disposition",
+    "ack_notifications",
+    "log_outcomes",
+    "view_case_context",
+  ],
+  senior: [
+    "view_cockpit",
+    "review_draft",
+    "override_disposition",
+    "assign_queue",
+    "ack_notifications",
+    "resolve_notifications",
+    "escalate_notification",
+    "run_sweeps",
+    "log_outcomes",
+    "view_admin_feed",
+    "view_case_context",
+  ],
+  ops: [
+    "view_cockpit",
+    "assign_queue",
+    "ack_notifications",
+    "resolve_notifications",
+    "run_sweeps",
+    "view_admin_feed",
+    "view_case_context",
+  ],
+  admin: [
+    "view_cockpit",
+    "review_draft",
+    "override_disposition",
+    "assign_queue",
+    "ack_notifications",
+    "resolve_notifications",
+    "escalate_notification",
+    "run_sweeps",
+    "export_audit",
+    "log_outcomes",
+    "view_admin_feed",
+    "view_case_context",
+  ],
+};
+
+export type SessionUser = {
+  userId: string;
+  role: AppRole;
+  permissions: AppPermission[];
+};
+
+export function getSessionUser(req: Request): SessionUser {
+  const userId = String(req.headers["x-user-id"] || "user-default");
+  const roleHeader = String(req.headers["x-user-role"] || "doctor").toLowerCase() as AppRole;
+  const role: AppRole = ["doctor", "senior", "ops", "admin"].includes(roleHeader)
+    ? roleHeader
+    : "doctor";
+
+  return {
+    userId,
+    role,
+    permissions: ROLE_PERMISSIONS[role],
+  };
+}
+
+export function hasPermission(user: SessionUser, permission: AppPermission) {
+  return user.permissions.includes(permission);
+}
+
+export function requirePermission(permission: AppPermission) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = getSessionUser(req);
+    if (!hasPermission(user, permission)) {
+      return res.status(403).json({
+        ok: false,
+        error: `Missing permission: ${permission}`,
+      });
+    }
+    (req as any).sessionUser = user;
+    next();
+  };
+}
+server/routes/session.ts
+import { Router } from "express";
+import { getSessionUser } from "../services/authzService";
+
+export const sessionRouter = Router();
+
+sessionRouter.get("/me", (req, res) => {
+  const user = getSessionUser(req);
+  res.json({ ok: true, user });
+});
+2. Notifications schema patch with deduplication and status
+server/db/schema.notifications.ts
+import { pgTable, text, timestamp, uuid, boolean } from "drizzle-orm/pg-core";
+
+export const notifications = pgTable("notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftId: text("draft_id"),
+  caseId: text("case_id"),
+  threadId: text("thread_id"),
+  physicianId: text("physician_id"),
+
+  type: text("type").notNull(),
+  channel: text("channel").notNull(),
+  message: text("message").notNull(),
+
+  dedupeKey: text("dedupe_key"),
+  status: text("status").notNull().default("open"), // open | acknowledged | resolved
+
+  sent: boolean("sent").default(false).notNull(),
+  acknowledged: boolean("acknowledged").default(false).notNull(),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+});
+3. Queue assignments with one-row-per-draft behavior
+
+This prevents assignment history from making the queue join sprout duplicates like mushrooms.
+
+server/db/schema.queueAssignments.ts
+import { pgTable, text, timestamp, uuid, uniqueIndex } from "drizzle-orm/pg-core";
+
+export const queueAssignments = pgTable(
+  "queue_assignments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    draftId: text("draft_id").notNull(),
+    caseId: text("case_id").notNull(),
+    threadId: text("thread_id").notNull(),
+    assignedPhysicianId: text("assigned_physician_id"),
+    assignmentReason: text("assignment_reason"),
+    priority: text("priority"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    draftUnique: uniqueIndex("queue_assignments_draft_id_uidx").on(table.draftId),
+  })
+);
+4. Clinician action audit log
+
+This gives you a clean paper trail for overrides and manual control.
+
+server/db/schema.clinicianActions.ts
+import { pgTable, text, timestamp, uuid, jsonb } from "drizzle-orm/pg-core";
+
+export const clinicianActions = pgTable("clinician_actions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftId: text("draft_id").notNull(),
+  caseId: text("case_id").notNull(),
+  threadId: text("thread_id").notNull(),
+
+  actorId: text("actor_id").notNull(),
+  actorRole: text("actor_role").notNull(),
+
+  actionType: text("action_type").notNull(), // override_disposition | assign | mark_reviewed
+  fromDisposition: text("from_disposition"),
+  toDisposition: text("to_disposition"),
+  assignedPhysicianId: text("assigned_physician_id"),
+  notes: text("notes"),
+  meta: jsonb("meta").$type<Record<string, any>>().default({}),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+5. Real patient/case store schemas
+
+These are the hydration tables for demographics, meds, allergies, and triage trace.
+
+server/db/schema.caseStore.ts
+import {
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  jsonb,
+  date,
+  integer,
+  boolean,
+} from "drizzle-orm/pg-core";
+
+export const patients = pgTable("patients", {
+  id: text("id").primaryKey(),
+  patientLabel: text("patient_label"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  dob: date("dob"),
+  sex: text("sex"),
+  phone: text("phone"),
+  email: text("email"),
+  allergies: jsonb("allergies").$type<string[]>().default([]),
+  meds: jsonb("meds").$type<string[]>().default([]),
+  problemList: jsonb("problem_list").$type<string[]>().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const cases = pgTable("cases", {
+  id: text("id").primaryKey(),
+  patientId: text("patient_id").notNull(),
+  complaint: text("complaint"),
+  disposition: text("disposition"),
+  triageSummary: text("triage_summary"),
+  differentialSummary: text("differential_summary"),
+  redFlags: jsonb("red_flags").$type<string[]>().default([]),
+  ageYears: integer("age_years"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const triageTraces = pgTable("triage_traces", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  caseId: text("case_id").notNull(),
+  stepIndex: integer("step_index").notNull(),
+  question: text("question"),
+  answer: text("answer"),
+  sourceRule: text("source_rule"),
+  redFlag: boolean("red_flag").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+6. Queue assignment service with upsert
+server/services/queueAssignmentService.ts
+
+Replace with:
+
+import { db } from "../db";
+import { queueAssignments } from "../db/schema.queueAssignments";
+import { replyDrafts } from "../db/schema.replyDrafts";
+import { getPendingDraftQueue } from "./pendingDraftQueueService";
+import { eq } from "drizzle-orm";
+
+function choosePhysician(input: {
+  complaint?: string | null;
+  blocked: boolean;
+  disposition?: string | null;
+}) {
+  if (input.blocked) {
+    return { physicianId: "doctor-senior", reason: "Blocked urgent case routed to senior reviewer" };
+  }
+
+  if (input.disposition === "same_day_visit") {
+    return { physicianId: "doctor-fasttrack", reason: "Same-day case routed to fast-track physician" };
+  }
+
+  if (input.complaint && /rash|skin/i.test(input.complaint)) {
+    return { physicianId: "doctor-derm", reason: "Skin complaint routed to dermatology-focused physician" };
+  }
+
+  if (input.complaint && /uti|urinary|dysuria/i.test(input.complaint)) {
+    return { physicianId: "doctor-gu", reason: "GU complaint routed to GU-focused physician" };
+  }
+
+  return { physicianId: "doctor-general", reason: "Default general queue assignment" };
+}
+
+export async function upsertDraftAssignment(input: {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  assignedPhysicianId: string;
+  assignmentReason: string;
+  priority?: string | null;
+}) {
+  const existing = await db
+    .select()
+    .from(queueAssignments)
+    .where(eq(queueAssignments.draftId, input.draftId))
+    .limit(1);
+
+  if (existing.length) {
+    const [updated] = await db
+      .update(queueAssignments)
+      .set({
+        assignedPhysicianId: input.assignedPhysicianId,
+        assignmentReason: input.assignmentReason,
+        priority: input.priority || "medium",
+      })
+      .where(eq(queueAssignments.draftId, input.draftId))
+      .returning();
+
+    return updated;
+  }
+
+  const [created] = await db
+    .insert(queueAssignments)
+    .values({
+      draftId: input.draftId,
+      caseId: input.caseId,
+      threadId: input.threadId,
+      assignedPhysicianId: input.assignedPhysicianId,
+      assignmentReason: input.assignmentReason,
+      priority: input.priority || "medium",
+    })
+    .returning();
+
+  return created;
+}
+
+export async function assignDraft(draft: {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  complaint?: string | null;
+  blocked: boolean;
+  disposition?: string | null;
+  taskPriority?: string | null;
+}) {
+  const chosen = choosePhysician({
+    complaint: draft.complaint,
+    blocked: draft.blocked,
+    disposition: draft.disposition,
+  });
+
+  return upsertDraftAssignment({
+    draftId: draft.draftId,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    assignedPhysicianId: chosen.physicianId,
+    assignmentReason: chosen.reason,
+    priority: draft.taskPriority || (draft.blocked ? "urgent" : "medium"),
+  });
+}
+
+export async function assignDraftToSpecificPhysician(input: {
+  draftId: string;
+  assignedPhysicianId: string;
+  assignmentReason: string;
+  priority?: string | null;
+}) {
+  const rows = await db
+    .select()
+    .from(replyDrafts)
+    .where(eq(replyDrafts.id, input.draftId))
+    .limit(1);
+
+  if (!rows.length) {
+    throw new Error("Draft not found");
+  }
+
+  const draft = rows[0];
+
+  return upsertDraftAssignment({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    assignedPhysicianId: input.assignedPhysicianId,
+    assignmentReason: input.assignmentReason,
+    priority: input.priority || "medium",
+  });
+}
+
+export async function runQueueAssignmentSweep() {
+  const rows = await getPendingDraftQueue({ limit: 500, offset: 0 });
+  const assigned: any[] = [];
+
+  for (const row of rows) {
+    assigned.push(await assignDraft(row));
+  }
+
+  return {
+    assignedCount: assigned.length,
+    assigned,
+  };
+}
+7. Notification service with deduplication and resolution
+server/services/notificationService.ts
+
+Replace with:
+
+import { and, desc, eq, gte } from "drizzle-orm";
+import { db } from "../db";
+import { notifications } from "../db/schema.notifications";
+
+const DEFAULT_DEDUPE_MINUTES = 30;
+
+function buildDedupeKey(input: {
+  draftId?: string;
+  caseId?: string;
+  type: string;
+  physicianId?: string;
+}) {
+  return [
+    input.type,
+    input.draftId || "no-draft",
+    input.caseId || "no-case",
+    input.physicianId || "no-physician",
+  ].join("::");
+}
+
+export async function createNotification(input: {
+  draftId?: string;
+  caseId?: string;
+  threadId?: string;
+  physicianId?: string;
+  type: string;
+  channel: string;
+  message: string;
+  dedupeMinutes?: number;
+}) {
+  const dedupeKey = buildDedupeKey(input);
+  const dedupeMinutes = input.dedupeMinutes ?? DEFAULT_DEDUPE_MINUTES;
+  const cutoff = new Date(Date.now() - dedupeMinutes * 60 * 1000);
+
+  const existing = await db
+    .select()
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.dedupeKey, dedupeKey),
+        eq(notifications.status, "open"),
+        gte(notifications.createdAt, cutoff)
+      )
+    )
+    .orderBy(desc(notifications.createdAt))
+    .limit(1);
+
+  if (existing.length) {
+    return {
+      ...existing[0],
+      deduped: true,
+    };
+  }
+
+  const [row] = await db.insert(notifications).values({
+    draftId: input.draftId,
+    caseId: input.caseId,
+    threadId: input.threadId,
+    physicianId: input.physicianId,
+    type: input.type,
+    channel: input.channel,
+    message: input.message,
+    dedupeKey,
+    status: "open",
+    sent: true,
+  }).returning();
+
+  return row;
+}
+
+export async function acknowledgeNotification(id: string) {
+  const [row] = await db
+    .update(notifications)
+    .set({
+      acknowledged: true,
+      status: "acknowledged",
+    })
+    .where(eq(notifications.id, id))
+    .returning();
+
+  return row;
+}
+
+export async function resolveNotification(id: string) {
+  const [row] = await db
+    .update(notifications)
+    .set({
+      status: "resolved",
+      resolvedAt: new Date(),
+      acknowledged: true,
+    })
+    .where(eq(notifications.id, id))
+    .returning();
+
+  return row;
+}
+
+export async function resolveNotificationsByDraftAndType(input: {
+  draftId: string;
+  types?: string[];
+}) {
+  let query = db
+    .update(notifications)
+    .set({
+      status: "resolved",
+      resolvedAt: new Date(),
+      acknowledged: true,
+    })
+    .where(eq(notifications.draftId, input.draftId));
+
+  const rows = await query.returning();
+
+  if (!input.types?.length) return rows;
+
+  return rows.filter((r) => input.types!.includes(r.type));
+}
+8. Notification state syncing service
+
+This keeps the alert rail honest.
+
+server/services/notificationStateSyncService.ts
+import { getDraftQueueDetail, getPendingDraftQueue } from "./pendingDraftQueueService";
+import {
+  createNotification,
+  resolveNotificationsByDraftAndType,
+} from "./notificationService";
+
+export async function syncNotificationStateForDraft(draftId: string) {
+  const detail = await getDraftQueueDetail(draftId);
+  if (!detail) return null;
+
+  let resolvedCount = 0;
+  let createdCount = 0;
+
+  if (!detail.blocked) {
+    const rows = await resolveNotificationsByDraftAndType({
+      draftId,
+      types: ["blocked_urgent"],
+    });
+    resolvedCount += rows.length;
+  } else {
+    const row = await createNotification({
+      draftId: detail.draftId,
+      caseId: detail.caseId,
+      threadId: detail.threadId,
+      physicianId: detail.physicianId || undefined,
+      type: "blocked_urgent",
+      channel: "dashboard",
+      message: `Blocked urgent case ${detail.caseId} requires immediate manual review.`,
+      dedupeMinutes: 10,
+    });
+    if (!(row as any).deduped) createdCount += 1;
+  }
+
+  if (detail.status !== "approved") {
+    const rows = await resolveNotificationsByDraftAndType({
+      draftId,
+      types: ["approved_unsent"],
+    });
+    resolvedCount += rows.length;
+  } else if (detail.status === "approved") {
+    const row = await createNotification({
+      draftId: detail.draftId,
+      caseId: detail.caseId,
+      threadId: detail.threadId,
+      physicianId: detail.physicianId || undefined,
+      type: "approved_unsent",
+      channel: "dashboard",
+      message: `Approved draft ${detail.draftId} for case ${detail.caseId} still needs to be sent.`,
+      dedupeMinutes: 10,
+    });
+    if (!(row as any).deduped) createdCount += 1;
+  }
+
+  if (!detail.overdue) {
+    const rows = await resolveNotificationsByDraftAndType({
+      draftId,
+      types: ["overdue_draft"],
+    });
+    resolvedCount += rows.length;
+  } else {
+    const row = await createNotification({
+      draftId: detail.draftId,
+      caseId: detail.caseId,
+      threadId: detail.threadId,
+      physicianId: detail.physicianId || undefined,
+      type: "overdue_draft",
+      channel: "dashboard",
+      message: `Draft ${detail.draftId} for case ${detail.caseId} is overdue.`,
+      dedupeMinutes: 15,
+    });
+    if (!(row as any).deduped) createdCount += 1;
+  }
+
+  if (detail.disposition !== "same_day_visit") {
+    const rows = await resolveNotificationsByDraftAndType({
+      draftId,
+      types: ["same_day_warning"],
+    });
+    resolvedCount += rows.length;
+  } else {
+    const row = await createNotification({
+      draftId: detail.draftId,
+      caseId: detail.caseId,
+      threadId: detail.threadId,
+      physicianId: detail.physicianId || undefined,
+      type: "same_day_warning",
+      channel: "dashboard",
+      message: `Same-day visit case ${detail.caseId} should be reviewed promptly.`,
+      dedupeMinutes: 20,
+    });
+    if (!(row as any).deduped) createdCount += 1;
+  }
+
+  return {
+    draftId,
+    resolvedCount,
+    createdCount,
+  };
+}
+
+export async function syncNotificationStateForOpenDrafts(limit = 200) {
+  const rows = await getPendingDraftQueue({ limit, offset: 0 });
+  const results = [];
+
+  for (const row of rows) {
+    const result = await syncNotificationStateForDraft(row.draftId);
+    if (result) results.push(result);
+  }
+
+  return {
+    synced: results.length,
+    results,
+  };
+}
+9. Real thread hydration service
+server/services/threadHydrationService.ts
+import { and, asc, eq } from "drizzle-orm";
+import { db } from "../db";
+import { messageLogs } from "../db/schema.messageLogs";
+import { getReplyDraftRecord } from "./replyDraftRepository";
+
+export async function getThreadMessagesByDraftId(draftId: string) {
+  const draft = await getReplyDraftRecord(draftId);
+  if (!draft) return null;
+
+  const rows = await db
+    .select()
+    .from(messageLogs)
+    .where(
+      and(
+        eq(messageLogs.caseId, draft.caseId),
+        eq(messageLogs.threadId, draft.threadId)
+      )
+    )
+    .orderBy(asc(messageLogs.createdAt));
+
+  return {
+    draft,
+    messages: rows.map((m) => ({
+      id: m.id,
+      role:
+        m.senderRole === "patient"
+          ? "patient"
+          : m.senderRole === "doctor"
+          ? "doctor"
+          : m.senderRole === "assistant"
+          ? "assistant"
+          : "system",
+      text: m.body,
+      at: m.createdAt,
+      direction: m.direction,
+      channel: m.channel,
+    })),
+  };
+}
+server/routes/threadHydration.ts
+import { Router } from "express";
+import { requirePermission } from "../services/authzService";
+import { getThreadMessagesByDraftId } from "../services/threadHydrationService";
+
+export const threadHydrationRouter = Router();
+
+threadHydrationRouter.get(
+  "/draft/:draftId",
+  requirePermission("view_case_context"),
+  async (req, res) => {
+    try {
+      const result = await getThreadMessagesByDraftId(req.params.draftId);
+      if (!result) {
+        return res.status(404).json({ ok: false, error: "Draft not found" });
+      }
+      res.json({ ok: true, result });
+    } catch (err: any) {
+      console.error("thread hydration error", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+10. Real case-store hydration service
+server/services/caseStoreHydrationService.ts
+import { and, asc, eq } from "drizzle-orm";
+import { db } from "../db";
+import { cases, patients, triageTraces } from "../db/schema.caseStore";
+import { getReplyDraftRecord } from "./replyDraftRepository";
+
+function computeAgeYears(dob?: string | null, ageYearsFromCase?: number | null) {
+  if (ageYearsFromCase != null) return ageYearsFromCase;
+  if (!dob) return null;
+
+  const birth = new Date(dob);
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const m = now.getMonth() - birth.getMonth();
+
+  if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age -= 1;
+  return age;
+}
+
+export async function getHydratedCaseContextByDraftId(draftId: string) {
+  const draft = await getReplyDraftRecord(draftId);
+  if (!draft) return null;
+
+  const caseRows = await db
+    .select()
+    .from(cases)
+    .where(eq(cases.id, draft.caseId))
+    .limit(1);
+
+  if (!caseRows.length) {
+    return {
+      draft,
+      patient: null,
+      case: null,
+      triageTrace: [],
+    };
+  }
+
+  const caseRow = caseRows[0];
+
+  const patientRows = await db
+    .select()
+    .from(patients)
+    .where(eq(patients.id, caseRow.patientId))
+    .limit(1);
+
+  const patient = patientRows[0] || null;
+
+  const traceRows = await db
+    .select()
+    .from(triageTraces)
+    .where(eq(triageTraces.caseId, caseRow.id))
+    .orderBy(asc(triageTraces.stepIndex));
+
+  return {
+    draft,
+    patient: patient
+      ? {
+          id: patient.id,
+          patientLabel: patient.patientLabel,
+          fullName: [patient.firstName, patient.lastName].filter(Boolean).join(" ").trim(),
+          ageYears: computeAgeYears(patient.dob as any, caseRow.ageYears),
+          sex: patient.sex,
+          phone: patient.phone,
+          email: patient.email,
+          allergies: patient.allergies || [],
+          meds: patient.meds || [],
+          problemList: patient.problemList || [],
+        }
+      : null,
+    case: {
+      id: caseRow.id,
+      complaint: caseRow.complaint,
+      disposition: caseRow.disposition,
+      triageSummary: caseRow.triageSummary,
+      differentialSummary: caseRow.differentialSummary,
+      redFlags: caseRow.redFlags || [],
+      ageYears: caseRow.ageYears,
+    },
+    triageTrace: traceRows.map((r) => ({
+      id: r.id,
+      stepIndex: r.stepIndex,
+      question: r.question,
+      answer: r.answer,
+      sourceRule: r.sourceRule,
+      redFlag: r.redFlag,
+      createdAt: r.createdAt,
+    })),
+  };
+}
+server/routes/caseStoreHydration.ts
+import { Router } from "express";
+import { requirePermission } from "../services/authzService";
+import { getHydratedCaseContextByDraftId } from "../services/caseStoreHydrationService";
+
+export const caseStoreHydrationRouter = Router();
+
+caseStoreHydrationRouter.get(
+  "/draft/:draftId",
+  requirePermission("view_case_context"),
+  async (req, res) => {
+    try {
+      const result = await getHydratedCaseContextByDraftId(req.params.draftId);
+      if (!result) {
+        return res.status(404).json({ ok: false, error: "Draft not found" });
+      }
+      res.json({ ok: true, result });
+    } catch (err: any) {
+      console.error("case store hydration error", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+11. Cockpit trend service for mini sparklines
+server/services/cockpitTrendService.ts
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+import { replyDrafts } from "../db/schema.replyDrafts";
+
+function isoDay(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildDenseSeries(
+  rows: Array<{ day: string; total: number; blocked: number; heavy: number; sent: number }>,
+  daysBack: number
+) {
+  const map = new Map(rows.map((r) => [r.day, r]));
+  const out = [];
+
+  for (let i = daysBack - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const day = isoDay(d);
+    const row = map.get(day);
+
+    out.push({
+      day,
+      total: row?.total || 0,
+      blocked: row?.blocked || 0,
+      heavy: row?.heavy || 0,
+      sent: row?.sent || 0,
+    });
+  }
+
+  return out;
+}
+
+export async function getCockpitTrendStrip(daysBack = 14) {
+  const result = await db.execute(sql`
+    select
+      to_char(date_trunc('day', ${replyDrafts.createdAt}), 'YYYY-MM-DD') as day,
+      count(*)::int as total,
+      count(case when ${replyDrafts.blocked} = true then 1 end)::int as blocked,
+      count(case when ${replyDrafts.rewriteSeverity} = 'heavy' then 1 end)::int as heavy,
+      count(case when ${replyDrafts.status} = 'sent' then 1 end)::int as sent
+    from ${replyDrafts}
+    where ${replyDrafts.createdAt} >= now() - (${daysBack} || ' days')::interval
+    group by 1
+    order by 1 asc
+  `);
+
+  const dense = buildDenseSeries(result.rows as any, daysBack);
+
+  return {
+    series: {
+      draftVolume: dense.map((r) => r.total),
+      blocked: dense.map((r) => r.blocked),
+      heavyRewrites: dense.map((r) => r.heavy),
+      sent: dense.map((r) => r.sent),
+    },
+    labels: dense.map((r) => r.day),
+    latest: dense[dense.length - 1] || {
+      total: 0,
+      blocked: 0,
+      heavy: 0,
+      sent: 0,
+    },
+  };
+}
+server/routes/cockpitTrends.ts
+import { Router } from "express";
+import { requirePermission } from "../services/authzService";
+import { getCockpitTrendStrip } from "../services/cockpitTrendService";
+
+export const cockpitTrendsRouter = Router();
+
+cockpitTrendsRouter.get(
+  "/strip",
+  requirePermission("view_cockpit"),
+  async (req, res) => {
+    try {
+      const daysBack = req.query.daysBack ? Number(req.query.daysBack) : 14;
+      const result = await getCockpitTrendStrip(daysBack);
+      res.json({ ok: true, result });
+    } catch (err: any) {
+      console.error("cockpit trend strip error", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+12. Clinician action service
+server/services/clinicianActionService.ts
+import { db } from "../db";
+import { clinicianActions } from "../db/schema.clinicianActions";
+import { getReplyDraftRecord, updateReplyDraftRecord } from "./replyDraftRepository";
+import { createNotification } from "./notificationService";
+import { syncNotificationStateForDraft } from "./notificationStateSyncService";
+import { assignDraftToSpecificPhysician } from "./queueAssignmentService";
+import { createFollowUpTask } from "./followUpTaskRepository";
+
+export async function logClinicianAction(input: {
+  draftId: string;
+  caseId: string;
+  threadId: string;
+  actorId: string;
+  actorRole: string;
+  actionType: string;
+  fromDisposition?: string | null;
+  toDisposition?: string | null;
+  assignedPhysicianId?: string;
+  notes?: string;
+  meta?: Record<string, any>;
+}) {
+  const [row] = await db.insert(clinicianActions).values({
+    draftId: input.draftId,
+    caseId: input.caseId,
+    threadId: input.threadId,
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+    actionType: input.actionType,
+    fromDisposition: input.fromDisposition,
+    toDisposition: input.toDisposition,
+    assignedPhysicianId: input.assignedPhysicianId,
+    notes: input.notes,
+    meta: input.meta || {},
+  }).returning();
+
+  return row;
+}
+
+export async function overrideDraftDisposition(input: {
+  draftId: string;
+  actorId: string;
+  actorRole: string;
+  toDisposition: string;
+  notes?: string;
+}) {
+  const draft = await getReplyDraftRecord(input.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  const updated = await updateReplyDraftRecord(input.draftId, {
+    disposition: input.toDisposition,
+  });
+
+  await logClinicianAction({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+    actionType: "override_disposition",
+    fromDisposition: draft.disposition,
+    toDisposition: input.toDisposition,
+    notes: input.notes,
+    meta: {
+      priorStatus: draft.status,
+      blocked: draft.blocked,
+    },
+  });
+
+  if (input.toDisposition === "er_now") {
+    await createNotification({
+      draftId: draft.id,
+      caseId: draft.caseId,
+      threadId: draft.threadId,
+      physicianId: draft.physicianId || undefined,
+      type: "blocked_urgent",
+      channel: "dashboard",
+      message: `Case ${draft.caseId} disposition overridden to ER now.`,
+      dedupeMinutes: 5,
+    });
+
+    await createFollowUpTask({
+      caseId: draft.caseId,
+      threadId: draft.threadId,
+      draftId: draft.id,
+      taskType: "urgent_review",
+      priority: "urgent",
+      dueAt: new Date(Date.now() + 10 * 60 * 1000),
+      assignedPhysicianId: draft.physicianId || undefined,
+      notes: "Disposition overridden to ER now from cockpit action bar.",
+    });
+  }
+
+  if (input.toDisposition === "same_day_visit") {
+    await createNotification({
+      draftId: draft.id,
+      caseId: draft.caseId,
+      threadId: draft.threadId,
+      physicianId: draft.physicianId || undefined,
+      type: "same_day_warning",
+      channel: "dashboard",
+      message: `Case ${draft.caseId} disposition overridden to same-day visit.`,
+      dedupeMinutes: 10,
+    });
+  }
+
+  await syncNotificationStateForDraft(draft.id);
+
+  return updated;
+}
+
+export async function assignDraftFromClinicianAction(input: {
+  draftId: string;
+  actorId: string;
+  actorRole: string;
+  assignedPhysicianId: string;
+  notes?: string;
+}) {
+  const draft = await getReplyDraftRecord(input.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  const assignment = await assignDraftToSpecificPhysician({
+    draftId: draft.id,
+    assignedPhysicianId: input.assignedPhysicianId,
+    assignmentReason: input.notes || `Manual assignment by ${input.actorRole}`,
+    priority: draft.blocked ? "urgent" : "medium",
+  });
+
+  await logClinicianAction({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+    actionType: "assign",
+    assignedPhysicianId: input.assignedPhysicianId,
+    notes: input.notes,
+  });
+
+  return assignment;
+}
+
+export async function markDraftReviewed(input: {
+  draftId: string;
+  actorId: string;
+  actorRole: string;
+  notes?: string;
+}) {
+  const draft = await getReplyDraftRecord(input.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  await logClinicianAction({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+    actionType: "mark_reviewed",
+    notes: input.notes,
+  });
+
+  await syncNotificationStateForDraft(draft.id);
+
+  return {
+    ok: true,
+    draftId: draft.id,
+  };
+}
+13. Cockpit action routes
+server/routes/cockpitActions.ts
+import { Router } from "express";
+import { getSessionUser, requirePermission } from "../services/authzService";
+import {
+  overrideDraftDisposition,
+  assignDraftFromClinicianAction,
+  markDraftReviewed,
+} from "../services/clinicianActionService";
+
+export const cockpitActionsRouter = Router();
+
+cockpitActionsRouter.post(
+  "/:draftId/disposition",
+  requirePermission("override_disposition"),
+  async (req, res) => {
+    try {
+      const user = getSessionUser(req);
+      const row = await overrideDraftDisposition({
+        draftId: req.params.draftId,
+        actorId: user.userId,
+        actorRole: user.role,
+        toDisposition: req.body.toDisposition,
+        notes: req.body.notes,
+      });
+
+      res.json({ ok: true, row });
+    } catch (err: any) {
+      console.error("override disposition error", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+cockpitActionsRouter.post(
+  "/:draftId/assign",
+  requirePermission("assign_queue"),
+  async (req, res) => {
+    try {
+      const user = getSessionUser(req);
+      const row = await assignDraftFromClinicianAction({
+        draftId: req.params.draftId,
+        actorId: user.userId,
+        actorRole: user.role,
+        assignedPhysicianId: req.body.assignedPhysicianId,
+        notes: req.body.notes,
+      });
+
+      res.json({ ok: true, row });
+    } catch (err: any) {
+      console.error("assign draft error", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+cockpitActionsRouter.post(
+  "/:draftId/reviewed",
+  requirePermission("review_draft"),
+  async (req, res) => {
+    try {
+      const user = getSessionUser(req);
+      const row = await markDraftReviewed({
+        draftId: req.params.draftId,
+        actorId: user.userId,
+        actorRole: user.role,
+        notes: req.body.notes,
+      });
+
+      res.json({ ok: true, row });
+    } catch (err: any) {
+      console.error("mark reviewed error", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+14. Notification inline action service
+server/services/notificationActionService.ts
+import { createNotification, resolveNotification } from "./notificationService";
+import { getReplyDraftRecord, updateReplyDraftRecord } from "./replyDraftRepository";
+import { assignDraftToSpecificPhysician } from "./queueAssignmentService";
+
+export async function assignNowFromNotification(notification: {
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+}) {
+  if (!notification.draftId) {
+    throw new Error("Notification missing draftId");
+  }
+
+  const draft = await getReplyDraftRecord(notification.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  return assignDraftToSpecificPhysician({
+    draftId: draft.id,
+    assignedPhysicianId: "doctor-general",
+    assignmentReason: "Assigned from notification rail",
+    priority: draft.blocked ? "urgent" : "medium",
+  });
+}
+
+export async function sendReminderFromNotification(notification: {
+  draftId?: string | null;
+  caseId?: string | null;
+  threadId?: string | null;
+  physicianId?: string | null;
+}) {
+  if (!notification.draftId) {
+    throw new Error("Notification missing draftId");
+  }
+
+  const draft = await getReplyDraftRecord(notification.draftId);
+  if (!draft) throw new Error("Draft not found");
+
+  return createNotification({
+    draftId: draft.id,
+    caseId: draft.caseId,
+    threadId: draft.threadId,
+    physicianId: draft.physicianId || undefined,
+    type: "approved_unsent",
+    channel: "dashboard",
+    message: `Reminder: draft ${draft.id} for case ${draft.caseId} still needs action.`,
+    dedupeMinutes: 10,
+  });
+}
+
+export async function escalateToSeniorFromNotification(notification: {
+  draftId?: string | null;
+}) {
+  if (!
+please add the 5 recommended additions.  Message template recommendations based on complaint + role + prior acceptance
+
+Smart reminder timing engine
+
+Bulk queue operations
+
+Patient language / translation support
+
+Yes. Below is the next full layer for the cockpit and supervised messaging stack. It adds all 5 of the next recommended additions together:
+
+Message template recommendations based on complaint + role + prior acceptance
+
+Smart reminder timing engine
+
+Bulk queue operations
+
+Patient language / translation support
+
+EHR / case-store sync hooks
+
+This gives you a system that does not just react. It starts to suggest, schedule, batch, localize, and sync.
+
+What this adds
+Backend
+
+template recommendation engine using:
+
+complaint
+
+disposition
+
+user role
+
+tone
+
+prior acceptance / outcome signals
+
+smart reminder timing engine using:
+
+queue priority
+
+disposition
+
+draft status
+
+response delays
+
+bulk queue actions:
+
+assign
+
+acknowledge notifications

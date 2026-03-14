@@ -7,6 +7,8 @@ import {
   listConversations,
   caseIdFromChannel,
   ensureConversation,
+  setSessionState,
+  type SessionState,
 } from "../integrations/conversationStore"
 import { addDoctorMessage } from "../assistant/telemedicineSessionService"
 import { runTelemedicineAssistant } from "../assistant/telemedicineAssistantService"
@@ -104,6 +106,15 @@ router.post("/api/conversations/:caseId/analyze", async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message })
   }
+})
+
+// ── Update session state ──────────────────────────────────────────────────────
+router.patch("/api/conversations/:caseId/state", (req, res) => {
+  const valid: SessionState[] = ["active", "waiting_for_patient", "doctor_reviewing", "discharged"]
+  const state: SessionState = req.body.state
+  if (!valid.includes(state)) return res.status(400).json({ ok: false, error: "invalid state" })
+  setSessionState(req.params.caseId, state)
+  res.json({ ok: true, state })
 })
 
 export default router

@@ -8,13 +8,22 @@ export type ChatMessage = {
   channel?: "telegram" | "whatsapp" | "web"
 }
 
+export type SessionState =
+  | "active"
+  | "waiting_for_patient"
+  | "doctor_reviewing"
+  | "discharged"
+
 export type ConversationMeta = {
   caseId: string
   channel: "telegram" | "whatsapp" | "web"
   externalId: string
   createdAt: string
   updatedAt: string
+  sessionState: SessionState
   lastAssistantResult?: any
+  draftSentAt?: string
+  doctorRepliedAt?: string
 }
 
 const messages: Record<string, ChatMessage[]> = {}
@@ -34,12 +43,26 @@ export function ensureConversation(
       caseId,
       channel,
       externalId,
+      sessionState: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
     messages[caseId] = []
   }
   return meta[caseId]
+}
+
+export function setSessionState(caseId: string, state: SessionState): void {
+  const m = meta[caseId]
+  if (!m) return
+  m.sessionState = state
+  m.updatedAt = new Date().toISOString()
+  if (state === "waiting_for_patient" || state === "discharged") {
+    m.draftSentAt = new Date().toISOString()
+  }
+  if (state === "doctor_reviewing") {
+    m.doctorRepliedAt = new Date().toISOString()
+  }
 }
 
 export function addMessage(

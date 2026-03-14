@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,10 @@ type ConvMeta = {
   channel: "telegram" | "whatsapp" | "web"
   externalId: string
   updatedAt: string
+  sessionState?: SessionState
 }
+
+type SessionState = "active" | "waiting_for_patient" | "doctor_reviewing" | "discharged"
 
 type ConversationData = {
   ok: boolean
@@ -47,6 +50,12 @@ type ConversationSummary = {
   channel: string
   externalId: string
   updatedAt: string
+  sessionState?: SessionState
+}
+
+type CannedCategory = {
+  category: string
+  messages: { id: string; label: string; text: string }[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -67,6 +76,17 @@ function channelIcon(ch?: string) {
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
+
+function sessionStateBadge(state?: SessionState) {
+  if (!state) return { label: "Active", cls: "bg-green-100 text-green-700" }
+  const map: Record<SessionState, { label: string; cls: string }> = {
+    active: { label: "Active", cls: "bg-green-100 text-green-700" },
+    waiting_for_patient: { label: "Waiting Patient", cls: "bg-amber-100 text-amber-700" },
+    doctor_reviewing: { label: "Dr Reviewing", cls: "bg-blue-100 text-blue-700" },
+    discharged: { label: "Discharged", cls: "bg-gray-100 text-gray-500" },
+  }
+  return map[state]
 }
 
 function ConfidenceBar({ score }: { score: number }) {
@@ -91,9 +111,13 @@ export default function TelemedicineSplitPaneConsole() {
   const [sendToPatient, setSendToPatient] = useState(true)
   const [result, setResult] = useState<AssistantResult | null>(null)
   const [status, setStatus] = useState<string>("")
+  const [showCanned, setShowCanned] = useState(false)
+  const [cannedFilter, setCannedFilter] = useState("")
+  const [copied, setCopied] = useState<"note" | "discharge" | null>(null)
 
   const qc = useQueryClient()
   const convBottomRef = useRef<HTMLDivElement>(null)
+  const replyRef = useRef<HTMLTextAreaElement>(null)
 
   // ── Data fetching ────────────────────────────────────────────────────────────
 
@@ -110,25 +134,48 @@ export default function TelemedicineSplitPaneConsole() {
     refetchInterval: 5000,
   })
 
+  const { data: cannedData } = useQuery<{ ok: boolean; categories: CannedCategory[] }>({
+    queryKey: ["/api/telemed/canned-messages"],
+    queryFn: () => fetch("/api/telemed/canned-messages").then((r) => r.json()),
+    staleTime: Infinity,
+  })
+
   const messages = convData?.messages ?? []
   const meta = convData?.meta
+  const sessionState = meta?.sessionState
 
-  // Sync AI result from server
+  const stateBadge = sessionStateBadge(sessionState)
+
   useEffect(() => {
     if (convData?.lastResult) setResult(convData.lastResult)
   }, [convData?.lastResult])
 
-  // Auto-scroll on new messages
   useEffect(() => {
     convBottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages.length])
 
-  // Pre-fill reply with a suggested question when result arrives
   useEffect(() => {
     if (!replyText && result?.nextQuestions?.[0]) {
       setReplyText(result.nextQuestions[0])
     }
   }, [result?.nextQuestions?.[0]])
+
+  // ── Chart note + discharge instructions ──────────────────────────────────────
+
+  const chartNote = useMemo(() => {
+    const history = messages.filter((m) => m.role === "patient").map((m) => m.text).join(" ")
+    return `Chief Complaint:\n${result?.complaint ?? ""}\n\nHistory:\n${history}\n\nAssessment:\n${
+      result?.differential?.[0]?.diagnosis ?? ""
+    }\n\nPlan:\n${
+      result?.resources?.recommendedActions?.map((a) => a.diagnosis).join("\n") ?? ""
+    }\n\nDisposition:\n${result?.triage?.level ?? ""}`
+  }, [messages, result])
+
+  const dischargeInstructions = useMemo(() => {
+    const dx = result?.differential?.[0]?.diagnosis ?? "your condition"
+    const actions = result?.resources?.recommendedActions?.map((a) => `• ${a.diagnosis}`).join("\n") ?? ""
+    return `Discharge Instructions\n──────────────────────\nDiagnosis: ${dx}\n\nFollow-up:\n${actions || "• Follow up with your primary care provider"}\n\nReturn precautions:\n• Return to ER if symptoms worsen\n• Fever > 103°F / 39.4°C\n• Difficulty breathing\n• Severe chest pain`
+  }, [result])
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
@@ -175,16 +222,20 @@ export default function TelemedicineSplitPaneConsole() {
     },
   })
 
-  // ── Chart note ────────────────────────────────────────────────────────────────
+  const updateState = useMutation({
+    mutationFn: (state: SessionState) =>
+      fetch(`/api/conversations/${encodeURIComponent(caseId)}/state`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/conversations", caseId] })
+      qc.invalidateQueries({ queryKey: ["/api/conversations"] })
+    },
+  })
 
-  const chartNote = useMemo(() => {
-    const history = messages.filter((m) => m.role === "patient").map((m) => m.text).join(" ")
-    return `Chief Complaint:\n${result?.complaint ?? ""}\n\nHistory:\n${history}\n\nAssessment:\n${
-      result?.differential?.[0]?.diagnosis ?? ""
-    }\n\nPlan:\n${
-      result?.resources?.recommendedActions?.map((a) => a.diagnosis).join("\n") ?? ""
-    }\n\nDisposition:\n${result?.triage?.level ?? ""}`
-  }, [messages, result])
+  // ── Helpers ───────────────────────────────────────────────────────────────────
 
   function loadCase(id: string) {
     setCaseId(id)
@@ -193,6 +244,61 @@ export default function TelemedicineSplitPaneConsole() {
     setReplyText("")
     setStatus("")
   }
+
+  function insertCanned(text: string) {
+    setReplyText(text)
+    setShowCanned(false)
+    replyRef.current?.focus()
+  }
+
+  const copyNote = useCallback(() => {
+    navigator.clipboard.writeText(chartNote).then(() => {
+      setCopied("note")
+      setTimeout(() => setCopied(null), 1500)
+    })
+  }, [chartNote])
+
+  const copyDischarge = useCallback(() => {
+    navigator.clipboard.writeText(dischargeInstructions).then(() => {
+      setCopied("discharge")
+      setTimeout(() => setCopied(null), 1500)
+    })
+  }, [dischargeInstructions])
+
+  // ── Global keyboard shortcuts ─────────────────────────────────────────────────
+  // Ctrl+Enter → send reply
+  // Ctrl+N     → copy chart note
+  // Ctrl+D     → copy discharge instructions
+  // Ctrl+K     → open/close canned messages panel
+  // Escape     → close canned messages panel
+
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if (e.key === "Escape") { setShowCanned(false); return }
+      if (!e.ctrlKey && !e.metaKey) return
+      if (e.key === "k" || e.key === "K") { e.preventDefault(); setShowCanned((s) => !s); return }
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); copyNote(); return }
+      if (e.key === "d" || e.key === "D") { e.preventDefault(); copyDischarge(); return }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [copyNote, copyDischarge])
+
+  // ── Canned messages filter ─────────────────────────────────────────────────────
+
+  const filteredCanned = useMemo(() => {
+    if (!cannedData?.categories) return []
+    if (!cannedFilter.trim()) return cannedData.categories
+    const q = cannedFilter.toLowerCase()
+    return cannedData.categories
+      .map((cat) => ({
+        ...cat,
+        messages: cat.messages.filter(
+          (m) => m.label.toLowerCase().includes(q) || m.text.toLowerCase().includes(q)
+        ),
+      }))
+      .filter((cat) => cat.messages.length > 0)
+  }, [cannedData, cannedFilter])
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -225,27 +331,33 @@ export default function TelemedicineSplitPaneConsole() {
           </div>
         </div>
         <ScrollArea className="flex-1">
-          {(listData?.conversations ?? []).map((c) => (
-            <button
-              key={c.caseId}
-              data-testid={`case-item-${c.caseId}`}
-              onClick={() => loadCase(c.caseId)}
-              className={cn(
-                "w-full text-left px-3 py-2 border-b hover:bg-muted transition-colors",
-                c.caseId === caseId && "bg-blue-50 border-l-2 border-l-blue-500"
-              )}
-            >
-              <div className="flex items-center gap-1 mb-0.5">
-                <span className="text-[11px]">{channelIcon(c.channel)}</span>
-                <span className="font-mono text-[10px] truncate text-muted-foreground">
-                  {c.externalId}
-                </span>
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                {new Date(c.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </p>
-            </button>
-          ))}
+          {(listData?.conversations ?? []).map((c) => {
+            const sb = sessionStateBadge(c.sessionState)
+            return (
+              <button
+                key={c.caseId}
+                data-testid={`case-item-${c.caseId}`}
+                onClick={() => loadCase(c.caseId)}
+                className={cn(
+                  "w-full text-left px-3 py-2 border-b hover:bg-muted transition-colors",
+                  c.caseId === caseId && "bg-blue-50 border-l-2 border-l-blue-500"
+                )}
+              >
+                <div className="flex items-center gap-1 mb-0.5">
+                  <span className="text-[11px]">{channelIcon(c.channel)}</span>
+                  <span className="font-mono text-[10px] truncate text-muted-foreground">{c.externalId}</span>
+                </div>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className={cn("text-[9px] rounded-full px-1.5 py-0.5 font-medium", sb.cls)}>
+                    {sb.label}
+                  </span>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {new Date(c.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </p>
+              </button>
+            )
+          })}
           {(listData?.conversations ?? []).length === 0 && (
             <p className="text-xs text-muted-foreground text-center mt-6 px-2">
               No conversations yet — messages arrive here from Telegram / WhatsApp
@@ -260,9 +372,9 @@ export default function TelemedicineSplitPaneConsole() {
         {/* ── LEFT: Chat thread ── */}
         <div className="flex flex-col w-[50%] min-w-0">
 
-          {/* Header */}
-          <div className="px-4 py-2 border-b bg-card flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2">
+          {/* Header with session state badge + controls */}
+          <div className="px-4 py-2 border-b bg-card flex items-center justify-between shrink-0 gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
               {meta && (
                 <Badge variant="outline" className="text-[10px] font-mono">
                   {channelIcon(meta.channel)} {meta.channel} · {meta.externalId}
@@ -274,17 +386,38 @@ export default function TelemedicineSplitPaneConsole() {
                   {result.triage.level}
                 </Badge>
               )}
+              {/* D: Session state badge + state picker */}
+              <span
+                data-testid="badge-session-state"
+                className={cn("text-[10px] rounded-full px-2 py-0.5 font-semibold", stateBadge.cls)}
+              >
+                {stateBadge.label}
+              </span>
             </div>
-            <Button
-              data-testid="button-reanalyze"
-              size="sm"
-              variant="ghost"
-              className="h-6 text-xs"
-              onClick={() => reAnalyze.mutate()}
-              disabled={reAnalyze.isPending}
-            >
-              {reAnalyze.isPending ? "Analyzing…" : "⟳ Re-analyze"}
-            </Button>
+            <div className="flex items-center gap-1">
+              {/* Session state quick-actions */}
+              <select
+                data-testid="select-session-state"
+                className="text-[10px] border rounded px-1.5 py-0.5 bg-background cursor-pointer"
+                value={sessionState ?? "active"}
+                onChange={(e) => updateState.mutate(e.target.value as SessionState)}
+              >
+                <option value="active">Active</option>
+                <option value="waiting_for_patient">Waiting Patient</option>
+                <option value="doctor_reviewing">Dr Reviewing</option>
+                <option value="discharged">Discharged</option>
+              </select>
+              <Button
+                data-testid="button-reanalyze"
+                size="sm"
+                variant="ghost"
+                className="h-6 text-xs"
+                onClick={() => reAnalyze.mutate()}
+                disabled={reAnalyze.isPending}
+              >
+                {reAnalyze.isPending ? "…" : "⟳"}
+              </Button>
+            </div>
           </div>
 
           {/* Chat bubbles */}
@@ -303,11 +436,9 @@ export default function TelemedicineSplitPaneConsole() {
                   key={msg.id || idx}
                   className={cn(
                     "mb-3 flex",
-                    msg.role === "doctor"
-                      ? "justify-end"
-                      : msg.role === "system" || msg.role === "assistant"
-                      ? "justify-center"
-                      : "justify-start"
+                    msg.role === "doctor" ? "justify-end"
+                    : msg.role === "system" || msg.role === "assistant" ? "justify-center"
+                    : "justify-start"
                   )}
                 >
                   {msg.role === "system" || msg.role === "assistant" ? (
@@ -324,12 +455,7 @@ export default function TelemedicineSplitPaneConsole() {
                       )}
                     >
                       <p className="whitespace-pre-wrap leading-snug">{msg.text}</p>
-                      <p
-                        className={cn(
-                          "text-[10px] mt-1",
-                          msg.role === "doctor" ? "text-blue-200 text-right" : "text-muted-foreground"
-                        )}
-                      >
+                      <p className={cn("text-[10px] mt-1", msg.role === "doctor" ? "text-blue-200 text-right" : "text-muted-foreground")}>
                         {formatTime(msg.timestamp)} · {msg.role}
                         {msg.channel && ` · ${channelIcon(msg.channel)}`}
                       </p>
@@ -341,12 +467,62 @@ export default function TelemedicineSplitPaneConsole() {
             <div ref={convBottomRef} />
           </ScrollArea>
 
+          {/* C: Canned messages panel */}
+          {showCanned && (
+            <div className="border-t bg-muted/40 max-h-52 flex flex-col">
+              <div className="px-3 py-2 border-b flex items-center gap-2">
+                <Input
+                  data-testid="input-canned-filter"
+                  autoFocus
+                  placeholder="Search canned messages…"
+                  className="h-7 text-xs flex-1"
+                  value={cannedFilter}
+                  onChange={(e) => setCannedFilter(e.target.value)}
+                />
+                <button
+                  data-testid="button-close-canned"
+                  onClick={() => setShowCanned(false)}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
+                  ✕
+                </button>
+              </div>
+              <ScrollArea className="flex-1">
+                <div className="px-3 pb-2">
+                  {filteredCanned.length === 0 && (
+                    <p className="text-xs text-muted-foreground py-2">No matching canned messages</p>
+                  )}
+                  {filteredCanned.map((cat) => (
+                    <div key={cat.category} className="mt-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                        {cat.category}
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {cat.messages.map((m) => (
+                          <button
+                            key={m.id}
+                            data-testid={`canned-btn-${m.id}`}
+                            onClick={() => insertCanned(m.text)}
+                            className="text-[11px] px-2 py-1 rounded border bg-background hover:bg-blue-50 hover:border-blue-300 transition-colors text-left"
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
+
           {/* Reply area */}
           <div className="px-4 py-3 border-t shrink-0">
             <Textarea
               data-testid="textarea-doctor-reply"
+              ref={replyRef}
               rows={3}
-              placeholder="Type reply… (pre-filled from AI suggestion)"
+              placeholder="Type reply… (Ctrl+K for canned messages)"
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               onKeyDown={(e) => {
@@ -358,7 +534,7 @@ export default function TelemedicineSplitPaneConsole() {
               className="text-sm resize-none mb-2"
             />
 
-            {/* Suggested questions as quick-insert chips */}
+            {/* Suggested question chips */}
             {result?.nextQuestions?.length ? (
               <div className="flex flex-wrap gap-1 mb-2">
                 {result.nextQuestions.slice(0, 4).map((q, i) => (
@@ -374,20 +550,30 @@ export default function TelemedicineSplitPaneConsole() {
               </div>
             ) : null}
 
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={sendToPatient}
-                  onChange={(e) => setSendToPatient(e.target.checked)}
-                  className="rounded"
-                />
-                Deliver to patient via {meta?.channel ?? "channel"}
-              </label>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={sendToPatient}
+                    onChange={(e) => setSendToPatient(e.target.checked)}
+                    className="rounded"
+                  />
+                  Deliver via {meta?.channel ?? "channel"}
+                </label>
+                <Button
+                  data-testid="button-toggle-canned"
+                  size="sm"
+                  variant={showCanned ? "secondary" : "outline"}
+                  className="h-6 text-xs px-2"
+                  onClick={() => setShowCanned((s) => !s)}
+                >
+                  📋 Canned
+                  <span className="ml-1 text-[9px] text-muted-foreground">Ctrl+K</span>
+                </Button>
+              </div>
               <div className="flex gap-2 items-center">
-                {status && (
-                  <span className="text-[11px] text-green-600">{status}</span>
-                )}
+                {status && <span className="text-[11px] text-green-600">{status}</span>}
                 <Button
                   data-testid="button-send-doctor"
                   size="sm"
@@ -398,14 +584,14 @@ export default function TelemedicineSplitPaneConsole() {
                   {sendDoctor.isPending
                     ? "Sending…"
                     : sendToPatient
-                    ? "Send to Patient  Ctrl+↵"
-                    : "Save Note  Ctrl+↵"}
+                    ? "Send  Ctrl+↵"
+                    : "Save  Ctrl+↵"}
                 </Button>
               </div>
             </div>
           </div>
 
-          {/* Simulate patient (for testing) */}
+          {/* Simulate patient (testing) */}
           <details className="px-4 pb-2 border-t">
             <summary className="text-[10px] text-muted-foreground cursor-pointer py-1">
               Simulate patient message (testing)
@@ -442,18 +628,39 @@ export default function TelemedicineSplitPaneConsole() {
         {/* ── RIGHT: Clinical reasoning + chart note ── */}
         <div className="flex flex-col w-[50%] min-w-0 overflow-hidden">
           <div className="px-4 py-2 border-b bg-card shrink-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Clinical Reasoning — auto-updates on every message
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Clinical Reasoning
+              </p>
+              <div className="flex gap-1.5">
+                <Button
+                  data-testid="button-copy-note"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-xs px-2"
+                  onClick={copyNote}
+                >
+                  {copied === "note" ? "Copied! ✓" : "Copy Note  Ctrl+N"}
+                </Button>
+                <Button
+                  data-testid="button-copy-discharge"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-xs px-2"
+                  onClick={copyDischarge}
+                >
+                  {copied === "discharge" ? "Copied! ✓" : "Discharge  Ctrl+D"}
+                </Button>
+              </div>
+            </div>
           </div>
+
           <ScrollArea className="flex-1 px-4 py-4">
             <div className="space-y-5">
 
               {/* Differential */}
               <section>
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                  Differential
-                </h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Differential</h3>
                 {result?.differential?.length ? (
                   <div className="space-y-2">
                     {result.differential.map((d, i) => (
@@ -474,9 +681,7 @@ export default function TelemedicineSplitPaneConsole() {
               {/* Triage */}
               {result?.triage && (
                 <section>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                    Triage
-                  </h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Triage</h3>
                   <Badge className={cn("text-sm px-3 py-1", triageColor(result.triage.level))}>
                     {result.triage.level}
                   </Badge>
@@ -489,9 +694,7 @@ export default function TelemedicineSplitPaneConsole() {
               {/* Recommended actions */}
               {result?.resources?.recommendedActions?.length ? (
                 <section>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                    Actions
-                  </h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Actions</h3>
                   <div className="space-y-1.5">
                     {result.resources.recommendedActions.map((a) => {
                       const pri = (a.priority ?? "routine").toLowerCase()
@@ -513,9 +716,7 @@ export default function TelemedicineSplitPaneConsole() {
               {/* Contradictions */}
               {result?.contradictions?.length ? (
                 <section>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-600 mb-2">
-                    ⚠ Contradictions
-                  </h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-600 mb-2">⚠ Contradictions</h3>
                   {result.contradictions.map((c) => (
                     <div key={c.diagnosis} className="text-xs bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-1.5">
                       <span className="font-medium">{c.diagnosis}:</span> {c.conflict}
@@ -529,21 +730,22 @@ export default function TelemedicineSplitPaneConsole() {
               {/* Chart note */}
               <section>
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Live Chart Note
-                  </h3>
-                  <Button
-                    data-testid="button-copy-note"
-                    size="sm"
-                    variant="outline"
-                    className="h-6 text-xs px-2"
-                    onClick={() => navigator.clipboard.writeText(chartNote)}
-                  >
-                    Copy
-                  </Button>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Live Chart Note</h3>
                 </div>
                 <pre className="text-xs bg-muted border rounded p-3 whitespace-pre-wrap font-mono leading-relaxed">
                   {chartNote || "Waiting for messages…"}
+                </pre>
+              </section>
+
+              <Separator />
+
+              {/* Discharge instructions */}
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Discharge Instructions</h3>
+                </div>
+                <pre className="text-xs bg-muted border rounded p-3 whitespace-pre-wrap font-mono leading-relaxed">
+                  {dischargeInstructions}
                 </pre>
               </section>
 
@@ -552,6 +754,12 @@ export default function TelemedicineSplitPaneConsole() {
         </div>
 
       </div>
+
+      {/* Keyboard shortcuts tooltip */}
+      <div className="fixed bottom-3 right-4 text-[10px] text-muted-foreground bg-muted/80 border rounded px-2 py-1 shadow-sm pointer-events-none">
+        Ctrl+↵ send · Ctrl+K canned · Ctrl+N copy note · Ctrl+D discharge
+      </div>
+
     </div>
   )
 }

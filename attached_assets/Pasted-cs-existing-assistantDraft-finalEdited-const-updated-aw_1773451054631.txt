@@ -1,0 +1,175 @@
+cs(existing.assistantDraft, finalEdited);
+
+    const updated = await updateReplyDraftRecord(draftId, {
+      editedDraft: finalEdited,
+      physicianId,
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+      editDistance: metrics.editDistance,
+      editSimilarity: metrics.editSimilarity,
+      rewriteSeverity: metrics.rewriteSeverity,
+    });
+
+    return res.json({ ok: true, record: updated });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+Send route patch
+
+Replace the send tail with:
+
+supervisedRepliesRouter.post("/:draftId/send", async (req, res) => {
+  try {
+    const { draftId } = req.params;
+    const record = await getReplyDraftRecord(draftId);
+
+    if (!record) {
+      return res.status(404).json({ ok: false, error: "Draft not found" });
+    }
+
+    if (record.status === "blocked") {
+      return res.status(400).json({ ok: false, error: "Blocked draft cannot be sent" });
+    }
+
+    const finalText = record.editedDraft || record.assistantDraft;
+    const metrics = computeEditMetrics(record.assistantDraft, finalText);
+
+    await sendChannelMessage({
+      channel: record.channel,
+      externalThreadId: record.channelThreadExternalId,
+      text: finalText,
+    });
+
+    await logMessage({
+      caseId: record.caseId,
+      threadId: record.threadId,
+      channel: record.channel,
+      externalThreadId: record.channelThreadExternalId,
+      direction: "outbound",
+      senderRole: "doctor",
+      body: finalText,
+    });
+
+    const updated = await updateReplyDraftRecord(draftId, {
+      status: "sent",
+      sentAt: new Date().toISOString(),
+      finalSentText: finalText,
+      editDistance: metrics.editDistance,
+      editSimilarity: metrics.editSimilarity,
+      rewriteSeverity: metrics.rewriteSeverity,
+    });
+
+    return res.json({ ok: true, record: updated });
+  } catch (err: any) {
+    console.error(err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+9. Time-series analytics service
+server/services/timeSeriesAnalyticsService.ts
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+import { replyDrafts } from "../db/schema.replyDrafts";
+import { replyFeedback } from "../db/schema.replyFeedback";
+
+export type TimeBucket = "day" | "week";
+
+function bucketExpr(column: any, bucket: TimeBucket) {
+  if (bucket === "week") {
+    return sql`date_trunc('week', ${column})`;
+  }
+  return sql`date_trunc('day', ${column})`;
+}
+
+export async function getDraftTimeSeries(input?: {
+  bucket?: TimeBucket;
+  physicianId?: string;
+  daysBack?: number;
+}) {
+  const bucket = input?.bucket || "day";
+  const daysBack = input?.daysBack || 30;
+
+  const rows = await db.execute(sql`
+    select
+      ${bucketExpr(replyDrafts.createdAt, bucket)} as bucket,
+      count(*)::int as total,
+      count(case when ${replyDrafts.blocked} = true then 1 end)::int as blocked,
+      count(case when ${replyDrafts.status} = 'approved' then 1 end)::int as approved,
+      count(case when ${replyDrafts.status} = 'sent' then 1 end)::int as sent,
+      avg(${replyDrafts.confidence})::float as avg_confidence
+    from ${replyDrafts}
+    where ${replyDrafts.createdAt} >= now() - (${daysBack} || ' days')::interval
+      ${input?.physicianId ? sql`and ${replyDrafts.physicianId} = ${input.physicianId}` : sql``}
+    group by 1
+    order by 1 asc
+  `);
+
+  return rows.rows;
+}
+
+export async function getEditQualityTimeSeries(input?: {
+  bucket?: TimeBucket;
+  physicianId?: string;
+  daysBack?: number;
+}) {
+  const bucket = input?.bucket || "day";
+  const daysBack = input?.daysBack || 30;
+
+  const rows = await db.execute(sql`
+    select
+      ${bucketExpr(replyDrafts.createdAt, bucket)} as bucket,
+      count(*)::int as total,
+      count(case when ${replyDrafts.rewriteSeverity} = 'unchanged' then 1 end)::int as unchanged,
+      count(case when ${replyDrafts.rewriteSeverity} = 'light' then 1 end)::int as light,
+      count(case when ${replyDrafts.rewriteSeverity} = 'moderate' then 1 end)::int as moderate,
+      count(case when ${replyDrafts.rewriteSeverity} = 'heavy' then 1 end)::int as heavy,
+      avg(${replyDrafts.editSimilarity})::float as avg_similarity,
+      avg(${replyDrafts.editDistance})::float as avg_edit_distance
+    from ${replyDrafts}
+    where ${replyDrafts.createdAt} >= now() - (${daysBack} || ' days')::interval
+      ${input?.physicianId ? sql`and ${replyDrafts.physicianId} = ${input.physicianId}` : sql``}
+    group by 1
+    order by 1 asc
+  `);
+
+  return rows.rows;
+}
+
+export async function getToneBreakdown(input?: {
+  physicianId?: string;
+}) {
+  const rows = await db.execute(sql`
+    select
+      coalesce(${replyDrafts.tone}, 'unknown') as tone,
+      count(*)::int as total,
+      avg(${replyDrafts.editSimilarity})::float as avg_similarity,
+      count(case when ${replyDrafts.status} = 'sent' then 1 end)::int as sent
+    from ${replyDrafts}
+    where 1=1
+      ${input?.physicianId ? sql`and ${replyDrafts.physicianId} = ${input.physicianId}` : sql``}
+    group by 1
+    order by 2 desc
+  `);
+
+  return rows.rows;
+}
+
+export async function getTemplateBreakdown(input?: {
+  physicianId?: string;
+}) {
+  const rows = await db.execute(sql`
+    select
+      coalesce(${replyDrafts.templateKey}, 'unknown') as template_key,
+      count(*)::int as total,
+      avg(${replyDrafts.editSimilarity})::float as avg_similarity,
+      count(case when ${replyDrafts.status} = 'sent' then 1 end)::int as sent
+    from ${replyDrafts}
+    where 1=1
+      ${input?.physicianId ? sql`and ${replyDrafts.physicianId} = ${input.physicianId}` : sql``}
+    group by 1
+    order by 2 desc
+  `);
+
+  return rows.rows;
+}
