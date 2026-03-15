@@ -1,0 +1,141 @@
+// server/core/dispositionCalibrationEngine.ts
+
+export type RankedDx = {
+  diagnosis: string
+  score: number
+}
+
+export type DispositionCalibrationInput = {
+  complaint: string
+  proposedDisposition: string
+  aggregatedDifferentials: RankedDx[]
+  entropy?: number
+  redFlags?: string[]
+  supervisorDecision?: string
+  riskLevel?: "low" | "moderate" | "high" | string
+  guidelinePassed?: boolean
+  contradictionHasErrors?: boolean
+  severityLevel?: "low" | "moderate" | "high" | "critical" | string
+  completenessPassed?: boolean
+}
+
+export type DispositionCalibrationOutput = {
+  finalDisposition: string
+  calibrationAction: "unchanged" | "escalated" | "softened"
+  confidenceBand: "low" | "moderate" | "high"
+  reasons: string[]
+}
+
+const HIGH_ACUITY_DX = new Set([
+  "acute_coronary_syndrome",
+  "pulmonary_embolism",
+  "aortic_dissection",
+  "stroke",
+  "subarachnoid_hemorrhage",
+  "ectopic_pregnancy",
+  "ovarian_torsion",
+  "testicular_torsion",
+  "appendicitis",
+  "bowel_obstruction",
+  "sepsis",
+  "meningitis",
+  "pneumothorax",
+  "intracranial_bleed",
+  "gi_bleed",
+  "pyelonephritis",
+])
+
+export function dispositionCalibrationEngine(
+  input: DispositionCalibrationInput
+): DispositionCalibrationOutput {
+  const reasons: string[] = []
+  const topDx = input.aggregatedDifferentials[0]?.diagnosis || ""
+  const topScore = input.aggregatedDifferentials[0]?.score ?? 0
+  const entropy = input.entropy ?? 99
+  const hasRedFlags = (input.redFlags || []).length > 0
+  const highRisk = input.riskLevel === "high"
+  const criticalSeverity = input.severityLevel === "critical"
+  const contradiction = !!input.contradictionHasErrors
+  const guidelineFailed = input.guidelinePassed === false
+  const incomplete = input.completenessPassed === false
+
+  let finalDisposition = input.proposedDisposition || "needs_workup"
+  let calibrationAction: "unchanged" | "escalated" | "softened" = "unchanged"
+
+  let confidenceBand: "low" | "moderate" | "high" = "moderate"
+  if (topScore >= 0.8 && entropy < 0.6) confidenceBand = "high"
+  else if (topScore < 0.45 || entropy > 1.2) confidenceBand = "low"
+
+  if (contradiction) {
+    finalDisposition = "needs_physician_review"
+    calibrationAction = "escalated"
+    reasons.push("Contradiction errors present")
+  }
+
+  if (hasRedFlags) {
+    finalDisposition = "er_now"
+    calibrationAction = "escalated"
+    reasons.push("Red flags present")
+  }
+
+  if (criticalSeverity) {
+    finalDisposition = "er_now"
+    calibrationAction = "escalated"
+    reasons.push("Critical severity level")
+  }
+
+  if (HIGH_ACUITY_DX.has(topDx) && topScore >= 0.55) {
+    if (!["er_now", "ed_now", "needs_physician_review"].includes(finalDisposition)) {
+      finalDisposition = "needs_workup"
+      calibrationAction = "escalated"
+    }
+    reasons.push(`High-acuity top diagnosis: ${topDx}`)
+  }
+
+  if (highRisk && ["home_care", "routine_followup"].includes(finalDisposition)) {
+    finalDisposition = "needs_workup"
+    calibrationAction = "escalated"
+    reasons.push("High-risk context")
+  }
+
+  if (guidelineFailed && finalDisposition === "home_care") {
+    finalDisposition = "needs_workup"
+    calibrationAction = "escalated"
+    reasons.push("Guideline check failed")
+  }
+
+  if (incomplete && ["home_care", "routine_followup"].includes(finalDisposition)) {
+    finalDisposition = "needs_workup"
+    calibrationAction = "escalated"
+    reasons.push("Complaint completeness requirements not met")
+  }
+
+  if (input.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW") {
+    finalDisposition = "needs_physician_review"
+    calibrationAction = "escalated"
+    reasons.push("Supervisor requires physician review")
+  }
+
+  if (
+    confidenceBand === "high" &&
+    !hasRedFlags &&
+    !highRisk &&
+    !guidelineFailed &&
+    !incomplete &&
+    ["viral_uri", "allergic_rhinitis", "simple_cystitis", "pharyngitis"].includes(topDx) &&
+    finalDisposition === "needs_workup"
+  ) {
+    finalDisposition = "home_care"
+    calibrationAction = "softened"
+    reasons.push("High-confidence benign presentation")
+  }
+
+  if (reasons.length === 0) reasons.push("Disposition unchanged after calibration")
+
+  return {
+    finalDisposition,
+    calibrationAction,
+    confidenceBand,
+    reasons,
+  }
+}

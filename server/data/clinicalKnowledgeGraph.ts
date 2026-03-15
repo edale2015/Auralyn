@@ -303,3 +303,48 @@ export const clinicalEdges: GraphEdge[] = [
   { from: "anaphylaxis",           to: "epinephrine",           weight: 5, type: "treatment" },
   { from: "anaphylaxis",           to: "ER_NOW",                weight: 5, type: "red_flag" },
 ];
+
+// ─── Brain Engine Graph Edges (bundle format) ─────────────────────────────
+// Used by server/core/brain/* engines (RankedItem-based type system)
+export interface ClinicalEdge {
+  from: string;
+  to: string;
+  relation: 'supports_dx' | 'red_flag_for' | 'suggests_test' | 'suggests_treatment' | 'routes_to';
+  weight: number;
+}
+
+export const CLINICAL_GRAPH_EDGES: ClinicalEdge[] = [
+  { from: 'chest_pain', to: 'acute_coronary_syndrome', relation: 'supports_dx', weight: 0.92 },
+  { from: 'diaphoresis', to: 'acute_coronary_syndrome', relation: 'supports_dx', weight: 0.84 },
+  { from: 'shortness_of_breath', to: 'pulmonary_embolism', relation: 'supports_dx', weight: 0.82 },
+  { from: 'pleuritic_pain', to: 'pulmonary_embolism', relation: 'supports_dx', weight: 0.74 },
+  { from: 'dysuria', to: 'uti', relation: 'supports_dx', weight: 0.88 },
+  { from: 'urinary_frequency', to: 'uti', relation: 'supports_dx', weight: 0.79 },
+  { from: 'fever', to: 'pyelonephritis', relation: 'supports_dx', weight: 0.75 },
+  { from: 'flank_pain', to: 'pyelonephritis', relation: 'supports_dx', weight: 0.82 },
+  { from: 'sore_throat', to: 'pharyngitis', relation: 'supports_dx', weight: 0.84 },
+  { from: 'fever', to: 'influenza', relation: 'supports_dx', weight: 0.71 },
+  { from: 'productive_cough', to: 'pneumonia', relation: 'supports_dx', weight: 0.79 },
+  { from: 'neck_stiffness', to: 'meningitis', relation: 'supports_dx', weight: 0.95 },
+  { from: 'thunderclap_headache', to: 'subarachnoid_hemorrhage', relation: 'supports_dx', weight: 0.97 },
+  { from: 'unilateral_testicular_pain', to: 'testicular_torsion', relation: 'supports_dx', weight: 0.98 },
+  { from: 'facial_droop', to: 'stroke', relation: 'supports_dx', weight: 0.93 },
+  { from: 'weakness_one_side', to: 'stroke', relation: 'supports_dx', weight: 0.95 },
+  { from: 'sore_throat', to: 'airway_compromise', relation: 'red_flag_for', weight: 1 },
+  { from: 'chest_pain', to: 'acute_coronary_syndrome', relation: 'red_flag_for', weight: 1 },
+  { from: 'thunderclap_headache', to: 'subarachnoid_hemorrhage', relation: 'red_flag_for', weight: 1 },
+  { from: 'acute_coronary_syndrome', to: 'ecg', relation: 'suggests_test', weight: 0.96 },
+  { from: 'acute_coronary_syndrome', to: 'troponin', relation: 'suggests_test', weight: 0.95 },
+  { from: 'pulmonary_embolism', to: 'ddimer', relation: 'suggests_test', weight: 0.72 },
+  { from: 'pulmonary_embolism', to: 'ctpa', relation: 'suggests_test', weight: 0.93 },
+  { from: 'uti', to: 'urinalysis', relation: 'suggests_test', weight: 0.9 },
+  { from: 'pyelonephritis', to: 'urine_culture', relation: 'suggests_test', weight: 0.87 },
+  { from: 'pharyngitis', to: 'rapid_strep', relation: 'suggests_test', weight: 0.84 },
+  { from: 'uti', to: 'nitrofurantoin', relation: 'suggests_treatment', weight: 0.83 },
+  { from: 'pyelonephritis', to: 'ceftriaxone', relation: 'suggests_treatment', weight: 0.81 },
+  { from: 'pharyngitis', to: 'penicillin', relation: 'suggests_treatment', weight: 0.76 },
+  { from: 'influenza', to: 'oseltamivir', relation: 'suggests_treatment', weight: 0.66 },
+  { from: 'flank_pain', to: 'dysuria', relation: 'routes_to', weight: 0.7 },
+  { from: 'syncope', to: 'chest_pain', relation: 'routes_to', weight: 0.6 },
+  { from: 'neck_stiffness', to: 'headache', relation: 'routes_to', weight: 0.7 },
+];

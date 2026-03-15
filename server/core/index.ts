@@ -18,3 +18,4 @@ export * from './physicianFeedbackLearningEngine';
 export * from './outcomeLearningEngine';
 export * from './supervisorEngine';
 export * from './expansionEngine';
+// Brain coordinator (RankedItem type system) — import directly from './brain'

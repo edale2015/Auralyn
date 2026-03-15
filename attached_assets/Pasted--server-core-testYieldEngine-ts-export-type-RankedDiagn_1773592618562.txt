@@ -1,0 +1,112 @@
+// server/core/testYieldEngine.ts
+
+export type RankedDiagnosis = {
+  diagnosis: string
+  score: number
+}
+
+export type ProposedTest = {
+  name: string
+  urgency?: "urgent" | "routine"
+}
+
+export type TestYieldInput = {
+  complaint: string
+  rankedDiagnoses: RankedDiagnosis[]
+  proposedTests: ProposedTest[]
+}
+
+export type TestYieldResult = {
+  name: string
+  urgency: "urgent" | "routine"
+  yieldScore: number
+  rationale: string[]
+  actionability: "high" | "moderate" | "low"
+}
+
+const DX_TESTS: Record<string, { highYield: string[]; moderateYield: string[]; lowYield: string[] }> = {
+  acute_coronary_syndrome: {
+    highYield: ["ecg", "troponin"],
+    moderateYield: ["chest_xray", "bmp", "cbc"],
+    lowYield: ["rapid_strep"],
+  },
+  pulmonary_embolism: {
+    highYield: ["ctpa", "ddimer"],
+    moderateYield: ["ecg", "chest_xray"],
+    lowYield: ["rapid_flu"],
+  },
+  pneumonia: {
+    highYield: ["chest_xray"],
+    moderateYield: ["cbc", "pulse_ox"],
+    lowYield: ["ct_head"],
+  },
+  pyelonephritis: {
+    highYield: ["urinalysis", "urine_culture"],
+    moderateYield: ["cbc", "bmp"],
+    lowYield: ["ecg"],
+  },
+  simple_cystitis: {
+    highYield: ["urinalysis"],
+    moderateYield: ["urine_culture"],
+    lowYield: ["ct_abdomen_pelvis"],
+  },
+  appendicitis: {
+    highYield: ["ct_abdomen_pelvis", "ultrasound_abdomen"],
+    moderateYield: ["cbc", "crp"],
+    lowYield: ["rapid_strep"],
+  },
+  pharyngitis: {
+    highYield: ["rapid_strep"],
+    moderateYield: ["throat_culture"],
+    lowYield: ["ecg"],
+  },
+  meningitis: {
+    highYield: ["lp", "blood_cultures", "ct_head"],
+    moderateYield: ["cbc", "cmp"],
+    lowYield: ["urinalysis"],
+  },
+  stroke: {
+    highYield: ["ct_head", "cta_head_neck"],
+    moderateYield: ["ecg", "glucose"],
+    lowYield: ["rapid_strep"],
+  },
+}
+
+export function testYieldEngine(input: TestYieldInput): TestYieldResult[] {
+  const results: TestYieldResult[] = []
+
+  for (const test of input.proposedTests) {
+    let score = 0
+    const rationale: string[] = []
+
+    for (const dx of input.rankedDiagnoses.slice(0, 5)) {
+      const map = DX_TESTS[dx.diagnosis]
+      if (!map) continue
+
+      if (map.highYield.includes(test.name)) {
+        score += dx.score * 1.0
+        rationale.push(`${test.name} high-yield for ${dx.diagnosis}`)
+      } else if (map.moderateYield.includes(test.name)) {
+        score += dx.score * 0.5
+        rationale.push(`${test.name} moderate-yield for ${dx.diagnosis}`)
+      } else if (map.lowYield.includes(test.name)) {
+        score += dx.score * 0.1
+        rationale.push(`${test.name} low-yield for ${dx.diagnosis}`)
+      }
+    }
+
+    let actionability: "high" | "moderate" | "low" = "low"
+    if (score >= 0.7) actionability = "high"
+    else if (score >= 0.3) actionability = "moderate"
+
+    results.push({
+      name: test.name,
+      urgency: test.urgency || "routine",
+      yieldScore: Number(score.toFixed(3)),
+      rationale: rationale.length ? rationale : ["No strong yield mapping found"],
+      actionability,
+    })
+  }
+
+  return results.sort((a, b) => b.yieldScore - a.yieldScore)
+}

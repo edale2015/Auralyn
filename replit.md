@@ -8,6 +8,54 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (March 2026)
 
+### Clinical Brain Bundle v2 (37-file install)
+
+**New namespace: `server/core/brain/`** (parallel to existing wave-7 engines, zero conflicts)
+
+Installed as a self-contained, coherent engine family using a clean `RankedItem`-based type system (`shared/brainEngineTypes.ts`):
+
+| Engine | Function |
+|--------|----------|
+| `symptomNormalizationEngine` | Canonical symptom slug normalization |
+| `contradictionEngine` | Hard-pair contradiction detection (male/pregnant, no-fever/high-fever, etc.) |
+| `clinicalSafetyGuard` | Emergency rule triggers (ACS, SAH, stroke) |
+| `clinicalMemoryEngine` | Jaccard-based similar case retrieval from `brain_memory.ndjson` |
+| `caseSimilarityEngine` | Scores diagnoses from memory matches |
+| `differentialProbabilityEngine` | Log-odds Bayesian posterior over 11 diagnoses |
+| `knowledgeGraphEngine` | Graph traversal over `CLINICAL_GRAPH_EDGES` (33 edges) |
+| `evidenceAggregatorEngine` | 50% Bayes + 30% similarity + 20% graph weighted fusion |
+| `uncertaintyEngine` | Shannon entropy → escalate / ask / continue |
+| `complaintCompletenessEngine` | Required question gap detection per complaint |
+| `guidelineAdherenceEngine` | Major/minor variance vs. expected test workup |
+| `temporalProgressionEngine` | Timeline pattern flags |
+| `patientRiskStratificationEngine` | Age, SpO2, immunocompromised, top-dx risk flags |
+| `testRecommendationEngine` | Graph-derived ordered test list |
+| `treatmentRecommendationEngine` | Graph-derived ordered treatment list |
+| `returnPrecautionEngine` | Diagnosis-specific return precautions |
+| `medicationSafetyEngine` | Pregnancy + drug-interaction safety alerts |
+| `testYieldEngine` | Yield-adjusted test ordering |
+| `physicianFeedbackLearningEngine` | Feedback NDJSON persistence + disagreement stats |
+| `protocolVarianceEngine` | Protocol deviation detection |
+| `severityScoringEngine` | Vital-sign-weighted severity score (low/moderate/high/critical) |
+| `crossComplaintRouterEngine` | Symptom → complaint pathway routing |
+| `diagnosticDriftEngine` | Prior snapshot vs. current top-dx drift detection |
+| `dispositionCalibrationEngine` | Disposition selection from supervisor + severity + top-dx |
+| `physicianReviewPacketEngine` | Formatted review summary for physician handoff |
+| `supervisorEngine` | PASS / ESCALATE / BLOCK from 8 governance signals |
+| `coverageGapEngine` | Complaint gap analysis |
+
+**`server/core/brain/coordinator.ts`** — `runClinicalBrainCoordinator(input)` — 22-step sequential pipeline returning full `CoordinationOutput`
+
+**`server/data/clinicalKnowledgeGraph.ts`** — `CLINICAL_GRAPH_EDGES` (33 edges, `ClinicalEdge` interface with `relation` field) appended alongside existing `clinicalEdges` (306 edges, `GraphEdge` type)
+
+**`server/scripts/buildClinicalReasoningGraph.ts`** — exports CLINICAL_GRAPH_EDGES to `clinical_reasoning_graph.json`
+
+**`shared/brainEngineTypes.ts`** — Complete type system: `RankedItem`, `VitalSet`, `BrainCaseInput`, `PriorSnapshot`, `ContradictionResult`, `SafetyGuardResult`, `MemoryRetrieveResult`, `UncertaintyResult`, `CompletenessResult`, `GuidelineAdherenceResult`, `ProtocolVarianceResult`, `DriftResult`, `SeverityResult`, `MedicationSafetyAlert`, `MedicationSafetyResult`, `SupervisorResult`, `ReviewPacketResult`, `BrainOutput`, `CoordinationOutput`
+
+**API endpoints:**
+- `POST /api/brain/run` — runs the coordinator, returns `CoordinationOutput`
+- `GET /api/brain/graph-info` — returns edge count by relation type
+
 ### Session Enhancement Batch (T001–T009)
 
 **T001 — Async GPT-4o Job Queue** (`/ms-agent-ops`)
