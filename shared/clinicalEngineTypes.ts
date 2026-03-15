@@ -1,3 +1,90 @@
+// ─── Mega-bundle types (added from clinical_brain_mega_bundle) ───────────────
+
+export type Disposition =
+  | 'ER_NOW'
+  | 'URGENT_SAME_DAY'
+  | 'OFFICE_24H'
+  | 'VIDEO_VISIT'
+  | 'HOME_CARE'
+  | 'NEEDS_WORKUP'
+  | 'NEEDS_PHYSICIAN_REVIEW'
+  | 'BLOCK';
+
+export type SupervisorDecision = 'PASS' | 'ESCALATE' | 'BLOCK';
+
+export interface PatientProfile {
+  age?: number;
+  sex?: 'male' | 'female' | 'intersex' | 'unknown';
+  pregnant?: boolean;
+  weightKg?: number;
+  comorbidities?: string[];
+  medications?: string[];
+  allergies?: string[];
+  labs?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface DifferentialScore {
+  diagnosis: string;
+  score: number;
+  rationale?: string[];
+  source?: string;
+}
+
+export interface QuestionScore {
+  questionId: string;
+  score: number;
+  reason?: string;
+}
+
+export interface MemoryCase {
+  caseId: string;
+  complaint: string;
+  symptoms: string[];
+  finalDiagnosis?: string;
+  finalDisposition?: Disposition;
+  outcome?: string;
+  createdAt: string;
+}
+
+export interface ContradictionFinding {
+  code: string;
+  severity: 'error' | 'warning';
+  message: string;
+}
+
+export interface SafetyGuardResult {
+  triggered: boolean;
+  ruleId?: string;
+  disposition?: Disposition;
+  reason?: string;
+}
+
+export interface GovernanceSignals {
+  severityLevel?: SeverityLevel;
+  completenessPassed?: boolean;
+  contradictionErrors?: number;
+  protocolVarianceMajor?: boolean;
+  driftMajor?: boolean;
+  guidelineIssues?: string[];
+  supervisorDecision?: SupervisorDecision;
+}
+
+export interface MegaGraphNode {
+  id: string;
+  type: 'complaint' | 'symptom' | 'diagnosis' | 'test' | 'treatment' | 'red_flag' | 'question';
+  label: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MegaGraphEdge {
+  from: string;
+  to: string;
+  relation: string;
+  weight?: number;
+  metadata?: Record<string, unknown>;
+}
+
+// ─── Legacy types ──────────────────────────────────────────────────────────
 export type SeverityLevel = 'low' | 'moderate' | 'high' | 'critical';
 export type GovernanceDecision = 'APPROVE' | 'NEEDS_PHYSICIAN_REVIEW' | 'BLOCK';
 export type DispositionLabel = 'HOME_CARE' | 'NEEDS_WORKUP' | 'URGENT_CARE' | 'ED_NOW' | 'ER_NOW' | 'CALL_911';
