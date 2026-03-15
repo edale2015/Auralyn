@@ -1,4 +1,4 @@
-import { setMemory, getMemory } from "./msAgentMemory";
+import { setMemory } from "./msAgentMemory";
 
 export interface MsAgentStep {
   agentId: string;
@@ -45,3 +45,47 @@ export function completeSession(sessionId: string): MsAgentSession | null {
 
 export function getSession(sessionId: string): MsAgentSession | undefined { return sessions.get(sessionId); }
 export function listSessions(): MsAgentSession[] { return Array.from(sessions.values()).reverse(); }
+
+// ── Async Job Queue ──────────────────────────────────────────────────────────
+
+export type AsyncJobType = "reason" | "chart";
+export type AsyncJobStatus = "pending" | "running" | "complete" | "error";
+
+export interface AsyncJob {
+  jobId: string;
+  type: AsyncJobType;
+  status: AsyncJobStatus;
+  result?: unknown;
+  error?: string;
+  startedAt: string;
+  completedAt?: string;
+  input: unknown;
+}
+
+const asyncJobs = new Map<string, AsyncJob>();
+const MAX_ASYNC_JOBS = 200;
+
+export function createAsyncJob(type: AsyncJobType, input: unknown): AsyncJob {
+  const job: AsyncJob = {
+    jobId: `job_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    status: "pending",
+    startedAt: new Date().toISOString(),
+    input,
+  };
+  asyncJobs.set(job.jobId, job);
+  // evict oldest if over cap
+  if (asyncJobs.size > MAX_ASYNC_JOBS) {
+    const oldest = asyncJobs.keys().next().value;
+    if (oldest) asyncJobs.delete(oldest);
+  }
+  return job;
+}
+
+export function updateAsyncJob(jobId: string, update: Partial<Pick<AsyncJob, "status" | "result" | "error" | "completedAt">>): void {
+  const job = asyncJobs.get(jobId);
+  if (job) Object.assign(job, update);
+}
+
+export function getAsyncJob(jobId: string): AsyncJob | undefined { return asyncJobs.get(jobId); }
+export function listAsyncJobs(): AsyncJob[] { return Array.from(asyncJobs.values()).reverse(); }

@@ -3,14 +3,53 @@ import { CaseSnapshotCard, type CaseSnapshot } from "../components/CaseSnapshotC
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, ListChecks, Wifi, WifiOff, RefreshCw } from "lucide-react";
+import { Loader2, ListChecks, Wifi, WifiOff, RefreshCw, AlertTriangle, ShieldAlert } from "lucide-react";
 
 type QueueState = "NEEDS_REVIEW" | "PENDING" | "APPROVED" | "ESCALATED";
 
+interface SeverityBuckets {
+  critical: number;
+  high: number;
+  moderate: number;
+  low: number;
+  unknown: number;
+}
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: "destructive",
+  high: "destructive",
+  moderate: "secondary",
+  low: "outline",
+  unknown: "outline",
+};
+
+function SeverityBucketBar({ buckets }: { buckets: SeverityBuckets }) {
+  const total = Object.values(buckets).reduce((s, n) => s + n, 0);
+  if (total === 0) return null;
+  return (
+    <div className="flex items-center gap-3 flex-wrap" data-testid="severity-buckets">
+      {(["critical", "high", "moderate", "low"] as const).map((sev) => {
+        const count = buckets[sev];
+        if (!count) return null;
+        return (
+          <div key={sev} className="flex items-center gap-1" data-testid={`bucket-${sev}`}>
+            {sev === "critical" && <AlertTriangle className="w-3 h-3 text-destructive" />}
+            {sev === "high" && <ShieldAlert className="w-3 h-3 text-orange-500" />}
+            <Badge variant={SEVERITY_COLORS[sev] as any} className="text-xs">
+              {sev}: {count}
+            </Badge>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ReviewQueueV2() {
   const [snapshots, setSnapshots] = useState<CaseSnapshot[]>([]);
+  const [buckets, setBuckets] = useState<SeverityBuckets | null>(null);
   const [connected, setConnected] = useState(false);
-  const [error, setError]         = useState("");
+  const [error, setError] = useState("");
   const [stateFilter, setStateFilter] = useState<QueueState>("NEEDS_REVIEW");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -23,7 +62,8 @@ export default function ReviewQueueV2() {
     setError("");
     setConnected(false);
 
-    const es = new EventSource(`/api/sse/review-queue?state=${filter}`);
+    // Use enhanced /api/sse/queue with severity bucketing
+    const es = new EventSource(`/api/sse/queue?state=${filter}`);
     esRef.current = es;
 
     es.addEventListener("connected", () => setConnected(true));
@@ -32,6 +72,7 @@ export default function ReviewQueueV2() {
       try {
         const data = JSON.parse(evt.data);
         setSnapshots(data.cases ?? []);
+        if (data.buckets) setBuckets(data.buckets);
         setLastUpdated(new Date());
         setConnected(true);
         setError("");
@@ -45,9 +86,7 @@ export default function ReviewQueueV2() {
       setError(msg ?? "Connection error");
     });
 
-    es.onerror = () => {
-      setConnected(false);
-    };
+    es.onerror = () => { setConnected(false); };
   }
 
   useEffect(() => {
@@ -58,6 +97,8 @@ export default function ReviewQueueV2() {
     };
   }, [stateFilter]);
 
+  const criticalCount = buckets?.critical ?? 0;
+
   return (
     <div className="p-4 sm:p-6 space-y-4" data-testid="page-review-queue-v2">
       {/* ── Header ── */}
@@ -66,14 +107,14 @@ export default function ReviewQueueV2() {
           <ListChecks className="h-5 w-5 shrink-0" />
           <h2 className="text-xl font-semibold truncate">Review Queue</h2>
           {snapshots.length > 0 && (
-            <Badge variant="secondary" data-testid="badge-count">
-              {snapshots.length} pending
+            <Badge variant={criticalCount > 0 ? "destructive" : "secondary"} data-testid="badge-count">
+              {snapshots.length} cases
+              {criticalCount > 0 && ` · ${criticalCount} critical`}
             </Badge>
           )}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Live indicator */}
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <span
             className={`flex items-center gap-1 text-xs ${connected ? "text-green-600" : "text-muted-foreground"}`}
             data-testid="badge-live"
@@ -83,7 +124,6 @@ export default function ReviewQueueV2() {
               : <><WifiOff className="w-3.5 h-3.5" /> Reconnecting…</>}
           </span>
 
-          {/* State filter */}
           <Select value={stateFilter} onValueChange={(v) => setStateFilter(v as QueueState)}>
             <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-state-filter">
               <SelectValue />
@@ -96,18 +136,14 @@ export default function ReviewQueueV2() {
             </SelectContent>
           </Select>
 
-          {/* Manual refresh */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2"
-            onClick={() => connect(stateFilter)}
-            data-testid="button-refresh"
-          >
+          <Button variant="ghost" size="sm" className="h-8 px-2" onClick={() => connect(stateFilter)} data-testid="button-refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </Button>
         </div>
       </div>
+
+      {/* ── Severity buckets ── */}
+      {buckets && <SeverityBucketBar buckets={buckets} />}
 
       {lastUpdated && (
         <p className="text-xs text-muted-foreground" data-testid="text-last-updated">
@@ -132,12 +168,33 @@ export default function ReviewQueueV2() {
         </p>
       ) : (
         <div className="space-y-2">
-          {snapshots.map((snapshot) => (
-            <CaseSnapshotCard
-              key={snapshot.caseId}
-              snapshot={snapshot}
-              showOpenLink
-            />
+          {snapshots.map((snapshot: any) => (
+            <div key={snapshot.caseId} className="relative">
+              {snapshot._severity === "critical" && (
+                <div className="absolute left-0 top-0 bottom-0 w-1 bg-destructive rounded-l-md" />
+              )}
+              {snapshot._severity === "high" && (
+                <div className="absolute left-0 top-0 bottom-0 w-1 bg-orange-500 rounded-l-md" />
+              )}
+              <div className={snapshot._severity === "critical" || snapshot._severity === "high" ? "pl-2" : ""}>
+                <CaseSnapshotCard
+                  key={snapshot.caseId}
+                  snapshot={snapshot}
+                  showOpenLink
+                />
+              </div>
+              {snapshot._priority && (
+                <div className="absolute top-2 right-2">
+                  <Badge
+                    variant={snapshot._severity === "critical" ? "destructive" : snapshot._severity === "high" ? "secondary" : "outline"}
+                    className="text-xs font-mono"
+                    data-testid={`badge-priority-${snapshot.caseId}`}
+                  >
+                    {snapshot._priority}
+                  </Badge>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

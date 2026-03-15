@@ -8,6 +8,35 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (March 2026)
 
+### Session Enhancement Batch (T001–T009)
+
+**T001 — Async GPT-4o Job Queue** (`/ms-agent-ops`)
+- New in-memory async job store in `msAgentOrchestrator.ts`: `createAsyncJob`, `updateAsyncJob`, `getAsyncJob`, `listAsyncJobs`
+- New endpoints: `POST /api/msAgentTasks/reason/async` (fires background GPT-4o, returns `jobId`), `GET /api/msAgentTasks/jobs/:jobId` (poll status/result)
+- Frontend: "Run Async" button on Clinical Reasoning tab; job status badge + live polling via `refetchInterval`; result appears when job completes
+
+**T002 — Enhanced SSE Queue** (`/api/sse/queue`)
+- New SSE endpoint at `/api/sse/queue` (separate from existing `/api/sse/review-queue`) with severity bucketing
+- Auto-annotates each case with `_severity` (critical/high/moderate/low) from `brainOutput.severity.severityLevel` or disposition fallback
+- Sorts cases: critical P1 first → low P4 last; pushes `buckets` aggregate per update
+- ReviewQueueV2 updated: uses new endpoint, shows severity bucket bar, colored left-border strips for critical/high cases, P1–P4 priority badges
+
+**T005 — LangChain Chain History Tab** (`/ms-agent-ops`)
+- New "Chain History" tab in MicrosoftAgentOps — fetches from `/api/langchain/history` (already persisted to Firestore in `langchainRoutes.ts`)
+- Expandable run cards: type (tool/chain), tool name, latency, timestamp, step list, output preview
+
+**T009 — Expanded Complaint Registry**
+- `shared/complaints.ts` expanded from 143 → 262 canonical slugs (added 8 ENT, 5 pulmonary, 6 cardiac, 7 GI, 6 GU, 9 neuro, 7 MSK, 5 derm, 4 psych, 4 endo, 5 infectious, 5 trauma, 8 ophthalmology, 6 OB/GYN, 4 general, 4 vascular, 5 pediatric, 5 heme/onc, 6 toxicology entries)
+- `GoldReviewWorkbench.tsx` now imports `COMPLAINTS` from `@shared/complaints` instead of duplicating the list — single source of truth
+
+**Zip Bundle (New Engine Files)**
+- `shared/clinicalEngineTypes.ts` — comprehensive unified type definitions (BrainCaseInput, BrainOutput, CoordinationOutput, all result interfaces)
+- `server/core/generalization/domainGeneralizationEngine.ts` — domain-agnostic case similarity scoring with feature-weight signal maps
+- `server/core/supervisorEngine.ts` — wraps governance result + red flags + entropy into ESCALATE/PASS decision
+- `server/core/expansionEngine.ts` — complaint expansion planner (gap analysis between existing complaints and Sheet candidates)
+- `server/services/telepresence/telepresenceOrchestrator.ts` — builds session task lists for wall screen, robot, otoscope, vitals, EKG, and X-ray devices with safety checks
+- `server/core/index.ts` — barrel export for all core engines
+
 ### GoldReviewWorkbench Visual Analytics (`/gold-reviews`)
 - Added "Browse" / "Visualize" tab split using shadcn Tabs
 - Visualize tab includes: disposition distribution bar chart (colored by severity), confidence level pie chart, reviews-by-complaint bar chart (top 12), and top diagnoses frequency table
