@@ -8,6 +8,40 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (March 2026)
 
+### Research + Visualization + Conversation Optimization Bundle (March 2026)
+
+**5 new research engines** (`server/research/`):
+- `literatureScraperEngine.ts` — PubMed eUtils API scraper, returns structured `LiteratureRecord[]`
+- `evidenceWeightingEngine.ts` — Maps source type → confidence weight (guideline=1.0 → forum=0.2)
+- `graphDeduplicationEngine.ts` — Dedupes and optionally weight-merges knowledge graph edges
+- `knowledgeGapEngine.ts` — Scans COMPLAINTS list for low-coverage nodes, returns gap reports with suggestions
+- `researchPipelineController.ts` — Orchestrates the full pipeline: PubMed → ingest → weight → dedup → gap analysis
+- `pdfClinicalExtractor.ts` — PDF text/section extractor (text mode built-in; file mode stubs pdf-parse)
+
+**5 new conversation optimization engines** (`server/core/`):
+- `conversationAuditEngine.ts` — Scores conversations on empathy, completeness, clarity, safety, de-escalation; flags unsafe reassurance, missed red flags, missing modifiers; grades A–F
+- `conversationToneEngine.ts` — Detects tone (warm/clinical/dismissive/rushed/neutral), jargon, readability grade, offers plain-language rewrite
+- `deEscalationEngine.ts` — Detects emotional state (anxious/angry/confused), applies named protocol, generates suggested response + phrases to avoid
+- `conversationNextBestQuestion.ts` — Priority-ordered next question queue by complaint; universal + complaint-specific templates
+- `promptImprovementEngine.ts` — GPT-4o powered: rewrites AI messages for chosen goal (clarity/empathy/completeness/de-escalation/engagement); `replayWithBetterTone()` rewrites full conversations
+
+**Clinical Visualization Engine** (`server/core/clinicalDecisionVisualization.ts`):
+- Wraps `clinicalPathVisualizer` to generate 4 visualizations per case: Mermaid reasoning graph, Mermaid mind map, Mermaid decision tree, audit ladder (step-by-step engine trace)
+
+**2 new API route groups:**
+- `server/routes/clinicalVisualization.ts` → `/api/visualization/*` (architecture, pathway/:complaint, case-reasoning, engine-map, telepresence-workflow, types)
+- `server/routes/conversationOptimization.ts` → `/api/conversation-opt/*` (audit, tone, de-escalate, next-question, improve-prompt, replay, full-review)
+
+**MermaidDiagram component** (`client/src/components/MermaidDiagram.tsx`):
+- Renders Mermaid diagrams in-app using the `mermaid` npm package
+- Responsive SVG output, error handling, loading state
+
+**2 new pages:**
+- `ClinicalVisualizationPage` (`/clinical-visualization`) — 5 tabs: Architecture Diagram, Complaint Pathway, Case Reasoning (reasoning graph + mind map + decision tree + audit ladder), Engine Map, Telepresence Workflow; SVG download
+- `ConversationOptimizationPage` (`/conversation-optimization`) — 5 tabs: Audit Interaction (grade + score bars + flags), Improve Prompting (GPT-4o), De-escalation Protocol, Next Best Question queue, Replay with Better Tone
+
+**Sidebar entries added:** "Clinical Visualization" (Network icon) in Self-Developing AI; "Conversation Optimizer" (MessageCircle icon) in Operations
+
 ### Clinical Brain Bundle v2 (37-file install)
 
 **New namespace: `server/core/brain/`** (parallel to existing wave-7 engines, zero conflicts)
