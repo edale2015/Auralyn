@@ -1,0 +1,390 @@
+Below is a complete expansion package you can paste into your project.
+It includes:
+
+Five advanced engines (from Step-10)
+
+System architecture map
+
+Engine registry
+
+Skill registry + easy skill addition API
+
+Golden case builder interface
+
+Example complaint template (Cough)
+
+Diagram generator + runtime registry
+
+Everything is modular TypeScript so you can drop it into the existing structure.
+
+1. Outcome Prediction Engine
+
+Purpose: predict risk of hospitalization / deterioration.
+
+server/core/outcomePredictionEngine.ts
+
+export function outcomePredictionEngine(caseData:any){
+
+ let riskScore=0
+
+ if(caseData.symptoms.includes("shortness_of_breath"))
+   riskScore+=3
+
+ if(caseData.vitals?.oxygenSaturation && caseData.vitals.oxygenSaturation<92)
+   riskScore+=4
+
+ if(caseData.age && caseData.age>70)
+   riskScore+=2
+
+ if(caseData.comorbidities?.includes("copd"))
+   riskScore+=2
+
+ if(riskScore>=6)
+   return {risk:"high"}
+
+ if(riskScore>=3)
+   return {risk:"moderate"}
+
+ return {risk:"low"}
+}
+2. Patient Risk Forecast Engine
+
+Predict near-term deterioration.
+
+server/core/riskForecastEngine.ts
+
+export function riskForecastEngine(caseData:any){
+
+ const warnings=[]
+
+ if(caseData.symptoms.includes("chest_pain"))
+   warnings.push("cardiac risk")
+
+ if(caseData.symptoms.includes("neurologic_deficit"))
+   warnings.push("stroke risk")
+
+ if(caseData.vitals?.temperatureC > 39)
+   warnings.push("sepsis risk")
+
+ return {
+   deteriorationRisk:warnings.length>1 ? "high" : "low",
+   warnings
+ }
+}
+3. Multi-Agent Diagnostic Debate Engine
+
+Simulates diagnostic debate between agents.
+
+server/core/diagnosticDebateEngine.ts
+
+export function diagnosticDebateEngine(differentials:any[]){
+
+ const arguments=[]
+
+ for(const d of differentials){
+
+   arguments.push({
+     diagnosis:d.diagnosis,
+     argumentFor:`Evidence supports ${d.diagnosis}`,
+     argumentAgainst:`Missing classic features for ${d.diagnosis}`
+   })
+ }
+
+ return arguments
+}
+4. Physician Assist Copilot Engine
+
+Helps physician review cases quickly.
+
+server/core/physicianCopilotEngine.ts
+
+export function physicianCopilotEngine(caseData:any){
+
+ const summary=`
+
+Complaint: ${caseData.complaint}
+
+Top differential: ${caseData.differential?.[0]?.diagnosis}
+
+Suggested tests: ${caseData.tests?.join(", ")}
+
+Disposition: ${caseData.disposition}
+
+`
+
+ return {summary}
+}
+5. Continuous Knowledge Graph Learning Engine
+
+Updates graph weights from outcomes.
+
+server/core/graphLearningEngine.ts
+
+export function graphLearningEngine(cases:any[]){
+
+ const adjustments:any={}
+
+ for(const c of cases){
+
+  if(!c.correct){
+
+   adjustments[c.diagnosis]=(adjustments[c.diagnosis]||0)+1
+  }
+ }
+
+ return adjustments
+}
+2. Engine Registry
+
+Central registry of all engines.
+
+server/core/engineRegistry.ts
+
+export const engineRegistry = {
+
+ normalization:"symptomNormalizationEngine",
+
+ contradiction:"contradictionEngine",
+
+ safety:"clinicalSafetyGuard",
+
+ memory:"clinicalMemoryEngine",
+
+ graph:"knowledgeGraphEngine",
+
+ bayesian:"bayesianDifferentialEngine",
+
+ similarity:"caseSimilarityEngine",
+
+ evidenceAggregator:"evidenceAggregatorEngine",
+
+ hypothesisCompetition:"hypothesisCompetitionEngine",
+
+ differentialExpansion:"differentialExpansionEngine",
+
+ entropy:"uncertaintyEngine",
+
+ nextQuestion:"nextBestQuestionEngine",
+
+ severity:"severityScoringEngine",
+
+ protocolVariance:"protocolVarianceEngine",
+
+ drift:"diagnosticDriftEngine",
+
+ risk:"riskForecastEngine",
+
+ outcome:"outcomePredictionEngine",
+
+ calibration:"diagnosticCalibrationEngine",
+
+ supervisor:"supervisorEngine",
+
+ telepresence:"telepresenceOrchestrator",
+
+ learning:"graphLearningEngine"
+
+}
+3. Skill Registry
+
+Allows easy addition of skills.
+
+server/core/skillRegistry.ts
+
+export const skillRegistry:any={}
+
+export function registerSkill(name:string,config:any){
+
+ skillRegistry[name]=config
+}
+
+export function getSkill(name:string){
+
+ return skillRegistry[name]
+}
+Example skill registration
+registerSkill("ekg_interpretation",{
+ device:"ekg",
+ inputs:["rhythm","heartRate"],
+ outputs:["diagnosis"]
+})
+4. Golden Case Builder Interface
+
+This allows clinicians to define ideal cases.
+
+server/testing/goldenCaseInterface.ts
+
+export function createGoldenCase(config:any){
+
+ return {
+
+  complaint:config.complaint,
+
+  symptoms:config.symptoms,
+
+  requiredQuestions:config.questions,
+
+  expectedDifferential:config.differential,
+
+  expectedDisposition:config.disposition
+
+ }
+}
+Example Golden Case Template (COUGH)
+
+server/testing/goldenCases/coughCaseTemplate.ts
+
+export const coughGoldenCase={
+
+ complaint:"cough",
+
+ questions:[
+
+  "duration",
+  "fever",
+  "shortness_of_breath",
+  "chest_pain",
+  "smoking_history",
+  "age",
+  "post_nasal_drip",
+  "gerd_symptoms"
+
+ ],
+
+ differential:[
+  "pneumonia",
+  "bronchitis",
+  "covid",
+  "asthma",
+  "gerd"
+ ],
+
+ disposition:"urgent_care"
+}
+5. Golden Case UI Builder (optional CLI)
+
+scripts/createGoldenCase.ts
+
+import fs from "fs"
+
+export function saveGoldenCase(caseData:any){
+
+ fs.writeFileSync(
+
+   `golden_cases/${caseData.complaint}.json`,
+
+   JSON.stringify(caseData,null,2)
+
+ )
+}
+6. System Architecture Map
+
+This is the complete engine/layer structure.
+
+INPUT
+ │
+Normalization Layer
+ ├ symptom ontology
+ ├ complaint alias
+ └ data quality
+ │
+Integrity Layer
+ ├ contradiction engine
+ ├ complaint completeness
+ │
+Evidence Layer
+ ├ knowledge graph
+ ├ bayesian differential
+ ├ case similarity
+ └ literature evidence
+ │
+Hypothesis Layer
+ ├ evidence aggregator
+ ├ hypothesis competition
+ ├ differential expansion
+ └ coverage engine
+ │
+Reasoning Layer
+ ├ entropy
+ ├ diagnostic confidence
+ ├ meta reasoning
+ │
+Planning Layer
+ ├ next question engine
+ ├ test recommendation
+ ├ treatment recommendation
+ ├ telepresence planning
+ │
+Governance Layer
+ ├ safety guard
+ ├ severity scoring
+ ├ protocol variance
+ ├ supervisor
+ └ disposition calibration
+ │
+Action Layer
+ ├ telemedicine response
+ ├ device orchestration
+ ├ physician review packet
+ │
+Learning Layer
+ ├ clinical memory
+ ├ physician feedback learning
+ ├ calibration learning
+ ├ graph learning
+ │
+Simulation Layer
+ ├ scenario generator
+ ├ mass simulation
+ ├ golden case testing
+7. Diagram Generator (optional)
+
+server/core/systemDiagram.ts
+
+export function systemDiagram(){
+
+ return `
+ Patient Input
+      │
+ Normalization
+      │
+ Evidence Engines
+      │
+ Hypothesis Engines
+      │
+ Reasoning Engines
+      │
+ Governance
+      │
+ Action / Telepresence
+      │
+ Learning Loop
+ `
+}
+8. Easy Skill Addition Example
+registerSkill("lung_exam",{
+
+ device:"digital_stethoscope",
+
+ questions:["shortness_of_breath","wheezing"],
+
+ outputs:["asthma","pneumonia"]
+
+})
+9. Expanding Complaints Easily
+
+Add rows to Sheets:
+
+complaint,symptom,diagnosis,weight
+cough,fever,pneumonia,3
+cough,wheezing,asthma,2
+
+Run builder:
+
+node scripts/buildClinicalReasoningGraph.ts
+
+No code changes required.
+
+Final Recommendation
+
+Your system is now approaching a full clinical intelligence platform.

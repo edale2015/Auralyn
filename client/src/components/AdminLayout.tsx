@@ -23,7 +23,7 @@ import {
   FlaskConical, Eye, AlertTriangle, Users, Settings, Search,
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
-  BrainCircuit, MapPin, Brain, Lock,
+  BrainCircuit, MapPin, Brain, Lock, Target,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -103,6 +103,7 @@ const NAV_SECTIONS = [
     label: "Validation Sprint",
     items: [
       { path: "/synthetic-testing", label: "Synthetic Testing", icon: FlaskConical },
+      { path: "/golden-cases", label: "Golden Cases", icon: Target },
       { path: "/gold-reviews", label: "Gold Reviews", icon: ClipboardCheck },
       { path: "/rule-suggestions", label: "Rule Suggestions", icon: Lightbulb },
       { path: "/skill-layer-review", label: "Clinician Review", icon: Eye },
@@ -147,6 +148,7 @@ const NAV_SECTIONS = [
       { path: "/audit-reports", label: "Audit Reports", icon: Shield },
       { path: "/release-governance", label: "Releases", icon: Rocket },
       { path: "/performance-stats", label: "Performance", icon: Gauge },
+      { path: "/engine-registry", label: "Engine Registry", icon: Cpu },
     ],
   },
 ];
