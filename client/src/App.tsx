@@ -84,6 +84,7 @@ import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import EngineRegistryPage from "@/pages/EngineRegistryPage";
 import GoldenCasesPage from "@/pages/GoldenCasesPage";
+import MetaClinicalConsolePage from "@/pages/MetaClinicalConsolePage";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -177,6 +178,7 @@ function Router() {
       <Route path="/physician-analytics">{() => <AdminPage component={PhysicianAnalyticsPage} />}</Route>
       <Route path="/engine-registry">{() => <AdminPage component={EngineRegistryPage} />}</Route>
       <Route path="/golden-cases">{() => <AdminPage component={GoldenCasesPage} />}</Route>
+      <Route path="/meta-clinical">{() => <AdminPage component={MetaClinicalConsolePage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,0 +1,413 @@
+1. Meta-Clinical Intelligence Engine
+
+Monitors the reasoning process and adjusts engine weights.
+
+server/core/metaClinicalIntelligenceEngine.ts
+
+export function metaClinicalIntelligenceEngine(state:any){
+
+ let adjustments:any={}
+
+ if(state.entropy > 1.2)
+   adjustments["bayesian_weight"]=0.7
+
+ if(state.similarityConfidence < 0.4)
+   adjustments["similarity_weight"]=0.2
+
+ if(state.graphCoverage < 0.5)
+   adjustments["graph_weight"]=0.5
+
+ return {
+   adjustments,
+   notes:"meta reasoning adjustment applied"
+ }
+}
+2. Guideline Execution Engine
+
+Runs structured clinical scoring systems.
+
+server/core/guidelineExecutionEngine.ts
+
+export function guidelineExecutionEngine(caseData:any){
+
+ const results:any={}
+
+ if(caseData.complaint==="sore_throat"){
+
+  let score=0
+
+  if(caseData.symptoms.includes("fever")) score++
+  if(caseData.symptoms.includes("tonsillar_exudate")) score++
+  if(!caseData.symptoms.includes("cough")) score++
+
+  results["centor_score"]=score
+ }
+
+ if(caseData.complaint==="shortness_of_breath"){
+
+  let wells=0
+
+  if(caseData.symptoms.includes("tachycardia")) wells+=1.5
+  if(caseData.symptoms.includes("hemoptysis")) wells+=1
+  if(caseData.symptoms.includes("dvt_history")) wells+=1.5
+
+  results["wells_score"]=wells
+ }
+
+ return results
+}
+3. Longitudinal Patient Engine
+
+Tracks progression across visits.
+
+server/core/longitudinalPatientEngine.ts
+
+export function longitudinalPatientEngine(current:any, history:any[]){
+
+ if(!history || history.length===0)
+   return {status:"first_visit"}
+
+ const last=history[history.length-1]
+
+ if(last.diagnosis===current.diagnosis)
+   return {status:"persistent"}
+
+ if(last.symptoms && current.symptoms){
+
+   if(current.symptoms.length > last.symptoms.length)
+     return {status:"worsening"}
+ }
+
+ return {status:"stable"}
+}
+4. Clinical Knowledge Extraction Engine
+
+Turns guideline text into graph edges.
+
+server/core/clinicalKnowledgeExtractionEngine.ts
+
+export function clinicalKnowledgeExtractionEngine(text:string){
+
+ const edges:any=[]
+
+ const lines=text.split("\\n")
+
+ for(const l of lines){
+
+   if(l.includes("causes")){
+
+     const parts=l.split("causes")
+
+     edges.push({
+       from:parts[0].trim(),
+       to:parts[1].trim(),
+       relation:"causes"
+     })
+   }
+ }
+
+ return edges
+}
+
+This allows importing things like:
+
+fever causes infection
+infection causes sepsis
+5. Telepresence Robotics Controller
+
+server/services/telepresence/telepresenceController.ts
+
+export function telepresenceController(plan:any){
+
+ const commands=[]
+
+ if(plan.tests?.includes("ekg"))
+   commands.push("activate_EKG_device")
+
+ if(plan.tests?.includes("otoscope"))
+   commands.push("activate_otoscope")
+
+ if(plan.tests?.includes("chest_xray"))
+   commands.push("activate_xray_kiosk")
+
+ return commands
+}
+6. Meta Clinical Controller (Top Level)
+
+This orchestrates all engines.
+
+server/core/metaClinicalController.ts
+
+import { runClinicalBrain } from "./clinicalSuperBrain"
+import { metaClinicalIntelligenceEngine } from "./metaClinicalIntelligenceEngine"
+import { guidelineExecutionEngine } from "./guidelineExecutionEngine"
+import { longitudinalPatientEngine } from "./longitudinalPatientEngine"
+import { telepresenceController } from "../services/telepresence/telepresenceController"
+
+export async function metaClinicalController(caseInput:any, history:any[]){
+
+ const brain=await runClinicalBrain(caseInput)
+
+ const guideline=guidelineExecutionEngine(caseInput)
+
+ const longitudinal=longitudinalPatientEngine(caseInput,history)
+
+ const meta=metaClinicalIntelligenceEngine(brain)
+
+ const telepresence=telepresenceController(brain.plan || {})
+
+ return {
+
+  brain,
+
+  guideline,
+
+  longitudinal,
+
+  meta,
+
+  telepresence
+
+ }
+}
+7. Clinical Path Visualization Engine
+
+Creates graphs of reasoning paths.
+
+server/core/clinicalPathVisualizer.ts
+
+export function clinicalPathVisualizer(differential:any[]){
+
+ const nodes=[]
+ const edges=[]
+
+ nodes.push({id:"symptoms"})
+
+ differential.forEach(d=>{
+
+   nodes.push({id:d.diagnosis})
+
+   edges.push({
+     from:"symptoms",
+     to:d.diagnosis,
+     weight:d.score
+   })
+ })
+
+ return {nodes,edges}
+}
+8. Clinical Path Import Engine
+
+Turns structured clinical text into paths.
+
+server/core/clinicalPathImporter.ts
+
+export function clinicalPathImporter(text:string){
+
+ const paths=[]
+
+ const lines=text.split("\\n")
+
+ for(const line of lines){
+
+   const parts=line.split("->")
+
+   if(parts.length===2){
+
+     paths.push({
+       from:parts[0].trim(),
+       to:parts[1].trim()
+     })
+   }
+ }
+
+ return paths
+}
+
+Example input:
+
+cough -> pneumonia
+pneumonia -> chest_xray
+chest_xray -> antibiotics
+9. Visual Architecture Diagram Generator
+
+This engine generates a diagram dynamically.
+
+server/core/architectureDiagramEngine.ts
+
+export function architectureDiagramEngine(){
+
+ return `
+graph TD
+
+Input --> Normalization
+Normalization --> Integrity
+Integrity --> Evidence
+Evidence --> Hypothesis
+Hypothesis --> Reasoning
+Reasoning --> Planning
+Planning --> Governance
+Governance --> Action
+Action --> Learning
+Learning --> Simulation
+`
+}
+
+You can render this with Mermaid in a UI.
+
+10. Capability Buttons Layer
+
+Creates UI buttons to access all system tools.
+
+server/ui/capabilityButtons.ts
+
+export const capabilityButtons=[
+
+ {label:"Run Brain",action:"runClinicalBrain"},
+
+ {label:"Visualize Clinical Path",action:"visualizePath"},
+
+ {label:"Import Clinical Path",action:"importPath"},
+
+ {label:"Run Simulation",action:"runSimulation"},
+
+ {label:"Generate Golden Case",action:"createGoldenCase"},
+
+ {label:"Telepresence Device Plan",action:"devicePlan"},
+
+ {label:"Clinical Knowledge Import",action:"knowledgeImport"}
+
+]
+Visual Architecture Diagram
+
+Example output from the diagram engine:
+
+Full System Engine Registry
+
+Your application now includes approximately 70+ reasoning components:
+
+Input / Integrity
+
+Symptom normalization
+
+Complaint alias registry
+
+Contradiction engine
+
+Data quality engine
+
+Complaint completeness
+
+Evidence
+
+Knowledge graph
+
+Bayesian inference
+
+Case similarity
+
+Literature evidence
+
+Hypothesis
+
+Evidence aggregator
+
+Hypothesis competition
+
+Differential expansion
+
+Coverage engine
+
+Reasoning
+
+Entropy
+
+Diagnostic confidence
+
+Meta reasoning
+
+Planning
+
+Next best question
+
+Test recommendation
+
+Treatment recommendation
+
+Telepresence planning
+
+Governance
+
+Safety guard
+
+Severity scoring
+
+Protocol variance
+
+Supervisor
+
+Disposition calibration
+
+Action
+
+Telemedicine output
+
+Device orchestration
+
+Physician packet
+
+Learning
+
+Clinical memory
+
+Physician feedback learning
+
+Calibration learning
+
+Graph learning
+
+Simulation
+
+Scenario generator
+
+Mass simulation
+
+Golden case builder
+
+New Engines Added
+
+Meta-Clinical Intelligence
+
+Guideline Execution
+
+Longitudinal Patient
+
+Knowledge Extraction
+
+Telepresence Controller
+
+Visualization
+
+Clinical path visualizer
+
+Clinical path importer
+
+Architecture diagram engine
+
+Final Recommendation
+
+The next ultimate upgrade would be:
+
+Autonomous Clinical Research Engine
+
+This system would:
+
+read new clinical literature
+
+extract relationships
+
+expand the knowledge graph
+
+test against simulated cases
+
+suggest updates to reasoning w

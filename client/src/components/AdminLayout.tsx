@@ -135,6 +135,7 @@ const NAV_SECTIONS = [
   {
     label: "Self-Developing AI",
     items: [
+      { path: "/meta-clinical", label: "Meta-Clinical Console", icon: Sparkles },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },
