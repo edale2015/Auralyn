@@ -1,10 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-
-const COMPLAINTS = [
-  "sore_throat", "cough", "uti", "chest_pain",
-  "abdominal_pain", "fever", "rash", "ear_pain", "sinus_pressure",
-];
+import { COMPLAINTS } from "@shared/complaints";
 
 export default function ReleaseGateHistoryCard() {
   const [selectedComplaint, setSelectedComplaint] = useState("");

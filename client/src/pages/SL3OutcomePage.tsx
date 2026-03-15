@@ -7,8 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-
-const COMPLAINTS = ["cough", "sore_throat", "sinus_pressure", "ear_pain", "uti", "rash", "fever", "chest_pain", "abdominal_pain"];
+import { COMPLAINTS } from "@shared/complaints";
 const DISPOSITIONS = ["Home Care", "Urgent Care", "ED", "Prescription", "Watchful Waiting", "Telehealth Follow-up"];
 const FOLLOWUP_STATUSES = ["pending", "improved", "worsened", "hospitalized", "no_show"];
 

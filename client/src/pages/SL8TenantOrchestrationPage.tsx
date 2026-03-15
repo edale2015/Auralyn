@@ -8,9 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Building2, Users, Activity, Cpu, ToggleLeft, ToggleRight, Trash2, Plus } from "lucide-react";
 
+import { COMPLAINTS as ALL_COMPLAINTS } from "@shared/complaints";
+
 const PLANS = ["starter", "professional", "enterprise"];
 const STATUSES = ["trial", "active", "suspended", "offboarding"];
-const ALL_COMPLAINTS = ["cough", "sore_throat", "sinus_pressure", "ear_pain", "uti", "rash", "fever", "chest_pain", "abdominal_pain"];
 const ALL_CHANNELS = ["whatsapp", "sms", "telegram", "web"];
 
 const planColors: Record<string, string> = {

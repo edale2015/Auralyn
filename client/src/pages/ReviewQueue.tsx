@@ -19,7 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ClipboardList, AlertTriangle, Clock, Radio, WifiOff } from "lucide-react";
+import { ClipboardList, AlertTriangle, Clock, Radio, WifiOff, Flame } from "lucide-react";
 
 function confidenceBadge(confidence: string | undefined) {
   if (!confidence) return <Badge variant="outline" data-testid="badge-confidence-unknown">—</Badge>;
@@ -34,10 +34,19 @@ function dispositionBadge(disposition: string | undefined) {
   return <Badge variant={variant} data-testid={`badge-disposition-${disposition}`}>{disposition}</Badge>;
 }
 
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: "bg-red-100 text-red-700 border-red-300",
+  high: "bg-orange-100 text-orange-700 border-orange-300",
+  moderate: "bg-yellow-100 text-yellow-700 border-yellow-300",
+  low: "bg-slate-100 text-slate-600 border-slate-300",
+  unknown: "bg-gray-100 text-gray-500 border-gray-200",
+};
+
 export default function ReviewQueue() {
   const [stateFilter, setStateFilter] = useState("NEEDS_REVIEW");
   const [sseConnected, setSseConnected] = useState(false);
   const [sseError, setSseError] = useState(false);
+  const [severityBuckets, setSeverityBuckets] = useState<Record<string, number> | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const qc = useQueryClient();
 
@@ -52,8 +61,7 @@ export default function ReviewQueue() {
   });
 
   useEffect(() => {
-    const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
-    const url = `/api/sse/review-queue?state=${stateFilter}`;
+    const url = `/api/sse/queue?state=${stateFilter}`;
 
     function connect() {
       if (esRef.current) esRef.current.close();
@@ -66,8 +74,12 @@ export default function ReviewQueue() {
         setSseError(false);
       };
 
-      es.addEventListener("queue-update", () => {
+      es.addEventListener("queue-update", (e: MessageEvent) => {
         qc.invalidateQueries({ queryKey: ["/api/review/queue", stateFilter] });
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.buckets) setSeverityBuckets(payload.buckets);
+        } catch {}
       });
 
       es.addEventListener("connected", () => {
@@ -129,6 +141,22 @@ export default function ReviewQueue() {
             </SelectContent>
           </Select>
         </div>
+
+        {/* Severity buckets from enhanced SSE */}
+        {severityBuckets && Object.values(severityBuckets).some((v) => v > 0) && (
+          <div className="flex items-center gap-2 flex-wrap" data-testid="severity-buckets">
+            <Flame className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            {["critical", "high", "moderate", "low", "unknown"].map((sev) => {
+              const count = severityBuckets[sev] ?? 0;
+              if (!count) return null;
+              return (
+                <Badge key={sev} className={`text-xs capitalize border ${SEVERITY_COLORS[sev]}`} data-testid={`bucket-${sev}`}>
+                  {sev}: {count}
+                </Badge>
+              );
+            })}
+          </div>
+        )}
 
         {error && (
           <Card className="border-destructive">

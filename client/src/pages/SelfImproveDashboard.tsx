@@ -15,11 +15,7 @@ import {
   BarChart3, BookOpen, Target, Shield, Play, ChevronRight,
   Cpu, Database, GitBranch, Microscope
 } from "lucide-react";
-
-const COMPLAINTS = [
-  "sore_throat","cough","chest_pain","uti","fever","rash",
-  "abdominal_pain","ear_pain","sinus_pressure"
-];
+import { COMPLAINTS } from "@shared/complaints";
 
 const RISK_COLORS: Record<string, string> = {
   low: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",

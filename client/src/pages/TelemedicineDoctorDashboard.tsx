@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { COMPLAINTS } from "@shared/complaints";
 
 const DISPOSITION_COLORS: Record<string, string> = {
   active: "bg-blue-100 text-blue-800 border-blue-200",
@@ -135,7 +136,6 @@ function QuickAnalysisPanel({ sessionId }: { sessionId: string }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
 
-  const COMPLAINTS = ["cough", "sore_throat", "sinus_pressure", "ear_pain", "uti", "rash", "fever", "chest_pain", "abdominal_pain"];
   const DISPOSITIONS = ["Home Care", "Prescription", "Urgent Care", "ED", "Telehealth Follow-up"];
   const SYMPTOM_MAP: Record<string, string[]> = {
     cough: ["Fever", "Shortness of breath", "Chest pain", "Sputum production", "Night symptoms"],
