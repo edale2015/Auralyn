@@ -13,6 +13,8 @@ export type DispositionCalibrationInput = {
   riskLevel?: "low" | "moderate" | "high" | string;
   guidelinePassed?: boolean;
   contradictionHasErrors?: boolean;
+  severityLevel?: "low" | "moderate" | "high" | "critical" | string;
+  completenessPassed?: boolean;
 };
 
 export type DispositionCalibrationOutput = {
@@ -70,6 +72,8 @@ export function dispositionCalibrationEngine(
   const highRisk     = input.riskLevel === "high";
   const contradiction = !!input.contradictionHasErrors;
   const guidelineFailed = input.guidelinePassed === false;
+  const criticalSeverity = input.severityLevel === "critical";
+  const incomplete = input.completenessPassed === false;
 
   let finalDisposition  = (input.proposedDisposition || "needs_workup").toLowerCase();
   let calibrationAction: "unchanged" | "escalated" | "softened" = "unchanged";
@@ -91,6 +95,18 @@ export function dispositionCalibrationEngine(
     finalDisposition  = "er_now";
     calibrationAction = "escalated";
     reasons.push("Red flags present — escalating to ER");
+  }
+
+  if (criticalSeverity && finalDisposition !== "er_now") {
+    finalDisposition  = "er_now";
+    calibrationAction = "escalated";
+    reasons.push("Critical severity score — emergency escalation");
+  }
+
+  if (incomplete && ["home_care", "routine_followup"].includes(finalDisposition)) {
+    finalDisposition  = "needs_workup";
+    calibrationAction = "escalated";
+    reasons.push("Complaint completeness requirements not met");
   }
 
   if (HIGH_ACUITY_DX.has(topDx) && topScore >= 0.55) {

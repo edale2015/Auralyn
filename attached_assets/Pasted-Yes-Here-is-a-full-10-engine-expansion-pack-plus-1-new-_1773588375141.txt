@@ -1,0 +1,1469 @@
+Yes. Here is a full 10-engine expansion pack plus 1 new orchestration layer you can paste into Replit.
+
+I’m building on the previous 5 and adding the next 5 I’d recommend:
+
+Already requested:
+
+Disposition Calibration Engine
+
+Complaint Completeness Engine
+
+Medication Safety Engine
+
+Test Yield Engine
+
+Physician Feedback Learning Engine
+
+Next 5:
+6. Protocol Variance Engine
+7. Diagnostic Drift Engine
+8. Cross-Complaint Router Engine
+9. Severity Scoring Engine
+10. Unified Clinical Governance Engine
+
+New layer:
+11. Clinical Intelligence Coordination Layer
+This becomes the conductor. The other engines are instruments. No kazoo medicine.
+
+1) server/core/dispositionCalibrationEngine.ts
+// server/core/dispositionCalibrationEngine.ts
+
+export type RankedDx = {
+  diagnosis: string
+  score: number
+}
+
+export type DispositionCalibrationInput = {
+  complaint: string
+  proposedDisposition: string
+  aggregatedDifferentials: RankedDx[]
+  entropy?: number
+  redFlags?: string[]
+  supervisorDecision?: string
+  riskLevel?: "low" | "moderate" | "high" | string
+  guidelinePassed?: boolean
+  contradictionHasErrors?: boolean
+  severityLevel?: "low" | "moderate" | "high" | "critical" | string
+  completenessPassed?: boolean
+}
+
+export type DispositionCalibrationOutput = {
+  finalDisposition: string
+  calibrationAction: "unchanged" | "escalated" | "softened"
+  confidenceBand: "low" | "moderate" | "high"
+  reasons: string[]
+}
+
+const HIGH_ACUITY_DX = new Set([
+  "acute_coronary_syndrome",
+  "pulmonary_embolism",
+  "aortic_dissection",
+  "stroke",
+  "subarachnoid_hemorrhage",
+  "ectopic_pregnancy",
+  "ovarian_torsion",
+  "testicular_torsion",
+  "appendicitis",
+  "bowel_obstruction",
+  "sepsis",
+  "meningitis",
+  "pneumothorax",
+  "intracranial_bleed",
+  "gi_bleed",
+  "pyelonephritis",
+])
+
+export function dispositionCalibrationEngine(
+  input: DispositionCalibrationInput
+): DispositionCalibrationOutput {
+  const reasons: string[] = []
+  const topDx = input.aggregatedDifferentials[0]?.diagnosis || ""
+  const topScore = input.aggregatedDifferentials[0]?.score ?? 0
+  const entropy = input.entropy ?? 99
+  const hasRedFlags = (input.redFlags || []).length > 0
+  const highRisk = input.riskLevel === "high"
+  const criticalSeverity = input.severityLevel === "critical"
+  const contradiction = !!input.contradictionHasErrors
+  const guidelineFailed = input.guidelinePassed === false
+  const incomplete = input.completenessPassed === false
+
+  let finalDisposition = input.proposedDisposition || "needs_workup"
+  let calibrationAction: "unchanged" | "escalated" | "softened" = "unchanged"
+
+  let confidenceBand: "low" | "moderate" | "high" = "moderate"
+  if (topScore >= 0.8 && entropy < 0.6) confidenceBand = "high"
+  else if (topScore < 0.45 || entropy > 1.2) confidenceBand = "low"
+
+  if (contradiction) {
+    finalDisposition = "needs_physician_review"
+    calibrationAction = "escalated"
+    reasons.push("Contradiction errors present")
+  }
+
+  if (hasRedFlags) {
+    finalDisposition = "er_now"
+    calibrationAction = "escalated"
+    reasons.push("Red flags present")
+  }
+
+  if (criticalSeverity) {
+    finalDisposition = "er_now"
+    calibrationAction = "escalated"
+    reasons.push("Critical severity level")
+  }
+
+  if (HIGH_ACUITY_DX.has(topDx) && topScore >= 0.55) {
+    if (!["er_now", "ed_now", "needs_physician_review"].includes(finalDisposition)) {
+      finalDisposition = "needs_workup"
+      calibrationAction = "escalated"
+    }
+    reasons.push(`High-acuity top diagnosis: ${topDx}`)
+  }
+
+  if (highRisk && ["home_care", "routine_followup"].includes(finalDisposition)) {
+    finalDisposition = "needs_workup"
+    calibrationAction = "escalated"
+    reasons.push("High-risk context")
+  }
+
+  if (guidelineFailed && finalDisposition === "home_care") {
+    finalDisposition = "needs_workup"
+    calibrationAction = "escalated"
+    reasons.push("Guideline check failed")
+  }
+
+  if (incomplete && ["home_care", "routine_followup"].includes(finalDisposition)) {
+    finalDisposition = "needs_workup"
+    calibrationAction = "escalated"
+    reasons.push("Complaint completeness requirements not met")
+  }
+
+  if (input.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW") {
+    finalDisposition = "needs_physician_review"
+    calibrationAction = "escalated"
+    reasons.push("Supervisor requires physician review")
+  }
+
+  if (
+    confidenceBand === "high" &&
+    !hasRedFlags &&
+    !highRisk &&
+    !guidelineFailed &&
+    !incomplete &&
+    ["viral_uri", "allergic_rhinitis", "simple_cystitis", "pharyngitis"].includes(topDx) &&
+    finalDisposition === "needs_workup"
+  ) {
+    finalDisposition = "home_care"
+    calibrationAction = "softened"
+    reasons.push("High-confidence benign presentation")
+  }
+
+  if (reasons.length === 0) reasons.push("Disposition unchanged after calibration")
+
+  return {
+    finalDisposition,
+    calibrationAction,
+    confidenceBand,
+    reasons,
+  }
+}
+2) server/core/complaintCompletenessEngine.ts
+// server/core/complaintCompletenessEngine.ts
+
+export type ComplaintCompletenessInput = {
+  complaint: string
+  answeredQuestions?: Record<string, any>
+}
+
+export type ComplaintCompletenessOutput = {
+  complete: boolean
+  completenessScore: number
+  requiredQuestions: string[]
+  missingRequiredQuestions: string[]
+  recommendedQuestions: string[]
+  missingRecommendedQuestions: string[]
+  blockerReason?: string
+}
+
+type Rule = {
+  required: string[]
+  recommended: string[]
+}
+
+const RULES: Record<string, Rule> = {
+  chest_pain: {
+    required: ["age", "onset", "duration", "shortness_of_breath", "exertional", "radiation", "diaphoresis"],
+    recommended: ["nausea", "pleuritic", "reproducible", "pmh_cad", "anticoagulated"],
+  },
+  shortness_of_breath: {
+    required: ["age", "onset", "duration", "fever", "chest_pain", "wheezing", "oxygen_saturation_if_available"],
+    recommended: ["cough", "leg_swelling", "history_asthma", "history_copd"],
+  },
+  headache: {
+    required: ["onset", "duration", "worst_of_life", "neurologic_deficit", "fever", "neck_stiffness"],
+    recommended: ["photophobia", "vomiting", "pregnant", "trauma"],
+  },
+  abdominal_pain: {
+    required: ["location", "duration", "vomiting", "fever", "pregnant_if_applicable", "peritoneal_signs_if_known"],
+    recommended: ["diarrhea", "constipation", "urinary_symptoms", "prior_surgery"],
+  },
+  dysuria: {
+    required: ["duration", "frequency", "urgency", "fever", "flank_pain"],
+    recommended: ["pregnant_if_applicable", "hematuria", "vaginal_discharge", "back_pain"],
+  },
+  sore_throat: {
+    required: ["duration", "fever", "drooling", "voice_change", "neck_swelling"],
+    recommended: ["cough", "tonsillar_exudate", "sick_contacts"],
+  },
+  cough: {
+    required: ["duration", "fever", "shortness_of_breath", "chest_pain"],
+    recommended: ["wheezing", "productive", "hemoptysis", "history_asthma", "history_copd"],
+  },
+  ear_pain: {
+    required: ["duration", "fever", "drainage", "hearing_change"],
+    recommended: ["swimming", "uri_symptoms", "mastoid_pain"],
+  },
+  sinus_pressure: {
+    required: ["duration", "fever", "facial_pain", "worsening_after_improving"],
+    recommended: ["tooth_pain", "purulent_discharge", "headache"],
+  },
+}
+
+function isAnswered(v: any): boolean {
+  return v !== undefined && v !== null && v !== ""
+}
+
+export function complaintCompletenessEngine(
+  input: ComplaintCompletenessInput
+): ComplaintCompletenessOutput {
+  const answered = input.answeredQuestions || {}
+  const rule = RULES[input.complaint] || { required: [], recommended: [] }
+
+  const missingRequiredQuestions = rule.required.filter((q) => !isAnswered(answered[q]))
+  const missingRecommendedQuestions = rule.recommended.filter((q) => !isAnswered(answered[q]))
+
+  const total = rule.required.length + rule.recommended.length
+  const answeredCount =
+    (rule.required.length - missingRequiredQuestions.length) +
+    (rule.recommended.length - missingRecommendedQuestions.length)
+
+  return {
+    complete: missingRequiredQuestions.length === 0,
+    completenessScore: total > 0 ? answeredCount / total : 1,
+    requiredQuestions: rule.required,
+    missingRequiredQuestions,
+    recommendedQuestions: rule.recommended,
+    missingRecommendedQuestions,
+    blockerReason: missingRequiredQuestions.length ? "Missing required complaint questions" : undefined,
+  }
+}
+3) server/core/medicationSafetyEngine.ts
+// server/core/medicationSafetyEngine.ts
+
+export type MedicationCandidate = {
+  name: string
+  indication?: string
+  dose?: string
+}
+
+export type MedicationSafetyInput = {
+  complaint: string
+  topDiagnoses?: string[]
+  candidateMedications: MedicationCandidate[]
+  answeredQuestions?: Record<string, any>
+  allergies?: string[]
+}
+
+export type MedicationSafetyResult = {
+  medication: string
+  allowed: boolean
+  severity: "info" | "warning" | "block"
+  reasons: string[]
+  saferAlternatives: string[]
+}
+
+export type MedicationSafetyOutput = {
+  safeMedications: MedicationCandidate[]
+  flaggedMedications: MedicationSafetyResult[]
+}
+
+function norm(s: string): string {
+  return (s || "").trim().toLowerCase()
+}
+
+function hasAny(text: string, needles: string[]): boolean {
+  const t = norm(text)
+  return needles.some((n) => t.includes(norm(n)))
+}
+
+export function medicationSafetyEngine(
+  input: MedicationSafetyInput
+): MedicationSafetyOutput {
+  const a = input.answeredQuestions || {}
+  const allergies = (input.allergies || []).map(norm)
+  const pregnant = !!a.pregnant
+  const age = Number(a.age)
+  const anticoagulated = !!a.anticoagulated
+  const ckd = !!a.ckd || !!a.kidney_disease
+  const liverDisease = !!a.liver_disease
+  const asthma = !!a.asthma
+  const ulcer = !!a.peptic_ulcer_disease
+  const g6pd = !!a.g6pd
+  const qtRisk = !!a.qt_prolongation_history
+
+  const flaggedMedications: MedicationSafetyResult[] = []
+  const safeMedications: MedicationCandidate[] = []
+
+  for (const med of input.candidateMedications) {
+    const reasons: string[] = []
+    const saferAlternatives: string[] = []
+    let severity: "info" | "warning" | "block" = "info"
+    const name = norm(med.name)
+
+    if (
+      allergies.some((al) =>
+        name.includes(al) ||
+        (al.includes("penicillin") && hasAny(name, ["amoxicillin", "augmentin", "penicillin"]))
+      )
+    ) {
+      severity = "block"
+      reasons.push("Possible allergy conflict")
+      saferAlternatives.push("Use a non-cross-reactive alternative")
+    }
+
+    if (pregnant && hasAny(name, ["doxycycline", "tetracycline", "trimethoprim-sulfamethoxazole", "bactrim", "ibuprofen"])) {
+      severity = "block"
+      reasons.push("Avoid or use extreme caution in pregnancy")
+      saferAlternatives.push("Use pregnancy-safer alternative")
+    }
+
+    if (Number.isFinite(age) && age < 18 && hasAny(name, ["aspirin", "ciprofloxacin", "levofloxacin"])) {
+      severity = severity === "block" ? "block" : "warning"
+      reasons.push("Pediatric caution")
+      saferAlternatives.push("Use pediatric-first-line alternative")
+    }
+
+    if (ckd && hasAny(name, ["ibuprofen", "naproxen", "ketorolac"])) {
+      severity = "block"
+      reasons.push("NSAID may worsen kidney injury")
+      saferAlternatives.push("acetaminophen")
+    }
+
+    if (ckd && hasAny(name, ["nitrofurantoin"])) {
+      severity = severity === "block" ? "block" : "warning"
+      reasons.push("Nitrofurantoin renal caution")
+      saferAlternatives.push("Culture-guided alternative")
+    }
+
+    if (liverDisease && hasAny(name, ["acetaminophen", "tylenol"])) {
+      severity = severity === "block" ? "block" : "warning"
+      reasons.push("Hepatic caution")
+      saferAlternatives.push("Dose reduction or alternative")
+    }
+
+    if (anticoagulated && hasAny(name, ["ibuprofen", "naproxen", "ketorolac"])) {
+      severity = "block"
+      reasons.push("Bleeding risk while anticoagulated")
+      saferAlternatives.push("acetaminophen")
+    }
+
+    if (ulcer && hasAny(name, ["ibuprofen", "naproxen", "ketorolac"])) {
+      severity = "block"
+      reasons.push("GI bleed or ulcer risk")
+      saferAlternatives.push("acetaminophen")
+    }
+
+    if (asthma && hasAny(name, ["propranolol", "nadolol"])) {
+      severity = severity === "block" ? "block" : "warning"
+      reasons.push("May worsen bronchospasm")
+      saferAlternatives.push("Consider alternative agent")
+    }
+
+    if (g6pd && hasAny(name, ["bactrim", "trimethoprim-sulfamethoxazole", "nitrofurantoin"])) {
+      severity = severity === "block" ? "block" : "warning"
+      reasons.push("Possible hemolysis risk in G6PD deficiency")
+      saferAlternatives.push("Use safer alternative if possible")
+    }
+
+    if (qtRisk && hasAny(name, ["azithromycin", "levofloxacin", "ciprofloxacin", "ondansetron"])) {
+      severity = severity === "block" ? "block" : "warning"
+      reasons.push("QT prolongation caution")
+      saferAlternatives.push("Non-QT-prolonging alternative")
+    }
+
+    if (reasons.length > 0) {
+      flaggedMedications.push({
+        medication: med.name,
+        allowed: severity !== "block",
+        severity,
+        reasons,
+        saferAlternatives,
+      })
+      if (severity !== "block") safeMedications.push(med)
+    } else {
+      safeMedications.push(med)
+    }
+  }
+
+  return {
+    safeMedications,
+    flaggedMedications,
+  }
+}
+4) server/core/testYieldEngine.ts
+// server/core/testYieldEngine.ts
+
+export type RankedDiagnosis = {
+  diagnosis: string
+  score: number
+}
+
+export type ProposedTest = {
+  name: string
+  urgency?: "urgent" | "routine"
+}
+
+export type TestYieldInput = {
+  complaint: string
+  rankedDiagnoses: RankedDiagnosis[]
+  proposedTests: ProposedTest[]
+}
+
+export type TestYieldResult = {
+  name: string
+  urgency: "urgent" | "routine"
+  yieldScore: number
+  rationale: string[]
+  actionability: "high" | "moderate" | "low"
+}
+
+const DX_TESTS: Record<string, { highYield: string[]; moderateYield: string[]; lowYield: string[] }> = {
+  acute_coronary_syndrome: {
+    highYield: ["ecg", "troponin"],
+    moderateYield: ["chest_xray", "bmp", "cbc"],
+    lowYield: ["rapid_strep"],
+  },
+  pulmonary_embolism: {
+    highYield: ["ctpa", "ddimer"],
+    moderateYield: ["ecg", "chest_xray"],
+    lowYield: ["rapid_flu"],
+  },
+  pneumonia: {
+    highYield: ["chest_xray"],
+    moderateYield: ["cbc", "pulse_ox"],
+    lowYield: ["ct_head"],
+  },
+  pyelonephritis: {
+    highYield: ["urinalysis", "urine_culture"],
+    moderateYield: ["cbc", "bmp"],
+    lowYield: ["ecg"],
+  },
+  simple_cystitis: {
+    highYield: ["urinalysis"],
+    moderateYield: ["urine_culture"],
+    lowYield: ["ct_abdomen_pelvis"],
+  },
+  appendicitis: {
+    highYield: ["ct_abdomen_pelvis", "ultrasound_abdomen"],
+    moderateYield: ["cbc", "crp"],
+    lowYield: ["rapid_strep"],
+  },
+  pharyngitis: {
+    highYield: ["rapid_strep"],
+    moderateYield: ["throat_culture"],
+    lowYield: ["ecg"],
+  },
+  meningitis: {
+    highYield: ["lp", "blood_cultures", "ct_head"],
+    moderateYield: ["cbc", "cmp"],
+    lowYield: ["urinalysis"],
+  },
+  stroke: {
+    highYield: ["ct_head", "cta_head_neck"],
+    moderateYield: ["ecg", "glucose"],
+    lowYield: ["rapid_strep"],
+  },
+}
+
+export function testYieldEngine(input: TestYieldInput): TestYieldResult[] {
+  const results: TestYieldResult[] = []
+
+  for (const test of input.proposedTests) {
+    let score = 0
+    const rationale: string[] = []
+
+    for (const dx of input.rankedDiagnoses.slice(0, 5)) {
+      const map = DX_TESTS[dx.diagnosis]
+      if (!map) continue
+
+      if (map.highYield.includes(test.name)) {
+        score += dx.score * 1.0
+        rationale.push(`${test.name} high-yield for ${dx.diagnosis}`)
+      } else if (map.moderateYield.includes(test.name)) {
+        score += dx.score * 0.5
+        rationale.push(`${test.name} moderate-yield for ${dx.diagnosis}`)
+      } else if (map.lowYield.includes(test.name)) {
+        score += dx.score * 0.1
+        rationale.push(`${test.name} low-yield for ${dx.diagnosis}`)
+      }
+    }
+
+    let actionability: "high" | "moderate" | "low" = "low"
+    if (score >= 0.7) actionability = "high"
+    else if (score >= 0.3) actionability = "moderate"
+
+    results.push({
+      name: test.name,
+      urgency: test.urgency || "routine",
+      yieldScore: Number(score.toFixed(3)),
+      rationale: rationale.length ? rationale : ["No strong yield mapping found"],
+      actionability,
+    })
+  }
+
+  return results.sort((a, b) => b.yieldScore - a.yieldScore)
+}
+5) server/core/physicianFeedbackLearningEngine.ts
+// server/core/physicianFeedbackLearningEngine.ts
+
+import fs from "fs"
+import path from "path"
+
+export type PhysicianFeedbackEntry = {
+  timestamp: string
+  caseId: string
+  complaint: string
+  modelTopDiagnosis?: string
+  modelDisposition?: string
+  physicianDiagnosis?: string
+  physicianDisposition?: string
+  agreeDiagnosis: boolean
+  agreeDisposition: boolean
+  notes?: string
+  tags?: string[]
+}
+
+export type FeedbackStats = {
+  totalCases: number
+  diagnosisAgreementRate: number
+  dispositionAgreementRate: number
+  byComplaint: Record<string, {
+    total: number
+    diagnosisAgreementRate: number
+    dispositionAgreementRate: number
+  }>
+}
+
+const DATA_DIR = path.resolve(process.cwd(), "server/data")
+const FEEDBACK_FILE = path.join(DATA_DIR, "physician_feedback.ndjson")
+
+function ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
+}
+
+export function appendPhysicianFeedback(entry: PhysicianFeedbackEntry): void {
+  ensureDir()
+  fs.appendFileSync(FEEDBACK_FILE, JSON.stringify(entry) + "\n", "utf8")
+}
+
+export function readPhysicianFeedback(): PhysicianFeedbackEntry[] {
+  ensureDir()
+  if (!fs.existsSync(FEEDBACK_FILE)) return []
+  const raw = fs.readFileSync(FEEDBACK_FILE, "utf8").trim()
+  if (!raw) return []
+  return raw
+    .split("\n")
+    .map((line) => {
+      try {
+        return JSON.parse(line) as PhysicianFeedbackEntry
+      } catch {
+        return null
+      }
+    })
+    .filter(Boolean) as PhysicianFeedbackEntry[]
+}
+
+export function physicianFeedbackLearningEngine(): FeedbackStats {
+  const rows = readPhysicianFeedback()
+  if (rows.length === 0) {
+    return {
+      totalCases: 0,
+      diagnosisAgreementRate: 0,
+      dispositionAgreementRate: 0,
+      byComplaint: {},
+    }
+  }
+
+  const dxAgree = rows.filter((r) => r.agreeDiagnosis).length
+  const dispAgree = rows.filter((r) => r.agreeDisposition).length
+  const byComplaint: FeedbackStats["byComplaint"] = {}
+
+  for (const row of rows) {
+    byComplaint[row.complaint] ||= {
+      total: 0,
+      diagnosisAgreementRate: 0,
+      dispositionAgreementRate: 0,
+    }
+    byComplaint[row.complaint].total += 1
+  }
+
+  for (const complaint of Object.keys(byComplaint)) {
+    const subset = rows.filter((r) => r.complaint === complaint)
+    byComplaint[complaint].diagnosisAgreementRate =
+      Number((subset.filter((r) => r.agreeDiagnosis).length / subset.length).toFixed(3))
+    byComplaint[complaint].dispositionAgreementRate =
+      Number((subset.filter((r) => r.agreeDisposition).length / subset.length).toFixed(3))
+  }
+
+  return {
+    totalCases: rows.length,
+    diagnosisAgreementRate: Number((dxAgree / rows.length).toFixed(3)),
+    dispositionAgreementRate: Number((dispAgree / rows.length).toFixed(3)),
+    byComplaint,
+  }
+}
+6) server/core/protocolVarianceEngine.ts
+// server/core/protocolVarianceEngine.ts
+
+export type ProtocolVarianceInput = {
+  complaint: string
+  finalDisposition: string
+  aggregatedDifferentials: { diagnosis: string; score: number }[]
+  tests?: { name: string }[]
+  treatments?: string[]
+  redFlags?: string[]
+}
+
+export type ProtocolVarianceOutput = {
+  hasVariance: boolean
+  severity: "none" | "minor" | "major"
+  reasons: string[]
+  recommendedActions: string[]
+}
+
+const EXPECTATIONS: Record<string, {
+  requiredRedFlagEscalation?: boolean
+  recommendedTests?: string[]
+  suspiciousDispositionsForHighRisk?: string[]
+}> = {
+  chest_pain: {
+    requiredRedFlagEscalation: true,
+    recommendedTests: ["ecg", "troponin"],
+    suspiciousDispositionsForHighRisk: ["home_care"],
+  },
+  shortness_of_breath: {
+    requiredRedFlagEscalation: true,
+    recommendedTests: ["pulse_ox"],
+    suspiciousDispositionsForHighRisk: ["home_care"],
+  },
+  dysuria: {
+    recommendedTests: ["urinalysis"],
+  },
+  sore_throat: {
+    recommendedTests: ["rapid_strep"],
+  },
+}
+
+export function protocolVarianceEngine(
+  input: ProtocolVarianceInput
+): ProtocolVarianceOutput {
+  const rule = EXPECTATIONS[input.complaint]
+  const reasons: string[] = []
+  const recommendedActions: string[] = []
+
+  if (!rule) {
+    return {
+      hasVariance: false,
+      severity: "none",
+      reasons: [],
+      recommendedActions: [],
+    }
+  }
+
+  const testNames = new Set((input.tests || []).map((t) => t.name))
+  const hasRedFlags = (input.redFlags || []).length > 0
+  const topDx = input.aggregatedDifferentials[0]?.diagnosis || ""
+  const topScore = input.aggregatedDifferentials[0]?.score || 0
+  const highRiskDx = topScore >= 0.55
+
+  if (rule.requiredRedFlagEscalation && hasRedFlags && input.finalDisposition !== "er_now") {
+    reasons.push("Red flags present without ER escalation")
+    recommendedActions.push("Escalate to er_now")
+  }
+
+  for (const test of rule.recommendedTests || []) {
+    if (!testNames.has(test)) {
+      reasons.push(`Missing protocol-expected test: ${test}`)
+      recommendedActions.push(`Consider adding ${test}`)
+    }
+  }
+
+  if (highRiskDx && rule.suspiciousDispositionsForHighRisk?.includes(input.finalDisposition)) {
+    reasons.push(`Potentially unsafe disposition for high-risk top diagnosis: ${topDx}`)
+    recommendedActions.push("Escalate or physician review")
+  }
+
+  const severity =
+    reasons.length === 0 ? "none" :
+    reasons.some((r) => r.includes("unsafe") || r.includes("Red flags")) ? "major" : "minor"
+
+  return {
+    hasVariance: reasons.length > 0,
+    severity,
+    reasons,
+    recommendedActions,
+  }
+}
+7) server/core/diagnosticDriftEngine.ts
+// server/core/diagnosticDriftEngine.ts
+
+export type DriftSnapshot = {
+  timestamp: string
+  caseId: string
+  complaint: string
+  topDiagnosis: string
+  topScore: number
+  differential: { diagnosis: string; score: number }[]
+}
+
+export type DiagnosticDriftInput = {
+  priorSnapshots: DriftSnapshot[]
+  currentSnapshot: DriftSnapshot
+}
+
+export type DiagnosticDriftOutput = {
+  hasDrift: boolean
+  driftLevel: "none" | "moderate" | "major"
+  priorTopDiagnosis?: string
+  currentTopDiagnosis: string
+  reasons: string[]
+}
+
+export function diagnosticDriftEngine(
+  input: DiagnosticDriftInput
+): DiagnosticDriftOutput {
+  const reasons: string[] = []
+  const prior = input.priorSnapshots[input.priorSnapshots.length - 1]
+
+  if (!prior) {
+    return {
+      hasDrift: false,
+      driftLevel: "none",
+      currentTopDiagnosis: input.currentSnapshot.topDiagnosis,
+      reasons: ["No prior snapshot"],
+    }
+  }
+
+  const sameTop = prior.topDiagnosis === input.currentSnapshot.topDiagnosis
+  const scoreDelta = Math.abs(prior.topScore - input.currentSnapshot.topScore)
+
+  if (!sameTop) reasons.push(`Top diagnosis changed from ${prior.topDiagnosis} to ${input.currentSnapshot.topDiagnosis}`)
+  if (scoreDelta >= 0.25) reasons.push(`Top diagnosis confidence changed by ${scoreDelta.toFixed(2)}`)
+
+  const driftLevel =
+    reasons.length === 0 ? "none" :
+    (!sameTop && scoreDelta >= 0.25) ? "major" : "moderate"
+
+  return {
+    hasDrift: reasons.length > 0,
+    driftLevel,
+    priorTopDiagnosis: prior.topDiagnosis,
+    currentTopDiagnosis: input.currentSnapshot.topDiagnosis,
+    reasons,
+  }
+}
+8) server/core/crossComplaintRouterEngine.ts
+// server/core/crossComplaintRouterEngine.ts
+
+export type CrossComplaintRouterInput = {
+  complaint: string
+  normalizedSymptoms: string[]
+}
+
+export type CrossComplaintRouterOutput = {
+  originalComplaint: string
+  routedComplaints: string[]
+  reasons: string[]
+}
+
+const ROUTES: Array<{
+  symptom: string
+  addComplaint: string
+  reason: string
+}> = [
+  { symptom: "chest_pain", addComplaint: "shortness_of_breath", reason: "Chest pain often overlaps cardiopulmonary workup" },
+  { symptom: "shortness_of_breath", addComplaint: "chest_pain", reason: "Dyspnea may reflect cardiopulmonary chest-pain equivalent" },
+  { symptom: "vomiting", addComplaint: "abdominal_pain", reason: "Vomiting often requires abdominal pathway consideration" },
+  { symptom: "dysuria", addComplaint: "abdominal_pain", reason: "Urinary symptoms can reflect abdominal/pelvic pathology" },
+  { symptom: "headache", addComplaint: "neurologic", reason: "Headache often overlaps neurologic pathway" },
+  { symptom: "syncope", addComplaint: "chest_pain", reason: "Syncope may require cardiac pathway" },
+  { symptom: "weakness", addComplaint: "neurologic", reason: "Weakness may require neurologic pathway" },
+  { symptom: "flank_pain", addComplaint: "dysuria", reason: "Flank pain may overlap urinary/kidney pathway" },
+]
+
+export function crossComplaintRouterEngine(
+  input: CrossComplaintRouterInput
+): CrossComplaintRouterOutput {
+  const routed = new Set<string>([input.complaint])
+  const reasons: string[] = []
+
+  for (const rule of ROUTES) {
+    if (input.normalizedSymptoms.includes(rule.symptom) && rule.addComplaint !== input.complaint) {
+      routed.add(rule.addComplaint)
+      reasons.push(rule.reason)
+    }
+  }
+
+  return {
+    originalComplaint: input.complaint,
+    routedComplaints: Array.from(routed),
+    reasons,
+  }
+}
+9) server/core/severityScoringEngine.ts
+// server/core/severityScoringEngine.ts
+
+export type SeverityScoringInput = {
+  normalizedSymptoms: string[]
+  redFlags?: string[]
+  vitals?: {
+    heartRate?: number
+    systolicBP?: number
+    oxygenSaturation?: number
+    temperatureC?: number
+    respiratoryRate?: number
+  }
+}
+
+export type SeverityScoringOutput = {
+  numericScore: number
+  level: "low" | "moderate" | "high" | "critical"
+  reasons: string[]
+}
+
+export function severityScoringEngine(
+  input: SeverityScoringInput
+): SeverityScoringOutput {
+  let score = 0
+  const reasons: string[] = []
+  const s = new Set(input.normalizedSymptoms || [])
+  const v = input.vitals || {}
+  const redFlags = input.redFlags || []
+
+  score += redFlags.length * 3
+  if (redFlags.length) reasons.push(`${redFlags.length} red flags present`)
+
+  if (s.has("chest_pain")) { score += 2; reasons.push("Chest pain") }
+  if (s.has("shortness_of_breath")) { score += 2; reasons.push("Shortness of breath") }
+  if (s.has("syncope")) { score += 3; reasons.push("Syncope") }
+  if (s.has("thunderclap_headache")) { score += 3; reasons.push("Thunderclap headache") }
+  if (s.has("unilateral_weakness")) { score += 3; reasons.push("Neurologic deficit pattern") }
+  if (s.has("persistent_vomiting")) { score += 1; reasons.push("Persistent vomiting") }
+  if (s.has("fever")) { score += 1; reasons.push("Fever") }
+
+  if ((v.oxygenSaturation ?? 100) < 90) { score += 4; reasons.push("Severely low oxygen saturation") }
+  else if ((v.oxygenSaturation ?? 100) < 94) { score += 2; reasons.push("Low oxygen saturation") }
+
+  if ((v.systolicBP ?? 999) < 90) { score += 4; reasons.push("Hypotension") }
+  if ((v.heartRate ?? 0) > 130) { score += 2; reasons.push("Marked tachycardia") }
+  if ((v.respiratoryRate ?? 0) > 28) { score += 2; reasons.push("Tachypnea") }
+  if ((v.temperatureC ?? 0) >= 39.5) { score += 2; reasons.push("High fever") }
+
+  const level =
+    score >= 8 ? "critical" :
+    score >= 5 ? "high" :
+    score >= 2 ? "moderate" : "low"
+
+  return {
+    numericScore: score,
+    level,
+    reasons,
+  }
+}
+10) server/core/unifiedClinicalGovernanceEngine.ts
+// server/core/unifiedClinicalGovernanceEngine.ts
+
+export type UnifiedClinicalGovernanceInput = {
+  contradictionHasErrors?: boolean
+  safetyOverrideDisposition?: string | null
+  severityLevel?: string
+  protocolVarianceSeverity?: string
+  diagnosticDriftLevel?: string
+  physicianRequired?: boolean
+  guidelinePassed?: boolean
+}
+
+export type UnifiedClinicalGovernanceOutput = {
+  supervisorDecision: "APPROVE" | "NEEDS_PHYSICIAN_REVIEW" | "BLOCK"
+  reasons: string[]
+}
+
+export function unifiedClinicalGovernanceEngine(
+  input: UnifiedClinicalGovernanceInput
+): UnifiedClinicalGovernanceOutput {
+  const reasons: string[] = []
+
+  if (input.contradictionHasErrors) {
+    reasons.push("Contradiction errors present")
+    return { supervisorDecision: "BLOCK", reasons }
+  }
+
+  if (input.safetyOverrideDisposition === "er_now") {
+    reasons.push("Safety override requires emergency escalation")
+    return { supervisorDecision: "APPROVE", reasons }
+  }
+
+  if (input.severityLevel === "critical") {
+    reasons.push("Critical severity")
+    return { supervisorDecision: "APPROVE", reasons }
+  }
+
+  if (input.protocolVarianceSeverity === "major") {
+    reasons.push("Major protocol variance")
+    return { supervisorDecision: "NEEDS_PHYSICIAN_REVIEW", reasons }
+  }
+
+  if (input.diagnosticDriftLevel === "major") {
+    reasons.push("Major diagnostic drift")
+    return { supervisorDecision: "NEEDS_PHYSICIAN_REVIEW", reasons }
+  }
+
+  if (input.guidelinePassed === false) {
+    reasons.push("Guideline not satisfied")
+    return { supervisorDecision: "NEEDS_PHYSICIAN_REVIEW", reasons }
+  }
+
+  if (input.physicianRequired) {
+    reasons.push("Explicit physician review requirement")
+    return { supervisorDecision: "NEEDS_PHYSICIAN_REVIEW", reasons }
+  }
+
+  reasons.push("Governance checks passed")
+  return {
+    supervisorDecision: "APPROVE",
+    reasons,
+  }
+}
+11) NEW LAYER: server/core/clinicalIntelligenceCoordinationLayer.ts
+
+This is the added layer I recommend. It coordinates the engines and outputs a single stitched package.
+
+// server/core/clinicalIntelligenceCoordinationLayer.ts
+
+import { complaintCompletenessEngine } from "./complaintCompletenessEngine"
+import { severityScoringEngine } from "./severityScoringEngine"
+import { crossComplaintRouterEngine } from "./crossComplaintRouterEngine"
+import { protocolVarianceEngine } from "./protocolVarianceEngine"
+import { diagnosticDriftEngine, DriftSnapshot } from "./diagnosticDriftEngine"
+import { unifiedClinicalGovernanceEngine } from "./unifiedClinicalGovernanceEngine"
+import { dispositionCalibrationEngine } from "./dispositionCalibrationEngine"
+import { medicationSafetyEngine } from "./medicationSafetyEngine"
+import { testYieldEngine } from "./testYieldEngine"
+
+export type CoordinationInput = {
+  caseId: string
+  complaint: string
+  normalizedSymptoms: string[]
+  answeredQuestions: Record<string, any>
+  redFlags: string[]
+  vitals?: {
+    heartRate?: number
+    systolicBP?: number
+    oxygenSaturation?: number
+    temperatureC?: number
+    respiratoryRate?: number
+  }
+  aggregatedDifferentials: { diagnosis: string; score: number }[]
+  proposedDisposition: string
+  contradiction?: { hasErrors?: boolean }
+  safetyOverride?: { disposition?: string | null }
+  tests?: { name: string; urgency?: "urgent" | "routine" }[]
+  treatments?: string[]
+  allergies?: string[]
+  priorSnapshots?: DriftSnapshot[]
+  guideline?: { passed?: boolean }
+}
+
+export type CoordinationOutput = {
+  routedComplaints: ReturnType<typeof crossComplaintRouterEngine>
+  completeness: ReturnType<typeof complaintCompletenessEngine>
+  severity: ReturnType<typeof severityScoringEngine>
+  protocolVariance: ReturnType<typeof protocolVarianceEngine>
+  diagnosticDrift: ReturnType<typeof diagnosticDriftEngine>
+  governance: ReturnType<typeof unifiedClinicalGovernanceEngine>
+  calibration: ReturnType<typeof dispositionCalibrationEngine>
+  medicationSafety: ReturnType<typeof medicationSafetyEngine>
+  testYield: ReturnType<typeof testYieldEngine>
+  finalDisposition: string
+}
+
+export function clinicalIntelligenceCoordinationLayer(
+  input: CoordinationInput
+): CoordinationOutput {
+  const routedComplaints = crossComplaintRouterEngine({
+    complaint: input.complaint,
+    normalizedSymptoms: input.normalizedSymptoms,
+  })
+
+  const completeness = complaintCompletenessEngine({
+    complaint: input.complaint,
+    answeredQuestions: input.answeredQuestions,
+  })
+
+  const severity = severityScoringEngine({
+    normalizedSymptoms: input.normalizedSymptoms,
+    redFlags: input.redFlags,
+    vitals: input.vitals,
+  })
+
+  const protocolVariance = protocolVarianceEngine({
+    complaint: input.complaint,
+    finalDisposition: input.proposedDisposition,
+    aggregatedDifferentials: input.aggregatedDifferentials,
+    tests: input.tests,
+    treatments: input.treatments,
+    redFlags: input.redFlags,
+  })
+
+  const currentSnapshot: DriftSnapshot = {
+    timestamp: new Date().toISOString(),
+    caseId: input.caseId,
+    complaint: input.complaint,
+    topDiagnosis: input.aggregatedDifferentials[0]?.diagnosis || "unknown",
+    topScore: input.aggregatedDifferentials[0]?.score || 0,
+    differential: input.aggregatedDifferentials,
+  }
+
+  const diagnosticDrift = diagnosticDriftEngine({
+    priorSnapshots: input.priorSnapshots || [],
+    currentSnapshot,
+  })
+
+  const governance = unifiedClinicalGovernanceEngine({
+    contradictionHasErrors: !!input.contradiction?.hasErrors,
+    safetyOverrideDisposition: input.safetyOverride?.disposition ?? null,
+    severityLevel: severity.level,
+    protocolVarianceSeverity: protocolVariance.severity,
+    diagnosticDriftLevel: diagnosticDrift.driftLevel,
+    physicianRequired: false,
+    guidelinePassed: input.guideline?.passed,
+  })
+
+  const calibration = dispositionCalibrationEngine({
+    complaint: input.complaint,
+    proposedDisposition: input.proposedDisposition,
+    aggregatedDifferentials: input.aggregatedDifferentials,
+    entropy: undefined,
+    redFlags: input.redFlags,
+    supervisorDecision: governance.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW"
+      ? "NEEDS_PHYSICIAN_REVIEW"
+      : undefined,
+    guidelinePassed: input.guideline?.passed,
+    contradictionHasErrors: !!input.contradiction?.hasErrors,
+    severityLevel: severity.level,
+    completenessPassed: completeness.complete,
+  })
+
+  const medicationSafety = medicationSafetyEngine({
+    complaint: input.complaint,
+    topDiagnoses: input.aggregatedDifferentials.slice(0, 3).map((d) => d.diagnosis),
+    candidateMedications: (input.treatments || []).map((name) => ({ name })),
+    answeredQuestions: input.answeredQuestions,
+    allergies: input.allergies || [],
+  })
+
+  const testYield = testYieldEngine({
+    complaint: input.complaint,
+    rankedDiagnoses: input.aggregatedDifferentials,
+    proposedTests: input.tests || [],
+  })
+
+  return {
+    routedComplaints,
+    completeness,
+    severity,
+    protocolVariance,
+    diagnosticDrift,
+    governance,
+    calibration,
+    medicationSafety,
+    testYield,
+    finalDisposition: calibration.finalDisposition,
+  }
+}
+HOW TO WIRE THIS INTO THE BRAIN
+
+Add these imports inside server/core/clinicalBrainEngine.ts:
+
+import { clinicalIntelligenceCoordinationLayer } from "./clinicalIntelligenceCoordinationLayer"
+
+Then near the end of the pipeline, after you already have:
+
+normalizedSymptoms
+
+contradiction
+
+safetyOverride
+
+aggregatedDifferentials
+
+tests
+
+treatments
+
+guideline
+
+proposed disposition
+
+run:
+
+const coordination = clinicalIntelligenceCoordinationLayer({
+  caseId,
+  complaint,
+  normalizedSymptoms,
+  answeredQuestions,
+  redFlags,
+  vitals,
+  aggregatedDifferentials,
+  proposedDisposition: disposition,
+  contradiction,
+  safetyOverride,
+  tests,
+  treatments,
+  allergies: answeredQuestions?.allergies || [],
+  priorSnapshots: priorDiagnosticSnapshots || [],
+  guideline,
+})
+
+disposition = coordination.finalDisposition
+
+Then return:
+
+return {
+  normalizedSymptoms,
+  contradiction,
+  safetyOverride,
+  aggregatedDifferentials,
+  tests,
+  treatments,
+  guideline,
+  coordination,
+  finalDisposition: disposition,
+}
+WHY THIS NEW LAYER HELPS
+
+Without it, the engines are clever islands.
+
+With it, you get a real hierarchy:
+
+symptoms and answers enter the machine
+
+completeness, severity, routing, variance, drift are checked
+
+governance decides if the system can proceed
+
+calibration adjusts the disposition
+
+med safety + test yield refine outputs
+
+one final package comes out
+
+That is much closer to a genuine urgent care reasoning stack.
+
+THE NEXT LAYER I WOULD ADD AFTER THIS
+
+The next strongest addition after this bundle would be a Longitudinal Encounter Layer that compares:
+
+today’s symptoms vs prior visits
+
+new vs persistent red flags
+
+worsening trajectory
+
+failed prior treatment
+
+time-to-improvement expectations
+
+That would make the system much more telemedicine-ready, because urgent care is often less about one frozen snapshot and more about whether the story is improving, stalling, or turning dark.
+
+If you want, next I’ll write the Longitudinal Encounter Layer + persistence schema + updated clinicalBrainEngine wiring in one copy-paste block.
+
+What was built
+5 new engines — wired into the brain (previous message, now fully integrated)
+Engine	Key behavior
+Complaint Completeness	Gates soft-discharge if required complaint questions are unanswered; 9 complaint rules, 3 escalation levels
+Test Yield Scoring	Ranks proposed tests against top 5 differentials (high/moderate/low-yield per diagnosis); 9 diagnosis maps
+Medication Safety	Screens treatments against pregnancy, paediatric age, CKD, liver, anticoagulation, ulcer, asthma, G6PD, QT risk; blocks or warns with safer alternatives
+Disposition Calibration	Final arbiter — escalates on red flags, high-acuity dx, contradiction, low confidence, supervisor override; softens high-confidence benign presentations
+Physician Feedback Learning	NDJSON-persisted; appendPhysicianFeedback() + agreement rate stats + 10 most recent disagreements for dashboards
+T002 — SSE live queue
+ReviewQueueV2.tsx now opens an EventSource to /api/sse/review-queue, shows a live/reconnecting indicator, a state-filter dropdown (NEEDS_REVIEW / PENDING / APPROVED / ESCALATED), last-updated timestamp, and a manual refresh button. The 15-second polling is gone.
+
+T007 — Mobile layout
+Both CaseReview and ReviewQueueV2 now use p-4 sm:p-6, grid-cols-1 sm:grid-cols-2, grid-cols-2 sm:flex sm:flex-wrap for action buttons, and hidden sm:inline kbd hints so the interface stacks cleanly on phones.
+
+T008 — S = Sign-off shortcut
+CaseReview now has S→SIGNED_OFF as a first-class action with its own button (ClipboardSignature icon), keyboard handler, and shortcuts-panel entry. The shortcut panel now lists 7 keys: A, R, S, E, X, N, ?.
+
+T009 — Shared complaints + alias registry
+shared/complaints.ts — 143 canonical complaint slugs (sorted), shared COMPLAINTS_SET
+server/data/complaintAliasRegistry.ts — 152 intake aliases (e.g., sob→shortness_of_breath, afib→atrial_fibrillation, dysuria→uti) + resolveComplaintAlias() function used by intake parsers and channel adapters
+Brain pipeline is now 20 steps
+Documented in replit.md as a reference table.
+
+That is a strong jump. The brain has gone from a loose pile of clever parts to something that actually resembles a supervised clinical decision stack. 🧠⚕️
+
+What stands out as especially important:
+
+Disposition is now gated, not just guessed. Complaint completeness + calibration + medication safety means the system is less likely to hand out a breezy home-care answer when the chart is half-empty.
+
+Your review workflow got real-time nerves with SSE. That matters more than it sounds because stale review queues quietly rot systems from the inside.
+
+Complaint normalization got much sturdier with the shared complaint set plus alias registry. That is the plumbing layer people ignore until everything leaks.
+
+The 20-step pipeline is now mature enough to justify governance metrics, because you have enough layers to compare, audit, and tune.
+
+The main thing still missing is not “more engines” in the abstract. It is closing the loop between reasoning, review, and real outcomes. Right now you have a sharp brain. The next step is making it a brain that learns which of its own habits are safe, useful, and wrong.
+
+What I would build next, in order
+1. Longitudinal Encounter Engine
+
+This is the biggest clinical upgrade now.
+
+Why it matters:
+
+urgent care telemedicine often depends on trajectory
+
+“same cough for 2 days” is very different from “same cough, failed antibiotics, now worse, now dyspneic”
+
+many unsafe misses happen because the model sees only the current snapshot
+
+It should track:
+
+first symptom onset
+
+worsening / improving / unchanged
+
+prior visit for same complaint
+
+failed meds already tried
+
+prior recommended tests not completed
+
+new red flags since last encounter
+
+Outputs:
+
+trajectoryRisk
+
+isBounceBackVisit
+
+failedInitialTreatment
+
+newRedFlagsSinceLastVisit
+
+longitudinalDispositionAdjustment
+
+2. Guideline Execution Engine
+
+Right now you have protocol variance, which is good. This would go one step further.
+
+Instead of only saying “something is missing,” it should say:
+
+which complaint protocol was activated
+
+which steps are complete
+
+which branch was taken
+
+where the case deviated from guideline
+
+whether deviation is acceptable with rationale
+
+This becomes your medico-legal breadcrumb trail.
+
+3. Structured Differential Justification Engine
+
+You need a machine-readable explanation layer, not just natural language.
+
+For each top diagnosis:
+
+supporting findings
+
+contradicting findings
+
+missing findings
+
+confidence reason
+
+what would move it up or down
+
+That helps:
+
+physician review
+
+next-best-question quality
+
+future RL / feedback learning
+
+explaining why UTI beat pyelo, or vice versa
+
+4. Outcome Reconciliation Engine
+
+You already have physician feedback learning. Good. Next, reconcile:
+
+final reviewed diagnosis
+
+final disposition
+
+return visit within X days
+
+hospitalization after telemed discharge
+
+changed antibiotic after culture
+
+ED escalation after home-care recommendation
+
+This tells you whether the brain is not just agreeing with reviewers, but actually landing safely in the real world.
+
+5. Golden Case Regression Harness
+
+This is not glamorous, but it is crucial.
+
+Every time you add:
+
+a new complaint
+
+a new alias
+
+a new safety rule
+
+a new engine
+
+a new calibration tweak
+
+…you should be able to run 100 to 500 “gold” cases and see:
+
+disposition changes
+
+top differential changes
+
+added/removed tests
+
+newly triggered red flags
+
+new contradictions
+
+false escalations
+
+Without this, each improvement is also a stealth grenade.
+
+What I would not prioritize yet
+
+I would not add ten more exotic reasoning engines right this second.
+
+I would wait on things like:
+
+fancy reinforcement tuning
+
+aggressive autonomous self-modification
+
+broad cross-domain generalization
+
+Until you have:
+
+longitudinal memory
+
+outcome reconciliation
+
+gold-case regression
+
+guideline traceability
+
+Otherwise you get a smarter-looking system that is harder to trust.
+
+For urgent care telemedicine specifically, what still matters most
+
+These are your big rocks now:
+
+Complaint expansion from Sheets
+
+Longitudinal revisit logic
+
+Guideline trace + review trace
+
+Outcome-based calibration
+
+Golden-case testing
+
+And yes, you should absolutely add many more complaints from the Google Sheets, but not as a raw dump. The better move is:
+
+import complaints in priority waves
+
+require each complaint to have:
+
+alias coverage
+
+required questions
+
+red flags
+
+differential mappings
+
+disposition rule support
+
+at least 10 to 20 gold cases
+
+That keeps expansion from becoming spreadsheet spaghetti in a lab coat.
+
+My recommendation on Google Sheets upload
+
+Yes, uploading the key Sheets here would help, especially these:
+
+COMPLAINT_REGISTRY
+
+CLUSTER_SCORING_RULES
+
+RED_FLAG_RULES
+
+DISPOSITION_RULES
+
+DX_CANDIDATES
+
+if you have it, QUESTION_RULES or complaint-specific secondary questions
+
+if you have it, medication/treatment tables
+
+That would let me help with:
+
+complaint coverage gaps
+
+bad aliases
+
+missing red-flag branches
+
+weak differential branching
+
+graph builder improvements
+
+automated expansion scripts
+
+Bottom line
+
+You are now past the “toy triage bot” phase.
+
+The next leap is not just “more intelligence.” It is:
+
+memory across time
+
+traceable protocol execution
+
+measured real-world performance
+
+safe regression testing
+
+structured complaint expansion
+
+That is the path from “very smart demo” to “something a physician could actually supervise without wanting to throw their stethoscope through a window.”
+
+Send the Sheets or the replit.md pipeline section, and I’ll turn that into the next concrete build plan.

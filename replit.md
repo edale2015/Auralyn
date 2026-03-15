@@ -50,8 +50,8 @@ A unified Clinical State Model (`server/state/`) based on an in-memory and file-
 
 **Event Subscriber** (`server/core/events/eventSubscriber.ts`): Full pub/sub layer with `subscribe/once/unsubscribe/emitToSubscribers`. All `publishEvent()` calls auto-notify registered subscribers. Use `onClinicalEvent(type, handler)` for persistent subscriptions, `onceClinicalEvent(type, handler)` for one-shot handlers.
 
-### Clinical Brain Engine — 20-Step Pipeline
-`server/core/clinicalBrainEngine.ts` runs every inference call through a deterministic 20-step pipeline:
+### Clinical Brain Engine — 25-Step Pipeline
+`server/core/clinicalBrainEngine.ts` runs every inference call through a deterministic 25-step pipeline:
 
 | Step | Engine | File |
 |------|--------|------|
@@ -66,6 +66,8 @@ A unified Clinical State Model (`server/state/`) based on an in-memory and file-
 | 6c | Temporal Progression + Risk Stratification boosts | `temporalProgressionEngine.ts`, `riskStratificationEngine.ts` |
 | 7 | Uncertainty / Entropy | `uncertaintyEngine.ts` |
 | 8 | Red Flag Safety Layer | `redFlags.ts` |
+| 8b | **Severity Scoring** (numeric score → low/moderate/high/critical) | `severityScoringEngine.ts` |
+| 8c | **Cross-Complaint Routing** (symptom → secondary complaint pathways) | `crossComplaintRouterEngine.ts` |
 | 9 | Next-Best-Question Selector | `nextBestQuestionEngine.ts` |
 | 10 | Disposition Logic | inline |
 | 10b | Guideline Adherence (16 rules, 6 complaints) | `guidelineAdherenceEngine.ts` |
@@ -73,10 +75,15 @@ A unified Clinical State Model (`server/state/`) based on an in-memory and file-
 | 11b | Treatment & Test Recommendations | `treatmentEngine.ts`, `testRecommendationEngine.ts` |
 | 11c | Test Yield Scoring | `testYieldEngine.ts` |
 | 11d | Medication Safety Screening | `medicationSafetyEngine.ts` |
+| 11e | **Protocol Variance Check** (red-flag escalation, missing tests, unsafe disposition) | `protocolVarianceEngine.ts` |
+| 11f | **Diagnostic Drift Detection** (prior snapshot vs current — major/moderate/none) | `diagnosticDriftEngine.ts` |
 | 12 | Clinical Governance + Physician Packet | `clinicalGovernanceEngine.ts`, `physicianReviewPacketEngine.ts` |
-| 12b | Disposition Calibration (final arbiter) | `dispositionCalibrationEngine.ts` |
-| 12c | Physician Feedback Learning Stats | `physicianFeedbackLearningEngine.ts` |
+| 12b | **Unified Clinical Governance** (merges severity + variance + drift + guideline) | `unifiedClinicalGovernanceEngine.ts` |
+| 12c | Disposition Calibration (final arbiter) | `dispositionCalibrationEngine.ts` |
+| 12d | Physician Feedback Learning Stats | `physicianFeedbackLearningEngine.ts` |
 | 13 | Store in Clinical Memory | `clinicalMemoryEngine.ts` |
+
+**Coordination Layer**: `server/core/clinicalIntelligenceCoordinationLayer.ts` — standalone orchestrator that composes all 11 engines (steps 8b–12c) into a single `CoordinationOutput` package for external API calls.
 
 **Shared constants**: `shared/complaints.ts` (143 canonical complaint slugs), `server/data/complaintAliasRegistry.ts` (152 intake aliases → canonical slugs).
 

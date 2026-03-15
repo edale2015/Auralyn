@@ -23,6 +23,11 @@ import { complaintCompletenessEngine } from "./complaintCompletenessEngine";
 import { medicationSafetyEngine } from "./medicationSafetyEngine";
 import { testYieldEngine } from "./testYieldEngine";
 import { physicianFeedbackLearningEngine } from "./physicianFeedbackLearningEngine";
+import { severityScoringEngine, type SeverityScoringOutput } from "./severityScoringEngine";
+import { crossComplaintRouterEngine, type CrossComplaintRouterOutput } from "./crossComplaintRouterEngine";
+import { protocolVarianceEngine, type ProtocolVarianceOutput } from "./protocolVarianceEngine";
+import { diagnosticDriftEngine, type DiagnosticDriftOutput, type DriftSnapshot } from "./diagnosticDriftEngine";
+import { unifiedClinicalGovernanceEngine, type UnifiedClinicalGovernanceOutput } from "./unifiedClinicalGovernanceEngine";
 
 export interface BrainInput {
   complaint: string;
@@ -73,6 +78,13 @@ export interface BrainOutput {
 
   // Physician handoff packet
   physicianPacket?: PhysicianReviewPacket;
+
+  // Wave 7 engines
+  severity?: SeverityScoringOutput;
+  routedComplaints?: CrossComplaintRouterOutput;
+  protocolVariance?: ProtocolVarianceOutput;
+  diagnosticDrift?: DiagnosticDriftOutput;
+  unifiedGovernance?: UnifiedClinicalGovernanceOutput;
 }
 
 export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> {
@@ -256,6 +268,27 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Red flag engine failed:", (err as Error).message);
   }
 
+  // ─── 8b. Severity Scoring ─────────────────────────────────────────────────
+  try {
+    result.severity = severityScoringEngine({
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+      redFlags: result.redFlags ?? [],
+      vitals: answers?.vitals,
+    });
+  } catch (err) {
+    console.warn("[Brain] Severity scoring engine failed:", (err as Error).message);
+  }
+
+  // ─── 8c. Cross-Complaint Routing ──────────────────────────────────────────
+  try {
+    result.routedComplaints = crossComplaintRouterEngine({
+      complaint:          input.complaint,
+      normalizedSymptoms: result.normalizedSymptoms ?? [],
+    });
+  } catch (err) {
+    console.warn("[Brain] Cross-complaint router failed:", (err as Error).message);
+  }
+
   // ─── 9. Next-Best-Question Selector ───────────────────────────────────────
   try {
     // Only ask more questions if uncertain or no strong leading diagnosis
@@ -369,6 +402,48 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Medication safety engine failed:", (err as Error).message);
   }
 
+  // ─── 11e. Protocol Variance Check ─────────────────────────────────────────
+  try {
+    const testsList = (result.tests ?? []).map((t) => ({ name: t.test ?? "" }));
+    const treatmentNames = (result.treatments ?? []).map((t) => t.treatmentName ?? "");
+    result.protocolVariance = protocolVarianceEngine({
+      complaint:               input.complaint,
+      finalDisposition:        result.disposition ?? "needs_workup",
+      aggregatedDifferentials: (result.aggregatedDifferentials ?? []).map((d) => ({
+        diagnosis: d.diagnosis,
+        score:     d.score,
+      })),
+      tests:      testsList,
+      treatments: treatmentNames,
+      redFlags:   result.redFlags ?? [],
+    });
+  } catch (err) {
+    console.warn("[Brain] Protocol variance engine failed:", (err as Error).message);
+  }
+
+  // ─── 11f. Diagnostic Drift Detection ──────────────────────────────────────
+  try {
+    const currentSnapshot: DriftSnapshot = {
+      timestamp:    new Date().toISOString(),
+      caseId:       state?.sessionId ?? "unknown",
+      complaint:    input.complaint,
+      topDiagnosis: result.aggregatedDifferentials?.[0]?.diagnosis ?? "unknown",
+      topScore:     result.aggregatedDifferentials?.[0]?.score ?? 0,
+      differential: (result.aggregatedDifferentials ?? []).map((d) => ({
+        diagnosis: d.diagnosis,
+        score:     d.score,
+      })),
+    };
+    const priorSnapshots: DriftSnapshot[] = state?.diagnosticSnapshots ?? [];
+    result.diagnosticDrift = diagnosticDriftEngine({ priorSnapshots, currentSnapshot });
+
+    // Push current snapshot into state for future calls
+    if (state && !state.diagnosticSnapshots) state.diagnosticSnapshots = [];
+    if (state) state.diagnosticSnapshots.push(currentSnapshot);
+  } catch (err) {
+    console.warn("[Brain] Diagnostic drift engine failed:", (err as Error).message);
+  }
+
   // ─── 12. Clinical Governance — supervisor decision + audit tags ───────────
   try {
     const topBayesian = (result.differentials ?? []).map((d) => ({
@@ -457,7 +532,34 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Governance engine failed:", (err as Error).message);
   }
 
-  // ─── 12b. Disposition Calibration — final arbiter of disposition ──────────
+  // ─── 12b. Unified Clinical Governance ─────────────────────────────────────
+  try {
+    result.unifiedGovernance = unifiedClinicalGovernanceEngine({
+      contradictionHasErrors:    result.contradictions?.hasErrors,
+      safetyOverrideDisposition: result.disposition === "ER_NOW" ? "er_now" : null,
+      severityLevel:             result.severity?.level,
+      protocolVarianceSeverity:  result.protocolVariance?.severity,
+      diagnosticDriftLevel:      result.diagnosticDrift?.driftLevel,
+      physicianRequired:         result.governance?.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW",
+      guidelinePassed:           result.guideline?.passed,
+      completenessPassed:        result.completeness?.complete,
+    });
+
+    // Let unified governance override disposition when needed
+    if (
+      result.unifiedGovernance.supervisorDecision === "NEEDS_PHYSICIAN_REVIEW" &&
+      !["ER_NOW", "er_now"].includes(result.disposition ?? "")
+    ) {
+      result.disposition = "NEEDS_PHYSICIAN_REVIEW";
+    }
+    if (result.unifiedGovernance.supervisorDecision === "BLOCK") {
+      result.disposition = "NEEDS_PHYSICIAN_REVIEW";
+    }
+  } catch (err) {
+    console.warn("[Brain] Unified governance engine failed:", (err as Error).message);
+  }
+
+  // ─── 12c. Disposition Calibration — final arbiter of disposition ──────────
   try {
     const calibration = dispositionCalibrationEngine({
       complaint:               input.complaint,
@@ -468,10 +570,13 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
       })),
       entropy:                 result.uncertainty?.entropy,
       redFlags:                result.redFlags ?? [],
-      supervisorDecision:      result.governance?.supervisorDecision,
+      supervisorDecision:      result.unifiedGovernance?.supervisorDecision
+                                 ?? result.governance?.supervisorDecision,
       riskLevel:               result.risk?.overallRisk,
       guidelinePassed:         result.guideline?.passed,
       contradictionHasErrors:  result.contradictions?.hasErrors,
+      severityLevel:           result.severity?.level,
+      completenessPassed:      result.completeness?.complete,
     });
     result.calibration   = calibration;
     result.disposition   = calibration.finalDisposition;
@@ -479,7 +584,7 @@ export async function runClinicalBrain(input: BrainInput): Promise<BrainOutput> 
     console.warn("[Brain] Calibration engine failed:", (err as Error).message);
   }
 
-  // ─── 12c. Physician Feedback Learning Stats (async, dashboard only) ────────
+  // ─── 12d. Physician Feedback Learning Stats (async, dashboard only) ────────
   try {
     result.feedbackStats = physicianFeedbackLearningEngine();
   } catch {

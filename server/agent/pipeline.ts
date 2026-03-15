@@ -350,6 +350,11 @@ export async function initializePipeline(
     if (brainOutput.medicationSafety)       updated.medicationSafety         = brainOutput.medicationSafety;
     if (brainOutput.calibration)            updated.calibration              = brainOutput.calibration;
     if (brainOutput.feedbackStats)          updated.feedbackStats            = brainOutput.feedbackStats;
+    if (brainOutput.severity)              updated.severity                 = brainOutput.severity;
+    if (brainOutput.routedComplaints)      updated.routedComplaints         = brainOutput.routedComplaints;
+    if (brainOutput.protocolVariance)      updated.protocolVariance         = brainOutput.protocolVariance;
+    if (brainOutput.diagnosticDrift)       updated.diagnosticDrift          = brainOutput.diagnosticDrift;
+    if (brainOutput.unifiedGovernance)     updated.unifiedGovernance        = brainOutput.unifiedGovernance;
     if (brainOutput.nextQuestion !== undefined) updated.nextBestQuestion = brainOutput.nextQuestion;
     if (brainOutput.questionRankings)     updated.questionRankings      = brainOutput.questionRankings;
     if (brainOutput.redFlags?.length)     updated.redFlags = [...new Set([...updated.redFlags, ...brainOutput.redFlags])];
