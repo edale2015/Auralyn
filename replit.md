@@ -86,6 +86,15 @@ A strategic layer that automatically identifies areas needing attention, resolve
 ### Sheet Data Import
 Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, protocols, medications) via CSV, XLSX, or JSON files to populate the knowledge graph, with admin-only access.
 
+### Sheet-to-Graph Ingestion Pipeline
+`server/ingestion/` — Full pipeline: validation gate → sheet parsing → graph transformation → knowledge graph population. Ingests COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, RED_FLAG_RULES, CLUSTER_SCORING_RULES, OUTPUT_TEMPLATES into the knowledge graph as nodes/edges. Safety gate blocks import if schema validation fails or warnings exceed threshold. APIs: POST `/api/sheets/ingest-graph` (upload or use latest), POST `/api/sheets/sync`, GET `/api/sheets/sync-history`. UI in Knowledge Graph Data Import tab.
+
+### Clinical Change Audit Log
+`server/audit/` — Tracks every clinical data change with timestamps, sheet name, change type, key, and impact analysis. Impact analyzer maps changes to affected systems (triage engine, safety layer, etc.) with severity ratings. APIs: GET `/api/clinical-audit-log`, GET `/api/clinical-audit-log/stats`.
+
+### Sheet Sync Engine
+`server/sheets/sheetSyncEngine.ts` + `sheetSyncScheduler.ts` + `sheetDiffEngine.ts` — File-based sync with diff detection, scheduled daily sync support, and sync history tracking.
+
 ### Clinical Schema Validator
 `server/validation/` — 4-layer workbook validator checking: (1) workbook integrity (required sheets exist), (2) header/schema integrity (required columns, duplicate IDs), (3) cross-sheet referential integrity (CC_ID, template IDs, cluster IDs), (4) data quality (missing expressions, invalid values, orphan records). Validates 7 required sheets: COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, CLUSTER_SCORING_RULES, RED_FLAG_RULES, OUTPUT_TEMPLATES, GLOBAL_SECONDARY. APIs: POST `/api/clinical-schema/validate` (upload + validate), GET `/api/clinical-schema/validate` (validate existing), GET `/api/clinical-schema/summary`, GET `/api/clinical-schema/workbooks`. Frontend page at `/schema-validator`.
 

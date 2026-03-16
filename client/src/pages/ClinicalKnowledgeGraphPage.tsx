@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Network, Search, GitBranch, AlertTriangle, HelpCircle,
   ArrowRight, CheckCircle2, XCircle, Lightbulb, Layers, Cpu, Zap,
-  Upload, FileSpreadsheet, Loader2, Brain, Target
+  Upload, FileSpreadsheet, Loader2, Brain, Target,
+  AlertCircle, Database, History, ShieldAlert, ArrowDownToLine
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -545,7 +546,152 @@ function PanelDataImport() {
           )}
         </CardContent>
       </Card>
+
+      <PanelGraphIngestion />
+      <PanelAuditLog />
     </div>
+  );
+}
+
+function PanelGraphIngestion() {
+  const { toast } = useToast();
+  const [ingesting, setIngesting] = useState(false);
+  const [result, setResult] = useState<any>(null);
+
+  async function handleIngest() {
+    setIngesting(true);
+    try {
+      const token = localStorage.getItem("app_auth_token");
+      const res = await fetch("/api/sheets/ingest-graph", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+      });
+      const data = await res.json();
+      setResult(data);
+      if (data.status === "success") {
+        toast({ title: "Ingestion Complete", description: `Imported ${Object.values(data.counts || {}).reduce((a: number, b: any) => a + (b || 0), 0)} records into the knowledge graph` });
+      } else if (data.status === "blocked") {
+        toast({ title: "Ingestion Blocked", description: data.reason, variant: "destructive" });
+      } else {
+        toast({ title: "Ingestion Failed", description: data.error, variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Ingestion Error", description: err?.message, variant: "destructive" });
+    } finally {
+      setIngesting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <ArrowDownToLine className="h-4 w-4" />
+          Ingest Sheets Into Knowledge Graph
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Run the full ingestion pipeline: validates the latest uploaded workbook, then imports complaints, questions, disposition rules, red flags, scoring rules, and templates into the knowledge graph.
+        </p>
+        <Button onClick={handleIngest} disabled={ingesting} data-testid="button-ingest-graph">
+          {ingesting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Database className="h-4 w-4 mr-2" />}
+          Import Into Knowledge Graph
+        </Button>
+
+        {result && (
+          <div className="mt-3 space-y-3">
+            <div className="flex items-center gap-2">
+              {result.status === "success" ? (
+                <Badge className="bg-green-100 text-green-800 border-green-300"><CheckCircle2 className="h-3 w-3 mr-1" />Success</Badge>
+              ) : result.status === "blocked" ? (
+                <Badge className="bg-red-100 text-red-800 border-red-300"><ShieldAlert className="h-3 w-3 mr-1" />Blocked</Badge>
+              ) : (
+                <Badge variant="destructive"><AlertCircle className="h-3 w-3 mr-1" />Error</Badge>
+              )}
+              {result.file && <span className="text-xs font-mono text-muted-foreground">{result.file}</span>}
+            </div>
+
+            {result.status === "blocked" && (
+              <p className="text-sm text-red-600 dark:text-red-400">{result.reason}</p>
+            )}
+
+            {result.counts && (
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {Object.entries(result.counts).map(([key, val]) => (
+                  <div key={key} className="text-center p-2 rounded-lg bg-muted/30 border">
+                    <div className="text-lg font-bold">{val as number}</div>
+                    <div className="text-xs text-muted-foreground">{key}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {result.impacts?.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-xs font-medium text-muted-foreground">Impact Analysis</div>
+                {result.impacts.map((imp: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline" className="text-xs">{imp.severity}</Badge>
+                    <span>{imp.impact}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PanelAuditLog() {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["/api/clinical-audit-log"],
+  });
+
+  const IMPACT_COLORS: Record<string, string> = {
+    critical: "text-red-600",
+    high: "text-orange-600",
+    medium: "text-yellow-600",
+    low: "text-muted-foreground",
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <History className="h-4 w-4" />
+          Clinical Change Audit Log
+          {data?.count > 0 && <Badge variant="outline" className="text-xs">{data.count} records</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+        ) : !data?.records?.length ? (
+          <p className="text-sm text-muted-foreground py-4 text-center" data-testid="text-no-audit">
+            No clinical changes recorded yet. Import data to begin tracking changes.
+          </p>
+        ) : (
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {data.records.slice(0, 50).map((r: any, i: number) => (
+              <div key={i} className="flex items-center justify-between p-2 rounded bg-muted/20 text-xs" data-testid={`audit-${i}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Badge variant="outline" className="text-xs flex-shrink-0">{r.sheet}</Badge>
+                  <span className="truncate">{r.changeType}: {r.key || "—"}</span>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={IMPACT_COLORS[r.impact?.severity] || ""}>{r.impact?.severity}</span>
+                  <span className="text-muted-foreground">{new Date(r.timestamp).toLocaleTimeString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

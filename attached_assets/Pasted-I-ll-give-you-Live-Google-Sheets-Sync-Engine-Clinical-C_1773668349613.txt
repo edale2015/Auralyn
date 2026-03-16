@@ -1,0 +1,265 @@
+I’ll give you:
+
+Live Google Sheets Sync Engine
+
+Clinical Change Audit Log
+
+Five additional recommended layers / agents
+
+The code assumes the system is already using Node/Express like the rest of your backend.
+
+1️⃣ Live Sheet Sync Engine
+
+Purpose: automatically pull updates from Google Sheets and rebuild the knowledge graph safely.
+
+Instead of:
+
+export sheet → upload → import
+
+You get:
+
+edit sheet → nightly sync → validation → graph update
+Folder Structure
+server/
+  sheets/
+    googleSheetsClient.ts
+    sheetSyncEngine.ts
+    sheetDiffEngine.ts
+    sheetSyncScheduler.ts
+routes/
+    googleSheetSyncRoutes.ts
+Google Sheets Client
+
+Uses the Google Sheets API.
+
+server/sheets/googleSheetsClient.ts
+
+import {google} from "googleapis"
+
+const sheets = google.sheets("v4")
+
+export async function fetchSheet(spreadsheetId:string,range:string,auth:any){
+
+ const response = await sheets.spreadsheets.values.get({
+
+  spreadsheetId,
+  range,
+  auth
+
+ })
+
+ return response.data.values
+
+}
+Sheet Sync Engine
+
+This fetches sheets and runs the ingestion pipeline.
+
+server/sheets/sheetSyncEngine.ts
+
+import {fetchSheet} from "./googleSheetsClient"
+import {runSheetGraphPipeline} from "../ingestion/sheetToGraphPipeline"
+
+export async function runLiveSheetSync(config:any){
+
+ const results:any=[]
+
+ for(const sheet of config.sheets){
+
+   const data = await fetchSheet(
+     config.spreadsheetId,
+     sheet.range,
+     config.auth
+   )
+
+   const result = runSheetGraphPipeline(data)
+
+   results.push({
+    sheet:sheet.name,
+    result
+   })
+
+ }
+
+ return results
+
+}
+Sheet Diff Engine
+
+Detects what changed.
+
+server/sheets/sheetDiffEngine.ts
+
+export function diffSheets(oldRows:any[],newRows:any[]){
+
+ const changes:any=[]
+
+ const oldMap=new Map()
+
+ oldRows.forEach(r=>{
+  oldMap.set(JSON.stringify(r),true)
+ })
+
+ newRows.forEach(r=>{
+
+  const key=JSON.stringify(r)
+
+  if(!oldMap.has(key)){
+
+   changes.push({
+    type:"added",
+    row:r
+   })
+
+  }
+
+ })
+
+ return changes
+
+}
+Sync Scheduler
+
+Runs periodic updates.
+
+server/sheets/sheetSyncScheduler.ts
+
+import {runLiveSheetSync} from "./sheetSyncEngine"
+
+export function startSheetSyncScheduler(config:any){
+
+ setInterval(async()=>{
+
+  console.log("Running sheet sync...")
+
+  await runLiveSheetSync(config)
+
+ }, 1000 * 60 * 60 * 24) // daily
+
+}
+Sync API
+
+server/routes/googleSheetSyncRoutes.ts
+
+import express from "express"
+import {runLiveSheetSync} from "../sheets/sheetSyncEngine"
+
+const router=express.Router()
+
+router.post("/sheets/sync",async(req,res)=>{
+
+ const result = await runLiveSheetSync(req.body)
+
+ res.json(result)
+
+})
+
+export default router
+2️⃣ Clinical Change Audit Log
+
+This is critical for medical traceability.
+
+Every change to the clinical dataset should be logged.
+
+Folder Structure
+server/
+  audit/
+     clinicalChangeAuditLog.ts
+     changeImpactAnalyzer.ts
+routes/
+     auditRoutes.ts
+Clinical Change Audit Log
+
+server/audit/clinicalChangeAuditLog.ts
+
+type ChangeRecord={
+
+ timestamp:number
+ sheet:string
+ changeType:string
+ row:any
+ user?:string
+
+}
+
+const auditLog:ChangeRecord[]=[]
+
+export function recordClinicalChange(change:ChangeRecord){
+
+ auditLog.push(change)
+
+ if(auditLog.length>10000){
+   auditLog.shift()
+ }
+
+}
+
+export function getAuditHistory(){
+
+ return auditLog
+
+}
+Change Impact Analyzer
+
+Determines how serious a change is.
+
+server/audit/changeImpactAnalyzer.ts
+
+export function analyzeChangeImpact(change:any){
+
+ if(change.sheet==="DISPOSITION_RULES"){
+
+  return{
+   severity:"critical",
+   impact:"triage logic modified"
+  }
+
+ }
+
+ if(change.sheet==="CORE_QUESTIONS"){
+
+  return{
+   severity:"medium",
+   impact:"question flow changed"
+  }
+
+ }
+
+ return{
+  severity:"low",
+  impact:"data update"
+ }
+
+}
+Audit API
+
+server/routes/auditRoutes.ts
+
+import express from "express"
+import {getAuditHistory} from "../audit/clinicalChangeAuditLog"
+
+const router=express.Router()
+
+router.get("/clinical-audit-log",(req,res)=>{
+
+ res.json(getAuditHistory())
+
+})
+
+export default router
+What the Live Sync + Audit System Enables
+
+You now get:
+
+Real-time configuration
+edit spreadsheet
+↓
+nightly sync
+↓
+graph update
+↓
+reasoning engine update
+Full traceability
+who changed protocol
+when
+what clinical impact
