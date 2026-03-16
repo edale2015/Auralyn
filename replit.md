@@ -8,6 +8,58 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (March 2026)
 
+### Clinical Simulation Lab + Clinical Control Tower + ACIE (March 2026)
+
+**22 new server files across 3 new module directories:**
+
+`server/simulation/` — 8 modules:
+- `simulationCaseFactory.ts` — Stochastic case generator for all 8 complaints (cough, chest_pain, headache, dizziness, sore_throat, fever, ear_pain, breathlessness). Each complaint has evidence-based feature generation (diaphoresis → ACS, petechiae → meningococcemia, etc.), expected disposition (er_now/urgent_care/self_care), gold flags, and difficulty modifiers.
+- `simulationScenarioLibrary.ts` — Fixed scenario seeds for deterministic regression testing.
+- `simulationRunner.ts` — `runSimulationBatch(params)` generates cases, runs `predictWithFallback()` (deterministic clinical rules per complaint), evaluates each case, classifies failures via `failureTaxonomyEngine`, aggregates failure breakdown, feeds learning updates, saves run, auto-triggers ACIE improvement cycle.
+- `simulationEvaluator.ts` — `evaluateSimulationCase()` scores each prediction: +70 disposition correct, +20 diagnosis match, +10 confidence, −40 red flag miss. `summarizeEvaluations()` returns dispositionAccuracy, diagnosisAccuracy, avgScore, redFlagMissRate.
+- `simulationStore.ts` — In-memory ring buffer (100 runs); `listSimulationRuns()` returns header-only list; `getLastRunSummary()` feeds ACIE.
+- `failureTaxonomyEngine.ts` — `classifyFailure(simCase, prediction)` returns `missed_red_flag` (critical), `over_triage` (moderate), `under_triage` (high), `wrong_top_diagnosis` (moderate) or null.
+- `failureAggregator.ts` — `aggregateFailures(results)` → counts by category; `getCriticalFailures()` for safety monitoring.
+- `simulationLearningBridge.ts` — `feedSimulationLearning(results)` → queue of `disposition_error`, `diagnosis_error`, `red_flag_miss` updates; `getLearningStats()` for CCT display.
+
+`server/simulation/` — 2 more modules:
+- `protocolBenchmarkEngine.ts` — `runProtocolBenchmark(caseData)` returns 3 strategy results (rule_based, ai_engine, golden_case) with disposition, confidence, latency, and consensus disposition + agreement flag.
+- `channelSimulationHarness.ts` — Static performance profiles for 4 channels (telegram, whatsapp, web, sms): avgCompletionTime, dropoutRate, avgQuestions, compressionRatio, deliverySuccessRate, satisfaction. `getAllChannelPerformance()` for CCT panel.
+
+`server/improvement/` — 5 modules (Automated Clinical Improvement Engine):
+- `weaknessDetector.ts` — `detectWeakAreas(summary)` checks 4 thresholds: redFlagMissRate>2% (critical), dispositionAccuracy<90% (high/moderate), diagnosisAccuracy<75% (moderate), avgScore<70 (low).
+- `improvementGenerator.ts` — Maps each weakness type to 1–2 specific `ImprovementSuggestion` objects with action, engine target, priority, and estimated impact string.
+- `improvementStore.ts` — Ring buffer (200 records); `getImprovementStats()` → total, totalSuggestions, criticalCount.
+- `improvementScheduler.ts` — `runImprovementCycle(summary, source)` glues detection + generation + store.
+- `automatedImprovementEngine.ts` — `acie.run()` pulls last simulation summary and cycles; `acie.runFromSummary(summary)` for on-demand use.
+
+`server/analysis/` — 1 module:
+- `complaintCoverageMatrix.ts` — 8-complaint coverage map: engines, skills, guideline, guidelineSource, simulationPassRate, redFlagsCovered, gapAreas. `getOverallCoverageStats()` → avgPassRate, totalUniqueEngines, totalUniqueSkills, complaintsAbove90pct.
+
+**4 new route files:**
+- `simulationLabRoutes.ts` — POST run, GET runs, GET run/:runId, DELETE runs, GET learning, POST benchmark, GET improvements, GET improvements/stats, POST improvements/cycle.
+- `coverageMatrixRoutes.ts` — GET /coverage-matrix, /coverage-matrix/stats, /coverage-matrix/:complaint.
+- `channelSimulationRoutes.ts` — GET /channel-simulation, /channel-simulation/:channel.
+- `clinicalControlTowerRoutes.ts` — GET /cct/health, /cct/engines, /cct/simulation-summary, /cct/failures, /cct/channels, /cct/coverage, /cct/improvements, /cct/summary.
+
+**2 new frontend pages:**
+
+`client/src/pages/ClinicalSimulationLab.tsx` (`/simulation-lab`):
+- Control panel: complaint selector (8 complaints), case count (1–500), difficulty selector (easy/moderate/hard), Run button.
+- After run: 4 KPI cards (total cases, disposition accuracy with color threshold, diagnosis accuracy, red flag miss rate with safety threshold indicator).
+- 4-tab results view: Case Results (paginated table with pass/fail icons, score coloring), Failure Analysis (category cards with bar proportions, critical alert for missed red flags), Improvements (ACIE suggestions with priority badge + engine tag + impact estimate), Run History (click any previous run to reload its results).
+
+`client/src/pages/ClinicalControlTower.tsx` (`/control-tower`) — 7-tab mission control:
+- **System Health**: KPI grid (health score with progress bar, active engines, complaint coverage, simulation accuracy), engine level breakdown (6 levels with colored left border), top-5 improvement suggestions.
+- **Engines**: Filter by level, all 100 engines in grid cards with level color coding and status badge.
+- **Simulation**: Quick-run form (complaint + count), 4 KPI cards from last run, learning queue breakdown by update type.
+- **Failures**: Critical safety alert banner for missed red flags, failure category cards across all simulation runs.
+- **Channels**: 4 channel cards (telegram/whatsapp/web/sms) with completion time, dropout rate, delivery rate, satisfaction score, and delivery success progress bar.
+- **Coverage**: Stats row (complaints, avg pass rate, unique engines, above-90% count), per-complaint cards with pass-rate gauge, engine badges, guideline source, and gap areas.
+- **Improvements**: All ACIE cycles with improvements listed, priority + engine badges, estimated impact.
+
+Both pages added to sidebar under "Self-Developing AI" group. All 13 endpoints return HTTP 200. Frontend compiles with no errors.
+
 ### Brain Architecture + Engine Atlas + Session T001–T009 (March 2026)
 
 **`server/brain/` — 5 new orchestration modules:**

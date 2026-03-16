@@ -1,0 +1,540 @@
+Clinical Knowledge Graph Bundle
+File map
+server/
+  knowledge/
+    knowledgeGraphTypes.ts
+    clinicalKnowledgeGraph.ts
+    knowledgeGraphStore.ts
+    knowledgeGraphQueryEngine.ts
+    knowledgeGraphBuilder.ts
+  routes/
+    knowledgeGraphRoutes.ts
+
+client/
+  pages/
+    ClinicalKnowledgeGraphPage.tsx
+  components/
+    knowledge/
+      KnowledgeGraphExplorer.tsx
+      KnowledgeNodePanel.tsx
+      KnowledgePathViewer.tsx
+1) Types
+
+server/knowledge/knowledgeGraphTypes.ts
+
+export type KnowledgeNodeType =
+  | "complaint"
+  | "symptom"
+  | "question"
+  | "skill"
+  | "engine"
+  | "diagnosis"
+  | "protocol"
+  | "disposition";
+
+export interface KnowledgeNode {
+  id: string;
+  type: KnowledgeNodeType;
+  label: string;
+  metadata?: Record<string, any>;
+}
+
+export interface KnowledgeEdge {
+  id: string;
+  from: string;
+  to: string;
+  relation:
+    | "requires"
+    | "asks"
+    | "handled_by"
+    | "suggests"
+    | "governed_by"
+    | "can_lead_to"
+    | "supports"
+    | "escalates_to";
+  weight?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface ClinicalKnowledgeGraph {
+  nodes: KnowledgeNode[];
+  edges: KnowledgeEdge[];
+}
+2) Base graph
+
+server/knowledge/clinicalKnowledgeGraph.ts
+
+import { ClinicalKnowledgeGraph } from "./knowledgeGraphTypes";
+
+export const clinicalKnowledgeGraph: ClinicalKnowledgeGraph = {
+  nodes: [
+    { id: "complaint:cough", type: "complaint", label: "Cough" },
+    { id: "complaint:chest_pain", type: "complaint", label: "Chest Pain" },
+    { id: "complaint:headache", type: "complaint", label: "Headache" },
+
+    { id: "symptom:fever", type: "symptom", label: "Fever" },
+    { id: "symptom:sob", type: "symptom", label: "Shortness of Breath" },
+    { id: "symptom:chest_pain", type: "symptom", label: "Chest Pain" },
+    { id: "symptom:worst_headache", type: "symptom", label: "Worst Headache of Life" },
+
+    { id: "question:duration", type: "question", label: "How long has this been going on?" },
+    { id: "question:fever", type: "question", label: "Do you have fever?" },
+    { id: "question:sob", type: "question", label: "Do you have shortness of breath?" },
+    { id: "question:worst", type: "question", label: "Is this the worst headache of your life?" },
+
+    { id: "skill:red_flag_detection", type: "skill", label: "Red Flag Detection" },
+    { id: "skill:pneumonia_risk", type: "skill", label: "Pneumonia Risk" },
+    { id: "skill:mi_risk", type: "skill", label: "MI Risk" },
+    { id: "skill:sah_risk", type: "skill", label: "Subarachnoid Hemorrhage Risk" },
+
+    { id: "engine:redFlagEngine", type: "engine", label: "Red Flag Engine" },
+    { id: "engine:bayesianDifferentialEngine", type: "engine", label: "Bayesian Differential Engine" },
+    { id: "engine:nextQuestionSelector", type: "engine", label: "Next Question Selector" },
+    { id: "engine:protocolSelectionEngine", type: "engine", label: "Protocol Selection Engine" },
+
+    { id: "diagnosis:pneumonia", type: "diagnosis", label: "Pneumonia" },
+    { id: "diagnosis:viral_uri", type: "diagnosis", label: "Viral URI" },
+    { id: "diagnosis:acs", type: "diagnosis", label: "Acute Coronary Syndrome" },
+    { id: "diagnosis:sah", type: "diagnosis", label: "Subarachnoid Hemorrhage" },
+
+    { id: "protocol:cdc_respiratory", type: "protocol", label: "CDC Respiratory Protocol" },
+    { id: "protocol:acep_aha_chest_pain", type: "protocol", label: "ACEP/AHA Chest Pain Protocol" },
+    { id: "protocol:headache_emergency", type: "protocol", label: "Emergency Headache Protocol" },
+
+    { id: "disposition:self_care", type: "disposition", label: "Self Care" },
+    { id: "disposition:urgent_care", type: "disposition", label: "Urgent Care" },
+    { id: "disposition:er_now", type: "disposition", label: "ER Now" },
+  ],
+  edges: [
+    { id: "e1", from: "complaint:cough", to: "skill:red_flag_detection", relation: "requires", weight: 1 },
+    { id: "e2", from: "complaint:cough", to: "skill:pneumonia_risk", relation: "requires", weight: 1 },
+    { id: "e3", from: "complaint:cough", to: "question:duration", relation: "asks", weight: 0.7 },
+    { id: "e4", from: "complaint:cough", to: "question:fever", relation: "asks", weight: 0.9 },
+    { id: "e5", from: "complaint:cough", to: "question:sob", relation: "asks", weight: 1 },
+    { id: "e6", from: "complaint:cough", to: "protocol:cdc_respiratory", relation: "governed_by", weight: 1 },
+    { id: "e7", from: "complaint:cough", to: "diagnosis:pneumonia", relation: "suggests", weight: 0.8 },
+    { id: "e8", from: "complaint:cough", to: "diagnosis:viral_uri", relation: "suggests", weight: 0.6 },
+
+    { id: "e9", from: "complaint:chest_pain", to: "skill:red_flag_detection", relation: "requires", weight: 1 },
+    { id: "e10", from: "complaint:chest_pain", to: "skill:mi_risk", relation: "requires", weight: 1 },
+    { id: "e11", from: "complaint:chest_pain", to: "protocol:acep_aha_chest_pain", relation: "governed_by", weight: 1 },
+    { id: "e12", from: "complaint:chest_pain", to: "diagnosis:acs", relation: "suggests", weight: 0.9 },
+
+    { id: "e13", from: "complaint:headache", to: "skill:red_flag_detection", relation: "requires", weight: 1 },
+    { id: "e14", from: "complaint:headache", to: "skill:sah_risk", relation: "requires", weight: 1 },
+    { id: "e15", from: "complaint:headache", to: "question:worst", relation: "asks", weight: 1 },
+    { id: "e16", from: "complaint:headache", to: "protocol:headache_emergency", relation: "governed_by", weight: 1 },
+    { id: "e17", from: "complaint:headache", to: "diagnosis:sah", relation: "suggests", weight: 0.8 },
+
+    { id: "e18", from: "skill:red_flag_detection", to: "engine:redFlagEngine", relation: "handled_by", weight: 1 },
+    { id: "e19", from: "skill:pneumonia_risk", to: "engine:bayesianDifferentialEngine", relation: "handled_by", weight: 0.9 },
+    { id: "e20", from: "question:duration", to: "engine:nextQuestionSelector", relation: "supports", weight: 0.7 },
+    { id: "e21", from: "protocol:cdc_respiratory", to: "engine:protocolSelectionEngine", relation: "handled_by", weight: 1 },
+
+    { id: "e22", from: "diagnosis:viral_uri", to: "disposition:self_care", relation: "can_lead_to", weight: 0.7 },
+    { id: "e23", from: "diagnosis:pneumonia", to: "disposition:urgent_care", relation: "can_lead_to", weight: 0.8 },
+    { id: "e24", from: "diagnosis:acs", to: "disposition:er_now", relation: "can_lead_to", weight: 1 },
+    { id: "e25", from: "diagnosis:sah", to: "disposition:er_now", relation: "can_lead_to", weight: 1 },
+
+    { id: "e26", from: "symptom:sob", to: "disposition:er_now", relation: "escalates_to", weight: 0.85 },
+    { id: "e27", from: "symptom:worst_headache", to: "disposition:er_now", relation: "escalates_to", weight: 0.95 },
+  ],
+};
+3) Store
+
+server/knowledge/knowledgeGraphStore.ts
+
+import { clinicalKnowledgeGraph } from "./clinicalKnowledgeGraph";
+import { ClinicalKnowledgeGraph, KnowledgeEdge, KnowledgeNode } from "./knowledgeGraphTypes";
+
+const graph: ClinicalKnowledgeGraph = {
+  nodes: [...clinicalKnowledgeGraph.nodes],
+  edges: [...clinicalKnowledgeGraph.edges],
+};
+
+export function getKnowledgeGraph(): ClinicalKnowledgeGraph {
+  return graph;
+}
+
+export function addKnowledgeNode(node: KnowledgeNode) {
+  const exists = graph.nodes.some(n => n.id === node.id);
+  if (!exists) graph.nodes.push(node);
+}
+
+export function addKnowledgeEdge(edge: KnowledgeEdge) {
+  const exists = graph.edges.some(e => e.id === edge.id);
+  if (!exists) graph.edges.push(edge);
+}
+
+export function getNodeById(id: string) {
+  return graph.nodes.find(n => n.id === id) || null;
+}
+
+export function getEdgesForNode(id: string) {
+  return graph.edges.filter(e => e.from === id || e.to === id);
+}
+4) Query engine
+
+server/knowledge/knowledgeGraphQueryEngine.ts
+
+import { getKnowledgeGraph, getNodeById } from "./knowledgeGraphStore";
+
+export function getNeighborhood(nodeId: string) {
+  const graph = getKnowledgeGraph();
+  const center = getNodeById(nodeId);
+  if (!center) return null;
+
+  const directEdges = graph.edges.filter(e => e.from === nodeId || e.to === nodeId);
+  const neighborIds = new Set<string>();
+  directEdges.forEach(edge => {
+    if (edge.from !== nodeId) neighborIds.add(edge.from);
+    if (edge.to !== nodeId) neighborIds.add(edge.to);
+  });
+
+  const neighbors = graph.nodes.filter(n => neighborIds.has(n.id));
+
+  return {
+    center,
+    neighbors,
+    edges: directEdges,
+  };
+}
+
+export function findComplaintPathway(complaintId: string) {
+  const graph = getKnowledgeGraph();
+
+  const complaint = graph.nodes.find(n => n.id === complaintId && n.type === "complaint");
+  if (!complaint) return null;
+
+  const skills = graph.edges
+    .filter(e => e.from === complaintId && e.relation === "requires")
+    .map(e => graph.nodes.find(n => n.id === e.to))
+    .filter(Boolean);
+
+  const questions = graph.edges
+    .filter(e => e.from === complaintId && e.relation === "asks")
+    .map(e => graph.nodes.find(n => n.id === e.to))
+    .filter(Boolean);
+
+  const protocols = graph.edges
+    .filter(e => e.from === complaintId && e.relation === "governed_by")
+    .map(e => graph.nodes.find(n => n.id === e.to))
+    .filter(Boolean);
+
+  const diagnoses = graph.edges
+    .filter(e => e.from === complaintId && e.relation === "suggests")
+    .map(e => graph.nodes.find(n => n.id === e.to))
+    .filter(Boolean);
+
+  const engineIds = new Set<string>();
+  skills.forEach((skill: any) => {
+    graph.edges
+      .filter(e => e.from === skill.id && e.relation === "handled_by")
+      .forEach(e => engineIds.add(e.to));
+  });
+  protocols.forEach((protocol: any) => {
+    graph.edges
+      .filter(e => e.from === protocol.id && e.relation === "handled_by")
+      .forEach(e => engineIds.add(e.to));
+  });
+
+  const engines = graph.nodes.filter(n => engineIds.has(n.id));
+
+  return {
+    complaint,
+    skills,
+    questions,
+    protocols,
+    engines,
+    diagnoses,
+  };
+}
+
+export function searchKnowledgeGraph(term: string) {
+  const graph = getKnowledgeGraph();
+  const q = term.trim().toLowerCase();
+
+  return graph.nodes.filter(node => {
+    if (node.label.toLowerCase().includes(q)) return true;
+    return node.id.toLowerCase().includes(q);
+  });
+}
+5) Builder from brain assets
+
+This links your new brain layer to the graph.
+
+server/knowledge/knowledgeGraphBuilder.ts
+
+import { addKnowledgeEdge, addKnowledgeNode } from "./knowledgeGraphStore";
+
+export function syncComplaintSkillsToGraph(
+  complaint: string,
+  skills: Array<{ id: string; label: string; priority?: string; engineIds?: string[] }>
+) {
+  const complaintId = `complaint:${complaint}`;
+
+  addKnowledgeNode({
+    id: complaintId,
+    type: "complaint",
+    label: complaint.replaceAll("_", " "),
+  });
+
+  skills.forEach((skill, idx) => {
+    const skillId = skill.id.startsWith("skill:") ? skill.id : `skill:${skill.id}`;
+    addKnowledgeNode({
+      id: skillId,
+      type: "skill",
+      label: skill.label,
+      metadata: { priority: skill.priority || "medium" },
+    });
+
+    addKnowledgeEdge({
+      id: `sync_req_${complaint}_${idx}`,
+      from: complaintId,
+      to: skillId,
+      relation: "requires",
+      weight: 1,
+    });
+
+    (skill.engineIds || []).forEach((engineId, engineIdx) => {
+      const fullEngineId = engineId.startsWith("engine:") ? engineId : `engine:${engineId}`;
+      addKnowledgeNode({
+        id: fullEngineId,
+        type: "engine",
+        label: engineId.replace(/^engine:/, ""),
+      });
+
+      addKnowledgeEdge({
+        id: `sync_handled_${complaint}_${idx}_${engineIdx}`,
+        from: skillId,
+        to: fullEngineId,
+        relation: "handled_by",
+        weight: 0.9,
+      });
+    });
+  });
+}
+6) API routes
+
+server/routes/knowledgeGraphRoutes.ts
+
+import express from "express";
+import { getKnowledgeGraph } from "../knowledge/knowledgeGraphStore";
+import {
+  findComplaintPathway,
+  getNeighborhood,
+  searchKnowledgeGraph,
+} from "../knowledge/knowledgeGraphQueryEngine";
+
+const router = express.Router();
+
+router.get("/knowledge-graph", (_req, res) => {
+  res.json(getKnowledgeGraph());
+});
+
+router.get("/knowledge-graph/search", (req, res) => {
+  const q = String(req.query.q || "");
+  res.json(searchKnowledgeGraph(q));
+});
+
+router.get("/knowledge-graph/node/:nodeId", (req, res) => {
+  const data = getNeighborhood(req.params.nodeId);
+  if (!data) return res.status(404).json({ error: "node_not_found" });
+  res.json(data);
+});
+
+router.get("/knowledge-graph/pathway/:complaintId", (req, res) => {
+  const data = findComplaintPathway(req.params.complaintId);
+  if (!data) return res.status(404).json({ error: "complaint_not_found" });
+  res.json(data);
+});
+
+export default router;
+
+Register it:
+
+import knowledgeGraphRoutes from "./routes/knowledgeGraphRoutes";
+
+app.use("/api", knowledgeGraphRoutes);
+7) Explorer UI
+
+client/components/knowledge/KnowledgeGraphExplorer.tsx
+
+import React, { useEffect, useState } from "react";
+
+export default function KnowledgeGraphExplorer({
+  onSelectNode,
+}: {
+  onSelectNode: (nodeId: string) => void;
+}) {
+  const [graph, setGraph] = useState<any>(null);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/knowledge-graph")
+      .then(r => r.json())
+      .then(setGraph);
+  }, []);
+
+  async function search() {
+    const res = await fetch(`/api/knowledge-graph/search?q=${encodeURIComponent(query)}`);
+    setResults(await res.json());
+  }
+
+  return (
+    <div>
+      <h3>Knowledge Graph Explorer</h3>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search complaint, skill, engine, diagnosis..."
+        />
+        <button onClick={search}>Search</button>
+      </div>
+
+      {results.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <h4>Search Results</h4>
+          {results.map((node) => (
+            <div
+              key={node.id}
+              style={{ border: "1px solid #ccc", padding: 8, marginBottom: 8, cursor: "pointer" }}
+              onClick={() => onSelectNode(node.id)}
+            >
+              <b>{node.label}</b> <span>({node.type})</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {graph && (
+        <div>
+          <h4>Graph Summary</h4>
+          <p>Nodes: {graph.nodes.length}</p>
+          <p>Edges: {graph.edges.length}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+8) Node panel
+
+client/components/knowledge/KnowledgeNodePanel.tsx
+
+import React, { useEffect, useState } from "react";
+
+export default function KnowledgeNodePanel({ nodeId }: { nodeId: string }) {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    if (!nodeId) return;
+    fetch(`/api/knowledge-graph/node/${encodeURIComponent(nodeId)}`)
+      .then(r => r.json())
+      .then(setData);
+  }, [nodeId]);
+
+  if (!nodeId) return <div>Select a node.</div>;
+  if (!data) return <div>Loading node...</div>;
+
+  return (
+    <div>
+      <h3>{data.center.label}</h3>
+      <p>Type: {data.center.type}</p>
+
+      <h4>Neighbors</h4>
+      <ul>
+        {data.neighbors.map((n: any) => (
+          <li key={n.id}>{n.label} ({n.type})</li>
+        ))}
+      </ul>
+
+      <h4>Edges</h4>
+      <pre>{JSON.stringify(data.edges, null, 2)}</pre>
+    </div>
+  );
+}
+9) Pathway viewer
+
+client/components/knowledge/KnowledgePathViewer.tsx
+
+import React, { useState } from "react";
+
+export default function KnowledgePathViewer() {
+  const [complaintId, setComplaintId] = useState("complaint:cough");
+  const [data, setData] = useState<any>(null);
+
+  async function loadPathway() {
+    const res = await fetch(`/api/knowledge-graph/pathway/${encodeURIComponent(complaintId)}`);
+    setData(await res.json());
+  }
+
+  return (
+    <div>
+      <h3>Complaint Pathway Viewer</h3>
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={complaintId} onChange={e => setComplaintId(e.target.value)} />
+        <button onClick={loadPathway}>Load</button>
+      </div>
+
+      {data && (
+        <div style={{ marginTop: 16 }}>
+          <h4>{data.complaint.label}</h4>
+
+          <p><b>Skills</b></p>
+          <ul>{data.skills.map((x: any) => <li key={x.id}>{x.label}</li>)}</ul>
+
+          <p><b>Questions</b></p>
+          <ul>{data.questions.map((x: any) => <li key={x.id}>{x.label}</li>)}</ul>
+
+          <p><b>Protocols</b></p>
+          <ul>{data.protocols.map((x: any) => <li key={x.id}>{x.label}</li>)}</ul>
+
+          <p><b>Engines</b></p>
+          <ul>{data.engines.map((x: any) => <li key={x.id}>{x.label}</li>)}</ul>
+
+          <p><b>Diagnoses</b></p>
+          <ul>{data.diagnoses.map((x: any) => <li key={x.id}>{x.label}</li>)}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+10) Full page
+
+client/pages/ClinicalKnowledgeGraphPage.tsx
+
+import React, { useState } from "react";
+import KnowledgeGraphExplorer from "../components/knowledge/KnowledgeGraphExplorer";
+import KnowledgeNodePanel from "../components/knowledge/KnowledgeNodePanel";
+import KnowledgePathViewer from "../components/knowledge/KnowledgePathViewer";
+
+export default function ClinicalKnowledgeGraphPage() {
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h1>Clinical Knowledge Graph</h1>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div style={{ border: "1px solid #ddd", padding: 12 }}>
+          <KnowledgeGraphExplorer onSelectNode={setSelectedNodeId} />
+        </div>
+
+        <div style={{ border: "1px solid #ddd", padding: 12 }}>
+          <KnowledgeNodePanel nodeId={selectedNodeId} />
+        </div>
+      </div>
+
+      <div style={{ border: "1px solid #ddd", padding: 12, marginTop: 16 }}>
+        <KnowledgePathViewer />
+      </div>
+    </div>
+  );
+}
+Why this matters
+
+This unlocks several major upgrades:

@@ -23,7 +23,7 @@ import {
   FlaskConical, Eye, AlertTriangle, Users, Settings, Search,
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
-  BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network,
+  BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -140,6 +140,8 @@ const NAV_SECTIONS = [
       { path: "/meta-clinical", label: "Meta-Clinical Console", icon: Sparkles },
       { path: "/research-intelligence", label: "Research Intelligence", icon: Microscope },
       { path: "/clinical-visualization", label: "Clinical Visualization", icon: Network },
+      { path: "/simulation-lab", label: "Simulation Laboratory", icon: FlaskConical },
+      { path: "/control-tower", label: "Clinical Control Tower", icon: Radar },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },
