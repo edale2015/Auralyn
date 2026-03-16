@@ -1,0 +1,272 @@
+Architecture
+server/
+  ingestion/
+      sheetToGraphPipeline.ts
+      sheetParser.ts
+      graphTransformer.ts
+      ingestionGate.ts
+      ingestionReport.ts
+routes/
+      sheetGraphIngestionRoutes.ts
+1. Validation Gate
+
+This prevents bad data from entering the graph.
+
+server/ingestion/ingestionGate.ts
+
+export function validateBeforeIngest(validationReport:any){
+
+ if(!validationReport.ok){
+
+  return{
+   allowed:false,
+   reason:"Schema validation failed",
+   issues:validationReport.summary
+  }
+
+ }
+
+ if(validationReport.summary.warningCount > 50){
+
+  return{
+   allowed:false,
+   reason:"Too many warnings"
+  }
+
+ }
+
+ return{
+  allowed:true
+ }
+
+}
+2. Sheet Parser
+
+Converts spreadsheet rows into normalized objects.
+
+server/ingestion/sheetParser.ts
+
+export function parseSheetRows(rows:any[]){
+
+ return rows.map(r=>{
+
+  const cleaned:any={}
+
+  Object.entries(r).forEach(([k,v])=>{
+
+   cleaned[String(k).trim()] =
+     typeof v === "string" ? v.trim() : v
+
+  })
+
+  return cleaned
+
+ })
+
+}
+3. Graph Transformer
+
+Maps sheet rows → knowledge graph nodes and edges.
+
+server/ingestion/graphTransformer.ts
+
+import {addKnowledgeNode,addKnowledgeEdge} from "../knowledge/knowledgeGraphStore"
+
+export function ingestComplaints(rows:any[]){
+
+ rows.forEach(r=>{
+
+  addKnowledgeNode({
+   id:`complaint:${r.CC_ID}`,
+   type:"complaint",
+   label:r.CC_LABEL
+  })
+
+  if(r.RED_FLAG_SET_ID){
+
+   addKnowledgeEdge({
+    id:`edge_${Date.now()}`,
+    from:`complaint:${r.CC_ID}`,
+    to:`skill:red_flag_detection`,
+    relation:"requires"
+   })
+
+  }
+
+ })
+
+}
+
+export function ingestQuestions(rows:any[]){
+
+ rows.forEach(q=>{
+
+  addKnowledgeNode({
+   id:`question:${q.QUESTION_ID}`,
+   type:"question",
+   label:q.QUESTION_TEXT
+  })
+
+  addKnowledgeEdge({
+   id:`edge_q_${Date.now()}`,
+   from:`complaint:${q.CC_ID}`,
+   to:`question:${q.QUESTION_ID}`,
+   relation:"asks"
+  })
+
+ })
+
+}
+
+export function ingestDispositionRules(rows:any[]){
+
+ rows.forEach(r=>{
+
+  addKnowledgeEdge({
+   id:`disp_${Date.now()}`,
+   from:`complaint:${r.CC_ID}`,
+   to:`disposition:${r.DISPOSITION_LEVEL}`,
+   relation:"can_lead_to"
+  })
+
+ })
+
+}
+4. Sheet → Graph Pipeline
+
+server/ingestion/sheetToGraphPipeline.ts
+
+import {loadWorkbookFromFile} from "../validation/workbookLoader"
+import {validateClinicalWorkbook} from "../validation/clinicalSchemaValidator"
+import {validateBeforeIngest} from "./ingestionGate"
+import {parseSheetRows} from "./sheetParser"
+import {ingestComplaints,ingestQuestions,ingestDispositionRules} from "./graphTransformer"
+
+export function runSheetGraphPipeline(filePath:string){
+
+ const workbook = loadWorkbookFromFile(filePath)
+
+ const validationReport = validateClinicalWorkbook(workbook)
+
+ const gate = validateBeforeIngest(validationReport)
+
+ if(!gate.allowed){
+
+  return{
+   status:"blocked",
+   validationReport
+  }
+
+ }
+
+ const complaints = parseSheetRows(
+  workbook.sheets["COMPLAINT_REGISTRY"].rows
+ )
+
+ const questions = parseSheetRows(
+  workbook.sheets["CORE_QUESTIONS"].rows
+ )
+
+ const dispositions = parseSheetRows(
+  workbook.sheets["DISPOSITION_RULES"].rows
+ )
+
+ ingestComplaints(complaints)
+ ingestQuestions(questions)
+ ingestDispositionRules(dispositions)
+
+ return{
+  status:"success",
+  complaints:complaints.length,
+  questions:questions.length,
+  dispositions:dispositions.length
+ }
+
+}
+5. Ingestion API
+
+server/routes/sheetGraphIngestionRoutes.ts
+
+import express from "express"
+import path from "path"
+import {runSheetGraphPipeline} from "../ingestion/sheetToGraphPipeline"
+
+const router=express.Router()
+
+router.post("/sheets/ingest-graph",(req,res)=>{
+
+ const filePath = path.resolve("uploads/latest.xlsx")
+
+ const result = runSheetGraphPipeline(filePath)
+
+ res.json(result)
+
+})
+
+export default router
+6. Control Tower Panel
+
+Add to Knowledge Graph → Data Import tab.
+
+client/components/knowledge/SheetGraphIngest.tsx
+
+import React,{useState} from "react"
+
+export default function SheetGraphIngest(){
+
+ const [result,setResult]=useState(null)
+
+ async function run(){
+
+  const r = await fetch("/api/sheets/ingest-graph",{
+   method:"POST"
+  })
+
+  setResult(await r.json())
+
+ }
+
+ return(
+
+ <div>
+
+ <button onClick={run}>
+  Import Sheets Into Knowledge Graph
+ </button>
+
+ <pre>{JSON.stringify(result,null,2)}</pre>
+
+ </div>
+
+ )
+
+}
+What Happens After Import
+
+Your sheets automatically populate:
+
+Knowledge Graph
+complaints
+symptoms
+skills
+questions
+diagnoses
+protocols
+dispositions
+Reasoning Engines
+adaptive question engine
+probabilistic reasoning
+protocol selector
+simulation lab
+Simulation Engine
+graph-driven simulations
+Safety Guarantees
+
+The ingestion gate prevents:
+
+missing complaint IDs
+broken references
+invalid disposition rules
+duplicate templates
+
+from entering the graph.

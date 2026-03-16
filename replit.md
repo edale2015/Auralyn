@@ -86,6 +86,9 @@ A strategic layer that automatically identifies areas needing attention, resolve
 ### Sheet Data Import
 Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, protocols, medications) via CSV, XLSX, or JSON files to populate the knowledge graph, with admin-only access.
 
+### Clinical Schema Validator
+`server/validation/` — 4-layer workbook validator checking: (1) workbook integrity (required sheets exist), (2) header/schema integrity (required columns, duplicate IDs), (3) cross-sheet referential integrity (CC_ID, template IDs, cluster IDs), (4) data quality (missing expressions, invalid values, orphan records). Validates 7 required sheets: COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, CLUSTER_SCORING_RULES, RED_FLAG_RULES, OUTPUT_TEMPLATES, GLOBAL_SECONDARY. APIs: POST `/api/clinical-schema/validate` (upload + validate), GET `/api/clinical-schema/validate` (validate existing), GET `/api/clinical-schema/summary`, GET `/api/clinical-schema/workbooks`. Frontend page at `/schema-validator`.
+
 ### Knowledge Graph Dashboard
 An 8-tab dashboard (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions, Data Import, AI Planner) provides a comprehensive view and management interface for the clinical knowledge graph.
 

@@ -1,0 +1,912 @@
+What this validator should do
+
+It should check four layers:
+
+Workbook integrity
+
+required sheets exist
+
+no duplicate sheet names in config families
+
+Header/schema integrity
+
+required columns exist
+
+unexpected header drift is flagged
+
+duplicate IDs are detected
+
+Cross-sheet referential integrity
+
+COMPLAINT_REGISTRY.CC_ID exists wherever referenced
+
+CORE_QUESTIONS.VERSION matches complaint version
+
+DISPOSITION_SET_ID, RED_FLAG_SET_ID, SCORING_ID, template IDs resolve
+
+cluster IDs referenced in scoring rules exist in cluster master sheets
+
+Logic/data quality
+
+missing expressions
+
+bad priorities/order values
+
+empty required fields
+
+orphan rules/questions/templates
+
+Recommended file layout
+server/
+  validation/
+    clinicalSchemaTypes.ts
+    clinicalSheetSchemas.ts
+    workbookLoader.ts
+    clinicalSchemaValidator.ts
+    validationReportBuilder.ts
+  routes/
+    clinicalSchemaValidationRoutes.ts
+client/
+  pages/
+    ClinicalSchemaValidatorPage.tsx
+1) Types
+
+server/validation/clinicalSchemaTypes.ts
+
+export type SeverityLevel = "info" | "warning" | "error" | "critical";
+
+export interface ValidationIssue {
+  severity: SeverityLevel;
+  category:
+    | "missing_sheet"
+    | "missing_column"
+    | "duplicate_key"
+    | "missing_required_value"
+    | "broken_reference"
+    | "invalid_value"
+    | "orphan_record"
+    | "schema_drift";
+  sheet?: string;
+  row?: number;
+  column?: string;
+  key?: string;
+  message: string;
+  suggestion?: string;
+}
+
+export interface SheetValidationResult {
+  sheet: string;
+  rowCount: number;
+  issues: ValidationIssue[];
+}
+
+export interface WorkbookValidationReport {
+  ok: boolean;
+  generatedAt: number;
+  summary: {
+    sheetCount: number;
+    checkedSheets: number;
+    issueCount: number;
+    criticalCount: number;
+    errorCount: number;
+    warningCount: number;
+    infoCount: number;
+  };
+  sheetResults: SheetValidationResult[];
+}
+2) Expected schemas for your key sheets
+
+server/validation/clinicalSheetSchemas.ts
+
+export const requiredSheetSchemas: Record<string, string[]> = {
+  COMPLAINT_REGISTRY: [
+    "CC_ID",
+    "CC_LABEL",
+    "ENABLED",
+    "SYSTEM",
+    "GRAPH_ID",
+    "CORE_QUESTIONS_VERSION",
+    "RED_FLAG_SET_ID",
+    "SCORING_ID",
+    "DISPOSITION_SET_ID",
+    "OUTPUT_TEMPLATE_SET_ID",
+  ],
+  CORE_QUESTIONS: [
+    "CC_ID",
+    "VERSION",
+    "ORDER",
+    "QUESTION_ID",
+    "QUESTION_TEXT",
+    "ANSWER_TYPE",
+    "REQUIRED",
+    "MAPS_TO_FIELD",
+  ],
+  DISPOSITION_RULES: [
+    "DISP_SET_ID",
+    "DISP_RULE_ID",
+    "CC_ID",
+    "PRIORITY",
+    "WHEN_EXPR",
+    "DISPOSITION_LEVEL",
+    "RATIONALE_TEMPLATE_ID",
+    "CONFIDENCE_HINT",
+  ],
+  CLUSTER_SCORING_RULES: [
+    "CC_ID",
+    "VERSION",
+    "CLUSTER_ID",
+    "POINTS",
+    "WHEN_EXPR",
+    "EVIDENCE_FIELDS",
+  ],
+  RED_FLAG_RULES: [
+    "CC_ID",
+    "VERSION",
+    "RULE_ID",
+    "PRIORITY",
+    "WHEN_EXPR",
+  ],
+  OUTPUT_TEMPLATES: [
+    "TEMPLATE_ID",
+    "TEMPLATE_TYPE",
+    "TITLE",
+    "BODY",
+  ],
+  GLOBAL_SECONDARY: [
+    "System",
+    "Chief_Complaint",
+    "Cluster",
+    "Diagnosis_ID",
+    "Question_ID",
+    "Question_Text",
+    "Question_Type",
+    "Ask_Order",
+    "Bundle_ID",
+  ],
+};
+
+export const requiredSheets = Object.keys(requiredSheetSchemas);
+
+export const allowedDispositionLevels = new Set([
+  "SELF_CARE",
+  "SELF_CARE_OK",
+  "PRIMARY_CARE",
+  "URGENT_CARE",
+  "URGENT_CARE_TODAY",
+  "ED_NOW",
+  "ER_NOW",
+  "CALL_911",
+]);
+
+export const allowedAnswerTypes = new Set([
+  "boolean",
+  "yesno",
+  "choice",
+  "multiple",
+  "number",
+  "text",
+  "scale",
+  "date",
+]);
+
+export const allowedConfidenceHints = new Set([
+  "LOW",
+  "MEDIUM",
+  "HIGH",
+  "VERY_HIGH",
+]);
+3) Workbook loader
+
+server/validation/workbookLoader.ts
+
+import * as XLSX from "xlsx";
+
+export interface LoadedSheet {
+  name: string;
+  headers: string[];
+  rows: Record<string, any>[];
+}
+
+export interface LoadedWorkbook {
+  sheetNames: string[];
+  sheets: Record<string, LoadedSheet>;
+}
+
+function normalizeHeader(value: any): string {
+  return String(value ?? "").trim();
+}
+
+export function loadWorkbookFromFile(filePath: string): LoadedWorkbook {
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+
+  const result: LoadedWorkbook = {
+    sheetNames: workbook.SheetNames,
+    sheets: {},
+  };
+
+  for (const sheetName of workbook.SheetNames) {
+    const ws = workbook.Sheets[sheetName];
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, {
+      header: 1,
+      blankrows: false,
+      defval: null,
+    });
+
+    if (!rawRows.length) {
+      result.sheets[sheetName] = {
+        name: sheetName,
+        headers: [],
+        rows: [],
+      };
+      continue;
+    }
+
+    const headers = (rawRows[0] || [])
+      .map(normalizeHeader)
+      .filter((h: string) => h.length > 0);
+
+    const rows = rawRows.slice(1).map((row) => {
+      const obj: Record<string, any> = {};
+      headers.forEach((header, idx) => {
+        obj[header] = row[idx] ?? null;
+      });
+      return obj;
+    });
+
+    result.sheets[sheetName] = {
+      name: sheetName,
+      headers,
+      rows,
+    };
+  }
+
+  return result;
+}
+4) Main validator
+
+server/validation/clinicalSchemaValidator.ts
+
+import {
+  requiredSheets,
+  requiredSheetSchemas,
+  allowedDispositionLevels,
+  allowedAnswerTypes,
+  allowedConfidenceHints,
+} from "./clinicalSheetSchemas";
+import {
+  WorkbookValidationReport,
+  SheetValidationResult,
+  ValidationIssue,
+} from "./clinicalSchemaTypes";
+import { LoadedWorkbook } from "./workbookLoader";
+
+function makeIssue(issue: ValidationIssue): ValidationIssue {
+  return issue;
+}
+
+function hasValue(v: any): boolean {
+  return v !== null && v !== undefined && String(v).trim() !== "";
+}
+
+function normalize(v: any): string {
+  return String(v ?? "").trim();
+}
+
+function pushMissingColumnIssues(
+  sheet: string,
+  headers: string[],
+  issues: ValidationIssue[]
+) {
+  const required = requiredSheetSchemas[sheet] || [];
+  for (const col of required) {
+    if (!headers.includes(col)) {
+      issues.push(
+        makeIssue({
+          severity: "critical",
+          category: "missing_column",
+          sheet,
+          column: col,
+          message: `Missing required column "${col}" in ${sheet}.`,
+          suggestion: `Add column "${col}" to the header row of ${sheet}.`,
+        })
+      );
+    }
+  }
+}
+
+function validateComplaintRegistry(
+  rows: Record<string, any>[],
+  issues: ValidationIssue[]
+) {
+  const seen = new Set<string>();
+
+  rows.forEach((row, idx) => {
+    const excelRow = idx + 2;
+    const ccId = normalize(row.CC_ID);
+
+    if (!hasValue(ccId)) {
+      issues.push({
+        severity: "critical",
+        category: "missing_required_value",
+        sheet: "COMPLAINT_REGISTRY",
+        row: excelRow,
+        column: "CC_ID",
+        message: "CC_ID is required.",
+      });
+      return;
+    }
+
+    if (seen.has(ccId)) {
+      issues.push({
+        severity: "error",
+        category: "duplicate_key",
+        sheet: "COMPLAINT_REGISTRY",
+        row: excelRow,
+        key: ccId,
+        column: "CC_ID",
+        message: `Duplicate complaint ID "${ccId}".`,
+      });
+    }
+    seen.add(ccId);
+
+    ["CC_LABEL", "SYSTEM", "GRAPH_ID", "CORE_QUESTIONS_VERSION", "DISPOSITION_SET_ID"].forEach((col) => {
+      if (!hasValue(row[col])) {
+        issues.push({
+          severity: "error",
+          category: "missing_required_value",
+          sheet: "COMPLAINT_REGISTRY",
+          row: excelRow,
+          column: col,
+          key: ccId,
+          message: `${col} is required for complaint "${ccId}".`,
+        });
+      }
+    });
+  });
+}
+
+function validateCoreQuestions(
+  rows: Record<string, any>[],
+  complaintIds: Set<string>,
+  issues: ValidationIssue[]
+) {
+  const seenQuestionIds = new Set<string>();
+
+  rows.forEach((row, idx) => {
+    const excelRow = idx + 2;
+    const ccId = normalize(row.CC_ID);
+    const questionId = normalize(row.QUESTION_ID);
+    const answerType = normalize(row.ANSWER_TYPE).toLowerCase();
+    const orderVal = row.ORDER;
+
+    if (!complaintIds.has(ccId)) {
+      issues.push({
+        severity: "error",
+        category: "broken_reference",
+        sheet: "CORE_QUESTIONS",
+        row: excelRow,
+        column: "CC_ID",
+        key: ccId,
+        message: `CORE_QUESTIONS references unknown CC_ID "${ccId}".`,
+      });
+    }
+
+    if (!hasValue(questionId)) {
+      issues.push({
+        severity: "critical",
+        category: "missing_required_value",
+        sheet: "CORE_QUESTIONS",
+        row: excelRow,
+        column: "QUESTION_ID",
+        key: ccId,
+        message: "QUESTION_ID is required.",
+      });
+    } else if (seenQuestionIds.has(questionId)) {
+      issues.push({
+        severity: "error",
+        category: "duplicate_key",
+        sheet: "CORE_QUESTIONS",
+        row: excelRow,
+        column: "QUESTION_ID",
+        key: questionId,
+        message: `Duplicate QUESTION_ID "${questionId}".`,
+      });
+    } else {
+      seenQuestionIds.add(questionId);
+    }
+
+    if (!allowedAnswerTypes.has(answerType)) {
+      issues.push({
+        severity: "warning",
+        category: "invalid_value",
+        sheet: "CORE_QUESTIONS",
+        row: excelRow,
+        column: "ANSWER_TYPE",
+        key: questionId,
+        message: `Unexpected ANSWER_TYPE "${row.ANSWER_TYPE}".`,
+        suggestion: "Use one of the allowed answer types or extend the validator if intentional.",
+      });
+    }
+
+    if (typeof orderVal !== "number") {
+      issues.push({
+        severity: "warning",
+        category: "invalid_value",
+        sheet: "CORE_QUESTIONS",
+        row: excelRow,
+        column: "ORDER",
+        key: questionId,
+        message: "ORDER should be numeric.",
+      });
+    }
+
+    if (!hasValue(row.QUESTION_TEXT)) {
+      issues.push({
+        severity: "error",
+        category: "missing_required_value",
+        sheet: "CORE_QUESTIONS",
+        row: excelRow,
+        column: "QUESTION_TEXT",
+        key: questionId,
+        message: "QUESTION_TEXT is required.",
+      });
+    }
+  });
+}
+
+function validateDispositionRules(
+  rows: Record<string, any>[],
+  complaintIds: Set<string>,
+  templateIds: Set<string>,
+  issues: ValidationIssue[]
+) {
+  const seenRuleIds = new Set<string>();
+
+  rows.forEach((row, idx) => {
+    const excelRow = idx + 2;
+    const ruleId = normalize(row.DISP_RULE_ID);
+    const ccId = normalize(row.CC_ID);
+    const dispLevel = normalize(row.DISPOSITION_LEVEL);
+    const templateId = normalize(row.RATIONALE_TEMPLATE_ID);
+
+    if (seenRuleIds.has(ruleId)) {
+      issues.push({
+        severity: "error",
+        category: "duplicate_key",
+        sheet: "DISPOSITION_RULES",
+        row: excelRow,
+        key: ruleId,
+        message: `Duplicate DISP_RULE_ID "${ruleId}".`,
+      });
+    }
+    seenRuleIds.add(ruleId);
+
+    if (!complaintIds.has(ccId)) {
+      issues.push({
+        severity: "error",
+        category: "broken_reference",
+        sheet: "DISPOSITION_RULES",
+        row: excelRow,
+        column: "CC_ID",
+        key: ruleId,
+        message: `DISPOSITION_RULES references unknown complaint "${ccId}".`,
+      });
+    }
+
+    if (!allowedDispositionLevels.has(dispLevel)) {
+      issues.push({
+        severity: "warning",
+        category: "invalid_value",
+        sheet: "DISPOSITION_RULES",
+        row: excelRow,
+        column: "DISPOSITION_LEVEL",
+        key: ruleId,
+        message: `Unexpected disposition level "${dispLevel}".`,
+      });
+    }
+
+    if (!hasValue(row.WHEN_EXPR)) {
+      issues.push({
+        severity: "critical",
+        category: "missing_required_value",
+        sheet: "DISPOSITION_RULES",
+        row: excelRow,
+        column: "WHEN_EXPR",
+        key: ruleId,
+        message: "WHEN_EXPR is required for each disposition rule.",
+      });
+    }
+
+    if (hasValue(templateId) && !templateIds.has(templateId)) {
+      issues.push({
+        severity: "error",
+        category: "broken_reference",
+        sheet: "DISPOSITION_RULES",
+        row: excelRow,
+        column: "RATIONALE_TEMPLATE_ID",
+        key: ruleId,
+        message: `Unknown RATIONALE_TEMPLATE_ID "${templateId}".`,
+      });
+    }
+
+    const confidenceHint = normalize(row.CONFIDENCE_HINT);
+    if (hasValue(confidenceHint) && !allowedConfidenceHints.has(confidenceHint)) {
+      issues.push({
+        severity: "warning",
+        category: "invalid_value",
+        sheet: "DISPOSITION_RULES",
+        row: excelRow,
+        column: "CONFIDENCE_HINT",
+        key: ruleId,
+        message: `Unexpected confidence hint "${confidenceHint}".`,
+      });
+    }
+  });
+}
+
+function validateClusterScoringRules(
+  rows: Record<string, any>[],
+  complaintIds: Set<string>,
+  issues: ValidationIssue[]
+) {
+  rows.forEach((row, idx) => {
+    const excelRow = idx + 2;
+    const ccId = normalize(row.CC_ID);
+    const clusterId = normalize(row.CLUSTER_ID);
+
+    if (!complaintIds.has(ccId)) {
+      issues.push({
+        severity: "error",
+        category: "broken_reference",
+        sheet: "CLUSTER_SCORING_RULES",
+        row: excelRow,
+        column: "CC_ID",
+        key: clusterId,
+        message: `CLUSTER_SCORING_RULES references unknown complaint "${ccId}".`,
+      });
+    }
+
+    if (!hasValue(clusterId)) {
+      issues.push({
+        severity: "error",
+        category: "missing_required_value",
+        sheet: "CLUSTER_SCORING_RULES",
+        row: excelRow,
+        column: "CLUSTER_ID",
+        message: "CLUSTER_ID is required.",
+      });
+    }
+
+    if (!hasValue(row.WHEN_EXPR)) {
+      issues.push({
+        severity: "warning",
+        category: "missing_required_value",
+        sheet: "CLUSTER_SCORING_RULES",
+        row: excelRow,
+        column: "WHEN_EXPR",
+        key: clusterId,
+        message: "WHEN_EXPR is missing for scoring rule.",
+      });
+    }
+  });
+}
+
+function validateOutputTemplates(
+  rows: Record<string, any>[],
+  issues: ValidationIssue[]
+): Set<string> {
+  const templateIds = new Set<string>();
+
+  rows.forEach((row, idx) => {
+    const excelRow = idx + 2;
+    const templateId = normalize(row.TEMPLATE_ID);
+
+    if (!hasValue(templateId)) {
+      issues.push({
+        severity: "critical",
+        category: "missing_required_value",
+        sheet: "OUTPUT_TEMPLATES",
+        row: excelRow,
+        column: "TEMPLATE_ID",
+        message: "TEMPLATE_ID is required.",
+      });
+      return;
+    }
+
+    if (templateIds.has(templateId)) {
+      issues.push({
+        severity: "error",
+        category: "duplicate_key",
+        sheet: "OUTPUT_TEMPLATES",
+        row: excelRow,
+        key: templateId,
+        message: `Duplicate TEMPLATE_ID "${templateId}".`,
+      });
+    }
+
+    templateIds.add(templateId);
+
+    if (!hasValue(row.BODY)) {
+      issues.push({
+        severity: "warning",
+        category: "missing_required_value",
+        sheet: "OUTPUT_TEMPLATES",
+        row: excelRow,
+        column: "BODY",
+        key: templateId,
+        message: "Template BODY is empty.",
+      });
+    }
+  });
+
+  return templateIds;
+}
+
+function validateGlobalSecondary(
+  rows: Record<string, any>[],
+  issues: ValidationIssue[]
+) {
+  const seenSecIds = new Set<string>();
+
+  rows.forEach((row, idx) => {
+    const excelRow = idx + 2;
+    const secId = normalize(row.SEC_ID || row.Question_ID || `ROW_${excelRow}`);
+
+    if (seenSecIds.has(secId)) {
+      issues.push({
+        severity: "warning",
+        category: "duplicate_key",
+        sheet: "GLOBAL_SECONDARY",
+        row: excelRow,
+        key: secId,
+        message: `Duplicate secondary/question key "${secId}".`,
+      });
+    }
+    seenSecIds.add(secId);
+
+    if (!hasValue(row.Question_Text)) {
+      issues.push({
+        severity: "error",
+        category: "missing_required_value",
+        sheet: "GLOBAL_SECONDARY",
+        row: excelRow,
+        column: "Question_Text",
+        key: secId,
+        message: "Question_Text is required.",
+      });
+    }
+
+    if (!hasValue(row.Bundle_ID)) {
+      issues.push({
+        severity: "warning",
+        category: "missing_required_value",
+        sheet: "GLOBAL_SECONDARY",
+        row: excelRow,
+        column: "Bundle_ID",
+        key: secId,
+        message: "Bundle_ID is missing.",
+      });
+    }
+  });
+}
+
+export function validateClinicalWorkbook(workbook: LoadedWorkbook): WorkbookValidationReport {
+  const sheetResults: SheetValidationResult[] = [];
+
+  for (const sheetName of requiredSheets) {
+    if (!workbook.sheetNames.includes(sheetName)) {
+      sheetResults.push({
+        sheet: sheetName,
+        rowCount: 0,
+        issues: [
+          {
+            severity: "critical",
+            category: "missing_sheet",
+            sheet: sheetName,
+            message: `Required sheet "${sheetName}" is missing.`,
+          },
+        ],
+      });
+    }
+  }
+
+  const complaintSheet = workbook.sheets["COMPLAINT_REGISTRY"];
+  const complaintIds = new Set<string>();
+  const templateIds = new Set<string>();
+
+  for (const [sheetName, sheet] of Object.entries(workbook.sheets)) {
+    if (!requiredSheetSchemas[sheetName]) continue;
+
+    const issues: ValidationIssue[] = [];
+    pushMissingColumnIssues(sheetName, sheet.headers, issues);
+
+    if (sheetName === "COMPLAINT_REGISTRY") {
+      validateComplaintRegistry(sheet.rows, issues);
+      sheet.rows.forEach((r) => {
+        const ccId = normalize(r.CC_ID);
+        if (hasValue(ccId)) complaintIds.add(ccId);
+      });
+    }
+
+    if (sheetName === "OUTPUT_TEMPLATES") {
+      validateOutputTemplates(sheet.rows, issues).forEach((id) => templateIds.add(id));
+    }
+
+    sheetResults.push({
+      sheet: sheetName,
+      rowCount: sheet.rows.length,
+      issues,
+    });
+  }
+
+  for (const result of sheetResults) {
+    const sheet = workbook.sheets[result.sheet];
+    if (!sheet) continue;
+
+    if (result.sheet === "CORE_QUESTIONS") {
+      validateCoreQuestions(sheet.rows, complaintIds, result.issues);
+    }
+
+    if (result.sheet === "DISPOSITION_RULES") {
+      validateDispositionRules(sheet.rows, complaintIds, templateIds, result.issues);
+    }
+
+    if (result.sheet === "CLUSTER_SCORING_RULES") {
+      validateClusterScoringRules(sheet.rows, complaintIds, result.issues);
+    }
+
+    if (result.sheet === "GLOBAL_SECONDARY") {
+      validateGlobalSecondary(sheet.rows, result.issues);
+    }
+  }
+
+  const allIssues = sheetResults.flatMap((s) => s.issues);
+
+  const summary = {
+    sheetCount: workbook.sheetNames.length,
+    checkedSheets: sheetResults.length,
+    issueCount: allIssues.length,
+    criticalCount: allIssues.filter((i) => i.severity === "critical").length,
+    errorCount: allIssues.filter((i) => i.severity === "error").length,
+    warningCount: allIssues.filter((i) => i.severity === "warning").length,
+    infoCount: allIssues.filter((i) => i.severity === "info").length,
+  };
+
+  return {
+    ok: summary.criticalCount === 0 && summary.errorCount === 0,
+    generatedAt: Date.now(),
+    summary,
+    sheetResults,
+  };
+}
+5) Report builder
+
+server/validation/validationReportBuilder.ts
+
+import { WorkbookValidationReport } from "./clinicalSchemaTypes";
+
+export function buildReadableValidationSummary(report: WorkbookValidationReport) {
+  const topProblemSheets = report.sheetResults
+    .map((s) => ({ sheet: s.sheet, count: s.issues.length }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  return {
+    ok: report.ok,
+    summary: report.summary,
+    topProblemSheets,
+    recommendedNextStep: report.ok
+      ? "Workbook passed core schema validation."
+      : "Fix critical and error-level issues first, then rerun validator.",
+  };
+}
+6) API routes
+
+server/routes/clinicalSchemaValidationRoutes.ts
+
+import express from "express";
+import path from "path";
+import { loadWorkbookFromFile } from "../validation/workbookLoader";
+import { validateClinicalWorkbook } from "../validation/clinicalSchemaValidator";
+import { buildReadableValidationSummary } from "../validation/validationReportBuilder";
+
+const router = express.Router();
+
+// Use your uploaded workbook path for now.
+// Later, wire this to the app's upload/import system.
+const DEFAULT_WORKBOOK_PATH = path.resolve("/mnt/data/MedAssistNovember18.xlsx");
+
+router.get("/clinical-schema/validate", (_req, res) => {
+  try {
+    const workbook = loadWorkbookFromFile(DEFAULT_WORKBOOK_PATH);
+    const report = validateClinicalWorkbook(workbook);
+    res.json(report);
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      error: "schema_validation_failed",
+      detail: error?.message || "Unknown validation error",
+    });
+  }
+});
+
+router.get("/clinical-schema/summary", (_req, res) => {
+  try {
+    const workbook = loadWorkbookFromFile(DEFAULT_WORKBOOK_PATH);
+    const report = validateClinicalWorkbook(workbook);
+    res.json(buildReadableValidationSummary(report));
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      error: "schema_summary_failed",
+      detail: error?.message || "Unknown validation error",
+    });
+  }
+});
+
+export default router;
+
+Register it in your server:
+
+import clinicalSchemaValidationRoutes from "./routes/clinicalSchemaValidationRoutes";
+
+app.use("/api", clinicalSchemaValidationRoutes);
+7) Frontend page
+
+client/pages/ClinicalSchemaValidatorPage.tsx
+
+import React, { useEffect, useState } from "react";
+
+export default function ClinicalSchemaValidatorPage() {
+  const [summary, setSummary] = useState<any>(null);
+  const [report, setReport] = useState<any>(null);
+
+  async function load() {
+    const [summaryRes, reportRes] = await Promise.all([
+      fetch("/api/clinical-schema/summary"),
+      fetch("/api/clinical-schema/validate"),
+    ]);
+
+    setSummary(await summaryRes.json());
+    setReport(await reportRes.json());
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h1>Clinical Data Schema Validator</h1>
+
+      <button onClick={load}>Re-run Validation</button>
+
+      <div style={{ marginTop: 16 }}>
+        <h2>Summary</h2>
+        <pre>{JSON.stringify(summary, null, 2)}</pre>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <h2>Detailed Report</h2>
+        <pre>{JSON.stringify(report, null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
+What this validator catches immediately in your type of workbook
+
+Given the workbook structure you uploaded, this validator is especially useful for catching:
+
+CC_ID referenced in rules but missing from COMPLAINT_REGISTRY
+
+disposition rules pointing to missing template IDs
+
+bad ANSWER_TYPE drift in CORE_QUESTIONS
+
+duplicate complaint/question/template IDs
+
+empty WHEN_EXPR logic cells
+
+orphan diagnostic/scoring records
+
+missing required config columns after manual sheet edits
