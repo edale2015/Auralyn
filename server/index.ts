@@ -402,6 +402,8 @@ app.use(clinicalVersionRoutes);
 app.use(intelligenceMapRoutes);
 app.use(controlCenterRoutes);
 app.use(reasoningDebuggerRoutes);
+import clinicalAnalyticsRoutes from "./routes/clinicalAnalyticsRoutes";
+app.use(clinicalAnalyticsRoutes);
 console.log("[SimulationLab] Clinical simulation + coverage + channel + CCT routes registered");
 console.log("[Agents] Clinical reasoning agent + chart agent + full pipeline registered");
 console.log("[Scenarios] Clinical scenario generator + system architecture map registered");

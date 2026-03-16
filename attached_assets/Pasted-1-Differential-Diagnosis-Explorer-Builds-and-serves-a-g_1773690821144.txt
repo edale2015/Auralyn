@@ -1,0 +1,302 @@
+1️⃣ Differential Diagnosis Explorer
+
+Builds and serves a graph of differential diagnosis relationships so the UI can render a visual map.
+
+server/differential/differentialExplorer.ts
+export interface DiagnosisNode {
+  id: string
+  name: string
+  system: string
+}
+
+export interface DiagnosisEdge {
+  source: string
+  target: string
+  relationship: "overlap" | "rule_out" | "rule_in"
+}
+
+export interface DifferentialGraph {
+  nodes: DiagnosisNode[]
+  edges: DiagnosisEdge[]
+}
+
+export class DifferentialDiagnosisExplorer {
+  buildGraph(diagnoses: DiagnosisNode[]): DifferentialGraph {
+    const edges: DiagnosisEdge[] = []
+
+    for (let i = 0; i < diagnoses.length; i++) {
+      for (let j = i + 1; j < diagnoses.length; j++) {
+        if (diagnoses[i].system === diagnoses[j].system) {
+          edges.push({
+            source: diagnoses[i].id,
+            target: diagnoses[j].id,
+            relationship: "overlap"
+          })
+        }
+      }
+    }
+
+    return {
+      nodes: diagnoses,
+      edges
+    }
+  }
+}
+
+export const differentialExplorer = new DifferentialDiagnosisExplorer()
+API
+import { Router } from "express"
+import { differentialExplorer } from "../differential/differentialExplorer"
+
+const router = Router()
+
+router.post("/graph", (req, res) => {
+  const graph = differentialExplorer.buildGraph(req.body.diagnoses)
+  res.json(graph)
+})
+
+export default router
+2️⃣ Question Impact Analyzer
+
+Measures how much each question reduces diagnostic entropy.
+
+server/questions/questionImpactAnalyzer.ts
+export interface DiagnosisProbability {
+  diagnosis: string
+  probability: number
+}
+
+export interface QuestionImpactResult {
+  questionId: string
+  entropyBefore: number
+  entropyAfter: number
+  impact: number
+}
+
+function entropy(probs: number[]): number {
+  return -probs.reduce((sum, p) => {
+    if (p === 0) return sum
+    return sum + p * Math.log2(p)
+  }, 0)
+}
+
+export class QuestionImpactAnalyzer {
+
+  analyze(
+    questionId: string,
+    before: DiagnosisProbability[],
+    after: DiagnosisProbability[]
+  ): QuestionImpactResult {
+
+    const beforeEntropy = entropy(before.map(p => p.probability))
+    const afterEntropy = entropy(after.map(p => p.probability))
+
+    return {
+      questionId,
+      entropyBefore: beforeEntropy,
+      entropyAfter: afterEntropy,
+      impact: beforeEntropy - afterEntropy
+    }
+  }
+}
+
+export const questionImpactAnalyzer = new QuestionImpactAnalyzer()
+3️⃣ Protocol Conflict Detector
+
+Detects contradictions between protocols.
+
+server/protocols/protocolConflictDetector.ts
+export interface ProtocolRule {
+  protocolId: string
+  condition: string
+  action: string
+}
+
+export interface Conflict {
+  ruleA: ProtocolRule
+  ruleB: ProtocolRule
+  reason: string
+}
+
+export class ProtocolConflictDetector {
+
+  detect(rules: ProtocolRule[]): Conflict[] {
+
+    const conflicts: Conflict[] = []
+
+    for (let i = 0; i < rules.length; i++) {
+      for (let j = i + 1; j < rules.length; j++) {
+
+        if (
+          rules[i].condition === rules[j].condition &&
+          rules[i].action !== rules[j].action
+        ) {
+
+          conflicts.push({
+            ruleA: rules[i],
+            ruleB: rules[j],
+            reason: "Same condition produces conflicting actions"
+          })
+        }
+      }
+    }
+
+    return conflicts
+  }
+}
+
+export const protocolConflictDetector = new ProtocolConflictDetector()
+4️⃣ Case Cluster Discovery Engine
+
+Discovers new clinical phenotypes using clustering.
+
+server/cases/caseClusterDiscovery.ts
+export interface ClinicalCase {
+  id: string
+  symptoms: string[]
+}
+
+export interface CaseCluster {
+  clusterId: string
+  cases: string[]
+}
+
+export class CaseClusterDiscoveryEngine {
+
+  cluster(cases: ClinicalCase[]): CaseCluster[] {
+
+    const clusters: Record<string, string[]> = {}
+
+    cases.forEach(c => {
+      const key = c.symptoms.sort().join("|")
+
+      if (!clusters[key]) clusters[key] = []
+
+      clusters[key].push(c.id)
+    })
+
+    return Object.entries(clusters).map(([k, v], i) => ({
+      clusterId: `cluster_${i}`,
+      cases: v
+    }))
+  }
+}
+
+export const caseClusterDiscovery = new CaseClusterDiscoveryEngine()
+5️⃣ Autonomous Clinical Research Agent
+
+Automatically searches PubMed for updates.
+
+server/research/pubmedAgent.ts
+import fetch from "node-fetch"
+
+export interface PubMedArticle {
+  title: string
+  abstract: string
+  link: string
+}
+
+export class AutonomousClinicalResearchAgent {
+
+  async search(term: string): Promise<PubMedArticle[]> {
+
+    const url =
+      `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&term=${term}`
+
+    const response = await fetch(url)
+    const data = await response.json()
+
+    const ids = data.esearchresult.idlist.slice(0, 5)
+
+    const articles: PubMedArticle[] = ids.map((id: string) => ({
+      title: `PubMed Article ${id}`,
+      abstract: "",
+      link: `https://pubmed.ncbi.nlm.nih.gov/${id}/`
+    }))
+
+    return articles
+  }
+}
+
+export const researchAgent = new AutonomousClinicalResearchAgent()
+5 More Major Engines I Recommend Next
+
+These move your platform toward clinical AI autonomy and regulatory readiness.
+
+1️⃣ Clinical Guideline Validator
+
+Automatically compares your protocols to:
+
+CDC guidelines
+
+USPSTF
+
+IDSA
+
+NICE
+
+Flags outdated protocols.
+
+2️⃣ Clinical Scenario Generator
+
+Creates thousands of synthetic patient cases for stress testing.
+
+This massively improves:
+
+triage reliability
+
+differential accuracy.
+
+3️⃣ Clinical Decision Trace Engine
+
+Every decision becomes a replayable reasoning graph.
+
+Essential for:
+
+physician trust
+
+FDA clearance.
+
+4️⃣ Real-World Outcome Learning Engine
+
+Feeds back:
+
+lab results
+
+physician overrides
+
+patient outcomes
+
+to retrain diagnostic probabilities.
+
+5️⃣ Federated Clinical Learning Layer
+
+Allows multiple clinics to contribute anonymized case learning without sharing PHI.
+
+This becomes the network intelligence layer.
+
+Major Next System (Highly Recommended)
+
+The single most powerful addition you could build next is the:
+
+Interactive Clinical Intelligence Map
+
+A live reasoning visualization that shows:
+
+Symptoms
+  ↓
+Questions
+  ↓
+Red Flags
+  ↓
+Differential
+  ↓
+Disposition
+
+Physicians can literally watch the system think.
+
+It becomes:
+
+debugger
+
+teaching tool

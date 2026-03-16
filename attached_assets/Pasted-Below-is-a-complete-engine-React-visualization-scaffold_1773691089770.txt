@@ -1,0 +1,289 @@
+Below is a complete engine + React visualization scaffold designed for your existing stack.
+
+Interactive Clinical Intelligence Map (ICIM)
+System Architecture
+Clinical Intelligence Map
+        │
+        ▼
+Graph Builder Engine
+        │
+        ▼
+Clinical Graph Store
+        │
+        ▼
+Visualization API
+        │
+        ▼
+React Graph UI (D3 / Cytoscape)
+1️⃣ Backend — Map Graph Engine
+
+Creates a full architecture graph of the system.
+
+server/intelligenceMap/intelligenceGraphBuilder.ts
+export interface ClinicalNode {
+  id: string
+  label: string
+  category: string
+  status: "active" | "inactive" | "warning"
+}
+
+export interface ClinicalEdge {
+  source: string
+  target: string
+  label?: string
+}
+
+export interface ClinicalGraph {
+  nodes: ClinicalNode[]
+  edges: ClinicalEdge[]
+}
+
+export class IntelligenceGraphBuilder {
+
+  build(): ClinicalGraph {
+
+    const nodes: ClinicalNode[] = [
+      { id: "symptom", label: "Symptom Intake", category: "interface", status: "active" },
+      { id: "router", label: "Adaptive Router", category: "engine", status: "active" },
+      { id: "kg", label: "Knowledge Graph", category: "knowledge", status: "active" },
+      { id: "redflag", label: "Red Flag Engine", category: "safety", status: "active" },
+      { id: "bayes", label: "Bayesian Differential", category: "engine", status: "active" },
+      { id: "similarity", label: "Case Similarity", category: "engine", status: "active" },
+      { id: "cluster", label: "Cluster Scoring", category: "engine", status: "active" },
+      { id: "confidence", label: "Confidence Calibration", category: "engine", status: "active" },
+      { id: "protocol", label: "Protocol Selector", category: "engine", status: "active" },
+      { id: "reasoning", label: "Unified Reasoning Engine", category: "engine", status: "active" },
+      { id: "disposition", label: "Disposition Resolver", category: "engine", status: "active" }
+    ]
+
+    const edges: ClinicalEdge[] = [
+      { source: "symptom", target: "router" },
+      { source: "router", target: "kg" },
+      { source: "kg", target: "redflag" },
+      { source: "redflag", target: "bayes" },
+      { source: "bayes", target: "similarity" },
+      { source: "similarity", target: "cluster" },
+      { source: "cluster", target: "confidence" },
+      { source: "confidence", target: "protocol" },
+      { source: "protocol", target: "reasoning" },
+      { source: "reasoning", target: "disposition" }
+    ]
+
+    return { nodes, edges }
+  }
+}
+
+export const intelligenceGraphBuilder = new IntelligenceGraphBuilder()
+2️⃣ Backend API
+server/routes/intelligenceMapRoutes.ts
+import { Router } from "express"
+import { intelligenceGraphBuilder } from "../intelligenceMap/intelligenceGraphBuilder"
+
+const router = Router()
+
+router.get("/graph", (req, res) => {
+
+  const graph = intelligenceGraphBuilder.build()
+
+  res.json(graph)
+})
+
+export default router
+3️⃣ Backend — Node Details Engine
+
+Provides information for clicked nodes.
+
+server/intelligenceMap/nodeInspector.ts
+export interface NodeDetail {
+
+  id: string
+  description: string
+  dashboards: string[]
+  connections: string[]
+}
+
+const nodeDetails: Record<string, NodeDetail> = {
+
+  router: {
+    id: "router",
+    description: "Routes patient complaints to the correct clinical pipeline",
+    dashboards: ["/router-debug"],
+    connections: ["kg", "redflag"]
+  },
+
+  bayes: {
+    id: "bayes",
+    description: "Calculates differential diagnosis probabilities",
+    dashboards: ["/bayesian-analysis"],
+    connections: ["similarity"]
+  }
+
+}
+
+export function getNodeDetail(id: string): NodeDetail | undefined {
+
+  return nodeDetails[id]
+}
+4️⃣ React Visualization
+
+Use React Flow or Cytoscape.
+
+client/src/pages/ClinicalIntelligenceMap.tsx
+import React, { useEffect, useState } from "react"
+import ReactFlow from "reactflow"
+import "reactflow/dist/style.css"
+
+export default function ClinicalIntelligenceMap() {
+
+  const [elements, setElements] = useState<any[]>([])
+
+  useEffect(() => {
+
+    fetch("/api/intelligence-map/graph")
+      .then(res => res.json())
+      .then(data => {
+
+        const nodes = data.nodes.map((n: any) => ({
+          id: n.id,
+          data: { label: n.label },
+          position: {
+            x: Math.random() * 600,
+            y: Math.random() * 400
+          }
+        }))
+
+        const edges = data.edges.map((e: any, i: number) => ({
+          id: "e" + i,
+          source: e.source,
+          target: e.target
+        }))
+
+        setElements([...nodes, ...edges])
+      })
+
+  }, [])
+
+  return (
+
+    <div style={{ height: "90vh", width: "100%" }}>
+
+      <h2>Interactive Clinical Intelligence Map</h2>
+
+      <ReactFlow nodes={elements.filter(e => !e.source)}
+                 edges={elements.filter(e => e.source)} />
+
+    </div>
+  )
+}
+5️⃣ Node Click Inspector
+client/src/components/NodeInspector.tsx
+import { useState } from "react"
+
+export default function NodeInspector({ node }: any) {
+
+  const [detail, setDetail] = useState<any>(null)
+
+  const load = () => {
+
+    fetch(`/api/intelligence-map/node/${node.id}`)
+      .then(r => r.json())
+      .then(setDetail)
+  }
+
+  return (
+
+    <div>
+
+      <button onClick={load}>Inspect Node</button>
+
+      {detail && (
+
+        <div>
+
+          <h3>{detail.id}</h3>
+
+          <p>{detail.description}</p>
+
+          <h4>Dashboards</h4>
+
+          {detail.dashboards.map((d: string) => (
+            <div key={d}>{d}</div>
+          ))}
+
+        </div>
+
+      )}
+
+    </div>
+  )
+}
+6️⃣ Add Route to Express
+import intelligenceMapRoutes from "./routes/intelligenceMapRoutes"
+
+app.use("/api/intelligence-map", intelligenceMapRoutes)
+What the Map Now Shows
+Symptom Intake
+     ↓
+Adaptive Router
+     ↓
+Knowledge Graph
+     ↓
+Red Flag Engine
+     ↓
+Bayesian Differential
+     ↓
+Case Similarity
+     ↓
+Cluster Scoring
+     ↓
+Confidence Calibration
+     ↓
+Protocol Selector
+     ↓
+Unified Reasoning
+     ↓
+Disposition Resolver
+
+Each node is clickable.
+
+Optional Advanced Features
+
+You can easily extend this map to include:
+
+Real-time engine status
+
+Color nodes:
+
+green = healthy
+yellow = warning
+red = failing
+Latency overlays
+
+Edge labels showing:
+
+Bayesian Engine → 41ms
+Protocol Engine → 12ms
+Live reasoning replay
+
+Physician can click:
+
+"Replay Case"
+
+and watch the graph light up as reasoning flows through it.
+
+Your Platform Now
+
+You effectively have:
+
+Clinical AI Platform
+      │
+      ▼
+Clinical Intelligence Control Center
+      │
+      ▼
+Interactive Clinical Intelligence Map
+      │
+      ▼
+Visual Reasoning Debugger
+
+This is very close to what Palantir builds for hospitals.

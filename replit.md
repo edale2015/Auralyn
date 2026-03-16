@@ -113,6 +113,16 @@ The master "mission control" dashboard aggregating all platform subsystems. Fron
 
 Backend: `server/safety/clinicalSafetyScoreEngine.ts`, `server/performance/engineProfiler.ts`, `server/controlCenter/controlCenterService.ts`, `server/controlCenter/alertEngine.ts`. APIs: GET `/api/control-center/snapshot|engine-stats`, POST `/api/control-center/safety-score`, GET `/api/intelligence-map`, POST `/api/reasoning-debug`.
 
+### Clinical Analytics Engines
+A unified 5-tab dashboard at `/clinical-analytics-engines` providing advanced clinical analysis tools:
+- **Differential Diagnosis Explorer** — Visual graph of 15 diagnoses across 3 body systems (respiratory, ENT, neuro) with 34 relationships (overlap, rule_out, rule_in, co_occurrence). Can also build from Knowledge Graph data. (`server/differential/differentialExplorer.ts`)
+- **Question Impact Analyzer** — Entropy-based ranking of 10 triage questions measuring diagnostic information gain. Shows entropy before/after, absolute impact, and percentage reduction. (`server/questions/questionImpactAnalyzer.ts`)
+- **Protocol Conflict Detector** — Scans 11 protocol rules across 5 protocols to detect 3 conflicts (1 critical) where same conditions produce different actions. Severity-ranked. (`server/protocols/protocolConflictDetector.ts`)
+- **Case Cluster Discovery Engine** — Groups 15 clinical cases into 9 phenotype clusters by symptom signature with auto-labeling (Cardiopulmonary Alert, Meningeal Signs, Allergic Pattern, etc.). (`server/cases/caseClusterDiscovery.ts`)
+- **Autonomous PubMed Research Agent** — Live search against NCBI PubMed eutils API with article titles and links. (`server/research/pubmedAgent.ts`)
+
+APIs: GET `/api/differential-explorer/graph`, GET `/api/question-impact`, GET `/api/protocol-conflicts`, GET `/api/case-clusters`, GET `/api/pubmed-search?term=X&max=N`. Routes in `server/routes/clinicalAnalyticsRoutes.ts`.
+
 ### Knowledge Graph Dashboard
 An 8-tab dashboard (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions, Data Import, AI Planner) provides a comprehensive view and management interface for the clinical knowledge graph.
 
