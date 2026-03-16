@@ -83,6 +83,21 @@ A targeted simulation system (`server/simulation/graphDrivenSimulationEngine.ts`
 - `server/explainability/explainableAIEngine.ts` — Generates physician-readable reasoning explanations. POST `/api/clinical-explanation`.
 - `server/guidelines/guidelineUpdateAgent.ts` — Monitors 8 clinical guideline sources for compliance. GET `/api/guideline-updates`, GET `/api/guideline-summary`.
 
+### Clinical Memory Engine
+`server/memory/clinicalMemoryEngine.ts` — In-memory ring buffer (5000 cases) storing case embeddings + structured features for fast similarity retrieval. Feature-matching scorer returns top-N similar cases with matched feature list. APIs: POST `/api/memory/store-case`, POST `/api/memory/retrieve`, GET `/api/memory/stats`.
+
+### Patient Personalization Engine
+`server/engines/patientPersonalizationEngine.ts` — Modifies clinical reasoning using patient context: age >65 (1.3x risk), pediatric <5 (1.2x), pregnancy (1.4x), immunocompromised (1.5x), anticoagulant use (1.2x bleeding risk), smoking (1.15x), obesity (1.1x). Returns compound risk multiplier and list of applied rules. API: POST `/api/personalization/apply`.
+
+### Confidence Calibration Trainer
+`server/training/confidenceCalibrationTrainer.ts` — Records predicted confidence vs actual correctness (10K buffer), computes calibration curve by 0.1 buckets with per-bucket accuracy and calibration error. APIs: POST `/api/calibration/record`, GET `/api/calibration/curve`.
+
+### Model Drift Detector
+`server/analysis/modelDriftDetector.ts` — Tracks accuracy over time (365-day window), compares recent vs older performance using configurable window size and 5% drift threshold. Returns trend (improving/stable/degrading) with recommendations. APIs: POST `/api/model-drift/record`, GET `/api/model-drift`, GET `/api/model-drift/history`.
+
+### Autonomous Research Agent
+`server/research/autonomousResearchAgent.ts` — Monitors medical literature and proposes knowledge graph updates. Simulates 5 research findings (myocarditis, long COVID, mpox pharyngitis, RSV, vestibular migraine) with sources and relevance scores. APIs: GET `/api/research/findings`, GET `/api/research/stats`.
+
 ### Operational Intelligence and Tooling
 The platform includes case analytics logs, rule contradiction detection, and a toolchain to compile clinical guidelines. A synthetic testing system generates cases for output validation, supported by a Mismatch Dashboard, Gold Review Workbench, Rule Suggestions, and a Complaint Control Center.
 
