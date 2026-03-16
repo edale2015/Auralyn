@@ -1,0 +1,181 @@
+Purpose: generate synthetic cases based on graph gaps instead of random complaints.
+
+Example:
+
+If the graph gap detector reports:
+
+dizziness → missing stroke risk coverage
+
+The simulation engine generates stroke-like dizziness cases.
+
+File Structure
+server/
+  simulation/
+     graphDrivenSimulationEngine.ts
+     gapTargetCaseFactory.ts
+     simulationPriorityPlanner.ts
+routes/
+     graphSimulationRoutes.ts
+Gap Target Case Factory
+
+Creates cases based on graph weaknesses.
+
+server/simulation/gapTargetCaseFactory.ts
+
+export function generateGapTargetCase(gap:any){
+
+ if(gap.problem==="missing_protocol"){
+
+  return{
+   complaint:gap.complaint,
+   features:{
+     severity:"moderate",
+     durationDays:3
+   }
+  }
+
+ }
+
+ if(gap.problem==="no_engine_assigned"){
+
+  return{
+   skill:gap.skill,
+   features:{
+     edgeCase:true
+   }
+  }
+
+ }
+
+ if(gap.problem==="no_disposition_path"){
+
+  return{
+   diagnosis:gap.diagnosis,
+   features:{
+     severe:true
+   }
+  }
+
+ }
+
+ return{
+  complaint:"generic",
+  features:{}
+ }
+
+}
+Simulation Priority Planner
+
+Prioritizes which graph gaps to simulate first.
+
+server/simulation/simulationPriorityPlanner.ts
+
+export function prioritizeSimulationTargets(gaps:any[]){
+
+ return gaps.sort((a,b)=>{
+
+   const weight = {
+     missing_protocol:5,
+     no_engine_assigned:4,
+     no_disposition_path:3,
+     missing_skill_mapping:2
+   }
+
+   return weight[b.problem]-weight[a.problem]
+
+ })
+
+}
+Graph-Driven Simulation Engine
+
+server/simulation/graphDrivenSimulationEngine.ts
+
+import {detectGraphGaps} from "../knowledge/graphGapDetector"
+import {generateGapTargetCase} from "./gapTargetCaseFactory"
+import {prioritizeSimulationTargets} from "./simulationPriorityPlanner"
+
+export function runGraphDrivenSimulation(){
+
+ const gaps = detectGraphGaps()
+
+ const prioritized = prioritizeSimulationTargets(gaps)
+
+ const simulations:any[]=[]
+
+ prioritized.slice(0,20).forEach(gap=>{
+
+   const simCase = generateGapTargetCase(gap)
+
+   simulations.push({
+     gap,
+     simCase
+   })
+
+ })
+
+ return simulations
+
+}
+API Endpoint
+
+server/routes/graphSimulationRoutes.ts
+
+import express from "express"
+import {runGraphDrivenSimulation} from "../simulation/graphDrivenSimulationEngine"
+
+const router=express.Router()
+
+router.get("/graph-simulations",(req,res)=>{
+
+ res.json(runGraphDrivenSimulation())
+
+})
+
+export default router
+Control Tower Panel
+
+Add a new tab:
+
+Graph Simulation
+
+Example component:
+
+client/components/cct/CCTGraphSimulation.tsx
+
+import React,{useEffect,useState} from "react"
+
+export default function CCTGraphSimulation(){
+
+ const [data,setData]=useState(null)
+
+ useEffect(()=>{
+
+  fetch("/api/graph-simulations")
+  .then(r=>r.json())
+  .then(setData)
+
+ },[])
+
+ return(
+
+ <pre>
+ {JSON.stringify(data,null,2)}
+ </pre>
+
+ )
+
+}
+What the Graph-Driven Simulation Engine Enables
+
+Instead of random testing:
+
+random cough case
+random headache case
+
+You now get:
+
+simulate 200 dizziness stroke cases
+simulate 100 chest pain aortic dissection cases
+simulate missing red flag pathways
+
+So the system targets its weakest reasoning areas.

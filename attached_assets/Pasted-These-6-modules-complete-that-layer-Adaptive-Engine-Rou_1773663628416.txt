@@ -1,0 +1,220 @@
+These 6 modules complete that layer:
+
+Adaptive Engine Router
+
+Engine Cost Optimizer
+
+Clinical Knowledge Expansion Agent
+
+Differential Diagnosis Ranking Engine
+
+Multi-Case Pattern Detector
+
+Conversation Safety Monitor
+
+Then I’ll give 5 additional high-impact recommendations.
+
+1️⃣ Adaptive Engine Router
+
+Purpose: dynamically decide which engines should run for a case.
+
+Example:
+
+simple cough → 7 engines
+dizziness possible stroke → 25 engines
+chest pain tearing → emergency engines only
+Adaptive Engine Router
+
+server/brain/adaptiveEngineRouter.ts
+
+export function selectEngines(context:any){
+
+ const engines:string[]=[]
+
+ const complaint=context.complaint
+
+ engines.push("ClinicalSkillEngine")
+ engines.push("ProtocolSelectionEngine")
+
+ if(complaint==="cough"){
+
+   engines.push("redFlagEngine")
+   engines.push("bayesianDifferentialEngine")
+   engines.push("nextQuestionSelector")
+
+ }
+
+ if(complaint==="chest_pain"){
+
+   engines.push("redFlagEngine")
+   engines.push("bayesianDifferentialEngine")
+   engines.push("clusterScoringEngine")
+   engines.push("confidenceCalibrationEngine")
+   engines.push("dispositionEngine")
+
+ }
+
+ if(context.severity==="high"){
+
+   engines.push("emergencySafetyEngine")
+
+ }
+
+ return engines
+
+}
+2️⃣ Engine Cost Optimizer
+
+Tracks cost/latency and routes to cheaper engines when possible.
+
+server/observability/engineCostOptimizer.ts
+
+const engineCosts={
+
+ bayesianDifferentialEngine:{latency:120,cost:1.2},
+ caseSimilarityEngine:{latency:80,cost:0.4},
+ llmExplanationEngine:{latency:400,cost:4.5},
+ ruleBasedEngine:{latency:30,cost:0.1}
+
+}
+
+export function chooseLowestCostEngine(options:string[]){
+
+ let best=null
+ let bestScore=Infinity
+
+ options.forEach(engine=>{
+
+  const data=engineCosts[engine]
+
+  if(!data) return
+
+  const score=data.latency + data.cost
+
+  if(score<bestScore){
+
+   bestScore=score
+   best=engine
+
+  }
+
+ })
+
+ return best
+
+}
+3️⃣ Clinical Knowledge Expansion Agent
+
+Automatically expands the knowledge graph.
+
+server/knowledge/knowledgeExpansionAgent.ts
+
+import {addKnowledgeNode,addKnowledgeEdge} from "./knowledgeGraphStore"
+
+export function expandKnowledgeGraph(update:any){
+
+ if(update.type==="new_diagnosis"){
+
+   addKnowledgeNode({
+
+    id:`diagnosis:${update.name}`,
+    type:"diagnosis",
+    label:update.name
+
+   })
+
+   addKnowledgeEdge({
+
+    id:`edge_${Date.now()}`,
+    from:`complaint:${update.complaint}`,
+    to:`diagnosis:${update.name}`,
+    relation:"suggests"
+
+   })
+
+ }
+
+}
+
+Example expansion:
+
+chest pain → myocarditis
+4️⃣ Differential Diagnosis Ranking Engine
+
+Ranks diagnoses using probability.
+
+server/engines/differentialRankingEngine.ts
+
+export function rankDifferential(diagnoses:any[]){
+
+ const scored=diagnoses.map(d=>({
+
+  diagnosis:d,
+  probability:Math.random()
+
+ }))
+
+ scored.sort((a,b)=>b.probability-a.probability)
+
+ return scored
+
+}
+
+Later this integrates:
+
+Bayesian engine
+case similarity
+guideline priors
+5️⃣ Multi-Case Pattern Detector
+
+Finds recurring clinical errors.
+
+server/analysis/multiCasePatternDetector.ts
+
+export function detectPatterns(cases:any[]){
+
+ const patternMap:any={}
+
+ cases.forEach(c=>{
+
+  if(!c.failure) return
+
+  const key=c.failure.category
+
+  if(!patternMap[key])
+    patternMap[key]=0
+
+  patternMap[key]++
+
+ })
+
+ return patternMap
+
+}
+
+Example output:
+
+missed_red_flag: 5
+wrong_diagnosis: 11
+6️⃣ Conversation Safety Monitor
+
+Detects confusion or distress.
+
+server/engines/conversationSafetyMonitor.ts
+
+export function analyzeConversation(message:string){
+
+ const riskWords=["confused","scared","panic","dont understand"]
+
+ const detected=riskWords.some(w=>message.includes(w))
+
+ return{
+
+  risk:detected,
+  recommendedTone: detected ? "reassuring" : "neutral"
+
+ }
+
+}
+
+The tone strategy engine can react to this.
