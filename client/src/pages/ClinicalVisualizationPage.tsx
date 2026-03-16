@@ -8,8 +8,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, GitBranch, Map, Network, Cpu, Activity, Download, RefreshCw, Layers } from "lucide-react";
+import { Loader2, GitBranch, Map, Network, Cpu, Activity, Download, RefreshCw, Layers, Play, MessageSquare } from "lucide-react";
 import MermaidDiagram from "@/components/MermaidDiagram";
+import ReplayTimeline from "@/components/ReplayTimeline";
+import DecisionGraph from "@/components/DecisionGraph";
+import { useToast } from "@/hooks/use-toast";
 import { COMPLAINTS } from "@shared/complaints";
 
 const FORMAT_OPTIONS = [
@@ -34,9 +37,49 @@ const SAMPLE_CASE = {
 };
 
 export default function ClinicalVisualizationPage() {
+  const { toast } = useToast();
   const [archFormat, setArchFormat] = useState("mermaid");
   const [pathComplaint, setPathComplaint] = useState("chest_pain");
   const [activeTab, setActiveTab] = useState("architecture");
+
+  // Decision Replay
+  const [replayCaseId, setReplayCaseId] = useState("");
+  const [replayResult, setReplayResult] = useState<any>(null);
+  const [replayView, setReplayView] = useState<"timeline" | "graph">("timeline");
+  const [replayLoading, setReplayLoading] = useState(false);
+
+  // Intake Schemas
+  const [schemaComplaint, setSchemaComplaint] = useState("cough");
+  const [schemaChannel, setSchemaChannel] = useState<"telegram" | "whatsapp">("telegram");
+
+  async function loadReplay(caseIdOverride?: string) {
+    const id = caseIdOverride ?? replayCaseId;
+    if (!id) return;
+    setReplayLoading(true);
+    try {
+      const res = await apiRequest("GET", `/api/clinical-intelligence/replay/${id}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setReplayResult(data);
+    } catch (err: any) {
+      toast({ title: "Replay failed", description: err.message, variant: "destructive" });
+    } finally {
+      setReplayLoading(false);
+    }
+  }
+
+  async function loadDemoReplay() {
+    setReplayLoading(true);
+    try {
+      const res = await apiRequest("GET", "/api/clinical-intelligence/replay/demo/Headache");
+      const data = await res.json();
+      setReplayResult(data);
+    } catch (err: any) {
+      toast({ title: "Demo replay failed", description: err.message, variant: "destructive" });
+    } finally {
+      setReplayLoading(false);
+    }
+  }
 
   // Architecture diagram
   const archQuery = useQuery<any>({
@@ -139,6 +182,12 @@ export default function ClinicalVisualizationPage() {
             </TabsTrigger>
             <TabsTrigger value="telepresence" data-testid="tab-telepresence">
               <Network className="h-3.5 w-3.5 mr-1.5" />Telepresence Flow
+            </TabsTrigger>
+            <TabsTrigger value="decision-replay" data-testid="tab-decision-replay">
+              <Play className="h-3.5 w-3.5 mr-1.5" />Decision Replay
+            </TabsTrigger>
+            <TabsTrigger value="intake-schemas" data-testid="tab-intake-schemas">
+              <MessageSquare className="h-3.5 w-3.5 mr-1.5" />Intake Schemas
             </TabsTrigger>
           </TabsList>
 
@@ -380,8 +429,180 @@ export default function ClinicalVisualizationPage() {
               </CardContent>
             </Card>
           </TabsContent>
+          {/* Decision Replay Tab */}
+          <TabsContent value="decision-replay" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Play className="h-4 w-4 text-primary" />Decision Replay Engine
+                </CardTitle>
+                <CardDescription>Reconstruct exactly how the AI reasoned through a clinical case — step by step, engine by engine.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Controls */}
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex-1 min-w-48">
+                    <Label className="mb-1.5 block text-xs">Case ID</Label>
+                    <Input
+                      value={replayCaseId}
+                      onChange={(e) => setReplayCaseId(e.target.value)}
+                      placeholder="Enter case ID..."
+                      data-testid="input-replay-case-id"
+                      onKeyDown={(e) => e.key === "Enter" && loadReplay()}
+                    />
+                  </div>
+                  <Button onClick={() => loadReplay()} disabled={!replayCaseId || replayLoading} data-testid="button-load-replay">
+                    {replayLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
+                    Load Replay
+                  </Button>
+                  <Button variant="outline" onClick={loadDemoReplay} disabled={replayLoading} data-testid="button-demo-replay">
+                    {replayLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Activity className="h-4 w-4 mr-2" />}
+                    Run Demo (Headache)
+                  </Button>
+                  {replayResult && (
+                    <div className="flex border border-border rounded-lg overflow-hidden">
+                      <button
+                        onClick={() => setReplayView("timeline")}
+                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${replayView === "timeline" ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}
+                        data-testid="button-view-timeline"
+                      >Timeline</button>
+                      <button
+                        onClick={() => setReplayView("graph")}
+                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${replayView === "graph" ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}
+                        data-testid="button-view-graph"
+                      >Graph</button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Result */}
+                {replayLoading && (
+                  <div className="flex items-center justify-center py-16 text-muted-foreground gap-3">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                    <span className="text-sm">Replaying clinical decisions...</span>
+                  </div>
+                )}
+                {!replayLoading && !replayResult && (
+                  <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+                    <Play className="h-12 w-12 opacity-20" />
+                    <p className="text-sm">Enter a case ID or run the demo to replay a decision</p>
+                    <p className="text-xs opacity-60">Each engine step is shown with confidence score, input, and output</p>
+                  </div>
+                )}
+                {!replayLoading && replayResult && replayView === "timeline" && (
+                  <ReplayTimeline replay={replayResult} />
+                )}
+                {!replayLoading && replayResult && replayView === "graph" && (
+                  <DecisionGraph replay={replayResult} height={500} />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Intake Schemas Tab */}
+          <TabsContent value="intake-schemas" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4 text-primary" />Intake Schema Registry
+                </CardTitle>
+                <CardDescription>
+                  View auto-generated Telegram Mini App and WhatsApp Flow question schemas for each complaint.
+                  These schemas are used to build structured intake flows for patients.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div>
+                    <Label className="mb-1.5 block text-xs">Complaint</Label>
+                    <Select value={schemaComplaint} onValueChange={setSchemaComplaint} data-testid="select-schema-complaint">
+                      <SelectTrigger className="w-52" data-testid="select-trigger-schema">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["cough", "headache", "sore_throat", "ear_pain", "dizziness", "shortness_of_breath", "fever", "chest_pain"].map((c) => (
+                          <SelectItem key={c} value={c}>{c.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex border border-border rounded-lg overflow-hidden">
+                    {(["telegram", "whatsapp"] as const).map((ch) => (
+                      <button
+                        key={ch}
+                        onClick={() => setSchemaChannel(ch)}
+                        className={`px-4 py-1.5 text-xs font-medium transition-colors capitalize ${schemaChannel === ch ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}
+                        data-testid={`button-channel-${ch}`}
+                      >{ch === "telegram" ? "Telegram Mini App" : "WhatsApp Flow"}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <SchemaPreview complaint={schemaComplaint} channel={schemaChannel} />
+              </CardContent>
+            </Card>
+          </TabsContent>
         </Tabs>
       </div>
+    </div>
+  );
+}
+
+function SchemaPreview({ complaint, channel }: { complaint: string; channel: "telegram" | "whatsapp" }) {
+  const url = channel === "telegram"
+    ? `/api/clinical-intelligence/schemas/telegram-mini-app/${complaint}`
+    : `/api/clinical-intelligence/schemas/whatsapp/${complaint}`;
+
+  const { data, isLoading, error } = useQuery<any>({
+    queryKey: [url],
+    staleTime: 300_000,
+  });
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
+      <Loader2 className="h-5 w-5 animate-spin" /><span className="text-sm">Loading schema...</span>
+    </div>
+  );
+
+  if (error || !data) return (
+    <div className="text-center py-8 text-muted-foreground text-sm">Schema not found for {complaint}</div>
+  );
+
+  const questions = data.questions ?? [];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-sm">{data.displayName ?? data.complaint}</span>
+        {data.version && <Badge variant="outline" className="text-[10px]">v{data.version}</Badge>}
+        {data.flowId && <Badge variant="secondary" className="text-[10px] font-mono">{data.flowId}</Badge>}
+        <span className="ml-auto text-xs text-muted-foreground">{questions.length} question{questions.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      <div className="space-y-2">
+        {questions.map((q: any, i: number) => (
+          <div key={i} className="border border-border rounded-lg bg-card px-4 py-3 flex items-start gap-3" data-testid={`schema-question-${i}`}>
+            <span className="text-xs font-mono text-muted-foreground shrink-0 mt-0.5">Q{i + 1}</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">{q.label ?? q.question ?? q.text}</p>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <Badge variant="outline" className="text-[10px]">{q.type}</Badge>
+                {(q.options ?? q.answers ?? []).filter(Boolean).map((o: string) => (
+                  <Badge key={o} variant="secondary" className="text-[10px]">{o}</Badge>
+                ))}
+                {q.required === false && <Badge variant="outline" className="text-[10px] text-muted-foreground">optional</Badge>}
+              </div>
+            </div>
+            <span className="text-[10px] font-mono text-muted-foreground shrink-0">{q.id ?? q.name ?? ""}</span>
+          </div>
+        ))}
+      </div>
+
+      {data.completionMessage && (
+        <div className="border border-green-500/30 bg-green-500/5 rounded-lg px-4 py-2.5 text-sm text-muted-foreground">
+          <span className="text-green-600 font-medium mr-2">Completion message:</span>{data.completionMessage}
+        </div>
+      )}
     </div>
   );
 }

@@ -8,6 +8,34 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (March 2026)
 
+### Clinical Intelligence Bundle (March 2026)
+
+**2 new server engines** (`server/engines/`):
+- `decisionReplayEngine.ts` — `DecisionReplayEngine.buildReplay()` maps a Firestore `CaseRecord` to an ordered `ReplayStep[]` (Intake → Red Flag → Similarity → Bayesian Differential → Risk → Temporal → Consensus → Disposition → Note). `buildDemoReplay(complaint)` generates a self-contained demo case for any complaint. Filters by layer and min-confidence supported.
+- `compactQuestionComposer.ts` — `CompactQuestionComposer` converts a `QuestionBundle` to 5 output formats: Telegram keyboard messages, Telegram Mini App form fields, WhatsApp interactive buttons/lists, WhatsApp Flow steps, SMS short-form. Used by the schema compose-preview endpoint.
+
+**2 new channel schemas** (`server/channels/`):
+- `telegramMiniAppSchema.ts` — 8 complaint schemas (cough, headache, sore throat, ear pain, dizziness, breathlessness, fever, chest pain) each with typed questions (yesno/number/scale/multiple), versions, and displayName. `getMiniAppSchema(complaint)` + `listMiniAppComplaints()` helpers.
+- `whatsappFlowSchema.ts` — matching 8-complaint WhatsApp Flow schema registry with flowId, completionMessage, and typed question arrays. `getWhatsAppFlow(complaint)` + `listWhatsAppFlows()` helpers.
+
+**1 new API route group** (`server/routes/decisionReplayRoutes.ts` → `/api/clinical-intelligence/*`):
+- `/replay/demo/:complaint` — demo replay without a real case
+- `/replay/:caseId` — full replay from Firestore case (supports `?includeInputs=false`)
+- `/replay/:caseId/steps` — step list only (no input/output details)
+- `/compose/telegram`, `/compose/telegram-mini-app`, `/compose/whatsapp`, `/compose/all` — POST a QuestionBundle → get formatted messages
+- `/schemas/telegram-mini-app`, `/schemas/telegram-mini-app/:complaint` — schema registry GET
+- `/schemas/whatsapp`, `/schemas/whatsapp/:complaint` — WhatsApp flow registry GET
+- `/schemas/compose-preview/:complaint` — all 5 output formats for a complaint in one shot
+
+**3 new React components**:
+- `ReplayTimeline.tsx` — colour-coded timeline, each step as a card with layer badge + confidence bar + duration; click to expand full input/output JSON; summary header with avg confidence and final disposition banner
+- `DecisionGraph.tsx` — React Flow directed graph built from `CaseReplay.steps`; node colour = confidence level (green/amber/red); final disposition node at bottom; MiniMap + Controls; draggable nodes
+- `DecisionGraph.tsx` uses `@xyflow/react` named imports
+
+**2 new tabs in `ClinicalVisualizationPage`** (`/clinical-visualization`):
+- **Decision Replay** — Case ID input + "Load Replay" + "Run Demo (Headache)" button; Timeline/Graph toggle view; renders `ReplayTimeline` or `DecisionGraph`
+- **Intake Schemas** — complaint picker + Telegram/WhatsApp channel toggle; renders `SchemaPreview` (self-contained subcomponent) showing every question with type badge, options, required/optional markers, and completion message
+
 ### Research + Visualization + Conversation Optimization Bundle (March 2026)
 
 **5 new research engines** (`server/research/`):

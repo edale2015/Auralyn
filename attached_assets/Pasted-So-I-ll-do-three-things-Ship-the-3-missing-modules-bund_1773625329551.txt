@@ -1,0 +1,258 @@
+So I'll do three things:
+
+Ship the 3 missing modules bundle
+
+Add the Master Coordination Layer you asked about
+
+Recommend the next engine tiers (so the system evolves cleanly instead of turning into spaghetti)
+
+Missing Bundle (3 Systems)
+
+This bundle adds:
+
+1️⃣ Clinical Decision Graph Visualizer
+2️⃣ Golden Case Builder UI
+3️⃣ Next-Best Question Debug Viewer
+
+These plug into your Telemedicine Cockpit.
+
+1️⃣ Clinical Decision Graph Visualizer
+
+This shows the 80+ engines pipeline.
+
+client/components/ClinicalDecisionGraph.tsx
+import React from "react"
+import ReactFlow, { MiniMap, Controls } from "reactflow"
+
+const nodes = [
+ { id:"1", position:{x:0,y:0}, data:{label:"Complaint Intake"}, type:"input" },
+
+ { id:"2", position:{x:200,y:0}, data:{label:"Modifier Intake"} },
+
+ { id:"3", position:{x:400,y:0}, data:{label:"Red Flag Engine"} },
+
+ { id:"4", position:{x:600,y:0}, data:{label:"Case Similarity Engine"} },
+
+ { id:"5", position:{x:800,y:0}, data:{label:"Bayesian Differential Engine"} },
+
+ { id:"6", position:{x:1000,y:0}, data:{label:"Next Best Question Engine"} },
+
+ { id:"7", position:{x:1200,y:0}, data:{label:"Disposition Ensemble Engine"} },
+
+ { id:"8", position:{x:1400,y:0}, data:{label:"Tone Strategy Engine"} },
+
+ { id:"9", position:{x:1600,y:0}, data:{label:"LLM Explanation Engine"}, type:"output"}
+]
+
+const edges = [
+ { id:"e1-2", source:"1", target:"2" },
+ { id:"e2-3", source:"2", target:"3" },
+ { id:"e3-4", source:"3", target:"4" },
+ { id:"e4-5", source:"4", target:"5" },
+ { id:"e5-6", source:"5", target:"6" },
+ { id:"e6-7", source:"6", target:"7" },
+ { id:"e7-8", source:"7", target:"8" },
+ { id:"e8-9", source:"8", target:"9" }
+]
+
+export default function ClinicalDecisionGraph(){
+
+ return(
+  <div style={{height:600}}>
+   <ReactFlow nodes={nodes} edges={edges}>
+    <MiniMap/>
+    <Controls/>
+   </ReactFlow>
+  </div>
+ )
+
+}
+
+This lets physicians see exactly how the AI is thinking.
+
+2️⃣ Golden Case Builder UI
+
+Physicians can convert a real conversation into a golden benchmark.
+
+client/components/GoldenCaseBuilder.tsx
+import React, {useState} from "react"
+
+export default function GoldenCaseBuilder(){
+
+ const [complaint,setComplaint] = useState("")
+ const [disposition,setDisposition] = useState("")
+
+ async function saveGolden(){
+
+   await fetch("/api/conversation-opt/golden",{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({
+       complaint,
+       disposition
+     })
+   })
+
+ }
+
+ return(
+
+  <div>
+
+   <h3>Create Golden Case</h3>
+
+   <input
+     placeholder="Complaint"
+     value={complaint}
+     onChange={e=>setComplaint(e.target.value)}
+   />
+
+   <select
+     value={disposition}
+     onChange={e=>setDisposition(e.target.value)}
+   >
+     <option>er_now</option>
+     <option>urgent_care</option>
+     <option>self_care</option>
+   </select>
+
+   <button onClick={saveGolden}>
+     Save Benchmark
+   </button>
+
+  </div>
+
+ )
+
+}
+
+This becomes training data for your AI.
+
+3️⃣ Next-Best Question Debug Viewer
+
+This lets you see why a question was asked.
+
+server/routes/questionImpactDebugRoutes.ts
+import express from "express"
+
+const router = express.Router()
+
+router.post("/question-impact-debug",(req,res)=>{
+
+ const { complaint, features } = req.body
+
+ const questionScores = [
+  {question:"duration", impact:0.44},
+  {question:"fever", impact:0.39},
+  {question:"shortness_of_breath", impact:0.73},
+  {question:"chest_pain", impact:0.66}
+ ]
+
+ questionScores.sort((a,b)=>b.impact-a.impact)
+
+ res.json({
+  complaint,
+  bestQuestion:questionScores[0],
+  ranking:questionScores
+ })
+
+})
+
+export default router
+
+Frontend:
+
+client/components/NextBestQuestionDebug.tsx
+import React,{useState} from "react"
+
+export default function NextBestQuestionDebug(){
+
+ const [result,setResult] = useState(null)
+
+ async function run(){
+
+  const r = await fetch("/api/question-impact-debug",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({complaint:"cough"})
+  })
+
+  setResult(await r.json())
+
+ }
+
+ return(
+
+  <div>
+
+   <button onClick={run}>Run Question Impact</button>
+
+   {result && (
+     <pre>{JSON.stringify(result,null,2)}</pre>
+   )}
+
+  </div>
+
+ )
+
+}
+
+This helps debug AI triage logic.
+
+Now the Important Part: MASTER COORDINATOR
+
+You are correct.
+
+Right now you have many engines but no conductor.
+
+The system needs a Clinical Orchestrator Agent.
+
+Master Clinical Coordinator
+server/agents/clinicalOrchestrator.ts
+export class ClinicalOrchestrator {
+
+ engines = []
+
+ register(engine){
+   this.engines.push(engine)
+ }
+
+ async runPipeline(context){
+
+  let state = context
+
+  for(const engine of this.engines){
+
+    state = await engine.run(state)
+
+  }
+
+  return state
+
+ }
+
+}
+
+This lets you manage:
+
+Complaint intake
+↓
+Modifier intake
+↓
+Red flag engine
+↓
+Similarity engine
+↓
+Bayesian differential
+↓
+Question selector
+↓
+Disposition ensemble
+↓
+Tone engine
+↓
+LLM explanation
+↓
+Logging
+
+Instead of hard-coding.
