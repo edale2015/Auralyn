@@ -144,6 +144,7 @@ const NAV_SECTIONS = [
       { path: "/control-tower", label: "Clinical Control Tower", icon: Radar },
       { path: "/knowledge-graph", label: "Knowledge Graph", icon: Network },
       { path: "/schema-validator", label: "Schema Validator", icon: ShieldCheck },
+      { path: "/clinical-governance", label: "Clinical Governance", icon: Shield },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },

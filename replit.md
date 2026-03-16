@@ -98,6 +98,18 @@ Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, 
 ### Clinical Schema Validator
 `server/validation/` — 4-layer workbook validator checking: (1) workbook integrity (required sheets exist), (2) header/schema integrity (required columns, duplicate IDs), (3) cross-sheet referential integrity (CC_ID, template IDs, cluster IDs), (4) data quality (missing expressions, invalid values, orphan records). Validates 7 required sheets: COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, CLUSTER_SCORING_RULES, RED_FLAG_RULES, OUTPUT_TEMPLATES, GLOBAL_SECONDARY. APIs: POST `/api/clinical-schema/validate` (upload + validate), GET `/api/clinical-schema/validate` (validate existing), GET `/api/clinical-schema/summary`, GET `/api/clinical-schema/workbooks`. Frontend page at `/schema-validator`.
 
+### Clinical Governance & Deployment Layer
+`server/governance/` — 7 modules ensuring clinical changes are safe before deployment:
+- **Governance Queue** (`governanceQueue.ts`) — Stores pending changes with risk levels, supports approve/reject workflow
+- **Review Engine** (`governanceReviewEngine.ts`) — Evaluates risk of sheet changes (critical/high/medium/low) with affected system analysis
+- **Regression Testing Agent** (`protocolRegressionAgent.ts`) — Runs graph-driven simulations after rule changes to detect protocol regressions
+- **Risk Monitor** (`clinicalRiskMonitor.ts`) — Threshold-based clinical metric monitoring (red flag accuracy, ER rates, escalation rates)
+- **Knowledge Consistency Engine** (`knowledgeConsistencyEngine.ts`) — Detects dangerous mappings, dangling edges, incomplete complaints, duplicate nodes
+- **Physician Feedback Agent** (`physicianFeedbackAgent.ts`) — Records and tracks clinical corrections from physicians
+- **Deployment Manager** (`deploymentManager.ts`) — Version control for clinical config with deploy/rollback capability
+
+APIs: `/api/governance/queue|submit|review/:id|stats|regression-test|risk-analysis|consistency-check|feedback|deploy|rollback|versions`. Frontend page at `/clinical-governance` with 6 tabs.
+
 ### Knowledge Graph Dashboard
 An 8-tab dashboard (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions, Data Import, AI Planner) provides a comprehensive view and management interface for the clinical knowledge graph.
 
