@@ -1,0 +1,215 @@
+1. Clinical Intelligence Planning Layer (CIPL)
+
+Purpose: automatically decide:
+
+what simulations to run
+
+what graph gaps to fix
+
+which engines need improvement
+
+which protocols need review
+
+where diagnostic accuracy is weak
+
+Think of it as the strategy layer above the Control Tower.
+
+File layout
+server/
+  planning/
+    clinicalIntelligencePlanner.ts
+    improvementPrioritizer.ts
+    simulationPlanner.ts
+    graphExpansionPlanner.ts
+routes/
+    intelligencePlanningRoutes.ts
+Clinical Intelligence Planner
+
+server/planning/clinicalIntelligencePlanner.ts
+
+import {detectGraphGaps} from "../knowledge/graphGapDetector"
+import {planSimulationSchedule} from "../simulation/simulationPlanner"
+import {detectModelDrift} from "../analysis/modelDriftDetector"
+import {getOutcomeStats} from "../outcomes/outcomeTracker"
+
+export function runClinicalPlanningCycle(){
+
+ const gaps = detectGraphGaps()
+ const drift = detectModelDrift()
+ const outcomes = getOutcomeStats()
+ const simulationPlan = planSimulationSchedule()
+
+ const priorities:any[]=[]
+
+ if(gaps.length>0){
+
+  priorities.push({
+   priority:"high",
+   task:"resolve_graph_gaps",
+   count:gaps.length
+  })
+
+ }
+
+ if(drift.drift){
+
+  priorities.push({
+   priority:"critical",
+   task:"model_retraining_required"
+  })
+
+ }
+
+ if(outcomes.total>0){
+
+  priorities.push({
+   priority:"medium",
+   task:"analyze_outcome_accuracy"
+  })
+
+ }
+
+ priorities.push({
+   priority:"medium",
+   task:"run_targeted_simulations",
+   schedule:simulationPlan
+ })
+
+ return{
+
+  priorities,
+  nextFocus:priorities[0] || "system_stable"
+
+ }
+
+}
+Planning API
+
+server/routes/intelligencePlanningRoutes.ts
+
+import express from "express"
+import {runClinicalPlanningCycle} from "../planning/clinicalIntelligencePlanner"
+
+const router=express.Router()
+
+router.get("/clinical-planner/run",(req,res)=>{
+
+ res.json(runClinicalPlanningCycle())
+
+})
+
+export default router
+2. Visual System Map
+
+This provides an interactive architecture overview so engineers and physicians can understand the entire platform.
+
+System Map API
+
+server/architecture/systemMap.ts
+
+export const systemMap={
+
+ layers:[
+
+  {
+   name:"Interface Layer",
+   nodes:["Telegram","WhatsApp","Web Dashboard"]
+  },
+
+  {
+   name:"Clinical Brain",
+   nodes:[
+    "Adaptive Engine Router",
+    "Unified Reasoning Engine",
+    "Protocol Selector"
+   ]
+  },
+
+  {
+   name:"Reasoning Engines",
+   nodes:[
+    "Bayesian Differential",
+    "Case Similarity",
+    "Differential Ranking"
+   ]
+  },
+
+  {
+   name:"Safety Layer",
+   nodes:[
+    "Red Flag Engine",
+    "Rare Disease Safety Net"
+   ]
+  },
+
+  {
+   name:"Knowledge Layer",
+   nodes:[
+    "Clinical Knowledge Graph",
+    "Skill Graph",
+    "Protocol Registry"
+   ]
+  },
+
+  {
+   name:"Learning Layer",
+   nodes:[
+    "Clinical Memory",
+    "Outcome Tracker",
+    "Confidence Calibration",
+    "Drift Detector"
+   ]
+  },
+
+  {
+   name:"Simulation Layer",
+   nodes:[
+    "Simulation Lab",
+    "Graph Driven Simulation",
+    "Scenario Generator"
+   ]
+  },
+
+  {
+   name:"Improvement Layer",
+   nodes:[
+    "Gap Detector",
+    "Improvement Engine",
+    "Planning Layer"
+   ]
+  }
+
+ ]
+
+}
+Visual System Map Dashboard
+
+client/pages/SystemMap.tsx
+
+import React,{useEffect,useState} from "react"
+
+export default function SystemMap(){
+
+ const [map,setMap]=useState(null)
+
+ useEffect(()=>{
+
+  fetch("/api/system-map")
+  .then(r=>r.json())
+  .then(setMap)
+
+ },[])
+
+ return(
+
+ <div>
+
+ <h2>Clinical AI Architecture</h2>
+
+ <pre>{JSON.stringify(map,null,2)}</pre>
+
+ </div>
+
+ )
+
+}

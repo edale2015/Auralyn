@@ -98,6 +98,22 @@ A targeted simulation system (`server/simulation/graphDrivenSimulationEngine.ts`
 ### Autonomous Research Agent
 `server/research/autonomousResearchAgent.ts` — Monitors medical literature and proposes knowledge graph updates. Simulates 5 research findings (myocarditis, long COVID, mpox pharyngitis, RSV, vestibular migraine) with sources and relevance scores. APIs: GET `/api/research/findings`, GET `/api/research/stats`.
 
+### OpenAI Clinical Reasoning Agents (T001)
+`server/agents/msClinicalReasoningAgent.ts` — GPT-4o-powered clinical reasoning agent that takes complaint + structured answers + red flags and returns differential diagnoses with probabilities, recommended disposition, critical findings, next steps, and confidence level. API: POST `/api/agents/clinical-reasoning`.
+
+`server/agents/msChartAgent.ts` — GPT-4o-powered chart documentation agent that generates structured clinical notes (chief complaint, HPI, ROS, assessment, plan, ICD-10/CPT codes). API: POST `/api/agents/chart`.
+
+Full pipeline endpoint chains both agents sequentially: POST `/api/agents/full-pipeline`.
+
+### Clinical Scenario Generator
+`server/simulation/clinicalScenarioGenerator.ts` — Generates realistic patient narratives from templates for 8 complaint types (cough, chest_pain, headache, dizziness, sore_throat, fever, ear_pain, breathlessness). Uses randomized demographics, symptoms, history. APIs: GET `/api/scenario/:complaint`, GET `/api/scenario/:complaint/batch`, GET `/api/scenario/complaints`.
+
+### System Architecture Map
+`server/architecture/systemArchitectureMap.ts` — Live architectural overview of the platform: 11 layers, 135+ engines, 8 agents, 6 dashboards, 18 API surfaces. API: GET `/api/system-architecture`.
+
+### Complaint Alias Registry (T009)
+`server/agents/complaintAliasRegistry.ts` — Maps 90+ natural-language aliases (e.g., "sore throat", "belly pain", "pink eye", "can't breathe") to canonical complaint slugs from `shared/complaints.ts` (143 entries). APIs: GET `/api/complaint-aliases`, GET `/api/complaint-aliases/resolve?q=...`, POST `/api/complaint-aliases`.
+
 ### Operational Intelligence and Tooling
 The platform includes case analytics logs, rule contradiction detection, and a toolchain to compile clinical guidelines. A synthetic testing system generates cases for output validation, supported by a Mismatch Dashboard, Gold Review Workbench, Rule Suggestions, and a Complaint Control Center.
 
