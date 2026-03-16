@@ -83,6 +83,7 @@ import PhysicianAnalyticsPage from "@/pages/PhysicianAnalyticsPage";
 import MismatchDashboard from "@/pages/MismatchDashboard";
 import PerformanceStats from "@/pages/PerformanceStats";
 import EngineRegistryPage from "@/pages/EngineRegistryPage";
+import EngineAtlasDashboard from "@/pages/EngineAtlasDashboard";
 import GoldenCasesPage from "@/pages/GoldenCasesPage";
 import MetaClinicalConsolePage from "@/pages/MetaClinicalConsolePage";
 import ResearchIntelligencePage from "@/pages/ResearchIntelligencePage";
@@ -181,6 +182,7 @@ function Router() {
       <Route path="/messaging-status">{() => <AdminPage component={MessagingStatusPage} />}</Route>
       <Route path="/physician-analytics">{() => <AdminPage component={PhysicianAnalyticsPage} />}</Route>
       <Route path="/engine-registry">{() => <AdminPage component={EngineRegistryPage} />}</Route>
+      <Route path="/engine-atlas">{() => <AdminPage component={EngineAtlasDashboard} />}</Route>
       <Route path="/golden-cases">{() => <AdminPage component={GoldenCasesPage} />}</Route>
       <Route path="/meta-clinical">{() => <AdminPage component={MetaClinicalConsolePage} />}</Route>
       <Route path="/research-intelligence">{() => <AdminPage component={ResearchIntelligencePage} />}</Route>

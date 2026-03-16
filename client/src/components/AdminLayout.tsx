@@ -154,6 +154,7 @@ const NAV_SECTIONS = [
       { path: "/release-governance", label: "Releases", icon: Rocket },
       { path: "/performance-stats", label: "Performance", icon: Gauge },
       { path: "/engine-registry", label: "Engine Registry", icon: Cpu },
+      { path: "/engine-atlas", label: "Brain Control Tower", icon: Brain },
     ],
   },
 ];

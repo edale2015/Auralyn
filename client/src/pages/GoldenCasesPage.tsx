@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { PlusCircle, FlaskConical, CheckCircle, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { PlusCircle, FlaskConical, CheckCircle, ChevronDown, ChevronUp, Trash2, Download } from "lucide-react";
 
 interface CaseField { id: string; label: string; type: string; options?: string[]; unit?: string; required: boolean; clinicalMeaning: string; }
 interface GoldenCaseTemplate { complaint: string; label: string; fields: CaseField[]; expectedDispositions: string[]; commonDiagnoses: string[]; }
@@ -139,7 +139,17 @@ export default function GoldenCasesPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Create and manage expert-labeled test cases for clinical brain validation</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" data-testid="button-export-csv"
+            onClick={() => { window.location.href = '/api/gold-reviews/export?format=csv'; }}
+            className="gap-1.5 text-sm">
+            <Download className="h-3.5 w-3.5" /> Export CSV
+          </Button>
+          <Button variant="outline" size="sm" data-testid="button-export-json"
+            onClick={() => { window.location.href = '/api/gold-reviews/export?format=json'; }}
+            className="gap-1.5 text-sm">
+            <Download className="h-3.5 w-3.5" /> Export JSON
+          </Button>
           <Button data-testid="button-new-golden-case" onClick={() => setShowForm(!showForm)} variant={showForm ? 'secondary' : 'default'} className="gap-2">
             <PlusCircle className="h-4 w-4" /> {showForm ? 'Cancel' : 'New Golden Case'}
           </Button>

@@ -1,0 +1,410 @@
+We will build five panels so you can systematically review everything:
+
+Engine Atlas – all engines organized by level
+
+Skill Atlas – skills required for each complaint
+
+Agent Atlas – orchestration agents controlling engines
+
+Integration Atlas – WhatsApp, Telegram, ECW, ChatGPT, etc.
+
+System Review Panel – automatic architecture review
+
+This lets you ask questions like:
+
+“Is WhatsApp intake slower than Telegram?”
+
+“Which engines are used for chest pain?”
+
+“Which skills are missing for dizziness?”
+
+“Which integrations are failing?”
+
+Engine Atlas Dashboard
+
+Location:
+
+/client/pages/EngineAtlasDashboard.tsx
+import React, { useState } from "react"
+import EngineAtlas from "../components/EngineAtlas"
+import SkillAtlas from "../components/SkillAtlas"
+import AgentAtlas from "../components/AgentAtlas"
+import IntegrationAtlas from "../components/IntegrationAtlas"
+import SystemReviewPanel from "../components/SystemReviewPanel"
+
+export default function EngineAtlasDashboard(){
+
+  const [tab,setTab] = useState("engines")
+
+  return(
+
+    <div>
+
+      <h1>Clinical Brain Control Tower</h1>
+
+      <div style={{display:"flex",gap:10}}>
+
+        <button onClick={()=>setTab("engines")}>Engines</button>
+        <button onClick={()=>setTab("skills")}>Skills</button>
+        <button onClick={()=>setTab("agents")}>Agents</button>
+        <button onClick={()=>setTab("integrations")}>Integrations</button>
+        <button onClick={()=>setTab("review")}>System Review</button>
+
+      </div>
+
+      {tab==="engines" && <EngineAtlas/>}
+      {tab==="skills" && <SkillAtlas/>}
+      {tab==="agents" && <AgentAtlas/>}
+      {tab==="integrations" && <IntegrationAtlas/>}
+      {tab==="review" && <SystemReviewPanel/>}
+
+    </div>
+
+  )
+
+}
+Engine Atlas Panel
+
+Displays the 100-engine architecture grouped by level.
+
+/client/components/EngineAtlas.tsx
+import React from "react"
+
+const engineGroups = {
+
+Safety:[
+"redFlagEngine",
+"riskThresholdEngine",
+"sepsisAlertEngine",
+"strokeAlertEngine",
+"miAlertEngine"
+],
+
+Diagnostic:[
+"bayesianDifferentialEngine",
+"caseSimilarityEngine",
+"clusterScoringEngine",
+"guidelineComplianceEngine"
+],
+
+Conversation:[
+"toneStrategyEngine",
+"nextQuestionSelector",
+"conversationCompressionEngine"
+],
+
+PhysicianTools:[
+"goldenCaseTrainer",
+"conversationAuditEngine",
+"physicianOverrideEngine"
+],
+
+Learning:[
+"outcomeReinforcementEngine",
+"temporalPatternLearning",
+"conversationSuccessScoring"
+],
+
+SystemIntelligence:[
+"clinicalSkillEngine",
+"protocolSelectionEngine",
+"confidenceCalibrationEngine",
+"clinicalSimulationEngine",
+"physicianLearningEngine"
+]
+
+}
+
+export default function EngineAtlas(){
+
+return(
+
+<div>
+
+{Object.entries(engineGroups).map(([group,engines])=>(
+<div key={group} style={{marginTop:20}}>
+
+<h3>{group}</h3>
+
+<ul>
+{engines.map(e=>(
+<li key={e}>{e}</li>
+))}
+</ul>
+
+</div>
+))}
+
+</div>
+
+)
+
+}
+Skill Atlas
+
+Shows what knowledge each complaint requires.
+
+/client/components/SkillAtlas.tsx
+import React from "react"
+
+const skills = {
+
+cough:[
+"pneumonia_risk",
+"asthma_history",
+"chronic_cough",
+"red_flag_detection"
+],
+
+chest_pain:[
+"mi_risk",
+"pe_risk",
+"aortic_dissection",
+"gerd"
+],
+
+dizziness:[
+"stroke_risk",
+"vertigo",
+"medication_side_effect"
+]
+
+}
+
+export default function SkillAtlas(){
+
+return(
+
+<div>
+
+{Object.entries(skills).map(([complaint,list])=>(
+
+<div key={complaint}>
+
+<h3>{complaint}</h3>
+
+<ul>
+{list.map(skill=>(
+<li key={skill}>{skill}</li>
+))}
+</ul>
+
+</div>
+
+))}
+
+</div>
+
+)
+
+}
+Agent Atlas
+
+Shows which agents coordinate engines.
+
+/client/components/AgentAtlas.tsx
+import React from "react"
+
+const agents = {
+
+ClinicalBrainAgent:[
+"engineOrchestrator",
+"skillResolver",
+"protocolSelector"
+],
+
+ConversationAgent:[
+"toneStrategyEngine",
+"compressionEngine",
+"questionSelector"
+],
+
+DiagnosticAgent:[
+"bayesianDifferential",
+"caseSimilarity",
+"clusterScoring"
+],
+
+LearningAgent:[
+"outcomeReinforcement",
+"physicianLearning",
+"temporalPatternLearning"
+]
+
+}
+
+export default function AgentAtlas(){
+
+return(
+
+<div>
+
+{Object.entries(agents).map(([agent,engines])=>(
+<div key={agent}>
+
+<h3>{agent}</h3>
+
+<ul>
+{engines.map(e=>(
+<li key={e}>{e}</li>
+))}
+</ul>
+
+</div>
+))}
+
+</div>
+
+)
+
+}
+Integration Atlas
+
+Shows external application connections.
+
+/client/components/IntegrationAtlas.tsx
+import React from "react"
+
+const integrations = [
+
+{
+name:"Telegram",
+purpose:"Patient intake + triage",
+improvement:"Mini App form batching for faster responses"
+},
+
+{
+name:"WhatsApp",
+purpose:"Patient triage via flows",
+improvement:"Compress multi-question steps"
+},
+
+{
+name:"ChatGPT",
+purpose:"LLM explanation engine",
+improvement:"cache responses"
+},
+
+{
+name:"Firestore",
+purpose:"case storage",
+improvement:"index triage queries"
+},
+
+{
+name:"ECW",
+purpose:"EHR integration",
+improvement:"FHIR batching"
+}
+
+]
+
+export default function IntegrationAtlas(){
+
+return(
+
+<div>
+
+{integrations.map(i=>(
+<div key={i.name} style={{border:"1px solid gray",margin:10,padding:10}}>
+
+<h3>{i.name}</h3>
+
+<p><b>Purpose:</b> {i.purpose}</p>
+<p><b>Improvement Idea:</b> {i.improvement}</p>
+
+</div>
+))}
+
+</div>
+
+)
+
+}
+System Review Panel
+
+Runs architecture review.
+
+/client/components/SystemReviewPanel.tsx
+import React,{useState} from "react"
+
+export default function SystemReviewPanel(){
+
+const [result,setResult] = useState(null)
+
+async function runReview(){
+
+const r = await fetch("/api/system-review")
+
+setResult(await r.json())
+
+}
+
+return(
+
+<div>
+
+<button onClick={runReview}>
+Run Architecture Review
+</button>
+
+{result && (
+
+<pre>
+{JSON.stringify(result,null,2)}
+</pre>
+
+)}
+
+</div>
+
+)
+
+}
+System Review API
+server/routes/systemReviewRoutes.ts
+import express from "express"
+
+const router = express.Router()
+
+router.get("/system-review",(req,res)=>{
+
+res.json({
+
+suggestions:[
+
+"Add temporal symptom engine",
+"Improve WhatsApp compression",
+"Add rare disease detection",
+"Add conversation misunderstanding detector"
+
+]
+
+})
+
+})
+
+export default router
+What This Dashboard Lets You Do
+
+You can now systematically inspect:
+
+Engines
+
+Which engines exist and what they do.
+
+Skills
+
+What medical knowledge the AI is applying.
+
+Agents
+
+Which orchestration agents control the system.
+
+Integrations
+
+Telegram, WhatsApp, ChatGPT, ECW, Firestore.
+
+System Review
+
+Automatic architecture improvement suggestions.

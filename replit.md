@@ -8,6 +8,62 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Enhancements (March 2026)
 
+### Brain Architecture + Engine Atlas + Session T001–T009 (March 2026)
+
+**`server/brain/` — 5 new orchestration modules:**
+- `engineRegistry.ts` — Authoritative runtime registry of all 100 engines with status (`active`/`stub`/`planned`), description, avg latency, and file path. Organized into 6 levels: Safety (10), Diagnostic (20), Conversation (15), PhysicianControl (10), Learning (15), SystemIntelligence (30). Helpers: `getAllEngines()`, `getEngineCounts()`, `getEnginesByLevel()`.
+- `clinicalBrain.ts` — Plugin-architecture pipeline orchestrator. `ClinicalBrain.register(engine)` chains engines; `runPipeline(context)` executes them in order, wrapping each in a try/catch with timing, trace logging, and output-key diffing. Singleton `clinicalBrain` exported.
+- `skillGraph.ts` — Maps 8 complaints to `SkillRequirement[]` with priority (`critical`/`high`/`medium`/`low`), description, and `relatedEngines[]`. Helpers: `getSkillsForComplaint()`, `getCriticalSkills()`, `getEnginesForComplaint()`.
+- `protocolSelector.ts` — Maps complaints to clinical protocol objects (CDC, ACEP/AHA, NICE, AAFP). Each protocol has evidence level, key recommendations, safety priorities, and disposition guidance. `selectProtocol(complaint)` returns best match or `GENERAL_TRIAGE` fallback.
+- `systemReviewEngine.ts` — `runSystemReview()` returns health score (% active engines), 12 standing improvement suggestions sorted by priority, engine counts per level, and next-priority module. `getModuleSuggestions(module)` filters by module name.
+
+**6 new Level-6 engines (`server/engines/`):**
+- `clinicalSkillEngine.ts` — Resolves required skills for the complaint from SkillGraph; adds `requiredSkills[]`, `criticalSkills[]`, `skillEnginesRequired[]` to pipeline context.
+- `protocolSelectionEngine.ts` — Runs ProtocolSelector; adds `protocol`, `protocolName`, `protocolSource`, `protocolEvidenceLevel`, `protocolSafetyPriorities` to context.
+- `confidenceCalibrationEngine.ts` — Dampens overconfident scores (>0.9 → ×0.85) and lifts underconfident ones (<0.4 → +0.1); adds `calibratedConfidence`, `confidenceCalibrationDirection`.
+- `clinicalSimulationEngine.ts` — `generateCase(complaint?)` produces a randomised synthetic case with age, sex, vitals, comorbidities, and expected acuity for regression testing. `generateBatch(n)` for bulk test sets.
+- `physicianLearningEngine.ts` — In-memory `PhysicianLearningStore` (500-entry ring buffer) records physician corrections and exposes `getPatterns()` + `getStats()` (override rate, top correction pattern).
+- `conversationCompressionEngine.ts` — Groups sequential yes/no questions into multi-select turns; text questions into single-select chunks. `compress(questionSet)` → `CompressedTurn[]`. `compressToText()` for SMS.
+
+**1 new channel utility (`server/channels/whatsappFlowBuilder.ts`):**
+- `buildWhatsAppFlow(questions, opts)` → WhatsApp Flows v3.0 screen JSON with typed components (RadioButtonsGroup, CheckboxGroup, TextInput, Dropdown).
+- `buildFlowSteps(questions)` → flat step array for sequential flow.
+
+**14 new API endpoints (`/api/system-brain/*`):**
+- `GET /review` — full system review (health score, engine counts, 12 suggestions)
+- `GET /review/modules` — list of system modules
+- `GET /review/modules/:module` — suggestions for a specific module
+- `GET /engines` — all 100 engines with layer field injected
+- `GET /engines/counts` — engine counts by level
+- `GET /engines/level/:level` — engines filtered by level
+- `GET /protocols` — all 8 clinical protocols
+- `GET /protocols/:id` — single protocol by ID
+- `GET /protocols/for/:complaint` — best protocol for a complaint
+- `GET /skills` — full skill atlas (all complaints)
+- `GET /skills/:complaint` — skills for one complaint
+- `POST /simulate` — generate 1–50 synthetic test cases
+- `GET /physician-learning/stats` — override rate + top pattern
+- `GET /physician-learning/patterns` — full correction pattern list
+
+**`client/src/pages/EngineAtlasDashboard.tsx` — Brain Control Tower page (`/engine-atlas`):**
+- 5-tab dashboard: **Engines** (searchable + filterable grid of all 100 engines, colour-coded by level, with status icon + latency badge), **Skills** (complaint picker → priority-sorted skill cards with related engines), **Agents** (8 agent coordination cards), **Integrations** (10 integration cards with purpose + improvement idea), **System Review** (live review with health bar + 12 improvement suggestions sorted by priority).
+- Added to sidebar under "Self-Developing AI" as "Brain Control Tower".
+
+**T003 – Gold Review export (GoldenCasesPage):**
+- Added "Export CSV" and "Export JSON" buttons to GoldenCasesPage header. Both use `window.location.href` to trigger file download via the existing `/api/gold-reviews/export?format=csv|json` route (already implemented with proper `Content-Disposition` headers).
+
+**T009 – Expanded complaints list:**
+- `shared/complaints.ts` expanded from 93 → 136 entries across all categories: added 14 ENT variants, 6 pulmonary, 4 cardiac, 8 GI, 6 GU/Renal, 7 Neurology, 8 MSK, 5 Dermatology, 6 Psychiatric, 5 Endocrine, 7 Infections, 4 Trauma, 3 Ophthalmology, 7 OB/GYN, 5 General, 3 Vascular, 5 Pediatric, 3 Hematology, 5 Toxicology. All sorted alphabetically. `COMPLAINTS_SET` auto-updated.
+
+**Tasks already fully implemented (verified via code review):**
+- T001 — msClinicalReasoningAgent + msChartAgent: async GPT-4o endpoints at `/api/msAgentTasks/reason/async` and `/api/msAgentTasks/chart/:caseId/async` with job polling.
+- T002 — SSE queue: `/api/sse/queue` endpoint with severity bucketing; ReviewQueue.tsx uses SSE with auto-reconnect.
+- T004 — Alert thresholds: MessagingStatusPage has full configurable threshold UI + backend check.
+- T005 — LangChain history: Firestore-persisted run history + ChainHistory tab in AgentOps.
+- T006 — Physician analytics: PhysicianAnalyticsPage with Recharts bar/pie charts.
+- T007 — Mobile layout: CaseReview + ReviewQueue both use `sm:`/`md:` responsive classes with mobile-specific card views.
+- T008 — Keyboard shortcuts: CaseReview has A/R/S/E/X/N/? shortcuts with toast confirmation.
+
 ### Clinical Intelligence Bundle (March 2026)
 
 **2 new server engines** (`server/engines/`):

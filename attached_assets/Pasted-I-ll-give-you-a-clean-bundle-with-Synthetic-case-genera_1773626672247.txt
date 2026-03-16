@@ -1,0 +1,755 @@
+I’ll give you a clean bundle with:
+
+Synthetic case generator
+
+Simulation runner
+
+Score/evaluation engine
+
+Lab registry + results store
+
+API routes
+
+React dashboard
+
+2–5 next recommendations
+
+Clinical Simulation Laboratory
+File map
+server/
+  simulation/
+    simulationCaseFactory.ts
+    simulationScenarioLibrary.ts
+    simulationRunner.ts
+    simulationEvaluator.ts
+    simulationStore.ts
+  routes/
+    simulationLabRoutes.ts
+
+client/
+  pages/
+    ClinicalSimulationLab.tsx
+  components/
+    SimulationControlPanel.tsx
+    SimulationResultsTable.tsx
+    SimulationSummaryCards.tsx
+1) Synthetic Case Factory
+
+server/simulation/simulationCaseFactory.ts
+
+export type SimComplaint =
+  | "cough"
+  | "chest_pain"
+  | "headache"
+  | "dizziness"
+  | "sore_throat"
+  | "fever"
+  | "ear_pain"
+  | "breathlessness";
+
+export interface SimulationCase {
+  caseId: string;
+  complaint: SimComplaint;
+  age: number;
+  sex: "male" | "female";
+  features: Record<string, any>;
+  expectedDisposition: "er_now" | "urgent_care" | "self_care";
+  expectedTopDiagnosis?: string;
+  goldFlags?: string[];
+  difficulty: "easy" | "moderate" | "hard";
+}
+
+function randInt(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function pick<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function uid(prefix = "sim"): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function buildSimulationCase(
+  complaint: SimComplaint,
+  difficulty: "easy" | "moderate" | "hard" = "moderate"
+): SimulationCase {
+  const age = randInt(1, 90);
+  const sex = pick(["male", "female"] as const);
+
+  const base: SimulationCase = {
+    caseId: uid(),
+    complaint,
+    age,
+    sex,
+    features: {},
+    expectedDisposition: "self_care",
+    difficulty,
+    goldFlags: [],
+  };
+
+  switch (complaint) {
+    case "cough": {
+      const fever = Math.random() > 0.5;
+      const sob = Math.random() > 0.7;
+      const durationDays = randInt(1, 21);
+      const chestPain = Math.random() > 0.8;
+
+      base.features = {
+        fever,
+        sob,
+        durationDays,
+        chestPain,
+        asthmaHistory: Math.random() > 0.7,
+        smoking: Math.random() > 0.6,
+      };
+
+      if (sob || chestPain) {
+        base.expectedDisposition = "urgent_care";
+        base.expectedTopDiagnosis = "pneumonia_vs_bronchitis";
+        base.goldFlags = ["shortness_of_breath"];
+      } else if (fever && durationDays > 7) {
+        base.expectedDisposition = "urgent_care";
+        base.expectedTopDiagnosis = "pneumonia";
+      } else {
+        base.expectedDisposition = "self_care";
+        base.expectedTopDiagnosis = "viral_uri";
+      }
+      break;
+    }
+
+    case "chest_pain": {
+      const exertional = Math.random() > 0.6;
+      const sob = Math.random() > 0.5;
+      const diaphoresis = Math.random() > 0.75;
+      const tearing = Math.random() > 0.92;
+
+      base.features = {
+        exertional,
+        sob,
+        diaphoresis,
+        tearing,
+        radiationToArm: Math.random() > 0.65,
+        pleuritic: Math.random() > 0.75,
+      };
+
+      if (tearing || diaphoresis || (exertional && sob)) {
+        base.expectedDisposition = "er_now";
+        base.expectedTopDiagnosis = tearing ? "aortic_dissection" : "acute_coronary_syndrome";
+        base.goldFlags = tearing ? ["tearing_pain"] : ["possible_acs"];
+      } else {
+        base.expectedDisposition = "urgent_care";
+        base.expectedTopDiagnosis = "musculoskeletal_or_gerd";
+      }
+      break;
+    }
+
+    case "headache": {
+      const worst = Math.random() > 0.88;
+      const neckStiff = Math.random() > 0.85;
+      const neuroDeficit = Math.random() > 0.9;
+
+      base.features = {
+        worst,
+        neckStiff,
+        neuroDeficit,
+        fever: Math.random() > 0.55,
+        vomiting: Math.random() > 0.4,
+      };
+
+      if (worst || neckStiff || neuroDeficit) {
+        base.expectedDisposition = "er_now";
+        base.expectedTopDiagnosis = worst ? "subarachnoid_hemorrhage" : "meningitis_or_stroke";
+        base.goldFlags = ["neurologic_or_meningeal_red_flag"];
+      } else {
+        base.expectedDisposition = "urgent_care";
+        base.expectedTopDiagnosis = "migraine_or_tension";
+      }
+      break;
+    }
+
+    case "dizziness": {
+      const unilateralWeakness = Math.random() > 0.92;
+      const speechChange = Math.random() > 0.9;
+      const positional = Math.random() > 0.55;
+
+      base.features = {
+        unilateralWeakness,
+        speechChange,
+        positional,
+        vomiting: Math.random() > 0.5,
+        medicationChange: Math.random() > 0.7,
+      };
+
+      if (unilateralWeakness || speechChange) {
+        base.expectedDisposition = "er_now";
+        base.expectedTopDiagnosis = "stroke";
+        base.goldFlags = ["stroke_red_flag"];
+      } else if (positional) {
+        base.expectedDisposition = "urgent_care";
+        base.expectedTopDiagnosis = "bppv";
+      } else {
+        base.expectedDisposition = "urgent_care";
+        base.expectedTopDiagnosis = "nonspecific_dizziness";
+      }
+      break;
+    }
+
+    default: {
+      base.features = {
+        fever: Math.random() > 0.5,
+        durationDays: randInt(1, 10),
+      };
+      base.expectedDisposition = "urgent_care";
+      base.expectedTopDiagnosis = "generic_condition";
+    }
+  }
+
+  if (difficulty === "hard") {
+    base.features["comorbidityBurden"] = pick(["low", "moderate", "high"]);
+    base.features["ambiguousHistory"] = true;
+  }
+
+  return base;
+}
+
+export function buildSimulationBatch(
+  complaint: SimComplaint,
+  count: number,
+  difficulty: "easy" | "moderate" | "hard" = "moderate"
+): SimulationCase[] {
+  return Array.from({ length: count }, () => buildSimulationCase(complaint, difficulty));
+}
+2) Scenario Library
+
+server/simulation/simulationScenarioLibrary.ts
+
+import { SimulationCase } from "./simulationCaseFactory";
+
+export const simulationScenarioLibrary: Record<string, Partial<SimulationCase>[]> = {
+  cough: [
+    {
+      features: { fever: true, sob: true, durationDays: 5, chestPain: false },
+      expectedDisposition: "urgent_care",
+      expectedTopDiagnosis: "pneumonia",
+      difficulty: "easy",
+    },
+    {
+      features: { fever: false, sob: false, durationDays: 2, chestPain: false },
+      expectedDisposition: "self_care",
+      expectedTopDiagnosis: "viral_uri",
+      difficulty: "easy",
+    },
+  ],
+  chest_pain: [
+    {
+      features: { exertional: true, sob: true, diaphoresis: true, tearing: false },
+      expectedDisposition: "er_now",
+      expectedTopDiagnosis: "acute_coronary_syndrome",
+      difficulty: "moderate",
+    },
+    {
+      features: { exertional: false, sob: false, diaphoresis: false, tearing: false, pleuritic: true },
+      expectedDisposition: "urgent_care",
+      expectedTopDiagnosis: "musculoskeletal_or_gerd",
+      difficulty: "moderate",
+    },
+  ],
+};
+3) Simulation Evaluator
+
+server/simulation/simulationEvaluator.ts
+
+import { SimulationCase } from "./simulationCaseFactory";
+
+export interface SimulationPrediction {
+  predictedDisposition: "er_now" | "urgent_care" | "self_care";
+  predictedTopDiagnosis?: string;
+  confidence?: number;
+  trace?: any[];
+}
+
+export interface SimulationEvaluation {
+  caseId: string;
+  complaint: string;
+  expectedDisposition: string;
+  predictedDisposition: string;
+  dispositionCorrect: boolean;
+  expectedTopDiagnosis?: string;
+  predictedTopDiagnosis?: string;
+  diagnosisMatch: boolean;
+  confidence: number;
+  score: number;
+  redFlagMiss: boolean;
+}
+
+export function evaluateSimulationCase(
+  simCase: SimulationCase,
+  prediction: SimulationPrediction
+): SimulationEvaluation {
+  const dispositionCorrect =
+    simCase.expectedDisposition === prediction.predictedDisposition;
+
+  const diagnosisMatch =
+    !!simCase.expectedTopDiagnosis &&
+    !!prediction.predictedTopDiagnosis &&
+    simCase.expectedTopDiagnosis === prediction.predictedTopDiagnosis;
+
+  const confidence = prediction.confidence ?? 0.5;
+
+  const redFlagMiss =
+    simCase.expectedDisposition === "er_now" &&
+    prediction.predictedDisposition !== "er_now";
+
+  let score = 0;
+  if (dispositionCorrect) score += 70;
+  if (diagnosisMatch) score += 20;
+  score += Math.round(Math.min(10, confidence * 10));
+  if (redFlagMiss) score -= 40;
+  if (score < 0) score = 0;
+
+  return {
+    caseId: simCase.caseId,
+    complaint: simCase.complaint,
+    expectedDisposition: simCase.expectedDisposition,
+    predictedDisposition: prediction.predictedDisposition,
+    dispositionCorrect,
+    expectedTopDiagnosis: simCase.expectedTopDiagnosis,
+    predictedTopDiagnosis: prediction.predictedTopDiagnosis,
+    diagnosisMatch,
+    confidence,
+    score,
+    redFlagMiss,
+  };
+}
+
+export function summarizeEvaluations(results: SimulationEvaluation[]) {
+  const total = results.length || 1;
+  const dispositionAccuracy =
+    results.filter(r => r.dispositionCorrect).length / total;
+  const diagnosisAccuracy =
+    results.filter(r => r.diagnosisMatch).length / total;
+  const avgScore =
+    results.reduce((sum, r) => sum + r.score, 0) / total;
+  const redFlagMissRate =
+    results.filter(r => r.redFlagMiss).length / total;
+
+  return {
+    totalCases: results.length,
+    dispositionAccuracy,
+    diagnosisAccuracy,
+    avgScore,
+    redFlagMissRate,
+  };
+}
+4) Simulation Store
+
+server/simulation/simulationStore.ts
+
+import { SimulationCase } from "./simulationCaseFactory";
+import { SimulationEvaluation } from "./simulationEvaluator";
+
+export interface SimulationRunRecord {
+  runId: string;
+  createdAt: number;
+  complaint: string;
+  difficulty: string;
+  cases: SimulationCase[];
+  results: SimulationEvaluation[];
+  summary: {
+    totalCases: number;
+    dispositionAccuracy: number;
+    diagnosisAccuracy: number;
+    avgScore: number;
+    redFlagMissRate: number;
+  };
+}
+
+const simulationRuns: SimulationRunRecord[] = [];
+
+export function saveSimulationRun(run: SimulationRunRecord) {
+  simulationRuns.unshift(run);
+  if (simulationRuns.length > 100) simulationRuns.pop();
+}
+
+export function listSimulationRuns() {
+  return simulationRuns;
+}
+
+export function getSimulationRun(runId: string) {
+  return simulationRuns.find(r => r.runId === runId);
+}
+
+export function clearSimulationRuns() {
+  simulationRuns.length = 0;
+}
+5) Simulation Runner
+
+This is the heart of the lab. It can plug into your existing clinical brain later. For now it includes a deterministic fallback predictor so it runs immediately.
+
+server/simulation/simulationRunner.ts
+
+import {
+  buildSimulationBatch,
+  SimulationCase,
+  SimComplaint,
+} from "./simulationCaseFactory";
+import {
+  evaluateSimulationCase,
+  summarizeEvaluations,
+  SimulationPrediction,
+} from "./simulationEvaluator";
+import { saveSimulationRun, SimulationRunRecord } from "./simulationStore";
+
+function uid(prefix = "run"): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Replace this with your actual clinical brain invocation later.
+ * Example:
+ *   const state = await clinicalBrain.run({ complaint: simCase.complaint, patientData: simCase.features, caseId: simCase.caseId })
+ */
+async function predictWithFallback(simCase: SimulationCase): Promise<SimulationPrediction> {
+  const f = simCase.features;
+
+  if (simCase.complaint === "chest_pain") {
+    if (f.tearing || f.diaphoresis || (f.exertional && f.sob)) {
+      return {
+        predictedDisposition: "er_now",
+        predictedTopDiagnosis: f.tearing ? "aortic_dissection" : "acute_coronary_syndrome",
+        confidence: 0.92,
+        trace: [{ engine: "fallbackChestPainRule", output: "high_risk" }],
+      };
+    }
+    return {
+      predictedDisposition: "urgent_care",
+      predictedTopDiagnosis: "musculoskeletal_or_gerd",
+      confidence: 0.66,
+      trace: [{ engine: "fallbackChestPainRule", output: "non_high_risk" }],
+    };
+  }
+
+  if (simCase.complaint === "cough") {
+    if (f.sob || f.chestPain) {
+      return {
+        predictedDisposition: "urgent_care",
+        predictedTopDiagnosis: "pneumonia_vs_bronchitis",
+        confidence: 0.79,
+      };
+    }
+    if (f.fever && f.durationDays > 7) {
+      return {
+        predictedDisposition: "urgent_care",
+        predictedTopDiagnosis: "pneumonia",
+        confidence: 0.72,
+      };
+    }
+    return {
+      predictedDisposition: "self_care",
+      predictedTopDiagnosis: "viral_uri",
+      confidence: 0.74,
+    };
+  }
+
+  if (simCase.complaint === "headache") {
+    if (f.worst || f.neckStiff || f.neuroDeficit) {
+      return {
+        predictedDisposition: "er_now",
+        predictedTopDiagnosis: "meningitis_or_stroke",
+        confidence: 0.9,
+      };
+    }
+    return {
+      predictedDisposition: "urgent_care",
+      predictedTopDiagnosis: "migraine_or_tension",
+      confidence: 0.67,
+    };
+  }
+
+  if (simCase.complaint === "dizziness") {
+    if (f.unilateralWeakness || f.speechChange) {
+      return {
+        predictedDisposition: "er_now",
+        predictedTopDiagnosis: "stroke",
+        confidence: 0.89,
+      };
+    }
+    return {
+      predictedDisposition: "urgent_care",
+      predictedTopDiagnosis: f.positional ? "bppv" : "nonspecific_dizziness",
+      confidence: 0.68,
+    };
+  }
+
+  return {
+    predictedDisposition: "urgent_care",
+    predictedTopDiagnosis: "generic_condition",
+    confidence: 0.55,
+  };
+}
+
+export async function runSimulationBatch(params: {
+  complaint: SimComplaint;
+  count: number;
+  difficulty: "easy" | "moderate" | "hard";
+}) {
+  const cases = buildSimulationBatch(params.complaint, params.count, params.difficulty);
+
+  const results = [];
+  for (const simCase of cases) {
+    const prediction = await predictWithFallback(simCase);
+    const evaluation = evaluateSimulationCase(simCase, prediction);
+    results.push(evaluation);
+  }
+
+  const summary = summarizeEvaluations(results);
+
+  const run: SimulationRunRecord = {
+    runId: uid(),
+    createdAt: Date.now(),
+    complaint: params.complaint,
+    difficulty: params.difficulty,
+    cases,
+    results,
+    summary,
+  };
+
+  saveSimulationRun(run);
+  return run;
+}
+6) Simulation Lab Routes
+
+server/routes/simulationLabRoutes.ts
+
+import express from "express";
+import { runSimulationBatch } from "../simulation/simulationRunner";
+import {
+  clearSimulationRuns,
+  getSimulationRun,
+  listSimulationRuns,
+} from "../simulation/simulationStore";
+
+const router = express.Router();
+
+router.post("/simulation-lab/run", async (req, res) => {
+  try {
+    const complaint = req.body.complaint || "cough";
+    const count = Number(req.body.count || 25);
+    const difficulty = req.body.difficulty || "moderate";
+
+    const run = await runSimulationBatch({
+      complaint,
+      count,
+      difficulty,
+    });
+
+    res.json(run);
+  } catch (error: any) {
+    res.status(500).json({
+      error: "simulation_run_failed",
+      detail: error?.message || "Unknown error",
+    });
+  }
+});
+
+router.get("/simulation-lab/runs", (req, res) => {
+  res.json(listSimulationRuns());
+});
+
+router.get("/simulation-lab/runs/:runId", (req, res) => {
+  const run = getSimulationRun(req.params.runId);
+  if (!run) {
+    return res.status(404).json({ error: "run_not_found" });
+  }
+  res.json(run);
+});
+
+router.delete("/simulation-lab/runs", (req, res) => {
+  clearSimulationRuns();
+  res.json({ ok: true });
+});
+
+export default router;
+
+Register it with your API app, for example:
+
+import simulationLabRoutes from "./routes/simulationLabRoutes";
+
+app.use("/api", simulationLabRoutes);
+7) Simulation Dashboard Components
+Summary Cards
+
+client/components/SimulationSummaryCards.tsx
+
+import React from "react";
+
+export default function SimulationSummaryCards({ summary }: { summary: any }) {
+  if (!summary) return null;
+
+  const pct = (n: number) => `${Math.round((n || 0) * 100)}%`;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+      <div style={{ border: "1px solid #ccc", padding: 12 }}>
+        <h4>Total Cases</h4>
+        <div>{summary.totalCases}</div>
+      </div>
+      <div style={{ border: "1px solid #ccc", padding: 12 }}>
+        <h4>Disposition Accuracy</h4>
+        <div>{pct(summary.dispositionAccuracy)}</div>
+      </div>
+      <div style={{ border: "1px solid #ccc", padding: 12 }}>
+        <h4>Diagnosis Accuracy</h4>
+        <div>{pct(summary.diagnosisAccuracy)}</div>
+      </div>
+      <div style={{ border: "1px solid #ccc", padding: 12 }}>
+        <h4>Red Flag Miss Rate</h4>
+        <div>{pct(summary.redFlagMissRate)}</div>
+      </div>
+    </div>
+  );
+}
+Control Panel
+
+client/components/SimulationControlPanel.tsx
+
+import React, { useState } from "react";
+
+export default function SimulationControlPanel({
+  onRun,
+}: {
+  onRun: (params: { complaint: string; count: number; difficulty: string }) => void;
+}) {
+  const [complaint, setComplaint] = useState("cough");
+  const [count, setCount] = useState(25);
+  const [difficulty, setDifficulty] = useState("moderate");
+
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+      <select value={complaint} onChange={e => setComplaint(e.target.value)}>
+        <option value="cough">cough</option>
+        <option value="chest_pain">chest_pain</option>
+        <option value="headache">headache</option>
+        <option value="dizziness">dizziness</option>
+      </select>
+
+      <input
+        type="number"
+        min={1}
+        max={500}
+        value={count}
+        onChange={e => setCount(Number(e.target.value))}
+      />
+
+      <select value={difficulty} onChange={e => setDifficulty(e.target.value)}>
+        <option value="easy">easy</option>
+        <option value="moderate">moderate</option>
+        <option value="hard">hard</option>
+      </select>
+
+      <button onClick={() => onRun({ complaint, count, difficulty })}>
+        Run Simulation
+      </button>
+    </div>
+  );
+}
+Results Table
+
+client/components/SimulationResultsTable.tsx
+
+import React from "react";
+
+export default function SimulationResultsTable({ results }: { results: any[] }) {
+  if (!results?.length) return null;
+
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Case</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Complaint</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Expected Disp</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Predicted Disp</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Disp OK</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Diag OK</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Score</th>
+          <th style={{ border: "1px solid #ccc", padding: 8 }}>Red Flag Miss</th>
+        </tr>
+      </thead>
+      <tbody>
+        {results.map((row) => (
+          <tr key={row.caseId}>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.caseId}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.complaint}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.expectedDisposition}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.predictedDisposition}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.dispositionCorrect ? "✓" : "✗"}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.diagnosisMatch ? "✓" : "✗"}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.score}</td>
+            <td style={{ border: "1px solid #ccc", padding: 8 }}>{row.redFlagMiss ? "YES" : ""}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+Full Page
+
+client/pages/ClinicalSimulationLab.tsx
+
+import React, { useEffect, useState } from "react";
+import SimulationControlPanel from "../components/SimulationControlPanel";
+import SimulationSummaryCards from "../components/SimulationSummaryCards";
+import SimulationResultsTable from "../components/SimulationResultsTable";
+
+export default function ClinicalSimulationLab() {
+  const [currentRun, setCurrentRun] = useState<any>(null);
+  const [history, setHistory] = useState<any[]>([]);
+
+  async function refreshHistory() {
+    const res = await fetch("/api/simulation-lab/runs");
+    const data = await res.json();
+    setHistory(data);
+  }
+
+  async function runSimulation(params: {
+    complaint: string;
+    count: number;
+    difficulty: string;
+  }) {
+    const res = await fetch("/api/simulation-lab/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json();
+    setCurrentRun(data);
+    refreshHistory();
+  }
+
+  useEffect(() => {
+    refreshHistory();
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h1>Clinical Simulation Laboratory</h1>
+
+      <SimulationControlPanel onRun={runSimulation} />
+
+      {currentRun && (
+        <>
+          <SimulationSummaryCards summary={currentRun.summary} />
+          <SimulationResultsTable results={currentRun.results} />
+        </>
+      )}
+
+      <div style={{ marginTop: 24 }}>
+        <h2>Recent Simulation Runs</h2>
+        <pre>{JSON.stringify(history.slice(0, 10), null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
