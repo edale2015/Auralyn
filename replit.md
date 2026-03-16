@@ -58,6 +58,31 @@ A Firestore-backed state machine manages the case lifecycle, and a physician rev
 ### Clinical Knowledge Graph
 A unified clinical ontology (`server/knowledge/`) connecting complaints, symptoms, skills, engines, diagnoses, protocols, and dispositions in a directed weighted graph (~80 nodes, ~80 edges). Modules: `knowledgeGraphTypes.ts` (8 node types, 8 relation types), `clinicalKnowledgeGraph.ts` (base graph with all 8 complaints), `knowledgeGraphStore.ts` (in-memory store with upsert), `knowledgeGraphQueryEngine.ts` (neighborhood, pathway, search, escalation queries), `knowledgeGraphBuilder.ts` (sync brain assets into graph), `graphGapDetector.ts` (structural gap analysis: missing protocols, skills, engines, dispositions), `questionCoverageEngine.ts` (question-to-skill coverage scoring), `protocolSyncEngine.ts` (protocol alignment). Analysis: `server/analysis/engineDependencyGraph.ts` (8 engine dependency chains with canonical graph IDs). Engine: `server/engines/graphAwareQuestionEngine.ts` (graph-optimized adaptive question selection). Frontend: `/knowledge-graph` page with 6 tabs (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions). 12 API endpoints at `/api/knowledge-graph/*`.
 
+### Graph-Driven Simulation Engine
+A targeted simulation system (`server/simulation/graphDrivenSimulationEngine.ts`) that generates synthetic cases based on knowledge graph gaps instead of random complaints. Modules: `gapTargetCaseFactory.ts` (creates cases per gap type: missing protocol, no engine, no disposition, etc.), `simulationPriorityPlanner.ts` (prioritizes by problem severity), `simulationPlanner.ts` (daily/weekly/monthly schedules). API: GET `/api/graph-simulations`, GET `/api/simulation-schedule`.
+
+### Adaptive Engine Router + Cost Optimizer
+`server/brain/adaptiveEngineRouter.ts` dynamically selects which engines to run per case based on complaint type and severity (simple cough → 5 engines, chest pain with red flags → 8+ engines). `server/observability/engineCostOptimizer.ts` tracks latency, cost, and reliability for 12 engines with weighted optimization. APIs: POST `/api/engine-routing`, GET `/api/engine-costs`, POST `/api/engine-costs/optimize`.
+
+### Knowledge Expansion Agent
+`server/knowledge/knowledgeExpansionAgent.ts` automatically expands the knowledge graph with new diagnoses, symptoms, questions, skills, or protocols. Maintains expansion audit log. APIs: POST `/api/knowledge-expansion`, GET `/api/knowledge-expansion/stats`.
+
+### Unified Probabilistic Clinical Reasoning Engine
+`server/reasoning/unifiedClinicalReasoningEngine.ts` combines 5 signal sources (Bayesian: 30%, similarity: 20%, graph prior: 15%, protocol: 20%, physician override: 15%) into a single probability model. APIs: POST `/api/unified-reasoning`, GET `/api/reasoning-weights`.
+
+### Clinical Outcome Tracker
+`server/outcomes/outcomeTracker.ts` records predicted vs actual diagnoses to measure real-world accuracy. APIs: POST `/api/outcomes`, GET `/api/outcomes/stats`.
+
+### Rare Disease Safety Net
+`server/engines/rareDiseaseSafetyNet.ts` pattern-matches 7 rare conditions (myocarditis, pheochromocytoma, Guillain-Barré, PE, aortic dissection, meningococcemia, Kawasaki). API: POST `/api/rare-disease-check`.
+
+### Clinical Intelligence Support Modules
+- `server/engines/differentialRankingEngine.ts` — Ranks diagnoses using Bayesian + similarity + guideline + red flag signals. POST `/api/differential-ranking`.
+- `server/analysis/multiCasePatternDetector.ts` — Finds recurring failure patterns across cases. POST `/api/pattern-detection`.
+- `server/engines/conversationSafetyMonitor.ts` — Detects patient confusion/distress with 13 risk patterns and recommends tone adjustments. POST `/api/conversation-safety`.
+- `server/explainability/explainableAIEngine.ts` — Generates physician-readable reasoning explanations. POST `/api/clinical-explanation`.
+- `server/guidelines/guidelineUpdateAgent.ts` — Monitors 8 clinical guideline sources for compliance. GET `/api/guideline-updates`, GET `/api/guideline-summary`.
+
 ### Operational Intelligence and Tooling
 The platform includes case analytics logs, rule contradiction detection, and a toolchain to compile clinical guidelines. A synthetic testing system generates cases for output validation, supported by a Mismatch Dashboard, Gold Review Workbench, Rule Suggestions, and a Complaint Control Center.
 

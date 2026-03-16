@@ -1,0 +1,247 @@
+1️⃣ Unified Probabilistic Clinical Reasoning Engine
+
+Purpose: combine multiple reasoning signals into one probability model.
+
+Signals included:
+
+• Bayesian differential engine
+• Case similarity engine
+• Knowledge graph prior probabilities
+• Protocol rules
+• Physician overrides
+
+Reasoning Engine
+
+server/reasoning/unifiedClinicalReasoningEngine.ts
+
+export interface DiagnosisSignal{
+
+ diagnosis:string
+ bayesian?:number
+ similarity?:number
+ graphPrior?:number
+ protocolWeight?:number
+
+}
+
+export function computeDiagnosisProbability(signal:DiagnosisSignal){
+
+ const weights={
+
+  bayesian:0.35,
+  similarity:0.25,
+  graphPrior:0.2,
+  protocolWeight:0.2
+
+ }
+
+ let score=0
+
+ score += (signal.bayesian || 0) * weights.bayesian
+ score += (signal.similarity || 0) * weights.similarity
+ score += (signal.graphPrior || 0) * weights.graphPrior
+ score += (signal.protocolWeight || 0) * weights.protocolWeight
+
+ return score
+
+}
+
+export function runUnifiedReasoning(signals:DiagnosisSignal[]){
+
+ const results = signals.map(s=>({
+
+  diagnosis:s.diagnosis,
+  probability:computeDiagnosisProbability(s)
+
+ }))
+
+ results.sort((a,b)=>b.probability-a.probability)
+
+ return results
+
+}
+2️⃣ Clinical Outcome Tracker
+
+Purpose: measure real-world diagnostic accuracy.
+
+server/outcomes/outcomeTracker.ts
+
+const outcomes:any[]=[]
+
+export function recordOutcome(caseId:string,actualDiagnosis:string){
+
+ outcomes.push({
+
+  caseId,
+  actualDiagnosis,
+  timestamp:Date.now()
+
+ })
+
+}
+
+export function getOutcomeStats(){
+
+ const total=outcomes.length
+
+ const diagnoses:any={}
+
+ outcomes.forEach(o=>{
+
+  if(!diagnoses[o.actualDiagnosis])
+   diagnoses[o.actualDiagnosis]=0
+
+  diagnoses[o.actualDiagnosis]++
+
+ })
+
+ return{
+  total,
+  diagnoses
+ }
+
+}
+3️⃣ Rare Disease Safety Net
+
+Purpose: detect unusual diagnoses that normal engines might miss.
+
+server/engines/rareDiseaseSafetyNet.ts
+
+const rareDiseasePatterns={
+
+ myocarditis:["chest_pain","recent_viral"],
+ pheochromocytoma:["headache","palpitations"],
+ guillain_barre:["weakness","recent_infection"]
+
+}
+
+export function checkRareDiseases(symptoms:string[]){
+
+ const matches=[]
+
+ Object.entries(rareDiseasePatterns).forEach(([disease,pattern])=>{
+
+  const matched = pattern.every(p=>symptoms.includes(p))
+
+  if(matched)
+   matches.push(disease)
+
+ })
+
+ return matches
+
+}
+4️⃣ Explainable AI Layer
+
+Produces physician-readable reasoning.
+
+server/explainability/explainableAIEngine.ts
+
+export function generateClinicalExplanation(decision:any){
+
+ return{
+
+  summary:`Disposition: ${decision.disposition}`,
+
+  reasoning:[
+
+   `Top diagnosis: ${decision.topDiagnosis}`,
+
+   `Probability: ${(decision.probability*100).toFixed(1)}%`,
+
+   `Protocol used: ${decision.protocol}`
+
+  ],
+
+  safetyChecks:decision.redFlags || []
+
+ }
+
+}
+
+Example output:
+
+Disposition: ER
+
+Reasoning:
+- top diagnosis acute coronary syndrome
+- probability 91%
+- ACEP protocol triggered
+5️⃣ Clinical Guideline Update Agent
+
+Monitors guideline updates.
+
+server/guidelines/guidelineUpdateAgent.ts
+
+export function checkGuidelineUpdates(){
+
+ return{
+
+  CDC:"up_to_date",
+  ACEP:"update_available",
+  NICE:"up_to_date"
+
+ }
+
+}
+
+Later this can connect to guideline feeds.
+
+6️⃣ Autonomous Simulation Planner
+
+Schedules simulations automatically.
+
+server/simulation/simulationPlanner.ts
+
+export function planSimulationSchedule(){
+
+ return{
+
+  daily:[
+
+   "graph_gap_simulations",
+   "red_flag_stress_test"
+
+  ],
+
+  weekly:[
+
+   "rare_disease_cases",
+   "protocol_edge_cases"
+
+  ],
+
+  monthly:[
+
+   "full_platform_simulation",
+   "cost_performance_analysis"
+
+  ]
+
+ }
+
+}
+What the Unified Reasoning Layer Changes
+
+Before:
+
+Bayesian engine
+Similarity engine
+Protocol engine
+Graph reasoning
+
+all produce separate results.
+
+After:
+
+Unified Clinical Reasoner
+      ↓
+single probability ranking
+      ↓
+disposition decision
+
+This improves:
+
+• consistency
+• explainability
+• learning accuracy
