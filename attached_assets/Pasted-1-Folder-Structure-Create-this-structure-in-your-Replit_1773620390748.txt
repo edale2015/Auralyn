@@ -1,0 +1,357 @@
+1. Folder Structure
+
+Create this structure in your Replit project:
+
+server/
+  api/
+    auditRoutes.ts
+    reasoningRoutes.ts
+  engines/
+    conversationAuditEngine.ts
+    promptImprovementEngine.ts
+    toneStrategyEngine.ts
+    deEscalationProtocolEngine.ts
+    physicianPromptOverrideEngine.ts
+    engineTraceLogger.ts
+  services/
+    goldenConversationBuilder.ts
+
+client/
+  components/
+    MermaidViewer.tsx
+    ReasoningGraph.tsx
+    ChatReviewPanel.tsx
+    EngineTracePanel.tsx
+  pages/
+    ClinicalDashboard.tsx
+2. Conversation Audit Engine
+
+server/engines/conversationAuditEngine.ts
+
+export interface AuditResult {
+  empathyScore: number
+  clarityScore: number
+  safetyScore: number
+  missedQuestions: string[]
+  unsafePhrases: string[]
+}
+
+export function conversationAuditEngine(messages:any[]):AuditResult{
+
+  const text = messages.map(m=>m.content.toLowerCase()).join(" ")
+
+  const unsafePhrases = []
+
+  if(text.includes("nothing to worry about"))
+    unsafePhrases.push("nothing to worry about")
+
+  const empathyWords = ["sorry","understand","that sounds difficult"]
+
+  const empathyScore =
+    empathyWords.filter(w=>text.includes(w)).length / empathyWords.length
+
+  return {
+    empathyScore,
+    clarityScore:0.8,
+    safetyScore: unsafePhrases.length ? 0.4 : 0.9,
+    missedQuestions:[],
+    unsafePhrases
+  }
+}
+3. Prompt Improvement Engine
+
+server/engines/promptImprovementEngine.ts
+
+export function promptImprovementEngine(prompt:string){
+
+ return `
+Rewrite this prompt so it:
+
+• asks only one clear question
+• uses simple language
+• avoids medical jargon
+• maintains empathy
+
+Original:
+${prompt}
+`
+}
+4. Tone Strategy Engine
+
+server/engines/toneStrategyEngine.ts
+
+export function toneStrategyEngine(context:any){
+
+ if(context.anxietyLevel > 0.7)
+   return "calm_reassuring"
+
+ if(context.severity === "critical")
+   return "urgent_directive"
+
+ return "empathetic_gathering"
+}
+5. De-escalation Protocol Engine
+
+server/engines/deEscalationProtocolEngine.ts
+
+export function deEscalationProtocolEngine(){
+
+ return {
+   opening:
+     "I can hear that this is stressful. Let's slow down and take this step by step.",
+   steps:[
+     "Acknowledge emotion",
+     "Ask one focused question",
+     "Provide reassurance without dismissing concern"
+   ]
+ }
+}
+6. Physician Prompt Override Engine
+
+server/engines/physicianPromptOverrideEngine.ts
+
+export function physicianPromptOverrideEngine(input:any){
+
+ return {
+
+   systemAddendum: input.note,
+
+   nextQuestionOverride: input.question,
+
+   toneOverride: input.tone,
+
+   deescalationMode: input.deEscalate
+ }
+}
+7. Engine Trace Logger
+
+server/engines/engineTraceLogger.ts
+
+export const engineTrace:any[]=[]
+
+export function logEngineTrace(engine:string, output:any){
+
+ engineTrace.push({
+   engine,
+   output,
+   time:new Date().toISOString()
+ })
+}
+
+export function getTrace(){
+ return engineTrace
+}
+8. Golden Conversation Builder
+
+server/services/goldenConversationBuilder.ts
+
+export function createGoldenConversation(data:any){
+
+ return {
+
+  complaint:data.complaint,
+
+  patientMessages:data.messages,
+
+  idealQuestions:data.questions,
+
+  idealDisposition:data.disposition
+
+ }
+}
+9. API Routes
+
+server/api/auditRoutes.ts
+
+import express from "express"
+import { conversationAuditEngine } from "../engines/conversationAuditEngine"
+
+const router = express.Router()
+
+router.post("/audit",(req,res)=>{
+
+ const result =
+   conversationAuditEngine(req.body.messages)
+
+ res.json(result)
+
+})
+
+export default router
+
+server/api/reasoningRoutes.ts
+
+import express from "express"
+import { getTrace } from "../engines/engineTraceLogger"
+
+const router = express.Router()
+
+router.get("/engine-trace",(req,res)=>{
+
+ res.json(getTrace())
+
+})
+
+export default router
+10. Mermaid Viewer Component
+
+client/components/MermaidViewer.tsx
+
+import React, { useEffect, useRef } from "react"
+import mermaid from "mermaid"
+
+mermaid.initialize({startOnLoad:false})
+
+export default function MermaidViewer({chart}:{chart:string}){
+
+ const ref = useRef<HTMLDivElement>(null)
+
+ useEffect(()=>{
+
+   if(!ref.current) return
+
+   mermaid.render("chart",chart)
+     .then(r=>{
+       ref.current!.innerHTML=r.svg
+     })
+
+ },[chart])
+
+ return <div ref={ref}/>
+}
+11. React Flow Reasoning Graph
+
+Install:
+
+npm install reactflow
+
+client/components/ReasoningGraph.tsx
+
+import React from "react"
+import ReactFlow from "reactflow"
+
+export default function ReasoningGraph({nodes,edges}:any){
+
+ return (
+  <div style={{height:500}}>
+    <ReactFlow nodes={nodes} edges={edges}/>
+  </div>
+ )
+}
+12. Chat Review Panel
+
+client/components/ChatReviewPanel.tsx
+
+import React from "react"
+
+export default function ChatReviewPanel({messages,audit}:any){
+
+ return (
+
+<div>
+
+<h3>Chat Review</h3>
+
+{messages.map((m:any,i:number)=>(
+ <div key={i}>
+  <b>{m.role}</b>: {m.content}
+ </div>
+))}
+
+<h4>Audit</h4>
+
+<div>Empathy: {audit.empathyScore}</div>
+<div>Safety: {audit.safetyScore}</div>
+
+</div>
+
+ )
+}
+13. Engine Audit Trace Panel
+
+client/components/EngineTracePanel.tsx
+
+import React,{useEffect,useState} from "react"
+
+export default function EngineTracePanel(){
+
+ const [trace,setTrace]=useState<any[]>([])
+
+ useEffect(()=>{
+
+  fetch("/api/engine-trace")
+    .then(r=>r.json())
+    .then(setTrace)
+
+ },[])
+
+ return (
+
+<div>
+
+<h3>Engine Trace</h3>
+
+{trace.map((t,i)=>(
+ <div key={i}>
+  {t.engine} → {JSON.stringify(t.output)}
+ </div>
+))}
+
+</div>
+
+ )
+}
+14. Clinical Dashboard Page
+
+client/pages/ClinicalDashboard.tsx
+
+import React from "react"
+import MermaidViewer from "../components/MermaidViewer"
+import EngineTracePanel from "../components/EngineTracePanel"
+
+export default function ClinicalDashboard(){
+
+ const diagram=`
+graph TD
+PatientInput-->Normalization
+Normalization-->Evidence
+Evidence-->Differential
+Differential-->Disposition
+`
+
+ return (
+
+<div style={{padding:20}}>
+
+<h2>Clinical Telemedicine Cockpit</h2>
+
+<button>Run Clinical Brain</button>
+<button>Audit Conversation</button>
+<button>Improve Prompt</button>
+<button>Apply De-escalation</button>
+<button>Create Golden Conversation</button>
+
+<h3>System Architecture</h3>
+
+<MermaidViewer chart={diagram}/>
+
+<EngineTracePanel/>
+
+</div>
+
+ )
+}
+Result
+
+After adding this bundle your app becomes a physician-supervised telemedicine cockpit with:
+
+• visual reasoning graphs
+• architecture diagrams
+• chat audit tools
+• prompt optimization
+• tone control
+• de-escalation tools
+• golden case creation
+• engine trace debugging
+
+Next Step I Recommend

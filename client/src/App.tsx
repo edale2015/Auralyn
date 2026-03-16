@@ -88,6 +88,7 @@ import MetaClinicalConsolePage from "@/pages/MetaClinicalConsolePage";
 import ResearchIntelligencePage from "@/pages/ResearchIntelligencePage";
 import ClinicalVisualizationPage from "@/pages/ClinicalVisualizationPage";
 import ConversationOptimizationPage from "@/pages/ConversationOptimizationPage";
+import ClinicalCockpitPage from "@/pages/ClinicalCockpitPage";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -185,6 +186,7 @@ function Router() {
       <Route path="/research-intelligence">{() => <AdminPage component={ResearchIntelligencePage} />}</Route>
       <Route path="/clinical-visualization">{() => <AdminPage component={ClinicalVisualizationPage} />}</Route>
       <Route path="/conversation-optimization">{() => <AdminPage component={ConversationOptimizationPage} />}</Route>
+      <Route path="/clinical-cockpit">{() => <AdminPage component={ClinicalCockpitPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

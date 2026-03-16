@@ -5,6 +5,16 @@ import { conversationToneEngine } from '../core/conversationToneEngine';
 import { deEscalationEngine } from '../core/deEscalationEngine';
 import { conversationNextBestQuestion, buildQuestionQueue } from '../core/conversationNextBestQuestion';
 import { promptImprovementEngine, replayWithBetterTone } from '../core/promptImprovementEngine';
+import { toneStrategyEngine } from '../engines/toneStrategyEngine';
+import { getTrace, clearTrace, getTraceStats } from '../engines/engineTraceLogger';
+import { physicianPromptOverrideEngine, buildPromptWithOverride, getOverrideHistory } from '../engines/physicianPromptOverrideEngine';
+import {
+  createGoldenConversation,
+  getGoldenConversation,
+  listGoldenConversations,
+  deleteGoldenConversation,
+  scoreConversationAgainstGolden,
+} from '../services/goldenConversationBuilder';
 
 export const conversationOptimizationRouter = Router();
 
@@ -77,6 +87,94 @@ conversationOptimizationRouter.post('/replay', requireRole(['admin', 'physician'
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Tone Strategy ─────────────────────────────────────────────────────────────
+conversationOptimizationRouter.post('/tone-strategy', requireRole(['admin', 'physician']), (req, res) => {
+  try {
+    const context = req.body;
+    res.json(toneStrategyEngine(context));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Engine Trace ──────────────────────────────────────────────────────────────
+conversationOptimizationRouter.get('/engine-trace', requireRole(['admin', 'physician']), (req, res) => {
+  const { limit, sessionId, caseId } = req.query;
+  res.json(getTrace({ limit: limit ? Number(limit) : 100, sessionId: sessionId as string, caseId: caseId as string }));
+});
+
+conversationOptimizationRouter.get('/engine-trace/stats', requireRole(['admin', 'physician']), (_req, res) => {
+  res.json(getTraceStats());
+});
+
+conversationOptimizationRouter.delete('/engine-trace', requireRole(['admin']), (_req, res) => {
+  clearTrace();
+  res.json({ cleared: true });
+});
+
+// ── Physician Prompt Override ─────────────────────────────────────────────────
+conversationOptimizationRouter.post('/physician-override', requireRole(['admin', 'physician']), (req, res) => {
+  try {
+    const override = physicianPromptOverrideEngine(req.body);
+    res.json(override);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+conversationOptimizationRouter.post('/physician-override/apply', requireRole(['admin', 'physician']), (req, res) => {
+  try {
+    const { systemPrompt, override } = req.body;
+    if (!systemPrompt || !override) return res.status(400).json({ error: 'systemPrompt and override required' });
+    const result = buildPromptWithOverride(systemPrompt, override);
+    res.json({ augmentedPrompt: result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+conversationOptimizationRouter.get('/physician-override/history', requireRole(['admin', 'physician']), (req, res) => {
+  const limit = req.query.limit ? Number(req.query.limit) : 50;
+  res.json(getOverrideHistory(limit));
+});
+
+// ── Golden Conversation Builder ───────────────────────────────────────────────
+conversationOptimizationRouter.post('/golden', requireRole(['admin', 'physician']), (req, res) => {
+  try {
+    const golden = createGoldenConversation(req.body);
+    res.json(golden);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+conversationOptimizationRouter.get('/golden', requireRole(['admin', 'physician']), (req, res) => {
+  const { complaint } = req.query;
+  res.json(listGoldenConversations(complaint as string | undefined));
+});
+
+conversationOptimizationRouter.get('/golden/:id', requireRole(['admin', 'physician']), (req, res) => {
+  const golden = getGoldenConversation(req.params.id);
+  if (!golden) return res.status(404).json({ error: 'Not found' });
+  res.json(golden);
+});
+
+conversationOptimizationRouter.delete('/golden/:id', requireRole(['admin']), (req, res) => {
+  const deleted = deleteGoldenConversation(req.params.id);
+  res.json({ deleted });
+});
+
+conversationOptimizationRouter.post('/golden/:id/score', requireRole(['admin', 'physician']), (req, res) => {
+  try {
+    const { messages } = req.body;
+    if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages array required' });
+    const result = scoreConversationAgainstGolden(messages, req.params.id);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? err });
   }
 });
 
