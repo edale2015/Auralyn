@@ -96,6 +96,7 @@ import ClinicalKnowledgeGraphPage from "@/pages/ClinicalKnowledgeGraphPage";
 import ClinicalSchemaValidatorPage from "@/pages/ClinicalSchemaValidatorPage";
 import ClinicalGovernancePage from "@/pages/ClinicalGovernancePage";
 import ClinicalVersionControlPage from "@/pages/ClinicalVersionControlPage";
+import ClinicalIntelligenceControlCenter from "@/pages/ClinicalIntelligenceControlCenter";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -201,6 +202,7 @@ function Router() {
       <Route path="/schema-validator">{() => <AdminPage component={ClinicalSchemaValidatorPage} />}</Route>
       <Route path="/clinical-governance">{() => <AdminPage component={ClinicalGovernancePage} />}</Route>
       <Route path="/clinical-version-control">{() => <AdminPage component={ClinicalVersionControlPage} />}</Route>
+      <Route path="/intelligence-control-center">{() => <AdminPage component={ClinicalIntelligenceControlCenter} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

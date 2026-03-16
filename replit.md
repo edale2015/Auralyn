@@ -87,39 +87,31 @@ A strategic layer that automatically identifies areas needing attention, resolve
 Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, protocols, medications) via CSV, XLSX, or JSON files to populate the knowledge graph, with admin-only access.
 
 ### Sheet-to-Graph Ingestion Pipeline
-`server/ingestion/` — Full pipeline: validation gate → sheet parsing → graph transformation → knowledge graph population. Ingests COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, RED_FLAG_RULES, CLUSTER_SCORING_RULES, OUTPUT_TEMPLATES into the knowledge graph as nodes/edges. Safety gate blocks import if schema validation fails or warnings exceed threshold. APIs: POST `/api/sheets/ingest-graph` (upload or use latest), POST `/api/sheets/sync`, GET `/api/sheets/sync-history`. UI in Knowledge Graph Data Import tab.
+Full pipeline for clinical data ingestion: validation gate → sheet parsing → graph transformation → knowledge graph population. Ingests COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, RED_FLAG_RULES, CLUSTER_SCORING_RULES, OUTPUT_TEMPLATES into the knowledge graph as nodes/edges. Safety gate blocks import if schema validation fails or warnings exceed threshold.
 
 ### Clinical Change Audit Log
-`server/audit/` — Tracks every clinical data change with timestamps, sheet name, change type, key, and impact analysis. Impact analyzer maps changes to affected systems (triage engine, safety layer, etc.) with severity ratings. APIs: GET `/api/clinical-audit-log`, GET `/api/clinical-audit-log/stats`.
+Tracks every clinical data change with timestamps, sheet name, change type, key, and impact analysis. Impact analyzer maps changes to affected systems (triage engine, safety layer, etc.) with severity ratings.
 
 ### Sheet Sync Engine
-`server/sheets/sheetSyncEngine.ts` + `sheetSyncScheduler.ts` + `sheetDiffEngine.ts` — File-based sync with diff detection, scheduled daily sync support, and sync history tracking.
+File-based sync with diff detection, scheduled daily sync support, and sync history tracking.
 
 ### Clinical Schema Validator
-`server/validation/` — 4-layer workbook validator checking: (1) workbook integrity (required sheets exist), (2) header/schema integrity (required columns, duplicate IDs), (3) cross-sheet referential integrity (CC_ID, template IDs, cluster IDs), (4) data quality (missing expressions, invalid values, orphan records). Validates 7 required sheets: COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, CLUSTER_SCORING_RULES, RED_FLAG_RULES, OUTPUT_TEMPLATES, GLOBAL_SECONDARY. APIs: POST `/api/clinical-schema/validate` (upload + validate), GET `/api/clinical-schema/validate` (validate existing), GET `/api/clinical-schema/summary`, GET `/api/clinical-schema/workbooks`. Frontend page at `/schema-validator`.
+A 4-layer workbook validator checking: (1) workbook integrity, (2) header/schema integrity, (3) cross-sheet referential integrity, (4) data quality. Validates 7 required sheets: COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, CLUSTER_SCORING_RULES, RED_FLAG_RULES, OUTPUT_TEMPLATES, GLOBAL_SECONDARY.
 
 ### Clinical Governance & Deployment Layer
-`server/governance/` — 7 modules ensuring clinical changes are safe before deployment:
-- **Governance Queue** (`governanceQueue.ts`) — Stores pending changes with risk levels, supports approve/reject workflow
-- **Review Engine** (`governanceReviewEngine.ts`) — Evaluates risk of sheet changes (critical/high/medium/low) with affected system analysis
-- **Regression Testing Agent** (`protocolRegressionAgent.ts`) — Runs graph-driven simulations after rule changes to detect protocol regressions
-- **Risk Monitor** (`clinicalRiskMonitor.ts`) — Threshold-based clinical metric monitoring (red flag accuracy, ER rates, escalation rates)
-- **Knowledge Consistency Engine** (`knowledgeConsistencyEngine.ts`) — Detects dangerous mappings, dangling edges, incomplete complaints, duplicate nodes
-- **Physician Feedback Agent** (`physicianFeedbackAgent.ts`) — Records and tracks clinical corrections from physicians
-- **Deployment Manager** (`deploymentManager.ts`) — Version control for clinical config with deploy/rollback capability
-
-APIs: `/api/governance/queue|submit|review/:id|stats|regression-test|risk-analysis|consistency-check|feedback|deploy|rollback|versions`. Frontend page at `/clinical-governance` with 6 tabs.
+Comprises 7 modules ensuring clinical changes are safe before deployment: Governance Queue, Review Engine, Regression Testing Agent, Risk Monitor, Knowledge Consistency Engine, Physician Feedback Agent, and Deployment Manager.
 
 ### Clinical Version Control System (CVCS)
-`server/versioning/` — 6 modules for clinical configuration versioning:
-- **Version Types** (`clinicalVersionTypes.ts`) — Type definitions for ClinicalVersion, VersionDiff, VersionTimelineEntry
-- **Version Store** (`clinicalVersionStore.ts`) — In-memory version storage with CRUD, status updates, deployment tracking
-- **Version Manager** (`clinicalVersionManager.ts`) — Creates version snapshots with SHA-256 hashes of sheets/graph state
-- **Version Diff** (`clinicalVersionDiff.ts`) — Computes differences between any two versions (added/removed/modified, affected sheets)
-- **Rollback Manager** (`clinicalRollbackManager.ts`) — Deploy/rollback with automatic status management of previous versions
-- **Change Timeline** (`clinicalChangeTimeline.ts`) — Builds chronological timeline of all clinical data changes
+Comprises 6 modules for clinical configuration versioning: Version Types, Version Store, Version Manager, Version Diff, Rollback Manager, and Change Timeline. It provides version snapshots, diffing, deployment, and rollback capabilities.
 
-APIs: GET/POST `/api/clinical-versions`, GET `/api/clinical-versions/summary|deployment/current|diff/:from/:to`, POST `/api/clinical-versions/deploy|rollback`, GET `/api/clinical-change-timeline`. Frontend page at `/clinical-version-control` with 3 tabs (History with diff viewer, Create Version, Timeline with deployment status). Components: `client/src/components/versioning/VersionList.tsx`, `VersionDiffViewer.tsx`, `VersionRollbackPanel.tsx`.
+### Clinical Intelligence Control Center (CICC)
+The master "mission control" dashboard aggregating all platform subsystems. Frontend at `/intelligence-control-center` with 4 tabs:
+- **Overview** — Safety score (0–100 weighted: red flag 35%, diagnostic 30%, protocol 20%, question 10%, disposition 5%), system health status, engine summary, graph health, active alerts, version & governance status
+- **Engine Profiler** — Performance table for all engines: calls, avg latency, error rate, cost. Pre-seeded with demo data (`server/performance/engineProfiler.ts`)
+- **Interactive Intelligence Map** — Visual architecture graph with 32 clickable nodes across 9 categories (interface, agent, engine, knowledge, simulation, governance, integration, safety, learning), 35 edges, node detail panel with connections (`server/architecture/intelligenceMapGraph.ts`)
+- **Visual Reasoning Debugger** — Step-through debugger showing 11-step reasoning pipeline (Symptom Normalizer → Adaptive Router → Knowledge Graph → Red Flag → Bayesian → Case Similarity → Cluster Scoring → Confidence Calibration → Protocol Selector → Unified Reasoning → Disposition Resolver). Input any complaint/symptoms to trace (`server/reasoning/reasoningTraceEngine.ts`)
+
+Backend: `server/safety/clinicalSafetyScoreEngine.ts`, `server/performance/engineProfiler.ts`, `server/controlCenter/controlCenterService.ts`, `server/controlCenter/alertEngine.ts`. APIs: GET `/api/control-center/snapshot|engine-stats`, POST `/api/control-center/safety-score`, GET `/api/intelligence-map`, POST `/api/reasoning-debug`.
 
 ### Knowledge Graph Dashboard
 An 8-tab dashboard (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions, Data Import, AI Planner) provides a comprehensive view and management interface for the clinical knowledge graph.
