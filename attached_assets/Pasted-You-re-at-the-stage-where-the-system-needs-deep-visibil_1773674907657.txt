@@ -1,0 +1,366 @@
+You’re at the stage where the system needs deep visibility and direct physician control.
+The two tools you asked for solve that:
+
+Interactive Clinical Intelligence Map (ICIM)
+
+Visual Reasoning Debugger (VRD)
+
+Together they let physicians:
+
+see the entire architecture
+
+click any engine / agent / protocol / node
+
+run the reasoning pipeline step-by-step
+
+Every engine will have buttons so physicians can test or inspect them directly.
+
+Below is the implementation scaffold designed to fit your current structure.
+
+1. Interactive Clinical Intelligence Map
+
+This shows the entire system graph:
+
+interfaces
+clinical brain
+engines
+knowledge graph
+simulation
+learning
+governance
+integrations
+
+Each node is clickable.
+
+Folder Structure
+client/
+  pages/
+      ClinicalIntelligenceMap.tsx
+  components/
+      intelligence-map/
+          IntelligenceMapCanvas.tsx
+          IntelligenceNodePanel.tsx
+          EngineControlPanel.tsx
+server/
+  architecture/
+      intelligenceMapGraph.ts
+routes/
+      intelligenceMapRoutes.ts
+Architecture Graph Definition
+
+server/architecture/intelligenceMapGraph.ts
+
+export const intelligenceGraph={
+
+ nodes:[
+
+  {id:"clinical_brain",type:"agent",label:"Clinical Brain"},
+  {id:"adaptive_router",type:"engine",label:"Adaptive Engine Router"},
+  {id:"unified_reasoning",type:"engine",label:"Unified Reasoning Engine"},
+  {id:"knowledge_graph",type:"knowledge",label:"Clinical Knowledge Graph"},
+  {id:"simulation_lab",type:"simulation",label:"Simulation Lab"},
+  {id:"scenario_generator",type:"simulation",label:"Scenario Generator"},
+  {id:"sheet_sync",type:"integration",label:"Google Sheet Sync"},
+  {id:"audit_log",type:"governance",label:"Clinical Audit Log"},
+  {id:"version_control",type:"governance",label:"Clinical Version Control"}
+
+ ],
+
+ edges:[
+
+  {from:"clinical_brain",to:"adaptive_router"},
+  {from:"adaptive_router",to:"unified_reasoning"},
+  {from:"unified_reasoning",to:"knowledge_graph"},
+  {from:"knowledge_graph",to:"simulation_lab"},
+  {from:"simulation_lab",to:"scenario_generator"},
+  {from:"sheet_sync",to:"knowledge_graph"},
+  {from:"knowledge_graph",to:"version_control"},
+  {from:"version_control",to:"audit_log"}
+
+ ]
+
+}
+Map API
+
+server/routes/intelligenceMapRoutes.ts
+
+import express from "express"
+import {intelligenceGraph} from "../architecture/intelligenceMapGraph"
+
+const router=express.Router()
+
+router.get("/intelligence-map",(req,res)=>{
+
+ res.json(intelligenceGraph)
+
+})
+
+export default router
+Interactive Map UI
+
+client/components/intelligence-map/IntelligenceMapCanvas.tsx
+
+Uses React Flow for interactive graph navigation.
+
+import React,{useEffect,useState} from "react"
+import ReactFlow,{MiniMap,Controls} from "reactflow"
+
+export default function IntelligenceMapCanvas({onSelectNode}){
+
+ const [graph,setGraph]=useState(null)
+
+ useEffect(()=>{
+
+  fetch("/api/intelligence-map")
+  .then(r=>r.json())
+  .then(setGraph)
+
+ },[])
+
+ if(!graph) return null
+
+ const nodes = graph.nodes.map(n=>({
+
+  id:n.id,
+  data:{label:n.label},
+  position:{x:Math.random()*500,y:Math.random()*500}
+
+ }))
+
+ const edges = graph.edges.map((e,i)=>({
+
+  id:`e${i}`,
+  source:e.from,
+  target:e.to
+
+ }))
+
+ return(
+
+ <div style={{height:600}}>
+
+ <ReactFlow
+  nodes={nodes}
+  edges={edges}
+  onNodeClick={(e,node)=>onSelectNode(node.id)}
+ >
+
+ <MiniMap/>
+ <Controls/>
+
+ </ReactFlow>
+
+ </div>
+
+ )
+
+}
+Engine Control Panel
+
+Each engine node gets buttons.
+
+client/components/intelligence-map/EngineControlPanel.tsx
+
+import React from "react"
+
+export default function EngineControlPanel({engine}){
+
+ async function runEngine(){
+
+  const r = await fetch(`/api/engine/run/${engine}`)
+
+  const result = await r.json()
+
+  alert(JSON.stringify(result,null,2))
+
+ }
+
+ return(
+
+ <div>
+
+ <h3>{engine}</h3>
+
+ <button onClick={runEngine}>
+ Run Engine
+ </button>
+
+ <button>
+ View Logs
+ </button>
+
+ <button>
+ Run Simulation
+ </button>
+
+ </div>
+
+ )
+
+}
+Node Panel
+
+Shows details of clicked node.
+
+client/components/intelligence-map/IntelligenceNodePanel.tsx
+
+import React from "react"
+import EngineControlPanel from "./EngineControlPanel"
+
+export default function IntelligenceNodePanel({node}){
+
+ if(!node) return <div>Select node</div>
+
+ return(
+
+ <div>
+
+ <h2>{node}</h2>
+
+ <EngineControlPanel engine={node}/>
+
+ </div>
+
+ )
+
+}
+Intelligence Map Page
+
+client/pages/ClinicalIntelligenceMap.tsx
+
+import React,{useState} from "react"
+import IntelligenceMapCanvas from "../components/intelligence-map/IntelligenceMapCanvas"
+import IntelligenceNodePanel from "../components/intelligence-map/IntelligenceNodePanel"
+
+export default function ClinicalIntelligenceMap(){
+
+ const [node,setNode]=useState(null)
+
+ return(
+
+ <div>
+
+ <h1>Clinical Intelligence Map</h1>
+
+ <IntelligenceMapCanvas onSelectNode={setNode}/>
+
+ <IntelligenceNodePanel node={node}/>
+
+ </div>
+
+ )
+
+}
+2. Visual Reasoning Debugger
+
+This lets physicians step through the reasoning process.
+
+Folder Structure
+server/
+  reasoning/
+      reasoningTraceEngine.ts
+routes/
+      reasoningDebuggerRoutes.ts
+client/
+  pages/
+      ReasoningDebugger.tsx
+Reasoning Trace Engine
+
+server/reasoning/reasoningTraceEngine.ts
+
+export function runReasoningTrace(input:any){
+
+ const steps=[]
+
+ steps.push({
+  engine:"Adaptive Router",
+  output:"selected engines"
+ })
+
+ steps.push({
+  engine:"Knowledge Graph",
+  output:"resolved skills"
+ })
+
+ steps.push({
+  engine:"Bayesian Differential",
+  output:"probabilities"
+ })
+
+ steps.push({
+  engine:"Unified Reasoning",
+  output:"final diagnosis ranking"
+ })
+
+ return{
+  steps
+ }
+
+}
+Debug API
+
+server/routes/reasoningDebuggerRoutes.ts
+
+import express from "express"
+import {runReasoningTrace} from "../reasoning/reasoningTraceEngine"
+
+const router=express.Router()
+
+router.post("/reasoning-debug",(req,res)=>{
+
+ res.json(runReasoningTrace(req.body))
+
+})
+
+export default router
+Debugger UI
+
+client/pages/ReasoningDebugger.tsx
+
+import React,{useState} from "react"
+
+export default function ReasoningDebugger(){
+
+ const [trace,setTrace]=useState(null)
+
+ async function run(){
+
+  const r = await fetch("/api/reasoning-debug",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({complaint:"cough"})
+  })
+
+  setTrace(await r.json())
+
+ }
+
+ return(
+
+ <div>
+
+ <h2>Clinical Reasoning Debugger</h2>
+
+ <button onClick={run}>
+ Run Trace
+ </button>
+
+ <pre>{JSON.stringify(trace,null,2)}</pre>
+
+ </div>
+
+ )
+
+}
+Physician Control Buttons
+
+Each engine panel should include:
+
+Run engine
+Run simulation
+View logs
+View reasoning trace
+Edit configuration
+View knowledge graph connections
+
+This ensures every feature is accessible from the UI.

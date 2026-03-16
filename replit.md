@@ -110,6 +110,17 @@ Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, 
 
 APIs: `/api/governance/queue|submit|review/:id|stats|regression-test|risk-analysis|consistency-check|feedback|deploy|rollback|versions`. Frontend page at `/clinical-governance` with 6 tabs.
 
+### Clinical Version Control System (CVCS)
+`server/versioning/` — 6 modules for clinical configuration versioning:
+- **Version Types** (`clinicalVersionTypes.ts`) — Type definitions for ClinicalVersion, VersionDiff, VersionTimelineEntry
+- **Version Store** (`clinicalVersionStore.ts`) — In-memory version storage with CRUD, status updates, deployment tracking
+- **Version Manager** (`clinicalVersionManager.ts`) — Creates version snapshots with SHA-256 hashes of sheets/graph state
+- **Version Diff** (`clinicalVersionDiff.ts`) — Computes differences between any two versions (added/removed/modified, affected sheets)
+- **Rollback Manager** (`clinicalRollbackManager.ts`) — Deploy/rollback with automatic status management of previous versions
+- **Change Timeline** (`clinicalChangeTimeline.ts`) — Builds chronological timeline of all clinical data changes
+
+APIs: GET/POST `/api/clinical-versions`, GET `/api/clinical-versions/summary|deployment/current|diff/:from/:to`, POST `/api/clinical-versions/deploy|rollback`, GET `/api/clinical-change-timeline`. Frontend page at `/clinical-version-control` with 3 tabs (History with diff viewer, Create Version, Timeline with deployment status). Components: `client/src/components/versioning/VersionList.tsx`, `VersionDiffViewer.tsx`, `VersionRollbackPanel.tsx`.
+
 ### Knowledge Graph Dashboard
 An 8-tab dashboard (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions, Data Import, AI Planner) provides a comprehensive view and management interface for the clinical knowledge graph.
 

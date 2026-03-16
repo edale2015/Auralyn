@@ -144,6 +144,7 @@ import clinicalSchemaValidationRoutes from "./routes/clinicalSchemaValidationRou
 import sheetGraphIngestionRoutes from "./routes/sheetGraphIngestionRoutes";
 import auditRoutes from "./routes/auditRoutes";
 import governanceRoutes from "./routes/governanceRoutes";
+import clinicalVersionRoutes from "./routes/clinicalVersionRoutes";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -394,6 +395,7 @@ app.use(clinicalSchemaValidationRoutes);
 app.use(sheetGraphIngestionRoutes);
 app.use(auditRoutes);
 app.use(governanceRoutes);
+app.use(clinicalVersionRoutes);
 console.log("[SimulationLab] Clinical simulation + coverage + channel + CCT routes registered");
 console.log("[Agents] Clinical reasoning agent + chart agent + full pipeline registered");
 console.log("[Scenarios] Clinical scenario generator + system architecture map registered");
@@ -405,6 +407,7 @@ console.log("[ClinicalIntelligence] Memory engine + personalization + calibratio
 console.log("[ClinicalEngines] Temporal, Risk, Timeline, Consensus, Resources, Epi, Triage, Feedback routes registered");
 console.log("[Completion Modules] State, Intake, Pathways, Copilot, Predictive, RL, Telemedicine, Self-Improve routes registered");
 console.log("[Governance] Clinical governance queue + review engine + regression testing + risk monitor + consistency + deployment routes registered");
+console.log("[Versioning] Clinical version control + diff + rollback + timeline routes registered");
 app.use("/telegram", telegramRouter);
 console.log("[Cases] Case management endpoints registered at /api/cases/*");
 console.log("[Review] Physician review endpoints registered at /api/review/*");
