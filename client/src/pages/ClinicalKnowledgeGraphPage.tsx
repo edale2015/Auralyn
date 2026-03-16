@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Network, Search, GitBranch, AlertTriangle, HelpCircle,
-  ArrowRight, CheckCircle2, XCircle, Lightbulb, Layers, Cpu, Zap
+  ArrowRight, CheckCircle2, XCircle, Lightbulb, Layers, Cpu, Zap,
+  Upload, FileSpreadsheet, Loader2, Brain, Target
 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 const nodeTypeColor: Record<string, string> = {
   complaint: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
@@ -432,6 +435,229 @@ function PanelAdaptiveQuestions() {
   );
 }
 
+function PanelDataImport() {
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const qc = useQueryClient();
+
+  const { data: uploads, isLoading: uploadsLoading } = useQuery<any>({
+    queryKey: ["/api/sheets/uploads"],
+  });
+
+  async function handleUpload() {
+    const file = fileRef.current?.files?.[0];
+    if (!file) {
+      toast({ title: "No file selected", variant: "destructive" });
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const token = localStorage.getItem("app_auth_token");
+      const res = await fetch("/api/sheets/import", {
+        method: "POST",
+        body: form,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      toast({ title: "Sheet uploaded", description: `${result.filename} (${result.sizeKb} KB)` });
+      qc.invalidateQueries({ queryKey: ["/api/sheets/uploads"] });
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err?.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Upload className="h-4 w-4" />
+            Import Clinical Data Sheets
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Upload .csv, .xlsx, or .json files containing complaints, diagnoses, questions, protocols, or medications to populate the knowledge graph.
+          </p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.csv,.xls,.json"
+              className="max-w-sm"
+              data-testid="input-sheet-file"
+            />
+            <Button onClick={handleUpload} disabled={uploading} data-testid="button-upload-sheet">
+              {uploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+              Upload Sheet
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <Badge variant="outline">Complaints</Badge>
+            <Badge variant="outline">Diagnoses</Badge>
+            <Badge variant="outline">Questions</Badge>
+            <Badge variant="outline">Protocols</Badge>
+            <Badge variant="outline">Medications</Badge>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <FileSpreadsheet className="h-4 w-4" />
+            Previous Uploads
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {uploadsLoading ? (
+            <div className="flex justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : !uploads?.files?.length ? (
+            <p className="text-sm text-muted-foreground py-4 text-center" data-testid="text-no-uploads">
+              No sheets uploaded yet. Upload a file to get started.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {uploads.files.map((f: any) => (
+                <div key={f.filename} className="flex items-center justify-between p-2.5 rounded-lg bg-muted/30 text-sm" data-testid={`upload-${f.filename}`}>
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-mono text-xs">{f.filename}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span>{f.sizeKb} KB</span>
+                    <span>{new Date(f.uploadedAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+const PRIORITY_COLORS: Record<string, string> = {
+  critical: "bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-300",
+  high: "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/30 dark:text-orange-300",
+  medium: "bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900/30 dark:text-yellow-300",
+  low: "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/30 dark:text-blue-300",
+};
+
+function PanelAIPlanner() {
+  const { data, isLoading, refetch } = useQuery<any>({
+    queryKey: ["/api/clinical-planner/run"],
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          AI-driven strategic planning layer — automatically identifies what needs attention across the entire platform.
+        </p>
+        <Button variant="outline" size="sm" onClick={() => refetch()} data-testid="button-rerun-planner">
+          <Brain className="h-3.5 w-3.5 mr-1.5" />
+          Re-Run
+        </Button>
+      </div>
+
+      {isLoading && <div className="text-muted-foreground py-8 text-center">Analyzing platform state…</div>}
+
+      {data && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="pt-4">
+                <div className="text-xs text-muted-foreground">Knowledge Gaps</div>
+                <div className={`text-3xl font-bold mt-1 ${data.gapCount > 0 ? "text-orange-600" : "text-green-600"}`}>{data.gapCount}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="text-xs text-muted-foreground">Model Drift</div>
+                <div className={`text-3xl font-bold mt-1 ${data.driftDetected ? "text-red-600" : "text-green-600"}`}>
+                  {data.driftDetected ? "Yes" : "No"}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="text-xs text-muted-foreground">Accuracy</div>
+                <div className="text-3xl font-bold mt-1">
+                  {data.outcomeAccuracy != null ? `${data.outcomeAccuracy}%` : "—"}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="text-xs text-muted-foreground">Priorities</div>
+                <div className="text-3xl font-bold mt-1">{data.priorities.length}</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Target className="h-4 w-4" />
+                Next Focus: <Badge variant="outline" className="font-mono text-xs">{data.nextFocus.replace(/_/g, " ")}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {data.priorities.map((p: any, i: number) => (
+                <div key={i} className="flex items-start gap-3 p-3 rounded-lg border bg-muted/20" data-testid={`priority-${i}`}>
+                  <Badge className={`${PRIORITY_COLORS[p.priority]} border text-xs flex-shrink-0`}>{p.priority}</Badge>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm">{p.task.replace(/_/g, " ")}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{p.description}</div>
+                    {p.count != null && (
+                      <div className="text-xs mt-1"><Badge variant="outline" className="text-xs">{p.count} items</Badge></div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {data.simulationSchedule && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Simulation Schedule</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {["daily", "weekly", "monthly"].map((freq) => (
+                    <div key={freq}>
+                      <div className="text-xs font-medium uppercase text-muted-foreground mb-2">{freq}</div>
+                      <div className="space-y-1">
+                        {(data.simulationSchedule[freq] || []).map((task: string) => (
+                          <div key={task} className="text-xs bg-muted/30 rounded px-2 py-1">{task.replace(/_/g, " ")}</div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function ClinicalKnowledgeGraphPage() {
   return (
     <div className="p-6 space-y-6">
@@ -453,6 +679,8 @@ export default function ClinicalKnowledgeGraphPage() {
           <TabsTrigger value="coverage" className="gap-1.5" data-testid="tab-kg-coverage"><HelpCircle className="h-3.5 w-3.5" />Question Coverage</TabsTrigger>
           <TabsTrigger value="deps" className="gap-1.5" data-testid="tab-kg-deps"><Layers className="h-3.5 w-3.5" />Engine Dependencies</TabsTrigger>
           <TabsTrigger value="adaptive" className="gap-1.5" data-testid="tab-kg-adaptive"><Zap className="h-3.5 w-3.5" />Adaptive Questions</TabsTrigger>
+          <TabsTrigger value="import" className="gap-1.5" data-testid="tab-kg-import"><Upload className="h-3.5 w-3.5" />Data Import</TabsTrigger>
+          <TabsTrigger value="planner" className="gap-1.5" data-testid="tab-kg-planner"><Brain className="h-3.5 w-3.5" />AI Planner</TabsTrigger>
         </TabsList>
 
         <TabsContent value="explorer"><PanelExplorer /></TabsContent>
@@ -461,6 +689,8 @@ export default function ClinicalKnowledgeGraphPage() {
         <TabsContent value="coverage"><PanelQuestionCoverage /></TabsContent>
         <TabsContent value="deps"><PanelEngineDeps /></TabsContent>
         <TabsContent value="adaptive"><PanelAdaptiveQuestions /></TabsContent>
+        <TabsContent value="import"><PanelDataImport /></TabsContent>
+        <TabsContent value="planner"><PanelAIPlanner /></TabsContent>
       </Tabs>
     </div>
   );
