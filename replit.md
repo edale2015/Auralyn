@@ -131,6 +131,15 @@ Dashboard at `/auralyn` with 4 tabs (Overview, Clinics, Billing, Assistant):
 
 APIs: GET `/api/auralyn/overview|tenants|billing/summary|billing/plans|billing/invoices|billing/subscriptions`; POST `/api/auralyn/tenants`, `/api/auralyn/clinical/run`; PATCH `/api/auralyn/tenants/:id/plan`. Routes in `server/routes/auralynSaasRoutes.ts`.
 
+### EHR Integration & RBAC
+Dashboard at `/ehr-integration` with 4 tabs (Connection, Patients, Encounters, Brain→EHR):
+- **FHIR Service** — FHIR R4-compliant EHR integration with Patient, Encounter, and Observation resources. Supports create/read operations with 5 demo patients, 4 encounters, and 4 observations. Clinical Brain output auto-creates FHIR encounters. (`server/integration/fhirService.ts`)
+- **RBAC Service** — Granular permission system with 6 roles (admin, physician, nurse, staff, patient, viewer) and 14 permissions covering clinical, billing, EHR, deployment, and audit access. (`server/auth/rbacService.ts`)
+- **Brain→EHR Pipeline** — Run clinical brain on a selected patient, auto-create a FHIR Encounter with diagnosis, disposition, and ranked differentials.
+- User roles expanded: `admin | physician | nurse | staff | patient | viewer` (`server/types/auth.ts`)
+
+APIs: GET `/api/ehr/status|summary|patients|encounters|observations`, `/api/ehr/patients/:id`, `/api/rbac/roles|check`; POST `/api/ehr/patients|observations`, `/api/ehr/encounters/from-brain`. Routes in `server/routes/ehrRoutes.ts`.
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp
