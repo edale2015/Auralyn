@@ -154,6 +154,7 @@ const NAV_SECTIONS = [
       { path: "/auralyn", label: "Auralyn SaaS Platform", icon: Rocket },
       { path: "/ehr-integration", label: "EHR Integration & RBAC", icon: HeartPulse },
       { path: "/clinical-scale", label: "Clinical Scale Stack", icon: ClipboardCheck },
+      { path: "/operations-dashboard", label: "Operations Dashboard", icon: Gauge },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },

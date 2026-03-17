@@ -1,0 +1,554 @@
+NEXT SCALING MOVES
+
+I recommend building these 6 next:
+
+Multi-Physician Routing Engine
+
+Escalation + SLA Queue
+
+Clinic Tenant Isolation
+
+Live Operations Dashboard API
+
+Outcome Drift Monitor
+
+Physician Workload + Approval Rules
+
+Below is the code.
+
+1. MULTI-PHYSICIAN ROUTING ENGINE
+
+This assigns cases intelligently based on load, specialty, and risk.
+
+/server/services/physicianRouter.ts
+export type PhysicianProfile = {
+  id: string;
+  clinicId: string;
+  name: string;
+  role: "physician" | "pa" | "np" | "admin";
+  specialties: string[];
+  active: boolean;
+  currentLoad: number;
+  maxConcurrent: number;
+  canReviewHighRisk: boolean;
+};
+
+export type RoutedCaseInput = {
+  clinicId: string;
+  complaint: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  preferredSpecialty?: string;
+};
+
+function specialtyScore(physician: PhysicianProfile, preferred?: string) {
+  if (!preferred) return 0;
+  return physician.specialties.includes(preferred) ? 3 : 0;
+}
+
+function highRiskScore(physician: PhysicianProfile, riskLevel: string) {
+  if (riskLevel !== "HIGH") return 0;
+  return physician.canReviewHighRisk ? 4 : -100;
+}
+
+function loadScore(physician: PhysicianProfile) {
+  const remaining = physician.maxConcurrent - physician.currentLoad;
+  return remaining;
+}
+
+export function routeCaseToPhysician(
+  physicians: PhysicianProfile[],
+  input: RoutedCaseInput
+) {
+  const candidates = physicians.filter(
+    p =>
+      p.clinicId === input.clinicId &&
+      p.active &&
+      p.currentLoad < p.maxConcurrent &&
+      p.role !== "admin"
+  );
+
+  if (!candidates.length) {
+    return {
+      assignedPhysicianId: null,
+      routingReason: "No available clinician"
+    };
+  }
+
+  const ranked = candidates
+    .map(p => ({
+      physician: p,
+      score:
+        specialtyScore(p, input.preferredSpecialty) +
+        highRiskScore(p, input.riskLevel) +
+        loadScore(p)
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  return {
+    assignedPhysicianId: ranked[0].physician.id,
+    routingReason: `Assigned by score ${ranked[0].score}`
+  };
+}
+2. ESCALATION + SLA QUEUE
+
+High-risk and aging cases should rise like cream. Quietly. Reliably.
+
+/server/services/caseQueue.ts
+export type QueueCase = {
+  id: string;
+  clinicId: string;
+  assignedPhysicianId: string | null;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  createdAt: number;
+  status: "pending" | "reviewed" | "escalated";
+  confidence: number;
+};
+
+export function calculateCasePriority(qc: QueueCase) {
+  let score = 0;
+
+  if (qc.riskLevel === "HIGH") score += 100;
+  if (qc.riskLevel === "MEDIUM") score += 40;
+  if (qc.confidence < 0.7) score += 30;
+
+  const ageMinutes = Math.floor((Date.now() - qc.createdAt) / 60000);
+  score += Math.min(ageMinutes, 60);
+
+  return score;
+}
+
+export function sortQueue(cases: QueueCase[]) {
+  return [...cases].sort((a, b) => calculateCasePriority(b) - calculateCasePriority(a));
+}
+
+export function shouldEscalateCase(qc: QueueCase) {
+  const ageMinutes = Math.floor((Date.now() - qc.createdAt) / 60000);
+
+  if (qc.riskLevel === "HIGH" && ageMinutes >= 5) return true;
+  if (qc.riskLevel === "MEDIUM" && ageMinutes >= 20) return true;
+  if (qc.confidence < 0.5 && ageMinutes >= 10) return true;
+
+  return false;
+}
+/server/routes/escalation.ts
+import express from "express";
+import { shouldEscalateCase } from "../services/caseQueue";
+
+const router = express.Router();
+
+router.post("/scan", async (req, res) => {
+  const cases = req.body.cases || [];
+
+  const escalated = cases
+    .filter(shouldEscalateCase)
+    .map((c: any) => ({
+      ...c,
+      status: "escalated",
+      escalatedAt: new Date().toISOString()
+    }));
+
+  res.json({
+    scanned: cases.length,
+    escalatedCount: escalated.length,
+    escalated
+  });
+});
+
+export default router;
+3. CLINIC TENANT ISOLATION
+
+Now we make sure Clinic A never sees Clinic B’s patients. No data soup.
+
+/server/middleware/tenantGuard.ts
+import { Request, Response, NextFunction } from "express";
+
+export function tenantGuard(req: Request, res: Response, next: NextFunction) {
+  const clinicId = req.headers["x-clinic-id"];
+
+  if (!clinicId || typeof clinicId !== "string") {
+    return res.status(400).json({
+      error: "Missing clinic context"
+    });
+  }
+
+  res.locals.clinicId = clinicId;
+  next();
+}
+Example route update
+import express from "express";
+import { tenantGuard } from "../middleware/tenantGuard";
+
+const router = express.Router();
+
+router.get("/my-cases", tenantGuard, async (req, res) => {
+  const clinicId = res.locals.clinicId;
+
+  // replace with real DB query
+  const allCases = req.body.mockCases || [];
+  const clinicCases = allCases.filter((c: any) => c.clinicId === clinicId);
+
+  res.json({
+    clinicId,
+    count: clinicCases.length,
+    cases: clinicCases
+  });
+});
+
+export default router;
+4. LIVE OPERATIONS DASHBOARD API
+
+This gives you the pulse of the system.
+
+/server/services/opsMetrics.ts
+export type OpsMetricInput = {
+  totalCases: number;
+  reviewedCases: number;
+  escalatedCases: number;
+  overrides: number;
+  avgReviewSeconds: number;
+  satisfactionAverage: number;
+};
+
+export function buildOpsSnapshot(input: OpsMetricInput) {
+  const pendingCases = input.totalCases - input.reviewedCases;
+  const reviewRate = input.totalCases === 0 ? 0 : input.reviewedCases / input.totalCases;
+  const overrideRate = input.reviewedCases === 0 ? 0 : input.overrides / input.reviewedCases;
+  const escalationRate = input.totalCases === 0 ? 0 : input.escalatedCases / input.totalCases;
+
+  return {
+    timestamp: new Date().toISOString(),
+    totals: {
+      totalCases: input.totalCases,
+      reviewedCases: input.reviewedCases,
+      pendingCases,
+      escalatedCases: input.escalatedCases
+    },
+    rates: {
+      reviewRate,
+      overrideRate,
+      escalationRate
+    },
+    performance: {
+      avgReviewSeconds: input.avgReviewSeconds,
+      satisfactionAverage: input.satisfactionAverage
+    }
+  };
+}
+/server/routes/ops.ts
+import express from "express";
+import { buildOpsSnapshot } from "../services/opsMetrics";
+
+const router = express.Router();
+
+router.get("/snapshot", async (_req, res) => {
+  // replace with real aggregation query
+  const snapshot = buildOpsSnapshot({
+    totalCases: 240,
+    reviewedCases: 211,
+    escalatedCases: 14,
+    overrides: 27,
+    avgReviewSeconds: 19,
+    satisfactionAverage: 4.6
+  });
+
+  res.json(snapshot);
+});
+
+export default router;
+5. OUTCOME DRIFT MONITOR
+
+This watches for silent decay. The kind that arrives in a suit and smiles.
+
+/server/services/driftMonitor.ts
+export type OutcomeRecord = {
+  timestamp: string;
+  correct: boolean;
+  complaint: string;
+};
+
+export function computeWindowAccuracy(records: OutcomeRecord[]) {
+  if (!records.length) return 0;
+  return records.filter(r => r.correct).length / records.length;
+}
+
+export function detectOutcomeDrift(
+  baseline: OutcomeRecord[],
+  recent: OutcomeRecord[],
+  thresholdDrop = 0.08
+) {
+  const baselineAccuracy = computeWindowAccuracy(baseline);
+  const recentAccuracy = computeWindowAccuracy(recent);
+  const delta = baselineAccuracy - recentAccuracy;
+
+  return {
+    baselineAccuracy,
+    recentAccuracy,
+    delta,
+    driftDetected: delta >= thresholdDrop,
+    recommendedAction:
+      delta >= thresholdDrop
+        ? "Increase caution, require more physician review, inspect complaint clusters"
+        : "Stable"
+  };
+}
+/server/routes/drift.ts
+import express from "express";
+import { detectOutcomeDrift } from "../services/driftMonitor";
+
+const router = express.Router();
+
+router.post("/detect", async (req, res) => {
+  const { baseline = [], recent = [] } = req.body;
+
+  const result = detectOutcomeDrift(baseline, recent);
+
+  res.json(result);
+});
+
+export default router;
+6. PHYSICIAN APPROVAL RULES ENGINE
+
+This determines what can be auto-approved, what must be reviewed, and what gets sirens.
+
+/server/services/approvalRules.ts
+export type ApprovalInput = {
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  confidence: number;
+  hasSafetyAlerts: boolean;
+  disposition: string;
+};
+
+export function evaluateApprovalRule(input: ApprovalInput) {
+  if (input.riskLevel === "HIGH") {
+    return {
+      action: "mandatory_review",
+      reason: "High-risk cases require physician review"
+    };
+  }
+
+  if (input.hasSafetyAlerts) {
+    return {
+      action: "mandatory_review",
+      reason: "Safety alerts present"
+    };
+  }
+
+  if (input.confidence < 0.75) {
+    return {
+      action: "mandatory_review",
+      reason: "Confidence below threshold"
+    };
+  }
+
+  if (input.disposition === "er_now" || input.disposition === "urgent_now") {
+    return {
+      action: "mandatory_review",
+      reason: "High-severity disposition"
+    };
+  }
+
+  return {
+    action: "eligible_for_batch_approval",
+    reason: "Low-risk, high-confidence, no safety alerts"
+  };
+}
+7. FRONTEND: OPERATIONS DASHBOARD PANEL
+/frontend/pages/OperationsDashboard.tsx
+import { useEffect, useState } from "react";
+
+type Snapshot = {
+  timestamp: string;
+  totals: {
+    totalCases: number;
+    reviewedCases: number;
+    pendingCases: number;
+    escalatedCases: number;
+  };
+  rates: {
+    reviewRate: number;
+    overrideRate: number;
+    escalationRate: number;
+  };
+  performance: {
+    avgReviewSeconds: number;
+    satisfactionAverage: number;
+  };
+};
+
+export default function OperationsDashboard() {
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+
+  useEffect(() => {
+    fetch("/api/ops/snapshot")
+      .then(r => r.json())
+      .then(setSnapshot);
+  }, []);
+
+  if (!snapshot) return <div className="p-6">Loading operations...</div>;
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Operations Dashboard</h1>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="border rounded p-4">
+          <div>Total Cases</div>
+          <div className="text-2xl font-semibold">{snapshot.totals.totalCases}</div>
+        </div>
+
+        <div className="border rounded p-4">
+          <div>Pending Cases</div>
+          <div className="text-2xl font-semibold">{snapshot.totals.pendingCases}</div>
+        </div>
+
+        <div className="border rounded p-4">
+          <div>Escalated Cases</div>
+          <div className="text-2xl font-semibold">{snapshot.totals.escalatedCases}</div>
+        </div>
+
+        <div className="border rounded p-4">
+          <div>Avg Review Time</div>
+          <div className="text-2xl font-semibold">{snapshot.performance.avgReviewSeconds}s</div>
+        </div>
+      </div>
+
+      <div className="border rounded p-4">
+        <div>Review Rate: {(snapshot.rates.reviewRate * 100).toFixed(1)}%</div>
+        <div>Override Rate: {(snapshot.rates.overrideRate * 100).toFixed(1)}%</div>
+        <div>Escalation Rate: {(snapshot.rates.escalationRate * 100).toFixed(1)}%</div>
+        <div>Patient Satisfaction: {snapshot.performance.satisfactionAverage.toFixed(2)} / 5</div>
+      </div>
+    </div>
+  );
+}
+8. APP WIRING
+/server/index.ts additions
+import escalation from "./routes/escalation";
+import ops from "./routes/ops";
+import drift from "./routes/drift";
+
+app.use("/api/escalation", escalation);
+app.use("/api/ops", ops);
+app.use("/api/drift", drift);
+Dashboard tab addition
+import OperationsDashboard from "./OperationsDashboard";
+
+// inside your tab bar
+<button onClick={() => setTab("ops")}>Operations</button>
+
+// inside render
+{tab === "ops" && <OperationsDashboard />}
+STRATEGIC SUGGESTIONS BEFORE NEXT CODE WAVE
+
+The next 4 moves after this should be:
+
+A. Auth + role system
+You need clinic admin vs physician vs reviewer permissions.
+
+B. Real queue persistence
+Move from in-memory queue logic to DB-backed or Redis-backed queues.
+
+C. Per-complaint performance analytics
+You want to know whether cough is thriving while dizziness is a gremlin swamp.
+
+D. Legal-grade immutable audit export
+Signed audit packets with hash chains.
+
+CODE FOR A: SIMPLE ROLE GUARD
+/server/middleware/roleGuard.ts
+import { Request, Response, NextFunction } from "express";
+
+export function roleGuard(allowedRoles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const role = req.headers["x-user-role"];
+
+    if (!role || typeof role !== "string") {
+      return res.status(401).json({ error: "Missing user role" });
+    }
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    next();
+  };
+}
+
+Usage:
+
+import { roleGuard } from "../middleware/roleGuard";
+
+router.post("/approve", roleGuard(["physician", "admin"]), async (req, res) => {
+  res.json({ success: true });
+});
+CODE FOR B: PER-COMPLAINT ANALYTICS
+/server/services/complaintAnalytics.ts
+export type ComplaintOutcome = {
+  complaint: string;
+  correct: boolean;
+  escalated: boolean;
+};
+
+export function buildComplaintAnalytics(rows: ComplaintOutcome[]) {
+  const map: Record<string, { total: number; correct: number; escalated: number }> = {};
+
+  for (const row of rows) {
+    if (!map[row.complaint]) {
+      map[row.complaint] = { total: 0, correct: 0, escalated: 0 };
+    }
+
+    map[row.complaint].total += 1;
+    if (row.correct) map[row.complaint].correct += 1;
+    if (row.escalated) map[row.complaint].escalated += 1;
+  }
+
+  return Object.entries(map).map(([complaint, v]) => ({
+    complaint,
+    total: v.total,
+    accuracy: v.total ? v.correct / v.total : 0,
+    escalationRate: v.total ? v.escalated / v.total : 0
+  }));
+}
+CODE FOR C: HASHED AUDIT CHAIN
+/server/services/auditChain.ts
+import crypto from "crypto";
+
+export type AuditEntryInput = {
+  timestamp: string;
+  caseId: string;
+  userId: string;
+  action: string;
+  payload: unknown;
+};
+
+export function hashAuditEntry(entry: AuditEntryInput, previousHash: string) {
+  const serialized = JSON.stringify({
+    ...entry,
+    previousHash
+  });
+
+  return crypto.createHash("sha256").update(serialized).digest("hex");
+}
+WHAT THIS ADDS
+
+With this wave, Auralyn now gains:
+
+clinic-safe routing
+
+time-sensitive escalation
+
+tenant isolation
+
+live operations visibility
+
+drift detection
+
+batch approval rules
+
+role-aware access
+
+per-complaint learning
+
+tamper-evident audit foundations
+
+That is the difference between “impressive demo” and “something an actual clinic ops lead can stare at without blinking.”
