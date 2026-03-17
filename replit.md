@@ -122,6 +122,15 @@ Dashboard at `/self-improving-brain` with 5 tabs (Cycle, Predict, Debug, Agents,
 
 APIs: GET `/api/self-improving/cycle|history`, `/api/predictive-failures`, `/api/auto-debugger/actions|root-cause`, `/api/agent-coordinator`, `/api/clinical-memory`, `/api/autonomous-deploy/history`; POST `/api/explainability-graph`, `/api/autonomous-deploy`. Routes in `server/routes/selfImprovingRoutes.ts`.
 
+### Auralyn SaaS Platform
+Dashboard at `/auralyn` with 4 tabs (Overview, Clinics, Billing, Assistant):
+- **Multi-Tenant System** — Manages clinic tenants with plan-based access (Basic $49/Pro $149/Enterprise $499), feature gating, and case limits. (`server/core/tenantManager.ts`)
+- **Billing Service** — Stripe-ready subscription management with MRR/ARR tracking, invoices, and plan pricing. (`server/billing/billingService.ts`)
+- **Clinical Assistant** — Tenant-aware clinical brain endpoint for symptom analysis with diagnosis, disposition, confidence, safety alerts, differential, and execution trace.
+- **Platform Overview** — Shows total clinics, MRR ($697), ARR, tenant distribution, deployment status, and 10 platform capabilities.
+
+APIs: GET `/api/auralyn/overview|tenants|billing/summary|billing/plans|billing/invoices|billing/subscriptions`; POST `/api/auralyn/tenants`, `/api/auralyn/clinical/run`; PATCH `/api/auralyn/tenants/:id/plan`. Routes in `server/routes/auralynSaasRoutes.ts`.
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp

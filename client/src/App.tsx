@@ -101,6 +101,7 @@ import ClinicalAnalyticsEngines from "@/pages/ClinicalAnalyticsEngines";
 import AdvancedClinicalEngines from "@/pages/AdvancedClinicalEngines";
 import ClinicalBrainMonitor from "@/pages/ClinicalBrainMonitor";
 import SelfImprovingBrainDashboard from "@/pages/SelfImprovingBrainDashboard";
+import AuralynDashboard from "@/pages/AuralynDashboard";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -211,6 +212,7 @@ function Router() {
       <Route path="/advanced-clinical-engines">{() => <AdminPage component={AdvancedClinicalEngines} />}</Route>
       <Route path="/clinical-brain-monitor">{() => <AdminPage component={ClinicalBrainMonitor} />}</Route>
       <Route path="/self-improving-brain">{() => <AdminPage component={SelfImprovingBrainDashboard} />}</Route>
+      <Route path="/auralyn">{() => <AdminPage component={AuralynDashboard} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

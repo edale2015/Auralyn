@@ -151,6 +151,7 @@ const NAV_SECTIONS = [
       { path: "/advanced-clinical-engines", label: "Advanced Clinical Engines", icon: Activity },
       { path: "/clinical-brain-monitor", label: "Clinical Brain Monitor", icon: Brain },
       { path: "/self-improving-brain", label: "Self-Improving Brain", icon: Zap },
+      { path: "/auralyn", label: "Auralyn SaaS Platform", icon: Rocket },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },
