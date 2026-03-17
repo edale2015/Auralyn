@@ -98,6 +98,7 @@ import ClinicalGovernancePage from "@/pages/ClinicalGovernancePage";
 import ClinicalVersionControlPage from "@/pages/ClinicalVersionControlPage";
 import ClinicalIntelligenceControlCenter from "@/pages/ClinicalIntelligenceControlCenter";
 import ClinicalAnalyticsEngines from "@/pages/ClinicalAnalyticsEngines";
+import AdvancedClinicalEngines from "@/pages/AdvancedClinicalEngines";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -205,6 +206,7 @@ function Router() {
       <Route path="/clinical-version-control">{() => <AdminPage component={ClinicalVersionControlPage} />}</Route>
       <Route path="/intelligence-control-center">{() => <AdminPage component={ClinicalIntelligenceControlCenter} />}</Route>
       <Route path="/clinical-analytics-engines">{() => <AdminPage component={ClinicalAnalyticsEngines} />}</Route>
+      <Route path="/advanced-clinical-engines">{() => <AdminPage component={AdvancedClinicalEngines} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

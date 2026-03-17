@@ -148,6 +148,7 @@ const NAV_SECTIONS = [
       { path: "/clinical-version-control", label: "Version Control", icon: GitBranch },
       { path: "/intelligence-control-center", label: "Intelligence Control Center", icon: Radar },
       { path: "/clinical-analytics-engines", label: "Clinical Analytics Engines", icon: BarChart3 },
+      { path: "/advanced-clinical-engines", label: "Advanced Clinical Engines", icon: Activity },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },
