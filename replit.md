@@ -126,6 +126,31 @@ A 5-tab dashboard at `/advanced-clinical-engines` for advanced clinical AI capab
 
 APIs: GET `/api/clinical-drift`, `/api/uncertainty-navigator`, `/api/outcome-learning`, `/api/risk-scores/demo`, `/api/federated-learning`; POST `/api/risk-scores/centor|wells|heart`. Routes in `server/routes/advancedEngineRoutes.ts`.
 
+### 12-Layer Clinical AI Architecture & Brain Monitor
+The entire clinical AI system is organized into 12 structured layers under `server/layers/`:
+1. **Interface** — Receives input from Telegram, WhatsApp, Web UI
+2. **Normalization** — Converts messy text to structured clinical format with symptom mapping (40+ synonyms)
+3. **State** — Tracks case progression, history, and status
+4. **Knowledge** — Connects to knowledge graph for diagnosis candidates (10 symptom-to-diagnosis mappings)
+5. **Safety** — Red flag engine with 7 rules for emergency/urgent/caution routing
+6. **Reasoning** — Bayesian weighted differential analysis with probability ranking
+7. **Decision** — Produces final diagnosis + disposition based on reasoning + safety
+8. **Learning** — Outcome-based probability updates via outcomeLearningEngine
+9. **Analytics** — Question impact, clustering, protocol conflict analysis
+10. **Governance** — Deployment and change validation
+11. **Integration** — External API connections (PubMed, EHR)
+12. **Orchestration** — The Clinical Brain that coordinates all layers with event tracking
+
+**Real-Time Monitoring**: Event bus (`server/realtime/eventBus.ts`) captures all layer executions, system health monitor (`server/realtime/systemHealthMonitor.ts`) tracks 15 services across layers/services/external APIs.
+
+**Clinical Brain Monitor** dashboard at `/clinical-brain-monitor` with 4 tabs:
+- **Architecture** — Visual 12-layer stack with descriptions and status
+- **System Health** — Real-time status of 15 services with latency monitoring (auto-refreshes every 5s)
+- **Run Brain** — Input symptoms and watch the brain process through all 7 pipeline layers with execution trace, diagnosis, disposition, confidence, and safety alerts
+- **Event Feed** — Live stream of all system events (reasoning, safety, decision, error) with auto-refresh
+
+APIs: POST `/api/layer-brain/run`, GET `/api/layer-brain/health|events|cases|analytics|learning|layers`.
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp
