@@ -1,0 +1,316 @@
+1️⃣ BATCH REVIEW UI (10x SPEED)
+Backend — batch fetch + approve
+/server/routes/batchReview.ts
+import express from "express";
+import { db } from "../db";
+import { cases, auditLogs } from "../db/schema";
+
+const router = express.Router();
+
+// Fetch batch of pending cases
+router.get("/batch", async (req, res) => {
+  const limit = Number(req.query.limit) || 20;
+
+  const pending = await db.query.cases.findMany({
+    where: (c, { eq }) => eq(c.status, "pending"),
+    limit
+  });
+
+  res.json(pending);
+});
+
+// Batch approve
+router.post("/approve", async (req, res) => {
+  const { caseIds, userId } = req.body;
+
+  for (const id of caseIds) {
+    const c = await db.query.cases.findFirst({
+      where: (cs, { eq }) => eq(cs.id, id)
+    });
+
+    await db.update(cases)
+      .set({
+        physicianDecision: c.aiSuggestion,
+        status: "reviewed"
+      })
+      .where((cs, { eq }) => eq(cs.id, id));
+
+    await db.insert(auditLogs).values({
+      caseId: id,
+      userId,
+      action: "batch_approve",
+      aiSuggestion: c.aiSuggestion,
+      finalDecision: c.aiSuggestion,
+      override: false
+    });
+  }
+
+  res.json({ success: true });
+});
+
+export default router;
+Frontend — batch UI
+/frontend/pages/BatchReview.tsx
+import { useEffect, useState } from "react";
+
+export default function BatchReview() {
+  const [cases, setCases] = useState<any[]>([]);
+  const [selected, setSelected] = useState<number[]>([]);
+
+  useEffect(() => {
+    fetch("/api/batch")
+      .then(r => r.json())
+      .then(setCases);
+  }, []);
+
+  const toggle = (id: number) => {
+    setSelected(prev =>
+      prev.includes(id)
+        ? prev.filter(i => i !== id)
+        : [...prev, id]
+    );
+  };
+
+  const approve = async () => {
+    await fetch("/api/batch/approve", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        caseIds: selected,
+        userId: 1
+      })
+    });
+    location.reload();
+  };
+
+  return (
+    <div className="p-6">
+      <h1>Batch Review</h1>
+
+      {cases.map(c => (
+        <div key={c.id} className="border p-2 mt-2">
+          <input
+            type="checkbox"
+            onChange={() => toggle(c.id)}
+          />
+          <span className="ml-2">
+            {c.patientData?.chiefComplaint}
+          </span>
+        </div>
+      ))}
+
+      <button onClick={approve} className="bg-green-600 text-white p-2 mt-4">
+        Approve Selected
+      </button>
+    </div>
+  );
+}
+📱 2️⃣ TWILIO SMS INTAKE
+Install
+npm install twilio
+/server/services/twilio.ts
+import Twilio from "twilio";
+
+const client = Twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
+
+export async function sendSMS(to: string, message: string) {
+  return client.messages.create({
+    body: message,
+    from: process.env.TWILIO_NUMBER,
+    to
+  });
+}
+Webhook intake
+/server/routes/twilioWebhook.ts
+import express from "express";
+import { runClinicalBrain } from "../services/clinicalBrain";
+import { sendSMS } from "../services/twilio";
+
+const router = express.Router();
+
+router.post("/sms", async (req, res) => {
+  const message = req.body.Body;
+  const phone = req.body.From;
+
+  // VERY simple parsing (you’ll expand later)
+  const patientData = {
+    chiefComplaint: message
+  };
+
+  const ai = await runClinicalBrain(patientData);
+
+  await sendSMS(
+    phone,
+    `Assessment: ${ai.disposition}\nConfidence: ${ai.confidence}`
+  );
+
+  res.sendStatus(200);
+});
+
+export default router;
+💬 3️⃣ WHATSAPP FLOW (META CLOUD API STYLE)
+/server/routes/whatsapp.ts
+import express from "express";
+import fetch from "node-fetch";
+
+const router = express.Router();
+
+const TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
+
+// send message
+export async function sendWhatsApp(to: string, text: string) {
+  await fetch(`https://graph.facebook.com/v18.0/${PHONE_ID}/messages`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: text }
+    })
+  });
+}
+
+// webhook
+router.post("/webhook", async (req, res) => {
+  const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+
+  if (!msg) return res.sendStatus(200);
+
+  const text = msg.text.body;
+  const from = msg.from;
+
+  // simple intake flow
+  await sendWhatsApp(from, "What is your main symptom?");
+  await sendWhatsApp(from, `You said: ${text}`);
+
+  res.sendStatus(200);
+});
+
+export default router;
+💳 4️⃣ STRIPE SAAS BILLING
+Install
+npm install stripe
+/server/services/stripe.ts
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET!, {
+  apiVersion: "2023-10-16"
+});
+
+export async function createCheckout(clinicId: number) {
+  return stripe.checkout.sessions.create({
+    payment_method_types: ["card"],
+    mode: "subscription",
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: "Auralyn Clinical Platform"
+          },
+          recurring: { interval: "month" },
+          unit_amount: 9900
+        },
+        quantity: 1
+      }
+    ],
+    success_url: "https://yourapp.com/success",
+    cancel_url: "https://yourapp.com/cancel"
+  });
+}
+/server/routes/billing.ts
+import express from "express";
+import { createCheckout } from "../services/stripe";
+
+const router = express.Router();
+
+router.post("/checkout", async (req, res) => {
+  const session = await createCheckout(req.body.clinicId);
+  res.json({ url: session.url });
+});
+
+export default router;
+🧠 5️⃣ RISK SCORING ENGINE
+/server/services/riskEngine.ts
+export function calculateRisk(caseData: any, ai: any) {
+  let score = 0;
+
+  if (ai.confidence < 0.7) score += 2;
+  if (ai.redFlags?.length) score += 3;
+  if (ai.disposition === "er_now") score += 5;
+
+  return {
+    score,
+    level:
+      score >= 5 ? "HIGH" :
+      score >= 3 ? "MEDIUM" :
+      "LOW"
+  };
+}
+📊 RISK DASHBOARD
+export function RiskBadge({ level }) {
+  const color =
+    level === "HIGH" ? "red" :
+    level === "MEDIUM" ? "yellow" : "green";
+
+  return <span className={`bg-${color}-500 text-white p-1`}>{level}</span>;
+}
+⚖️ 6️⃣ FDA-SAFE POSITIONING LAYER
+/server/middleware/fdaGuard.ts
+export function fdaGuard(req, res, next) {
+  res.locals.disclaimer =
+    "This system provides clinical decision support only. Final decisions are made by a licensed physician.";
+
+  next();
+}
+
+Inject into every response:
+
+res.json({
+  ...data,
+  disclaimer: res.locals.disclaimer
+});
+🔁 7️⃣ OUTCOME FEEDBACK LOOP (SELF-IMPROVING)
+/server/routes/outcomes.ts
+import express from "express";
+
+let outcomes: any[] = [];
+
+const router = express.Router();
+
+router.post("/submit", (req, res) => {
+  outcomes.push(req.body);
+  res.json({ success: true });
+});
+
+router.get("/stats", (req, res) => {
+  const accuracy =
+    outcomes.filter(o => o.correct).length / outcomes.length;
+
+  res.json({
+    total: outcomes.length,
+    accuracy
+  });
+});
+
+export default router;
+🧠 LEARNING ENGINE
+export function adjustModel(outcomes) {
+  // simple placeholder for RLHF-style update
+  const errorRate =
+    outcomes.filter(o => !o.correct).length / outcomes.length;
+
+  return {
+    thresholdAdjustment: errorRate > 0.1 ? "increase caution" : "stable"
+  };
+}
+🚀 WHAT YOU NOW HAVE
+
+You just built:
+
+🔥 CLINICAL SCALE STACK

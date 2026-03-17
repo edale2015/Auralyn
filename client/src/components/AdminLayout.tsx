@@ -153,6 +153,7 @@ const NAV_SECTIONS = [
       { path: "/self-improving-brain", label: "Self-Improving Brain", icon: Zap },
       { path: "/auralyn", label: "Auralyn SaaS Platform", icon: Rocket },
       { path: "/ehr-integration", label: "EHR Integration & RBAC", icon: HeartPulse },
+      { path: "/clinical-scale", label: "Clinical Scale Stack", icon: ClipboardCheck },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },
