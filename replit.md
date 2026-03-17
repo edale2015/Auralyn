@@ -9,16 +9,13 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 
 ### Core Architecture
-The system utilizes a constrained agent architecture for deterministic medical triage, featuring a plan/act/observe agent loop and a multi-system triage pipeline with canonical keys and a unified sheets registry for data configuration and diagnostic candidate generation. A clinical state builder deterministically assembles an auditable clinical state. A modular, skill-based orchestration layer handles clinical triage, supported by an active control plane for managing rollouts and rule governance. An intelligence layer provides explainability and failure-driven rule suggestions, with an extended learning loop using patient outcomes for continuous improvement.
+The system employs a constrained agent architecture for deterministic medical triage, featuring a plan/act/observe agent loop and a multi-system triage pipeline. It utilizes a unified sheets registry for data configuration and diagnostic candidate generation, and a clinical state builder that deterministically assembles an auditable clinical state. A modular, skill-based orchestration layer handles clinical triage, supported by an active control plane for managing rollouts and rule governance. An intelligence layer provides explainability and failure-driven rule suggestions, with an extended learning loop for continuous improvement.
 
 ### Clinical State Model (CSM)
 A unified `ClinicalState` object, based on an in-memory and file-persisted model, drives all completion modules, utilizing an event bus for typed events and a state projection service.
 
 ### Clinical Brain Engine
-The system features a deterministic 25-step pipeline for every inference call, encompassing symptom normalization, contradiction detection, clinical safety, memory retrieval, case similarity, knowledge graph evidence, Bayesian differential, evidence aggregation, temporal progression, risk stratification, red flag safety, severity scoring, cross-complaint routing, next-best-question selection, disposition logic, guideline adherence, complaint completeness gating, treatment & test recommendations, medication safety screening, protocol variance checks, diagnostic drift detection, clinical governance, physician packet generation, and disposition calibration.
-
-### Adaptive Question Selection Engine
-An adaptive question engine implements Bayesian optimal question selection with Shannon entropy minimization using priors, feature likelihoods, and question banks.
+A deterministic 25-step pipeline for every inference call covers symptom normalization, contradiction detection, clinical safety, memory retrieval, case similarity, knowledge graph evidence, Bayesian differential, evidence aggregation, temporal progression, risk stratification, red flag safety, severity scoring, next-best-question selection, disposition logic, guideline adherence, treatment & test recommendations, and physician packet generation. An adaptive question engine implements Bayesian optimal question selection.
 
 ### Self-Developing Medical AI
 An autonomous improvement engine continuously monitors, diagnoses, and proposes fixes through trace capture, gold case evaluation, failure classification, proposal generation, regression, reinforcement learning, and clinical knowledge graph updates.
@@ -27,7 +24,7 @@ An autonomous improvement engine continuously monitors, diagnoses, and proposes 
 Provides real-time session management, compound safety rules, ranked differential diagnoses, medication suggestions, auto-coding for ICD-10 and CPT, return precaution generation, and auto-generation of clinical notes.
 
 ### Frontend
-Built with React 18 and TypeScript, using `shadcn/ui` with Tailwind CSS, providing interfaces for physician login, patient intake, case status, visit summaries, physician dashboard, and administrative consoles. Specialized pages include a Clinical Simulation Lab, Clinical Control Tower, Engine Atlas Dashboard, Clinical Visualization Page, and Conversation Optimization Page.
+Built with React 18 and TypeScript, using `shadcn/ui` with Tailwind CSS, providing interfaces for physician login, patient intake, case status, visit summaries, physician dashboard, and administrative consoles. Specialized pages include a Clinical Simulation Lab, Clinical Control Tower, and Engine Atlas Dashboard.
 
 ### Backend
 Built with Express 5, Node.js, and TypeScript, offering REST API endpoints. Includes Centor score calculation, red flag detection, a supervisor gate for patient-facing outputs, and LLM integrations with rate limiting, per-run budgets, and a circuit breaker.
@@ -74,82 +71,56 @@ Leverages GPT-4o for clinical reasoning, providing differential diagnoses, recom
 ### Clinical Scenario Generator
 Generates realistic patient narratives from templates for various complaint types with randomized demographics, symptoms, and history.
 
-### System Architecture Map
-Provides a live architectural overview of the platform, detailing layers, engines, agents, dashboards, and API surfaces.
-
 ### Complaint Alias Registry
 Maps natural-language aliases to canonical complaint slugs for consistent processing.
 
 ### Clinical Intelligence Planning Layer (CIPL)
 A strategic layer that automatically identifies areas needing attention, resolves knowledge graph gaps, detects model drift, analyzes outcome accuracy, schedules simulations, and ranks improvement priorities.
 
-### Sheet Data Import
-Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, protocols, medications) via CSV, XLSX, or JSON files to populate the knowledge graph, with admin-only access.
+### Sheet Data Import and Ingestion
+Allows for the upload of clinical data (e.g., complaints, diagnoses, questions, protocols, medications) via CSV, XLSX, or JSON files to populate the knowledge graph through a full pipeline: validation gate → sheet parsing → graph transformation → knowledge graph population.
 
-### Sheet-to-Graph Ingestion Pipeline
-Full pipeline for clinical data ingestion: validation gate → sheet parsing → graph transformation → knowledge graph population. Ingests COMPLAINT_REGISTRY, CORE_QUESTIONS, DISPOSITION_RULES, RED_FLAG_RULES, CLUSTER_SCORING_RULES, OUTPUT_TEMPLATES into the knowledge graph as nodes/edges.
-
-### Clinical Change Audit Log
-Tracks every clinical data change with timestamps, sheet name, change type, key, and impact analysis, mapping changes to affected systems with severity ratings.
-
-### Sheet Sync Engine
-File-based sync with diff detection, scheduled daily sync support, and sync history tracking.
-
-### Clinical Schema Validator
-A 4-layer workbook validator checking: (1) workbook integrity, (2) header/schema integrity, (3) cross-sheet referential integrity, (4) data quality. Validates 7 required sheets.
+### Clinical Change Audit Log and Version Control
+Tracks every clinical data change with timestamps, sheet name, change type, key, and impact analysis. A Clinical Version Control System (CVCS) provides version snapshots, diffing, deployment, and rollback capabilities for clinical configurations.
 
 ### Clinical Governance & Deployment Layer
-Comprises 7 modules ensuring clinical changes are safe before deployment: Governance Queue, Review Engine, Regression Testing Agent, Risk Monitor, Knowledge Consistency Engine, Physician Feedback Agent, and Deployment Manager.
-
-### Clinical Version Control System (CVCS)
-Comprises 6 modules for clinical configuration versioning: Version Types, Version Store, Version Manager, Version Diff, Rollback Manager, and Change Timeline, providing version snapshots, diffing, deployment, and rollback capabilities.
+Comprises modules ensuring clinical changes are safe before deployment, including a Governance Queue, Review Engine, Regression Testing Agent, Risk Monitor, and Deployment Manager.
 
 ### Clinical Intelligence Control Center (CICC)
-The master "mission control" dashboard aggregating all platform subsystems, providing an overview of safety scores, system health, engine summaries, graph health, active alerts, and version status. It also includes an Engine Profiler, Interactive Intelligence Map, and Visual Reasoning Debugger.
+A master "mission control" dashboard aggregating all platform subsystems, providing an overview of safety scores, system health, engine summaries, graph health, active alerts, and version status.
 
 ### Clinical Analytics Engines
-A unified 5-tab dashboard providing advanced clinical analysis tools including Differential Diagnosis Explorer, Question Impact Analyzer, Protocol Conflict Detector, Case Cluster Discovery Engine, and an Autonomous PubMed Research Agent.
+A unified dashboard provides advanced clinical analysis tools including Differential Diagnosis Explorer, Question Impact Analyzer, Protocol Conflict Detector, and Case Cluster Discovery Engine.
 
 ### Knowledge Graph Dashboard
-An 8-tab dashboard (Explorer, Pathways, Gap Analysis, Question Coverage, Engine Dependencies, Adaptive Questions, Data Import, AI Planner) provides a comprehensive view and management interface for the clinical knowledge graph.
+An 8-tab dashboard provides a comprehensive view and management interface for the clinical knowledge graph.
 
 ### Operational Intelligence and Tooling
-Includes case analytics logs, rule contradiction detection, and a toolchain to compile clinical guidelines. A synthetic testing system generates cases for output validation, supported by a Mismatch Dashboard, Gold Review Workbench, Rule Suggestions, and a Complaint Control Center.
+Includes case analytics logs, rule contradiction detection, a toolchain to compile clinical guidelines, and a synthetic testing system to generate cases for output validation.
 
 ### Advanced Clinical Engines
-A 5-tab dashboard at `/advanced-clinical-engines` for advanced clinical AI capabilities:
-- **Clinical Drift Detector** — Compares baseline vs current case results, detecting diagnosis/disposition drift with severity grading (none→critical). Tracks change rates and lists specific case changes. (`server/engines/clinicalDriftDetector.ts`)
-- **Diagnostic Uncertainty Navigator** — Entropy-based next-best-question selector. Computes information gain for 5 candidate questions and ranks them by diagnostic uncertainty reduction. (`server/engines/diagnosticUncertaintyNavigator.ts`)
-- **Treatment Outcome Learning Engine** — Feeds back real outcomes to update diagnosis probabilities (70/30 observed/prior blend). Shows confusion matrix, accuracy metrics, and learning recommendations. (`server/engines/outcomeLearningEngine.ts`)
-- **Clinical Risk Scoring Engine** — Implements Modified Centor (strep), Wells (PE), and HEART (cardiac) scores with interpretations and recommendations. (`server/engines/riskScoringEngine.ts`)
-- **Federated Learning Engine** — Aggregates anonymized case data across 4 clinics (1,026 cases) without sharing PHI. Shows global diagnosis distribution and clinic contributions. (`server/federated/federatedLearningEngine.ts`)
-
-APIs: GET `/api/clinical-drift`, `/api/uncertainty-navigator`, `/api/outcome-learning`, `/api/risk-scores/demo`, `/api/federated-learning`; POST `/api/risk-scores/centor|wells|heart`. Routes in `server/routes/advancedEngineRoutes.ts`.
+A dashboard at `/advanced-clinical-engines` offers advanced clinical AI capabilities:
+- **Clinical Drift Detector**: Compares baseline vs current case results, detecting diagnosis/disposition drift.
+- **Diagnostic Uncertainty Navigator**: Entropy-based next-best-question selector.
+- **Treatment Outcome Learning Engine**: Feeds back real outcomes to update diagnosis probabilities.
+- **Clinical Risk Scoring Engine**: Implements Modified Centor, Wells, and HEART scores.
+- **Federated Learning Engine**: Aggregates anonymized case data across clinics.
 
 ### 12-Layer Clinical AI Architecture & Brain Monitor
-The entire clinical AI system is organized into 12 structured layers under `server/layers/`:
-1. **Interface** — Receives input from Telegram, WhatsApp, Web UI
-2. **Normalization** — Converts messy text to structured clinical format with symptom mapping (40+ synonyms)
-3. **State** — Tracks case progression, history, and status
-4. **Knowledge** — Connects to knowledge graph for diagnosis candidates (10 symptom-to-diagnosis mappings)
-5. **Safety** — Red flag engine with 7 rules for emergency/urgent/caution routing
-6. **Reasoning** — Bayesian weighted differential analysis with probability ranking
-7. **Decision** — Produces final diagnosis + disposition based on reasoning + safety
-8. **Learning** — Outcome-based probability updates via outcomeLearningEngine
-9. **Analytics** — Question impact, clustering, protocol conflict analysis
-10. **Governance** — Deployment and change validation
-11. **Integration** — External API connections (PubMed, EHR)
-12. **Orchestration** — The Clinical Brain that coordinates all layers with event tracking
+The entire clinical AI system is organized into 12 structured layers: Interface, Normalization, State, Knowledge, Safety, Reasoning, Decision, Learning, Analytics, Governance, Integration, and Orchestration. A real-time monitoring system tracks events and system health, with a Clinical Brain Monitor dashboard at `/clinical-brain-monitor`.
 
-**Real-Time Monitoring**: Event bus (`server/realtime/eventBus.ts`) captures all layer executions, system health monitor (`server/realtime/systemHealthMonitor.ts`) tracks 15 services across layers/services/external APIs.
+### Self-Improving Clinical Brain
+Dashboard at `/self-improving-brain` with 5 tabs (Cycle, Predict, Debug, Agents, Deploy):
+- **Self-Improvement Cycle** — Runs a full analysis pass: predictive failure detection, root cause analysis, debug action review, agent coordination, and memory snapshot. Outputs AI-generated recommendations. (`server/brain/selfImprovingBrain.ts`)
+- **Predictive Failure Engine** — Tracks latency/error trends across 6 services, detects increasing latency and error spikes, predicts failures before they happen. (`server/engines/predictiveFailureEngine.ts`)
+- **Auto-Debugger Agent** — Subscribes to event bus, automatically handles errors, detects latency anomalies, scans system health every 10s, dispatches restart/reroute/adjust/alert actions. (`server/agents/autoDebuggerAgent.ts`)
+- **Root Cause Engine** — Analyzes error events to identify primary failure sources and detect error burst patterns. (`server/agents/rootCauseEngine.ts`)
+- **Multi-Agent Coordinator** — Prevents task conflicts across 5 agents (AutoDebugger, PredictiveEngine, SimulationAgent, LearningAgent, GovernanceAgent). (`server/agents/multiAgentCoordinator.ts`)
+- **Clinical Memory Engine** — Centralized memory store with TTL support, type-based retrieval, and capacity management (1000 entries). (`server/engines/memoryEngine.ts`)
+- **Explainability Graph Engine** — Builds reasoning trace graphs from layer execution data. (`server/engines/explainabilityGraphEngine.ts`)
+- **Autonomous Deployment Engine** — Governance-gated deployment with predictive risk checks, simulation testing, and safety gates. Tracks deployment history with approve/reject/rollback. (`server/deployment/autonomousDeploymentEngine.ts`)
 
-**Clinical Brain Monitor** dashboard at `/clinical-brain-monitor` with 4 tabs:
-- **Architecture** — Visual 12-layer stack with descriptions and status
-- **System Health** — Real-time status of 15 services with latency monitoring (auto-refreshes every 5s)
-- **Run Brain** — Input symptoms and watch the brain process through all 7 pipeline layers with execution trace, diagnosis, disposition, confidence, and safety alerts
-- **Event Feed** — Live stream of all system events (reasoning, safety, decision, error) with auto-refresh
-
-APIs: POST `/api/layer-brain/run`, GET `/api/layer-brain/health|events|cases|analytics|learning|layers`.
+APIs: GET `/api/self-improving/cycle|history`, `/api/predictive-failures`, `/api/auto-debugger/actions|root-cause`, `/api/agent-coordinator`, `/api/clinical-memory`, `/api/autonomous-deploy/history`; POST `/api/explainability-graph`, `/api/autonomous-deploy`. Routes in `server/routes/selfImprovingRoutes.ts`.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API
