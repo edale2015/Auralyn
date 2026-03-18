@@ -10,7 +10,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Activity, AlertTriangle, Users, Clock, TrendingDown,
   Shield, BarChart3, CheckCircle, XCircle, ArrowUpDown,
-  Zap, Link, RefreshCw
+  Zap, Link, RefreshCw, Download, Star, Award
 } from "lucide-react";
 
 function getAuthHeaders() {
@@ -303,8 +303,23 @@ function DriftMonitorTab() {
 }
 
 function AuditChainTab() {
+  const { toast } = useToast();
   const { data: auditData, isLoading } = useQuery<any>({ queryKey: ["/api/ops/audit-chain"] });
   const { data: verifyData } = useQuery<any>({ queryKey: ["/api/ops/audit-chain/verify"] });
+
+  const exportMut = useMutation({
+    mutationFn: () => fetch("/api/ops/audit-chain/export", { headers: getAuthHeaders() }).then(r => r.json()),
+    onSuccess: (data) => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Audit Export Complete", description: `Exported ${data.chainLength} entries (${data.integrityStatus})` });
+    },
+  });
 
   if (isLoading) return <div className="p-6 text-muted-foreground">Loading audit chain...</div>;
 
@@ -313,6 +328,12 @@ function AuditChainTab() {
 
   return (
     <div className="space-y-6">
+      <div className="flex gap-2">
+        <Button onClick={() => exportMut.mutate()} variant="outline" disabled={exportMut.isPending} data-testid="button-export-audit">
+          <Download className="w-4 h-4 mr-2" /> Export Audit Chain (Legal-Grade)
+        </Button>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Chain Length</div><div className="text-2xl font-bold">{summary.length || 0}</div></CardContent></Card>
         <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Approvals</div><div className="text-2xl font-bold text-green-600">{summary.actions?.approve || 0}</div></CardContent></Card>
@@ -439,6 +460,89 @@ function ApprovalRulesTab() {
   );
 }
 
+function PhysicianPerformanceTab() {
+  const [clinicId, setClinicId] = useState("all");
+  const queryClinic = clinicId === "all" ? undefined : clinicId;
+  const { data: perfData, isLoading } = useQuery<any>({
+    queryKey: ["/api/ops/physician-performance", queryClinic],
+    queryFn: () => fetch(`/api/ops/physician-performance${queryClinic ? `?clinicId=${queryClinic}` : ""}`, { headers: getAuthHeaders() }).then(r => r.json()),
+  });
+
+  if (isLoading) return <div className="p-6 text-muted-foreground">Loading physician performance...</div>;
+
+  const physicians = perfData?.physicians || [];
+
+  const gradeColors: Record<string, string> = { A: "text-green-600 bg-green-50", B: "text-blue-600 bg-blue-50", C: "text-yellow-600 bg-yellow-50", D: "text-red-600 bg-red-50" };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-4">
+        <Select value={clinicId} onValueChange={setClinicId}>
+          <SelectTrigger className="w-48" data-testid="select-perf-clinic"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Clinics</SelectItem>
+            <SelectItem value="clinic_a">Clinic A</SelectItem>
+            <SelectItem value="clinic_b">Clinic B</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Physicians</div><div className="text-2xl font-bold">{physicians.length}</div></CardContent></Card>
+        <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Cases Reviewed</div><div className="text-2xl font-bold">{physicians.reduce((s: number, p: any) => s + p.totalCases, 0)}</div></CardContent></Card>
+        <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Avg Override Rate</div><div className="text-2xl font-bold">{physicians.length > 0 ? ((physicians.reduce((s: number, p: any) => s + p.overrideRate, 0) / physicians.length) * 100).toFixed(1) : 0}%</div></CardContent></Card>
+        <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Avg Satisfaction</div><div className="text-2xl font-bold">{physicians.length > 0 ? (physicians.reduce((s: number, p: any) => s + p.avgSatisfaction, 0) / physicians.length).toFixed(2) : 0}</div></CardContent></Card>
+      </div>
+
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Award className="w-5 h-5" /> Physician Performance Scorecard</CardTitle></CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {physicians.map((p: any) => (
+              <div key={p.physicianId} className="border rounded p-4 space-y-3" data-testid={`perf-${p.physicianId}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-lg">{p.physicianName}</div>
+                    <div className="text-sm text-muted-foreground">{p.clinicId} · {p.totalCases} cases</div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-2xl font-bold px-3 py-1 rounded ${gradeColors[p.performanceGrade] || ""}`}>{p.performanceGrade}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                  <div>
+                    <div className="text-muted-foreground">Accuracy</div>
+                    <div className={`font-semibold ${p.accuracy < 0.75 ? "text-red-600" : p.accuracy < 0.85 ? "text-yellow-600" : "text-green-600"}`}>{(p.accuracy * 100).toFixed(1)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Avg Review Time</div>
+                    <div className="font-semibold">{p.avgReviewTimeSeconds}s</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Override Rate</div>
+                    <div className={`font-semibold ${p.overrideRate > 0.2 ? "text-red-600" : ""}`}>{(p.overrideRate * 100).toFixed(1)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Satisfaction</div>
+                    <div className="font-semibold flex items-center gap-1"><Star className="w-3 h-3 text-yellow-500" /> {p.avgSatisfaction}</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">High Risk</div>
+                    <div className="font-semibold">{p.highRiskCases} cases</div>
+                  </div>
+                </div>
+                <div className="w-full bg-muted rounded-full h-2">
+                  <div className={`h-full rounded-full ${p.accuracy >= 0.85 ? "bg-green-500" : p.accuracy >= 0.75 ? "bg-yellow-500" : "bg-red-500"}`} style={{ width: `${p.accuracy * 100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function OperationsDashboard() {
   const [tab, setTab] = useState("overview");
 
@@ -448,20 +552,22 @@ export default function OperationsDashboard() {
         <h1 className="text-3xl font-bold flex items-center gap-3" data-testid="text-page-title">
           <Activity className="w-8 h-8 text-primary" /> Operations Dashboard
         </h1>
-        <p className="text-muted-foreground mt-1">Live system operations — physician routing, escalation queue, drift monitoring, audit chain</p>
+        <p className="text-muted-foreground mt-1">Live system operations — physician routing, performance, escalation queue, drift monitoring, audit chain</p>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid grid-cols-6 w-full max-w-3xl">
+        <TabsList className="grid grid-cols-7 w-full max-w-4xl">
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="routing" data-testid="tab-routing">Routing</TabsTrigger>
+          <TabsTrigger value="performance" data-testid="tab-performance">Performance</TabsTrigger>
           <TabsTrigger value="queue" data-testid="tab-queue">Queue & SLA</TabsTrigger>
           <TabsTrigger value="drift" data-testid="tab-drift">Drift</TabsTrigger>
-          <TabsTrigger value="audit" data-testid="tab-audit">Audit Chain</TabsTrigger>
+          <TabsTrigger value="audit" data-testid="tab-audit">Audit</TabsTrigger>
           <TabsTrigger value="rules" data-testid="tab-rules">Rules</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OpsOverviewTab /></TabsContent>
         <TabsContent value="routing"><PhysicianRoutingTab /></TabsContent>
+        <TabsContent value="performance"><PhysicianPerformanceTab /></TabsContent>
         <TabsContent value="queue"><EscalationQueueTab /></TabsContent>
         <TabsContent value="drift"><DriftMonitorTab /></TabsContent>
         <TabsContent value="audit"><AuditChainTab /></TabsContent>

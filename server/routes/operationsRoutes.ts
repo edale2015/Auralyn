@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { requireRole } from "../middleware/requireRole";
+import { tenantGuard } from "../middleware/tenantGuard";
 import { routeCaseToPhysician, getPhysicians, assignCaseLoad, releaseCaseLoad } from "../services/physicianRouter";
 import { getQueue, escalateCases, shouldEscalateCase, getAllCases } from "../services/caseQueue";
 import { buildOpsSnapshot } from "../services/opsMetrics";
@@ -7,6 +8,8 @@ import { getDemoDrift } from "../services/driftMonitor";
 import { evaluateApprovalRule, evaluateBatch } from "../services/approvalRules";
 import { getDemoComplaintAnalytics } from "../services/complaintAnalytics";
 import { auditChain } from "../services/auditChain";
+import { getPhysicianPerformance, addCaseRecord } from "../services/physicianMetrics";
+import { buildAuditExport } from "../services/auditExport";
 
 const router = Router();
 
@@ -80,6 +83,40 @@ router.post("/api/ops/audit-chain/append", requireRole(["admin", "physician"]), 
 
 router.get("/api/ops/audit-chain/verify", requireRole(["admin"]), (_req: Request, res: Response) => {
   res.json(auditChain.verify());
+});
+
+router.get("/api/ops/audit-chain/export", requireRole(["admin"]), (req: Request, res: Response) => {
+  const authUser = (req as any).authUser;
+  const userId = authUser?.userId || "system";
+  const packet = buildAuditExport(userId);
+  res.json(packet);
+});
+
+router.get("/api/ops/physician-performance", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
+  const clinicId = req.query.clinicId as string | undefined;
+  res.json({ physicians: getPhysicianPerformance(clinicId) });
+});
+
+router.post("/api/ops/physician-performance/record", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
+  const authUser = (req as any).authUser;
+  const record = {
+    ...req.body,
+    timestamp: Date.now(),
+    physicianId: req.body.physicianId || authUser?.userId || "unknown",
+  };
+  addCaseRecord(record);
+  res.json({ success: true, record });
+});
+
+router.get("/api/ops/clinic-cases", requireRole(["admin", "physician"]), tenantGuard, (req: Request, res: Response) => {
+  const clinicId = (req as any).clinicId;
+  const allCases = getAllCases();
+  const clinicCases = allCases.filter((c) => c.clinicId === clinicId);
+  res.json({
+    clinicId,
+    count: clinicCases.length,
+    cases: clinicCases,
+  });
 });
 
 export default router;
