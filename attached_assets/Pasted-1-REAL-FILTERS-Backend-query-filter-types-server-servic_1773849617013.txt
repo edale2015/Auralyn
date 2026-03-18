@@ -1,0 +1,631 @@
+1) REAL FILTERS
+Backend query filter types
+/server/services/executiveFilters.ts
+export type ExecutiveFilterInput = {
+  clinicId?: string;
+  startDate?: string;
+  endDate?: string;
+  complaint?: string;
+  physicianId?: string;
+};
+
+export function applySnapshotFilters<T extends {
+  clinicId?: string;
+  snapshotDate?: string | Date;
+}>(rows: T[], filters: ExecutiveFilterInput) {
+  return rows.filter(row => {
+    if (filters.clinicId && row.clinicId !== filters.clinicId) return false;
+
+    if (filters.startDate) {
+      const rowDate = new Date(row.snapshotDate || 0).getTime();
+      if (rowDate < new Date(filters.startDate).getTime()) return false;
+    }
+
+    if (filters.endDate) {
+      const rowDate = new Date(row.snapshotDate || 0).getTime();
+      if (rowDate > new Date(filters.endDate).getTime()) return false;
+    }
+
+    return true;
+  });
+}
+
+export function applyComplaintFilters<T extends {
+  complaint?: string;
+}>(rows: T[], filters: ExecutiveFilterInput) {
+  return rows.filter(row => {
+    if (filters.complaint && row.complaint !== filters.complaint) return false;
+    return true;
+  });
+}
+
+export function applyPhysicianFilters<T extends {
+  physicianId?: string;
+}>(rows: T[], filters: ExecutiveFilterInput) {
+  return rows.filter(row => {
+    if (filters.physicianId && row.physicianId !== filters.physicianId) return false;
+    return true;
+  });
+}
+Route additions
+/server/routes/executiveFilters.ts
+import express from "express";
+import { listExecutiveSnapshots } from "../services/executiveStore";
+import { buildExecutiveChartSeries } from "../services/executiveCharts";
+import { applySnapshotFilters } from "../services/executiveFilters";
+
+const router = express.Router();
+
+router.get("/charts", async (req, res) => {
+  const clinicId = String(req.query.clinicId || "");
+  const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+  const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+
+  if (!clinicId) {
+    return res.status(400).json({ error: "clinicId required" });
+  }
+
+  const rows = await listExecutiveSnapshots(clinicId, 200);
+  const filtered = applySnapshotFilters(rows as any[], {
+    clinicId,
+    startDate,
+    endDate
+  });
+
+  res.json(buildExecutiveChartSeries(filtered as any));
+});
+
+export default router;
+/server/index.ts
+import executiveFilters from "./routes/executiveFilters";
+
+app.use("/api/executive-filters", executiveFilters);
+Frontend filter bar
+/frontend/components/ExecutiveFilterBar.tsx
+import { useState } from "react";
+
+type Props = {
+  onApply: (filters: {
+    clinicId: string;
+    startDate?: string;
+    endDate?: string;
+    complaint?: string;
+    physicianId?: string;
+  }) => void;
+};
+
+export default function ExecutiveFilterBar({ onApply }: Props) {
+  const [clinicId, setClinicId] = useState("clinicA");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [complaint, setComplaint] = useState("");
+  const [physicianId, setPhysicianId] = useState("");
+
+  return (
+    <div className="border rounded p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+      <input
+        className="border rounded px-3 py-2"
+        value={clinicId}
+        onChange={e => setClinicId(e.target.value)}
+        placeholder="Clinic ID"
+      />
+      <input
+        className="border rounded px-3 py-2"
+        type="date"
+        value={startDate}
+        onChange={e => setStartDate(e.target.value)}
+      />
+      <input
+        className="border rounded px-3 py-2"
+        type="date"
+        value={endDate}
+        onChange={e => setEndDate(e.target.value)}
+      />
+      <input
+        className="border rounded px-3 py-2"
+        value={complaint}
+        onChange={e => setComplaint(e.target.value)}
+        placeholder="Complaint"
+      />
+      <input
+        className="border rounded px-3 py-2"
+        value={physicianId}
+        onChange={e => setPhysicianId(e.target.value)}
+        placeholder="Physician ID"
+      />
+
+      <button
+        className="border rounded px-4 py-2 md:col-span-5"
+        onClick={() =>
+          onApply({
+            clinicId,
+            startDate: startDate || undefined,
+            endDate: endDate || undefined,
+            complaint: complaint || undefined,
+            physicianId: physicianId || undefined
+          })
+        }
+      >
+        Apply Filters
+      </button>
+    </div>
+  );
+}
+2) CSV / PDF EXPORT
+CSV export service
+/server/services/exportCsv.ts
+export function toCsv(rows: Record<string, unknown>[]) {
+  if (!rows.length) return "";
+
+  const headers = Object.keys(rows[0]);
+  const escape = (value: unknown) =>
+    `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+  const lines = [
+    headers.join(","),
+    ...rows.map(row => headers.map(h => escape(row[h])).join(","))
+  ];
+
+  return lines.join("\n");
+}
+PDF export service
+/server/services/exportPdf.ts
+import PDFDocument from "pdfkit";
+
+export async function buildExecutivePdf(payload: {
+  title: string;
+  summaryLines: string[];
+  cards: { title: string; value: string | number; note?: string }[];
+}) {
+  return new Promise<Buffer>((resolve) => {
+    const doc = new PDFDocument({ margin: 40 });
+    const chunks: Buffer[] = [];
+
+    doc.on("data", chunk => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+
+    doc.fontSize(20).text(payload.title);
+    doc.moveDown();
+
+    doc.fontSize(12).text("Summary");
+    payload.summaryLines.forEach(line => doc.text(`• ${line}`));
+    doc.moveDown();
+
+    doc.fontSize(12).text("Key Metrics");
+    payload.cards.forEach(card => {
+      doc.text(`${card.title}: ${card.value}${card.note ? ` | ${card.note}` : ""}`);
+    });
+
+    doc.end();
+  });
+}
+Export routes
+/server/routes/executiveExport.ts
+import express from "express";
+import { toCsv } from "../services/exportCsv";
+import { buildExecutivePdf } from "../services/exportPdf";
+
+const router = express.Router();
+
+router.post("/csv", async (req, res) => {
+  const rows = req.body.rows || [];
+  const csv = toCsv(rows);
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", 'attachment; filename="executive-export.csv"');
+  res.send(csv);
+});
+
+router.post("/pdf", async (req, res) => {
+  const buffer = await buildExecutivePdf(req.body);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", 'attachment; filename="executive-board-packet.pdf"');
+  res.send(buffer);
+});
+
+export default router;
+/server/index.ts
+import executiveExport from "./routes/executiveExport";
+
+app.use("/api/executive-export", executiveExport);
+3) AUTOMATED WEEKLY EXECUTIVE EMAILS
+Email payload builder
+/server/services/weeklyExecutiveMailer.ts
+export type WeeklyExecutiveEmailInput = {
+  clinicId: string;
+  recipientEmail: string;
+  headline: string;
+  summaryLines: string[];
+};
+
+export function buildWeeklyExecutiveEmail(input: WeeklyExecutiveEmailInput) {
+  return {
+    to: input.recipientEmail,
+    subject: `Weekly Executive Summary | ${input.clinicId}`,
+    body: [
+      input.headline,
+      "",
+      ...input.summaryLines.map(line => `- ${line}`),
+      "",
+      "Generated by Auralyn Clinical Decision Support System."
+    ].join("\n")
+  };
+}
+Email route
+/server/routes/weeklyExecutiveEmail.ts
+import express from "express";
+import { buildWeeklyExecutiveEmail } from "../services/weeklyExecutiveMailer";
+import { send_email } from "gmail"; // illustrative only if using wrapper internally
+const router = express.Router();
+
+router.post("/preview", async (req, res) => {
+  res.json(buildWeeklyExecutiveEmail(req.body));
+});
+
+export default router;
+
+For your current stack, I’d keep preview first, then connect to your existing email layer.
+
+/server/index.ts
+import weeklyExecutiveEmail from "./routes/weeklyExecutiveEmail";
+
+app.use("/api/weekly-executive-email", weeklyExecutiveEmail);
+Scheduled weekly summary job
+/server/jobs/weeklyExecutiveSummaryJob.ts
+import cron from "node-cron";
+import { buildWeeklyExecutiveEmail } from "../services/weeklyExecutiveMailer";
+
+export function startWeeklyExecutiveSummaryJob() {
+  cron.schedule("0 7 * * MON", async () => {
+    const email = buildWeeklyExecutiveEmail({
+      clinicId: "clinicA",
+      recipientEmail: "admin@clinicA.com",
+      headline: "Clinic A processed 3,200 cases with healthy margin and stable safety posture.",
+      summaryLines: [
+        "Override rate: 11.0%",
+        "Average satisfaction: 4.56",
+        "Top pressure complaint: dizziness",
+        "Safety mode: elevated"
+      ]
+    });
+
+    console.log("Weekly executive email preview", email);
+  });
+}
+/server/index.ts
+import { startWeeklyExecutiveSummaryJob } from "./jobs/weeklyExecutiveSummaryJob";
+
+startWeeklyExecutiveSummaryJob();
+4) CROSS-CLINIC COMPARISON DASHBOARD
+Service
+/server/services/crossClinicComparison.ts
+export type ClinicComparisonRow = {
+  clinicId: string;
+  totalCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  marginPct: number;
+  escalationRate: number;
+};
+
+export function buildCrossClinicComparison(rows: ClinicComparisonRow[]) {
+  return rows
+    .map(r => ({
+      ...r,
+      status:
+        r.overrideRate > 0.15 || r.marginPct < 25
+          ? "critical"
+          : r.overrideRate > 0.08 || r.marginPct < 40
+          ? "watch"
+          : "good"
+    }))
+    .sort((a, b) => b.totalCases - a.totalCases);
+}
+Route
+/server/routes/crossClinic.ts
+import express from "express";
+import { buildCrossClinicComparison } from "../services/crossClinicComparison";
+
+const router = express.Router();
+
+router.post("/compare", async (req, res) => {
+  res.json(buildCrossClinicComparison(req.body.rows || []));
+});
+
+export default router;
+/server/index.ts
+import crossClinic from "./routes/crossClinic";
+
+app.use("/api/cross-clinic", crossClinic);
+Frontend page
+/frontend/pages/CrossClinicDashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function CrossClinicDashboard() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/cross-clinic/compare", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        rows: [
+          { clinicId: "clinicA", totalCases: 3200, overrideRate: 0.11, avgSatisfaction: 4.56, marginPct: 41.2, escalationRate: 0.08 },
+          { clinicId: "clinicB", totalCases: 2100, overrideRate: 0.07, avgSatisfaction: 4.68, marginPct: 46.5, escalationRate: 0.05 },
+          { clinicId: "clinicC", totalCases: 1400, overrideRate: 0.18, avgSatisfaction: 4.02, marginPct: 22.4, escalationRate: 0.16 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setRows);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Cross-Clinic Comparison</h1>
+      {rows.map(row => (
+        <div key={row.clinicId} className="border rounded p-4">
+          <div className="font-semibold">{row.clinicId}</div>
+          <div>Total Cases: {row.totalCases}</div>
+          <div>Override Rate: {(row.overrideRate * 100).toFixed(1)}%</div>
+          <div>Satisfaction: {row.avgSatisfaction}</div>
+          <div>Margin: {row.marginPct}%</div>
+          <div>Escalation Rate: {(row.escalationRate * 100).toFixed(1)}%</div>
+          <div>Status: {row.status}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+5) ALERT CENTER
+Alert engine
+/server/services/alertCenter.ts
+export type AlertInput = {
+  type: "complaint" | "physician" | "clinic";
+  entityId: string;
+  severity: "watch" | "critical";
+  message: string;
+  createdAt?: string;
+};
+
+const alertStore: AlertInput[] = [];
+
+export function createAlert(input: AlertInput) {
+  const row = {
+    ...input,
+    createdAt: input.createdAt || new Date().toISOString()
+  };
+  alertStore.unshift(row);
+  return row;
+}
+
+export function listAlerts(severity?: "watch" | "critical") {
+  if (!severity) return alertStore;
+  return alertStore.filter(a => a.severity === severity);
+}
+Routes
+/server/routes/alertCenter.ts
+import express from "express";
+import { createAlert, listAlerts } from "../services/alertCenter";
+
+const router = express.Router();
+
+router.post("/", async (req, res) => {
+  res.json(createAlert(req.body));
+});
+
+router.get("/", async (req, res) => {
+  const severity =
+    req.query.severity === "watch" || req.query.severity === "critical"
+      ? req.query.severity
+      : undefined;
+
+  res.json(listAlerts(severity));
+});
+
+export default router;
+/server/index.ts
+import alertCenter from "./routes/alertCenter";
+
+app.use("/api/alert-center", alertCenter);
+Frontend
+/frontend/pages/AlertCenterDashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function AlertCenterDashboard() {
+  const [alerts, setAlerts] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/alert-center", {
+      method: "GET"
+    })
+      .then(r => r.json())
+      .then(setAlerts);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Alert Center</h1>
+      {alerts.map((alert, i) => (
+        <div key={i} className="border rounded p-4">
+          <div className="font-semibold">
+            {alert.type} | {alert.entityId}
+          </div>
+          <div>Severity: {alert.severity}</div>
+          <div>{alert.message}</div>
+          <div className="text-sm opacity-70">{alert.createdAt}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+6) CASE-LEVEL DRILLDOWN LINKS
+Route
+/server/routes/caseDrilldown.ts
+import express from "express";
+
+const router = express.Router();
+
+router.get("/:caseId", async (req, res) => {
+  const caseId = req.params.caseId;
+
+  res.json({
+    caseId,
+    patientName: "Jane Doe",
+    complaint: "dizziness",
+    aiSuggestion: "urgent evaluation",
+    finalDecision: "physician reviewed - urgent",
+    riskLevel: "HIGH",
+    confidence: 0.61,
+    reasoning: {
+      redFlags: ["near syncope", "new neurologic symptom"],
+      matchedPattern: "high-risk dizziness pathway"
+    },
+    auditTrail: [
+      { action: "ai_generated", timestamp: "2026-03-17T12:00:00Z" },
+      { action: "physician_reviewed", timestamp: "2026-03-17T12:03:00Z" }
+    ]
+  });
+});
+
+export default router;
+/server/index.ts
+import caseDrilldown from "./routes/caseDrilldown";
+
+app.use("/api/case-drilldown", caseDrilldown);
+Complaint card links
+inside complaint drilldown card
+<a
+  href={`/case-drilldown/${row.sampleCaseId || "case-001"}`}
+  className="underline"
+>
+  Open sample case drilldown
+</a>
+Case drilldown page
+/frontend/pages/CaseDrilldownPage.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  caseId: string;
+};
+
+export default function CaseDrilldownPage({ caseId }: Props) {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    fetch(`/api/case-drilldown/${caseId}`)
+      .then(r => r.json())
+      .then(setData);
+  }, [caseId]);
+
+  if (!data) return <div className="p-6">Loading case...</div>;
+
+  return (
+    <div className="p-6 space-y-3">
+      <h1 className="text-2xl font-bold">Case Drilldown</h1>
+      <div>Case ID: {data.caseId}</div>
+      <div>Patient: {data.patientName}</div>
+      <div>Complaint: {data.complaint}</div>
+      <div>AI Suggestion: {data.aiSuggestion}</div>
+      <div>Final Decision: {data.finalDecision}</div>
+      <div>Risk: {data.riskLevel}</div>
+      <div>Confidence: {data.confidence}</div>
+
+      <div className="border rounded p-4">
+        <div className="font-semibold">Reasoning</div>
+        <pre>{JSON.stringify(data.reasoning, null, 2)}</pre>
+      </div>
+
+      <div className="border rounded p-4">
+        <div className="font-semibold">Audit Trail</div>
+        <pre>{JSON.stringify(data.auditTrail, null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
+7) DB MIGRATIONS + RETENTION POLICIES
+SQL migration example
+/server/db/migrations/0007_executive_command_deck.sql
+CREATE TABLE IF NOT EXISTS simulation_runs (
+  id SERIAL PRIMARY KEY,
+  pack_id TEXT NOT NULL,
+  complaint TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  strategy_results JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS control_runs (
+  id SERIAL PRIMARY KEY,
+  clinic_id TEXT NOT NULL,
+  run_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  input JSONB NOT NULL,
+  output JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS executive_snapshots (
+  id SERIAL PRIMARY KEY,
+  clinic_id TEXT NOT NULL,
+  snapshot_date TIMESTAMP NOT NULL DEFAULT NOW(),
+  total_cases NUMERIC NOT NULL,
+  reviewed_cases NUMERIC NOT NULL,
+  escalated_cases NUMERIC NOT NULL,
+  override_rate NUMERIC NOT NULL,
+  avg_satisfaction NUMERIC NOT NULL,
+  avg_cost_per_case NUMERIC NOT NULL,
+  avg_revenue_per_case NUMERIC NOT NULL,
+  complaint_breakdown JSONB NOT NULL,
+  physician_breakdown JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_control_runs_clinic_run_at
+ON control_runs (clinic_id, run_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_executive_snapshots_clinic_snapshot_date
+ON executive_snapshots (clinic_id, snapshot_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_simulation_runs_pack_created_at
+ON simulation_runs (pack_id, created_at DESC);
+Retention cleanup job
+/server/jobs/retentionCleanupJob.ts
+import cron from "node-cron";
+import { db } from "../db";
+import { simulationRuns, controlRuns, executiveSnapshots } from "../db/executiveSchema";
+import { lt, sql } from "drizzle-orm";
+
+export function startRetentionCleanupJob() {
+  cron.schedule("30 3 * * SUN", async () => {
+    const simulationCutoff = new Date();
+    simulationCutoff.setDate(simulationCutoff.getDate() - 120);
+
+    const controlCutoff = new Date();
+    controlCutoff.setDate(controlCutoff.getDate() - 180);
+
+    const snapshotCutoff = new Date();
+    snapshotCutoff.setDate(snapshotCutoff.getDate() - 365);
+
+    await db.delete(simulationRuns).where(lt(simulationRuns.createdAt, simulationCutoff));
+    await db.delete(controlRuns).where(lt(controlRuns.runAt, controlCutoff));
+    await db.delete(executiveSnapshots).where(lt(executiveSnapshots.snapshotDate, snapshotCutoff));
+
+    console.log("Retention cleanup completed", {
+      simulationCutoff,
+      controlCutoff,
+      snapshotCutoff
+    });
+  });
+}
+/server/index.ts
+import { startRetentionCleanupJob } from "./jobs/retentionCleanupJob";
+
+startRetentionCleanupJob();
+Dashboard tab wiring
+import CrossClinicDashboard from "./CrossClinicDashboard";
+import AlertCenterDashboard from "./AlertCenterDashboard";
+import CaseDrilldownPage from "./CaseDrilldownPage";
+
+<button onClick={() => setTab("cross-clinic")}>Cross-Clinic</button>
+<button onClick={() => setTab("alerts")}>Alerts</button>
+
+{tab === "cross-clinic" && <CrossClinicDashboard />}
+{tab === "alerts" && <AlertCenterDashboard />}

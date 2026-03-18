@@ -64,6 +64,7 @@ import MultilingualTemplateAuthoringPage from "@/pages/MultilingualTemplateAutho
 import OperationsCockpitPage from "@/pages/OperationsCockpitPage";
 import SelfImproveDashboard from "@/pages/SelfImproveDashboard";
 import PhysicianDashboard from "@/pages/PhysicianDashboard";
+import ExecutiveDashboard from "@/pages/ExecutiveDashboard";
 import HybridReasoningConsole from "@/pages/HybridReasoningConsole";
 import UCSMConsole from "@/pages/UCSMConsole";
 import ClinicalOpsConsole from "@/pages/ClinicalOpsConsole";
@@ -237,6 +238,7 @@ function Router() {
       <Route path="/pack-audit-log">{() => <AdminPage component={PackAuditLogPage} />}</Route>
       <Route path="/coverage-dashboard">{() => <AdminPage component={CoverageDashboard} />}</Route>
       <Route path="/physician-dashboard">{() => <AdminPage component={PhysicianDashboard} />}</Route>
+      <Route path="/executive-dashboard">{() => <AdminPage component={ExecutiveDashboard} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );
