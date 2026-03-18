@@ -63,6 +63,7 @@ import ReminderTimelineInspectorPage from "@/pages/ReminderTimelineInspectorPage
 import MultilingualTemplateAuthoringPage from "@/pages/MultilingualTemplateAuthoringPage";
 import OperationsCockpitPage from "@/pages/OperationsCockpitPage";
 import SelfImproveDashboard from "@/pages/SelfImproveDashboard";
+import PhysicianDashboard from "@/pages/PhysicianDashboard";
 import HybridReasoningConsole from "@/pages/HybridReasoningConsole";
 import UCSMConsole from "@/pages/UCSMConsole";
 import ClinicalOpsConsole from "@/pages/ClinicalOpsConsole";
@@ -235,6 +236,7 @@ function Router() {
       <Route path="/pack-questions">{() => <AdminPage component={PackQuestionsAdminPage} />}</Route>
       <Route path="/pack-audit-log">{() => <AdminPage component={PackAuditLogPage} />}</Route>
       <Route path="/coverage-dashboard">{() => <AdminPage component={CoverageDashboard} />}</Route>
+      <Route path="/physician-dashboard">{() => <AdminPage component={PhysicianDashboard} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

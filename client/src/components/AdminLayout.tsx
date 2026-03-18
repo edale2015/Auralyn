@@ -163,6 +163,7 @@ const NAV_SECTIONS = [
       { path: "/pack-questions", label: "Pack Questions", icon: ClipboardList },
       { path: "/pack-audit-log", label: "Pack Audit Log", icon: Shield },
       { path: "/coverage-dashboard", label: "Coverage Dashboard", icon: BarChart3 },
+      { path: "/physician-dashboard", label: "Physician Control Center", icon: HeartPulse },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },
