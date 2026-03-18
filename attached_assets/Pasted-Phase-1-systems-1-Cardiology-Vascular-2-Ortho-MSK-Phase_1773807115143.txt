@@ -1,0 +1,1502 @@
+Phase 1 systems
+1. Cardiology / Vascular
+2. Ortho / MSK
+Phase 2 systems
+3. Pulmonary
+4. GI
+5. Neuro
+1. Shared types
+// shared/systemPackTypes.ts
+
+export type PackTier = "symptom" | "modifier" | "clinician_algorithm";
+
+export type Disposition =
+  | "self_care"
+  | "office_followup"
+  | "telemed_now"
+  | "urgent_care"
+  | "er_now";
+
+export type QuestionType =
+  | "yes_no"
+  | "single_select"
+  | "multi_select"
+  | "text"
+  | "number"
+  | "duration"
+  | "severity";
+
+export interface IntakeQuestionOption {
+  label: string;
+  value: string;
+  redFlag?: boolean;
+}
+
+export interface IntakeQuestion {
+  id: string;
+  prompt: string;
+  type: QuestionType;
+  priority: number;
+  required?: boolean;
+  options?: IntakeQuestionOption[];
+  helpText?: string;
+}
+
+export interface SymptomPack {
+  id: string;
+  system: string;
+  tier: "symptom";
+  title: string;
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questions: IntakeQuestion[];
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+}
+
+export interface ModifierPack {
+  id: string;
+  system: string;
+  tier: "modifier";
+  title: string;
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustments: Array<{
+    condition: string;
+    action: "raise_risk" | "force_review" | "force_escalation";
+    amount?: number;
+    reason: string;
+  }>;
+}
+
+export interface ClinicianAlgorithmPack {
+  id: string;
+  system: string;
+  tier: "clinician_algorithm";
+  title: string;
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+}
+2. CARDIOLOGY / VASCULAR
+A. Symptom packs
+// server/config/packs/cardiologySymptomPacks.ts
+
+import { SymptomPack } from "../../../shared/systemPackTypes";
+
+export const cardiologySymptomPacks: SymptomPack[] = [
+  {
+    id: "card_chest_pain",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Chest Pain",
+    aliases: ["chest pain", "chest pressure", "tightness in chest"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1, required: true },
+      { id: "radiation", prompt: "Pain to arm, jaw, or back?", type: "yes_no", priority: 2 },
+      { id: "exertional", prompt: "Triggered or worse with exertion?", type: "yes_no", priority: 3 },
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 4 },
+      { id: "sweating_nausea", prompt: "Cold sweat or nausea?", type: "yes_no", priority: 5 },
+      { id: "tearing", prompt: "Sudden tearing pain to the back?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "radiation", "fainting", "sweating_nausea", "tearing"],
+    autoEscalateRules: [
+      "sob=yes",
+      "radiation=yes",
+      "fainting=yes",
+      "sweating_nausea=yes",
+      "tearing=yes",
+    ],
+    autoReviewRules: [],
+    planTemplateKey: "card_chest_pain",
+  },
+  {
+    id: "card_shortness_of_breath",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Shortness of Breath",
+    aliases: ["shortness of breath", "trouble breathing", "breathless"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "at_rest", prompt: "Short of breath at rest?", type: "yes_no", priority: 1, required: true },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 2 },
+      { id: "orthopnea", prompt: "Worse lying flat?", type: "yes_no", priority: 3 },
+      { id: "leg_swelling", prompt: "Any leg swelling?", type: "yes_no", priority: 4 },
+      { id: "blue_lips", prompt: "Blue lips or trouble speaking full sentences?", type: "yes_no", priority: 5 },
+      { id: "sudden_onset", prompt: "Did this start suddenly?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["at_rest", "chest_pain", "blue_lips", "sudden_onset"],
+    autoEscalateRules: ["at_rest=yes", "chest_pain=yes", "blue_lips=yes", "sudden_onset=yes"],
+    autoReviewRules: ["orthopnea=yes", "leg_swelling=yes"],
+    planTemplateKey: "card_sob",
+  },
+  {
+    id: "card_palpitations",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Palpitations",
+    aliases: ["palpitations", "heart racing", "rapid heartbeat", "irregular heartbeat"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 3 },
+      { id: "duration", prompt: "How long do episodes last?", type: "duration", priority: 4 },
+      { id: "known_arrhythmia", prompt: "Known atrial fibrillation or arrhythmia?", type: "yes_no", priority: 5 },
+      { id: "stimulants", prompt: "Caffeine, stimulants, or energy drinks involved?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["chest_pain", "sob", "fainting"],
+    autoEscalateRules: ["chest_pain=yes", "sob=yes", "fainting=yes"],
+    autoReviewRules: ["known_arrhythmia=yes"],
+    planTemplateKey: "card_palpitations",
+  },
+  {
+    id: "card_syncope",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Syncope / Near Syncope",
+    aliases: ["passed out", "fainted", "syncope", "near fainting"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "during_exertion", prompt: "Did this happen during exertion?", type: "yes_no", priority: 1 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 2 },
+      { id: "palpitations", prompt: "Any palpitations before the event?", type: "yes_no", priority: 3 },
+      { id: "injury", prompt: "Any head injury from the event?", type: "yes_no", priority: 4 },
+      { id: "pregnant", prompt: "Any chance of pregnancy?", type: "yes_no", priority: 5 },
+      { id: "recurrent", prompt: "Has this happened before?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["during_exertion", "chest_pain", "palpitations", "injury"],
+    autoEscalateRules: ["during_exertion=yes", "chest_pain=yes", "palpitations=yes", "injury=yes"],
+    autoReviewRules: ["recurrent=yes", "pregnant=yes"],
+    planTemplateKey: "card_syncope",
+  },
+  {
+    id: "card_edema",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Edema / Swelling",
+    aliases: ["edema", "leg swelling", "ankle swelling", "foot swelling"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "one_sided", prompt: "Only one leg or side swollen?", type: "yes_no", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "pain_redness", prompt: "Pain, redness, or warmth in the leg?", type: "yes_no", priority: 4 },
+      { id: "orthopnea", prompt: "Worse when lying flat or overnight breathing trouble?", type: "yes_no", priority: 5 },
+      { id: "rapid_weight_gain", prompt: "Rapid weight gain?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "chest_pain"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes"],
+    autoReviewRules: ["one_sided=yes", "pain_redness=yes", "orthopnea=yes", "rapid_weight_gain=yes"],
+    planTemplateKey: "card_edema",
+  },
+  {
+    id: "card_hypertension",
+    system: "cardiology",
+    tier: "symptom",
+    title: "High Blood Pressure Concern",
+    aliases: ["high blood pressure", "hypertension", "bp high"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "reading", prompt: "What is the blood pressure reading?", type: "text", priority: 1 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 2 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 3 },
+      { id: "neuro", prompt: "Any severe headache, weakness, confusion, or vision change?", type: "yes_no", priority: 4 },
+      { id: "pregnant", prompt: "Pregnant?", type: "yes_no", priority: 5 },
+      { id: "missed_meds", prompt: "Missed blood pressure medications?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["chest_pain", "sob", "neuro"],
+    autoEscalateRules: ["chest_pain=yes", "sob=yes", "neuro=yes"],
+    autoReviewRules: ["pregnant=yes", "missed_meds=yes"],
+    planTemplateKey: "card_hypertension",
+  },
+  {
+    id: "card_hypotension",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Low Blood Pressure Concern",
+    aliases: ["low blood pressure", "hypotension", "bp low"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 1 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 2 },
+      { id: "bleeding", prompt: "Any bleeding?", type: "yes_no", priority: 3 },
+      { id: "vomiting_diarrhea", prompt: "Vomiting or diarrhea?", type: "yes_no", priority: 4 },
+      { id: "infection", prompt: "Fever or signs of infection?", type: "yes_no", priority: 5 },
+      { id: "meds", prompt: "New meds or extra blood pressure medicine?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["fainting", "chest_pain", "bleeding"],
+    autoEscalateRules: ["fainting=yes", "chest_pain=yes", "bleeding=yes"],
+    autoReviewRules: ["infection=yes", "vomiting_diarrhea=yes", "meds=yes"],
+    planTemplateKey: "card_hypotension",
+  },
+  {
+    id: "card_arrhythmia_concern",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Arrhythmia Concern",
+    aliases: ["arrhythmia", "afib", "irregular rhythm"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "rate_fast", prompt: "Very fast heart rate?", type: "yes_no", priority: 1 },
+      { id: "rate_slow", prompt: "Very slow heart rate?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 4 },
+      { id: "fainting", prompt: "Any fainting?", type: "yes_no", priority: 5 },
+      { id: "known_history", prompt: "Known arrhythmia history?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["chest_pain", "sob", "fainting"],
+    autoEscalateRules: ["chest_pain=yes", "sob=yes", "fainting=yes"],
+    autoReviewRules: ["rate_fast=yes", "rate_slow=yes", "known_history=yes"],
+    planTemplateKey: "card_arrhythmia",
+  },
+  {
+    id: "card_aortic_dissection_concern",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Aortic Dissection / Aneurysm Concern",
+    aliases: ["tearing chest pain", "aneurysm concern", "dissection concern"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "sudden_severe", prompt: "Sudden severe pain?", type: "yes_no", priority: 1 },
+      { id: "tearing_back", prompt: "Tearing pain into the back?", type: "yes_no", priority: 2 },
+      { id: "weakness_neuro", prompt: "Weakness, numbness, or speech trouble?", type: "yes_no", priority: 3 },
+      { id: "fainting", prompt: "Any fainting?", type: "yes_no", priority: 4 },
+      { id: "known_aneurysm", prompt: "Known aneurysm history?", type: "yes_no", priority: 5 },
+      { id: "marfan", prompt: "Known connective tissue disorder?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sudden_severe", "tearing_back", "weakness_neuro", "fainting"],
+    autoEscalateRules: ["sudden_severe=yes", "tearing_back=yes", "weakness_neuro=yes", "fainting=yes"],
+    autoReviewRules: [],
+    planTemplateKey: "card_dissection",
+  },
+  {
+    id: "card_chf_fluid_overload",
+    system: "cardiology",
+    tier: "symptom",
+    title: "CHF / Fluid Overload",
+    aliases: ["heart failure", "fluid overload", "congestive heart failure"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1 },
+      { id: "orthopnea", prompt: "Worse lying flat?", type: "yes_no", priority: 2 },
+      { id: "waking_gasping", prompt: "Waking up gasping for air?", type: "yes_no", priority: 3 },
+      { id: "leg_swelling", prompt: "More leg swelling than usual?", type: "yes_no", priority: 4 },
+      { id: "rapid_weight_gain", prompt: "Rapid weight gain?", type: "yes_no", priority: 5 },
+      { id: "missed_diuretics", prompt: "Missed diuretic meds?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "waking_gasping"],
+    autoEscalateRules: ["sob=yes AND orthopnea=yes", "waking_gasping=yes"],
+    autoReviewRules: ["leg_swelling=yes", "rapid_weight_gain=yes", "missed_diuretics=yes"],
+    planTemplateKey: "card_chf",
+  },
+  {
+    id: "card_raynaud",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Raynaud / Color Change in Fingers",
+    aliases: ["raynauds", "fingers turn white", "cold fingers"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "color_change", prompt: "White, blue, or red color changes?", type: "yes_no", priority: 1 },
+      { id: "pain_ulcers", prompt: "Painful sores or ulcers?", type: "yes_no", priority: 2 },
+      { id: "one_sided", prompt: "Only one hand or one side?", type: "yes_no", priority: 3 },
+      { id: "triggered_cold", prompt: "Triggered by cold?", type: "yes_no", priority: 4 },
+      { id: "smoking", prompt: "Smoking or nicotine exposure?", type: "yes_no", priority: 5 },
+      { id: "autoimmune", prompt: "Known autoimmune disease?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["pain_ulcers"],
+    autoEscalateRules: [],
+    autoReviewRules: ["pain_ulcers=yes", "one_sided=yes", "autoimmune=yes"],
+    planTemplateKey: "card_raynaud",
+  },
+  {
+    id: "card_varicose_veins",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Varicose Veins / Chronic Venous Symptoms",
+    aliases: ["varicose veins", "bulging veins", "venous insufficiency"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "one_sided", prompt: "Suddenly worse on one side?", type: "yes_no", priority: 1 },
+      { id: "pain_redness", prompt: "Pain, redness, or warmth?", type: "yes_no", priority: 2 },
+      { id: "ulcers", prompt: "Any leg wounds or ulcers?", type: "yes_no", priority: 3 },
+      { id: "swelling", prompt: "Leg swelling?", type: "yes_no", priority: 4 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 5 },
+      { id: "bleeding", prompt: "Any bleeding from the veins?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob"],
+    autoEscalateRules: ["sob=yes"],
+    autoReviewRules: ["pain_redness=yes", "ulcers=yes", "bleeding=yes", "one_sided=yes"],
+    planTemplateKey: "card_varicose",
+  },
+];
+B. Modifier packs
+// server/config/packs/cardiologyModifierPacks.ts
+
+import { ModifierPack } from "../../../shared/systemPackTypes";
+
+export const cardiologyModifierPacks: ModifierPack[] = [
+  {
+    id: "card_mod_known_chf",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Known CHF",
+    appliesToSymptoms: ["card_shortness_of_breath", "card_edema", "card_chf_fluid_overload"],
+    triggers: ["history_chf=yes"],
+    riskAdjustments: [
+      { condition: "history_chf=yes", action: "raise_risk", amount: 20, reason: "Known CHF increases decompensation risk" },
+      { condition: "sob=yes AND orthopnea=yes", action: "force_review", reason: "Possible CHF exacerbation" },
+    ],
+  },
+  {
+    id: "card_mod_anticoagulation",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Anticoagulation",
+    appliesToSymptoms: ["card_chest_pain", "card_syncope", "card_hypotension"],
+    triggers: ["anticoagulated=yes"],
+    riskAdjustments: [
+      { condition: "anticoagulated=yes", action: "raise_risk", amount: 15, reason: "Bleeding/complication risk" },
+      { condition: "fainting=yes AND anticoagulated=yes", action: "force_review", reason: "Anticoagulated syncope needs careful review" },
+    ],
+  },
+  {
+    id: "card_mod_pregnancy",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Pregnancy / Postpartum",
+    appliesToSymptoms: ["card_chest_pain", "card_shortness_of_breath", "card_syncope", "card_hypertension"],
+    triggers: ["pregnant=yes", "postpartum=yes"],
+    riskAdjustments: [
+      { condition: "pregnant=yes", action: "raise_risk", amount: 20, reason: "Pregnancy changes cardiac and clot risk" },
+      { condition: "postpartum=yes AND sob=yes", action: "force_review", reason: "Postpartum cardiopulmonary risk" },
+    ],
+  },
+  {
+    id: "card_mod_known_arrhythmia",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Known Arrhythmia History",
+    appliesToSymptoms: ["card_palpitations", "card_syncope", "card_arrhythmia_concern"],
+    triggers: ["known_arrhythmia=yes"],
+    riskAdjustments: [
+      { condition: "known_arrhythmia=yes", action: "raise_risk", amount: 15, reason: "History raises recurrence significance" },
+      { condition: "known_arrhythmia=yes AND fainting=yes", action: "force_escalation", reason: "Syncope with arrhythmia history" },
+    ],
+  },
+  {
+    id: "card_mod_congenital_heart",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Congenital Heart Disease",
+    appliesToSymptoms: ["card_shortness_of_breath", "card_palpitations", "card_syncope", "card_chf_fluid_overload"],
+    triggers: ["congenital_heart_disease=yes"],
+    riskAdjustments: [
+      { condition: "congenital_heart_disease=yes", action: "raise_risk", amount: 25, reason: "Congenital disease raises complexity" },
+      { condition: "congenital_heart_disease=yes", action: "force_review", reason: "Needs clinician-level interpretation" },
+    ],
+  },
+  {
+    id: "card_mod_known_aneurysm",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Known Aneurysm / Connective Tissue Disorder",
+    appliesToSymptoms: ["card_chest_pain", "card_aortic_dissection_concern"],
+    triggers: ["known_aneurysm=yes", "connective_tissue_disorder=yes"],
+    riskAdjustments: [
+      { condition: "known_aneurysm=yes", action: "force_escalation", reason: "Known aneurysm plus pain is high risk" },
+      { condition: "connective_tissue_disorder=yes", action: "raise_risk", amount: 20, reason: "Dissection risk increased" },
+    ],
+  },
+];
+C. Clinician algorithm packs
+// server/config/packs/cardiologyClinicianAlgorithms.ts
+
+import { ClinicianAlgorithmPack } from "../../../shared/systemPackTypes";
+
+export const cardiologyClinicianAlgorithms: ClinicianAlgorithmPack[] = [
+  {
+    id: "card_algo_acls_tachy",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "Tachyarrhythmia ACLS Support",
+    entryCriteria: ["unstable tachycardia concern", "very rapid pulse", "palpitations with instability"],
+    requiredInputs: ["heart_rate", "bp", "mental_status", "chest_pain", "sob", "12lead_available"],
+    outputActions: [
+      "flag unstable vs stable",
+      "recommend immediate ER escalation if unstable",
+      "highlight synchronized cardioversion pathway reference",
+    ],
+    notes: ["Clinician-facing only", "Not for patient-facing self-triage"],
+  },
+  {
+    id: "card_algo_acls_brady",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "Bradycardia ACLS Support",
+    entryCriteria: ["symptomatic bradycardia concern"],
+    requiredInputs: ["heart_rate", "bp", "mental_status", "chest_pain", "syncope"],
+    outputActions: [
+      "flag symptomatic bradycardia",
+      "recommend emergency escalation",
+      "surface atropine / pacing reference checklist",
+    ],
+  },
+  {
+    id: "card_algo_chest_pain_risk",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "High-Risk Chest Pain Review",
+    entryCriteria: ["card_chest_pain matched"],
+    requiredInputs: ["age", "risk_factors", "radiation", "sob", "exertional", "diaphoresis", "ekg_if_available"],
+    outputActions: [
+      "classify low/intermediate/high concern",
+      "suggest ER pathway when high-risk features present",
+      "highlight dissection/ACS/PE mimics",
+    ],
+  },
+  {
+    id: "card_algo_chf_review",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "CHF Exacerbation Review",
+    entryCriteria: ["card_chf_fluid_overload matched", "known CHF modifier present"],
+    requiredInputs: ["weight_change", "orthopnea", "pnD", "leg_edema", "diuretic_adherence", "spo2_if_available"],
+    outputActions: [
+      "identify probable fluid overload",
+      "flag urgent escalation if respiratory compromise",
+      "support med adherence and follow-up review",
+    ],
+  },
+  {
+    id: "card_algo_dissection_screen",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "Aortic Dissection Screen",
+    entryCriteria: ["tearing pain", "sudden severe chest/back pain", "aneurysm history"],
+    requiredInputs: ["pain_onset", "pain_radiation", "neuro_deficits", "pulse_deficit_if_known", "bp_difference_if_known"],
+    outputActions: [
+      "flag dissection concern",
+      "recommend immediate emergency transfer",
+      "document high-risk rationale",
+    ],
+  },
+];
+3. ORTHO / MSK
+A. Symptom packs
+// server/config/packs/orthoSymptomPacks.ts
+
+import { SymptomPack } from "../../../shared/systemPackTypes";
+
+export const orthoSymptomPacks: SymptomPack[] = [
+  {
+    id: "ortho_back_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Back Pain",
+    aliases: ["back pain", "low back pain"],
+    likelyDisposition: "self_care",
+    questions: [
+      { id: "injury", prompt: "Any fall, lifting injury, or trauma?", type: "yes_no", priority: 1 },
+      { id: "leg_weakness", prompt: "Any leg weakness?", type: "yes_no", priority: 2 },
+      { id: "groin_numbness", prompt: "Any numbness in the groin area?", type: "yes_no", priority: 3 },
+      { id: "bowel_bladder", prompt: "Any loss of bowel or bladder control?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "ivdu_cancer", prompt: "IV drug use, cancer, or immune suppression?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["leg_weakness", "groin_numbness", "bowel_bladder", "fever"],
+    autoEscalateRules: ["groin_numbness=yes", "bowel_bladder=yes", "leg_weakness=yes"],
+    autoReviewRules: ["fever=yes", "ivdu_cancer=yes", "injury=yes"],
+    planTemplateKey: "ortho_back_pain",
+  },
+  {
+    id: "ortho_neck_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Neck Pain",
+    aliases: ["neck pain", "stiff neck"],
+    likelyDisposition: "self_care",
+    questions: [
+      { id: "injury", prompt: "Any trauma, fall, or car accident?", type: "yes_no", priority: 1 },
+      { id: "arm_weakness", prompt: "Any arm weakness or clumsiness?", type: "yes_no", priority: 2 },
+      { id: "numbness", prompt: "Any numbness or tingling?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "headache", prompt: "Severe headache with the neck pain?", type: "yes_no", priority: 5 },
+      { id: "cannot_rotate", prompt: "Unable to turn the neck normally?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["arm_weakness", "fever", "headache"],
+    autoEscalateRules: ["arm_weakness=yes"],
+    autoReviewRules: ["injury=yes", "fever=yes", "headache=yes", "cannot_rotate=yes"],
+    planTemplateKey: "ortho_neck_pain",
+  },
+  {
+    id: "ortho_rib_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Rib / Chest Wall Pain",
+    aliases: ["rib pain", "chest wall pain", "pain with breathing after injury"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "injury", prompt: "Was there a fall or direct hit?", type: "yes_no", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "cough_blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 3 },
+      { id: "deformity", prompt: "Any visible deformity?", type: "yes_no", priority: 4 },
+      { id: "pain_breath", prompt: "Severe pain with breathing?", type: "yes_no", priority: 5 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "cough_blood"],
+    autoEscalateRules: ["sob=yes", "cough_blood=yes"],
+    autoReviewRules: ["injury=yes", "deformity=yes", "pain_breath=yes"],
+    planTemplateKey: "ortho_rib_pain",
+  },
+  {
+    id: "ortho_shoulder_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Shoulder Pain",
+    aliases: ["shoulder pain", "rotator cuff", "dislocated shoulder"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "injury", prompt: "Any fall, lifting injury, or dislocation event?", type: "yes_no", priority: 1 },
+      { id: "deformity", prompt: "Any visible deformity?", type: "yes_no", priority: 2 },
+      { id: "cannot_raise", prompt: "Unable to raise the arm?", type: "yes_no", priority: 3 },
+      { id: "numbness", prompt: "Any numbness or tingling?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever or hot swollen joint?", type: "yes_no", priority: 5 },
+      { id: "chest_pain", prompt: "Any chest pain instead of shoulder-only pain?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["deformity", "numbness", "chest_pain"],
+    autoEscalateRules: ["deformity=yes", "chest_pain=yes"],
+    autoReviewRules: ["cannot_raise=yes", "injury=yes", "fever=yes", "numbness=yes"],
+    planTemplateKey: "ortho_shoulder_pain",
+  },
+  {
+    id: "ortho_elbow_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Elbow Pain",
+    aliases: ["elbow pain"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "injury", prompt: "Any fall or direct blow?", type: "yes_no", priority: 1 },
+      { id: "deformity", prompt: "Any deformity?", type: "yes_no", priority: 2 },
+      { id: "cannot_bend", prompt: "Unable to bend or straighten?", type: "yes_no", priority: 3 },
+      { id: "hand_numbness", prompt: "Any numbness in hand/fingers?", type: "yes_no", priority: 4 },
+      { id: "swelling", prompt: "Major swelling?", type: "yes_no", priority: 5 },
+      { id: "fever", prompt: "Any fever or redness?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["deformity", "hand_numbness"],
+    autoEscalateRules: ["deformity=yes"],
+    autoReviewRules: ["cannot_bend=yes", "injury=yes", "fever=yes", "hand_numbness=yes"],
+    planTemplateKey: "ortho_elbow_pain",
+  },
+  {
+    id: "ortho_hand_wrist_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Hand / Wrist Pain",
+    aliases: ["wrist pain", "hand pain", "finger injury"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "injury", prompt: "Any fall onto the hand/wrist or crush injury?", type: "yes_no", priority: 1 },
+      { id: "deformity", prompt: "Any deformity?", type: "yes_no", priority: 2 },
+      { id: "snuffbox", prompt: "Pain at the base of the thumb/wrist?", type: "yes_no", priority: 3 },
+      { id: "numbness", prompt: "Any numbness or tingling?", type: "yes_no", priority: 4 },
+      { id: "cannot_grip", prompt: "Unable to grip or move fingers normally?", type: "yes_no", priority: 5 },
+      { id: "open_wound", prompt: "Any open wound?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["deformity", "numbness", "open_wound"],
+    autoEscalateRules: ["deformity=yes", "open_wound=yes"],
+    autoReviewRules: ["snuffbox=yes", "cannot_grip=yes", "injury=yes", "numbness=yes"],
+    planTemplateKey: "ortho_hand_wrist_pain",
+  },
+  {
+    id: "ortho_hip_pelvis_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Hip / Pelvis Pain",
+    aliases: ["hip pain", "pelvis pain", "groin pain after fall"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "fall", prompt: "Any fall or trauma?", type: "yes_no", priority: 1 },
+      { id: "cannot_walk", prompt: "Unable to walk or bear weight?", type: "yes_no", priority: 2 },
+      { id: "shortened_leg", prompt: "Leg looks shortened or turned outward?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "sudden_pop", prompt: "Sudden pop or severe strain?", type: "yes_no", priority: 5 },
+      { id: "numbness", prompt: "Any numbness or weakness?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["cannot_walk", "shortened_leg"],
+    autoEscalateRules: ["cannot_walk=yes", "shortened_leg=yes"],
+    autoReviewRules: ["fall=yes", "fever=yes", "numbness=yes"],
+    planTemplateKey: "ortho_hip_pelvis_pain",
+  },
+  {
+    id: "ortho_knee_femur_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Knee / Femur Pain",
+    aliases: ["knee pain", "femur pain", "twisted knee"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "injury", prompt: "Any twist, fall, or direct blow?", type: "yes_no", priority: 1 },
+      { id: "cannot_bear_weight", prompt: "Unable to bear weight?", type: "yes_no", priority: 2 },
+      { id: "locked", prompt: "Knee locked or cannot bend/straighten?", type: "yes_no", priority: 3 },
+      { id: "deformity", prompt: "Any deformity?", type: "yes_no", priority: 4 },
+      { id: "swelling_fast", prompt: "Did swelling come quickly?", type: "yes_no", priority: 5 },
+      { id: "fever", prompt: "Any fever or hot red joint?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["cannot_bear_weight", "deformity", "fever"],
+    autoEscalateRules: ["deformity=yes", "fever=yes AND cannot_bear_weight=yes"],
+    autoReviewRules: ["cannot_bear_weight=yes", "locked=yes", "swelling_fast=yes", "injury=yes"],
+    planTemplateKey: "ortho_knee_femur_pain",
+  },
+  {
+    id: "ortho_lower_leg_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Lower Leg / Calf Pain",
+    aliases: ["calf pain", "shin pain", "lower leg pain"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "injury", prompt: "Any trauma or sports injury?", type: "yes_no", priority: 1 },
+      { id: "swelling", prompt: "Any swelling?", type: "yes_no", priority: 2 },
+      { id: "redness_warmth", prompt: "Any redness or warmth?", type: "yes_no", priority: 3 },
+      { id: "cannot_walk", prompt: "Unable to walk?", type: "yes_no", priority: 4 },
+      { id: "sob", prompt: "Any shortness of breath or chest pain?", type: "yes_no", priority: 5 },
+      { id: "pain_out_of_proportion", prompt: "Severe pain out of proportion?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "pain_out_of_proportion"],
+    autoEscalateRules: ["sob=yes", "pain_out_of_proportion=yes"],
+    autoReviewRules: ["redness_warmth=yes", "swelling=yes", "cannot_walk=yes"],
+    planTemplateKey: "ortho_lower_leg_pain",
+  },
+  {
+    id: "ortho_foot_ankle_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Foot / Ankle Pain",
+    aliases: ["ankle pain", "foot pain", "sprained ankle"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "injury", prompt: "Did you twist it or fall?", type: "yes_no", priority: 1 },
+      { id: "cannot_bear_weight", prompt: "Can you bear weight?", type: "yes_no", priority: 2 },
+      { id: "deformity", prompt: "Any deformity?", type: "yes_no", priority: 3 },
+      { id: "numbness", prompt: "Any numbness?", type: "yes_no", priority: 4 },
+      { id: "open_wound", prompt: "Any open wound?", type: "yes_no", priority: 5 },
+      { id: "swelling", prompt: "Major swelling or bruising?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["deformity", "open_wound", "numbness"],
+    autoEscalateRules: ["deformity=yes", "open_wound=yes"],
+    autoReviewRules: ["cannot_bear_weight=no", "swelling=yes", "injury=yes", "numbness=yes"],
+    planTemplateKey: "ortho_foot_ankle_pain",
+  },
+  {
+    id: "ortho_joint_swelling",
+    system: "ortho",
+    tier: "symptom",
+    title: "Joint Swelling",
+    aliases: ["swollen joint", "hot joint"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 1 },
+      { id: "red_hot", prompt: "Is the joint hot and red?", type: "yes_no", priority: 2 },
+      { id: "cannot_move", prompt: "Unable to move or bear weight on it?", type: "yes_no", priority: 3 },
+      { id: "injury", prompt: "Any trauma?", type: "yes_no", priority: 4 },
+      { id: "known_gout", prompt: "Known gout?", type: "yes_no", priority: 5 },
+      { id: "immune_suppressed", prompt: "Immune suppression or joint replacement?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["fever", "red_hot", "cannot_move"],
+    autoEscalateRules: ["fever=yes AND red_hot=yes", "cannot_move=yes AND red_hot=yes"],
+    autoReviewRules: ["immune_suppressed=yes", "injury=yes", "known_gout=yes"],
+    planTemplateKey: "ortho_joint_swelling",
+  },
+  {
+    id: "ortho_post_fall_injury",
+    system: "ortho",
+    tier: "symptom",
+    title: "Post-Fall Injury",
+    aliases: ["fell down", "post fall pain", "injured after fall"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "head_hit", prompt: "Did you hit your head?", type: "yes_no", priority: 1 },
+      { id: "passed_out", prompt: "Did you pass out?", type: "yes_no", priority: 2 },
+      { id: "cannot_walk", prompt: "Unable to walk or stand?", type: "yes_no", priority: 3 },
+      { id: "deformity", prompt: "Any deformity?", type: "yes_no", priority: 4 },
+      { id: "bleeding", prompt: "Any major bleeding?", type: "yes_no", priority: 5 },
+      { id: "anticoagulated", prompt: "On blood thinners?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["head_hit", "passed_out", "bleeding", "deformity"],
+    autoEscalateRules: ["passed_out=yes", "bleeding=yes", "deformity=yes", "head_hit=yes AND anticoagulated=yes"],
+    autoReviewRules: ["cannot_walk=yes", "head_hit=yes", "anticoagulated=yes"],
+    planTemplateKey: "ortho_post_fall",
+  },
+];
+B. Modifier packs
+// server/config/packs/orthoModifierPacks.ts
+
+import { ModifierPack } from "../../../shared/systemPackTypes";
+
+export const orthoModifierPacks: ModifierPack[] = [
+  {
+    id: "ortho_mod_anticoagulation",
+    system: "ortho",
+    tier: "modifier",
+    title: "Anticoagulation",
+    appliesToSymptoms: ["ortho_post_fall_injury", "ortho_hip_pelvis_pain", "ortho_back_pain"],
+    triggers: ["anticoagulated=yes"],
+    riskAdjustments: [
+      { condition: "anticoagulated=yes", action: "raise_risk", amount: 20, reason: "Bleeding risk after injury" },
+      { condition: "head_hit=yes AND anticoagulated=yes", action: "force_escalation", reason: "Head trauma on anticoagulation" },
+    ],
+  },
+  {
+    id: "ortho_mod_osteoporosis",
+    system: "ortho",
+    tier: "modifier",
+    title: "Osteoporosis / Fragility Risk",
+    appliesToSymptoms: ["ortho_hip_pelvis_pain", "ortho_back_pain", "ortho_post_fall_injury"],
+    triggers: ["osteoporosis=yes", "older_adult=yes"],
+    riskAdjustments: [
+      { condition: "osteoporosis=yes", action: "raise_risk", amount: 15, reason: "Higher fracture risk" },
+      { condition: "older_adult=yes AND fall=yes", action: "force_review", reason: "Fragility fracture concern" },
+    ],
+  },
+  {
+    id: "ortho_mod_diabetes",
+    system: "ortho",
+    tier: "modifier",
+    title: "Diabetes",
+    appliesToSymptoms: ["ortho_joint_swelling", "ortho_foot_ankle_pain"],
+    triggers: ["diabetes=yes"],
+    riskAdjustments: [
+      { condition: "diabetes=yes", action: "raise_risk", amount: 10, reason: "Infection and wound healing risk" },
+      { condition: "diabetes=yes AND open_wound=yes", action: "force_review", reason: "Diabetic foot/wound risk" },
+    ],
+  },
+  {
+    id: "ortho_mod_immunocompromised",
+    system: "ortho",
+    tier: "modifier",
+    title: "Immunocompromised / Cancer / IVDU",
+    appliesToSymptoms: ["ortho_back_pain", "ortho_joint_swelling", "ortho_neck_pain"],
+    triggers: ["immune_suppressed=yes", "cancer=yes", "ivdu=yes"],
+    riskAdjustments: [
+      { condition: "immune_suppressed=yes", action: "raise_risk", amount: 20, reason: "Infection risk higher" },
+      { condition: "fever=yes AND immune_suppressed=yes", action: "force_escalation", reason: "Possible spinal/joint infection" },
+    ],
+  },
+  {
+    id: "ortho_mod_prosthetic_joint",
+    system: "ortho",
+    tier: "modifier",
+    title: "Prosthetic Joint",
+    appliesToSymptoms: ["ortho_joint_swelling", "ortho_knee_femur_pain", "ortho_hip_pelvis_pain"],
+    triggers: ["prosthetic_joint=yes"],
+    riskAdjustments: [
+      { condition: "prosthetic_joint=yes", action: "raise_risk", amount: 20, reason: "Hardware/prosthetic complication risk" },
+      { condition: "prosthetic_joint=yes AND fever=yes", action: "force_review", reason: "Possible prosthetic joint infection" },
+    ],
+  },
+];
+C. Clinician algorithm packs
+// server/config/packs/orthoClinicianAlgorithms.ts
+
+import { ClinicianAlgorithmPack } from "../../../shared/systemPackTypes";
+
+export const orthoClinicianAlgorithms: ClinicianAlgorithmPack[] = [
+  {
+    id: "ortho_algo_cauda_equina_screen",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Cauda Equina Screen",
+    entryCriteria: ["back pain with neuro symptoms"],
+    requiredInputs: ["groin_numbness", "bowel_bladder", "leg_weakness", "severe_pain"],
+    outputActions: [
+      "flag possible cauda equina",
+      "recommend immediate ER evaluation",
+      "document neuro red flags",
+    ],
+  },
+  {
+    id: "ortho_algo_septic_joint_screen",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Septic Joint Screen",
+    entryCriteria: ["hot swollen joint", "joint swelling with fever"],
+    requiredInputs: ["fever", "red_hot", "cannot_move", "prosthetic_joint", "immune_status"],
+    outputActions: [
+      "flag septic arthritis concern",
+      "recommend urgent/ER escalation",
+      "document inability to bear weight and infection risk",
+    ],
+  },
+  {
+    id: "ortho_algo_ottawa_ankle_support",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Ottawa Ankle / Foot Rule Support",
+    entryCriteria: ["foot/ankle injury"],
+    requiredInputs: ["cannot_bear_weight", "malleolar_tenderness_if_known", "midfoot_tenderness_if_known"],
+    outputActions: [
+      "suggest imaging consideration",
+      "classify likely sprain vs fracture concern",
+    ],
+  },
+  {
+    id: "ortho_algo_fracture_risk_review",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Fracture / Dislocation Review",
+    entryCriteria: ["deformity", "cannot bear weight", "fall with severe pain"],
+    requiredInputs: ["deformity", "weight_bearing", "neurovascular_status_if_known", "open_wound"],
+    outputActions: [
+      "flag likely fracture/dislocation",
+      "recommend urgent imaging pathway",
+      "document neurovascular red flags",
+    ],
+  },
+  {
+    id: "ortho_algo_neurovascular_limb_screen",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Neurovascular Limb Threat Screen",
+    entryCriteria: ["limb injury with numbness, weakness, or severe swelling"],
+    requiredInputs: ["numbness", "weakness", "severe_pain", "cool_limb_if_known", "pulse_if_known"],
+    outputActions: [
+      "flag neurovascular compromise",
+      "recommend emergency in-person evaluation",
+    ],
+  },
+];
+4. Next 3 systems
+
+I’m adding the same architecture for:
+
+Pulmonary
+
+GI
+
+Neuro
+
+To keep this usable instead of monstrous, I’ll give strong starter libraries with enough packs to wire immediately.
+
+PULMONARY
+Symptom packs
+// server/config/packs/pulmonarySymptomPacks.ts
+
+import { SymptomPack } from "../../../shared/systemPackTypes";
+
+export const pulmonarySymptomPacks: SymptomPack[] = [
+  {
+    id: "pulm_cough",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Cough",
+    aliases: ["cough", "bronchitis", "cold"],
+    likelyDisposition: "self_care",
+    questions: [
+      { id: "duration", prompt: "How long have you had the cough?", type: "duration", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 5 },
+      { id: "asthma_copd", prompt: "Asthma or COPD history?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "chest_pain", "blood"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes", "blood=yes"],
+    autoReviewRules: ["fever=yes", "asthma_copd=yes"],
+    planTemplateKey: "pulm_cough",
+  },
+  {
+    id: "pulm_wheeze",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Wheezing",
+    aliases: ["wheezing", "whistling in chest"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "sob", prompt: "Shortness of breath?", type: "yes_no", priority: 1 },
+      { id: "speaking", prompt: "Trouble speaking full sentences?", type: "yes_no", priority: 2 },
+      { id: "inhaler_working", prompt: "Is the inhaler helping?", type: "yes_no", priority: 3 },
+      { id: "blue_lips", prompt: "Blue lips?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Fever?", type: "yes_no", priority: 5 },
+      { id: "asthma_history", prompt: "Known asthma?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["speaking", "blue_lips"],
+    autoEscalateRules: ["speaking=yes", "blue_lips=yes", "sob=yes AND inhaler_working=no"],
+    autoReviewRules: ["fever=yes", "asthma_history=yes"],
+    planTemplateKey: "pulm_wheeze",
+  },
+  {
+    id: "pulm_pleuritic_pain",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Pleuritic Chest Pain",
+    aliases: ["pain with breathing", "pleuritic pain"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1 },
+      { id: "cough_blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 2 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 3 },
+      { id: "travel", prompt: "Recent travel or immobility?", type: "yes_no", priority: 4 },
+      { id: "leg_swelling", prompt: "Any leg swelling?", type: "yes_no", priority: 5 },
+      { id: "injury", prompt: "Any injury?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "cough_blood"],
+    autoEscalateRules: ["sob=yes", "cough_blood=yes"],
+    autoReviewRules: ["travel=yes", "leg_swelling=yes", "fever=yes"],
+    planTemplateKey: "pulm_pleuritic",
+  },
+  {
+    id: "pulm_uri_congestion",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "URI / Congestion",
+    aliases: ["congestion", "runny nose", "cold symptoms"],
+    likelyDisposition: "self_care",
+    questions: [
+      { id: "duration", prompt: "How long have symptoms been present?", type: "duration", priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 3 },
+      { id: "facial_swelling", prompt: "Facial swelling or severe pain?", type: "yes_no", priority: 4 },
+      { id: "sore_throat", prompt: "Severe sore throat?", type: "yes_no", priority: 5 },
+      { id: "dehydration", prompt: "Unable to keep fluids down?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["sob", "dehydration"],
+    autoEscalateRules: ["sob=yes", "dehydration=yes"],
+    autoReviewRules: ["facial_swelling=yes", "fever=yes"],
+    planTemplateKey: "pulm_uri",
+  },
+  {
+    id: "pulm_sleep_apnea_concern",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Sleep Apnea Concern",
+    aliases: ["sleep apnea", "stop breathing in sleep", "snoring"],
+    likelyDisposition: "office_followup",
+    questions: [
+      { id: "snoring", prompt: "Loud snoring?", type: "yes_no", priority: 1 },
+      { id: "witnessed_apnea", prompt: "Has anyone seen breathing pauses?", type: "yes_no", priority: 2 },
+      { id: "day_sleepy", prompt: "Very sleepy during the day?", type: "yes_no", priority: 3 },
+      { id: "morning_headache", prompt: "Morning headaches?", type: "yes_no", priority: 4 },
+      { id: "obesity", prompt: "Overweight or large neck?", type: "yes_no", priority: 5 },
+      { id: "heart_failure", prompt: "Heart failure or afib history?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: [],
+    autoEscalateRules: [],
+    autoReviewRules: ["witnessed_apnea=yes", "day_sleepy=yes", "heart_failure=yes"],
+    planTemplateKey: "pulm_sleep_apnea",
+  },
+];
+Modifier packs
+// server/config/packs/pulmonaryModifierPacks.ts
+
+import { ModifierPack } from "../../../shared/systemPackTypes";
+
+export const pulmonaryModifierPacks: ModifierPack[] = [
+  {
+    id: "pulm_mod_asthma_copd",
+    system: "pulmonary",
+    tier: "modifier",
+    title: "Asthma / COPD",
+    appliesToSymptoms: ["pulm_cough", "pulm_wheeze", "pulm_uri_congestion"],
+    triggers: ["asthma=yes", "copd=yes"],
+    riskAdjustments: [
+      { condition: "asthma=yes OR copd=yes", action: "raise_risk", amount: 15, reason: "Baseline pulmonary disease" },
+      { condition: "sob=yes AND inhaler_working=no", action: "force_review", reason: "Possible exacerbation" },
+    ],
+  },
+  {
+    id: "pulm_mod_immunocompromised",
+    system: "pulmonary",
+    tier: "modifier",
+    title: "Immunocompromised",
+    appliesToSymptoms: ["pulm_cough", "pulm_uri_congestion", "pulm_pleuritic_pain"],
+    triggers: ["immune_suppressed=yes"],
+    riskAdjustments: [
+      { condition: "immune_suppressed=yes", action: "raise_risk", amount: 20, reason: "Infection complexity higher" },
+      { condition: "fever=yes AND immune_suppressed=yes", action: "force_review", reason: "Higher-risk infection" },
+    ],
+  },
+  {
+    id: "pulm_mod_pe_risk",
+    system: "pulmonary",
+    tier: "modifier",
+    title: "PE Risk Context",
+    appliesToSymptoms: ["pulm_pleuritic_pain", "pulm_cough"],
+    triggers: ["recent_travel=yes", "postop=yes", "estrogen=yes", "prior_clot=yes"],
+    riskAdjustments: [
+      { condition: "prior_clot=yes", action: "raise_risk", amount: 25, reason: "Prior VTE risk" },
+      { condition: "sob=yes AND leg_swelling=yes", action: "force_escalation", reason: "Possible PE pattern" },
+    ],
+  },
+];
+Clinician algorithms
+// server/config/packs/pulmonaryClinicianAlgorithms.ts
+
+import { ClinicianAlgorithmPack } from "../../../shared/systemPackTypes";
+
+export const pulmonaryClinicianAlgorithms: ClinicianAlgorithmPack[] = [
+  {
+    id: "pulm_algo_asthma_exacerbation",
+    system: "pulmonary",
+    tier: "clinician_algorithm",
+    title: "Asthma Exacerbation Support",
+    entryCriteria: ["wheeze", "known asthma", "sob"],
+    requiredInputs: ["speaking", "inhaler_response", "resp_rate_if_known", "spo2_if_known"],
+    outputActions: ["flag mild/moderate/severe concern", "recommend ED escalation if severe features present"],
+  },
+  {
+    id: "pulm_algo_pe_screen",
+    system: "pulmonary",
+    tier: "clinician_algorithm",
+    title: "PE Screen",
+    entryCriteria: ["pleuritic pain", "sob", "leg swelling", "travel risk"],
+    requiredInputs: ["sob", "leg_swelling", "travel", "prior_clot", "hemoptysis"],
+    outputActions: ["flag PE concern", "recommend emergency evaluation when high-risk cluster present"],
+  },
+];
+GI
+Symptom packs
+// server/config/packs/giSymptomPacks.ts
+
+import { SymptomPack } from "../../../shared/systemPackTypes";
+
+export const giSymptomPacks: SymptomPack[] = [
+  {
+    id: "gi_abdominal_pain",
+    system: "gi",
+    tier: "symptom",
+    title: "Abdominal Pain",
+    aliases: ["abdominal pain", "stomach pain", "belly pain"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "location", prompt: "Where is the pain?", type: "text", priority: 1 },
+      { id: "severity", prompt: "How severe is it 0-10?", type: "severity", priority: 2 },
+      { id: "vomiting", prompt: "Any vomiting?", type: "yes_no", priority: 3 },
+      { id: "blood_stool", prompt: "Any blood or black stool?", type: "yes_no", priority: 4 },
+      { id: "pregnant", prompt: "Any chance of pregnancy?", type: "yes_no", priority: 5 },
+      { id: "fainting", prompt: "Any fainting or severe weakness?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["blood_stool", "fainting"],
+    autoEscalateRules: ["blood_stool=yes", "fainting=yes", "severity>=8"],
+    autoReviewRules: ["pregnant=yes", "vomiting=yes"],
+    planTemplateKey: "gi_abdominal_pain",
+  },
+  {
+    id: "gi_vomiting",
+    system: "gi",
+    tier: "symptom",
+    title: "Vomiting",
+    aliases: ["vomiting", "throwing up"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "fluids", prompt: "Able to keep fluids down?", type: "yes_no", priority: 1 },
+      { id: "blood", prompt: "Any blood in vomit?", type: "yes_no", priority: 2 },
+      { id: "abdominal_pain", prompt: "Any abdominal pain?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "pregnancy", prompt: "Pregnant?", type: "yes_no", priority: 5 },
+      { id: "duration", prompt: "How long has this been happening?", type: "duration", priority: 6 },
+    ],
+    redFlags: ["blood"],
+    autoEscalateRules: ["blood=yes", "fluids=no"],
+    autoReviewRules: ["abdominal_pain=yes", "pregnancy=yes", "fever=yes"],
+    planTemplateKey: "gi_vomiting",
+  },
+  {
+    id: "gi_diarrhea",
+    system: "gi",
+    tier: "symptom",
+    title: "Diarrhea",
+    aliases: ["diarrhea", "loose stool"],
+    likelyDisposition: "self_care",
+    questions: [
+      { id: "blood", prompt: "Any blood in stool?", type: "yes_no", priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "dehydration", prompt: "Dizzy, dry mouth, or low urine?", type: "yes_no", priority: 3 },
+      { id: "abdominal_pain", prompt: "Severe abdominal pain?", type: "yes_no", priority: 4 },
+      { id: "travel_antibiotics", prompt: "Recent travel or antibiotics?", type: "yes_no", priority: 5 },
+      { id: "duration", prompt: "How long has it lasted?", type: "duration", priority: 6 },
+    ],
+    redFlags: ["blood", "dehydration"],
+    autoEscalateRules: ["blood=yes", "dehydration=yes"],
+    autoReviewRules: ["fever=yes", "abdominal_pain=yes", "travel_antibiotics=yes"],
+    planTemplateKey: "gi_diarrhea",
+  },
+  {
+    id: "gi_constipation",
+    system: "gi",
+    tier: "symptom",
+    title: "Constipation",
+    aliases: ["constipation"],
+    likelyDisposition: "self_care",
+    questions: [
+      { id: "vomiting", prompt: "Any vomiting?", type: "yes_no", priority: 1 },
+      { id: "distention", prompt: "Very swollen belly?", type: "yes_no", priority: 2 },
+      { id: "blood", prompt: "Any blood in stool?", type: "yes_no", priority: 3 },
+      { id: "pain", prompt: "Severe abdominal pain?", type: "yes_no", priority: 4 },
+      { id: "gas", prompt: "Able to pass gas?", type: "yes_no", priority: 5 },
+      { id: "duration", prompt: "How long has this been going on?", type: "duration", priority: 6 },
+    ],
+    redFlags: ["vomiting", "distention", "pain"],
+    autoEscalateRules: ["vomiting=yes AND gas=no", "distention=yes", "pain=yes"],
+    autoReviewRules: ["blood=yes"],
+    planTemplateKey: "gi_constipation",
+  },
+  {
+    id: "gi_rectal_bleeding",
+    system: "gi",
+    tier: "symptom",
+    title: "Rectal Bleeding",
+    aliases: ["rectal bleeding", "blood in stool"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "black_stool", prompt: "Black stool?", type: "yes_no", priority: 1 },
+      { id: "large_amount", prompt: "Large amount of bleeding?", type: "yes_no", priority: 2 },
+      { id: "fainting", prompt: "Any fainting or weakness?", type: "yes_no", priority: 3 },
+      { id: "pain", prompt: "Rectal or abdominal pain?", type: "yes_no", priority: 4 },
+      { id: "blood_thinner", prompt: "On blood thinners?", type: "yes_no", priority: 5 },
+      { id: "constipation", prompt: "Recent constipation or straining?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["black_stool", "large_amount", "fainting"],
+    autoEscalateRules: ["black_stool=yes", "large_amount=yes", "fainting=yes"],
+    autoReviewRules: ["blood_thinner=yes", "pain=yes"],
+    planTemplateKey: "gi_rectal_bleeding",
+  },
+];
+Modifier packs
+// server/config/packs/giModifierPacks.ts
+
+import { ModifierPack } from "../../../shared/systemPackTypes";
+
+export const giModifierPacks: ModifierPack[] = [
+  {
+    id: "gi_mod_pregnancy",
+    system: "gi",
+    tier: "modifier",
+    title: "Pregnancy",
+    appliesToSymptoms: ["gi_abdominal_pain", "gi_vomiting"],
+    triggers: ["pregnant=yes"],
+    riskAdjustments: [
+      { condition: "pregnant=yes", action: "raise_risk", amount: 20, reason: "Pregnancy changes abdominal differential" },
+      { condition: "pregnant=yes AND abdominal_pain=yes", action: "force_review", reason: "Pregnancy-related abdominal risk" },
+    ],
+  },
+  {
+    id: "gi_mod_anticoagulation",
+    system: "gi",
+    tier: "modifier",
+    title: "Anticoagulation",
+    appliesToSymptoms: ["gi_rectal_bleeding", "gi_abdominal_pain"],
+    triggers: ["blood_thinner=yes"],
+    riskAdjustments: [
+      { condition: "blood_thinner=yes", action: "raise_risk", amount: 20, reason: "Bleeding risk increased" },
+      { condition: "large_amount=yes AND blood_thinner=yes", action: "force_escalation", reason: "Higher-risk GI bleed pattern" },
+    ],
+  },
+  {
+    id: "gi_mod_immunocompromised",
+    system: "gi",
+    tier: "modifier",
+    title: "Immunocompromised / IBD / Cancer",
+    appliesToSymptoms: ["gi_abdominal_pain", "gi_diarrhea"],
+    triggers: ["immune_suppressed=yes", "ibd=yes", "cancer=yes"],
+    riskAdjustments: [
+      { condition: "immune_suppressed=yes OR ibd=yes", action: "raise_risk", amount: 15, reason: "Higher complexity and complication risk" },
+      { condition: "fever=yes AND immune_suppressed=yes", action: "force_review", reason: "Infection/inflammatory risk" },
+    ],
+  },
+];
+Clinician algorithms
+// server/config/packs/giClinicianAlgorithms.ts
+
+import { ClinicianAlgorithmPack } from "../../../shared/systemPackTypes";
+
+export const giClinicianAlgorithms: ClinicianAlgorithmPack[] = [
+  {
+    id: "gi_algo_appendicitis_screen",
+    system: "gi",
+    tier: "clinician_algorithm",
+    title: "Appendicitis Screen",
+    entryCriteria: ["RLQ pain", "abdominal pain with vomiting/fever"],
+    requiredInputs: ["location", "vomiting", "fever", "rebound_if_known", "pain_migration_if_known"],
+    outputActions: ["flag appendicitis concern", "recommend urgent/ER escalation when high-risk cluster present"],
+  },
+  {
+    id: "gi_algo_obstruction_screen",
+    system: "gi",
+    tier: "clinician_algorithm",
+    title: "Obstruction Screen",
+    entryCriteria: ["vomiting with distention", "constipation with no gas"],
+    requiredInputs: ["vomiting", "distention", "gas", "surgical_history_if_known"],
+    outputActions: ["flag bowel obstruction concern", "recommend urgent/ER pathway"],
+  },
+];
+NEURO
+Symptom packs
+// server/config/packs/neuroSymptomPacks.ts
+
+import { SymptomPack } from "../../../shared/systemPackTypes";
+
+export const neuroSymptomPacks: SymptomPack[] = [
+  {
+    id: "neuro_headache",
+    system: "neuro",
+    tier: "symptom",
+    title: "Headache",
+    aliases: ["headache", "migraine"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "sudden", prompt: "Sudden worst headache of life?", type: "yes_no", priority: 1 },
+      { id: "weakness", prompt: "Any weakness, numbness, or speech trouble?", type: "yes_no", priority: 2 },
+      { id: "fever_stiff_neck", prompt: "Any fever or stiff neck?", type: "yes_no", priority: 3 },
+      { id: "vision", prompt: "Any vision changes?", type: "yes_no", priority: 4 },
+      { id: "pregnant", prompt: "Pregnant or postpartum?", type: "yes_no", priority: 5 },
+      { id: "severity", prompt: "How severe 0-10?", type: "severity", priority: 6 },
+    ],
+    redFlags: ["sudden", "weakness", "fever_stiff_neck"],
+    autoEscalateRules: ["sudden=yes", "weakness=yes", "fever_stiff_neck=yes"],
+    autoReviewRules: ["vision=yes", "pregnant=yes", "severity>=8"],
+    planTemplateKey: "neuro_headache",
+  },
+  {
+    id: "neuro_dizziness",
+    system: "neuro",
+    tier: "symptom",
+    title: "Dizziness / Vertigo",
+    aliases: ["dizziness", "vertigo", "lightheaded"],
+    likelyDisposition: "telemed_now",
+    questions: [
+      { id: "fainting", prompt: "Any fainting?", type: "yes_no", priority: 1 },
+      { id: "weakness", prompt: "Any weakness, numbness, slurred speech, or trouble walking?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain or palpitations?", type: "yes_no", priority: 3 },
+      { id: "spinning", prompt: "Does the room feel like it's spinning?", type: "yes_no", priority: 4 },
+      { id: "dehydration", prompt: "Poor fluid intake, vomiting, or diarrhea?", type: "yes_no", priority: 5 },
+      { id: "duration", prompt: "How long has this lasted?", type: "duration", priority: 6 },
+    ],
+    redFlags: ["fainting", "weakness", "chest_pain"],
+    autoEscalateRules: ["fainting=yes", "weakness=yes", "chest_pain=yes"],
+    autoReviewRules: ["dehydration=yes"],
+    planTemplateKey: "neuro_dizziness",
+  },
+  {
+    id: "neuro_numbness_weakness",
+    system: "neuro",
+    tier: "symptom",
+    title: "Numbness / Weakness",
+    aliases: ["weakness", "numbness", "can't move", "tingling one side"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "one_sided", prompt: "One-sided symptoms?", type: "yes_no", priority: 1 },
+      { id: "face_speech", prompt: "Facial droop or speech trouble?", type: "yes_no", priority: 2 },
+      { id: "sudden", prompt: "Did it start suddenly?", type: "yes_no", priority: 3 },
+      { id: "walking", prompt: "Trouble walking?", type: "yes_no", priority: 4 },
+      { id: "headache", prompt: "Severe headache with it?", type: "yes_no", priority: 5 },
+      { id: "back_pain", prompt: "Back pain with leg symptoms?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["one_sided", "face_speech", "sudden"],
+    autoEscalateRules: ["one_sided=yes", "face_speech=yes", "sudden=yes"],
+    autoReviewRules: ["walking=yes", "headache=yes", "back_pain=yes"],
+    planTemplateKey: "neuro_weakness",
+  },
+  {
+    id: "neuro_seizure_concern",
+    system: "neuro",
+    tier: "symptom",
+    title: "Seizure Concern",
+    aliases: ["seizure", "convulsion", "shaking spell"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "ongoing", prompt: "Is it happening now or repeated without recovery?", type: "yes_no", priority: 1 },
+      { id: "injury", prompt: "Any injury during the event?", type: "yes_no", priority: 2 },
+      { id: "pregnant", prompt: "Pregnant?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "first_time", prompt: "First seizure-like event?", type: "yes_no", priority: 5 },
+      { id: "diabetes", prompt: "Diabetes or low sugar risk?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["ongoing"],
+    autoEscalateRules: ["ongoing=yes", "pregnant=yes", "injury=yes"],
+    autoReviewRules: ["first_time=yes", "fever=yes", "diabetes=yes"],
+    planTemplateKey: "neuro_seizure",
+  },
+  {
+    id: "neuro_confusion",
+    system: "neuro",
+    tier: "symptom",
+    title: "Confusion / Altered Mental Status",
+    aliases: ["confusion", "altered", "not acting right"],
+    likelyDisposition: "er_now",
+    questions: [
+      { id: "new_onset", prompt: "Is this new?", type: "yes_no", priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "head_injury", prompt: "Any head injury?", type: "yes_no", priority: 3 },
+      { id: "weakness", prompt: "Any weakness or speech trouble?", type: "yes_no", priority: 4 },
+      { id: "low_sugar", prompt: "Diabetes or low sugar concern?", type: "yes_no", priority: 5 },
+      { id: "substances", prompt: "Alcohol or drug concern?", type: "yes_no", priority: 6 },
+    ],
+    redFlags: ["new_onset", "weakness"],
+    autoEscalateRules: ["new_onset=yes", "weakness=yes", "head_injury=yes"],
+    autoReviewRules: ["fever=yes", "low_sugar=yes", "substances=yes"],
+    planTemplateKey: "neuro_confusion",
+  },
+];
+Modifier packs
+// server/config/packs/neuroModifierPacks.ts
+
+import { ModifierPack } from "../../../shared/systemPackTypes";
+
+export const neuroModifierPacks: ModifierPack[] = [
+  {
+    id: "neuro_mod_anticoagulation",
+    system: "neuro",
+    tier: "modifier",
+    title: "Anticoagulation",
+    appliesToSymptoms: ["neuro_headache", "neuro_confusion", "neuro_seizure_concern"],
+    triggers: ["anticoagulated=yes"],
+    riskAdjustments: [
+      { condition: "anticoagulated=yes", action: "raise_risk", amount: 20, reason: "Bleeding risk higher" },
+      { condition: "head_injury=yes AND anticoagulated=yes", action: "force_escalation", reason: "Head injury on anticoagulation" },
+    ],
+  },
+  {
+    id: "neuro_mod_pregnancy_postpartum",
+    system: "neuro",
+    tier: "modifier",
+    title: "Pregnancy / Postpartum",
+    appliesToSymptoms: ["neuro_headache", "neuro_seizure_concern"],
+    triggers: ["pregnant=yes", "postpartum=yes"],
+    riskAdjustments: [
+      { condition: "pregnant=yes OR postpartum=yes", action: "raise_risk", amount: 20, reason: "Pregnancy-related neuro risk" },
+      { condition: "headache=yes AND pregnant=yes", action: "force_review", reason: "Pregnancy headache red-flag context" },
+    ],
+  },
+  {
+    id: "neuro_mod_stroke_history",
+    system: "neuro",
+    tier: "modifier",
+    title: "Prior Stroke / TIA",
+    appliesToSymptoms: ["neuro_numbness_weakness", "neuro_dizziness", "neuro_confusion"],
+    triggers: ["prior_stroke=yes", "prior_tia=yes"],
+    riskAdjustments: [
+      { condition: "prior_stroke=yes OR prior_tia=yes", action: "raise_risk", amount: 15, reason: "Higher recurrence concern" },
+      { condition: "one_sided=yes AND prior_stroke=yes", action: "force_escalation", reason: "Possible recurrent cerebrovascular event" },
+    ],
+  },
+];
+Clinician algorithms
+// server/config/packs/neuroClinicianAlgorithms.ts
+
+import { ClinicianAlgorithmPack } from "../../../shared/systemPackTypes";
+
+export const neuroClinicianAlgorithms: ClinicianAlgorithmPack[] = [
+  {
+    id: "neuro_algo_stroke_screen",
+    system: "neuro",
+    tier: "clinician_algorithm",
+    title: "Stroke Screen",
+    entryCriteria: ["one-sided weakness", "speech trouble", "facial droop", "sudden neuro deficit"],
+    requiredInputs: ["last_known_well_if_known", "one_sided", "face_speech", "walking", "anticoagulated"],
+    outputActions: ["flag stroke concern", "recommend immediate ER/EMS pathway", "document acute neuro deficits"],
+  },
+  {
+    id: "neuro_algo_sah_headache_screen",
+    system: "neuro",
+    tier: "clinician_algorithm",
+    title: "Thunderclap Headache Screen",
+    entryCriteria: ["sudden worst headache", "thunderclap headache"],
+    requiredInputs: ["sudden", "severity", "neck_stiffness", "neuro_deficits", "anticoagulated"],
+    outputActions: ["flag subarachnoid hemorrhage concern", "recommend immediate emergency evaluation"],
+  },
+  {
+    id: "neuro_algo_seizure_review",
+    system: "neuro",
+    tier: "clinician_algorithm",
+    title: "Seizure Review",
+    entryCriteria: ["seizure concern"],
+    requiredInputs: ["ongoing", "first_time", "pregnant", "fever", "injury", "diabetes"],
+    outputActions: ["flag status epilepticus concern if ongoing", "recommend emergency pathway for high-risk features"],
+  },
+];
+5. Combined registry
+// server/config/systemPackRegistry.ts
+
+import { cardiologySymptomPacks } from "./packs/cardiologySymptomPacks";
+import { cardiologyModifierPacks } from "./packs/cardiologyModifierPacks";
+import { cardiologyClinicianAlgorithms } from "./packs/cardiologyClinicianAlgorithms";
+
+import { orthoSymptomPacks } from "./packs/orthoSymptomPacks";
+import { orthoModifierPacks } from "./packs/orthoModifierPacks";
+import { orthoClinicianAlgorithms } from "./packs/orthoClinicianAlgorithms";
+
+import { pulmonarySymptomPacks } from "./packs/pulmonarySymptomPacks";
+import { pulmonaryModifierPacks } from "./packs/pulmonaryModifierPacks";
+import { pulmonaryClinicianAlgorithms } from "./packs/pulmonaryClinicianAlgorithms";
+
+import { giSymptomPacks } from "./packs/giSymptomPacks";
+import { giModifierPacks } from "./packs/giModifierPacks";
+import { giClinicianAlgorithms } from "./packs/giClinicianAlgorithms";
+
+import { neuroSymptomPacks } from "./packs/neuroSymptomPacks";
+import { neuroModifierPacks } from "./packs/neuroModifierPacks";
+import { neuroClinicianAlgorithms } from "./packs/neuroClinicianAlgorithms";
+
+export const symptomPackRegistry = [
+  ...cardiologySymptomPacks,
+  ...orthoSymptomPacks,
+  ...pulmonarySymptomPacks,
+  ...giSymptomPacks,
+  ...neuroSymptomPacks,
+];
+
+export const modifierPackRegistry = [
+  ...cardiologyModifierPacks,
+  ...orthoModifierPacks,
+  ...pulmonaryModifierPacks,
+  ...giModifierPacks,
+  ...neuroModifierPacks,
+];
+
+export const clinicianAlgorithmRegistry = [
+  ...cardiologyClinicianAlgorithms,
+  ...orthoClinicianAlgorithms,
+  ...pulmonaryClinicianAlgorithms,
+  ...giClinicianAlgorithms,
+  ...neuroClinicianAlgorithms,
+];
+6. Recommended engine behavior
+
+Use this order:
+
+Step 1
+
+Run universal safety screen
+
+Step 2
+
+Match one primary symptom pack
+
+Step 3
+
+Apply all relevant modifier packs
+
+Step 4
+
+If red flags or complexity present, surface clinician algorithm packs
+
+Step 5
+
+Generate:
+
+patient-facing next questions
+
+queue priority
+
+review requirement
+
+clinician checklist if needed
+
+That gives you a layered engine instead of one giant soup pot.

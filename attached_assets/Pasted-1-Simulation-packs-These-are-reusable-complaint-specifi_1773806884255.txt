@@ -1,0 +1,765 @@
+1) Simulation packs
+
+These are reusable complaint-specific datasets for replaying strategy changes.
+
+/server/services/simulationPacks.ts
+export type SimulationCase = {
+  id: string;
+  complaint: string;
+  rawConfidence: number;
+  wasCorrect: boolean;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  escalated: boolean;
+  override: boolean;
+  reviewSeconds: number;
+  satisfaction: number;
+};
+
+export type SimulationPack = {
+  id: string;
+  name: string;
+  complaint: string;
+  description: string;
+  cases: SimulationCase[];
+};
+
+export function getSimulationPacks(): SimulationPack[] {
+  return [
+    {
+      id: "pack-cough-001",
+      name: "Cough Pack",
+      complaint: "cough",
+      description: "Mixed low and medium-risk cough scenarios with variable confidence.",
+      cases: [
+        { id: "c1", complaint: "cough", rawConfidence: 0.92, wasCorrect: true, riskLevel: "LOW", escalated: false, override: false, reviewSeconds: 10, satisfaction: 4.8 },
+        { id: "c2", complaint: "cough", rawConfidence: 0.81, wasCorrect: true, riskLevel: "LOW", escalated: false, override: false, reviewSeconds: 11, satisfaction: 4.7 },
+        { id: "c3", complaint: "cough", rawConfidence: 0.68, wasCorrect: false, riskLevel: "MEDIUM", escalated: true, override: true, reviewSeconds: 24, satisfaction: 3.9 },
+        { id: "c4", complaint: "cough", rawConfidence: 0.77, wasCorrect: true, riskLevel: "MEDIUM", escalated: false, override: false, reviewSeconds: 18, satisfaction: 4.4 }
+      ]
+    },
+    {
+      id: "pack-dizziness-001",
+      name: "Dizziness Pack",
+      complaint: "dizziness",
+      description: "Higher-risk complaint pack to stress-test escalation and thresholds.",
+      cases: [
+        { id: "d1", complaint: "dizziness", rawConfidence: 0.74, wasCorrect: true, riskLevel: "MEDIUM", escalated: false, override: false, reviewSeconds: 20, satisfaction: 4.3 },
+        { id: "d2", complaint: "dizziness", rawConfidence: 0.61, wasCorrect: false, riskLevel: "HIGH", escalated: true, override: true, reviewSeconds: 35, satisfaction: 3.5 },
+        { id: "d3", complaint: "dizziness", rawConfidence: 0.58, wasCorrect: false, riskLevel: "HIGH", escalated: true, override: true, reviewSeconds: 39, satisfaction: 3.2 },
+        { id: "d4", complaint: "dizziness", rawConfidence: 0.83, wasCorrect: true, riskLevel: "MEDIUM", escalated: false, override: false, reviewSeconds: 16, satisfaction: 4.5 }
+      ]
+    },
+    {
+      id: "pack-rash-001",
+      name: "Rash Pack",
+      complaint: "rash",
+      description: "Mostly low-risk, used for throughput and cost optimization testing.",
+      cases: [
+        { id: "r1", complaint: "rash", rawConfidence: 0.94, wasCorrect: true, riskLevel: "LOW", escalated: false, override: false, reviewSeconds: 7, satisfaction: 4.9 },
+        { id: "r2", complaint: "rash", rawConfidence: 0.89, wasCorrect: true, riskLevel: "LOW", escalated: false, override: false, reviewSeconds: 8, satisfaction: 4.8 },
+        { id: "r3", complaint: "rash", rawConfidence: 0.72, wasCorrect: false, riskLevel: "LOW", escalated: false, override: true, reviewSeconds: 15, satisfaction: 4.1 },
+        { id: "r4", complaint: "rash", rawConfidence: 0.87, wasCorrect: true, riskLevel: "LOW", escalated: false, override: false, reviewSeconds: 9, satisfaction: 4.8 }
+      ]
+    }
+  ];
+}
+
+export function getSimulationPackById(id: string): SimulationPack | null {
+  return getSimulationPacks().find(p => p.id === id) || null;
+}
+2) Strategy simulation lab
+
+This compares multiple strategies against a selected pack.
+
+/server/services/simulationLab.ts
+import { SimulationCase } from "./simulationPacks";
+
+export type SimulationStrategy = {
+  name: string;
+  confidenceThreshold: number;
+  batchApprovalEnabled: boolean;
+  mandatoryReviewMedium: boolean;
+};
+
+export type StrategyResult = {
+  strategy: string;
+  totalCases: number;
+  autoApproved: number;
+  physicianReviewed: number;
+  escalated: number;
+  accuracyPct: number;
+  overrideRatePct: number;
+  avgReviewSeconds: number;
+  avgSatisfaction: number;
+  costPerCase: number;
+};
+
+export function runSimulationStrategy(
+  cases: SimulationCase[],
+  strategy: SimulationStrategy
+): StrategyResult {
+  let autoApproved = 0;
+  let physicianReviewed = 0;
+  let escalated = 0;
+  let correct = 0;
+  let overrides = 0;
+  let totalReviewSeconds = 0;
+  let totalSatisfaction = 0;
+  let totalCost = 0;
+
+  for (const c of cases) {
+    const mustReview =
+      c.riskLevel === "HIGH" ||
+      (strategy.mandatoryReviewMedium && c.riskLevel === "MEDIUM") ||
+      !strategy.batchApprovalEnabled ||
+      c.rawConfidence < strategy.confidenceThreshold;
+
+    if (mustReview) {
+      physicianReviewed++;
+      totalReviewSeconds += c.reviewSeconds;
+      totalCost += 7.5;
+    } else {
+      autoApproved++;
+      totalReviewSeconds += Math.max(2, c.reviewSeconds * 0.2);
+      totalCost += 2.2;
+    }
+
+    if (c.escalated) escalated++;
+    if (c.wasCorrect) correct++;
+    if (c.override) overrides++;
+    totalSatisfaction += c.satisfaction;
+  }
+
+  const totalCases = cases.length;
+
+  return {
+    strategy: strategy.name,
+    totalCases,
+    autoApproved,
+    physicianReviewed,
+    escalated,
+    accuracyPct: Number(((correct / Math.max(1, totalCases)) * 100).toFixed(2)),
+    overrideRatePct: Number(((overrides / Math.max(1, totalCases)) * 100).toFixed(2)),
+    avgReviewSeconds: Number((totalReviewSeconds / Math.max(1, totalCases)).toFixed(2)),
+    avgSatisfaction: Number((totalSatisfaction / Math.max(1, totalCases)).toFixed(2)),
+    costPerCase: Number((totalCost / Math.max(1, totalCases)).toFixed(2))
+  };
+}
+
+export function runSimulationLab(
+  cases: SimulationCase[],
+  strategies: SimulationStrategy[]
+): StrategyResult[] {
+  return strategies.map(strategy => runSimulationStrategy(cases, strategy));
+}
+3) Nightly control runs
+
+This is the automatic “closing bell” brain pass.
+
+/server/services/nightlyControlRun.ts
+import { runAdaptiveControlLoop, AdaptiveControlInput } from "./adaptiveControlLoop";
+
+export type NightlyControlRunRecord = {
+  id: string;
+  clinicId: string;
+  runAt: string;
+  input: AdaptiveControlInput;
+  output: ReturnType<typeof runAdaptiveControlLoop>;
+};
+
+const nightlyControlRunStore: NightlyControlRunRecord[] = [];
+
+export function executeNightlyControlRun(input: AdaptiveControlInput) {
+  const output = runAdaptiveControlLoop(input);
+
+  const record: NightlyControlRunRecord = {
+    id: `ncr-${Date.now()}`,
+    clinicId: input.clinicId,
+    runAt: new Date().toISOString(),
+    input,
+    output
+  };
+
+  nightlyControlRunStore.push(record);
+  return record;
+}
+
+export function listNightlyControlRuns(clinicId?: string) {
+  if (!clinicId) return nightlyControlRunStore;
+  return nightlyControlRunStore.filter(r => r.clinicId === clinicId);
+}
+Optional scheduler bootstrap
+
+Install:
+
+npm install node-cron
+/server/jobs/nightlyControlJob.ts
+import cron from "node-cron";
+import { executeNightlyControlRun } from "../services/nightlyControlRun";
+
+export function startNightlyControlJob() {
+  cron.schedule("0 2 * * *", async () => {
+    const clinics = [
+      {
+        clinicId: "clinicA",
+        driftDetected: true,
+        anomalySeverity: "watch" as const,
+        recentOverrideRate: 0.13,
+        recentAccuracy: 0.81,
+        avgCostPerCase: 8.9,
+        escalationRate: 0.09,
+        currentConfidenceThreshold: 0.82
+      },
+      {
+        clinicId: "clinicB",
+        driftDetected: false,
+        anomalySeverity: "normal" as const,
+        recentOverrideRate: 0.06,
+        recentAccuracy: 0.92,
+        avgCostPerCase: 6.8,
+        escalationRate: 0.05,
+        currentConfidenceThreshold: 0.78
+      }
+    ];
+
+    for (const clinic of clinics) {
+      executeNightlyControlRun(clinic);
+    }
+  });
+}
+/server/index.ts addition
+import { startNightlyControlJob } from "./jobs/nightlyControlJob";
+
+// after app setup
+startNightlyControlJob();
+4) Executive dashboard engines
+
+These are the boardroom instruments.
+
+/server/services/executiveDashboard.ts
+export type ExecutiveClinicSnapshot = {
+  clinicId: string;
+  totalCases: number;
+  reviewedCases: number;
+  escalatedCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  avgCostPerCase: number;
+  avgRevenuePerCase: number;
+};
+
+export type ExecutiveDashboardCard = {
+  title: string;
+  value: string | number;
+  status: "good" | "watch" | "critical";
+  note: string;
+};
+
+export function buildExecutiveDashboard(snapshot: ExecutiveClinicSnapshot) {
+  const pendingCases = snapshot.totalCases - snapshot.reviewedCases;
+  const marginPerCase = snapshot.avgRevenuePerCase - snapshot.avgCostPerCase;
+  const marginPct = snapshot.avgRevenuePerCase
+    ? (marginPerCase / snapshot.avgRevenuePerCase) * 100
+    : 0;
+
+  const cards: ExecutiveDashboardCard[] = [
+    {
+      title: "Total Cases",
+      value: snapshot.totalCases,
+      status: "good",
+      note: "System-wide throughput"
+    },
+    {
+      title: "Pending Cases",
+      value: pendingCases,
+      status: pendingCases > 50 ? "watch" : "good",
+      note: "Queue pressure"
+    },
+    {
+      title: "Escalation Rate",
+      value: `${((snapshot.escalatedCases / Math.max(1, snapshot.totalCases)) * 100).toFixed(1)}%`,
+      status: snapshot.escalatedCases / Math.max(1, snapshot.totalCases) > 0.12 ? "watch" : "good",
+      note: "Safety load"
+    },
+    {
+      title: "Override Rate",
+      value: `${(snapshot.overrideRate * 100).toFixed(1)}%`,
+      status: snapshot.overrideRate > 0.15 ? "critical" : snapshot.overrideRate > 0.08 ? "watch" : "good",
+      note: "Clinical friction indicator"
+    },
+    {
+      title: "Satisfaction",
+      value: snapshot.avgSatisfaction.toFixed(2),
+      status: snapshot.avgSatisfaction < 4.2 ? "watch" : "good",
+      note: "Patient experience"
+    },
+    {
+      title: "Margin %",
+      value: `${marginPct.toFixed(1)}%`,
+      status: marginPct < 25 ? "critical" : marginPct < 40 ? "watch" : "good",
+      note: "Financial health"
+    }
+  ];
+
+  return {
+    clinicId: snapshot.clinicId,
+    cards,
+    headline: `Clinic ${snapshot.clinicId} is operating at ${(marginPct).toFixed(1)}% margin with ${snapshot.totalCases} total cases processed`
+  };
+}
+5) Executive summary trend engine
+/server/services/executiveTrends.ts
+export type ExecutiveTrendPoint = {
+  date: string;
+  totalCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  marginPct: number;
+};
+
+export function buildExecutiveTrends(points: ExecutiveTrendPoint[]) {
+  return {
+    dates: points.map(p => p.date),
+    throughput: points.map(p => p.totalCases),
+    overrideRate: points.map(p => Number((p.overrideRate * 100).toFixed(2))),
+    satisfaction: points.map(p => Number(p.avgSatisfaction.toFixed(2))),
+    marginPct: points.map(p => Number(p.marginPct.toFixed(2)))
+  };
+}
+6) Routes for packs, simulations, control runs, and executive dashboards
+/server/routes/simulationControl.ts
+import express from "express";
+import { getSimulationPacks, getSimulationPackById } from "../services/simulationPacks";
+import { runSimulationLab } from "../services/simulationLab";
+import { executeNightlyControlRun, listNightlyControlRuns } from "../services/nightlyControlRun";
+import { buildExecutiveDashboard } from "../services/executiveDashboard";
+import { buildExecutiveTrends } from "../services/executiveTrends";
+
+const router = express.Router();
+
+router.get("/packs", (_req, res) => {
+  res.json(getSimulationPacks());
+});
+
+router.get("/packs/:id", (req, res) => {
+  const pack = getSimulationPackById(req.params.id);
+  if (!pack) {
+    return res.status(404).json({ error: "Pack not found" });
+  }
+  res.json(pack);
+});
+
+router.post("/simulate-pack", (req, res) => {
+  const { packId, strategies } = req.body;
+  const pack = getSimulationPackById(packId);
+
+  if (!pack) {
+    return res.status(404).json({ error: "Pack not found" });
+  }
+
+  const results = runSimulationLab(pack.cases, strategies || []);
+  res.json({
+    packId,
+    complaint: pack.complaint,
+    results
+  });
+});
+
+router.post("/nightly-run", (req, res) => {
+  const record = executeNightlyControlRun(req.body);
+  res.json(record);
+});
+
+router.get("/nightly-runs", (req, res) => {
+  const clinicId = typeof req.query.clinicId === "string" ? req.query.clinicId : undefined;
+  res.json(listNightlyControlRuns(clinicId));
+});
+
+router.post("/executive-dashboard", (req, res) => {
+  res.json(buildExecutiveDashboard(req.body));
+});
+
+router.post("/executive-trends", (req, res) => {
+  res.json(buildExecutiveTrends(req.body.points || []));
+});
+
+export default router;
+/server/index.ts addition
+import simulationControl from "./routes/simulationControl";
+
+app.use("/api/simulation-control", simulationControl);
+7) Executive dashboard UI
+/frontend/pages/ExecutiveDashboard.tsx
+import { useEffect, useState } from "react";
+
+type DashboardResponse = {
+  clinicId: string;
+  cards: {
+    title: string;
+    value: string | number;
+    status: "good" | "watch" | "critical";
+    note: string;
+  }[];
+  headline: string;
+};
+
+type TrendsResponse = {
+  dates: string[];
+  throughput: number[];
+  overrideRate: number[];
+  satisfaction: number[];
+  marginPct: number[];
+};
+
+export default function ExecutiveDashboard() {
+  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [trends, setTrends] = useState<TrendsResponse | null>(null);
+
+  useEffect(() => {
+    fetch("/api/simulation-control/executive-dashboard", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        clinicId: "clinicA",
+        totalCases: 3200,
+        reviewedCases: 3040,
+        escalatedCases: 260,
+        overrideRate: 0.11,
+        avgSatisfaction: 4.56,
+        avgCostPerCase: 8.6,
+        avgRevenuePerCase: 24
+      })
+    })
+      .then(r => r.json())
+      .then(setDashboard);
+
+    fetch("/api/simulation-control/executive-trends", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        points: [
+          { date: "2026-03-12", totalCases: 480, overrideRate: 0.12, avgSatisfaction: 4.48, marginPct: 41.2 },
+          { date: "2026-03-13", totalCases: 510, overrideRate: 0.10, avgSatisfaction: 4.50, marginPct: 42.8 },
+          { date: "2026-03-14", totalCases: 535, overrideRate: 0.09, avgSatisfaction: 4.58, marginPct: 43.3 },
+          { date: "2026-03-15", totalCases: 550, overrideRate: 0.11, avgSatisfaction: 4.61, marginPct: 44.1 },
+          { date: "2026-03-16", totalCases: 575, overrideRate: 0.10, avgSatisfaction: 4.63, marginPct: 44.9 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setTrends);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Executive Dashboard</h1>
+
+      {dashboard && (
+        <>
+          <div className="border rounded p-4 text-lg font-semibold">
+            {dashboard.headline}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {dashboard.cards.map(card => (
+              <div key={card.title} className="border rounded p-4">
+                <div className="text-sm opacity-70">{card.title}</div>
+                <div className="text-2xl font-bold mt-1">{card.value}</div>
+                <div className="mt-2 text-sm">{card.note}</div>
+                <div className="mt-2 text-xs uppercase tracking-wide">
+                  Status: {card.status}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {trends && (
+        <div className="border rounded p-4">
+          <h2 className="text-xl font-semibold mb-3">Recent Trends</h2>
+          <div className="space-y-2">
+            {trends.dates.map((date, i) => (
+              <div key={date} className="border rounded p-3">
+                <div><strong>{date}</strong></div>
+                <div>Throughput: {trends.throughput[i]}</div>
+                <div>Override Rate: {trends.overrideRate[i]}%</div>
+                <div>Satisfaction: {trends.satisfaction[i]}</div>
+                <div>Margin: {trends.marginPct[i]}%</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+8) Simulation lab UI
+/frontend/pages/SimulationLabDashboard.tsx
+import { useEffect, useState } from "react";
+
+type Pack = {
+  id: string;
+  name: string;
+  complaint: string;
+  description: string;
+};
+
+export default function SimulationLabDashboard() {
+  const [packs, setPacks] = useState<Pack[]>([]);
+  const [selectedPackId, setSelectedPackId] = useState<string>("");
+  const [results, setResults] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/simulation-control/packs")
+      .then(r => r.json())
+      .then((data: Pack[]) => {
+        setPacks(data);
+        if (data.length) setSelectedPackId(data[0].id);
+      });
+  }, []);
+
+  const runSimulation = async () => {
+    if (!selectedPackId) return;
+
+    const res = await fetch("/api/simulation-control/simulate-pack", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        packId: selectedPackId,
+        strategies: [
+          { name: "Conservative", confidenceThreshold: 0.85, batchApprovalEnabled: false, mandatoryReviewMedium: true },
+          { name: "Balanced", confidenceThreshold: 0.78, batchApprovalEnabled: true, mandatoryReviewMedium: true },
+          { name: "Aggressive", confidenceThreshold: 0.70, batchApprovalEnabled: true, mandatoryReviewMedium: false }
+        ]
+      })
+    });
+
+    const data = await res.json();
+    setResults(data.results || []);
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Simulation Lab</h1>
+
+      <div className="border rounded p-4 space-y-3">
+        <label className="block">
+          <div className="text-sm mb-1">Choose Simulation Pack</div>
+          <select
+            className="border rounded px-3 py-2 w-full"
+            value={selectedPackId}
+            onChange={e => setSelectedPackId(e.target.value)}
+          >
+            {packs.map(pack => (
+              <option key={pack.id} value={pack.id}>
+                {pack.name} | {pack.complaint}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          onClick={runSimulation}
+          className="px-4 py-2 border rounded"
+        >
+          Run Strategy Comparison
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {results.map(row => (
+          <div key={row.strategy} className="border rounded p-4">
+            <div className="text-lg font-semibold">{row.strategy}</div>
+            <div>Total Cases: {row.totalCases}</div>
+            <div>Auto Approved: {row.autoApproved}</div>
+            <div>Physician Reviewed: {row.physicianReviewed}</div>
+            <div>Escalated: {row.escalated}</div>
+            <div>Accuracy: {row.accuracyPct}%</div>
+            <div>Override Rate: {row.overrideRatePct}%</div>
+            <div>Avg Review Seconds: {row.avgReviewSeconds}</div>
+            <div>Avg Satisfaction: {row.avgSatisfaction}</div>
+            <div>Cost / Case: ${row.costPerCase}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+9) Nightly control runs UI
+/frontend/pages/NightlyControlRunsDashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function NightlyControlRunsDashboard() {
+  const [runs, setRuns] = useState<any[]>([]);
+
+  const loadRuns = async () => {
+    const res = await fetch("/api/simulation-control/nightly-runs?clinicId=clinicA");
+    const data = await res.json();
+    setRuns(data);
+  };
+
+  const triggerRun = async () => {
+    await fetch("/api/simulation-control/nightly-run", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        clinicId: "clinicA",
+        driftDetected: true,
+        anomalySeverity: "watch",
+        recentOverrideRate: 0.14,
+        recentAccuracy: 0.8,
+        avgCostPerCase: 8.7,
+        escalationRate: 0.09,
+        currentConfidenceThreshold: 0.83
+      })
+    });
+
+    await loadRuns();
+  };
+
+  useEffect(() => {
+    loadRuns();
+  }, []);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Nightly Control Runs</h1>
+
+      <button onClick={triggerRun} className="px-4 py-2 border rounded">
+        Trigger Manual Control Run
+      </button>
+
+      <div className="space-y-3">
+        {runs.map(run => (
+          <div key={run.id} className="border rounded p-4">
+            <div className="font-semibold">{run.id}</div>
+            <div>Run At: {run.runAt}</div>
+            <div>Safety Mode: {run.output.safetyMode}</div>
+            <div>Routing Policy: {run.output.routingPolicy}</div>
+            <div>Threshold: {run.output.nextConfidenceThreshold}</div>
+            <div>Batch Approval: {String(run.output.batchApprovalEnabled)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+10) Add dashboard tabs
+import ExecutiveDashboard from "./ExecutiveDashboard";
+import SimulationLabDashboard from "./SimulationLabDashboard";
+import NightlyControlRunsDashboard from "./NightlyControlRunsDashboard";
+
+<button onClick={() => setTab("simulation-lab")}>Simulation Lab</button>
+<button onClick={() => setTab("nightly-runs")}>Nightly Runs</button>
+<button onClick={() => setTab("executive")}>Executive</button>
+
+{tab === "simulation-lab" && <SimulationLabDashboard />}
+{tab === "nightly-runs" && <NightlyControlRunsDashboard />}
+{tab === "executive" && <ExecutiveDashboard />}
+Next recommendations
+
+These are the strongest moves after this:
+
+Persist simulation results to DB
+
+Persist nightly control runs to DB
+
+Board-ready charts using Recharts
+
+Scenario presets by clinic type
+
+Auto-email weekly executive summaries
+
+Complaint drilldown cards from executive dashboard
+
+A/B testing mode for threshold strategies
+
+And here’s code for two of the highest-value ones now.
+
+11) Persist simulation results
+/server/services/simulationResultsStore.ts
+export type StoredSimulationResult = {
+  id: string;
+  packId: string;
+  createdAt: string;
+  results: unknown[];
+};
+
+const simulationResultsStore: StoredSimulationResult[] = [];
+
+export function saveSimulationResult(packId: string, results: unknown[]) {
+  const record = {
+    id: `sim-${Date.now()}`,
+    packId,
+    createdAt: new Date().toISOString(),
+    results
+  };
+
+  simulationResultsStore.push(record);
+  return record;
+}
+
+export function listSimulationResults() {
+  return simulationResultsStore;
+}
+Add to /server/routes/simulationControl.ts
+import { saveSimulationResult, listSimulationResults } from "../services/simulationResultsStore";
+
+router.post("/simulate-pack", (req, res) => {
+  const { packId, strategies } = req.body;
+  const pack = getSimulationPackById(packId);
+
+  if (!pack) {
+    return res.status(404).json({ error: "Pack not found" });
+  }
+
+  const results = runSimulationLab(pack.cases, strategies || []);
+  const saved = saveSimulationResult(packId, results);
+
+  res.json({
+    packId,
+    complaint: pack.complaint,
+    results,
+    saved
+  });
+});
+
+router.get("/simulation-results", (_req, res) => {
+  res.json(listSimulationResults());
+});
+12) Weekly executive summary payload generator
+/server/services/weeklyExecutiveSummary.ts
+export type WeeklyExecutiveSummaryInput = {
+  clinicId: string;
+  totalCases: number;
+  marginPct: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  topComplaint: string;
+  safetyMode: string;
+};
+
+export function buildWeeklyExecutiveSummary(input: WeeklyExecutiveSummaryInput) {
+  return {
+    subject: `Weekly Auralyn Executive Summary | ${input.clinicId}`,
+    sections: [
+      `Total cases processed: ${input.totalCases}`,
+      `Margin: ${input.marginPct}%`,
+      `Override rate: ${(input.overrideRate * 100).toFixed(1)}%`,
+      `Average satisfaction: ${input.avgSatisfaction.toFixed(2)}`,
+      `Top operational pressure complaint: ${input.topComplaint}`,
+      `Current safety mode: ${input.safetyMode}`
+    ],
+    recommendation:
+      input.overrideRate > 0.12
+        ? "Focus next week on complaint hardening and tighter approval thresholds."
+        : "System stable. Prioritize throughput optimization and staffing alignment."
+  };
+}
+Route
+import { buildWeeklyExecutiveSummary } from "../services/weeklyExecutiveSummary";
+
+router.post("/weekly-summary", (req, res) => {
+  res.json(buildWeeklyExecutiveSummary(req.body));
+});

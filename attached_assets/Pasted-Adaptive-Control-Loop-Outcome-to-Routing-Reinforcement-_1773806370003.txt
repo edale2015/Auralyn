@@ -1,0 +1,779 @@
+Adaptive Control Loop
+
+Outcome-to-Routing Reinforcement
+
+Case-Mix Forecasting Engine
+
+Clinic Profitability Dashboard API
+
+Simulation Mode for Threshold Strategies
+
+Unified Adaptive Dashboard
+
+Next recommendations + code for those too
+
+1. ADAPTIVE CONTROL LOOP
+
+This takes live metrics and decides how the system should behave right now.
+
+/server/services/adaptiveControlLoop.ts
+export type AdaptiveControlInput = {
+  clinicId: string;
+  driftDetected: boolean;
+  anomalySeverity: "normal" | "watch" | "critical";
+  recentOverrideRate: number;
+  recentAccuracy: number;
+  avgCostPerCase: number;
+  escalationRate: number;
+  currentConfidenceThreshold: number;
+};
+
+export type AdaptiveControlOutput = {
+  clinicId: string;
+  safetyMode: "normal" | "elevated" | "strict";
+  nextConfidenceThreshold: number;
+  routingPolicy: "balanced" | "quality_first" | "throughput_first";
+  batchApprovalEnabled: boolean;
+  mandatoryReviewHigh: boolean;
+  mandatoryReviewMedium: boolean;
+  recommendedActions: string[];
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function runAdaptiveControlLoop(
+  input: AdaptiveControlInput
+): AdaptiveControlOutput {
+  let safetyMode: AdaptiveControlOutput["safetyMode"] = "normal";
+  let routingPolicy: AdaptiveControlOutput["routingPolicy"] = "balanced";
+  let batchApprovalEnabled = true;
+  let mandatoryReviewHigh = true;
+  let mandatoryReviewMedium = false;
+  let nextConfidenceThreshold = input.currentConfidenceThreshold;
+  const recommendedActions: string[] = [];
+
+  if (input.anomalySeverity === "critical" || input.recentOverrideRate > 0.2) {
+    safetyMode = "strict";
+    routingPolicy = "quality_first";
+    batchApprovalEnabled = false;
+    mandatoryReviewMedium = true;
+    nextConfidenceThreshold += 0.07;
+    recommendedActions.push(
+      "Critical safety posture activated",
+      "Disable batch approvals temporarily",
+      "Route more cases to top-ranked physicians"
+    );
+  } else if (
+    input.driftDetected ||
+    input.anomalySeverity === "watch" ||
+    input.recentAccuracy < 0.8
+  ) {
+    safetyMode = "elevated";
+    routingPolicy = "quality_first";
+    batchApprovalEnabled = true;
+    mandatoryReviewMedium = true;
+    nextConfidenceThreshold += 0.04;
+    recommendedActions.push(
+      "Elevated review posture enabled",
+      "Increase complaint-level audit sampling",
+      "Tighten approval threshold modestly"
+    );
+  } else if (input.avgCostPerCase > 10 && input.recentAccuracy > 0.9) {
+    safetyMode = "normal";
+    routingPolicy = "throughput_first";
+    batchApprovalEnabled = true;
+    mandatoryReviewMedium = false;
+    nextConfidenceThreshold -= 0.02;
+    recommendedActions.push(
+      "Cost optimization posture enabled",
+      "Expand low-risk batch approval",
+      "Route more low-risk cases to faster clinicians"
+    );
+  } else {
+    recommendedActions.push("System stable");
+  }
+
+  if (input.escalationRate > 0.12) {
+    recommendedActions.push("Review SLA thresholds and escalation triggers");
+  }
+
+  nextConfidenceThreshold = clamp(nextConfidenceThreshold, 0.6, 0.95);
+
+  return {
+    clinicId: input.clinicId,
+    safetyMode,
+    nextConfidenceThreshold: Number(nextConfidenceThreshold.toFixed(3)),
+    routingPolicy,
+    batchApprovalEnabled,
+    mandatoryReviewHigh,
+    mandatoryReviewMedium,
+    recommendedActions
+  };
+}
+2. OUTCOME-TO-ROUTING REINFORCEMENT
+
+This nudges routing toward better-performing physicians and away from wobblier patterns.
+
+/server/services/routingReinforcement.ts
+export type RoutingOutcomeRow = {
+  physicianId: string;
+  complaint: string;
+  wasCorrect: boolean;
+  escalated: boolean;
+  override: boolean;
+};
+
+export type ReinforcementWeight = {
+  physicianId: string;
+  complaint: string;
+  weightAdjustment: number;
+  reason: string;
+};
+
+export function buildRoutingReinforcement(
+  rows: RoutingOutcomeRow[]
+): ReinforcementWeight[] {
+  const map: Record<string, { total: number; correct: number; escalated: number; overrides: number }> = {};
+
+  for (const row of rows) {
+    const key = `${row.physicianId}::${row.complaint}`;
+    if (!map[key]) {
+      map[key] = { total: 0, correct: 0, escalated: 0, overrides: 0 };
+    }
+
+    map[key].total += 1;
+    if (row.wasCorrect) map[key].correct += 1;
+    if (row.escalated) map[key].escalated += 1;
+    if (row.override) map[key].overrides += 1;
+  }
+
+  return Object.entries(map).map(([key, v]) => {
+    const [physicianId, complaint] = key.split("::");
+    const accuracy = v.total ? v.correct / v.total : 0;
+    const escalationRate = v.total ? v.escalated / v.total : 0;
+    const overrideRate = v.total ? v.overrides / v.total : 0;
+
+    let weightAdjustment = 0;
+    let reason = "Stable";
+
+    if (accuracy >= 0.92 && escalationRate < 0.08 && overrideRate < 0.08) {
+      weightAdjustment = 0.15;
+      reason = "Promote routing for this physician-complaint pair";
+    } else if (accuracy < 0.75 || escalationRate > 0.2 || overrideRate > 0.18) {
+      weightAdjustment = -0.2;
+      reason = "Reduce routing weight and require closer supervision";
+    } else if (accuracy < 0.85) {
+      weightAdjustment = -0.08;
+      reason = "Slightly reduce routing weight pending review";
+    }
+
+    return {
+      physicianId,
+      complaint,
+      weightAdjustment: Number(weightAdjustment.toFixed(3)),
+      reason
+    };
+  });
+}
+3. CASE-MIX FORECASTING ENGINE
+
+This predicts tomorrow’s or next shift’s case profile so staffing isn’t guesswork.
+
+/server/services/caseMixForecast.ts
+export type HistoricalCaseMixRow = {
+  date: string;
+  complaint: string;
+  count: number;
+  avgRiskScore: number;
+};
+
+export type CaseMixForecastRow = {
+  complaint: string;
+  forecastCount: number;
+  forecastAvgRiskScore: number;
+  recommendedStaffingWeight: number;
+};
+
+export function buildCaseMixForecast(
+  rows: HistoricalCaseMixRow[]
+): CaseMixForecastRow[] {
+  const map: Record<string, { totalCount: number; totalRisk: number; days: number }> = {};
+
+  for (const row of rows) {
+    if (!map[row.complaint]) {
+      map[row.complaint] = { totalCount: 0, totalRisk: 0, days: 0 };
+    }
+
+    map[row.complaint].totalCount += row.count;
+    map[row.complaint].totalRisk += row.avgRiskScore;
+    map[row.complaint].days += 1;
+  }
+
+  return Object.entries(map).map(([complaint, v]) => {
+    const forecastCount = v.days ? v.totalCount / v.days : 0;
+    const forecastAvgRiskScore = v.days ? v.totalRisk / v.days : 0;
+    const recommendedStaffingWeight = forecastCount * (1 + forecastAvgRiskScore / 10);
+
+    return {
+      complaint,
+      forecastCount: Number(forecastCount.toFixed(1)),
+      forecastAvgRiskScore: Number(forecastAvgRiskScore.toFixed(2)),
+      recommendedStaffingWeight: Number(recommendedStaffingWeight.toFixed(2))
+    };
+  }).sort((a, b) => b.recommendedStaffingWeight - a.recommendedStaffingWeight);
+}
+4. CLINIC PROFITABILITY ENGINE
+
+This tells you whether the clinic’s workflow is a fountain or a leak.
+
+/server/services/clinicProfitability.ts
+export type ProfitabilityInput = {
+  clinicId: string;
+  totalCases: number;
+  avgRevenuePerCase: number;
+  avgCostPerCase: number;
+  monthlyPlatformFee: number;
+};
+
+export function computeClinicProfitability(input: ProfitabilityInput) {
+  const grossRevenue = input.totalCases * input.avgRevenuePerCase;
+  const variableCost = input.totalCases * input.avgCostPerCase;
+  const totalCost = variableCost + input.monthlyPlatformFee;
+  const grossMargin = grossRevenue - totalCost;
+  const marginPct = grossRevenue ? grossMargin / grossRevenue : 0;
+
+  return {
+    clinicId: input.clinicId,
+    grossRevenue: Number(grossRevenue.toFixed(2)),
+    variableCost: Number(variableCost.toFixed(2)),
+    monthlyPlatformFee: Number(input.monthlyPlatformFee.toFixed(2)),
+    totalCost: Number(totalCost.toFixed(2)),
+    grossMargin: Number(grossMargin.toFixed(2)),
+    marginPct: Number((marginPct * 100).toFixed(2))
+  };
+}
+5. THRESHOLD STRATEGY SIMULATION ENGINE
+
+This compares possible threshold settings before you flip the switch in production.
+
+/server/services/thresholdSimulation.ts
+export type ThresholdStrategy = {
+  name: string;
+  confidenceThreshold: number;
+  batchApprovalEnabled: boolean;
+};
+
+export type SimulatedCase = {
+  rawConfidence: number;
+  wasCorrect: boolean;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+};
+
+export type ThresholdSimulationResult = {
+  strategy: string;
+  autoApproved: number;
+  mandatoryReviewed: number;
+  estimatedAccuracy: number;
+  estimatedCostPerCase: number;
+  estimatedOverrideRate: number;
+};
+
+export function simulateThresholdStrategies(
+  cases: SimulatedCase[],
+  strategies: ThresholdStrategy[]
+): ThresholdSimulationResult[] {
+  return strategies.map(strategy => {
+    let autoApproved = 0;
+    let mandatoryReviewed = 0;
+    let correctCount = 0;
+    let estimatedTotalCost = 0;
+    let overrides = 0;
+
+    for (const c of cases) {
+      const mandatory =
+        c.riskLevel === "HIGH" ||
+        c.rawConfidence < strategy.confidenceThreshold ||
+        !strategy.batchApprovalEnabled;
+
+      if (mandatory) {
+        mandatoryReviewed++;
+        estimatedTotalCost += 7.5;
+        if (!c.wasCorrect) overrides++;
+        if (c.wasCorrect) correctCount++;
+      } else {
+        autoApproved++;
+        estimatedTotalCost += 2.2;
+        if (!c.wasCorrect) overrides++;
+        if (c.wasCorrect) correctCount++;
+      }
+    }
+
+    const estimatedAccuracy = cases.length ? correctCount / cases.length : 0;
+    const estimatedCostPerCase = cases.length ? estimatedTotalCost / cases.length : 0;
+    const estimatedOverrideRate = cases.length ? overrides / cases.length : 0;
+
+    return {
+      strategy: strategy.name,
+      autoApproved,
+      mandatoryReviewed,
+      estimatedAccuracy: Number((estimatedAccuracy * 100).toFixed(2)),
+      estimatedCostPerCase: Number(estimatedCostPerCase.toFixed(2)),
+      estimatedOverrideRate: Number((estimatedOverrideRate * 100).toFixed(2))
+    };
+  });
+}
+6. ADAPTIVE RECOMMENDATIONS ENGINE
+
+This combines the new control outputs into next moves.
+
+/server/services/adaptiveRecommendations.ts
+export type AdaptiveRecommendationInput = {
+  safetyMode: "normal" | "elevated" | "strict";
+  nextConfidenceThreshold: number;
+  topCaseMixComplaint?: string;
+  marginPct: number;
+};
+
+export function buildAdaptiveRecommendations(
+  input: AdaptiveRecommendationInput
+) {
+  const out: string[] = [];
+
+  if (input.safetyMode === "strict") {
+    out.push("Activate temporary strict review mode across medium and high-risk queues");
+    out.push("Increase physician sampling on weak complaint clusters");
+  } else if (input.safetyMode === "elevated") {
+    out.push("Maintain elevated review mode until drift and anomaly signals normalize");
+  } else {
+    out.push("System stable enough to optimize throughput in low-risk pathways");
+  }
+
+  if (input.nextConfidenceThreshold >= 0.85) {
+    out.push("High approval threshold suggests current caution is warranted");
+  } else if (input.nextConfidenceThreshold <= 0.72) {
+    out.push("Approval threshold may be loosened selectively for low-risk complaints");
+  }
+
+  if (input.topCaseMixComplaint) {
+    out.push(`Increase staffing and complaint-hardening attention for ${input.topCaseMixComplaint}`);
+  }
+
+  if (input.marginPct < 25) {
+    out.push("Margin pressure detected. Reduce review friction for safe low-risk cases and inspect escalation costs");
+  } else if (input.marginPct > 45) {
+    out.push("Healthy margin profile. Reinvest into higher-quality follow-up and complaint calibration");
+  }
+
+  return out;
+}
+7. ROUTES FOR THE ADAPTIVE CONTROL LAYER
+/server/routes/adaptiveControl.ts
+import express from "express";
+import { runAdaptiveControlLoop } from "../services/adaptiveControlLoop";
+import { buildRoutingReinforcement } from "../services/routingReinforcement";
+import { buildCaseMixForecast } from "../services/caseMixForecast";
+import { computeClinicProfitability } from "../services/clinicProfitability";
+import { simulateThresholdStrategies } from "../services/thresholdSimulation";
+import { buildAdaptiveRecommendations } from "../services/adaptiveRecommendations";
+
+const router = express.Router();
+
+router.post("/loop", (req, res) => {
+  res.json(runAdaptiveControlLoop(req.body));
+});
+
+router.post("/reinforcement", (req, res) => {
+  res.json(buildRoutingReinforcement(req.body.rows || []));
+});
+
+router.post("/case-mix", (req, res) => {
+  res.json(buildCaseMixForecast(req.body.rows || []));
+});
+
+router.post("/profitability", (req, res) => {
+  res.json(computeClinicProfitability(req.body));
+});
+
+router.post("/simulate-thresholds", (req, res) => {
+  const { cases = [], strategies = [] } = req.body;
+  res.json(simulateThresholdStrategies(cases, strategies));
+});
+
+router.post("/recommendations", (req, res) => {
+  res.json({
+    recommendations: buildAdaptiveRecommendations(req.body)
+  });
+});
+
+export default router;
+/server/index.ts addition
+import adaptiveControl from "./routes/adaptiveControl";
+
+app.use("/api/adaptive-control", adaptiveControl);
+8. FRONTEND ADAPTIVE DASHBOARD
+/frontend/pages/AdaptiveControlDashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function AdaptiveControlDashboard() {
+  const [loopResult, setLoopResult] = useState<any>(null);
+  const [caseMix, setCaseMix] = useState<any[]>([]);
+  const [profitability, setProfitability] = useState<any>(null);
+  const [simulation, setSimulation] = useState<any[]>([]);
+  const [recommendations, setRecommendations] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetch("/api/adaptive-control/loop", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        clinicId: "clinicA",
+        driftDetected: true,
+        anomalySeverity: "watch",
+        recentOverrideRate: 0.14,
+        recentAccuracy: 0.79,
+        avgCostPerCase: 9.4,
+        escalationRate: 0.11,
+        currentConfidenceThreshold: 0.78
+      })
+    })
+      .then(r => r.json())
+      .then(setLoopResult);
+
+    fetch("/api/adaptive-control/case-mix", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        rows: [
+          { date: "2026-03-12", complaint: "cough", count: 18, avgRiskScore: 2.1 },
+          { date: "2026-03-13", complaint: "cough", count: 22, avgRiskScore: 2.5 },
+          { date: "2026-03-12", complaint: "dizziness", count: 8, avgRiskScore: 4.3 },
+          { date: "2026-03-13", complaint: "dizziness", count: 10, avgRiskScore: 4.7 },
+          { date: "2026-03-12", complaint: "sore throat", count: 14, avgRiskScore: 1.8 },
+          { date: "2026-03-13", complaint: "sore throat", count: 16, avgRiskScore: 1.9 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setCaseMix);
+
+    fetch("/api/adaptive-control/profitability", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        clinicId: "clinicA",
+        totalCases: 3200,
+        avgRevenuePerCase: 24,
+        avgCostPerCase: 8.8,
+        monthlyPlatformFee: 19900
+      })
+    })
+      .then(r => r.json())
+      .then(setProfitability);
+
+    fetch("/api/adaptive-control/simulate-thresholds", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        cases: [
+          { rawConfidence: 0.91, wasCorrect: true, riskLevel: "LOW" },
+          { rawConfidence: 0.82, wasCorrect: true, riskLevel: "LOW" },
+          { rawConfidence: 0.69, wasCorrect: false, riskLevel: "MEDIUM" },
+          { rawConfidence: 0.77, wasCorrect: true, riskLevel: "MEDIUM" },
+          { rawConfidence: 0.58, wasCorrect: false, riskLevel: "HIGH" },
+          { rawConfidence: 0.88, wasCorrect: true, riskLevel: "LOW" }
+        ],
+        strategies: [
+          { name: "Conservative", confidenceThreshold: 0.85, batchApprovalEnabled: false },
+          { name: "Balanced", confidenceThreshold: 0.78, batchApprovalEnabled: true },
+          { name: "Aggressive", confidenceThreshold: 0.7, batchApprovalEnabled: true }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setSimulation);
+  }, []);
+
+  useEffect(() => {
+    if (!loopResult || !caseMix.length || !profitability) return;
+
+    fetch("/api/adaptive-control/recommendations", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        safetyMode: loopResult.safetyMode,
+        nextConfidenceThreshold: loopResult.nextConfidenceThreshold,
+        topCaseMixComplaint: caseMix[0]?.complaint,
+        marginPct: profitability.marginPct
+      })
+    })
+      .then(r => r.json())
+      .then(data => setRecommendations(data.recommendations || []));
+  }, [loopResult, caseMix, profitability]);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Adaptive Control Dashboard</h1>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Control Loop</h2>
+        {loopResult && (
+          <div className="space-y-1">
+            <div>Safety Mode: {loopResult.safetyMode}</div>
+            <div>Routing Policy: {loopResult.routingPolicy}</div>
+            <div>Next Confidence Threshold: {loopResult.nextConfidenceThreshold}</div>
+            <div>Batch Approval Enabled: {String(loopResult.batchApprovalEnabled)}</div>
+            <div>Mandatory Review Medium: {String(loopResult.mandatoryReviewMedium)}</div>
+          </div>
+        )}
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Case Mix Forecast</h2>
+        <div className="space-y-2">
+          {caseMix.map(row => (
+            <div key={row.complaint} className="border rounded p-3">
+              <div><strong>{row.complaint}</strong></div>
+              <div>Forecast Count: {row.forecastCount}</div>
+              <div>Forecast Avg Risk: {row.forecastAvgRiskScore}</div>
+              <div>Staffing Weight: {row.recommendedStaffingWeight}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Clinic Profitability</h2>
+        {profitability && (
+          <div className="space-y-1">
+            <div>Gross Revenue: ${profitability.grossRevenue}</div>
+            <div>Total Cost: ${profitability.totalCost}</div>
+            <div>Gross Margin: ${profitability.grossMargin}</div>
+            <div>Margin %: {profitability.marginPct}%</div>
+          </div>
+        )}
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Threshold Strategy Simulation</h2>
+        <div className="space-y-2">
+          {simulation.map(row => (
+            <div key={row.strategy} className="border rounded p-3">
+              <div><strong>{row.strategy}</strong></div>
+              <div>Auto Approved: {row.autoApproved}</div>
+              <div>Mandatory Reviewed: {row.mandatoryReviewed}</div>
+              <div>Estimated Accuracy: {row.estimatedAccuracy}%</div>
+              <div>Estimated Cost/Case: ${row.estimatedCostPerCase}</div>
+              <div>Estimated Override Rate: {row.estimatedOverrideRate}%</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Recommendations</h2>
+        <ul className="list-disc pl-6">
+          {recommendations.map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
+      </section>
+    </div>
+  );
+}
+9. ADD TAB TO MAIN DASHBOARD
+import AdaptiveControlDashboard from "./AdaptiveControlDashboard";
+
+<button onClick={() => setTab("adaptive")}>Adaptive Control</button>
+
+{tab === "adaptive" && <AdaptiveControlDashboard />}
+10. OTHER PARTS YOU ASKED FOR
+
+Here are the next best recommendations, followed by code.
+
+Next recommendations
+
+Shift staffing forecaster
+
+Clinic portfolio dashboard
+
+Adaptive routing memory store
+
+Scenario comparison lab
+
+Executive summary generator
+
+11. SHIFT STAFFING FORECASTER
+/server/services/shiftStaffingForecast.ts
+export type ShiftForecastInput = {
+  hourBlock: string;
+  expectedCases: number;
+  avgRiskScore: number;
+};
+
+export function buildShiftStaffingForecast(rows: ShiftForecastInput[]) {
+  return rows.map(row => {
+    const recommendedClinicians = Math.ceil(row.expectedCases / 20 + row.avgRiskScore / 2);
+    const recommendedHighRiskReviewers = row.avgRiskScore >= 3.5 ? 2 : 1;
+
+    return {
+      ...row,
+      recommendedClinicians,
+      recommendedHighRiskReviewers
+    };
+  });
+}
+12. CLINIC PORTFOLIO DASHBOARD ENGINE
+/server/services/clinicPortfolio.ts
+export type PortfolioClinicRow = {
+  clinicId: string;
+  totalCases: number;
+  marginPct: number;
+  overrideRate: number;
+  satisfaction: number;
+};
+
+export function buildClinicPortfolio(rows: PortfolioClinicRow[]) {
+  const totalCases = rows.reduce((sum, r) => sum + r.totalCases, 0);
+  const avgMargin = rows.reduce((sum, r) => sum + r.marginPct, 0) / Math.max(1, rows.length);
+  const avgOverrideRate = rows.reduce((sum, r) => sum + r.overrideRate, 0) / Math.max(1, rows.length);
+  const avgSatisfaction = rows.reduce((sum, r) => sum + r.satisfaction, 0) / Math.max(1, rows.length);
+
+  return {
+    totalClinics: rows.length,
+    totalCases,
+    avgMargin: Number(avgMargin.toFixed(2)),
+    avgOverrideRate: Number((avgOverrideRate * 100).toFixed(2)),
+    avgSatisfaction: Number(avgSatisfaction.toFixed(2)),
+    clinics: rows
+  };
+}
+13. ADAPTIVE ROUTING MEMORY STORE
+/server/services/adaptiveMemory.ts
+export type AdaptiveMemoryEntry = {
+  clinicId: string;
+  timestamp: string;
+  safetyMode: string;
+  confidenceThreshold: number;
+  routingPolicy: string;
+};
+
+const adaptiveMemoryStore: AdaptiveMemoryEntry[] = [];
+
+export function saveAdaptiveMemory(entry: AdaptiveMemoryEntry) {
+  adaptiveMemoryStore.push(entry);
+  return entry;
+}
+
+export function getAdaptiveMemory(clinicId: string) {
+  return adaptiveMemoryStore.filter(e => e.clinicId === clinicId);
+}
+14. SCENARIO COMPARISON LAB
+/server/services/scenarioComparison.ts
+export type ScenarioResult = {
+  name: string;
+  accuracy: number;
+  costPerCase: number;
+  overrideRate: number;
+};
+
+export function compareScenarios(rows: ScenarioResult[]) {
+  const bestAccuracy = [...rows].sort((a, b) => b.accuracy - a.accuracy)[0];
+  const bestCost = [...rows].sort((a, b) => a.costPerCase - b.costPerCase)[0];
+  const bestOverride = [...rows].sort((a, b) => a.overrideRate - b.overrideRate)[0];
+
+  return {
+    bestAccuracy,
+    bestCost,
+    bestOverride,
+    scenarios: rows
+  };
+}
+15. EXECUTIVE SUMMARY GENERATOR
+/server/services/executiveSummary.ts
+export type ExecutiveSummaryInput = {
+  clinicId: string;
+  totalCases: number;
+  safetyMode: string;
+  marginPct: number;
+  overrideRate: number;
+  topComplaint: string;
+};
+
+export function buildExecutiveSummary(input: ExecutiveSummaryInput) {
+  return {
+    headline: `Clinic ${input.clinicId} processed ${input.totalCases} cases with ${input.marginPct}% margin`,
+    summary: [
+      `Current safety mode: ${input.safetyMode}`,
+      `Override rate: ${(input.overrideRate * 100).toFixed(1)}%`,
+      `Highest staffing pressure complaint: ${input.topComplaint}`,
+      input.marginPct < 25
+        ? "Margin is compressed and should be improved through safer automation expansion."
+        : "Margin profile is healthy enough to support reinvestment."
+    ]
+  };
+}
+16. ROUTES FOR THE NEXT WAVE
+/server/routes/adaptiveInsights.ts
+import express from "express";
+import { buildShiftStaffingForecast } from "../services/shiftStaffingForecast";
+import { buildClinicPortfolio } from "../services/clinicPortfolio";
+import { saveAdaptiveMemory, getAdaptiveMemory } from "../services/adaptiveMemory";
+import { compareScenarios } from "../services/scenarioComparison";
+import { buildExecutiveSummary } from "../services/executiveSummary";
+
+const router = express.Router();
+
+router.post("/shift-forecast", (req, res) => {
+  res.json(buildShiftStaffingForecast(req.body.rows || []));
+});
+
+router.post("/portfolio", (req, res) => {
+  res.json(buildClinicPortfolio(req.body.rows || []));
+});
+
+router.post("/memory/save", (req, res) => {
+  res.json(saveAdaptiveMemory(req.body));
+});
+
+router.get("/memory/:clinicId", (req, res) => {
+  res.json(getAdaptiveMemory(req.params.clinicId));
+});
+
+router.post("/scenario-compare", (req, res) => {
+  res.json(compareScenarios(req.body.rows || []));
+});
+
+router.post("/executive-summary", (req, res) => {
+  res.json(buildExecutiveSummary(req.body));
+});
+
+export default router;
+/server/index.ts addition
+import adaptiveInsights from "./routes/adaptiveInsights";
+
+app.use("/api/adaptive-insights", adaptiveInsights);
+WHAT THIS ADDS
+
+With this wave, Auralyn now has:
+
+adaptive control loop
+
+outcome-driven routing reinforcement
+
+case-mix forecasting
+
+profitability modeling
+
+threshold strategy simulation
+
+shift staffing forecasts
+
+portfolio-level visibility
+
+adaptive memory
+
+scenario comparison
+
+executive summaries
+
+That is not just intelligence. That is operational intelligence with memor

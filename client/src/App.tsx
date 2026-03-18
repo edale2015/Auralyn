@@ -107,6 +107,8 @@ import ClinicalScaleDashboard from "@/pages/ClinicalScaleDashboard";
 import OperationsDashboard from "@/pages/OperationsDashboard";
 import SmartIntakeDashboard from "@/pages/SmartIntakeDashboard";
 import IntelligenceDashboard from "@/pages/IntelligenceDashboard";
+import AdaptiveControlDashboard from "@/pages/AdaptiveControlDashboard";
+import PackBuilderAdminPage from "@/pages/PackBuilderAdminPage";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -223,6 +225,8 @@ function Router() {
       <Route path="/operations-dashboard">{() => <AdminPage component={OperationsDashboard} />}</Route>
       <Route path="/smart-intake">{() => <AdminPage component={SmartIntakeDashboard} />}</Route>
       <Route path="/intelligence-layer">{() => <AdminPage component={IntelligenceDashboard} />}</Route>
+      <Route path="/adaptive-control">{() => <AdminPage component={AdaptiveControlDashboard} />}</Route>
+      <Route path="/pack-builder">{() => <AdminPage component={PackBuilderAdminPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

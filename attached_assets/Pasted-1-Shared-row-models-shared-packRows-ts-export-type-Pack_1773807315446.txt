@@ -1,0 +1,3692 @@
+1. Shared row models
+// shared/packRows.ts
+
+export type PackTier = "symptom" | "modifier" | "clinician_algorithm";
+export type Disposition =
+  | "self_care"
+  | "office_followup"
+  | "telemed_now"
+  | "urgent_care"
+  | "er_now";
+
+export type QuestionType =
+  | "yes_no"
+  | "single_select"
+  | "multi_select"
+  | "text"
+  | "number"
+  | "duration"
+  | "severity";
+
+export interface PackRowBase {
+  id: string;
+  system: string;
+  tier: PackTier;
+  title: string;
+  isActive: boolean;
+  version: number;
+  tags?: string[];
+}
+
+export interface SymptomPackRow extends PackRowBase {
+  tier: "symptom";
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questionsJson: string;           // JSON string for sheet/db editing
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+}
+
+export interface ModifierPackRow extends PackRowBase {
+  tier: "modifier";
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustmentsJson: string;     // JSON string
+}
+
+export interface ClinicianAlgorithmRow extends PackRowBase {
+  tier: "clinician_algorithm";
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+}
+
+export interface IntakeQuestionOption {
+  label: string;
+  value: string;
+  redFlag?: boolean;
+}
+
+export interface IntakeQuestion {
+  id: string;
+  prompt: string;
+  type: QuestionType;
+  priority: number;
+  required?: boolean;
+  options?: IntakeQuestionOption[];
+  helpText?: string;
+}
+
+export interface ModifierRiskAdjustment {
+  condition: string;
+  action: "raise_risk" | "force_review" | "force_escalation";
+  amount?: number;
+  reason: string;
+}
+
+export interface ParsedSymptomPack {
+  id: string;
+  system: string;
+  title: string;
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questions: IntakeQuestion[];
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+  tags?: string[];
+}
+
+export interface ParsedModifierPack {
+  id: string;
+  system: string;
+  title: string;
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustments: ModifierRiskAdjustment[];
+  tags?: string[];
+}
+
+export interface ParsedClinicianAlgorithm {
+  id: string;
+  system: string;
+  title: string;
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+  tags?: string[];
+}
+
+export interface AnswerMap {
+  [key: string]: string | number | boolean | null | undefined;
+}
+2. Seed rows in sheet-editable form
+
+These are examples. In production they can come from Google Sheets, Postgres, Firestore, or JSON files.
+
+// server/config/packRows.seed.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+
+export const symptomPackRows: SymptomPackRow[] = [
+  {
+    id: "card_chest_pain",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Chest Pain",
+    isActive: true,
+    version: 1,
+    tags: ["high_risk", "acs", "dissection"],
+    aliases: ["chest pain", "chest pressure", "tightness in chest"],
+    likelyDisposition: "er_now",
+    questionsJson: JSON.stringify([
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1, required: true },
+      { id: "radiation", prompt: "Pain to arm, jaw, or back?", type: "yes_no", priority: 2 },
+      { id: "exertional", prompt: "Triggered or worse with exertion?", type: "yes_no", priority: 3 },
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 4 },
+      { id: "sweating_nausea", prompt: "Cold sweat or nausea?", type: "yes_no", priority: 5 },
+      { id: "tearing", prompt: "Sudden tearing pain to the back?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["sob", "radiation", "fainting", "sweating_nausea", "tearing"],
+    autoEscalateRules: [
+      "sob=yes",
+      "radiation=yes",
+      "fainting=yes",
+      "sweating_nausea=yes",
+      "tearing=yes"
+    ],
+    autoReviewRules: [],
+    planTemplateKey: "card_chest_pain",
+  },
+  {
+    id: "ortho_back_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Back Pain",
+    isActive: true,
+    version: 1,
+    tags: ["msk", "spine"],
+    aliases: ["back pain", "low back pain"],
+    likelyDisposition: "self_care",
+    questionsJson: JSON.stringify([
+      { id: "injury", prompt: "Any fall, lifting injury, or trauma?", type: "yes_no", priority: 1 },
+      { id: "leg_weakness", prompt: "Any leg weakness?", type: "yes_no", priority: 2 },
+      { id: "groin_numbness", prompt: "Any numbness in the groin area?", type: "yes_no", priority: 3 },
+      { id: "bowel_bladder", prompt: "Any loss of bowel or bladder control?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "ivdu_cancer", prompt: "IV drug use, cancer, or immune suppression?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["leg_weakness", "groin_numbness", "bowel_bladder", "fever"],
+    autoEscalateRules: [
+      "groin_numbness=yes",
+      "bowel_bladder=yes",
+      "leg_weakness=yes"
+    ],
+    autoReviewRules: [
+      "fever=yes",
+      "ivdu_cancer=yes",
+      "injury=yes"
+    ],
+    planTemplateKey: "ortho_back_pain",
+  },
+  {
+    id: "pulm_cough",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Cough",
+    isActive: true,
+    version: 1,
+    aliases: ["cough", "bronchitis", "cold"],
+    likelyDisposition: "self_care",
+    questionsJson: JSON.stringify([
+      { id: "duration", prompt: "How long have you had the cough?", type: "duration", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 5 },
+      { id: "asthma_copd", prompt: "Asthma or COPD history?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["sob", "chest_pain", "blood"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes", "blood=yes"],
+    autoReviewRules: ["fever=yes", "asthma_copd=yes"],
+    planTemplateKey: "pulm_cough",
+  }
+];
+
+export const modifierPackRows: ModifierPackRow[] = [
+  {
+    id: "card_mod_congenital_heart",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Congenital Heart Disease",
+    isActive: true,
+    version: 1,
+    tags: ["modifier", "high_risk_pmh"],
+    appliesToSymptoms: [
+      "card_shortness_of_breath",
+      "card_palpitations",
+      "card_syncope",
+      "card_chf_fluid_overload",
+      "card_chest_pain"
+    ],
+    triggers: ["congenital_heart_disease=yes"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "congenital_heart_disease=yes",
+        action: "raise_risk",
+        amount: 25,
+        reason: "Congenital disease raises complexity"
+      },
+      {
+        condition: "congenital_heart_disease=yes",
+        action: "force_review",
+        reason: "Needs clinician-level interpretation"
+      }
+    ]),
+  },
+  {
+    id: "ortho_mod_anticoagulation",
+    system: "ortho",
+    tier: "modifier",
+    title: "Anticoagulation",
+    isActive: true,
+    version: 1,
+    appliesToSymptoms: ["ortho_post_fall_injury", "ortho_back_pain", "ortho_hip_pelvis_pain"],
+    triggers: ["anticoagulated=yes"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "anticoagulated=yes",
+        action: "raise_risk",
+        amount: 20,
+        reason: "Bleeding risk after injury"
+      },
+      {
+        condition: "head_hit=yes AND anticoagulated=yes",
+        action: "force_escalation",
+        reason: "Head trauma on anticoagulation"
+      }
+    ]),
+  }
+];
+
+export const clinicianAlgorithmRows: ClinicianAlgorithmRow[] = [
+  {
+    id: "card_algo_acls_tachy",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "Tachyarrhythmia ACLS Support",
+    isActive: true,
+    version: 1,
+    tags: ["acls", "emergency"],
+    entryCriteria: ["unstable_tachycardia=yes", "very_rapid_pulse=yes", "palpitations=yes AND fainting=yes"],
+    requiredInputs: ["heart_rate", "bp", "mental_status", "chest_pain", "sob", "12lead_available"],
+    outputActions: [
+      "flag unstable vs stable",
+      "recommend immediate ER escalation if unstable",
+      "surface synchronized cardioversion reference"
+    ],
+    notes: ["Clinician-facing only"],
+  },
+  {
+    id: "ortho_algo_cauda_equina_screen",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Cauda Equina Screen",
+    isActive: true,
+    version: 1,
+    entryCriteria: ["groin_numbness=yes", "bowel_bladder=yes", "leg_weakness=yes AND severe_back_pain=yes"],
+    requiredInputs: ["groin_numbness", "bowel_bladder", "leg_weakness", "severe_back_pain"],
+    outputActions: [
+      "flag possible cauda equina",
+      "recommend immediate ER evaluation",
+      "document neuro red flags"
+    ],
+  }
+];
+3. Row parser
+
+Turns sheet-editable rows into real usable objects.
+
+// server/engines/packRowParser.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+  ParsedSymptomPack,
+  ParsedModifierPack,
+  ParsedClinicianAlgorithm,
+  IntakeQuestion,
+  ModifierRiskAdjustment,
+} from "../../shared/packRows";
+
+function safeParseJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function parseSymptomPackRow(row: SymptomPackRow): ParsedSymptomPack {
+  const questions = safeParseJson<IntakeQuestion[]>(row.questionsJson, []).sort(
+    (a, b) => a.priority - b.priority
+  );
+
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    aliases: row.aliases,
+    likelyDisposition: row.likelyDisposition,
+    questions,
+    redFlags: row.redFlags,
+    autoEscalateRules: row.autoEscalateRules,
+    autoReviewRules: row.autoReviewRules,
+    planTemplateKey: row.planTemplateKey,
+    tags: row.tags,
+  };
+}
+
+export function parseModifierPackRow(row: ModifierPackRow): ParsedModifierPack {
+  const riskAdjustments = safeParseJson<ModifierRiskAdjustment[]>(
+    row.riskAdjustmentsJson,
+    []
+  );
+
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    appliesToSymptoms: row.appliesToSymptoms,
+    triggers: row.triggers,
+    riskAdjustments,
+    tags: row.tags,
+  };
+}
+
+export function parseClinicianAlgorithmRow(
+  row: ClinicianAlgorithmRow
+): ParsedClinicianAlgorithm {
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    entryCriteria: row.entryCriteria,
+    requiredInputs: row.requiredInputs,
+    outputActions: row.outputActions,
+    notes: row.notes,
+    tags: row.tags,
+  };
+}
+4. Rule parser
+
+This is the engine room. It evaluates:
+
+sob=yes
+
+severity>=8
+
+head_hit=yes AND anticoagulated=yes
+
+prior_clot=yes OR travel=yes
+
+ANY_RED_FLAG=true
+
+// server/engines/ruleParser.ts
+
+import { AnswerMap } from "../../shared/packRows";
+
+type CompareOp = "=" | "!=" | ">" | "<" | ">=" | "<=";
+
+function normalizeValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (value == null) return "";
+  return String(value).trim().toLowerCase();
+}
+
+function toNumberMaybe(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function evaluateAtomicCondition(
+  condition: string,
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): boolean {
+  const trimmed = condition.trim();
+
+  if (trimmed === "ANY_RED_FLAG=true") {
+    return Boolean(context?.anyRedFlag);
+  }
+
+  const match = trimmed.match(/^([a-zA-Z0-9_]+)\s*(=|!=|>=|<=|>|<)\s*(.+)$/);
+  if (!match) return false;
+
+  const [, key, op, rawExpected] = match;
+  const actual = answers[key];
+  const expected = rawExpected.trim().toLowerCase();
+
+  const actualNum = toNumberMaybe(actual);
+  const expectedNum = toNumberMaybe(expected);
+
+  if (actualNum != null && expectedNum != null) {
+    switch (op as CompareOp) {
+      case "=": return actualNum === expectedNum;
+      case "!=": return actualNum !== expectedNum;
+      case ">": return actualNum > expectedNum;
+      case "<": return actualNum < expectedNum;
+      case ">=": return actualNum >= expectedNum;
+      case "<=": return actualNum <= expectedNum;
+    }
+  }
+
+  const actualNorm = normalizeValue(actual);
+
+  switch (op as CompareOp) {
+    case "=": return actualNorm === expected;
+    case "!=": return actualNorm !== expected;
+    default: return false;
+  }
+}
+
+function splitByOperator(rule: string, operator: "AND" | "OR"): string[] {
+  return rule
+    .split(new RegExp(`\\s+${operator}\\s+`, "i"))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+export function evaluateRule(
+  rule: string,
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): boolean {
+  const orParts = splitByOperator(rule, "OR");
+  if (orParts.length > 1) {
+    return orParts.some(part => evaluateRule(part, answers, context));
+  }
+
+  const andParts = splitByOperator(rule, "AND");
+  if (andParts.length > 1) {
+    return andParts.every(part => evaluateRule(part, answers, context));
+  }
+
+  return evaluateAtomicCondition(rule, answers, context);
+}
+
+export function evaluateRules(
+  rules: string[],
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): string[] {
+  return rules.filter(rule => evaluateRule(rule, answers, context));
+}
+5. Pack matcher
+
+Finds the best symptom pack from the complaint text.
+
+// server/engines/packMatcher.ts
+
+import { ParsedSymptomPack } from "../../shared/packRows";
+
+export function matchSymptomPack(
+  chiefComplaint: string,
+  packs: ParsedSymptomPack[]
+): ParsedSymptomPack | null {
+  const normalized = chiefComplaint.trim().toLowerCase();
+
+  let best: { pack: ParsedSymptomPack; score: number } | null = null;
+
+  for (const pack of packs) {
+    let score = 0;
+
+    if (pack.id.toLowerCase() === normalized) score += 100;
+    if (pack.title.toLowerCase() === normalized) score += 90;
+
+    for (const alias of pack.aliases) {
+      const aliasNorm = alias.toLowerCase();
+      if (normalized === aliasNorm) score += 80;
+      if (normalized.includes(aliasNorm)) score += 50;
+    }
+
+    if (!best || score > best.score) {
+      best = { pack, score };
+    }
+  }
+
+  return best && best.score > 0 ? best.pack : null;
+}
+6. Modifier application engine
+// server/engines/modifierApplicationEngine.ts
+
+import {
+  ParsedModifierPack,
+  ParsedSymptomPack,
+  AnswerMap,
+} from "../../shared/packRows";
+import { evaluateRule, evaluateRules } from "./ruleParser";
+
+export interface ModifierApplicationResult {
+  matchedModifiers: Array<{
+    modifierId: string;
+    title: string;
+    matchedTriggers: string[];
+  }>;
+  riskDelta: number;
+  forceReview: boolean;
+  forceEscalation: boolean;
+  reasons: string[];
+}
+
+export function applyModifierPacks(
+  symptomPack: ParsedSymptomPack,
+  modifierPacks: ParsedModifierPack[],
+  answers: AnswerMap
+): ModifierApplicationResult {
+  const result: ModifierApplicationResult = {
+    matchedModifiers: [],
+    riskDelta: 0,
+    forceReview: false,
+    forceEscalation: false,
+    reasons: [],
+  };
+
+  for (const mod of modifierPacks) {
+    if (!mod.appliesToSymptoms.includes(symptomPack.id)) continue;
+
+    const matchedTriggers = evaluateRules(mod.triggers, answers);
+    if (matchedTriggers.length === 0) continue;
+
+    result.matchedModifiers.push({
+      modifierId: mod.id,
+      title: mod.title,
+      matchedTriggers,
+    });
+
+    for (const adj of mod.riskAdjustments) {
+      if (!evaluateRule(adj.condition, answers)) continue;
+
+      if (adj.action === "raise_risk") {
+        result.riskDelta += adj.amount || 0;
+      } else if (adj.action === "force_review") {
+        result.forceReview = true;
+      } else if (adj.action === "force_escalation") {
+        result.forceEscalation = true;
+      }
+
+      result.reasons.push(`${mod.id}:${adj.reason}`);
+    }
+  }
+
+  return result;
+}
+7. Clinician algorithm trigger engine
+// server/engines/clinicianAlgorithmTriggerEngine.ts
+
+import {
+  ParsedClinicianAlgorithm,
+  ParsedSymptomPack,
+  AnswerMap,
+} from "../../shared/packRows";
+import { evaluateRule } from "./ruleParser";
+
+export interface TriggeredClinicianAlgorithm {
+  id: string;
+  title: string;
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+  matchedEntryCriteria: string[];
+}
+
+export function triggerClinicianAlgorithms(
+  symptomPack: ParsedSymptomPack,
+  algorithms: ParsedClinicianAlgorithm[],
+  answers: AnswerMap
+): TriggeredClinicianAlgorithm[] {
+  const relevant = algorithms.filter(a => a.system === symptomPack.system);
+
+  const triggered: TriggeredClinicianAlgorithm[] = [];
+
+  for (const algo of relevant) {
+    const matched = algo.entryCriteria.filter(rule => evaluateRule(rule, answers));
+    if (matched.length === 0) continue;
+
+    triggered.push({
+      id: algo.id,
+      title: algo.title,
+      requiredInputs: algo.requiredInputs,
+      outputActions: algo.outputActions,
+      notes: algo.notes,
+      matchedEntryCriteria: matched,
+    });
+  }
+
+  return triggered;
+}
+8. Symptom pack evaluation engine
+
+This combines pack rules, modifier rules, and clinician triggers.
+
+// server/engines/symptomPackEvaluationEngine.ts
+
+import {
+  ParsedSymptomPack,
+  ParsedModifierPack,
+  ParsedClinicianAlgorithm,
+  AnswerMap,
+  Disposition,
+} from "../../shared/packRows";
+import { evaluateRules } from "./ruleParser";
+import { applyModifierPacks } from "./modifierApplicationEngine";
+import { triggerClinicianAlgorithms } from "./clinicianAlgorithmTriggerEngine";
+
+export interface SymptomPackEvaluation {
+  packId: string;
+  title: string;
+  baseDisposition: Disposition;
+  matchedRedFlags: string[];
+  matchedEscalateRules: string[];
+  matchedReviewRules: string[];
+  modifierRiskDelta: number;
+  forceReview: boolean;
+  forceEscalation: boolean;
+  finalDisposition: Disposition;
+  reasons: string[];
+  triggeredAlgorithms: ReturnType<typeof triggerClinicianAlgorithms>;
+}
+
+function escalateDisposition(base: Disposition): Disposition {
+  const order: Disposition[] = [
+    "self_care",
+    "office_followup",
+    "telemed_now",
+    "urgent_care",
+    "er_now",
+  ];
+
+  const idx = order.indexOf(base);
+  if (idx === -1 || idx === order.length - 1) return base;
+  return order[idx + 1];
+}
+
+export function evaluateSymptomPack(
+  pack: ParsedSymptomPack,
+  modifierPacks: ParsedModifierPack[],
+  clinicianAlgorithms: ParsedClinicianAlgorithm[],
+  answers: AnswerMap
+): SymptomPackEvaluation {
+  const matchedRedFlags = pack.redFlags.filter(flag => {
+    const v = answers[flag];
+    return v === true || String(v).toLowerCase() === "yes";
+  });
+
+  const context = { anyRedFlag: matchedRedFlags.length > 0 };
+
+  const matchedEscalateRules = evaluateRules(pack.autoEscalateRules, answers, context);
+  const matchedReviewRules = evaluateRules(pack.autoReviewRules, answers, context);
+
+  const modifierResult = applyModifierPacks(pack, modifierPacks, answers);
+
+  let finalDisposition = pack.likelyDisposition;
+  let forceReview = matchedReviewRules.length > 0 || modifierResult.forceReview;
+  let forceEscalation =
+    matchedEscalateRules.length > 0 || modifierResult.forceEscalation;
+
+  if (forceEscalation) {
+    finalDisposition = "er_now";
+  } else if (forceReview && finalDisposition === "self_care") {
+    finalDisposition = "telemed_now";
+  }
+
+  if (modifierResult.riskDelta >= 20 && finalDisposition !== "er_now") {
+    finalDisposition = escalateDisposition(finalDisposition);
+  }
+
+  const triggeredAlgorithms = triggerClinicianAlgorithms(
+    pack,
+    clinicianAlgorithms,
+    answers
+  );
+
+  return {
+    packId: pack.id,
+    title: pack.title,
+    baseDisposition: pack.likelyDisposition,
+    matchedRedFlags,
+    matchedEscalateRules,
+    matchedReviewRules,
+    modifierRiskDelta: modifierResult.riskDelta,
+    forceReview,
+    forceEscalation,
+    finalDisposition,
+    reasons: [
+      ...matchedRedFlags.map(x => `red_flag:${x}`),
+      ...matchedEscalateRules.map(x => `escalate_rule:${x}`),
+      ...matchedReviewRules.map(x => `review_rule:${x}`),
+      ...modifierResult.reasons,
+    ],
+    triggeredAlgorithms,
+  };
+}
+9. Plan templates
+
+These are configurable and keyed by planTemplateKey.
+
+// server/config/planTemplates.ts
+
+import { Disposition, AnswerMap } from "../../shared/packRows";
+
+export interface PlanTemplate {
+  key: string;
+  diagnosisLabel: string;
+  defaultDisposition: Disposition;
+  summary: string;
+  homeCare: string[];
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export const planTemplates: PlanTemplate[] = [
+  {
+    key: "pulm_cough",
+    diagnosisLabel: "Likely uncomplicated cough / viral URI pattern",
+    defaultDisposition: "self_care",
+    summary: "Symptoms fit a low-risk cough pattern unless breathing trouble, chest pain, or blood is present.",
+    homeCare: ["Hydration", "Rest", "Honey if age appropriate", "Humidified air"],
+    meds: [],
+    followUp: ["Follow up if not improving over several days."],
+    returnPrecautions: ["Shortness of breath", "Chest pain", "Coughing blood", "Worsening fever"],
+    patientMessage: "Your symptoms appear to fit a lower-risk cough pattern from the current information. Seek urgent care if breathing trouble, chest pain, or worsening symptoms develop.",
+  },
+  {
+    key: "ortho_back_pain",
+    diagnosisLabel: "Likely uncomplicated back pain pattern",
+    defaultDisposition: "self_care",
+    summary: "This pattern can often be managed conservatively if there is no weakness, bowel/bladder change, groin numbness, or fever.",
+    homeCare: ["Relative activity", "Heat or ice", "Avoid heavy lifting temporarily"],
+    meds: [],
+    followUp: ["Follow up if symptoms persist or worsen."],
+    returnPrecautions: ["Leg weakness", "Groin numbness", "Loss of bowel or bladder control", "Fever"],
+    patientMessage: "Your answers suggest a lower-risk back pain pattern at this time, but urgent evaluation is needed if weakness, numbness in the groin, or bowel/bladder symptoms develop.",
+  },
+  {
+    key: "card_chest_pain",
+    diagnosisLabel: "Potential high-risk chest pain",
+    defaultDisposition: "er_now",
+    summary: "Chest pain can represent a serious emergency depending on associated symptoms.",
+    homeCare: [],
+    meds: [],
+    followUp: ["Emergency evaluation now."],
+    returnPrecautions: ["Do not delay if symptoms continue or worsen."],
+    patientMessage: "Your symptoms may represent a serious medical problem. Please go to the emergency room now.",
+  },
+];
+
+Plan generator:
+
+// server/engines/planTemplateEngine.ts
+
+import { AnswerMap, Disposition } from "../../shared/packRows";
+import { planTemplates } from "../config/planTemplates";
+
+export interface GeneratedPlan {
+  key: string;
+  diagnosisLabel: string;
+  disposition: Disposition;
+  summary: string;
+  homeCare: string[];
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export function generatePlanFromTemplate(
+  key: string,
+  finalDisposition?: Disposition,
+  _answers?: AnswerMap
+): GeneratedPlan | null {
+  const template = planTemplates.find(t => t.key === key);
+  if (!template) return null;
+
+  return {
+    key: template.key,
+    diagnosisLabel: template.diagnosisLabel,
+    disposition: finalDisposition || template.defaultDisposition,
+    summary: template.summary,
+    homeCare: template.homeCare,
+    meds: template.meds,
+    followUp: template.followUp,
+    returnPrecautions: template.returnPrecautions,
+    patientMessage: template.patientMessage,
+  };
+}
+10. Admin API
+
+Simple CRUD-ish endpoints for the pack builder page.
+
+// server/routes/packAdmin.ts
+
+import express from "express";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+
+const router = express.Router();
+
+router.get("/all", (_req, res) => {
+  res.json({
+    symptomPackRows,
+    modifierPackRows,
+    clinicianAlgorithmRows,
+  });
+});
+
+router.get("/systems", (_req, res) => {
+  const systems = Array.from(
+    new Set([
+      ...symptomPackRows.map(x => x.system),
+      ...modifierPackRows.map(x => x.system),
+      ...clinicianAlgorithmRows.map(x => x.system),
+    ])
+  ).sort();
+
+  res.json({ systems });
+});
+
+router.post("/symptom", (req, res) => {
+  const row = req.body;
+  const idx = symptomPackRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) symptomPackRows[idx] = row;
+  else symptomPackRows.push(row);
+  res.json({ ok: true, row });
+});
+
+router.post("/modifier", (req, res) => {
+  const row = req.body;
+  const idx = modifierPackRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) modifierPackRows[idx] = row;
+  else modifierPackRows.push(row);
+  res.json({ ok: true, row });
+});
+
+router.post("/algorithm", (req, res) => {
+  const row = req.body;
+  const idx = clinicianAlgorithmRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) clinicianAlgorithmRows[idx] = row;
+  else clinicianAlgorithmRows.push(row);
+  res.json({ ok: true, row });
+});
+
+export default router;
+
+Register it:
+
+// server/index.ts
+import packAdminRoutes from "./routes/packAdmin";
+
+app.use("/api/pack-admin", packAdminRoutes);
+11. Intake orchestration route example
+
+This is where everything clicks together.
+
+// server/routes/packDrivenIntake.ts
+
+import express from "express";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+import {
+  parseSymptomPackRow,
+  parseModifierPackRow,
+  parseClinicianAlgorithmRow,
+} from "../engines/packRowParser";
+import { matchSymptomPack } from "../engines/packMatcher";
+import { evaluateSymptomPack } from "../engines/symptomPackEvaluationEngine";
+import { generatePlanFromTemplate } from "../engines/planTemplateEngine";
+
+const router = express.Router();
+
+router.post("/evaluate", (req, res) => {
+  const chiefComplaint = String(req.body.chiefComplaint || "");
+  const answers = req.body.answers || {};
+
+  const symptomPacks = symptomPackRows
+    .filter(x => x.isActive)
+    .map(parseSymptomPackRow);
+
+  const modifierPacks = modifierPackRows
+    .filter(x => x.isActive)
+    .map(parseModifierPackRow);
+
+  const clinicianAlgorithms = clinicianAlgorithmRows
+    .filter(x => x.isActive)
+    .map(parseClinicianAlgorithmRow);
+
+  const pack = matchSymptomPack(chiefComplaint, symptomPacks);
+
+  if (!pack) {
+    return res.json({
+      matched: false,
+      disposition: "telemed_now",
+      reason: "no_symptom_pack_match",
+    });
+  }
+
+  const evaluation = evaluateSymptomPack(
+    pack,
+    modifierPacks,
+    clinicianAlgorithms,
+    answers
+  );
+
+  const plan = generatePlanFromTemplate(
+    pack.planTemplateKey,
+    evaluation.finalDisposition,
+    answers
+  );
+
+  return res.json({
+    matched: true,
+    pack,
+    evaluation,
+    plan,
+    nextQuestions: pack.questions.slice(0, 4),
+  });
+});
+
+export default router;
+12. React pack builder admin page
+
+A clean starter editor for rows. You can split this into tabs later.
+
+// frontend/src/pages/PackBuilderAdminPage.tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+
+type RowType = "symptom" | "modifier" | "clinician_algorithm";
+
+export default function PackBuilderAdminPage() {
+  const [systems, setSystems] = useState<string[]>([]);
+  const [allRows, setAllRows] = useState<any>({});
+  const [systemFilter, setSystemFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState<RowType | "all">("all");
+  const [selectedRow, setSelectedRow] = useState<any | null>(null);
+  const [editorValue, setEditorValue] = useState("");
+
+  async function load() {
+    const [systemsRes, allRes] = await Promise.all([
+      fetch("/api/pack-admin/systems"),
+      fetch("/api/pack-admin/all"),
+    ]);
+    const systemsJson = await systemsRes.json();
+    const allJson = await allRes.json();
+    setSystems(systemsJson.systems || []);
+    setAllRows(allJson);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const flattened = useMemo(() => {
+    const rows = [
+      ...(allRows.symptomPackRows || []),
+      ...(allRows.modifierPackRows || []),
+      ...(allRows.clinicianAlgorithmRows || []),
+    ];
+
+    return rows.filter((row: any) => {
+      const okSystem = systemFilter === "all" || row.system === systemFilter;
+      const okTier = tierFilter === "all" || row.tier === tierFilter;
+      return okSystem && okTier;
+    });
+  }, [allRows, systemFilter, tierFilter]);
+
+  function openRow(row: any) {
+    setSelectedRow(row);
+    setEditorValue(JSON.stringify(row, null, 2));
+  }
+
+  async function saveRow() {
+    if (!selectedRow) return;
+
+    const parsed = JSON.parse(editorValue);
+    let endpoint = "/api/pack-admin/symptom";
+    if (parsed.tier === "modifier") endpoint = "/api/pack-admin/modifier";
+    if (parsed.tier === "clinician_algorithm") endpoint = "/api/pack-admin/algorithm";
+
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+
+    await load();
+    openRow(parsed);
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", height: "100vh" }}>
+      <div style={{ borderRight: "1px solid #ddd", padding: 16, overflow: "auto" }}>
+        <h2>Pack Builder</h2>
+
+        <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+          <select value={systemFilter} onChange={e => setSystemFilter(e.target.value)}>
+            <option value="all">All systems</option>
+            {systems.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <select value={tierFilter} onChange={e => setTierFilter(e.target.value as any)}>
+            <option value="all">All tiers</option>
+            <option value="symptom">Symptom</option>
+            <option value="modifier">Modifier</option>
+            <option value="clinician_algorithm">Clinician algorithm</option>
+          </select>
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          {flattened.map((row: any) => (
+            <button
+              key={row.id}
+              onClick={() => openRow(row)}
+              style={{
+                textAlign: "left",
+                padding: 12,
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                background: selectedRow?.id === row.id ? "#eef6ff" : "white",
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{row.title}</div>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                {row.system} • {row.tier} • {row.id}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: 16, overflow: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2>{selectedRow ? selectedRow.title : "Select a pack"}</h2>
+          {selectedRow && <button onClick={saveRow}>Save</button>}
+        </div>
+
+        <textarea
+          value={editorValue}
+          onChange={e => setEditorValue(e.target.value)}
+          style={{
+            width: "100%",
+            minHeight: "80vh",
+            fontFamily: "monospace",
+            fontSize: 13,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+13. What this gives you now
+
+This bundle already supports:
+
+sheet-editable pack rows
+
+versioned config rows
+
+rule evaluation with AND / OR / >= / <=
+
+symptom pack matching
+
+modifier risk application
+
+clinician algorithm surfacing
+
+plan template generation
+
+admin page editing
+
+That is a real skeleton for a configurable CDS pack engine.
+
+14. Best next files after this
+
+The next strongest upgrades are:
+
+A. Google Sheets sync adapter
+
+Map sheet tabs to:
+
+Symptom_Packs
+
+Modifier_Packs
+
+Clinician_Algorithms
+
+Plan_Templates
+
+B. Validation layer
+
+Before saving a row:
+
+validate rule syntax
+
+validate question JSON
+
+validate duplicate IDs
+
+validate planTemplateKey exists
+
+C. Visual rule builder
+
+Instead of raw strings:
+
+dropdown field
+
+operator
+
+value
+
+AND/OR rows
+
+D. Pack simulation page
+
+Enter:
+
+complaint
+
+answers
+And see:
+
+matched pack
+
+modifier hits
+
+final disposition
+
+triggered clinician algorithms
+
+generated patient plan
+
+That page is the lie detector for the whole system.
+
+15. The cleanest tab structure in Sheets
+
+Use these tabs:
+
+Symptom_Packs
+Modifier_Packs
+Clinician_Algorithms
+Plan_Templates
+Pack_Questions
+Pack_Audit_Log
+
+A very good long-term normalization is:
+
+Symptom_Packs for metadata
+
+Pack_Questions one row per question
+
+Plan_Templates one row per template
+
+rules as pipe-separated strings or JSON arrays
+
+That will scale better than giant JSON blobs once the library gets large.
+
+16. Recommended immediate next step
+
+The next thing to build is the Pack Simulator UI and the validation engine.
+That is where your hospital switchboard stops being clever on paper and starts proving itself under load.
+
+I can write those next as drop-in TypeScript and React files.
+
+pleasev build all of 14 - adapter, VALIDATION, VISUAL rule, SIMULATION page  Yes. Here is the drop-in TypeScript scaffolding for the next layer:
+
+sheet-editable JSON/TS rows
+
+rule parser
+
+pack matcher
+
+modifier application engine
+
+clinician algorithm trigger engine
+
+plan templates
+
+admin API
+
+React pack builder admin page
+
+This turns the pack system from a pile of objects into a configurable clinical switchboard 🔌🏥
+
+1. Shared row models
+// shared/packRows.ts
+
+export type PackTier = "symptom" | "modifier" | "clinician_algorithm";
+export type Disposition =
+  | "self_care"
+  | "office_followup"
+  | "telemed_now"
+  | "urgent_care"
+  | "er_now";
+
+export type QuestionType =
+  | "yes_no"
+  | "single_select"
+  | "multi_select"
+  | "text"
+  | "number"
+  | "duration"
+  | "severity";
+
+export interface PackRowBase {
+  id: string;
+  system: string;
+  tier: PackTier;
+  title: string;
+  isActive: boolean;
+  version: number;
+  tags?: string[];
+}
+
+export interface SymptomPackRow extends PackRowBase {
+  tier: "symptom";
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questionsJson: string;           // JSON string for sheet/db editing
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+}
+
+export interface ModifierPackRow extends PackRowBase {
+  tier: "modifier";
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustmentsJson: string;     // JSON string
+}
+
+export interface ClinicianAlgorithmRow extends PackRowBase {
+  tier: "clinician_algorithm";
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+}
+
+export interface IntakeQuestionOption {
+  label: string;
+  value: string;
+  redFlag?: boolean;
+}
+
+export interface IntakeQuestion {
+  id: string;
+  prompt: string;
+  type: QuestionType;
+  priority: number;
+  required?: boolean;
+  options?: IntakeQuestionOption[];
+  helpText?: string;
+}
+
+export interface ModifierRiskAdjustment {
+  condition: string;
+  action: "raise_risk" | "force_review" | "force_escalation";
+  amount?: number;
+  reason: string;
+}
+
+export interface ParsedSymptomPack {
+  id: string;
+  system: string;
+  title: string;
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questions: IntakeQuestion[];
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+  tags?: string[];
+}
+
+export interface ParsedModifierPack {
+  id: string;
+  system: string;
+  title: string;
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustments: ModifierRiskAdjustment[];
+  tags?: string[];
+}
+
+export interface ParsedClinicianAlgorithm {
+  id: string;
+  system: string;
+  title: string;
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+  tags?: string[];
+}
+
+export interface AnswerMap {
+  [key: string]: string | number | boolean | null | undefined;
+}
+2. Seed rows in sheet-editable form
+
+These are examples. In production they can come from Google Sheets, Postgres, Firestore, or JSON files.
+
+// server/config/packRows.seed.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+
+export const symptomPackRows: SymptomPackRow[] = [
+  {
+    id: "card_chest_pain",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Chest Pain",
+    isActive: true,
+    version: 1,
+    tags: ["high_risk", "acs", "dissection"],
+    aliases: ["chest pain", "chest pressure", "tightness in chest"],
+    likelyDisposition: "er_now",
+    questionsJson: JSON.stringify([
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1, required: true },
+      { id: "radiation", prompt: "Pain to arm, jaw, or back?", type: "yes_no", priority: 2 },
+      { id: "exertional", prompt: "Triggered or worse with exertion?", type: "yes_no", priority: 3 },
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 4 },
+      { id: "sweating_nausea", prompt: "Cold sweat or nausea?", type: "yes_no", priority: 5 },
+      { id: "tearing", prompt: "Sudden tearing pain to the back?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["sob", "radiation", "fainting", "sweating_nausea", "tearing"],
+    autoEscalateRules: [
+      "sob=yes",
+      "radiation=yes",
+      "fainting=yes",
+      "sweating_nausea=yes",
+      "tearing=yes"
+    ],
+    autoReviewRules: [],
+    planTemplateKey: "card_chest_pain",
+  },
+  {
+    id: "ortho_back_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Back Pain",
+    isActive: true,
+    version: 1,
+    tags: ["msk", "spine"],
+    aliases: ["back pain", "low back pain"],
+    likelyDisposition: "self_care",
+    questionsJson: JSON.stringify([
+      { id: "injury", prompt: "Any fall, lifting injury, or trauma?", type: "yes_no", priority: 1 },
+      { id: "leg_weakness", prompt: "Any leg weakness?", type: "yes_no", priority: 2 },
+      { id: "groin_numbness", prompt: "Any numbness in the groin area?", type: "yes_no", priority: 3 },
+      { id: "bowel_bladder", prompt: "Any loss of bowel or bladder control?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "ivdu_cancer", prompt: "IV drug use, cancer, or immune suppression?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["leg_weakness", "groin_numbness", "bowel_bladder", "fever"],
+    autoEscalateRules: [
+      "groin_numbness=yes",
+      "bowel_bladder=yes",
+      "leg_weakness=yes"
+    ],
+    autoReviewRules: [
+      "fever=yes",
+      "ivdu_cancer=yes",
+      "injury=yes"
+    ],
+    planTemplateKey: "ortho_back_pain",
+  },
+  {
+    id: "pulm_cough",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Cough",
+    isActive: true,
+    version: 1,
+    aliases: ["cough", "bronchitis", "cold"],
+    likelyDisposition: "self_care",
+    questionsJson: JSON.stringify([
+      { id: "duration", prompt: "How long have you had the cough?", type: "duration", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 5 },
+      { id: "asthma_copd", prompt: "Asthma or COPD history?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["sob", "chest_pain", "blood"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes", "blood=yes"],
+    autoReviewRules: ["fever=yes", "asthma_copd=yes"],
+    planTemplateKey: "pulm_cough",
+  }
+];
+
+export const modifierPackRows: ModifierPackRow[] = [
+  {
+    id: "card_mod_congenital_heart",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Congenital Heart Disease",
+    isActive: true,
+    version: 1,
+    tags: ["modifier", "high_risk_pmh"],
+    appliesToSymptoms: [
+      "card_shortness_of_breath",
+      "card_palpitations",
+      "card_syncope",
+      "card_chf_fluid_overload",
+      "card_chest_pain"
+    ],
+    triggers: ["congenital_heart_disease=yes"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "congenital_heart_disease=yes",
+        action: "raise_risk",
+        amount: 25,
+        reason: "Congenital disease raises complexity"
+      },
+      {
+        condition: "congenital_heart_disease=yes",
+        action: "force_review",
+        reason: "Needs clinician-level interpretation"
+      }
+    ]),
+  },
+  {
+    id: "ortho_mod_anticoagulation",
+    system: "ortho",
+    tier: "modifier",
+    title: "Anticoagulation",
+    isActive: true,
+    version: 1,
+    appliesToSymptoms: ["ortho_post_fall_injury", "ortho_back_pain", "ortho_hip_pelvis_pain"],
+    triggers: ["anticoagulated=yes"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "anticoagulated=yes",
+        action: "raise_risk",
+        amount: 20,
+        reason: "Bleeding risk after injury"
+      },
+      {
+        condition: "head_hit=yes AND anticoagulated=yes",
+        action: "force_escalation",
+        reason: "Head trauma on anticoagulation"
+      }
+    ]),
+  }
+];
+
+export const clinicianAlgorithmRows: ClinicianAlgorithmRow[] = [
+  {
+    id: "card_algo_acls_tachy",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "Tachyarrhythmia ACLS Support",
+    isActive: true,
+    version: 1,
+    tags: ["acls", "emergency"],
+    entryCriteria: ["unstable_tachycardia=yes", "very_rapid_pulse=yes", "palpitations=yes AND fainting=yes"],
+    requiredInputs: ["heart_rate", "bp", "mental_status", "chest_pain", "sob", "12lead_available"],
+    outputActions: [
+      "flag unstable vs stable",
+      "recommend immediate ER escalation if unstable",
+      "surface synchronized cardioversion reference"
+    ],
+    notes: ["Clinician-facing only"],
+  },
+  {
+    id: "ortho_algo_cauda_equina_screen",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Cauda Equina Screen",
+    isActive: true,
+    version: 1,
+    entryCriteria: ["groin_numbness=yes", "bowel_bladder=yes", "leg_weakness=yes AND severe_back_pain=yes"],
+    requiredInputs: ["groin_numbness", "bowel_bladder", "leg_weakness", "severe_back_pain"],
+    outputActions: [
+      "flag possible cauda equina",
+      "recommend immediate ER evaluation",
+      "document neuro red flags"
+    ],
+  }
+];
+3. Row parser
+
+Turns sheet-editable rows into real usable objects.
+
+// server/engines/packRowParser.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+  ParsedSymptomPack,
+  ParsedModifierPack,
+  ParsedClinicianAlgorithm,
+  IntakeQuestion,
+  ModifierRiskAdjustment,
+} from "../../shared/packRows";
+
+function safeParseJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function parseSymptomPackRow(row: SymptomPackRow): ParsedSymptomPack {
+  const questions = safeParseJson<IntakeQuestion[]>(row.questionsJson, []).sort(
+    (a, b) => a.priority - b.priority
+  );
+
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    aliases: row.aliases,
+    likelyDisposition: row.likelyDisposition,
+    questions,
+    redFlags: row.redFlags,
+    autoEscalateRules: row.autoEscalateRules,
+    autoReviewRules: row.autoReviewRules,
+    planTemplateKey: row.planTemplateKey,
+    tags: row.tags,
+  };
+}
+
+export function parseModifierPackRow(row: ModifierPackRow): ParsedModifierPack {
+  const riskAdjustments = safeParseJson<ModifierRiskAdjustment[]>(
+    row.riskAdjustmentsJson,
+    []
+  );
+
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    appliesToSymptoms: row.appliesToSymptoms,
+    triggers: row.triggers,
+    riskAdjustments,
+    tags: row.tags,
+  };
+}
+
+export function parseClinicianAlgorithmRow(
+  row: ClinicianAlgorithmRow
+): ParsedClinicianAlgorithm {
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    entryCriteria: row.entryCriteria,
+    requiredInputs: row.requiredInputs,
+    outputActions: row.outputActions,
+    notes: row.notes,
+    tags: row.tags,
+  };
+}
+4. Rule parser
+
+This is the engine room. It evaluates:
+
+sob=yes
+
+severity>=8
+
+head_hit=yes AND anticoagulated=yes
+
+prior_clot=yes OR travel=yes
+
+ANY_RED_FLAG=true
+
+// server/engines/ruleParser.ts
+
+import { AnswerMap } from "../../shared/packRows";
+
+type CompareOp = "=" | "!=" | ">" | "<" | ">=" | "<=";
+
+function normalizeValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (value == null) return "";
+  return String(value).trim().toLowerCase();
+}
+
+function toNumberMaybe(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function evaluateAtomicCondition(
+  condition: string,
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): boolean {
+  const trimmed = condition.trim();
+
+  if (trimmed === "ANY_RED_FLAG=true") {
+    return Boolean(context?.anyRedFlag);
+  }
+
+  const match = trimmed.match(/^([a-zA-Z0-9_]+)\s*(=|!=|>=|<=|>|<)\s*(.+)$/);
+  if (!match) return false;
+
+  const [, key, op, rawExpected] = match;
+  const actual = answers[key];
+  const expected = rawExpected.trim().toLowerCase();
+
+  const actualNum = toNumberMaybe(actual);
+  const expectedNum = toNumberMaybe(expected);
+
+  if (actualNum != null && expectedNum != null) {
+    switch (op as CompareOp) {
+      case "=": return actualNum === expectedNum;
+      case "!=": return actualNum !== expectedNum;
+      case ">": return actualNum > expectedNum;
+      case "<": return actualNum < expectedNum;
+      case ">=": return actualNum >= expectedNum;
+      case "<=": return actualNum <= expectedNum;
+    }
+  }
+
+  const actualNorm = normalizeValue(actual);
+
+  switch (op as CompareOp) {
+    case "=": return actualNorm === expected;
+    case "!=": return actualNorm !== expected;
+    default: return false;
+  }
+}
+
+function splitByOperator(rule: string, operator: "AND" | "OR"): string[] {
+  return rule
+    .split(new RegExp(\\s+${operator}\\s+, "i"))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+export function evaluateRule(
+  rule: string,
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): boolean {
+  const orParts = splitByOperator(rule, "OR");
+  if (orParts.length > 1) {
+    return orParts.some(part => evaluateRule(part, answers, context));
+  }
+
+  const andParts = splitByOperator(rule, "AND");
+  if (andParts.length > 1) {
+    return andParts.every(part => evaluateRule(part, answers, context));
+  }
+
+  return evaluateAtomicCondition(rule, answers, context);
+}
+
+export function evaluateRules(
+  rules: string[],
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): string[] {
+  return rules.filter(rule => evaluateRule(rule, answers, context));
+}
+5. Pack matcher
+
+Finds the best symptom pack from the complaint text.
+
+// server/engines/packMatcher.ts
+
+import { ParsedSymptomPack } from "../../shared/packRows";
+
+export function matchSymptomPack(
+  chiefComplaint: string,
+  packs: ParsedSymptomPack[]
+): ParsedSymptomPack | null {
+  const normalized = chiefComplaint.trim().toLowerCase();
+
+  let best: { pack: ParsedSymptomPack; score: number } | null = null;
+
+  for (const pack of packs) {
+    let score = 0;
+
+    if (pack.id.toLowerCase() === normalized) score += 100;
+    if (pack.title.toLowerCase() === normalized) score += 90;
+
+    for (const alias of pack.aliases) {
+      const aliasNorm = alias.toLowerCase();
+      if (normalized === aliasNorm) score += 80;
+      if (normalized.includes(aliasNorm)) score += 50;
+    }
+
+    if (!best || score > best.score) {
+      best = { pack, score };
+    }
+  }
+
+  return best && best.score > 0 ? best.pack : null;
+}
+6. Modifier application engine
+// server/engines/modifierApplicationEngine.ts
+
+import {
+  ParsedModifierPack,
+  ParsedSymptomPack,
+  AnswerMap,
+} from "../../shared/packRows";
+import { evaluateRule, evaluateRules } from "./ruleParser";
+
+export interface ModifierApplicationResult {
+  matchedModifiers: Array<{
+    modifierId: string;
+    title: string;
+    matchedTriggers: string[];
+  }>;
+  riskDelta: number;
+  forceReview: boolean;
+  forceEscalation: boolean;
+  reasons: string[];
+}
+
+export function applyModifierPacks(
+  symptomPack: ParsedSymptomPack,
+  modifierPacks: ParsedModifierPack[],
+  answers: AnswerMap
+): ModifierApplicationResult {
+  const result: ModifierApplicationResult = {
+    matchedModifiers: [],
+    riskDelta: 0,
+    forceReview: false,
+    forceEscalation: false,
+    reasons: [],
+  };
+
+  for (const mod of modifierPacks) {
+    if (!mod.appliesToSymptoms.includes(symptomPack.id)) continue;
+
+    const matchedTriggers = evaluateRules(mod.triggers, answers);
+    if (matchedTriggers.length === 0) continue;
+
+    result.matchedModifiers.push({
+      modifierId: mod.id,
+      title: mod.title,
+      matchedTriggers,
+    });
+
+    for (const adj of mod.riskAdjustments) {
+      if (!evaluateRule(adj.condition, answers)) continue;
+
+      if (adj.action === "raise_risk") {
+        result.riskDelta += adj.amount || 0;
+      } else if (adj.action === "force_review") {
+        result.forceReview = true;
+      } else if (adj.action === "force_escalation") {
+        result.forceEscalation = true;
+      }
+
+      result.reasons.push(${mod.id}:${adj.reason});
+    }
+  }
+
+  return result;
+}
+7. Clinician algorithm trigger engine
+// server/engines/clinicianAlgorithmTriggerEngine.ts
+
+import {
+  ParsedClinicianAlgorithm,
+  ParsedSymptomPack,
+  AnswerMap,
+} from "../../shared/packRows";
+import { evaluateRule } from "./ruleParser";
+
+export interface TriggeredClinicianAlgorithm {
+  id: string;
+  title: string;
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+  matchedEntryCriteria: string[];
+}
+
+export function triggerClinicianAlgorithms(
+  symptomPack: ParsedSymptomPack,
+  algorithms: ParsedClinicianAlgorithm[],
+  answers: AnswerMap
+): TriggeredClinicianAlgorithm[] {
+  const relevant = algorithms.filter(a => a.system === symptomPack.system);
+
+  const triggered: TriggeredClinicianAlgorithm[] = [];
+
+  for (const algo of relevant) {
+    const matched = algo.entryCriteria.filter(rule => evaluateRule(rule, answers));
+    if (matched.length === 0) continue;
+
+    triggered.push({
+      id: algo.id,
+      title: algo.title,
+      requiredInputs: algo.requiredInputs,
+      outputActions: algo.outputActions,
+      notes: algo.notes,
+      matchedEntryCriteria: matched,
+    });
+  }
+
+  return triggered;
+}
+8. Symptom pack evaluation engine
+
+This combines pack rules, modifier rules, and clinician triggers.
+
+// server/engines/symptomPackEvaluationEngine.ts
+
+import {
+  ParsedSymptomPack,
+  ParsedModifierPack,
+  ParsedClinicianAlgorithm,
+  AnswerMap,
+  Disposition,
+} from "../../shared/packRows";
+import { evaluateRules } from "./ruleParser";
+import { applyModifierPacks } from "./modifierApplicationEngine";
+import { triggerClinicianAlgorithms } from "./clinicianAlgorithmTriggerEngine";
+
+export interface SymptomPackEvaluation {
+  packId: string;
+  title: string;
+  baseDisposition: Disposition;
+  matchedRedFlags: string[];
+  matchedEscalateRules: string[];
+  matchedReviewRules: string[];
+  modifierRiskDelta: number;
+  forceReview: boolean;
+  forceEscalation: boolean;
+  finalDisposition: Disposition;
+  reasons: string[];
+  triggeredAlgorithms: ReturnType<typeof triggerClinicianAlgorithms>;
+}
+
+function escalateDisposition(base: Disposition): Disposition {
+  const order: Disposition[] = [
+    "self_care",
+    "office_followup",
+    "telemed_now",
+    "urgent_care",
+    "er_now",
+  ];
+
+  const idx = order.indexOf(base);
+  if (idx === -1 || idx === order.length - 1) return base;
+  return order[idx + 1];
+}
+
+export function evaluateSymptomPack(
+  pack: ParsedSymptomPack,
+  modifierPacks: ParsedModifierPack[],
+  clinicianAlgorithms: ParsedClinicianAlgorithm[],
+  answers: AnswerMap
+): SymptomPackEvaluation {
+  const matchedRedFlags = pack.redFlags.filter(flag => {
+    const v = answers[flag];
+    return v === true || String(v).toLowerCase() === "yes";
+  });
+
+  const context = { anyRedFlag: matchedRedFlags.length > 0 };
+
+  const matchedEscalateRules = evaluateRules(pack.autoEscalateRules, answers, context);
+  const matchedReviewRules = evaluateRules(pack.autoReviewRules, answers, context);
+
+  const modifierResult = applyModifierPacks(pack, modifierPacks, answers);
+
+  let finalDisposition = pack.likelyDisposition;
+  let forceReview = matchedReviewRules.length > 0 || modifierResult.forceReview;
+  let forceEscalation =
+    matchedEscalateRules.length > 0 || modifierResult.forceEscalation;
+
+  if (forceEscalation) {
+    finalDisposition = "er_now";
+  } else if (forceReview && finalDisposition === "self_care") {
+    finalDisposition = "telemed_now";
+  }
+
+  if (modifierResult.riskDelta >= 20 && finalDisposition !== "er_now") {
+    finalDisposition = escalateDisposition(finalDisposition);
+  }
+
+  const triggeredAlgorithms = triggerClinicianAlgorithms(
+    pack,
+    clinicianAlgorithms,
+    answers
+  );
+
+  return {
+    packId: pack.id,
+    title: pack.title,
+    baseDisposition: pack.likelyDisposition,
+    matchedRedFlags,
+    matchedEscalateRules,
+    matchedReviewRules,
+    modifierRiskDelta: modifierResult.riskDelta,
+    forceReview,
+    forceEscalation,
+    finalDisposition,
+    reasons: [
+      ...matchedRedFlags.map(x => red_flag:${x}),
+      ...matchedEscalateRules.map(x => escalate_rule:${x}),
+      ...matchedReviewRules.map(x => review_rule:${x}),
+      ...modifierResult.reasons,
+    ],
+    triggeredAlgorithms,
+  };
+}
+9. Plan templates
+
+These are configurable and keyed by planTemplateKey.
+
+// server/config/planTemplates.ts
+
+import { Disposition, AnswerMap } from "../../shared/packRows";
+
+export interface PlanTemplate {
+  key: string;
+  diagnosisLabel: string;
+  defaultDisposition: Disposition;
+  summary: string;
+  homeCare: string[];
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export const planTemplates: PlanTemplate[] = [
+  {
+    key: "pulm_cough",
+    diagnosisLabel: "Likely uncomplicated cough / viral URI pattern",
+    defaultDisposition: "self_care",
+    summary: "Symptoms fit a low-risk cough pattern unless breathing trouble, chest pain, or blood is present.",
+    homeCare: ["Hydration", "Rest", "Honey if age appropriate", "Humidified air"],
+    meds: [],
+    followUp: ["Follow up if not improving over several days."],
+    returnPrecautions: ["Shortness of breath", "Chest pain", "Coughing blood", "Worsening fever"],
+    patientMessage: "Your symptoms appear to fit a lower-risk cough pattern from the current information. Seek urgent care if breathing trouble, chest pain, or worsening symptoms develop.",
+  },
+  {
+    key: "ortho_back_pain",
+    diagnosisLabel: "Likely uncomplicated back pain pattern",
+    defaultDisposition: "self_care",
+    summary: "This pattern can often be managed conservatively if there is no weakness, bowel/bladder change, groin numbness, or fever.",
+    homeCare: ["Relative activity", "Heat or ice", "Avoid heavy lifting temporarily"],
+    meds: [],
+    followUp: ["Follow up if symptoms persist or worsen."],
+    returnPrecautions: ["Leg weakness", "Groin numbness", "Loss of bowel or bladder control", "Fever"],
+    patientMessage: "Your answers suggest a lower-risk back pain pattern at this time, but urgent evaluation is needed if weakness, numbness in the groin, or bowel/bladder symptoms develop.",
+  },
+  {
+    key: "card_chest_pain",
+    diagnosisLabel: "Potential high-risk chest pain",
+    defaultDisposition: "er_now",
+    summary: "Chest pain can represent a serious emergency depending on associated symptoms.",
+    homeCare: [],
+    meds: [],
+    followUp: ["Emergency evaluation now."],
+    returnPrecautions: ["Do not delay if symptoms continue or worsen."],
+    patientMessage: "Your symptoms may represent a serious medical problem. Please go to the emergency room now.",
+  },
+];
+
+Plan generator:
+
+// server/engines/planTemplateEngine.ts
+
+import { AnswerMap, Disposition } from "../../shared/packRows";
+import { planTemplates } from "../config/planTemplates";
+
+export interface GeneratedPlan {
+  key: string;
+  diagnosisLabel: string;
+  disposition: Disposition;
+  summary: string;
+  homeCare: string[];
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export function generatePlanFromTemplate(
+  key: string,
+  finalDisposition?: Disposition,
+  _answers?: AnswerMap
+): GeneratedPlan | null {
+  const template = planTemplates.find(t => t.key === key);
+  if (!template) return null;
+
+  return {
+    key: template.key,
+    diagnosisLabel: template.diagnosisLabel,
+    disposition: finalDisposition || template.defaultDisposition,
+    summary: template.summary,
+    homeCare: template.homeCare,
+    meds: template.meds,
+    followUp: template.followUp,
+    returnPrecautions: template.returnPrecautions,
+    patientMessage: template.patientMessage,
+  };
+}
+10. Admin API
+
+Simple CRUD-ish endpoints for the pack builder page.
+
+// server/routes/packAdmin.ts
+
+import express from "express";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+
+const router = express.Router();
+
+router.get("/all", (_req, res) => {
+  res.json({
+    symptomPackRows,
+    modifierPackRows,
+    clinicianAlgorithmRows,
+  });
+});
+
+router.get("/systems", (_req, res) => {
+  const systems = Array.from(
+    new Set([
+      ...symptomPackRows.map(x => x.system),
+      ...modifierPackRows.map(x => x.system),
+      ...clinicianAlgorithmRows.map(x => x.system),
+    ])
+  ).sort();
+
+  res.json({ systems });
+});
+
+router.post("/symptom", (req, res) => {
+  const row = req.body;
+  const idx = symptomPackRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) symptomPackRows[idx] = row;
+  else symptomPackRows.push(row);
+  res.json({ ok: true, row });
+});
+
+router.post("/modifier", (req, res) => {
+  const row = req.body;
+  const idx = modifierPackRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) modifierPackRows[idx] = row;
+  else modifierPackRows.push(row);
+  res.json({ ok: true, row });
+});
+
+router.post("/algorithm", (req, res) => {
+  const row = req.body;
+  const idx = clinicianAlgorithmRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) clinicianAlgorithmRows[idx] = row;
+  else clinicianAlgorithmRows.push(row);
+  res.json({ ok: true, row });
+});
+
+export default router;
+
+Register it:
+
+// server/index.ts
+import packAdminRoutes from "./routes/packAdmin";
+
+app.use("/api/pack-admin", packAdminRoutes);
+11. Intake orchestration route example
+
+This is where everything clicks together.
+
+// server/routes/packDrivenIntake.ts
+
+import express from "express";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+import {
+  parseSymptomPackRow,
+  parseModifierPackRow,
+  parseClinicianAlgorithmRow,
+} from "../engines/packRowParser";
+import { matchSymptomPack } from "../engines/packMatcher";
+import { evaluateSymptomPack } from "../engines/symptomPackEvaluationEngine";
+import { generatePlanFromTemplate } from "../engines/planTemplateEngine";
+
+const router = express.Router();
+
+router.post("/evaluate", (req, res) => {
+  const chiefComplaint = String(req.body.chiefComplaint || "");
+  const answers = req.body.answers || {};
+
+  const symptomPacks = symptomPackRows
+    .filter(x => x.isActive)
+    .map(parseSymptomPackRow);
+
+  const modifierPacks = modifierPackRows
+    .filter(x => x.isActive)
+    .map(parseModifierPackRow);
+
+  const clinicianAlgorithms = clinicianAlgorithmRows
+    .filter(x => x.isActive)
+    .map(parseClinicianAlgorithmRow);
+
+  const pack = matchSymptomPack(chiefComplaint, symptomPacks);
+
+  if (!pack) {
+    return res.json({
+      matched: false,
+      disposition: "telemed_now",
+      reason: "no_symptom_pack_match",
+    });
+  }
+
+  const evaluation = evaluateSymptomPack(
+    pack,
+    modifierPacks,
+    clinicianAlgorithms,
+    answers
+  );
+
+  const plan = generatePlanFromTemplate(
+    pack.planTemplateKey,
+    evaluation.finalDisposition,
+    answers
+  );
+
+  return res.json({
+    matched: true,
+    pack,
+    evaluation,
+    plan,
+    nextQuestions: pack.questions.slice(0, 4),
+  });
+});
+
+export default router;
+12. React pack builder admin page
+
+A clean starter editor for rows. You can split this into tabs later.
+
+// frontend/src/pages/PackBuilderAdminPage.tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+
+type RowType = "symptom" | "modifier" | "clinician_algorithm";
+
+export default function PackBuilderAdminPage() {
+  const [systems, setSystems] = useState<string[]>([]);
+  const [allRows, setAllRows] = useState<any>({});
+  const [systemFilter, setSystemFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState<RowType | "all">("all");
+  const [selectedRow, setSelectedRow] = useState<any | null>(null);
+  const [editorValue, setEditorValue] = useState("");
+
+  async function load() {
+    const [systemsRes, allRes] = await Promise.all([
+      fetch("/api/pack-admin/systems"),
+      fetch("/api/pack-admin/all"),
+    ]);
+    const systemsJson = await systemsRes.json();
+    const allJson = await allRes.json();
+    setSystems(systemsJson.systems || []);
+    setAllRows(allJson);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const flattened = useMemo(() => {
+    const rows = [
+      ...(allRows.symptomPackRows || []),
+      ...(allRows.modifierPackRows || []),
+      ...(allRows.clinicianAlgorithmRows || []),
+    ];
+
+    return rows.filter((row: any) => {
+      const okSystem = systemFilter === "all" || row.system === systemFilter;
+      const okTier = tierFilter === "all" || row.tier === tierFilter;
+      return okSystem && okTier;
+    });
+  }, [allRows, systemFilter, tierFilter]);
+
+  function openRow(row: any) {
+    setSelectedRow(row);
+    setEditorValue(JSON.stringify(row, null, 2));
+  }
+
+  async function saveRow() {
+    if (!selectedRow) return;
+
+    const parsed = JSON.parse(editorValue);
+    let endpoint = "/api/pack-admin/symptom";
+    if (parsed.tier === "modifier") endpoint = "/api/pack-admin/modifier";
+    if (parsed.tier === "clinician_algorithm") endpoint = "/api/pack-admin/algorithm";
+
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+
+    await load();
+    openRow(parsed);
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", height: "100vh" }}>
+      <div style={{ borderRight: "1px solid #ddd", padding: 16, overflow: "auto" }}>
+        <h2>Pack Builder</h2>
+
+        <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+          <select value={systemFilter} onChange={e => setSystemFilter(e.target.value)}>
+            <option value="all">All systems</option>
+            {systems.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <select value={tierFilter} onChange={e => setTierFilter(e.target.value as any)}>
+            <option value="all">All tiers</option>
+            <option value="symptom">Symptom</option>
+            <option value="modifier">Modifier</option>
+            <option value="clinician_algorithm">Clinician algorithm</option>
+          </select>
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          {flattened.map((row: any) => (
+            <button
+              key={row.id}
+              onClick={() => openRow(row)}
+              style={{
+                textAlign: "left",
+                padding: 12,
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                background: selectedRow?.id === row.id ? "#eef6ff" : "white",
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{row.title}</div>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                {row.system} • {row.tier} • {row.id}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: 16, overflow: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2>{selectedRow ? selectedRow.title : "Select a pack"}</h2>
+          {selectedRow && <button onClick={saveRow}>Save</button>}
+        </div>
+
+        <textarea
+          value={editorValue}
+          onChange={e => setEditorValue(e.target.value)}
+          style={{
+            width: "100%",
+            minHeight: "80vh",
+            fontFamily: "monospace",
+            fontSize: 13,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+13. What this gives you now
+
+This bundle already supports:
+
+sheet-editable pack rows
+
+versioned config rows
+
+rule evaluation with AND / OR / >= / <=
+
+symptom pack matching
+
+modifier risk application
+
+clinician algorithm surfacing
+
+plan template generation
+
+admin page editing
+
+That is a real skeleton for a configurable CDS pack engine.
+
+Yes. Let’s bolt on the next four pieces so the pack engine stops being a smart filing cabinet and becomes a live control panel ⚙️🩺
+
+Below is a drop-in scaffold for:
+
+Google Sheets adapter
+
+Validation engine
+
+Visual rule builder
+
+Pack simulator page + API
+
+I’m keeping it aligned with the files you already have.
+
+1. Google Sheets adapter
+
+This gives you a repository layer so the app can read/write rows from either:
+
+in-memory seed data
+
+Google Sheets
+
+later Postgres / Firestore
+
+A. Repository interface
+// server/repos/packRepository.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+
+export interface PackRepository {
+  getSymptomRows(): Promise<SymptomPackRow[]>;
+  getModifierRows(): Promise<ModifierPackRow[]>;
+  getAlgorithmRows(): Promise<ClinicianAlgorithmRow[]>;
+
+  saveSymptomRow(row: SymptomPackRow): Promise<void>;
+  saveModifierRow(row: ModifierPackRow): Promise<void>;
+  saveAlgorithmRow(row: ClinicianAlgorithmRow): Promise<void>;
+}
+B. In-memory repo
+// server/repos/inMemoryPackRepository.ts
+
+import { PackRepository } from "./packRepository";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+
+export class InMemoryPackRepository implements PackRepository {
+  async getSymptomRows(): Promise<SymptomPackRow[]> {
+    return [...symptomPackRows];
+  }
+
+  async getModifierRows(): Promise<ModifierPackRow[]> {
+    return [...modifierPackRows];
+  }
+
+  async getAlgorithmRows(): Promise<ClinicianAlgorithmRow[]> {
+    return [...clinicianAlgorithmRows];
+  }
+
+  async saveSymptomRow(row: SymptomPackRow): Promise<void> {
+    const idx = symptomPackRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) symptomPackRows[idx] = row;
+    else symptomPackRows.push(row);
+  }
+
+  async saveModifierRow(row: ModifierPackRow): Promise<void> {
+    const idx = modifierPackRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) modifierPackRows[idx] = row;
+    else modifierPackRows.push(row);
+  }
+
+  async saveAlgorithmRow(row: ClinicianAlgorithmRow): Promise<void> {
+    const idx = clinicianAlgorithmRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) clinicianAlgorithmRows[idx] = row;
+    else clinicianAlgorithmRows.push(row);
+  }
+}
+C. Google Sheets adapter
+
+This version assumes one row per pack in separate tabs:
+
+Symptom_Packs
+
+Modifier_Packs
+
+Clinician_Algorithms
+
+// server/repos/googleSheetsPackRepository.ts
+
+import { google } from "googleapis";
+import { PackRepository } from "./packRepository";
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+
+function splitCsv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split("|").map(x => x.trim()).filter(Boolean);
+}
+
+function joinCsv(values: string[] | undefined): string {
+  return (values || []).join("|");
+}
+
+export class GoogleSheetsPackRepository implements PackRepository {
+  private sheets;
+  private spreadsheetId: string;
+
+  constructor() {
+    const auth = new google.auth.GoogleAuth({
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+
+    this.sheets = google.sheets({ version: "v4", auth });
+    this.spreadsheetId = process.env.PACKS_SPREADSHEET_ID || "";
+  }
+
+  async getSymptomRows(): Promise<SymptomPackRow[]> {
+    const res = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: this.spreadsheetId,
+      range: "Symptom_Packs!A2:L",
+    });
+
+    const rows = res.data.values || [];
+
+    return rows.map((r): SymptomPackRow => ({
+      id: r[0] || "",
+      system: r[1] || "",
+      tier: "symptom",
+      title: r[2] || "",
+      isActive: String(r[3]).toLowerCase() === "true",
+      version: Number(r[4] || 1),
+      tags: splitCsv(r[5]),
+      aliases: splitCsv(r[6]),
+      likelyDisposition: (r[7] || "telemed_now") as any,
+      questionsJson: r[8] || "[]",
+      redFlags: splitCsv(r[9]),
+      autoEscalateRules: splitCsv(r[10]),
+      autoReviewRules: splitCsv(r[11]),
+      planTemplateKey: r[12] || "",
+    }));
+  }
+
+  async getModifierRows(): Promise<ModifierPackRow[]> {
+    const res = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: this.spreadsheetId,
+      range: "Modifier_Packs!A2:J",
+    });
+
+    const rows = res.data.values || [];
+
+    return rows.map((r): ModifierPackRow => ({
+      id: r[0] || "",
+      system: r[1] || "",
+      tier: "modifier",
+      title: r[2] || "",
+      isActive: String(r[3]).toLowerCase() === "true",
+      version: Number(r[4] || 1),
+      tags: splitCsv(r[5]),
+      appliesToSymptoms: splitCsv(r[6]),
+      triggers: splitCsv(r[7]),
+      riskAdjustmentsJson: r[8] || "[]",
+    }));
+  }
+
+  async getAlgorithmRows(): Promise<ClinicianAlgorithmRow[]> {
+    const res = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: this.spreadsheetId,
+      range: "Clinician_Algorithms!A2:J",
+    });
+
+    const rows = res.data.values || [];
+
+    return rows.map((r): ClinicianAlgorithmRow => ({
+      id: r[0] || "",
+      system: r[1] || "",
+      tier: "clinician_algorithm",
+      title: r[2] || "",
+      isActive: String(r[3]).toLowerCase() === "true",
+      version: Number(r[4] || 1),
+      tags: splitCsv(r[5]),
+      entryCriteria: splitCsv(r[6]),
+      requiredInputs: splitCsv(r[7]),
+      outputActions: splitCsv(r[8]),
+      notes: splitCsv(r[9]),
+    }));
+  }
+
+  async saveSymptomRow(row: SymptomPackRow): Promise<void> {
+    await this.upsertRow("Symptom_Packs", row.id, [
+      row.id,
+      row.system,
+      row.title,
+      String(row.isActive),
+      String(row.version),
+      joinCsv(row.tags),
+      joinCsv(row.aliases),
+      row.likelyDisposition,
+      row.questionsJson,
+      joinCsv(row.redFlags),
+      joinCsv(row.autoEscalateRules),
+      joinCsv(row.autoReviewRules),
+      row.planTemplateKey,
+    ]);
+  }
+
+  async saveModifierRow(row: ModifierPackRow): Promise<void> {
+    await this.upsertRow("Modifier_Packs", row.id, [
+      row.id,
+      row.system,
+      row.title,
+      String(row.isActive),
+      String(row.version),
+      joinCsv(row.tags),
+      joinCsv(row.appliesToSymptoms),
+      joinCsv(row.triggers),
+      row.riskAdjustmentsJson,
+    ]);
+  }
+
+  async saveAlgorithmRow(row: ClinicianAlgorithmRow): Promise<void> {
+    await this.upsertRow("Clinician_Algorithms", row.id, [
+      row.id,
+      row.system,
+      row.title,
+      String(row.isActive),
+      String(row.version),
+      joinCsv(row.tags),
+      joinCsv(row.entryCriteria),
+      joinCsv(row.requiredInputs),
+      joinCsv(row.outputActions),
+      joinCsv(row.notes),
+    ]);
+  }
+
+  private async upsertRow(sheetName: string, id: string, values: string[]): Promise<void> {
+    const lookup = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: this.spreadsheetId,
+      range: `${sheetName}!A:A`,
+    });
+
+    const rows = lookup.data.values || [];
+    const existingIndex = rows.findIndex(r => r[0] === id);
+
+    if (existingIndex >= 1) {
+      const rowNumber = existingIndex + 1;
+      await this.sheets.spreadsheets.values.update({
+        spreadsheetId: this.spreadsheetId,
+        range: `${sheetName}!A${rowNumber}:Z${rowNumber}`,
+        valueInputOption: "RAW",
+        requestBody: { values: [values] },
+      });
+    } else {
+      await this.sheets.spreadsheets.values.append({
+        spreadsheetId: this.spreadsheetId,
+        range: `${sheetName}!A:Z`,
+        valueInputOption: "RAW",
+        requestBody: { values: [values] },
+      });
+    }
+  }
+}
+D. Repository selector
+// server/repos/getPackRepository.ts
+
+import { PackRepository } from "./packRepository";
+import { InMemoryPackRepository } from "./inMemoryPackRepository";
+import { GoogleSheetsPackRepository } from "./googleSheetsPackRepository";
+
+let cached: PackRepository | null = null;
+
+export function getPackRepository(): PackRepository {
+  if (cached) return cached;
+
+  const driver = process.env.PACK_REPO_DRIVER || "memory";
+
+  if (driver === "google_sheets") {
+    cached = new GoogleSheetsPackRepository();
+    return cached;
+  }
+
+  cached = new InMemoryPackRepository();
+  return cached;
+}
+2. Validation engine
+
+This catches broken JSON, bad rules, duplicate question IDs, missing template keys, and malformed packs before they poison the machine.
+
+A. Validation models
+// server/engines/packValidationEngine.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+  IntakeQuestion,
+  ModifierRiskAdjustment,
+} from "../../shared/packRows";
+
+export interface ValidationIssue {
+  severity: "error" | "warning";
+  field: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  issues: ValidationIssue[];
+}
+B. Rule syntax validator
+// add to server/engines/packValidationEngine.ts
+
+const allowedDispositions = new Set([
+  "self_care",
+  "office_followup",
+  "telemed_now",
+  "urgent_care",
+  "er_now",
+]);
+
+const allowedQuestionTypes = new Set([
+  "yes_no",
+  "single_select",
+  "multi_select",
+  "text",
+  "number",
+  "duration",
+  "severity",
+]);
+
+function isValidRuleSyntax(rule: string): boolean {
+  const cleaned = rule.trim();
+
+  if (!cleaned) return false;
+  if (cleaned === "ANY_RED_FLAG=true") return true;
+
+  const parts = cleaned.split(/\s+(AND|OR)\s+/i);
+  return parts.every(part => {
+    if (/^(AND|OR)$/i.test(part)) return true;
+    return /^[a-zA-Z0-9_]+\s*(=|!=|>=|<=|>|<)\s*.+$/.test(part.trim());
+  });
+}
+
+function safeJsonParse<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+C. Symptom row validator
+// add to server/engines/packValidationEngine.ts
+
+export function validateSymptomPackRow(
+  row: SymptomPackRow,
+  existingPlanKeys: string[] = []
+): ValidationResult {
+  const issues: ValidationIssue[] = [];
+
+  if (!row.id) issues.push({ severity: "error", field: "id", message: "Missing id" });
+  if (!row.system) issues.push({ severity: "error", field: "system", message: "Missing system" });
+  if (!row.title) issues.push({ severity: "error", field: "title", message: "Missing title" });
+
+  if (!allowedDispositions.has(row.likelyDisposition)) {
+    issues.push({
+      severity: "error",
+      field: "likelyDisposition",
+      message: `Invalid disposition: ${row.likelyDisposition}`,
+    });
+  }
+
+  const questions = safeJsonParse<IntakeQuestion[] | null>(row.questionsJson, null);
+  if (!questions || !Array.isArray(questions)) {
+    issues.push({
+      severity: "error",
+      field: "questionsJson",
+      message: "questionsJson must be valid JSON array",
+    });
+  } else {
+    const seen = new Set<string>();
+
+    for (const q of questions) {
+      if (!q.id) issues.push({ severity: "error", field: "questionsJson", message: "Question missing id" });
+      if (!q.prompt) issues.push({ severity: "error", field: "questionsJson", message: `Question ${q.id} missing prompt` });
+      if (!allowedQuestionTypes.has(q.type)) {
+        issues.push({
+          severity: "error",
+          field: "questionsJson",
+          message: `Question ${q.id} has invalid type ${q.type}`,
+        });
+      }
+      if (typeof q.priority !== "number") {
+        issues.push({
+          severity: "error",
+          field: "questionsJson",
+          message: `Question ${q.id} missing numeric priority`,
+        });
+      }
+
+      if (q.id) {
+        if (seen.has(q.id)) {
+          issues.push({
+            severity: "error",
+            field: "questionsJson",
+            message: `Duplicate question id ${q.id}`,
+          });
+        }
+        seen.add(q.id);
+      }
+    }
+  }
+
+  for (const rule of row.autoEscalateRules || []) {
+    if (!isValidRuleSyntax(rule)) {
+      issues.push({
+        severity: "error",
+        field: "autoEscalateRules",
+        message: `Invalid rule syntax: ${rule}`,
+      });
+    }
+  }
+
+  for (const rule of row.autoReviewRules || []) {
+    if (!isValidRuleSyntax(rule)) {
+      issues.push({
+        severity: "error",
+        field: "autoReviewRules",
+        message: `Invalid rule syntax: ${rule}`,
+      });
+    }
+  }
+
+  if (!row.planTemplateKey) {
+    issues.push({
+      severity: "warning",
+      field: "planTemplateKey",
+      message: "Missing plan template key",
+    });
+  } else if (existingPlanKeys.length > 0 && !existingPlanKeys.includes(row.planTemplateKey)) {
+    issues.push({
+      severity: "warning",
+      field: "planTemplateKey",
+      message: `No plan template found for ${row.planTemplateKey}`,
+    });
+  }
+
+  return {
+    ok: !issues.some(x => x.severity === "error"),
+    issues,
+  };
+}
+D. Modifier validator
+// add to server/engines/packValidationEngine.ts
+
+export function validateModifierPackRow(row: ModifierPackRow): ValidationResult {
+  const issues: ValidationIssue[] = [];
+
+  if (!row.id) issues.push({ severity: "error", field: "id", message: "Missing id" });
+  if (!row.system) issues.push({ severity: "error", field: "system", message: "Missing system" });
+  if (!row.title) issues.push({ severity: "error", field: "title", message: "Missing title" });
+
+  const adjustments = safeJsonParse<ModifierRiskAdjustment[] | null>(
+    row.riskAdjustmentsJson,
+    null
+  );
+
+  if (!adjustments || !Array.isArray(adjustments)) {
+    issues.push({
+      severity: "error",
+      field: "riskAdjustmentsJson",
+      message: "riskAdjustmentsJson must be a valid JSON array",
+    });
+  } else {
+    for (const adj of adjustments) {
+      if (!adj.condition || !isValidRuleSyntax(adj.condition)) {
+        issues.push({
+          severity: "error",
+          field: "riskAdjustmentsJson",
+          message: `Invalid adjustment condition: ${adj.condition}`,
+        });
+      }
+      if (!["raise_risk", "force_review", "force_escalation"].includes(adj.action)) {
+        issues.push({
+          severity: "error",
+          field: "riskAdjustmentsJson",
+          message: `Invalid adjustment action: ${adj.action}`,
+        });
+      }
+      if (!adj.reason) {
+        issues.push({
+          severity: "warning",
+          field: "riskAdjustmentsJson",
+          message: `Adjustment missing reason`,
+        });
+      }
+    }
+  }
+
+  for (const rule of row.triggers || []) {
+    if (!isValidRuleSyntax(rule)) {
+      issues.push({
+        severity: "error",
+        field: "triggers",
+        message: `Invalid trigger syntax: ${rule}`,
+      });
+    }
+  }
+
+  return {
+    ok: !issues.some(x => x.severity === "error"),
+    issues,
+  };
+}
+E. Clinician algorithm validator
+// add to server/engines/packValidationEngine.ts
+
+export function validateClinicianAlgorithmRow(
+  row: ClinicianAlgorithmRow
+): ValidationResult {
+  const issues: ValidationIssue[] = [];
+
+  if (!row.id) issues.push({ severity: "error", field: "id", message: "Missing id" });
+  if (!row.system) issues.push({ severity: "error", field: "system", message: "Missing system" });
+  if (!row.title) issues.push({ severity: "error", field: "title", message: "Missing title" });
+
+  for (const rule of row.entryCriteria || []) {
+    if (!isValidRuleSyntax(rule)) {
+      issues.push({
+        severity: "error",
+        field: "entryCriteria",
+        message: `Invalid entry criterion syntax: ${rule}`,
+      });
+    }
+  }
+
+  if (!row.requiredInputs?.length) {
+    issues.push({
+      severity: "warning",
+      field: "requiredInputs",
+      message: "No required inputs listed",
+    });
+  }
+
+  if (!row.outputActions?.length) {
+    issues.push({
+      severity: "warning",
+      field: "outputActions",
+      message: "No output actions listed",
+    });
+  }
+
+  return {
+    ok: !issues.some(x => x.severity === "error"),
+    issues,
+  };
+}
+F. Unified validator
+// add to server/engines/packValidationEngine.ts
+
+export function validateAnyPackRow(
+  row: any,
+  existingPlanKeys: string[] = []
+): ValidationResult {
+  if (row.tier === "symptom") {
+    return validateSymptomPackRow(row, existingPlanKeys);
+  }
+  if (row.tier === "modifier") {
+    return validateModifierPackRow(row);
+  }
+  if (row.tier === "clinician_algorithm") {
+    return validateClinicianAlgorithmRow(row);
+  }
+
+  return {
+    ok: false,
+    issues: [{ severity: "error", field: "tier", message: `Unknown tier ${row.tier}` }],
+  };
+}
+3. Validation-aware admin API
+
+This upgrades save routes so they validate before storing.
+
+// server/routes/packAdmin.ts
+
+import express from "express";
+import { getPackRepository } from "../repos/getPackRepository";
+import { validateAnyPackRow } from "../engines/packValidationEngine";
+import { planTemplates } from "../config/planTemplates";
+
+const router = express.Router();
+const repo = getPackRepository();
+
+router.get("/all", async (_req, res) => {
+  const [symptomPackRows, modifierPackRows, clinicianAlgorithmRows] =
+    await Promise.all([
+      repo.getSymptomRows(),
+      repo.getModifierRows(),
+      repo.getAlgorithmRows(),
+    ]);
+
+  res.json({ symptomPackRows, modifierPackRows, clinicianAlgorithmRows });
+});
+
+router.get("/systems", async (_req, res) => {
+  const [symptoms, modifiers, algorithms] = await Promise.all([
+    repo.getSymptomRows(),
+    repo.getModifierRows(),
+    repo.getAlgorithmRows(),
+  ]);
+
+  const systems = Array.from(
+    new Set([
+      ...symptoms.map(x => x.system),
+      ...modifiers.map(x => x.system),
+      ...algorithms.map(x => x.system),
+    ])
+  ).sort();
+
+  res.json({ systems });
+});
+
+router.post("/validate", async (req, res) => {
+  const planKeys = planTemplates.map(x => x.key);
+  const result = validateAnyPackRow(req.body, planKeys);
+  res.json(result);
+});
+
+router.post("/symptom", async (req, res) => {
+  const planKeys = planTemplates.map(x => x.key);
+  const validation = validateAnyPackRow(req.body, planKeys);
+  if (!validation.ok) {
+    return res.status(400).json({ ok: false, validation });
+  }
+
+  await repo.saveSymptomRow(req.body);
+  res.json({ ok: true, row: req.body, validation });
+});
+
+router.post("/modifier", async (req, res) => {
+  const validation = validateAnyPackRow(req.body);
+  if (!validation.ok) {
+    return res.status(400).json({ ok: false, validation });
+  }
+
+  await repo.saveModifierRow(req.body);
+  res.json({ ok: true, row: req.body, validation });
+});
+
+router.post("/algorithm", async (req, res) => {
+  const validation = validateAnyPackRow(req.body);
+  if (!validation.ok) {
+    return res.status(400).json({ ok: false, validation });
+  }
+
+  await repo.saveAlgorithmRow(req.body);
+  res.json({ ok: true, row: req.body, validation });
+});
+
+export default router;
+4. Visual rule builder
+
+Instead of hand-typing rules like a cave scribe with a stethoscope, this gives you a structured editor.
+
+A. Rule builder types
+// frontend/src/types/ruleBuilder.ts
+
+export type RuleOperator = "=" | "!=" | ">" | "<" | ">=" | "<=";
+export type RuleJoiner = "AND" | "OR";
+
+export interface RuleClause {
+  field: string;
+  operator: RuleOperator;
+  value: string;
+}
+
+export interface RuleGroup {
+  clauses: RuleClause[];
+  joiner: RuleJoiner;
+}
+B. Helpers to stringify / parse simple rules
+// frontend/src/utils/ruleBuilderUtils.ts
+
+import { RuleClause, RuleGroup } from "../types/ruleBuilder";
+
+export function stringifyRuleGroup(group: RuleGroup): string {
+  return group.clauses
+    .map(c => `${c.field}${c.operator}${c.value}`)
+    .join(` ${group.joiner} `);
+}
+
+export function parseSimpleRuleToGroup(rule: string): RuleGroup {
+  const joiner: "AND" | "OR" = /\s+OR\s+/i.test(rule) ? "OR" : "AND";
+  const parts = rule.split(new RegExp(`\\s+${joiner}\\s+`, "i"));
+
+  const clauses: RuleClause[] = parts.map(part => {
+    const m = part.match(/^([a-zA-Z0-9_]+)\s*(=|!=|>=|<=|>|<)\s*(.+)$/);
+    if (!m) {
+      return { field: "", operator: "=", value: "" };
+    }
+    return {
+      field: m[1],
+      operator: m[2] as any,
+      value: m[3],
+    };
+  });
+
+  return { clauses, joiner };
+}
+C. RuleBuilder component
+// frontend/src/components/RuleBuilder.tsx
+
+import React from "react";
+import { RuleClause, RuleGroup } from "../types/ruleBuilder";
+import { stringifyRuleGroup } from "../utils/ruleBuilderUtils";
+
+export function RuleBuilder({
+  value,
+  onChange,
+  availableFields,
+}: {
+  value: RuleGroup;
+  onChange: (next: RuleGroup) => void;
+  availableFields: string[];
+}) {
+  function updateClause(index: number, patch: Partial<RuleClause>) {
+    const next = {
+      ...value,
+      clauses: value.clauses.map((c, i) => (i === index ? { ...c, ...patch } : c)),
+    };
+    onChange(next);
+  }
+
+  function addClause() {
+    onChange({
+      ...value,
+      clauses: [...value.clauses, { field: "", operator: "=", value: "" }],
+    });
+  }
+
+  function removeClause(index: number) {
+    onChange({
+      ...value,
+      clauses: value.clauses.filter((_, i) => i !== index),
+    });
+  }
+
+  return (
+    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
+      <div style={{ marginBottom: 8 }}>
+        <label>Joiner </label>
+        <select
+          value={value.joiner}
+          onChange={e => onChange({ ...value, joiner: e.target.value as "AND" | "OR" })}
+        >
+          <option value="AND">AND</option>
+          <option value="OR">OR</option>
+        </select>
+      </div>
+
+      <div style={{ display: "grid", gap: 8 }}>
+        {value.clauses.map((clause, idx) => (
+          <div key={idx} style={{ display: "grid", gridTemplateColumns: "1.4fr .7fr 1fr auto", gap: 8 }}>
+            <select
+              value={clause.field}
+              onChange={e => updateClause(idx, { field: e.target.value })}
+            >
+              <option value="">Select field</option>
+              {availableFields.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+
+            <select
+              value={clause.operator}
+              onChange={e => updateClause(idx, { operator: e.target.value as any })}
+            >
+              <option value="=">=</option>
+              <option value="!=">!=</option>
+              <option value=">">{">"}</option>
+              <option value="<">{"<"}</option>
+              <option value=">=">{">="}</option>
+              <option value="<=">{"<="}</option>
+            </select>
+
+            <input
+              value={clause.value}
+              onChange={e => updateClause(idx, { value: e.target.value })}
+              placeholder="yes / no / 8 / value"
+            />
+
+            <button onClick={() => removeClause(idx)}>Remove</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button onClick={addClause}>Add Clause</button>
+      </div>
+
+      <div style={{ marginTop: 12, fontFamily: "monospace", fontSize: 12, opacity: 0.85 }}>
+        Rule: {stringifyRuleGroup(value)}
+      </div>
+    </div>
+  );
+}
+5. Simulator API
+
+This lets you enter a complaint and answer map, then see the whole pipeline:
+
+matched pack
+
+validation
+
+rule hits
+
+modifier hits
+
+algorithms
+
+final plan
+
+// server/routes/packSimulator.ts
+
+import express from "express";
+import { getPackRepository } from "../repos/getPackRepository";
+import {
+  parseSymptomPackRow,
+  parseModifierPackRow,
+  parseClinicianAlgorithmRow,
+} from "../engines/packRowParser";
+import { matchSymptomPack } from "../engines/packMatcher";
+import { evaluateSymptomPack } from "../engines/symptomPackEvaluationEngine";
+import { generatePlanFromTemplate } from "../engines/planTemplateEngine";
+
+const router = express.Router();
+const repo = getPackRepository();
+
+router.post("/run", async (req, res) => {
+  const chiefComplaint = String(req.body.chiefComplaint || "");
+  const answers = req.body.answers || {};
+
+  const [symptomRows, modifierRows, algorithmRows] = await Promise.all([
+    repo.getSymptomRows(),
+    repo.getModifierRows(),
+    repo.getAlgorithmRows(),
+  ]);
+
+  const symptomPacks = symptomRows.filter(x => x.isActive).map(parseSymptomPackRow);
+  const modifierPacks = modifierRows.filter(x => x.isActive).map(parseModifierPackRow);
+  const clinicianAlgorithms = algorithmRows.filter(x => x.isActive).map(parseClinicianAlgorithmRow);
+
+  const matchedPack = matchSymptomPack(chiefComplaint, symptomPacks);
+
+  if (!matchedPack) {
+    return res.json({
+      matched: false,
+      chiefComplaint,
+      answers,
+      result: null,
+      reason: "no_symptom_pack_match",
+    });
+  }
+
+  const evaluation = evaluateSymptomPack(
+    matchedPack,
+    modifierPacks,
+    clinicianAlgorithms,
+    answers
+  );
+
+  const plan = generatePlanFromTemplate(
+    matchedPack.planTemplateKey,
+    evaluation.finalDisposition,
+    answers
+  );
+
+  res.json({
+    matched: true,
+    chiefComplaint,
+    answers,
+    matchedPack,
+    evaluation,
+    plan,
+    suggestedQuestions: matchedPack.questions.slice(0, 6),
+  });
+});
+
+export default router;
+
+Register it:
+
+// server/index.ts
+import packSimulatorRoutes from "./routes/packSimulator";
+
+app.use("/api/pack-simulator", packSimulatorRoutes);
+6. Simulator page
+
+A real UI panel for testing packs without guessing in the dark.
+
+// frontend/src/pages/PackSimulatorPage.tsx
+
+import React, { useMemo, useState } from "react";
+
+function parseAnswersJson(raw: string) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export default function PackSimulatorPage() {
+  const [chiefComplaint, setChiefComplaint] = useState("back pain");
+  const [answersJson, setAnswersJson] = useState(
+    JSON.stringify(
+      {
+        injury: "yes",
+        leg_weakness: "no",
+        groin_numbness: "no",
+        bowel_bladder: "no",
+        fever: "no",
+        ivdu_cancer: "no",
+      },
+      null,
+      2
+    )
+  );
+  const [result, setResult] = useState<any | null>(null);
+  const parsedAnswers = useMemo(() => parseAnswersJson(answersJson), [answersJson]);
+
+  async function runSimulation() {
+    const res = await fetch("/api/pack-simulator/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chiefComplaint,
+        answers: parsedAnswers || {},
+      }),
+    });
+
+    const json = await res.json();
+    setResult(json);
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", gap: 16, padding: 16 }}>
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+        <h2>Pack Simulator</h2>
+
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <label>Chief complaint</label>
+            <input
+              value={chiefComplaint}
+              onChange={e => setChiefComplaint(e.target.value)}
+              style={{ width: "100%", padding: 8 }}
+            />
+          </div>
+
+          <div>
+            <label>Answers JSON</label>
+            <textarea
+              value={answersJson}
+              onChange={e => setAnswersJson(e.target.value)}
+              style={{
+                width: "100%",
+                minHeight: 320,
+                fontFamily: "monospace",
+                padding: 8,
+              }}
+            />
+          </div>
+
+          <button onClick={runSimulation}>Run Simulation</button>
+        </div>
+      </div>
+
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, overflow: "auto" }}>
+        <h2>Simulation Output</h2>
+        <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
+          {JSON.stringify(result, null, 2)}
+        </pre>
+      </div>
+    </div>
+  );
+}
+7. Validation pane in the admin page
+
+This gives your current editor a save-and-check brain.
+
+// frontend/src/pages/PackBuilderAdminPage.tsx
+// replace or extend your current file
+
+import React, { useEffect, useMemo, useState } from "react";
+
+type RowType = "symptom" | "modifier" | "clinician_algorithm";
+
+export default function PackBuilderAdminPage() {
+  const [systems, setSystems] = useState<string[]>([]);
+  const [allRows, setAllRows] = useState<any>({});
+  const [systemFilter, setSystemFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState<RowType | "all">("all");
+  const [selectedRow, setSelectedRow] = useState<any | null>(null);
+  const [editorValue, setEditorValue] = useState("");
+  const [validation, setValidation] = useState<any | null>(null);
+  const [saveMessage, setSaveMessage] = useState("");
+
+  async function load() {
+    const [systemsRes, allRes] = await Promise.all([
+      fetch("/api/pack-admin/systems"),
+      fetch("/api/pack-admin/all"),
+    ]);
+    const systemsJson = await systemsRes.json();
+    const allJson = await allRes.json();
+    setSystems(systemsJson.systems || []);
+    setAllRows(allJson);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const flattened = useMemo(() => {
+    const rows = [
+      ...(allRows.symptomPackRows || []),
+      ...(allRows.modifierPackRows || []),
+      ...(allRows.clinicianAlgorithmRows || []),
+    ];
+
+    return rows.filter((row: any) => {
+      const okSystem = systemFilter === "all" || row.system === systemFilter;
+      const okTier = tierFilter === "all" || row.tier === tierFilter;
+      return okSystem && okTier;
+    });
+  }, [allRows, systemFilter, tierFilter]);
+
+  function openRow(row: any) {
+    setSelectedRow(row);
+    setEditorValue(JSON.stringify(row, null, 2));
+    setValidation(null);
+    setSaveMessage("");
+  }
+
+  async function validateRow() {
+    try {
+      const parsed = JSON.parse(editorValue);
+      const res = await fetch("/api/pack-admin/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed),
+      });
+      const json = await res.json();
+      setValidation(json);
+    } catch (err: any) {
+      setValidation({
+        ok: false,
+        issues: [{ severity: "error", field: "json", message: err.message }],
+      });
+    }
+  }
+
+  async function saveRow() {
+    const parsed = JSON.parse(editorValue);
+
+    let endpoint = "/api/pack-admin/symptom";
+    if (parsed.tier === "modifier") endpoint = "/api/pack-admin/modifier";
+    if (parsed.tier === "clinician_algorithm") endpoint = "/api/pack-admin/algorithm";
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      setValidation(json.validation || json);
+      setSaveMessage("Save failed");
+      return;
+    }
+
+    setValidation(json.validation || null);
+    setSaveMessage("Saved");
+    await load();
+    openRow(parsed);
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", height: "100vh" }}>
+      <div style={{ borderRight: "1px solid #ddd", padding: 16, overflow: "auto" }}>
+        <h2>Pack Builder</h2>
+
+        <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+          <select value={systemFilter} onChange={e => setSystemFilter(e.target.value)}>
+            <option value="all">All systems</option>
+            {systems.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <select value={tierFilter} onChange={e => setTierFilter(e.target.value as any)}>
+            <option value="all">All tiers</option>
+            <option value="symptom">Symptom</option>
+            <option value="modifier">Modifier</option>
+            <option value="clinician_algorithm">Clinician algorithm</option>
+          </select>
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          {flattened.map((row: any) => (
+            <button
+              key={row.id}
+              onClick={() => openRow(row)}
+              style={{
+                textAlign: "left",
+                padding: 12,
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                background: selectedRow?.id === row.id ? "#eef6ff" : "white",
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{row.title}</div>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                {row.system} • {row.tier} • {row.id}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: 16, overflow: "auto" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>{selectedRow ? selectedRow.title : "Select a pack"}</h2>
+          {selectedRow && (
+            <>
+              <button onClick={validateRow}>Validate</button>
+              <button onClick={saveRow}>Save</button>
+              {saveMessage && <span>{saveMessage}</span>}
+            </>
+          )}
+        </div>
+
+        <textarea
+          value={editorValue}
+          onChange={e => setEditorValue(e.target.value)}
+          style={{
+            width: "100%",
+            minHeight: "60vh",
+            fontFamily: "monospace",
+            fontSize: 13,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        />
+
+        <div style={{ marginTop: 16 }}>
+          <h3>Validation</h3>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
+            {JSON.stringify(validation, null, 2)}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+8. Optional visual rule editor panel for the admin page
+
+You can mount this below the JSON editor for any selected row. For example, when editing a symptom row, load one rule into the builder.
+
+// frontend/src/components/RuleBuilderDemoPanel.tsx
+
+import React, { useEffect, useState } from "react";
+import { RuleBuilder } from "./RuleBuilder";
+import { parseSimpleRuleToGroup, stringifyRuleGroup } from "../utils/ruleBuilderUtils";
+
+export function RuleBuilderDemoPanel({
+  initialRule,
+  availableFields,
+  onRuleChange,
+}: {
+  initialRule: string;
+  availableFields: string[];
+  onRuleChange: (rule: string) => void;
+}) {
+  const [group, setGroup] = useState(parseSimpleRuleToGroup(initialRule));
+
+  useEffect(() => {
+    setGroup(parseSimpleRuleToGroup(initialRule));
+  }, [initialRule]);
+
+  useEffect(() => {
+    onRuleChange(stringifyRuleGroup(group));
+  }, [group, onRuleChange]);
+
+  return (
+    <div>
+      <h3>Visual Rule Builder</h3>
+      <RuleBuilder
+        value={group}
+        onChange={setGroup}
+        availableFields={availableFields}
+      />
+    </div>
+  );
+}
+9. Plan template validation and admin starter
+
+A nice extra beam for the house.
+
+// server/engines/planTemplateValidation.ts
+
+import { planTemplates } from "../config/planTemplates";
+
+export function validatePlanTemplates() {
+  const ids = new Set<string>();
+  const issues: string[] = [];
+
+  for (const t of planTemplates) {
+    if (!t.key) issues.push("Template missing key");
+    if (ids.has(t.key)) issues.push(`Duplicate template key ${t.key}`);
+    ids.add(t.key);
+
+    if (!t.diagnosisLabel) issues.push(`Template ${t.key} missing diagnosisLabel`);
+    if (!t.patientMessage) issues.push(`Template ${t.key} missing patientMessage`);
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}
+10. Suggested Google Sheet column layout
+
+For the adapter to behave nicely, use these exact columns.
+
+Symptom_Packs
+id | system | title | isActive | version | tags | aliases | likelyDisposition | questionsJson | redFlags | autoEscalateRules | autoReviewRules | planTemplateKey
+Modifier_Packs
+id | system | title | isActive | version | tags | appliesToSymptoms | triggers | riskAdjustmentsJson
+Clinician_Algorithms
+id | system | title | isActive | version | tags | entryCriteria | requiredInputs | outputActions | notes
+
+Use | as the list separator for non-JSON arrays. It’s boring, but boring is reliable.
+
+11. End-to-end wiring summary
+
+Register these routes:
+
+// server/index.ts
+
+import packAdminRoutes from "./routes/packAdmin";
+import packSimulatorRoutes from "./routes/packSimulator";
+
+app.use("/api/pack-admin", packAdminRoutes);
+app.use("/api/pack-simulator", packSimulatorRoutes);
+
+Use the repository instead of direct seed imports in all new routes.
+
+Set env for Sheets:
+
+PACK_REPO_DRIVER=google_sheets
+PACKS_SPREADSHEET_ID=your_sheet_id_here
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+
+For local scaffold mode:
+
+PACK_REPO_DRIVER=memory
+12. What this adds to your system
+
+Now you have:
+
+adapter layer so packs can live in Sheets
+
+validation gate before saving broken rules
+
+visual rule builder so people do not have to hand-type every condition
+
+simulation page to dry-run pack logic safely
+
+same parser/evaluation engine shared by both real intake and simulation
+
+That’s the difference between “configurable” and “actually governable.”
+
+13. Best next two upgrades
+
+The strongest next files would be:
+
+a normalized Pack Questions tab instead of questionsJson
+
+a Pack Audit Log that stores every edit with user, timestamp, diff, and validation result
+
+Those two turn this from a lively prototype into a court-tidy machine.

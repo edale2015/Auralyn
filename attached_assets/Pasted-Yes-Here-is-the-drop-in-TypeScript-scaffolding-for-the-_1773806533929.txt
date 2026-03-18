@@ -1,0 +1,1155 @@
+Yes. Here is the drop-in TypeScript scaffolding for the next layer:
+
+sheet-editable JSON/TS rows
+
+rule parser
+
+pack matcher
+
+modifier application engine
+
+clinician algorithm trigger engine
+
+plan templates
+
+admin API
+
+React pack builder admin page
+
+This turns the pack system from a pile of objects into a configurable clinical switchboard 🔌🏥
+
+1. Shared row models
+// shared/packRows.ts
+
+export type PackTier = "symptom" | "modifier" | "clinician_algorithm";
+export type Disposition =
+  | "self_care"
+  | "office_followup"
+  | "telemed_now"
+  | "urgent_care"
+  | "er_now";
+
+export type QuestionType =
+  | "yes_no"
+  | "single_select"
+  | "multi_select"
+  | "text"
+  | "number"
+  | "duration"
+  | "severity";
+
+export interface PackRowBase {
+  id: string;
+  system: string;
+  tier: PackTier;
+  title: string;
+  isActive: boolean;
+  version: number;
+  tags?: string[];
+}
+
+export interface SymptomPackRow extends PackRowBase {
+  tier: "symptom";
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questionsJson: string;           // JSON string for sheet/db editing
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+}
+
+export interface ModifierPackRow extends PackRowBase {
+  tier: "modifier";
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustmentsJson: string;     // JSON string
+}
+
+export interface ClinicianAlgorithmRow extends PackRowBase {
+  tier: "clinician_algorithm";
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+}
+
+export interface IntakeQuestionOption {
+  label: string;
+  value: string;
+  redFlag?: boolean;
+}
+
+export interface IntakeQuestion {
+  id: string;
+  prompt: string;
+  type: QuestionType;
+  priority: number;
+  required?: boolean;
+  options?: IntakeQuestionOption[];
+  helpText?: string;
+}
+
+export interface ModifierRiskAdjustment {
+  condition: string;
+  action: "raise_risk" | "force_review" | "force_escalation";
+  amount?: number;
+  reason: string;
+}
+
+export interface ParsedSymptomPack {
+  id: string;
+  system: string;
+  title: string;
+  aliases: string[];
+  likelyDisposition: Disposition;
+  questions: IntakeQuestion[];
+  redFlags: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  planTemplateKey: string;
+  tags?: string[];
+}
+
+export interface ParsedModifierPack {
+  id: string;
+  system: string;
+  title: string;
+  appliesToSymptoms: string[];
+  triggers: string[];
+  riskAdjustments: ModifierRiskAdjustment[];
+  tags?: string[];
+}
+
+export interface ParsedClinicianAlgorithm {
+  id: string;
+  system: string;
+  title: string;
+  entryCriteria: string[];
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+  tags?: string[];
+}
+
+export interface AnswerMap {
+  [key: string]: string | number | boolean | null | undefined;
+}
+2. Seed rows in sheet-editable form
+
+These are examples. In production they can come from Google Sheets, Postgres, Firestore, or JSON files.
+
+// server/config/packRows.seed.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+
+export const symptomPackRows: SymptomPackRow[] = [
+  {
+    id: "card_chest_pain",
+    system: "cardiology",
+    tier: "symptom",
+    title: "Chest Pain",
+    isActive: true,
+    version: 1,
+    tags: ["high_risk", "acs", "dissection"],
+    aliases: ["chest pain", "chest pressure", "tightness in chest"],
+    likelyDisposition: "er_now",
+    questionsJson: JSON.stringify([
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1, required: true },
+      { id: "radiation", prompt: "Pain to arm, jaw, or back?", type: "yes_no", priority: 2 },
+      { id: "exertional", prompt: "Triggered or worse with exertion?", type: "yes_no", priority: 3 },
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 4 },
+      { id: "sweating_nausea", prompt: "Cold sweat or nausea?", type: "yes_no", priority: 5 },
+      { id: "tearing", prompt: "Sudden tearing pain to the back?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["sob", "radiation", "fainting", "sweating_nausea", "tearing"],
+    autoEscalateRules: [
+      "sob=yes",
+      "radiation=yes",
+      "fainting=yes",
+      "sweating_nausea=yes",
+      "tearing=yes"
+    ],
+    autoReviewRules: [],
+    planTemplateKey: "card_chest_pain",
+  },
+  {
+    id: "ortho_back_pain",
+    system: "ortho",
+    tier: "symptom",
+    title: "Back Pain",
+    isActive: true,
+    version: 1,
+    tags: ["msk", "spine"],
+    aliases: ["back pain", "low back pain"],
+    likelyDisposition: "self_care",
+    questionsJson: JSON.stringify([
+      { id: "injury", prompt: "Any fall, lifting injury, or trauma?", type: "yes_no", priority: 1 },
+      { id: "leg_weakness", prompt: "Any leg weakness?", type: "yes_no", priority: 2 },
+      { id: "groin_numbness", prompt: "Any numbness in the groin area?", type: "yes_no", priority: 3 },
+      { id: "bowel_bladder", prompt: "Any loss of bowel or bladder control?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "ivdu_cancer", prompt: "IV drug use, cancer, or immune suppression?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["leg_weakness", "groin_numbness", "bowel_bladder", "fever"],
+    autoEscalateRules: [
+      "groin_numbness=yes",
+      "bowel_bladder=yes",
+      "leg_weakness=yes"
+    ],
+    autoReviewRules: [
+      "fever=yes",
+      "ivdu_cancer=yes",
+      "injury=yes"
+    ],
+    planTemplateKey: "ortho_back_pain",
+  },
+  {
+    id: "pulm_cough",
+    system: "pulmonary",
+    tier: "symptom",
+    title: "Cough",
+    isActive: true,
+    version: 1,
+    aliases: ["cough", "bronchitis", "cold"],
+    likelyDisposition: "self_care",
+    questionsJson: JSON.stringify([
+      { id: "duration", prompt: "How long have you had the cough?", type: "duration", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 5 },
+      { id: "asthma_copd", prompt: "Asthma or COPD history?", type: "yes_no", priority: 6 }
+    ]),
+    redFlags: ["sob", "chest_pain", "blood"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes", "blood=yes"],
+    autoReviewRules: ["fever=yes", "asthma_copd=yes"],
+    planTemplateKey: "pulm_cough",
+  }
+];
+
+export const modifierPackRows: ModifierPackRow[] = [
+  {
+    id: "card_mod_congenital_heart",
+    system: "cardiology",
+    tier: "modifier",
+    title: "Congenital Heart Disease",
+    isActive: true,
+    version: 1,
+    tags: ["modifier", "high_risk_pmh"],
+    appliesToSymptoms: [
+      "card_shortness_of_breath",
+      "card_palpitations",
+      "card_syncope",
+      "card_chf_fluid_overload",
+      "card_chest_pain"
+    ],
+    triggers: ["congenital_heart_disease=yes"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "congenital_heart_disease=yes",
+        action: "raise_risk",
+        amount: 25,
+        reason: "Congenital disease raises complexity"
+      },
+      {
+        condition: "congenital_heart_disease=yes",
+        action: "force_review",
+        reason: "Needs clinician-level interpretation"
+      }
+    ]),
+  },
+  {
+    id: "ortho_mod_anticoagulation",
+    system: "ortho",
+    tier: "modifier",
+    title: "Anticoagulation",
+    isActive: true,
+    version: 1,
+    appliesToSymptoms: ["ortho_post_fall_injury", "ortho_back_pain", "ortho_hip_pelvis_pain"],
+    triggers: ["anticoagulated=yes"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "anticoagulated=yes",
+        action: "raise_risk",
+        amount: 20,
+        reason: "Bleeding risk after injury"
+      },
+      {
+        condition: "head_hit=yes AND anticoagulated=yes",
+        action: "force_escalation",
+        reason: "Head trauma on anticoagulation"
+      }
+    ]),
+  }
+];
+
+export const clinicianAlgorithmRows: ClinicianAlgorithmRow[] = [
+  {
+    id: "card_algo_acls_tachy",
+    system: "cardiology",
+    tier: "clinician_algorithm",
+    title: "Tachyarrhythmia ACLS Support",
+    isActive: true,
+    version: 1,
+    tags: ["acls", "emergency"],
+    entryCriteria: ["unstable_tachycardia=yes", "very_rapid_pulse=yes", "palpitations=yes AND fainting=yes"],
+    requiredInputs: ["heart_rate", "bp", "mental_status", "chest_pain", "sob", "12lead_available"],
+    outputActions: [
+      "flag unstable vs stable",
+      "recommend immediate ER escalation if unstable",
+      "surface synchronized cardioversion reference"
+    ],
+    notes: ["Clinician-facing only"],
+  },
+  {
+    id: "ortho_algo_cauda_equina_screen",
+    system: "ortho",
+    tier: "clinician_algorithm",
+    title: "Cauda Equina Screen",
+    isActive: true,
+    version: 1,
+    entryCriteria: ["groin_numbness=yes", "bowel_bladder=yes", "leg_weakness=yes AND severe_back_pain=yes"],
+    requiredInputs: ["groin_numbness", "bowel_bladder", "leg_weakness", "severe_back_pain"],
+    outputActions: [
+      "flag possible cauda equina",
+      "recommend immediate ER evaluation",
+      "document neuro red flags"
+    ],
+  }
+];
+3. Row parser
+
+Turns sheet-editable rows into real usable objects.
+
+// server/engines/packRowParser.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+  ParsedSymptomPack,
+  ParsedModifierPack,
+  ParsedClinicianAlgorithm,
+  IntakeQuestion,
+  ModifierRiskAdjustment,
+} from "../../shared/packRows";
+
+function safeParseJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function parseSymptomPackRow(row: SymptomPackRow): ParsedSymptomPack {
+  const questions = safeParseJson<IntakeQuestion[]>(row.questionsJson, []).sort(
+    (a, b) => a.priority - b.priority
+  );
+
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    aliases: row.aliases,
+    likelyDisposition: row.likelyDisposition,
+    questions,
+    redFlags: row.redFlags,
+    autoEscalateRules: row.autoEscalateRules,
+    autoReviewRules: row.autoReviewRules,
+    planTemplateKey: row.planTemplateKey,
+    tags: row.tags,
+  };
+}
+
+export function parseModifierPackRow(row: ModifierPackRow): ParsedModifierPack {
+  const riskAdjustments = safeParseJson<ModifierRiskAdjustment[]>(
+    row.riskAdjustmentsJson,
+    []
+  );
+
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    appliesToSymptoms: row.appliesToSymptoms,
+    triggers: row.triggers,
+    riskAdjustments,
+    tags: row.tags,
+  };
+}
+
+export function parseClinicianAlgorithmRow(
+  row: ClinicianAlgorithmRow
+): ParsedClinicianAlgorithm {
+  return {
+    id: row.id,
+    system: row.system,
+    title: row.title,
+    entryCriteria: row.entryCriteria,
+    requiredInputs: row.requiredInputs,
+    outputActions: row.outputActions,
+    notes: row.notes,
+    tags: row.tags,
+  };
+}
+4. Rule parser
+
+This is the engine room. It evaluates:
+
+sob=yes
+
+severity>=8
+
+head_hit=yes AND anticoagulated=yes
+
+prior_clot=yes OR travel=yes
+
+ANY_RED_FLAG=true
+
+// server/engines/ruleParser.ts
+
+import { AnswerMap } from "../../shared/packRows";
+
+type CompareOp = "=" | "!=" | ">" | "<" | ">=" | "<=";
+
+function normalizeValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (value == null) return "";
+  return String(value).trim().toLowerCase();
+}
+
+function toNumberMaybe(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function evaluateAtomicCondition(
+  condition: string,
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): boolean {
+  const trimmed = condition.trim();
+
+  if (trimmed === "ANY_RED_FLAG=true") {
+    return Boolean(context?.anyRedFlag);
+  }
+
+  const match = trimmed.match(/^([a-zA-Z0-9_]+)\s*(=|!=|>=|<=|>|<)\s*(.+)$/);
+  if (!match) return false;
+
+  const [, key, op, rawExpected] = match;
+  const actual = answers[key];
+  const expected = rawExpected.trim().toLowerCase();
+
+  const actualNum = toNumberMaybe(actual);
+  const expectedNum = toNumberMaybe(expected);
+
+  if (actualNum != null && expectedNum != null) {
+    switch (op as CompareOp) {
+      case "=": return actualNum === expectedNum;
+      case "!=": return actualNum !== expectedNum;
+      case ">": return actualNum > expectedNum;
+      case "<": return actualNum < expectedNum;
+      case ">=": return actualNum >= expectedNum;
+      case "<=": return actualNum <= expectedNum;
+    }
+  }
+
+  const actualNorm = normalizeValue(actual);
+
+  switch (op as CompareOp) {
+    case "=": return actualNorm === expected;
+    case "!=": return actualNorm !== expected;
+    default: return false;
+  }
+}
+
+function splitByOperator(rule: string, operator: "AND" | "OR"): string[] {
+  return rule
+    .split(new RegExp(`\\s+${operator}\\s+`, "i"))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+export function evaluateRule(
+  rule: string,
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): boolean {
+  const orParts = splitByOperator(rule, "OR");
+  if (orParts.length > 1) {
+    return orParts.some(part => evaluateRule(part, answers, context));
+  }
+
+  const andParts = splitByOperator(rule, "AND");
+  if (andParts.length > 1) {
+    return andParts.every(part => evaluateRule(part, answers, context));
+  }
+
+  return evaluateAtomicCondition(rule, answers, context);
+}
+
+export function evaluateRules(
+  rules: string[],
+  answers: AnswerMap,
+  context?: { anyRedFlag?: boolean }
+): string[] {
+  return rules.filter(rule => evaluateRule(rule, answers, context));
+}
+5. Pack matcher
+
+Finds the best symptom pack from the complaint text.
+
+// server/engines/packMatcher.ts
+
+import { ParsedSymptomPack } from "../../shared/packRows";
+
+export function matchSymptomPack(
+  chiefComplaint: string,
+  packs: ParsedSymptomPack[]
+): ParsedSymptomPack | null {
+  const normalized = chiefComplaint.trim().toLowerCase();
+
+  let best: { pack: ParsedSymptomPack; score: number } | null = null;
+
+  for (const pack of packs) {
+    let score = 0;
+
+    if (pack.id.toLowerCase() === normalized) score += 100;
+    if (pack.title.toLowerCase() === normalized) score += 90;
+
+    for (const alias of pack.aliases) {
+      const aliasNorm = alias.toLowerCase();
+      if (normalized === aliasNorm) score += 80;
+      if (normalized.includes(aliasNorm)) score += 50;
+    }
+
+    if (!best || score > best.score) {
+      best = { pack, score };
+    }
+  }
+
+  return best && best.score > 0 ? best.pack : null;
+}
+6. Modifier application engine
+// server/engines/modifierApplicationEngine.ts
+
+import {
+  ParsedModifierPack,
+  ParsedSymptomPack,
+  AnswerMap,
+} from "../../shared/packRows";
+import { evaluateRule, evaluateRules } from "./ruleParser";
+
+export interface ModifierApplicationResult {
+  matchedModifiers: Array<{
+    modifierId: string;
+    title: string;
+    matchedTriggers: string[];
+  }>;
+  riskDelta: number;
+  forceReview: boolean;
+  forceEscalation: boolean;
+  reasons: string[];
+}
+
+export function applyModifierPacks(
+  symptomPack: ParsedSymptomPack,
+  modifierPacks: ParsedModifierPack[],
+  answers: AnswerMap
+): ModifierApplicationResult {
+  const result: ModifierApplicationResult = {
+    matchedModifiers: [],
+    riskDelta: 0,
+    forceReview: false,
+    forceEscalation: false,
+    reasons: [],
+  };
+
+  for (const mod of modifierPacks) {
+    if (!mod.appliesToSymptoms.includes(symptomPack.id)) continue;
+
+    const matchedTriggers = evaluateRules(mod.triggers, answers);
+    if (matchedTriggers.length === 0) continue;
+
+    result.matchedModifiers.push({
+      modifierId: mod.id,
+      title: mod.title,
+      matchedTriggers,
+    });
+
+    for (const adj of mod.riskAdjustments) {
+      if (!evaluateRule(adj.condition, answers)) continue;
+
+      if (adj.action === "raise_risk") {
+        result.riskDelta += adj.amount || 0;
+      } else if (adj.action === "force_review") {
+        result.forceReview = true;
+      } else if (adj.action === "force_escalation") {
+        result.forceEscalation = true;
+      }
+
+      result.reasons.push(`${mod.id}:${adj.reason}`);
+    }
+  }
+
+  return result;
+}
+7. Clinician algorithm trigger engine
+// server/engines/clinicianAlgorithmTriggerEngine.ts
+
+import {
+  ParsedClinicianAlgorithm,
+  ParsedSymptomPack,
+  AnswerMap,
+} from "../../shared/packRows";
+import { evaluateRule } from "./ruleParser";
+
+export interface TriggeredClinicianAlgorithm {
+  id: string;
+  title: string;
+  requiredInputs: string[];
+  outputActions: string[];
+  notes?: string[];
+  matchedEntryCriteria: string[];
+}
+
+export function triggerClinicianAlgorithms(
+  symptomPack: ParsedSymptomPack,
+  algorithms: ParsedClinicianAlgorithm[],
+  answers: AnswerMap
+): TriggeredClinicianAlgorithm[] {
+  const relevant = algorithms.filter(a => a.system === symptomPack.system);
+
+  const triggered: TriggeredClinicianAlgorithm[] = [];
+
+  for (const algo of relevant) {
+    const matched = algo.entryCriteria.filter(rule => evaluateRule(rule, answers));
+    if (matched.length === 0) continue;
+
+    triggered.push({
+      id: algo.id,
+      title: algo.title,
+      requiredInputs: algo.requiredInputs,
+      outputActions: algo.outputActions,
+      notes: algo.notes,
+      matchedEntryCriteria: matched,
+    });
+  }
+
+  return triggered;
+}
+8. Symptom pack evaluation engine
+
+This combines pack rules, modifier rules, and clinician triggers.
+
+// server/engines/symptomPackEvaluationEngine.ts
+
+import {
+  ParsedSymptomPack,
+  ParsedModifierPack,
+  ParsedClinicianAlgorithm,
+  AnswerMap,
+  Disposition,
+} from "../../shared/packRows";
+import { evaluateRules } from "./ruleParser";
+import { applyModifierPacks } from "./modifierApplicationEngine";
+import { triggerClinicianAlgorithms } from "./clinicianAlgorithmTriggerEngine";
+
+export interface SymptomPackEvaluation {
+  packId: string;
+  title: string;
+  baseDisposition: Disposition;
+  matchedRedFlags: string[];
+  matchedEscalateRules: string[];
+  matchedReviewRules: string[];
+  modifierRiskDelta: number;
+  forceReview: boolean;
+  forceEscalation: boolean;
+  finalDisposition: Disposition;
+  reasons: string[];
+  triggeredAlgorithms: ReturnType<typeof triggerClinicianAlgorithms>;
+}
+
+function escalateDisposition(base: Disposition): Disposition {
+  const order: Disposition[] = [
+    "self_care",
+    "office_followup",
+    "telemed_now",
+    "urgent_care",
+    "er_now",
+  ];
+
+  const idx = order.indexOf(base);
+  if (idx === -1 || idx === order.length - 1) return base;
+  return order[idx + 1];
+}
+
+export function evaluateSymptomPack(
+  pack: ParsedSymptomPack,
+  modifierPacks: ParsedModifierPack[],
+  clinicianAlgorithms: ParsedClinicianAlgorithm[],
+  answers: AnswerMap
+): SymptomPackEvaluation {
+  const matchedRedFlags = pack.redFlags.filter(flag => {
+    const v = answers[flag];
+    return v === true || String(v).toLowerCase() === "yes";
+  });
+
+  const context = { anyRedFlag: matchedRedFlags.length > 0 };
+
+  const matchedEscalateRules = evaluateRules(pack.autoEscalateRules, answers, context);
+  const matchedReviewRules = evaluateRules(pack.autoReviewRules, answers, context);
+
+  const modifierResult = applyModifierPacks(pack, modifierPacks, answers);
+
+  let finalDisposition = pack.likelyDisposition;
+  let forceReview = matchedReviewRules.length > 0 || modifierResult.forceReview;
+  let forceEscalation =
+    matchedEscalateRules.length > 0 || modifierResult.forceEscalation;
+
+  if (forceEscalation) {
+    finalDisposition = "er_now";
+  } else if (forceReview && finalDisposition === "self_care") {
+    finalDisposition = "telemed_now";
+  }
+
+  if (modifierResult.riskDelta >= 20 && finalDisposition !== "er_now") {
+    finalDisposition = escalateDisposition(finalDisposition);
+  }
+
+  const triggeredAlgorithms = triggerClinicianAlgorithms(
+    pack,
+    clinicianAlgorithms,
+    answers
+  );
+
+  return {
+    packId: pack.id,
+    title: pack.title,
+    baseDisposition: pack.likelyDisposition,
+    matchedRedFlags,
+    matchedEscalateRules,
+    matchedReviewRules,
+    modifierRiskDelta: modifierResult.riskDelta,
+    forceReview,
+    forceEscalation,
+    finalDisposition,
+    reasons: [
+      ...matchedRedFlags.map(x => `red_flag:${x}`),
+      ...matchedEscalateRules.map(x => `escalate_rule:${x}`),
+      ...matchedReviewRules.map(x => `review_rule:${x}`),
+      ...modifierResult.reasons,
+    ],
+    triggeredAlgorithms,
+  };
+}
+9. Plan templates
+
+These are configurable and keyed by planTemplateKey.
+
+// server/config/planTemplates.ts
+
+import { Disposition, AnswerMap } from "../../shared/packRows";
+
+export interface PlanTemplate {
+  key: string;
+  diagnosisLabel: string;
+  defaultDisposition: Disposition;
+  summary: string;
+  homeCare: string[];
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export const planTemplates: PlanTemplate[] = [
+  {
+    key: "pulm_cough",
+    diagnosisLabel: "Likely uncomplicated cough / viral URI pattern",
+    defaultDisposition: "self_care",
+    summary: "Symptoms fit a low-risk cough pattern unless breathing trouble, chest pain, or blood is present.",
+    homeCare: ["Hydration", "Rest", "Honey if age appropriate", "Humidified air"],
+    meds: [],
+    followUp: ["Follow up if not improving over several days."],
+    returnPrecautions: ["Shortness of breath", "Chest pain", "Coughing blood", "Worsening fever"],
+    patientMessage: "Your symptoms appear to fit a lower-risk cough pattern from the current information. Seek urgent care if breathing trouble, chest pain, or worsening symptoms develop.",
+  },
+  {
+    key: "ortho_back_pain",
+    diagnosisLabel: "Likely uncomplicated back pain pattern",
+    defaultDisposition: "self_care",
+    summary: "This pattern can often be managed conservatively if there is no weakness, bowel/bladder change, groin numbness, or fever.",
+    homeCare: ["Relative activity", "Heat or ice", "Avoid heavy lifting temporarily"],
+    meds: [],
+    followUp: ["Follow up if symptoms persist or worsen."],
+    returnPrecautions: ["Leg weakness", "Groin numbness", "Loss of bowel or bladder control", "Fever"],
+    patientMessage: "Your answers suggest a lower-risk back pain pattern at this time, but urgent evaluation is needed if weakness, numbness in the groin, or bowel/bladder symptoms develop.",
+  },
+  {
+    key: "card_chest_pain",
+    diagnosisLabel: "Potential high-risk chest pain",
+    defaultDisposition: "er_now",
+    summary: "Chest pain can represent a serious emergency depending on associated symptoms.",
+    homeCare: [],
+    meds: [],
+    followUp: ["Emergency evaluation now."],
+    returnPrecautions: ["Do not delay if symptoms continue or worsen."],
+    patientMessage: "Your symptoms may represent a serious medical problem. Please go to the emergency room now.",
+  },
+];
+
+Plan generator:
+
+// server/engines/planTemplateEngine.ts
+
+import { AnswerMap, Disposition } from "../../shared/packRows";
+import { planTemplates } from "../config/planTemplates";
+
+export interface GeneratedPlan {
+  key: string;
+  diagnosisLabel: string;
+  disposition: Disposition;
+  summary: string;
+  homeCare: string[];
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export function generatePlanFromTemplate(
+  key: string,
+  finalDisposition?: Disposition,
+  _answers?: AnswerMap
+): GeneratedPlan | null {
+  const template = planTemplates.find(t => t.key === key);
+  if (!template) return null;
+
+  return {
+    key: template.key,
+    diagnosisLabel: template.diagnosisLabel,
+    disposition: finalDisposition || template.defaultDisposition,
+    summary: template.summary,
+    homeCare: template.homeCare,
+    meds: template.meds,
+    followUp: template.followUp,
+    returnPrecautions: template.returnPrecautions,
+    patientMessage: template.patientMessage,
+  };
+}
+10. Admin API
+
+Simple CRUD-ish endpoints for the pack builder page.
+
+// server/routes/packAdmin.ts
+
+import express from "express";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+
+const router = express.Router();
+
+router.get("/all", (_req, res) => {
+  res.json({
+    symptomPackRows,
+    modifierPackRows,
+    clinicianAlgorithmRows,
+  });
+});
+
+router.get("/systems", (_req, res) => {
+  const systems = Array.from(
+    new Set([
+      ...symptomPackRows.map(x => x.system),
+      ...modifierPackRows.map(x => x.system),
+      ...clinicianAlgorithmRows.map(x => x.system),
+    ])
+  ).sort();
+
+  res.json({ systems });
+});
+
+router.post("/symptom", (req, res) => {
+  const row = req.body;
+  const idx = symptomPackRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) symptomPackRows[idx] = row;
+  else symptomPackRows.push(row);
+  res.json({ ok: true, row });
+});
+
+router.post("/modifier", (req, res) => {
+  const row = req.body;
+  const idx = modifierPackRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) modifierPackRows[idx] = row;
+  else modifierPackRows.push(row);
+  res.json({ ok: true, row });
+});
+
+router.post("/algorithm", (req, res) => {
+  const row = req.body;
+  const idx = clinicianAlgorithmRows.findIndex(x => x.id === row.id);
+  if (idx >= 0) clinicianAlgorithmRows[idx] = row;
+  else clinicianAlgorithmRows.push(row);
+  res.json({ ok: true, row });
+});
+
+export default router;
+
+Register it:
+
+// server/index.ts
+import packAdminRoutes from "./routes/packAdmin";
+
+app.use("/api/pack-admin", packAdminRoutes);
+11. Intake orchestration route example
+
+This is where everything clicks together.
+
+// server/routes/packDrivenIntake.ts
+
+import express from "express";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+import {
+  parseSymptomPackRow,
+  parseModifierPackRow,
+  parseClinicianAlgorithmRow,
+} from "../engines/packRowParser";
+import { matchSymptomPack } from "../engines/packMatcher";
+import { evaluateSymptomPack } from "../engines/symptomPackEvaluationEngine";
+import { generatePlanFromTemplate } from "../engines/planTemplateEngine";
+
+const router = express.Router();
+
+router.post("/evaluate", (req, res) => {
+  const chiefComplaint = String(req.body.chiefComplaint || "");
+  const answers = req.body.answers || {};
+
+  const symptomPacks = symptomPackRows
+    .filter(x => x.isActive)
+    .map(parseSymptomPackRow);
+
+  const modifierPacks = modifierPackRows
+    .filter(x => x.isActive)
+    .map(parseModifierPackRow);
+
+  const clinicianAlgorithms = clinicianAlgorithmRows
+    .filter(x => x.isActive)
+    .map(parseClinicianAlgorithmRow);
+
+  const pack = matchSymptomPack(chiefComplaint, symptomPacks);
+
+  if (!pack) {
+    return res.json({
+      matched: false,
+      disposition: "telemed_now",
+      reason: "no_symptom_pack_match",
+    });
+  }
+
+  const evaluation = evaluateSymptomPack(
+    pack,
+    modifierPacks,
+    clinicianAlgorithms,
+    answers
+  );
+
+  const plan = generatePlanFromTemplate(
+    pack.planTemplateKey,
+    evaluation.finalDisposition,
+    answers
+  );
+
+  return res.json({
+    matched: true,
+    pack,
+    evaluation,
+    plan,
+    nextQuestions: pack.questions.slice(0, 4),
+  });
+});
+
+export default router;
+12. React pack builder admin page
+
+A clean starter editor for rows. You can split this into tabs later.
+
+// frontend/src/pages/PackBuilderAdminPage.tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+
+type RowType = "symptom" | "modifier" | "clinician_algorithm";
+
+export default function PackBuilderAdminPage() {
+  const [systems, setSystems] = useState<string[]>([]);
+  const [allRows, setAllRows] = useState<any>({});
+  const [systemFilter, setSystemFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState<RowType | "all">("all");
+  const [selectedRow, setSelectedRow] = useState<any | null>(null);
+  const [editorValue, setEditorValue] = useState("");
+
+  async function load() {
+    const [systemsRes, allRes] = await Promise.all([
+      fetch("/api/pack-admin/systems"),
+      fetch("/api/pack-admin/all"),
+    ]);
+    const systemsJson = await systemsRes.json();
+    const allJson = await allRes.json();
+    setSystems(systemsJson.systems || []);
+    setAllRows(allJson);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const flattened = useMemo(() => {
+    const rows = [
+      ...(allRows.symptomPackRows || []),
+      ...(allRows.modifierPackRows || []),
+      ...(allRows.clinicianAlgorithmRows || []),
+    ];
+
+    return rows.filter((row: any) => {
+      const okSystem = systemFilter === "all" || row.system === systemFilter;
+      const okTier = tierFilter === "all" || row.tier === tierFilter;
+      return okSystem && okTier;
+    });
+  }, [allRows, systemFilter, tierFilter]);
+
+  function openRow(row: any) {
+    setSelectedRow(row);
+    setEditorValue(JSON.stringify(row, null, 2));
+  }
+
+  async function saveRow() {
+    if (!selectedRow) return;
+
+    const parsed = JSON.parse(editorValue);
+    let endpoint = "/api/pack-admin/symptom";
+    if (parsed.tier === "modifier") endpoint = "/api/pack-admin/modifier";
+    if (parsed.tier === "clinician_algorithm") endpoint = "/api/pack-admin/algorithm";
+
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+
+    await load();
+    openRow(parsed);
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", height: "100vh" }}>
+      <div style={{ borderRight: "1px solid #ddd", padding: 16, overflow: "auto" }}>
+        <h2>Pack Builder</h2>
+
+        <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+          <select value={systemFilter} onChange={e => setSystemFilter(e.target.value)}>
+            <option value="all">All systems</option>
+            {systems.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <select value={tierFilter} onChange={e => setTierFilter(e.target.value as any)}>
+            <option value="all">All tiers</option>
+            <option value="symptom">Symptom</option>
+            <option value="modifier">Modifier</option>
+            <option value="clinician_algorithm">Clinician algorithm</option>
+          </select>
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          {flattened.map((row: any) => (
+            <button
+              key={row.id}
+              onClick={() => openRow(row)}
+              style={{
+                textAlign: "left",
+                padding: 12,
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                background: selectedRow?.id === row.id ? "#eef6ff" : "white",
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{row.title}</div>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                {row.system} • {row.tier} • {row.id}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: 16, overflow: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2>{selectedRow ? selectedRow.title : "Select a pack"}</h2>
+          {selectedRow && <button onClick={saveRow}>Save</button>}
+        </div>
+
+        <textarea
+          value={editorValue}
+          onChange={e => setEditorValue(e.target.value)}
+          style={{
+            width: "100%",
+            minHeight: "80vh",
+            fontFamily: "monospace",
+            fontSize: 13,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+13. What this gives you now
+
+This bundle already supports:
+
+sheet-editable pack rows
+
+versioned config rows
+
+rule evaluation with AND / OR / >= / <=
+
+symptom pack matching
+
+modifier risk application
+
+clinician algorithm surfacing
+
+plan template generation
+
+admin page editing
+
+That is a real skeleton for a configurable CDS pack engine.
