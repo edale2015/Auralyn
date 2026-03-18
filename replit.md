@@ -42,6 +42,12 @@ The **Unified Clinical Pipeline** (`/api/pipeline/*`) is the single-flow orchest
 - **Audit Middleware**: Global audit logger at `server/middleware/auditMiddleware.ts` — logs user, role, action, path, method, status, latency per request. Applied to all pipeline routes (RUN_PIPELINE, RUN_PIPELINE_FHIR, SELF_IMPROVE, SIMULATE). In-memory rolling log (10,000 rows max). Viewable at `/api/monitoring/audit-log`.
 - **High-Scale Simulation Engine**: `server/engines/highScaleSimulationEngine.ts` — runs 1000+ synthetic cases per pack with accuracy, under-triage rate, and over-triage rate. Route: `/api/monitoring/simulate-high-scale`.
 - **Performance Monitoring**: Global `metricsMiddleware` tracks total requests, errors, avg latency, p95 latency in a rolling 1000-request window. Route: `/api/monitoring/metrics`, `/api/monitoring/metrics/reset`.
+- **Workbook Intelligence Engine** (`server/engines/workbookIntelligenceEngine.ts`): Auto-detects tab types (symptom/question/modifier/algorithm) and column meanings (complaint/question/rule/modifier) with confidence scores. Pattern-based + learning-enhanced detection.
+- **Adaptive Legacy Mapper** (`server/engines/adaptiveLegacyMapper.ts`): Uses workbook intelligence to auto-map workbook data into symptomRows, questionRows, modifierRows, algorithmRows with full mapping report.
+- **Adaptive Mapping Refiner** (`server/engines/adaptiveMappingRefiner.ts`): Self-correcting mapping with human-in-the-loop feedback. Records corrections, applies learned refinements on future analyses (confidence 1.0 for learned mappings).
+- **Adaptive Mapping Routes** (`/api/adaptive-mapping/*`): `/analyze-workbook` (detect structure), `/run-adaptive-mapping` (full adaptive mapping), `/feedback` (submit corrections), `/refinement-memory` (view learned mappings), `/refinement-memory/clear` (reset learned mappings).
+- **Endocrinology Extended Packs** (`server/config/systemContent/endocrinologyExtendedPacks.ts`): 7 additional packs — hyperthyroid, hypothyroid, thyroid nodule, diabetes medication, steroid withdrawal, prolactin/pituitary, electrolyte/hormonal pattern.
+- **Environmental Advanced Packs** (`server/config/systemContent/environmentalAdvancedRows.ts`): 5 packs (air pollution, mold exposure, noise damage, motion sickness, travel-related illness) + 1 modifier (elderly temperature vulnerability).
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API

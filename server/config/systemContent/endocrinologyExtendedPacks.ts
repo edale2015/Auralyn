@@ -1,0 +1,51 @@
+export const endocrinologyExtendedPacks = [
+  {
+    id: "endo_hyperthyroid",
+    title: "Hyperthyroid Symptoms",
+    redFlags: ["chest_pain", "sob"],
+    autoEscalateRules: ["chest_pain=yes", "sob=yes"],
+    autoReviewRules: ["weight_loss=yes", "palpitations=yes"],
+  },
+  {
+    id: "endo_hypothyroid",
+    title: "Hypothyroid Symptoms",
+    redFlags: [],
+    autoEscalateRules: [],
+    autoReviewRules: ["fatigue=yes", "weight_gain=yes"],
+  },
+  {
+    id: "endo_thyroid_nodule",
+    title: "Thyroid Nodule / Neck Mass",
+    redFlags: ["breathing", "rapid_growth"],
+    autoEscalateRules: ["breathing=yes"],
+    autoReviewRules: ["duration>=14", "weight_loss=yes"],
+  },
+  {
+    id: "endo_diabetes_med_issue",
+    title: "Diabetes Medication Problem",
+    redFlags: ["confusion", "passed_out"],
+    autoEscalateRules: ["confusion=yes", "passed_out=yes"],
+    autoReviewRules: ["hypoglycemia=yes", "hyperglycemia=yes"],
+  },
+  {
+    id: "endo_steroid_withdrawal",
+    title: "Steroid Withdrawal / Adrenal Issue",
+    redFlags: ["fainting", "vomiting"],
+    autoEscalateRules: ["fainting=yes", "vomiting=yes"],
+    autoReviewRules: ["steroid_use=yes"],
+  },
+  {
+    id: "endo_prolactin_issue",
+    title: "Prolactin / Pituitary Concern",
+    redFlags: ["vision"],
+    autoEscalateRules: ["vision=yes"],
+    autoReviewRules: ["headache=yes"],
+  },
+  {
+    id: "endo_electrolyte_pattern",
+    title: "Electrolyte / Hormonal Pattern",
+    redFlags: ["confusion", "seizure"],
+    autoEscalateRules: ["confusion=yes", "seizure=yes"],
+    autoReviewRules: ["vomiting=yes"],
+  },
+];

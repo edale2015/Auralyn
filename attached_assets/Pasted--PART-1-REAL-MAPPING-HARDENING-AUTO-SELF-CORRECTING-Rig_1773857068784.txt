@@ -1,0 +1,186 @@
+🧠 PART 1 — REAL MAPPING HARDENING (AUTO → SELF-CORRECTING)
+
+Right now your system can:
+
+detect sheet structure ✅
+
+map rows heuristically ✅
+
+Now we upgrade it to:
+👉 learn from its mistakes and refine mappings automatically
+
+🔥 Upgrade: Confidence + Feedback + Auto-Correction
+📦 FILE: server/engines/adaptiveMappingRefiner.ts
+type MappingFeedback = {
+  field: string;
+  correctType: string;
+};
+
+interface RefinementMemory {
+  [normalizedColumn: string]: string;
+}
+
+const refinementMemory: RefinementMemory = {};
+
+function normalize(text: string) {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function applyRefinement(column: string): string | null {
+  const key = normalize(column);
+  return refinementMemory[key] || null;
+}
+
+export function recordCorrection(column: string, correctType: string) {
+  const key = normalize(column);
+  refinementMemory[key] = correctType;
+}
+🔄 Update your intelligence engine to use learning
+Modify detectColumnType
+import { applyRefinement } from "./adaptiveMappingRefiner";
+
+export function detectColumnType(colName: string): ColumnMapping {
+  const refined = applyRefinement(colName);
+  if (refined) {
+    return {
+      columnName: colName,
+      guess: refined as ColumnGuess,
+      confidence: 1.0,
+    };
+  }
+
+  // existing logic continues...
+}
+🎯 Feedback route (human-in-the-loop correction)
+📦 FILE: server/routes/mappingFeedbackRoutes.ts
+import express from "express";
+import { recordCorrection } from "../engines/adaptiveMappingRefiner";
+
+const router = express.Router();
+
+router.post("/feedback", (req, res) => {
+  const { column, correctType } = req.body;
+
+  recordCorrection(column, correctType);
+
+  res.json({
+    ok: true,
+    message: "Mapping correction stored",
+  });
+});
+
+export default router;
+
+Register:
+
+app.use("/api/mapping-feedback", mappingFeedbackRoutes);
+🚀 Result
+
+Now your system:
+
+auto-detects
+
+auto-maps
+
+learns corrections
+
+improves future mappings
+
+👉 This is adaptive ingestion, not static parsing.
+
+🌍 PART 2 — ENVIRONMENTAL DEEP EXPANSION (FULL SYSTEM)
+
+We now push Environmental from “complete” → “elite”
+
+Add advanced packs
+📦 FILE: environmentalAdvancedRows.ts
+export const environmentalAdvancedPacks = [
+  {
+    id: "env_air_pollution",
+    title: "Air Pollution Exposure",
+    redFlags: ["sob", "chest_pain"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes"],
+    autoReviewRules: ["asthma=yes"],
+  },
+  {
+    id: "env_mold_exposure",
+    title: "Mold Exposure",
+    redFlags: [],
+    autoEscalateRules: [],
+    autoReviewRules: ["sob=yes", "chronic_cough=yes"],
+  },
+  {
+    id: "env_noise_exposure",
+    title: "Noise-Induced Hearing Damage",
+    redFlags: ["sudden_hearing_loss"],
+    autoEscalateRules: ["sudden_hearing_loss=yes"],
+    autoReviewRules: ["ringing=yes"],
+  },
+  {
+    id: "env_motion_sickness",
+    title: "Motion Sickness",
+    redFlags: [],
+    autoEscalateRules: [],
+    autoReviewRules: ["vomiting=yes"],
+  },
+  {
+    id: "env_travel_related",
+    title: "Travel-Related Illness",
+    redFlags: ["fever", "rash"],
+    autoEscalateRules: ["fever=yes"],
+    autoReviewRules: ["travel=yes"],
+  },
+];
+Environmental modifiers
+export const environmentalAdvancedModifiers = [
+  {
+    id: "env_mod_elderly",
+    appliesToSymptoms: ["env_heat_illness", "env_cold_exposure"],
+    triggers: ["age>70"],
+    riskAdjustmentsJson: JSON.stringify([
+      {
+        condition: "age>70",
+        action: "raise_risk",
+        amount: 20,
+        reason: "Temperature vulnerability",
+      },
+    ]),
+  },
+];
+🧬 PART 3 — SYSTEM STATUS (HONEST)
+
+You now have:
+
+🧠 ENGINE
+
+adaptive ingestion ✅
+
+learning feedback loop ✅
+
+sheet integration ✅
+
+validation + audit ✅
+
+🏥 SYSTEMS (STRONG)
+
+ENT → full
+
+Environmental → full+
+
+Endocrine → mid-high
+
+others → starter-mid
+
+🔥 PART 4 — WHAT TO DO NEXT (HIGH IMPACT)
+
+You now have two powerful options:
+
+OPTION 1 — RUN REAL MAPPING ON YOUR SHEET
+
+👉 This is the most important next step
+
+Run:
+
+GET /api/adaptive-mapping/run-adaptive-mapping
+
+Then:
