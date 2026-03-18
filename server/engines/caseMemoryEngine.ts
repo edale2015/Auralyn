@@ -63,6 +63,27 @@ export function getMemoryStats() {
   };
 }
 
+export function boostFromMemory(similar: SimilarCaseResult[]) {
+  const diagnosisVotes = new Map<string, number>();
+  const dispositionVotes = new Map<string, number>();
+
+  for (const item of similar) {
+    diagnosisVotes.set(
+      item.case.diagnosis,
+      (diagnosisVotes.get(item.case.diagnosis) ?? 0) + item.score
+    );
+    dispositionVotes.set(
+      item.case.triage,
+      (dispositionVotes.get(item.case.triage) ?? 0) + item.score
+    );
+  }
+
+  return {
+    diagnoses: [...diagnosisVotes.entries()].sort((a, b) => b[1] - a[1]),
+    dispositions: [...dispositionVotes.entries()].sort((a, b) => b[1] - a[1]),
+  };
+}
+
 export function seedCaseMemory() {
   if (memoryStore.length > 0) return 0;
 

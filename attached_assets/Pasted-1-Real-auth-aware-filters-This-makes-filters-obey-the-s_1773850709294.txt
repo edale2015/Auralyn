@@ -1,0 +1,789 @@
+1) Real auth-aware filters
+
+This makes filters obey the signed-in user’s clinic and role instead of trusting the browser.
+
+/server/middleware/authContext.ts
+import { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+
+export type AuthUser = {
+  id: string;
+  email: string;
+  role: "admin" | "physician" | "reviewer" | "executive";
+  clinicId: string;
+};
+
+export function authContext(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+
+  if (!header?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing bearer token" });
+  }
+
+  const token = header.replace("Bearer ", "");
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as AuthUser;
+    res.locals.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+/server/services/authAwareFilters.ts
+export type DashboardFilterInput = {
+  clinicId?: string;
+  startDate?: string;
+  endDate?: string;
+  complaint?: string;
+  physicianId?: string;
+};
+
+export type DashboardAuthUser = {
+  id: string;
+  role: "admin" | "physician" | "reviewer" | "executive";
+  clinicId: string;
+};
+
+export function resolveAuthAwareFilters(
+  requested: DashboardFilterInput,
+  user: DashboardAuthUser
+): DashboardFilterInput {
+  const resolved: DashboardFilterInput = {
+    ...requested
+  };
+
+  if (user.role !== "executive") {
+    resolved.clinicId = user.clinicId;
+  } else if (!resolved.clinicId) {
+    resolved.clinicId = user.clinicId;
+  }
+
+  if (user.role === "physician") {
+    resolved.physicianId = user.id;
+  }
+
+  return resolved;
+}
+/server/routes/authAwareDashboard.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import { resolveAuthAwareFilters } from "../services/authAwareFilters";
+import { listExecutiveSnapshots } from "../services/executiveStore";
+import { buildExecutiveChartSeries } from "../services/executiveCharts";
+
+const router = express.Router();
+
+router.get("/charts", authContext, async (req, res) => {
+  const user = res.locals.user;
+  const filters = resolveAuthAwareFilters(
+    {
+      clinicId: req.query.clinicId ? String(req.query.clinicId) : undefined,
+      startDate: req.query.startDate ? String(req.query.startDate) : undefined,
+      endDate: req.query.endDate ? String(req.query.endDate) : undefined,
+      physicianId: req.query.physicianId ? String(req.query.physicianId) : undefined,
+      complaint: req.query.complaint ? String(req.query.complaint) : undefined
+    },
+    user
+  );
+
+  const snapshots = await listExecutiveSnapshots(filters.clinicId!, 200);
+  const series = buildExecutiveChartSeries(snapshots as any);
+
+  res.json({
+    user,
+    filters,
+    series
+  });
+});
+
+export default router;
+/server/index.ts
+import authAwareDashboard from "./routes/authAwareDashboard";
+
+app.use("/api/auth-aware-dashboard", authAwareDashboard);
+2) Saved dashboard views
+
+Operators love not having to rebuild the same cockpit every morning.
+
+/server/db/dashboardViewsSchema.ts
+import { pgTable, serial, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+
+export const dashboardViews = pgTable("dashboard_views", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  clinicId: text("clinic_id").notNull(),
+  name: text("name").notNull(),
+  viewType: text("view_type").notNull(),
+  filters: jsonb("filters").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull()
+});
+/server/services/dashboardViewsStore.ts
+import { db } from "../db";
+import { dashboardViews } from "../db/dashboardViewsSchema";
+
+export async function saveDashboardView(payload: {
+  userId: string;
+  clinicId: string;
+  name: string;
+  viewType: string;
+  filters: unknown;
+}) {
+  const [row] = await db.insert(dashboardViews).values(payload).returning();
+  return row;
+}
+
+export async function listDashboardViews(userId: string, clinicId: string) {
+  return db.query.dashboardViews.findMany({
+    where: (t, { and, eq }) => and(eq(t.userId, userId), eq(t.clinicId, clinicId)),
+    orderBy: (t, { desc }) => [desc(t.createdAt)]
+  });
+}
+
+export async function deleteDashboardView(id: number, userId: string) {
+  return db.delete(dashboardViews).where((t, { and, eq }) => and(eq(t.id, id), eq(t.userId, userId)));
+}
+/server/routes/dashboardViews.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import {
+  saveDashboardView,
+  listDashboardViews,
+  deleteDashboardView
+} from "../services/dashboardViewsStore";
+
+const router = express.Router();
+
+router.get("/", authContext, async (_req, res) => {
+  const user = res.locals.user;
+  const rows = await listDashboardViews(user.id, user.clinicId);
+  res.json(rows);
+});
+
+router.post("/", authContext, async (req, res) => {
+  const user = res.locals.user;
+  const row = await saveDashboardView({
+    userId: user.id,
+    clinicId: user.clinicId,
+    name: req.body.name,
+    viewType: req.body.viewType,
+    filters: req.body.filters
+  });
+  res.json(row);
+});
+
+router.delete("/:id", authContext, async (req, res) => {
+  const user = res.locals.user;
+  await deleteDashboardView(Number(req.params.id), user.id);
+  res.json({ success: true });
+});
+
+export default router;
+/server/index.ts
+import dashboardViews from "./routes/dashboardViews";
+
+app.use("/api/dashboard-views", dashboardViews);
+/frontend/components/SavedViewsPanel.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+  onApply: (filters: any) => void;
+};
+
+export default function SavedViewsPanel({ token, onApply }: Props) {
+  const [views, setViews] = useState<any[]>([]);
+  const [name, setName] = useState("");
+
+  const load = async () => {
+    const res = await fetch("/api/dashboard-views", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    setViews(await res.json());
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const save = async () => {
+    const filters = {
+      clinicId: "clinicA",
+      startDate: "2026-03-01",
+      endDate: "2026-03-18"
+    };
+
+    await fetch("/api/dashboard-views", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        name,
+        viewType: "executive",
+        filters
+      })
+    });
+
+    setName("");
+    await load();
+  };
+
+  const remove = async (id: number) => {
+    await fetch(`/api/dashboard-views/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    await load();
+  };
+
+  return (
+    <div className="border rounded p-4 space-y-3">
+      <h2 className="text-lg font-semibold">Saved Views</h2>
+
+      <div className="flex gap-2">
+        <input
+          className="border rounded px-3 py-2 flex-1"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="View name"
+        />
+        <button className="border rounded px-4 py-2" onClick={save}>
+          Save
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {views.map(v => (
+          <div key={v.id} className="border rounded p-3 flex justify-between items-center">
+            <div>
+              <div className="font-semibold">{v.name}</div>
+              <div className="text-sm opacity-70">{v.viewType}</div>
+            </div>
+            <div className="flex gap-2">
+              <button className="border rounded px-3 py-1" onClick={() => onApply(v.filters)}>
+                Apply
+              </button>
+              <button className="border rounded px-3 py-1" onClick={() => remove(v.id)}>
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+3) Role-based board packet export
+
+This prevents the wrong people from exporting sensitive board packets.
+
+/server/middleware/roleGate.ts
+import { Request, Response, NextFunction } from "express";
+
+export function roleGate(roles: string[]) {
+  return (_req: Request, res: Response, next: NextFunction) => {
+    const user = res.locals.user;
+    if (!user || !roles.includes(user.role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  };
+}
+/server/routes/boardPacketExport.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import { roleGate } from "../middleware/roleGate";
+import { buildExecutivePdf } from "../services/exportPdf";
+import { toCsv } from "../services/exportCsv";
+
+const router = express.Router();
+
+router.post("/pdf", authContext, roleGate(["admin", "executive"]), async (req, res) => {
+  const buffer = await buildExecutivePdf({
+    title: req.body.title,
+    summaryLines: req.body.summaryLines || [],
+    cards: req.body.cards || []
+  });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", 'attachment; filename="board-packet.pdf"');
+  res.send(buffer);
+});
+
+router.post("/csv", authContext, roleGate(["admin", "executive"]), async (req, res) => {
+  const csv = toCsv(req.body.rows || []);
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", 'attachment; filename="board-packet.csv"');
+  res.send(csv);
+});
+
+export default router;
+/server/index.ts
+import boardPacketExport from "./routes/boardPacketExport";
+
+app.use("/api/board-packet-export", boardPacketExport);
+4) Alert acknowledgement workflow
+
+Alerts should not just scream into the void. They need ownership.
+
+/server/db/alertsSchema.ts
+import { pgTable, serial, text, timestamp, boolean } from "drizzle-orm/pg-core";
+
+export const alerts = pgTable("alerts", {
+  id: serial("id").primaryKey(),
+  type: text("type").notNull(),
+  entityId: text("entity_id").notNull(),
+  severity: text("severity").notNull(),
+  message: text("message").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  acknowledged: boolean("acknowledged").default(false).notNull(),
+  acknowledgedBy: text("acknowledged_by"),
+  acknowledgedAt: timestamp("acknowledged_at")
+});
+/server/services/alertsStore.ts
+import { db } from "../db";
+import { alerts } from "../db/alertsSchema";
+
+export async function createDbAlert(payload: {
+  type: string;
+  entityId: string;
+  severity: string;
+  message: string;
+}) {
+  const [row] = await db.insert(alerts).values(payload).returning();
+  return row;
+}
+
+export async function listDbAlerts(includeAcknowledged = true) {
+  if (includeAcknowledged) {
+    return db.query.alerts.findMany({
+      orderBy: (t, { desc }) => [desc(t.createdAt)]
+    });
+  }
+
+  return db.query.alerts.findMany({
+    where: (t, { eq }) => eq(t.acknowledged, false),
+    orderBy: (t, { desc }) => [desc(t.createdAt)]
+  });
+}
+
+export async function acknowledgeDbAlert(id: number, userId: string) {
+  const [row] = await db
+    .update(alerts)
+    .set({
+      acknowledged: true,
+      acknowledgedBy: userId,
+      acknowledgedAt: new Date()
+    })
+    .where((t, { eq }) => eq(t.id, id))
+    .returning();
+
+  return row;
+}
+/server/routes/alertsWorkflow.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import { createDbAlert, listDbAlerts, acknowledgeDbAlert } from "../services/alertsStore";
+
+const router = express.Router();
+
+router.get("/", authContext, async (req, res) => {
+  const includeAcknowledged = req.query.includeAcknowledged !== "false";
+  const rows = await listDbAlerts(includeAcknowledged);
+  res.json(rows);
+});
+
+router.post("/", authContext, async (req, res) => {
+  const row = await createDbAlert(req.body);
+  res.json(row);
+});
+
+router.post("/:id/acknowledge", authContext, async (req, res) => {
+  const user = res.locals.user;
+  const row = await acknowledgeDbAlert(Number(req.params.id), user.id);
+  res.json(row);
+});
+
+export default router;
+/server/index.ts
+import alertsWorkflow from "./routes/alertsWorkflow";
+
+app.use("/api/alerts-workflow", alertsWorkflow);
+/frontend/pages/AlertCenterAcknowledge.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+};
+
+export default function AlertCenterAcknowledge({ token }: Props) {
+  const [alerts, setAlerts] = useState<any[]>([]);
+
+  const load = async () => {
+    const res = await fetch("/api/alerts-workflow?includeAcknowledged=true", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    setAlerts(await res.json());
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const acknowledge = async (id: number) => {
+    await fetch(`/api/alerts-workflow/${id}/acknowledge`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    await load();
+  };
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Alert Workflow</h1>
+      {alerts.map(alert => (
+        <div key={alert.id} className="border rounded p-4">
+          <div className="font-semibold">
+            {alert.type} | {alert.entityId}
+          </div>
+          <div>{alert.message}</div>
+          <div>Severity: {alert.severity}</div>
+          <div>Acknowledged: {String(alert.acknowledged)}</div>
+          {!alert.acknowledged && (
+            <button className="border rounded px-3 py-1 mt-2" onClick={() => acknowledge(alert.id)}>
+              Acknowledge
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+5) Drilldown from physician → case list → case detail
+
+Now the dashboard becomes a hallway, not a wall.
+
+/server/routes/physicianCases.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+
+const router = express.Router();
+
+router.get("/:physicianId/cases", authContext, async (req, res) => {
+  const physicianId = req.params.physicianId;
+
+  res.json([
+    {
+      caseId: "case-1001",
+      physicianId,
+      complaint: "cough",
+      patientName: "Jane Doe",
+      riskLevel: "LOW",
+      confidence: 0.91,
+      finalDecision: "supportive care"
+    },
+    {
+      caseId: "case-1002",
+      physicianId,
+      complaint: "dizziness",
+      patientName: "John Roe",
+      riskLevel: "HIGH",
+      confidence: 0.61,
+      finalDecision: "urgent evaluation"
+    }
+  ]);
+});
+
+export default router;
+/server/index.ts
+import physicianCases from "./routes/physicianCases";
+
+app.use("/api/physician-cases", physicianCases);
+/frontend/pages/PhysicianCaseListPage.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+  physicianId: string;
+  onOpenCase: (caseId: string) => void;
+};
+
+export default function PhysicianCaseListPage({ token, physicianId, onOpenCase }: Props) {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch(`/api/physician-cases/${physicianId}/cases`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(setRows);
+  }, [physicianId]);
+
+  return (
+    <div className="p-6 space-y-3">
+      <h1 className="text-2xl font-bold">Physician Case List</h1>
+      {rows.map(row => (
+        <div key={row.caseId} className="border rounded p-4">
+          <div className="font-semibold">{row.patientName}</div>
+          <div>Complaint: {row.complaint}</div>
+          <div>Risk: {row.riskLevel}</div>
+          <div>Confidence: {row.confidence}</div>
+          <button className="border rounded px-3 py-1 mt-2" onClick={() => onOpenCase(row.caseId)}>
+            Open Case
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+Add link in physician drilldown card
+<button
+  className="underline mt-2"
+  onClick={() => {
+    // route or state transition to physician case list
+    console.log("Open physician cases", row.physicianId);
+  }}
+>
+  View physician cases
+</button>
+6) Warehouse-ready analytics pipeline
+
+This makes your data exportable for BI tools, Snowflake, BigQuery, Redshift, or ducky little CSV rivers.
+
+/server/services/warehouseExport.ts
+export type WarehouseFactCase = {
+  caseId: string;
+  clinicId: string;
+  physicianId: string;
+  complaint: string;
+  riskLevel: string;
+  confidence: number;
+  escalated: boolean;
+  override: boolean;
+  reviewSeconds: number;
+  satisfaction: number;
+  createdAt: string;
+};
+
+export type WarehouseExportBundle = {
+  facts_cases: WarehouseFactCase[];
+  dim_clinics: { clinicId: string; clinicName: string }[];
+  dim_physicians: { physicianId: string; clinicId: string; physicianName: string }[];
+};
+
+export function buildWarehouseExport(): WarehouseExportBundle {
+  return {
+    facts_cases: [
+      {
+        caseId: "case-1001",
+        clinicId: "clinicA",
+        physicianId: "dr-johnson",
+        complaint: "cough",
+        riskLevel: "LOW",
+        confidence: 0.91,
+        escalated: false,
+        override: false,
+        reviewSeconds: 10,
+        satisfaction: 4.8,
+        createdAt: "2026-03-18T08:00:00Z"
+      },
+      {
+        caseId: "case-1002",
+        clinicId: "clinicA",
+        physicianId: "dr-smith",
+        complaint: "dizziness",
+        riskLevel: "HIGH",
+        confidence: 0.61,
+        escalated: true,
+        override: true,
+        reviewSeconds: 35,
+        satisfaction: 3.9,
+        createdAt: "2026-03-18T08:10:00Z"
+      }
+    ],
+    dim_clinics: [
+      { clinicId: "clinicA", clinicName: "Clinic A" },
+      { clinicId: "clinicB", clinicName: "Clinic B" }
+    ],
+    dim_physicians: [
+      { physicianId: "dr-johnson", clinicId: "clinicA", physicianName: "Dr. Johnson" },
+      { physicianId: "dr-smith", clinicId: "clinicA", physicianName: "Dr. Smith" }
+    ]
+  };
+}
+/server/routes/warehouseExport.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import { roleGate } from "../middleware/roleGate";
+import { buildWarehouseExport } from "../services/warehouseExport";
+
+const router = express.Router();
+
+router.get("/", authContext, roleGate(["admin", "executive"]), async (_req, res) => {
+  res.json(buildWarehouseExport());
+});
+
+export default router;
+/server/index.ts
+import warehouseExport from "./routes/warehouseExport";
+
+app.use("/api/warehouse-export", warehouseExport);
+7) Benchmarks by complaint and clinic type
+
+This lets you compare apples to apples instead of apples to helicopters.
+
+/server/services/benchmarks.ts
+export type BenchmarkRow = {
+  clinicType: string;
+  complaint: string;
+  accuracy: number;
+  overrideRate: number;
+  escalationRate: number;
+  avgSatisfaction: number;
+};
+
+export function buildBenchmarks(rows: BenchmarkRow[]) {
+  return rows.map(row => {
+    let band: "top" | "middle" | "needs_attention" = "middle";
+
+    if (row.accuracy >= 0.92 && row.overrideRate <= 0.06 && row.escalationRate <= 0.08) {
+      band = "top";
+    } else if (row.accuracy < 0.8 || row.overrideRate > 0.15 || row.escalationRate > 0.18) {
+      band = "needs_attention";
+    }
+
+    return {
+      ...row,
+      accuracyPct: Number((row.accuracy * 100).toFixed(1)),
+      overrideRatePct: Number((row.overrideRate * 100).toFixed(1)),
+      escalationRatePct: Number((row.escalationRate * 100).toFixed(1)),
+      band
+    };
+  });
+}
+/server/routes/benchmarks.ts
+import express from "express";
+import { buildBenchmarks } from "../services/benchmarks";
+
+const router = express.Router();
+
+router.post("/", async (req, res) => {
+  res.json(buildBenchmarks(req.body.rows || []));
+});
+
+export default router;
+/server/index.ts
+import benchmarks from "./routes/benchmarks";
+
+app.use("/api/benchmarks", benchmarks);
+/frontend/pages/BenchmarksDashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function BenchmarksDashboard() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/benchmarks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rows: [
+          {
+            clinicType: "urgent_care",
+            complaint: "cough",
+            accuracy: 0.93,
+            overrideRate: 0.05,
+            escalationRate: 0.07,
+            avgSatisfaction: 4.7
+          },
+          {
+            clinicType: "urgent_care",
+            complaint: "dizziness",
+            accuracy: 0.78,
+            overrideRate: 0.19,
+            escalationRate: 0.22,
+            avgSatisfaction: 4.0
+          },
+          {
+            clinicType: "virtual_primary_care",
+            complaint: "rash",
+            accuracy: 0.95,
+            overrideRate: 0.04,
+            escalationRate: 0.03,
+            avgSatisfaction: 4.8
+          }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setRows);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Benchmarks</h1>
+      {rows.map((row, i) => (
+        <div key={i} className="border rounded p-4">
+          <div className="font-semibold">
+            {row.clinicType} | {row.complaint}
+          </div>
+          <div>Accuracy: {row.accuracyPct}%</div>
+          <div>Override Rate: {row.overrideRatePct}%</div>
+          <div>Escalation Rate: {row.escalationRatePct}%</div>
+          <div>Satisfaction: {row.avgSatisfaction}</div>
+          <div>Band: {row.band}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+Migrations for these new pieces
+/server/db/migrations/0008_exec_ops_extensions.sql
+CREATE TABLE IF NOT EXISTS dashboard_views (
+  id SERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  clinic_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  view_type TEXT NOT NULL,
+  filters JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id SERIAL PRIMARY KEY,
+  type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  acknowledged BOOLEAN NOT NULL DEFAULT FALSE,
+  acknowledged_by TEXT,
+  acknowledged_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_views_user_clinic_created
+ON dashboard_views (user_id, clinic_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_created_ack
+ON alerts (created_at DESC, acknowledged);
+Example tab wiring
+import SavedViewsPanel from "./components/SavedViewsPanel";
+import AlertCenterAcknowledge from "./pages/AlertCenterAcknowledge";
+import CrossClinicDashboard from "./pages/CrossClinicDashboard";
+import BenchmarksDashboard from "./pages/BenchmarksDashboard";
+
+<button onClick={() => setTab("saved-views")}>Saved Views</button>
+<button onClick={() => setTab("alert-workflow")}>Alert Workflow</button>
+<button onClick={() => setTab("benchmarks")}>Benchmarks</button>
+<button onClick={() => setTab("cross-clinic")}>Cross-Clinic</button>
+
+{tab === "saved-views" && (
+  <SavedViewsPanel token={token} onApply={(filters) => console.log("apply", filters)} />
+)}
+{tab === "alert-workflow" && <AlertCenterAcknowledge token={token} />}
+{tab === "benchmarks" && <BenchmarksDashboard />}
+{tab === "cross-clinic" && <CrossClinicDashboard />}

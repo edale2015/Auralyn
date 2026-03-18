@@ -1,0 +1,838 @@
+Absolutely. Below is a full Executive Dashboard layer code pack for the 7 parts you listed:
+
+Trends
+
+Complaints
+
+Physicians
+
+Cross-Clinic
+
+Alerts
+
+Email Preview
+
+Export
+
+I’m also including the shared backend route and service glue so the tabs actually have something to eat.
+
+0) Shared backend types and store
+/server/services/executiveStore.ts
+export type ExecutiveSnapshot = {
+  id: string;
+  clinicId: string;
+  snapshotDate: string;
+  totalCases: number;
+  reviewedCases: number;
+  escalatedCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  avgCostPerCase: number;
+  avgRevenuePerCase: number;
+  complaintBreakdown: ComplaintSnapshot[];
+  physicianBreakdown: PhysicianSnapshot[];
+};
+
+export type ComplaintSnapshot = {
+  complaint: string;
+  totalCases: number;
+  escalationRate: number;
+  overrideRate: number;
+  avgConfidence: number;
+  avgSatisfaction: number;
+  sampleCaseId?: string;
+};
+
+export type PhysicianSnapshot = {
+  physicianId: string;
+  totalCases: number;
+  avgReviewSeconds: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  highRiskCases: number;
+};
+
+export type ExecutiveAlert = {
+  id: string;
+  type: "complaint" | "physician" | "clinic";
+  entityId: string;
+  severity: "watch" | "critical";
+  message: string;
+  createdAt: string;
+};
+
+const executiveSnapshots: ExecutiveSnapshot[] = [];
+const executiveAlerts: ExecutiveAlert[] = [];
+
+export function seedExecutiveData() {
+  if (executiveSnapshots.length) return;
+
+  const dates = [
+    "2026-03-12T00:00:00Z",
+    "2026-03-13T00:00:00Z",
+    "2026-03-14T00:00:00Z",
+    "2026-03-15T00:00:00Z",
+    "2026-03-16T00:00:00Z"
+  ];
+
+  dates.forEach((date, i) => {
+    executiveSnapshots.push({
+      id: `snap-${i + 1}`,
+      clinicId: "clinicA",
+      snapshotDate: date,
+      totalCases: 460 + i * 30,
+      reviewedCases: 430 + i * 28,
+      escalatedCases: 50 - i * 2,
+      overrideRate: 0.12 - i * 0.005,
+      avgSatisfaction: 4.4 + i * 0.05,
+      avgCostPerCase: 9.4 - i * 0.2,
+      avgRevenuePerCase: 24,
+      complaintBreakdown: [
+        {
+          complaint: "cough",
+          totalCases: 180 + i * 10,
+          escalationRate: 0.07,
+          overrideRate: 0.05,
+          avgConfidence: 0.88,
+          avgSatisfaction: 4.7,
+          sampleCaseId: "case-cough-001"
+        },
+        {
+          complaint: "dizziness",
+          totalCases: 60 + i * 4,
+          escalationRate: 0.22,
+          overrideRate: 0.18,
+          avgConfidence: 0.69,
+          avgSatisfaction: 4.0,
+          sampleCaseId: "case-diz-001"
+        },
+        {
+          complaint: "rash",
+          totalCases: 120 + i * 6,
+          escalationRate: 0.03,
+          overrideRate: 0.04,
+          avgConfidence: 0.91,
+          avgSatisfaction: 4.8,
+          sampleCaseId: "case-rash-001"
+        }
+      ],
+      physicianBreakdown: [
+        {
+          physicianId: "dr-johnson",
+          totalCases: 210 + i * 8,
+          avgReviewSeconds: 14,
+          overrideRate: 0.05,
+          avgSatisfaction: 4.8,
+          highRiskCases: 44
+        },
+        {
+          physicianId: "dr-lee",
+          totalCases: 170 + i * 7,
+          avgReviewSeconds: 19,
+          overrideRate: 0.08,
+          avgSatisfaction: 4.6,
+          highRiskCases: 31
+        },
+        {
+          physicianId: "dr-smith",
+          totalCases: 120 + i * 4,
+          avgReviewSeconds: 34,
+          overrideRate: 0.20,
+          avgSatisfaction: 3.9,
+          highRiskCases: 12
+        }
+      ]
+    });
+  });
+
+  executiveAlerts.push(
+    {
+      id: "alert-1",
+      type: "complaint",
+      entityId: "dizziness",
+      severity: "critical",
+      message: "Dizziness override rate remains above threshold.",
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: "alert-2",
+      type: "physician",
+      entityId: "dr-smith",
+      severity: "watch",
+      message: "Average review time elevated for Dr. Smith.",
+      createdAt: new Date().toISOString()
+    }
+  );
+}
+
+seedExecutiveData();
+
+export function listExecutiveSnapshots(clinicId?: string) {
+  return clinicId
+    ? executiveSnapshots.filter(s => s.clinicId === clinicId)
+    : executiveSnapshots;
+}
+
+export function listExecutiveAlerts() {
+  return executiveAlerts;
+}
+
+export function createExecutiveAlert(
+  alert: Omit<ExecutiveAlert, "id" | "createdAt">
+): ExecutiveAlert {
+  const row: ExecutiveAlert = {
+    id: `alert-${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    ...alert
+  };
+  executiveAlerts.unshift(row);
+  return row;
+}
+1) Trends
+/server/services/executiveCharts.ts
+import { ExecutiveSnapshot } from "./executiveStore";
+
+export function buildTrendSeries(rows: ExecutiveSnapshot[]) {
+  return rows
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(a.snapshotDate).getTime() - new Date(b.snapshotDate).getTime()
+    )
+    .map(r => {
+      const marginPct = r.avgRevenuePerCase
+        ? ((r.avgRevenuePerCase - r.avgCostPerCase) / r.avgRevenuePerCase) * 100
+        : 0;
+
+      return {
+        date: r.snapshotDate.slice(0, 10),
+        totalCases: r.totalCases,
+        overrideRatePct: Number((r.overrideRate * 100).toFixed(2)),
+        avgSatisfaction: Number(r.avgSatisfaction.toFixed(2)),
+        marginPct: Number(marginPct.toFixed(2))
+      };
+    });
+}
+/frontend/pages/executive/ExecutiveTrendsTab.tsx
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  BarChart,
+  Bar
+} from "recharts";
+
+type Props = {
+  trends: {
+    date: string;
+    totalCases: number;
+    overrideRatePct: number;
+    avgSatisfaction: number;
+    marginPct: number;
+  }[];
+};
+
+export default function ExecutiveTrendsTab({ trends }: Props) {
+  return (
+    <div className="space-y-6">
+      <div className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Throughput</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={trends}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="totalCases" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Override Rate</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={trends}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="overrideRatePct" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Margin %</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={trends}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="marginPct" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+2) Complaints
+/server/services/executiveDrilldown.ts
+import { ComplaintSnapshot, PhysicianSnapshot } from "./executiveStore";
+
+export function buildComplaintDrilldown(rows: ComplaintSnapshot[]) {
+  return rows
+    .map(r => {
+      let status: "good" | "watch" | "critical" = "good";
+      if (r.overrideRate > 0.18 || r.escalationRate > 0.2) status = "critical";
+      else if (r.overrideRate > 0.1 || r.escalationRate > 0.12) status = "watch";
+
+      return { ...r, status };
+    })
+    .sort((a, b) => b.totalCases - a.totalCases);
+}
+
+export function buildPhysicianDrilldown(rows: PhysicianSnapshot[]) {
+  return rows
+    .map(r => {
+      let status: "good" | "watch" | "critical" = "good";
+      if (r.overrideRate > 0.18 || r.avgSatisfaction < 4.0) status = "critical";
+      else if (r.overrideRate > 0.1 || r.avgReviewSeconds > 30) status = "watch";
+      return { ...r, status };
+    })
+    .sort((a, b) => b.totalCases - a.totalCases);
+}
+/frontend/pages/executive/ExecutiveComplaintsTab.tsx
+type ComplaintRow = {
+  complaint: string;
+  totalCases: number;
+  escalationRate: number;
+  overrideRate: number;
+  avgConfidence: number;
+  avgSatisfaction: number;
+  sampleCaseId?: string;
+  status: "good" | "watch" | "critical";
+};
+
+type Props = {
+  rows: ComplaintRow[];
+  onOpenCase?: (caseId: string) => void;
+};
+
+export default function ExecutiveComplaintsTab({ rows, onOpenCase }: Props) {
+  return (
+    <div className="space-y-3">
+      {rows.map(row => (
+        <div key={row.complaint} className="border rounded p-4">
+          <div className="font-semibold text-lg">{row.complaint}</div>
+          <div>Total Cases: {row.totalCases}</div>
+          <div>Escalation Rate: {(row.escalationRate * 100).toFixed(1)}%</div>
+          <div>Override Rate: {(row.overrideRate * 100).toFixed(1)}%</div>
+          <div>Avg Confidence: {row.avgConfidence}</div>
+          <div>Avg Satisfaction: {row.avgSatisfaction}</div>
+          <div>Status: {row.status}</div>
+
+          {row.sampleCaseId && onOpenCase && (
+            <button
+              className="underline mt-2"
+              onClick={() => onOpenCase(row.sampleCaseId!)}
+            >
+              Open sample case drilldown
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+3) Physicians
+/frontend/pages/executive/ExecutivePhysiciansTab.tsx
+type PhysicianRow = {
+  physicianId: string;
+  totalCases: number;
+  avgReviewSeconds: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  highRiskCases: number;
+  status: "good" | "watch" | "critical";
+};
+
+type Props = {
+  rows: PhysicianRow[];
+  onOpenPhysicianCases?: (physicianId: string) => void;
+};
+
+export default function ExecutivePhysiciansTab({
+  rows,
+  onOpenPhysicianCases
+}: Props) {
+  return (
+    <div className="space-y-3">
+      {rows.map(row => (
+        <div key={row.physicianId} className="border rounded p-4">
+          <div className="font-semibold text-lg">{row.physicianId}</div>
+          <div>Total Cases: {row.totalCases}</div>
+          <div>Avg Review Seconds: {row.avgReviewSeconds}</div>
+          <div>Override Rate: {(row.overrideRate * 100).toFixed(1)}%</div>
+          <div>Avg Satisfaction: {row.avgSatisfaction}</div>
+          <div>High-Risk Cases: {row.highRiskCases}</div>
+          <div>Status: {row.status}</div>
+
+          {onOpenPhysicianCases && (
+            <button
+              className="underline mt-2"
+              onClick={() => onOpenPhysicianCases(row.physicianId)}
+            >
+              View physician cases
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+4) Cross-Clinic
+/server/services/crossClinicComparison.ts
+export type ClinicComparisonRow = {
+  clinicId: string;
+  totalCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  marginPct: number;
+  escalationRate: number;
+};
+
+export function buildCrossClinicComparison(rows: ClinicComparisonRow[]) {
+  return rows
+    .map(r => ({
+      ...r,
+      status:
+        r.overrideRate > 0.15 || r.marginPct < 25
+          ? "critical"
+          : r.overrideRate > 0.08 || r.marginPct < 40
+          ? "watch"
+          : "good"
+    }))
+    .sort((a, b) => b.totalCases - a.totalCases);
+}
+/frontend/pages/executive/ExecutiveCrossClinicTab.tsx
+type Row = {
+  clinicId: string;
+  totalCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  marginPct: number;
+  escalationRate: number;
+  status: "good" | "watch" | "critical";
+};
+
+type Props = {
+  rows: Row[];
+};
+
+export default function ExecutiveCrossClinicTab({ rows }: Props) {
+  return (
+    <div className="space-y-3">
+      {rows.map(row => (
+        <div key={row.clinicId} className="border rounded p-4">
+          <div className="font-semibold text-lg">{row.clinicId}</div>
+          <div>Total Cases: {row.totalCases}</div>
+          <div>Override Rate: {(row.overrideRate * 100).toFixed(1)}%</div>
+          <div>Escalation Rate: {(row.escalationRate * 100).toFixed(1)}%</div>
+          <div>Satisfaction: {row.avgSatisfaction}</div>
+          <div>Margin: {row.marginPct}%</div>
+          <div>Status: {row.status}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+5) Alerts
+/frontend/pages/executive/ExecutiveAlertsTab.tsx
+type AlertRow = {
+  id: string;
+  type: "complaint" | "physician" | "clinic";
+  entityId: string;
+  severity: "watch" | "critical";
+  message: string;
+  createdAt: string;
+};
+
+type Props = {
+  rows: AlertRow[];
+  onCreate?: (payload: {
+    type: AlertRow["type"];
+    entityId: string;
+    severity: AlertRow["severity"];
+    message: string;
+  }) => void;
+};
+
+export default function ExecutiveAlertsTab({ rows, onCreate }: Props) {
+  return (
+    <div className="space-y-4">
+      {onCreate && (
+        <button
+          className="border rounded px-4 py-2"
+          onClick={() =>
+            onCreate({
+              type: "clinic",
+              entityId: "clinicA",
+              severity: "watch",
+              message: "Manual executive alert created from dashboard."
+            })
+          }
+        >
+          Create Demo Alert
+        </button>
+      )}
+
+      {rows.map(row => (
+        <div key={row.id} className="border rounded p-4">
+          <div className="font-semibold">
+            {row.type} | {row.entityId}
+          </div>
+          <div>Severity: {row.severity}</div>
+          <div>{row.message}</div>
+          <div className="text-sm opacity-70">{row.createdAt}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+6) Email Preview
+/server/services/weeklyExecutiveMailer.ts
+export type WeeklyExecutiveEmailInput = {
+  clinicId: string;
+  recipientEmail: string;
+  headline: string;
+  summaryLines: string[];
+};
+
+export function buildWeeklyExecutiveEmail(input: WeeklyExecutiveEmailInput) {
+  return {
+    to: input.recipientEmail,
+    subject: `Weekly Executive Summary | ${input.clinicId}`,
+    body: [
+      input.headline,
+      "",
+      ...input.summaryLines.map(line => `- ${line}`),
+      "",
+      "Generated by Auralyn Clinical Decision Support System."
+    ].join("\n")
+  };
+}
+/frontend/pages/executive/ExecutiveEmailPreviewTab.tsx
+type Props = {
+  preview: {
+    to: string;
+    subject: string;
+    body: string;
+  } | null;
+  onGenerate: () => void;
+};
+
+export default function ExecutiveEmailPreviewTab({
+  preview,
+  onGenerate
+}: Props) {
+  return (
+    <div className="space-y-4">
+      <button className="border rounded px-4 py-2" onClick={onGenerate}>
+        Generate Weekly Email Preview
+      </button>
+
+      {preview && (
+        <div className="border rounded p-4">
+          <div><strong>To:</strong> {preview.to}</div>
+          <div><strong>Subject:</strong> {preview.subject}</div>
+          <pre className="mt-3 whitespace-pre-wrap">{preview.body}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+7) Export
+/server/services/exportCsv.ts
+export function toCsv(rows: Record<string, unknown>[]) {
+  if (!rows.length) return "";
+
+  const headers = Object.keys(rows[0]);
+  const escape = (value: unknown) =>
+    `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+  return [
+    headers.join(","),
+    ...rows.map(row => headers.map(h => escape(row[h])).join(","))
+  ].join("\n");
+}
+/frontend/pages/executive/ExecutiveExportTab.tsx
+type Props = {
+  onDownloadCsv: () => void;
+};
+
+export default function ExecutiveExportTab({ onDownloadCsv }: Props) {
+  return (
+    <div className="space-y-4">
+      <div className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-2">Export</h2>
+        <button className="border rounded px-4 py-2" onClick={onDownloadCsv}>
+          Download CSV
+        </button>
+      </div>
+    </div>
+  );
+}
+Unified backend route for all 7 parts
+/server/routes/executiveDb.ts
+import express from "express";
+import {
+  listExecutiveSnapshots,
+  listExecutiveAlerts,
+  createExecutiveAlert
+} from "../services/executiveStore";
+import { buildTrendSeries } from "../services/executiveCharts";
+import {
+  buildComplaintDrilldown,
+  buildPhysicianDrilldown
+} from "../services/executiveDrilldown";
+import { buildCrossClinicComparison } from "../services/crossClinicComparison";
+import { buildWeeklyExecutiveEmail } from "../services/weeklyExecutiveMailer";
+import { toCsv } from "../services/exportCsv";
+
+const router = express.Router();
+
+router.get("/trends", (_req, res) => {
+  const snapshots = listExecutiveSnapshots("clinicA");
+  res.json(buildTrendSeries(snapshots));
+});
+
+router.get("/complaints", (_req, res) => {
+  const latest = listExecutiveSnapshots("clinicA").slice(-1)[0];
+  res.json(buildComplaintDrilldown(latest?.complaintBreakdown || []));
+});
+
+router.get("/physicians", (_req, res) => {
+  const latest = listExecutiveSnapshots("clinicA").slice(-1)[0];
+  res.json(buildPhysicianDrilldown(latest?.physicianBreakdown || []));
+});
+
+router.get("/cross-clinic", (_req, res) => {
+  res.json(
+    buildCrossClinicComparison([
+      {
+        clinicId: "clinicA",
+        totalCases: 3200,
+        overrideRate: 0.11,
+        avgSatisfaction: 4.56,
+        marginPct: 41.2,
+        escalationRate: 0.08
+      },
+      {
+        clinicId: "clinicB",
+        totalCases: 2100,
+        overrideRate: 0.07,
+        avgSatisfaction: 4.68,
+        marginPct: 46.5,
+        escalationRate: 0.05
+      },
+      {
+        clinicId: "clinicC",
+        totalCases: 1400,
+        overrideRate: 0.18,
+        avgSatisfaction: 4.02,
+        marginPct: 22.4,
+        escalationRate: 0.16
+      }
+    ])
+  );
+});
+
+router.get("/alerts", (_req, res) => {
+  res.json(listExecutiveAlerts());
+});
+
+router.post("/alerts", (req, res) => {
+  const row = createExecutiveAlert(req.body);
+  res.json(row);
+});
+
+router.get("/email-preview", (_req, res) => {
+  res.json(
+    buildWeeklyExecutiveEmail({
+      clinicId: "clinicA",
+      recipientEmail: "admin@clinica.com",
+      headline: "Clinic A processed 3,200 cases with strong margin and stable satisfaction.",
+      summaryLines: [
+        "Override rate: 11.0%",
+        "Average satisfaction: 4.56",
+        "Top pressure complaint: dizziness",
+        "Safety posture: elevated"
+      ]
+    })
+  );
+});
+
+router.get("/export.csv", (_req, res) => {
+  const latest = listExecutiveSnapshots("clinicA").slice(-1)[0];
+  const csv = toCsv(
+    (latest?.complaintBreakdown || []).map(r => ({
+      complaint: r.complaint,
+      totalCases: r.totalCases,
+      escalationRate: r.escalationRate,
+      overrideRate: r.overrideRate,
+      avgConfidence: r.avgConfidence,
+      avgSatisfaction: r.avgSatisfaction
+    }))
+  );
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", 'attachment; filename="executive-export.csv"');
+  res.send(csv);
+});
+
+export default router;
+/server/index.ts
+import executiveDb from "./routes/executiveDb";
+
+app.use("/api/executive-db", executiveDb);
+Main 7-tab executive dashboard page
+/frontend/pages/ExecutiveDashboard.tsx
+import { useEffect, useState } from "react";
+import ExecutiveTrendsTab from "./executive/ExecutiveTrendsTab";
+import ExecutiveComplaintsTab from "./executive/ExecutiveComplaintsTab";
+import ExecutivePhysiciansTab from "./executive/ExecutivePhysiciansTab";
+import ExecutiveCrossClinicTab from "./executive/ExecutiveCrossClinicTab";
+import ExecutiveAlertsTab from "./executive/ExecutiveAlertsTab";
+import ExecutiveEmailPreviewTab from "./executive/ExecutiveEmailPreviewTab";
+import ExecutiveExportTab from "./executive/ExecutiveExportTab";
+
+type TabKey =
+  | "trends"
+  | "complaints"
+  | "physicians"
+  | "cross-clinic"
+  | "alerts"
+  | "email-preview"
+  | "export";
+
+export default function ExecutiveDashboard() {
+  const [tab, setTab] = useState<TabKey>("trends");
+  const [trends, setTrends] = useState<any[]>([]);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [physicians, setPhysicians] = useState<any[]>([]);
+  const [crossClinic, setCrossClinic] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [emailPreview, setEmailPreview] = useState<any>(null);
+
+  const loadAll = async () => {
+    const [
+      trendsRes,
+      complaintsRes,
+      physiciansRes,
+      crossRes,
+      alertsRes
+    ] = await Promise.all([
+      fetch("/api/executive-db/trends"),
+      fetch("/api/executive-db/complaints"),
+      fetch("/api/executive-db/physicians"),
+      fetch("/api/executive-db/cross-clinic"),
+      fetch("/api/executive-db/alerts")
+    ]);
+
+    setTrends(await trendsRes.json());
+    setComplaints(await complaintsRes.json());
+    setPhysicians(await physiciansRes.json());
+    setCrossClinic(await crossRes.json());
+    setAlerts(await alertsRes.json());
+  };
+
+  useEffect(() => {
+    loadAll();
+  }, []);
+
+  const generateEmailPreview = async () => {
+    const res = await fetch("/api/executive-db/email-preview");
+    setEmailPreview(await res.json());
+  };
+
+  const createDemoAlert = async (payload: any) => {
+    await fetch("/api/executive-db/alerts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    const res = await fetch("/api/executive-db/alerts");
+    setAlerts(await res.json());
+  };
+
+  const downloadCsv = () => {
+    window.open("/api/executive-db/export.csv", "_blank");
+  };
+
+  const openCase = (caseId: string) => {
+    window.location.href = `/case-drilldown/${caseId}`;
+  };
+
+  const openPhysicianCases = (physicianId: string) => {
+    window.location.href = `/physician-cases/${physicianId}`;
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Executive Dashboard</h1>
+
+      <div className="flex flex-wrap gap-2">
+        <button className="border rounded px-3 py-2" onClick={() => setTab("trends")}>Trends</button>
+        <button className="border rounded px-3 py-2" onClick={() => setTab("complaints")}>Complaints</button>
+        <button className="border rounded px-3 py-2" onClick={() => setTab("physicians")}>Physicians</button>
+        <button className="border rounded px-3 py-2" onClick={() => setTab("cross-clinic")}>Cross-Clinic</button>
+        <button className="border rounded px-3 py-2" onClick={() => setTab("alerts")}>Alerts</button>
+        <button className="border rounded px-3 py-2" onClick={() => setTab("email-preview")}>Email Preview</button>
+        <button className="border rounded px-3 py-2" onClick={() => setTab("export")}>Export</button>
+      </div>
+
+      {tab === "trends" && <ExecutiveTrendsTab trends={trends} />}
+      {tab === "complaints" && (
+        <ExecutiveComplaintsTab rows={complaints} onOpenCase={openCase} />
+      )}
+      {tab === "physicians" && (
+        <ExecutivePhysiciansTab
+          rows={physicians}
+          onOpenPhysicianCases={openPhysicianCases}
+        />
+      )}
+      {tab === "cross-clinic" && <ExecutiveCrossClinicTab rows={crossClinic} />}
+      {tab === "alerts" && (
+        <ExecutiveAlertsTab rows={alerts} onCreate={createDemoAlert} />
+      )}
+      {tab === "email-preview" && (
+        <ExecutiveEmailPreviewTab
+          preview={emailPreview}
+          onGenerate={generateEmailPreview}
+        />
+      )}
+      {tab === "export" && <ExecutiveExportTab onDownloadCsv={downloadCsv} />}
+    </div>
+  );
+}
+App route wiring
+/frontend/App.tsx
+import ExecutiveDashboard from "./pages/ExecutiveDashboard";
+import CaseDrilldownPage from "./pages/CaseDrilldownPage";
+import PhysicianCaseListPage from "./pages/PhysicianCaseListPage";
+
+// example pseudo-routing pattern
+// replace with your actual router config
