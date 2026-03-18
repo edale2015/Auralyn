@@ -48,6 +48,8 @@ The **Unified Clinical Pipeline** (`/api/pipeline/*`) is the single-flow orchest
 - **Adaptive Mapping Routes** (`/api/adaptive-mapping/*`): `/analyze-workbook` (detect structure), `/run-adaptive-mapping` (full adaptive mapping), `/feedback` (submit corrections), `/refinement-memory` (view learned mappings), `/refinement-memory/clear` (reset learned mappings).
 - **Endocrinology Extended Packs** (`server/config/systemContent/endocrinologyExtendedPacks.ts`): 7 additional packs — hyperthyroid, hypothyroid, thyroid nodule, diabetes medication, steroid withdrawal, prolactin/pituitary, electrolyte/hormonal pattern.
 - **Environmental Advanced Packs** (`server/config/systemContent/environmentalAdvancedRows.ts`): 5 packs (air pollution, mold exposure, noise damage, motion sickness, travel-related illness) + 1 modifier (elderly temperature vulnerability).
+- **Full Mapping Pipeline** (`/api/full-mapping/*`): One-click pipeline wrapping sheet fetch → adaptive mapping → validation → preview. Routes: `/run-full-pipeline` (from Google Sheets via `PACKS_SPREADSHEET_ID`), `/run-full-pipeline-local` (from workbook JSON in request body).
+- **System Pack Generator** (`server/engines/systemPackGenerator.ts`): Auto-generates packs from 10 system definitions (derm, pulmonary, gi, neuro, msk, cardio, gu, psych, ent, eye) — 100 complaints total. Routes at `/api/system-expansion/*`: `/generate-all-systems`, `/generate-system/:system`, `/available-systems`.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API
