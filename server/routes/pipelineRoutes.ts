@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { requireRole } from "../middleware/requireRole";
+import { auditMiddleware } from "../middleware/auditMiddleware";
 import { runClinicalPipeline, PipelineInput } from "../pipeline/unifiedClinicalPipeline";
 import { runContinuousImprovement } from "../agents/selfImprovementOrchestrator";
 import { simulateAndTrain } from "../engines/simulationTrainingLoop";
@@ -19,7 +20,7 @@ const stubRepo = {
   getPlans: async () => [],
 };
 
-router.post("/run", auth, async (req: Request, res: Response) => {
+router.post("/run", auth, auditMiddleware("RUN_PIPELINE"), async (req: Request, res: Response) => {
   try {
     const input: PipelineInput = {
       text: req.body.text || "",
@@ -34,7 +35,7 @@ router.post("/run", auth, async (req: Request, res: Response) => {
   }
 });
 
-router.post("/run-fhir", auth, async (req: Request, res: Response) => {
+router.post("/run-fhir", auth, auditMiddleware("RUN_PIPELINE_FHIR"), async (req: Request, res: Response) => {
   try {
     const input: PipelineInput = {
       text: req.body.text || "",
@@ -50,7 +51,7 @@ router.post("/run-fhir", auth, async (req: Request, res: Response) => {
   }
 });
 
-router.post("/self-improve", auth, async (_req: Request, res: Response) => {
+router.post("/self-improve", auth, auditMiddleware("SELF_IMPROVE"), async (_req: Request, res: Response) => {
   try {
     const result = await runContinuousImprovement();
     res.json({ ok: true, ...result });
@@ -59,7 +60,7 @@ router.post("/self-improve", auth, async (_req: Request, res: Response) => {
   }
 });
 
-router.post("/simulate-all", auth, async (req: Request, res: Response) => {
+router.post("/simulate-all", auth, auditMiddleware("SIMULATE"), async (req: Request, res: Response) => {
   try {
     const count = req.body.count || 100;
     const result = await simulateAndTrain([], count);

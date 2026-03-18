@@ -1,0 +1,637 @@
+1) Google email connection with Gmail API OAuth2
+Install
+npm install googleapis google-auth-library
+.env
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_REDIRECT_URI=https://yourdomain.com/api/google-email/oauth/callback
+GOOGLE_EMAIL_FROM=your_clinic_email@gmail.com
+GOOGLE_EMAIL_SCOPES=https://www.googleapis.com/auth/gmail.send
+GOOGLE_EMAIL_STATE_SECRET=replace_me
+/server/db/googleEmailSchema.ts
+import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+
+export const googleEmailConnections = pgTable("google_email_connections", {
+  id: serial("id").primaryKey(),
+  clinicId: text("clinic_id").notNull(),
+  userId: text("user_id").notNull(),
+  emailAddress: text("email_address").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull()
+});
+/server/services/googleEmailStore.ts
+import { db } from "../db";
+import { googleEmailConnections } from "../db/googleEmailSchema";
+
+export async function upsertGoogleEmailConnection(payload: {
+  clinicId: string;
+  userId: string;
+  emailAddress: string;
+  refreshToken: string;
+}) {
+  const existing = await db.query.googleEmailConnections.findFirst({
+    where: (t, { and, eq }) =>
+      and(eq(t.clinicId, payload.clinicId), eq(t.userId, payload.userId))
+  });
+
+  if (existing) {
+    const [updated] = await db
+      .update(googleEmailConnections)
+      .set({
+        emailAddress: payload.emailAddress,
+        refreshToken: payload.refreshToken
+      })
+      .where((t, { eq }) => eq(t.id, existing.id))
+      .returning();
+
+    return updated;
+  }
+
+  const [created] = await db.insert(googleEmailConnections).values(payload).returning();
+  return created;
+}
+
+export async function getGoogleEmailConnection(clinicId: string, userId: string) {
+  return db.query.googleEmailConnections.findFirst({
+    where: (t, { and, eq }) =>
+      and(eq(t.clinicId, clinicId), eq(t.userId, userId))
+  });
+}
+/server/services/googleEmail.ts
+import { google } from "googleapis";
+import { getGoogleEmailConnection } from "./googleEmailStore";
+
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
+const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
+const SCOPES = (process.env.GOOGLE_EMAIL_SCOPES || "https://www.googleapis.com/auth/gmail.send").split(",");
+
+export function createGoogleOAuthClient() {
+  return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+}
+
+export function buildGoogleEmailAuthUrl(state: string) {
+  const client = createGoogleOAuthClient();
+  return client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: SCOPES,
+    state
+  });
+}
+
+export async function exchangeGoogleEmailCode(code: string) {
+  const client = createGoogleOAuthClient();
+  const { tokens } = await client.getToken(code);
+  return tokens;
+}
+
+function encodeMessage(to: string, subject: string, body: string, from: string) {
+  const message = [
+    `From: ${from}`,
+    `To: ${to}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "MIME-Version: 1.0",
+    `Subject: ${subject}`,
+    "",
+    body
+  ].join("\n");
+
+  return Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+export async function sendGoogleEmail(payload: {
+  clinicId: string;
+  userId: string;
+  to: string;
+  subject: string;
+  body: string;
+}) {
+  const connection = await getGoogleEmailConnection(payload.clinicId, payload.userId);
+
+  if (!connection) {
+    throw new Error("No Google email connection found");
+  }
+
+  const client = createGoogleOAuthClient();
+  client.setCredentials({
+    refresh_token: connection.refreshToken
+  });
+
+  const gmail = google.gmail({ version: "v1", auth: client });
+
+  const raw = encodeMessage(
+    payload.to,
+    payload.subject,
+    payload.body,
+    connection.emailAddress
+  );
+
+  const result = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw }
+  });
+
+  return result.data;
+}
+/server/routes/googleEmail.ts
+import express from "express";
+import crypto from "crypto";
+import { authContext } from "../middleware/authContext";
+import { buildGoogleEmailAuthUrl, exchangeGoogleEmailCode, sendGoogleEmail } from "../services/googleEmail";
+import { upsertGoogleEmailConnection } from "../services/googleEmailStore";
+
+const router = express.Router();
+
+function signState(input: { clinicId: string; userId: string }) {
+  const payload = JSON.stringify(input);
+  const sig = crypto
+    .createHmac("sha256", process.env.GOOGLE_EMAIL_STATE_SECRET || "dev-state")
+    .update(payload)
+    .digest("hex");
+
+  return Buffer.from(JSON.stringify({ payload, sig })).toString("base64url");
+}
+
+function verifyState(state: string) {
+  const decoded = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
+  const expected = crypto
+    .createHmac("sha256", process.env.GOOGLE_EMAIL_STATE_SECRET || "dev-state")
+    .update(decoded.payload)
+    .digest("hex");
+
+  if (expected !== decoded.sig) {
+    throw new Error("Invalid state signature");
+  }
+
+  return JSON.parse(decoded.payload) as { clinicId: string; userId: string };
+}
+
+router.get("/connect", authContext, async (_req, res) => {
+  const user = res.locals.user;
+  const state = signState({ clinicId: user.clinicId, userId: user.id });
+  const url = buildGoogleEmailAuthUrl(state);
+  res.json({ url });
+});
+
+router.get("/oauth/callback", async (req, res) => {
+  const code = String(req.query.code || "");
+  const state = String(req.query.state || "");
+
+  if (!code || !state) {
+    return res.status(400).send("Missing code or state");
+  }
+
+  const { clinicId, userId } = verifyState(state);
+  const tokens = await exchangeGoogleEmailCode(code);
+
+  if (!tokens.refresh_token) {
+    return res.status(400).send("No refresh token returned. Re-consent may be required.");
+  }
+
+  await upsertGoogleEmailConnection({
+    clinicId,
+    userId,
+    emailAddress: process.env.GOOGLE_EMAIL_FROM || "",
+    refreshToken: tokens.refresh_token
+  });
+
+  res.send("Google email connected successfully.");
+});
+
+router.post("/send", authContext, async (req, res) => {
+  const user = res.locals.user;
+
+  const data = await sendGoogleEmail({
+    clinicId: user.clinicId,
+    userId: user.id,
+    to: req.body.to,
+    subject: req.body.subject,
+    body: req.body.body
+  });
+
+  res.json({ success: true, data });
+});
+
+export default router;
+/server/index.ts
+import googleEmail from "./routes/googleEmail";
+
+app.use("/api/google-email", googleEmail);
+/frontend/pages/GoogleEmailConnectPage.tsx
+import { useState } from "react";
+
+type Props = {
+  token: string;
+};
+
+export default function GoogleEmailConnectPage({ token }: Props) {
+  const [status, setStatus] = useState("");
+
+  const connect = async () => {
+    const res = await fetch("/api/google-email/connect", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    window.location.href = data.url;
+  };
+
+  const sendTest = async () => {
+    const res = await fetch("/api/google-email/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        to: "test@example.com",
+        subject: "Auralyn executive summary test",
+        body: "This is a Gmail API connection test from Auralyn."
+      })
+    });
+
+    const data = await res.json();
+    setStatus(JSON.stringify(data));
+  };
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Google Email Connection</h1>
+      <button className="border rounded px-4 py-2" onClick={connect}>
+        Connect Google Email
+      </button>
+      <button className="border rounded px-4 py-2" onClick={sendTest}>
+        Send Test Email
+      </button>
+      {status && <pre className="border rounded p-4">{status}</pre>}
+    </div>
+  );
+}
+
+Google’s Gmail API docs describe sending with messages.send, and Google’s web-server OAuth flow is the right pattern when the server needs offline access using a refresh token.
+
+Also, Gmail and Workspace have sending limits, and higher-volume senders to Gmail accounts must meet sender authentication and related requirements, so keep weekly summaries and board packets low-volume and authenticated.
+
+2) Shared views with approval workflow
+/server/db/sharedViewsSchema.ts
+import { pgTable, serial, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+
+export const sharedDashboardViews = pgTable("shared_dashboard_views", {
+  id: serial("id").primaryKey(),
+  clinicId: text("clinic_id").notNull(),
+  createdByUserId: text("created_by_user_id").notNull(),
+  approvedByUserId: text("approved_by_user_id"),
+  name: text("name").notNull(),
+  viewType: text("view_type").notNull(),
+  filters: jsonb("filters").notNull(),
+  isApproved: boolean("is_approved").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  approvedAt: timestamp("approved_at")
+});
+/server/services/sharedViewsStore.ts
+import { db } from "../db";
+import { sharedDashboardViews } from "../db/sharedViewsSchema";
+
+export async function createSharedView(payload: {
+  clinicId: string;
+  createdByUserId: string;
+  name: string;
+  viewType: string;
+  filters: unknown;
+}) {
+  const [row] = await db.insert(sharedDashboardViews).values(payload).returning();
+  return row;
+}
+
+export async function listSharedViews(clinicId: string, approvedOnly = false) {
+  if (approvedOnly) {
+    return db.query.sharedDashboardViews.findMany({
+      where: (t, { and, eq }) => and(eq(t.clinicId, clinicId), eq(t.isApproved, true)),
+      orderBy: (t, { desc }) => [desc(t.createdAt)]
+    });
+  }
+
+  return db.query.sharedDashboardViews.findMany({
+    where: (t, { eq }) => eq(t.clinicId, clinicId),
+    orderBy: (t, { desc }) => [desc(t.createdAt)]
+  });
+}
+
+export async function approveSharedView(id: number, approvedByUserId: string) {
+  const [row] = await db
+    .update(sharedDashboardViews)
+    .set({
+      isApproved: true,
+      approvedByUserId,
+      approvedAt: new Date()
+    })
+    .where((t, { eq }) => eq(t.id, id))
+    .returning();
+
+  return row;
+}
+/server/routes/sharedViews.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import { roleGate } from "../middleware/roleGate";
+import { createSharedView, listSharedViews, approveSharedView } from "../services/sharedViewsStore";
+
+const router = express.Router();
+
+router.get("/", authContext, async (req, res) => {
+  const user = res.locals.user;
+  const approvedOnly = req.query.approvedOnly === "true";
+  const rows = await listSharedViews(user.clinicId, approvedOnly);
+  res.json(rows);
+});
+
+router.post("/", authContext, async (req, res) => {
+  const user = res.locals.user;
+  const row = await createSharedView({
+    clinicId: user.clinicId,
+    createdByUserId: user.id,
+    name: req.body.name,
+    viewType: req.body.viewType,
+    filters: req.body.filters
+  });
+  res.json(row);
+});
+
+router.post("/:id/approve", authContext, roleGate(["admin", "executive"]), async (req, res) => {
+  const user = res.locals.user;
+  const row = await approveSharedView(Number(req.params.id), user.id);
+  res.json(row);
+});
+
+export default router;
+3) Signed board exports
+/server/services/signedBoardExports.ts
+import crypto from "crypto";
+
+export function canonicalJson(value: unknown) {
+  return JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort());
+}
+
+export function signBoardPayload(payload: unknown) {
+  const serialized = canonicalJson(payload);
+  const signature = crypto
+    .createHmac("sha256", process.env.BOARD_EXPORT_SIGNING_SECRET || "dev-board-secret")
+    .update(serialized)
+    .digest("hex");
+
+  return {
+    payload,
+    signature,
+    algorithm: "HMAC-SHA256",
+    signedAt: new Date().toISOString()
+  };
+}
+
+export function verifyBoardSignature(payload: unknown, signature: string) {
+  const expected = crypto
+    .createHmac("sha256", process.env.BOARD_EXPORT_SIGNING_SECRET || "dev-board-secret")
+    .update(canonicalJson(payload))
+    .digest("hex");
+
+  return expected === signature;
+}
+/server/routes/signedBoardExports.ts
+import express from "express";
+import { authContext } from "../middleware/authContext";
+import { roleGate } from "../middleware/roleGate";
+import { signBoardPayload, verifyBoardSignature } from "../services/signedBoardExports";
+import { buildExecutivePdf } from "../services/exportPdf";
+
+const router = express.Router();
+
+router.post("/json", authContext, roleGate(["admin", "executive"]), async (req, res) => {
+  res.json(signBoardPayload(req.body));
+});
+
+router.post("/verify", authContext, roleGate(["admin", "executive"]), async (req, res) => {
+  const ok = verifyBoardSignature(req.body.payload, req.body.signature);
+  res.json({ valid: ok });
+});
+
+router.post("/pdf", authContext, roleGate(["admin", "executive"]), async (req, res) => {
+  const signed = signBoardPayload(req.body);
+  const buffer = await buildExecutivePdf({
+    title: req.body.title || "Signed Board Packet",
+    summaryLines: [
+      ...(req.body.summaryLines || []),
+      `Signature: ${signed.signature}`,
+      `Algorithm: ${signed.algorithm}`,
+      `Signed At: ${signed.signedAt}`
+    ],
+    cards: req.body.cards || []
+  });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", 'attachment; filename="signed-board-packet.pdf"');
+  res.send(buffer);
+});
+
+export default router;
+4) Benchmarks with charts
+/server/services/benchmarkTrends.ts
+export type BenchmarkTrendPoint = {
+  date: string;
+  clinicType: string;
+  complaint: string;
+  accuracy: number;
+  overrideRate: number;
+  escalationRate: number;
+};
+
+export function buildBenchmarkTrendSeries(rows: BenchmarkTrendPoint[]) {
+  return rows.map(r => ({
+    ...r,
+    accuracyPct: Number((r.accuracy * 100).toFixed(2)),
+    overrideRatePct: Number((r.overrideRate * 100).toFixed(2)),
+    escalationRatePct: Number((r.escalationRate * 100).toFixed(2))
+  }));
+}
+/server/routes/benchmarkTrends.ts
+import express from "express";
+import { buildBenchmarkTrendSeries } from "../services/benchmarkTrends";
+
+const router = express.Router();
+
+router.post("/", async (req, res) => {
+  res.json(buildBenchmarkTrendSeries(req.body.rows || []));
+});
+
+export default router;
+/frontend/pages/BenchmarkTrendsDashboard.tsx
+import { useEffect, useState } from "react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip
+} from "recharts";
+
+export default function BenchmarkTrendsDashboard() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/benchmark-trends", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        rows: [
+          { date: "2026-03-14", clinicType: "urgent_care", complaint: "dizziness", accuracy: 0.78, overrideRate: 0.19, escalationRate: 0.22 },
+          { date: "2026-03-15", clinicType: "urgent_care", complaint: "dizziness", accuracy: 0.80, overrideRate: 0.17, escalationRate: 0.20 },
+          { date: "2026-03-16", clinicType: "urgent_care", complaint: "dizziness", accuracy: 0.83, overrideRate: 0.15, escalationRate: 0.18 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setRows);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Benchmark Trend Charts</h1>
+      <div className="border rounded p-4 h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={rows}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date" />
+            <YAxis />
+            <Tooltip />
+            <Line type="monotone" dataKey="accuracyPct" />
+            <Line type="monotone" dataKey="overrideRatePct" />
+            <Line type="monotone" dataKey="escalationRatePct" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+5) Server-side pagination
+/server/services/pagination.ts
+export type PaginationParams = {
+  page?: number;
+  pageSize?: number;
+};
+
+export function paginate<T>(rows: T[], params: PaginationParams) {
+  const page = Math.max(1, params.page || 1);
+  const pageSize = Math.min(100, Math.max(1, params.pageSize || 20));
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize;
+
+  return {
+    page,
+    pageSize,
+    total: rows.length,
+    totalPages: Math.ceil(rows.length / pageSize),
+    items: rows.slice(start, end)
+  };
+}
+Example paginated alerts route
+import { paginate } from "../services/pagination";
+import { listDbAlerts } from "../services/alertsStore";
+
+router.get("/", authContext, async (req, res) => {
+  const rows = await listDbAlerts(true);
+  const page = Number(req.query.page || 1);
+  const pageSize = Number(req.query.pageSize || 20);
+
+  res.json(paginate(rows, { page, pageSize }));
+});
+/frontend/components/PaginationControls.tsx
+type Props = {
+  page: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+};
+
+export default function PaginationControls({ page, totalPages, onPageChange }: Props) {
+  return (
+    <div className="flex gap-2 items-center">
+      <button
+        className="border rounded px-3 py-1"
+        disabled={page <= 1}
+        onClick={() => onPageChange(page - 1)}
+      >
+        Prev
+      </button>
+      <span>Page {page} / {totalPages}</span>
+      <button
+        className="border rounded px-3 py-1"
+        disabled={page >= totalPages}
+        onClick={() => onPageChange(page + 1)}
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+6) Shared views approval UI
+/frontend/pages/SharedViewsApprovalDashboard.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+};
+
+export default function SharedViewsApprovalDashboard({ token }: Props) {
+  const [rows, setRows] = useState<any[]>([]);
+
+  const load = async () => {
+    const res = await fetch("/api/shared-views", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    setRows(await res.json());
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const approve = async (id: number) => {
+    await fetch(`/api/shared-views/${id}/approve`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    await load();
+  };
+
+  return (
+    <div className="p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Shared Views Approval</h1>
+      {rows.map(row => (
+        <div key={row.id} className="border rounded p-4">
+          <div className="font-semibold">{row.name}</div>
+          <div>Type: {row.viewType}</div>
+          <div>Approved: {String(row.isApproved)}</div>
+          {!row.isApproved && (
+            <button className="border rounded px-3 py-1 mt-2" onClick={() => approve(row.id)}>
+              Approve
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+7) Final route wiring
+/server/index.ts
+import sharedViews from "./routes/sharedViews";
+import signedBoardExports from "./routes/signedBoardExports";
+import benchmarkTrends from "./routes/benchmarkTrends";
+
+app.use("/api/shared-views", sharedViews);
+app.use("/api/signed-board-exports", signedBoardExports);
+app.use("/api/benchmark-trends", benchmarkTrends);

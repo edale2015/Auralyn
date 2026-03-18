@@ -34,6 +34,14 @@ The **Unified Clinical Pipeline** (`/api/pipeline/*`) is the single-flow orchest
 ### System Design Choices
 - **Data Management**: Firebase Firestore is the primary data store, supplemented by SQLite for intake. PHI retention policies ensure split storage for clinical records and debug telemetry. NDJSON-backed stores are used for outcomes, message templates, and tenant configurations.
 - **Authentication**: Physician authentication uses password-only, session-based HMAC-signed httpOnly cookies. Patient intake uses token-based access with 6-digit code verification. A JWT-based role authentication layer supports admin, physician, staff, and patient roles.
+- **Google Email** (`/api/google-email/*`): Gmail API OAuth2 connection for clinic email sending (weekly summaries, board packets). Routes: `/connect` (OAuth URL), `/oauth/callback` (code exchange), `/send` (send email). Requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` env vars.
+- **Shared Dashboard Views** (`/api/shared-views/*`): Create, list, and approve shared dashboard views with approval workflow. Admin-only approval gate.
+- **Signed Board Exports** (`/api/signed-board-exports/*`): HMAC-SHA256 signed JSON board packets with verification. Routes: `/json` (sign), `/verify` (verify signature). Uses `BOARD_EXPORT_SIGNING_SECRET` env var.
+- **Benchmark Trends** (`/api/benchmark-trends/*`): Benchmark trend series computation (accuracy%, override rate%, escalation rate%).
+- **Server-side Pagination**: Reusable `paginate()` utility at `server/services/pagination.ts` (page/pageSize params, max 100 per page).
+- **Audit Middleware**: Global audit logger at `server/middleware/auditMiddleware.ts` — logs user, role, action, path, method, status, latency per request. Applied to all pipeline routes (RUN_PIPELINE, RUN_PIPELINE_FHIR, SELF_IMPROVE, SIMULATE). In-memory rolling log (10,000 rows max). Viewable at `/api/monitoring/audit-log`.
+- **High-Scale Simulation Engine**: `server/engines/highScaleSimulationEngine.ts` — runs 1000+ synthetic cases per pack with accuracy, under-triage rate, and over-triage rate. Route: `/api/monitoring/simulate-high-scale`.
+- **Performance Monitoring**: Global `metricsMiddleware` tracks total requests, errors, avg latency, p95 latency in a rolling 1000-request window. Route: `/api/monitoring/metrics`, `/api/monitoring/metrics/reset`.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API

@@ -171,6 +171,12 @@ import legacyTabMapperRoutes from "./routes/legacyTabMapperRoutes";
 import clinicalIntegrationRoutes from "./routes/clinicalIntegrationRoutes";
 import googleSheetsMigrationRoutes from "./routes/googleSheetsMigrationRoutes";
 import pipelineRoutes from "./routes/pipelineRoutes";
+import googleEmailRoutes from "./routes/googleEmailRoutes";
+import sharedViewsRoutes from "./routes/sharedViewsRoutes";
+import signedBoardExportsRoutes from "./routes/signedBoardExportsRoutes";
+import benchmarkTrendsRoutes from "./routes/benchmarkTrendsRoutes";
+import systemMonitoringRoutes from "./routes/systemMonitoringRoutes";
+import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
@@ -192,6 +198,7 @@ declare module "http" {
 }
 
 app.use(cookieParser());
+app.use(metricsMiddleware);
 
 app.use(
   express.json({
@@ -448,6 +455,16 @@ app.use("/api/legacy-mapper", legacyTabMapperRoutes);
 app.use("/api/integrations", clinicalIntegrationRoutes);
 app.use("/api/sheets-migration", googleSheetsMigrationRoutes);
 app.use("/api/pipeline", pipelineRoutes);
+app.use("/api/google-email", googleEmailRoutes);
+app.use("/api/shared-views", sharedViewsRoutes);
+app.use("/api/signed-board-exports", signedBoardExportsRoutes);
+app.use("/api/benchmark-trends", benchmarkTrendsRoutes);
+app.use("/api/monitoring", systemMonitoringRoutes);
+console.log("[GoogleEmail] Gmail API OAuth2 connection endpoints registered at /api/google-email/*");
+console.log("[SharedViews] Shared dashboard views + approval workflow registered at /api/shared-views/*");
+console.log("[SignedExports] Signed board exports (JSON + verify) registered at /api/signed-board-exports/*");
+console.log("[BenchmarkTrends] Benchmark trend series registered at /api/benchmark-trends/*");
+console.log("[Monitoring] System metrics, audit log, high-scale simulation registered at /api/monitoring/*");
 console.log("[SmartIntake] Smart intake pipeline, review queue, batch approval, outcome feedback registered");
 console.log("[AdaptiveControl] Adaptive control loop, reinforcement, case-mix, profitability, threshold simulation registered");
 console.log("[PackSystem] Pack admin, pack-driven intake, complaint packs, rule parser, modifier engine registered");
