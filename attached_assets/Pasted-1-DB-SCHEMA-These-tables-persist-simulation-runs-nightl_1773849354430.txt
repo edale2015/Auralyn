@@ -1,0 +1,521 @@
+1. DB SCHEMA
+
+These tables persist simulation runs, nightly control runs, and executive snapshots.
+
+/server/db/executiveSchema.ts
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  jsonb,
+  numeric
+} from "drizzle-orm/pg-core";
+
+export const simulationRuns = pgTable("simulation_runs", {
+  id: serial("id").primaryKey(),
+  packId: text("pack_id").notNull(),
+  complaint: text("complaint").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  strategyResults: jsonb("strategy_results").notNull()
+});
+
+export const controlRuns = pgTable("control_runs", {
+  id: serial("id").primaryKey(),
+  clinicId: text("clinic_id").notNull(),
+  runAt: timestamp("run_at").defaultNow().notNull(),
+  input: jsonb("input").notNull(),
+  output: jsonb("output").notNull()
+});
+
+export const executiveSnapshots = pgTable("executive_snapshots", {
+  id: serial("id").primaryKey(),
+  clinicId: text("clinic_id").notNull(),
+  snapshotDate: timestamp("snapshot_date").defaultNow().notNull(),
+  totalCases: numeric("total_cases").notNull(),
+  reviewedCases: numeric("reviewed_cases").notNull(),
+  escalatedCases: numeric("escalated_cases").notNull(),
+  overrideRate: numeric("override_rate").notNull(),
+  avgSatisfaction: numeric("avg_satisfaction").notNull(),
+  avgCostPerCase: numeric("avg_cost_per_case").notNull(),
+  avgRevenuePerCase: numeric("avg_revenue_per_case").notNull(),
+  complaintBreakdown: jsonb("complaint_breakdown").notNull(),
+  physicianBreakdown: jsonb("physician_breakdown").notNull()
+});
+2. DB PERSISTENCE SERVICES
+/server/services/executiveStore.ts
+import { db } from "../db";
+import {
+  simulationRuns,
+  controlRuns,
+  executiveSnapshots
+} from "../db/executiveSchema";
+
+export async function saveSimulationRun(
+  packId: string,
+  complaint: string,
+  strategyResults: unknown[]
+) {
+  const [row] = await db.insert(simulationRuns).values({
+    packId,
+    complaint,
+    strategyResults
+  }).returning();
+
+  return row;
+}
+
+export async function listSimulationRuns(limit = 20) {
+  return db.query.simulationRuns.findMany({
+    orderBy: (t, { desc }) => [desc(t.createdAt)],
+    limit
+  });
+}
+
+export async function saveControlRun(
+  clinicId: string,
+  input: unknown,
+  output: unknown
+) {
+  const [row] = await db.insert(controlRuns).values({
+    clinicId,
+    input,
+    output
+  }).returning();
+
+  return row;
+}
+
+export async function listControlRuns(clinicId?: string, limit = 30) {
+  if (clinicId) {
+    return db.query.controlRuns.findMany({
+      where: (t, { eq }) => eq(t.clinicId, clinicId),
+      orderBy: (t, { desc }) => [desc(t.runAt)],
+      limit
+    });
+  }
+
+  return db.query.controlRuns.findMany({
+    orderBy: (t, { desc }) => [desc(t.runAt)],
+    limit
+  });
+}
+
+export async function saveExecutiveSnapshot(payload: {
+  clinicId: string;
+  totalCases: number;
+  reviewedCases: number;
+  escalatedCases: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  avgCostPerCase: number;
+  avgRevenuePerCase: number;
+  complaintBreakdown: unknown;
+  physicianBreakdown: unknown;
+}) {
+  const [row] = await db.insert(executiveSnapshots).values({
+    clinicId: payload.clinicId,
+    totalCases: String(payload.totalCases),
+    reviewedCases: String(payload.reviewedCases),
+    escalatedCases: String(payload.escalatedCases),
+    overrideRate: String(payload.overrideRate),
+    avgSatisfaction: String(payload.avgSatisfaction),
+    avgCostPerCase: String(payload.avgCostPerCase),
+    avgRevenuePerCase: String(payload.avgRevenuePerCase),
+    complaintBreakdown: payload.complaintBreakdown,
+    physicianBreakdown: payload.physicianBreakdown
+  }).returning();
+
+  return row;
+}
+
+export async function listExecutiveSnapshots(clinicId: string, limit = 30) {
+  return db.query.executiveSnapshots.findMany({
+    where: (t, { eq }) => eq(t.clinicId, clinicId),
+    orderBy: (t, { desc }) => [desc(t.snapshotDate)],
+    limit
+  });
+}
+3. DRILLDOWN ENGINES
+
+These give complaint and physician drilldowns instead of just top-level numbers.
+
+/server/services/executiveDrilldown.ts
+export type ComplaintDrilldownRow = {
+  complaint: string;
+  totalCases: number;
+  escalationRate: number;
+  overrideRate: number;
+  avgConfidence: number;
+  avgSatisfaction: number;
+};
+
+export type PhysicianDrilldownRow = {
+  physicianId: string;
+  totalCases: number;
+  avgReviewSeconds: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  highRiskCases: number;
+};
+
+export function buildComplaintDrilldown(rows: ComplaintDrilldownRow[]) {
+  return rows
+    .map(r => {
+      let status: "good" | "watch" | "critical" = "good";
+
+      if (r.overrideRate > 0.18 || r.escalationRate > 0.2) status = "critical";
+      else if (r.overrideRate > 0.1 || r.escalationRate > 0.12) status = "watch";
+
+      return {
+        ...r,
+        status
+      };
+    })
+    .sort((a, b) => b.totalCases - a.totalCases);
+}
+
+export function buildPhysicianDrilldown(rows: PhysicianDrilldownRow[]) {
+  return rows
+    .map(r => {
+      let status: "good" | "watch" | "critical" = "good";
+
+      if (r.overrideRate > 0.18 || r.avgSatisfaction < 4.0) status = "critical";
+      else if (r.overrideRate > 0.1 || r.avgReviewSeconds > 30) status = "watch";
+
+      return {
+        ...r,
+        status
+      };
+    })
+    .sort((a, b) => b.totalCases - a.totalCases);
+}
+4. CHART-SHAPING ENGINE
+
+This converts snapshots into chart-ready series.
+
+/server/services/executiveCharts.ts
+export function buildExecutiveChartSeries(
+  snapshots: Array<{
+    snapshotDate: string | Date;
+    totalCases: string | number;
+    overrideRate: string | number;
+    avgSatisfaction: string | number;
+    avgCostPerCase: string | number;
+    avgRevenuePerCase: string | number;
+  }>
+) {
+  const ordered = [...snapshots].sort(
+    (a, b) => new Date(a.snapshotDate).getTime() - new Date(b.snapshotDate).getTime()
+  );
+
+  return ordered.map(s => {
+    const revenue = Number(s.avgRevenuePerCase);
+    const cost = Number(s.avgCostPerCase);
+    const marginPct = revenue ? ((revenue - cost) / revenue) * 100 : 0;
+
+    return {
+      date: new Date(s.snapshotDate).toISOString().slice(0, 10),
+      totalCases: Number(s.totalCases),
+      overrideRatePct: Number((Number(s.overrideRate) * 100).toFixed(2)),
+      avgSatisfaction: Number(Number(s.avgSatisfaction).toFixed(2)),
+      avgCostPerCase: Number(Number(s.avgCostPerCase).toFixed(2)),
+      avgRevenuePerCase: Number(Number(s.avgRevenuePerCase).toFixed(2)),
+      marginPct: Number(marginPct.toFixed(2))
+    };
+  });
+}
+5. UPDATED ROUTES WITH DB + DRILLDOWNS
+/server/routes/executiveDb.ts
+import express from "express";
+import {
+  saveSimulationRun,
+  listSimulationRuns,
+  saveControlRun,
+  listControlRuns,
+  saveExecutiveSnapshot,
+  listExecutiveSnapshots
+} from "../services/executiveStore";
+import { buildComplaintDrilldown, buildPhysicianDrilldown } from "../services/executiveDrilldown";
+import { buildExecutiveChartSeries } from "../services/executiveCharts";
+import { getSimulationPackById } from "../services/simulationPacks";
+import { runSimulationLab } from "../services/simulationLab";
+import { runAdaptiveControlLoop } from "../services/adaptiveControlLoop";
+
+const router = express.Router();
+
+router.post("/simulation-runs", async (req, res) => {
+  const { packId, strategies = [] } = req.body;
+  const pack = getSimulationPackById(packId);
+
+  if (!pack) {
+    return res.status(404).json({ error: "Pack not found" });
+  }
+
+  const results = runSimulationLab(pack.cases, strategies);
+  const saved = await saveSimulationRun(pack.id, pack.complaint, results);
+
+  res.json({ saved, results });
+});
+
+router.get("/simulation-runs", async (req, res) => {
+  const limit = Number(req.query.limit || 20);
+  const rows = await listSimulationRuns(limit);
+  res.json(rows);
+});
+
+router.post("/control-runs", async (req, res) => {
+  const output = runAdaptiveControlLoop(req.body);
+  const saved = await saveControlRun(req.body.clinicId, req.body, output);
+  res.json(saved);
+});
+
+router.get("/control-runs", async (req, res) => {
+  const clinicId = typeof req.query.clinicId === "string" ? req.query.clinicId : undefined;
+  const limit = Number(req.query.limit || 30);
+  const rows = await listControlRuns(clinicId, limit);
+  res.json(rows);
+});
+
+router.post("/snapshots", async (req, res) => {
+  const saved = await saveExecutiveSnapshot(req.body);
+  res.json(saved);
+});
+
+router.get("/snapshots/:clinicId", async (req, res) => {
+  const rows = await listExecutiveSnapshots(req.params.clinicId, Number(req.query.limit || 30));
+  res.json(rows);
+});
+
+router.post("/drilldown/complaints", async (req, res) => {
+  res.json(buildComplaintDrilldown(req.body.rows || []));
+});
+
+router.post("/drilldown/physicians", async (req, res) => {
+  res.json(buildPhysicianDrilldown(req.body.rows || []));
+});
+
+router.get("/charts/:clinicId", async (req, res) => {
+  const rows = await listExecutiveSnapshots(req.params.clinicId, Number(req.query.limit || 30));
+  res.json(buildExecutiveChartSeries(rows as any));
+});
+
+export default router;
+/server/index.ts addition
+import executiveDb from "./routes/executiveDb";
+
+app.use("/api/executive-db", executiveDb);
+6. EXECUTIVE DASHBOARD UI WITH DRILLDOWNS
+
+This version is chart-ready and includes complaint and physician panels.
+
+/frontend/pages/ExecutiveDashboardDrilldown.tsx
+import { useEffect, useState } from "react";
+import {
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar
+} from "recharts";
+
+type ChartRow = {
+  date: string;
+  totalCases: number;
+  overrideRatePct: number;
+  avgSatisfaction: number;
+  marginPct: number;
+};
+
+export default function ExecutiveDashboardDrilldown() {
+  const [charts, setCharts] = useState<ChartRow[]>([]);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [physicians, setPhysicians] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/executive-db/charts/clinicA?limit=10")
+      .then(r => r.json())
+      .then(setCharts);
+
+    fetch("/api/executive-db/drilldown/complaints", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        rows: [
+          { complaint: "cough", totalCases: 420, escalationRate: 0.08, overrideRate: 0.06, avgConfidence: 0.87, avgSatisfaction: 4.6 },
+          { complaint: "dizziness", totalCases: 150, escalationRate: 0.22, overrideRate: 0.19, avgConfidence: 0.69, avgSatisfaction: 4.0 },
+          { complaint: "rash", totalCases: 260, escalationRate: 0.03, overrideRate: 0.04, avgConfidence: 0.91, avgSatisfaction: 4.8 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setComplaints);
+
+    fetch("/api/executive-db/drilldown/physicians", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        rows: [
+          { physicianId: "dr-johnson", totalCases: 410, avgReviewSeconds: 14, overrideRate: 0.05, avgSatisfaction: 4.8, highRiskCases: 44 },
+          { physicianId: "dr-lee", totalCases: 330, avgReviewSeconds: 19, overrideRate: 0.08, avgSatisfaction: 4.6, highRiskCases: 31 },
+          { physicianId: "dr-smith", totalCases: 215, avgReviewSeconds: 34, overrideRate: 0.2, avgSatisfaction: 3.9, highRiskCases: 12 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setPhysicians);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-8">
+      <h1 className="text-2xl font-bold">Executive Dashboard + Drilldowns</h1>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-4">Throughput Trend</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={charts}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="totalCases" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-4">Override Rate Trend</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={charts}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="overrideRatePct" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-4">Margin Trend</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={charts}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="marginPct" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-4">Complaint Drilldown</h2>
+        <div className="space-y-3">
+          {complaints.map(row => (
+            <div key={row.complaint} className="border rounded p-3">
+              <div className="font-semibold">{row.complaint}</div>
+              <div>Total Cases: {row.totalCases}</div>
+              <div>Escalation Rate: {(row.escalationRate * 100).toFixed(1)}%</div>
+              <div>Override Rate: {(row.overrideRate * 100).toFixed(1)}%</div>
+              <div>Avg Confidence: {row.avgConfidence}</div>
+              <div>Avg Satisfaction: {row.avgSatisfaction}</div>
+              <div>Status: {row.status}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-4">Physician Drilldown</h2>
+        <div className="space-y-3">
+          {physicians.map(row => (
+            <div key={row.physicianId} className="border rounded p-3">
+              <div className="font-semibold">{row.physicianId}</div>
+              <div>Total Cases: {row.totalCases}</div>
+              <div>Avg Review Seconds: {row.avgReviewSeconds}</div>
+              <div>Override Rate: {(row.overrideRate * 100).toFixed(1)}%</div>
+              <div>Avg Satisfaction: {row.avgSatisfaction}</div>
+              <div>High-Risk Cases: {row.highRiskCases}</div>
+              <div>Status: {row.status}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+7. SAVE SEED SNAPSHOTS FOR CHARTS
+
+This gives the chart something to breathe with.
+
+/server/scripts/seedExecutiveSnapshots.ts
+import { saveExecutiveSnapshot } from "../services/executiveStore";
+
+async function main() {
+  const rows = [
+    {
+      clinicId: "clinicA",
+      totalCases: 480,
+      reviewedCases: 452,
+      escalatedCases: 52,
+      overrideRate: 0.12,
+      avgSatisfaction: 4.42,
+      avgCostPerCase: 9.4,
+      avgRevenuePerCase: 24,
+      complaintBreakdown: [],
+      physicianBreakdown: []
+    },
+    {
+      clinicId: "clinicA",
+      totalCases: 520,
+      reviewedCases: 497,
+      escalatedCases: 48,
+      overrideRate: 0.1,
+      avgSatisfaction: 4.51,
+      avgCostPerCase: 8.9,
+      avgRevenuePerCase: 24,
+      complaintBreakdown: [],
+      physicianBreakdown: []
+    },
+    {
+      clinicId: "clinicA",
+      totalCases: 560,
+      reviewedCases: 534,
+      escalatedCases: 44,
+      overrideRate: 0.09,
+      avgSatisfaction: 4.59,
+      avgCostPerCase: 8.4,
+      avgRevenuePerCase: 24,
+      complaintBreakdown: [],
+      physicianBreakdown: []
+    }
+  ];
+
+  for (const row of rows) {
+    await saveExecutiveSnapshot(row);
+  }
+
+  process.exit(0);
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+8. ADD TAB
+import ExecutiveDashboardDrilldown from "./ExecutiveDashboardDrilldown";
+
+<button onClick={() => setTab("executive-drilldown")}>Executive Drilldown</button>
+
+{tab === "executive-drilldown" && <ExecutiveDashboardDrilldown />}

@@ -1,0 +1,990 @@
+1. Register the routes
+server/index.ts
+import express from "express";
+import googleSheetsMigrationRoutes from "./routes/googleSheetsMigrationRoutes";
+import legacyTabMapperRoutes from "./routes/legacyTabMapperRoutes";
+
+const app = express();
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+// Existing routes...
+// app.use("/api/pack-admin", packAdminRoutes);
+// app.use("/api/pack-simulator", packSimulatorRoutes);
+
+app.use("/api/google-sheets-migration", googleSheetsMigrationRoutes);
+app.use("/api/legacy-tab-mapper", legacyTabMapperRoutes);
+
+const port = Number(process.env.PORT || 3001);
+
+app.listen(port, () => {
+  console.log(`Server listening on ${port}`);
+});
+2. Migration route file
+server/routes/googleSheetsMigrationRoutes.ts
+import express from "express";
+import {
+  ensureCanonicalTabs,
+  runDryRunMigration,
+  applyMigration,
+  runMigrationQa,
+  cutoverToCanonicalSheets,
+} from "../services/googleSheetsMigrationService";
+
+const router = express.Router();
+
+/**
+ * STEP 1
+ * Create canonical tabs if missing
+ */
+router.post("/ensure-canonical-tabs", async (_req, res) => {
+  try {
+    const result = await ensureCanonicalTabs();
+    res.json({ ok: true, step: 1, result });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      step: 1,
+      error: error?.message || "Failed to ensure canonical tabs",
+    });
+  }
+});
+
+/**
+ * STEP 2
+ * Dry run legacy/raw mapping into canonical structures
+ */
+router.post("/dry-run", async (_req, res) => {
+  try {
+    const result = await runDryRunMigration();
+    res.json({ ok: true, step: 2, result });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      step: 2,
+      error: error?.message || "Dry run failed",
+    });
+  }
+});
+
+/**
+ * STEP 3
+ * Apply migration to canonical tabs
+ */
+router.post("/apply", async (_req, res) => {
+  try {
+    const result = await applyMigration();
+    res.json({ ok: true, step: 3, result });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      step: 3,
+      error: error?.message || "Apply migration failed",
+    });
+  }
+});
+
+/**
+ * STEP 4
+ * Run QA on canonical tabs
+ */
+router.post("/run-qa", async (_req, res) => {
+  try {
+    const result = await runMigrationQa();
+    res.json({ ok: true, step: 4, result });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      step: 4,
+      error: error?.message || "QA failed",
+    });
+  }
+});
+
+/**
+ * STEP 5
+ * Cut over app to canonical sheet tabs
+ */
+router.post("/cutover", async (_req, res) => {
+  try {
+    const result = await cutoverToCanonicalSheets();
+    res.json({ ok: true, step: 5, result });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      step: 5,
+      error: error?.message || "Cutover failed",
+    });
+  }
+});
+
+export default router;
+3. Service wrapper for the 5 steps
+server/services/googleSheetsMigrationService.ts
+import { google } from "googleapis";
+import crypto from "crypto";
+import { appendPackAuditLog } from "../engines/packAuditLogger";
+import { legacyMapWorkbookTabs } from "../engines/legacyTabMapper";
+import { validateAnyPackRow, validatePackQuestionRow } from "../engines/packValidationEngine";
+
+const CANONICAL_TABS = [
+  "Symptom_Packs",
+  "Pack_Questions",
+  "Modifier_Packs",
+  "Clinician_Algorithms",
+  "Plan_Templates",
+  "Pack_Audit_Log",
+  "Import_Mapping_Log",
+  "Import_Errors",
+];
+
+function getSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  return google.sheets({ version: "v4", auth });
+}
+
+function getSpreadsheetId() {
+  const id = process.env.PACKS_SPREADSHEET_ID;
+  if (!id) {
+    throw new Error("Missing PACKS_SPREADSHEET_ID");
+  }
+  return id;
+}
+
+async function getSpreadsheetMeta() {
+  const sheets = getSheetsClient();
+  const spreadsheetId = getSpreadsheetId();
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  return { sheets, spreadsheetId, meta };
+}
+
+function headerRowFor(tab: string): string[] {
+  if (tab === "Symptom_Packs") {
+    return [
+      "id",
+      "system",
+      "title",
+      "isActive",
+      "version",
+      "tags",
+      "aliases",
+      "likelyDisposition",
+      "questionsJson",
+      "redFlags",
+      "autoEscalateRules",
+      "autoReviewRules",
+      "planTemplateKey",
+    ];
+  }
+
+  if (tab === "Pack_Questions") {
+    return [
+      "id",
+      "packId",
+      "questionId",
+      "prompt",
+      "type",
+      "priority",
+      "required",
+      "optionsJson",
+      "helpText",
+      "isActive",
+      "version",
+    ];
+  }
+
+  if (tab === "Modifier_Packs") {
+    return [
+      "id",
+      "system",
+      "title",
+      "isActive",
+      "version",
+      "tags",
+      "appliesToSymptoms",
+      "triggers",
+      "riskAdjustmentsJson",
+    ];
+  }
+
+  if (tab === "Clinician_Algorithms") {
+    return [
+      "id",
+      "system",
+      "title",
+      "isActive",
+      "version",
+      "tags",
+      "entryCriteria",
+      "requiredInputs",
+      "outputActions",
+      "notes",
+    ];
+  }
+
+  if (tab === "Plan_Templates") {
+    return [
+      "key",
+      "diagnosisLabel",
+      "defaultDisposition",
+      "summary",
+      "homeCare",
+      "medsJson",
+      "followUp",
+      "returnPrecautions",
+      "patientMessage",
+    ];
+  }
+
+  if (tab === "Pack_Audit_Log") {
+    return [
+      "id",
+      "entityType",
+      "entityId",
+      "action",
+      "actorId",
+      "actorName",
+      "at",
+      "beforeJson",
+      "afterJson",
+      "validationOk",
+      "validationIssuesJson",
+      "notes",
+    ];
+  }
+
+  if (tab === "Import_Mapping_Log") {
+    return [
+      "id",
+      "sourceTab",
+      "entityType",
+      "entityId",
+      "status",
+      "detailsJson",
+      "at",
+    ];
+  }
+
+  if (tab === "Import_Errors") {
+    return [
+      "id",
+      "sourceTab",
+      "entityType",
+      "entityId",
+      "errorMessage",
+      "payloadJson",
+      "at",
+    ];
+  }
+
+  return ["id"];
+}
+
+async function ensureHeader(tabName: string) {
+  const { sheets, spreadsheetId } = await getSpreadsheetMeta();
+  const header = headerRowFor(tabName);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${tabName}!A1:Z1`,
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [header],
+    },
+  });
+}
+
+export async function ensureCanonicalTabs() {
+  const { sheets, spreadsheetId, meta } = await getSpreadsheetMeta();
+
+  const existingTitles = new Set(
+    (meta.data.sheets || []).map(s => s.properties?.title).filter(Boolean)
+  );
+
+  const missing = CANONICAL_TABS.filter(t => !existingTitles.has(t));
+
+  if (missing.length > 0) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: missing.map(title => ({
+          addSheet: {
+            properties: { title },
+          },
+        })),
+      },
+    });
+  }
+
+  for (const tab of CANONICAL_TABS) {
+    await ensureHeader(tab);
+  }
+
+  await appendPackAuditLog({
+    entityType: "plan_template",
+    entityId: "canonical_tabs",
+    action: "update",
+    actorId: "system",
+    afterJson: JSON.stringify({ ensuredTabs: CANONICAL_TABS }),
+    validationOk: true,
+    validationIssuesJson: "[]",
+    notes: "Canonical tabs ensured",
+  });
+
+  return {
+    existing: [...existingTitles],
+    created: missing,
+    canonicalTabs: CANONICAL_TABS,
+  };
+}
+
+async function readAllTabsAsObjects() {
+  const { sheets, spreadsheetId, meta } = await getSpreadsheetMeta();
+  const titles = (meta.data.sheets || [])
+    .map(s => s.properties?.title)
+    .filter((x): x is string => Boolean(x));
+
+  const result: Record<string, string[][]> = {};
+
+  for (const title of titles) {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${title}!A:Z`,
+    });
+    result[title] = res.data.values || [];
+  }
+
+  return result;
+}
+
+export async function runDryRunMigration() {
+  const workbookTabs = await readAllTabsAsObjects();
+
+  const mapped = legacyMapWorkbookTabs(workbookTabs);
+
+  const validations = {
+    symptom: mapped.symptomRows.map(row => ({
+      id: row.id,
+      validation: validateAnyPackRow(row),
+    })),
+    modifier: mapped.modifierRows.map(row => ({
+      id: row.id,
+      validation: validateAnyPackRow(row),
+    })),
+    algorithm: mapped.algorithmRows.map(row => ({
+      id: row.id,
+      validation: validateAnyPackRow(row),
+    })),
+    question: mapped.questionRows.map(row => ({
+      id: row.id,
+      validation: validatePackQuestionRow(row),
+    })),
+  };
+
+  return {
+    summary: {
+      symptomRows: mapped.symptomRows.length,
+      modifierRows: mapped.modifierRows.length,
+      algorithmRows: mapped.algorithmRows.length,
+      questionRows: mapped.questionRows.length,
+      issues: mapped.issues.length,
+    },
+    mapped,
+    validations,
+  };
+}
+
+function joinPipe(values?: string[]) {
+  return (values || []).join("|");
+}
+
+async function appendRows(tabName: string, values: string[][]) {
+  if (values.length === 0) return;
+  const { sheets, spreadsheetId } = await getSpreadsheetMeta();
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${tabName}!A:Z`,
+    valueInputOption: "RAW",
+    requestBody: { values },
+  });
+}
+
+export async function applyMigration() {
+  const dryRun = await runDryRunMigration();
+  const { mapped } = dryRun;
+
+  const validSymptomRows = mapped.symptomRows.filter(
+    row => validateAnyPackRow(row).ok
+  );
+  const validModifierRows = mapped.modifierRows.filter(
+    row => validateAnyPackRow(row).ok
+  );
+  const validAlgorithmRows = mapped.algorithmRows.filter(
+    row => validateAnyPackRow(row).ok
+  );
+  const validQuestionRows = mapped.questionRows.filter(
+    row => validatePackQuestionRow(row).ok
+  );
+
+  await appendRows(
+    "Symptom_Packs",
+    validSymptomRows.map(row => [
+      row.id,
+      row.system,
+      row.title,
+      String(row.isActive),
+      String(row.version),
+      joinPipe(row.tags),
+      joinPipe(row.aliases),
+      row.likelyDisposition,
+      row.questionsJson || "[]",
+      joinPipe(row.redFlags),
+      joinPipe(row.autoEscalateRules),
+      joinPipe(row.autoReviewRules),
+      row.planTemplateKey,
+    ])
+  );
+
+  await appendRows(
+    "Modifier_Packs",
+    validModifierRows.map(row => [
+      row.id,
+      row.system,
+      row.title,
+      String(row.isActive),
+      String(row.version),
+      joinPipe(row.tags),
+      joinPipe(row.appliesToSymptoms),
+      joinPipe(row.triggers),
+      row.riskAdjustmentsJson,
+    ])
+  );
+
+  await appendRows(
+    "Clinician_Algorithms",
+    validAlgorithmRows.map(row => [
+      row.id,
+      row.system,
+      row.title,
+      String(row.isActive),
+      String(row.version),
+      joinPipe(row.tags),
+      joinPipe(row.entryCriteria),
+      joinPipe(row.requiredInputs),
+      joinPipe(row.outputActions),
+      joinPipe(row.notes),
+    ])
+  );
+
+  await appendRows(
+    "Pack_Questions",
+    validQuestionRows.map(row => [
+      row.id,
+      row.packId,
+      row.questionId,
+      row.prompt,
+      row.type,
+      String(row.priority),
+      String(row.required),
+      row.optionsJson || "",
+      row.helpText || "",
+      String(row.isActive),
+      String(row.version),
+    ])
+  );
+
+  const mappingLogRows = [
+    ...validSymptomRows.map(row => [
+      crypto.randomUUID(),
+      row.system,
+      "symptom_pack",
+      row.id,
+      "imported",
+      JSON.stringify(row),
+      new Date().toISOString(),
+    ]),
+    ...validModifierRows.map(row => [
+      crypto.randomUUID(),
+      row.system,
+      "modifier_pack",
+      row.id,
+      "imported",
+      JSON.stringify(row),
+      new Date().toISOString(),
+    ]),
+    ...validAlgorithmRows.map(row => [
+      crypto.randomUUID(),
+      row.system,
+      "clinician_algorithm",
+      row.id,
+      "imported",
+      JSON.stringify(row),
+      new Date().toISOString(),
+    ]),
+    ...validQuestionRows.map(row => [
+      crypto.randomUUID(),
+      row.packId,
+      "pack_question",
+      row.id,
+      "imported",
+      JSON.stringify(row),
+      new Date().toISOString(),
+    ]),
+  ];
+
+  await appendRows("Import_Mapping_Log", mappingLogRows);
+
+  const invalidRows = [
+    ...mapped.symptomRows
+      .filter(row => !validateAnyPackRow(row).ok)
+      .map(row => [
+        crypto.randomUUID(),
+        row.system,
+        "symptom_pack",
+        row.id,
+        "Validation failed",
+        JSON.stringify(row),
+        new Date().toISOString(),
+      ]),
+    ...mapped.modifierRows
+      .filter(row => !validateAnyPackRow(row).ok)
+      .map(row => [
+        crypto.randomUUID(),
+        row.system,
+        "modifier_pack",
+        row.id,
+        "Validation failed",
+        JSON.stringify(row),
+        new Date().toISOString(),
+      ]),
+    ...mapped.algorithmRows
+      .filter(row => !validateAnyPackRow(row).ok)
+      .map(row => [
+        crypto.randomUUID(),
+        row.system,
+        "clinician_algorithm",
+        row.id,
+        "Validation failed",
+        JSON.stringify(row),
+        new Date().toISOString(),
+      ]),
+    ...mapped.questionRows
+      .filter(row => !validatePackQuestionRow(row).ok)
+      .map(row => [
+        crypto.randomUUID(),
+        row.packId,
+        "pack_question",
+        row.id,
+        "Validation failed",
+        JSON.stringify(row),
+        new Date().toISOString(),
+      ]),
+  ];
+
+  await appendRows("Import_Errors", invalidRows);
+
+  await appendPackAuditLog({
+    entityType: "plan_template",
+    entityId: "google_sheets_apply_migration",
+    action: "update",
+    actorId: "system",
+    afterJson: JSON.stringify({
+      imported: {
+        symptom: validSymptomRows.length,
+        modifier: validModifierRows.length,
+        algorithm: validAlgorithmRows.length,
+        question: validQuestionRows.length,
+      },
+      errors: invalidRows.length,
+    }),
+    validationOk: true,
+    validationIssuesJson: "[]",
+    notes: "Applied legacy-to-canonical migration",
+  });
+
+  return {
+    imported: {
+      symptomRows: validSymptomRows.length,
+      modifierRows: validModifierRows.length,
+      algorithmRows: validAlgorithmRows.length,
+      questionRows: validQuestionRows.length,
+    },
+    errorsLogged: invalidRows.length,
+    issues: mapped.issues,
+  };
+}
+
+export async function runMigrationQa() {
+  const { sheets, spreadsheetId } = await getSpreadsheetMeta();
+
+  const tabsToCheck = [
+    "Symptom_Packs",
+    "Pack_Questions",
+    "Modifier_Packs",
+    "Clinician_Algorithms",
+  ];
+
+  const counts: Record<string, number> = {};
+
+  for (const tab of tabsToCheck) {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${tab}!A2:A`,
+    });
+    counts[tab] = (res.data.values || []).length;
+  }
+
+  const qa = {
+    counts,
+    ok:
+      counts["Symptom_Packs"] > 0 &&
+      counts["Pack_Questions"] > 0,
+  };
+
+  await appendPackAuditLog({
+    entityType: "plan_template",
+    entityId: "google_sheets_run_qa",
+    action: "validate",
+    actorId: "system",
+    afterJson: JSON.stringify(qa),
+    validationOk: qa.ok,
+    validationIssuesJson: JSON.stringify([]),
+    notes: "Migration QA completed",
+  });
+
+  return qa;
+}
+
+export async function cutoverToCanonicalSheets() {
+  process.env.PACK_REPO_DRIVER = "google_sheets";
+
+  const result = {
+    packRepoDriver: process.env.PACK_REPO_DRIVER,
+    spreadsheetIdConfigured: Boolean(process.env.PACKS_SPREADSHEET_ID),
+    canonicalMode: true,
+  };
+
+  await appendPackAuditLog({
+    entityType: "plan_template",
+    entityId: "google_sheets_cutover",
+    action: "update",
+    actorId: "system",
+    afterJson: JSON.stringify(result),
+    validationOk: true,
+    validationIssuesJson: "[]",
+    notes: "Cutover to canonical Google Sheets repository",
+  });
+
+  return result;
+}
+4. Legacy tab mapper engine
+server/engines/legacyTabMapper.ts
+import crypto from "crypto";
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+
+export interface LegacyMapResult {
+  symptomRows: SymptomPackRow[];
+  modifierRows: ModifierPackRow[];
+  algorithmRows: ClinicianAlgorithmRow[];
+  questionRows: PackQuestionRow[];
+  issues: string[];
+}
+
+function slugify(input: string) {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function rowsToObjects(rows: string[][]) {
+  if (!rows.length) return [];
+  const header = rows[0].map(x => String(x || "").trim());
+  return rows.slice(1).map(r => {
+    const obj: Record<string, string> = {};
+    for (let i = 0; i < header.length; i++) {
+      obj[header[i]] = r[i] || "";
+    }
+    return obj;
+  });
+}
+
+function detectSystemFromTab(tabName: string) {
+  const n = tabName.toLowerCase();
+  if (n.includes("ent")) return "ent";
+  if (n.includes("card")) return "cardiology";
+  if (n.includes("ortho")) return "ortho";
+  if (n.includes("pulm")) return "pulmonary";
+  if (n.includes("gi")) return "gi";
+  if (n.includes("neuro")) return "neuro";
+  if (n.includes("derm")) return "derm";
+  if (n.includes("uro")) return "urology";
+  if (n.includes("endo")) return "endocrinology";
+  if (n.includes("tox")) return "toxicology";
+  if (n.includes("psych")) return "psych";
+  if (n.includes("eye")) return "eye";
+  if (n.includes("allergy")) return "allergy_immunology";
+  if (n.includes("environment")) return "environment";
+  return "general";
+}
+
+function parsePipeOrCsv(text: string) {
+  if (!text) return [];
+  return text
+    .split(/[|,]/)
+    .map(x => x.trim())
+    .filter(Boolean);
+}
+
+export function legacyMapWorkbookTabs(
+  workbookTabs: Record<string, string[][]>
+): LegacyMapResult {
+  const result: LegacyMapResult = {
+    symptomRows: [],
+    modifierRows: [],
+    algorithmRows: [],
+    questionRows: [],
+    issues: [],
+  };
+
+  for (const [tabName, rawRows] of Object.entries(workbookTabs)) {
+    const lower = tabName.toLowerCase();
+    if (!rawRows.length) continue;
+
+    const objects = rowsToObjects(rawRows);
+    const system = detectSystemFromTab(tabName);
+
+    if (lower.includes("complaint") || lower.includes("chief") || lower.includes("symptom")) {
+      for (const row of objects) {
+        const title =
+          row["title"] ||
+          row["complaint"] ||
+          row["chief_complaint"] ||
+          row["symptom"] ||
+          "";
+
+        if (!title) continue;
+
+        const id = `${system}_${slugify(title)}`;
+
+        result.symptomRows.push({
+          id,
+          system,
+          tier: "symptom",
+          title,
+          isActive: true,
+          version: 1,
+          tags: parsePipeOrCsv(row["tags"] || ""),
+          aliases: parsePipeOrCsv(row["aliases"] || row["synonyms"] || title),
+          likelyDisposition: (row["likelyDisposition"] ||
+            row["disposition"] ||
+            "telemed_now") as any,
+          questionsJson: "[]",
+          redFlags: parsePipeOrCsv(row["redFlags"] || row["red_flags"] || ""),
+          autoEscalateRules: parsePipeOrCsv(
+            row["autoEscalateRules"] || row["escalate_rules"] || ""
+          ),
+          autoReviewRules: parsePipeOrCsv(
+            row["autoReviewRules"] || row["review_rules"] || ""
+          ),
+          planTemplateKey: row["planTemplateKey"] || id,
+        });
+      }
+    }
+
+    if (lower.includes("secondary") || lower.includes("question")) {
+      for (const row of objects) {
+        const packRef =
+          row["packId"] ||
+          row["complaintId"] ||
+          row["chief_complaint"] ||
+          row["complaint"] ||
+          row["symptom"] ||
+          "";
+
+        const prompt = row["prompt"] || row["question"] || row["text"] || "";
+        if (!packRef || !prompt) continue;
+
+        const packId =
+          packRef.includes("_") ? packRef : `${system}_${slugify(packRef)}`;
+
+        const questionId = slugify(
+          row["questionId"] || row["field"] || prompt.slice(0, 40)
+        );
+
+        result.questionRows.push({
+          id: crypto.randomUUID(),
+          packId,
+          questionId,
+          prompt,
+          type: (row["type"] || "yes_no") as any,
+          priority: Number(row["priority"] || 1),
+          required: String(row["required"]).toLowerCase() === "true",
+          optionsJson: row["optionsJson"] || "",
+          helpText: row["helpText"] || "",
+          isActive: true,
+          version: 1,
+        });
+      }
+    }
+
+    if (lower.includes("modifier")) {
+      for (const row of objects) {
+        const title = row["title"] || row["modifier"] || row["name"] || "";
+        if (!title) continue;
+
+        const id = `${system}_mod_${slugify(title)}`;
+
+        const appliesToSymptoms = parsePipeOrCsv(
+          row["appliesToSymptoms"] || row["applies_to"] || row["complaints"] || ""
+        ).map(x => (x.includes("_") ? x : `${system}_${slugify(x)}`));
+
+        const triggers = parsePipeOrCsv(row["triggers"] || row["trigger_rules"] || "");
+
+        const riskAdjustments = row["riskAdjustmentsJson"]
+          ? row["riskAdjustmentsJson"]
+          : JSON.stringify([
+              {
+                condition: triggers[0] || "ANY_RED_FLAG=true",
+                action: "force_review",
+                reason: title,
+              },
+            ]);
+
+        result.modifierRows.push({
+          id,
+          system,
+          tier: "modifier",
+          title,
+          isActive: true,
+          version: 1,
+          tags: parsePipeOrCsv(row["tags"] || ""),
+          appliesToSymptoms,
+          triggers,
+          riskAdjustmentsJson: riskAdjustments,
+        });
+      }
+    }
+
+    if (lower.includes("triage") || lower.includes("algorithm") || lower.includes("acls")) {
+      for (const row of objects) {
+        const title = row["title"] || row["algorithm"] || row["name"] || "";
+        if (!title) continue;
+
+        const id = `${system}_algo_${slugify(title)}`;
+
+        result.algorithmRows.push({
+          id,
+          system,
+          tier: "clinician_algorithm",
+          title,
+          isActive: true,
+          version: 1,
+          tags: parsePipeOrCsv(row["tags"] || ""),
+          entryCriteria: parsePipeOrCsv(row["entryCriteria"] || row["entry_criteria"] || ""),
+          requiredInputs: parsePipeOrCsv(row["requiredInputs"] || row["required_inputs"] || ""),
+          outputActions: parsePipeOrCsv(row["outputActions"] || row["output_actions"] || ""),
+          notes: parsePipeOrCsv(row["notes"] || ""),
+        });
+      }
+    }
+  }
+
+  if (
+    result.symptomRows.length === 0 &&
+    result.questionRows.length === 0 &&
+    result.modifierRows.length === 0 &&
+    result.algorithmRows.length === 0
+  ) {
+    result.issues.push("No recognizable legacy rows were mapped from workbook tabs.");
+  }
+
+  return result;
+}
+5. One-shot runner script for steps 1 to 5
+scripts/runGoogleSheetsIncorporation.ts
+const baseUrl = process.env.APP_BASE_URL || "http://localhost:3001";
+
+async function post(path: string) {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(`${path} failed: ${JSON.stringify(json, null, 2)}`);
+  }
+  return json;
+}
+
+async function main() {
+  console.log("Step 1: ensure canonical tabs");
+  console.log(await post("/api/google-sheets-migration/ensure-canonical-tabs"));
+
+  console.log("Step 2: dry run");
+  console.log(await post("/api/google-sheets-migration/dry-run"));
+
+  console.log("Step 3: apply");
+  console.log(await post("/api/google-sheets-migration/apply"));
+
+  console.log("Step 4: run QA");
+  console.log(await post("/api/google-sheets-migration/run-qa"));
+
+  console.log("Step 5: cutover");
+  console.log(await post("/api/google-sheets-migration/cutover"));
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+
+Run it with:
+
+node --env-file=.env scripts/runGoogleSheetsIncorporation.ts
+
+Or if using tsx:
+
+npx tsx scripts/runGoogleSheetsIncorporation.ts
+6. Environment variables
+.env
+PACK_REPO_DRIVER=google_sheets
+PACKS_SPREADSHEET_ID=your_google_sheet_id_here
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+PORT=3001
+APP_BASE_URL=http://localhost:3001
+7. After Sheets incorporation, continue Endocrinology build-up
+
+Yes. After these 5 steps, the next clean move is to continue Endocrinology to a fuller set. The first packs to add next are:
+
+thyroid nodule / neck fullness
+
+hyperthyroid pattern
+
+hypothyroid pattern
+
+diabetes medication issue
+
+insulin dosing concern
+
+steroid withdrawal / adrenal suppression
+
+pituitary / prolactin symptom pattern
+
+electrolyte/endocrine overlap screen
