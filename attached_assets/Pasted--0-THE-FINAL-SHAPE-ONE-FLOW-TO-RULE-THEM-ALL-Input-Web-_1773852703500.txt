@@ -1,0 +1,229 @@
+🧠 0. THE FINAL SHAPE (ONE FLOW TO RULE THEM ALL)
+Input (Web / Telegram / WhatsApp)
+        ↓
+Complaint Router
+        ↓
+Pack Loader (Sheets / Repo)
+        ↓
+Dynamic Questions Engine
+        ↓
+Modifiers Engine
+        ↓
+Rules + Clusters + RLHF Weights
+        ↓
+Memory Boost
+        ↓
+Triage Resolver + Safety Layer
+        ↓
+Plan Generator
+        ↓
+Trace Builder (for Graph + Audit)
+        ↓
+Case Memory Storage
+        ↓
+Outcome Logging
+        ↓
+Self-Improvement Loop (async)
+        ↓
+Sheets Update (approved)
+🔗 1. UNIFIED PIPELINE (CORE FILE)
+
+This is the single source of truth.
+
+// server/pipeline/unifiedClinicalPipeline.ts
+
+import { routeComplaint } from "../engines/complaintRouterEngine";
+import { buildParsedSymptomPacksFromRows } from "../engines/normalizedPackBuilder";
+import { applyModifiers } from "../engines/modifierEngine";
+import { evaluateRules } from "../engines/ruleEngine";
+import { scoreDiagnoses } from "../engines/diagnosisEngine";
+import { resolveTriage } from "../engines/triageEngine";
+import { generatePlan } from "../engines/planEngine";
+import { boostFromMemory, storeCase } from "../engines/caseMemoryEngine";
+import { buildExplainabilityGraph } from "../engines/explainabilityGraphEngine";
+import { ingestOutcome } from "../services/patientOutcomeLogService";
+import { applyRLHFWeights } from "../engines/rlhfWeightTuningEngine";
+
+export async function runClinicalPipeline(input: any, repo: any) {
+  const trace: any = {
+    complaint: null,
+    questions: [],
+    modifiers: [],
+    rules: [],
+    clusters: [],
+    final: {}
+  };
+
+  // 1. ROUTE
+  const route = routeComplaint(input.text, await repo.getRouter());
+  if (!route) throw new Error("No complaint match");
+  trace.complaint = route.complaint;
+
+  // 2. LOAD PACK
+  const rows = await repo.getQuestionRows(route.packId);
+  const packs = buildParsedSymptomPacksFromRows(rows);
+  const pack = packs[route.packId];
+
+  // 3. QUESTIONS (assume answers already provided in input)
+  trace.questions = input.answers || [];
+
+  // 4. MODIFIERS
+  const { caseData } = applyModifiers(input, await repo.getModifiers());
+  trace.modifiers = caseData.modifiers || [];
+
+  // 5. RULES + CLUSTERS
+  const rules = await repo.getRules(route.packId);
+  const ruleResults = evaluateRules(caseData, rules);
+  trace.rules = ruleResults;
+
+  let clusters = scoreDiagnoses(caseData, await repo.getClusters());
+  clusters = applyRLHFWeights(clusters);
+  trace.clusters = clusters;
+
+  let diagnosis = clusters[0]?.cluster;
+
+  // 6. MEMORY BOOST
+  diagnosis = boostFromMemory(diagnosis, caseData);
+
+  // 7. TRIAGE + SAFETY
+  let triage = resolveTriage(diagnosis, await repo.getTriageMap());
+
+  if (triage !== "ER" && clusters[0]?.score > 0.9) {
+    triage = "ER"; // safety override
+  }
+
+  // 8. PLAN
+  const plan = generatePlan(diagnosis, await repo.getPlans(), await repo.getMeds());
+
+  // 9. TRACE GRAPH
+  const graph = buildExplainabilityGraph(trace);
+
+  // 10. MEMORY STORE
+  storeCase({ complaint: route.complaint, ...caseData, diagnosis, triage });
+
+  // 11. OUTCOME LOG (async placeholder)
+  ingestOutcome({ complaint: route.complaint, diagnosis, triage }, {});
+
+  return {
+    diagnosis,
+    triage,
+    plan,
+    trace,
+    graph
+  };
+}
+🔁 2. SELF-IMPROVEMENT LOOP (CONNECTED)
+
+Now we wire it to real + simulated data
+
+// server/agents/selfImprovementOrchestrator.ts
+
+import { runSelfImprovementCycle } from "../engines/selfImprovementEngine";
+import { applyFixToSheets } from "../engines/googleSheetsMigrationEngine";
+
+export async function runContinuousImprovement() {
+  const result = await runSelfImprovementCycle();
+
+  const approvedFixes = result.fixes.filter(f => f.autoApprove === true);
+
+  for (const fix of approvedFixes) {
+    await applyFixToSheets(fix);
+  }
+
+  return result;
+}
+🧪 3. SIMULATION LOOP → TRAINING
+// server/engines/simulationTrainingLoop.ts
+
+import { runSimulations } from "./massSimulationEngine";
+import { ingestOutcome } from "../services/patientOutcomeLogService";
+
+export async function simulateAndTrain(repo) {
+  const packs = await repo.getAll();
+  const results = await runSimulations(packs, 500);
+
+  for (const r of results.cases) {
+    ingestOutcome(r.predicted, r.groundTruth);
+  }
+
+  return results;
+}
+📲 4. MESSAGING (LOCKED TO PIPELINE)
+Telegram
+// server/integrations/telegramController.ts
+
+import { runClinicalPipeline } from "../pipeline/unifiedClinicalPipeline";
+
+bot.on("message", async (msg) => {
+  const response = await runClinicalPipeline(
+    { text: msg.text, answers: [] },
+    repo
+  );
+
+  bot.sendMessage(msg.chat.id, formatResponse(response));
+});
+WhatsApp
+// server/integrations/whatsappController.ts
+
+router.post("/webhook", async (req, res) => {
+  const result = await runClinicalPipeline(
+    { text: req.body.message, answers: [] },
+    repo
+  );
+
+  sendWhatsAppReply(req.body.from, result);
+});
+📊 5. DASHBOARD = CONTROL CENTER
+
+Upgrade your existing dashboard with real controls:
+
+Add actions:
+POST /api/self-improve/apply-fix
+POST /api/simulate-all
+POST /api/integrations/run-pipeline
+GET  /api/explain
+Key additions:
+🔘 Apply Fix Button
+
+→ calls Sheets migration
+
+🔘 Run Simulation
+
+→ triggers training loop
+
+🔘 View Trace
+
+→ opens graph
+
+🔘 Replay Case
+
+→ runs pipeline again
+
+🧬 6. NORMALIZATION LAYER (MANDATORY)
+// server/utils/normalize.ts
+
+export function normalizeSystem(system: string) {
+  const map = {
+    ent: "ENT",
+    cardiology: "CARD",
+    gi: "GI",
+    gastroenterology: "GI"
+  };
+
+  return map[system.toLowerCase()] || system.toUpperCase();
+}
+🏥 7. EHR OUTPUT (FHIR READY)
+// server/integrations/fhirController.ts
+
+export function buildEncounter(result) {
+  return {
+    resourceType: "Encounter",
+    diagnosis: result.diagnosis,
+    triage: result.triage,
+    plan: result.plan
+  };
+}
+🔐 8. SAFETY LAYER
+if (triage === "routine" && diagnosis === "ACS") {
+  throw new Error("Unsafe triage blocked");
+}
