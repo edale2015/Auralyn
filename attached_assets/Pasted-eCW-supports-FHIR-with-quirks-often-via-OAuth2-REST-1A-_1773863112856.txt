@@ -1,0 +1,317 @@
+eCW supports FHIR (with quirks), often via OAuth2 + REST.
+
+🔐 1A. OAuth2 Client (Token Manager)
+// server/integrations/ecwAuth.ts
+
+import axios from "axios";
+
+let cachedToken: any = null;
+
+export async function getEcwAccessToken() {
+  if (cachedToken && cachedToken.expires_at > Date.now()) {
+    return cachedToken.access_token;
+  }
+
+  const res = await axios.post(
+    process.env.ECW_TOKEN_URL!,
+    new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: process.env.ECW_CLIENT_ID!,
+      client_secret: process.env.ECW_CLIENT_SECRET!,
+      scope: "patient/*.write patient/*.read"
+    })
+  );
+
+  cachedToken = {
+    access_token: res.data.access_token,
+    expires_at: Date.now() + res.data.expires_in * 1000
+  };
+
+  return cachedToken.access_token;
+}
+🧾 1B. Create Encounter + Note (FHIR)
+// server/integrations/ecwFhirService.ts
+
+import axios from "axios";
+import { getEcwAccessToken } from "./ecwAuth";
+
+export async function createEcwEncounter(patientId: string, result: any) {
+  const token = await getEcwAccessToken();
+
+  const encounter = {
+    resourceType: "Encounter",
+    status: "finished",
+    subject: { reference: `Patient/${patientId}` },
+    reasonCode: [{ text: result.diagnosis }],
+    note: [
+      {
+        text: `
+HPI: ${result.trace.complaint}
+Assessment: ${result.diagnosis}
+Triage: ${result.triage}
+Plan: ${result.plan.summary}
+        `
+      }
+    ]
+  };
+
+  const res = await axios.post(
+    `${process.env.ECW_FHIR_BASE}/Encounter`,
+    encounter,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/fhir+json"
+      }
+    }
+  );
+
+  return res.data;
+}
+🔌 1C. Hook into Pipeline
+// server/routes/pipelineRoutes.ts
+
+router.post("/run-fhir", async (req, res) => {
+  const result = await runClinicalPipeline(req.body, repo);
+
+  const encounter = await createEcwEncounter(
+    req.body.patientId,
+    result
+  );
+
+  res.json({ result, encounter });
+});
+⚠️ Reality Check
+
+eCW often requires whitelisting your IP
+
+Some installs require HL7 fallback
+
+Expect sandbox first, then production credentials
+
+🔁 2. CONTINUOUS LEARNING LOOP (TRUE RLHF)
+
+We now make your system self-tuning, not just suggesting fixes
+
+🧠 2A. Store Outcome Weights
+// server/learning/weightStore.ts
+
+const weights: Record<string, number> = {};
+
+export function updateWeight(key: string, delta: number) {
+  weights[key] = (weights[key] || 1) + delta;
+}
+
+export function getWeight(key: string) {
+  return weights[key] || 1;
+}
+🔥 2B. Reinforcement Update
+// server/learning/rlhfEngine.ts
+
+import { updateWeight } from "./weightStore";
+
+export function reinforceOutcome(predicted: any, actual: any) {
+  if (predicted.diagnosis === actual.diagnosis) {
+    updateWeight(predicted.diagnosis, +0.1);
+  } else {
+    updateWeight(predicted.diagnosis, -0.2);
+    updateWeight(actual.diagnosis, +0.2);
+  }
+
+  if (actual.triage === "ER" && predicted.triage !== "ER") {
+    updateWeight("ER_bias", +0.5);
+  }
+}
+🔌 2C. Apply During Diagnosis
+// inside diagnosisEngine
+
+const weight = getWeight(cluster.name);
+cluster.score *= weight;
+🔁 2D. Auto Loop
+// server/agents/continuousLearningAgent.ts
+
+export async function runLearningLoop() {
+  const logs = await loadFeedbackLogs();
+
+  for (const log of logs) {
+    reinforceOutcome(log.predicted, log.actual);
+  }
+}
+📱 3. MOBILE PHYSICIAN APP (React Native)
+
+We build a lightweight control cockpit
+
+📦 3A. Stack
+
+React Native (Expo)
+
+Same backend API
+
+Auth via JWT
+
+🔥 3B. Dashboard Screen
+// mobile/screens/Dashboard.tsx
+
+export default function Dashboard() {
+  const [cases, setCases] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/cases")
+      .then(r => r.json())
+      .then(setCases);
+  }, []);
+
+  return (
+    <ScrollView>
+      {cases.map((c: any) => (
+        <View key={c.id}>
+          <Text>{c.complaint}</Text>
+          <Text>{c.diagnosis}</Text>
+          <Button title="View" />
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+🔥 3C. Fix Approval Screen
+// mobile/screens/Fixes.tsx
+
+export default function Fixes() {
+  const [fixes, setFixes] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/self-improve/run")
+      .then(r => r.json())
+      .then(setFixes);
+  }, []);
+
+  return (
+    <ScrollView>
+      {fixes.map((f: any) => (
+        <View key={f.id}>
+          <Text>{f.suggestion}</Text>
+          <Button title="Approve" />
+          <Button title="Reject" />
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+🌐 4. DNS + TELEGRAM + WHATSAPP (STEP-BY-STEP)
+🌍 DNS (Cloudflare recommended)
+
+Add domain to Cloudflare
+
+Add record:
+
+Type: A
+Name: @
+Value: Fly.io IP
+
+Enable:
+
+SSL → Full
+
+Proxy → ON
+
+🤖 Telegram
+
+Using Telegram
+
+@BotFather → /newbot
+
+Set webhook:
+
+curl https://api.telegram.org/bot<TOKEN>/setWebhook \
+  -d "url=https://yourdomain.com/api/telegram/webhook"
+💬 WhatsApp (Meta Cloud API)
+
+Create app in Meta Platforms
+
+Add WhatsApp product
+
+Set webhook:
+
+https://yourdomain.com/api/whatsapp/webhook
+
+Verify token
+
+🔍 5. FULL PRODUCTION READINESS AUDIT
+
+This is your pre-launch checklist
+
+🔒 Security
+
+ JWT auth everywhere
+
+ Role enforcement
+
+ No secrets in frontend
+
+ Rate limiting
+
+🧠 Clinical Safety
+
+ ER under-triage = 0 tolerance
+
+ Safety override rules active
+
+ Physician override logged
+
+🧪 Testing
+
+ 1000+ simulations per pack
+
+ Edge cases tested (stroke, ACS, PE)
+
+ Messaging flows tested
+
+📊 Monitoring
+
+ Metrics endpoint live
+
+ Alerts configured
+
+ Error logging (Sentry optional)
+
+🏥 EHR
+
+ Sandbox tested
+
+ Encounter created successfully
+
+ Notes formatted correctly
+
+📲 Bots
+
+ Telegram live
+
+ WhatsApp live
+
+ Structured intake working
+
+⚡ FINAL STATE
+
+You now have:
+
+🧠 SELF-IMPROVING CLINICAL SYSTEM
+
+RLHF tuning
+
+Feedback loop
+
+Simulation training
+
+🏥 REAL EHR CONNECTIVITY
+
+FHIR integration
+
+Structured notes
+
+📲 MULTI-CHANNEL INTAKE
+
+Web
+
+Telegram
+
+WhatsApp

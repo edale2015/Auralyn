@@ -1,0 +1,594 @@
+1) Put the “E” button on the board
+
+Where: top-right of the Executive Dashboard header, beside Export.
+
+/frontend/components/ExecutiveOpsButton.tsx
+import { useState } from "react";
+import ExecutiveOpsDrawer from "./ExecutiveOpsDrawer";
+
+type Props = {
+  token: string;
+};
+
+export default function ExecutiveOpsButton({ token }: Props) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <button
+        aria-label="Executive Ops"
+        title="Executive Ops"
+        className="h-10 w-10 rounded-full border text-lg font-bold"
+        onClick={() => setOpen(true)}
+      >
+        E
+      </button>
+
+      {open && <ExecutiveOpsDrawer token={token} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+/frontend/components/ExecutiveOpsDrawer.tsx
+import { useState } from "react";
+import GoogleEmailConnectPage from "../pages/GoogleEmailConnectPage";
+import SharedViewsApprovalDashboard from "../pages/SharedViewsApprovalDashboard";
+import BenchmarkTrendsDashboard from "../pages/BenchmarkTrendsDashboard";
+import AlertCenterAcknowledge from "../pages/AlertCenterAcknowledge";
+
+type Props = {
+  token: string;
+  onClose: () => void;
+};
+
+type Tab =
+  | "google-email"
+  | "shared-views"
+  | "signed-export"
+  | "benchmarks"
+  | "alerts";
+
+export default function ExecutiveOpsDrawer({ token, onClose }: Props) {
+  const [tab, setTab] = useState<Tab>("google-email");
+  const [signedPayload, setSignedPayload] = useState<any>(null);
+  const [verifyResult, setVerifyResult] = useState<any>(null);
+
+  const signBoardExport = async () => {
+    const res = await fetch("/api/signed-board-exports/json", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        title: "Executive Board Packet",
+        summaryLines: [
+          "Clinic A processed 3,200 cases.",
+          "Override rate 11.0%",
+          "Margin 41.2%"
+        ],
+        cards: [
+          { title: "Cases", value: 3200 },
+          { title: "Margin", value: "41.2%" }
+        ]
+      })
+    });
+    setSignedPayload(await res.json());
+    setVerifyResult(null);
+  };
+
+  const verifyBoardExport = async () => {
+    if (!signedPayload) return;
+    const res = await fetch("/api/signed-board-exports/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        payload: signedPayload.payload,
+        signature: signedPayload.signature
+      })
+    });
+    setVerifyResult(await res.json());
+  };
+
+  const downloadSignedPdf = async () => {
+    const res = await fetch("/api/signed-board-exports/pdf", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        title: "Signed Executive Board Packet",
+        summaryLines: [
+          "Clinic A processed 3,200 cases.",
+          "Override rate 11.0%",
+          "Margin 41.2%"
+        ],
+        cards: [
+          { title: "Cases", value: 3200 },
+          { title: "Margin", value: "41.2%" }
+        ]
+      })
+    });
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30">
+      <div className="absolute right-0 top-0 h-full w-full max-w-3xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b p-4">
+          <h1 className="text-xl font-bold">Executive Ops</h1>
+          <button className="border rounded px-3 py-1" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="flex gap-2 border-b p-3 flex-wrap">
+          <button className="border rounded px-3 py-1" onClick={() => setTab("google-email")}>Google Email</button>
+          <button className="border rounded px-3 py-1" onClick={() => setTab("shared-views")}>Shared Views</button>
+          <button className="border rounded px-3 py-1" onClick={() => setTab("signed-export")}>Signed Export</button>
+          <button className="border rounded px-3 py-1" onClick={() => setTab("benchmarks")}>Benchmarks</button>
+          <button className="border rounded px-3 py-1" onClick={() => setTab("alerts")}>Alerts</button>
+        </div>
+
+        <div className="p-4 overflow-auto h-[calc(100%-120px)]">
+          {tab === "google-email" && <GoogleEmailConnectPage token={token} />}
+          {tab === "shared-views" && <SharedViewsApprovalDashboard token={token} />}
+          {tab === "benchmarks" && <BenchmarkTrendsDashboard />}
+          {tab === "alerts" && <AlertCenterAcknowledge token={token} />}
+
+          {tab === "signed-export" && (
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <button className="border rounded px-4 py-2" onClick={signBoardExport}>
+                  Sign JSON
+                </button>
+                <button className="border rounded px-4 py-2" onClick={verifyBoardExport}>
+                  Verify Signature
+                </button>
+                <button className="border rounded px-4 py-2" onClick={downloadSignedPdf}>
+                  Download Signed PDF
+                </button>
+              </div>
+
+              {signedPayload && (
+                <pre className="border rounded p-4 overflow-auto text-sm">
+                  {JSON.stringify(signedPayload, null, 2)}
+                </pre>
+              )}
+
+              {verifyResult && (
+                <pre className="border rounded p-4 overflow-auto text-sm">
+                  {JSON.stringify(verifyResult, null, 2)}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+Add it to the Executive board header
+import ExecutiveOpsButton from "../components/ExecutiveOpsButton";
+
+// inside ExecutiveDashboard header row
+<div className="flex items-center justify-between">
+  <h1 className="text-2xl font-bold">Executive Dashboard</h1>
+  <ExecutiveOpsButton token={token} />
+</div>
+2) Google OAuth deployment checklist as code-backed config
+
+What you need to create in Google Cloud Console
+
+A Google Cloud project
+
+Gmail API enabled
+
+OAuth consent screen configured
+
+OAuth client of type Web application
+
+Exact authorized redirect URIs
+
+Authorized domains including your app domain if you use custom domain branding/policy pages
+
+Minimal scope: https://www.googleapis.com/auth/gmail.send
+
+/server/config/deploymentChecklist.ts
+export const deploymentChecklist = {
+  googleCloud: [
+    "Create Google Cloud project",
+    "Enable Gmail API",
+    "Configure OAuth consent screen (Branding, Audience, Data Access)",
+    "Create OAuth client: Web application",
+    "Add exact Authorized redirect URIs",
+    "Add authorized domains for app/privacy/terms/callback host if applicable"
+  ],
+  gmailScope: [
+    "Use least privilege scope: https://www.googleapis.com/auth/gmail.send"
+  ],
+  productionUris: [
+    "https://app.yourdomain.com/api/google-email/oauth/callback",
+    "http://localhost:3000/api/google-email/oauth/callback"
+  ]
+};
+/server/routes/deploymentStatus.ts
+import express from "express";
+import { deploymentChecklist } from "../config/deploymentChecklist";
+import { googleEmailConfig } from "../config/googleEmailConfig";
+
+const router = express.Router();
+
+router.get("/gmail", async (_req, res) => {
+  res.json({
+    configured: Boolean(
+      googleEmailConfig.clientId &&
+      googleEmailConfig.clientSecret &&
+      googleEmailConfig.redirectUri
+    ),
+    redirectUri: googleEmailConfig.redirectUri,
+    scopes: googleEmailConfig.scopes,
+    checklist: deploymentChecklist
+  });
+});
+
+export default router;
+/server/index.ts
+import deploymentStatus from "./routes/deploymentStatus";
+
+app.use("/api/deployment-status", deploymentStatus);
+3) Production-safe Google Email UI with setup status
+/frontend/pages/GoogleEmailConnectPage.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+};
+
+export default function GoogleEmailConnectPage({ token }: Props) {
+  const [status, setStatus] = useState<any>(null);
+  const [sendStatus, setSendStatus] = useState("");
+  const [recipient, setRecipient] = useState("test@example.com");
+
+  useEffect(() => {
+    fetch("/api/deployment-status/gmail")
+      .then(r => r.json())
+      .then(setStatus);
+  }, []);
+
+  const connect = async () => {
+    const res = await fetch("/api/google-email/connect", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    window.location.href = data.url;
+  };
+
+  const sendTest = async () => {
+    const res = await fetch("/api/google-email/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        to: recipient,
+        subject: "Auralyn Gmail setup test",
+        body: "This is a production setup test for Gmail OAuth and send flow."
+      })
+    });
+
+    const data = await res.json();
+    setSendStatus(JSON.stringify(data, null, 2));
+  };
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Google Email</h2>
+
+      {status && (
+        <div className="border rounded p-4 space-y-2">
+          <div><strong>Configured:</strong> {String(status.configured)}</div>
+          <div><strong>Redirect URI:</strong> {status.redirectUri}</div>
+          <div><strong>Scopes:</strong> {status.scopes.join(", ")}</div>
+          <div className="pt-2">
+            <strong>Checklist:</strong>
+            <ul className="list-disc pl-6">
+              {status.checklist.googleCloud.map((item: string) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button className="border rounded px-4 py-2" onClick={connect}>
+          Connect Google Email
+        </button>
+      </div>
+
+      <div className="border rounded p-4 space-y-2">
+        <div className="font-semibold">Test send</div>
+        <input
+          className="border rounded px-3 py-2 w-full"
+          value={recipient}
+          onChange={e => setRecipient(e.target.value)}
+          placeholder="recipient@example.com"
+        />
+        <button className="border rounded px-4 py-2" onClick={sendTest}>
+          Send Test Email
+        </button>
+        {sendStatus && <pre className="border rounded p-4 overflow-auto text-sm">{sendStatus}</pre>}
+      </div>
+    </div>
+  );
+}
+4) Weekly summary send button from the Executive board
+
+This makes Gmail access actually usable from the board.
+
+/frontend/components/SendWeeklySummaryButton.tsx
+import { useState } from "react";
+
+type Props = {
+  token: string;
+  recipientEmail: string;
+};
+
+export default function SendWeeklySummaryButton({ token, recipientEmail }: Props) {
+  const [result, setResult] = useState("");
+
+  const send = async () => {
+    const res = await fetch("/api/weekly-executive-email/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        recipientEmail,
+        headline: "Clinic A processed 3,200 cases with stable safety posture.",
+        summaryLines: [
+          "Override rate: 11.0%",
+          "Average satisfaction: 4.56",
+          "Top pressure complaint: dizziness",
+          "Safety mode: elevated"
+        ]
+      })
+    });
+
+    const data = await res.json();
+    setResult(JSON.stringify(data, null, 2));
+  };
+
+  return (
+    <div className="space-y-2">
+      <button className="border rounded px-4 py-2" onClick={send}>
+        Send Weekly Summary
+      </button>
+      {result && <pre className="border rounded p-4 overflow-auto text-sm">{result}</pre>}
+    </div>
+  );
+}
+
+Add inside the Google Email tab or Email Preview tab:
+
+<SendWeeklySummaryButton token={token} recipientEmail="admin@clinica.com" />
+5) Shared Views approval UI
+/frontend/pages/SharedViewsApprovalDashboard.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+};
+
+export default function SharedViewsApprovalDashboard({ token }: Props) {
+  const [rows, setRows] = useState<any[]>([]);
+  const [name, setName] = useState("Board default");
+  const [filtersJson, setFiltersJson] = useState(
+    JSON.stringify({ clinicId: "clinicA", startDate: "2026-03-01", endDate: "2026-03-18" }, null, 2)
+  );
+
+  const load = async () => {
+    const res = await fetch("/api/shared-views", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    setRows(await res.json());
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const create = async () => {
+    await fetch("/api/shared-views", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        name,
+        viewType: "executive",
+        filters: JSON.parse(filtersJson)
+      })
+    });
+    await load();
+  };
+
+  const approve = async (id: number) => {
+    await fetch(`/api/shared-views/${id}/approve`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    await load();
+  };
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Shared Views</h2>
+
+      <div className="border rounded p-4 space-y-2">
+        <input
+          className="border rounded px-3 py-2 w-full"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="View name"
+        />
+        <textarea
+          className="border rounded px-3 py-2 w-full h-40"
+          value={filtersJson}
+          onChange={e => setFiltersJson(e.target.value)}
+        />
+        <button className="border rounded px-4 py-2" onClick={create}>
+          Create Shared View
+        </button>
+      </div>
+
+      {rows.map(row => (
+        <div key={row.id} className="border rounded p-4">
+          <div className="font-semibold">{row.name}</div>
+          <div>Type: {row.viewType}</div>
+          <div>Approved: {String(row.isApproved)}</div>
+          <div>Created By: {row.createdByUserId}</div>
+          <div>Approved By: {row.approvedByUserId || "—"}</div>
+          {!row.isApproved && (
+            <button className="border rounded px-3 py-1 mt-2" onClick={() => approve(row.id)}>
+              Approve
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+6) Benchmark trends UI
+/frontend/pages/BenchmarkTrendsDashboard.tsx
+import { useEffect, useState } from "react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip
+} from "recharts";
+
+export default function BenchmarkTrendsDashboard() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/benchmark-trends", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rows: [
+          { date: "2026-03-14", clinicType: "urgent_care", complaint: "dizziness", accuracy: 0.78, overrideRate: 0.19, escalationRate: 0.22 },
+          { date: "2026-03-15", clinicType: "urgent_care", complaint: "dizziness", accuracy: 0.80, overrideRate: 0.17, escalationRate: 0.20 },
+          { date: "2026-03-16", clinicType: "urgent_care", complaint: "dizziness", accuracy: 0.83, overrideRate: 0.15, escalationRate: 0.18 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setRows);
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Benchmark Trends</h2>
+      <div className="border rounded p-4 h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={rows}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date" />
+            <YAxis />
+            <Tooltip />
+            <Line type="monotone" dataKey="accuracyPct" />
+            <Line type="monotone" dataKey="overrideRatePct" />
+            <Line type="monotone" dataKey="escalationRatePct" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+7) Paginated alerts UI
+/frontend/pages/PaginatedAlertsPage.tsx
+import { useEffect, useState } from "react";
+
+type Props = {
+  token: string;
+};
+
+export default function PaginatedAlertsPage({ token }: Props) {
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<any>(null);
+
+  const load = async (nextPage: number) => {
+    const res = await fetch(`/api/alerts-workflow?page=${nextPage}&pageSize=10`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    setData(await res.json());
+    setPage(nextPage);
+  };
+
+  useEffect(() => {
+    load(1);
+  }, []);
+
+  if (!data) return <div>Loading alerts...</div>;
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Paginated Alerts</h2>
+
+      {data.items.map((alert: any) => (
+        <div key={alert.id} className="border rounded p-4">
+          <div className="font-semibold">
+            {alert.type} | {alert.entityId}
+          </div>
+          <div>{alert.message}</div>
+          <div>Severity: {alert.severity}</div>
+          <div>Acknowledged: {String(alert.acknowledged)}</div>
+        </div>
+      ))}
+
+      <div className="flex gap-2 items-center">
+        <button
+          className="border rounded px-3 py-1"
+          disabled={data.page <= 1}
+          onClick={() => load(page - 1)}
+        >
+          Prev
+        </button>
+        <span>Page {data.page} / {data.totalPages}</span>
+        <button
+          className="border rounded px-3 py-1"
+          disabled={data.page >= data.totalPages}
+          onClick={() => load(page + 1)}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+Where the “E” button is
+
+Put it top-right of the Executive Dashboard header, next to or just after your Export button. That is the cleanest place because it acts like an “Executive Ops / Enablement” hatch rather than cluttering the main tabs.
+
+Example header:
+
+<div className="flex items-center justify-between">
+  <h1 className="text-2xl font-bold">Executive Dashboard</h1>
+  <div className="flex gap-2">
+    <button className="border rounded px-4 py-2">Export</button>
+    <ExecutiveOpsButton token={token} />
+  </div>
+</div>

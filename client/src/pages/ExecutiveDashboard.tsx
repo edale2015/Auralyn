@@ -19,6 +19,7 @@ import {
   Save, Bookmark, Database, Award, Eye, Trash2,
   FileText, Stethoscope, CheckSquare, Clock, User,
 } from "lucide-react";
+import ExecutiveOpsButton from "@/components/ExecutiveOpsButton";
 
 const STATUS_COLORS: Record<string, string> = {
   good: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
@@ -746,9 +747,12 @@ export default function ExecutiveDashboard() {
           </h1>
           <p className="text-muted-foreground mt-1">Board-Level Analytics, Drilldowns, Alerts, Benchmarks, and Cross-Clinic Insights</p>
         </div>
-        <Button data-testid="button-seed-executive" variant="outline" onClick={() => seedMut.mutate()} disabled={seedMut.isPending}>
-          {seedMut.isPending ? <><RefreshCw className="h-4 w-4 mr-2 animate-spin" /> Seeding...</> : <><Microscope className="h-4 w-4 mr-2" /> Seed Demo Data</>}
-        </Button>
+        <div className="flex gap-2">
+          <Button data-testid="button-seed-executive" variant="outline" onClick={() => seedMut.mutate()} disabled={seedMut.isPending}>
+            {seedMut.isPending ? <><RefreshCw className="h-4 w-4 mr-2 animate-spin" /> Seeding...</> : <><Microscope className="h-4 w-4 mr-2" /> Seed Demo Data</>}
+          </Button>
+          <ExecutiveOpsButton token={localStorage.getItem("app_auth_token") || ""} />
+        </div>
       </div>
 
       <Tabs defaultValue="trends">

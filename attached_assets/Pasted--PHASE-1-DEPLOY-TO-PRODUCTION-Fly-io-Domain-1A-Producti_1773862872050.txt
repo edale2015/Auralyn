@@ -1,0 +1,221 @@
+🚀 PHASE 1 — DEPLOY TO PRODUCTION (Fly.io + Domain)
+🐳 1A. Production Dockerfile (Hardened)
+# Dockerfile
+
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+COPY . .
+
+RUN npm run build
+
+ENV NODE_ENV=production
+
+EXPOSE 3000
+
+CMD ["node", "dist/server.js"]
+⚙️ 1B. fly.toml (Production Ready)
+app = "clinical-brain"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.concurrency]]
+    hard_limit = 100
+    soft_limit = 80
+🚀 1C. Deploy
+npm install -g flyctl
+
+fly auth login
+fly launch --no-deploy
+fly deploy
+🌐 1D. Add Domain
+fly domains add yourdomain.com
+
+Then update DNS:
+
+A record → Fly IP
+
+Or use Fly’s generated CNAME
+
+🔐 1E. Environment Variables
+fly secrets set \
+PACK_REPO_DRIVER=google_sheets \
+GOOGLE_SHEETS_ID=xxx \
+GOOGLE_API_KEY=xxx \
+JWT_SECRET=xxx \
+TELEGRAM_BOT_TOKEN=xxx \
+WHATSAPP_TOKEN=xxx
+🤖 PHASE 2 — TELEGRAM BOT (LIVE)
+🧠 2A. Bot Setup
+
+Go to Telegram → @BotFather
+
+/newbot
+
+Copy token
+
+🔌 2B. Webhook
+curl -X POST https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook \
+  -d "url=https://yourdomain.com/api/telegram/webhook"
+🔥 2C. Production Handler
+// server/routes/telegramWebhook.ts
+
+router.post("/telegram/webhook", async (req, res) => {
+  const msg = req.body.message;
+
+  const result = await runClinicalPipeline(
+    { text: msg.text, answers: [] },
+    repo
+  );
+
+  await sendTelegramMessage(msg.chat.id, formatResponse(result));
+
+  res.sendStatus(200);
+});
+🎯 IMPORTANT UPGRADE
+
+Switch to pack-driven intake:
+
+First message → detect complaint
+
+Then → structured yes/no flow
+
+NOT free text after first step
+
+💬 PHASE 3 — WHATSAPP (LIVE)
+🧠 3A. Setup
+
+Use WhatsApp Business or Meta Cloud API
+
+🔌 3B. Webhook
+// server/routes/whatsappWebhook.ts
+
+router.post("/whatsapp/webhook", async (req, res) => {
+  const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+
+  if (!message) return res.sendStatus(200);
+
+  const result = await runClinicalPipeline(
+    { text: message.text.body, answers: [] },
+    repo
+  );
+
+  await sendWhatsAppReply(message.from, formatResponse(result));
+
+  res.sendStatus(200);
+});
+⚠️ MUST DO
+
+Use Flow Builder for structured intake
+
+Do NOT rely on free text conversations
+
+📊 PHASE 4 — MONITORING DASHBOARDS (LIVE OPS)
+🧠 4A. Add Metrics Panel to Dashboard
+
+You already built backend → now surface it:
+
+<Tab label="System Health">
+  <MetricsPanel />
+</Tab>
+🔔 4B. Add Alerts (CRITICAL)
+// server/monitoring/alertEngine.ts
+
+export function checkAlerts(metrics) {
+  if (metrics.errorRate > 0.05) {
+    sendAlert("High error rate");
+  }
+
+  if (metrics.avgLatency > 2000) {
+    sendAlert("Latency spike");
+  }
+}
+📩 4C. Simple Email Alert
+import nodemailer from "nodemailer";
+
+export async function sendAlert(message: string) {
+  await transporter.sendMail({
+    to: "you@email.com",
+    subject: "Clinical System Alert",
+    text: message
+  });
+}
+📊 4D. Optional (Next Level)
+
+Datadog
+
+Sentry
+
+Grafana
+
+🔐 PHASE 5 — PRODUCTION SAFETY LOCKS (NON-NEGOTIABLE)
+🛑 Add Final Guardrail
+if (
+  result.triage === "routine" &&
+  ["ACS", "PE", "Stroke"].includes(result.diagnosis)
+) {
+  throw new Error("Unsafe discharge blocked");
+}
+🧾 Add Physician Override Log
+appendAuditRow({
+  action: "PHYSICIAN_OVERRIDE",
+  caseId,
+  original,
+  override,
+  timestamp
+});
+🧠 FINAL LIVE SYSTEM
+
+You now have:
+
+🌍 LIVE CLINICAL PLATFORM
+
+Domain + HTTPS
+
+Scalable backend (Fly.io)
+
+Real-time intake
+
+🤖 AI IN THE WILD
+
+Telegram bot
+
+WhatsApp bot
+
+Structured intake flows
+
+📊 LIVE OPERATIONS
+
+Metrics dashboard
+
+Alerts
+
+Simulation monitoring
+
+🔒 CLINICAL SAFETY SYSTEM
+
+Audit logs
+
+Role enforcement
+
+Hard safety blocks
