@@ -110,6 +110,9 @@ import IntelligenceDashboard from "@/pages/IntelligenceDashboard";
 import AdaptiveControlDashboard from "@/pages/AdaptiveControlDashboard";
 import PackBuilderAdminPage from "@/pages/PackBuilderAdminPage";
 import PackSimulatorPage from "@/pages/PackSimulatorPage";
+import PackQuestionsAdminPage from "@/pages/PackQuestionsAdminPage";
+import PackAuditLogPage from "@/pages/PackAuditLogPage";
+import CoverageDashboard from "@/pages/CoverageDashboard";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -229,6 +232,9 @@ function Router() {
       <Route path="/adaptive-control">{() => <AdminPage component={AdaptiveControlDashboard} />}</Route>
       <Route path="/pack-builder">{() => <AdminPage component={PackBuilderAdminPage} />}</Route>
       <Route path="/pack-simulator">{() => <AdminPage component={PackSimulatorPage} />}</Route>
+      <Route path="/pack-questions">{() => <AdminPage component={PackQuestionsAdminPage} />}</Route>
+      <Route path="/pack-audit-log">{() => <AdminPage component={PackAuditLogPage} />}</Route>
+      <Route path="/coverage-dashboard">{() => <AdminPage component={CoverageDashboard} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

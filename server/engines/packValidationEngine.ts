@@ -5,6 +5,7 @@ import {
   IntakeQuestion,
   ModifierRiskAdjustment,
 } from "../../shared/packRows";
+import { PackQuestionRow } from "../../shared/packQuestionRows";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -248,6 +249,47 @@ export function validateClinicianAlgorithmRow(
       field: "outputActions",
       message: "No output actions listed",
     });
+  }
+
+  return {
+    ok: !issues.some(x => x.severity === "error"),
+    issues,
+  };
+}
+
+export function validatePackQuestionRow(row: PackQuestionRow): ValidationResult {
+  const issues: ValidationIssue[] = [];
+
+  if (!row.id) issues.push({ severity: "error", field: "id", message: "Missing id" });
+  if (!row.packId) issues.push({ severity: "error", field: "packId", message: "Missing packId" });
+  if (!row.questionId) issues.push({ severity: "error", field: "questionId", message: "Missing questionId" });
+  if (!row.prompt) issues.push({ severity: "error", field: "prompt", message: "Missing prompt" });
+
+  if (!allowedQuestionTypes.has(row.type)) {
+    issues.push({
+      severity: "error",
+      field: "type",
+      message: `Invalid question type ${row.type}`,
+    });
+  }
+
+  if (typeof row.priority !== "number" || !Number.isFinite(row.priority)) {
+    issues.push({
+      severity: "error",
+      field: "priority",
+      message: "Priority must be numeric",
+    });
+  }
+
+  if (row.optionsJson) {
+    const parsed = safeJsonParse<any[] | null>(row.optionsJson, null);
+    if (!parsed || !Array.isArray(parsed)) {
+      issues.push({
+        severity: "error",
+        field: "optionsJson",
+        message: "optionsJson must be a valid JSON array",
+      });
+    }
   }
 
   return {

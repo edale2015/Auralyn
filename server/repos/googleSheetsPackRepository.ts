@@ -5,6 +5,8 @@ import {
   ModifierPackRow,
   ClinicianAlgorithmRow,
 } from "../../shared/packRows";
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+import { PackAuditLogRow } from "../../shared/packAuditRows";
 
 function splitCsv(value: string | undefined): string[] {
   if (!value) return [];
@@ -99,6 +101,53 @@ export class GoogleSheetsPackRepository implements PackRepository {
     }));
   }
 
+  async getQuestionRows(): Promise<PackQuestionRow[]> {
+    const res = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: this.spreadsheetId,
+      range: "Pack_Questions!A2:K",
+    });
+
+    const rows = res.data.values || [];
+
+    return rows.map((r): PackQuestionRow => ({
+      id: r[0] || "",
+      packId: r[1] || "",
+      questionId: r[2] || "",
+      prompt: r[3] || "",
+      type: (r[4] || "text") as any,
+      priority: Number(r[5] || 0),
+      required: String(r[6]).toLowerCase() === "true",
+      optionsJson: r[7] || "",
+      helpText: r[8] || "",
+      isActive: String(r[9]).toLowerCase() === "true",
+      version: Number(r[10] || 1),
+    }));
+  }
+
+  async getAuditRows(limit = 200): Promise<PackAuditLogRow[]> {
+    const res = await this.sheets.spreadsheets.values.get({
+      spreadsheetId: this.spreadsheetId,
+      range: "Pack_Audit_Log!A2:L",
+    });
+
+    const rows = (res.data.values || []).slice(-limit).reverse();
+
+    return rows.map((r): PackAuditLogRow => ({
+      id: r[0] || "",
+      entityType: (r[1] || "symptom_pack") as any,
+      entityId: r[2] || "",
+      action: (r[3] || "update") as any,
+      actorId: r[4] || "",
+      actorName: r[5] || "",
+      at: r[6] || "",
+      beforeJson: r[7] || "",
+      afterJson: r[8] || "",
+      validationOk: String(r[9]).toLowerCase() === "true",
+      validationIssuesJson: r[10] || "",
+      notes: r[11] || "",
+    }));
+  }
+
   async saveSymptomRow(row: SymptomPackRow): Promise<void> {
     await this.upsertRow("Symptom_Packs", row.id, [
       row.id,
@@ -144,6 +193,46 @@ export class GoogleSheetsPackRepository implements PackRepository {
       joinCsv(row.outputActions),
       joinCsv(row.notes),
     ]);
+  }
+
+  async saveQuestionRow(row: PackQuestionRow): Promise<void> {
+    await this.upsertRow("Pack_Questions", row.id, [
+      row.id,
+      row.packId,
+      row.questionId,
+      row.prompt,
+      row.type,
+      String(row.priority),
+      String(row.required),
+      row.optionsJson || "",
+      row.helpText || "",
+      String(row.isActive),
+      String(row.version),
+    ]);
+  }
+
+  async appendAuditRow(row: PackAuditLogRow): Promise<void> {
+    await this.sheets.spreadsheets.values.append({
+      spreadsheetId: this.spreadsheetId,
+      range: "Pack_Audit_Log!A:L",
+      valueInputOption: "RAW",
+      requestBody: {
+        values: [[
+          row.id,
+          row.entityType,
+          row.entityId,
+          row.action,
+          row.actorId,
+          row.actorName || "",
+          row.at,
+          row.beforeJson || "",
+          row.afterJson || "",
+          String(Boolean(row.validationOk)),
+          row.validationIssuesJson || "",
+          row.notes || "",
+        ]],
+      },
+    });
   }
 
   private async upsertRow(sheetName: string, id: string, values: string[]): Promise<void> {

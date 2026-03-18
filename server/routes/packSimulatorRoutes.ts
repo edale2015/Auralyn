@@ -1,6 +1,7 @@
 import express from "express";
 import { getPackRepository } from "../repos/getPackRepository";
-import { parseSymptomPackRow, parseModifierPackRow, parseClinicianAlgorithmRow } from "../engines/packRowParser";
+import { parseModifierPackRow, parseClinicianAlgorithmRow } from "../engines/packRowParser";
+import { buildParsedSymptomPacksFromRows } from "../engines/normalizedPackBuilder";
 import { evaluateSymptomPack } from "../engines/symptomPackEvaluationEngine";
 import { generatePlanFromTemplate } from "../engines/planTemplateEngine";
 
@@ -14,22 +15,26 @@ router.post("/run", async (req, res) => {
     return res.status(400).json({ error: "symptomPackId and answers required" });
   }
 
-  const symptomRows = await repo.getSymptomRows();
-  const modifierRows = await repo.getModifierRows();
-  const algorithmRows = await repo.getAlgorithmRows();
+  const [symptomRows, questionRows, modifierRows, algorithmRows] = await Promise.all([
+    repo.getSymptomRows(),
+    repo.getQuestionRows(),
+    repo.getModifierRows(),
+    repo.getAlgorithmRows(),
+  ]);
 
-  const rawSymptom = symptomRows.find(r => r.id === symptomPackId);
-  if (!rawSymptom) {
+  const symptomPacks = buildParsedSymptomPacksFromRows(symptomRows, questionRows);
+  const parsedSymptom = symptomPacks.find(p => p.id === symptomPackId);
+
+  if (!parsedSymptom) {
     return res.status(404).json({ error: `Symptom pack ${symptomPackId} not found` });
   }
 
-  const parsedSymptom = parseSymptomPackRow(rawSymptom);
   const parsedModifiers = modifierRows.filter(m => m.isActive).map(parseModifierPackRow);
   const parsedAlgorithms = algorithmRows.filter(a => a.isActive).map(parseClinicianAlgorithmRow);
 
   const evaluation = evaluateSymptomPack(parsedSymptom, parsedModifiers, parsedAlgorithms, answers);
 
-  const plan = generatePlanFromTemplate(rawSymptom.planTemplateKey);
+  const plan = generatePlanFromTemplate(parsedSymptom.planTemplateKey);
 
   res.json({
     symptomPackId,
@@ -42,7 +47,7 @@ router.post("/run", async (req, res) => {
       redFlagsTriggered: evaluation.matchedRedFlags,
       escalateReasons: evaluation.matchedEscalateRules,
       reviewReasons: evaluation.matchedReviewRules,
-      planTemplateKey: rawSymptom.planTemplateKey,
+      planTemplateKey: parsedSymptom.planTemplateKey,
     },
     modifiers: {
       totalRiskAdjustment: evaluation.modifierRiskDelta,
@@ -52,6 +57,7 @@ router.post("/run", async (req, res) => {
     },
     triggeredAlgorithms: evaluation.triggeredAlgorithms,
     plan,
+    suggestedQuestions: parsedSymptom.questions,
     summary: {
       escalate: evaluation.forceEscalation,
       review: evaluation.forceReview,
@@ -92,14 +98,17 @@ router.post("/questions", async (req, res) => {
     return res.status(400).json({ error: "symptomPackId required" });
   }
 
-  const symptomRows = await repo.getSymptomRows();
-  const rawSymptom = symptomRows.find(r => r.id === symptomPackId);
+  const [symptomRows, questionRows] = await Promise.all([
+    repo.getSymptomRows(),
+    repo.getQuestionRows(),
+  ]);
 
-  if (!rawSymptom) {
+  const symptomPacks = buildParsedSymptomPacksFromRows(symptomRows, questionRows);
+  const parsed = symptomPacks.find(p => p.id === symptomPackId);
+
+  if (!parsed) {
     return res.status(404).json({ error: `Symptom pack ${symptomPackId} not found` });
   }
-
-  const parsed = parseSymptomPackRow(rawSymptom);
 
   res.json({
     symptomPackId,
