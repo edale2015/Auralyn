@@ -1,0 +1,237 @@
+🧑‍⚕️ 1. PHYSICIAN CONTROL (WEB + MOBILE)
+🧠 Backend: Case Review + Override API
+// server/routes/physicianControlRoutes.ts
+
+import express from "express";
+import { requireRole } from "../middleware/requireRole";
+import { appendAuditRow } from "../repos/getPackRepository";
+
+const router = express.Router();
+
+// Get pending cases
+router.get("/cases", requireRole(["physician", "admin"]), async (req, res) => {
+  const cases = await loadRecentCases(); // from DB
+  res.json(cases);
+});
+
+// Override diagnosis / triage
+router.post("/override", requireRole(["physician"]), async (req, res) => {
+  const { caseId, diagnosis, triage, reason } = req.body;
+
+  await saveOverride(caseId, { diagnosis, triage });
+
+  await appendAuditRow({
+    action: "PHYSICIAN_OVERRIDE",
+    caseId,
+    diagnosis,
+    triage,
+    reason,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({ success: true });
+});
+
+export default router;
+🌐 Web UI (React)
+// client/src/pages/PhysicianControlPanel.tsx
+
+export default function PhysicianControlPanel() {
+  const [cases, setCases] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/physician/cases")
+      .then(r => r.json())
+      .then(setCases);
+  }, []);
+
+  return (
+    <div>
+      <h2>Physician Review Queue</h2>
+      {cases.map((c: any) => (
+        <div key={c.id}>
+          <p>{c.complaint}</p>
+          <p>AI: {c.diagnosis} ({c.triage})</p>
+
+          <button onClick={() => override(c.id, "ER", "ER")}>
+            Override to ER
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+📱 Mobile (React Native / Expo)
+// mobile/screens/ReviewQueue.tsx
+
+export default function ReviewQueue() {
+  const [cases, setCases] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/physician/cases")
+      .then(r => r.json())
+      .then(setCases);
+  }, []);
+
+  return (
+    <ScrollView>
+      {cases.map((c: any) => (
+        <View key={c.id}>
+          <Text>{c.complaint}</Text>
+          <Text>{c.diagnosis}</Text>
+          <Button title="Override to ER" />
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+🔒 2. HIPAA HARDENING (CRITICAL)
+
+This is not optional. This is where systems fail legally.
+
+🔐 Encryption at Rest
+// server/security/encryption.ts
+
+import crypto from "crypto";
+
+const key = Buffer.from(process.env.ENCRYPTION_KEY!, "hex");
+
+export function encrypt(text: string) {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
+
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
+
+  return iv.toString("hex") + ":" + encrypted;
+}
+
+export function decrypt(data: string) {
+  const [ivHex, encrypted] = data.split(":");
+  const iv = Buffer.from(ivHex, "hex");
+
+  const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+
+  let decrypted = decipher.update(encrypted, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+
+  return decrypted;
+}
+🔐 PHI Redaction (Logs)
+// server/security/redaction.ts
+
+export function redactPHI(text: string) {
+  return text
+    .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[SSN]")
+    .replace(/\b\d{10}\b/g, "[PHONE]")
+    .replace(/[A-Z][a-z]+ [A-Z][a-z]+/g, "[NAME]");
+}
+🔒 Access Logging (Required)
+// server/security/accessLog.ts
+
+export function logAccess(userId: string, resource: string) {
+  console.log({
+    userId,
+    resource,
+    timestamp: new Date().toISOString()
+  });
+}
+⚠️ MUST ALSO DO (non-code)
+
+BAA with hosting provider
+
+Encrypted backups
+
+TLS enforced (HTTPS only)
+
+No PHI in logs
+
+Role-based access (already done)
+
+💰 3. INSURANCE BILLING (ICD-10 + CPT)
+🧠 ICD + CPT Mapper
+// server/billing/codingEngine.ts
+
+export function mapToBilling(diagnosis: string, visitType: string) {
+  const icdMap: any = {
+    "ACS": "I20.0",
+    "Pneumonia": "J18.9",
+    "Migraine": "G43.909"
+  };
+
+  const cptMap: any = {
+    "telemed": "99443",
+    "urgent": "99284",
+    "routine": "99213"
+  };
+
+  return {
+    icd10: icdMap[diagnosis] || "R69",
+    cpt: cptMap[visitType] || "99213"
+  };
+}
+🧾 Claim Object
+// server/billing/claimBuilder.ts
+
+export function buildClaim(result: any, patient: any) {
+  const codes = mapToBilling(result.diagnosis, result.triage);
+
+  return {
+    patientId: patient.id,
+    diagnosis: codes.icd10,
+    procedure: codes.cpt,
+    provider: "YourClinic",
+    date: new Date().toISOString()
+  };
+}
+🔌 Submit (Clearinghouse placeholder)
+// server/billing/submitClaim.ts
+
+export async function submitClaim(claim: any) {
+  console.log("Submitting claim:", claim);
+
+  return {
+    status: "submitted",
+    claimId: "CLM-" + Date.now()
+  };
+}
+⚖️ 4. AI TRIAGE CERTIFICATION (FDA-STYLE FRAMEWORK)
+
+You are entering regulated medical device territory.
+
+🧠 Required System Components
+1. Decision Logging (you already have trace)
+2. Versioned Model Registry
+// server/compliance/modelRegistry.ts
+
+export const MODEL_VERSION = "v1.0.0";
+
+export function logModelUsage(caseId: string) {
+  return {
+    caseId,
+    modelVersion: MODEL_VERSION,
+    timestamp: new Date().toISOString()
+  };
+}
+3. Risk Classification
+// server/compliance/riskEngine.ts
+
+export function classifyRisk(result: any) {
+  if (result.triage === "ER") return "HIGH";
+  if (result.triage === "urgent") return "MEDIUM";
+  return "LOW";
+}
+4. Mandatory Human Review
+if (classifyRisk(result) === "HIGH") {
+  result.requiresPhysicianReview = true;
+}
+5. Audit Bundle Export
+// server/compliance/auditExport.ts
+
+export function exportCaseAudit(trace: any) {
+  return {
+    complaint: trace.complaint,
+    decisions: trace,
+    timestamp: new Date().toISOString()
+  };
+}
