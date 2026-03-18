@@ -109,6 +109,7 @@ import SmartIntakeDashboard from "@/pages/SmartIntakeDashboard";
 import IntelligenceDashboard from "@/pages/IntelligenceDashboard";
 import AdaptiveControlDashboard from "@/pages/AdaptiveControlDashboard";
 import PackBuilderAdminPage from "@/pages/PackBuilderAdminPage";
+import PackSimulatorPage from "@/pages/PackSimulatorPage";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -227,6 +228,7 @@ function Router() {
       <Route path="/intelligence-layer">{() => <AdminPage component={IntelligenceDashboard} />}</Route>
       <Route path="/adaptive-control">{() => <AdminPage component={AdaptiveControlDashboard} />}</Route>
       <Route path="/pack-builder">{() => <AdminPage component={PackBuilderAdminPage} />}</Route>
+      <Route path="/pack-simulator">{() => <AdminPage component={PackSimulatorPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

@@ -159,6 +159,7 @@ const NAV_SECTIONS = [
       { path: "/intelligence-layer", label: "Intelligence Layer", icon: Radar },
       { path: "/adaptive-control", label: "Adaptive Control", icon: Activity },
       { path: "/pack-builder", label: "Pack Builder", icon: Package },
+      { path: "/pack-simulator", label: "Pack Simulator", icon: FlaskConical },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },

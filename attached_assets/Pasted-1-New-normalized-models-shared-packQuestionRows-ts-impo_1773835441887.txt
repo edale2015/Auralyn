@@ -1,0 +1,802 @@
+1. New normalized models
+// shared/packQuestionRows.ts
+
+import { QuestionType } from "./packRows";
+
+export interface PackQuestionRow {
+  id: string;                 // unique row id
+  packId: string;             // symptom pack id
+  questionId: string;         // logical question key, e.g. "sob"
+  prompt: string;
+  type: QuestionType;
+  priority: number;
+  required: boolean;
+  optionsJson?: string;       // JSON array for select/multi-select options
+  helpText?: string;
+  isActive: boolean;
+  version: number;
+}
+// shared/packAuditRows.ts
+
+export interface PackAuditLogRow {
+  id: string;
+  entityType: "symptom_pack" | "modifier_pack" | "clinician_algorithm" | "pack_question" | "plan_template";
+  entityId: string;
+  action: "create" | "update" | "delete" | "validate";
+  actorId: string;
+  actorName?: string;
+  at: string;
+  beforeJson?: string;
+  afterJson?: string;
+  validationOk?: boolean;
+  validationIssuesJson?: string;
+  notes?: string;
+}
+2. Questions repository support
+
+Update the repository interface.
+
+// server/repos/packRepository.ts
+
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+import { PackAuditLogRow } from "../../shared/packAuditRows";
+
+export interface PackRepository {
+  getSymptomRows(): Promise<SymptomPackRow[]>;
+  getModifierRows(): Promise<ModifierPackRow[]>;
+  getAlgorithmRows(): Promise<ClinicianAlgorithmRow[]>;
+  getQuestionRows(): Promise<PackQuestionRow[]>;
+  getAuditRows(limit?: number): Promise<PackAuditLogRow[]>;
+
+  saveSymptomRow(row: SymptomPackRow): Promise<void>;
+  saveModifierRow(row: ModifierPackRow): Promise<void>;
+  saveAlgorithmRow(row: ClinicianAlgorithmRow): Promise<void>;
+  saveQuestionRow(row: PackQuestionRow): Promise<void>;
+  appendAuditRow(row: PackAuditLogRow): Promise<void>;
+}
+3. Seed data for normalized questions + audit log
+// server/config/packQuestions.seed.ts
+
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+
+export const packQuestionRows: PackQuestionRow[] = [
+  {
+    id: "pq_card_chest_pain_1",
+    packId: "card_chest_pain",
+    questionId: "sob",
+    prompt: "Any shortness of breath?",
+    type: "yes_no",
+    priority: 1,
+    required: true,
+    isActive: true,
+    version: 1,
+  },
+  {
+    id: "pq_card_chest_pain_2",
+    packId: "card_chest_pain",
+    questionId: "radiation",
+    prompt: "Pain to arm, jaw, or back?",
+    type: "yes_no",
+    priority: 2,
+    required: false,
+    isActive: true,
+    version: 1,
+  },
+  {
+    id: "pq_ortho_back_pain_1",
+    packId: "ortho_back_pain",
+    questionId: "injury",
+    prompt: "Any fall, lifting injury, or trauma?",
+    type: "yes_no",
+    priority: 1,
+    required: false,
+    isActive: true,
+    version: 1,
+  },
+  {
+    id: "pq_ortho_back_pain_2",
+    packId: "ortho_back_pain",
+    questionId: "leg_weakness",
+    prompt: "Any leg weakness?",
+    type: "yes_no",
+    priority: 2,
+    required: false,
+    isActive: true,
+    version: 1,
+  },
+];
+// server/config/packAuditLog.seed.ts
+
+import { PackAuditLogRow } from "../../shared/packAuditRows";
+
+export const packAuditLogRows: PackAuditLogRow[] = [];
+4. Update in-memory repo
+// server/repos/inMemoryPackRepository.ts
+
+import { PackRepository } from "./packRepository";
+import {
+  symptomPackRows,
+  modifierPackRows,
+  clinicianAlgorithmRows,
+} from "../config/packRows.seed";
+import { packQuestionRows } from "../config/packQuestions.seed";
+import { packAuditLogRows } from "../config/packAuditLog.seed";
+import {
+  SymptomPackRow,
+  ModifierPackRow,
+  ClinicianAlgorithmRow,
+} from "../../shared/packRows";
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+import { PackAuditLogRow } from "../../shared/packAuditRows";
+
+export class InMemoryPackRepository implements PackRepository {
+  async getSymptomRows(): Promise<SymptomPackRow[]> {
+    return [...symptomPackRows];
+  }
+
+  async getModifierRows(): Promise<ModifierPackRow[]> {
+    return [...modifierPackRows];
+  }
+
+  async getAlgorithmRows(): Promise<ClinicianAlgorithmRow[]> {
+    return [...clinicianAlgorithmRows];
+  }
+
+  async getQuestionRows(): Promise<PackQuestionRow[]> {
+    return [...packQuestionRows];
+  }
+
+  async getAuditRows(limit = 200): Promise<PackAuditLogRow[]> {
+    return [...packAuditLogRows].slice(-limit).reverse();
+  }
+
+  async saveSymptomRow(row: SymptomPackRow): Promise<void> {
+    const idx = symptomPackRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) symptomPackRows[idx] = row;
+    else symptomPackRows.push(row);
+  }
+
+  async saveModifierRow(row: ModifierPackRow): Promise<void> {
+    const idx = modifierPackRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) modifierPackRows[idx] = row;
+    else modifierPackRows.push(row);
+  }
+
+  async saveAlgorithmRow(row: ClinicianAlgorithmRow): Promise<void> {
+    const idx = clinicianAlgorithmRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) clinicianAlgorithmRows[idx] = row;
+    else clinicianAlgorithmRows.push(row);
+  }
+
+  async saveQuestionRow(row: PackQuestionRow): Promise<void> {
+    const idx = packQuestionRows.findIndex(x => x.id === row.id);
+    if (idx >= 0) packQuestionRows[idx] = row;
+    else packQuestionRows.push(row);
+  }
+
+  async appendAuditRow(row: PackAuditLogRow): Promise<void> {
+    packAuditLogRows.push(row);
+  }
+}
+5. Google Sheets support for normalized tabs
+Expected tabs
+Pack_Questions
+id | packId | questionId | prompt | type | priority | required | optionsJson | helpText | isActive | version
+Pack_Audit_Log
+id | entityType | entityId | action | actorId | actorName | at | beforeJson | afterJson | validationOk | validationIssuesJson | notes
+Adapter additions
+// add to server/repos/googleSheetsPackRepository.ts
+
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+import { PackAuditLogRow } from "../../shared/packAuditRows";
+// add methods inside GoogleSheetsPackRepository
+
+async getQuestionRows(): Promise<PackQuestionRow[]> {
+  const res = await this.sheets.spreadsheets.values.get({
+    spreadsheetId: this.spreadsheetId,
+    range: "Pack_Questions!A2:K",
+  });
+
+  const rows = res.data.values || [];
+
+  return rows.map((r): PackQuestionRow => ({
+    id: r[0] || "",
+    packId: r[1] || "",
+    questionId: r[2] || "",
+    prompt: r[3] || "",
+    type: (r[4] || "text") as any,
+    priority: Number(r[5] || 0),
+    required: String(r[6]).toLowerCase() === "true",
+    optionsJson: r[7] || "",
+    helpText: r[8] || "",
+    isActive: String(r[9]).toLowerCase() === "true",
+    version: Number(r[10] || 1),
+  }));
+}
+
+async getAuditRows(limit = 200): Promise<PackAuditLogRow[]> {
+  const res = await this.sheets.spreadsheets.values.get({
+    spreadsheetId: this.spreadsheetId,
+    range: "Pack_Audit_Log!A2:L",
+  });
+
+  const rows = (res.data.values || []).slice(-limit).reverse();
+
+  return rows.map((r): PackAuditLogRow => ({
+    id: r[0] || "",
+    entityType: (r[1] || "symptom_pack") as any,
+    entityId: r[2] || "",
+    action: (r[3] || "update") as any,
+    actorId: r[4] || "",
+    actorName: r[5] || "",
+    at: r[6] || "",
+    beforeJson: r[7] || "",
+    afterJson: r[8] || "",
+    validationOk: String(r[9]).toLowerCase() === "true",
+    validationIssuesJson: r[10] || "",
+    notes: r[11] || "",
+  }));
+}
+
+async saveQuestionRow(row: PackQuestionRow): Promise<void> {
+  await this.upsertRow("Pack_Questions", row.id, [
+    row.id,
+    row.packId,
+    row.questionId,
+    row.prompt,
+    row.type,
+    String(row.priority),
+    String(row.required),
+    row.optionsJson || "",
+    row.helpText || "",
+    String(row.isActive),
+    String(row.version),
+  ]);
+}
+
+async appendAuditRow(row: PackAuditLogRow): Promise<void> {
+  await this.sheets.spreadsheets.values.append({
+    spreadsheetId: this.spreadsheetId,
+    range: "Pack_Audit_Log!A:L",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[
+        row.id,
+        row.entityType,
+        row.entityId,
+        row.action,
+        row.actorId,
+        row.actorName || "",
+        row.at,
+        row.beforeJson || "",
+        row.afterJson || "",
+        String(Boolean(row.validationOk)),
+        row.validationIssuesJson || "",
+        row.notes || "",
+      ]],
+    },
+  });
+}
+6. Build symptom packs from normalized question rows
+
+This replaces questionsJson as the source of truth when available.
+
+// server/engines/normalizedPackBuilder.ts
+
+import {
+  ParsedSymptomPack,
+  SymptomPackRow,
+  IntakeQuestion,
+} from "../../shared/packRows";
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+
+function safeParseOptions(raw?: string) {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildParsedSymptomPacksFromRows(
+  symptomRows: SymptomPackRow[],
+  questionRows: PackQuestionRow[]
+): ParsedSymptomPack[] {
+  return symptomRows
+    .filter(row => row.isActive)
+    .map(row => {
+      const questions: IntakeQuestion[] = questionRows
+        .filter(q => q.packId === row.id && q.isActive)
+        .map(q => ({
+          id: q.questionId,
+          prompt: q.prompt,
+          type: q.type,
+          priority: q.priority,
+          required: q.required,
+          options: safeParseOptions(q.optionsJson),
+          helpText: q.helpText,
+        }))
+        .sort((a, b) => a.priority - b.priority);
+
+      return {
+        id: row.id,
+        system: row.system,
+        title: row.title,
+        aliases: row.aliases,
+        likelyDisposition: row.likelyDisposition,
+        questions,
+        redFlags: row.redFlags,
+        autoEscalateRules: row.autoEscalateRules,
+        autoReviewRules: row.autoReviewRules,
+        planTemplateKey: row.planTemplateKey,
+        tags: row.tags,
+      };
+    });
+}
+7. Question row validation
+// add to server/engines/packValidationEngine.ts
+
+import { PackQuestionRow } from "../../shared/packQuestionRows";
+
+export function validatePackQuestionRow(row: PackQuestionRow): ValidationResult {
+  const issues: ValidationIssue[] = [];
+
+  if (!row.id) issues.push({ severity: "error", field: "id", message: "Missing id" });
+  if (!row.packId) issues.push({ severity: "error", field: "packId", message: "Missing packId" });
+  if (!row.questionId) issues.push({ severity: "error", field: "questionId", message: "Missing questionId" });
+  if (!row.prompt) issues.push({ severity: "error", field: "prompt", message: "Missing prompt" });
+
+  if (!allowedQuestionTypes.has(row.type)) {
+    issues.push({
+      severity: "error",
+      field: "type",
+      message: `Invalid question type ${row.type}`,
+    });
+  }
+
+  if (typeof row.priority !== "number" || !Number.isFinite(row.priority)) {
+    issues.push({
+      severity: "error",
+      field: "priority",
+      message: "Priority must be numeric",
+    });
+  }
+
+  if (row.optionsJson) {
+    const parsed = safeJsonParse<any[] | null>(row.optionsJson, null);
+    if (!parsed || !Array.isArray(parsed)) {
+      issues.push({
+        severity: "error",
+        field: "optionsJson",
+        message: "optionsJson must be a valid JSON array",
+      });
+    }
+  }
+
+  return {
+    ok: !issues.some(x => x.severity === "error"),
+    issues,
+  };
+}
+8. Audit logger helper
+// server/engines/packAuditLogger.ts
+
+import crypto from "crypto";
+import { PackAuditLogRow } from "../../shared/packAuditRows";
+import { getPackRepository } from "../repos/getPackRepository";
+
+const repo = getPackRepository();
+
+export async function appendPackAuditLog(input: Omit<PackAuditLogRow, "id" | "at">) {
+  const row: PackAuditLogRow = {
+    id: crypto.randomUUID(),
+    at: new Date().toISOString(),
+    ...input,
+  };
+
+  await repo.appendAuditRow(row);
+  return row;
+}
+9. Admin routes for normalized questions + audit view
+// add to server/routes/packAdmin.ts
+
+import { validatePackQuestionRow } from "../engines/packValidationEngine";
+import { appendPackAuditLog } from "../engines/packAuditLogger";
+router.get("/questions", async (_req, res) => {
+  const rows = await repo.getQuestionRows();
+  res.json({ rows });
+});
+
+router.get("/audit", async (req, res) => {
+  const limit = Number(req.query.limit || 200);
+  const rows = await repo.getAuditRows(limit);
+  res.json({ rows });
+});
+
+router.post("/question", async (req, res) => {
+  const validation = validatePackQuestionRow(req.body);
+  if (!validation.ok) {
+    await appendPackAuditLog({
+      entityType: "pack_question",
+      entityId: req.body.id || "unknown",
+      action: "validate",
+      actorId: "system",
+      validationOk: false,
+      validationIssuesJson: JSON.stringify(validation.issues),
+      notes: "Question validation failed",
+    });
+
+    return res.status(400).json({ ok: false, validation });
+  }
+
+  await repo.saveQuestionRow(req.body);
+
+  await appendPackAuditLog({
+    entityType: "pack_question",
+    entityId: req.body.id,
+    action: "update",
+    actorId: "system",
+    afterJson: JSON.stringify(req.body),
+    validationOk: true,
+    validationIssuesJson: JSON.stringify(validation.issues),
+    notes: "Question saved",
+  });
+
+  res.json({ ok: true, row: req.body, validation });
+});
+
+Also upgrade existing save routes to audit. Example for symptom save:
+
+router.post("/symptom", async (req, res) => {
+  const planKeys = planTemplates.map(x => x.key);
+  const validation = validateAnyPackRow(req.body, planKeys);
+
+  if (!validation.ok) {
+    await appendPackAuditLog({
+      entityType: "symptom_pack",
+      entityId: req.body.id || "unknown",
+      action: "validate",
+      actorId: "system",
+      validationOk: false,
+      validationIssuesJson: JSON.stringify(validation.issues),
+      notes: "Symptom pack validation failed",
+    });
+
+    return res.status(400).json({ ok: false, validation });
+  }
+
+  await repo.saveSymptomRow(req.body);
+
+  await appendPackAuditLog({
+    entityType: "symptom_pack",
+    entityId: req.body.id,
+    action: "update",
+    actorId: "system",
+    afterJson: JSON.stringify(req.body),
+    validationOk: true,
+    validationIssuesJson: JSON.stringify(validation.issues),
+    notes: "Symptom pack saved",
+  });
+
+  res.json({ ok: true, row: req.body, validation });
+});
+
+Do the same pattern for modifier and algorithm.
+
+10. Simulator route should use normalized questions
+// server/routes/packSimulator.ts
+
+import express from "express";
+import { getPackRepository } from "../repos/getPackRepository";
+import {
+  parseModifierPackRow,
+  parseClinicianAlgorithmRow,
+} from "../engines/packRowParser";
+import { buildParsedSymptomPacksFromRows } from "../engines/normalizedPackBuilder";
+import { matchSymptomPack } from "../engines/packMatcher";
+import { evaluateSymptomPack } from "../engines/symptomPackEvaluationEngine";
+import { generatePlanFromTemplate } from "../engines/planTemplateEngine";
+
+const router = express.Router();
+const repo = getPackRepository();
+
+router.post("/run", async (req, res) => {
+  const chiefComplaint = String(req.body.chiefComplaint || "");
+  const answers = req.body.answers || {};
+
+  const [symptomRows, questionRows, modifierRows, algorithmRows] = await Promise.all([
+    repo.getSymptomRows(),
+    repo.getQuestionRows(),
+    repo.getModifierRows(),
+    repo.getAlgorithmRows(),
+  ]);
+
+  const symptomPacks = buildParsedSymptomPacksFromRows(symptomRows, questionRows);
+  const modifierPacks = modifierRows.filter(x => x.isActive).map(parseModifierPackRow);
+  const clinicianAlgorithms = algorithmRows.filter(x => x.isActive).map(parseClinicianAlgorithmRow);
+
+  const matchedPack = matchSymptomPack(chiefComplaint, symptomPacks);
+
+  if (!matchedPack) {
+    return res.json({
+      matched: false,
+      chiefComplaint,
+      answers,
+      result: null,
+      reason: "no_symptom_pack_match",
+    });
+  }
+
+  const evaluation = evaluateSymptomPack(
+    matchedPack,
+    modifierPacks,
+    clinicianAlgorithms,
+    answers
+  );
+
+  const plan = generatePlanFromTemplate(
+    matchedPack.planTemplateKey,
+    evaluation.finalDisposition,
+    answers
+  );
+
+  res.json({
+    matched: true,
+    chiefComplaint,
+    answers,
+    matchedPack,
+    evaluation,
+    plan,
+    suggestedQuestions: matchedPack.questions,
+  });
+});
+
+export default router;
+11. Question builder admin page
+// frontend/src/pages/PackQuestionsAdminPage.tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+
+export default function PackQuestionsAdminPage() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [selected, setSelected] = useState<any | null>(null);
+  const [editorValue, setEditorValue] = useState("");
+  const [validation, setValidation] = useState<any | null>(null);
+
+  async function load() {
+    const res = await fetch("/api/pack-admin/questions");
+    const json = await res.json();
+    setRows(json.rows || []);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const grouped = useMemo(() => {
+    const byPack: Record<string, any[]> = {};
+    for (const row of rows) {
+      byPack[row.packId] = byPack[row.packId] || [];
+      byPack[row.packId].push(row);
+    }
+    for (const k of Object.keys(byPack)) {
+      byPack[k].sort((a, b) => a.priority - b.priority);
+    }
+    return byPack;
+  }, [rows]);
+
+  function openRow(row: any) {
+    setSelected(row);
+    setEditorValue(JSON.stringify(row, null, 2));
+    setValidation(null);
+  }
+
+  async function validateRow() {
+    const parsed = JSON.parse(editorValue);
+    const issues: any[] = [];
+
+    if (!parsed.packId) issues.push({ severity: "error", field: "packId", message: "Missing packId" });
+    if (!parsed.questionId) issues.push({ severity: "error", field: "questionId", message: "Missing questionId" });
+    if (!parsed.prompt) issues.push({ severity: "error", field: "prompt", message: "Missing prompt" });
+
+    setValidation({
+      ok: !issues.some(x => x.severity === "error"),
+      issues,
+    });
+  }
+
+  async function saveRow() {
+    const parsed = JSON.parse(editorValue);
+    const res = await fetch("/api/pack-admin/question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+    const json = await res.json();
+    setValidation(json.validation || null);
+    if (res.ok) {
+      await load();
+      openRow(parsed);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", height: "100vh" }}>
+      <div style={{ borderRight: "1px solid #ddd", padding: 16, overflow: "auto" }}>
+        <h2>Pack Questions</h2>
+        {Object.entries(grouped).map(([packId, packRows]) => (
+          <div key={packId} style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>{packId}</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {(packRows as any[]).map(row => (
+                <button
+                  key={row.id}
+                  onClick={() => openRow(row)}
+                  style={{ textAlign: "left", padding: 10, border: "1px solid #ddd", borderRadius: 8 }}
+                >
+                  <div>{row.priority}. {row.prompt}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>
+                    {row.questionId} • {row.type}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ padding: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>{selected ? selected.questionId : "Select a question"}</h2>
+          {selected && (
+            <>
+              <button onClick={validateRow}>Validate</button>
+              <button onClick={saveRow}>Save</button>
+            </>
+          )}
+        </div>
+
+        <textarea
+          value={editorValue}
+          onChange={e => setEditorValue(e.target.value)}
+          style={{
+            width: "100%",
+            minHeight: "60vh",
+            fontFamily: "monospace",
+            fontSize: 13,
+            padding: 12,
+            border: "1px solid #ddd",
+            borderRadius: 8,
+          }}
+        />
+
+        <div style={{ marginTop: 16 }}>
+          <h3>Validation</h3>
+          <pre>{JSON.stringify(validation, null, 2)}</pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+12. Audit log viewer page
+// frontend/src/pages/PackAuditLogPage.tsx
+
+import React, { useEffect, useState } from "react";
+
+export default function PackAuditLogPage() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  async function load() {
+    const res = await fetch("/api/pack-admin/audit?limit=300");
+    const json = await res.json();
+    setRows(json.rows || []);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h2>Pack Audit Log</h2>
+      <div style={{ display: "grid", gap: 12 }}>
+        {rows.map(row => (
+          <div
+            key={row.id}
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: 10,
+              padding: 12,
+            }}
+          >
+            <div style={{ fontWeight: 700 }}>
+              {row.entityType} • {row.entityId}
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.85 }}>
+              {row.action} • {row.actorId} • {row.at}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              validationOk: {String(row.validationOk)}
+            </div>
+            {row.notes && <div style={{ marginTop: 6 }}>{row.notes}</div>}
+            {row.validationIssuesJson && (
+              <details style={{ marginTop: 8 }}>
+                <summary>Validation issues</summary>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
+                  {row.validationIssuesJson}
+                </pre>
+              </details>
+            )}
+            {row.afterJson && (
+              <details style={{ marginTop: 8 }}>
+                <summary>After JSON</summary>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
+                  {row.afterJson}
+                </pre>
+              </details>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+13. Status of systems and pack count
+
+Current answer: No, we have not finished all systems with 15 packs each.
+
+What is built so far
+
+We have architecture and starter content for:
+
+Cardiology/Vascular
+
+Ortho/MSK
+
+Pulmonary
+
+GI
+
+Neuro
+
+But these are starter libraries, not complete 15-pack system libraries across the board.
+
+Still incomplete
+
+You originally wanted something like 5 to 15 packs per system. We still need to fully expand:
+
+ENT
+
+Derm
+
+GU
+
+Women’s Health
+
+Psych
+
+Eye
+
+Infectious disease / General
+
+plus more depth in the 5 starter systems
+
+Honest status
+
+So the framework is now mature, but the content library is not yet complete.
+
+Think of it this way:
+
+Engine room: largely built
+
+control panels: built
+
+audit and editing infrastructure: now built
+
+full clinical content inventory: not finished yet
