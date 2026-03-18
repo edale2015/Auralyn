@@ -1,0 +1,847 @@
+The intelligence layer should do four things:
+
+Route better over time
+
+Calibrate confidence by complaint and clinician
+
+Detect unsafe patterns before humans notice
+
+Optimize cost, throughput, and supervision load
+
+So below is the next code wave:
+
+Auto physician ranking
+
+Performance-aware routing
+
+Confidence calibration by complaint
+
+Real-time anomaly detection
+
+Cost-per-case optimization
+
+Intelligence dashboard tab
+
+Recommendation engine
+
+1. AUTO PHYSICIAN RANKING ENGINE
+
+This scores physicians using speed, override rate, satisfaction, and high-risk handling.
+
+/server/services/physicianRanking.ts
+export type RankedPhysicianInput = {
+  physicianId: string;
+  clinicId: string;
+  avgReviewTimeSeconds: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  highRiskHandled: number;
+  active: boolean;
+};
+
+export type RankedPhysicianOutput = RankedPhysicianInput & {
+  intelligenceScore: number;
+  tier: "elite" | "strong" | "watch" | "restricted";
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function computePhysicianIntelligenceScore(p: RankedPhysicianInput) {
+  const speedScore = clamp(100 - p.avgReviewTimeSeconds, 0, 100) * 0.25;
+  const overrideScore = clamp(100 - p.overrideRate * 100, 0, 100) * 0.30;
+  const satisfactionScore = clamp((p.avgSatisfaction / 5) * 100, 0, 100) * 0.25;
+  const riskScore = clamp(p.highRiskHandled * 5, 0, 100) * 0.20;
+
+  const total = speedScore + overrideScore + satisfactionScore + riskScore;
+
+  let tier: RankedPhysicianOutput["tier"] = "watch";
+  if (!p.active) tier = "restricted";
+  else if (total >= 85) tier = "elite";
+  else if (total >= 70) tier = "strong";
+  else if (total < 50) tier = "restricted";
+
+  return {
+    ...p,
+    intelligenceScore: Number(total.toFixed(2)),
+    tier
+  };
+}
+
+export function rankPhysicians(physicians: RankedPhysicianInput[]) {
+  return physicians
+    .map(computePhysicianIntelligenceScore)
+    .sort((a, b) => b.intelligenceScore - a.intelligenceScore);
+}
+2. PERFORMANCE-AWARE ROUTING ENGINE
+
+Now routing uses performance, not just current load.
+
+/server/services/intelligentRouter.ts
+export type IntelligentRouterPhysician = {
+  id: string;
+  clinicId: string;
+  active: boolean;
+  currentLoad: number;
+  maxConcurrent: number;
+  canReviewHighRisk: boolean;
+  specialties: string[];
+  intelligenceScore: number;
+  tier: "elite" | "strong" | "watch" | "restricted";
+};
+
+export type IntelligentRouteInput = {
+  clinicId: string;
+  complaint: string;
+  preferredSpecialty?: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+};
+
+function specialtyBonus(p: IntelligentRouterPhysician, specialty?: string) {
+  if (!specialty) return 0;
+  return p.specialties.includes(specialty) ? 15 : 0;
+}
+
+function loadPenalty(p: IntelligentRouterPhysician) {
+  const utilization = p.currentLoad / Math.max(1, p.maxConcurrent);
+  return utilization * 40;
+}
+
+function highRiskGate(p: IntelligentRouterPhysician, riskLevel: string) {
+  if (riskLevel !== "HIGH") return 0;
+  return p.canReviewHighRisk ? 20 : -1000;
+}
+
+function tierBonus(tier: IntelligentRouterPhysician["tier"]) {
+  if (tier === "elite") return 20;
+  if (tier === "strong") return 10;
+  if (tier === "watch") return -5;
+  return -100;
+}
+
+export function intelligentlyRouteCase(
+  physicians: IntelligentRouterPhysician[],
+  input: IntelligentRouteInput
+) {
+  const candidates = physicians.filter(
+    p =>
+      p.clinicId === input.clinicId &&
+      p.active &&
+      p.currentLoad < p.maxConcurrent &&
+      p.tier !== "restricted"
+  );
+
+  if (!candidates.length) {
+    return {
+      assignedPhysicianId: null,
+      score: null,
+      routingReason: "No eligible physician available"
+    };
+  }
+
+  const ranked = candidates
+    .map(p => {
+      const score =
+        p.intelligenceScore +
+        specialtyBonus(p, input.preferredSpecialty) +
+        highRiskGate(p, input.riskLevel) +
+        tierBonus(p.tier) -
+        loadPenalty(p);
+
+      return {
+        physician: p,
+        score: Number(score.toFixed(2))
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return {
+    assignedPhysicianId: ranked[0].physician.id,
+    score: ranked[0].score,
+    routingReason: `Routed by intelligence score with load and risk adjustment`
+  };
+}
+3. CONFIDENCE CALIBRATION ENGINE
+
+This corrects raw AI confidence based on actual outcomes by complaint.
+
+/server/services/confidenceCalibration.ts
+export type CalibrationRow = {
+  complaint: string;
+  rawConfidence: number;
+  wasCorrect: boolean;
+};
+
+export type ComplaintCalibration = {
+  complaint: string;
+  empiricalAccuracy: number;
+  avgRawConfidence: number;
+  adjustment: number;
+};
+
+export function buildComplaintCalibration(rows: CalibrationRow[]): ComplaintCalibration[] {
+  const map: Record<
+    string,
+    { total: number; correct: number; confidenceSum: number }
+  > = {};
+
+  for (const row of rows) {
+    if (!map[row.complaint]) {
+      map[row.complaint] = {
+        total: 0,
+        correct: 0,
+        confidenceSum: 0
+      };
+    }
+
+    map[row.complaint].total += 1;
+    map[row.complaint].confidenceSum += row.rawConfidence;
+    if (row.wasCorrect) map[row.complaint].correct += 1;
+  }
+
+  return Object.entries(map).map(([complaint, v]) => {
+    const empiricalAccuracy = v.total ? v.correct / v.total : 0;
+    const avgRawConfidence = v.total ? v.confidenceSum / v.total : 0;
+    const adjustment = empiricalAccuracy - avgRawConfidence;
+
+    return {
+      complaint,
+      empiricalAccuracy: Number(empiricalAccuracy.toFixed(3)),
+      avgRawConfidence: Number(avgRawConfidence.toFixed(3)),
+      adjustment: Number(adjustment.toFixed(3))
+    };
+  });
+}
+
+export function calibrateConfidence(
+  complaint: string,
+  rawConfidence: number,
+  calibrations: ComplaintCalibration[]
+) {
+  const hit = calibrations.find(c => c.complaint === complaint);
+  if (!hit) {
+    return {
+      complaint,
+      rawConfidence,
+      calibratedConfidence: rawConfidence,
+      source: "no_calibration"
+    };
+  }
+
+  const calibrated = Math.max(0, Math.min(1, rawConfidence + hit.adjustment));
+
+  return {
+    complaint,
+    rawConfidence,
+    calibratedConfidence: Number(calibrated.toFixed(3)),
+    source: "complaint_calibration"
+  };
+}
+4. REAL-TIME ANOMALY DETECTION
+
+This spots strange spikes in overrides, escalations, or drops in accuracy.
+
+/server/services/anomalyDetector.ts
+export type MetricPoint = {
+  timestamp: string;
+  value: number;
+};
+
+export type AnomalyCheckResult = {
+  metric: string;
+  latest: number;
+  mean: number;
+  stdDev: number;
+  zScore: number;
+  isAnomaly: boolean;
+  severity: "normal" | "watch" | "critical";
+};
+
+function mean(values: number[]) {
+  return values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
+}
+
+function stdDev(values: number[]) {
+  const m = mean(values);
+  const variance =
+    values.reduce((acc, v) => acc + Math.pow(v - m, 2), 0) / Math.max(1, values.length);
+  return Math.sqrt(variance);
+}
+
+export function detectMetricAnomaly(metric: string, points: MetricPoint[]): AnomalyCheckResult {
+  const values = points.map(p => p.value);
+  const latest = values[values.length - 1] ?? 0;
+  const baseline = values.slice(0, -1);
+
+  if (baseline.length < 3) {
+    return {
+      metric,
+      latest,
+      mean: latest,
+      stdDev: 0,
+      zScore: 0,
+      isAnomaly: false,
+      severity: "normal"
+    };
+  }
+
+  const m = mean(baseline);
+  const sd = stdDev(baseline) || 0.0001;
+  const z = (latest - m) / sd;
+  const absZ = Math.abs(z);
+
+  let severity: AnomalyCheckResult["severity"] = "normal";
+  if (absZ >= 3) severity = "critical";
+  else if (absZ >= 2) severity = "watch";
+
+  return {
+    metric,
+    latest: Number(latest.toFixed(3)),
+    mean: Number(m.toFixed(3)),
+    stdDev: Number(sd.toFixed(3)),
+    zScore: Number(z.toFixed(3)),
+    isAnomaly: absZ >= 2,
+    severity
+  };
+}
+5. COST-PER-CASE OPTIMIZATION ENGINE
+
+This shows where margin improves and where supervision is too heavy.
+
+/server/services/costOptimizer.ts
+export type CostCaseRow = {
+  caseId: string;
+  clinicId: string;
+  reviewSeconds: number;
+  escalated: boolean;
+  physicianHourlyCost: number;
+  platformCost: number;
+};
+
+export function computeCostPerCase(rows: CostCaseRow[]) {
+  const enriched = rows.map(r => {
+    const physicianCost = (r.reviewSeconds / 3600) * r.physicianHourlyCost;
+    const escalationPenalty = r.escalated ? 8 : 0;
+    const totalCost = physicianCost + r.platformCost + escalationPenalty;
+
+    return {
+      ...r,
+      physicianCost: Number(physicianCost.toFixed(2)),
+      escalationPenalty,
+      totalCost: Number(totalCost.toFixed(2))
+    };
+  });
+
+  const avgCost =
+    enriched.reduce((sum, r) => sum + r.totalCost, 0) / Math.max(1, enriched.length);
+
+  return {
+    averageCostPerCase: Number(avgCost.toFixed(2)),
+    cases: enriched
+  };
+}
+
+export function recommendCostAction(avgCostPerCase: number) {
+  if (avgCostPerCase > 12) {
+    return "Increase batch approvals for low-risk cases and review escalation rules";
+  }
+  if (avgCostPerCase > 7) {
+    return "Moderate cost. Optimize physician assignment and review speed";
+  }
+  return "Cost profile healthy";
+}
+6. INTELLIGENCE RECOMMENDATION ENGINE
+
+This turns metrics into actions, not just pretty numbers.
+
+/server/services/intelligenceRecommendations.ts
+export type IntelligenceInputs = {
+  driftDetected: boolean;
+  overrideRate: number;
+  escalationRate: number;
+  avgCostPerCase: number;
+  anomalySeverity: "normal" | "watch" | "critical";
+};
+
+export function buildIntelligenceRecommendations(input: IntelligenceInputs) {
+  const recommendations: string[] = [];
+
+  if (input.driftDetected) {
+    recommendations.push(
+      "Require additional physician review for underperforming complaints and retrain confidence thresholds"
+    );
+  }
+
+  if (input.overrideRate > 0.15) {
+    recommendations.push(
+      "High override rate detected. Review reasoning chains and complaint-specific question logic"
+    );
+  }
+
+  if (input.escalationRate > 0.1) {
+    recommendations.push(
+      "Escalation rate elevated. Inspect routing delays, SLA thresholds, and red-flag gating"
+    );
+  }
+
+  if (input.avgCostPerCase > 10) {
+    recommendations.push(
+      "Cost per case is high. Increase eligibility for batch approval on low-risk, high-confidence cases"
+    );
+  }
+
+  if (input.anomalySeverity === "critical") {
+    recommendations.push(
+      "Critical anomaly detected. Activate safety mode and require mandatory review for affected cluster"
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push("System stable. Continue monitoring and refine complaint calibration");
+  }
+
+  return recommendations;
+}
+7. ROUTES FOR THE INTELLIGENCE LAYER
+/server/routes/intelligence.ts
+import express from "express";
+import { rankPhysicians } from "../services/physicianRanking";
+import {
+  buildComplaintCalibration,
+  calibrateConfidence
+} from "../services/confidenceCalibration";
+import { detectMetricAnomaly } from "../services/anomalyDetector";
+import {
+  computeCostPerCase,
+  recommendCostAction
+} from "../services/costOptimizer";
+import { buildIntelligenceRecommendations } from "../services/intelligenceRecommendations";
+
+const router = express.Router();
+
+router.post("/rank-physicians", (req, res) => {
+  const ranked = rankPhysicians(req.body.physicians || []);
+  res.json(ranked);
+});
+
+router.post("/calibration/build", (req, res) => {
+  const rows = req.body.rows || [];
+  const result = buildComplaintCalibration(rows);
+  res.json(result);
+});
+
+router.post("/calibration/apply", (req, res) => {
+  const { complaint, rawConfidence, calibrations } = req.body;
+  const result = calibrateConfidence(complaint, rawConfidence, calibrations || []);
+  res.json(result);
+});
+
+router.post("/anomaly", (req, res) => {
+  const { metric, points } = req.body;
+  const result = detectMetricAnomaly(metric, points || []);
+  res.json(result);
+});
+
+router.post("/cost", (req, res) => {
+  const result = computeCostPerCase(req.body.rows || []);
+  res.json({
+    ...result,
+    recommendation: recommendCostAction(result.averageCostPerCase)
+  });
+});
+
+router.post("/recommendations", (req, res) => {
+  const recommendations = buildIntelligenceRecommendations(req.body);
+  res.json({ recommendations });
+});
+
+export default router;
+/server/index.ts addition
+import intelligence from "./routes/intelligence";
+
+app.use("/api/intelligence", intelligence);
+8. FRONTEND: INTELLIGENCE DASHBOARD
+/frontend/pages/IntelligenceDashboard.tsx
+import { useEffect, useState } from "react";
+
+type RankedPhysician = {
+  physicianId: string;
+  intelligenceScore: number;
+  tier: string;
+  avgReviewTimeSeconds: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  highRiskHandled: number;
+};
+
+export default function IntelligenceDashboard() {
+  const [ranked, setRanked] = useState<RankedPhysician[]>([]);
+  const [recommendations, setRecommendations] = useState<string[]>([]);
+  const [costSummary, setCostSummary] = useState<any>(null);
+  const [anomaly, setAnomaly] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/intelligence/rank-physicians", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        physicians: [
+          {
+            physicianId: "p1",
+            clinicId: "clinicA",
+            avgReviewTimeSeconds: 16,
+            overrideRate: 0.05,
+            avgSatisfaction: 4.8,
+            highRiskHandled: 10,
+            active: true
+          },
+          {
+            physicianId: "p2",
+            clinicId: "clinicA",
+            avgReviewTimeSeconds: 24,
+            overrideRate: 0.12,
+            avgSatisfaction: 4.5,
+            highRiskHandled: 6,
+            active: true
+          },
+          {
+            physicianId: "p3",
+            clinicId: "clinicB",
+            avgReviewTimeSeconds: 35,
+            overrideRate: 0.2,
+            avgSatisfaction: 4.1,
+            highRiskHandled: 2,
+            active: true
+          }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setRanked);
+
+    fetch("/api/intelligence/anomaly", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        metric: "override_rate",
+        points: [
+          { timestamp: "2026-03-01T00:00:00Z", value: 0.05 },
+          { timestamp: "2026-03-02T00:00:00Z", value: 0.06 },
+          { timestamp: "2026-03-03T00:00:00Z", value: 0.04 },
+          { timestamp: "2026-03-04T00:00:00Z", value: 0.055 },
+          { timestamp: "2026-03-05T00:00:00Z", value: 0.18 }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setAnomaly);
+
+    fetch("/api/intelligence/cost", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rows: [
+          {
+            caseId: "c1",
+            clinicId: "clinicA",
+            reviewSeconds: 14,
+            escalated: false,
+            physicianHourlyCost: 180,
+            platformCost: 1.8
+          },
+          {
+            caseId: "c2",
+            clinicId: "clinicA",
+            reviewSeconds: 40,
+            escalated: true,
+            physicianHourlyCost: 180,
+            platformCost: 1.8
+          },
+          {
+            caseId: "c3",
+            clinicId: "clinicA",
+            reviewSeconds: 18,
+            escalated: false,
+            physicianHourlyCost: 180,
+            platformCost: 1.8
+          }
+        ]
+      })
+    })
+      .then(r => r.json())
+      .then(setCostSummary);
+
+    fetch("/api/intelligence/recommendations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        driftDetected: true,
+        overrideRate: 0.18,
+        escalationRate: 0.11,
+        avgCostPerCase: 10.4,
+        anomalySeverity: "critical"
+      })
+    })
+      .then(r => r.json())
+      .then(data => setRecommendations(data.recommendations || []));
+  }, []);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Intelligence Dashboard</h1>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Physician Ranking</h2>
+        <div className="space-y-2">
+          {ranked.map(p => (
+            <div key={p.physicianId} className="border rounded p-3">
+              <div><strong>{p.physicianId}</strong> | Tier: {p.tier}</div>
+              <div>Score: {p.intelligenceScore}</div>
+              <div>Avg Review Time: {p.avgReviewTimeSeconds}s</div>
+              <div>Override Rate: {(p.overrideRate * 100).toFixed(1)}%</div>
+              <div>Satisfaction: {p.avgSatisfaction.toFixed(2)}</div>
+              <div>High-Risk Cases Handled: {p.highRiskHandled}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Anomaly Detection</h2>
+        {anomaly && (
+          <div>
+            <div>Metric: {anomaly.metric}</div>
+            <div>Latest: {anomaly.latest}</div>
+            <div>Mean: {anomaly.mean}</div>
+            <div>Z-Score: {anomaly.zScore}</div>
+            <div>Severity: {anomaly.severity}</div>
+          </div>
+        )}
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Cost Per Case</h2>
+        {costSummary && (
+          <div>
+            <div>Average Cost Per Case: ${costSummary.averageCostPerCase}</div>
+            <div>Recommendation: {costSummary.recommendation}</div>
+          </div>
+        )}
+      </section>
+
+      <section className="border rounded p-4">
+        <h2 className="text-xl font-semibold mb-3">Recommendations</h2>
+        <ul className="list-disc pl-6">
+          {recommendations.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+9. ADD TAB TO YOUR OPERATIONS DASHBOARD
+import IntelligenceDashboard from "./IntelligenceDashboard";
+
+<button onClick={() => setTab("intelligence")}>Intelligence</button>
+
+{tab === "intelligence" && <IntelligenceDashboard />}
+10. NEXT SUGGESTIONS, THEN CODE
+
+The next best upgrades after this are:
+
+Safety mode switch
+
+Complaint-specific hardening
+
+Self-tuning approval thresholds
+
+Physician coaching engine
+
+So I’m including those too.
+
+11. SAFETY MODE SWITCH
+
+When anomaly or drift gets ugly, the system tightens automatically.
+
+/server/services/safetyMode.ts
+export type SafetyModeInput = {
+  driftDetected: boolean;
+  anomalySeverity: "normal" | "watch" | "critical";
+  overrideRate: number;
+};
+
+export function determineSafetyMode(input: SafetyModeInput) {
+  if (input.anomalySeverity === "critical" || input.overrideRate > 0.2) {
+    return {
+      mode: "strict",
+      mandatoryReviewAllMediumAndHigh: true,
+      batchApprovalEnabled: false
+    };
+  }
+
+  if (input.driftDetected || input.anomalySeverity === "watch") {
+    return {
+      mode: "elevated",
+      mandatoryReviewAllHigh: true,
+      batchApprovalEnabled: true
+    };
+  }
+
+  return {
+    mode: "normal",
+    mandatoryReviewAllHigh: true,
+    batchApprovalEnabled: true
+  };
+}
+12. SELF-TUNING APPROVAL THRESHOLDS
+/server/services/selfTuningThresholds.ts
+export type ThresholdTuningInput = {
+  currentConfidenceThreshold: number;
+  recentOverrideRate: number;
+  recentAccuracy: number;
+};
+
+export function tuneApprovalThreshold(input: ThresholdTuningInput) {
+  let nextThreshold = input.currentConfidenceThreshold;
+
+  if (input.recentOverrideRate > 0.15 || input.recentAccuracy < 0.8) {
+    nextThreshold += 0.05;
+  } else if (input.recentOverrideRate < 0.05 && input.recentAccuracy > 0.92) {
+    nextThreshold -= 0.03;
+  }
+
+  nextThreshold = Math.max(0.6, Math.min(0.95, nextThreshold));
+
+  return {
+    currentConfidenceThreshold: input.currentConfidenceThreshold,
+    nextConfidenceThreshold: Number(nextThreshold.toFixed(3))
+  };
+}
+13. PHYSICIAN COACHING ENGINE
+
+This recommends where each clinician can improve.
+
+/server/services/physicianCoaching.ts
+export type CoachingInput = {
+  physicianId: string;
+  avgReviewTimeSeconds: number;
+  overrideRate: number;
+  avgSatisfaction: number;
+  highRiskHandled: number;
+};
+
+export function buildPhysicianCoaching(input: CoachingInput) {
+  const tips: string[] = [];
+
+  if (input.avgReviewTimeSeconds > 30) {
+    tips.push("Review time is high. Increase batch-review usage for low-risk cases.");
+  }
+
+  if (input.overrideRate > 0.12) {
+    tips.push("Override rate elevated. Revisit reasoning traces and complaint-specific logic.");
+  }
+
+  if (input.avgSatisfaction < 4.4) {
+    tips.push("Satisfaction below target. Improve communication and disposition explanation clarity.");
+  }
+
+  if (input.highRiskHandled < 3) {
+    tips.push("Limited high-risk exposure. Consider supervised escalation review training.");
+  }
+
+  if (!tips.length) {
+    tips.push("Performance strong. Continue current review patterns.");
+  }
+
+  return {
+    physicianId: input.physicianId,
+    tips
+  };
+}
+14. COMPLAINT-SPECIFIC HARDENING ENGINE
+
+This tightens specific weak complaints like dizziness or hoarseness.
+
+/server/services/complaintHardening.ts
+export type ComplaintPerformance = {
+  complaint: string;
+  accuracy: number;
+  escalationRate: number;
+};
+
+export function buildComplaintHardeningPlan(rows: ComplaintPerformance[]) {
+  return rows.map(row => {
+    let status = "stable";
+    let action = "Monitor";
+
+    if (row.accuracy < 0.6 || row.escalationRate > 0.2) {
+      status = "critical";
+      action = "Require mandatory review, add more complaint questions, recalibrate confidence";
+    } else if (row.accuracy < 0.75 || row.escalationRate > 0.12) {
+      status = "watch";
+      action = "Increase review sampling and inspect reasoning traces";
+    }
+
+    return {
+      complaint: row.complaint,
+      accuracy: row.accuracy,
+      escalationRate: row.escalationRate,
+      status,
+      action
+    };
+  });
+}
+15. MORE ROUTES
+/server/routes/intelligenceControl.ts
+import express from "express";
+import { determineSafetyMode } from "../services/safetyMode";
+import { tuneApprovalThreshold } from "../services/selfTuningThresholds";
+import { buildPhysicianCoaching } from "../services/physicianCoaching";
+import { buildComplaintHardeningPlan } from "../services/complaintHardening";
+
+const router = express.Router();
+
+router.post("/safety-mode", (req, res) => {
+  res.json(determineSafetyMode(req.body));
+});
+
+router.post("/tune-threshold", (req, res) => {
+  res.json(tuneApprovalThreshold(req.body));
+});
+
+router.post("/coach-physician", (req, res) => {
+  res.json(buildPhysicianCoaching(req.body));
+});
+
+router.post("/harden-complaints", (req, res) => {
+  res.json(buildComplaintHardeningPlan(req.body.rows || []));
+});
+
+export default router;
+/server/index.ts addition
+import intelligenceControl from "./routes/intelligenceControl";
+
+app.use("/api/intelligence-control", intelligenceControl);
+WHAT THIS ADDS
+
+With this wave, Auralyn now has:
+
+performance-aware routing
+
+confidence calibration
+
+anomaly detection
+
+cost intelligence
+
+safety-mode escalation
+
+self-tuning thresholds
+
+physician coaching
+
+complaint-specific hardening
+
+That is the start of a real adaptive clinical platform.

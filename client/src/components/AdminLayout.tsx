@@ -155,6 +155,8 @@ const NAV_SECTIONS = [
       { path: "/ehr-integration", label: "EHR Integration & RBAC", icon: HeartPulse },
       { path: "/clinical-scale", label: "Clinical Scale Stack", icon: ClipboardCheck },
       { path: "/operations-dashboard", label: "Operations Dashboard", icon: Gauge },
+      { path: "/smart-intake", label: "Smart Intake Pipeline", icon: MessageSquare },
+      { path: "/intelligence-layer", label: "Intelligence Layer", icon: Radar },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },
       { path: "/hybrid-reasoning", label: "Hybrid Reasoning Engine", icon: Zap },
       { path: "/ucsm", label: "Clinical State Model", icon: Activity },

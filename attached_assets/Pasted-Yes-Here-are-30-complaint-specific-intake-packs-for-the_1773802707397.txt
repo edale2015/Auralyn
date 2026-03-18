@@ -1,0 +1,835 @@
+Yes. Here are 30 complaint-specific intake packs for the engine, designed so the app asks the fewest high-yield questions first, catches red flags early, and routes cleanly into risk scoring and auto-plan logic. Think of them as thirty tiny clinical trapdoors, each tuned to catch the dangerous stuff before it tiptoes past 🩺⚙️
+
+I’ll give you:
+
+A reusable pack schema
+
+A TypeScript file with 30 packs
+
+A small selector/runner
+
+Notes on how to wire them into your existing intake engine
+
+1. Pack schema
+// shared/complaintPacks.ts
+
+export type ComplaintQuestionType =
+  | "yes_no"
+  | "single_select"
+  | "multi_select"
+  | "text"
+  | "number"
+  | "duration"
+  | "severity";
+
+export interface ComplaintQuestionOption {
+  label: string;
+  value: string;
+  redFlag?: boolean;
+}
+
+export interface ComplaintQuestion {
+  id: string;
+  prompt: string;
+  type: ComplaintQuestionType;
+  required?: boolean;
+  priority: number;
+  options?: ComplaintQuestionOption[];
+  helpText?: string;
+  stopIfAnswered?: boolean;
+}
+
+export interface ComplaintPack {
+  complaintId: string;
+  aliases: string[];
+  title: string;
+  ageBands?: Array<"infant" | "child" | "teen" | "adult" | "older_adult">;
+  coreQuestions: ComplaintQuestion[];
+  redFlagTriggers: string[];
+  autoEscalateRules: string[];
+  autoReviewRules: string[];
+  likelyDisposition:
+    | "self_care"
+    | "office_followup"
+    | "telemed_now"
+    | "urgent_care"
+    | "er_now";
+  planTemplateKey: string;
+}
+2. Thirty complaint packs
+// server/config/complaintPacks.ts
+
+import { ComplaintPack } from "../../shared/complaintPacks";
+
+export const complaintPacks: ComplaintPack[] = [
+  {
+    complaintId: "cough",
+    aliases: ["cough", "cold", "bronchitis", "congestion"],
+    title: "Cough",
+    coreQuestions: [
+      { id: "duration", prompt: "How long have you had the cough?", type: "duration", required: true, priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", required: true, priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", required: true, priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "blood", prompt: "Any coughing up blood?", type: "yes_no", priority: 5 },
+      { id: "asthma_copd", prompt: "History of asthma or COPD?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["sob", "chest_pain", "blood"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes", "blood=yes"],
+    autoReviewRules: ["asthma_copd=yes", "fever=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "cough_basic",
+  },
+
+  {
+    complaintId: "sore_throat",
+    aliases: ["sore throat", "throat pain", "strep"],
+    title: "Sore Throat",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has the sore throat been present?", type: "duration", required: true, priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", required: true, priority: 2 },
+      { id: "trouble_swallowing", prompt: "Trouble swallowing saliva?", type: "yes_no", priority: 3 },
+      { id: "voice_change", prompt: "Voice muffled or changed?", type: "yes_no", priority: 4 },
+      { id: "breathing", prompt: "Any breathing trouble?", type: "yes_no", priority: 5 },
+      { id: "cough", prompt: "Any cough?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["trouble_swallowing", "voice_change", "breathing"],
+    autoEscalateRules: ["breathing=yes", "trouble_swallowing=yes", "voice_change=yes"],
+    autoReviewRules: ["fever=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "sore_throat_basic",
+  },
+
+  {
+    complaintId: "fever",
+    aliases: ["fever", "high temperature"],
+    title: "Fever",
+    coreQuestions: [
+      { id: "temp", prompt: "What is the highest temperature?", type: "number", required: true, priority: 1 },
+      { id: "duration", prompt: "How long has the fever been present?", type: "duration", required: true, priority: 2 },
+      { id: "confusion", prompt: "Any confusion or unusual sleepiness?", type: "yes_no", priority: 3 },
+      { id: "stiff_neck", prompt: "Any stiff neck?", type: "yes_no", priority: 4 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 5 },
+      { id: "dehydration", prompt: "Unable to keep fluids down?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["confusion", "stiff_neck", "sob", "dehydration"],
+    autoEscalateRules: ["confusion=yes", "stiff_neck=yes", "sob=yes", "dehydration=yes"],
+    autoReviewRules: ["temp>=103"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "fever_basic",
+  },
+
+  {
+    complaintId: "rash",
+    aliases: ["rash", "itchy rash", "skin spots", "red bumps"],
+    title: "Rash",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has the rash been there?", type: "duration", required: true, priority: 1 },
+      { id: "itchy", prompt: "Is it itchy?", type: "yes_no", priority: 2 },
+      { id: "painful", prompt: "Is it painful?", type: "yes_no", priority: 3 },
+      { id: "mouth_eyes", prompt: "Any mouth sores or eye involvement?", type: "yes_no", priority: 4 },
+      { id: "swelling_breathing", prompt: "Any facial swelling or trouble breathing?", type: "yes_no", priority: 5 },
+      { id: "new_meds", prompt: "Any new medicine started recently?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["mouth_eyes", "swelling_breathing"],
+    autoEscalateRules: ["swelling_breathing=yes", "mouth_eyes=yes"],
+    autoReviewRules: ["new_meds=yes", "painful=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "rash_basic",
+  },
+
+  {
+    complaintId: "urinary_burning",
+    aliases: ["uti", "burning urination", "burns when pee", "pain urinating"],
+    title: "Urinary Burning",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has the urinary burning been present?", type: "duration", required: true, priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "back_pain", prompt: "Any back or flank pain?", type: "yes_no", priority: 3 },
+      { id: "vomiting", prompt: "Any vomiting?", type: "yes_no", priority: 4 },
+      { id: "pregnancy", prompt: "Any chance of pregnancy?", type: "yes_no", priority: 5 },
+      { id: "blood_urine", prompt: "Any blood in the urine?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["fever", "back_pain", "vomiting"],
+    autoEscalateRules: ["fever=yes AND back_pain=yes", "vomiting=yes"],
+    autoReviewRules: ["pregnancy=yes", "blood_urine=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "uti_basic",
+  },
+
+  {
+    complaintId: "abdominal_pain",
+    aliases: ["abdominal pain", "stomach pain", "belly pain"],
+    title: "Abdominal Pain",
+    coreQuestions: [
+      { id: "location", prompt: "Where is the pain located?", type: "single_select", priority: 1, options: [
+        { label: "Right lower", value: "rlq" }, { label: "Right upper", value: "ruq" },
+        { label: "Left lower", value: "llq" }, { label: "Left upper", value: "luq" },
+        { label: "Middle", value: "mid" }, { label: "Diffuse", value: "diffuse" },
+      ]},
+      { id: "severity", prompt: "How severe is the pain from 0-10?", type: "severity", required: true, priority: 2 },
+      { id: "vomiting", prompt: "Any vomiting?", type: "yes_no", priority: 3 },
+      { id: "blood_stool", prompt: "Any blood in stool or black stool?", type: "yes_no", priority: 4 },
+      { id: "pregnancy", prompt: "Any chance of pregnancy?", type: "yes_no", priority: 5 },
+      { id: "fainting", prompt: "Any fainting or severe weakness?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["blood_stool", "fainting"],
+    autoEscalateRules: ["severity>=8", "fainting=yes", "blood_stool=yes"],
+    autoReviewRules: ["pregnancy=yes", "vomiting=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "abdominal_pain_basic",
+  },
+
+  {
+    complaintId: "vomiting",
+    aliases: ["vomiting", "throwing up", "emesis"],
+    title: "Vomiting",
+    coreQuestions: [
+      { id: "duration", prompt: "How long have you been vomiting?", type: "duration", priority: 1 },
+      { id: "fluids", prompt: "Able to keep fluids down?", type: "yes_no", priority: 2 },
+      { id: "blood", prompt: "Any blood in vomit?", type: "yes_no", priority: 3 },
+      { id: "abdominal_pain", prompt: "Any significant abdominal pain?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "pregnancy", prompt: "Any chance of pregnancy?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["blood", "fluids"],
+    autoEscalateRules: ["blood=yes", "fluids=no"],
+    autoReviewRules: ["pregnancy=yes", "abdominal_pain=yes", "fever=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "vomiting_basic",
+  },
+
+  {
+    complaintId: "diarrhea",
+    aliases: ["diarrhea", "loose stool"],
+    title: "Diarrhea",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has the diarrhea been present?", type: "duration", priority: 1 },
+      { id: "blood", prompt: "Any blood in stool?", type: "yes_no", priority: 2 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 3 },
+      { id: "dehydration", prompt: "Dizziness, very dry mouth, or not urinating much?", type: "yes_no", priority: 4 },
+      { id: "abdominal_pain", prompt: "Severe abdominal pain?", type: "yes_no", priority: 5 },
+      { id: "travel_antibiotics", prompt: "Recent travel or antibiotics?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["blood", "dehydration", "abdominal_pain"],
+    autoEscalateRules: ["dehydration=yes", "blood=yes", "abdominal_pain=yes"],
+    autoReviewRules: ["fever=yes", "travel_antibiotics=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "diarrhea_basic",
+  },
+
+  {
+    complaintId: "ear_pain",
+    aliases: ["ear pain", "earache"],
+    title: "Ear Pain",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has the ear pain been present?", type: "duration", priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "drainage", prompt: "Any ear drainage?", type: "yes_no", priority: 3 },
+      { id: "hearing_loss", prompt: "Any new hearing loss?", type: "yes_no", priority: 4 },
+      { id: "swelling", prompt: "Any swelling behind the ear?", type: "yes_no", priority: 5 },
+      { id: "recent_swimming", prompt: "Recent swimming or water in the ear?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["swelling", "hearing_loss"],
+    autoEscalateRules: ["swelling=yes"],
+    autoReviewRules: ["drainage=yes", "fever=yes", "hearing_loss=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "ear_pain_basic",
+  },
+
+  {
+    complaintId: "eye_redness",
+    aliases: ["pink eye", "conjunctivitis", "red eye", "eye redness"],
+    title: "Eye Redness",
+    coreQuestions: [
+      { id: "pain", prompt: "Is there eye pain?", type: "yes_no", priority: 1 },
+      { id: "vision", prompt: "Any change in vision?", type: "yes_no", priority: 2 },
+      { id: "contact_lens", prompt: "Do you wear contact lenses?", type: "yes_no", priority: 3 },
+      { id: "discharge", prompt: "Any discharge or crusting?", type: "yes_no", priority: 4 },
+      { id: "light_sensitive", prompt: "Sensitive to light?", type: "yes_no", priority: 5 },
+      { id: "injury", prompt: "Any recent eye injury or chemical exposure?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["pain", "vision", "light_sensitive", "injury"],
+    autoEscalateRules: ["vision=yes", "injury=yes"],
+    autoReviewRules: ["pain=yes", "contact_lens=yes", "light_sensitive=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "eye_redness_basic",
+  },
+
+  {
+    complaintId: "headache",
+    aliases: ["headache", "migraine", "head pain"],
+    title: "Headache",
+    coreQuestions: [
+      { id: "severity", prompt: "How severe is the headache from 0-10?", type: "severity", priority: 1 },
+      { id: "sudden", prompt: "Did it start suddenly at maximum intensity?", type: "yes_no", priority: 2 },
+      { id: "weakness", prompt: "Any weakness, numbness, or speech trouble?", type: "yes_no", priority: 3 },
+      { id: "fever_stiff_neck", prompt: "Any fever or stiff neck?", type: "yes_no", priority: 4 },
+      { id: "vision", prompt: "Any vision changes?", type: "yes_no", priority: 5 },
+      { id: "pregnant", prompt: "Pregnant or postpartum?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["sudden", "weakness", "fever_stiff_neck"],
+    autoEscalateRules: ["sudden=yes", "weakness=yes", "fever_stiff_neck=yes"],
+    autoReviewRules: ["vision=yes", "pregnant=yes", "severity>=8"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "headache_basic",
+  },
+
+  {
+    complaintId: "dizziness",
+    aliases: ["dizzy", "vertigo", "lightheaded"],
+    title: "Dizziness",
+    coreQuestions: [
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 1 },
+      { id: "chest_pain", prompt: "Any chest pain or palpitations?", type: "yes_no", priority: 2 },
+      { id: "neuro", prompt: "Any weakness, numbness, trouble walking, or slurred speech?", type: "yes_no", priority: 3 },
+      { id: "spinning", prompt: "Does it feel like the room is spinning?", type: "yes_no", priority: 4 },
+      { id: "dehydration", prompt: "Poor fluid intake or vomiting/diarrhea?", type: "yes_no", priority: 5 },
+      { id: "pregnant", prompt: "Any chance of pregnancy?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["fainting", "chest_pain", "neuro"],
+    autoEscalateRules: ["fainting=yes", "chest_pain=yes", "neuro=yes"],
+    autoReviewRules: ["dehydration=yes", "pregnant=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "dizziness_basic",
+  },
+
+  {
+    complaintId: "back_pain",
+    aliases: ["back pain", "low back pain"],
+    title: "Back Pain",
+    coreQuestions: [
+      { id: "injury", prompt: "Any fall or injury?", type: "yes_no", priority: 1 },
+      { id: "weakness", prompt: "Any leg weakness or trouble walking?", type: "yes_no", priority: 2 },
+      { id: "numbness_groin", prompt: "Any numbness in the groin area?", type: "yes_no", priority: 3 },
+      { id: "bowel_bladder", prompt: "Any loss of bowel or bladder control?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "urinary", prompt: "Any burning urination or flank pain?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["weakness", "numbness_groin", "bowel_bladder"],
+    autoEscalateRules: ["bowel_bladder=yes", "numbness_groin=yes", "weakness=yes"],
+    autoReviewRules: ["fever=yes", "injury=yes", "urinary=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "back_pain_basic",
+  },
+
+  {
+    complaintId: "chest_pain",
+    aliases: ["chest pain", "chest pressure"],
+    title: "Chest Pain",
+    coreQuestions: [
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 1 },
+      { id: "radiation", prompt: "Pain going to jaw, arm, or back?", type: "yes_no", priority: 2 },
+      { id: "fainting", prompt: "Any fainting?", type: "yes_no", priority: 3 },
+      { id: "sweating", prompt: "Cold sweat or nausea?", type: "yes_no", priority: 4 },
+      { id: "exertion", prompt: "Worse with exertion?", type: "yes_no", priority: 5 },
+      { id: "history", prompt: "Any heart or clotting history?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["sob", "radiation", "fainting", "sweating", "exertion"],
+    autoEscalateRules: ["ANY_RED_FLAG=true"],
+    autoReviewRules: ["history=yes"],
+    likelyDisposition: "er_now",
+    planTemplateKey: "chest_pain_emergency",
+  },
+
+  {
+    complaintId: "shortness_of_breath",
+    aliases: ["shortness of breath", "trouble breathing", "can't breathe"],
+    title: "Shortness of Breath",
+    coreQuestions: [
+      { id: "rest", prompt: "Short of breath at rest?", type: "yes_no", priority: 1 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 2 },
+      { id: "bluish", prompt: "Lips blue or trouble speaking full sentences?", type: "yes_no", priority: 3 },
+      { id: "asthma", prompt: "Asthma/COPD history?", type: "yes_no", priority: 4 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 5 },
+      { id: "leg_swelling", prompt: "Any leg swelling or recent travel?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["rest", "chest_pain", "bluish"],
+    autoEscalateRules: ["rest=yes", "chest_pain=yes", "bluish=yes"],
+    autoReviewRules: ["asthma=yes", "leg_swelling=yes", "fever=yes"],
+    likelyDisposition: "er_now",
+    planTemplateKey: "sob_emergency",
+  },
+
+  {
+    complaintId: "sinus_symptoms",
+    aliases: ["sinus infection", "sinus pressure", "sinus congestion"],
+    title: "Sinus Symptoms",
+    coreQuestions: [
+      { id: "duration", prompt: "How long have the sinus symptoms been present?", type: "duration", priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "face_pain", prompt: "Facial pain or pressure?", type: "yes_no", priority: 3 },
+      { id: "tooth_pain", prompt: "Any upper tooth pain?", type: "yes_no", priority: 4 },
+      { id: "eye_swelling", prompt: "Any eye swelling or severe headache?", type: "yes_no", priority: 5 },
+      { id: "immunocompromised", prompt: "Immune system problems?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["eye_swelling"],
+    autoEscalateRules: ["eye_swelling=yes"],
+    autoReviewRules: ["fever=yes", "immunocompromised=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "sinus_basic",
+  },
+
+  {
+    complaintId: "tooth_pain",
+    aliases: ["tooth pain", "dental pain", "toothache"],
+    title: "Tooth Pain",
+    coreQuestions: [
+      { id: "swelling", prompt: "Any facial or gum swelling?", type: "yes_no", priority: 1 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 2 },
+      { id: "swallowing", prompt: "Any trouble swallowing?", type: "yes_no", priority: 3 },
+      { id: "opening_mouth", prompt: "Trouble opening the mouth?", type: "yes_no", priority: 4 },
+      { id: "drainage", prompt: "Any pus or bad-tasting drainage?", type: "yes_no", priority: 5 },
+      { id: "injury", prompt: "Any trauma to the tooth?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["swallowing", "opening_mouth"],
+    autoEscalateRules: ["swallowing=yes", "opening_mouth=yes"],
+    autoReviewRules: ["swelling=yes", "fever=yes", "drainage=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "tooth_pain_basic",
+  },
+
+  {
+    complaintId: "allergic_reaction",
+    aliases: ["allergic reaction", "hives", "allergy"],
+    title: "Allergic Reaction",
+    coreQuestions: [
+      { id: "breathing", prompt: "Any trouble breathing?", type: "yes_no", priority: 1 },
+      { id: "face_swelling", prompt: "Any lip, tongue, or facial swelling?", type: "yes_no", priority: 2 },
+      { id: "vomiting", prompt: "Any vomiting after exposure?", type: "yes_no", priority: 3 },
+      { id: "fainting", prompt: "Any dizziness or fainting?", type: "yes_no", priority: 4 },
+      { id: "trigger", prompt: "Known trigger such as food or medication?", type: "yes_no", priority: 5 },
+      { id: "epipen", prompt: "Used epinephrine already?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["breathing", "face_swelling", "fainting"],
+    autoEscalateRules: ["breathing=yes", "face_swelling=yes", "fainting=yes"],
+    autoReviewRules: ["vomiting=yes", "epipen=yes"],
+    likelyDisposition: "er_now",
+    planTemplateKey: "allergic_reaction_emergency",
+  },
+
+  {
+    complaintId: "hives",
+    aliases: ["hives", "urticaria"],
+    title: "Hives",
+    coreQuestions: [
+      { id: "breathing", prompt: "Any trouble breathing?", type: "yes_no", priority: 1 },
+      { id: "swelling", prompt: "Any swelling of lips or tongue?", type: "yes_no", priority: 2 },
+      { id: "new_meds", prompt: "Any new medications?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "painful", prompt: "Are the skin lesions painful rather than itchy?", type: "yes_no", priority: 5 },
+      { id: "duration", prompt: "How long has this been happening?", type: "duration", priority: 6 },
+    ],
+    redFlagTriggers: ["breathing", "swelling"],
+    autoEscalateRules: ["breathing=yes", "swelling=yes"],
+    autoReviewRules: ["new_meds=yes", "painful=yes", "fever=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "hives_basic",
+  },
+
+  {
+    complaintId: "injury_minor",
+    aliases: ["sprain", "strain", "minor injury", "twisted ankle"],
+    title: "Minor Injury",
+    coreQuestions: [
+      { id: "deformity", prompt: "Visible deformity?", type: "yes_no", priority: 1 },
+      { id: "weight_bearing", prompt: "Able to bear weight or use the limb?", type: "yes_no", priority: 2 },
+      { id: "numbness", prompt: "Any numbness?", type: "yes_no", priority: 3 },
+      { id: "open_wound", prompt: "Any open wound?", type: "yes_no", priority: 4 },
+      { id: "head_injury", prompt: "Any head injury involved?", type: "yes_no", priority: 5 },
+      { id: "swelling", prompt: "Marked swelling?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["deformity", "numbness", "open_wound"],
+    autoEscalateRules: ["deformity=yes", "numbness=yes"],
+    autoReviewRules: ["weight_bearing=no", "open_wound=yes", "head_injury=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "injury_minor_basic",
+  },
+
+  {
+    complaintId: "laceration",
+    aliases: ["cut", "laceration", "gash"],
+    title: "Laceration",
+    coreQuestions: [
+      { id: "bleeding", prompt: "Is bleeding hard to stop?", type: "yes_no", priority: 1 },
+      { id: "depth", prompt: "Does it look deep or open widely?", type: "yes_no", priority: 2 },
+      { id: "location", prompt: "Is it on face, hand, joint, or genitals?", type: "yes_no", priority: 3 },
+      { id: "function", prompt: "Can you move the area normally?", type: "yes_no", priority: 4 },
+      { id: "dirty", prompt: "Was it dirty or caused by metal/animal bite?", type: "yes_no", priority: 5 },
+      { id: "tetanus", prompt: "Tetanus shot up to date?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["bleeding", "depth", "function"],
+    autoEscalateRules: ["bleeding=yes"],
+    autoReviewRules: ["depth=yes", "location=yes", "function=no", "dirty=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "laceration_basic",
+  },
+
+  {
+    complaintId: "insect_bite",
+    aliases: ["bug bite", "insect bite", "bee sting"],
+    title: "Insect Bite / Sting",
+    coreQuestions: [
+      { id: "breathing", prompt: "Any trouble breathing?", type: "yes_no", priority: 1 },
+      { id: "face_swelling", prompt: "Any facial swelling?", type: "yes_no", priority: 2 },
+      { id: "spreading_redness", prompt: "Is redness rapidly spreading?", type: "yes_no", priority: 3 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 4 },
+      { id: "painful", prompt: "Severe pain?", type: "yes_no", priority: 5 },
+      { id: "tick", prompt: "Was it a tick bite?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["breathing", "face_swelling"],
+    autoEscalateRules: ["breathing=yes", "face_swelling=yes"],
+    autoReviewRules: ["spreading_redness=yes", "fever=yes", "tick=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "insect_bite_basic",
+  },
+
+  {
+    complaintId: "cellulitis",
+    aliases: ["cellulitis", "skin infection", "red swollen skin"],
+    title: "Cellulitis / Skin Infection",
+    coreQuestions: [
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 1 },
+      { id: "rapid_spread", prompt: "Is the redness spreading quickly?", type: "yes_no", priority: 2 },
+      { id: "severe_pain", prompt: "Severe pain or pain out of proportion?", type: "yes_no", priority: 3 },
+      { id: "face", prompt: "Is it on the face?", type: "yes_no", priority: 4 },
+      { id: "drainage", prompt: "Any pus or drainage?", type: "yes_no", priority: 5 },
+      { id: "diabetes", prompt: "Diabetes or immune suppression?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["rapid_spread", "severe_pain"],
+    autoEscalateRules: ["severe_pain=yes"],
+    autoReviewRules: ["fever=yes", "rapid_spread=yes", "face=yes", "diabetes=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "cellulitis_basic",
+  },
+
+  {
+    complaintId: "leg_swelling",
+    aliases: ["leg swelling", "swollen leg"],
+    title: "Leg Swelling",
+    coreQuestions: [
+      { id: "one_sided", prompt: "Is only one leg swollen?", type: "yes_no", priority: 1 },
+      { id: "pain", prompt: "Any leg pain?", type: "yes_no", priority: 2 },
+      { id: "sob", prompt: "Any shortness of breath or chest pain?", type: "yes_no", priority: 3 },
+      { id: "travel", prompt: "Recent travel, surgery, or immobility?", type: "yes_no", priority: 4 },
+      { id: "redness", prompt: "Any redness or warmth?", type: "yes_no", priority: 5 },
+      { id: "heart_kidney", prompt: "Heart, kidney, or liver disease?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["sob"],
+    autoEscalateRules: ["sob=yes"],
+    autoReviewRules: ["one_sided=yes", "pain=yes", "travel=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "leg_swelling_basic",
+  },
+
+  {
+    complaintId: "palpitations",
+    aliases: ["palpitations", "heart racing", "rapid heart beat"],
+    title: "Palpitations",
+    coreQuestions: [
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "fainting", prompt: "Any fainting or near-fainting?", type: "yes_no", priority: 3 },
+      { id: "duration", prompt: "How long do episodes last?", type: "duration", priority: 4 },
+      { id: "stimulants", prompt: "Energy drinks, caffeine, or stimulant use?", type: "yes_no", priority: 5 },
+      { id: "heart_history", prompt: "Any heart history?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["chest_pain", "sob", "fainting"],
+    autoEscalateRules: ["fainting=yes", "chest_pain=yes", "sob=yes"],
+    autoReviewRules: ["heart_history=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "palpitations_basic",
+  },
+
+  {
+    complaintId: "anxiety_panic",
+    aliases: ["anxiety", "panic attack", "panic"],
+    title: "Anxiety / Panic",
+    coreQuestions: [
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "suicidal", prompt: "Any thoughts of self-harm?", type: "yes_no", priority: 3 },
+      { id: "substances", prompt: "Any alcohol, stimulant, or drug use?", type: "yes_no", priority: 4 },
+      { id: "history", prompt: "Previous panic/anxiety diagnosis?", type: "yes_no", priority: 5 },
+      { id: "safe_now", prompt: "Do you feel safe right now?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["suicidal", "safe_now"],
+    autoEscalateRules: ["suicidal=yes", "safe_now=no", "chest_pain=yes", "sob=yes"],
+    autoReviewRules: ["substances=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "anxiety_basic",
+  },
+
+  {
+    complaintId: "depression",
+    aliases: ["depression", "feeling depressed", "low mood"],
+    title: "Depression",
+    coreQuestions: [
+      { id: "suicidal", prompt: "Any thoughts of harming yourself?", type: "yes_no", priority: 1 },
+      { id: "psychosis", prompt: "Any voices, paranoia, or confusion?", type: "yes_no", priority: 2 },
+      { id: "function", prompt: "Able to function day to day?", type: "yes_no", priority: 3 },
+      { id: "sleep", prompt: "Sleeping much less or much more?", type: "yes_no", priority: 4 },
+      { id: "substances", prompt: "Alcohol or drug use worsening things?", type: "yes_no", priority: 5 },
+      { id: "support", prompt: "Do you have support with you now?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["suicidal", "psychosis"],
+    autoEscalateRules: ["suicidal=yes", "psychosis=yes"],
+    autoReviewRules: ["function=no", "support=no", "substances=yes"],
+    likelyDisposition: "telemed_now",
+    planTemplateKey: "depression_basic",
+  },
+
+  {
+    complaintId: "insomnia",
+    aliases: ["insomnia", "can't sleep"],
+    title: "Insomnia",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has sleep been a problem?", type: "duration", priority: 1 },
+      { id: "mania", prompt: "Feeling unusually energized, euphoric, or impulsive?", type: "yes_no", priority: 2 },
+      { id: "substances", prompt: "Caffeine, alcohol, or stimulant use?", type: "yes_no", priority: 3 },
+      { id: "snoring", prompt: "Loud snoring or witnessed pauses in breathing?", type: "yes_no", priority: 4 },
+      { id: "suicidal", prompt: "Any self-harm thoughts?", type: "yes_no", priority: 5 },
+      { id: "anxiety", prompt: "Anxiety contributing?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["mania", "suicidal"],
+    autoEscalateRules: ["suicidal=yes"],
+    autoReviewRules: ["mania=yes", "snoring=yes", "substances=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "insomnia_basic",
+  },
+
+  {
+    complaintId: "med_refill",
+    aliases: ["refill", "med refill", "prescription refill"],
+    title: "Medication Refill",
+    coreQuestions: [
+      { id: "med_name", prompt: "What medication needs refill?", type: "text", priority: 1, required: true },
+      { id: "dose", prompt: "What dose are you taking?", type: "text", priority: 2 },
+      { id: "out_now", prompt: "Are you out of medication now?", type: "yes_no", priority: 3 },
+      { id: "side_effects", prompt: "Any side effects or new symptoms?", type: "yes_no", priority: 4 },
+      { id: "pregnant", prompt: "Pregnant or breastfeeding?", type: "yes_no", priority: 5 },
+      { id: "controlled", prompt: "Is it a controlled medication?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: [],
+    autoEscalateRules: [],
+    autoReviewRules: ["side_effects=yes", "pregnant=yes", "controlled=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "refill_basic",
+  },
+
+  {
+    complaintId: "high_blood_pressure",
+    aliases: ["high blood pressure", "hypertension", "bp high"],
+    title: "High Blood Pressure",
+    coreQuestions: [
+      { id: "reading", prompt: "What was the blood pressure reading?", type: "text", priority: 1 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 2 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 3 },
+      { id: "neuro", prompt: "Any severe headache, confusion, weakness, or vision change?", type: "yes_no", priority: 4 },
+      { id: "pregnant", prompt: "Pregnant?", type: "yes_no", priority: 5 },
+      { id: "missed_meds", prompt: "Missed blood pressure meds recently?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["chest_pain", "sob", "neuro"],
+    autoEscalateRules: ["chest_pain=yes", "sob=yes", "neuro=yes"],
+    autoReviewRules: ["pregnant=yes", "missed_meds=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "htn_basic",
+  },
+
+  {
+    complaintId: "covid_flu_like",
+    aliases: ["flu", "covid", "body aches", "viral symptoms"],
+    title: "COVID / Flu-like Symptoms",
+    coreQuestions: [
+      { id: "days", prompt: "How many days have symptoms been present?", type: "duration", priority: 1 },
+      { id: "sob", prompt: "Any shortness of breath?", type: "yes_no", priority: 2 },
+      { id: "chest_pain", prompt: "Any chest pain?", type: "yes_no", priority: 3 },
+      { id: "dehydration", prompt: "Unable to keep fluids down?", type: "yes_no", priority: 4 },
+      { id: "immunocompromised", prompt: "Immune suppression or major chronic illness?", type: "yes_no", priority: 5 },
+      { id: "pregnant", prompt: "Pregnant?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["sob", "chest_pain", "dehydration"],
+    autoEscalateRules: ["sob=yes", "chest_pain=yes", "dehydration=yes"],
+    autoReviewRules: ["immunocompromised=yes", "pregnant=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "viral_basic",
+  },
+
+  {
+    complaintId: "constipation",
+    aliases: ["constipation", "can't poop"],
+    title: "Constipation",
+    coreQuestions: [
+      { id: "duration", prompt: "How long has constipation been going on?", type: "duration", priority: 1 },
+      { id: "vomiting", prompt: "Any vomiting?", type: "yes_no", priority: 2 },
+      { id: "distention", prompt: "Is the belly very swollen or hard?", type: "yes_no", priority: 3 },
+      { id: "blood", prompt: "Any blood in stool?", type: "yes_no", priority: 4 },
+      { id: "pain", prompt: "Severe abdominal pain?", type: "yes_no", priority: 5 },
+      { id: "able_pass_gas", prompt: "Able to pass gas?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["vomiting", "distention", "pain"],
+    autoEscalateRules: ["vomiting=yes AND able_pass_gas=no", "distention=yes", "pain=yes"],
+    autoReviewRules: ["blood=yes"],
+    likelyDisposition: "self_care",
+    planTemplateKey: "constipation_basic",
+  },
+
+  {
+    complaintId: "hemorrhoids_rectal_pain",
+    aliases: ["hemorrhoids", "rectal pain", "anal pain"],
+    title: "Hemorrhoids / Rectal Pain",
+    coreQuestions: [
+      { id: "bleeding", prompt: "Any rectal bleeding?", type: "yes_no", priority: 1 },
+      { id: "black_stool", prompt: "Any black stool?", type: "yes_no", priority: 2 },
+      { id: "fever", prompt: "Any fever?", type: "yes_no", priority: 3 },
+      { id: "drainage", prompt: "Any pus or drainage?", type: "yes_no", priority: 4 },
+      { id: "constipation", prompt: "Recent constipation/straining?", type: "yes_no", priority: 5 },
+      { id: "severe_pain", prompt: "Severe constant pain?", type: "yes_no", priority: 6 },
+    ],
+    redFlagTriggers: ["black_stool"],
+    autoEscalateRules: ["black_stool=yes"],
+    autoReviewRules: ["fever=yes", "drainage=yes", "bleeding=yes", "severe_pain=yes"],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "hemorrhoid_basic",
+  },
+];
+3. Pack selector and question runner
+// server/engines/complaintPackEngine.ts
+
+import { complaintPacks } from "../config/complaintPacks";
+import { ComplaintPack } from "../../shared/complaintPacks";
+
+export function findComplaintPack(chiefComplaint: string): ComplaintPack | null {
+  const normalized = chiefComplaint.trim().toLowerCase();
+
+  for (const pack of complaintPacks) {
+    if (pack.complaintId === normalized) return pack;
+    if (pack.aliases.some(a => normalized.includes(a.toLowerCase()))) return pack;
+  }
+
+  return null;
+}
+
+export function getInitialQuestions(chiefComplaint: string, maxQuestions = 4) {
+  const pack = findComplaintPack(chiefComplaint);
+  if (!pack) return [];
+
+  return [...pack.coreQuestions]
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, maxQuestions);
+}
+
+export function getNextComplaintQuestion(
+  chiefComplaint: string,
+  answeredKeys: string[]
+) {
+  const pack = findComplaintPack(chiefComplaint);
+  if (!pack) return null;
+
+  return [...pack.coreQuestions]
+    .sort((a, b) => a.priority - b.priority)
+    .find(q => !answeredKeys.includes(q.id)) || null;
+}
+
+export function evaluateComplaintEscalation(
+  chiefComplaint: string,
+  answers: Record<string, string | boolean | number | null>
+) {
+  const pack = findComplaintPack(chiefComplaint);
+  if (!pack) {
+    return {
+      matched: false,
+      escalate: false,
+      review: true,
+      reasons: ["no_pack_found"],
+    };
+  }
+
+  const reasons: string[] = [];
+  let escalate = false;
+  let review = false;
+
+  for (const flag of pack.redFlagTriggers) {
+    if (answers[flag] === true || answers[flag] === "yes") {
+      reasons.push(`red_flag:${flag}`);
+      escalate = true;
+    }
+  }
+
+  for (const rule of pack.autoReviewRules) {
+    const [key, val] = rule.split("=");
+    if (answers[key] != null && String(answers[key]).toLowerCase() === String(val).toLowerCase()) {
+      reasons.push(`review_rule:${rule}`);
+      review = true;
+    }
+  }
+
+  return {
+    matched: true,
+    escalate,
+    review,
+    reasons,
+    likelyDisposition: pack.likelyDisposition,
+    planTemplateKey: pack.planTemplateKey,
+  };
+}
+4. How to wire this into your existing intake engine
+
+In your intake route, after chiefComplaint is extracted:
+
+import { getInitialQuestions, evaluateComplaintEscalation } from "../engines/complaintPackEngine";
+
+// after smart intake parsing
+const starterQuestions = getInitialQuestions(intake.chiefComplaint, 4);
+
+// later, once answers exist
+const answerMap = Object.fromEntries(
+  (intake.answers || []).map(a => [a.key, a.value])
+);
+
+const complaintEval = evaluateComplaintEscalation(intake.chiefComplaint, answerMap);
+
+// merge into queue logic
+if (complaintEval.escalate) {
+  // raise risk and send to ER / urgent review path
+}
+if (complaintEval.review) {
+  // route to clinician review
+}
+5. Best way to use these 30 packs at scale
+
+For 1000 patients/day, do not ask 10 questions up front like a medieval tax collector. Ask:
+
+2 universal safety questions
+
+2 complaint-pack questions
+
+then branch only if needed
+
+Recommended flow:
+
+Step 1: universal pre-check
+
+age
+
+pregnancy possibility if relevant
+
+severe breathing trouble?
+
+severe chest pain / confusion / passing out?
+
+Step 2: complaint pack
+
+Pull first 3 to 4 highest-priority questions
+
+Step 3: early stop logic
+
+If:
+
+red flag found → escalate immediately
+
+safe low-risk pattern found → auto-plan
+
+uncertainty remains → ask next 1 to 2 questions only
+
+That keeps the whole thing fast, sharp, and less likely to feel like a haunted insurance form.

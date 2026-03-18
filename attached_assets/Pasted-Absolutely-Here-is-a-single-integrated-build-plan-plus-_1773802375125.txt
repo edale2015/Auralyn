@@ -1,0 +1,1529 @@
+Absolutely. Here is a single integrated build plan plus core code scaffold for all 5 systems, wired together like a clinical switchboard instead of a spaghetti forest 🌲⚙️
+
+I’m going to give you:
+
+Architecture
+
+Data flow
+
+Backend code scaffolding
+
+Frontend physician review UI
+
+Twilio / WhatsApp intake hooks
+
+Queue prioritization
+
+One-click batch approval
+
+Auto-plan generation
+
+Outcome feedback loop
+
+This is written as a Replit/Fly.io-ready TypeScript stack style:
+
+Node / Express backend
+
+React frontend
+
+simple in-memory adapters you can swap to DB
+
+easy to connect to your existing Auralyn system
+
+System architecture
+Twilio SMS / WhatsApp
+        ↓
+Smart Intake Engine
+        ↓
+Structured Case Builder
+        ↓
+Risk Scoring Engine
+        ↓
+Auto Plan Generator
+        ↓
+Queue Prioritizer
+        ↓
+Physician Batch Approval UI
+        ↓
+Approved Plan Sent to Patient
+        ↓
+Outcome Feedback Engine
+        ↓
+Learning / analytics / NPS improvement
+Folder layout
+server/
+  index.ts
+  routes/
+    intake.ts
+    review.ts
+    outcomes.ts
+    queue.ts
+  engines/
+    smartIntakeEngine.ts
+    riskScoringEngine.ts
+    autoPlanEngine.ts
+    queuePrioritizationEngine.ts
+    outcomeFeedbackEngine.ts
+    batchApprovalEngine.ts
+  services/
+    twilioWebhookService.ts
+    whatsappWebhookService.ts
+    caseStore.ts
+    auditLog.ts
+frontend/
+  src/
+    pages/
+      BatchReviewPage.tsx
+    components/
+      ReviewQueueTable.tsx
+      RiskBadge.tsx
+      CaseDrawer.tsx
+      BatchToolbar.tsx
+    api/
+      reviewApi.ts
+      intakeApi.ts
+shared/
+  types.ts
+1. Shared types
+// shared/types.ts
+
+export type Disposition =
+  | "self_care"
+  | "office_followup"
+  | "telemed_now"
+  | "urgent_care"
+  | "er_now";
+
+export type QueueStatus =
+  | "new"
+  | "auto_resolved"
+  | "needs_review"
+  | "approved"
+  | "modified"
+  | "escalated"
+  | "closed";
+
+export interface PatientMessage {
+  role: "patient" | "system" | "doctor";
+  text: string;
+  at: string;
+}
+
+export interface SymptomAnswer {
+  key: string;
+  value: string | boolean | number | null;
+}
+
+export interface StructuredCase {
+  id: string;
+  patientId: string;
+  source: "sms" | "whatsapp" | "web";
+  chiefComplaint: string;
+  age?: number;
+  sex?: string;
+  symptomDuration?: string;
+  answers: SymptomAnswer[];
+  transcript: PatientMessage[];
+  redFlags: string[];
+  missingCriticalData: string[];
+  riskScore: number;
+  riskLevel: "low" | "medium" | "high" | "critical";
+  confidenceScore: number;
+  differential: Array<{ diagnosis: string; probability: number }>;
+  proposedDisposition: Disposition;
+  proposedPlan: TreatmentPlan | null;
+  reviewReason?: string;
+  queuePriority: number;
+  queueStatus: QueueStatus;
+  approvedBy?: string;
+  approvedAt?: string;
+  overrideNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TreatmentPlan {
+  summary: string;
+  diagnosisLabel: string;
+  meds: Array<{
+    name: string;
+    dose: string;
+    instructions: string;
+  }>;
+  homeCare: string[];
+  followUp: string[];
+  returnPrecautions: string[];
+  patientMessage: string;
+}
+
+export interface OutcomeRecord {
+  caseId: string;
+  outcomeType:
+    | "resolved"
+    | "improved"
+    | "unchanged"
+    | "worsened"
+    | "er_visit"
+    | "hospitalized"
+    | "complaint";
+  npsScore?: number;
+  patientComment?: string;
+  collectedAt: string;
+}
+
+export interface BatchApprovalRequest {
+  caseIds: string[];
+  physicianId: string;
+  action: "approve" | "escalate" | "request_review";
+  overrideDisposition?: Disposition;
+  overridePlanNote?: string;
+}
+2. Case store
+
+Use this now, replace with Postgres/Firestore later.
+
+// server/services/caseStore.ts
+
+import { OutcomeRecord, StructuredCase } from "../../shared/types";
+
+const cases = new Map<string, StructuredCase>();
+const outcomes: OutcomeRecord[] = [];
+
+export const caseStore = {
+  saveCase(input: StructuredCase) {
+    cases.set(input.id, input);
+    return input;
+  },
+
+  getCase(id: string) {
+    return cases.get(id) || null;
+  },
+
+  listCases() {
+    return Array.from(cases.values());
+  },
+
+  updateCase(id: string, patch: Partial<StructuredCase>) {
+    const current = cases.get(id);
+    if (!current) return null;
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    cases.set(id, next);
+    return next;
+  },
+
+  saveOutcome(record: OutcomeRecord) {
+    outcomes.push(record);
+    return record;
+  },
+
+  listOutcomes() {
+    return outcomes;
+  },
+};
+3. Audit log
+// server/services/auditLog.ts
+
+export interface AuditEntry {
+  at: string;
+  event: string;
+  entityId: string;
+  actor: string;
+  details: Record<string, unknown>;
+}
+
+const auditEntries: AuditEntry[] = [];
+
+export const auditLog = {
+  write(entry: Omit<AuditEntry, "at">) {
+    const full = { ...entry, at: new Date().toISOString() };
+    auditEntries.push(full);
+    return full;
+  },
+  list() {
+    return auditEntries;
+  },
+};
+4. Smart intake engine
+
+This is the intake brain that turns messy patient text into structured fields and asks only the next best question.
+
+// server/engines/smartIntakeEngine.ts
+
+import { PatientMessage, StructuredCase, SymptomAnswer } from "../../shared/types";
+
+type IntakeDraft = Partial<StructuredCase>;
+
+const RED_FLAG_PATTERNS = [
+  { pattern: /chest pain|pressure in chest/i, flag: "chest_pain" },
+  { pattern: /shortness of breath|can't breathe|trouble breathing/i, flag: "sob" },
+  { pattern: /fainting|passed out|syncope/i, flag: "syncope" },
+  { pattern: /one sided weakness|slurred speech/i, flag: "stroke_symptoms" },
+  { pattern: /severe abdominal pain/i, flag: "severe_abdominal_pain" },
+  { pattern: /pregnant and bleeding/i, flag: "pregnancy_bleeding" },
+];
+
+export function parseSmartIntake(
+  patientId: string,
+  source: "sms" | "whatsapp" | "web",
+  transcript: PatientMessage[]
+): IntakeDraft {
+  const allText = transcript.map(t => t.text).join(" ");
+  const chiefComplaint = extractChiefComplaint(allText);
+  const age = extractAge(allText);
+  const sex = extractSex(allText);
+  const symptomDuration = extractDuration(allText);
+  const redFlags = extractRedFlags(allText);
+
+  const answers: SymptomAnswer[] = [];
+  if (age != null) answers.push({ key: "age", value: age });
+  if (sex) answers.push({ key: "sex", value: sex });
+  if (symptomDuration) answers.push({ key: "duration", value: symptomDuration });
+
+  const missingCriticalData = [];
+  if (age == null) missingCriticalData.push("age");
+  if (!chiefComplaint) missingCriticalData.push("chief_complaint");
+
+  return {
+    patientId,
+    source,
+    chiefComplaint: chiefComplaint || "general_medical_question",
+    age,
+    sex,
+    symptomDuration,
+    answers,
+    transcript,
+    redFlags,
+    missingCriticalData,
+  };
+}
+
+function extractChiefComplaint(text: string): string {
+  const complaintMap = [
+    "cough",
+    "sore throat",
+    "fever",
+    "rash",
+    "urinary burning",
+    "ear pain",
+    "eye redness",
+    "abdominal pain",
+    "vomiting",
+    "diarrhea",
+    "back pain",
+    "headache",
+    "refill",
+  ];
+  const lower = text.toLowerCase();
+  return complaintMap.find(c => lower.includes(c)) || inferComplaint(lower);
+}
+
+function inferComplaint(text: string): string {
+  if (/pee burns|burning when urinate|uti/i.test(text)) return "urinary burning";
+  if (/runny nose|congestion|cold/i.test(text)) return "cough";
+  if (/itchy spots|red bumps/i.test(text)) return "rash";
+  return "general_medical_question";
+}
+
+function extractAge(text: string): number | undefined {
+  const match = text.match(/\b(\d{1,3})\s*(yo|year old|years old)\b/i);
+  if (!match) return undefined;
+  return Number(match[1]);
+}
+
+function extractSex(text: string): string | undefined {
+  if (/\bfemale\b|\bwoman\b|\bgirl\b/i.test(text)) return "female";
+  if (/\bmale\b|\bman\b|\bboy\b/i.test(text)) return "male";
+  return undefined;
+}
+
+function extractDuration(text: string): string | undefined {
+  const match = text.match(/\b(\d+)\s*(day|days|week|weeks|month|months)\b/i);
+  return match ? `${match[1]} ${match[2]}` : undefined;
+}
+
+function extractRedFlags(text: string): string[] {
+  return RED_FLAG_PATTERNS.filter(x => x.pattern.test(text)).map(x => x.flag);
+}
+
+export function getNextBestQuestion(draft: Partial<StructuredCase>): string | null {
+  if (!draft.age) return "What is the patient's age?";
+  if (!draft.chiefComplaint) return "What is the main symptom today?";
+  if (draft.chiefComplaint === "cough" && !hasAnswer(draft, "sob")) {
+    return "Any shortness of breath, chest pain, or fever?";
+  }
+  if (draft.chiefComplaint === "urinary burning" && !hasAnswer(draft, "pregnancy_status")) {
+    return "Any fever, back pain, vomiting, or pregnancy?";
+  }
+  if (draft.chiefComplaint === "rash" && !hasAnswer(draft, "rash_red_flags")) {
+    return "Any mouth sores, facial swelling, trouble breathing, or severe pain?";
+  }
+  return null;
+}
+
+function hasAnswer(draft: Partial<StructuredCase>, key: string) {
+  return (draft.answers || []).some(a => a.key === key);
+}
+5. Risk scoring engine
+
+This decides who vanishes into auto-resolution and who enters the doctor queue.
+
+// server/engines/riskScoringEngine.ts
+
+import { StructuredCase } from "../../shared/types";
+
+export function scoreRisk(input: Partial<StructuredCase>) {
+  let score = 0;
+
+  if ((input.redFlags || []).length > 0) score += 70;
+  if ((input.missingCriticalData || []).length > 0) score += 10;
+  if ((input.age || 0) < 3) score += 15;
+  if ((input.age || 0) > 75) score += 12;
+
+  const cc = (input.chiefComplaint || "").toLowerCase();
+
+  if (cc.includes("chest")) score += 60;
+  if (cc.includes("abdominal")) score += 20;
+  if (cc.includes("vomiting")) score += 15;
+  if (cc.includes("urinary")) score += 10;
+  if (cc.includes("rash")) score += 8;
+  if (cc.includes("refill")) score -= 20;
+
+  if ((input.symptomDuration || "").includes("month")) score += 10;
+
+  const confidenceScore = calculateConfidence(input);
+
+  if (confidenceScore < 0.6) score += 20;
+  if (confidenceScore > 0.9) score -= 8;
+
+  score = Math.max(0, Math.min(100, score));
+
+  let riskLevel: "low" | "medium" | "high" | "critical" = "low";
+  if (score >= 80) riskLevel = "critical";
+  else if (score >= 55) riskLevel = "high";
+  else if (score >= 25) riskLevel = "medium";
+
+  return {
+    riskScore: score,
+    riskLevel,
+    confidenceScore,
+  };
+}
+
+function calculateConfidence(input: Partial<StructuredCase>) {
+  let confidence = 0.5;
+  if (input.chiefComplaint) confidence += 0.15;
+  if (input.age) confidence += 0.05;
+  if (input.symptomDuration) confidence += 0.05;
+  if ((input.missingCriticalData || []).length === 0) confidence += 0.1;
+  if ((input.redFlags || []).length === 0) confidence += 0.1;
+  if ((input.answers || []).length >= 3) confidence += 0.1;
+  return Math.max(0, Math.min(0.99, confidence));
+}
+6. Auto plan engine
+
+This is the plan factory. Clear, warm, safe.
+
+// server/engines/autoPlanEngine.ts
+
+import { Disposition, StructuredCase, TreatmentPlan } from "../../shared/types";
+
+export function generateAutoPlan(input: Partial<StructuredCase>): {
+  proposedDisposition: Disposition;
+  differential: Array<{ diagnosis: string; probability: number }>;
+  proposedPlan: TreatmentPlan | null;
+  reviewReason?: string;
+} {
+  const cc = (input.chiefComplaint || "").toLowerCase();
+  const redFlags = input.redFlags || [];
+
+  if (redFlags.length > 0) {
+    return {
+      proposedDisposition: "er_now",
+      differential: [{ diagnosis: "red_flag_condition", probability: 0.95 }],
+      proposedPlan: {
+        summary: "Red flag symptoms require immediate emergency evaluation.",
+        diagnosisLabel: "Possible emergency condition",
+        meds: [],
+        homeCare: [],
+        followUp: ["Go to the ER now or call emergency services if symptoms are severe."],
+        returnPrecautions: ["Do not wait if symptoms worsen."],
+        patientMessage:
+          "Your symptoms may indicate an urgent problem. Please go to the emergency room now.",
+      },
+      reviewReason: "red_flags_detected",
+    };
+  }
+
+  if (cc === "cough") {
+    return {
+      proposedDisposition: "self_care",
+      differential: [
+        { diagnosis: "viral_uri", probability: 0.82 },
+        { diagnosis: "post_nasal_drainage", probability: 0.11 },
+        { diagnosis: "bronchitis", probability: 0.07 },
+      ],
+      proposedPlan: {
+        summary: "Likely viral upper respiratory infection without clear emergency features.",
+        diagnosisLabel: "Viral upper respiratory infection",
+        meds: [
+          {
+            name: "Acetaminophen",
+            dose: "per label dosing",
+            instructions: "Use for fever or discomfort if needed.",
+          },
+        ],
+        homeCare: [
+          "Hydration",
+          "Rest",
+          "Honey if age appropriate",
+          "Humidified air",
+        ],
+        followUp: ["Follow up if not improving over several days."],
+        returnPrecautions: [
+          "Trouble breathing",
+          "Persistent chest pain",
+          "Dehydration",
+          "High fever",
+        ],
+        patientMessage:
+          "Your symptoms most likely fit a viral upper respiratory infection. Supportive care is recommended, and you should seek urgent evaluation if breathing trouble, chest pain, or worsening symptoms develop.",
+      },
+    };
+  }
+
+  if (cc === "urinary burning") {
+    return {
+      proposedDisposition: "telemed_now",
+      differential: [
+        { diagnosis: "acute_simple_cystitis", probability: 0.84 },
+        { diagnosis: "pyelonephritis", probability: 0.08 },
+        { diagnosis: "vaginitis", probability: 0.08 },
+      ],
+      proposedPlan: {
+        summary: "Symptoms may fit uncomplicated cystitis if no fever, flank pain, or pregnancy risk.",
+        diagnosisLabel: "Possible uncomplicated UTI",
+        meds: [
+          {
+            name: "Nitrofurantoin",
+            dose: "100 mg",
+            instructions: "Twice daily for 5 days if physician confirms appropriateness.",
+          },
+        ],
+        homeCare: ["Hydration", "Avoid bladder irritants temporarily"],
+        followUp: ["Reassess if not improved in 48 hours."],
+        returnPrecautions: ["Fever", "Back pain", "Vomiting", "Pregnancy concern"],
+        patientMessage:
+          "Your symptoms may fit a bladder infection. A clinician will confirm whether treatment is appropriate and make sure there are no higher-risk signs.",
+      },
+      reviewReason: "medication_review_required",
+    };
+  }
+
+  if (cc === "rash") {
+    return {
+      proposedDisposition: "office_followup",
+      differential: [
+        { diagnosis: "contact_dermatitis", probability: 0.5 },
+        { diagnosis: "viral_exanthem", probability: 0.25 },
+        { diagnosis: "eczema", probability: 0.25 },
+      ],
+      proposedPlan: {
+        summary: "Non-emergent rash pattern without obvious red flags based on available data.",
+        diagnosisLabel: "Likely non-emergent rash",
+        meds: [],
+        homeCare: [
+          "Avoid new skin products",
+          "Gentle moisturizer",
+          "Avoid scratching",
+        ],
+        followUp: ["Review images or schedule follow-up if persistent."],
+        returnPrecautions: [
+          "Mouth sores",
+          "Breathing difficulty",
+          "Rapid spread",
+          "Severe pain",
+        ],
+        patientMessage:
+          "The rash does not appear to show immediate danger from the current information, but it should be reviewed if it spreads, becomes painful, or is associated with swelling or breathing problems.",
+      },
+    };
+  }
+
+  if (cc === "refill") {
+    return {
+      proposedDisposition: "office_followup",
+      differential: [{ diagnosis: "medication_refill_request", probability: 0.98 }],
+      proposedPlan: {
+        summary: "Medication refill request routed for clinician review.",
+        diagnosisLabel: "Refill request",
+        meds: [],
+        homeCare: [],
+        followUp: ["Medication list and pharmacy will be verified."],
+        returnPrecautions: [],
+        patientMessage:
+          "Your refill request has been received and is being reviewed.",
+      },
+    };
+  }
+
+  return {
+    proposedDisposition: "needsDoctorReview" as never,
+    differential: [{ diagnosis: "undifferentiated_complaint", probability: 0.5 }],
+    proposedPlan: null,
+    reviewReason: "unsupported_complaint_pathway",
+  };
+}
+
+If you want stricter typing, replace the fallback with telemed_now and review reason.
+
+7. Queue prioritization engine
+
+This is the traffic cop.
+
+// server/engines/queuePrioritizationEngine.ts
+
+import { StructuredCase } from "../../shared/types";
+
+export function computeQueuePriority(input: Partial<StructuredCase>): number {
+  let score = 0;
+
+  score += (input.riskScore || 0) * 5;
+
+  if (input.reviewReason === "red_flags_detected") score += 500;
+  if (input.reviewReason === "medication_review_required") score += 150;
+  if (input.reviewReason === "unsupported_complaint_pathway") score += 120;
+
+  const age = input.age || 0;
+  if (age < 3 || age > 75) score += 40;
+
+  if (input.proposedDisposition === "er_now") score += 1000;
+  if (input.proposedDisposition === "urgent_care") score += 300;
+  if (input.proposedDisposition === "telemed_now") score += 100;
+
+  return score;
+}
+
+export function sortQueue<T extends Partial<StructuredCase>>(cases: T[]): T[] {
+  return [...cases].sort((a, b) => (b.queuePriority || 0) - (a.queuePriority || 0));
+}
+8. Batch approval engine
+
+This is the physician speed booster rocket.
+
+// server/engines/batchApprovalEngine.ts
+
+import { BatchApprovalRequest } from "../../shared/types";
+import { caseStore } from "../services/caseStore";
+import { auditLog } from "../services/auditLog";
+
+export function executeBatchApproval(req: BatchApprovalRequest) {
+  const results = [];
+
+  for (const caseId of req.caseIds) {
+    const current = caseStore.getCase(caseId);
+    if (!current) continue;
+
+    let queueStatus = current.queueStatus;
+    let proposedDisposition = current.proposedDisposition;
+    let overrideNotes = current.overrideNotes;
+
+    if (req.action === "approve") {
+      queueStatus = "approved";
+    } else if (req.action === "escalate") {
+      queueStatus = "escalated";
+      proposedDisposition = req.overrideDisposition || "telemed_now";
+      overrideNotes = req.overridePlanNote || "Escalated during batch review";
+    } else if (req.action === "request_review") {
+      queueStatus = "needs_review";
+      overrideNotes = req.overridePlanNote || "Additional review requested";
+    }
+
+    const updated = caseStore.updateCase(caseId, {
+      queueStatus,
+      proposedDisposition,
+      overrideNotes,
+      approvedBy: req.physicianId,
+      approvedAt: new Date().toISOString(),
+    });
+
+    auditLog.write({
+      actor: req.physicianId,
+      entityId: caseId,
+      event: `batch_${req.action}`,
+      details: {
+        priorStatus: current.queueStatus,
+        nextStatus: queueStatus,
+        overrideDisposition: req.overrideDisposition || null,
+        overridePlanNote: req.overridePlanNote || null,
+      },
+    });
+
+    results.push(updated);
+  }
+
+  return results;
+}
+9. Outcome feedback engine
+
+This is where the app becomes less statue, more organism.
+
+// server/engines/outcomeFeedbackEngine.ts
+
+import { OutcomeRecord } from "../../shared/types";
+import { caseStore } from "../services/caseStore";
+import { auditLog } from "../services/auditLog";
+
+export function recordOutcome(input: OutcomeRecord) {
+  const saved = caseStore.saveOutcome(input);
+
+  const linkedCase = caseStore.getCase(input.caseId);
+
+  auditLog.write({
+    actor: "system_outcome_collector",
+    entityId: input.caseId,
+    event: "outcome_recorded",
+    details: {
+      outcomeType: input.outcomeType,
+      npsScore: input.npsScore ?? null,
+      patientComment: input.patientComment ?? null,
+      complaint: linkedCase?.chiefComplaint ?? null,
+      disposition: linkedCase?.proposedDisposition ?? null,
+    },
+  });
+
+  return saved;
+}
+
+export function buildOutcomeAnalytics() {
+  const outcomes = caseStore.listOutcomes();
+
+  const total = outcomes.length || 1;
+  const avgNps =
+    outcomes.filter(x => typeof x.npsScore === "number")
+      .reduce((sum, x) => sum + (x.npsScore || 0), 0) /
+    Math.max(1, outcomes.filter(x => typeof x.npsScore === "number").length);
+
+  const byType = outcomes.reduce<Record<string, number>>((acc, item) => {
+    acc[item.outcomeType] = (acc[item.outcomeType] || 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    totalOutcomes: outcomes.length,
+    averageNps: Number(avgNps.toFixed(2)),
+    byType,
+    worseningRate: Number((((byType["worsened"] || 0) / total) * 100).toFixed(2)),
+    erVisitRate: Number((((byType["er_visit"] || 0) / total) * 100).toFixed(2)),
+  };
+}
+10. Intake route with Twilio / WhatsApp wiring
+// server/routes/intake.ts
+
+import express from "express";
+import crypto from "crypto";
+import { parseSmartIntake } from "../engines/smartIntakeEngine";
+import { scoreRisk } from "../engines/riskScoringEngine";
+import { generateAutoPlan } from "../engines/autoPlanEngine";
+import { computeQueuePriority } from "../engines/queuePrioritizationEngine";
+import { caseStore } from "../services/caseStore";
+import { auditLog } from "../services/auditLog";
+import { StructuredCase } from "../../shared/types";
+
+const router = express.Router();
+
+router.post("/webhook/twilio", async (req, res) => {
+  const messageBody = req.body.Body || "";
+  const from = req.body.From || "unknown";
+  const source = inferSource(req.body);
+
+  const transcript = [
+    {
+      role: "patient" as const,
+      text: messageBody,
+      at: new Date().toISOString(),
+    },
+  ];
+
+  const intake = parseSmartIntake(from, source, transcript);
+  const risk = scoreRisk(intake);
+  const plan = generateAutoPlan({ ...intake, ...risk });
+  const queuePriority = computeQueuePriority({ ...intake, ...risk, ...plan });
+
+  const newCase: StructuredCase = {
+    id: crypto.randomUUID(),
+    patientId: from,
+    source,
+    chiefComplaint: intake.chiefComplaint || "general_medical_question",
+    age: intake.age,
+    sex: intake.sex,
+    symptomDuration: intake.symptomDuration,
+    answers: intake.answers || [],
+    transcript,
+    redFlags: intake.redFlags || [],
+    missingCriticalData: intake.missingCriticalData || [],
+    riskScore: risk.riskScore,
+    riskLevel: risk.riskLevel,
+    confidenceScore: risk.confidenceScore,
+    differential: plan.differential,
+    proposedDisposition: plan.proposedDisposition,
+    proposedPlan: plan.proposedPlan,
+    reviewReason: plan.reviewReason,
+    queuePriority,
+    queueStatus:
+      risk.riskLevel === "low" &&
+      risk.confidenceScore >= 0.85 &&
+      !plan.reviewReason &&
+      plan.proposedPlan
+        ? "auto_resolved"
+        : "needs_review",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  caseStore.saveCase(newCase);
+
+  auditLog.write({
+    actor: "smart_intake_engine",
+    entityId: newCase.id,
+    event: "case_created",
+    details: {
+      source,
+      riskLevel: newCase.riskLevel,
+      confidenceScore: newCase.confidenceScore,
+      queueStatus: newCase.queueStatus,
+      reviewReason: newCase.reviewReason || null,
+    },
+  });
+
+  if (newCase.queueStatus === "auto_resolved" && newCase.proposedPlan) {
+    return res.type("text/xml").send(twimlReply(newCase.proposedPlan.patientMessage));
+  }
+
+  return res.type("text/xml").send(
+    twimlReply(
+      "Thanks. Your case has been received and is being reviewed by a clinician. We'll message you shortly."
+    )
+  );
+});
+
+function inferSource(body: any): "sms" | "whatsapp" | "web" {
+  const from = String(body.From || "");
+  return from.startsWith("whatsapp:") ? "whatsapp" : "sms";
+}
+
+function twimlReply(message: string) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>${escapeXml(message)}</Message>
+</Response>`;
+}
+
+function escapeXml(input: string) {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export default router;
+11. Queue and batch review routes
+// server/routes/queue.ts
+
+import express from "express";
+import { caseStore } from "../services/caseStore";
+import { sortQueue } from "../engines/queuePrioritizationEngine";
+
+const router = express.Router();
+
+router.get("/review-queue", (req, res) => {
+  const items = caseStore.listCases().filter(
+    c => c.queueStatus === "needs_review" || c.queueStatus === "new"
+  );
+  res.json(sortQueue(items));
+});
+
+router.get("/review-queue/:id", (req, res) => {
+  const item = caseStore.getCase(req.params.id);
+  if (!item) return res.status(404).json({ error: "Case not found" });
+  res.json(item);
+});
+
+export default router;
+// server/routes/review.ts
+
+import express from "express";
+import { executeBatchApproval } from "../engines/batchApprovalEngine";
+import { BatchApprovalRequest } from "../../shared/types";
+
+const router = express.Router();
+
+router.post("/batch-approve", (req, res) => {
+  const body = req.body as BatchApprovalRequest;
+  const results = executeBatchApproval(body);
+  res.json({ updated: results.length, results });
+});
+
+export default router;
+// server/routes/outcomes.ts
+
+import express from "express";
+import { buildOutcomeAnalytics, recordOutcome } from "../engines/outcomeFeedbackEngine";
+
+const router = express.Router();
+
+router.post("/", (req, res) => {
+  const saved = recordOutcome(req.body);
+  res.json(saved);
+});
+
+router.get("/analytics", (req, res) => {
+  res.json(buildOutcomeAnalytics());
+});
+
+export default router;
+12. Express server
+// server/index.ts
+
+import express from "express";
+import intakeRoutes from "./routes/intake";
+import queueRoutes from "./routes/queue";
+import reviewRoutes from "./routes/review";
+import outcomeRoutes from "./routes/outcomes";
+
+const app = express();
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.use("/api/intake", intakeRoutes);
+app.use("/api/queue", queueRoutes);
+app.use("/api/review", reviewRoutes);
+app.use("/api/outcomes", outcomeRoutes);
+
+const port = Number(process.env.PORT || 3001);
+
+app.listen(port, () => {
+  console.log(`Server listening on ${port}`);
+});
+13. Frontend API layer
+// frontend/src/api/reviewApi.ts
+
+export async function fetchReviewQueue() {
+  const res = await fetch("/api/queue/review-queue");
+  if (!res.ok) throw new Error("Failed to load queue");
+  return res.json();
+}
+
+export async function fetchCase(id: string) {
+  const res = await fetch(`/api/queue/review-queue/${id}`);
+  if (!res.ok) throw new Error("Failed to load case");
+  return res.json();
+}
+
+export async function batchApprove(payload: {
+  caseIds: string[];
+  physicianId: string;
+  action: "approve" | "escalate" | "request_review";
+  overrideDisposition?: string;
+  overridePlanNote?: string;
+}) {
+  const res = await fetch("/api/review/batch-approve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Batch approval failed");
+  return res.json();
+}
+14. Risk badge
+// frontend/src/components/RiskBadge.tsx
+
+import React from "react";
+
+export function RiskBadge({ level }: { level: string }) {
+  const styles: Record<string, React.CSSProperties> = {
+    low: { background: "#dcfce7", color: "#166534" },
+    medium: { background: "#fef3c7", color: "#92400e" },
+    high: { background: "#fee2e2", color: "#991b1b" },
+    critical: { background: "#7f1d1d", color: "white" },
+  };
+
+  return (
+    <span
+      style={{
+        padding: "4px 8px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 700,
+        ...styles[level],
+      }}
+    >
+      {level.toUpperCase()}
+    </span>
+  );
+}
+15. Batch toolbar
+// frontend/src/components/BatchToolbar.tsx
+
+import React from "react";
+
+export function BatchToolbar({
+  selectedCount,
+  onApprove,
+  onEscalate,
+  onRefresh,
+}: {
+  selectedCount: number;
+  onApprove: () => void;
+  onEscalate: () => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+      <button onClick={onApprove}>Approve Selected ({selectedCount})</button>
+      <button onClick={onEscalate}>Escalate Selected</button>
+      <button onClick={onRefresh}>Refresh Queue</button>
+    </div>
+  );
+}
+16. Review queue table
+// frontend/src/components/ReviewQueueTable.tsx
+
+import React from "react";
+import { RiskBadge } from "./RiskBadge";
+
+export function ReviewQueueTable({
+  rows,
+  selected,
+  toggleSelected,
+  openCase,
+}: {
+  rows: any[];
+  selected: string[];
+  toggleSelected: (id: string) => void;
+  openCase: (id: string) => void;
+}) {
+  return (
+    <table width="100%" cellPadding={10} style={{ borderCollapse: "collapse" }}>
+      <thead>
+        <tr>
+          <th />
+          <th>Priority</th>
+          <th>Complaint</th>
+          <th>Age</th>
+          <th>Risk</th>
+          <th>Confidence</th>
+          <th>Disposition</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(row => (
+          <tr
+            key={row.id}
+            style={{ borderTop: "1px solid #ddd", cursor: "pointer" }}
+            onClick={() => openCase(row.id)}
+          >
+            <td onClick={e => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={selected.includes(row.id)}
+                onChange={() => toggleSelected(row.id)}
+              />
+            </td>
+            <td>{row.queuePriority}</td>
+            <td>{row.chiefComplaint}</td>
+            <td>{row.age ?? "-"}</td>
+            <td><RiskBadge level={row.riskLevel} /></td>
+            <td>{Math.round((row.confidenceScore || 0) * 100)}%</td>
+            <td>{row.proposedDisposition}</td>
+            <td>{row.reviewReason || "-"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+17. Case drawer
+// frontend/src/components/CaseDrawer.tsx
+
+import React from "react";
+
+export function CaseDrawer({ item }: { item: any | null }) {
+  if (!item) return <div style={{ padding: 16 }}>Select a case</div>;
+
+  return (
+    <div style={{ padding: 16, borderLeft: "1px solid #ddd", height: "100%", overflow: "auto" }}>
+      <h3>{item.chiefComplaint}</h3>
+      <p><strong>Age:</strong> {item.age ?? "-"}</p>
+      <p><strong>Risk:</strong> {item.riskLevel} ({item.riskScore})</p>
+      <p><strong>Disposition:</strong> {item.proposedDisposition}</p>
+      <p><strong>Reason:</strong> {item.reviewReason || "auto-safe pattern"}</p>
+
+      <h4>Differential</h4>
+      <ul>
+        {(item.differential || []).map((d: any) => (
+          <li key={d.diagnosis}>
+            {d.diagnosis}: {Math.round(d.probability * 100)}%
+          </li>
+        ))}
+      </ul>
+
+      <h4>Red flags</h4>
+      <ul>
+        {(item.redFlags || []).map((f: string) => <li key={f}>{f}</li>)}
+      </ul>
+
+      <h4>Plan</h4>
+      {item.proposedPlan ? (
+        <>
+          <p>{item.proposedPlan.summary}</p>
+          <h5>Meds</h5>
+          <ul>
+            {(item.proposedPlan.meds || []).map((m: any) => (
+              <li key={m.name}>
+                {m.name} {m.dose} - {m.instructions}
+              </li>
+            ))}
+          </ul>
+          <h5>Home care</h5>
+          <ul>
+            {(item.proposedPlan.homeCare || []).map((x: string) => <li key={x}>{x}</li>)}
+          </ul>
+          <h5>Return precautions</h5>
+          <ul>
+            {(item.proposedPlan.returnPrecautions || []).map((x: string) => <li key={x}>{x}</li>)}
+          </ul>
+        </>
+      ) : (
+        <p>No auto-plan available.</p>
+      )}
+    </div>
+  );
+}
+18. Batch review page
+// frontend/src/pages/BatchReviewPage.tsx
+
+import React, { useEffect, useState } from "react";
+import { fetchCase, fetchReviewQueue, batchApprove } from "../api/reviewApi";
+import { ReviewQueueTable } from "../components/ReviewQueueTable";
+import { BatchToolbar } from "../components/BatchToolbar";
+import { CaseDrawer } from "../components/CaseDrawer";
+
+export default function BatchReviewPage() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [activeCase, setActiveCase] = useState<any | null>(null);
+
+  async function load() {
+    const data = await fetchReviewQueue();
+    setRows(data);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  function toggleSelected(id: string) {
+    setSelected(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  }
+
+  async function openCase(id: string) {
+    const data = await fetchCase(id);
+    setActiveCase(data);
+  }
+
+  async function handleApprove() {
+    if (!selected.length) return;
+    await batchApprove({
+      caseIds: selected,
+      physicianId: "doctor_1",
+      action: "approve",
+    });
+    setSelected([]);
+    setActiveCase(null);
+    await load();
+  }
+
+  async function handleEscalate() {
+    if (!selected.length) return;
+    await batchApprove({
+      caseIds: selected,
+      physicianId: "doctor_1",
+      action: "escalate",
+      overrideDisposition: "telemed_now",
+      overridePlanNote: "Escalated from batch queue",
+    });
+    setSelected([]);
+    setActiveCase(null);
+    await load();
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", height: "100vh" }}>
+      <div style={{ padding: 16 }}>
+        <h2>Physician Batch Review</h2>
+        <BatchToolbar
+          selectedCount={selected.length}
+          onApprove={handleApprove}
+          onEscalate={handleEscalate}
+          onRefresh={load}
+        />
+        <ReviewQueueTable
+          rows={rows}
+          selected={selected}
+          toggleSelected={toggleSelected}
+          openCase={openCase}
+        />
+      </div>
+      <CaseDrawer item={activeCase} />
+    </div>
+  );
+}
+19. Twilio setup notes
+
+For Twilio SMS and WhatsApp, both can hit the same webhook route.
+
+Twilio webhook URL
+POST /api/intake/webhook/twilio
+Expected fields from Twilio
+
+Body
+
+From
+
+Twilio WhatsApp sandbox usually sends:
+
+From=whatsapp:+1...
+
+So your route already handles both.
+
+20. Fast queue logic for 1000 pts/day
+
+This matters more than almost anything else.
+
+Recommended automatic routing thresholds
+Auto-resolve
+
+riskLevel = low
+
+confidenceScore >= 0.85
+
+no red flags
+
+no medication requiring clinician review
+
+supported complaint pathway
+
+Batch review
+
+low/medium risk
+
+confidenceScore >= 0.70
+
+plan generated
+
+meds/refill/routine items
+
+no severe data gaps
+
+Assisted review
+
+medium/high risk
+
+confidenceScore < 0.70
+
+contradictory inputs
+
+unsupported complaint
+
+child under 3
+
+elderly / immunocompromised / pregnancy uncertainty
+
+Immediate escalation
+
+critical risk
+
+red flags
+
+chest pain / neuro / severe respiratory / sepsis signals
+
+21. High-impact improvements to add next
+
+These would make this much stronger:
+
+1. Complaint-specific microflows
+
+Instead of generic logic, build per-complaint question packs for:
+
+cough
+
+sore throat
+
+UTI
+
+rash
+
+conjunctivitis
+
+refill
+
+sinus symptoms
+
+ear pain
+
+GI symptoms
+
+back pain
+
+That is where speed and NPS start humming.
+
+2. “Approve all safe” button
+
+Add an endpoint that approves every visible case with:
+
+low risk
+
+no red flags
+
+confidence > threshold
+
+reviewReason empty or medication only
+
+3. Follow-up automation
+
+Text patient at:
+
+12 hours
+
+48 hours
+
+5 days
+
+Collect:
+
+better / worse / same
+
+NPS 0 to 10
+
+any ER visit
+
+4. Physician personalization
+
+Different doctors have different appetites for automation. Add per-doctor settings:
+
+auto-approve threshold
+
+preferred queue sort
+
+mandatory review for antibiotics
+
+mandatory review for pediatrics
+
+5. Safety hard stops
+
+Never auto-close:
+
+age < 2 or 3 depending on complaint
+
+pregnancy risk
+
+immunocompromised
+
+chest pain
+
+neuro symptoms
+
+severe dehydration
+
+return visit for same complaint in 7 days
+
+22. One-click “approve all safe” endpoint
+// add to server/routes/review.ts
+
+import { caseStore } from "../services/caseStore";
+import { executeBatchApproval } from "../engines/batchApprovalEngine";
+
+router.post("/approve-all-safe", (req, res) => {
+  const physicianId = req.body.physicianId || "doctor_1";
+
+  const safeIds = caseStore
+    .listCases()
+    .filter(c =>
+      c.queueStatus === "needs_review" &&
+      c.riskLevel === "low" &&
+      c.confidenceScore >= 0.85 &&
+      c.redFlags.length === 0 &&
+      c.proposedPlan &&
+      c.reviewReason !== "red_flags_detected"
+    )
+    .map(c => c.id);
+
+  const results = executeBatchApproval({
+    caseIds: safeIds,
+    physicianId,
+    action: "approve",
+  });
+
+  res.json({
+    approvedCount: results.length,
+    results,
+  });
+});
+23. Outcome/NPS collection SMS message
+
+Use this after case closes:
+
+How are you feeling since your visit?
+Reply:
+1 = better
+2 = same
+3 = worse
+4 = went to ER
+
+Also, on a scale of 0-10, how likely are you to recommend us?
+
+That gives you:
+
+resolution rate
+
+worsening rate
+
+unexpected ER rate
+
+NPS
+
+safety surveillance
+
+24. The real formula for 1000 patients/day
+
+You do not get there by making the physician click faster.
+
+You get there by making the physician touch only:
+
+the strange
+
+the risky
+
+the expensive
+
+the litigious
+
+the uncertain
+
+Everything else gets piped through:
+
+structured intake
+
+protocolized plan
+
+queue sorting
+
+one-click approval
+
+automated follow-up
+
+That’s the assembly line with a stethoscope.
+
+25. Best order to build next
+
+Build in this exact order:
+
+Complaint-specific smart intake packs
+
+Approve-all-safe button
+
+Outcome SMS loop
+
+Per-doctor thresholds
+
+Full audit viewer
+
+Antibiotic and controlled med review gates
+
+Photo upload for rash/eye/throat
+
+Physician override analytics
+
+NPS dashboard
+
+Learning engine from overrides + outcomes
+
+If you want, next I’ll turn this into a single Replit-ready bundle with:
+
+package.json
+
+full Express app
+
+React page
+
+Twilio webhook wiring
+
+mock seed data
+
+copy-paste file tree ready to run.
+
+YES PLEASE ALL OF THE ABOVE INTO A REPLIT READY BUNDLE
+Thought for 3m 51s
+
+Done. I packaged the scaffold into a Replit-ready ZIP bundle.
+
+Files:
+
+Download the ZIP bundle
+
+Browse the project folder
+
+What’s inside:
+
+Smart intake webhook for Twilio / WhatsApp-style payloads
+
+Risk scoring engine
+
+Auto-plan engine
+
+Queue prioritization
+
+Batch approval and approve-all-safe
+
+Outcome / NPS analytics
+
+Physician review React UI
+
+Demo seed route for quick testing
+
+Quick start after upload to Replit:
+
+npm install
+npm run dev
+
+Useful first clicks:
+
+POST /api/dev/seed to load demo cases
+
+open the frontend and review the queue
+
+use “Approve All Safe” to test the one-click lane
+
+Two important notes:
+
+This is a strong scaffold, not production-hardened clinical software yet
+
+Before real use, add auth, database persistence, complaint-specific protocols, and medication/pregnancy/allergy guardrails
+
+If you want, next step should be the complaint-specific packs for cough, sore throat, UTI, rash, refill, ear pain, conjunctivitis, sinus symptoms, diarrhea, and back pain so the intake engine stops being generic and starts singing.
+
+Voice chat e

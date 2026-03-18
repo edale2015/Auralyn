@@ -105,6 +105,8 @@ import AuralynDashboard from "@/pages/AuralynDashboard";
 import EHRIntegrationDashboard from "@/pages/EHRIntegrationDashboard";
 import ClinicalScaleDashboard from "@/pages/ClinicalScaleDashboard";
 import OperationsDashboard from "@/pages/OperationsDashboard";
+import SmartIntakeDashboard from "@/pages/SmartIntakeDashboard";
+import IntelligenceDashboard from "@/pages/IntelligenceDashboard";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -219,6 +221,8 @@ function Router() {
       <Route path="/ehr-integration">{() => <AdminPage component={EHRIntegrationDashboard} />}</Route>
       <Route path="/clinical-scale">{() => <AdminPage component={ClinicalScaleDashboard} />}</Route>
       <Route path="/operations-dashboard">{() => <AdminPage component={OperationsDashboard} />}</Route>
+      <Route path="/smart-intake">{() => <AdminPage component={SmartIntakeDashboard} />}</Route>
+      <Route path="/intelligence-layer">{() => <AdminPage component={IntelligenceDashboard} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );
