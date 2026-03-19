@@ -1,0 +1,191 @@
+🧠 PART 1 — AUTO-TUNE RULES FROM OUTCOMES (SELF-IMPROVING ENGINE)
+
+Goal:
+👉 Detect where rules are failing
+👉 Suggest improvements
+👉 (optionally) auto-apply safe adjustments
+
+📦 server/engines/autoTuneEngine.ts
+type Outcome = {
+  packId: string;
+  predictedDisposition: string;
+  actualDisposition: string;
+  answers: any;
+  correct: boolean;
+};
+
+const outcomeStore: Outcome[] = [];
+
+export function logOutcome(o: Outcome) {
+  outcomeStore.push(o);
+}
+
+export function analyzeFailures() {
+  const failures: any[] = [];
+
+  for (const o of outcomeStore) {
+    if (!o.correct) {
+      failures.push(o);
+    }
+  }
+
+  const patterns: Record<string, any> = {};
+
+  for (const f of failures) {
+    const key = f.packId;
+
+    patterns[key] = patterns[key] || {
+      count: 0,
+      mismatches: [],
+    };
+
+    patterns[key].count++;
+    patterns[key].mismatches.push({
+      predicted: f.predictedDisposition,
+      actual: f.actualDisposition,
+    });
+  }
+
+  return patterns;
+}
+📦 Auto-rule suggestion layer
+export function suggestRuleChanges(patterns: any) {
+  const suggestions: any[] = [];
+
+  for (const [packId, data] of Object.entries(patterns)) {
+    if ((data as any).count > 5) {
+      suggestions.push({
+        packId,
+        suggestion: "Consider adding escalation rule for frequent misclassification",
+      });
+    }
+  }
+
+  return suggestions;
+}
+📦 Route
+// server/routes/autoTuneRoutes.ts
+
+import express from "express";
+import { analyzeFailures, suggestRuleChanges } from "../engines/autoTuneEngine";
+
+const router = express.Router();
+
+router.get("/analyze", (_req, res) => {
+  const patterns = analyzeFailures();
+  const suggestions = suggestRuleChanges(patterns);
+
+  res.json({
+    patterns,
+    suggestions,
+  });
+});
+
+export default router;
+🗣️ PART 2 — GPT EXPLANATION LAYER
+
+This makes the system explain itself like a physician.
+
+📦 server/engines/gptExplanationEngine.ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export async function generateClinicalExplanation(input: {
+  complaint: string;
+  answers: any;
+  evaluation: any;
+}) {
+  const prompt = `
+Patient complaint: ${input.complaint}
+
+Answers:
+${JSON.stringify(input.answers)}
+
+System decision:
+${JSON.stringify(input.evaluation)}
+
+Explain:
+1. Most likely diagnosis
+2. Why this is safe or unsafe
+3. What would make it dangerous
+`;
+
+  const res = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  return res.choices[0].message.content;
+}
+📦 Hook into intake
+// inside packDrivenIntake.ts
+
+import { generateClinicalExplanation } from "../engines/gptExplanationEngine";
+
+const explanation = await generateClinicalExplanation({
+  complaint: chiefComplaint,
+  answers,
+  evaluation,
+});
+
+return res.json({
+  ...existing,
+  explanation,
+});
+🧑‍⚕️ PART 3 — PHYSICIAN DASHBOARD (CONTROL CENTER)
+
+This is your mission control UI
+
+📦 client/src/pages/PhysicianDashboard.tsx
+import React, { useEffect, useState } from "react";
+
+export default function PhysicianDashboard() {
+  const [cases, setCases] = useState<any[]>([]);
+  const [analysis, setAnalysis] = useState<any>(null);
+
+  async function loadCases() {
+    const res = await fetch("/api/pack-simulator/recent");
+    const json = await res.json();
+    setCases(json || []);
+  }
+
+  async function loadAnalysis() {
+    const res = await fetch("/api/auto-tune/analyze");
+    const json = await res.json();
+    setAnalysis(json);
+  }
+
+  useEffect(() => {
+    loadCases();
+    loadAnalysis();
+  }, []);
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h1>Physician Dashboard</h1>
+
+      <h2>Recent Cases</h2>
+      {cases.map((c, i) => (
+        <div key={i} style={{ border: "1px solid #ddd", margin: 10, padding: 10 }}>
+          <b>{c.packId}</b>
+          <div>Disposition: {c.disposition}</div>
+          <div>Confidence: {c.confidence}</div>
+        </div>
+      ))}
+
+      <h2>Auto-Tune Insights</h2>
+      {analysis?.suggestions?.map((s: any, i: number) => (
+        <div key={i}>
+          {s.packId}: {s.suggestion}
+        </div>
+      ))}
+    </div>
+  );
+}
+📦 Add to routing
+// App.tsx
+
+<Route path="/physician-dashboard" element={<PhysicianDashboard />} />

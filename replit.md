@@ -45,6 +45,17 @@ The **Google Sheets Migration Engine** manages canonical tab creation, verificat
 - **System Pack Generator**: Auto-generates packs from 10 system definitions.
 - **Executive Ops Drawer**: Slide-out panel in Executive Dashboard for Google Email, Shared Views, Signed Export, Benchmarks, and Alerts.
 - **Deployment Status**: Reports Gmail OAuth configuration status and deployment checklist.
+- **Extended Clinical Scoring**: 10 additional scoring systems (PERC, CHA2DS2-VASc, Ottawa Ankle, PedsFever, Alvarado, TIMI, GCS, NEWS2, CIWA, CURB-65) at `/api/extended-scoring/*`.
+- **Outcome Learning & RLHF**: Outcome logging, reinforcement learning, continuous learning loop at `/api/outcome-learning/*`.
+- **Insurance Billing**: ICD-10/CPT coding (38+ diagnoses), claim builder, submission at `/api/billing/*`.
+- **Compliance (FDA-style)**: Model registry, risk classification, safe discharge validation, audit export at `/api/compliance/*`.
+- **HIPAA Security**: AES-256 encryption, PHI redaction, access logging at `/api/security/*`.
+- **Auto-Tune Engine**: Self-improving rule analysis with failure pattern detection and suggestions at `/api/auto-tune/*`.
+- **GPT Clinical Explanation**: AI-powered clinical explanations (OpenAI) at `/api/gpt-explanation/explain`.
+- **X12 Clearinghouse**: 837P claim mapping, clearinghouse submission, ERA/835 status tracking at `/api/clearinghouse/*`.
+- **SaMD Compliance**: Model versioning, performance registry, risk controls, audit bundles at `/api/samd-compliance/*`.
+- **PHI Field Protection**: Field-level AES encryption for PHI fields at `/api/phi-protection/*`.
+- **Rate Limiting & No-PHI Log**: Request rate limiting middleware and PHI-stripping log middleware.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API
