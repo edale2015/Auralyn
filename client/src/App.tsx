@@ -46,6 +46,7 @@ import AgentControlPanel from "@/pages/AgentControlPanel";
 import PayerIntelligenceDashboard from "@/pages/PayerIntelligenceDashboard";
 import StrategyDashboard from "@/pages/StrategyDashboard";
 import EnterpriseDashboard from "@/pages/EnterpriseDashboard";
+import OperatorDashboard from "@/pages/OperatorDashboard";
 import AIAssistant from "@/pages/AIAssistant";
 import DecisionGraphExplorer from "@/pages/DecisionGraphExplorer";
 import DecisionGraphHeatmaps from "@/pages/DecisionGraphHeatmaps";
@@ -169,6 +170,7 @@ function Router() {
       <Route path="/payer-intelligence">{() => <AdminPage component={PayerIntelligenceDashboard} />}</Route>
       <Route path="/strategy">{() => <AdminPage component={StrategyDashboard} />}</Route>
       <Route path="/enterprise">{() => <AdminPage component={EnterpriseDashboard} />}</Route>
+      <Route path="/operator">{() => <AdminPage component={OperatorDashboard} />}</Route>
       <Route path="/ops-daily-digest">{() => <AdminPage component={OpsDailyDigest} />}</Route>
       <Route path="/runtime-analytics">{() => <AdminPage component={RuntimeAnalytics} />}</Route>
       <Route path="/notifications">{() => <AdminPage component={Notifications} />}</Route>
