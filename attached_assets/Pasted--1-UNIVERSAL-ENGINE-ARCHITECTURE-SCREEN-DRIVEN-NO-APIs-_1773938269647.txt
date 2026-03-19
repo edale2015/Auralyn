@@ -1,0 +1,308 @@
+🧠 1. UNIVERSAL ENGINE ARCHITECTURE (SCREEN-DRIVEN, NO APIs)
+
+Think of this like a pilot flying different planes using only the cockpit controls.
+
+🏗️ Core Layers
+USER INPUT
+   ↓
+INTENT ENGINE (what are we trying to do?)
+   ↓
+TASK PLANNER (steps required)
+   ↓
+SCREEN PERCEPTION (what is on the screen?)
+   ↓
+ACTION ENGINE (click/type/scroll)
+   ↓
+VERIFICATION ENGINE (did it work?)
+   ↓
+MEMORY + LEARNING LOOP
+🧩 Module Breakdown
+1. 🧠 Intent Engine
+
+“Apply for SNAP”
+
+“Submit prior authorization”
+
+“File claim”
+
+👉 Converts to structured task:
+
+{
+  "goal": "submit_snap_application",
+  "user_profile": {...}
+}
+2. 🧭 Task Planner (CRITICAL)
+
+Turns goal → steps:
+
+1. open website
+2. login
+3. navigate to form
+4. fill sections
+5. upload docs
+6. submit
+
+You already built this logic in clinical flows.
+
+3. 👁️ Screen Perception Engine
+
+This is the magic.
+
+Uses:
+
+OCR (read text)
+
+DOM parsing (if browser)
+
+Vision model (buttons, fields)
+
+Outputs:
+
+{
+  "fields": [
+    {"label": "First Name", "type": "input", "position": [x,y]},
+    {"label": "DOB", "type": "date"},
+    {"label": "Submit", "type": "button"}
+  ]
+}
+4. ✋ Action Engine (Human Simulation Layer)
+
+No APIs. Just like a human.
+
+Actions:
+
+click(x,y)
+
+type("John")
+
+tab()
+
+scroll()
+
+5. ✅ Verification Engine
+
+Checks:
+
+did field fill?
+
+did page change?
+
+did error appear?
+
+6. 🧠 Memory + Learning
+
+Stores:
+
+what worked
+
+what failed
+
+screen patterns
+
+🖥️ 2. UI AUTOMATION (RPA-STYLE BUT SMART)
+
+Traditional RPA:
+
+“click this exact button”
+
+Your system:
+
+“find the button that means submit, even if layout changes”
+
+🔥 Key Advantage
+
+Instead of:
+
+click(523, 812)
+
+You do:
+
+click(find_element("Submit"))
+🏛️ 3. GOVERNMENT INTAKE MVP (FIRST MONETIZABLE PRODUCT)
+
+Let’s build something you can actually deploy.
+
+🎯 MVP Goal
+
+User says:
+
+“I lost my job, 2 kids, need help”
+
+System:
+
+Determines eligibility programs
+
+Fills applications automatically
+
+Submits via browser automation
+
+🧱 Architecture
+Frontend (simple intake form)
+        ↓
+Backend (Flask)
+        ↓
+Eligibility Engine
+        ↓
+Form Mapping Engine
+        ↓
+RPA Automation Engine (Playwright)
+💻 4. FULL MVP CODE (REPLIT-READY)
+📁 Structure
+/app.py
+/automation/agent.py
+/automation/perception.py
+/automation/actions.py
+/engine/eligibility.py
+/engine/planner.py
+/templates/index.html
+🔹 app.py (Main Server)
+from flask import Flask, request, render_template, jsonify
+from engine.eligibility import determine_programs
+from automation.agent import run_application_flow
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+@app.route("/submit", methods=["POST"])
+def submit():
+    data = request.json
+
+    programs = determine_programs(data)
+
+    results = []
+    for program in programs:
+        result = run_application_flow(program, data)
+        results.append(result)
+
+    return jsonify({
+        "programs": programs,
+        "results": results
+    })
+
+if __name__ == "__main__":
+    app.run(debug=True)
+🔹 eligibility.py
+def determine_programs(user):
+    programs = []
+
+    if user.get("income", 0) < 2000:
+        programs.append("SNAP")
+
+    if user.get("children", 0) > 0:
+        programs.append("Medicaid")
+
+    return programs
+🔹 agent.py (CORE RPA ENGINE)
+from playwright.sync_api import sync_playwright
+from automation.perception import find_field
+from automation.actions import fill_field, click_button
+
+def run_application_flow(program, user_data):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page()
+
+        if program == "SNAP":
+            page.goto("https://example-snap-form.com")
+
+        # Perception loop
+        fields = find_field(page)
+
+        for field in fields:
+            label = field["label"]
+
+            if label in user_data:
+                fill_field(page, field, user_data[label])
+
+        click_button(page, "Submit")
+
+        return {"program": program, "status": "submitted"}
+🔹 perception.py
+def find_field(page):
+    inputs = page.query_selector_all("input")
+
+    fields = []
+    for i in inputs:
+        label = i.get_attribute("name") or "unknown"
+        fields.append({
+            "element": i,
+            "label": label
+        })
+
+    return fields
+🔹 actions.py
+def fill_field(page, field, value):
+    field["element"].fill(str(value))
+
+def click_button(page, text):
+    buttons = page.query_selector_all("button")
+
+    for b in buttons:
+        if text.lower() in b.inner_text().lower():
+            b.click()
+            break
+🔹 index.html
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Government Assistance Intake</h2>
+
+  <input id="income" placeholder="Monthly Income"><br>
+  <input id="children" placeholder="Number of Children"><br>
+
+  <button onclick="submitForm()">Submit</button>
+
+  <script>
+    function submitForm() {
+      fetch("/submit", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          income: document.getElementById("income").value,
+          children: document.getElementById("children").value
+        })
+      })
+      .then(res => res.json())
+      .then(data => alert(JSON.stringify(data)));
+    }
+  </script>
+</body>
+</html>
+🤖 5. MAKE IT “SMART RPA” (YOUR EDGE)
+
+Upgrade with:
+
+🔹 Semantic Matching
+
+Instead of exact labels:
+
+“First Name”
+
+“Given Name”
+
+“Applicant Name”
+
+👉 all map correctly
+
+🔹 Error Recovery
+
+If:
+
+page changes
+
+button missing
+
+👉 system re-scans and adapts
+
+🔹 Multi-Agent Execution
+
+Agent 1: perception
+
+Agent 2: planner
+
+Agent 3: executor
+
+Agent 4: validator
