@@ -87,6 +87,7 @@ const NAV_SECTIONS = [
       { path: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
       { path: "/agent-ops", label: "Agent Ops", icon: Bot },
       { path: "/ms-agent-ops", label: "MS Agent Ops", icon: Cpu },
+      { path: "/agent-control", label: "Agent Control", icon: Bot },
     ],
   },
   {

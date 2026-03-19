@@ -40,7 +40,14 @@ export async function runAgents(context: AgentContext): Promise<{
   const executionOrder: string[] = [];
   const start = Date.now();
 
+  const { isAgentEnabled } = await import("./agentConfig");
+
   for (const agent of agents) {
+    if (!isAgentEnabled(agent.name)) {
+      executionOrder.push(`${agent.name}:SKIPPED`);
+      continue;
+    }
+
     try {
       const output = await agent.run(context, results);
       results[agent.name] = output;

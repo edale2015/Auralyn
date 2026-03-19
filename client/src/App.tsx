@@ -42,6 +42,7 @@ import ClinicalValidation from "@/pages/ClinicalValidation";
 import ReleaseGovernance from "@/pages/ReleaseGovernance";
 import AgentOps from "@/pages/AgentOps";
 import MicrosoftAgentOps from "@/pages/MicrosoftAgentOps";
+import AgentControlPanel from "@/pages/AgentControlPanel";
 import AIAssistant from "@/pages/AIAssistant";
 import DecisionGraphExplorer from "@/pages/DecisionGraphExplorer";
 import DecisionGraphHeatmaps from "@/pages/DecisionGraphHeatmaps";
@@ -161,6 +162,7 @@ function Router() {
       <Route path="/ai-assistant">{() => <AdminPage component={AIAssistant} />}</Route>
       <Route path="/agent-ops">{() => <AdminPage component={AgentOps} />}</Route>
       <Route path="/ms-agent-ops">{() => <AdminPage component={MicrosoftAgentOps} />}</Route>
+      <Route path="/agent-control">{() => <AdminPage component={AgentControlPanel} />}</Route>
       <Route path="/ops-daily-digest">{() => <AdminPage component={OpsDailyDigest} />}</Route>
       <Route path="/runtime-analytics">{() => <AdminPage component={RuntimeAnalytics} />}</Route>
       <Route path="/notifications">{() => <AdminPage component={Notifications} />}</Route>

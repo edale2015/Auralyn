@@ -1,0 +1,371 @@
+💳 PART 1 — REAL CLEARINGHOUSE + LIVE CLAIMS
+
+Works with Change Healthcare / Availity–style APIs. Keep a sandbox + production switch.
+
+📁 server/billing/clearinghouseRealClient.ts
+import axios from "axios";
+
+type SubmitResult = {
+  claimId: string;
+  status: "accepted" | "rejected" | "pending";
+  raw?: any;
+};
+
+export class ClearinghouseRealClient {
+  private base = process.env.CLEARINGHOUSE_URL!;
+  private key = process.env.CLEARINGHOUSE_API_KEY!;
+
+  async submit837P(x12Payload: string): Promise<SubmitResult> {
+    const res = await axios.post(
+      `${this.base}/claims/837p`,
+      { payload: x12Payload },
+      {
+        headers: {
+          Authorization: `Bearer ${this.key}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
+      }
+    );
+
+    return {
+      claimId: res.data.claimId,
+      status: res.data.status,
+      raw: res.data,
+    };
+  }
+
+  async checkStatus(claimId: string) {
+    const res = await axios.get(
+      `${this.base}/claims/${claimId}/status`,
+      { headers: { Authorization: `Bearer ${this.key}` } }
+    );
+    return res.data; // includes payer adjudication
+  }
+
+  async fetchERA835(sinceISO: string) {
+    const res = await axios.get(
+      `${this.base}/era/835?since=${encodeURIComponent(sinceISO)}`,
+      { headers: { Authorization: `Bearer ${this.key}` } }
+    );
+    return res.data; // array of 835s or normalized remits
+  }
+}
+📁 server/billing/x12Builder.ts (minimal 837P generator)
+export function build837P(encounter: any) {
+  const now = new Date();
+  const ts = now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+
+  const icd = encounter.coding.icd10?.[0]?.code || "R69";
+  const cpt = encounter.coding.cpt?.[0]?.code || "99213";
+
+  return [
+    `ISA*00*          *00*          *ZZ*SENDERID      *ZZ*RECEIVERID    *${ts.slice(0,8)}*${ts.slice(8,12)}*^*00501*000000905*1*T*:~`,
+    `GS*HC*SENDERID*RECEIVERID*${ts.slice(0,8)}*${ts.slice(8,12)}*1*X*005010X222A1~`,
+    `ST*837*0001*005010X222A1~`,
+    `NM1*41*2*YOUR ORG*****46*123456789~`,
+    `NM1*40*2*CLEARINGHOUSE*****46*999999999~`,
+    `HL*1**20*1~`,
+    `NM1*85*2*PROVIDER*****XX*${process.env.NPI || "1234567890"}~`,
+    `CLM*${encounter.encounter_id}*${encounter.billing.estimated_revenue}***11:B:1*Y*A*Y*Y~`,
+    `HI*ABK:${icd}~`,
+    `SV1*HC:${cpt}*${encounter.billing.estimated_revenue}*UN*1***1~`,
+    `DTP*472*D8*${ts.slice(0,8)}~`,
+    `SE*12*0001~`,
+    `GE*1*1~`,
+    `IEA*1*000000905~`,
+  ].join("");
+}
+📁 server/billing/eraProcessor.ts (835 → outcome + RLHF)
+import { MoneyRLHFEngine } from "../learning/moneyRLHFEngine";
+
+export class ERAProcessor {
+  constructor(private rlhf = new MoneyRLHFEngine()) {}
+
+  // expects normalized ERA items: [{ claimId, paidAmount, denied, reasons }]
+  process(eraItems: any[]) {
+    for (const item of eraItems) {
+      this.rlhf.update({
+        encounterId: item.claimId,
+        paid: !item.denied,
+        revenue: item.paidAmount || 0,
+        denialReasons: item.reasons || [],
+        coding: item.coding || {},
+      });
+    }
+  }
+}
+📁 server/routes/claims.ts
+import express from "express";
+import { ClearinghouseRealClient } from "../billing/clearinghouseRealClient";
+import { build837P } from "../billing/x12Builder";
+
+const router = express.Router();
+const ch = new ClearinghouseRealClient();
+
+router.post("/submit", async (req, res) => {
+  const encounter = req.body;
+  const x12 = build837P(encounter);
+  const result = await ch.submit837P(x12);
+  res.json(result);
+});
+
+router.get("/:id/status", async (req, res) => {
+  const status = await ch.checkStatus(req.params.id);
+  res.json(status);
+});
+
+export default router;
+⏱️ Cron to pull ERA (835)
+import cron from "node-cron";
+import { ClearinghouseRealClient } from "../billing/clearinghouseRealClient";
+import { ERAProcessor } from "../billing/eraProcessor";
+
+const ch = new ClearinghouseRealClient();
+const era = new ERAProcessor();
+
+cron.schedule("*/10 * * * *", async () => {
+  const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const items = await ch.fetchERA835(since);
+  era.process(items);
+});
+🔐 PART 2 — PRODUCTION HARDENING (MUST DO)
+2A. AWS Secrets Manager (no .env in prod)
+📁 server/config/secrets.ts
+import AWS from "aws-sdk";
+
+const sm = new AWS.SecretsManager({ region: process.env.AWS_REGION });
+
+export async function loadSecrets(secretId: string) {
+  const data = await sm.getSecretValue({ SecretId: secretId }).promise();
+  const json = JSON.parse(data.SecretString || "{}");
+
+  for (const [k, v] of Object.entries(json)) {
+    process.env[k] = String(v);
+  }
+}
+Use at boot:
+import { loadSecrets } from "./config/secrets";
+
+(async () => {
+  if (process.env.NODE_ENV === "production") {
+    await loadSecrets("clinical-ai/prod");
+  }
+  // start server
+})();
+Create secret (example)
+aws secretsmanager create-secret \
+  --name clinical-ai/prod \
+  --secret-string '{
+    "DATABASE_URL":"postgresql://...",
+    "REDIS_URL":"rediss://...",
+    "CLEARINGHOUSE_API_KEY":"...",
+    "OPENAI_API_KEY":"...",
+    "JWT_SECRET":"...",
+    "ENCRYPTION_KEY":"..."
+  }'
+2B. Use RDS (Postgres) instead of in-cluster DB
+📁 infra/aws/rds.ts (CDK)
+import * as rds from "aws-cdk-lib/aws-rds";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+
+export function createRDS(scope: any, vpc: ec2.Vpc) {
+  return new rds.DatabaseInstance(scope, "ClinicalRDS", {
+    engine: rds.DatabaseInstanceEngine.postgres({
+      version: rds.PostgresEngineVersion.VER_14,
+    }),
+    vpc,
+    multiAz: true,
+    storageEncrypted: true,
+    instanceType: ec2.InstanceType.of(
+      ec2.InstanceClass.T3,
+      ec2.InstanceSize.MEDIUM
+    ),
+    credentials: rds.Credentials.fromGeneratedSecret("dbuser"),
+    databaseName: "clinical",
+  });
+}
+
+Set DATABASE_URL to the RDS endpoint (via Secrets Manager).
+
+2C. HTTPS with ALB + ACM
+📁 k8s/ingress-alb.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clinical-alb
+  namespace: clinical-ai
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT:certificate/XXXX
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+spec:
+  rules:
+    - host: yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 80
+Install AWS Load Balancer Controller
+helm repo add eks https://aws.github.io/eks-charts
+helm upgrade -i aws-load-balancer-controller eks/aws-load-balancer-controller \
+  -n kube-system \
+  --set clusterName=YOUR_CLUSTER \
+  --set serviceAccount.create=false \
+  --set serviceAccount.name=aws-load-balancer-controller
+🟡 SHOULD DO
+
+Set conservative autonomy:
+
+AUTO_SUBMIT_THRESHOLD=0.95
+🟢 NICE TO HAVE — OBSERVABILITY
+📁 k8s/monitoring.yaml (Prometheus + Grafana via Helm)
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --create-namespace
+Backend metrics endpoint
+import client from "prom-client";
+const register = new client.Registry();
+client.collectDefaultMetrics({ register });
+
+export const httpLatency = new client.Histogram({
+  name: "http_latency_ms",
+  help: "HTTP latency",
+  buckets: [50, 100, 200, 500, 1000, 2000],
+});
+register.registerMetric(httpLatency);
+
+// expose
+app.get("/metrics", async (_req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
+
+Grafana dashboards:
+
+Denial rate
+
+Auto-submit rate
+
+Revenue/hour
+
+Latency + error rate per agent
+
+🧪 PART 3 — PILOT ROLLOUT PLAN (SAFE → SCALE)
+Phase 0 — Internal Sandbox (Week 0–1)
+
+Clearinghouse sandbox only
+
+AUTO_SUBMIT_THRESHOLD=1.0 (no auto-submit)
+
+100% physician review
+
+Validate:
+
+837P correctness
+
+ERA ingestion
+
+Audit logs
+
+Phase 1 — Shadow Mode (Week 2–3)
+
+Run live cases but do not submit automatically
+
+Compare:
+
+AI coding vs physician coding
+
+Predicted denial vs actual
+
+KPI targets:
+
+≥95% coding agreement
+
+≤10% predicted denial
+
+Phase 2 — Assisted Billing (Week 4–6)
+
+Submit claims after physician approval
+
+Auto-fix enabled
+
+RLHF learning active
+
+KPIs:
+
+Denial rate < 8–10%
+
+Revenue parity vs baseline
+
+Phase 3 — Limited Autonomy (Week 7–10)
+
+Auto-submit low-risk only
+
+Keep:
+
+cardiac / high-risk → always human
+
+Threshold:
+
+AUTO_SUBMIT_THRESHOLD=0.95
+
+KPIs:
+
+Denial rate ≤ 5–7%
+
+Auto-submit share 20–40%
+
+Phase 4 — Scale
+
+Multi-clinic rollout
+
+Add payer-specific rules
+
+Expand specialties
+
+Gradually relax threshold to 0.9 if safe
+
+🧠 GUARDRAILS (KEEP THESE ON)
+
+Always log full audit trail
+
+Block auto-submit for:
+
+high-risk ICD families (cardiac, neuro acute)
+
+Enforce physician availability for escalation
+
+Keep rollback switch:
+
+ENABLE_AUTONOMY=false
+🏁 WHAT YOU NOW HAVE
+
+A system that:
+
+💳 Submits real claims (837P)
+
+📬 Processes real remits (835)
+
+🧠 Learns from money (RLHF)
+
+🔐 Runs on HIPAA-grade infra
+
+⚙️ Scales on Kubernetes
+
+👨‍⚕️ Keeps physicians in control where needed

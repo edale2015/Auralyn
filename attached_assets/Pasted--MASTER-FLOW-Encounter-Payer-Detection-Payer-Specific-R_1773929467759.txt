@@ -1,0 +1,221 @@
+🧠 MASTER FLOW
+Encounter
+   ↓
+Payer Detection
+   ↓
+Payer-Specific RLHF Score
+   ↓
+Contract Simulation (what would this pay under each payer?)
+   ↓
+Optimization Decision
+   ↓
+Submit (best strategy)
+   ↓
+ERA Outcome → Reinforcement
+🤖 PART 1 — PAYER-SPECIFIC RLHF ENGINE
+
+Instead of one learning loop…
+You now have one brain per payer 🧠🧠🧠
+
+📁 server/learning/payerRLHFEngine.ts
+type Outcome = {
+  payer: string;
+  coding: any;
+  paid: boolean;
+  revenue: number;
+};
+
+export class PayerRLHFEngine {
+  private weights: Record<string, Record<string, number>> = {};
+
+  update(outcome: Outcome) {
+    const payer = outcome.payer;
+    const key = this.key(outcome.coding);
+
+    if (!this.weights[payer]) this.weights[payer] = {};
+    if (!this.weights[payer][key]) this.weights[payer][key] = 0.5;
+
+    if (outcome.paid) {
+      const reward = outcome.revenue / 500;
+      this.weights[payer][key] += 0.1 * reward;
+    } else {
+      this.weights[payer][key] -= 0.2;
+    }
+
+    this.weights[payer][key] = Math.max(0, Math.min(1, this.weights[payer][key]));
+  }
+
+  score(coding: any, payer: string): number {
+    return this.weights[payer]?.[this.key(coding)] || 0.4;
+  }
+
+  private key(coding: any) {
+    const icd = coding.icd10?.[0]?.code || "none";
+    const cpt = coding.cpt?.[0]?.code || "none";
+    return `${icd}_${cpt}`;
+  }
+}
+🧮 PART 2 — CONTRACT SIMULATION ENGINE
+
+This lets you answer:
+
+“If I had 1,000 cases… how much would each payer pay me?”
+
+📁 server/analytics/contractSimulationEngine.ts
+type Contract = {
+  payer: string;
+  cptRates: Record<string, number>;
+};
+
+type Encounter = {
+  coding: any;
+};
+
+export class ContractSimulationEngine {
+  simulate(encounters: Encounter[], contracts: Contract[]) {
+    return contracts.map(contract => {
+      let total = 0;
+
+      for (const e of encounters) {
+        const cpt = e.coding.cpt?.[0]?.code || "99213";
+        const rate = contract.cptRates[cpt] || 50;
+
+        total += rate;
+      }
+
+      return {
+        payer: contract.payer,
+        projectedRevenue: total,
+        avgPerEncounter: total / encounters.length
+      };
+    });
+  }
+}
+📊 Example contract input
+const contracts = [
+  {
+    payer: "medicare",
+    cptRates: { "99213": 75, "99214": 110 }
+  },
+  {
+    payer: "aetna",
+    cptRates: { "99213": 90, "99214": 130 }
+  }
+];
+🎯 PART 3 — PAYER OPTIMIZATION DECISION ENGINE
+
+This chooses the best strategy per encounter.
+
+📁 server/analytics/payerStrategyEngine.ts
+export class PayerStrategyEngine {
+  chooseBest(encounter: any, payers: string[], rlhf: any, contracts: any) {
+    let best = null;
+
+    for (const payer of payers) {
+      const score = rlhf.score(encounter.coding, payer);
+
+      const rate = contracts[payer]?.[encounter.coding.cpt?.[0]?.code] || 50;
+
+      const expectedValue = score * rate;
+
+      if (!best || expectedValue > best.value) {
+        best = {
+          payer,
+          value: expectedValue,
+          score,
+          rate
+        };
+      }
+    }
+
+    return best;
+  }
+}
+🔁 PART 4 — ERA → RLHF FEEDBACK LOOP (PAYER-AWARE)
+import { PayerRLHFEngine } from "./payerRLHFEngine";
+
+const rlhf = new PayerRLHFEngine();
+
+function processERA(eraItems: any[]) {
+  for (const item of eraItems) {
+    rlhf.update({
+      payer: item.payer,
+      coding: item.coding,
+      paid: !item.denied,
+      revenue: item.paidAmount
+    });
+  }
+}
+📊 PART 5 — CONTRACT SIMULATION DASHBOARD
+📁 frontend/src/pages/ContractSimulationDashboard.tsx
+import { useEffect, useState } from "react";
+import axios from "axios";
+
+export default function ContractSimulationDashboard() {
+  const [data, setData] = useState<any[]>([]);
+
+  useEffect(() => {
+    axios.get("/api/analytics/simulate").then(res => setData(res.data));
+  }, []);
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h1>🧮 Contract Simulation</h1>
+
+      {data.map((d, i) => (
+        <div key={i}>
+          <b>{d.payer}</b><br />
+          Projected Revenue: ${d.projectedRevenue}<br />
+          Avg per Encounter: ${d.avgPerEncounter.toFixed(2)}
+        </div>
+      ))}
+    </div>
+  );
+}
+🧠 PART 6 — FULL INTELLIGENT FLOW
+import { PayerRLHFEngine } from "../learning/payerRLHFEngine";
+import { ContractSimulationEngine } from "../analytics/contractSimulationEngine";
+import { PayerStrategyEngine } from "../analytics/payerStrategyEngine";
+
+const rlhf = new PayerRLHFEngine();
+const simulator = new ContractSimulationEngine();
+const strategist = new PayerStrategyEngine();
+
+export function runPayerIntelligence(encounter: any, payers: string[], contracts: any) {
+  const best = strategist.chooseBest(encounter, payers, rlhf, contracts);
+
+  return {
+    bestPayer: best.payer,
+    expectedRevenue: best.value,
+    confidence: best.score
+  };
+}
+💰 WHAT THIS UNLOCKS (THIS IS THE EDGE)
+🧠 Intelligence
+
+Learns which payer pays best for which case
+
+Adapts coding per payer automatically
+
+💰 Revenue Optimization
+
+Simulates contracts BEFORE signing
+
+Routes decisions toward highest expected value
+
+🤝 Negotiation Power
+
+You can now say:
+
+“We generate $X per 1,000 cases with you vs $Y with competitors.”
+
+That’s real leverage.
+
+🚀 FINAL STATE
+
+You now have:
+
+🧠 A payer-aware learning system
+💰 A contract simulation engine
+🤖 A strategy engine that optimizes revenue
+📊 A negotiation intelligence layer
