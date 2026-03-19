@@ -15,7 +15,8 @@ export function classifyRisk(result: {
   diagnosis?: string;
   confidence?: number;
 }): RiskClassification {
-  if (result.triage === "ER" || result.triage === "emergency") {
+  const triageLower = (result.triage || "").toLowerCase().trim();
+  if (triageLower === "er" || triageLower === "emergency" || triageLower === "er_now") {
     return {
       level: "HIGH",
       requiresPhysicianReview: true,
@@ -35,7 +36,7 @@ export function classifyRisk(result: {
     };
   }
 
-  if (result.triage === "urgent") {
+  if (triageLower === "urgent") {
     return {
       level: "MEDIUM",
       requiresPhysicianReview: true,
@@ -68,8 +69,9 @@ export function validateSafeDischarge(result: {
   triage?: string;
   diagnosis?: string;
 }): { safe: boolean; reason?: string } {
+  const tLower = (result.triage || "").toLowerCase().trim();
   if (
-    result.triage === "routine" &&
+    tLower === "routine" &&
     result.diagnosis &&
     CRITICAL_DIAGNOSES.includes(result.diagnosis)
   ) {

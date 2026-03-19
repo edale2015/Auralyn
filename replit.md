@@ -60,6 +60,7 @@ The **Google Sheets Migration Engine** manages canonical tab creation, verificat
 - **ICD-10/CPT Auto-Coder**: Case-insensitive diagnosis cluster coding with batch support and ICD-10 search at `/api/auto-code/*`.
 - **Encounter Bundle Builder**: Unified EHR (FHIR) + billing (X12 837P) + audit trail + clinical note + denial prediction in one exportable bundle at `/api/encounter-bundle/*`.
 - **Denial Prediction Engine**: Pre-submission claim denial risk scoring with revenue impact estimation, batch analysis, and actionable fix recommendations at `/api/denial-prediction/*`.
+- **Revenue Pipeline**: Unified revenue optimization layer at `/api/revenue-pipeline/*` with: CPT auto-fix engine (denial-driven upcoding), RLHF claim outcome learning (ICD/CPT pair weighting), smart physician routing (specialty-based load-balanced assignment with stateful load tracking), revenue analytics (metrics + projections), and a full intelligent pipeline that chains coding → denial prediction → auto-fix → learned score adjustment → physician routing → disposition decision.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API
