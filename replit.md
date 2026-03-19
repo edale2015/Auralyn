@@ -58,7 +58,8 @@ The **Google Sheets Migration Engine** manages canonical tab creation, verificat
 - **Rate Limiting & No-PHI Log**: Request rate limiting middleware and deep recursive PHI-stripping log middleware.
 - **FDA 510(k) Narrative Generator**: Pre-filled 9-section regulatory narrative with live metrics, scoring system counts, ICD-10 mapping counts at `/api/fda-510k/*`.
 - **ICD-10/CPT Auto-Coder**: Case-insensitive diagnosis cluster coding with batch support and ICD-10 search at `/api/auto-code/*`.
-- **Encounter Bundle Builder**: Unified EHR (FHIR) + billing (X12 837P) + audit trail + clinical note in one exportable bundle at `/api/encounter-bundle/*`.
+- **Encounter Bundle Builder**: Unified EHR (FHIR) + billing (X12 837P) + audit trail + clinical note + denial prediction in one exportable bundle at `/api/encounter-bundle/*`.
+- **Denial Prediction Engine**: Pre-submission claim denial risk scoring with revenue impact estimation, batch analysis, and actionable fix recommendations at `/api/denial-prediction/*`.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API

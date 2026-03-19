@@ -5,6 +5,7 @@ import { MODEL } from "../compliance/modelVersionEngine";
 import { MODEL_VERSION } from "../compliance/modelRegistry";
 import { enforceRiskControls } from "../compliance/riskControl";
 import { build837P, type X12_837P } from "./x12Mapper";
+import { predictDenial, type DenialPrediction } from "./denialPredictionEngine";
 
 export interface EncounterBundleInput {
   patientId: string;
@@ -66,6 +67,7 @@ export interface EncounterBundle {
     appliedControls: string[];
     reason?: string;
   };
+  denialPrediction: DenialPrediction;
   fhirEncounter: FHIREncounterResource;
   clinicalNote: ClinicalNote;
   auditTrail: {
@@ -175,6 +177,18 @@ export function buildEncounterBundle(input: EncounterBundleInput): EncounterBund
     generatedAt: now,
   };
 
+  const denialResult = predictDenial({
+    coding,
+    riskClassification: risk,
+    encounter: {
+      complaint: input.complaint,
+      diagnosis: input.diagnosis,
+      triage: input.triage,
+      confidence: input.confidence,
+    },
+    clinicalNote,
+  });
+
   return {
     bundleId,
     generatedAt: now,
@@ -195,6 +209,7 @@ export function buildEncounterBundle(input: EncounterBundleInput): EncounterBund
       appliedControls: riskResult.appliedControls,
       reason: riskResult.reason,
     },
+    denialPrediction: denialResult,
     fhirEncounter,
     clinicalNote,
     auditTrail: {
