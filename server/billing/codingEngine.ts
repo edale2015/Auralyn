@@ -50,12 +50,22 @@ const CPT_MAP: Record<string, { code: string; description: string }> = {
   "complex": { code: "99215", description: "Office Visit — High complexity" },
 };
 
+const ICD10_LOOKUP = new Map<string, string>();
+for (const [key, val] of Object.entries(ICD10_MAP)) {
+  ICD10_LOOKUP.set(key.toLowerCase().trim(), val);
+}
+
+const CPT_LOOKUP = new Map<string, { code: string; description: string }>();
+for (const [key, val] of Object.entries(CPT_MAP)) {
+  CPT_LOOKUP.set(key.toLowerCase().trim(), val);
+}
+
 export function mapToICD10(diagnosis: string): string {
-  return ICD10_MAP[diagnosis] || "R69";
+  return ICD10_MAP[diagnosis] || ICD10_LOOKUP.get(diagnosis.toLowerCase().trim()) || "R69";
 }
 
 export function mapToCPT(visitType: string): { code: string; description: string } {
-  return CPT_MAP[visitType] || CPT_MAP["routine"];
+  return CPT_MAP[visitType] || CPT_LOOKUP.get(visitType.toLowerCase().trim()) || CPT_MAP["routine"];
 }
 
 export function mapToBilling(diagnosis: string, visitType: string) {

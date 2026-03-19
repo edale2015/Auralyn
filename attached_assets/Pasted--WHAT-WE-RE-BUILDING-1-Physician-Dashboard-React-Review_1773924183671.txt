@@ -1,0 +1,234 @@
+🧠 WHAT WE’RE BUILDING
+1. Physician Dashboard (React)
+
+Review queue (risk-prioritized)
+
+One-click approve / reject
+
+Full clinical + audit trace
+
+Billing preview
+
+2. Denial Prevention Engine
+
+Predict claim rejection BEFORE submission
+
+Suggest fixes (ICD/CPT mismatches, missing modifiers, etc.)
+
+Feed back into RLHF loop
+
+🎛️ PART 1 — PHYSICIAN DASHBOARD (FRONTEND)
+📁 frontend/src/pages/PhysicianDashboard.tsx
+import { useEffect, useState } from "react";
+import axios from "axios";
+
+export default function PhysicianDashboard() {
+  const [queue, setQueue] = useState<any[]>([]);
+  const [selected, setSelected] = useState<any>(null);
+
+  useEffect(() => {
+    loadQueue();
+  }, []);
+
+  async function loadQueue() {
+    const res = await axios.get("/api/review/queue");
+    setQueue(res.data);
+  }
+
+  async function approve() {
+    await axios.post("/api/review/approve", {
+      encounterId: selected.encounter_id,
+      physicianId: "phys_001"
+    });
+    loadQueue();
+    setSelected(null);
+  }
+
+  async function reject() {
+    await axios.post("/api/review/reject", {
+      encounterId: selected.encounter_id,
+      physicianId: "phys_001",
+      comments: "Needs correction"
+    });
+    loadQueue();
+    setSelected(null);
+  }
+
+  return (
+    <div style={{ display: "flex", height: "100vh" }}>
+      
+      {/* LEFT PANEL — QUEUE */}
+      <div style={{ width: "30%", borderRight: "1px solid #ccc", padding: 10 }}>
+        <h3>Review Queue</h3>
+
+        {queue.map((item) => (
+          <div
+            key={item.encounter_id}
+            onClick={() => setSelected(item)}
+            style={{
+              padding: 10,
+              marginBottom: 5,
+              cursor: "pointer",
+              background: item.riskScore > 0.7 ? "#ffe6e6" : "#e6f7ff"
+            }}
+          >
+            <b>{item.patient.id}</b><br />
+            Risk: {item.riskScore.toFixed(2)}
+          </div>
+        ))}
+      </div>
+
+      {/* RIGHT PANEL — DETAILS */}
+      <div style={{ flex: 1, padding: 20 }}>
+        {selected ? (
+          <>
+            <h2>Encounter Review</h2>
+
+            <h4>Diagnosis</h4>
+            <pre>{JSON.stringify(selected.clinical, null, 2)}</pre>
+
+            <h4>Coding</h4>
+            <pre>{JSON.stringify(selected.coding, null, 2)}</pre>
+
+            <h4>Denial Risk</h4>
+            <pre>{JSON.stringify(selected.denialPrediction, null, 2)}</pre>
+
+            <button onClick={approve}>Approve</button>
+            <button onClick={reject}>Reject</button>
+          </>
+        ) : (
+          <h3>Select a case</h3>
+        )}
+      </div>
+    </div>
+  );
+}
+🔥 PART 2 — REVIEW QUEUE API (WITH RISK PRIORITY)
+📁 server/review/reviewQueue.ts
+export class ReviewQueue {
+  private queue: any[] = [];
+
+  add(encounter: any, denialPrediction: any) {
+    this.queue.push({
+      ...encounter,
+      denialPrediction,
+      riskScore: denialPrediction.riskScore
+    });
+
+    this.queue.sort((a, b) => b.riskScore - a.riskScore);
+  }
+
+  getAll() {
+    return this.queue;
+  }
+}
+📁 server/routes/reviewQueue.ts
+import express from "express";
+import { ReviewQueue } from "../review/reviewQueue";
+
+const router = express.Router();
+const queue = new ReviewQueue();
+
+router.get("/queue", (req, res) => {
+  res.json(queue.getAll());
+});
+
+export default router;
+💸 PART 3 — DENIAL PREDICTION ENGINE
+
+This is one of the highest ROI components you can build.
+
+📁 server/billing/denialEngine.ts
+type DenialPrediction = {
+  riskScore: number;
+  reasons: string[];
+  recommendations: string[];
+};
+
+export class DenialEngine {
+  predict(encounter: any): DenialPrediction {
+    let risk = 0;
+    const reasons: string[] = [];
+    const fixes: string[] = [];
+
+    // Rule 1 — Missing ICD
+    if (!encounter.coding.icd10?.length) {
+      risk += 0.4;
+      reasons.push("Missing ICD-10 codes");
+      fixes.push("Add primary diagnosis");
+    }
+
+    // Rule 2 — CPT mismatch
+    if (encounter.coding.cpt[0]?.code === "99214" &&
+        encounter.clinical.complexity < 0.5) {
+      risk += 0.3;
+      reasons.push("CPT level too high for complexity");
+      fixes.push("Downgrade to 99213 or increase documentation");
+    }
+
+    // Rule 3 — Missing documentation
+    if (!encounter.clinical.reasoning) {
+      risk += 0.2;
+      reasons.push("Missing clinical reasoning");
+      fixes.push("Add reasoning narrative");
+    }
+
+    // Rule 4 — High-risk diagnosis requires support
+    if (encounter.coding.icd10[0]?.code.startsWith("I")) {
+      risk += 0.2;
+      reasons.push("Cardiac diagnosis requires supporting data");
+      fixes.push("Add vitals, ECG, or justification");
+    }
+
+    return {
+      riskScore: Math.min(risk, 1),
+      reasons,
+      recommendations: fixes
+    };
+  }
+}
+🔗 PART 4 — CONNECT DENIAL ENGINE INTO PIPELINE
+📁 update deploymentPipeline.ts
+import { DenialEngine } from "../billing/denialEngine";
+import { ReviewQueue } from "../review/reviewQueue";
+
+const denialEngine = new DenialEngine();
+const queue = new ReviewQueue();
+
+export async function runDeploymentPipeline(input: any) {
+  const encounter = /* existing logic */;
+
+  // 🔥 NEW STEP — DENIAL PREDICTION
+  const denialPrediction = denialEngine.predict(encounter);
+
+  // Add to physician queue
+  queue.add(encounter, denialPrediction);
+
+  return {
+    status: "queued_for_review",
+    denialPrediction,
+    encounter
+  };
+}
+🧠 PART 5 — WHAT THIS UNLOCKS
+👨‍⚕️ Physician Experience
+
+Sees highest-risk cases first
+
+Sees why claims may fail
+
+Fixes BEFORE submission
+
+💰 Revenue Impact
+
+Prevents undercoding/overcoding
+
+Reduces denials (huge $$$)
+
+Improves reimbursement consistency
+
+🤖 AI Feedback Loop
+
+Denial → correction → RLHF update
+
+System gets smarter over time

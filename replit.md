@@ -55,7 +55,10 @@ The **Google Sheets Migration Engine** manages canonical tab creation, verificat
 - **X12 Clearinghouse**: 837P claim mapping, clearinghouse submission, ERA/835 status tracking at `/api/clearinghouse/*`.
 - **SaMD Compliance**: Model versioning, performance registry, risk controls, audit bundles at `/api/samd-compliance/*`.
 - **PHI Field Protection**: Field-level AES encryption for PHI fields at `/api/phi-protection/*`.
-- **Rate Limiting & No-PHI Log**: Request rate limiting middleware and PHI-stripping log middleware.
+- **Rate Limiting & No-PHI Log**: Request rate limiting middleware and deep recursive PHI-stripping log middleware.
+- **FDA 510(k) Narrative Generator**: Pre-filled 9-section regulatory narrative with live metrics, scoring system counts, ICD-10 mapping counts at `/api/fda-510k/*`.
+- **ICD-10/CPT Auto-Coder**: Case-insensitive diagnosis cluster coding with batch support and ICD-10 search at `/api/auto-code/*`.
+- **Encounter Bundle Builder**: Unified EHR (FHIR) + billing (X12 837P) + audit trail + clinical note in one exportable bundle at `/api/encounter-bundle/*`.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API
