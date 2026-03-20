@@ -10,6 +10,7 @@ import { requirePhysician } from "../auth/requirePhysician";
 import { logApproval } from "../audit/approvalAudit";
 import { notifyOnCallPhysician } from "../notifications/notifier";
 import { createTraceId } from "../audit/auditLogger";
+import { logAutonomyMetric } from "../autonomy/autonomyMetrics";
 
 const router = Router();
 
@@ -80,8 +81,18 @@ router.post("/approve/:id", requirePhysician as any, async (req: any, res) => {
   const id = req.params.id;
   const physicianId = req.physician?.physicianId ?? req.physician?.sub ?? "unknown";
   try {
+    const session = await getSessionById(id);
     await updateSession(id, { status: "approved", approvedBy: physicianId });
     await logApproval({ patientId: id, physicianId, action: "approve" });
+    logAutonomyMetric({
+      traceId: (session as any)?.traceId,
+      complaint: (session as any)?.complaint,
+      mode: "autonomous",
+      dispositionGiven: (session as any)?.disposition?.disposition,
+      confidence: (session as any)?.disposition?.confidence,
+      wasOverridden: false,
+      safetyTriggered: ((session as any)?.safetyFlags?.length ?? 0) > 0,
+    }).catch(() => {});
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e?.message });
@@ -92,8 +103,18 @@ router.post("/override/:id", requirePhysician as any, async (req: any, res) => {
   const id = req.params.id;
   const physicianId = req.physician?.physicianId ?? req.physician?.sub ?? "unknown";
   try {
+    const session = await getSessionById(id);
     await updateSession(id, { status: "overridden", approvedBy: physicianId, overrideData: req.body });
     await logApproval({ patientId: id, physicianId, action: "override", overrideData: req.body });
+    logAutonomyMetric({
+      traceId: (session as any)?.traceId,
+      complaint: (session as any)?.complaint,
+      mode: "autonomous",
+      dispositionGiven: (session as any)?.disposition?.disposition,
+      confidence: (session as any)?.disposition?.confidence,
+      wasOverridden: true,
+      safetyTriggered: ((session as any)?.safetyFlags?.length ?? 0) > 0,
+    }).catch(() => {});
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e?.message });

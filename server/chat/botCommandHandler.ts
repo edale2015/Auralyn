@@ -7,8 +7,43 @@ import { getLoopStats } from "../system/autonomousLoop";
 import { runLearningCycle } from "../engines/unifiedOutcomeLearning";
 import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
 import { getSystemHealth } from "../monitoring/systemMonitor";
+import { parseOperatorIntent } from "./intentRouter";
 
 export type BotReply = { text: string; handled: boolean };
+
+const operatorWindows: Map<string, { count: number; heavyCount: number; windowStart: number }> = new Map();
+const WINDOW_MS = 60_000;
+const MAX_COMMANDS = 30;
+const MAX_HEAVY_COMMANDS = 5;
+const HEAVY_CMDS = new Set(["learn", "simulate"]);
+
+function checkRateLimit(chatId: string | number, cmd: string): boolean {
+  const key = String(chatId);
+  const now = Date.now();
+  let entry = operatorWindows.get(key);
+  if (!entry || now - entry.windowStart > WINDOW_MS) {
+    entry = { count: 0, heavyCount: 0, windowStart: now };
+    operatorWindows.set(key, entry);
+  }
+  if (entry.count >= MAX_COMMANDS) return false;
+  const isHeavy = HEAVY_CMDS.has(cmd.replace("/", ""));
+  if (isHeavy && entry.heavyCount >= MAX_HEAVY_COMMANDS) return false;
+  entry.count++;
+  if (isHeavy) entry.heavyCount++;
+  return true;
+}
+
+const commandAuditLog: Array<{ chatId: string; cmd: string; ts: string; source: "slash" | "intent" }> = [];
+const MAX_AUDIT = 500;
+
+function auditCommand(chatId: string | number, cmd: string, source: "slash" | "intent") {
+  commandAuditLog.push({ chatId: String(chatId), cmd, ts: new Date().toISOString(), source });
+  if (commandAuditLog.length > MAX_AUDIT) commandAuditLog.shift();
+}
+
+export function getCommandAuditLog(limit = 50) {
+  return commandAuditLog.slice(-limit);
+}
 
 function getAllowedChatIds(): Set<string> {
   const raw = process.env.ALLOWED_TELEGRAM_CHAT_IDS ?? "";
@@ -165,7 +200,37 @@ export async function handleBotCommand(
   chatId: string | number
 ): Promise<BotReply> {
   const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) return { text: "", handled: false };
+
+  if (!trimmed.startsWith("/")) {
+    if (!isChatAllowed(chatId)) return { text: "", handled: false };
+    const intent = parseOperatorIntent(trimmed);
+    if (intent.action === "unknown" || intent.confidence === "low") return { text: "", handled: false };
+
+    auditCommand(chatId, `[intent:${intent.action}]`, "intent");
+
+    if (!checkRateLimit(chatId, intent.action)) {
+      return { text: "⏱️ Rate limit reached. Max 30 commands/minute (5 for heavy ops). Try again shortly.", handled: true };
+    }
+
+    let reply: string;
+    try {
+      switch (intent.action) {
+        case "queue": reply = await handleQueue(); break;
+        case "approve": reply = intent.target ? await handleApprove(intent.target) : "Could not extract session ID. Try: /approve {id}"; break;
+        case "override": reply = intent.target ? await handleOverride(intent.target, intent.args ?? "") : "Could not extract session ID. Try: /override {id}"; break;
+        case "health": reply = await handleHealth(); break;
+        case "alerts": reply = await handleAlerts(); break;
+        case "simulate": reply = await handleSimulate(intent.args ?? "cough"); break;
+        case "learn": reply = await handleLearn(); break;
+        case "circuits": reply = await handleCircuits(); break;
+        case "help": reply = helpText(); break;
+        default: return { text: "", handled: false };
+      }
+    } catch (e: any) {
+      reply = `❌ Command failed: ${e.message}`;
+    }
+    return { text: reply, handled: true };
+  }
 
   const [rawCmd, ...argParts] = trimmed.split(/\s+/);
   const cmd = rawCmd.toLowerCase();
@@ -181,6 +246,12 @@ export async function handleBotCommand(
       handled: true,
     };
   }
+
+  if (!checkRateLimit(chatId, cmd)) {
+    return { text: "⏱️ Rate limit reached. Max 30 commands/minute (5 for heavy ops: /learn, /simulate). Try again shortly.", handled: true };
+  }
+
+  auditCommand(chatId, cmd, "slash");
 
   let reply: string;
 

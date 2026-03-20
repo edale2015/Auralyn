@@ -2,6 +2,7 @@ import { predictFailures } from "../monitoring/predictiveEngine";
 import { acquireLock, releaseLock } from "../locks/redisLock";
 import { detectDrift } from "../monitoring/dataDrift";
 import { emitEvent } from "../controlTower/eventBus";
+import { runSelfHealing } from "../autonomy/selfHealing";
 
 const LEARNING_LOCK_KEY = "global_learning_lock";
 const LEARNING_LOCK_TTL = 55_000;
@@ -62,8 +63,16 @@ export function startAutonomousLoop(intervalMs = 60_000) {
 
   loopInterval = setInterval(async () => {
     cycleCount++;
-    console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction + drift`);
-    await Promise.all([runLearningCycleSafe(), runPredictionSafe(), runDriftDetectionSafe()]);
+    console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction + drift + self-healing`);
+    const [, , , healActions] = await Promise.all([
+      runLearningCycleSafe(),
+      runPredictionSafe(),
+      runDriftDetectionSafe(),
+      runSelfHealing().catch(() => []),
+    ]);
+    if (healActions.length > 0) {
+      console.log(`[AutonomousLoop] Self-heal: ${healActions.length} action(s) taken`);
+    }
   }, intervalMs);
 
   loopInterval.unref?.();

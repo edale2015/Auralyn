@@ -12,6 +12,10 @@ import { getModelVersions } from "../engines/unifiedOutcomeLearning";
 import { detectDrift, getBaselineSnapshot, getDriftSampleCount, resetBaseline } from "../monitoring/dataDrift";
 import { getRecentSnapshots } from "../snapshots/systemSnapshot";
 import { checkSLO } from "../monitoring/slo";
+import { analyzeFailure } from "../monitoring/rootCauseEngine";
+import { runSelfHealing, getLastHealTimes } from "../autonomy/selfHealing";
+import { getAutonomyStats } from "../autonomy/autonomyMetrics";
+import { getCommandAuditLog } from "../chat/botCommandHandler";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -145,6 +149,42 @@ router.get("/snapshots", auth, async (req: Request, res: Response) => {
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }
+});
+
+router.get("/root-cause", auth, (_req: Request, res: Response) => {
+  try {
+    const report = analyzeFailure();
+    res.json({ ok: true, ...report });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.post("/self-heal", auth, async (_req: Request, res: Response) => {
+  try {
+    const actions = await runSelfHealing();
+    res.json({ ok: true, actionsTriggered: actions.length, actions, lastHealTimes: getLastHealTimes() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.get("/self-heal/history", auth, (_req: Request, res: Response) => {
+  res.json({ ok: true, lastHealTimes: getLastHealTimes() });
+});
+
+router.get("/autonomy", requireRole(["admin", "physician"]), async (_req: Request, res: Response) => {
+  try {
+    const stats = await getAutonomyStats();
+    res.json({ ok: true, ...stats });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.get("/bot-audit", auth, (req: Request, res: Response) => {
+  const limit = Number(req.query.limit) || 50;
+  res.json({ ok: true, log: getCommandAuditLog(limit) });
 });
 
 export default router;

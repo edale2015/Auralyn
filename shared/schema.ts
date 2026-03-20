@@ -256,6 +256,23 @@ export const insertSystemSnapshotSchema = createInsertSchema(systemSnapshots).om
 export type InsertSystemSnapshot = z.infer<typeof insertSystemSnapshotSchema>;
 export type SystemSnapshot = typeof systemSnapshots.$inferSelect;
 
+// Autonomy performance tracking — FDA evidence, trust metric, tuning engine
+export const autonomyMetrics = pgTable("autonomy_metrics", {
+  id: serial("id").primaryKey(),
+  traceId: text("trace_id"),
+  complaint: text("complaint"),
+  mode: text("mode").notNull(),
+  dispositionGiven: text("disposition_given"),
+  confidence: real("confidence"),
+  wasOverridden: boolean("was_overridden").default(false).notNull(),
+  safetyTriggered: boolean("safety_triggered").default(false).notNull(),
+  guardrailsTriggered: text("guardrails_triggered").array().default([]),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertAutonomyMetricSchema = createInsertSchema(autonomyMetrics).omit({ id: true, createdAt: true });
+export type InsertAutonomyMetric = z.infer<typeof insertAutonomyMetricSchema>;
+export type AutonomyMetric = typeof autonomyMetrics.$inferSelect;
+
 // Idempotency keys — prevent duplicate POSTs from retries or ALB replays
 export const idempotencyKeys = pgTable("idempotency_keys", {
   key: text("key").primaryKey(),
