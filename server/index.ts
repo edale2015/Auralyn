@@ -204,6 +204,10 @@ import enterpriseRoutes from "./routes/enterpriseRoutes";
 import operatorRoutes from "./routes/operatorRoutes";
 import engineRoutes from "./routes/engineRoutes";
 import clinicalFlowRoutes from "./routes/clinicalRoutes";
+import systemSimulationRoutes from "./routes/systemSimulationRoutes";
+import systemAuditRoutes from "./routes/systemAuditRoutes";
+import outcomeFeedbackRoutes from "./routes/outcomeFeedbackRoutes";
+import { startAutonomousLoop } from "./system/autonomousLoop";
 import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
@@ -516,6 +520,12 @@ app.use("/api/enterprise", enterpriseRoutes);
 app.use("/api/operator", operatorRoutes);
 app.use("/api/engines", engineRoutes);
 app.use("/api/clinical", clinicalFlowRoutes);
+app.use("/api/simulation", systemSimulationRoutes);
+app.use("/api/audit", systemAuditRoutes);
+app.use("/api/outcome", outcomeFeedbackRoutes);
+console.log("[Simulation] Digital twin simulation runs + batch + history at /api/simulation/*");
+console.log("[AuditTrace] Immutable audit trace log at /api/audit/*");
+console.log("[OutcomeFeedback] Outcome recording, weights, learning cycle at /api/outcome/*");
 console.log("[PayerIntelligence] Payer optimization, denial v2, RLHF, contracts, scaling, clinics, self-improve at /api/payer-intelligence/*");
 console.log("[Strategy] Multi-payer routing, dynamic pricing, network strategy, clinic optimizer, trust scores, disagreements, daily reports, telehealth compliance at /api/strategy/*");
 console.log("[Enterprise] Digital twin, simulation, adaptive control, voice swarm, growth engine, capacity/service-mix, scaling playbook, enterprise orchestrator at /api/enterprise/*");
@@ -683,6 +693,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      startAutonomousLoop(60_000);
     },
   );
 })();

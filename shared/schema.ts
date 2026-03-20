@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -139,6 +139,66 @@ export const insertUserSchema = createInsertSchema(users).pick({
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+// Outcome learning records
+export const outcomes = pgTable("outcomes", {
+  id: serial("id").primaryKey(),
+  input: jsonb("input"),
+  predicted: text("predicted"),
+  actual: text("actual"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertOutcomeSchema = createInsertSchema(outcomes).omit({ id: true, createdAt: true });
+export type InsertOutcome = z.infer<typeof insertOutcomeSchema>;
+export type Outcome = typeof outcomes.$inferSelect;
+
+// Diagnosis weights (learning system)
+export const weights = pgTable("weights", {
+  id: serial("id").primaryKey(),
+  diagnosis: text("diagnosis").notNull().unique(),
+  value: real("value").default(1.0),
+});
+export const insertWeightSchema = createInsertSchema(weights).omit({ id: true });
+export type InsertWeight = z.infer<typeof insertWeightSchema>;
+export type Weight = typeof weights.$inferSelect;
+
+// Engine execution logs (monitoring)
+export const engineLogs = pgTable("engine_logs", {
+  id: serial("id").primaryKey(),
+  engine: text("engine").notNull(),
+  status: text("status").notNull(),
+  latencyMs: integer("latency_ms"),
+  error: text("error"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertEngineLogSchema = createInsertSchema(engineLogs).omit({ id: true, createdAt: true });
+export type InsertEngineLog = z.infer<typeof insertEngineLogSchema>;
+export type EngineLog = typeof engineLogs.$inferSelect;
+
+// Digital twin simulation runs
+export const simulations = pgTable("simulations", {
+  id: serial("id").primaryKey(),
+  input: jsonb("input"),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertSimulationSchema = createInsertSchema(simulations).omit({ id: true, createdAt: true });
+export type InsertSimulation = z.infer<typeof insertSimulationSchema>;
+export type Simulation = typeof simulations.$inferSelect;
+
+// Immutable audit trace logs
+export const auditLogs = pgTable("audit_logs", {
+  id: serial("id").primaryKey(),
+  traceId: text("trace_id").notNull(),
+  step: text("step").notNull(),
+  input: jsonb("input"),
+  output: jsonb("output"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
 
 // Re-export chat models for OpenAI integration
 export * from "./models/chat";

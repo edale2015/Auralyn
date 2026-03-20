@@ -1,15 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Activity, Bot, AlertTriangle, CheckCircle, XCircle,
-  Play, RefreshCw, Cpu, Zap, Shield, TrendingUp, Clock
+  Play, RefreshCw, Cpu, Zap, Shield, TrendingUp, Clock,
+  FlaskConical, Search, ClipboardList, HeartPulse, BarChart3
 } from "lucide-react";
 
 function StatusDot({ status }: { status: string }) {
@@ -326,6 +328,332 @@ function SmsTab() {
   );
 }
 
+function SystemHealthTab() {
+  const [health, setHealth] = useState<Record<string, any>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchHealth = async () => {
+      try {
+        const res = await fetch("/api/monitoring/health", {
+          headers: { Authorization: `Bearer ${localStorage.getItem("app_auth_token")}` },
+        });
+        const data = await res.json();
+        setHealth(data);
+      } catch {}
+      setLoading(false);
+    };
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const { data: prediction } = useQuery<any>({ queryKey: ["/api/monitoring/predict-failures"] });
+  const { data: loopData } = useQuery<any>({ queryKey: ["/api/monitoring/health/detailed"] });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <HeartPulse className="h-4 w-4" /> Live Engine Health
+            <Badge variant="outline" className="ml-auto text-xs">Auto-refresh 3s</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading engine health...</p>
+          ) : Object.keys(health).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No engine logs yet. Run a clinical flow to populate.</p>
+          ) : (
+            <div className="space-y-2">
+              {Object.entries(health).map(([engine, stats]: [string, any]) => (
+                <div key={engine} className="flex items-center gap-3 p-2 rounded-lg border bg-card" data-testid={`health-engine-${engine}`}>
+                  <span className={`text-lg ${stats.error > 0 ? "text-red-500" : "text-green-500"}`}>●</span>
+                  <span className="text-sm font-medium flex-1">{engine}</span>
+                  <Badge variant="outline" className="text-xs">✓ {stats.healthy}</Badge>
+                  {stats.error > 0 && <Badge variant="destructive" className="text-xs">✗ {stats.error}</Badge>}
+                  {stats.warning > 0 && <Badge className="text-xs bg-yellow-500">⚠ {stats.warning}</Badge>}
+                  <span className="text-xs text-muted-foreground">{stats.avgLatencyMs}ms avg</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {prediction && (
+        <Card>
+          <CardHeader><CardTitle className="text-base flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Failure Prediction</CardTitle></CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-3 mb-2">
+              <Badge variant={prediction.unstable ? "destructive" : "default"}>
+                {prediction.unstable ? "Unstable" : "Stable"}
+              </Badge>
+              <span className="text-sm">Error rate: <strong>{(prediction.errorRate * 100).toFixed(1)}%</strong></span>
+            </div>
+            <p className="text-sm text-muted-foreground">{prediction.recommendation}</p>
+            {prediction.topFailingEngines?.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {prediction.topFailingEngines.map((e: any) => (
+                  <div key={e.engine} className="text-xs text-muted-foreground">
+                    {e.engine}: {e.errorCount} errors ({(e.rate * 100).toFixed(0)}%)
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {loopData?.autonomousLoop && (
+        <Card>
+          <CardHeader><CardTitle className="text-base flex items-center gap-2"><RefreshCw className="h-4 w-4" /> Autonomous Loop</CardTitle></CardHeader>
+          <CardContent>
+            <div className="flex gap-3">
+              <Badge variant={loopData.autonomousLoop.running ? "default" : "outline"}>
+                {loopData.autonomousLoop.running ? "Running" : "Stopped"}
+              </Badge>
+              <span className="text-sm text-muted-foreground">Cycles completed: {loopData.autonomousLoop.cycleCount}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function SimulationTab() {
+  const { toast } = useToast();
+  const [complaint, setComplaint] = useState("sore-throat");
+  const [age, setAge] = useState("35");
+  const [result, setResult] = useState<any>(null);
+
+  const { data: history } = useQuery<any[]>({ queryKey: ["/api/simulation/history"] });
+
+  const runSim = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/simulation/run", {
+        complaint,
+        answers: { age: Number(age), fever: true },
+        channel: "web",
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/simulation/history"] });
+      toast({ title: data.success ? "Simulation complete" : "Simulation blocked", description: data.traceId ? `Trace: ${data.traceId?.slice(0, 8)}...` : data.error });
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><FlaskConical className="h-4 w-4" /> Digital Twin Simulation</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-3">
+            Run a simulated clinical flow through the full pipeline. Results are persisted to PostgreSQL.
+          </p>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <Input data-testid="input-sim-complaint" placeholder="Complaint (e.g. sore-throat)" value={complaint} onChange={e => setComplaint(e.target.value)} />
+            <Input data-testid="input-sim-age" placeholder="Patient age" value={age} onChange={e => setAge(e.target.value)} type="number" />
+          </div>
+          <Button data-testid="button-run-sim" onClick={() => runSim.mutate()} disabled={runSim.isPending || !complaint}>
+            {runSim.isPending ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" />Running...</> : <><Play className="h-3 w-3 mr-1" />Run Simulation</>}
+          </Button>
+
+          {result && (
+            <div className="mt-4 p-3 rounded-lg bg-muted space-y-2">
+              <div className="flex gap-2">
+                <Badge variant={result.success ? "default" : "destructive"}>{result.success ? "Success" : result.blocked ? "Blocked by Safety Gate" : "Error"}</Badge>
+                {result.traceId && <Badge variant="outline" className="font-mono text-xs">Trace: {result.traceId.slice(0, 8)}...</Badge>}
+                {result.safetyGate && <Badge variant={result.safetyGate.level === "HIGH" ? "destructive" : result.safetyGate.level === "MEDIUM" ? "secondary" : "default"}>{result.safetyGate.level}</Badge>}
+              </div>
+              {result.explanation && (
+                <p className="text-sm text-muted-foreground">{result.explanation.summary}</p>
+              )}
+              {result.error && <p className="text-sm text-destructive">{result.error}</p>}
+              <p className="text-xs text-muted-foreground">{result.latencyMs}ms · {result.timestamp}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {history && history.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle className="text-sm">Simulation History ({history.length})</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {history.map((h: any) => (
+                <div key={h.id} className="flex items-center gap-2 p-2 rounded border text-sm" data-testid={`sim-history-${h.id}`}>
+                  <Badge variant={(h.result as any)?.success ? "default" : "destructive"} className="text-xs">
+                    {(h.result as any)?.success ? "✓" : "✗"}
+                  </Badge>
+                  <span className="flex-1 font-mono text-xs text-muted-foreground">{(h.result as any)?.traceId?.slice(0, 8) ?? "—"}</span>
+                  <span className="text-xs text-muted-foreground">{new Date(h.createdAt).toLocaleTimeString()}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function TraceTab() {
+  const [traceId, setTraceId] = useState("");
+  const [steps, setSteps] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
+
+  const lookup = async () => {
+    if (!traceId.trim()) return;
+    setLoading(true);
+    setSearched(true);
+    try {
+      const res = await fetch(`/api/audit/trace/${traceId.trim()}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("app_auth_token")}` },
+      });
+      setSteps(await res.json());
+    } catch {
+      setSteps([]);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><Search className="h-4 w-4" /> Audit Trace Replay</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-3">
+            Enter a trace ID from a clinical flow to replay every step immutably stored in PostgreSQL.
+          </p>
+          <div className="flex gap-2 mb-4">
+            <Input
+              data-testid="input-trace-id"
+              placeholder="Trace ID (UUID)"
+              value={traceId}
+              onChange={e => setTraceId(e.target.value)}
+              className="font-mono text-sm"
+            />
+            <Button data-testid="button-lookup-trace" onClick={lookup} disabled={loading || !traceId.trim()}>
+              {loading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+            </Button>
+          </div>
+
+          {searched && steps.length === 0 && !loading && (
+            <p className="text-sm text-muted-foreground">No steps found for this trace ID.</p>
+          )}
+
+          {steps.length > 0 && (
+            <div className="space-y-3">
+              {steps.map((s, i) => (
+                <div key={s.id} className="border rounded-lg p-3" data-testid={`trace-step-${i}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="outline" className="font-mono text-xs">{i + 1}</Badge>
+                    <span className="font-semibold text-sm">{s.step}</span>
+                    <span className="text-xs text-muted-foreground ml-auto">{new Date(s.createdAt).toLocaleTimeString()}</span>
+                  </div>
+                  {s.output && (
+                    <pre className="text-xs bg-muted rounded p-2 overflow-x-auto max-h-40 overflow-y-auto">
+                      {JSON.stringify(s.output, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ComplianceTab() {
+  const { data: logs, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/audit/recent"],
+    refetchInterval: 10000,
+  });
+
+  const { data: outcomes } = useQuery<any[]>({ queryKey: ["/api/outcome/outcomes"] });
+  const { data: weights } = useQuery<any[]>({ queryKey: ["/api/outcome/weights"] });
+
+  const runLearning = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/outcome/learning/run");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/outcome/weights"] });
+      console.log(`[Learning] Processed ${data.processed} outcomes, updated: ${data.updated?.join(", ")}`);
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <Card>
+          <CardHeader><CardTitle className="text-sm">Audit Log Summary</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{logs?.length ?? 0}</div>
+            <div className="text-xs text-muted-foreground">Recent audit entries (last 50)</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="text-sm flex items-center gap-2">Learning Weights <Button size="sm" variant="outline" onClick={() => runLearning.mutate()} disabled={runLearning.isPending} data-testid="button-run-learning">{runLearning.isPending ? "Running..." : "Run Cycle"}</Button></CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{weights?.length ?? 0}</div>
+            <div className="text-xs text-muted-foreground">Diagnosis weights in DB</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {weights && weights.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle className="text-sm">Top Diagnosis Weights</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {weights.slice(0, 10).map((w: any) => (
+                <div key={w.diagnosis} className="flex items-center gap-2" data-testid={`weight-${w.diagnosis}`}>
+                  <span className="text-sm flex-1">{w.diagnosis}</span>
+                  <div className="w-24 bg-muted rounded-full h-1.5">
+                    <div className="bg-primary h-1.5 rounded-full" style={{ width: `${Math.min(100, (w.value / 2) * 100)}%` }} />
+                  </div>
+                  <span className="text-xs font-mono text-muted-foreground w-12 text-right">{w.value?.toFixed(3)}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader><CardTitle className="text-sm flex items-center gap-2"><ClipboardList className="h-4 w-4" /> Recent Audit Trail</CardTitle></CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : !logs || logs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No audit entries yet. Run a clinical flow.</p>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {logs.map((d: any) => (
+                <div key={d.id} className="flex items-center gap-2 p-2 border rounded text-xs" data-testid={`audit-entry-${d.id}`}>
+                  <Badge variant="outline" className="font-mono shrink-0">{d.step}</Badge>
+                  <span className="font-mono text-muted-foreground truncate flex-1">{d.traceId?.slice(0, 8)}...</span>
+                  <span className="text-muted-foreground shrink-0">{new Date(d.createdAt).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function EngineDashboard() {
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
@@ -335,11 +663,17 @@ export default function EngineDashboard() {
             <Activity className="h-6 w-6" /> Engine Control Center
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Live agent monitoring · Master clinical orchestrator · Auto-debug · SMS gateway
+            Live health monitoring · Digital twin · Audit trace replay · Compliance · Agents · Orchestrator · Auto-debug · SMS
           </p>
         </div>
 
-        <Tabs defaultValue="agents">
+        <Tabs defaultValue="health">
+          <TabsList className="grid grid-cols-4 mb-1">
+            <TabsTrigger value="health" data-testid="tab-health"><HeartPulse className="h-3 w-3 mr-1" />Health</TabsTrigger>
+            <TabsTrigger value="simulation" data-testid="tab-simulation"><FlaskConical className="h-3 w-3 mr-1" />Simulation</TabsTrigger>
+            <TabsTrigger value="trace" data-testid="tab-trace"><Search className="h-3 w-3 mr-1" />Trace</TabsTrigger>
+            <TabsTrigger value="compliance" data-testid="tab-compliance"><ClipboardList className="h-3 w-3 mr-1" />Compliance</TabsTrigger>
+          </TabsList>
           <TabsList className="grid grid-cols-4 mb-4">
             <TabsTrigger value="agents" data-testid="tab-agents"><Bot className="h-3 w-3 mr-1" />Agents</TabsTrigger>
             <TabsTrigger value="orchestrator" data-testid="tab-orchestrator"><Cpu className="h-3 w-3 mr-1" />Orchestrator</TabsTrigger>
@@ -347,6 +681,10 @@ export default function EngineDashboard() {
             <TabsTrigger value="sms" data-testid="tab-sms"><Zap className="h-3 w-3 mr-1" />SMS</TabsTrigger>
           </TabsList>
 
+          <TabsContent value="health"><SystemHealthTab /></TabsContent>
+          <TabsContent value="simulation"><SimulationTab /></TabsContent>
+          <TabsContent value="trace"><TraceTab /></TabsContent>
+          <TabsContent value="compliance"><ComplianceTab /></TabsContent>
           <TabsContent value="agents"><AgentsTab /></TabsContent>
           <TabsContent value="orchestrator"><OrchestratorTab /></TabsContent>
           <TabsContent value="diagnostic"><DiagnosticTab /></TabsContent>

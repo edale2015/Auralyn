@@ -4,6 +4,10 @@ import { logOutcome } from "../learning/outcomeLearningEngine";
 import { learningEngine as operatorLearning } from "../operator/learningEngine";
 import { publish } from "../agents/eventBus";
 import { multiAgentCoordinator } from "../agents/multiAgentCoordinator";
+import { runSafetyGate, SafetyGateResult } from "../safety/safetyGate";
+import { createTraceId, auditStep } from "../audit/auditLogger";
+import { generateClinicalExplanation } from "../explainability/explainableAIEngine";
+import { logEngineStatus } from "../monitoring/systemMonitor";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -19,7 +23,11 @@ export interface ClinicalFlowResult {
   complaint: string;
   scores?: any;
   billing?: any;
+  safetyGate?: SafetyGateResult;
+  explanation?: any;
+  blocked?: boolean;
   learningTriggered: boolean;
+  traceId?: string;
   latencyMs: number;
   error?: string;
   timestamp: string;
@@ -37,6 +45,15 @@ function validateInput(input: ClinicalInput): ClinicalInput {
   if (!input.answers || typeof input.answers !== "object") {
     throw new Error("answers must be an object");
   }
+
+  const answers = input.answers as Record<string, any>;
+  if ((answers.ageYears ?? answers.age ?? 99) < 1 && (answers.fever || (answers.temperature ?? 0) > 37.8)) {
+    throw new Error("SAFETY BLOCK: Infant (<1yr) with fever must be escalated to ED immediately");
+  }
+  if (answers.oxygenSaturation !== undefined && answers.oxygenSaturation < 92) {
+    throw new Error(`SAFETY BLOCK: Hypoxia detected (SpO₂ ${answers.oxygenSaturation}%) — urgent clinical intervention required`);
+  }
+
   return {
     ...input,
     complaint: input.complaint.trim().slice(0, 500),
@@ -45,10 +62,13 @@ function validateInput(input: ClinicalInput): ClinicalInput {
 }
 
 async function runScoring(input: ClinicalInput): Promise<any> {
+  const t = Date.now();
   try {
     const result = await computeScoringSystems(input as any);
+    await logEngineStatus("scoringSystemsEngine", "healthy", Date.now() - t);
     return result;
-  } catch {
+  } catch (e: any) {
+    await logEngineStatus("scoringSystemsEngine", "error", Date.now() - t, e?.message);
     return { computed: false, reason: "scoring skipped" };
   }
 }
@@ -61,7 +81,7 @@ async function runBilling(complaint: string): Promise<any> {
   }
 }
 
-async function runLearningCycle(complaint: string, scores: any): Promise<void> {
+async function triggerLearning(complaint: string, scores: any): Promise<void> {
   try {
     logOutcome({
       packId: complaint,
@@ -69,7 +89,6 @@ async function runLearningCycle(complaint: string, scores: any): Promise<void> {
       actualDiagnosis: "pending",
       correct: false,
     });
-
     operatorLearning.logStep({
       stepId: flowCounter,
       action: "clinical_flow",
@@ -84,13 +103,12 @@ async function runLearningCycle(complaint: string, scores: any): Promise<void> {
   }
 }
 
-function auditLog(entry: { type: string; latency: number; success: boolean; error?: string }) {
+function publishAudit(entry: { type: string; latency: number; success: boolean; error?: string }) {
   publish("clinical_flow_audit", {
     ...entry,
     timestamp: new Date().toISOString(),
     flowId: flowCounter,
   });
-
   if (entry.success) {
     multiAgentCoordinator.complete("ClinicalOrchestrator", "full_flow");
   } else {
@@ -101,30 +119,83 @@ function auditLog(entry: { type: string; latency: number; success: boolean; erro
 export async function runFullClinicalFlow(input: ClinicalInput): Promise<ClinicalFlowResult> {
   const start = Date.now();
   const id = `flow_${++flowCounter}_${Date.now()}`;
+  const traceId = createTraceId();
 
   multiAgentCoordinator.assign("ClinicalOrchestrator", "full_flow");
 
   try {
     const validated = validateInput(input);
 
+    await auditStep({ traceId, step: "INPUT_VALIDATION", input, output: validated });
+
+    const safetyChecks = {
+      pediatric: (validated.answers.ageYears ?? 99) < 18 && validated.answers.fever
+        ? { risk: (validated.answers.ageYears ?? 18) < 2 ? "HIGH" : "LOW" }
+        : { risk: "LOW" },
+      pregnancy: validated.answers.pregnant && validated.answers.medications?.includes("ibuprofen")
+        ? { risk: "HIGH", reason: "NSAIDs unsafe in pregnancy" }
+        : { risk: "LOW" },
+      drug: [],
+    };
+
+    const safetyGate = runSafetyGate(validated.answers ?? {}, safetyChecks);
+
+    await auditStep({ traceId, step: "SAFETY_GATE", input: safetyChecks, output: safetyGate });
+
+    if (!safetyGate.allowed) {
+      const latencyMs = Date.now() - start;
+      publishAudit({ type: "FULL_FLOW_BLOCKED", latency: latencyMs, success: false, error: "Safety gate blocked" });
+      await logEngineStatus("clinicalOrchestrator", "warning", latencyMs, `Safety gate blocked: ${safetyGate.reasons.join("; ")}`);
+
+      const blockedResult: ClinicalFlowResult & { id: string } = {
+        id, traceId,
+        success: false,
+        blocked: true,
+        complaint: validated.complaint,
+        safetyGate,
+        learningTriggered: false,
+        latencyMs,
+        timestamp: new Date().toISOString(),
+      };
+      flowLog.push(blockedResult);
+      if (flowLog.length > 500) flowLog.shift();
+      return blockedResult;
+    }
+
     const scores = await runScoring(validated);
+    await auditStep({ traceId, step: "SCORING", input: validated, output: scores });
 
     const billing = await runBilling(validated.complaint);
+    await auditStep({ traceId, step: "BILLING", input: { complaint: validated.complaint }, output: billing });
 
-    runLearningCycle(validated.complaint, scores).catch(console.error);
+    const explanation = generateClinicalExplanation({
+      topDiagnosis: scores?.primaryDiagnosis ?? validated.complaint,
+      probability: scores?.confidence ?? 0.5,
+      disposition: scores?.disposition ?? "physician-review",
+      protocol: scores?.protocol,
+      redFlags: scores?.redFlags ?? safetyGate.reasons,
+      differentials: scores?.differentials ?? [],
+      enginesUsed: scores?.enginesUsed ?? ["scoringSystemsEngine"],
+    });
+    await auditStep({ traceId, step: "EXPLANATION", input: null, output: explanation });
+
+    triggerLearning(validated.complaint, scores).catch(console.error);
 
     const latencyMs = Date.now() - start;
     totalLatency += latencyMs;
 
-    auditLog({ type: "FULL_FLOW", latency: latencyMs, success: true });
+    publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: true });
+    await logEngineStatus("clinicalOrchestrator", "healthy", latencyMs);
 
     const result: ClinicalFlowResult & { id: string } = {
-      id,
+      id, traceId,
       success: true,
       patientId: input.patientId,
       complaint: validated.complaint,
       scores,
       billing,
+      safetyGate,
+      explanation,
       learningTriggered: true,
       latencyMs,
       timestamp: new Date().toISOString(),
@@ -138,10 +209,11 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     totalErrors++;
     const latencyMs = Date.now() - start;
 
-    auditLog({ type: "FULL_FLOW", latency: latencyMs, success: false, error: err.message });
+    publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: false, error: err.message });
+    await logEngineStatus("clinicalOrchestrator", "error", latencyMs, err.message).catch(() => {});
 
     const result: ClinicalFlowResult & { id: string } = {
-      id,
+      id, traceId,
       success: false,
       complaint: input.complaint ?? "unknown",
       error: err.message,
