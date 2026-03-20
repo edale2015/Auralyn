@@ -4,6 +4,7 @@ import { runFullClinicalFlow, getFlowLog, getOrchestratorMetrics } from "../orch
 import { sendSMS, sendWhatsApp, parseSMSIntent } from "../services/smsService";
 import { createOrUpsertSession } from "../patient/sessionStorePg";
 import { createTraceId } from "../audit/auditLogger";
+import { handleSMSCommand } from "../chat/botCommandHandler";
 
 const router = express.Router();
 
@@ -54,6 +55,13 @@ router.post("/sms/webhook", express.urlencoded({ extended: false }), async (req,
 
   const traceId = createTraceId();
   const patientId = from.replace(/\W/g, "_");
+
+  const smsCommand = await handleSMSCommand(incoming).catch(() => null);
+  if (smsCommand) {
+    await sendSMS(from, smsCommand).catch(() => {});
+    res.sendStatus(200);
+    return;
+  }
 
   try {
     const result = await runFullClinicalFlow({

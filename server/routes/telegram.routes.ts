@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { telegramSendMessage } from "../services/telegramClient";
+import { handleBotCommand } from "../chat/botCommandHandler";
 import {
   getActiveCaseId,
   setActiveCaseId,
@@ -113,6 +114,12 @@ telegramRouter.post("/webhook", async (req, res) => {
 
     const threadId = String(chatId);
     const text: string = (msg.text ?? "").trim();
+
+    const botCmd = await handleBotCommand(text, chatId);
+    if (botCmd.handled) {
+      await telegramSendMessage({ botToken, chatId, text: botCmd.text });
+      return res.json({ ok: true });
+    }
 
     if (text.toLowerCase() === "/start" || text.toLowerCase() === "/reset") {
       const oldCaseId = await getActiveCaseId({ channel: "telegram", threadId });
