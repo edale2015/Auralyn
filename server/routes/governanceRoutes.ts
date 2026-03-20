@@ -147,6 +147,49 @@ router.post("/api/governance/deploy", requireRole(["admin"]), (req: Request, res
   res.json(version);
 });
 
+import {
+  requireApproval,
+  proposeLearningUpdate,
+  applyApprovedUpdate,
+  rejectUpdate,
+  getPendingModelApprovals,
+  getModelApprovalStats,
+} from "../governance/modelApproval";
+
+router.get("/api/governance/model-approvals", requireRole(["admin", "physician"]), (_req: Request, res: Response) => {
+  res.json({ ok: true, pending: getPendingModelApprovals(), stats: getModelApprovalStats() });
+});
+
+router.post("/api/governance/model-approvals/propose", requireRole(["admin"]), (req: Request, res: Response) => {
+  const { packId, oldAccuracy, newAccuracy, source } = req.body;
+  if (!packId || oldAccuracy === undefined || newAccuracy === undefined) {
+    return res.status(400).json({ error: "packId, oldAccuracy, newAccuracy are required" });
+  }
+  const result = proposeLearningUpdate(packId, oldAccuracy, newAccuracy, source ?? "manual");
+  res.json({ ok: true, result });
+});
+
+router.post("/api/governance/model-approvals/:id/approve", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
+  const { reviewedBy } = req.body;
+  const ok = applyApprovedUpdate(req.params.id, reviewedBy ?? "physician");
+  if (!ok) return res.status(404).json({ error: "Item not found or already resolved" });
+  res.json({ ok: true, applied: req.params.id });
+});
+
+router.post("/api/governance/model-approvals/:id/reject", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
+  const { reviewedBy, reason } = req.body;
+  const ok = rejectUpdate(req.params.id, reviewedBy ?? "physician", reason);
+  if (!ok) return res.status(404).json({ error: "Item not found or already resolved" });
+  res.json({ ok: true, rejected: req.params.id });
+});
+
+router.post("/api/governance/model-approvals/check", requireRole(["admin"]), (req: Request, res: Response) => {
+  const { impact } = req.body;
+  if (impact === undefined) return res.status(400).json({ error: "impact is required" });
+  const result = requireApproval({ oldValue: 0, newValue: impact, impact, source: "manual-check" });
+  res.json({ ok: true, result });
+});
+
 router.post("/api/governance/rollback", requireRole(["admin"]), (req: Request, res: Response) => {
   const { versionId } = req.body;
   if (!versionId) return res.status(400).json({ error: "versionId is required" });

@@ -2,6 +2,7 @@ import { registerHandler, AsyncJob } from "./asyncWorker";
 import { auditStep } from "../audit/auditLogger";
 import { logEngineStatus } from "../monitoring/systemMonitor";
 import { saveSnapshot } from "../snapshots/systemSnapshot";
+import { saveFullSnapshot } from "../snapshots/fullSnapshot";
 import { recordSample } from "../monitoring/dataDrift";
 import { notifyOnCallPhysician } from "../notifications/notifier";
 
@@ -23,7 +24,16 @@ export function initAsyncWorkerHandlers(): void {
   registerHandler("snapshot", async (job: AsyncJob) => {
     const { state, meta, sample } = job.payload;
     await Promise.all([
-      saveSnapshot(state, meta).catch(() => {}),
+      saveFullSnapshot({
+        traceId: meta?.traceId ?? state?.traceId ?? "unknown",
+        patientId: meta?.patientId,
+        complaint: meta?.complaint,
+        input: meta ?? {},
+        weights: state?.weights,
+        safetyLevel: state?.safety?.level,
+        confidence: state?.confidence,
+        autonomyMode: state?.autonomyMode,
+      }).catch(() => saveSnapshot(state, meta).catch(() => {})),
       sample ? Promise.resolve(recordSample(sample)) : Promise.resolve(),
     ]);
   });

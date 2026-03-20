@@ -3,6 +3,8 @@ import { acquireLock, releaseLock } from "../locks/redisLock";
 import { detectDrift } from "../monitoring/dataDrift";
 import { emitEvent } from "../controlTower/eventBus";
 import { runSelfHealing } from "../autonomy/selfHealing";
+import { proposeLearningUpdate } from "../governance/modelApproval";
+import { learnFromOutcomes } from "../learning/outcomeLearningEngine";
 
 const LEARNING_LOCK_KEY = "global_learning_lock";
 const LEARNING_LOCK_TTL = 55_000;
@@ -56,6 +58,23 @@ async function runDriftDetectionSafe() {
   }
 }
 
+const packBaselines: Record<string, number> = {};
+
+async function runModelGovernanceSafe() {
+  try {
+    const insights = learnFromOutcomes();
+    for (const [packId, insight] of Object.entries(insights)) {
+      const baseline = packBaselines[packId];
+      if (baseline !== undefined && Math.abs(insight.accuracy - baseline) > 0.01) {
+        proposeLearningUpdate(packId, baseline, insight.accuracy, "autonomous_loop");
+      }
+      packBaselines[packId] = insight.accuracy;
+    }
+  } catch (e: any) {
+    console.error("[AutonomousLoop] Model governance error:", e?.message);
+  }
+}
+
 export function startAutonomousLoop(intervalMs = 60_000) {
   if (loopInterval) return;
 
@@ -63,7 +82,7 @@ export function startAutonomousLoop(intervalMs = 60_000) {
 
   loopInterval = setInterval(async () => {
     cycleCount++;
-    console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction + drift + self-healing`);
+    console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction + drift + self-healing + model-governance`);
     const [, , , healActions] = await Promise.all([
       runLearningCycleSafe(),
       runPredictionSafe(),
@@ -73,6 +92,7 @@ export function startAutonomousLoop(intervalMs = 60_000) {
     if (healActions.length > 0) {
       console.log(`[AutonomousLoop] Self-heal: ${healActions.length} action(s) taken`);
     }
+    await runModelGovernanceSafe();
   }, intervalMs);
 
   loopInterval.unref?.();
