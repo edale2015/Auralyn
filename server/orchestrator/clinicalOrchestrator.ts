@@ -64,7 +64,7 @@ function validateInput(input: ClinicalInput): ClinicalInput {
 async function runScoring(input: ClinicalInput): Promise<any> {
   const t = Date.now();
   try {
-    const result = await computeScoringSystems(input as any);
+    const result = await computeScoringSystems(input.complaint ?? "unknown", input.answers ?? {});
     await logEngineStatus("scoringSystemsEngine", "healthy", Date.now() - t);
     return result;
   } catch (e: any) {

@@ -183,6 +183,7 @@ const NAV_SECTIONS = [
       { path: "/engine-atlas", label: "Brain Control Tower", icon: Brain },
       { path: "/engines", label: "Engine Control Center", icon: Settings },
       { path: "/patient-queue", label: "Live Patient Queue", icon: Activity },
+      { path: "/stress-test", label: "Stress Test & Metrics", icon: Zap },
     ],
   },
 ];

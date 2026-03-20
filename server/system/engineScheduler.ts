@@ -44,15 +44,15 @@ export function startEngines() {
   if (schedulerStarted) return;
   schedulerStarted = true;
 
-  const learningInterval = setInterval(safeLearningCycle, 60_000);
+  // Learning is already handled by autonomousLoop every 60s — only schedule
+  // prediction (30s) and health monitoring (10s) here to avoid double runs
   const predictionInterval = setInterval(safeFailurePrediction, 30_000);
   const healthInterval = setInterval(safeHealthMonitor, 10_000);
 
-  learningInterval.unref();
   predictionInterval.unref();
   healthInterval.unref();
 
-  console.log("[EngineScheduler] All engines scheduled: learning(60s), prediction(30s), health(10s)");
+  console.log("[EngineScheduler] Engines scheduled: prediction(30s), health(10s) — learning delegated to AutonomousLoop");
 }
 
 export function getEngineRegistry() {
