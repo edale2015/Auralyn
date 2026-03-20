@@ -59,3 +59,12 @@ export function getBufferStats() {
     flushIntervalMs: FLUSH_INTERVAL_MS,
   };
 }
+
+process.on("SIGTERM", () => {
+  console.log("[WriteBuffer] SIGTERM received — flushing log buffer...");
+  flushBuffer().then(() => process.exit(0)).catch(() => process.exit(1));
+});
+
+process.on("SIGINT", () => {
+  flushBuffer().finally(() => process.exit(0));
+});

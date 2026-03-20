@@ -1,6 +1,7 @@
 import { sendSMS } from "../services/smsService";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
+import { shouldSendAlert } from "./redisDeduper";
 
 export type AlertPayload = {
   patientId: string;
@@ -8,16 +9,6 @@ export type AlertPayload = {
   reasons: string[];
   traceId?: string;
 };
-
-const recentAlerts = new Map<string, number>();
-
-function shouldSendAlert(key: string, windowMs = 5 * 60 * 1000): boolean {
-  const now = Date.now();
-  const last = recentAlerts.get(key) ?? 0;
-  if (now - last < windowMs) return false;
-  recentAlerts.set(key, now);
-  return true;
-}
 
 export async function notifyOnCallPhysician(
   payload: AlertPayload
@@ -27,7 +18,7 @@ export async function notifyOnCallPhysician(
   }
 
   const dedupKey = `${payload.patientId}|${payload.riskLevel}|${payload.reasons.join("|")}`;
-  if (!shouldSendAlert(dedupKey)) {
+  if (!(await shouldSendAlert(dedupKey))) {
     console.log("[Notifier] Alert deduped for patient:", payload.patientId);
     return { sent: false, reason: "deduped" };
   }

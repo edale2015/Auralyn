@@ -215,6 +215,9 @@ import stressRoutes from "./stress/stressRoutes";
 import rpaRoutes from "./rpa/rpaRoutes";
 import visionRoutes from "./vision/visionRoutes";
 import queueRoutes from "./queue/queueRoutes";
+import { initControlTowerSocket } from "./controlTower/socket";
+import { startAnomalyEngine } from "./controlTower/anomalyEngine";
+import { startSecretRotation } from "./config/secretRotation";
 import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
@@ -714,6 +717,9 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
       startAutonomousLoop(60_000);
       startEngines();
+      initControlTowerSocket(httpServer);
+      startAnomalyEngine(5000);
+      if (process.env.NODE_ENV === "production") startSecretRotation();
     },
   );
 })();

@@ -1,0 +1,137 @@
+Add distributed lock
+// server/locks/redisLock.ts
+import IORedis from "ioredis";
+
+const redis = new IORedis(process.env.REDIS_URL);
+
+export async function acquireLock(key, ttl = 5000) {
+  return await redis.set(key, "1", "NX", "PX", ttl);
+}
+Use in learning
+if (await acquireLock("learning_lock")) {
+  await runLearningCycle();
+}
+🔴 2. EVENT BUS MEMORY LEAK (CONTROL TOWER)
+Problem
+
+Your event bus:
+
+const listeners = [];
+
+👉 grows forever
+👉 no cleanup
+👉 no backpressure
+
+✅ FIX
+Limit buffer
+const MAX_EVENTS = 1000;
+let events = [];
+
+export function emitEvent(e) {
+  events.push(e);
+
+  if (events.length > MAX_EVENTS) {
+    events.shift();
+  }
+
+  listeners.forEach(l => l(e));
+}
+🔴 3. WEBSOCKET SCALING ISSUE
+Problem
+new WebSocketServer({ port: 8080 });
+
+👉 breaks under:
+
+multiple pods
+
+load balancer
+
+✅ FIX
+
+Use:
+
+Redis pub/sub
+
+or socket.io adapter
+
+Example (Redis pub/sub)
+const sub = new IORedis();
+const pub = new IORedis();
+
+sub.subscribe("events");
+
+sub.on("message", (_, msg) => {
+  wss.clients.forEach(c => c.send(msg));
+});
+🔴 4. AUTONOMY MODE RISK (CRITICAL)
+Problem
+
+You now allow:
+
+if (confidence > 0.85) AUTO
+
+👉 Dangerous edge case:
+
+wrong high-confidence prediction
+
+unsafe autonomous action
+
+✅ FIX (MANDATORY)
+Add dual-threshold safety
+if (confidence > 0.9 && safety.level === "LOW") {
+  return AUTO;
+}
+
+AND:
+
+if (uncertainty > 0.2) {
+  return REVIEW;
+}
+🔴 5. RPA FAILURE HANDLING
+Problem
+
+RPA:
+
+await runBrowserTask(...)
+
+👉 no retry
+👉 no fallback
+👉 no timeout
+
+✅ FIX
+await withRetry(() => runBrowserTask(task), 2);
+
+AND:
+
+await Promise.race([
+  runBrowserTask(task),
+  new Promise((_, r) => setTimeout(() => r("timeout"), 5000))
+]);
+🟡 MEDIUM ISSUES
+⚠️ 6. WRITE BUFFER DATA LOSS
+
+If server crashes:
+👉 buffered logs are lost
+
+Fix:
+
+flush on shutdown
+
+process.on("SIGTERM", flushBuffer);
+⚠️ 7. CACHE MEMORY GROWTH
+
+LRU exists ✔️
+BUT:
+
+no global memory cap across pods
+
+👉 acceptable for now
+
+⚠️ 8. JWT EXPIRATION HANDLING
+
+You validate JWT ✔️
+BUT:
+
+no refresh token flow
+
+👉 add later

@@ -9,6 +9,10 @@ import { createTraceId, auditStep } from "../audit/auditLogger";
 import { generateClinicalExplanation } from "../explainability/explainableAIEngine";
 import { logEngineStatus } from "../monitoring/systemMonitor";
 import { notifyOnCallPhysician } from "../notifications/notifier";
+import { executeActions } from "./executionLayer";
+import { autonomyDecision } from "../autonomy/autonomyEngine";
+import { executeAutonomousCare } from "../autonomy/autoActions";
+import { emitEvent } from "../controlTower/eventBus";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -201,6 +205,29 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     });
     await auditStep({ traceId, step: "EXPLANATION", input: null, output: explanation });
 
+    const confidence = scores?.confidence ?? 0;
+    const autoDecision = autonomyDecision({ safety: safetyGate, confidence });
+
+    let executionResults: any[] = [];
+    if (autoDecision.mode === "AUTO") {
+      executeAutonomousCare({
+        patientId: input.patientId,
+        phone: (input.metadata as any)?.phone,
+        followUp: `Your assessment is complete. ${explanation?.summary ?? "Take rest and fluids. Seek care if symptoms worsen."}`,
+      }).catch(console.error);
+    } else if (autoDecision.mode === "ESCALATE") {
+      notifyOnCallPhysician({
+        patientId: input.patientId ?? "unknown",
+        riskLevel: "HIGH",
+        reasons: safetyGate.reasons,
+        traceId,
+      }).catch(console.error);
+    }
+
+    if ((validated.metadata as any)?.executionSteps?.length) {
+      executionResults = await executeActions({ steps: (validated.metadata as any).executionSteps }).catch(() => []);
+    }
+
     triggerLearning(validated.complaint, scores).catch(console.error);
 
     import("../engines/unifiedOutcomeLearning").then(({ recordOutcome, runLearningCycle }) => {
@@ -219,7 +246,13 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: true });
     await logEngineStatus("clinicalOrchestrator", "healthy", latencyMs);
 
-    const result: ClinicalFlowResult & { id: string } = {
+    emitEvent({
+      type: "PATIENT_FLOW",
+      payload: { patientId: input.patientId, complaint: validated.complaint, safetyGate, confidence, autonomyMode: autoDecision.mode, latency: latencyMs },
+      timestamp: Date.now(),
+    });
+
+    const result: ClinicalFlowResult & { id: string; autonomy?: any; executionResults?: any[] } = {
       id, traceId,
       success: true,
       patientId: input.patientId,
@@ -231,6 +264,8 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
       learningTriggered: true,
       latencyMs,
       timestamp: new Date().toISOString(),
+      autonomy: autoDecision,
+      executionResults: executionResults.length ? executionResults : undefined,
     };
 
     flowLog.push(result);

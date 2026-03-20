@@ -1,0 +1,208 @@
+🧠 CONTROL TOWER ARCHITECTURE
+System Events → Event Bus → Aggregator → WebSocket → Dashboard
+                                ↓
+                         Anomaly Engine
+                                ↓
+                         Alerts + Insights
+🚀 PART 1 — EVENT BUS (THE NERVOUS SYSTEM)
+
+Everything must emit events.
+
+📁 server/controlTower/eventBus.ts
+type Event = {
+  type: string;
+  payload: any;
+  timestamp: number;
+};
+
+const listeners: Function[] = [];
+
+export function emitEvent(event: Event) {
+  for (const l of listeners) l(event);
+}
+
+export function subscribe(fn: Function) {
+  listeners.push(fn);
+}
+🔥 CONNECT TO ORCHESTRATOR
+import { emitEvent } from "../controlTower/eventBus";
+
+emitEvent({
+  type: "PATIENT_FLOW",
+  payload: {
+    input,
+    diagnosis,
+    safety: safetyGate
+  },
+  timestamp: Date.now()
+});
+📡 PART 2 — AGGREGATOR ENGINE
+
+Collects system-wide state.
+
+📁 server/controlTower/aggregator.ts
+const state = {
+  patients: [],
+  errors: [],
+  engines: {},
+  alerts: []
+};
+
+export function updateState(event) {
+  if (event.type === "PATIENT_FLOW") {
+    state.patients.push(event.payload);
+  }
+
+  if (event.type === "ERROR") {
+    state.errors.push(event.payload);
+  }
+
+  if (event.type === "ENGINE_STATUS") {
+    state.engines[event.payload.name] = event.payload.status;
+  }
+
+  if (event.type === "ALERT") {
+    state.alerts.push(event.payload);
+  }
+}
+
+export function getState() {
+  return state;
+}
+🔗 CONNECT BUS → AGGREGATOR
+import { subscribe } from "./eventBus";
+import { updateState } from "./aggregator";
+
+subscribe(updateState);
+🌐 PART 3 — REAL-TIME STREAM (WEBSOCKET)
+📁 server/controlTower/socket.ts
+import { WebSocketServer } from "ws";
+import { getState } from "./aggregator";
+import { subscribe } from "./eventBus";
+
+const wss = new WebSocketServer({ port: 8080 });
+
+subscribe(() => {
+  const state = JSON.stringify(getState());
+
+  wss.clients.forEach(client => {
+    if (client.readyState === 1) {
+      client.send(state);
+    }
+  });
+});
+🧠 PART 4 — ANOMALY DETECTION ENGINE
+📁 server/controlTower/anomalyEngine.ts
+import { emitEvent } from "./eventBus";
+
+export function detectAnomalies(state) {
+  if (state.errors.length > 10) {
+    emitEvent({
+      type: "ALERT",
+      payload: { message: "High error volume detected" },
+      timestamp: Date.now()
+    });
+  }
+
+  const highRisk = state.patients.filter(p => p.safety?.level === "HIGH");
+
+  if (highRisk.length > 5) {
+    emitEvent({
+      type: "ALERT",
+      payload: { message: "Spike in HIGH-risk patients" },
+      timestamp: Date.now()
+    });
+  }
+}
+RUN LOOP
+setInterval(() => {
+  const state = getState();
+  detectAnomalies(state);
+}, 5000);
+🖥️ PART 5 — FRONTEND CONTROL TOWER
+📁 client/components/ControlTower.tsx
+import { useEffect, useState } from "react";
+
+export function ControlTower() {
+  const [state, setState] = useState(null);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:8080");
+
+    ws.onmessage = (msg) => {
+      setState(JSON.parse(msg.data));
+    };
+
+    return () => ws.close();
+  }, []);
+
+  if (!state) return <div>Loading...</div>;
+
+  return (
+    <div>
+      <h2>System Control Tower</h2>
+
+      <h3>Patients</h3>
+      <p>{state.patients.length}</p>
+
+      <h3>Errors</h3>
+      <p>{state.errors.length}</p>
+
+      <h3>Alerts</h3>
+      {state.alerts.map((a, i) => (
+        <div key={i}>{a.message}</div>
+      ))}
+
+      <h3>Engines</h3>
+      {Object.entries(state.engines).map(([k, v]) => (
+        <div key={k}>
+          {k}: {v === "healthy" ? "🟢" : "🔴"}
+        </div>
+      ))}
+    </div>
+  );
+}
+📊 PART 6 — GLOBAL METRICS PANEL
+📁 client/components/SystemMetrics.tsx
+export function SystemMetrics({ state }) {
+  const avgLatency =
+    state.patients.reduce((a, p) => a + (p.latency || 0), 0) /
+    (state.patients.length || 1);
+
+  return (
+    <div>
+      <h3>Avg Latency: {Math.round(avgLatency)} ms</h3>
+      <h3>Active Patients: {state.patients.length}</h3>
+    </div>
+  );
+}
+🎛️ PART 7 — COMMAND PANEL (CONTROL SYSTEM)
+📁 client/components/CommandPanel.tsx
+export function CommandPanel() {
+  const runStress = () => {
+    fetch("/api/stress/run", { method: "POST" });
+  };
+
+  return (
+    <div>
+      <button onClick={runStress}>Run Stress Test</button>
+
+      <button onClick={() =>
+        fetch("/api/outcome/learning/run", { method: "POST" })
+      }>
+        Run Learning Cycle
+      </button>
+    </div>
+  );
+}
+🧠 FINAL CONTROL TOWER CAPABILITIES
+
+You now have:
+
+🟢 Real-time patient tracking
+🟢 Live engine health map
+🟢 Alert system (visual + backend)
+🟢 Anomaly detection
+🟢 WebSocket streaming
+🟢 Global metrics
+🟢 Command controls

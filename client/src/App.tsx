@@ -123,6 +123,7 @@ import PackSimulatorPage from "@/pages/PackSimulatorPage";
 import PackQuestionsAdminPage from "@/pages/PackQuestionsAdminPage";
 import PackAuditLogPage from "@/pages/PackAuditLogPage";
 import CoverageDashboard from "@/pages/CoverageDashboard";
+import ControlTowerPage from "@/pages/ControlTowerPage";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -255,6 +256,7 @@ function Router() {
       <Route path="/coverage-dashboard">{() => <AdminPage component={CoverageDashboard} />}</Route>
       <Route path="/physician-dashboard">{() => <AdminPage component={PhysicianDashboard} />}</Route>
       <Route path="/executive-dashboard">{() => <AdminPage component={ExecutiveDashboard} />}</Route>
+      <Route path="/control-tower">{() => <AdminPage component={ControlTowerPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );
