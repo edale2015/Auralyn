@@ -256,5 +256,12 @@ export const insertSystemSnapshotSchema = createInsertSchema(systemSnapshots).om
 export type InsertSystemSnapshot = z.infer<typeof insertSystemSnapshotSchema>;
 export type SystemSnapshot = typeof systemSnapshots.$inferSelect;
 
+// Idempotency keys — prevent duplicate POSTs from retries or ALB replays
+export const idempotencyKeys = pgTable("idempotency_keys", {
+  key: text("key").primaryKey(),
+  response: jsonb("response").notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 // Re-export chat models for OpenAI integration
 export * from "./models/chat";

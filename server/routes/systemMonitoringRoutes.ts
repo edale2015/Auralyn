@@ -11,6 +11,7 @@ import { getAllBreakerStates, openAIBreaker, dbBreaker, twilioBreaker, scoringBr
 import { getModelVersions } from "../engines/unifiedOutcomeLearning";
 import { detectDrift, getBaselineSnapshot, getDriftSampleCount, resetBaseline } from "../monitoring/dataDrift";
 import { getRecentSnapshots } from "../snapshots/systemSnapshot";
+import { checkSLO } from "../monitoring/slo";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -95,6 +96,16 @@ router.post("/circuit-reset", auth, (req: Request, res: Response) => {
   } else {
     res.status(400).json({ ok: false, error: `Unknown breaker '${name}'. Valid: ${Object.keys(map).join(", ")}` });
   }
+});
+
+router.get("/slo", requireRole(["admin", "physician"]), (_req: Request, res: Response) => {
+  const metrics = getMetrics() as { p95Latency: number; errorRate: number; totalRequests: number };
+  const result = checkSLO({
+    p95Latency: metrics.p95Latency,
+    errorRate: metrics.errorRate,
+    totalRequests: metrics.totalRequests,
+  });
+  res.json({ ok: true, ...result });
 });
 
 router.get("/model-versions", auth, async (req: Request, res: Response) => {

@@ -1,0 +1,289 @@
+1) 🔁 Idempotency for all write endpoints (prevent duplicates)
+
+Why: retries (client, ALB, queue) can create duplicate sessions, alerts, or approvals.
+
+Middleware
+// server/middleware/idempotency.ts
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+export async function idempotency(req, res, next) {
+  const key = req.headers["idempotency-key"];
+  if (!key) return next();
+
+  const found = await db.execute(sql`
+    SELECT response FROM idempotency_keys WHERE key = ${key} LIMIT 1
+  `);
+
+  if (found.rows[0]) {
+    return res.json(found.rows[0].response);
+  }
+
+  res._send = res.json;
+  res.json = async (body) => {
+    await db.execute(sql`
+      INSERT INTO idempotency_keys (key, response)
+      VALUES (${key}, ${JSON.stringify(body)}::jsonb)
+    `);
+    return res._send(body);
+  };
+
+  next();
+}
+Table
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT PRIMARY KEY,
+  response JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+Apply
+app.use("/api/patients/session", idempotency);
+app.use("/api/patients/approve", idempotency);
+2) 🧯 Graceful degradation matrix (not just one fallback)
+
+Why: different failures need different safe responses.
+
+// server/fallback/degradationMatrix.ts
+export function degrade(err) {
+  if (err.message.includes("Circuit open")) {
+    return { message: "Temporarily unavailable. Try again shortly.", safe: true };
+  }
+  if (err.message.includes("database")) {
+    return { message: "System busy. Seek care if symptoms worsen.", safe: true };
+  }
+  return { message: "Issue detected. Clinician will review.", safe: true };
+}
+
+Use in orchestrator catch:
+
+} catch (e) {
+  return degrade(e);
+}
+3) 🧪 Contract tests for every public API (catch drift)
+
+Why: you have many panels + routes; protect them from breaking.
+
+// tests/contracts/patients.contract.test.ts
+import request from "supertest";
+import app from "../../server/app";
+
+it("POST /api/patients/session shape", async () => {
+  const res = await request(app).post("/api/patients/session").send({ age: 30 });
+  expect(res.body).toHaveProperty("success");
+  expect(res.body).toHaveProperty("traceId");
+});
+4) 🧮 SLOs + alert thresholds (Control Tower becomes actionable)
+
+Why: turn metrics into decisions.
+
+// server/monitoring/slo.ts
+export const SLO = {
+  latencyP95: 1200,
+  errorRate: 0.05,
+};
+
+export function checkSLO(metrics) {
+  const alerts = [];
+  if (metrics.p95 > SLO.latencyP95) alerts.push("Latency SLO breached");
+  if (metrics.errorRate > SLO.errorRate) alerts.push("Error SLO breached");
+  return alerts;
+}
+
+Emit to Control Tower as ALERT events.
+
+5) 🧾 PII boundary enforcement (no PHI leaves server accidentally)
+
+Why: you already sanitize logs; enforce at API boundary too.
+
+// server/middleware/phiBoundary.ts
+import { sanitizeForLog } from "../utils/phiSanitizer";
+
+export function phiBoundary(req, res, next) {
+  res._json = res.json;
+  res.json = (body) => {
+    if (process.env.NODE_ENV === "production") {
+      // ensure no PHI leaks in public endpoints
+      const sanitized = sanitizeForLog(body);
+      return res._json(sanitized);
+    }
+    return res._json(body);
+  };
+  next();
+}
+
+Apply to public routes (SMS/web intake responses).
+
+🎛️ YOUR PANELS — WHAT EACH ONE IS FOR
+
+Think of your UI like a cockpit. Here’s how to use each panel:
+
+1) 🟢 Patient Queue (/patient-queue)
+
+Purpose: Day-to-day operations
+You do:
+
+review pending
+
+approve/override/escalate
+
+watch risk badges + safety flags
+
+2) 🧠 Control Tower (global dashboard)
+
+Purpose: System health + awareness
+You do:
+
+watch alerts (HIGH-risk spikes, failures)
+
+check engine health (🟢/🔴)
+
+view active patients + errors
+
+act on anomaly alerts
+
+3) ⚙️ Engine Control Center (/engines)
+
+Purpose: Manual control / debugging
+You do:
+
+run learning cycle
+
+check circuit breakers
+
+trigger simulations
+
+verify each engine is alive
+
+4) 📊 Health / Monitoring
+
+Purpose: SLO + infra status
+You do:
+
+check DB pass/fail
+
+latency, error rate
+
+circuit breaker states
+
+drift status
+
+5) 🔮 Simulation / Digital Twin
+
+Purpose: Test without risk
+You do:
+
+run scenarios (e.g., chest pain + age 70)
+
+compare outcomes
+
+validate safety + diagnosis
+
+6) 🔍 Trace Replay
+
+Purpose: Explainability + debugging
+You do:
+
+open a traceId
+
+step through: validation → safety → scoring → diagnosis → billing → explanation
+
+verify correctness
+
+7) 🧾 Compliance / Audit
+
+Purpose: Legal + FDA posture
+You do:
+
+review audit chain (hash-linked)
+
+inspect approvals/overrides
+
+export logs if needed
+
+8) 📈 Stress Test
+
+Purpose: Capacity + failure behavior
+You do:
+
+run 100–500 patients
+
+check P95 latency, failures
+
+watch Control Tower during load
+
+9) 💬 SMS Tab
+
+Purpose: Real-world intake simulation
+You do:
+
+test patient messages
+
+verify parsing → orchestrator → response
+
+📱 TELEGRAM + WHATSAPP “PANELS” (LIKE CLAWD)
+
+Yes—you can expose each panel as a chat command set. Think of chat as a remote CLI for your system.
+
+Core idea
+
+Map commands → your existing APIs.
+
+🟢 Telegram Bot (Node)
+Setup
+npm install node-telegram-bot-api
+Bot
+// server/chat/telegramBot.ts
+import TelegramBot from "node-telegram-bot-api";
+import fetch from "node-fetch";
+
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+
+// Patient queue
+bot.onText(/\/queue/, async (msg) => {
+  const res = await fetch("http://localhost:3000/api/patients/queue?limit=10");
+  const data = await res.json();
+
+  bot.sendMessage(msg.chat.id, JSON.stringify(data, null, 2));
+});
+
+// Approve
+bot.onText(/\/approve (.+)/, async (msg, match) => {
+  const id = match[1];
+  await fetch(`http://localhost:3000/api/patients/approve/${id}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.BOT_JWT}` }
+  });
+  bot.sendMessage(msg.chat.id, `Approved ${id}`);
+});
+
+// Health
+bot.onText(/\/health/, async (msg) => {
+  const res = await fetch("http://localhost:3000/api/monitoring/health");
+  bot.sendMessage(msg.chat.id, JSON.stringify(await res.json(), null, 2));
+});
+🟢 WhatsApp (Twilio)
+
+Use your existing webhook:
+
+// extend /api/clinical/sms/webhook
+if (incoming.startsWith("/queue")) {
+  const data = await getSessions(5, 0);
+  await sendSMS(from, JSON.stringify(data));
+}
+🧠 Suggested Command Map
+Panel	Telegram/WhatsApp Command
+Patient Queue	/queue
+Approve	/approve {id}
+Override	/override {id}
+Health	/health
+Control Tower Alerts	/alerts
+Run Simulation	/simulate cough 5days
+Run Learning	/learn
+Circuit Status	/circuits
+🔐 Security for chat access (important)
+
+Issue bot-specific JWT with limited scope
+
+Restrict by chat ID whitelist
+
+if (!ALLOWED_CHAT_IDS.includes(msg.chat.id)) return;

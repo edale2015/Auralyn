@@ -17,6 +17,7 @@ import { executeAutonomousCare } from "../autonomy/autoActions";
 import { emitEvent } from "../controlTower/eventBus";
 import { scoringBreaker } from "../utils/circuitBreaker";
 import { safeFallbackResponse } from "../fallback/fallbackEngine";
+import { degrade } from "../fallback/degradationMatrix";
 import { saveSnapshot } from "../snapshots/systemSnapshot";
 import { recordSample } from "../monitoring/dataDrift";
 import { getQueueStats } from "../queue/patientQueue";
@@ -362,12 +363,17 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
         timestamp: new Date().toISOString(),
       };
     } else {
-      const fallback = safeFallbackResponse(input, err.message);
+      const degraded = degrade(err);
       result = {
-        ...fallback,
-        id,
-        traceId,
+        id, traceId,
+        success: false,
+        fallback: true,
         complaint: input.complaint ?? "unknown",
+        disposition: "escalate",
+        message: degraded.message,
+        degradedReason: degraded.reason,
+        safe: degraded.safe,
+        learningTriggered: false,
         latencyMs,
         timestamp: new Date().toISOString(),
       };
