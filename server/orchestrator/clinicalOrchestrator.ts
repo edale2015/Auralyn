@@ -12,9 +12,15 @@ import { notifyOnCallPhysician } from "../notifications/notifier";
 import { executeActions } from "./executionLayer";
 import { autonomyDecision } from "../autonomy/autonomyEngine";
 import { applySecondOpinionGate } from "../autonomy/secondOpinion";
+import { applyGuardrailGate } from "../safety/guardrailEngine";
 import { executeAutonomousCare } from "../autonomy/autoActions";
 import { emitEvent } from "../controlTower/eventBus";
 import { scoringBreaker } from "../utils/circuitBreaker";
+import { safeFallbackResponse } from "../fallback/fallbackEngine";
+import { saveSnapshot } from "../snapshots/systemSnapshot";
+import { recordSample } from "../monitoring/dataDrift";
+import { getQueueStats } from "../queue/patientQueue";
+import { getAllBreakerStates } from "../utils/circuitBreaker";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -212,7 +218,21 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     const confidence = scores?.confidence ?? 0;
     const uncertainty = scores?.uncertainty ?? 0.5;
     const rawDecision = autonomyDecision({ safety: safetyGate, confidence, uncertainty });
-    const autoDecision = applySecondOpinionGate(rawDecision, scores ?? {});
+    const secondOpinionDecision = applySecondOpinionGate(rawDecision, scores ?? {});
+
+    const guardrailInput = {
+      diagnosis: scores?.primaryDiagnosis,
+      meds: validated.answers?.medications ?? validated.answers?.meds ?? [],
+      answers: validated.answers,
+      complaint: validated.complaint,
+    };
+    const guardrailDecision = applyGuardrailGate(secondOpinionDecision, guardrailInput);
+
+    const explanationReasoningDepth = (explanation?.reasoning?.length ?? 0) + (explanation?.differentialSummary?.length ?? 0);
+    const explanationIsThin = explanationReasoningDepth < 3 || (explanation?.summary?.length ?? 0) < 40;
+    const autoDecision = (confidence >= 0.9 && explanationIsThin && guardrailDecision.mode === "AUTO")
+      ? { mode: "REVIEW" as const, reason: `Explainability confidence gap: confidence ${(confidence * 100).toFixed(0)}% but explanation depth insufficient (${explanationReasoningDepth} reasoning points) — routing to physician` }
+      : guardrailDecision;
 
     let executionResults: any[] = [];
     if (autoDecision.mode === "AUTO") {
@@ -294,6 +314,28 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
       executionResults: executionResults.length ? executionResults : undefined,
     };
 
+    recordSample({
+      ageYears: validated.answers?.ageYears ?? validated.answers?.age,
+      confidence,
+      complaint: validated.complaint,
+    });
+
+    saveSnapshot(
+      {
+        weights: undefined,
+        safety: safetyGate,
+        diagnosis: scores?.primaryDiagnosis,
+        confidence,
+        autonomyMode: autoDecision.mode,
+        queueDepth: getQueueStats().queueDepth,
+        circuitBreakers: getAllBreakerStates(),
+        billing,
+        traceId,
+        scores,
+      },
+      { traceId, patientId: input.patientId, complaint: validated.complaint }
+    ).catch(() => {});
+
     flowLog.push(result);
     if (flowLog.length > 500) flowLog.shift();
 
@@ -305,15 +347,31 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: false, error: err.message });
     await logEngineStatus("clinicalOrchestrator", "error", latencyMs, err.message).catch(() => {});
 
-    const result: ClinicalFlowResult & { id: string } = {
-      id, traceId,
-      success: false,
-      complaint: input.complaint ?? "unknown",
-      error: err.message,
-      learningTriggered: false,
-      latencyMs,
-      timestamp: new Date().toISOString(),
-    };
+    const isSafetyBlock = typeof err.message === "string" && err.message.startsWith("SAFETY BLOCK");
+
+    let result: ClinicalFlowResult & { id: string };
+
+    if (isSafetyBlock) {
+      result = {
+        id, traceId,
+        success: false,
+        complaint: input.complaint ?? "unknown",
+        error: err.message,
+        learningTriggered: false,
+        latencyMs,
+        timestamp: new Date().toISOString(),
+      };
+    } else {
+      const fallback = safeFallbackResponse(input, err.message);
+      result = {
+        ...fallback,
+        id,
+        traceId,
+        complaint: input.complaint ?? "unknown",
+        latencyMs,
+        timestamp: new Date().toISOString(),
+      };
+    }
 
     flowLog.push(result);
     if (flowLog.length > 500) flowLog.shift();

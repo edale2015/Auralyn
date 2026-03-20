@@ -240,5 +240,21 @@ export const alertLogs = pgTable("alert_logs", {
 });
 export type AlertLog = typeof alertLogs.$inferSelect;
 
+// Full system snapshots — replayable decision state
+export const systemSnapshots = pgTable("system_snapshots", {
+  id: serial("id").primaryKey(),
+  traceId: text("trace_id"),
+  patientId: text("patient_id"),
+  state: jsonb("state").notNull(),
+  complaint: text("complaint"),
+  autonomyMode: text("autonomy_mode"),
+  safetyLevel: text("safety_level"),
+  confidence: real("confidence"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertSystemSnapshotSchema = createInsertSchema(systemSnapshots).omit({ id: true, createdAt: true });
+export type InsertSystemSnapshot = z.infer<typeof insertSystemSnapshotSchema>;
+export type SystemSnapshot = typeof systemSnapshots.$inferSelect;
+
 // Re-export chat models for OpenAI integration
 export * from "./models/chat";

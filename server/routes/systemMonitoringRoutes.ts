@@ -9,6 +9,8 @@ import { getLoopStats } from "../system/autonomousLoop";
 import { analyzeSystemHealth } from "../controlTower/systemOptimizer";
 import { getAllBreakerStates, openAIBreaker, dbBreaker, twilioBreaker, scoringBreaker } from "../utils/circuitBreaker";
 import { getModelVersions } from "../engines/unifiedOutcomeLearning";
+import { detectDrift, getBaselineSnapshot, getDriftSampleCount, resetBaseline } from "../monitoring/dataDrift";
+import { getRecentSnapshots } from "../snapshots/systemSnapshot";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -100,6 +102,35 @@ router.get("/model-versions", auth, async (req: Request, res: Response) => {
     const limit = Number(req.query.limit) || 20;
     const versions = await getModelVersions(limit);
     res.json({ ok: true, versions });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.get("/data-drift", requireRole(["admin", "physician"]), async (_req: Request, res: Response) => {
+  try {
+    const report = await detectDrift();
+    res.json({
+      ok: true,
+      ...report,
+      baseline: getBaselineSnapshot(),
+      sampleCount: getDriftSampleCount(),
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.post("/data-drift/reset-baseline", auth, (_req: Request, res: Response) => {
+  resetBaseline();
+  res.json({ ok: true, message: "Drift baseline reset — will re-establish from next 50 patient samples" });
+});
+
+router.get("/snapshots", auth, async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 20;
+    const snapshots = await getRecentSnapshots(limit);
+    res.json({ ok: true, snapshots });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }

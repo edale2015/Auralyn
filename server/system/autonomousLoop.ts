@@ -1,5 +1,7 @@
 import { predictFailures } from "../monitoring/predictiveEngine";
 import { acquireLock, releaseLock } from "../locks/redisLock";
+import { detectDrift } from "../monitoring/dataDrift";
+import { emitEvent } from "../controlTower/eventBus";
 
 const LEARNING_LOCK_KEY = "global_learning_lock";
 const LEARNING_LOCK_TTL = 55_000;
@@ -21,6 +23,7 @@ async function runLearningCycleSafe() {
     await runLearningCycle();
   } catch (e: any) {
     console.error("[AutonomousLoop] Learning cycle error:", e?.message ?? e);
+    emitEvent({ type: "ERROR", payload: { source: "learningCycle", error: e?.message }, timestamp: Date.now() });
   } finally {
     await releaseLock(LEARNING_LOCK_KEY);
   }
@@ -39,15 +42,28 @@ async function runPredictionSafe() {
   }
 }
 
+async function runDriftDetectionSafe() {
+  try {
+    const report = await detectDrift();
+    if (report.drift) {
+      console.warn(`[AutonomousLoop] Data drift detected: ${report.summary}`);
+    }
+    return report;
+  } catch (e: any) {
+    console.error("[AutonomousLoop] Drift detection error:", e?.message ?? e);
+    return null;
+  }
+}
+
 export function startAutonomousLoop(intervalMs = 60_000) {
   if (loopInterval) return;
 
-  console.log(`[AutonomousLoop] Starting autonomous learning + failure prediction loop (every ${intervalMs / 1000}s)`);
+  console.log(`[AutonomousLoop] Starting autonomous learning + failure prediction + drift detection loop (every ${intervalMs / 1000}s)`);
 
   loopInterval = setInterval(async () => {
     cycleCount++;
-    console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction`);
-    await Promise.all([runLearningCycleSafe(), runPredictionSafe()]);
+    console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction + drift`);
+    await Promise.all([runLearningCycleSafe(), runPredictionSafe(), runDriftDetectionSafe()]);
   }, intervalMs);
 
   loopInterval.unref?.();
