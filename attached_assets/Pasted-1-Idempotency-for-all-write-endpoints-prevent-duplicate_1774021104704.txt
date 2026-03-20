@@ -1,0 +1,114 @@
+1) 🔁 Idempotency for all write endpoints (prevent duplicates)
+
+Why: retries (client, ALB, queue) can create duplicate sessions, alerts, or approvals.
+
+Middleware
+// server/middleware/idempotency.ts
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+export async function idempotency(req, res, next) {
+  const key = req.headers["idempotency-key"];
+  if (!key) return next();
+
+  const found = await db.execute(sql`
+    SELECT response FROM idempotency_keys WHERE key = ${key} LIMIT 1
+  `);
+
+  if (found.rows[0]) {
+    return res.json(found.rows[0].response);
+  }
+
+  res._send = res.json;
+  res.json = async (body) => {
+    await db.execute(sql`
+      INSERT INTO idempotency_keys (key, response)
+      VALUES (${key}, ${JSON.stringify(body)}::jsonb)
+    `);
+    return res._send(body);
+  };
+
+  next();
+}
+Table
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT PRIMARY KEY,
+  response JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+Apply
+app.use("/api/patients/session", idempotency);
+app.use("/api/patients/approve", idempotency);
+2) 🧯 Graceful degradation matrix (not just one fallback)
+
+Why: different failures need different safe responses.
+
+// server/fallback/degradationMatrix.ts
+export function degrade(err) {
+  if (err.message.includes("Circuit open")) {
+    return { message: "Temporarily unavailable. Try again shortly.", safe: true };
+  }
+  if (err.message.includes("database")) {
+    return { message: "System busy. Seek care if symptoms worsen.", safe: true };
+  }
+  return { message: "Issue detected. Clinician will review.", safe: true };
+}
+
+Use in orchestrator catch:
+
+} catch (e) {
+  return degrade(e);
+}
+3) 🧪 Contract tests for every public API (catch drift)
+
+Why: you have many panels + routes; protect them from breaking.
+
+// tests/contracts/patients.contract.test.ts
+import request from "supertest";
+import app from "../../server/app";
+
+it("POST /api/patients/session shape", async () => {
+  const res = await request(app).post("/api/patients/session").send({ age: 30 });
+  expect(res.body).toHaveProperty("success");
+  expect(res.body).toHaveProperty("traceId");
+});
+4) 🧮 SLOs + alert thresholds (Control Tower becomes actionable)
+
+Why: turn metrics into decisions.
+
+// server/monitoring/slo.ts
+export const SLO = {
+  latencyP95: 1200,
+  errorRate: 0.05,
+};
+
+export function checkSLO(metrics) {
+  const alerts = [];
+  if (metrics.p95 > SLO.latencyP95) alerts.push("Latency SLO breached");
+  if (metrics.errorRate > SLO.errorRate) alerts.push("Error SLO breached");
+  return alerts;
+}
+
+Emit to Control Tower as ALERT events.
+
+5) 🧾 PII boundary enforcement (no PHI leaves server accidentally)
+
+Why: you already sanitize logs; enforce at API boundary too.
+
+// server/middleware/phiBoundary.ts
+import { sanitizeForLog } from "../utils/phiSanitizer";
+
+export function phiBoundary(req, res, next) {
+  res._json = res.json;
+  res.json = (body) => {
+    if (process.env.NODE_ENV === "production") {
+      // ensure no PHI leaks in public endpoints
+      const sanitized = sanitizeForLog(body);
+      return res._json(sanitized);
+    }
+    return res._json(body);
+  };
+  next();
+}
+
+Apply to public routes (SMS/web intake responses).
