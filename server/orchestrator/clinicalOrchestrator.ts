@@ -206,7 +206,8 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     await auditStep({ traceId, step: "EXPLANATION", input: null, output: explanation });
 
     const confidence = scores?.confidence ?? 0;
-    const autoDecision = autonomyDecision({ safety: safetyGate, confidence });
+    const uncertainty = scores?.uncertainty ?? 0.5;
+    const autoDecision = autonomyDecision({ safety: safetyGate, confidence, uncertainty });
 
     let executionResults: any[] = [];
     if (autoDecision.mode === "AUTO") {
@@ -214,21 +215,33 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
         patientId: input.patientId,
         phone: (input.metadata as any)?.phone,
         followUp: `Your assessment is complete. ${explanation?.summary ?? "Take rest and fluids. Seek care if symptoms worsen."}`,
-      }).catch(console.error);
+      }).catch((e: any) => {
+        console.error("[Orchestrator] AUTO care delivery failed:", e?.message);
+        emitEvent({ type: "ERROR", payload: { source: "autoCare", patientId: input.patientId, error: e?.message }, timestamp: Date.now() });
+      });
     } else if (autoDecision.mode === "ESCALATE") {
       notifyOnCallPhysician({
         patientId: input.patientId ?? "unknown",
         riskLevel: "HIGH",
         reasons: safetyGate.reasons,
         traceId,
-      }).catch(console.error);
+      }).catch((e: any) => {
+        console.error("[Orchestrator] On-call physician notification FAILED:", e?.message);
+        emitEvent({
+          type: "ALERT",
+          payload: { message: `On-call SMS failed for patient ${input.patientId}: ${e?.message}`, severity: "CRITICAL", patientId: input.patientId },
+          timestamp: Date.now(),
+        });
+      });
     }
 
     if ((validated.metadata as any)?.executionSteps?.length) {
       executionResults = await executeActions({ steps: (validated.metadata as any).executionSteps }).catch(() => []);
     }
 
-    triggerLearning(validated.complaint, scores).catch(console.error);
+    triggerLearning(validated.complaint, scores).catch((e: any) => {
+      console.error("[Orchestrator] Learning trigger failed:", e?.message);
+    });
 
     import("../engines/unifiedOutcomeLearning").then(({ recordOutcome, runLearningCycle }) => {
       recordOutcome({
@@ -237,8 +250,18 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
         actual: null,
         input: validated.answers ?? {},
         correct: null,
-      }).then(() => runLearningCycle().catch(() => {})).catch(() => {});
-    }).catch(() => {});
+      }).then(() =>
+        runLearningCycle().catch((e: any) => {
+          console.error("[Orchestrator] Learning cycle failed:", e?.message);
+          emitEvent({ type: "ERROR", payload: { source: "learningCycle", error: e?.message }, timestamp: Date.now() });
+        })
+      ).catch((e: any) => {
+        console.error("[Orchestrator] Outcome recording failed:", e?.message);
+        emitEvent({ type: "ERROR", payload: { source: "outcomeRecording", error: e?.message }, timestamp: Date.now() });
+      });
+    }).catch((e: any) => {
+      console.error("[Orchestrator] Failed to import learning module:", e?.message);
+    });
 
     const latencyMs = Date.now() - start;
     totalLatency += latencyMs;

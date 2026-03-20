@@ -1,3 +1,6 @@
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+
 export interface HealthStatus {
   status: "healthy" | "degraded" | "unhealthy";
   uptime: number;
@@ -19,9 +22,41 @@ export async function runHealthChecks(): Promise<HealthStatus> {
     message: `Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB`,
   });
 
-  checks.push({ name: "uptime", status: "pass", durationMs: 0, message: `${Math.round((Date.now() - startTime) / 1000)}s` });
+  checks.push({
+    name: "uptime",
+    status: "pass",
+    durationMs: 0,
+    message: `${Math.round((Date.now() - startTime) / 1000)}s`,
+  });
 
-  const overallStatus = checks.every((c) => c.status === "pass") ? "healthy" : checks.some((c) => c.status === "fail") ? "unhealthy" : "degraded";
+  const dbStart = Date.now();
+  try {
+    await db.execute(sql`SELECT 1`);
+    checks.push({
+      name: "database",
+      status: "pass",
+      durationMs: Date.now() - dbStart,
+      message: "Postgres connected",
+    });
+  } catch (e: any) {
+    checks.push({
+      name: "database",
+      status: "fail",
+      durationMs: Date.now() - dbStart,
+      message: `Postgres error: ${e?.message ?? "unknown"}`,
+    });
+  }
 
-  return { status: overallStatus, uptime: Date.now() - startTime, timestamp: new Date().toISOString(), checks };
+  const overallStatus = checks.every((c) => c.status === "pass")
+    ? "healthy"
+    : checks.some((c) => c.status === "fail")
+    ? "unhealthy"
+    : "degraded";
+
+  return {
+    status: overallStatus,
+    uptime: Date.now() - startTime,
+    timestamp: new Date().toISOString(),
+    checks,
+  };
 }

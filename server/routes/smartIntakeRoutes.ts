@@ -8,6 +8,7 @@ import { executeBatchApproval } from "../engines/batchApprovalEngine";
 import { recordOutcome, buildOutcomeAnalytics } from "../engines/outcomeFeedbackEngine";
 import { intakeCaseStore, StructuredIntakeCase } from "../services/intakeCaseStore";
 import { intakeAuditLog } from "../services/intakeAuditLog";
+import { requireRole } from "../middleware/requireRole";
 
 const router = express.Router();
 
@@ -97,30 +98,41 @@ router.post("/web-intake", (req, res) => {
   res.json({ caseId: newCase.id, riskLevel: newCase.riskLevel, queueStatus: newCase.queueStatus, nextQuestion: nextQ, disposition: newCase.proposedDisposition });
 });
 
-router.get("/review-queue", (req, res) => {
-  const items = intakeCaseStore.listCases().filter((c) => c.queueStatus === "needs_review" || c.queueStatus === "new");
-  res.json(sortQueue(items));
+const clinicianOnly = requireRole(["admin", "physician", "nurse", "staff"]);
+const adminOrPhysician = requireRole(["admin", "physician"]);
+
+router.get("/review-queue", clinicianOnly, (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const items = intakeCaseStore
+    .listCases()
+    .filter((c) => c.queueStatus === "needs_review" || c.queueStatus === "new");
+  const sorted = sortQueue(items);
+  res.json({ total: sorted.length, offset, limit, cases: sorted.slice(offset, offset + limit) });
 });
 
-router.get("/all-cases", (req, res) => {
+router.get("/all-cases", clinicianOnly, (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
   const all = intakeCaseStore.listCases();
   const byStatus: Record<string, number> = {};
   all.forEach((c) => { byStatus[c.queueStatus] = (byStatus[c.queueStatus] || 0) + 1; });
-  res.json({ total: all.length, byStatus, cases: sortQueue(all) });
+  const sorted = sortQueue(all);
+  res.json({ total: all.length, byStatus, offset, limit, cases: sorted.slice(offset, offset + limit) });
 });
 
-router.get("/case/:id", (req, res) => {
+router.get("/case/:id", clinicianOnly, (req, res) => {
   const item = intakeCaseStore.getCase(req.params.id);
   if (!item) return res.status(404).json({ error: "Case not found" });
   res.json(item);
 });
 
-router.post("/batch-approve", (req, res) => {
+router.post("/batch-approve", adminOrPhysician, (req, res) => {
   const results = executeBatchApproval(req.body);
   res.json({ updated: results.length, results });
 });
 
-router.post("/approve-all-safe", (req, res) => {
+router.post("/approve-all-safe", adminOrPhysician, (req, res) => {
   const physicianId = req.body.physicianId || "system_auto";
   const safeIds = intakeCaseStore.listCases()
     .filter((c) => c.queueStatus === "needs_review" && c.riskLevel === "low" && c.confidenceScore >= 0.85 && c.redFlags.length === 0 && c.proposedPlan && c.reviewReason !== "red_flags_detected")
@@ -129,17 +141,20 @@ router.post("/approve-all-safe", (req, res) => {
   res.json({ approvedCount: results.length, results });
 });
 
-router.post("/outcomes", (req, res) => {
+router.post("/outcomes", clinicianOnly, (req, res) => {
   const saved = recordOutcome(req.body);
   res.json(saved);
 });
 
-router.get("/outcomes/analytics", (req, res) => {
+router.get("/outcomes/analytics", clinicianOnly, (req, res) => {
   res.json(buildOutcomeAnalytics());
 });
 
-router.get("/audit-log", (req, res) => {
-  res.json(intakeAuditLog.list());
+router.get("/audit-log", adminOrPhysician, (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 100), 500);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
+  const all = intakeAuditLog.list();
+  res.json({ total: all.length, offset, limit, entries: all.slice(offset, offset + limit) });
 });
 
 function inferSource(body: any): "sms" | "whatsapp" | "web" {

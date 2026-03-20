@@ -20,6 +20,8 @@ function getWsUrl(): string {
 export default function ControlTowerPage() {
   const [state, setState] = useState<TowerState | null>(null);
   const [connected, setConnected] = useState(false);
+  const [stressLoading, setStressLoading] = useState(false);
+  const [learningLoading, setLearningLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const { toast } = useToast();
 
@@ -48,17 +50,46 @@ export default function ControlTowerPage() {
   }, []);
 
   const runStress = async () => {
-    await fetch("/api/stress/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ concurrency: 5, requests: 20 }) });
-    toast({ title: "Stress test started", description: "Check results at /stress-test" });
+    setStressLoading(true);
+    try {
+      const res = await fetch("/api/stress/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concurrency: 5, requests: 20 }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(body || `HTTP ${res.status}`);
+      }
+      toast({ title: "Stress test started", description: "Check results at /stress-test" });
+    } catch (e: any) {
+      toast({ title: "Stress test failed", description: e.message, variant: "destructive" });
+    } finally {
+      setStressLoading(false);
+    }
   };
 
   const runLearning = async () => {
-    await fetch("/api/outcome/learning/run", { method: "POST" });
-    toast({ title: "Learning cycle triggered" });
+    setLearningLoading(true);
+    try {
+      const res = await fetch("/api/outcome/learning/run", { method: "POST" });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(body || `HTTP ${res.status}`);
+      }
+      toast({ title: "Learning cycle triggered", description: "Outcome weights will be updated." });
+    } catch (e: any) {
+      toast({ title: "Learning cycle failed", description: e.message, variant: "destructive" });
+    } finally {
+      setLearningLoading(false);
+    }
   };
 
   const avgLatency = state
-    ? Math.round(state.patients.reduce((a, p) => a + (p.latency ?? p.latencyMs ?? 0), 0) / (state.patients.length || 1))
+    ? Math.round(
+        state.patients.reduce((a, p) => a + (p.latency ?? p.latencyMs ?? 0), 0) /
+        (state.patients.length || 1)
+      )
     : 0;
 
   return (
@@ -73,20 +104,36 @@ export default function ControlTowerPage() {
       {/* System Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Active Patients</CardTitle></CardHeader>
-          <CardContent><p className="text-3xl font-bold" data-testid="metric-patients">{state?.patients.length ?? 0}</p></CardContent>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Active Patients</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold" data-testid="metric-patients">{state?.patients.length ?? 0}</p>
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Errors</CardTitle></CardHeader>
-          <CardContent><p className="text-3xl font-bold text-red-500" data-testid="metric-errors">{state?.errors.length ?? 0}</p></CardContent>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Errors</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold text-red-500" data-testid="metric-errors">{state?.errors.length ?? 0}</p>
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Avg Latency</CardTitle></CardHeader>
-          <CardContent><p className="text-3xl font-bold" data-testid="metric-latency">{avgLatency} ms</p></CardContent>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Avg Latency</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold" data-testid="metric-latency">{avgLatency} ms</p>
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Alerts</CardTitle></CardHeader>
-          <CardContent><p className="text-3xl font-bold text-yellow-500" data-testid="metric-alerts">{state?.alerts.length ?? 0}</p></CardContent>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Alerts</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold text-yellow-500" data-testid="metric-alerts">{state?.alerts.length ?? 0}</p>
+          </CardContent>
         </Card>
       </div>
 
@@ -107,7 +154,9 @@ export default function ControlTowerPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No engine data yet — system events will appear here in real time.</p>
+              <p className="text-sm text-muted-foreground" data-testid="engines-empty">
+                No engine data yet — events will appear here in real time.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -117,19 +166,32 @@ export default function ControlTowerPage() {
           <CardHeader><CardTitle>Alerts</CardTitle></CardHeader>
           <CardContent>
             {state?.alerts.length ? (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+              <div className="space-y-2 max-h-60 overflow-y-auto" data-testid="alerts-list">
                 {state.alerts.slice(-10).reverse().map((alert, i) => (
-                  <div key={i} className="flex items-start gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-900/20" data-testid={`alert-${i}`}>
+                  <div
+                    key={i}
+                    className="flex items-start gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-900/20"
+                    data-testid={`alert-item-${i}`}
+                  >
                     <span className="text-yellow-600">⚠</span>
                     <div>
-                      <p className="text-sm font-medium">{alert.message}</p>
-                      {alert.category && <p className="text-xs text-muted-foreground">{alert.category}</p>}
+                      <p className="text-sm font-medium" data-testid={`alert-message-${i}`}>{alert.message}</p>
+                      {alert.category && (
+                        <p className="text-xs text-muted-foreground" data-testid={`alert-category-${i}`}>
+                          {alert.category}
+                        </p>
+                      )}
+                      {alert.severity && (
+                        <Badge variant={alert.severity === "CRITICAL" ? "destructive" : "secondary"} className="text-xs mt-1">
+                          {alert.severity}
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No alerts — all systems nominal.</p>
+              <p className="text-sm text-muted-foreground" data-testid="alerts-empty">No alerts — all systems nominal.</p>
             )}
           </CardContent>
         </Card>
@@ -139,24 +201,41 @@ export default function ControlTowerPage() {
           <CardHeader><CardTitle>Recent Patient Flows</CardTitle></CardHeader>
           <CardContent>
             {state?.patients.length ? (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+              <div className="space-y-2 max-h-60 overflow-y-auto" data-testid="patients-list">
                 {state.patients.slice(-8).reverse().map((p, i) => (
-                  <div key={i} className="flex items-center justify-between p-2 rounded bg-muted/30" data-testid={`patient-flow-${i}`}>
+                  <div
+                    key={i}
+                    className="flex items-center justify-between p-2 rounded bg-muted/30"
+                    data-testid={`patient-flow-${i}`}
+                  >
                     <div>
-                      <p className="text-xs font-mono">{p.patientId ?? "anon"}</p>
-                      <p className="text-xs text-muted-foreground">{p.complaint?.slice(0, 40)}</p>
+                      <p className="text-xs font-mono" data-testid={`patient-id-${i}`}>{p.patientId ?? "anon"}</p>
+                      <p className="text-xs text-muted-foreground" data-testid={`patient-complaint-${i}`}>
+                        {p.complaint?.slice(0, 40) ?? "—"}
+                      </p>
                     </div>
                     <div className="text-right">
-                      <Badge variant={p.autonomyMode === "AUTO" ? "default" : p.autonomyMode === "ESCALATE" ? "destructive" : "secondary"}>
+                      <Badge
+                        variant={
+                          p.autonomyMode === "AUTO"
+                            ? "default"
+                            : p.autonomyMode === "ESCALATE"
+                            ? "destructive"
+                            : "secondary"
+                        }
+                        data-testid={`patient-mode-${i}`}
+                      >
                         {p.autonomyMode ?? "REVIEW"}
                       </Badge>
-                      <p className="text-xs text-muted-foreground mt-1">{p.latency ?? p.latencyMs ?? 0}ms</p>
+                      <p className="text-xs text-muted-foreground mt-1" data-testid={`patient-latency-${i}`}>
+                        {p.latency ?? p.latencyMs ?? 0}ms
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No patient flows yet.</p>
+              <p className="text-sm text-muted-foreground" data-testid="patients-empty">No patient flows yet.</p>
             )}
           </CardContent>
         </Card>
@@ -165,16 +244,38 @@ export default function ControlTowerPage() {
         <Card>
           <CardHeader><CardTitle>Command Panel</CardTitle></CardHeader>
           <CardContent className="space-y-3">
-            <Button className="w-full" variant="outline" onClick={runStress} data-testid="btn-stress-test">
-              Run Stress Test
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={runStress}
+              disabled={stressLoading}
+              data-testid="btn-stress-test"
+            >
+              {stressLoading ? "Running..." : "Run Stress Test"}
             </Button>
-            <Button className="w-full" variant="outline" onClick={runLearning} data-testid="btn-learning-cycle">
-              Run Learning Cycle
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={runLearning}
+              disabled={learningLoading}
+              data-testid="btn-learning-cycle"
+            >
+              {learningLoading ? "Running..." : "Run Learning Cycle"}
             </Button>
-            <Button className="w-full" variant="outline" onClick={() => window.open("/api/monitoring/health", "_blank")} data-testid="btn-health-check">
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => window.open("/api/monitoring/health", "_blank")}
+              data-testid="btn-health-check"
+            >
               Health Check
             </Button>
-            <Button className="w-full" variant="outline" onClick={() => window.open("/api/queue/stats", "_blank")} data-testid="btn-queue-stats">
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => window.open("/api/queue/stats", "_blank")}
+              data-testid="btn-queue-stats"
+            >
               Queue Stats
             </Button>
           </CardContent>

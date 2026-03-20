@@ -80,10 +80,14 @@ export function generateFixes(errors: DetectedError[]): AutoFix[] {
   });
 }
 
+const MAX_FIX_STORE = 1000;
 const fixStore: AutoFix[] = [];
 
 export function storeGeneratedFixes(fixes: AutoFix[]) {
   fixStore.push(...fixes);
+  if (fixStore.length > MAX_FIX_STORE) {
+    fixStore.splice(0, fixStore.length - MAX_FIX_STORE);
+  }
 }
 
 export function getStoredFixes(): AutoFix[] {

@@ -9,7 +9,17 @@ export function tenantGuard(req: Request, res: Response, next: NextFunction) {
   const clinicId = headerClinicId || queryClinicId || bodyClinicId || authUser?.organizationId;
 
   if (!clinicId || typeof clinicId !== "string") {
-    return res.status(400).json({ error: "Missing clinic context. Provide clinicId via header (x-clinic-id), query, or body." });
+    return res.status(400).json({
+      error: "Missing clinic context. Provide clinicId via header (x-clinic-id), query, or body.",
+    });
+  }
+
+  if (authUser && authUser.organizationId && authUser.role !== "admin") {
+    if (authUser.organizationId !== clinicId) {
+      return res.status(403).json({
+        error: "Forbidden: clinicId does not match your organization.",
+      });
+    }
   }
 
   (req as any).clinicId = clinicId;

@@ -48,6 +48,7 @@ function detectMissingSignals(caseData: CaseData, actualOutcome: ActualOutcome):
   return missing;
 }
 
+const MAX_FEEDBACK_STORE = 1000;
 const feedbackStore: FeedbackLog[] = [];
 
 export function ingestOutcome(caseData: CaseData, actualOutcome: ActualOutcome): FeedbackLog {
@@ -64,6 +65,9 @@ export function ingestOutcome(caseData: CaseData, actualOutcome: ActualOutcome):
   };
 
   feedbackStore.push(log);
+  if (feedbackStore.length > MAX_FEEDBACK_STORE) {
+    feedbackStore.splice(0, feedbackStore.length - MAX_FEEDBACK_STORE);
+  }
   return log;
 }
 
