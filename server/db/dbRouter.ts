@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
+import { isChaosActive } from "../chaos/chaosEngine";
 
 const { Pool } = pg;
 
@@ -33,6 +34,9 @@ export const dbWrite = drizzle(primaryPool, { schema });
 export const dbRead = drizzle(replicaPool ?? primaryPool, { schema });
 
 export function getDb(mode: "read" | "write" = "write") {
+  if (isChaosActive("db_down")) {
+    throw new Error("CHAOS_DB_DOWN: database failure injected");
+  }
   if (mode === "read" && replicaPool) return dbRead;
   return dbWrite;
 }

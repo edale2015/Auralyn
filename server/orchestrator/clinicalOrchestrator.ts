@@ -28,6 +28,7 @@ import {
   buildTriageCacheKey,
 } from "../cache/triageCache";
 import { queueAsyncWork } from "../queue/asyncWorker";
+import { isChaosActive, maybeDelay } from "../chaos/chaosEngine";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -84,6 +85,11 @@ function validateInput(input: ClinicalInput): ClinicalInput {
 
 async function runScoring(input: ClinicalInput): Promise<any> {
   const t = Date.now();
+  if (isChaosActive("openai_down")) {
+    queueAsyncWork({ type: "audit", payload: { engine: "scoringSystemsEngine", status: "chaos_openai_down", latencyMs: 0 } });
+    return { computed: false, reason: "CHAOS_OPENAI_DOWN: fallback response", safe: true, fallback: true };
+  }
+  await maybeDelay("latency_spike", 2000);
   try {
     const result = await scoringBreaker.call(() =>
       computeScoringSystems(input.complaint ?? "unknown", input.answers ?? {})

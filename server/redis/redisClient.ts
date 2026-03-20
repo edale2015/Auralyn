@@ -1,4 +1,5 @@
 import { emitEvent } from "../controlTower/eventBus";
+import { isChaosActive } from "../chaos/chaosEngine";
 
 type RedisClientInstance = any;
 
@@ -56,6 +57,7 @@ export async function getRedisClient(): Promise<RedisClientInstance | null> {
 }
 
 export async function redisSet(key: string, value: string, opts?: { nx?: boolean; exSeconds?: number; pxMs?: number }): Promise<string | null> {
+  if (isChaosActive("redis_down")) throw new Error("CHAOS_REDIS_DOWN: Redis failure injected");
   const redis = await getRedisClient();
   if (!redis) return null;
   try {
