@@ -1,79 +1,77 @@
-import { Router } from "express"
+import { Router } from "express";
+import { randomUUID } from "crypto";
+import { processMessage, sendReply } from "../channels";
+import { type MessageEvent } from "../channels/messageEvent";
 import {
   addMessage,
   caseIdFromChannel,
   ensureConversation,
   setLastResult,
-} from "../integrations/conversationStore"
-import { addPatientMessage, addSystemMessage } from "../assistant/telemedicineSessionService"
-import { runTelemedicineAssistant } from "../assistant/telemedicineAssistantService"
-import { sendWhatsAppMessage } from "../whatsapp/send"
+} from "../integrations/conversationStore";
+import { addPatientMessage, addSystemMessage } from "../assistant/telemedicineSessionService";
 
-const router = Router()
-
-function formatReplyForWhatsApp(result: any): string {
-  const top = result?.differential?.[0]
-  const level = (result?.triage?.level ?? "unknown").toUpperCase()
-  const questions = (result?.nextQuestions ?? []).slice(0, 2).map((q: string) => `• ${q}`).join("\n")
-  const actions = (result?.resources?.recommendedActions ?? [])
-    .slice(0, 2)
-    .map((a: any) => `• ${a.diagnosis}`)
-    .join("\n")
-
-  return [
-    `*Triage:* ${level}`,
-    top ? `*Most likely:* ${top.diagnosis}` : "",
-    questions ? `\n*Suggested questions:*\n${questions}` : "",
-    actions ? `\n*Recommendations:*\n${actions}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n")
-}
+const router = Router();
 
 // Twilio sends x-www-form-urlencoded: From=whatsapp:+1234...&Body=text
 router.post("/whatsapp/webhook", async (req, res) => {
-  // Twilio expects a 200 with TwiML or empty body immediately
-  res.status(200).set("Content-Type", "text/xml").send("<Response></Response>")
+  // Respond immediately — Twilio requires acknowledgement within 15 seconds
+  res.status(200).set("Content-Type", "text/xml").send("<Response></Response>");
 
   try {
-    const from: string = String(req.body?.From ?? "").replace(/^whatsapp:/, "").trim()
-    const text: string = String(req.body?.Body ?? "").trim()
+    const rawFrom: string = String(req.body?.From ?? "").trim();
+    const text: string = String(req.body?.Body ?? "").trim();
+    const messageSid: string = String(req.body?.MessageSid ?? randomUUID());
 
-    if (!from || !text) return
+    if (!rawFrom || !text) return;
 
-    const caseId = caseIdFromChannel("whatsapp", from)
-    ensureConversation(caseId, "whatsapp", from)
+    const externalUserId = rawFrom.replace(/^whatsapp:/, "");
 
-    // Record patient message in conversation store
-    addMessage(caseId, "patient", text, "whatsapp")
+    // Build MessageEvent for the main conversation orchestrator (Sheets-driven, full pipeline)
+    const event: MessageEvent = {
+      channel: "whatsapp",
+      externalUserId,
+      chatId: externalUserId,
+      text,
+      timestamp: new Date().toISOString(),
+      messageId: messageSid,
+      rawSignatureVerified: true,
+      media: [],
+    };
 
-    // Record in telemed session
-    addPatientMessage(caseId, text)
+    // Route through the full clinical conversation orchestrator
+    // This uses Sheets-loaded questions, red-flag rules, and sends replies back to the patient
+    const result = await processMessage(event);
 
-    // Run assistant analysis (async, doctor sees result in console)
-    const result = await runTelemedicineAssistant(caseId, text)
-    setLastResult(caseId, result)
+    // Send replies to the patient via Twilio WhatsApp
+    for (const reply of result.replies) {
+      await sendReply(`whatsapp:${externalUserId}`, reply).catch((e: any) =>
+        console.error("[WhatsApp] sendReply error:", e?.message)
+      );
+    }
 
-    // Store assistant analysis as a system message so it's visible in the thread
-    const summary = formatReplyForWhatsApp(result)
-    addMessage(caseId, "assistant", summary, "whatsapp")
-    addSystemMessage(caseId, `AI analysis updated — ${new Date().toLocaleTimeString()}`)
+    // Also maintain the telemedicine doctor-review thread for physician oversight
+    const caseId = caseIdFromChannel("whatsapp", externalUserId);
+    ensureConversation(caseId, "whatsapp", externalUserId);
+    addPatientMessage(caseId, text);
 
-    // NOTE: We do NOT auto-send to patient here.
-    // The doctor reviews the draft in the split-pane console and sends manually.
-    // To enable auto-reply, uncomment:
-    // await sendWhatsAppMessage(from, summary)
-    void sendWhatsAppMessage // keep import alive for future use
+    if (result.replies.length > 0) {
+      const summary = result.replies.join("\n---\n");
+      addMessage(caseId, "assistant", summary, "whatsapp");
+      addSystemMessage(caseId, `AI response sent — ${new Date().toLocaleTimeString()}`);
+      setLastResult(caseId, result);
+    }
 
-    console.log(`[WhatsApp] caseId=${caseId} processed message from ${from}`)
+    console.log(
+      `[WhatsApp] caseId=${caseId} replies=${result.replies.length} staffCmd=${result.isStaffCommand} dedup=${result.dedupSkipped}`
+    );
   } catch (err: any) {
-    console.error("[WhatsApp] Webhook error:", err?.message ?? err)
+    console.error("[WhatsApp] Webhook error:", err?.message ?? err);
   }
-})
+});
 
-// Twilio GET verification (some versions ping with GET)
+// Twilio GET verification
 router.get("/whatsapp/webhook", (_req, res) => {
-  res.status(200).send("OK")
-})
+  res.status(200).send("OK");
+});
 
-export default router
+export default router;

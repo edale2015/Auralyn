@@ -4,7 +4,8 @@ import { detectDrift } from "../monitoring/dataDrift";
 import { emitEvent } from "../controlTower/eventBus";
 import { runSelfHealing } from "../autonomy/selfHealing";
 import { proposeLearningUpdate } from "../governance/modelApproval";
-import { learnFromOutcomes } from "../learning/outcomeLearningEngine";
+import { learnFromOutcomes, seedOutcomesFromDB } from "../learning/outcomeLearningEngine";
+import { loadSessionsFromDB } from "../patient/sessionStore";
 
 const LEARNING_LOCK_KEY = "global_learning_lock";
 const LEARNING_LOCK_TTL = 55_000;
@@ -60,6 +61,21 @@ async function runDriftDetectionSafe() {
 
 const packBaselines: Record<string, number> = {};
 
+async function initBaselinesFromDB(): Promise<void> {
+  try {
+    await seedOutcomesFromDB();
+    const insights = learnFromOutcomes();
+    for (const [packId, insight] of Object.entries(insights)) {
+      packBaselines[packId] = insight.accuracy;
+    }
+    if (Object.keys(packBaselines).length > 0) {
+      console.log(`[AutonomousLoop] Governance baselines initialized: ${Object.keys(packBaselines).join(", ")}`);
+    }
+  } catch (e: any) {
+    console.error("[AutonomousLoop] Baseline init error:", e?.message);
+  }
+}
+
 async function runModelGovernanceSafe() {
   try {
     const insights = learnFromOutcomes();
@@ -79,6 +95,11 @@ export function startAutonomousLoop(intervalMs = 60_000) {
   if (loopInterval) return;
 
   console.log(`[AutonomousLoop] Starting autonomous learning + failure prediction + drift detection loop (every ${intervalMs / 1000}s)`);
+
+  Promise.all([
+    initBaselinesFromDB(),
+    loadSessionsFromDB(),
+  ]).catch((e: any) => console.error("[AutonomousLoop] Startup init error:", e?.message));
 
   loopInterval = setInterval(async () => {
     cycleCount++;

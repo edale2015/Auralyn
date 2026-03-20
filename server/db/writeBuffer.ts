@@ -5,7 +5,7 @@ interface BufferedLog {
   engine: string;
   status: string;
   latencyMs: number;
-  message?: string | null;
+  error?: string | null;
   createdAt: Date;
 }
 
@@ -31,7 +31,7 @@ export async function flushBuffer(): Promise<void> {
         engine: row.engine,
         status: row.status,
         latencyMs: row.latencyMs,
-        message: row.message ?? null,
+        error: row.error ?? null,
         createdAt: row.createdAt,
       }))
     );

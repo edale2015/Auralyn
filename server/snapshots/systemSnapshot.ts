@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { systemSnapshots } from "../../shared/schema";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 export interface SnapshotState {
   weights?: Record<string, number>;
@@ -52,7 +52,7 @@ export async function getSnapshotByTrace(traceId: string) {
     const rows = await db
       .select()
       .from(systemSnapshots)
-      .where((t: any) => t.traceId.eq(traceId))
+      .where(eq(systemSnapshots.traceId, traceId))
       .limit(1);
     return rows[0] ?? null;
   } catch (e: any) {

@@ -10,7 +10,7 @@ export async function logEngineStatus(
   error: string | null = null
 ) {
   try {
-    bufferedInsert({ engine, status, latencyMs, message: error, createdAt: new Date() });
+    bufferedInsert({ engine, status, latencyMs, error, createdAt: new Date() });
   } catch (e) {
     console.error("[SystemMonitor] Failed to buffer engine status:", e);
   }
