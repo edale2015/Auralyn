@@ -1,0 +1,164 @@
+1️⃣ UNIFIED OUTCOME LEARNING ENGINE
+📁 server/engines/outcomeLearningEngine.ts
+import { db } from "../db";
+
+export async function recordOutcome({
+  input,
+  predicted,
+  actual
+}) {
+  await db.insert("outcomes").values({
+    input,
+    predicted,
+    actual
+  });
+}
+
+export async function runLearningCycle() {
+  const outcomes = await db
+    .select()
+    .from("outcomes")
+    .orderBy("created_at DESC")
+    .limit(200);
+
+  for (const o of outcomes) {
+    const delta = o.predicted === o.actual ? 0.02 : -0.05;
+
+    await db.execute(`
+      UPDATE weights
+      SET value = value + ${delta}
+      WHERE diagnosis = '${o.predicted}'
+    `);
+  }
+
+  console.log("🧠 Learning cycle complete");
+}
+2️⃣ SAFETY ENGINES (CRITICAL)
+👶 Pediatric Safety Engine
+// server/engines/safety/pediatricSafety.ts
+
+export function pediatricSafetyCheck(input) {
+  if (input.age < 2 && input.fever) {
+    return {
+      risk: "HIGH",
+      reason: "Infant fever requires urgent evaluation"
+    };
+  }
+
+  return { risk: "LOW" };
+}
+💊 Drug Interaction Engine
+// server/engines/safety/drugInteraction.ts
+
+const interactions = {
+  warfarin: ["ibuprofen", "aspirin"],
+  lisinopril: ["potassium"]
+};
+
+export function checkDrugInteractions(meds) {
+  const issues = [];
+
+  meds.forEach(m => {
+    if (interactions[m]) {
+      issues.push(...interactions[m]);
+    }
+  });
+
+  return issues;
+}
+🤰 Pregnancy Safety Engine
+// server/engines/safety/pregnancySafety.ts
+
+export function pregnancySafetyCheck(input) {
+  if (input.pregnant && input.medications?.includes("ibuprofen")) {
+    return {
+      risk: "HIGH",
+      reason: "NSAIDs unsafe in pregnancy"
+    };
+  }
+
+  return { risk: "LOW" };
+}
+3️⃣ INTEGRATE SAFETY INTO ORCHESTRATOR
+🔥 MODIFY orchestrator
+import { pediatricSafetyCheck } from "../engines/safety/pediatricSafety";
+import { pregnancySafetyCheck } from "../engines/safety/pregnancySafety";
+import { checkDrugInteractions } from "../engines/safety/drugInteraction";
+
+...
+
+// before diagnosis
+const safety = {
+  pediatric: pediatricSafetyCheck(input),
+  pregnancy: pregnancySafetyCheck(input),
+  drug: checkDrugInteractions(input.medications || [])
+};
+
+if (
+  safety.pediatric.risk === "HIGH" ||
+  safety.pregnancy.risk === "HIGH" ||
+  safety.drug.length > 0
+) {
+  return {
+    success: false,
+    safety,
+    message: "Safety risk detected"
+  };
+}
+4️⃣ DIGITAL TWIN → POSTGRES (NOT FIRESTORE)
+UPDATE:
+await db.insert("simulations").values({
+  input,
+  result,
+  created_at: new Date()
+});
+5️⃣ OPERATOR ELIGIBILITY ENGINE
+// server/engines/operatorEligibility.ts
+
+export function checkEligibility(input) {
+  if (input.age > 65 && input.chestPain) {
+    return { eligible: false, reason: "Needs ER evaluation" };
+  }
+
+  return { eligible: true };
+}
+ADD TO ORCHESTRATOR
+const eligibility = checkEligibility(input);
+
+if (!eligibility.eligible) {
+  return {
+    success: false,
+    message: eligibility.reason
+  };
+}
+6️⃣ AUTONOMOUS LEARNING SYSTEM (NO HUMAN)
+🧠 SELF-IMPROVING LOOP
+// server/system/autonomousLoop.ts
+
+import { runLearningCycle } from "../engines/outcomeLearningEngine";
+
+export function startAutonomousLoop() {
+  setInterval(async () => {
+    console.log("🔁 Running autonomous learning...");
+
+    await runLearningCycle();
+
+  }, 60000); // every minute
+}
+7️⃣ PHYSICIAN CORRECTIONS → AUTO FEEDBACK
+// server/routes/feedbackRoutes.ts
+
+router.post("/feedback", async (req, res) => {
+  const { predicted, actual, input } = req.body;
+
+  await recordOutcome({ predicted, actual, input });
+
+  res.json({ success: true });
+});
+8️⃣ CONNECT EVERYTHING (CRITICAL)
+
+In server/index.ts:
+
+import { startAutonomousLoop } from "./system/autonomousLoop";
+
+startAutonomousLoop();

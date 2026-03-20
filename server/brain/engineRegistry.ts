@@ -18,9 +18,9 @@ export const EngineRegistry: Record<EngineLevel, EngineDescriptor[]> = {
     { name: 'strokeAlertEngine',          description: 'FAST + Cincinnati stroke screen',                                  status: 'active',  filePath: 'server/core/strokeAlertEngine.ts',         avgDurationMs: 10  },
     { name: 'miAlertEngine',              description: 'Chest pain → ACS risk pathway (HEART score)',                      status: 'active',  filePath: 'server/core/miAlertEngine.ts',             avgDurationMs: 14  },
     { name: 'anaphylaxisAlertEngine',     description: 'Allergy + trigger + symptom triad detection',                      status: 'active',  filePath: 'server/core/anaphylaxisAlertEngine.ts',    avgDurationMs: 9   },
-    { name: 'pediatricSafetyEngine',      description: 'Age-adjusted safety thresholds for paediatric patients',           status: 'stub',    filePath: 'server/core/pediatricSafetyEngine.ts',     avgDurationMs: 11  },
-    { name: 'drugInteractionSafetyEngine',description: 'Cross-checks patient meds against known dangerous interactions',   status: 'stub',    avgDurationMs: 22 },
-    { name: 'pregnancySafetyEngine',      description: 'Pregnancy-specific contraindications and escalation rules',        status: 'stub',    avgDurationMs: 13 },
+    { name: 'pediatricSafetyEngine',      description: 'Age-adjusted dose safety, contraindications for paediatric patients', status: 'active', filePath: 'server/engines/pediatricSafetyEngine.ts',     avgDurationMs: 11, layer: 'Safety' },
+    { name: 'drugInteractionSafetyEngine',description: 'Cross-checks patient meds against known dangerous interactions',      status: 'active', filePath: 'server/engines/drugInteractionSafetyEngine.ts', avgDurationMs: 22, layer: 'Safety' },
+    { name: 'pregnancySafetyEngine',      description: 'FDA category checks, trimester-specific contraindications',          status: 'active', filePath: 'server/engines/pregnancySafetyEngine.ts',    avgDurationMs: 13, layer: 'Safety' },
   ],
 
   Diagnostic: [
