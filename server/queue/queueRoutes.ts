@@ -6,8 +6,13 @@ const router = Router();
 
 router.post("/patient", requireRole(["admin", "physician"]), async (req, res) => {
   try {
-    const jobId = await addPatientJob(req.body);
-    res.json({ ok: true, jobId, message: "Patient queued for clinical processing" });
+    const result = await addPatientJob(req.body);
+
+    if (!result.queued) {
+      return res.status(503).json({ ok: false, error: result.error ?? "System busy" });
+    }
+
+    res.json({ ok: true, jobId: result.jobId, message: "Patient queued for clinical processing" });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }

@@ -6,6 +6,9 @@ import { runHighScaleSimulations } from "../engines/highScaleSimulationEngine";
 import { getSystemHealth, getRecentEngineLogs, logEngineStatus } from "../monitoring/systemMonitor";
 import { predictFailures } from "../monitoring/predictiveEngine";
 import { getLoopStats } from "../system/autonomousLoop";
+import { analyzeSystemHealth } from "../controlTower/systemOptimizer";
+import { getAllBreakerStates, openAIBreaker, dbBreaker, twilioBreaker, scoringBreaker } from "../utils/circuitBreaker";
+import { getModelVersions } from "../engines/unifiedOutcomeLearning";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -63,6 +66,43 @@ router.post("/engine-log", requireRole(["admin", "physician", "staff"]), async (
 
 router.get("/predict-failures", auth, async (_req: Request, res: Response) => {
   res.json(await predictFailures());
+});
+
+router.get("/optimizer", requireRole(["admin", "physician"]), async (_req: Request, res: Response) => {
+  try {
+    const snapshot = await analyzeSystemHealth();
+    res.json({ ok: true, ...snapshot });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.get("/circuit-breakers", requireRole(["admin", "physician"]), (_req: Request, res: Response) => {
+  res.json({ ok: true, breakers: getAllBreakerStates() });
+});
+
+router.post("/circuit-reset", auth, (req: Request, res: Response) => {
+  const { name } = req.body;
+  const map: Record<string, any> = { openai: openAIBreaker, database: dbBreaker, twilio: twilioBreaker, scoring: scoringBreaker };
+  if (name && map[name]) {
+    map[name].reset();
+    res.json({ ok: true, message: `Circuit breaker '${name}' reset to closed state` });
+  } else if (!name) {
+    Object.values(map).forEach((b: any) => b.reset());
+    res.json({ ok: true, message: "All circuit breakers reset" });
+  } else {
+    res.status(400).json({ ok: false, error: `Unknown breaker '${name}'. Valid: ${Object.keys(map).join(", ")}` });
+  }
+});
+
+router.get("/model-versions", auth, async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 20;
+    const versions = await getModelVersions(limit);
+    res.json({ ok: true, versions });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
 });
 
 export default router;

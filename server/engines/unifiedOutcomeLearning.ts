@@ -1,6 +1,6 @@
 import { db } from "../db";
-import { outcomes, weights } from "../../shared/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { outcomes, weights, modelVersions } from "../../shared/schema";
+import { desc, eq } from "drizzle-orm";
 
 export async function recordOutcome({
   input,
@@ -9,14 +9,16 @@ export async function recordOutcome({
 }: {
   input: Record<string, any>;
   predicted: string;
-  actual: string;
+  actual: string | null;
 }): Promise<void> {
   try {
-    await db.insert(outcomes).values({ input, predicted, actual });
+    await db.insert(outcomes).values({ input, predicted, actual: actual ?? "pending" });
   } catch (e) {
     console.error("[UnifiedOutcomeLearning] recordOutcome error:", e);
   }
 }
+
+let learningCycleCount = 0;
 
 export async function runLearningCycle(): Promise<{ processed: number; updated: string[] }> {
   try {
@@ -43,7 +45,25 @@ export async function runLearningCycle(): Promise<{ processed: number; updated: 
       if (!updated.includes(diagnosis)) updated.push(diagnosis);
     }
 
-    console.log(`[UnifiedOutcomeLearning] Cycle complete — processed ${recent.length}, updated weights: ${updated.join(", ") || "none"}`);
+    learningCycleCount++;
+
+    if (updated.length > 0) {
+      const allWeights = await db.select().from(weights);
+      const snapshot: Record<string, number> = {};
+      for (const w of allWeights) {
+        snapshot[w.diagnosis] = w.value ?? 1.0;
+      }
+
+      await db.insert(modelVersions).values({
+        weights: snapshot,
+        cycleCount: learningCycleCount,
+        triggeredBy: "autonomous_loop",
+      }).catch((e: any) => {
+        console.error("[UnifiedOutcomeLearning] Failed to save model version:", e?.message);
+      });
+    }
+
+    console.log(`[UnifiedOutcomeLearning] Cycle #${learningCycleCount} complete — processed ${recent.length}, updated weights: ${updated.join(", ") || "none"}`);
     return { processed: recent.length, updated };
   } catch (e) {
     console.error("[UnifiedOutcomeLearning] runLearningCycle error:", e);
@@ -77,4 +97,17 @@ export async function getRecentOutcomes(limit = 50) {
     console.error("[UnifiedOutcomeLearning] getRecentOutcomes error:", e);
     return [];
   }
+}
+
+export async function getModelVersions(limit = 20) {
+  try {
+    return await db.select().from(modelVersions).orderBy(desc(modelVersions.createdAt)).limit(limit);
+  } catch (e) {
+    console.error("[UnifiedOutcomeLearning] getModelVersions error:", e);
+    return [];
+  }
+}
+
+export function getLearningCycleCount(): number {
+  return learningCycleCount;
 }

@@ -1,5 +1,7 @@
 import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
 
+const MAX_QUEUE_DEPTH = 1000;
+
 interface QueueJob {
   id: string;
   data: any;
@@ -84,14 +86,27 @@ async function processNext(): Promise<void> {
   }
 }
 
-export async function addPatientJob(input: any): Promise<string> {
+export async function addPatientJob(input: any): Promise<{ jobId: string; queued: boolean; error?: string }> {
   await ensureInit();
+
+  if (redisAvailable && redisQueue) {
+    try {
+      const waiting = await redisQueue.getWaitingCount();
+      if (waiting >= MAX_QUEUE_DEPTH) {
+        return { jobId: "", queued: false, error: "System busy — queue at capacity. Please try again shortly." };
+      }
+    } catch {}
+  } else {
+    if (pendingQueue.length >= MAX_QUEUE_DEPTH) {
+      return { jobId: "", queued: false, error: "System busy — queue at capacity. Please try again shortly." };
+    }
+  }
 
   const jobId = `job_${++jobCounter}_${Date.now()}`;
 
   if (redisAvailable && redisQueue) {
     await redisQueue.add("new-patient", input, { jobId });
-    return jobId;
+    return { jobId, queued: true };
   }
 
   const job: QueueJob = {
@@ -104,7 +119,7 @@ export async function addPatientJob(input: any): Promise<string> {
   pendingQueue.push(jobId);
 
   setTimeout(processNext, 0);
-  return jobId;
+  return { jobId, queued: true };
 }
 
 export async function getJobStatus(jobId: string): Promise<QueueJob | null> {
@@ -141,5 +156,7 @@ export function getQueueStats() {
     done: jobs.filter(j => j.status === "done").length,
     failed: jobs.filter(j => j.status === "failed").length,
     queueDepth: pendingQueue.length,
+    maxDepth: MAX_QUEUE_DEPTH,
+    atCapacity: pendingQueue.length >= MAX_QUEUE_DEPTH,
   };
 }

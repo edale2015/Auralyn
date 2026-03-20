@@ -11,8 +11,10 @@ import { logEngineStatus } from "../monitoring/systemMonitor";
 import { notifyOnCallPhysician } from "../notifications/notifier";
 import { executeActions } from "./executionLayer";
 import { autonomyDecision } from "../autonomy/autonomyEngine";
+import { applySecondOpinionGate } from "../autonomy/secondOpinion";
 import { executeAutonomousCare } from "../autonomy/autoActions";
 import { emitEvent } from "../controlTower/eventBus";
+import { scoringBreaker } from "../utils/circuitBreaker";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -69,7 +71,9 @@ function validateInput(input: ClinicalInput): ClinicalInput {
 async function runScoring(input: ClinicalInput): Promise<any> {
   const t = Date.now();
   try {
-    const result = await computeScoringSystems(input.complaint ?? "unknown", input.answers ?? {});
+    const result = await scoringBreaker.call(() =>
+      computeScoringSystems(input.complaint ?? "unknown", input.answers ?? {})
+    );
     await logEngineStatus("scoringSystemsEngine", "healthy", Date.now() - t);
     return result;
   } catch (e: any) {
@@ -207,7 +211,8 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
 
     const confidence = scores?.confidence ?? 0;
     const uncertainty = scores?.uncertainty ?? 0.5;
-    const autoDecision = autonomyDecision({ safety: safetyGate, confidence, uncertainty });
+    const rawDecision = autonomyDecision({ safety: safetyGate, confidence, uncertainty });
+    const autoDecision = applySecondOpinionGate(rawDecision, scores ?? {});
 
     let executionResults: any[] = [];
     if (autoDecision.mode === "AUTO") {
@@ -245,11 +250,9 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
 
     import("../engines/unifiedOutcomeLearning").then(({ recordOutcome, runLearningCycle }) => {
       recordOutcome({
-        engineId: "clinicalOrchestrator",
         predicted: scores?.primaryDiagnosis ?? validated.complaint,
         actual: null,
         input: validated.answers ?? {},
-        correct: null,
       }).then(() =>
         runLearningCycle().catch((e: any) => {
           console.error("[Orchestrator] Learning cycle failed:", e?.message);

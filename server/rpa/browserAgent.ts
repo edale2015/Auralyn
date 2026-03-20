@@ -1,4 +1,5 @@
 import type { RPATemplate, RPAStep } from "./templateLibrary";
+import { emitEvent } from "../controlTower/eventBus";
 
 export interface BrowserTaskInput {
   url: string;
@@ -22,6 +23,18 @@ export async function runBrowserTask(task: BrowserTaskInput): Promise<{ success:
       await page.goto(task.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
       for (const step of task.steps) {
+        const selectorExists = step.selector ? await page.isVisible(step.selector).catch(() => false) : true;
+
+        if (step.selector && !selectorExists) {
+          const errMsg = `Selector not found: "${step.selector}" (step: ${step.type})`;
+          emitEvent({
+            type: "RPA_FAILURE",
+            payload: { url: task.url, selector: step.selector, stepType: step.type, error: errMsg },
+            timestamp: Date.now(),
+          });
+          return { success: false, error: errMsg, durationMs: Date.now() - start };
+        }
+
         if (step.type === "click") await page.click(step.selector!, { timeout: step.timeout ?? 10_000 });
         if (step.type === "type") await page.fill(step.selector!, step.value ?? "", { timeout: step.timeout ?? 10_000 });
         if (step.type === "select") await page.selectOption(step.selector!, step.value ?? "");
@@ -34,6 +47,11 @@ export async function runBrowserTask(task: BrowserTaskInput): Promise<{ success:
       await browser.close();
     }
   } catch (err: any) {
+    emitEvent({
+      type: "RPA_FAILURE",
+      payload: { url: task.url, error: err?.message },
+      timestamp: Date.now(),
+    });
     return { success: false, error: err?.message, durationMs: Date.now() - start };
   }
 }
@@ -88,15 +106,46 @@ export async function runUIAutomation(task: BrowserTask): Promise<RPAResult> {
 
       for (const step of template.steps) {
         try {
-          await executeStep(page, step);
+          await executeStep(page, step, template.url);
           stepsCompleted++;
         } catch (e: any) {
-          errors.push(`Step ${stepsCompleted + 1} (${step.description ?? step.type}): ${e?.message}`);
+          const errMsg = `Step ${stepsCompleted + 1} (${step.description ?? step.type}): ${e?.message}`;
+          errors.push(errMsg);
+
+          if (e?.message?.includes("Selector not found")) {
+            emitEvent({
+              type: "RPA_FAILURE",
+              payload: {
+                templateId: template.id,
+                templateName: template.name,
+                url: template.url,
+                step: step.description ?? step.type,
+                selector: step.selector,
+                error: e?.message,
+              },
+              timestamp: Date.now(),
+            });
+          }
+
           break;
         }
       }
     } finally {
       await browser.close();
+    }
+
+    if (errors.length > 0) {
+      emitEvent({
+        type: "RPA_FAILURE",
+        payload: {
+          templateId: template.id,
+          templateName: template.name,
+          stepsCompleted,
+          stepsTotal: template.steps.length,
+          errors,
+        },
+        timestamp: Date.now(),
+      });
     }
 
     return {
@@ -109,18 +158,33 @@ export async function runUIAutomation(task: BrowserTask): Promise<RPAResult> {
       output: {},
     };
   } catch (e: any) {
+    emitEvent({
+      type: "RPA_FAILURE",
+      payload: { templateId: template.id, templateName: template.name, error: `Playwright unavailable: ${e?.message}` },
+      timestamp: Date.now(),
+    });
     return simulateExecution(template, start, `Playwright unavailable: ${e?.message}`);
   }
 }
 
-async function executeStep(page: any, step: RPAStep): Promise<void> {
+async function executeStep(page: any, step: RPAStep, url?: string): Promise<void> {
   switch (step.type) {
-    case "click":
+    case "click": {
+      if (step.selector) {
+        const visible = await page.isVisible(step.selector).catch(() => false);
+        if (!visible) throw new Error(`Selector not found: "${step.selector}"`);
+      }
       await page.click(step.selector!, { timeout: step.timeout ?? 10_000 });
       break;
-    case "type":
+    }
+    case "type": {
+      if (step.selector) {
+        const visible = await page.isVisible(step.selector).catch(() => false);
+        if (!visible) throw new Error(`Selector not found: "${step.selector}"`);
+      }
       await page.fill(step.selector!, step.value ?? "", { timeout: step.timeout ?? 10_000 });
       break;
+    }
     case "select":
       await page.selectOption(step.selector!, step.value ?? "", { timeout: step.timeout ?? 10_000 });
       break;
@@ -130,10 +194,11 @@ async function executeStep(page: any, step: RPAStep): Promise<void> {
     case "screenshot":
       await page.screenshot({ path: `rpa_screenshot_${Date.now()}.png` });
       break;
-    case "assert":
+    case "assert": {
       const visible = await page.isVisible(step.selector!);
       if (!visible) throw new Error(`Assertion failed: ${step.selector} not visible`);
       break;
+    }
   }
 }
 

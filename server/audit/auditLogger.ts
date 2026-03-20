@@ -2,6 +2,7 @@ import { db } from "../db";
 import { auditLogs } from "../../shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
+import { advanceChain } from "./hashChain";
 
 export function createTraceId(): string {
   return uuidv4();
@@ -21,12 +22,17 @@ export async function auditStep({
   metadata?: Record<string, any>;
 }): Promise<void> {
   try {
+    const entry = { traceId, step, input: input ?? null, output: output ?? null, metadata };
+    const { hash, prevHash } = advanceChain(entry as Record<string, unknown>);
+
     await db.insert(auditLogs).values({
       traceId,
       step,
       input: input ?? null,
       output: output ?? null,
       metadata,
+      hash,
+      prevHash,
     });
   } catch (e) {
     console.error("[AuditLogger] Failed to write audit step:", e);

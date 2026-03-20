@@ -1,14 +1,28 @@
 import { predictFailures } from "../monitoring/predictiveEngine";
+import { acquireLock, releaseLock } from "../locks/redisLock";
+
+const LEARNING_LOCK_KEY = "global_learning_lock";
+const LEARNING_LOCK_TTL = 55_000;
 
 let loopInterval: ReturnType<typeof setInterval> | null = null;
 let cycleCount = 0;
+let skippedCount = 0;
 
 async function runLearningCycleSafe() {
+  const acquired = await acquireLock(LEARNING_LOCK_KEY, LEARNING_LOCK_TTL);
+  if (!acquired) {
+    skippedCount++;
+    console.log(`[AutonomousLoop] Learning cycle skipped — another instance holds the lock (skip #${skippedCount})`);
+    return;
+  }
+
   try {
     const { runLearningCycle } = await import("../engines/unifiedOutcomeLearning");
     await runLearningCycle();
   } catch (e: any) {
     console.error("[AutonomousLoop] Learning cycle error:", e?.message ?? e);
+  } finally {
+    await releaseLock(LEARNING_LOCK_KEY);
   }
 }
 
@@ -48,5 +62,5 @@ export function stopAutonomousLoop() {
 }
 
 export function getLoopStats() {
-  return { running: !!loopInterval, cycleCount };
+  return { running: !!loopInterval, cycleCount, skippedCount };
 }

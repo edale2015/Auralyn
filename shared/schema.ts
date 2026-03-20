@@ -186,7 +186,7 @@ export const insertSimulationSchema = createInsertSchema(simulations).omit({ id:
 export type InsertSimulation = z.infer<typeof insertSimulationSchema>;
 export type Simulation = typeof simulations.$inferSelect;
 
-// Immutable audit trace logs
+// Immutable audit trace logs (with SHA-256 hash chain)
 export const auditLogs = pgTable("audit_logs", {
   id: serial("id").primaryKey(),
   traceId: text("trace_id").notNull(),
@@ -194,11 +194,25 @@ export const auditLogs = pgTable("audit_logs", {
   input: jsonb("input"),
   output: jsonb("output"),
   metadata: jsonb("metadata"),
+  hash: text("hash"),
+  prevHash: text("prev_hash"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
+
+// Model versioning — snapshot of diagnosis weights after each learning cycle
+export const modelVersions = pgTable("model_versions", {
+  id: serial("id").primaryKey(),
+  weights: jsonb("weights").notNull(),
+  cycleCount: integer("cycle_count"),
+  triggeredBy: text("triggered_by"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertModelVersionSchema = createInsertSchema(modelVersions).omit({ id: true, createdAt: true });
+export type InsertModelVersion = z.infer<typeof insertModelVersionSchema>;
+export type ModelVersion = typeof modelVersions.$inferSelect;
 
 // Patient sessions (persistent queue — replaces in-memory store)
 export const patientSessions = pgTable("patient_sessions", {
