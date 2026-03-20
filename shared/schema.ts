@@ -289,5 +289,17 @@ export const idempotencyKeys = pgTable("idempotency_keys", {
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+// FDA experiment log — reproducibility + submission tracking
+export const fdaExperiments = pgTable("fda_experiments", {
+  id: serial("id").primaryKey(),
+  config: jsonb("config").notNull(),
+  metrics: jsonb("metrics").notNull(),
+  pass: boolean("pass").default(false).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertFdaExperimentSchema = createInsertSchema(fdaExperiments).omit({ id: true, createdAt: true });
+export type InsertFdaExperiment = z.infer<typeof insertFdaExperimentSchema>;
+export type FdaExperiment = typeof fdaExperiments.$inferSelect;
+
 // Re-export chat models for OpenAI integration
 export * from "./models/chat";

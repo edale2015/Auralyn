@@ -3,6 +3,9 @@ import { runValidation } from "./validationRunner";
 import { computeMetrics } from "./metricsEngine";
 import { generateFDAReport } from "./reportGenerator";
 import { exportFDABundle } from "./exportBundle";
+import { stratify } from "./stratifiedAnalysis";
+import { createSubmissionBundle } from "./submissionBundle";
+import { saveExperiment, listExperiments } from "./experimentManager";
 
 const router = Router();
 
@@ -21,10 +24,8 @@ router.post("/validate", async (req, res) => {
   try {
     const dataset = req.body?.dataset ?? BUILT_IN_DATASET;
     const threshold = req.body?.threshold ?? 0.8;
-
     const results = await runValidation(dataset);
     const metrics = computeMetrics(results, threshold);
-
     res.json({ ok: true, metrics, results });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
@@ -35,11 +36,9 @@ router.post("/report", async (req, res) => {
   try {
     const dataset = req.body?.dataset ?? BUILT_IN_DATASET;
     const threshold = req.body?.threshold ?? 0.8;
-
     const results = await runValidation(dataset);
     const metrics = computeMetrics(results, threshold);
     const report = generateFDAReport(metrics, results);
-
     res.json({ ok: true, report });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
@@ -50,13 +49,68 @@ router.post("/export", async (req, res) => {
   try {
     const dataset = req.body?.dataset ?? BUILT_IN_DATASET;
     const threshold = req.body?.threshold ?? 0.8;
-
     const results = await runValidation(dataset);
     const metrics = computeMetrics(results, threshold);
     const report = generateFDAReport(metrics, results);
     const bundle = exportFDABundle(report);
-
     res.json({ ok: true, bundle });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.post("/stratify", async (req, res) => {
+  try {
+    const dataset = req.body?.dataset ?? BUILT_IN_DATASET;
+    const threshold = req.body?.threshold ?? 0.8;
+    const results = await runValidation(dataset);
+    const stratified = stratify(results, threshold);
+    res.json({ ok: true, stratified });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.post("/bundle", async (req, res) => {
+  try {
+    const dataset = req.body?.dataset ?? BUILT_IN_DATASET;
+    const threshold = req.body?.threshold ?? 0.8;
+    const results = await runValidation(dataset);
+    const metrics = computeMetrics(results, threshold);
+    const report = generateFDAReport(metrics, results);
+    const stratified = stratify(results, threshold);
+    const bundle = await createSubmissionBundle(report, stratified);
+    res.json({ ok: true, bundle });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.post("/experiment/save", async (req, res) => {
+  try {
+    const dataset = req.body?.dataset ?? BUILT_IN_DATASET;
+    const threshold = req.body?.threshold ?? 0.8;
+    const config = {
+      dataset: req.body?.datasetLabel ?? "built-in",
+      threshold,
+      engineVersion: req.body?.engineVersion ?? "1.0.0",
+      runBy: req.body?.runBy,
+      tags: req.body?.tags,
+    };
+    const results = await runValidation(dataset);
+    const metrics = computeMetrics(results, threshold);
+    const experiment = await saveExperiment(config, metrics);
+    res.json({ ok: true, experiment, metrics });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.get("/experiments", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit ?? 20), 100);
+    const experiments = await listExperiments(limit);
+    res.json({ ok: true, experiments, count: experiments.length });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }

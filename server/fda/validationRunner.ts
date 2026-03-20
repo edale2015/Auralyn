@@ -10,6 +10,8 @@ export interface ValidationResult {
   predicted: string | null;
   actual: string;
   correct: boolean;
+  safety: string;
+  confidence: number;
 }
 
 export async function runValidation(dataset: ValidationCase[]): Promise<ValidationResult[]> {
@@ -23,11 +25,16 @@ export async function runValidation(dataset: ValidationCase[]): Promise<Validati
         (res as any)?.diagnosis?.primary ??
         null;
 
+      const safety: string = (res as any)?.safety?.level ?? (res as any)?.safetyLevel ?? "UNKNOWN";
+      const confidence: number = (res as any)?.diagnosis?.confidence ?? (res as any)?.scores?.confidence ?? 0;
+
       results.push({
         input: caseData.input,
         predicted,
         actual: caseData.actual,
         correct: predicted?.toLowerCase() === caseData.actual?.toLowerCase(),
+        safety,
+        confidence,
       });
     } catch {
       results.push({
@@ -35,6 +42,8 @@ export async function runValidation(dataset: ValidationCase[]): Promise<Validati
         predicted: null,
         actual: caseData.actual,
         correct: false,
+        safety: "UNKNOWN",
+        confidence: 0,
       });
     }
   }

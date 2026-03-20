@@ -1,0 +1,162 @@
+🧪 PART 1 — CLINICAL VALIDATION RUNNER
+📁 server/fda/validationRunner.ts
+import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
+import { normalizeDiagnosisLabel } from "./normalizeDiagnosis";
+
+export async function runValidation(dataset) {
+  const results = [];
+
+  for (const caseData of dataset) {
+    const res = await runFullClinicalFlow(caseData.input);
+
+    results.push({
+      input: caseData.input,
+      predicted: normalizeDiagnosisLabel(res?.diagnosis?.primary),
+      actual: normalizeDiagnosisLabel(caseData.actual),
+      safety: res?.safety?.level || "UNKNOWN",
+      confidence: res?.diagnosis?.confidence || 0
+    });
+  }
+
+  return results;
+}
+📊 PART 2 — METRICS ENGINE (FDA CORE)
+📁 server/fda/metricsEngine.ts
+export function computeMetrics(results) {
+  let tp = 0, fp = 0, fn = 0;
+
+  for (const r of results) {
+    if (r.predicted === r.actual) tp++;
+    else {
+      fp++;
+      fn++;
+    }
+  }
+
+  const precision = tp / (tp + fp || 1);
+  const recall = tp / (tp + fn || 1);
+  const f1 = 2 * (precision * recall) / (precision + recall || 1);
+
+  return {
+    total: results.length,
+    accuracy: tp / results.length,
+    precision,
+    recall,
+    f1
+  };
+}
+📈 PART 3 — STRATIFIED ANALYSIS (CRITICAL FOR FDA)
+📁 server/fda/stratifiedAnalysis.ts
+export function stratify(results) {
+  const groups = {
+    pediatric: [],
+    adult: [],
+    highRisk: [],
+    lowRisk: []
+  };
+
+  results.forEach(r => {
+    if (r.input.age < 18) groups.pediatric.push(r);
+    else groups.adult.push(r);
+
+    if (r.safety === "HIGH") groups.highRisk.push(r);
+    else groups.lowRisk.push(r);
+  });
+
+  return groups;
+}
+🧠 PART 4 — EXPERIMENT MANAGER (REPRODUCIBILITY)
+📁 server/fda/experimentManager.ts
+import { db } from "../db";
+
+export async function saveExperiment(config, metrics) {
+  await db.insert("fda_experiments").values({
+    config,
+    metrics,
+    created_at: new Date()
+  });
+}
+Table
+CREATE TABLE fda_experiments (
+  id SERIAL PRIMARY KEY,
+  config JSONB,
+  metrics JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+📄 PART 5 — REPORT GENERATOR
+📁 server/fda/reportGenerator.ts
+import fs from "fs";
+
+export function generateReport(metrics, stratified) {
+  const report = {
+    summary: "Clinical AI Validation Report",
+    metrics,
+    stratified,
+    timestamp: new Date()
+  };
+
+  fs.writeFileSync(
+    "fda_report.json",
+    JSON.stringify(report, null, 2)
+  );
+
+  return report;
+}
+📦 PART 6 — FDA SUBMISSION BUNDLE
+📁 server/fda/submissionBundle.ts
+import fs from "fs";
+import archiver from "archiver";
+
+export function createSubmissionBundle() {
+  const output = fs.createWriteStream("fda_submission.zip");
+  const archive = archiver("zip");
+
+  archive.pipe(output);
+
+  archive.file("fda_report.json", { name: "report.json" });
+  archive.file("model_versions.json", { name: "model_versions.json" });
+
+  archive.append(JSON.stringify({
+    compliance: [
+      "FDA 21 CFR Part 11",
+      "ISO 13485",
+      "IEC 62304"
+    ]
+  }), { name: "manifest.json" });
+
+  archive.finalize();
+}
+🌐 PART 7 — API ROUTES
+📁 server/fda/routes.ts
+import express from "express";
+import { runValidation } from "./validationRunner";
+import { computeMetrics } from "./metricsEngine";
+import { stratify } from "./stratifiedAnalysis";
+import { generateReport } from "./reportGenerator";
+import { createSubmissionBundle } from "./submissionBundle";
+
+const router = express.Router();
+
+router.post("/validate", async (req, res) => {
+  const dataset = req.body.dataset;
+
+  const results = await runValidation(dataset);
+  const metrics = computeMetrics(results);
+  const stratified = stratify(results);
+
+  res.json({ metrics, stratified });
+});
+
+router.post("/report", async (req, res) => {
+  const { metrics, stratified } = req.body;
+
+  const report = generateReport(metrics, stratified);
+  res.json(report);
+});
+
+router.post("/bundle", async (req, res) => {
+  createSubmissionBundle();
+  res.json({ success: true });
+});
+
+export default router;
