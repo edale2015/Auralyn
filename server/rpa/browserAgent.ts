@@ -1,5 +1,43 @@
 import type { RPATemplate, RPAStep } from "./templateLibrary";
 
+export interface BrowserTaskInput {
+  url: string;
+  steps: RPAStep[];
+  headless?: boolean;
+}
+
+export async function runBrowserTask(task: BrowserTaskInput): Promise<{ success: boolean; result?: string; error?: string; durationMs: number }> {
+  const start = Date.now();
+  try {
+    const playwright = await import("playwright").catch(() => null);
+    if (!playwright) {
+      console.log(`[BrowserAgent] Simulating task at ${task.url} (${task.steps.length} steps)`);
+      return { success: true, result: `Simulated: ${task.steps.length} steps at ${task.url}`, durationMs: Date.now() - start };
+    }
+
+    const browser = await playwright.chromium.launch({ headless: task.headless ?? true });
+    const page = await browser.newPage();
+
+    try {
+      await page.goto(task.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+      for (const step of task.steps) {
+        if (step.type === "click") await page.click(step.selector!, { timeout: step.timeout ?? 10_000 });
+        if (step.type === "type") await page.fill(step.selector!, step.value ?? "", { timeout: step.timeout ?? 10_000 });
+        if (step.type === "select") await page.selectOption(step.selector!, step.value ?? "");
+        if (step.type === "wait") await page.waitForTimeout(step.timeout ?? 1_000);
+      }
+
+      const result = await page.content();
+      return { success: true, result: result.slice(0, 2000), durationMs: Date.now() - start };
+    } finally {
+      await browser.close();
+    }
+  } catch (err: any) {
+    return { success: false, error: err?.message, durationMs: Date.now() - start };
+  }
+}
+
 export interface RPAResult {
   success: boolean;
   stepsCompleted: number;

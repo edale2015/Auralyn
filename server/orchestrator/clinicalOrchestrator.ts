@@ -188,7 +188,7 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
         actual: null,
         input: validated.answers ?? {},
         correct: null,
-      }).then(() => runLearningCycle()).catch(() => {});
+      }).then(() => runLearningCycle().catch(() => {})).catch(() => {});
     }).catch(() => {});
 
     const latencyMs = Date.now() - start;

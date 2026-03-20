@@ -12,7 +12,7 @@ export interface RPATemplate {
   description: string;
   url: string;
   steps: RPAStep[];
-  category: "patient-intake" | "billing" | "government-form" | "ehr" | "insurance" | "custom";
+  category: "patient-intake" | "billing" | "government-form" | "ehr" | "insurance" | "pharmacy" | "custom";
 }
 
 export const templates: Record<string, RPATemplate> = {
@@ -83,6 +83,40 @@ export function getTemplate(id: string): RPATemplate | undefined {
 export function listTemplates(): RPATemplate[] {
   return Object.values(templates);
 }
+
+templates.pharmacyForm = {
+  id: "pharmacy-form",
+  name: "Pharmacy Prescription Form",
+  description: "Submits a prescription form to a pharmacy portal",
+  url: "{{pharmacyUrl}}/prescription",
+  category: "pharmacy",
+  steps: [
+    { type: "type", selector: "#patient-name", value: "{{patientName}}", description: "Enter patient name" },
+    { type: "type", selector: "#dob", value: "{{dateOfBirth}}", description: "Enter date of birth" },
+    { type: "type", selector: "#rx-number", value: "{{rxNumber}}", description: "Enter prescription number" },
+    { type: "type", selector: "#medication", value: "{{medicationName}}", description: "Enter medication name" },
+    { type: "type", selector: "#quantity", value: "{{quantity}}", description: "Enter quantity" },
+    { type: "select", selector: "#refills", value: "{{refills}}", description: "Select refill count" },
+    { type: "click", selector: "#submit", description: "Submit prescription form" },
+    { type: "wait", timeout: 2000, description: "Wait for confirmation" },
+    { type: "screenshot", description: "Capture confirmation number" },
+  ],
+};
+
+templates.governmentForm = {
+  id: "government-form",
+  name: "Government Reporting Form",
+  description: "Fills out a government regulatory reporting form",
+  url: "https://example.gov/form",
+  category: "government-form",
+  steps: [
+    { type: "type", selector: "#name", value: "{{reporterName}}", description: "Enter reporter name" },
+    { type: "type", selector: "#facility-id", value: "{{facilityId}}", description: "Enter facility ID" },
+    { type: "type", selector: "#event-date", value: "{{eventDate}}", description: "Enter event date" },
+    { type: "type", selector: "#description", value: "{{eventDescription}}", description: "Enter event description" },
+    { type: "click", selector: "#submit", description: "Submit report" },
+  ],
+};
 
 export function fillTemplate(template: RPATemplate, variables: Record<string, string>): RPATemplate {
   const filled = JSON.parse(JSON.stringify(template)) as RPATemplate;

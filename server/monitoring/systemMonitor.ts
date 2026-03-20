@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { engineLogs } from "../../shared/schema";
 import { desc, eq, sql } from "drizzle-orm";
+import { bufferedInsert } from "../db/writeBuffer";
 
 export async function logEngineStatus(
   engine: string,
@@ -9,9 +10,9 @@ export async function logEngineStatus(
   error: string | null = null
 ) {
   try {
-    await db.insert(engineLogs).values({ engine, status, latencyMs, error });
+    bufferedInsert({ engine, status, latencyMs, message: error, createdAt: new Date() });
   } catch (e) {
-    console.error("[SystemMonitor] Failed to log engine status:", e);
+    console.error("[SystemMonitor] Failed to buffer engine status:", e);
   }
 }
 

@@ -1,0 +1,198 @@
+PART 1 — AWS ARCHITECTURE (SIMPLE + STRONG)
+Internet
+   ↓
+Route53 (your domain)
+   ↓
+CloudFront (frontend)
+   ↓
+ALB (HTTPS)
+   ↓
+ECS Fargate (Node app, auto-scale)
+   ↓
+RDS Postgres
+   ↓
+ElastiCache Redis (queue)
+🗄️ PART 2 — RDS POSTGRES (FINALIZE)
+
+You already created it. Now lock it down:
+
+🔐 Security Group
+
+Allow inbound 5432 only from ECS security group (NOT public)
+
+🧠 Connection string (Secrets Manager, not .env)
+
+prod/medscribe:
+
+{
+  "DATABASE_URL": "postgresql://user:pass@host:5432/medscribe"
+}
+🔐 PART 3 — AWS SECRETS MANAGER (REAL)
+Create secret: prod/medscribe
+{
+  "DATABASE_URL": "...",
+  "OPENAI_KEY": "...",
+  "TWILIO_SID": "...",
+  "TWILIO_TOKEN": "...",
+  "TWILIO_NUMBER": "+1XXXX",
+  "REDIS_URL": "redis://..."
+}
+Loader (already added, ensure used at boot)
+// server/index.ts
+import { loadSecrets } from "./config/secretsManager";
+
+if (process.env.NODE_ENV === "production") {
+  await loadSecrets();
+}
+🐳 PART 4 — BACKEND DEPLOY (ECS FARGATE)
+📁 Dockerfile (final)
+FROM node:20-alpine
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+
+COPY . .
+
+ENV NODE_ENV=production
+EXPOSE 3000
+
+CMD ["node", "server/index.js"]
+🧾 Task Definition (ECS)
+
+CPU: 512–1024
+
+Memory: 1–2GB
+
+Port: 3000
+
+Env: none (use Secrets Manager)
+
+🔗 Attach Secrets
+
+In ECS task:
+
+Secrets:
+- DATABASE_URL → prod/medscribe:DATABASE_URL
+- OPENAI_KEY → prod/medscribe:OPENAI_KEY
+- TWILIO_SID → prod/medscribe:TWILIO_SID
+- TWILIO_TOKEN → prod/medscribe:TWILIO_TOKEN
+- REDIS_URL → prod/medscribe:REDIS_URL
+🌐 PART 5 — ALB + HTTPS
+1. Create ALB
+
+Listener: 443
+
+Target: ECS service
+
+2. Add ACM Certificate
+
+Domain: api.yourdomain.com
+
+3. Health check
+GET /api/monitoring/health
+🌍 PART 6 — DOMAIN (ROUTE53)
+
+api.yourdomain.com → ALB
+
+app.yourdomain.com → CloudFront
+
+🖥️ PART 7 — FRONTEND DEPLOY (S3 + CLOUDFRONT)
+Build
+npm run build
+Upload to S3
+CloudFront:
+
+Origin: S3
+
+Enable HTTPS
+
+Cache static assets
+
+📲 PART 8 — TWILIO LIVE SMS (CRITICAL)
+📁 server/integrations/twilio.ts
+import twilio from "twilio";
+
+const client = twilio(
+  process.env.TWILIO_SID,
+  process.env.TWILIO_TOKEN
+);
+
+export async function sendSMS(to, message) {
+  return client.messages.create({
+    to,
+    from: process.env.TWILIO_NUMBER,
+    body: message
+  });
+}
+📁 Webhook Route
+router.post("/sms/webhook", async (req, res) => {
+  const incoming = req.body.Body;
+  const from = req.body.From;
+
+  const result = await handlePatient({ text: incoming });
+
+  await sendSMS(from, result.message || "Received");
+
+  res.sendStatus(200);
+});
+Twilio Console
+
+Set webhook:
+
+https://api.yourdomain.com/api/clinical/sms/webhook
+⚡ PART 9 — REDIS (QUEUE PROD)
+
+Use:
+
+AWS ElastiCache Redis
+
+Update secret:
+
+REDIS_URL=redis://...
+📊 PART 10 — MONITORING + ALERTS
+CloudWatch Alarms
+
+Set alerts:
+
+CPU > 80%
+
+Error rate > 10%
+
+Latency > 2s
+
+Add structured logging
+console.log(JSON.stringify({
+  event: "clinical_flow",
+  latency,
+  status: "success"
+}));
+🧠 PART 11 — PRODUCTION SAFETY MODE
+
+Before real patients:
+
+🔒 Force “review required”
+if (process.env.PILOT_MODE === "true") {
+  return {
+    message: "Clinician reviewing your case"
+  };
+}
+🧪 PART 12 — FINAL PRE-LAUNCH TEST
+
+Run:
+
+Stress test:
+
+/api/stress/run
+
+Simulation:
+
+/api/simulation/run
+
+SMS test:
+
+text your Twilio number
+
+Audit trace:
+
+/api/audit/trace/:id
