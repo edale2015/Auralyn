@@ -208,6 +208,9 @@ import systemSimulationRoutes from "./routes/systemSimulationRoutes";
 import systemAuditRoutes from "./routes/systemAuditRoutes";
 import outcomeFeedbackRoutes from "./routes/outcomeFeedbackRoutes";
 import { startAutonomousLoop } from "./system/autonomousLoop";
+import { startEngines } from "./system/engineScheduler";
+import fdaPackageRoutes from "./fda/fdaPackageRoutes";
+import patientQueueRoutes from "./patient/patientQueueRoutes";
 import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
@@ -523,6 +526,10 @@ app.use("/api/clinical", clinicalFlowRoutes);
 app.use("/api/simulation", systemSimulationRoutes);
 app.use("/api/audit", systemAuditRoutes);
 app.use("/api/outcome", outcomeFeedbackRoutes);
+app.use("/api/fda-package", fdaPackageRoutes);
+app.use("/api/patients", patientQueueRoutes);
+console.log("[FDAPackage] Validation runner, metrics engine, report generator, export bundle at /api/fda-package/*");
+console.log("[PatientQueue] Live patient queue + physician approve/override/escalate at /api/patients/*");
 console.log("[Simulation] Digital twin simulation runs + batch + history at /api/simulation/*");
 console.log("[AuditTrace] Immutable audit trace log at /api/audit/*");
 console.log("[OutcomeFeedback] Outcome recording, weights, learning cycle at /api/outcome/*");
@@ -694,6 +701,7 @@ app.use((req, res, next) => {
     () => {
       log(`serving on port ${port}`);
       startAutonomousLoop(60_000);
+      startEngines();
     },
   );
 })();

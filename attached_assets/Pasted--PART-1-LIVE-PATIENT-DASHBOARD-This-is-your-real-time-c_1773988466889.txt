@@ -1,0 +1,246 @@
+🖥️ PART 1 — LIVE PATIENT DASHBOARD
+
+This is your real-time command center
+
+📁 Backend: Patient Session Store
+// server/patient/sessionStore.ts
+
+const sessions = new Map();
+
+export function createSession(id, data) {
+  sessions.set(id, {
+    ...data,
+    status: "pending",
+    createdAt: new Date()
+  });
+}
+
+export function updateSession(id, update) {
+  const existing = sessions.get(id);
+  sessions.set(id, { ...existing, ...update });
+}
+
+export function getAllSessions() {
+  return Array.from(sessions.entries()).map(([id, s]) => ({
+    id,
+    ...s
+  }));
+}
+📁 Route: Patient Queue
+// server/routes/patientRoutes.ts
+
+import express from "express";
+import { getAllSessions } from "../patient/sessionStore";
+
+const router = express.Router();
+
+router.get("/queue", (req, res) => {
+  res.json(getAllSessions());
+});
+
+export default router;
+🖥️ Frontend: Dashboard
+// client/components/PatientDashboard.tsx
+
+export function PatientDashboard() {
+  const [patients, setPatients] = useState([]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetch("/api/patients/queue")
+        .then(r => r.json())
+        .then(setPatients);
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div>
+      <h2>Live Patients</h2>
+      {patients.map(p => (
+        <div key={p.id}>
+          <strong>{p.id}</strong>
+          <span>{p.status}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+👨‍⚕️ PART 2 — PHYSICIAN CONTROL PANEL
+📁 Backend
+// server/routes/physicianRoutes.ts
+
+router.post("/approve/:id", (req, res) => {
+  updateSession(req.params.id, {
+    status: "approved"
+  });
+  res.json({ success: true });
+});
+
+router.post("/override/:id", (req, res) => {
+  updateSession(req.params.id, {
+    status: "overridden",
+    override: req.body
+  });
+  res.json({ success: true });
+});
+🖥️ Frontend
+export function PhysicianPanel({ patient }) {
+  return (
+    <div>
+      <button onClick={() =>
+        fetch(`/api/physician/approve/${patient.id}`, { method: "POST" })
+      }>
+        Approve
+      </button>
+
+      <button onClick={() =>
+        fetch(`/api/physician/override/${patient.id}`, {
+          method: "POST",
+          body: JSON.stringify({ diagnosis: "custom" })
+        })
+      }>
+        Override
+      </button>
+    </div>
+  );
+}
+🔥 PART 3 — FIX ALL CRITICAL ISSUES
+✅ 1. ORCHESTRATOR DOMINANCE (FORCED)
+🔒 SINGLE ENTRY POINT
+// server/core/entry.ts
+
+import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
+
+export async function handlePatient(input) {
+  return runFullClinicalFlow(input);
+}
+🔧 FIX SMS ROUTE
+// server/routes/clinicalRoutes.ts
+
+router.post("/sms/parse-intent", async (req, res) => {
+  const result = await handlePatient(req.body);
+  res.json(result);
+});
+
+👉 NOTHING bypasses orchestrator now.
+
+✅ 2. SAFETY HARD BLOCK
+if (!safetyGate.allowed) {
+  return {
+    blocked: true,
+    safety: safetyGate
+  };
+}
+✅ 3. REAL-TIME LEARNING (NOT PASSIVE)
+// inside orchestrator AFTER outcome
+
+await recordOutcome({
+  input,
+  predicted: diagnosis.primary,
+  actual: null
+});
+
+// immediate micro-adjustment
+await runLearningCycle();
+✅ 4. ENGINE AUTO-TRIGGER SYSTEM
+// server/system/engineScheduler.ts
+
+export function startEngines() {
+  setInterval(runLearningCycle, 60000);
+  setInterval(predictFailures, 30000);
+  setInterval(monitorSystemHealth, 10000);
+}
+✅ 5. AWS SECRETS MANAGER (REAL)
+// server/config/secretsManager.ts
+
+import AWS from "aws-sdk";
+
+const sm = new AWS.SecretsManager();
+
+export async function loadSecrets() {
+  const data = await sm.getSecretValue({
+    SecretId: "prod/medscribe"
+  }).promise();
+
+  const secrets = JSON.parse(data.SecretString || "{}");
+
+  Object.assign(process.env, secrets);
+}
+ENV SEPARATION
+if (process.env.NODE_ENV === "production") {
+  await loadSecrets();
+}
+✅ 6. FRONTEND → BACKEND VERIFICATION
+
+Add this helper:
+
+// client/utils/apiCheck.ts
+
+export async function verifyEndpoint(path) {
+  try {
+    const res = await fetch(path);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+👉 Run at app load → detect broken buttons
+
+✅ 7. DIGITAL TWIN → ACTIVE
+// after each patient
+
+await runSimulation(input);
+
+Now used for:
+
+learning
+
+validation
+
+replay
+
+✅ 8. REMOVE DUPLICATES
+enforce:
+export const ENGINES = {
+  learning: singleLearningEngine,
+  scoring: singleScoringEngine
+};
+🟡 MEDIUM FIXES
+RATE LIMITING
+// middleware
+
+const rateLimit = {};
+
+export function limiter(req, res, next) {
+  const ip = req.ip;
+  rateLimit[ip] = (rateLimit[ip] || 0) + 1;
+
+  if (rateLimit[ip] > 100) {
+    return res.status(429).send("Too many requests");
+  }
+
+  next();
+}
+RETRY + FALLBACK
+export async function withRetry(fn, retries = 3) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (retries === 0) throw e;
+    return withRetry(fn, retries - 1);
+  }
+}
+QUEUE SYSTEM (BASIC)
+const queue = [];
+
+export function addToQueue(task) {
+  queue.push(task);
+}
+
+setInterval(() => {
+  const task = queue.shift();
+  if (task) task();
+}, 100);

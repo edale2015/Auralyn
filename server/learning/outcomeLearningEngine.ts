@@ -4,63 +4,53 @@ export interface OutcomeEntry {
   predictedDiagnosis: string;
   actualDiagnosis: string;
   correct: boolean;
-  timestamp: string;
-}
-
-const outcomeMemory: OutcomeEntry[] = [];
-
-export function logOutcome(entry: Omit<OutcomeEntry, "timestamp">): OutcomeEntry {
-  const full: OutcomeEntry = {
-    ...entry,
-    timestamp: new Date().toISOString(),
-  };
-  outcomeMemory.push(full);
-  return full;
+  timestamp: Date;
 }
 
 export interface PackInsight {
-  correct: number;
-  incorrect: number;
+  packId: string;
   accuracy: number;
-  total: number;
-  lastUpdated: string;
+  totalCases: number;
+  correctCases: number;
+}
+
+const outcomes: OutcomeEntry[] = [];
+
+export function logOutcome(entry: Omit<OutcomeEntry, "timestamp">): OutcomeEntry {
+  const record: OutcomeEntry = { ...entry, timestamp: new Date() };
+  outcomes.push(record);
+  if (outcomes.length > 1000) outcomes.shift();
+  return record;
 }
 
 export function learnFromOutcomes(): Record<string, PackInsight> {
-  const insights: Record<string, PackInsight> = {};
-
-  for (const entry of outcomeMemory) {
-    const key = entry.packId;
-
-    if (!insights[key]) {
-      insights[key] = { correct: 0, incorrect: 0, accuracy: 0, total: 0, lastUpdated: "" };
-    }
-
-    if (entry.correct) {
-      insights[key].correct++;
-    } else {
-      insights[key].incorrect++;
-    }
-
-    insights[key].total = insights[key].correct + insights[key].incorrect;
-    insights[key].accuracy =
-      insights[key].total > 0
-        ? Math.round((insights[key].correct / insights[key].total) * 1000) / 10
-        : 0;
-    insights[key].lastUpdated = entry.timestamp;
+  const byPack: Record<string, OutcomeEntry[]> = {};
+  for (const o of outcomes) {
+    if (!byPack[o.packId]) byPack[o.packId] = [];
+    byPack[o.packId].push(o);
   }
 
+  const insights: Record<string, PackInsight> = {};
+  for (const [packId, entries] of Object.entries(byPack)) {
+    const correct = entries.filter(e => e.correct).length;
+    insights[packId] = {
+      packId,
+      totalCases: entries.length,
+      correctCases: correct,
+      accuracy: correct / (entries.length || 1),
+    };
+  }
   return insights;
 }
 
 export function getOutcomeCount(): number {
-  return outcomeMemory.length;
+  return outcomes.length;
 }
 
 export function getRecentOutcomes(limit = 50): OutcomeEntry[] {
-  return outcomeMemory.slice(-limit);
+  return outcomes.slice(-limit);
 }
 
 export function clearOutcomes(): void {
-  outcomeMemory.length = 0;
+  outcomes.length = 0;
 }
