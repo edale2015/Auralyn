@@ -200,5 +200,31 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: tru
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
 
+// Patient sessions (persistent queue — replaces in-memory store)
+export const patientSessions = pgTable("patient_sessions", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull(),
+  riskLevel: text("risk_level"),
+  safetyFlags: jsonb("safety_flags").default([]),
+  disposition: jsonb("disposition"),
+  approvedBy: text("approved_by"),
+  overrideData: jsonb("override_data"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export type PatientSessionRow = typeof patientSessions.$inferSelect;
+
+// Alert log (high-risk SMS alerts sent to on-call physician)
+export const alertLogs = pgTable("alert_logs", {
+  id: serial("id").primaryKey(),
+  patientId: text("patient_id").notNull(),
+  riskLevel: text("risk_level").notNull(),
+  reasons: jsonb("reasons").notNull(),
+  channel: text("channel").notNull(),
+  traceId: text("trace_id"),
+  sentAt: timestamp("sent_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export type AlertLog = typeof alertLogs.$inferSelect;
+
 // Re-export chat models for OpenAI integration
 export * from "./models/chat";

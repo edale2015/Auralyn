@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { runUIAutomation, runBrowserTask } from "./browserAgent";
 import { getTemplate, listTemplates, fillTemplate } from "./templateLibrary";
+import { getRpaMode } from "./rpaHealth";
 import { requireRole } from "../middleware/requireRole";
 
 const router = Router();
@@ -68,6 +69,11 @@ router.post("/run-custom", requireRole(["admin"]), async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }
+});
+
+router.get("/health", async (_req, res) => {
+  const mode = await getRpaMode();
+  res.json({ ok: true, ...mode });
 });
 
 export default router;

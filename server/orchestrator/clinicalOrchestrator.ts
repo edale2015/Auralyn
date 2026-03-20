@@ -8,6 +8,7 @@ import { runSafetyGate, SafetyGateResult } from "../safety/safetyGate";
 import { createTraceId, auditStep } from "../audit/auditLogger";
 import { generateClinicalExplanation } from "../explainability/explainableAIEngine";
 import { logEngineStatus } from "../monitoring/systemMonitor";
+import { notifyOnCallPhysician } from "../notifications/notifier";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -142,10 +143,31 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
 
     await auditStep({ traceId, step: "SAFETY_GATE", input: safetyChecks, output: safetyGate });
 
+    if (process.env.PILOT_MODE === "true") {
+      return {
+        success: true,
+        complaint: validated.complaint,
+        patientId: input.patientId,
+        blocked: false,
+        learningTriggered: false,
+        latencyMs: Date.now() - start,
+        timestamp: new Date().toISOString(),
+        pilotMode: true,
+        message: "Clinician reviewing your case",
+      } as any;
+    }
+
     if (!safetyGate.allowed) {
       const latencyMs = Date.now() - start;
       publishAudit({ type: "FULL_FLOW_BLOCKED", latency: latencyMs, success: false, error: "Safety gate blocked" });
       await logEngineStatus("clinicalOrchestrator", "warning", latencyMs, `Safety gate blocked: ${safetyGate.reasons.join("; ")}`);
+
+      notifyOnCallPhysician({
+        patientId: input.patientId ?? "unknown",
+        riskLevel: "HIGH",
+        reasons: safetyGate.reasons,
+        traceId,
+      }).catch(console.error);
 
       const blockedResult: ClinicalFlowResult & { id: string } = {
         id, traceId,

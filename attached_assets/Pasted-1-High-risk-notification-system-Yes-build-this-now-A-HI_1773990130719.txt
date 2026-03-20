@@ -1,0 +1,756 @@
+1. High-risk notification system
+
+Yes, build this now. A HIGH-risk flag that only paints the screen red is a smoke alarm with no sound.
+
+What to add
+server/notifications/notifier.ts
+import { sendSMS } from "../integrations/twilio";
+
+type AlertPayload = {
+  patientId: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  reasons: string[];
+  traceId?: string;
+};
+
+export async function notifyOnCallPhysician(payload: AlertPayload) {
+  const onCall = process.env.ON_CALL_PHYSICIAN_NUMBER;
+  if (!onCall) {
+    console.warn("ON_CALL_PHYSICIAN_NUMBER missing. Alert not sent.");
+    return { sent: false, reason: "missing_on_call_number" };
+  }
+
+  const msg =
+    `[HIGH RISK ALERT] Patient ${payload.patientId}\n` +
+    `Risk: ${payload.riskLevel}\n` +
+    `Reasons: ${payload.reasons.join(", ")}\n` +
+    `${payload.traceId ? `Trace: ${payload.traceId}` : ""}`;
+
+  await sendSMS(onCall, msg);
+  return { sent: true };
+}
+Add to orchestrator right after safety gate
+import { notifyOnCallPhysician } from "../notifications/notifier";
+
+if (!safetyGate.allowed) {
+  await notifyOnCallPhysician({
+    patientId: input.patientId || "unknown",
+    riskLevel: "HIGH",
+    reasons: safetyGate.reasons,
+    traceId,
+  });
+
+  return {
+    success: false,
+    blocked: true,
+    safety: safetyGate,
+    traceId,
+  };
+}
+Optional alert audit table
+CREATE TABLE IF NOT EXISTS alerts (
+  id SERIAL PRIMARY KEY,
+  patient_id TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  reasons JSONB NOT NULL,
+  channel TEXT NOT NULL,
+  sent_at TIMESTAMP DEFAULT NOW(),
+  trace_id TEXT
+);
+2. Persistent patient sessions in Postgres
+
+Also yes. In-memory sessions are fine for demos and terrible for real operations.
+
+Table
+CREATE TABLE IF NOT EXISTS patient_sessions (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  risk_level TEXT,
+  safety_flags JSONB DEFAULT '[]'::jsonb,
+  disposition JSONB,
+  approved_by TEXT,
+  override_data JSONB,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+server/patient/sessionStorePg.ts
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+export type PatientSession = {
+  id: string;
+  status: string;
+  riskLevel?: string | null;
+  safetyFlags?: string[];
+  disposition?: unknown;
+  approvedBy?: string | null;
+  overrideData?: unknown;
+};
+
+export async function createPatientSessionPg(session: PatientSession) {
+  await db.execute(sql`
+    INSERT INTO patient_sessions
+      (id, status, risk_level, safety_flags, disposition, approved_by, override_data)
+    VALUES
+      (${session.id},
+       ${session.status},
+       ${session.riskLevel ?? null},
+       ${JSON.stringify(session.safetyFlags ?? [])}::jsonb,
+       ${JSON.stringify(session.disposition ?? null)}::jsonb,
+       ${session.approvedBy ?? null},
+       ${JSON.stringify(session.overrideData ?? null)}::jsonb)
+    ON CONFLICT (id) DO UPDATE SET
+      status = EXCLUDED.status,
+      risk_level = EXCLUDED.risk_level,
+      safety_flags = EXCLUDED.safety_flags,
+      disposition = EXCLUDED.disposition,
+      approved_by = EXCLUDED.approved_by,
+      override_data = EXCLUDED.override_data,
+      updated_at = NOW();
+  `);
+}
+
+export async function getPatientSessionsPg() {
+  const result = await db.execute(sql`
+    SELECT *
+    FROM patient_sessions
+    ORDER BY created_at DESC
+    LIMIT 200
+  `);
+  return result.rows;
+}
+
+export async function updatePatientSessionPg(
+  id: string,
+  patch: Partial<PatientSession>
+) {
+  await db.execute(sql`
+    UPDATE patient_sessions
+    SET
+      status = COALESCE(${patch.status ?? null}, status),
+      risk_level = COALESCE(${patch.riskLevel ?? null}, risk_level),
+      safety_flags = COALESCE(${patch.safetyFlags ? JSON.stringify(patch.safetyFlags) : null}::jsonb, safety_flags),
+      disposition = COALESCE(${patch.disposition ? JSON.stringify(patch.disposition) : null}::jsonb, disposition),
+      approved_by = COALESCE(${patch.approvedBy ?? null}, approved_by),
+      override_data = COALESCE(${patch.overrideData ? JSON.stringify(patch.overrideData) : null}::jsonb, override_data),
+      updated_at = NOW()
+    WHERE id = ${id}
+  `);
+}
+Replace queue routes to use Postgres store
+import {
+  createPatientSessionPg,
+  getPatientSessionsPg,
+  updatePatientSessionPg,
+} from "../patient/sessionStorePg";
+
+router.get("/queue", async (_req, res) => {
+  const sessions = await getPatientSessionsPg();
+  res.json(sessions);
+});
+
+router.post("/session", async (req, res) => {
+  const result = await runFullClinicalFlow(req.body);
+
+  await createPatientSessionPg({
+    id: req.body.patientId,
+    status: result.success ? "pending_review" : "blocked",
+    riskLevel: result.safety?.level ?? "LOW",
+    safetyFlags: result.safety?.reasons ?? [],
+    disposition: result,
+  });
+
+  res.json(result);
+});
+3. Physician-specific auth for approve/override
+
+Yes, absolutely. admin is too blunt. These actions need a physician claim.
+
+JWT middleware
+server/auth/requirePhysician.ts
+import jwt from "jsonwebtoken";
+import { Request, Response, NextFunction } from "express";
+
+type JwtClaims = {
+  sub: string;
+  role?: string;
+  physician?: boolean;
+  physicianId?: string;
+};
+
+export function requirePhysician(
+  req: Request & { user?: JwtClaims },
+  res: Response,
+  next: NextFunction
+) {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing bearer token" });
+  }
+
+  try {
+    const token = auth.slice("Bearer ".length);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtClaims;
+
+    if (!decoded.physician && decoded.role !== "physician") {
+      return res.status(403).json({ error: "Physician access required" });
+    }
+
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+Apply to queue actions
+import { requirePhysician } from "../auth/requirePhysician";
+
+router.post("/approve/:id", requirePhysician, async (req: any, res) => {
+  await updatePatientSessionPg(req.params.id, {
+    status: "approved",
+    approvedBy: req.user.physicianId || req.user.sub,
+  });
+  res.json({ success: true });
+});
+
+router.post("/override/:id", requirePhysician, async (req: any, res) => {
+  await updatePatientSessionPg(req.params.id, {
+    status: "overridden",
+    approvedBy: req.user.physicianId || req.user.sub,
+    overrideData: req.body,
+  });
+  res.json({ success: true });
+});
+4. Diagnosis confidence calibration
+
+Yes, but this is more than cosmetics. Right now your FDA metrics are being kneecapped by label mismatch rather than true model behavior.
+
+Best fix
+
+Create a canonical label map so validation compares apples to apples.
+
+server/fda/diagnosisLabelMap.ts
+export const DIAGNOSIS_LABEL_MAP: Record<string, string> = {
+  viral_uri: "viral_upper_respiratory_infection",
+  uri: "viral_upper_respiratory_infection",
+  viral_bronchitis: "acute_bronchitis",
+  acs: "acute_coronary_syndrome",
+  pna: "pneumonia",
+  uti_simple: "uncomplicated_uti",
+};
+server/fda/normalizeDiagnosis.ts
+import { DIAGNOSIS_LABEL_MAP } from "./diagnosisLabelMap";
+
+export function normalizeDiagnosisLabel(label?: string | null) {
+  if (!label) return "unknown";
+  const normalized = label.trim().toLowerCase();
+  return DIAGNOSIS_LABEL_MAP[normalized] || normalized;
+}
+Patch validation runner
+import { normalizeDiagnosisLabel } from "./normalizeDiagnosis";
+
+results.push({
+  input: caseData.input,
+  predicted: normalizeDiagnosisLabel(res?.diagnosis?.primary || null),
+  actual: normalizeDiagnosisLabel(caseData.actual),
+});
+Confidence calibration
+
+If you also want a confidence score that behaves better:
+
+server/engines/confidenceCalibration.ts
+export function calibrateConfidence(rawScore: number) {
+  const clipped = Math.max(0, Math.min(1, rawScore));
+  if (clipped > 0.9) return 0.85 + (clipped - 0.9) * 0.5;
+  if (clipped < 0.2) return clipped * 0.7;
+  return clipped;
+}
+
+Use it before returning diagnosis confidence to the UI or validation package.
+
+5. Playwright installation
+
+Yes, but only when you want real browser execution rather than simulation fallback.
+
+Install
+npm install playwright
+npx playwright install --with-deps chromium
+Health endpoint so you know whether RPA is live or simulated
+server/rpa/rpaHealth.ts
+export async function getRpaMode() {
+  try {
+    const mod = await import("playwright");
+    return { mode: mod?.chromium ? "live" : "simulated" };
+  } catch {
+    return { mode: "simulated" };
+  }
+}
+Route
+import express from "express";
+import { getRpaMode } from "./rpaHealth";
+
+const router = express.Router();
+
+router.get("/health", async (_req, res) => {
+  res.json(await getRpaMode());
+});
+
+export default router;
+What I would still change beyond Replit’s list
+Add physician alert deduping
+
+You do not want 12 SMS alerts for the same blocked patient.
+
+Simple approach
+const recentAlerts = new Map<string, number>();
+
+export function shouldSendAlert(key: string, windowMs = 5 * 60 * 1000) {
+  const now = Date.now();
+  const last = recentAlerts.get(key) || 0;
+  if (now - last < windowMs) return false;
+  recentAlerts.set(key, now);
+  return true;
+}
+
+Use patientId + riskLevel + reasons.join("|") as the key.
+
+Add server-side session pagination
+
+Your queue route will eventually become a swamp.
+
+router.get("/queue", async (req, res) => {
+  const limit = Math.min(Number(req.query.limit || 50), 200);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
+  // query with LIMIT/OFFSET
+});
+Add audit entry for approvals/overrides
+
+These actions are medico-legal events, not just UI clicks.
+
+Recommendation summary
+Build now
+
+High-risk notification system
+
+Persistent Postgres patient sessions
+
+Physician JWT claim enforcement
+
+Diagnosis label normalization/calibration
+
+Build when ready for live browser ops
+
+Install Playwright and flip RPA to live mode
+
+My verdict on Replit’s recommendations
+
+They’re good. They’re also incomplete unless you add:
+
+alert deduping
+
+approval/override audit logging
+
+queue pagination
+
+canonical diagnosis label normalization
+
+If you want, I can write the full merged patch set next as one cohesive backend bundle:
+alerts + Postgres session store + physician JWT middleware + diagnosis normalization + approval audit logging.
+
+PLEASE write the full merged patch set next as one cohesive backend bundle:
+alerts + Postgres session store + physician JWT middleware + diagnosis normalization + approval audit logging.
+
+Here’s a single cohesive backend patch bundle you can drop into your repo. It adds:
+
+🔔 High-risk alerts (with deduping)
+
+🗄️ Postgres patient sessions (persistent queue)
+
+🛂 Physician JWT middleware (approve/override protected)
+
+🧭 Diagnosis normalization (for FDA metrics)
+
+🧾 Approval/override audit logging (medico-legal trace)
+
+Everything is wired to your existing orchestrator-first flow.
+
+🧱 0) DB MIGRATIONS
+
+Run once on your Postgres:
+
+-- patient sessions
+CREATE TABLE IF NOT EXISTS patient_sessions (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  risk_level TEXT,
+  safety_flags JSONB DEFAULT '[]'::jsonb,
+  disposition JSONB,
+  approved_by TEXT,
+  override_data JSONB,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- alerts
+CREATE TABLE IF NOT EXISTS alerts (
+  id SERIAL PRIMARY KEY,
+  patient_id TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  reasons JSONB NOT NULL,
+  channel TEXT NOT NULL,
+  sent_at TIMESTAMP DEFAULT NOW(),
+  trace_id TEXT
+);
+
+-- (optional but recommended) index for queue paging
+CREATE INDEX IF NOT EXISTS idx_patient_sessions_created_at
+ON patient_sessions (created_at DESC);
+🔔 1) ALERTS (WITH DEDUPING)
+server/notifications/notifier.ts
+import { sendSMS } from "../integrations/twilio";
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+type AlertPayload = {
+  patientId: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  reasons: string[];
+  traceId?: string;
+};
+
+// in-memory dedupe (per instance). Good enough for pilot.
+// later: move to Redis for multi-instance dedupe.
+const recentAlerts = new Map<string, number>();
+
+function shouldSendAlert(key: string, windowMs = 5 * 60 * 1000) {
+  const now = Date.now();
+  const last = recentAlerts.get(key) || 0;
+  if (now - last < windowMs) return false;
+  recentAlerts.set(key, now);
+  return true;
+}
+
+export async function notifyOnCallPhysician(payload: AlertPayload) {
+  if (payload.riskLevel !== "HIGH") return { sent: false, reason: "not_high" };
+
+  const key =
+    `${payload.patientId}|${payload.riskLevel}|${payload.reasons.join("|")}`;
+
+  if (!shouldSendAlert(key)) {
+    return { sent: false, reason: "deduped" };
+  }
+
+  const to = process.env.ON_CALL_PHYSICIAN_NUMBER;
+  if (!to) {
+    console.warn("ON_CALL_PHYSICIAN_NUMBER missing");
+    return { sent: false, reason: "missing_number" };
+  }
+
+  const body =
+    `[HIGH RISK ALERT]\n` +
+    `Patient: ${payload.patientId}\n` +
+    `Reasons: ${payload.reasons.join(", ")}\n` +
+    `${payload.traceId ? `Trace: ${payload.traceId}` : ""}`;
+
+  await sendSMS(to, body);
+
+  // persist alert
+  await db.execute(sql`
+    INSERT INTO alerts (patient_id, risk_level, reasons, channel, trace_id)
+    VALUES (
+      ${payload.patientId},
+      ${payload.riskLevel},
+      ${JSON.stringify(payload.reasons)}::jsonb,
+      ${"sms"},
+      ${payload.traceId ?? null}
+    )
+  `);
+
+  return { sent: true };
+}
+🗄️ 2) POSTGRES PATIENT SESSION STORE
+server/patient/sessionStorePg.ts
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+export type PatientSession = {
+  id: string;
+  status: string;
+  riskLevel?: string | null;
+  safetyFlags?: string[];
+  disposition?: unknown;
+  approvedBy?: string | null;
+  overrideData?: unknown;
+};
+
+export async function createOrUpsertSession(s: PatientSession) {
+  await db.execute(sql`
+    INSERT INTO patient_sessions
+      (id, status, risk_level, safety_flags, disposition, approved_by, override_data)
+    VALUES
+      (${s.id},
+       ${s.status},
+       ${s.riskLevel ?? null},
+       ${JSON.stringify(s.safetyFlags ?? [])}::jsonb,
+       ${JSON.stringify(s.disposition ?? null)}::jsonb,
+       ${s.approvedBy ?? null},
+       ${JSON.stringify(s.overrideData ?? null)}::jsonb)
+    ON CONFLICT (id) DO UPDATE SET
+      status = EXCLUDED.status,
+      risk_level = EXCLUDED.risk_level,
+      safety_flags = EXCLUDED.safety_flags,
+      disposition = EXCLUDED.disposition,
+      approved_by = EXCLUDED.approved_by,
+      override_data = EXCLUDED.override_data,
+      updated_at = NOW()
+  `);
+}
+
+export async function getSessions(limit = 50, offset = 0) {
+  const res = await db.execute(sql`
+    SELECT *
+    FROM patient_sessions
+    ORDER BY created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+  return res.rows;
+}
+
+export async function updateSession(
+  id: string,
+  patch: Partial<PatientSession>
+) {
+  await db.execute(sql`
+    UPDATE patient_sessions
+    SET
+      status = COALESCE(${patch.status ?? null}, status),
+      risk_level = COALESCE(${patch.riskLevel ?? null}, risk_level),
+      safety_flags = COALESCE(
+        ${patch.safetyFlags ? JSON.stringify(patch.safetyFlags) : null}::jsonb,
+        safety_flags
+      ),
+      disposition = COALESCE(
+        ${patch.disposition ? JSON.stringify(patch.disposition) : null}::jsonb,
+        disposition
+      ),
+      approved_by = COALESCE(${patch.approvedBy ?? null}, approved_by),
+      override_data = COALESCE(
+        ${patch.overrideData ? JSON.stringify(patch.overrideData) : null}::jsonb,
+        override_data
+      ),
+      updated_at = NOW()
+    WHERE id = ${id}
+  `);
+}
+🛂 3) PHYSICIAN JWT MIDDLEWARE
+server/auth/requirePhysician.ts
+import jwt from "jsonwebtoken";
+import { Request, Response, NextFunction } from "express";
+
+type Claims = {
+  sub: string;
+  role?: string;
+  physician?: boolean;
+  physicianId?: string;
+};
+
+export function requirePhysician(
+  req: Request & { user?: Claims },
+  res: Response,
+  next: NextFunction
+) {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing bearer token" });
+  }
+
+  try {
+    const token = auth.slice("Bearer ".length);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as Claims;
+
+    if (!decoded.physician && decoded.role !== "physician") {
+      return res.status(403).json({ error: "Physician access required" });
+    }
+
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+🧭 4) DIAGNOSIS NORMALIZATION (FOR FDA METRICS)
+server/fda/diagnosisLabelMap.ts
+export const DIAGNOSIS_LABEL_MAP: Record<string, string> = {
+  uri: "viral_upper_respiratory_infection",
+  viral_uri: "viral_upper_respiratory_infection",
+  viral_bronchitis: "acute_bronchitis",
+  acs: "acute_coronary_syndrome",
+  pna: "pneumonia",
+  uti_simple: "uncomplicated_uti",
+};
+server/fda/normalizeDiagnosis.ts
+import { DIAGNOSIS_LABEL_MAP } from "./diagnosisLabelMap";
+
+export function normalizeDiagnosisLabel(label?: string | null) {
+  if (!label) return "unknown";
+  const key = label.trim().toLowerCase();
+  return DIAGNOSIS_LABEL_MAP[key] || key;
+}
+Patch your validation runner
+import { normalizeDiagnosisLabel } from "./normalizeDiagnosis";
+
+results.push({
+  input: caseData.input,
+  predicted: normalizeDiagnosisLabel(res?.diagnosis?.primary || null),
+  actual: normalizeDiagnosisLabel(caseData.actual),
+});
+🧾 5) APPROVAL / OVERRIDE AUDIT LOGGING
+server/audit/approvalAudit.ts
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+export async function logApproval({
+  patientId,
+  physicianId,
+  action,
+  overrideData,
+}: {
+  patientId: string;
+  physicianId: string;
+  action: "approve" | "override" | "escalate";
+  overrideData?: any;
+}) {
+  await db.execute(sql`
+    INSERT INTO audit_logs (trace_id, step, input, output, metadata)
+    VALUES (
+      ${patientId},
+      ${"PHYSICIAN_ACTION"},
+      ${JSON.stringify({ action })}::jsonb,
+      ${JSON.stringify(overrideData ?? null)}::jsonb,
+      ${JSON.stringify({ physicianId })}::jsonb
+    )
+  `);
+}
+🧩 6) PATIENT QUEUE ROUTES (FULLY WIRED)
+server/routes/patientQueueRoutes.ts
+import express from "express";
+import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
+import {
+  createOrUpsertSession,
+  getSessions,
+  updateSession,
+} from "../patient/sessionStorePg";
+import { requirePhysician } from "../auth/requirePhysician";
+import { logApproval } from "../audit/approvalAudit";
+import { notifyOnCallPhysician } from "../notifications/notifier";
+import { createTraceId } from "../audit/auditLogger";
+
+const router = express.Router();
+
+// GET queue (paged)
+router.get("/queue", async (req, res) => {
+  const limit = Math.min(Number(req.query.limit || 50), 200);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
+  const rows = await getSessions(limit, offset);
+  res.json(rows);
+});
+
+// POST new patient (always goes through orchestrator)
+router.post("/session", async (req, res) => {
+  const traceId = createTraceId();
+  const input = { ...req.body, traceId };
+
+  const result = await runFullClinicalFlow(input);
+
+  const patientId = req.body.patientId || traceId;
+
+  // persist session
+  await createOrUpsertSession({
+    id: patientId,
+    status: result.success ? "pending_review" : "blocked",
+    riskLevel: result?.safety?.level ?? "LOW",
+    safetyFlags: result?.safety?.reasons ?? [],
+    disposition: result,
+  });
+
+  // notify if high risk blocked
+  if (result?.blocked && result?.safety?.level === "HIGH") {
+    await notifyOnCallPhysician({
+      patientId,
+      riskLevel: "HIGH",
+      reasons: result.safety.reasons,
+      traceId,
+    });
+  }
+
+  res.json({ ...result, traceId, patientId });
+});
+
+// POST approve
+router.post("/approve/:id", requirePhysician, async (req: any, res) => {
+  const id = req.params.id;
+  const physicianId = req.user.physicianId || req.user.sub;
+
+  await updateSession(id, {
+    status: "approved",
+    approvedBy: physicianId,
+  });
+
+  await logApproval({
+    patientId: id,
+    physicianId,
+    action: "approve",
+  });
+
+  res.json({ success: true });
+});
+
+// POST override
+router.post("/override/:id", requirePhysician, async (req: any, res) => {
+  const id = req.params.id;
+  const physicianId = req.user.physicianId || req.user.sub;
+
+  await updateSession(id, {
+    status: "overridden",
+    approvedBy: physicianId,
+    overrideData: req.body,
+  });
+
+  await logApproval({
+    patientId: id,
+    physicianId,
+    action: "override",
+    overrideData: req.body,
+  });
+
+  res.json({ success: true });
+});
+
+// POST escalate
+router.post("/escalate/:id", requirePhysician, async (req: any, res) => {
+  const id = req.params.id;
+  const physicianId = req.user.physicianId || req.user.sub;
+
+  await updateSession(id, { status: "escalated" });
+
+  await logApproval({
+    patientId: id,
+    physicianId,
+    action: "escalate",
+  });
+
+  res.json({ success: true });
+});
+
+export default router;
+🔌 7) WIRING (IMPORTANT)
+server/index.ts
+import patientQueueRoutes from "./routes/patientQueueRoutes";
+
+app.use("/api/patients", patientQueueRoutes);
+
+Ensure:
+
+All intake paths (SMS, web, RPA) ultimately call /api/patients/session
+
+No route bypasses runFullClinicalFlow

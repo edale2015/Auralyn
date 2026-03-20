@@ -1,80 +1,115 @@
 import { Router } from "express";
-import {
-  getAllSessions,
-  getSession,
-  createSession,
-  updateSession,
-  deleteSession,
-  seedDemoSessions,
-} from "./sessionStore";
 import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
+import {
+  createOrUpsertSession,
+  getSessions,
+  getSessionById,
+  updateSession,
+} from "./sessionStorePg";
+import { requirePhysician } from "../auth/requirePhysician";
+import { logApproval } from "../audit/approvalAudit";
+import { notifyOnCallPhysician } from "../notifications/notifier";
+import { createTraceId } from "../audit/auditLogger";
 
 const router = Router();
 
-seedDemoSessions();
-
-router.get("/queue", (_req, res) => {
-  res.json(getAllSessions());
-});
-
-router.get("/session/:id", (req, res) => {
-  const s = getSession(req.params.id);
-  if (!s) return res.status(404).json({ error: "Session not found" });
-  res.json(s);
-});
-
-router.post("/session", async (req, res) => {
+router.get("/queue", async (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const offset = Math.max(Number(req.query.offset ?? 0), 0);
   try {
-    const { id, complaint, answers } = req.body;
-    const sessionId = id ?? `pt-${Date.now()}`;
-
-    const flowResult = await runFullClinicalFlow({ complaint, answers });
-
-    const session = createSession(sessionId, {
-      complaint,
-      age: answers?.age,
-      disposition: (flowResult as any)?.scores?.disposition ?? "physician-review",
-      riskLevel: (flowResult as any)?.safetyGate?.level?.toLowerCase() ?? "low",
-      safetyFlags: (flowResult as any)?.safetyGate?.reasons ?? [],
-      status: "pending",
-    });
-
-    res.json({ ok: true, session, flow: flowResult });
+    const rows = await getSessions(limit, offset);
+    res.json(rows);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e?.message });
+    res.status(500).json({ error: e?.message });
   }
 });
 
-router.post("/approve/:id", (req, res) => {
-  const session = updateSession(req.params.id, {
-    status: "approved",
-    approvedBy: req.body?.physicianId ?? "physician",
-  });
-  if (!session) return res.status(404).json({ error: "Session not found" });
-  res.json({ success: true, session });
+router.get("/session/:id", async (req, res) => {
+  try {
+    const session = await getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    res.json(session);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
 });
 
-router.post("/override/:id", (req, res) => {
-  const session = updateSession(req.params.id, {
-    status: "overridden",
-    override: req.body,
-    approvedBy: req.body?.physicianId ?? "physician",
-  });
-  if (!session) return res.status(404).json({ error: "Session not found" });
-  res.json({ success: true, session });
+router.post("/session", async (req, res) => {
+  const traceId = createTraceId();
+  const patientId = req.body.patientId || req.body.id || traceId;
+
+  try {
+    const result = await runFullClinicalFlow({ ...req.body, patientId });
+
+    const riskLevel = (result as any)?.safetyGate?.level ?? "LOW";
+    const safetyFlags = (result as any)?.safetyGate?.reasons ?? [];
+    const isBlocked = (result as any)?.blocked === true;
+
+    await createOrUpsertSession({
+      id: patientId,
+      status: isBlocked ? "blocked" : result.success ? "pending_review" : "failed",
+      riskLevel,
+      safetyFlags,
+      disposition: result,
+    });
+
+    if (isBlocked && riskLevel === "HIGH") {
+      notifyOnCallPhysician({
+        patientId,
+        riskLevel: "HIGH",
+        reasons: safetyFlags,
+        traceId,
+      }).catch(console.error);
+    }
+
+    console.log(JSON.stringify({
+      event: "clinical_flow",
+      patientId,
+      traceId,
+      latency: result.latencyMs,
+      status: result.success ? "success" : "blocked",
+    }));
+
+    res.json({ ...result, traceId, patientId });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message, traceId });
+  }
 });
 
-router.post("/escalate/:id", (req, res) => {
-  const session = updateSession(req.params.id, {
-    status: "escalated",
-  });
-  if (!session) return res.status(404).json({ error: "Session not found" });
-  res.json({ success: true, session });
+router.post("/approve/:id", requirePhysician as any, async (req: any, res) => {
+  const id = req.params.id;
+  const physicianId = req.physician?.physicianId ?? req.physician?.sub ?? "unknown";
+  try {
+    await updateSession(id, { status: "approved", approvedBy: physicianId });
+    await logApproval({ patientId: id, physicianId, action: "approve" });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
 });
 
-router.delete("/session/:id", (req, res) => {
-  const removed = deleteSession(req.params.id);
-  res.json({ success: removed });
+router.post("/override/:id", requirePhysician as any, async (req: any, res) => {
+  const id = req.params.id;
+  const physicianId = req.physician?.physicianId ?? req.physician?.sub ?? "unknown";
+  try {
+    await updateSession(id, { status: "overridden", approvedBy: physicianId, overrideData: req.body });
+    await logApproval({ patientId: id, physicianId, action: "override", overrideData: req.body });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
+router.post("/escalate/:id", requirePhysician as any, async (req: any, res) => {
+  const id = req.params.id;
+  const physicianId = req.physician?.physicianId ?? req.physician?.sub ?? "unknown";
+  try {
+    await updateSession(id, { status: "escalated" });
+    await logApproval({ patientId: id, physicianId, action: "escalate" });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
 });
 
 export default router;
