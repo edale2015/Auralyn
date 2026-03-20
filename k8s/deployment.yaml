@@ -7,6 +7,11 @@ metadata:
     version: "1.0.0"
 spec:
   replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 2
   selector:
     matchLabels:
       app: auralyn-clinical-ai
@@ -30,16 +35,52 @@ spec:
                 secretKeyRef:
                   name: auralyn-secrets
                   key: database-url
+            - name: DATABASE_URL_PRIMARY
+              valueFrom:
+                secretKeyRef:
+                  name: auralyn-secrets
+                  key: database-url-primary
+                  optional: true
+            - name: DATABASE_URL_REPLICA
+              valueFrom:
+                secretKeyRef:
+                  name: auralyn-secrets
+                  key: database-url-replica
+                  optional: true
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: auralyn-secrets
                   key: openai-api-key
+            - name: REDIS_PRIMARY
+              valueFrom:
+                secretKeyRef:
+                  name: auralyn-secrets
+                  key: redis-primary
+                  optional: true
+            - name: REDIS_SECONDARY
+              valueFrom:
+                secretKeyRef:
+                  name: auralyn-secrets
+                  key: redis-secondary
+                  optional: true
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
                   name: auralyn-secrets
                   key: redis-url
+                  optional: true
+            - name: PRIMARY_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: auralyn-secrets
+                  key: primary-api-url
+                  optional: true
+            - name: SECONDARY_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: auralyn-secrets
+                  key: secondary-api-url
                   optional: true
           resources:
             requests:
@@ -48,18 +89,22 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
           livenessProbe:
             httpGet:
-              path: /api/monitoring/health
+              path: /api/healthz
               port: 5000
             initialDelaySeconds: 30
             periodSeconds: 15
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/monitoring/health
+              path: /api/healthz
               port: 5000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 5
 ---
 apiVersion: v1

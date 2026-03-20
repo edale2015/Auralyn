@@ -20,6 +20,10 @@ import { getTriageCacheStats, invalidateTriageCache } from "../cache/triageCache
 import { getAsyncWorkerStats } from "../queue/asyncWorker";
 import { getQueueDepths } from "../queue/queues";
 import { getAutoThreshold } from "../autonomy/autonomyEngine";
+import { dbHealthCheck } from "../db/dbRouter";
+import { detectRegionFailure, getLastRegionStatus } from "../monitoring/failoverDetector";
+import { isUsingFallback } from "../redis/redisClient";
+import { emitEvent } from "../controlTower/eventBus";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -50,6 +54,44 @@ router.post("/simulate-high-scale", auth, (req: Request, res: Response) => {
     res.json({ ok: true, results });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.get("/live", async (_req: Request, res: Response) => {
+  try {
+    const dbStatus = await dbHealthCheck();
+    if (!dbStatus.ok) {
+      return res.status(500).json({ status: "fail", reason: "database unreachable" });
+    }
+    res.json({ status: "ok", db: "up", latencyMs: dbStatus.latencyMs });
+  } catch (e: any) {
+    res.status(500).json({ status: "fail", error: e?.message });
+  }
+});
+
+router.post("/region-event", async (req: Request, res: Response) => {
+  const secret = req.headers["x-region-sync"];
+  const expected = process.env.REGION_SYNC_SECRET;
+  if (expected && secret !== expected) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const event = req.body;
+  if (!event?.type || !event?.timestamp) {
+    return res.status(400).json({ error: "invalid event" });
+  }
+  emitEvent({ ...event, fromRegion: true });
+  res.json({ ok: true });
+});
+
+router.get("/region", requireRole(["admin", "physician"]), async (_req: Request, res: Response) => {
+  try {
+    const [status, lastStatus] = await Promise.all([
+      detectRegionFailure(),
+      Promise.resolve(getLastRegionStatus()),
+    ]);
+    res.json({ ok: true, status, lastStatus, redisFallback: isUsingFallback() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
   }
 });
 

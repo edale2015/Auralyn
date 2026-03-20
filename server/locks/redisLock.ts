@@ -1,31 +1,11 @@
-const inMemoryLocks = new Set<string>();
-let redisClient: any = null;
-let initialized = false;
+import { redisSet, redisDel } from "../redis/redisClient";
 
-async function getRedis(): Promise<any | null> {
-  if (initialized) return redisClient;
-  initialized = true;
-  if (!process.env.REDIS_URL) return null;
-  try {
-    const { default: IORedis } = await import("ioredis");
-    redisClient = new IORedis(process.env.REDIS_URL, { lazyConnect: true, connectTimeout: 3000 });
-    await redisClient.connect();
-    return redisClient;
-  } catch {
-    redisClient = null;
-    return null;
-  }
-}
+const inMemoryLocks = new Set<string>();
 
 export async function acquireLock(key: string, ttlMs = 5000): Promise<boolean> {
-  const redis = await getRedis();
-
-  if (redis) {
-    try {
-      const result = await redis.set(key, "1", "NX", "PX", ttlMs);
-      return result === "OK";
-    } catch {}
-  }
+  const result = await redisSet(key, "1", { nx: true, pxMs: ttlMs });
+  if (result === "OK") return true;
+  if (result !== null) return false;
 
   if (inMemoryLocks.has(key)) return false;
   inMemoryLocks.add(key);
@@ -34,9 +14,16 @@ export async function acquireLock(key: string, ttlMs = 5000): Promise<boolean> {
 }
 
 export async function releaseLock(key: string): Promise<void> {
-  const redis = await getRedis();
-  if (redis) {
-    try { await redis.del(key); return; } catch {}
-  }
+  await redisDel(key);
   inMemoryLocks.delete(key);
+}
+
+export async function acquireGlobalLock(key: string, ttlSeconds = 60): Promise<boolean> {
+  const result = await redisSet(key, "1", { nx: true, exSeconds: ttlSeconds });
+  if (result === "OK") return true;
+  if (result !== null) return false;
+  if (inMemoryLocks.has(key)) return false;
+  inMemoryLocks.add(key);
+  setTimeout(() => inMemoryLocks.delete(key), ttlSeconds * 1000).unref();
+  return true;
 }

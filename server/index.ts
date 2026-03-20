@@ -214,6 +214,7 @@ import outcomeFeedbackRoutes from "./routes/outcomeFeedbackRoutes";
 import { startAutonomousLoop } from "./system/autonomousLoop";
 import { startEngines } from "./system/engineScheduler";
 import { initAsyncWorkerHandlers } from "./queue/asyncWorkerInit";
+import { runFailoverLoop } from "./monitoring/failoverDetector";
 import fdaPackageRoutes from "./fda/fdaPackageRoutes";
 import patientQueueRoutes from "./patient/patientQueueRoutes";
 import stressRoutes from "./stress/stressRoutes";
@@ -725,6 +726,7 @@ app.use((req, res, next) => {
       initAsyncWorkerHandlers();
       startAutonomousLoop(60_000);
       startEngines();
+      runFailoverLoop(60_000);
       initControlTowerSocket(httpServer);
       startAnomalyEngine(5000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
