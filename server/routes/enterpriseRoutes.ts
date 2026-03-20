@@ -1,4 +1,5 @@
 import express from "express";
+import { requireRole } from "../middleware/requireRole";
 import { digitalTwin } from "../simulation/digitalTwin";
 import { whatIfEngine, strategyTester } from "../simulation/whatIfEngine";
 import { runControlCycle, getControlLog, multiObjectiveOptimizer, safetyEnvelope } from "../control/adaptiveController";
@@ -9,6 +10,7 @@ import { scalingPlaybookEngine } from "../scaling/scalingPlaybook";
 import { enterpriseOrchestrator } from "../meta/enterpriseOrchestrator";
 
 const router = express.Router();
+router.use(requireRole(["admin"]));
 
 router.get("/digital-twin", (_req, res) => {
   const state = digitalTwin.getState();

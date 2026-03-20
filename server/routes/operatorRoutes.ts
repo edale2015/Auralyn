@@ -1,4 +1,5 @@
 import express from "express";
+import { requireRole } from "../middleware/requireRole";
 import { intentEngine } from "../operator/intentEngine";
 import { taskPlanner } from "../operator/taskPlanner";
 import { eligibilityEngine } from "../operator/eligibilityEngine";
@@ -7,6 +8,7 @@ import { batchProcessor } from "../operator/batchProcessor";
 import { operatorOrchestrator } from "../operator/operatorOrchestrator";
 
 const router = express.Router();
+router.use(requireRole(["admin", "physician", "staff"]));
 
 router.post("/parse-intent", (req, res) => {
   const { text } = req.body;

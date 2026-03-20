@@ -1,0 +1,265 @@
+🧠 PART 1 — MASTER ORCHESTRATOR ENGINE
+
+This is your missing brain.
+
+📁 server/orchestrator/clinicalOrchestrator.ts
+import { runScoring } from "../engines/scoringEngine";
+import { runDiagnosis } from "../engines/diagnosisEngine";
+import { runBilling } from "../engines/billingEngine";
+import { logOutcome } from "../engines/outcomeEngine";
+import { runLearningCycle } from "../engines/learningEngine";
+import { validateInput } from "../core/validation";
+import { auditLog } from "../audit/auditLogger";
+
+export async function runFullClinicalFlow(input: any) {
+  const start = Date.now();
+
+  try {
+    // 1. Validate
+    const validated = validateInput(input);
+
+    // 2. Scoring
+    const scores = await runScoring(validated);
+
+    // 3. Diagnosis
+    const diagnosis = await runDiagnosis(validated, scores);
+
+    // 4. Billing
+    const billing = await runBilling(diagnosis);
+
+    // 5. Log outcome
+    await logOutcome({
+      input,
+      scores,
+      diagnosis,
+      billing
+    });
+
+    // 6. Trigger learning async
+    runLearningCycle().catch(console.error);
+
+    // 7. Audit
+    await auditLog({
+      type: "FULL_FLOW",
+      latency: Date.now() - start
+    });
+
+    return {
+      success: true,
+      scores,
+      diagnosis,
+      billing
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+🔁 PART 2 — CLOSED-LOOP LEARNING SYSTEM
+📁 server/engines/learningEngine.ts
+import { db } from "../db";
+
+export async function runLearningCycle() {
+  const outcomes = await db.select().from("outcomes").limit(100);
+
+  for (const o of outcomes) {
+    if (o.predicted !== o.actual) {
+      await db.update("weights")
+        .set({
+          value: db.raw("value - 0.01")
+        })
+        .where({ diagnosis: o.predicted });
+    } else {
+      await db.update("weights")
+        .set({
+          value: db.raw("value + 0.01")
+        })
+        .where({ diagnosis: o.predicted });
+    }
+  }
+
+  console.log("Learning cycle complete");
+}
+🤖 PART 3 — MULTI-AGENT COORDINATOR
+📁 server/agents/agentCoordinator.ts
+const agents = new Map();
+
+export function registerAgent(name, fn) {
+  agents.set(name, {
+    fn,
+    status: "idle",
+    lastRun: null
+  });
+}
+
+export async function runAgent(name) {
+  const agent = agents.get(name);
+  if (!agent) throw new Error("Agent not found");
+
+  agent.status = "running";
+  agent.lastRun = new Date();
+
+  try {
+    await agent.fn();
+    agent.status = "healthy";
+  } catch (e) {
+    agent.status = "error";
+  }
+}
+
+export function getAgentStatus() {
+  return Array.from(agents.entries());
+}
+⚙️ PART 4 — AUTO-DEBUG + PREDICTIVE ENGINE
+📁 server/engines/autoDebugEngine.ts
+export function monitorSystemHealth(metrics) {
+  if (metrics.errorRate > 0.05) {
+    console.log("⚠️ High error rate detected");
+  }
+
+  if (metrics.latency > 2000) {
+    console.log("⚠️ Latency spike");
+  }
+}
+📊 PART 5 — ENGINE DASHBOARD API
+📁 server/routes/engineRoutes.ts
+import express from "express";
+import { getAgentStatus, runAgent } from "../agents/agentCoordinator";
+
+const router = express.Router();
+
+router.get("/status", (req, res) => {
+  res.json(getAgentStatus());
+});
+
+router.post("/run/:name", async (req, res) => {
+  await runAgent(req.params.name);
+  res.json({ success: true });
+});
+
+export default router;
+🖥️ PART 6 — FRONTEND DASHBOARD (RED/GREEN LIGHTS)
+Example React Component
+export function EnginePanel() {
+  const [engines, setEngines] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/engines/status")
+      .then(r => r.json())
+      .then(setEngines);
+  }, []);
+
+  return (
+    <div>
+      {engines.map(([name, e]) => (
+        <div key={name}>
+          <span>{name}</span>
+          <span style={{
+            color: e.status === "healthy" ? "green" : "red"
+          }}>
+            ●
+          </span>
+          <button onClick={() => {
+            fetch(`/api/engines/run/${name}`, { method: "POST" })
+          }}>
+            Run
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+🔐 PART 7 — REAL SECRET MANAGEMENT
+📁 server/config/env.ts
+import dotenv from "dotenv";
+dotenv.config();
+
+function required(name: string) {
+  const val = process.env[name];
+  if (!val) throw new Error(`Missing ENV: ${name}`);
+  return val;
+}
+
+export const ENV = {
+  DB_URL: required("DB_URL"),
+  OPENAI_KEY: required("OPENAI_KEY"),
+  TWILIO_SID: required("TWILIO_SID"),
+  TWILIO_TOKEN: required("TWILIO_TOKEN")
+};
+☁️ AWS SECRETS MANAGER (PROD)
+📁 server/config/secrets.ts
+import AWS from "aws-sdk";
+
+const client = new AWS.SecretsManager();
+
+export async function getSecret(name: string) {
+  const data = await client.getSecretValue({ SecretId: name }).promise();
+  return JSON.parse(data.SecretString || "{}");
+}
+📡 PART 8 — TWILIO + GMAIL INTEGRATION
+Twilio
+import twilio from "twilio";
+
+const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_TOKEN);
+
+export function sendSMS(to, msg) {
+  return client.messages.create({
+    to,
+    from: process.env.TWILIO_NUMBER,
+    body: msg
+  });
+}
+🏥 PART 9 — FULL PATIENT FLOW API
+📁 server/routes/clinicalRoutes.ts
+import express from "express";
+import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
+
+const router = express.Router();
+
+router.post("/run", async (req, res) => {
+  const result = await runFullClinicalFlow(req.body);
+  res.json(result);
+});
+
+export default router;
+🧹 PART 10 — SYSTEM CLEANUP RULES
+
+You MUST enforce:
+
+1. ONE flow only:
+clinicalOrchestrator → everything
+2. No duplicate engines:
+
+merge scoring variants
+
+unify diagnosis logic
+
+3. No direct DB calls from UI routes
+
+always go through orchestrator or engines
+
+🚀 PART 11 — PRODUCTION DEPLOYMENT (K8s READY)
+Dockerfile
+FROM node:20
+WORKDIR /app
+COPY . .
+RUN npm install
+CMD ["npm", "run", "start"]
+K8s snippet
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clinical-ai
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: app
+          image: your-image
+          envFrom:
+            - secretRef:
+                name: app-secrets
