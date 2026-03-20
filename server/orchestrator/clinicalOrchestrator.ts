@@ -10,18 +10,24 @@ import { generateClinicalExplanation } from "../explainability/explainableAIEngi
 import { logEngineStatus } from "../monitoring/systemMonitor";
 import { notifyOnCallPhysician } from "../notifications/notifier";
 import { executeActions } from "./executionLayer";
-import { autonomyDecision } from "../autonomy/autonomyEngine";
+import { autonomyDecision, setLoadAwareThreshold } from "../autonomy/autonomyEngine";
 import { applySecondOpinionGate } from "../autonomy/secondOpinion";
 import { applyGuardrailGate } from "../safety/guardrailEngine";
 import { executeAutonomousCare } from "../autonomy/autoActions";
 import { emitEvent } from "../controlTower/eventBus";
 import { scoringBreaker } from "../utils/circuitBreaker";
-import { safeFallbackResponse } from "../fallback/fallbackEngine";
 import { degrade } from "../fallback/degradationMatrix";
 import { saveSnapshot } from "../snapshots/systemSnapshot";
 import { recordSample } from "../monitoring/dataDrift";
 import { getQueueStats } from "../queue/patientQueue";
 import { getAllBreakerStates } from "../utils/circuitBreaker";
+import { getMetrics } from "../monitoring/metricsStore";
+import {
+  getCachedTriage,
+  setCachedTriage,
+  buildTriageCacheKey,
+} from "../cache/triageCache";
+import { queueAsyncWork } from "../queue/asyncWorker";
 
 export interface ClinicalInput {
   patientId?: string;
@@ -45,6 +51,7 @@ export interface ClinicalFlowResult {
   latencyMs: number;
   error?: string;
   timestamp: string;
+  fromCache?: boolean;
 }
 
 const flowLog: Array<ClinicalFlowResult & { id: string }> = [];
@@ -81,10 +88,10 @@ async function runScoring(input: ClinicalInput): Promise<any> {
     const result = await scoringBreaker.call(() =>
       computeScoringSystems(input.complaint ?? "unknown", input.answers ?? {})
     );
-    await logEngineStatus("scoringSystemsEngine", "healthy", Date.now() - t);
+    queueAsyncWork({ type: "audit", payload: { engine: "scoringSystemsEngine", status: "healthy", latencyMs: Date.now() - t } });
     return result;
   } catch (e: any) {
-    await logEngineStatus("scoringSystemsEngine", "error", Date.now() - t, e?.message);
+    queueAsyncWork({ type: "audit", payload: { engine: "scoringSystemsEngine", status: "error", latencyMs: Date.now() - t, error: e?.message } });
     return { computed: false, reason: "scoring skipped" };
   }
 }
@@ -94,28 +101,6 @@ async function runBilling(complaint: string): Promise<any> {
     return mapToBilling(complaint, "office_visit");
   } catch {
     return { coded: false, reason: "billing skipped" };
-  }
-}
-
-async function triggerLearning(complaint: string, scores: any): Promise<void> {
-  try {
-    logOutcome({
-      packId: complaint,
-      predictedDiagnosis: scores?.primaryDiagnosis ?? "unknown",
-      actualDiagnosis: "pending",
-      correct: false,
-    });
-    operatorLearning.logStep({
-      stepId: flowCounter,
-      action: "clinical_flow",
-      field: "complaint",
-      success: true,
-      program: complaint,
-      retryCount: 0,
-      duration: 0,
-    });
-  } catch (e) {
-    console.error("[ClinicalOrchestrator] Learning cycle error:", e);
   }
 }
 
@@ -142,7 +127,31 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
   try {
     const validated = validateInput(input);
 
-    await auditStep({ traceId, step: "INPUT_VALIDATION", input, output: validated });
+    // ── Load-aware autonomy threshold ──────────────────────────────────────
+    const queueStats = getQueueStats();
+    const metrics = getMetrics();
+    setLoadAwareThreshold(queueStats.queueDepth ?? 0, metrics.errorRate ?? 0);
+
+    // ── LRU cache check — return immediately on hit ────────────────────────
+    const cacheKey = buildTriageCacheKey(validated.complaint, validated.answers);
+    const cached = getCachedTriage(cacheKey);
+    if (cached && !input.patientId) {
+      const cachedResult = {
+        ...cached,
+        id,
+        traceId,
+        patientId: input.patientId,
+        latencyMs: Date.now() - start,
+        timestamp: new Date().toISOString(),
+        fromCache: true,
+      };
+      flowLog.push(cachedResult);
+      if (flowLog.length > 500) flowLog.shift();
+      return cachedResult;
+    }
+
+    // ── Sync: audit INPUT_VALIDATION (lightweight, keep on hot path) ───────
+    auditStep({ traceId, step: "INPUT_VALIDATION", input, output: validated }).catch(() => {});
 
     const safetyChecks = {
       pediatric: (validated.answers.ageYears ?? 99) < 18 && validated.answers.fever
@@ -156,7 +165,8 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
 
     const safetyGate = runSafetyGate(validated.answers ?? {}, safetyChecks);
 
-    await auditStep({ traceId, step: "SAFETY_GATE", input: safetyChecks, output: safetyGate });
+    // ── Safety gate audit — fire-and-forget ───────────────────────────────
+    queueAsyncWork({ type: "audit", traceId, payload: { traceId, step: "SAFETY_GATE", input: safetyChecks, output: safetyGate } });
 
     if (process.env.PILOT_MODE === "true") {
       return {
@@ -175,14 +185,18 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     if (!safetyGate.allowed) {
       const latencyMs = Date.now() - start;
       publishAudit({ type: "FULL_FLOW_BLOCKED", latency: latencyMs, success: false, error: "Safety gate blocked" });
-      await logEngineStatus("clinicalOrchestrator", "warning", latencyMs, `Safety gate blocked: ${safetyGate.reasons.join("; ")}`);
 
-      notifyOnCallPhysician({
-        patientId: input.patientId ?? "unknown",
-        riskLevel: "HIGH",
-        reasons: safetyGate.reasons,
+      // Fire-and-forget post-block work
+      queueAsyncWork({
+        type: "notification",
         traceId,
-      }).catch(console.error);
+        payload: { patientId: input.patientId ?? "unknown", riskLevel: "HIGH", reasons: safetyGate.reasons, traceId },
+      });
+      queueAsyncWork({
+        type: "audit",
+        traceId,
+        payload: { engine: "clinicalOrchestrator", status: "warning", latencyMs, error: `Safety gate blocked: ${safetyGate.reasons.join("; ")}` },
+      });
 
       const blockedResult: ClinicalFlowResult & { id: string } = {
         id, traceId,
@@ -199,11 +213,11 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
       return blockedResult;
     }
 
-    const scores = await runScoring(validated);
-    await auditStep({ traceId, step: "SCORING", input: validated, output: scores });
-
-    const billing = await runBilling(validated.complaint);
-    await auditStep({ traceId, step: "BILLING", input: { complaint: validated.complaint }, output: billing });
+    // ── Core triage pipeline (sync — these determine the response) ─────────
+    const [scores, billing] = await Promise.all([
+      runScoring(validated),
+      runBilling(validated.complaint),
+    ]);
 
     const explanation = generateClinicalExplanation({
       topDiagnosis: scores?.primaryDiagnosis ?? validated.complaint,
@@ -214,7 +228,6 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
       differentials: scores?.differentials ?? [],
       enginesUsed: scores?.enginesUsed ?? ["scoringSystemsEngine"],
     });
-    await auditStep({ traceId, step: "EXPLANATION", input: null, output: explanation });
 
     const confidence = scores?.confidence ?? 0;
     const uncertainty = scores?.uncertainty ?? 0.5;
@@ -235,69 +248,14 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
       ? { mode: "REVIEW" as const, reason: `Explainability confidence gap: confidence ${(confidence * 100).toFixed(0)}% but explanation depth insufficient (${explanationReasoningDepth} reasoning points) — routing to physician` }
       : guardrailDecision;
 
-    let executionResults: any[] = [];
-    if (autoDecision.mode === "AUTO") {
-      executeAutonomousCare({
-        patientId: input.patientId,
-        phone: (input.metadata as any)?.phone,
-        followUp: `Your assessment is complete. ${explanation?.summary ?? "Take rest and fluids. Seek care if symptoms worsen."}`,
-      }).catch((e: any) => {
-        console.error("[Orchestrator] AUTO care delivery failed:", e?.message);
-        emitEvent({ type: "ERROR", payload: { source: "autoCare", patientId: input.patientId, error: e?.message }, timestamp: Date.now() });
-      });
-    } else if (autoDecision.mode === "ESCALATE") {
-      notifyOnCallPhysician({
-        patientId: input.patientId ?? "unknown",
-        riskLevel: "HIGH",
-        reasons: safetyGate.reasons,
-        traceId,
-      }).catch((e: any) => {
-        console.error("[Orchestrator] On-call physician notification FAILED:", e?.message);
-        emitEvent({
-          type: "ALERT",
-          payload: { message: `On-call SMS failed for patient ${input.patientId}: ${e?.message}`, severity: "CRITICAL", patientId: input.patientId },
-          timestamp: Date.now(),
-        });
-      });
-    }
-
-    if ((validated.metadata as any)?.executionSteps?.length) {
-      executionResults = await executeActions({ steps: (validated.metadata as any).executionSteps }).catch(() => []);
-    }
-
-    triggerLearning(validated.complaint, scores).catch((e: any) => {
-      console.error("[Orchestrator] Learning trigger failed:", e?.message);
-    });
-
-    import("../engines/unifiedOutcomeLearning").then(({ recordOutcome, runLearningCycle }) => {
-      recordOutcome({
-        predicted: scores?.primaryDiagnosis ?? validated.complaint,
-        actual: null,
-        input: validated.answers ?? {},
-      }).then(() =>
-        runLearningCycle().catch((e: any) => {
-          console.error("[Orchestrator] Learning cycle failed:", e?.message);
-          emitEvent({ type: "ERROR", payload: { source: "learningCycle", error: e?.message }, timestamp: Date.now() });
-        })
-      ).catch((e: any) => {
-        console.error("[Orchestrator] Outcome recording failed:", e?.message);
-        emitEvent({ type: "ERROR", payload: { source: "outcomeRecording", error: e?.message }, timestamp: Date.now() });
-      });
-    }).catch((e: any) => {
-      console.error("[Orchestrator] Failed to import learning module:", e?.message);
-    });
-
     const latencyMs = Date.now() - start;
     totalLatency += latencyMs;
 
-    publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: true });
-    await logEngineStatus("clinicalOrchestrator", "healthy", latencyMs);
-
-    emitEvent({
-      type: "PATIENT_FLOW",
-      payload: { patientId: input.patientId, complaint: validated.complaint, safetyGate, confidence, autonomyMode: autoDecision.mode, latency: latencyMs },
-      timestamp: Date.now(),
-    });
+    // ── Build and return the response immediately ──────────────────────────
+    let executionResults: any[] = [];
+    if ((validated.metadata as any)?.executionSteps?.length) {
+      executionResults = await executeActions({ steps: (validated.metadata as any).executionSteps }).catch(() => []);
+    }
 
     const result: ClinicalFlowResult & { id: string; autonomy?: any; executionResults?: any[] } = {
       id, traceId,
@@ -315,38 +273,107 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
       executionResults: executionResults.length ? executionResults : undefined,
     };
 
-    recordSample({
-      ageYears: validated.answers?.ageYears ?? validated.answers?.age,
-      confidence,
-      complaint: validated.complaint,
-    });
-
-    saveSnapshot(
-      {
-        weights: undefined,
-        safety: safetyGate,
-        diagnosis: scores?.primaryDiagnosis,
-        confidence,
-        autonomyMode: autoDecision.mode,
-        queueDepth: getQueueStats().queueDepth,
-        circuitBreakers: getAllBreakerStates(),
-        billing,
-        traceId,
-        scores,
-      },
-      { traceId, patientId: input.patientId, complaint: validated.complaint }
-    ).catch(() => {});
-
     flowLog.push(result);
     if (flowLog.length > 500) flowLog.shift();
 
+    // Cache the result (skip patient-specific results to avoid data leakage)
+    if (!input.patientId) {
+      setCachedTriage(cacheKey, { ...result, id: undefined, traceId: undefined, patientId: undefined });
+    }
+
+    // ── Fire-and-forget all post-processing ───────────────────────────────
+    publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: true });
+
+    emitEvent({
+      type: "PATIENT_FLOW",
+      payload: { patientId: input.patientId, complaint: validated.complaint, safetyGate, confidence, autonomyMode: autoDecision.mode, latency: latencyMs },
+      timestamp: Date.now(),
+    });
+
+    queueAsyncWork({
+      type: "audit",
+      traceId,
+      payload: { traceId, step: "SCORING", input: validated, output: scores },
+    });
+    queueAsyncWork({
+      type: "audit",
+      traceId,
+      payload: { traceId, step: "BILLING", input: { complaint: validated.complaint }, output: billing },
+    });
+    queueAsyncWork({
+      type: "audit",
+      traceId,
+      payload: { traceId, step: "EXPLANATION", input: null, output: explanation },
+    });
+    queueAsyncWork({
+      type: "audit",
+      traceId,
+      payload: { engine: "clinicalOrchestrator", status: "healthy", latencyMs },
+    });
+
+    // Autonomous care / escalation — fire-and-forget
+    if (autoDecision.mode === "AUTO") {
+      executeAutonomousCare({
+        patientId: input.patientId,
+        phone: (input.metadata as any)?.phone,
+        followUp: `Your assessment is complete. ${explanation?.summary ?? "Take rest and fluids. Seek care if symptoms worsen."}`,
+      }).catch((e: any) => {
+        emitEvent({ type: "ERROR", payload: { source: "autoCare", patientId: input.patientId, error: e?.message }, timestamp: Date.now() });
+      });
+    } else if (autoDecision.mode === "ESCALATE") {
+      notifyOnCallPhysician({
+        patientId: input.patientId ?? "unknown",
+        riskLevel: "HIGH",
+        reasons: safetyGate.reasons,
+        traceId,
+      }).catch((e: any) => {
+        emitEvent({
+          type: "ALERT",
+          payload: { message: `On-call SMS failed for patient ${input.patientId}: ${e?.message}`, severity: "CRITICAL", patientId: input.patientId },
+          timestamp: Date.now(),
+        });
+      });
+    }
+
+    queueAsyncWork({
+      type: "learning",
+      traceId,
+      payload: { complaint: validated.complaint, scores, answers: validated.answers },
+    });
+
+    queueAsyncWork({
+      type: "snapshot",
+      traceId,
+      payload: {
+        state: {
+          weights: undefined,
+          safety: safetyGate,
+          diagnosis: scores?.primaryDiagnosis,
+          confidence,
+          autonomyMode: autoDecision.mode,
+          queueDepth: queueStats.queueDepth,
+          circuitBreakers: getAllBreakerStates(),
+          billing,
+          traceId,
+          scores,
+        },
+        meta: { traceId, patientId: input.patientId, complaint: validated.complaint },
+        sample: {
+          ageYears: validated.answers?.ageYears ?? validated.answers?.age,
+          confidence,
+          complaint: validated.complaint,
+        },
+      },
+    });
+
     return result;
+
   } catch (err: any) {
     totalErrors++;
     const latencyMs = Date.now() - start;
 
     publishAudit({ type: "FULL_FLOW", latency: latencyMs, success: false, error: err.message });
-    await logEngineStatus("clinicalOrchestrator", "error", latencyMs, err.message).catch(() => {});
+    queueAsyncWork({ type: "audit", traceId, payload: { engine: "clinicalOrchestrator", status: "error", latencyMs, error: err.message } });
 
     const isSafetyBlock = typeof err.message === "string" && err.message.startsWith("SAFETY BLOCK");
 
@@ -376,7 +403,7 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
         learningTriggered: false,
         latencyMs,
         timestamp: new Date().toISOString(),
-      };
+      } as any;
     }
 
     flowLog.push(result);

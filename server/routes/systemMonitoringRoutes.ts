@@ -16,6 +16,10 @@ import { analyzeFailure } from "../monitoring/rootCauseEngine";
 import { runSelfHealing, getLastHealTimes } from "../autonomy/selfHealing";
 import { getAutonomyStats } from "../autonomy/autonomyMetrics";
 import { getCommandAuditLog } from "../chat/botCommandHandler";
+import { getTriageCacheStats, invalidateTriageCache } from "../cache/triageCache";
+import { getAsyncWorkerStats } from "../queue/asyncWorker";
+import { getQueueDepths } from "../queue/queues";
+import { getAutoThreshold } from "../autonomy/autonomyEngine";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -185,6 +189,30 @@ router.get("/autonomy", requireRole(["admin", "physician"]), async (_req: Reques
 router.get("/bot-audit", auth, (req: Request, res: Response) => {
   const limit = Number(req.query.limit) || 50;
   res.json({ ok: true, log: getCommandAuditLog(limit) });
+});
+
+router.get("/perf", requireRole(["admin", "physician"]), async (_req: Request, res: Response) => {
+  try {
+    const [queueDepths, cacheStats, workerStats] = await Promise.all([
+      getQueueDepths(),
+      Promise.resolve(getTriageCacheStats()),
+      Promise.resolve(getAsyncWorkerStats()),
+    ]);
+    res.json({
+      ok: true,
+      cache: cacheStats,
+      asyncWorker: workerStats,
+      queues: queueDepths,
+      autonomyThreshold: getAutoThreshold(),
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+router.post("/cache/invalidate", auth, (_req: Request, res: Response) => {
+  invalidateTriageCache();
+  res.json({ ok: true, message: "Triage response cache cleared" });
 });
 
 export default router;

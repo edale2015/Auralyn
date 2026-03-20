@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -170,7 +170,10 @@ export const engineLogs = pgTable("engine_logs", {
   latencyMs: integer("latency_ms"),
   error: text("error"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (t) => ({
+  createdAtIdx: index("idx_engine_logs_created_at").on(t.createdAt),
+  engineIdx: index("idx_engine_logs_engine").on(t.engine),
+}));
 export const insertEngineLogSchema = createInsertSchema(engineLogs).omit({ id: true, createdAt: true });
 export type InsertEngineLog = z.infer<typeof insertEngineLogSchema>;
 export type EngineLog = typeof engineLogs.$inferSelect;
@@ -197,7 +200,10 @@ export const auditLogs = pgTable("audit_logs", {
   hash: text("hash"),
   prevHash: text("prev_hash"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (t) => ({
+  traceIdIdx: index("idx_audit_logs_trace_id").on(t.traceId),
+  createdAtIdx: index("idx_audit_logs_created_at").on(t.createdAt),
+}));
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
@@ -225,7 +231,10 @@ export const patientSessions = pgTable("patient_sessions", {
   overrideData: jsonb("override_data"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (t) => ({
+  statusIdx: index("idx_patient_sessions_status").on(t.status),
+  createdAtIdx: index("idx_patient_sessions_created_at").on(t.createdAt),
+}));
 export type PatientSessionRow = typeof patientSessions.$inferSelect;
 
 // Alert log (high-risk SMS alerts sent to on-call physician)

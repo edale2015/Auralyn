@@ -7,8 +7,26 @@ export interface AutonomyDecision {
   reason: string;
 }
 
-const AUTO_CONFIDENCE_THRESHOLD = 0.9;
+const BASE_AUTO_THRESHOLD = 0.9;
 const UNCERTAINTY_CAP = 0.2;
+
+let dynamicThreshold = BASE_AUTO_THRESHOLD;
+
+export function setLoadAwareThreshold(queueDepth: number, errorRate: number): void {
+  const highLoad = queueDepth > 500 || errorRate > 0.15;
+  const criticalLoad = queueDepth > 800 || errorRate > 0.25;
+  if (criticalLoad) {
+    dynamicThreshold = 0.97;
+  } else if (highLoad) {
+    dynamicThreshold = 0.95;
+  } else {
+    dynamicThreshold = BASE_AUTO_THRESHOLD;
+  }
+}
+
+export function getAutoThreshold(): number {
+  return dynamicThreshold;
+}
 
 export function autonomyDecision({
   safety,
@@ -33,15 +51,15 @@ export function autonomyDecision({
     };
   }
 
-  if (confidence >= AUTO_CONFIDENCE_THRESHOLD && safety.level === "LOW") {
+  if (confidence >= dynamicThreshold && safety.level === "LOW") {
     return {
       mode: "AUTO",
-      reason: `Confidence ${(confidence * 100).toFixed(0)}% with LOW risk — autonomous discharge`,
+      reason: `Confidence ${(confidence * 100).toFixed(0)}% ≥ threshold ${(dynamicThreshold * 100).toFixed(0)}% with LOW risk — autonomous discharge`,
     };
   }
 
   return {
     mode: "REVIEW",
-    reason: `Confidence ${(confidence * 100).toFixed(0)}% below auto-threshold — routing to physician`,
+    reason: `Confidence ${(confidence * 100).toFixed(0)}% below auto-threshold ${(dynamicThreshold * 100).toFixed(0)}% — routing to physician`,
   };
 }

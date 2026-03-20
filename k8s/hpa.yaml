@@ -7,15 +7,15 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: auralyn-clinical-ai
-  minReplicas: 2
-  maxReplicas: 20
+  minReplicas: 3
+  maxReplicas: 30
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 70
+          averageUtilization: 60
     - type: Resource
       resource:
         name: memory
@@ -24,10 +24,10 @@ spec:
           averageUtilization: 80
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 30
+      stabilizationWindowSeconds: 15
       policies:
         - type: Pods
-          value: 4
+          value: 6
           periodSeconds: 60
     scaleDown:
       stabilizationWindowSeconds: 300

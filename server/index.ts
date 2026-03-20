@@ -213,6 +213,7 @@ import systemAuditRoutes from "./routes/systemAuditRoutes";
 import outcomeFeedbackRoutes from "./routes/outcomeFeedbackRoutes";
 import { startAutonomousLoop } from "./system/autonomousLoop";
 import { startEngines } from "./system/engineScheduler";
+import { initAsyncWorkerHandlers } from "./queue/asyncWorkerInit";
 import fdaPackageRoutes from "./fda/fdaPackageRoutes";
 import patientQueueRoutes from "./patient/patientQueueRoutes";
 import stressRoutes from "./stress/stressRoutes";
@@ -721,6 +722,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      initAsyncWorkerHandlers();
       startAutonomousLoop(60_000);
       startEngines();
       initControlTowerSocket(httpServer);
