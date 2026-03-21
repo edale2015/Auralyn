@@ -52,3 +52,12 @@ export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs: number;
     return { ok: false, latencyMs: Date.now() - start, replica: !!replicaPool };
   }
 }
+
+export async function query<T = any>(text: string, params: any[] = []): Promise<{ rows: T[]; rowCount: number | null }> {
+  return primaryPool.query<T>(text, params);
+}
+
+export async function testDbConnection(): Promise<{ ok: boolean }> {
+  const result = await query<{ ok: number }>("SELECT 1 AS ok", []);
+  return { ok: result.rows[0]?.ok === 1 };
+}

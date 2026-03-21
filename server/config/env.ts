@@ -1,7 +1,18 @@
 export const ENV = {
   NODE_ENV: process.env.NODE_ENV ?? "development",
-  PORT: Number(process.env.PORT ?? 5000),
+  PORT: Number(process.env.PORT ?? 3000),
   SESSION_SECRET: process.env.SESSION_SECRET ?? "dev-secret",
+
+  JWT_SECRET: process.env.JWT_SECRET ?? "",
+  MD_PASSWORD: process.env.MD_PASSWORD ?? "",
+  CLINICIAN_PASSWORD: process.env.CLINICIAN_PASSWORD ?? "",
+
+  DATABASE_URL: process.env.DATABASE_URL_PRIMARY ?? process.env.DATABASE_URL ?? "",
+  REDIS_URL: process.env.REDIS_URL ?? "",
+
+  REVIEW_AUTH_MODE: process.env.REVIEW_AUTH_MODE ?? "on",
+  ENABLE_TEST_ROUTES: process.env.ENABLE_TEST_ROUTES === "true",
+  ALLOW_PROVIDER_KEY_FALLBACK: process.env.ALLOW_PROVIDER_KEY_FALLBACK === "true",
 
   OPENAI_API_KEY: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
   OPENAI_BASE_URL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "https://api.openai.com/v1",

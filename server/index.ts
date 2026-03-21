@@ -90,6 +90,11 @@ import sl6Routes from "./routes/sl6Routes";
 import sl7Routes from "./routes/sl7Routes";
 import sl8Routes from "./routes/sl8Routes";
 import stateRoutes from "./routes/stateRoutes";
+import stateAdminRouter from "./routes/stateAdmin";
+import { assertProductionSafe } from "./config/assertProductionSafe";
+import { assertRuntimeModes } from "./config/assertRuntimeModes";
+import { assertQueueReady } from "./config/assertQueueReady";
+import { validateConfig } from "./config/validateConfig";
 import autonomousIntakeRoutes from "./routes/autonomousIntakeRoutes";
 import pathwayRoutes from "./routes/pathwayRoutes";
 import copilotRoutes from "./routes/copilotRoutes";
@@ -311,6 +316,10 @@ app.get("/api/healthz/deps", async (_req, res) => {
 // Auth routes
 app.use(authRouter);
 console.log("[Auth] Session cookie auth enabled");
+
+// State admin routes (durable DB-backed state endpoints)
+app.use(stateAdminRouter);
+console.log("[StateAdmin] Durable state endpoints registered at /api/state/*");
 
 // Test/regression routes
 const testRouter = Router();
@@ -672,6 +681,12 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Production safety guards — no-ops in dev, fatal in prod
+  validateConfig();
+  assertProductionSafe();
+  assertRuntimeModes();
+  await assertQueueReady();
+
   await registerRoutes(httpServer, app);
 
   // Warm cache: load flows and rules at startup (prevents first-request delay)

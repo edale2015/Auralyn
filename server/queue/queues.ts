@@ -47,6 +47,11 @@ export let learningQueue: QueueShim;
 
 async function initQueues() {
   const redisUrl = process.env.REDIS_URL;
+
+  if (process.env.NODE_ENV === "production" && !redisUrl && process.env.USE_FAKE_QUEUE !== "true") {
+    throw new Error("❌ [STARTUP FATAL] REDIS_URL is required in production. In-memory queues are not allowed in production.");
+  }
+
   if (redisUrl) {
     try {
       const { Queue } = await import("bullmq");

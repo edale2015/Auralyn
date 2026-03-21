@@ -30,7 +30,12 @@ export function requirePhysician(
 
   try {
     const token = auth.slice("Bearer ".length);
-    const secret = process.env.JWT_SECRET ?? "dev-secret-change-in-prod";
+    const isProd = process.env.NODE_ENV === "production";
+    const secret = process.env.JWT_SECRET || (isProd ? undefined : "dev-jwt-secret-DO-NOT-USE-IN-PROD");
+    if (!secret) {
+      res.status(500).json({ error: "JWT_SECRET not configured" });
+      return;
+    }
     const decoded = jwt.verify(token, secret) as PhysicianClaims;
 
     if (!decoded.physician && decoded.role !== "physician") {
