@@ -1,0 +1,134 @@
+You should update these files now:
+
+Dockerfile
+.dockerignore
+package.json
+script/build.ts only if it currently swallows failures or writes somewhere other than dist/index.cjs
+1) Dockerfile
+Replace the entire file with this
+# Phase 1 / Step 1
+# Production-safe multi-stage Docker build
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install dependencies first for cache efficiency
+COPY package*.json ./
+RUN npm install
+
+# Copy source
+COPY . .
+
+# Build must fail loudly if anything is wrong
+RUN npm run build
+
+# --------------------------------------------------
+
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Install production dependencies only
+COPY package*.json ./
+RUN npm install --omit=dev && npm cache clean --force
+
+# Copy built output from builder
+COPY --from=builder /app/dist ./dist
+
+# If your app needs static assets at runtime, uncomment and keep only what is actually needed:
+# COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+
+CMD ["node", "dist/index.cjs"]
+2) .dockerignore
+Create this file if missing, or replace it
+node_modules
+dist
+.git
+.github
+.env
+.env.*
+*.log
+coverage
+tmp
+temp
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+uploads
+attached_assets
+infra/.terraform
+infra/*.tfstate
+infra/*.tfstate.*
+
+This keeps the image from hauling around junk like a moving truck full of bricks.
+
+3) package.json
+Replace only the scripts section with this
+
+Use this version if your app is built into dist/index.cjs:
+
+"scripts": {
+  "dev": "tsx server/index.ts",
+  "build": "tsc && node script/build.ts",
+  "start": "node dist/index.cjs",
+  "docker:build": "docker build -t med-scribe-app .",
+  "docker:run": "docker run -p 3000:3000 --env-file .env med-scribe-app"
+}
+Important
+
+If your current build script contains:
+
+|| true
+exit 0
+any fallback that hides failure
+
+remove it. Build must fail hard.
+
+4) script/build.ts
+Replace only if your current build script hides errors or writes the wrong output
+
+Use this version if you want a clean, deterministic build wrapper:
+
+// Phase 1 / Step 1
+import { build } from "esbuild";
+import { mkdir } from "node:fs/promises";
+
+async function run() {
+  await mkdir("dist", { recursive: true });
+
+  await build({
+    entryPoints: ["server/index.ts"],
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    outfile: "dist/index.cjs",
+    format: "cjs",
+    sourcemap: false,
+    minify: false,
+    external: [
+      "pg-native",
+      "better-sqlite3"
+    ],
+    logLevel: "info"
+  });
+
+  console.log("✅ Build complete: dist/index.cjs");
+}
+
+run().catch((err) => {
+  console.error("❌ Build failed");
+  console.error(err);
+  process.exit(1);
+});
+Keep this file only if:
+you are actually using esbuild in your repo
+your app entrypoint is server/index.ts
+
+If your repo already uses tsc only and reliably emits dist/index.cjs, then you do not need to replace script/build.ts.
+But if it is currently swallowing errors, replace it.

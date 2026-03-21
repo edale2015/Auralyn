@@ -1,0 +1,1133 @@
+Phase 1 / Step 2
+Reconcile package manifest with actual imports
+
+This step is only about making sure package.json truthfully matches the codebase.
+
+It covers:
+
+missing dependencies
+unused dependencies
+devDependency vs dependency split
+CI guard so this does not drift again
+deterministic install behavior
+
+It does not cover secrets, auth, PHI logs, Redis enforcement, or test flags. Those are the next steps.
+
+What Step 2 fully fixes
+
+This closes the gap where code imports packages that are not declared, or where the manifest contains stale packages that confuse builds and deployments.
+
+After this step:
+
+clean environments stop breaking unexpectedly
+Docker builds become consistent
+CI catches manifest drift
+prod-only images have the right runtime packages
+Files for Phase 1 / Step 2
+
+Update or create:
+
+package.json
+scripts/check-deps.mjs
+optionally scripts/check-imports.mjs
+.github/workflows/dependency-check.yml if you use GitHub Actions
+1) package.json
+Use this structure for dependencies and devDependencies
+
+You should merge this into your existing file. Do not blindly delete packages you know are truly used elsewhere, but this gives you the correct production split for the modules already identified.
+
+{
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "tsc && node script/build.ts",
+    "start": "node dist/index.cjs",
+    "check:deps": "node scripts/check-deps.mjs",
+    "check:imports": "node scripts/check-imports.mjs",
+    "verify:manifest": "npm run check:deps && npm run check:imports",
+    "docker:build": "docker build -t med-scribe-app .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env med-scribe-app"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.821.0",
+    "axios": "^1.9.0",
+    "bullmq": "^5.8.0",
+    "drizzle-orm": "^0.33.0",
+    "express": "^4.19.2",
+    "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "lru-cache": "^10.4.3",
+    "nanoid": "^5.0.7",
+    "node-fetch": "^3.3.2",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.12.0",
+    "playwright": "^1.53.1",
+    "stripe": "^16.12.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^24.0.10",
+    "@types/pg": "^8.11.6",
+    "@types/uuid": "^10.0.0",
+    "depcheck": "^1.4.7",
+    "drizzle-kit": "^0.24.2",
+    "esbuild": "^0.25.5",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
+Important rules for this step
+runtime packages go in dependencies
+build/test/typecheck tools go in devDependencies
+no package should exist “just in case”
+no import should rely on a package that is undeclared
+2) scripts/check-deps.mjs
+Create this file
+import { execSync } from "node:child_process";
+
+function run(command) {
+  return execSync(command, { stdio: "pipe", encoding: "utf8" });
+}
+
+try {
+  const output = run("npx depcheck --json");
+  const result = JSON.parse(output);
+
+  const missing = result.missing || {};
+  const invalid = result.invalidFiles || {};
+  const unused = result.dependencies || [];
+  const unusedDev = result.devDependencies || [];
+
+  const missingKeys = Object.keys(missing);
+  const invalidKeys = Object.keys(invalid);
+
+  if (missingKeys.length > 0) {
+    console.error("❌ Missing dependencies found:");
+    for (const key of missingKeys) {
+      console.error(`  - ${key}: ${missing[key].join(", ")}`);
+    }
+  }
+
+  if (invalidKeys.length > 0) {
+    console.error("❌ Invalid files found:");
+    for (const key of invalidKeys) {
+      console.error(`  - ${key}: ${invalid[key]}`);
+    }
+  }
+
+  if (unused.length > 0) {
+    console.warn("⚠️ Unused dependencies:");
+    for (const dep of unused) {
+      console.warn(`  - ${dep}`);
+    }
+  }
+
+  if (unusedDev.length > 0) {
+    console.warn("⚠️ Unused devDependencies:");
+    for (const dep of unusedDev) {
+      console.warn(`  - ${dep}`);
+    }
+  }
+
+  if (missingKeys.length > 0 || invalidKeys.length > 0) {
+    process.exit(1);
+  }
+
+  console.log("✅ Dependency manifest check passed");
+} catch (err) {
+  console.error("❌ Dependency check failed");
+  console.error(err?.stdout || err?.message || err);
+  process.exit(1);
+}
+3) scripts/check-imports.mjs
+Create this file
+
+This adds an extra sanity pass to catch common ESM/CJS import surprises.
+
+import fs from "node:fs";
+import path from "node:path";
+
+const ROOTS = ["server", "client", "script", "scripts"];
+const exts = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
+
+function walk(dir, files = []) {
+  if (!fs.existsSync(dir)) return files;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (["node_modules", "dist", ".git"].includes(entry.name)) continue;
+      walk(full, files);
+    } else {
+      if (exts.has(path.extname(entry.name))) files.push(full);
+    }
+  }
+  return files;
+}
+
+function checkFile(file) {
+  const text = fs.readFileSync(file, "utf8");
+
+  const badPatterns = [
+    { pattern: /require\(['"][^'"]+['"]\)/g, label: "CommonJS require in ESM file" },
+    { pattern: /module\.exports\s*=/g, label: "module.exports in ESM file" }
+  ];
+
+  const problems = [];
+  for (const { pattern, label } of badPatterns) {
+    if (pattern.test(text)) {
+      problems.push(label);
+    }
+  }
+  return problems;
+}
+
+const files = ROOTS.flatMap((r) => walk(r));
+let failed = false;
+
+for (const file of files) {
+  const problems = checkFile(file);
+  if (problems.length > 0) {
+    failed = true;
+    console.error(`❌ ${file}`);
+    for (const p of problems) {
+      console.error(`   - ${p}`);
+    }
+  }
+}
+
+if (failed) {
+  process.exit(1);
+}
+
+console.log("✅ Import style check passed");
+4) GitHub CI guard
+.github/workflows/dependency-check.yml
+
+Create this file if you use GitHub Actions.
+
+name: Dependency Manifest Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify-manifest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm install
+
+      - name: Verify manifest
+        run: npm run verify:manifest
+5) Replit shell commands for Step 2
+
+Run these after updating the files:
+
+npm install
+npm run check:deps
+npm run check:imports
+
+If depcheck reports unused packages, review them carefully before removal. Some frameworks load modules dynamically, so do not rip out a package just because the script flags it. But missing dependencies must be fixed.
+
+6) Cleanup commands for genuinely unused packages
+
+After reviewing output, remove only packages you confirm are truly unused:
+
+npm uninstall <package-name>
+npm uninstall -D <dev-package-name>
+Step 2 completion checklist
+
+Phase 1 / Step 2 is complete only when all are true:
+
+all imported packages are declared in package.json
+runtime packages are in dependencies
+build/test tools are in devDependencies
+npm install succeeds in a clean environment
+npm run check:deps passes
+npm run check:imports passes
+CI runs manifest verification on push/PR
+no known missing dependency remains
+Phase 1 / Step 2 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to copy into Replit now.
+
+Phase 1 / Step 3
+Remove prod-default secrets and passwords
+
+This step is only about eliminating dangerous fallback secrets and default credentials.
+
+It covers:
+
+no default JWT/session secrets in production
+no default physician/admin password in production
+no demo credentials enabled in production
+startup fails hard if secrets are missing
+one central env gate for secret enforcement
+
+It does not unify auth yet. That is Step 4.
+
+Files for Phase 1 / Step 3
+
+Update or create:
+
+server/config/env.ts
+server/config/assertProductionSafe.ts
+server/storage.ts
+server/services/authService.ts
+server/auth/requirePhysician.ts
+.env.example
+1) server/config/env.ts
+Replace with this version
+type EnvMode = "development" | "test" | "production";
+
+function getEnv(key: string, fallback?: string): string {
+  const value = process.env[key] ?? fallback;
+  if (value == null || value === "") {
+    throw new Error(`Missing environment variable: ${key}`);
+  }
+  return value;
+}
+
+function optionalEnv(key: string): string | undefined {
+  const value = process.env[key];
+  return value && value.trim() !== "" ? value : undefined;
+}
+
+export const ENV = {
+  NODE_ENV: (process.env.NODE_ENV || "development") as EnvMode,
+  PORT: Number(process.env.PORT || 3000),
+
+  DATABASE_URL: optionalEnv("DATABASE_URL"),
+  REDIS_URL: optionalEnv("REDIS_URL"),
+
+  JWT_SECRET: optionalEnv("JWT_SECRET"),
+  SESSION_SECRET: optionalEnv("SESSION_SECRET"),
+
+  MD_PASSWORD: optionalEnv("MD_PASSWORD"),
+  CLINICIAN_PASSWORD: optionalEnv("CLINICIAN_PASSWORD"),
+
+  REVIEW_AUTH_MODE: process.env.REVIEW_AUTH_MODE || "on",
+  ENABLE_TEST_ROUTES: process.env.ENABLE_TEST_ROUTES || "false",
+  ALLOW_PROVIDER_KEY_FALLBACK: process.env.ALLOW_PROVIDER_KEY_FALLBACK || "false",
+
+  TWILIO_ACCOUNT_SID: optionalEnv("TWILIO_ACCOUNT_SID"),
+  TWILIO_AUTH_TOKEN: optionalEnv("TWILIO_AUTH_TOKEN")
+};
+
+export function requireProductionSecret(name: keyof typeof ENV) {
+  if (ENV.NODE_ENV !== "production") return;
+
+  const value = ENV[name];
+  if (!value || (typeof value === "string" && value.trim() === "")) {
+    throw new Error(`❌ Missing required production secret: ${name}`);
+  }
+}
+2) server/config/assertProductionSafe.ts
+Create this file
+import { ENV, requireProductionSecret } from "./env";
+
+const bannedSecretValues = new Set([
+  "dev-secret",
+  "dev-secret-change-in-prod",
+  "changeme",
+  "password",
+  "physician123",
+  "admin123",
+  "demo-password"
+]);
+
+function assertNotBanned(name: string, value?: string) {
+  if (ENV.NODE_ENV !== "production") return;
+  if (!value) return;
+  if (bannedSecretValues.has(value)) {
+    throw new Error(`❌ Unsafe production secret/password for ${name}`);
+  }
+}
+
+export function assertProductionSafe() {
+  if (ENV.NODE_ENV !== "production") return;
+
+  requireProductionSecret("JWT_SECRET");
+  requireProductionSecret("SESSION_SECRET");
+  requireProductionSecret("MD_PASSWORD");
+  requireProductionSecret("CLINICIAN_PASSWORD");
+
+  assertNotBanned("JWT_SECRET", ENV.JWT_SECRET);
+  assertNotBanned("SESSION_SECRET", ENV.SESSION_SECRET);
+  assertNotBanned("MD_PASSWORD", ENV.MD_PASSWORD);
+  assertNotBanned("CLINICIAN_PASSWORD", ENV.CLINICIAN_PASSWORD);
+
+  if (process.env.DEMO_USERS === "true") {
+    throw new Error("❌ DEMO_USERS cannot be enabled in production");
+  }
+}
+3) server/index.ts
+Add this near the top, before app startup
+import { assertProductionSafe } from "./config/assertProductionSafe";
+
+assertProductionSafe();
+
+This forces startup to fail loudly if production is trying to use toy credentials.
+
+4) server/storage.ts
+Remove default password behavior
+
+Find patterns like these:
+
+process.env.MD_PASSWORD || "physician123"
+process.env.ADMIN_PASSWORD || "admin123"
+
+Replace them with this style:
+
+import { ENV } from "./config/env";
+
+if (ENV.NODE_ENV === "production" && !ENV.MD_PASSWORD) {
+  throw new Error("❌ MD_PASSWORD must be set in production");
+}
+
+const physicianPassword = ENV.MD_PASSWORD || "local-dev-password";
+Important
+
+For development only, you may still use a local fallback.
+For production, absolutely not.
+
+5) server/services/authService.ts
+Remove fallback JWT secret
+
+Find code like:
+
+const secret = process.env.APP_JWT_SECRET || "dev-secret";
+
+Replace with:
+
+import { ENV } from "../config/env";
+
+const secret = ENV.JWT_SECRET;
+if (!secret) {
+  throw new Error("❌ JWT_SECRET is not configured");
+}
+6) server/auth/requirePhysician.ts
+Remove alternate fallback secret
+
+Find code like:
+
+const secret = process.env.JWT_SECRET || "dev-secret-change-in-prod";
+
+Replace with:
+
+import { ENV } from "../config/env";
+
+const secret = ENV.JWT_SECRET;
+if (!secret) {
+  throw new Error("❌ JWT_SECRET is not configured");
+}
+7) .env.example
+Replace with this safer version
+NODE_ENV=development
+PORT=3000
+
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/med_scribe
+REDIS_URL=redis://localhost:6379
+
+JWT_SECRET=replace-with-a-long-random-secret
+SESSION_SECRET=replace-with-a-different-long-random-secret
+
+MD_PASSWORD=replace-with-a-strong-password
+CLINICIAN_PASSWORD=replace-with-a-strong-password
+
+REVIEW_AUTH_MODE=on
+ENABLE_TEST_ROUTES=false
+ALLOW_PROVIDER_KEY_FALLBACK=false
+
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+Step 3 completion checklist
+
+Phase 1 / Step 3 is complete only when all are true:
+
+no production secret has a fallback value
+no production password has a default value
+startup fails in production if required secrets are missing
+startup fails in production if banned placeholder values are used
+demo users cannot be enabled in production
+all auth secret reads use central env access
+.env.example contains placeholders, not real defaults
+Phase 1 / Step 3 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to copy into Replit now.
+
+Phase 1 / Step 4
+Unify auth secrets and auth model
+
+This step is only about ending the three-headed auth hydra.
+
+It covers:
+
+one JWT secret
+one token parser
+one auth middleware family
+one role model
+one login route style
+retirement of parallel auth flows
+
+It does not cover PHI logs or Redis. Those are next.
+
+Files for Phase 1 / Step 4
+
+Update or create:
+
+server/auth/unifiedAuth.ts
+server/middleware/requireAuth.ts
+server/middleware/requireRole.ts
+server/routes/auth.ts
+retire or redirect:
+server/routes.auth.ts
+server/services/authService.ts
+server/auth/requirePhysician.ts
+server/routes/roleAuth.ts
+1) server/auth/unifiedAuth.ts
+Create this file
+import jwt from "jsonwebtoken";
+import { ENV } from "../config/env";
+
+export type AuthRole = "admin" | "physician" | "reviewer" | "staff";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: AuthRole;
+  clinicId?: string;
+}
+
+export interface AuthTokenPayload extends AuthUser {
+  iat?: number;
+  exp?: number;
+}
+
+function getJwtSecret(): string {
+  if (!ENV.JWT_SECRET) {
+    throw new Error("❌ JWT_SECRET is not configured");
+  }
+  return ENV.JWT_SECRET;
+}
+
+export function signAccessToken(user: AuthUser): string {
+  return jwt.sign(user, getJwtSecret(), { expiresIn: "12h" });
+}
+
+export function verifyAccessToken(token: string): AuthTokenPayload {
+  return jwt.verify(token, getJwtSecret()) as AuthTokenPayload;
+}
+2) server/middleware/requireAuth.ts
+Create this file
+import type { Request, Response, NextFunction } from "express";
+import { verifyAccessToken } from "../auth/unifiedAuth";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        email: string;
+        role: "admin" | "physician" | "reviewer" | "staff";
+        clinicId?: string;
+      };
+    }
+  }
+}
+
+export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+
+  if (!header || !header.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const token = header.slice("Bearer ".length).trim();
+
+  try {
+    req.user = verifyAccessToken(token);
+    return next();
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+3) server/middleware/requireRole.ts
+Replace with this version
+import type { Request, Response, NextFunction } from "express";
+import type { AuthRole } from "../auth/unifiedAuth";
+
+export function requireRole(...roles: AuthRole[]) {
+  return function (req: Request, res: Response, next: NextFunction) {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    return next();
+  };
+}
+4) server/routes/auth.ts
+Create a single canonical auth route module
+import { Router } from "express";
+import { signAccessToken } from "../auth/unifiedAuth";
+import { ENV } from "../config/env";
+
+const router = Router();
+
+router.post("/login/physician", async (req, res) => {
+  const { email, password, clinicId } = req.body ?? {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Missing credentials" });
+  }
+
+  if (password !== ENV.MD_PASSWORD) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const token = signAccessToken({
+    id: email,
+    email,
+    role: "physician",
+    clinicId
+  });
+
+  return res.json({ token });
+});
+
+router.post("/login/admin", async (req, res) => {
+  const { email, password, clinicId } = req.body ?? {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Missing credentials" });
+  }
+
+  if (password !== ENV.CLINICIAN_PASSWORD) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const token = signAccessToken({
+    id: email,
+    email,
+    role: "admin",
+    clinicId
+  });
+
+  return res.json({ token });
+});
+
+router.get("/me", (req, res) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  return res.json({ ok: true });
+});
+
+export default router;
+5) server/index.ts
+Register the unified auth route
+import authRoutes from "./routes/auth";
+
+app.use("/api/auth", authRoutes);
+6) Retire old auth paths
+
+For these files:
+
+server/routes.auth.ts
+server/services/authService.ts
+server/auth/requirePhysician.ts
+server/routes/roleAuth.ts
+
+Do one of the following:
+
+delete them, or
+replace contents with a stub that throws on import, or
+re-export the new unified modules
+
+Safest option for tonight: replace their contents with comments and exports pointing to the new auth system.
+
+Example for server/auth/requirePhysician.ts
+export { requireAuth as requirePhysician } from "../middleware/requireAuth";
+Example for server/services/authService.ts
+export { signAccessToken, verifyAccessToken } from "../auth/unifiedAuth";
+
+This prevents ghost auth logic from surviving in a crawlspace.
+
+Step 4 completion checklist
+
+Phase 1 / Step 4 is complete only when all are true:
+
+all JWT signing uses one secret: JWT_SECRET
+all bearer token verification flows through verifyAccessToken
+all protected routes use requireAuth
+all role checks use one requireRole
+old parallel auth files are retired or redirected
+no route still depends on alternate secrets like APP_JWT_SECRET
+no route still uses a separate physician-only auth parser
+Phase 1 / Step 4 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to copy into Replit now.
+
+Phase 1 / Step 5
+Remove PHI-bearing console logs
+
+This step is only about preventing patient-identifying or clinical-text leakage in logs.
+
+It covers:
+
+no raw phone numbers in logs
+no raw SMS/WhatsApp/email bodies in logs
+no full patient payload dumps in logs
+one redacting logger
+easy replacement pattern for console.log
+Files for Phase 1 / Step 5
+
+Update or create:
+
+server/utils/logger.ts
+server/routes.ts
+server/whatsapp/send.ts
+server/services/smsService.ts
+any route/controller/service that logs request bodies or patient fields
+1) server/utils/logger.ts
+Create this file
+type LogLevel = "info" | "warn" | "error";
+
+function redactPhone(value?: string) {
+  if (!value) return undefined;
+  const digits = value.replace(/\D/g, "");
+  if (digits.length < 4) return "[REDACTED_PHONE]";
+  return `***${digits.slice(-4)}`;
+}
+
+function redactText(_value?: string) {
+  return _value ? "[REDACTED_TEXT]" : undefined;
+}
+
+function sanitize(data: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value == null) {
+      out[key] = value;
+      continue;
+    }
+
+    const k = key.toLowerCase();
+
+    if (k.includes("phone") || k.includes("from") || k.includes("to")) {
+      out[key] = redactPhone(String(value));
+    } else if (
+      k.includes("message") ||
+      k.includes("body") ||
+      k.includes("text") ||
+      k.includes("content") ||
+      k.includes("note")
+    ) {
+      out[key] = redactText(String(value));
+    } else if (
+      k.includes("patient") ||
+      k.includes("payload") ||
+      k.includes("request")
+    ) {
+      out[key] = "[REDACTED_OBJECT]";
+    } else {
+      out[key] = value;
+    }
+  }
+
+  return out;
+}
+
+function write(level: LogLevel, msg: string, data: Record<string, unknown> = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    msg,
+    ...sanitize(data)
+  };
+
+  const line = JSON.stringify(entry);
+
+  if (level === "error") {
+    console.error(line);
+  } else {
+    console.log(line);
+  }
+}
+
+export const logger = {
+  info: (msg: string, data?: Record<string, unknown>) => write("info", msg, data),
+  warn: (msg: string, data?: Record<string, unknown>) => write("warn", msg, data),
+  error: (msg: string, data?: Record<string, unknown>) => write("error", msg, data)
+};
+2) Replace bad log patterns
+Replace this kind of code:
+console.log("Incoming WhatsApp", { from, body });
+console.log("SMS send", { to, message });
+console.log("Patient payload", req.body);
+With this:
+import { logger } from "./utils/logger";
+// adjust relative path as needed
+
+logger.info("Incoming WhatsApp", {
+  from,
+  body,
+  traceId: req.traceId
+});
+
+logger.info("SMS send", {
+  to,
+  message,
+  traceId
+});
+
+logger.info("Patient request received", {
+  requestPayload: req.body,
+  traceId: req.traceId
+});
+
+The logger will redact the dangerous parts.
+
+3) server/routes.ts
+Search and replace examples
+
+Find lines like:
+
+console.log("Incoming message:", body.message);
+console.log("WhatsApp webhook payload:", req.body);
+console.log("Phone:", req.body.from);
+
+Replace with:
+
+import { logger } from "./utils/logger";
+
+logger.info("Incoming messaging webhook", {
+  from: req.body?.from,
+  body: req.body?.message || req.body?.body,
+  traceId: req.traceId
+});
+4) server/whatsapp/send.ts
+
+Replace logs like:
+
+console.log("Sending WhatsApp", { to, body });
+
+with:
+
+import { logger } from "../utils/logger";
+
+logger.info("Sending WhatsApp", {
+  to,
+  body,
+  traceId
+});
+5) server/services/smsService.ts
+
+Replace logs like:
+
+console.warn("SMS fallback body excerpt:", body?.slice(0, 50));
+
+with:
+
+import { logger } from "../utils/logger";
+
+logger.warn("SMS fallback invoked", {
+  body,
+  traceId
+});
+6) Prevent future raw logging
+
+Add this lightweight search discipline to your shell routine:
+
+grep -R "console\.log(" server client
+grep -R "console\.warn(" server client
+grep -R "console\.error(" server client
+
+Manually review any line that prints:
+
+request bodies
+patient objects
+phone numbers
+note text
+messages
+chart text
+Step 5 completion checklist
+
+Phase 1 / Step 5 is complete only when all are true:
+
+no raw patient text is logged
+no raw phone numbers are logged
+no request body is logged directly
+messaging services use the redacting logger
+webhook handlers use the redacting logger
+remaining console.* calls are either removed or safe infrastructure logs only
+Phase 1 / Step 5 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to copy into Replit now.
+
+Phase 1 / Step 6
+Make Redis/BullMQ mandatory in production
+
+This step is only about removing fake queue behavior and forcing durable queue infrastructure.
+
+It covers:
+
+one Redis connection
+one BullMQ queue family
+no in-memory queue fallback in production
+queue construction fails loudly if Redis is absent
+app startup validates Redis in production
+Files for Phase 1 / Step 6
+
+Update or create:
+
+server/queue/redis.ts
+server/queue/queues.ts
+server/config/assertQueueReady.ts
+server/index.ts
+any file currently doing in-memory queue fallback
+1) server/queue/redis.ts
+Create this file
+import IORedis from "ioredis";
+import { ENV } from "../config/env";
+
+let redisInstance: IORedis | null = null;
+
+export function getRedis(): IORedis {
+  if (!ENV.REDIS_URL) {
+    throw new Error("❌ REDIS_URL is not configured");
+  }
+
+  if (!redisInstance) {
+    redisInstance = new IORedis(ENV.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: true
+    });
+
+    redisInstance.on("error", (err) => {
+      console.error("Redis error", err);
+    });
+  }
+
+  return redisInstance;
+}
+2) server/queue/queues.ts
+Create or replace with this
+import { Queue, QueueEvents } from "bullmq";
+import { getRedis } from "./redis";
+
+const connection = getRedis();
+
+export const triageQueue = new Queue("triage", { connection });
+export const notificationQueue = new Queue("notification", { connection });
+export const learningQueue = new Queue("learning", { connection });
+
+export const triageQueueEvents = new QueueEvents("triage", { connection });
+export const notificationQueueEvents = new QueueEvents("notification", { connection });
+export const learningQueueEvents = new QueueEvents("learning", { connection });
+3) Remove any in-memory queue fallback
+
+Find code like:
+
+if (!redisAvailable) {
+  // fallback to memory queue
+}
+
+Delete the fallback branch.
+
+Replace with:
+
+import { ENV } from "../config/env";
+
+if (ENV.NODE_ENV === "production" && !ENV.REDIS_URL) {
+  throw new Error("❌ Redis is required in production");
+}
+
+For development, if you truly need a local fallback, keep it outside production paths only.
+But this step’s goal is to make production durable, not politely improvisational.
+
+4) server/config/assertQueueReady.ts
+Create this file
+import { ENV } from "./env";
+import { getRedis } from "../queue/redis";
+
+export async function assertQueueReady() {
+  if (ENV.NODE_ENV !== "production") return;
+
+  const redis = getRedis();
+  const pong = await redis.ping();
+
+  if (pong !== "PONG") {
+    throw new Error("❌ Redis ping failed");
+  }
+}
+5) server/index.ts
+Add this before app startup
+import { assertQueueReady } from "./config/assertQueueReady";
+
+await assertQueueReady();
+
+If your entrypoint is not top-level async yet, wrap startup:
+
+async function start() {
+  await assertQueueReady();
+
+  const port = Number(process.env.PORT || 3000);
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Server listening on ${port}`);
+  });
+}
+
+start().catch((err) => {
+  console.error("❌ Startup failed");
+  console.error(err);
+  process.exit(1);
+});
+Step 6 completion checklist
+
+Phase 1 / Step 6 is complete only when all are true:
+
+production requires REDIS_URL
+BullMQ queues use the shared Redis connection
+no production in-memory queue fallback remains
+startup pings Redis in production
+queue creation fails loudly if Redis is missing
+Phase 1 / Step 6 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to copy into Replit now.
+
+Phase 1 / Step 7
+Fail startup on mock/test/auth-off modes in prod
+
+This step is only about making production refuse unsafe runtime modes.
+
+It covers:
+
+no auth-off in prod
+no test routes in prod
+no provider fallback in prod unless explicitly safe
+no mocks in prod
+one startup gate for forbidden flags
+Files for Phase 1 / Step 7
+
+Update or create:
+
+server/config/assertRuntimeModes.ts
+server/index.ts
+any route registration file that conditionally mounts test routes
+1) server/config/assertRuntimeModes.ts
+Create this file
+import { ENV } from "./env";
+
+export function assertRuntimeModes() {
+  if (ENV.NODE_ENV !== "production") return;
+
+  const violations: string[] = [];
+
+  if (ENV.REVIEW_AUTH_MODE === "off") {
+    violations.push("REVIEW_AUTH_MODE=off is forbidden in production");
+  }
+
+  if (ENV.ENABLE_TEST_ROUTES === "true") {
+    violations.push("ENABLE_TEST_ROUTES=true is forbidden in production");
+  }
+
+  if (ENV.ALLOW_PROVIDER_KEY_FALLBACK === "true") {
+    violations.push("ALLOW_PROVIDER_KEY_FALLBACK=true is forbidden in production");
+  }
+
+  if (process.env.USE_MOCK_EHR === "true") {
+    violations.push("USE_MOCK_EHR=true is forbidden in production");
+  }
+
+  if (process.env.USE_FAKE_QUEUE === "true") {
+    violations.push("USE_FAKE_QUEUE=true is forbidden in production");
+  }
+
+  if (violations.length > 0) {
+    throw new Error(`❌ Unsafe production runtime flags:\n- ${violations.join("\n- ")}`);
+  }
+}
+2) server/index.ts
+Add this near startup
+import { assertRuntimeModes } from "./config/assertRuntimeModes";
+
+assertRuntimeModes();
+
+Put it before routes are mounted and before the app listens.
+
+3) Guard test route mounting
+
+If you currently have code like:
+
+if (process.env.ENABLE_TEST_ROUTES === "true") {
+  app.use("/api/test", testRoutes);
+}
+
+Replace with:
+
+import { ENV } from "./config/env";
+
+if (ENV.ENABLE_TEST_ROUTES === "true" && ENV.NODE_ENV !== "production") {
+  app.use("/api/test", testRoutes);
+}
+
+That way the app does not accidentally mount a toy door into production.
+
+Step 7 completion checklist
+
+Phase 1 / Step 7 is complete only when all are true:
+
+production startup rejects auth-off mode
+production startup rejects test routes
+production startup rejects mock/provider fallback flags
+test routes mount only outside production
+runtime safety gate executes before app starts listening
+Phase 1 / Step 7 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to copy into Replit now.
+
+End of Phase 1
+
+You now have complete copy-ready patches for:
+
+Phase 1 / Step 2
+Phase 1 / Step 3
+Phase 1 / Step 4
+Phase 1 / Step 5
+Phase 1 / Step 6
+Phase 1 / Step 7
+
+Together with the earlier Step 1 patch, that gives you a full Phase 1 remediation set.
