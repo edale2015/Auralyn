@@ -1,4 +1,4 @@
-import { query } from "../db/dbRouter";
+import { query } from "../db";
 
 export interface JobRecord {
   id: string;
@@ -52,4 +52,31 @@ export async function listJobs(limit = 100, queueName?: string, clinicId?: strin
   }
   const r = await query(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT $1`, [limit]);
   return r.rows;
+}
+
+export async function upsertJobRecord(input: {
+  id: string;
+  clinicId?: string;
+  queueName: string;
+  jobName: string;
+  status: string;
+  payload?: unknown;
+  result?: unknown;
+  error?: string;
+}): Promise<JobRecord> {
+  const result = await query(
+    `INSERT INTO jobs (id, clinic_id, queue_name, job_name, status, payload)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id)
+     DO UPDATE SET
+       status = EXCLUDED.status,
+       updated_at = NOW()
+     RETURNING *`,
+    [input.id, input.clinicId ?? null, input.queueName, input.jobName, input.status, input.payload ? JSON.stringify(input.payload) : null]
+  );
+  return result.rows[0];
+}
+
+export async function listRecentJobs(clinicId?: string, limit = 100): Promise<JobRecord[]> {
+  return listJobs(limit, undefined, clinicId);
 }

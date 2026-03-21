@@ -2,11 +2,15 @@ import { appendSystemEvent } from "../repos/systemEventRepo";
 import { assertProductionSafe } from "../config/assertProductionSafe";
 import { assertRuntimeModes } from "../config/assertRuntimeModes";
 import { assertQueueReady } from "../config/assertQueueReady";
-import { testDbConnection } from "../db/dbRouter";
+import { testDbConnection } from "../db";
 import { validateConfig } from "../config/validateConfig";
+import { startTelemetry, stopTelemetry } from "../monitoring/otel";
+import { logger } from "../utils/logger";
 
 async function start() {
   validateConfig();
+  await startTelemetry("med-scribe-scheduler");
+
   assertProductionSafe();
   assertRuntimeModes();
 
@@ -20,7 +24,16 @@ async function start() {
     payload: { nodeEnv: process.env.NODE_ENV || "development" }
   });
 
-  console.log("✅ Scheduler started");
+  logger.info("Scheduler started");
+
+  const shutdown = async () => {
+    logger.info("Scheduler shutdown initiated");
+    await stopTelemetry();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 start().catch((err) => {

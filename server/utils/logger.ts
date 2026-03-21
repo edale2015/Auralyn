@@ -1,3 +1,5 @@
+import { getRequestContext } from "../monitoring/requestContext";
+
 const isProd = process.env.NODE_ENV === "production";
 
 function redactPhone(value?: string) {
@@ -25,27 +27,38 @@ function sanitize(data: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-function formatEntry(level: string, event: string, data: Record<string, unknown>): string {
+function formatEntry(level: string, msg: string, data: Record<string, unknown>): string {
+  const ctx = getRequestContext();
   const safe = sanitize(data);
+
   if (isProd) {
-    return JSON.stringify({ level, event, ...safe, ts: new Date().toISOString() });
+    return JSON.stringify({
+      level, msg,
+      traceId: ctx?.traceId,
+      clinicId: ctx?.clinicId,
+      userId: ctx?.userId,
+      ...safe,
+      ts: new Date().toISOString()
+    });
   }
-  const prefix = `[${new Date().toISOString()}] [${level.toUpperCase()}] ${event}`;
+
+  const prefix = `[${new Date().toISOString()}] [${level.toUpperCase()}] ${msg}`;
+  const traceStr = ctx?.traceId ? ` [trace:${ctx.traceId}]` : "";
   const extras = Object.keys(safe).length ? " " + JSON.stringify(safe) : "";
-  return prefix + extras;
+  return prefix + traceStr + extras;
 }
 
 export const logger = {
-  info(event: string, data: Record<string, unknown> = {}): void {
-    console.log(formatEntry("info", event, data));
+  info(msg: string, data: Record<string, unknown> = {}): void {
+    console.log(formatEntry("info", msg, data));
   },
-  warn(event: string, data: Record<string, unknown> = {}): void {
-    console.warn(formatEntry("warn", event, data));
+  warn(msg: string, data: Record<string, unknown> = {}): void {
+    console.warn(formatEntry("warn", msg, data));
   },
-  error(event: string, data: Record<string, unknown> = {}): void {
-    console.error(formatEntry("error", event, data));
+  error(msg: string, data: Record<string, unknown> = {}): void {
+    console.error(formatEntry("error", msg, data));
   },
-  debug(event: string, data: Record<string, unknown> = {}): void {
-    if (!isProd) console.debug(formatEntry("debug", event, data));
+  debug(msg: string, data: Record<string, unknown> = {}): void {
+    if (!isProd) console.debug(formatEntry("debug", msg, data));
   },
 };

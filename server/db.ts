@@ -16,3 +16,29 @@ const pool = new Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+export async function query(text: string, values?: unknown[]): Promise<any> {
+  return pool.query(text, values as any);
+}
+
+export async function withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function testDbConnection(): Promise<{ ok: number }> {
+  const result = await pool.query("SELECT 1 as ok");
+  return result.rows[0];
+}
+
+export { pool };

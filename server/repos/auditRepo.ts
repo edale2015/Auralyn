@@ -1,4 +1,4 @@
-import { query } from "../db/dbRouter";
+import { query } from "../db";
 
 export interface AuditEntry {
   id: string;
@@ -36,6 +36,22 @@ export async function appendAuditLog(input: {
     ]
   );
   return result.rows[0];
+}
+
+export async function writeAuditEvent(input: {
+  clinicId?: string;
+  traceId?: string;
+  actorId?: string;
+  eventType: string;
+  entityType?: string;
+  entityId?: string;
+  data?: unknown;
+}): Promise<AuditEntry> {
+  return appendAuditLog(input);
+}
+
+export async function listAuditEvents(limit = 200, clinicId?: string): Promise<AuditEntry[]> {
+  return listAuditLogs(limit, clinicId);
 }
 
 export async function listAuditLogs(limit = 200, clinicId?: string, eventType?: string): Promise<AuditEntry[]> {

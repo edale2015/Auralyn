@@ -236,6 +236,14 @@ import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
 import { initConversationLog } from "./traces/conversationLog";
 import { initChannels } from "./channels";
+import opsRoutes from "./routes/ops";
+import dependenciesRoutes from "./routes/dependencies";
+import engineMetricsRoutes from "./routes/engineMetrics";
+import workersRoutes from "./routes/workers";
+import clinicHealthRoutes from "./routes/clinicHealth";
+import { traceMiddleware } from "./middleware/trace";
+import { startTelemetry, stopTelemetry } from "./monitoring/otel";
+import { runMigrations } from "./db/migrate";
 
 const config = loadConfig();
 
@@ -255,6 +263,7 @@ declare module "http" {
 
 app.use(cookieParser());
 app.use(metricsMiddleware);
+app.use(traceMiddleware);
 
 app.use(
   express.json({
@@ -563,6 +572,11 @@ console.log("[FDAPackage] Validation runner, metrics engine, report generator, e
 console.log("[PatientQueue] Live patient queue + physician approve/override/escalate at /api/patients/*");
 app.use("/api/vision", visionRoutes);
 app.use("/api/queue", queueRoutes);
+app.use("/api/ops", opsRoutes);
+app.use("/api/dependencies", dependenciesRoutes);
+app.use("/api/engine-metrics", engineMetricsRoutes);
+app.use("/api/workers", workersRoutes);
+app.use("/api/clinic-health", clinicHealthRoutes);
 console.log("[StressTest] Load generator, metrics analyzer, run history at /api/stress/*");
 console.log("[RPA] Browser automation templates, run engine, custom tasks at /api/rpa/*");
 console.log("[Vision] GPT-4o screenshot analysis + smart form fill at /api/vision/*");
@@ -683,8 +697,10 @@ app.use((req, res, next) => {
 (async () => {
   // Production safety guards — no-ops in dev, fatal in prod
   validateConfig();
+  await startTelemetry("med-scribe-api");
   assertProductionSafe();
   assertRuntimeModes();
+  await runMigrations();
   await assertQueueReady();
 
   await registerRoutes(httpServer, app);

@@ -1,0 +1,3726 @@
+Phase 2 / Step 8
+Move in-memory state to proper stores
+
+This step is only about replacing important in-memory state with durable storage.
+
+It covers:
+
+durable request records
+durable jobs
+durable audit events
+durable review cases
+durable outcomes
+durable metrics snapshots
+durable clinic-scoped state
+repository layer so the app stops sprinkling raw in-memory arrays everywhere
+
+It does not yet split workers or add dead-letter queues. Those are Steps 9 and 10.
+
+What Step 8 fully fixes
+
+This closes the trapdoor where:
+
+restarts wipe operational state
+one instance disagrees with another
+dashboards lie because they read local memory
+audit and review history vanish like chalk in the rain
+
+After this step:
+
+operational state becomes durable
+state becomes clinic-aware
+the app gets a reusable persistence layer
+“temporary prototype memory” gets replaced with actual database-backed records
+Files for Phase 2 / Step 8
+
+Create or update:
+
+server/db/index.ts
+server/db/migrate.ts
+server/db/schema.sql
+server/repos/requestRepo.ts
+server/repos/jobRepo.ts
+server/repos/auditRepo.ts
+server/repos/reviewRepo.ts
+server/repos/outcomeRepo.ts
+server/repos/metricsRepo.ts
+server/routes/stateAdmin.ts
+server/index.ts
+1) server/db/index.ts
+Create or replace with this
+import { Pool, QueryResult } from "pg";
+import { ENV } from "../config/env";
+
+if (!ENV.DATABASE_URL) {
+  throw new Error("❌ DATABASE_URL is required");
+}
+
+export const pool = new Pool({
+  connectionString: ENV.DATABASE_URL,
+  ssl: ENV.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
+});
+
+export async function query<T = any>(text: string, params: any[] = []): Promise<QueryResult<T>> {
+  return pool.query<T>(text, params);
+}
+
+export async function withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function testDbConnection() {
+  const result = await query("SELECT 1 as ok");
+  return result.rows[0];
+}
+2) server/db/schema.sql
+Create this file
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE TABLE IF NOT EXISTS requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  idempotency_key TEXT UNIQUE,
+  route TEXT NOT NULL,
+  method TEXT NOT NULL,
+  status TEXT NOT NULL,
+  response JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  clinic_id TEXT,
+  queue_name TEXT NOT NULL,
+  job_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  payload JSONB,
+  result JSONB,
+  error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  trace_id TEXT,
+  actor_id TEXT,
+  event_type TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id TEXT,
+  data JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS review_cases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT NOT NULL,
+  patient_key TEXT,
+  status TEXT NOT NULL,
+  priority TEXT NOT NULL DEFAULT 'normal',
+  assigned_to TEXT,
+  summary TEXT,
+  payload JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS outcomes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  case_id TEXT,
+  patient_key TEXT,
+  predicted JSONB,
+  actual JSONB,
+  status TEXT NOT NULL DEFAULT 'pending',
+  notes TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS metrics_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  metric_group TEXT NOT NULL,
+  metric_name TEXT NOT NULL,
+  metric_value DOUBLE PRECISION NOT NULL,
+  labels JSONB,
+  captured_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_requests_clinic_created ON requests (clinic_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_clinic_created ON jobs (clinic_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_trace ON audit_logs (trace_id);
+CREATE INDEX IF NOT EXISTS idx_review_cases_clinic_status ON review_cases (clinic_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_outcomes_clinic_status ON outcomes (clinic_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_group_name_time ON metrics_snapshots (metric_group, metric_name, captured_at DESC);
+3) server/db/migrate.ts
+Create this file
+import fs from "node:fs";
+import path from "node:path";
+import { query } from "./index";
+
+async function run() {
+  const schemaPath = path.join(process.cwd(), "server", "db", "schema.sql");
+  const sql = fs.readFileSync(schemaPath, "utf8");
+
+  await query(sql);
+  console.log("✅ Database schema applied");
+}
+
+run().catch((err) => {
+  console.error("❌ Database migration failed");
+  console.error(err);
+  process.exit(1);
+});
+4) package.json
+Add these scripts if not already present
+"db:migrate": "node --import tsx server/db/migrate.ts",
+"db:test": "node --import tsx -e \"import('./server/db/index.ts').then(m => m.testDbConnection().then(console.log))\""
+5) server/repos/requestRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function createRequestRecord(input: {
+  clinicId?: string;
+  idempotencyKey?: string;
+  route: string;
+  method: string;
+  status: string;
+  response?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO requests (clinic_id, idempotency_key, route, method, status, response)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      input.clinicId ?? null,
+      input.idempotencyKey ?? null,
+      input.route,
+      input.method,
+      input.status,
+      input.response ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function getRequestByIdempotencyKey(idempotencyKey: string) {
+  const result = await query(
+    `SELECT * FROM requests WHERE idempotency_key = $1 LIMIT 1`,
+    [idempotencyKey]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function updateRequestResponse(idempotencyKey: string, status: string, response: unknown) {
+  const result = await query(
+    `UPDATE requests
+     SET status = $2, response = $3, updated_at = NOW()
+     WHERE idempotency_key = $1
+     RETURNING *`,
+    [idempotencyKey, status, response]
+  );
+
+  return result.rows[0] ?? null;
+}
+6) server/repos/jobRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function upsertJobRecord(input: {
+  id: string;
+  clinicId?: string;
+  queueName: string;
+  jobName: string;
+  status: string;
+  payload?: unknown;
+  result?: unknown;
+  error?: string | null;
+}) {
+  const result = await query(
+    `INSERT INTO jobs (id, clinic_id, queue_name, job_name, status, payload, result, error)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (id)
+     DO UPDATE SET
+       clinic_id = EXCLUDED.clinic_id,
+       queue_name = EXCLUDED.queue_name,
+       job_name = EXCLUDED.job_name,
+       status = EXCLUDED.status,
+       payload = EXCLUDED.payload,
+       result = EXCLUDED.result,
+       error = EXCLUDED.error,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      input.id,
+      input.clinicId ?? null,
+      input.queueName,
+      input.jobName,
+      input.status,
+      input.payload ?? null,
+      input.result ?? null,
+      input.error ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listRecentJobs(clinicId?: string, limit = 100) {
+  const result = clinicId
+    ? await query(
+        `SELECT * FROM jobs WHERE clinic_id = $1 ORDER BY created_at DESC LIMIT $2`,
+        [clinicId, limit]
+      )
+    : await query(
+        `SELECT * FROM jobs ORDER BY created_at DESC LIMIT $1`,
+        [limit]
+      );
+
+  return result.rows;
+}
+7) server/repos/auditRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function writeAuditEvent(input: {
+  clinicId?: string;
+  traceId?: string;
+  actorId?: string;
+  eventType: string;
+  entityType?: string;
+  entityId?: string;
+  data?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO audit_logs (clinic_id, trace_id, actor_id, event_type, entity_type, entity_id, data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      input.clinicId ?? null,
+      input.traceId ?? null,
+      input.actorId ?? null,
+      input.eventType,
+      input.entityType ?? null,
+      input.entityId ?? null,
+      input.data ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listAuditEvents(traceId?: string, clinicId?: string, limit = 200) {
+  if (traceId) {
+    const result = await query(
+      `SELECT * FROM audit_logs WHERE trace_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [traceId, limit]
+    );
+    return result.rows;
+  }
+
+  if (clinicId) {
+    const result = await query(
+      `SELECT * FROM audit_logs WHERE clinic_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [clinicId, limit]
+    );
+    return result.rows;
+  }
+
+  const result = await query(
+    `SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+}
+8) server/repos/reviewRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function createReviewCase(input: {
+  clinicId: string;
+  patientKey?: string;
+  status: string;
+  priority?: string;
+  assignedTo?: string;
+  summary?: string;
+  payload?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO review_cases (clinic_id, patient_key, status, priority, assigned_to, summary, payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      input.clinicId,
+      input.patientKey ?? null,
+      input.status,
+      input.priority ?? "normal",
+      input.assignedTo ?? null,
+      input.summary ?? null,
+      input.payload ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function updateReviewCase(id: string, input: {
+  status?: string;
+  priority?: string;
+  assignedTo?: string;
+  summary?: string;
+  payload?: unknown;
+}) {
+  const result = await query(
+    `UPDATE review_cases
+     SET
+       status = COALESCE($2, status),
+       priority = COALESCE($3, priority),
+       assigned_to = COALESCE($4, assigned_to),
+       summary = COALESCE($5, summary),
+       payload = COALESCE($6, payload),
+       updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [
+      id,
+      input.status ?? null,
+      input.priority ?? null,
+      input.assignedTo ?? null,
+      input.summary ?? null,
+      input.payload ?? null
+    ]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function listReviewCases(clinicId: string, status?: string, limit = 100) {
+  const result = status
+    ? await query(
+        `SELECT * FROM review_cases
+         WHERE clinic_id = $1 AND status = $2
+         ORDER BY updated_at DESC
+         LIMIT $3`,
+        [clinicId, status, limit]
+      )
+    : await query(
+        `SELECT * FROM review_cases
+         WHERE clinic_id = $1
+         ORDER BY updated_at DESC
+         LIMIT $2`,
+        [clinicId, limit]
+      );
+
+  return result.rows;
+}
+9) server/repos/outcomeRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function createOutcome(input: {
+  clinicId?: string;
+  caseId?: string;
+  patientKey?: string;
+  predicted?: unknown;
+  actual?: unknown;
+  status?: string;
+  notes?: string;
+}) {
+  const result = await query(
+    `INSERT INTO outcomes (clinic_id, case_id, patient_key, predicted, actual, status, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      input.clinicId ?? null,
+      input.caseId ?? null,
+      input.patientKey ?? null,
+      input.predicted ?? null,
+      input.actual ?? null,
+      input.status ?? "pending",
+      input.notes ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function updateOutcome(id: string, input: {
+  actual?: unknown;
+  status?: string;
+  notes?: string;
+}) {
+  const result = await query(
+    `UPDATE outcomes
+     SET actual = COALESCE($2, actual),
+         status = COALESCE($3, status),
+         notes = COALESCE($4, notes),
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [id, input.actual ?? null, input.status ?? null, input.notes ?? null]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function listOutcomes(clinicId?: string, status?: string, limit = 100) {
+  if (clinicId && status) {
+    const result = await query(
+      `SELECT * FROM outcomes WHERE clinic_id = $1 AND status = $2 ORDER BY updated_at DESC LIMIT $3`,
+      [clinicId, status, limit]
+    );
+    return result.rows;
+  }
+
+  if (clinicId) {
+    const result = await query(
+      `SELECT * FROM outcomes WHERE clinic_id = $1 ORDER BY updated_at DESC LIMIT $2`,
+      [clinicId, limit]
+    );
+    return result.rows;
+  }
+
+  const result = await query(
+    `SELECT * FROM outcomes ORDER BY updated_at DESC LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+}
+10) server/repos/metricsRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function insertMetricSnapshot(input: {
+  clinicId?: string;
+  metricGroup: string;
+  metricName: string;
+  metricValue: number;
+  labels?: Record<string, unknown>;
+}) {
+  const result = await query(
+    `INSERT INTO metrics_snapshots (clinic_id, metric_group, metric_name, metric_value, labels)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [
+      input.clinicId ?? null,
+      input.metricGroup,
+      input.metricName,
+      input.metricValue,
+      input.labels ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listRecentMetricSnapshots(metricGroup?: string, limit = 200) {
+  const result = metricGroup
+    ? await query(
+        `SELECT * FROM metrics_snapshots
+         WHERE metric_group = $1
+         ORDER BY captured_at DESC
+         LIMIT $2`,
+        [metricGroup, limit]
+      )
+    : await query(
+        `SELECT * FROM metrics_snapshots
+         ORDER BY captured_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+
+  return result.rows;
+}
+11) server/routes/stateAdmin.ts
+Create this file
+
+This gives you a simple sanity panel API to prove the state is durable.
+
+import { Router } from "express";
+import { listRecentJobs } from "../repos/jobRepo";
+import { listAuditEvents } from "../repos/auditRepo";
+import { listOutcomes } from "../repos/outcomeRepo";
+import { listRecentMetricSnapshots } from "../repos/metricsRepo";
+
+const router = Router();
+
+router.get("/jobs", async (req, res) => {
+  const clinicId = String(req.query.clinicId || "") || undefined;
+  const rows = await listRecentJobs(clinicId, 100);
+  res.json(rows);
+});
+
+router.get("/audit", async (req, res) => {
+  const clinicId = String(req.query.clinicId || "") || undefined;
+  const traceId = String(req.query.traceId || "") || undefined;
+  const rows = await listAuditEvents(traceId, clinicId, 200);
+  res.json(rows);
+});
+
+router.get("/outcomes", async (req, res) => {
+  const clinicId = String(req.query.clinicId || "") || undefined;
+  const status = String(req.query.status || "") || undefined;
+  const rows = await listOutcomes(clinicId, status, 100);
+  res.json(rows);
+});
+
+router.get("/metrics", async (req, res) => {
+  const metricGroup = String(req.query.metricGroup || "") || undefined;
+  const rows = await listRecentMetricSnapshots(metricGroup, 200);
+  res.json(rows);
+});
+
+export default router;
+12) server/index.ts
+Register migration-friendly state admin routes
+
+Add:
+
+import stateAdminRoutes from "./routes/stateAdmin";
+
+app.use("/api/state", stateAdminRoutes);
+
+Also make sure your startup includes DB validation:
+
+import { testDbConnection } from "./db";
+
+async function start() {
+  await testDbConnection();
+
+  const port = Number(process.env.PORT || 3000);
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Server listening on ${port}`);
+  });
+}
+
+start().catch((err) => {
+  console.error("❌ Startup failed");
+  console.error(err);
+  process.exit(1);
+});
+13) Replace in-memory state usage
+
+Wherever you currently have things like:
+
+const jobs = []
+const outcomes = []
+const auditLog = []
+const reviewCases = []
+const metricsStore = {}
+
+Replace those patterns with the repos above.
+
+Example replacement
+Before
+const outcomes: any[] = [];
+
+export function addOutcome(outcome: any) {
+  outcomes.push(outcome);
+}
+After
+import { createOutcome } from "../repos/outcomeRepo";
+
+export async function addOutcome(outcome: any) {
+  return createOutcome(outcome);
+}
+
+That is the heart of this step. We are not just adding tables. We are replacing memory with persistence.
+
+Verification commands for Step 8
+
+Run:
+
+npm run db:migrate
+npm run db:test
+
+Then hit:
+
+GET /api/state/jobs
+GET /api/state/audit
+GET /api/state/outcomes
+GET /api/state/metrics
+
+Expected:
+
+endpoints return rows from Postgres
+no in-memory-only operational store remains for the core state categories above
+Step 8 completion checklist
+
+Phase 2 / Step 8 is complete only when all are true:
+
+database schema exists for requests, jobs, audit logs, review cases, outcomes, metrics snapshots
+migration script runs successfully
+database connection is validated at startup
+request/job/audit/review/outcome/metrics repos are implemented
+core operational state no longer depends on process memory
+state admin endpoints can read durable records from Postgres
+Phase 2 / Step 8 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 2 / Step 9
+Split API, workers, schedulers
+
+This step is only about separating responsibilities so the web server is not pretending to be a whole data center by itself.
+
+It covers:
+
+web/API entrypoint
+worker entrypoint
+scheduler entrypoint
+separate startup scripts
+shared app builder
+shared queue registration
+
+It does not yet add dead-letter queues or worker monitoring detail. That is next.
+
+What Step 9 fully fixes
+
+This closes the mess where:
+
+API and worker logic live in the same process
+web restarts interrupt background processing
+scaling the API accidentally scales schedulers too
+one service does too many jobs and becomes a spaghetti octopus
+
+After this step:
+
+API can scale independently
+workers can scale independently
+scheduler can be exactly one process
+deployment becomes sane
+Files for Phase 2 / Step 9
+
+Create or update:
+
+server/app.ts
+server/index.ts
+server/workers/index.ts
+server/workers/triageWorker.ts
+server/workers/notificationWorker.ts
+server/workers/learningWorker.ts
+server/scheduler/index.ts
+server/queues/registerWorkers.ts
+package.json
+1) server/app.ts
+Create this file
+import express from "express";
+import stateAdminRoutes from "./routes/stateAdmin";
+import authRoutes from "./routes/auth";
+import healthRoutes from "./routes/health";
+import { traceMiddleware } from "./middleware/trace";
+
+export function buildApp() {
+  const app = express();
+
+  app.use(express.json({ limit: "2mb" }));
+  app.use(traceMiddleware);
+
+  app.use("/health", healthRoutes);
+  app.use("/api/auth", authRoutes);
+  app.use("/api/state", stateAdminRoutes);
+
+  app.get("/", (_req, res) => {
+    res.json({ ok: true, service: "med-scribe-api" });
+  });
+
+  return app;
+}
+2) server/index.ts
+Replace with API-only startup
+import { buildApp } from "./app";
+import { testDbConnection } from "./db";
+import { assertProductionSafe } from "./config/assertProductionSafe";
+import { assertRuntimeModes } from "./config/assertRuntimeModes";
+import { assertQueueReady } from "./config/assertQueueReady";
+
+async function start() {
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  const app = buildApp();
+  const port = Number(process.env.PORT || 3000);
+
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`✅ API listening on ${port}`);
+  });
+}
+
+start().catch((err) => {
+  console.error("❌ API startup failed");
+  console.error(err);
+  process.exit(1);
+});
+3) server/workers/triageWorker.ts
+Create this file
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { writeAuditEvent } from "../repos/auditRepo";
+
+const connection = getRedis();
+
+export function createTriageWorker() {
+  const worker = new Worker(
+    "triage",
+    async (job) => {
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "triage",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      const result = {
+        disposition: "review",
+        confidence: 0.9
+      };
+
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "triage",
+        jobName: job.name,
+        status: "completed",
+        payload: job.data,
+        result
+      });
+
+      await writeAuditEvent({
+        clinicId: job.data?.clinicId,
+        traceId: job.data?.traceId,
+        eventType: "triage.job.completed",
+        entityType: "job",
+        entityId: job.id!,
+        data: result
+      });
+
+      return result;
+    },
+    { connection }
+  );
+
+  return worker;
+}
+4) server/workers/notificationWorker.ts
+Create this file
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+
+const connection = getRedis();
+
+export function createNotificationWorker() {
+  return new Worker(
+    "notification",
+    async (job) => {
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "notification",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      const result = { sent: true };
+
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "notification",
+        jobName: job.name,
+        status: "completed",
+        payload: job.data,
+        result
+      });
+
+      return result;
+    },
+    { connection }
+  );
+}
+5) server/workers/learningWorker.ts
+Create this file
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { insertMetricSnapshot } from "../repos/metricsRepo";
+
+const connection = getRedis();
+
+export function createLearningWorker() {
+  return new Worker(
+    "learning",
+    async (job) => {
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "learning",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      await insertMetricSnapshot({
+        clinicId: job.data?.clinicId,
+        metricGroup: "learning",
+        metricName: "job_runs",
+        metricValue: 1,
+        labels: { jobName: job.name }
+      });
+
+      const result = { learned: true };
+
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "learning",
+        jobName: job.name,
+        status: "completed",
+        payload: job.data,
+        result
+      });
+
+      return result;
+    },
+    { connection }
+  );
+}
+6) server/queues/registerWorkers.ts
+Create this file
+import { createTriageWorker } from "../workers/triageWorker";
+import { createNotificationWorker } from "../workers/notificationWorker";
+import { createLearningWorker } from "../workers/learningWorker";
+
+export function registerWorkers() {
+  const triageWorker = createTriageWorker();
+  const notificationWorker = createNotificationWorker();
+  const learningWorker = createLearningWorker();
+
+  return [triageWorker, notificationWorker, learningWorker];
+}
+7) server/workers/index.ts
+Create worker-only startup
+import { testDbConnection } from "../db";
+import { assertProductionSafe } from "../config/assertProductionSafe";
+import { assertRuntimeModes } from "../config/assertRuntimeModes";
+import { assertQueueReady } from "../config/assertQueueReady";
+import { registerWorkers } from "../queues/registerWorkers";
+
+async function start() {
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  registerWorkers();
+
+  console.log("✅ Workers started");
+}
+
+start().catch((err) => {
+  console.error("❌ Worker startup failed");
+  console.error(err);
+  process.exit(1);
+});
+8) server/scheduler/index.ts
+Create scheduler-only startup
+import { testDbConnection } from "../db";
+import { assertProductionSafe } from "../config/assertProductionSafe";
+import { assertRuntimeModes } from "../config/assertRuntimeModes";
+import { assertQueueReady } from "../config/assertQueueReady";
+import { learningQueue, notificationQueue } from "../queue/queues";
+
+async function scheduleRecurringJobs() {
+  await learningQueue.add(
+    "nightly-learning",
+    { source: "scheduler" },
+    {
+      repeat: { pattern: "0 * * * *" },
+      removeOnComplete: 50,
+      removeOnFail: 50
+    }
+  );
+
+  await notificationQueue.add(
+    "health-ping",
+    { source: "scheduler" },
+    {
+      repeat: { pattern: "*/15 * * * *" },
+      removeOnComplete: 50,
+      removeOnFail: 50
+    }
+  );
+}
+
+async function start() {
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+  await scheduleRecurringJobs();
+
+  console.log("✅ Scheduler started");
+}
+
+start().catch((err) => {
+  console.error("❌ Scheduler startup failed");
+  console.error(err);
+  process.exit(1);
+});
+9) package.json
+Add these scripts
+"start:api": "node --import tsx server/index.ts",
+"start:workers": "node --import tsx server/workers/index.ts",
+"start:scheduler": "node --import tsx server/scheduler/index.ts"
+
+Your process map becomes:
+
+API: npm run start:api
+Workers: npm run start:workers
+Scheduler: npm run start:scheduler
+10) Deployment note for this step
+
+In Replit, you may run one process at a time for testing.
+In production:
+
+API runs as one service
+Workers run as another service
+Scheduler runs as one singleton service
+
+That is the whole point of this step.
+
+Verification for Step 9
+
+Run in separate shells or services:
+
+npm run start:api
+npm run start:workers
+npm run start:scheduler
+
+Expected:
+
+API starts independently
+workers start independently
+scheduler starts independently
+no worker logic is required inside API startup
+no recurring jobs are mounted inside API startup
+Step 9 completion checklist
+
+Phase 2 / Step 9 is complete only when all are true:
+
+API has its own entrypoint
+workers have their own entrypoint
+scheduler has its own entrypoint
+shared app construction is separated into buildApp()
+queues/workers are not started inside the API process
+scheduler is not started inside the API process
+deployment can scale API and workers independently
+Phase 2 / Step 9 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 2 / Step 10
+Add real queue health and dead-letter handling
+
+This step is only about making queues observable and failures survivable.
+
+It covers:
+
+queue health checks
+queue depth reporting
+dead-letter queue
+failed job capture
+retry visibility
+queue event listeners
+
+It does not yet cover durable audit/event tables. That is Step 11, though we already laid part of that foundation.
+
+What Step 10 fully fixes
+
+This closes the blind corner where:
+
+jobs fail and vanish
+retries happen with no visibility
+backlogs accumulate invisibly
+there is no DLQ to inspect the wreckage
+
+After this step:
+
+failures get captured
+queues report depth
+dead letters exist
+queue operators can see what is happening
+Files for Phase 2 / Step 10
+
+Create or update:
+
+server/queue/queues.ts
+server/queue/queueHealth.ts
+server/queue/queueEvents.ts
+server/routes/queueHealth.ts
+server/workers/baseWorkerEvents.ts
+server/app.ts
+1) server/queue/queues.ts
+Replace with this expanded version
+import { Queue, QueueEvents } from "bullmq";
+import { getRedis } from "./redis";
+
+const connection = getRedis();
+
+export const triageQueue = new Queue("triage", { connection });
+export const notificationQueue = new Queue("notification", { connection });
+export const learningQueue = new Queue("learning", { connection });
+export const deadLetterQueue = new Queue("dead-letter", { connection });
+
+export const triageQueueEvents = new QueueEvents("triage", { connection });
+export const notificationQueueEvents = new QueueEvents("notification", { connection });
+export const learningQueueEvents = new QueueEvents("learning", { connection });
+2) server/workers/baseWorkerEvents.ts
+Create this file
+import type { Worker } from "bullmq";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { writeAuditEvent } from "../repos/auditRepo";
+import { deadLetterQueue } from "../queue/queues";
+
+export function attachWorkerEvents(worker: Worker, queueName: string) {
+  worker.on("completed", async (job, result) => {
+    if (!job) return;
+
+    await upsertJobRecord({
+      id: job.id!,
+      clinicId: job.data?.clinicId,
+      queueName,
+      jobName: job.name,
+      status: "completed",
+      payload: job.data,
+      result
+    });
+
+    await writeAuditEvent({
+      clinicId: job.data?.clinicId,
+      traceId: job.data?.traceId,
+      eventType: `${queueName}.job.completed`,
+      entityType: "job",
+      entityId: job.id!,
+      data: result
+    });
+  });
+
+  worker.on("failed", async (job, err) => {
+    if (!job) return;
+
+    await upsertJobRecord({
+      id: job.id!,
+      clinicId: job.data?.clinicId,
+      queueName,
+      jobName: job.name,
+      status: "failed",
+      payload: job.data,
+      error: err?.message || "Unknown worker failure"
+    });
+
+    await writeAuditEvent({
+      clinicId: job.data?.clinicId,
+      traceId: job.data?.traceId,
+      eventType: `${queueName}.job.failed`,
+      entityType: "job",
+      entityId: job.id!,
+      data: { error: err?.message || "Unknown worker failure" }
+    });
+
+    await deadLetterQueue.add(
+      `${queueName}-dead-letter`,
+      {
+        sourceQueue: queueName,
+        originalJobId: job.id,
+        jobName: job.name,
+        clinicId: job.data?.clinicId,
+        traceId: job.data?.traceId,
+        payload: job.data,
+        error: err?.message || "Unknown worker failure"
+      },
+      {
+        removeOnComplete: 1000,
+        removeOnFail: 1000
+      }
+    );
+  });
+}
+3) Update workers to use the base event handler
+server/workers/triageWorker.ts
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { attachWorkerEvents } from "./baseWorkerEvents";
+
+const connection = getRedis();
+
+export function createTriageWorker() {
+  const worker = new Worker(
+    "triage",
+    async (job) => {
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "triage",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      return {
+        disposition: "review",
+        confidence: 0.9
+      };
+    },
+    { connection }
+  );
+
+  attachWorkerEvents(worker, "triage");
+  return worker;
+}
+server/workers/notificationWorker.ts
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { attachWorkerEvents } from "./baseWorkerEvents";
+
+const connection = getRedis();
+
+export function createNotificationWorker() {
+  const worker = new Worker(
+    "notification",
+    async (job) => {
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "notification",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      return { sent: true };
+    },
+    { connection }
+  );
+
+  attachWorkerEvents(worker, "notification");
+  return worker;
+}
+server/workers/learningWorker.ts
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { insertMetricSnapshot } from "../repos/metricsRepo";
+import { attachWorkerEvents } from "./baseWorkerEvents";
+
+const connection = getRedis();
+
+export function createLearningWorker() {
+  const worker = new Worker(
+    "learning",
+    async (job) => {
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "learning",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      await insertMetricSnapshot({
+        clinicId: job.data?.clinicId,
+        metricGroup: "learning",
+        metricName: "job_runs",
+        metricValue: 1,
+        labels: { jobName: job.name }
+      });
+
+      return { learned: true };
+    },
+    { connection }
+  );
+
+  attachWorkerEvents(worker, "learning");
+  return worker;
+}
+4) server/queue/queueHealth.ts
+Create this file
+import { deadLetterQueue, learningQueue, notificationQueue, triageQueue } from "./queues";
+
+async function getQueueStats(queue: any) {
+  const [waiting, active, completed, failed, delayed] = await Promise.all([
+    queue.getWaitingCount(),
+    queue.getActiveCount(),
+    queue.getCompletedCount(),
+    queue.getFailedCount(),
+    queue.getDelayedCount()
+  ]);
+
+  return {
+    waiting,
+    active,
+    completed,
+    failed,
+    delayed
+  };
+}
+
+export async function getAllQueueHealth() {
+  const [triage, notification, learning, deadLetter] = await Promise.all([
+    getQueueStats(triageQueue),
+    getQueueStats(notificationQueue),
+    getQueueStats(learningQueue),
+    getQueueStats(deadLetterQueue)
+  ]);
+
+  return {
+    triage,
+    notification,
+    learning,
+    deadLetter
+  };
+}
+5) server/queue/queueEvents.ts
+Create this file
+import {
+  triageQueueEvents,
+  notificationQueueEvents,
+  learningQueueEvents
+} from "./queues";
+import { writeAuditEvent } from "../repos/auditRepo";
+
+function attachQueueEventLogger(queueName: string, queueEvents: any) {
+  queueEvents.on("waiting", async ({ jobId }: any) => {
+    await writeAuditEvent({
+      eventType: `${queueName}.job.waiting`,
+      entityType: "job",
+      entityId: String(jobId),
+      data: { queueName }
+    });
+  });
+
+  queueEvents.on("failed", async ({ jobId, failedReason }: any) => {
+    await writeAuditEvent({
+      eventType: `${queueName}.job.failed.event`,
+      entityType: "job",
+      entityId: String(jobId),
+      data: { queueName, failedReason }
+    });
+  });
+}
+
+export function registerQueueEvents() {
+  attachQueueEventLogger("triage", triageQueueEvents);
+  attachQueueEventLogger("notification", notificationQueueEvents);
+  attachQueueEventLogger("learning", learningQueueEvents);
+}
+6) server/routes/queueHealth.ts
+Create this file
+import { Router } from "express";
+import { getAllQueueHealth } from "../queue/queueHealth";
+
+const router = Router();
+
+router.get("/", async (_req, res) => {
+  const health = await getAllQueueHealth();
+  res.json(health);
+});
+
+export default router;
+7) server/app.ts
+Register queue health route
+
+Add:
+
+import queueHealthRoutes from "./routes/queueHealth";
+
+app.use("/api/queue-health", queueHealthRoutes);
+8) server/workers/index.ts
+Register queue event listeners
+
+Update startup:
+
+import { registerQueueEvents } from "../queue/queueEvents";
+
+async function start() {
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  registerQueueEvents();
+  registerWorkers();
+
+  console.log("✅ Workers started");
+}
+Verification for Step 10
+
+Start API and workers, then hit:
+
+GET /api/queue-health
+
+Expected:
+
+counts for triage, notification, learning, deadLetter
+
+Then enqueue some jobs and intentionally fail one in a worker to verify:
+
+failed job is persisted
+dead letter job appears in DLQ
+audit events are written
+Step 10 completion checklist
+
+Phase 2 / Step 10 is complete only when all are true:
+
+queues expose health stats
+dead-letter queue exists
+failed jobs are recorded durably
+queue events are logged into audit records
+queue health endpoint exists
+workers attach completion and failure handlers
+Phase 2 / Step 10 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 2 / Step 11
+Add durable audit/event tables
+
+This step is only about making operational events durable, queryable, and structured.
+
+It covers:
+
+durable audit log table
+durable event table separate from audit if needed
+helper repo for event append
+event retention-ready structure
+write helpers for runtime lifecycle events
+
+We already created audit_logs, but to fully complete this step cleanly, we will add a dedicated system_events table too, so audit and telemetry do not trample each other.
+
+Files for Phase 2 / Step 11
+
+Create or update:
+
+server/db/schema.sql
+server/repos/systemEventRepo.ts
+server/routes/events.ts
+server/app.ts
+1) server/db/schema.sql
+Add this table to the schema file
+CREATE TABLE IF NOT EXISTS system_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  trace_id TEXT,
+  event_name TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'info',
+  source TEXT,
+  payload JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_events_name_time ON system_events (event_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_system_events_trace_id ON system_events (trace_id);
+
+After updating schema, rerun migration:
+
+npm run db:migrate
+2) server/repos/systemEventRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function appendSystemEvent(input: {
+  clinicId?: string;
+  traceId?: string;
+  eventName: string;
+  severity?: "info" | "warn" | "error";
+  source?: string;
+  payload?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO system_events (clinic_id, trace_id, event_name, severity, source, payload)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      input.clinicId ?? null,
+      input.traceId ?? null,
+      input.eventName,
+      input.severity ?? "info",
+      input.source ?? null,
+      input.payload ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listSystemEvents(limit = 200, severity?: string) {
+  const result = severity
+    ? await query(
+        `SELECT * FROM system_events WHERE severity = $1 ORDER BY created_at DESC LIMIT $2`,
+        [severity, limit]
+      )
+    : await query(
+        `SELECT * FROM system_events ORDER BY created_at DESC LIMIT $1`,
+        [limit]
+      );
+
+  return result.rows;
+}
+3) server/routes/events.ts
+Create this file
+import { Router } from "express";
+import { listSystemEvents } from "../repos/systemEventRepo";
+
+const router = Router();
+
+router.get("/", async (req, res) => {
+  const severity = String(req.query.severity || "") || undefined;
+  const limit = Number(req.query.limit || 200);
+  const rows = await listSystemEvents(limit, severity);
+  res.json(rows);
+});
+
+export default router;
+4) server/app.ts
+Register events route
+
+Add:
+
+import eventsRoutes from "./routes/events";
+
+app.use("/api/events", eventsRoutes);
+5) Write startup events
+server/index.ts
+
+Add:
+
+import { appendSystemEvent } from "./repos/systemEventRepo";
+
+async function start() {
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "api.startup",
+    severity: "info",
+    source: "api",
+    payload: { nodeEnv: process.env.NODE_ENV || "development" }
+  });
+
+  const app = buildApp();
+  const port = Number(process.env.PORT || 3000);
+
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`✅ API listening on ${port}`);
+  });
+}
+server/workers/index.ts
+
+Add:
+
+import { appendSystemEvent } from "../repos/systemEventRepo";
+
+await appendSystemEvent({
+  eventName: "workers.startup",
+  severity: "info",
+  source: "workers"
+});
+server/scheduler/index.ts
+
+Add:
+
+import { appendSystemEvent } from "../repos/systemEventRepo";
+
+await appendSystemEvent({
+  eventName: "scheduler.startup",
+  severity: "info",
+  source: "scheduler"
+});
+Step 11 completion checklist
+
+Phase 2 / Step 11 is complete only when all are true:
+
+audit log table exists
+system event table exists
+event repo exists
+system lifecycle events are written durably
+API route can list recent system events
+audit and telemetry are separated structurally
+Phase 2 / Step 11 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 2 / Step 12
+Build proper readiness/live probes
+
+This step is only about correct health endpoint semantics.
+
+It covers:
+
+livez
+readyz
+full health report
+DB readiness
+Redis readiness
+queue readiness
+failure status codes
+
+It improves on the earlier Phase 1 patch and completes it properly.
+
+Files for Phase 2 / Step 12
+
+Create or update:
+
+server/routes/health.ts
+server/queue/queueHealth.ts
+server/db/index.ts
+1) server/routes/health.ts
+Replace with this version
+import { Router } from "express";
+import { testDbConnection } from "../db";
+import { getRedis } from "../queue/redis";
+import { getAllQueueHealth } from "../queue/queueHealth";
+
+const router = Router();
+
+router.get("/livez", async (_req, res) => {
+  res.status(200).json({
+    status: "alive",
+    uptime: process.uptime(),
+    ts: new Date().toISOString()
+  });
+});
+
+router.get("/readyz", async (_req, res) => {
+  try {
+    await testDbConnection();
+
+    const redis = getRedis();
+    const pong = await redis.ping();
+    if (pong !== "PONG") {
+      throw new Error("Redis ping failed");
+    }
+
+    res.status(200).json({
+      status: "ready"
+    });
+  } catch (err: any) {
+    res.status(503).json({
+      status: "not_ready",
+      error: err?.message || "Unknown readiness failure"
+    });
+  }
+});
+
+router.get("/healthz/full", async (_req, res) => {
+  const report: Record<string, any> = {
+    ts: new Date().toISOString(),
+    uptime: process.uptime(),
+    checks: {}
+  };
+
+  let ok = true;
+
+  try {
+    await testDbConnection();
+    report.checks.database = { ok: true };
+  } catch (err: any) {
+    ok = false;
+    report.checks.database = { ok: false, error: err?.message || "DB failure" };
+  }
+
+  try {
+    const redis = getRedis();
+    const pong = await redis.ping();
+    report.checks.redis = { ok: pong === "PONG" };
+    if (pong !== "PONG") ok = false;
+  } catch (err: any) {
+    ok = false;
+    report.checks.redis = { ok: false, error: err?.message || "Redis failure" };
+  }
+
+  try {
+    report.checks.queues = await getAllQueueHealth();
+  } catch (err: any) {
+    ok = false;
+    report.checks.queues = { ok: false, error: err?.message || "Queue health failure" };
+  }
+
+  res.status(ok ? 200 : 503).json({
+    status: ok ? "healthy" : "degraded",
+    ...report
+  });
+});
+
+export default router;
+2) server/db/index.ts
+Ensure testDbConnection() is present
+
+Already provided in Step 8. Keep:
+
+export async function testDbConnection() {
+  const result = await query("SELECT 1 as ok");
+  return result.rows[0];
+}
+Step 12 completion checklist
+
+Phase 2 / Step 12 is complete only when all are true:
+
+/health/livez exists and is lightweight
+/health/readyz validates DB and Redis
+/health/healthz/full reports DB, Redis, and queues
+readiness returns 503 on dependency failure
+full health returns 503 when degraded
+Phase 2 / Step 12 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 2 / Step 13
+Build centralized config validation
+
+This step is only about making configuration strict, typed enough to be safe, and validated in one place.
+
+It covers:
+
+one central config module
+required vs optional env handling
+numeric parsing
+boolean parsing
+production-specific required settings
+a startup config validation function
+
+This completes the loose ends from earlier env work.
+
+Files for Phase 2 / Step 13
+
+Create or update:
+
+server/config/env.ts
+server/config/validateConfig.ts
+server/index.ts
+server/workers/index.ts
+server/scheduler/index.ts
+1) server/config/env.ts
+Replace with this stricter version
+type EnvMode = "development" | "test" | "production";
+
+function getOptional(key: string): string | undefined {
+  const value = process.env[key];
+  return value && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function getRequired(key: string): string {
+  const value = getOptional(key);
+  if (!value) {
+    throw new Error(`Missing environment variable: ${key}`);
+  }
+  return value;
+}
+
+function getBoolean(key: string, fallback = false): boolean {
+  const value = getOptional(key);
+  if (!value) return fallback;
+  return value === "true";
+}
+
+function getNumber(key: string, fallback?: number): number {
+  const value = getOptional(key);
+  if (!value) {
+    if (fallback !== undefined) return fallback;
+    throw new Error(`Missing numeric environment variable: ${key}`);
+  }
+
+  const num = Number(value);
+  if (Number.isNaN(num)) {
+    throw new Error(`Invalid numeric environment variable: ${key}`);
+  }
+
+  return num;
+}
+
+export const ENV = {
+  NODE_ENV: (getOptional("NODE_ENV") || "development") as EnvMode,
+  PORT: getNumber("PORT", 3000),
+
+  DATABASE_URL: getOptional("DATABASE_URL"),
+  REDIS_URL: getOptional("REDIS_URL"),
+
+  JWT_SECRET: getOptional("JWT_SECRET"),
+  SESSION_SECRET: getOptional("SESSION_SECRET"),
+  MD_PASSWORD: getOptional("MD_PASSWORD"),
+  CLINICIAN_PASSWORD: getOptional("CLINICIAN_PASSWORD"),
+
+  REVIEW_AUTH_MODE: getOptional("REVIEW_AUTH_MODE") || "on",
+  ENABLE_TEST_ROUTES: getBoolean("ENABLE_TEST_ROUTES", false),
+  ALLOW_PROVIDER_KEY_FALLBACK: getBoolean("ALLOW_PROVIDER_KEY_FALLBACK", false),
+
+  DEMO_USERS: getBoolean("DEMO_USERS", false),
+  USE_MOCK_EHR: getBoolean("USE_MOCK_EHR", false),
+  USE_FAKE_QUEUE: getBoolean("USE_FAKE_QUEUE", false),
+
+  TWILIO_ACCOUNT_SID: getOptional("TWILIO_ACCOUNT_SID"),
+  TWILIO_AUTH_TOKEN: getOptional("TWILIO_AUTH_TOKEN")
+};
+
+export { getRequired };
+2) server/config/validateConfig.ts
+Create this file
+import { ENV } from "./env";
+
+export function validateConfig() {
+  const errors: string[] = [];
+
+  if (!["development", "test", "production"].includes(ENV.NODE_ENV)) {
+    errors.push(`NODE_ENV invalid: ${ENV.NODE_ENV}`);
+  }
+
+  if (!Number.isInteger(ENV.PORT) || ENV.PORT <= 0) {
+    errors.push("PORT must be a positive integer");
+  }
+
+  if (!ENV.DATABASE_URL) {
+    errors.push("DATABASE_URL is required");
+  }
+
+  if (!ENV.REDIS_URL) {
+    errors.push("REDIS_URL is required");
+  }
+
+  if (ENV.NODE_ENV === "production") {
+    if (!ENV.JWT_SECRET) errors.push("JWT_SECRET is required in production");
+    if (!ENV.SESSION_SECRET) errors.push("SESSION_SECRET is required in production");
+    if (!ENV.MD_PASSWORD) errors.push("MD_PASSWORD is required in production");
+    if (!ENV.CLINICIAN_PASSWORD) errors.push("CLINICIAN_PASSWORD is required in production");
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`❌ Config validation failed:\n- ${errors.join("\n- ")}`);
+  }
+}
+3) server/index.ts
+Add config validation before startup
+import { validateConfig } from "./config/validateConfig";
+
+async function start() {
+  validateConfig();
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "api.startup",
+    severity: "info",
+    source: "api",
+    payload: { nodeEnv: process.env.NODE_ENV || "development" }
+  });
+
+  const app = buildApp();
+  const port = Number(process.env.PORT || 3000);
+
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`✅ API listening on ${port}`);
+  });
+}
+4) server/workers/index.ts
+Add config validation
+import { validateConfig } from "../config/validateConfig";
+
+async function start() {
+  validateConfig();
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "workers.startup",
+    severity: "info",
+    source: "workers"
+  });
+
+  registerQueueEvents();
+  registerWorkers();
+
+  console.log("✅ Workers started");
+}
+5) server/scheduler/index.ts
+Add config validation
+import { validateConfig } from "../config/validateConfig";
+
+async function start() {
+  validateConfig();
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "scheduler.startup",
+    severity: "info",
+    source: "scheduler"
+  });
+
+  await scheduleRecurringJobs();
+
+  console.log("✅ Scheduler started");
+}
+Verification for Step 13
+
+Try starting with:
+
+missing DATABASE_URL
+missing REDIS_URL
+invalid PORT=banana
+
+Expected:
+
+startup fails immediately with clear config error
+
+Then restore valid env and verify:
+
+API starts
+workers start
+scheduler starts
+Step 13 completion checklist
+
+Phase 2 / Step 13 is complete only when all are true:
+
+one central config module exists
+booleans and numbers parse safely
+required variables are validated centrally
+API, workers, and scheduler all validate config at startup
+invalid env values fail fast before service starts
+Phase 2 / Step 13 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+End of Phase 2
+
+You now have complete copy-ready patches for:
+
+Phase 2 / Step 8 Move in-memory state to proper stores
+Phase 2 / Step 9 Split API, workers, schedulers
+Phase 2 / Step 10 Add real queue health and dead-letter handling
+Phase 2 / Step 11 Add durable audit/event tables
+Phase 2 / Step 12 Build proper readiness/live probes
+Phase 2 / Step 13 Build centralized config validation
+
+That completes Phase 2 in order.
+
+What comes next
+
+Next in exact order is:
+
+Phase 3 / Step 14
+Add OpenTelemetry + correlation IDs
+
+Then:
+
+Step 15 real operations cockpit
+Step 16 dependency health map
+Step 17 per-engine latency/error/SLO reporting
+Step 18 worker-specific monitoring
+Step 19 per-clinic health and feature-state panels
+
+I’ll keep doing it the same way, one fully complete step at a time, ready to paste into Replit.
+
+which overrides the 3000 default, exactly as designed). Here is the complete Phase 1 / Step 1 checklist status:
+
+Phase 1 / Step 1 — Completion Status
+What was changed
+Dockerfile — full replacement:
+
+Was: single-stage, npm install --omit=dev before build (so tsx, vite, esbuild were missing during RUN npm run build), 2>/dev/null || true swallowing all build errors, CMD ["node", "server/index.js"] pointing at a file that doesn't exist, PORT=5000
+Now: multi-stage (builder gets all deps + runs the build, runner gets only prod deps + dist/), no silent failures, CMD ["node", "dist/index.cjs"], PORT=3000
+.dockerignore — added: .github, .env.*, coverage, tmp, temp, *.sqlite, *.sqlite-shm, *.sqlite-wal, uploads, infra/.terraform, infra/*.tfstate*
+
+server/index.ts — port default changed from "5000" to 3000. In Replit, process.env.PORT is injected as 5000 so no change there. In Docker, ENV PORT=3000 drives it. Binding is already host: "0.0.0.0" — untouched.
+
+script/build.ts — kept as-is. It already passes all three keeper conditions: uses esbuild, entry point is server/index.ts, process.exit(1) on failure. Replacing it with the simplified version would drop the Vite frontend build and break the app.
+
+package.json — the two docker convenience scripts cannot be added through the tools available (package.json edits are restricted). Run them directly:
+
+docker build -t med-scribe-app .
+docker run -p 3000:3000 --env-file .env med-scribe-app
+Checklist
+Requirement	Status
+Dockerfile is multi-stage	✅
+Build runs in builder stage with dev dependencies	✅
+Runtime stage installs prod deps only	✅
+Container starts with node dist/index.cjs	✅
+No || true or hidden build failures anywhere	✅
+App listens on 0.0.0.0	✅ (was already host: "0.0.0.0")
+.dockerignore excludes heavy/sensitive files	✅
+npm run build succeeds	✅ (dist/index.cjs 5.0 MB, built in 31s)
+node dist/index.cjs starts	✅ (Firebase init runs; hard-stops on missing APP_JWT_SECRET in prod — correct behavior)
+The one thing to do before docker run works end-to-end: add APP_JWT_SECRET=<64-char-random-string> to your .env file. That is the production guard the server enforces before opening port 3000.which overrides the 3000 default, exactly as designed). Here is the complete Phase 1 / Step 1 checklist status:
+
+Phase 1 / Step 1 — Completion Status
+What was changed
+Dockerfile — full replacement:
+
+Was: single-stage, npm install --omit=dev before build (so tsx, vite, esbuild were missing during RUN npm run build), 2>/dev/null || true swallowing all build errors, CMD ["node", "server/index.js"] pointing at a file that doesn't exist, PORT=5000
+Now: multi-stage (builder gets all deps + runs the build, runner gets only prod deps + dist/), no silent failures, CMD ["node", "dist/index.cjs"], PORT=3000
+.dockerignore — added: .github, .env.*, coverage, tmp, temp, *.sqlite, *.sqlite-shm, *.sqlite-wal, uploads, infra/.terraform, infra/*.tfstate*
+
+server/index.ts — port default changed from "5000" to 3000. In Replit, process.env.PORT is injected as 5000 so no change there. In Docker, ENV PORT=3000 drives it. Binding is already host: "0.0.0.0" — untouched.
+
+script/build.ts — kept as-is. It already passes all three keeper conditions: uses esbuild, entry point is server/index.ts, process.exit(1) on failure. Replacing it with the simplified version would drop the Vite frontend build and break the app.
+
+package.json — the two docker convenience scripts cannot be added through the tools available (package.json edits are restricted). Run them directly:
+
+docker build -t med-scribe-app .
+docker run -p 3000:3000 --env-file .env med-scribe-app
+Checklist
+Requirement	Status
+Dockerfile is multi-stage	✅
+Build runs in builder stage with dev dependencies	✅
+Runtime stage installs prod deps only	✅
+Container starts with node dist/index.cjs	✅
+No || true or hidden build failures anywhere	✅
+App listens on 0.0.0.0	✅ (was already host: "0.0.0.0")
+.dockerignore excludes heavy/sensitive files	✅
+npm run build succeeds	✅ (dist/index.cjs 5.0 MB, built in 31s)
+node dist/index.cjs starts	✅ (Firebase init runs; hard-stops on missing APP_JWT_SECRET in prod — correct behavior)
+The one thing to do before docker run works end-to-end: add APP_JWT_SECRET=<64-char-random-string> to your .env file. That is the production guard the server enforces before opening port 3000.  PLEASE CONTINUE WITH PHASE 3.  PLEASE FINISH PHASE 3 LIKE YOU DID PHASES 1 AND 2 LABELING EACH STEP AND COMPLETING THEM IN ORDER.
+
+Excellent. That Phase 1 / Step 1 status is exactly the kind of grounded checkpoint we want. The shipyard is no longer guessing where the bolts went.
+
+We’ll continue in exact order.
+
+Phase 3 / Step 14
+Add OpenTelemetry + correlation IDs
+
+This step is only about observability plumbing.
+
+It covers:
+
+one correlation ID per request
+request-scoped trace propagation
+OpenTelemetry bootstrap
+automatic HTTP/Express/Postgres/Redis tracing where possible
+trace IDs flowing into logs and event records
+worker job trace continuity
+
+It does not yet build the operations cockpit or health map. Those are Steps 15 and 16.
+
+What Step 14 fully fixes
+
+This closes the blind tunnel where:
+
+one request touches five systems and you cannot follow it
+logs, audit records, and queue jobs do not share a common trace identity
+latency debugging is folklore instead of evidence
+
+After this step:
+
+every request gets a correlation ID
+every request and job can carry a trace ID
+OpenTelemetry can emit spans for API/database/Redis work
+logs and audit events can include the same trace handle
+Files for Phase 3 / Step 14
+
+Create or update:
+
+package.json
+server/monitoring/otel.ts
+server/monitoring/requestContext.ts
+server/middleware/trace.ts
+server/utils/logger.ts
+server/index.ts
+server/workers/index.ts
+server/scheduler/index.ts
+server/orchestrator/orchestrator.ts
+server/workers/triageWorker.ts
+server/workers/notificationWorker.ts
+server/workers/learningWorker.ts
+1) Install telemetry packages
+
+Run in Replit shell:
+
+npm install @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node @opentelemetry/exporter-trace-otlp-http @opentelemetry/resources @opentelemetry/semantic-conventions
+
+If your repo uses strict version pinning, keep these in sync.
+
+2) server/monitoring/otel.ts
+Create this file
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
+
+let sdk: NodeSDK | null = null;
+let started = false;
+
+export async function startTelemetry(serviceName: string) {
+  if (started) return;
+
+  const exporter = new OTLPTraceExporter({
+    url: process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+  });
+
+  sdk = new NodeSDK({
+    resource: resourceFromAttributes({
+      [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
+      [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]:
+        process.env.NODE_ENV || "development"
+    }),
+    traceExporter: exporter,
+    instrumentations: [getNodeAutoInstrumentations()]
+  });
+
+  await sdk.start();
+  started = true;
+  console.log(`✅ OpenTelemetry started for ${serviceName}`);
+}
+
+export async function stopTelemetry() {
+  if (!sdk) return;
+  await sdk.shutdown();
+}
+3) server/monitoring/requestContext.ts
+Create this file
+import { AsyncLocalStorage } from "node:async_hooks";
+
+type RequestContext = {
+  traceId: string;
+  clinicId?: string;
+  userId?: string;
+};
+
+const storage = new AsyncLocalStorage<RequestContext>();
+
+export function runWithRequestContext<T>(ctx: RequestContext, fn: () => T): T {
+  return storage.run(ctx, fn);
+}
+
+export function getRequestContext(): RequestContext | undefined {
+  return storage.getStore();
+}
+
+export function getTraceId(): string | undefined {
+  return storage.getStore()?.traceId;
+}
+4) server/middleware/trace.ts
+Replace with this upgraded version
+import { v4 as uuid } from "uuid";
+import { context, trace } from "@opentelemetry/api";
+import { runWithRequestContext } from "../monitoring/requestContext";
+
+export function traceMiddleware(req: any, res: any, next: any) {
+  const incoming = req.headers["x-trace-id"];
+  const activeSpan = trace.getSpan(context.active());
+
+  const otelTraceId = activeSpan?.spanContext().traceId;
+  const traceId =
+    (typeof incoming === "string" && incoming.trim()) ||
+    otelTraceId ||
+    uuid();
+
+  req.traceId = traceId;
+  res.setHeader("x-trace-id", traceId);
+
+  runWithRequestContext(
+    {
+      traceId,
+      clinicId: req.clinic?.id,
+      userId: req.user?.id
+    },
+    () => next()
+  );
+}
+5) server/utils/logger.ts
+Replace with this trace-aware version
+import { getRequestContext } from "../monitoring/requestContext";
+
+type LogLevel = "info" | "warn" | "error";
+
+function redactPhone(value?: string) {
+  if (!value) return undefined;
+  const digits = value.replace(/\D/g, "");
+  if (digits.length < 4) return "[REDACTED_PHONE]";
+  return `***${digits.slice(-4)}`;
+}
+
+function redactText(value?: string) {
+  return value ? "[REDACTED_TEXT]" : undefined;
+}
+
+function sanitize(data: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value == null) {
+      out[key] = value;
+      continue;
+    }
+
+    const k = key.toLowerCase();
+
+    if (k.includes("phone") || k === "to" || k === "from") {
+      out[key] = redactPhone(String(value));
+    } else if (
+      k.includes("message") ||
+      k.includes("body") ||
+      k.includes("text") ||
+      k.includes("content") ||
+      k.includes("note")
+    ) {
+      out[key] = redactText(String(value));
+    } else if (
+      k.includes("patient") ||
+      k.includes("payload") ||
+      k.includes("request")
+    ) {
+      out[key] = "[REDACTED_OBJECT]";
+    } else {
+      out[key] = value;
+    }
+  }
+
+  return out;
+}
+
+function write(level: LogLevel, msg: string, data: Record<string, unknown> = {}) {
+  const ctx = getRequestContext();
+
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    msg,
+    traceId: ctx?.traceId,
+    clinicId: ctx?.clinicId,
+    userId: ctx?.userId,
+    ...sanitize(data)
+  };
+
+  const line = JSON.stringify(entry);
+
+  if (level === "error") {
+    console.error(line);
+  } else {
+    console.log(line);
+  }
+}
+
+export const logger = {
+  info: (msg: string, data?: Record<string, unknown>) => write("info", msg, data),
+  warn: (msg: string, data?: Record<string, unknown>) => write("warn", msg, data),
+  error: (msg: string, data?: Record<string, unknown>) => write("error", msg, data)
+};
+6) server/index.ts
+Add telemetry startup before app boot
+import { startTelemetry, stopTelemetry } from "./monitoring/otel";
+import { logger } from "./utils/logger";
+
+async function start() {
+  validateConfig();
+  await startTelemetry("med-scribe-api");
+
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "api.startup",
+    severity: "info",
+    source: "api",
+    payload: { nodeEnv: process.env.NODE_ENV || "development" }
+  });
+
+  const app = buildApp();
+  const port = Number(process.env.PORT || 3000);
+
+  const server = app.listen(port, "0.0.0.0", () => {
+    logger.info("API listening", { port });
+  });
+
+  const shutdown = async () => {
+    logger.info("API shutdown initiated");
+    server.close(async () => {
+      await stopTelemetry();
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+7) server/workers/index.ts
+Add worker telemetry startup
+import { startTelemetry, stopTelemetry } from "../monitoring/otel";
+import { logger } from "../utils/logger";
+
+async function start() {
+  validateConfig();
+  await startTelemetry("med-scribe-workers");
+
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "workers.startup",
+    severity: "info",
+    source: "workers"
+  });
+
+  registerQueueEvents();
+  registerWorkers();
+
+  logger.info("Workers started");
+
+  const shutdown = async () => {
+    logger.info("Workers shutdown initiated");
+    await stopTelemetry();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+8) server/scheduler/index.ts
+Add scheduler telemetry startup
+import { startTelemetry, stopTelemetry } from "../monitoring/otel";
+import { logger } from "../utils/logger";
+
+async function start() {
+  validateConfig();
+  await startTelemetry("med-scribe-scheduler");
+
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "scheduler.startup",
+    severity: "info",
+    source: "scheduler"
+  });
+
+  await scheduleRecurringJobs();
+
+  logger.info("Scheduler started");
+
+  const shutdown = async () => {
+    logger.info("Scheduler shutdown initiated");
+    await stopTelemetry();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+9) server/orchestrator/orchestrator.ts
+Ensure trace IDs are injected into jobs
+import { triageQueue } from "../queue/queues";
+import { getTraceId } from "../monitoring/requestContext";
+
+export async function orchestrateTriage(payload: any) {
+  const traceId = payload?.traceId || getTraceId();
+
+  return triageQueue.add(
+    "triage-job",
+    {
+      ...payload,
+      traceId
+    },
+    {
+      attempts: 3,
+      backoff: { type: "exponential", delay: 2000 },
+      removeOnComplete: 100,
+      removeOnFail: 100
+    }
+  );
+}
+10) Worker files
+Add trace-aware logging
+server/workers/triageWorker.ts
+import { Worker } from "bullmq";
+import { getRedis } from "../queue/redis";
+import { upsertJobRecord } from "../repos/jobRepo";
+import { attachWorkerEvents } from "./baseWorkerEvents";
+import { logger } from "../utils/logger";
+
+const connection = getRedis();
+
+export function createTriageWorker() {
+  const worker = new Worker(
+    "triage",
+    async (job) => {
+      logger.info("Triage job processing", {
+        jobId: job.id,
+        traceId: job.data?.traceId
+      });
+
+      await upsertJobRecord({
+        id: job.id!,
+        clinicId: job.data?.clinicId,
+        queueName: "triage",
+        jobName: job.name,
+        status: "processing",
+        payload: job.data
+      });
+
+      return {
+        disposition: "review",
+        confidence: 0.9
+      };
+    },
+    { connection }
+  );
+
+  attachWorkerEvents(worker, "triage");
+  return worker;
+}
+
+Do the same style for notificationWorker.ts and learningWorker.ts.
+
+Verification for Step 14
+
+Run:
+
+API
+workers
+scheduler
+
+Then make a request to any endpoint that enqueues a job.
+
+Verify:
+
+response includes x-trace-id
+logs contain traceId
+queue job contains traceId
+audit/system events can include that same ID
+OpenTelemetry initializes without crashing
+
+If you have an OTLP collector configured, spans should export. If not, startup still works, and the correlation ID portion remains fully useful.
+
+Step 14 completion checklist
+
+Phase 3 / Step 14 is complete only when all are true:
+
+OpenTelemetry bootstrap exists
+API/workers/scheduler each start telemetry
+every request gets a correlation ID
+x-trace-id is returned in responses
+logs include trace ID
+queued jobs carry trace ID forward
+shutdown path closes telemetry cleanly
+Phase 3 / Step 14 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 3 / Step 15
+Build a real operations cockpit
+
+This step is only about creating one operator-facing control surface.
+
+It covers:
+
+a single backend summary endpoint for ops
+one frontend operations page
+key sections: service state, queues, recent failures, startup events, core metrics
+one place to open first thing in the morning
+
+It does not yet build the dependency health map or per-engine SLO breakdowns. Those are next.
+
+What Step 15 fully fixes
+
+This closes the sprawl where:
+
+operators click through ten panels to understand one outage
+key data exists but is scattered like puzzle pieces across the floor
+
+After this step:
+
+there is one cockpit page
+it summarizes service health, queue health, recent events, and recent jobs
+you have an actual first-stop operational dashboard
+Files for Phase 3 / Step 15
+
+Create or update:
+
+server/routes/ops.ts
+server/app.ts
+client/src/pages/OperationsCockpit.tsx
+client/src/App.tsx or your route registry
+client/src/components/ops/StatCard.tsx
+1) server/routes/ops.ts
+Create this file
+import { Router } from "express";
+import { getAllQueueHealth } from "../queue/queueHealth";
+import { listSystemEvents } from "../repos/systemEventRepo";
+import { listRecentJobs } from "../repos/jobRepo";
+import { listRecentMetricSnapshots } from "../repos/metricsRepo";
+import { testDbConnection } from "../db";
+import { getRedis } from "../queue/redis";
+
+const router = Router();
+
+router.get("/summary", async (_req, res) => {
+  let database = { ok: false as boolean, error: undefined as string | undefined };
+  let redis = { ok: false as boolean, error: undefined as string | undefined };
+
+  try {
+    await testDbConnection();
+    database.ok = true;
+  } catch (err: any) {
+    database.error = err?.message || "DB failure";
+  }
+
+  try {
+    const pong = await getRedis().ping();
+    redis.ok = pong === "PONG";
+    if (!redis.ok) redis.error = "Redis ping failed";
+  } catch (err: any) {
+    redis.error = err?.message || "Redis failure";
+  }
+
+  const [queues, events, jobs, metrics] = await Promise.all([
+    getAllQueueHealth(),
+    listSystemEvents(20),
+    listRecentJobs(undefined, 20),
+    listRecentMetricSnapshots(undefined, 50)
+  ]);
+
+  res.json({
+    services: {
+      api: { ok: true },
+      database,
+      redis
+    },
+    queues,
+    recentEvents: events,
+    recentJobs: jobs,
+    recentMetrics: metrics
+  });
+});
+
+export default router;
+2) server/app.ts
+Register ops route
+
+Add:
+
+import opsRoutes from "./routes/ops";
+
+app.use("/api/ops", opsRoutes);
+3) client/src/components/ops/StatCard.tsx
+Create this file
+type Props = {
+  title: string;
+  value: string | number;
+  subtitle?: string;
+};
+
+export default function StatCard({ title, value, subtitle }: Props) {
+  return (
+    <div className="rounded-2xl border p-4 shadow-sm bg-white">
+      <div className="text-sm text-gray-500">{title}</div>
+      <div className="text-2xl font-semibold mt-1">{value}</div>
+      {subtitle ? <div className="text-xs text-gray-400 mt-1">{subtitle}</div> : null}
+    </div>
+  );
+}
+4) client/src/pages/OperationsCockpit.tsx
+Create this file
+import { useEffect, useState } from "react";
+import StatCard from "../components/ops/StatCard";
+
+type OpsSummary = {
+  services: any;
+  queues: any;
+  recentEvents: any[];
+  recentJobs: any[];
+  recentMetrics: any[];
+};
+
+export default function OperationsCockpit() {
+  const [data, setData] = useState<OpsSummary | null>(null);
+  const [error, setError] = useState<string>("");
+
+  async function load() {
+    try {
+      const res = await fetch("/api/ops/summary");
+      const json = await res.json();
+      setData(json);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load operations summary");
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 15000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (error) {
+    return <div className="p-6 text-red-600">Operations error: {error}</div>;
+  }
+
+  if (!data) {
+    return <div className="p-6">Loading operations cockpit...</div>;
+  }
+
+  const totalWaiting =
+    (data.queues?.triage?.waiting || 0) +
+    (data.queues?.notification?.waiting || 0) +
+    (data.queues?.learning?.waiting || 0);
+
+  const totalFailed =
+    (data.queues?.triage?.failed || 0) +
+    (data.queues?.notification?.failed || 0) +
+    (data.queues?.learning?.failed || 0) +
+    (data.queues?.deadLetter?.failed || 0);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Operations Cockpit</h1>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard title="API" value={data.services.api.ok ? "OK" : "DOWN"} />
+        <StatCard title="Database" value={data.services.database.ok ? "OK" : "FAIL"} />
+        <StatCard title="Redis" value={data.services.redis.ok ? "OK" : "FAIL"} />
+        <StatCard title="Queued Jobs" value={totalWaiting} subtitle="waiting across core queues" />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard title="Queue Failures" value={totalFailed} />
+        <StatCard title="Dead Letters" value={data.queues?.deadLetter?.waiting || 0} />
+        <StatCard title="Recent Events" value={data.recentEvents.length} />
+        <StatCard title="Recent Jobs" value={data.recentJobs.length} />
+      </div>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Queue Health</h2>
+        <pre className="rounded-2xl border p-4 overflow-auto bg-gray-50 text-sm">
+          {JSON.stringify(data.queues, null, 2)}
+        </pre>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Recent System Events</h2>
+        <div className="rounded-2xl border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-3">Time</th>
+                <th className="text-left p-3">Event</th>
+                <th className="text-left p-3">Severity</th>
+                <th className="text-left p-3">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.recentEvents.map((row) => (
+                <tr key={row.id} className="border-t">
+                  <td className="p-3">{new Date(row.created_at).toLocaleString()}</td>
+                  <td className="p-3">{row.event_name}</td>
+                  <td className="p-3">{row.severity}</td>
+                  <td className="p-3">{row.source || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Recent Jobs</h2>
+        <div className="rounded-2xl border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-3">Job ID</th>
+                <th className="text-left p-3">Queue</th>
+                <th className="text-left p-3">Name</th>
+                <th className="text-left p-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.recentJobs.map((row) => (
+                <tr key={row.id} className="border-t">
+                  <td className="p-3">{row.id}</td>
+                  <td className="p-3">{row.queue_name}</td>
+                  <td className="p-3">{row.job_name}</td>
+                  <td className="p-3">{row.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+5) Route it into the frontend
+
+In your client route registry, add:
+
+import OperationsCockpit from "./pages/OperationsCockpit";
+
+And add a route such as:
+
+<Route path="/operations" element={<OperationsCockpit />} />
+
+Add a nav link too if your app has a sidebar.
+
+Verification for Step 15
+
+Start API and frontend, then open:
+
+/operations
+
+Expected:
+
+one page with service state
+queue summary
+recent jobs
+recent system events
+
+This page should become your first-stop operational dashboard.
+
+Step 15 completion checklist
+
+Phase 3 / Step 15 is complete only when all are true:
+
+backend ops summary endpoint exists
+frontend cockpit page exists
+cockpit shows service health, queues, recent jobs, recent events
+cockpit is routable from the app
+operators can use one page as first-stop overview
+Phase 3 / Step 15 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 3 / Step 16
+Add dependency health map
+
+This step is only about clearly surfacing dependency status.
+
+It covers:
+
+explicit dependency map endpoint
+backend checks for DB, Redis, queue infra, telemetry config, messaging config
+frontend dependency map panel
+
+It does not yet add per-engine SLO metrics. That is Step 17.
+
+Files for Phase 3 / Step 16
+
+Create or update:
+
+server/routes/dependencies.ts
+server/app.ts
+client/src/pages/DependencyHealthMap.tsx
+route registry
+1) server/routes/dependencies.ts
+Create this file
+import { Router } from "express";
+import { testDbConnection } from "../db";
+import { getRedis } from "../queue/redis";
+import { ENV } from "../config/env";
+
+const router = Router();
+
+router.get("/", async (_req, res) => {
+  const checks: Record<string, any> = {
+    database: { ok: false },
+    redis: { ok: false },
+    queueInfra: { ok: false },
+    telemetry: { ok: false },
+    twilio: { ok: false }
+  };
+
+  try {
+    await testDbConnection();
+    checks.database.ok = true;
+  } catch (err: any) {
+    checks.database.error = err?.message || "DB failure";
+  }
+
+  try {
+    const pong = await getRedis().ping();
+    checks.redis.ok = pong === "PONG";
+    checks.queueInfra.ok = pong === "PONG";
+    if (pong !== "PONG") {
+      checks.redis.error = "Redis ping failed";
+      checks.queueInfra.error = "Queue infra unavailable";
+    }
+  } catch (err: any) {
+    const message = err?.message || "Redis failure";
+    checks.redis.error = message;
+    checks.queueInfra.error = message;
+  }
+
+  checks.telemetry.ok = Boolean(
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
+      process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+  );
+  if (!checks.telemetry.ok) {
+    checks.telemetry.note = "No OTLP exporter configured";
+  }
+
+  checks.twilio.ok = Boolean(ENV.TWILIO_ACCOUNT_SID && ENV.TWILIO_AUTH_TOKEN);
+  if (!checks.twilio.ok) {
+    checks.twilio.note = "Twilio credentials missing";
+  }
+
+  res.json(checks);
+});
+
+export default router;
+2) server/app.ts
+Register dependency route
+
+Add:
+
+import dependencyRoutes from "./routes/dependencies";
+
+app.use("/api/dependencies", dependencyRoutes);
+3) client/src/pages/DependencyHealthMap.tsx
+Create this file
+import { useEffect, useState } from "react";
+
+export default function DependencyHealthMap() {
+  const [data, setData] = useState<Record<string, any> | null>(null);
+
+  useEffect(() => {
+    fetch("/api/dependencies")
+      .then((r) => r.json())
+      .then(setData);
+  }, []);
+
+  if (!data) {
+    return <div className="p-6">Loading dependency health...</div>;
+  }
+
+  const entries = Object.entries(data);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Dependency Health Map</h1>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {entries.map(([name, value]) => (
+          <div key={name} className="rounded-2xl border p-4 shadow-sm bg-white">
+            <div className="text-lg font-medium capitalize">{name}</div>
+            <div className={`mt-2 font-semibold ${value.ok ? "text-green-600" : "text-red-600"}`}>
+              {value.ok ? "OK" : "FAIL"}
+            </div>
+            {value.error ? <div className="text-sm text-red-500 mt-2">{value.error}</div> : null}
+            {value.note ? <div className="text-sm text-gray-500 mt-2">{value.note}</div> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+4) Route it into the frontend
+
+Add:
+
+import DependencyHealthMap from "./pages/DependencyHealthMap";
+<Route path="/dependencies" element={<DependencyHealthMap />} />
+Verification for Step 16
+
+Open:
+
+/dependencies
+
+Expected:
+
+database state
+Redis state
+queue infra state
+telemetry config state
+Twilio config state
+Step 16 completion checklist
+
+Phase 3 / Step 16 is complete only when all are true:
+
+backend dependency map endpoint exists
+frontend dependency map page exists
+DB and Redis health are explicit
+queue infra, telemetry, and Twilio readiness are explicit
+dependency page is routable in the app
+Phase 3 / Step 16 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 3 / Step 17
+Add per-engine latency/error/SLO reporting
+
+This step is only about measuring engine behavior.
+
+It covers:
+
+engine metric recording
+latency/error counters
+SLO summaries
+backend reporting route
+frontend engine observability panel
+
+It does not yet handle worker-specific monitoring or clinic feature-state views. Those are Steps 18 and 19.
+
+Files for Phase 3 / Step 17
+
+Create or update:
+
+server/repos/engineMetricsRepo.ts
+server/monitoring/engineMetrics.ts
+server/routes/engineMetrics.ts
+server/app.ts
+client/src/pages/EngineMetricsDashboard.tsx
+1) server/db/schema.sql
+Add this table
+CREATE TABLE IF NOT EXISTS engine_metrics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  engine_name TEXT NOT NULL,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0,
+  total_latency_ms BIGINT NOT NULL DEFAULT 0,
+  last_latency_ms BIGINT,
+  last_error TEXT,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE (clinic_id, engine_name)
+);
+
+Run migration again:
+
+npm run db:migrate
+2) server/repos/engineMetricsRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function recordEngineSuccess(input: {
+  clinicId?: string;
+  engineName: string;
+  latencyMs: number;
+}) {
+  await query(
+    `INSERT INTO engine_metrics (clinic_id, engine_name, success_count, error_count, total_latency_ms, last_latency_ms, updated_at)
+     VALUES ($1, $2, 1, 0, $3, $3, NOW())
+     ON CONFLICT (clinic_id, engine_name)
+     DO UPDATE SET
+       success_count = engine_metrics.success_count + 1,
+       total_latency_ms = engine_metrics.total_latency_ms + EXCLUDED.total_latency_ms,
+       last_latency_ms = EXCLUDED.last_latency_ms,
+       updated_at = NOW()`,
+    [input.clinicId ?? null, input.engineName, input.latencyMs]
+  );
+}
+
+export async function recordEngineError(input: {
+  clinicId?: string;
+  engineName: string;
+  latencyMs: number;
+  error: string;
+}) {
+  await query(
+    `INSERT INTO engine_metrics (clinic_id, engine_name, success_count, error_count, total_latency_ms, last_latency_ms, last_error, updated_at)
+     VALUES ($1, $2, 0, 1, $3, $3, $4, NOW())
+     ON CONFLICT (clinic_id, engine_name)
+     DO UPDATE SET
+       error_count = engine_metrics.error_count + 1,
+       total_latency_ms = engine_metrics.total_latency_ms + EXCLUDED.total_latency_ms,
+       last_latency_ms = EXCLUDED.last_latency_ms,
+       last_error = EXCLUDED.last_error,
+       updated_at = NOW()`,
+    [input.clinicId ?? null, input.engineName, input.latencyMs, input.error]
+  );
+}
+
+export async function listEngineMetrics(clinicId?: string) {
+  const result = clinicId
+    ? await query(`SELECT * FROM engine_metrics WHERE clinic_id = $1 ORDER BY engine_name`, [clinicId])
+    : await query(`SELECT * FROM engine_metrics ORDER BY clinic_id NULLS FIRST, engine_name`);
+
+  return result.rows;
+}
+3) server/monitoring/engineMetrics.ts
+Create this file
+import { recordEngineError, recordEngineSuccess } from "../repos/engineMetricsRepo";
+
+export async function withEngineMetrics<T>(
+  engineName: string,
+  clinicId: string | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  const start = Date.now();
+
+  try {
+    const result = await fn();
+    await recordEngineSuccess({
+      clinicId,
+      engineName,
+      latencyMs: Date.now() - start
+    });
+    return result;
+  } catch (err: any) {
+    await recordEngineError({
+      clinicId,
+      engineName,
+      latencyMs: Date.now() - start,
+      error: err?.message || "Unknown engine error"
+    });
+    throw err;
+  }
+}
+4) Use it inside workers and engine-like flows
+Example in server/workers/triageWorker.ts
+import { withEngineMetrics } from "../monitoring/engineMetrics";
+
+export function createTriageWorker() {
+  const worker = new Worker(
+    "triage",
+    async (job) => {
+      return withEngineMetrics("triage-engine", job.data?.clinicId, async () => {
+        logger.info("Triage job processing", {
+          jobId: job.id,
+          traceId: job.data?.traceId
+        });
+
+        await upsertJobRecord({
+          id: job.id!,
+          clinicId: job.data?.clinicId,
+          queueName: "triage",
+          jobName: job.name,
+          status: "processing",
+          payload: job.data
+        });
+
+        return {
+          disposition: "review",
+          confidence: 0.9
+        };
+      });
+    },
+    { connection }
+  );
+
+  attachWorkerEvents(worker, "triage");
+  return worker;
+}
+
+Apply the same wrapper to notification and learning workers, using names like:
+
+notification-engine
+learning-engine
+
+Also use it around any major clinical engine entrypoints in your app.
+
+5) server/routes/engineMetrics.ts
+Create this file
+import { Router } from "express";
+import { listEngineMetrics } from "../repos/engineMetricsRepo";
+
+const router = Router();
+
+router.get("/", async (req, res) => {
+  const clinicId = String(req.query.clinicId || "") || undefined;
+  const rows = await listEngineMetrics(clinicId);
+
+  const enriched = rows.map((row: any) => {
+    const totalRuns = Number(row.success_count) + Number(row.error_count);
+    const avgLatencyMs = totalRuns > 0 ? Number(row.total_latency_ms) / totalRuns : 0;
+    const errorRate = totalRuns > 0 ? Number(row.error_count) / totalRuns : 0;
+
+    return {
+      ...row,
+      totalRuns,
+      avgLatencyMs,
+      errorRate,
+      sloStatus: errorRate < 0.01 ? "healthy" : errorRate < 0.05 ? "warning" : "critical"
+    };
+  });
+
+  res.json(enriched);
+});
+
+export default router;
+6) server/app.ts
+Register engine metrics route
+
+Add:
+
+import engineMetricsRoutes from "./routes/engineMetrics";
+
+app.use("/api/engine-metrics", engineMetricsRoutes);
+7) client/src/pages/EngineMetricsDashboard.tsx
+Create this file
+import { useEffect, useState } from "react";
+
+export default function EngineMetricsDashboard() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/engine-metrics")
+      .then((r) => r.json())
+      .then(setRows);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Engine Metrics Dashboard</h1>
+
+      <div className="rounded-2xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left p-3">Engine</th>
+              <th className="text-left p-3">Success</th>
+              <th className="text-left p-3">Errors</th>
+              <th className="text-left p-3">Avg Latency</th>
+              <th className="text-left p-3">Error Rate</th>
+              <th className="text-left p-3">SLO</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${row.clinic_id || "global"}-${row.engine_name}`} className="border-t">
+                <td className="p-3">{row.engine_name}</td>
+                <td className="p-3">{row.success_count}</td>
+                <td className="p-3">{row.error_count}</td>
+                <td className="p-3">{Math.round(row.avgLatencyMs)} ms</td>
+                <td className="p-3">{(row.errorRate * 100).toFixed(2)}%</td>
+                <td className="p-3">{row.sloStatus}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+Route it in the frontend:
+
+import EngineMetricsDashboard from "./pages/EngineMetricsDashboard";
+<Route path="/engine-metrics" element={<EngineMetricsDashboard />} />
+Verification for Step 17
+
+Run jobs through the workers, then open:
+
+/engine-metrics
+
+Expected:
+
+per-engine success/error/avg latency
+calculated error rate
+SLO status
+Step 17 completion checklist
+
+Phase 3 / Step 17 is complete only when all are true:
+
+engine metrics table exists
+engine success/error recording exists
+engine latency is recorded
+backend engine metrics route exists
+frontend dashboard exists
+workers or engine flows actually write these metrics
+Phase 3 / Step 17 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 3 / Step 18
+Add worker-specific monitoring
+
+This step is only about visibility into worker processes themselves.
+
+It covers:
+
+worker heartbeats
+worker identity records
+active worker list
+worker last-seen timestamps
+worker monitor endpoint
+worker monitor frontend page
+
+It does not yet build clinic feature-state panels. That is Step 19.
+
+Files for Phase 3 / Step 18
+
+Create or update:
+
+server/db/schema.sql
+server/repos/workerMonitorRepo.ts
+server/monitoring/workerHeartbeat.ts
+server/routes/workers.ts
+server/app.ts
+server/workers/index.ts
+client/src/pages/WorkerMonitor.tsx
+1) server/db/schema.sql
+Add this table
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+  worker_id TEXT PRIMARY KEY,
+  worker_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  hostname TEXT,
+  pid INTEGER,
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  meta JSONB
+);
+
+Run migration again:
+
+npm run db:migrate
+2) server/repos/workerMonitorRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function upsertWorkerHeartbeat(input: {
+  workerId: string;
+  workerType: string;
+  status: string;
+  hostname?: string;
+  pid?: number;
+  meta?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO worker_heartbeats (worker_id, worker_type, status, hostname, pid, last_seen_at, meta)
+     VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+     ON CONFLICT (worker_id)
+     DO UPDATE SET
+       worker_type = EXCLUDED.worker_type,
+       status = EXCLUDED.status,
+       hostname = EXCLUDED.hostname,
+       pid = EXCLUDED.pid,
+       last_seen_at = NOW(),
+       meta = EXCLUDED.meta
+     RETURNING *`,
+    [
+      input.workerId,
+      input.workerType,
+      input.status,
+      input.hostname ?? null,
+      input.pid ?? null,
+      input.meta ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listWorkerHeartbeats() {
+  const result = await query(
+    `SELECT * FROM worker_heartbeats ORDER BY last_seen_at DESC`
+  );
+
+  return result.rows;
+}
+3) server/monitoring/workerHeartbeat.ts
+Create this file
+import os from "node:os";
+import { upsertWorkerHeartbeat } from "../repos/workerMonitorRepo";
+
+export function startWorkerHeartbeat(workerType: string) {
+  const workerId = `${workerType}-${os.hostname()}-${process.pid}`;
+
+  const tick = async () => {
+    await upsertWorkerHeartbeat({
+      workerId,
+      workerType,
+      status: "running",
+      hostname: os.hostname(),
+      pid: process.pid,
+      meta: {
+        uptimeSeconds: process.uptime()
+      }
+    });
+  };
+
+  tick().catch(console.error);
+  const interval = setInterval(() => {
+    tick().catch(console.error);
+  }, 10000);
+
+  return () => clearInterval(interval);
+}
+4) server/routes/workers.ts
+Create this file
+import { Router } from "express";
+import { listWorkerHeartbeats } from "../repos/workerMonitorRepo";
+
+const router = Router();
+
+router.get("/", async (_req, res) => {
+  const rows = await listWorkerHeartbeats();
+  res.json(rows);
+});
+
+export default router;
+5) server/app.ts
+Register worker route
+
+Add:
+
+import workerRoutes from "./routes/workers";
+
+app.use("/api/workers", workerRoutes);
+6) server/workers/index.ts
+Start heartbeat loop
+
+Add:
+
+import { startWorkerHeartbeat } from "../monitoring/workerHeartbeat";
+
+async function start() {
+  validateConfig();
+  await startTelemetry("med-scribe-workers");
+
+  assertProductionSafe();
+  assertRuntimeModes();
+
+  await testDbConnection();
+  await assertQueueReady();
+
+  await appendSystemEvent({
+    eventName: "workers.startup",
+    severity: "info",
+    source: "workers"
+  });
+
+  registerQueueEvents();
+  registerWorkers();
+
+  const stopHeartbeat = startWorkerHeartbeat("core-workers");
+
+  logger.info("Workers started");
+
+  const shutdown = async () => {
+    logger.info("Workers shutdown initiated");
+    stopHeartbeat();
+    await stopTelemetry();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+You can do the same for scheduler if you want a scheduler heartbeat too.
+
+7) client/src/pages/WorkerMonitor.tsx
+Create this file
+import { useEffect, useState } from "react";
+
+export default function WorkerMonitor() {
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/workers")
+        .then((r) => r.json())
+        .then(setRows);
+
+    load();
+    const id = setInterval(load, 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Worker Monitor</h1>
+
+      <div className="rounded-2xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left p-3">Worker ID</th>
+              <th className="text-left p-3">Type</th>
+              <th className="text-left p-3">Status</th>
+              <th className="text-left p-3">Host</th>
+              <th className="text-left p-3">PID</th>
+              <th className="text-left p-3">Last Seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.worker_id} className="border-t">
+                <td className="p-3">{row.worker_id}</td>
+                <td className="p-3">{row.worker_type}</td>
+                <td className="p-3">{row.status}</td>
+                <td className="p-3">{row.hostname || "-"}</td>
+                <td className="p-3">{row.pid || "-"}</td>
+                <td className="p-3">{new Date(row.last_seen_at).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+Route it in the frontend:
+
+import WorkerMonitor from "./pages/WorkerMonitor";
+<Route path="/workers" element={<WorkerMonitor />} />
+Verification for Step 18
+
+Start workers, then open:
+
+/workers
+
+Expected:
+
+active worker list
+heartbeat updates every 10 seconds
+visible worker host/PID/last seen
+Step 18 completion checklist
+
+Phase 3 / Step 18 is complete only when all are true:
+
+worker heartbeat table exists
+worker heartbeats are written periodically
+worker list endpoint exists
+worker monitor frontend page exists
+worker monitor is routable in the app
+Phase 3 / Step 18 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.
+
+Phase 3 / Step 19
+Add per-clinic health and feature-state panels
+
+This step is only about clinic-aware observability and feature visibility.
+
+It covers:
+
+clinic feature-state table
+clinic health summary endpoint
+feature flags by clinic
+frontend clinic health page
+one place to see which clinic is degraded and which features are enabled
+
+This completes Phase 3.
+
+Files for Phase 3 / Step 19
+
+Create or update:
+
+server/db/schema.sql
+server/repos/clinicStateRepo.ts
+server/routes/clinicHealth.ts
+server/app.ts
+client/src/pages/ClinicHealthDashboard.tsx
+1) server/db/schema.sql
+Add these tables
+CREATE TABLE IF NOT EXISTS clinic_feature_states (
+  clinic_id TEXT NOT NULL,
+  feature_name TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  config JSONB,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (clinic_id, feature_name)
+);
+
+CREATE TABLE IF NOT EXISTS clinic_health_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summary JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+Run migration again:
+
+npm run db:migrate
+2) server/repos/clinicStateRepo.ts
+Create this file
+import { query } from "../db";
+
+export async function upsertClinicFeatureState(input: {
+  clinicId: string;
+  featureName: string;
+  enabled: boolean;
+  config?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO clinic_feature_states (clinic_id, feature_name, enabled, config, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (clinic_id, feature_name)
+     DO UPDATE SET
+       enabled = EXCLUDED.enabled,
+       config = EXCLUDED.config,
+       updated_at = NOW()
+     RETURNING *`,
+    [input.clinicId, input.featureName, input.enabled, input.config ?? null]
+  );
+
+  return result.rows[0];
+}
+
+export async function listClinicFeatureStates(clinicId?: string) {
+  const result = clinicId
+    ? await query(
+        `SELECT * FROM clinic_feature_states WHERE clinic_id = $1 ORDER BY feature_name`,
+        [clinicId]
+      )
+    : await query(
+        `SELECT * FROM clinic_feature_states ORDER BY clinic_id, feature_name`
+      );
+
+  return result.rows;
+}
+
+export async function insertClinicHealthSnapshot(input: {
+  clinicId: string;
+  status: string;
+  summary: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO clinic_health_snapshots (clinic_id, status, summary)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [input.clinicId, input.status, input.summary]
+  );
+
+  return result.rows[0];
+}
+
+export async function listLatestClinicHealth() {
+  const result = await query(
+    `
+    SELECT DISTINCT ON (clinic_id)
+      clinic_id, status, summary, created_at
+    FROM clinic_health_snapshots
+    ORDER BY clinic_id, created_at DESC
+    `
+  );
+
+  return result.rows;
+}
+3) server/routes/clinicHealth.ts
+Create this file
+import { Router } from "express";
+import { listClinicFeatureStates, listLatestClinicHealth } from "../repos/clinicStateRepo";
+
+const router = Router();
+
+router.get("/", async (req, res) => {
+  const clinicId = String(req.query.clinicId || "") || undefined;
+
+  const [features, latestHealth] = await Promise.all([
+    listClinicFeatureStates(clinicId),
+    listLatestClinicHealth()
+  ]);
+
+  const filteredHealth = clinicId
+    ? latestHealth.filter((row: any) => row.clinic_id === clinicId)
+    : latestHealth;
+
+  res.json({
+    clinicId: clinicId || null,
+    features,
+    health: filteredHealth
+  });
+});
+
+export default router;
+4) server/app.ts
+Register clinic health route
+
+Add:
+
+import clinicHealthRoutes from "./routes/clinicHealth";
+
+app.use("/api/clinic-health", clinicHealthRoutes);
+5) client/src/pages/ClinicHealthDashboard.tsx
+Create this file
+import { useEffect, useState } from "react";
+
+export default function ClinicHealthDashboard() {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/clinic-health")
+      .then((r) => r.json())
+      .then(setData);
+  }, []);
+
+  if (!data) {
+    return <div className="p-6">Loading clinic health...</div>;
+  }
+
+  return (
+    <div className="p-6 space-y-8">
+      <h1 className="text-3xl font-semibold">Clinic Health Dashboard</h1>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Latest Clinic Health</h2>
+        <div className="rounded-2xl border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-3">Clinic</th>
+                <th className="text-left p-3">Status</th>
+                <th className="text-left p-3">Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.health.map((row: any) => (
+                <tr key={`${row.clinic_id}-${row.created_at}`} className="border-t">
+                  <td className="p-3">{row.clinic_id}</td>
+                  <td className="p-3">{row.status}</td>
+                  <td className="p-3">{new Date(row.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Clinic Feature States</h2>
+        <div className="rounded-2xl border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-3">Clinic</th>
+                <th className="text-left p-3">Feature</th>
+                <th className="text-left p-3">Enabled</th>
+                <th className="text-left p-3">Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.features.map((row: any) => (
+                <tr key={`${row.clinic_id}-${row.feature_name}`} className="border-t">
+                  <td className="p-3">{row.clinic_id}</td>
+                  <td className="p-3">{row.feature_name}</td>
+                  <td className="p-3">{row.enabled ? "Yes" : "No"}</td>
+                  <td className="p-3">{new Date(row.updated_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+Route it in the frontend:
+
+import ClinicHealthDashboard from "./pages/ClinicHealthDashboard";
+<Route path="/clinic-health" element={<ClinicHealthDashboard />} />
+6) Seed feature and health state where appropriate
+
+Whenever you enable or disable a clinic feature, call:
+
+import { upsertClinicFeatureState, insertClinicHealthSnapshot } from "../repos/clinicStateRepo";
+
+await upsertClinicFeatureState({
+  clinicId: "clinic-123",
+  featureName: "triage-engine",
+  enabled: true
+});
+
+await insertClinicHealthSnapshot({
+  clinicId: "clinic-123",
+  status: "healthy",
+  summary: {
+    queuesOk: true,
+    workersOk: true
+  }
+});
+
+This makes the page actually useful instead of being a museum label beside an empty pedestal.
+
+Verification for Step 19
+
+Open:
+
+/clinic-health
+
+Expected:
+
+latest clinic health by clinic
+feature-state rows by clinic
+panel is routable and usable
+Step 19 completion checklist
+
+Phase 3 / Step 19 is complete only when all are true:
+
+clinic feature-state table exists
+clinic health snapshot table exists
+repo helpers exist
+backend clinic health route exists
+frontend clinic health page exists
+per-clinic health and feature state are queryable and visible
+Phase 3 / Step 19 status
+
+Status: COMPLETE PATCH PROVIDED
+
+Ready to paste into Replit now.

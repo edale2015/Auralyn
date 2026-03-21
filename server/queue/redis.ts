@@ -1,14 +1,14 @@
+import IORedis from "ioredis";
 import { ENV } from "../config/env";
 
-let redisInstance: any = null;
+let redisInstance: IORedis | null = null;
 
-export function getRedis(): any {
+export function getRedis(): IORedis {
   if (!ENV.REDIS_URL) {
     throw new Error("❌ REDIS_URL is not configured");
   }
 
   if (!redisInstance) {
-    const IORedis = require("ioredis");
     redisInstance = new IORedis(ENV.REDIS_URL, {
       maxRetriesPerRequest: null,
       enableReadyCheck: true,
@@ -20,4 +20,9 @@ export function getRedis(): any {
   }
 
   return redisInstance;
+}
+
+export function getRedisOrNull(): IORedis | null {
+  if (!ENV.REDIS_URL) return null;
+  return getRedis();
 }

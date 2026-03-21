@@ -1,4 +1,4 @@
-import { query } from "../db/dbRouter";
+import { query } from "../db";
 
 export interface MetricSnapshot {
   id: string;
@@ -56,5 +56,28 @@ export async function listMetrics(
     `SELECT * FROM metrics_snapshots WHERE metric_group = $1 ORDER BY captured_at DESC LIMIT $2`,
     [metricGroup, limit]
   );
+  return r.rows;
+}
+
+export async function insertMetricSnapshot(input: {
+  clinicId?: string;
+  metricGroup: string;
+  metricName: string;
+  metricValue: number;
+  labels?: Record<string, unknown>;
+}): Promise<MetricSnapshot> {
+  return recordMetric(input);
+}
+
+export async function listRecentMetricSnapshots(clinicId?: string, limit = 200): Promise<MetricSnapshot[]> {
+  const r = clinicId
+    ? await query(
+        `SELECT * FROM metrics_snapshots WHERE clinic_id = $1 ORDER BY captured_at DESC LIMIT $2`,
+        [clinicId, limit]
+      )
+    : await query(
+        `SELECT * FROM metrics_snapshots ORDER BY captured_at DESC LIMIT $1`,
+        [limit]
+      );
   return r.rows;
 }

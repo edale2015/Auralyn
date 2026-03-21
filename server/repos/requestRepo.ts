@@ -1,4 +1,4 @@
-import { query } from "../db/dbRouter";
+import { query } from "../db";
 
 export interface RequestRecord {
   id: string;

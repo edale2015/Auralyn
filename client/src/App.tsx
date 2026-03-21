@@ -124,6 +124,11 @@ import PackQuestionsAdminPage from "@/pages/PackQuestionsAdminPage";
 import PackAuditLogPage from "@/pages/PackAuditLogPage";
 import CoverageDashboard from "@/pages/CoverageDashboard";
 import ControlTowerPage from "@/pages/ControlTowerPage";
+import OperationsCockpit from "@/pages/OperationsCockpit";
+import DependencyHealthMap from "@/pages/DependencyHealthMap";
+import EngineMetricsDashboard from "@/pages/EngineMetricsDashboard";
+import WorkerMonitor from "@/pages/WorkerMonitor";
+import ClinicHealthDashboard from "@/pages/ClinicHealthDashboard";
 import NotFound from "@/pages/not-found";
 
 function AdminPage({ component: Component }: { component: React.ComponentType }) {
@@ -257,6 +262,11 @@ function Router() {
       <Route path="/physician-dashboard">{() => <AdminPage component={PhysicianDashboard} />}</Route>
       <Route path="/executive-dashboard">{() => <AdminPage component={ExecutiveDashboard} />}</Route>
       <Route path="/control-tower">{() => <AdminPage component={ControlTowerPage} />}</Route>
+      <Route path="/ops">{() => <AdminPage component={OperationsCockpit} />}</Route>
+      <Route path="/dependency-health">{() => <AdminPage component={DependencyHealthMap} />}</Route>
+      <Route path="/engine-metrics">{() => <AdminPage component={EngineMetricsDashboard} />}</Route>
+      <Route path="/workers">{() => <AdminPage component={WorkerMonitor} />}</Route>
+      <Route path="/clinic-health">{() => <AdminPage component={ClinicHealthDashboard} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

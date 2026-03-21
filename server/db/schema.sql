@@ -82,6 +82,46 @@ CREATE TABLE IF NOT EXISTS system_events (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS engine_metrics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  engine_name TEXT NOT NULL,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0,
+  total_latency_ms BIGINT NOT NULL DEFAULT 0,
+  last_latency_ms BIGINT,
+  last_error TEXT,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE (clinic_id, engine_name)
+);
+
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+  worker_id TEXT PRIMARY KEY,
+  worker_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  hostname TEXT,
+  pid INTEGER,
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  meta JSONB
+);
+
+CREATE TABLE IF NOT EXISTS clinic_feature_states (
+  clinic_id TEXT NOT NULL,
+  feature_name TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  config JSONB,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (clinic_id, feature_name)
+);
+
+CREATE TABLE IF NOT EXISTS clinic_health_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summary JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_requests_clinic_created ON requests (clinic_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_clinic_created ON jobs (clinic_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_trace ON audit_logs (trace_id);
@@ -89,3 +129,6 @@ CREATE INDEX IF NOT EXISTS idx_review_cases_clinic_status ON review_cases (clini
 CREATE INDEX IF NOT EXISTS idx_outcomes_clinic_status ON outcomes (clinic_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_group_name_time ON metrics_snapshots (metric_group, metric_name, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_system_events_severity ON system_events (severity, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_engine_metrics_updated ON engine_metrics (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_clinic_health_snapshots_clinic ON clinic_health_snapshots (clinic_id, created_at DESC);
