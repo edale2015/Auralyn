@@ -95,6 +95,7 @@ import { assertProductionSafe } from "./config/assertProductionSafe";
 import { assertRuntimeModes } from "./config/assertRuntimeModes";
 import { assertQueueReady } from "./config/assertQueueReady";
 import { validateConfig } from "./config/validateConfig";
+import { loadAwsSecrets } from "./config/loadAwsSecrets";
 import autonomousIntakeRoutes from "./routes/autonomousIntakeRoutes";
 import pathwayRoutes from "./routes/pathwayRoutes";
 import copilotRoutes from "./routes/copilotRoutes";
@@ -695,6 +696,8 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Load secrets from AWS Secrets Manager before config validation (no-op locally)
+  await loadAwsSecrets();
   // Production safety guards — no-ops in dev, fatal in prod
   validateConfig();
   await startTelemetry("med-scribe-api");

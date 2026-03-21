@@ -1,0 +1,55 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment (staging or prod)"
+        required: true
+        default: "staging"
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.6"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file=environments/${{ github.event.inputs.environment }}.tfvars \
+            -var="container_image=${{ secrets.CONTAINER_IMAGE }}" \
+            -var="certificate_arn=${{ secrets.CERTIFICATE_ARN }}"
+
+      - name: Terraform Apply
+        if: github.event.inputs.environment == 'staging' || github.ref == 'refs/heads/main'
+        run: |
+          terraform apply -auto-approve \
+            -var-file=environments/${{ github.event.inputs.environment }}.tfvars \
+            -var="container_image=${{ secrets.CONTAINER_IMAGE }}" \
+            -var="certificate_arn=${{ secrets.CERTIFICATE_ARN }}"

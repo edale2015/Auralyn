@@ -4,11 +4,13 @@ import { assertRuntimeModes } from "../config/assertRuntimeModes";
 import { assertQueueReady } from "../config/assertQueueReady";
 import { testDbConnection } from "../db";
 import { validateConfig } from "../config/validateConfig";
+import { loadAwsSecrets } from "../config/loadAwsSecrets";
 import { startTelemetry, stopTelemetry } from "../monitoring/otel";
 import { logger } from "../utils/logger";
 import { startWorkerHeartbeat } from "../monitoring/workerHeartbeat";
 
 async function start() {
+  await loadAwsSecrets();
   validateConfig();
   await startTelemetry("med-scribe-workers");
 
