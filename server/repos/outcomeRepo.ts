@@ -21,7 +21,7 @@ export async function insertOutcome(input: {
   status?: string;
 }): Promise<OutcomeRecord> {
   const result = await query(
-    `INSERT INTO outcomes (clinic_id, case_id, patient_key, predicted, status)
+    `INSERT INTO triage_outcomes (clinic_id, case_id, patient_key, predicted, status)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
     [
@@ -37,14 +37,14 @@ export async function insertOutcome(input: {
 
 export async function updateOutcomeActual(id: string, actual: unknown, notes?: string): Promise<void> {
   await query(
-    `UPDATE outcomes SET actual = $1, notes = $2, status = 'recorded', updated_at = NOW() WHERE id = $3`,
+    `UPDATE triage_outcomes SET actual = $1, notes = $2, status = 'recorded', updated_at = NOW() WHERE id = $3`,
     [JSON.stringify(actual), notes ?? null, id]
   );
 }
 
 export async function listOutcomes(limit = 100, clinicId?: string): Promise<OutcomeRecord[]> {
   const result = clinicId
-    ? await query(`SELECT * FROM outcomes WHERE clinic_id = $1 ORDER BY updated_at DESC LIMIT $2`, [clinicId, limit])
-    : await query(`SELECT * FROM outcomes ORDER BY updated_at DESC LIMIT $1`, [limit]);
+    ? await query(`SELECT * FROM triage_outcomes WHERE clinic_id = $1 ORDER BY updated_at DESC LIMIT $2`, [clinicId, limit])
+    : await query(`SELECT * FROM triage_outcomes ORDER BY updated_at DESC LIMIT $1`, [limit]);
   return result.rows;
 }

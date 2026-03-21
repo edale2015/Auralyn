@@ -700,7 +700,11 @@ app.use((req, res, next) => {
   await startTelemetry("med-scribe-api");
   assertProductionSafe();
   assertRuntimeModes();
-  await runMigrations();
+  try {
+    await runMigrations();
+  } catch (err: any) {
+    console.warn("[Startup] Migration warning (non-fatal):", err?.message);
+  }
   await assertQueueReady();
 
   await registerRoutes(httpServer, app);

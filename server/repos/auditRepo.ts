@@ -22,7 +22,7 @@ export async function appendAuditLog(input: {
   data?: unknown;
 }): Promise<AuditEntry> {
   const result = await query(
-    `INSERT INTO audit_logs (clinic_id, trace_id, actor_id, event_type, entity_type, entity_id, data)
+    `INSERT INTO triage_audit_logs (clinic_id, trace_id, actor_id, event_type, entity_type, entity_id, data)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [
@@ -56,13 +56,13 @@ export async function listAuditEvents(limit = 200, clinicId?: string): Promise<A
 
 export async function listAuditLogs(limit = 200, clinicId?: string, eventType?: string): Promise<AuditEntry[]> {
   if (clinicId && eventType) {
-    const r = await query(`SELECT * FROM audit_logs WHERE clinic_id = $1 AND event_type = $2 ORDER BY created_at DESC LIMIT $3`, [clinicId, eventType, limit]);
+    const r = await query(`SELECT * FROM triage_audit_logs WHERE clinic_id = $1 AND event_type = $2 ORDER BY created_at DESC LIMIT $3`, [clinicId, eventType, limit]);
     return r.rows;
   }
   if (clinicId) {
-    const r = await query(`SELECT * FROM audit_logs WHERE clinic_id = $1 ORDER BY created_at DESC LIMIT $2`, [clinicId, limit]);
+    const r = await query(`SELECT * FROM triage_audit_logs WHERE clinic_id = $1 ORDER BY created_at DESC LIMIT $2`, [clinicId, limit]);
     return r.rows;
   }
-  const r = await query(`SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1`, [limit]);
+  const r = await query(`SELECT * FROM triage_audit_logs ORDER BY created_at DESC LIMIT $1`, [limit]);
   return r.rows;
 }

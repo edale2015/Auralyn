@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS audit_logs (
+CREATE TABLE IF NOT EXISTS triage_audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clinic_id TEXT,
   trace_id TEXT,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS review_cases (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS outcomes (
+CREATE TABLE IF NOT EXISTS triage_outcomes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clinic_id TEXT,
   case_id TEXT,
@@ -124,9 +124,10 @@ CREATE TABLE IF NOT EXISTS clinic_health_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_requests_clinic_created ON requests (clinic_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_clinic_created ON jobs (clinic_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_trace ON audit_logs (trace_id);
+CREATE INDEX IF NOT EXISTS idx_triage_audit_logs_trace ON triage_audit_logs (trace_id);
+CREATE INDEX IF NOT EXISTS idx_triage_audit_logs_clinic ON triage_audit_logs (clinic_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_review_cases_clinic_status ON review_cases (clinic_id, status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_outcomes_clinic_status ON outcomes (clinic_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_triage_outcomes_clinic_status ON triage_outcomes (clinic_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_group_name_time ON metrics_snapshots (metric_group, metric_name, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_system_events_severity ON system_events (severity, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_engine_metrics_updated ON engine_metrics (updated_at DESC);
