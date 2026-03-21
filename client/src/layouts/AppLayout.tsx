@@ -8,6 +8,7 @@ import {
   BrainCircuit,
   Server,
   Settings,
+  Bot,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { path: ROUTES.SAFETY, label: "Safety", icon: Shield },
   { path: ROUTES.LEARNING, label: "Learning", icon: BrainCircuit },
   { path: ROUTES.SYSTEM, label: "System", icon: Server },
+  { path: ROUTES.AUTOMATION, label: "Automation", icon: Bot },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

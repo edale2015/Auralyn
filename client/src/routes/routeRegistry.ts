@@ -8,4 +8,5 @@ export const ROUTES = {
   SETTINGS: "/settings",
   WORKERS: "/workers",
   CLINIC: "/clinic-health",
+  AUTOMATION: "/automation",
 };

@@ -133,3 +133,59 @@ CREATE INDEX IF NOT EXISTS idx_system_events_severity ON system_events (severity
 CREATE INDEX IF NOT EXISTS idx_engine_metrics_updated ON engine_metrics (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_clinic_health_snapshots_clinic ON clinic_health_snapshots (clinic_id, created_at DESC);
+
+-- Generalized Automation Layer
+CREATE TABLE IF NOT EXISTS automation_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT,
+  target_type TEXT NOT NULL DEFAULT 'web',
+  start_url TEXT NOT NULL,
+  login_url TEXT,
+  definition JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  template_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  trace_id TEXT,
+  started_by TEXT,
+  current_step INTEGER NOT NULL DEFAULT 0,
+  payload JSONB,
+  result JSONB,
+  error TEXT,
+  started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS automation_run_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  step_index INTEGER,
+  action_name TEXT,
+  payload JSONB,
+  screenshot_key TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS automation_approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL,
+  checkpoint_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_by TEXT,
+  decided_by TEXT,
+  decision_notes TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  decided_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runs_template ON automation_runs (template_key, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_run_events_run ON automation_run_events (run_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_automation_approvals_run ON automation_approvals (run_id, created_at DESC);

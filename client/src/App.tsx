@@ -29,6 +29,8 @@ import ClinicalWorkbench from "@/pages/ClinicalWorkbench";
 import IntakeWorkbench from "@/pages/IntakeWorkbench";
 import SafetyWorkbench from "@/pages/SafetyWorkbench";
 import SettingsWorkbench from "@/pages/SettingsWorkbench";
+import AutomationDashboard from "@/pages/AutomationDashboard";
+import AutomationRunDetail from "@/pages/AutomationRunDetail";
 
 validateRoutes();
 
@@ -45,6 +47,8 @@ function WorkbenchRouter() {
         <Route path={ROUTES.SETTINGS} component={SettingsWorkbench} />
         <Route path={ROUTES.WORKERS} component={WorkerMonitor} />
         <Route path={ROUTES.CLINIC} component={ClinicHealthDashboard} />
+        <Route path={ROUTES.AUTOMATION} component={AutomationDashboard} />
+        <Route path="/automation/runs/:runId" component={AutomationRunDetail} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
