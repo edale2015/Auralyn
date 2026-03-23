@@ -189,3 +189,15 @@ CREATE TABLE IF NOT EXISTS automation_approvals (
 CREATE INDEX IF NOT EXISTS idx_automation_runs_template ON automation_runs (template_key, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_automation_run_events_run ON automation_run_events (run_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_automation_approvals_run ON automation_approvals (run_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS automation_credentials (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  credential_key TEXT NOT NULL UNIQUE,
+  system_name TEXT NOT NULL,
+  username TEXT,
+  secret_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_credentials_key ON automation_credentials (credential_key);

@@ -31,6 +31,8 @@ import SafetyWorkbench from "@/pages/SafetyWorkbench";
 import SettingsWorkbench from "@/pages/SettingsWorkbench";
 import AutomationDashboard from "@/pages/AutomationDashboard";
 import AutomationRunDetail from "@/pages/AutomationRunDetail";
+import AutomationRecorder from "@/pages/AutomationRecorder";
+import AutomationReplay from "@/pages/AutomationReplay";
 
 validateRoutes();
 
@@ -49,6 +51,8 @@ function WorkbenchRouter() {
         <Route path={ROUTES.CLINIC} component={ClinicHealthDashboard} />
         <Route path={ROUTES.AUTOMATION} component={AutomationDashboard} />
         <Route path="/automation/runs/:runId" component={AutomationRunDetail} />
+        <Route path="/automation/recorder" component={AutomationRecorder} />
+        <Route path="/automation/replay/:runId" component={AutomationReplay} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

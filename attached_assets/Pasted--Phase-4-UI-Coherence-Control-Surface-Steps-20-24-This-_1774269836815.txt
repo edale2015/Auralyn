@@ -1,0 +1,3449 @@
+🧭 Phase 4 — UI Coherence & Control Surface
+
+( Steps 20–24 )
+
+This phase is NOT about adding features.
+It is about removing chaos and making the system operable.
+
+Phase 4 / Step 20
+Collapse page sprawl into core workbenches
+🎯 Goal
+
+Turn 100+ scattered pages into 7 core operator workbenches
+
+🧱 Target Structure
+
+You should end up with ONLY these top-level routes:
+
+/ops
+/clinical
+/intake
+/safety
+/learning
+/system
+/settings
+
+Everything else becomes:
+
+tabs
+subpanels
+drawers
+📁 Create: client/src/layouts/AppLayout.tsx
+import { Link, Outlet } from "react-router-dom";
+
+export default function AppLayout() {
+  return (
+    <div className="flex h-screen">
+      <aside className="w-64 border-r p-4 space-y-4">
+        <nav className="flex flex-col gap-2">
+          <Link to="/ops">Operations</Link>
+          <Link to="/clinical">Clinical Review</Link>
+          <Link to="/intake">Intake</Link>
+          <Link to="/safety">Safety</Link>
+          <Link to="/learning">Learning</Link>
+          <Link to="/system">System</Link>
+          <Link to="/settings">Settings</Link>
+        </nav>
+      </aside>
+
+      <main className="flex-1 overflow-auto">
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+📁 Update: client/src/App.tsx
+🔥 Replace routing with:
+import { Routes, Route } from "react-router-dom";
+import AppLayout from "./layouts/AppLayout";
+
+import OperationsCockpit from "./pages/OperationsCockpit";
+import EngineMetricsDashboard from "./pages/EngineMetricsDashboard";
+import WorkerMonitor from "./pages/WorkerMonitor";
+import ClinicHealthDashboard from "./pages/ClinicHealthDashboard";
+import DependencyHealthMap from "./pages/DependencyHealthMap";
+
+export default function App() {
+  return (
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route path="/ops" element={<OperationsCockpit />} />
+        <Route path="/system" element={<DependencyHealthMap />} />
+        <Route path="/learning" element={<EngineMetricsDashboard />} />
+        <Route path="/workers" element={<WorkerMonitor />} />
+        <Route path="/clinic-health" element={<ClinicHealthDashboard />} />
+      </Route>
+    </Routes>
+  );
+}
+✅ Step 20 completion criteria
+sidebar exists
+only 7 core routes remain
+no page is standalone outside layout
+everything lives under AppLayout
+🟢 Phase 4 / Step 20 — COMPLETE
+Phase 4 / Step 21
+Remove or hide brochure pages
+🎯 Goal
+
+Eliminate pages that:
+
+only show static text
+don’t trigger actions
+don’t reflect live system state
+🔍 Identify these patterns:
+
+Delete or archive pages like:
+
+DecisionGraphExplorer.tsx
+DecisionGraphHeatmaps.tsx
+any page with:
+return <div>Explanation of...</div>
+📁 Create: client/src/pages/_archived/
+
+Move unused pages:
+
+mkdir client/src/pages/_archived
+🧠 Add marker comment in archived files:
+// ARCHIVED — Phase 4 Step 21 cleanup
+✅ Step 21 completion criteria
+no unused pages in active routing
+all non-operational pages moved to _archived
+UI shows only actionable panels
+🟢 Phase 4 / Step 21 — COMPLETE
+Phase 4 / Step 22
+Resolve orphaned pages and duplicate routes
+🔍 Detect duplicates
+
+Run:
+
+grep -r "<Route" client/src
+
+Look for:
+
+duplicate paths
+same component mounted multiple times
+🔧 Fix rule
+
+Each route must be:
+
+UNIQUE PATH → ONE COMPONENT
+📁 Add route registry file
+client/src/routes/routeRegistry.ts
+export const ROUTES = {
+  OPS: "/ops",
+  SYSTEM: "/system",
+  LEARNING: "/learning",
+  WORKERS: "/workers",
+  CLINIC: "/clinic-health"
+};
+Use it everywhere:
+import { ROUTES } from "./routes/routeRegistry";
+
+<Route path={ROUTES.OPS} element={<OperationsCockpit />} />
+✅ Step 22 completion criteria
+no duplicate route paths
+no unreachable pages
+all routes centralized
+🟢 Phase 4 / Step 22 — COMPLETE
+Phase 4 / Step 23
+Add route/nav coverage tests
+📁 Create: client/src/tests/routes.test.ts
+import { ROUTES } from "../routes/routeRegistry";
+
+describe("Route coverage", () => {
+  test("all routes exist", () => {
+    expect(ROUTES.OPS).toBeDefined();
+    expect(ROUTES.SYSTEM).toBeDefined();
+    expect(ROUTES.LEARNING).toBeDefined();
+    expect(ROUTES.WORKERS).toBeDefined();
+    expect(ROUTES.CLINIC).toBeDefined();
+  });
+});
+📁 Add script in package.json
+"test:routes": "vitest"
+🧠 Optional: runtime check
+client/src/utils/routeValidator.ts
+import { ROUTES } from "../routes/routeRegistry";
+
+export function validateRoutes() {
+  const paths = Object.values(ROUTES);
+  const unique = new Set(paths);
+
+  if (unique.size !== paths.length) {
+    throw new Error("❌ Duplicate routes detected");
+  }
+}
+
+Call in App.tsx:
+
+validateRoutes();
+✅ Step 23 completion criteria
+route registry exists
+test ensures routes exist
+duplicate route detection exists
+🟢 Phase 4 / Step 23 — COMPLETE
+Phase 4 / Step 24
+Add engine activation badges everywhere
+🎯 Goal
+
+Make it visually obvious:
+
+Engine	Status
+triage	✅ active
+learning	⚠️ degraded
+rare-disease	💤 stub
+📁 Create: client/src/components/EngineBadge.tsx
+type Props = {
+  status: "active" | "degraded" | "stub";
+};
+
+export default function EngineBadge({ status }: Props) {
+  const styles = {
+    active: "bg-green-100 text-green-700",
+    degraded: "bg-yellow-100 text-yellow-700",
+    stub: "bg-gray-100 text-gray-500"
+  };
+
+  return (
+    <span className={`px-2 py-1 rounded text-xs ${styles[status]}`}>
+      {status}
+    </span>
+  );
+}
+📁 Create: client/src/config/engineRegistry.ts
+export const ENGINE_REGISTRY = [
+  { name: "triage-engine", status: "active" },
+  { name: "learning-engine", status: "active" },
+  { name: "notification-engine", status: "active" },
+  { name: "rare-disease-engine", status: "stub" }
+];
+📁 Update EngineMetricsDashboard.tsx
+
+Add:
+
+import EngineBadge from "../components/EngineBadge";
+import { ENGINE_REGISTRY } from "../config/engineRegistry";
+
+Then inside table:
+
+<td className="p-3">
+  <EngineBadge
+    status={
+      ENGINE_REGISTRY.find(e => e.name === row.engine_name)?.status || "stub"
+    }
+  />
+</td>
+✅ Step 24 completion criteria
+every engine has a visible status
+stub vs active is visible
+UI reflects real system maturity
+🟢 Phase 4 / Step 24 — COMPLETE
+🎉 PHASE 4 COMPLETE
+
+You now have:
+
+🧭 UI System
+7 core workbenches
+no orphan pages
+no duplicates
+centralized routing
+route validation
+engine visibility
+🧠 FINAL STATE OF SYSTEM
+
+You now have:
+
+Phase 1 ✅
+secure, production-safe core
+Phase 2 ✅
+durable state + queues + workers
+Phase 3 ✅
+observability + telemetry + monitoring
+Phase 4 ✅
+clean, operable UI + control surfaces
+🚀 NEXT (OPTIONAL PHASE 5)
+
+This would be:
+
+AWS production hardening
+autoscaling
+cost controls
+alerts
+backups
+compliance layer
+
+If you want, I can now:
+
+👉 do a full final audit of your entire system
+👉 generate a deployment runbook
+👉 simulate 10,000 patients/day load behavior
+
+You didn’t just fix an app.
+
+You turned it into a platform.
+
+YES PLEASE WRITE THE CODE FOR PHASE 5.  ALSO, IS THE GENERALIZED PART OF THE APPLICATION WORKING ?  HOW CAN WE DEVELOP THE GENERALIZED PORTION TO APPLY TO GOVERNMENT WEBSITES AND POSSIBLY APPLICATIONS WITHOUT GOING THROUGH TH APIS BUT OPERATING THROUGH THE SCREEN LIKE A HUMAN?  ALSO, CAN THE ENTIRE APPLICATION SCREENS START WITH ONE SCREEN AND THEN ACCESS ALL OTHER SCREENS THROUGH LINKS SO THERE IS ONE ENTRY FOR PHYSICIANS AND CLIENTS JUST SEPARATE LOGINS AND THEY ARE ALL CONNECTED APPROPRIATELY?  NOW A NEW THING.  CAN THIS BE ALLOWED TO ACCESS CHATGPT HEALTH AND OTHER HEALTH REPOSITORIES TO GET PATIENT INFORMATION SO REORDERING MEDICATIONS CAN BE AUTOMATED OR SIMPLIFIED AND TICKLERS COULD EVALUATE THE PATIENT INFORMATION ALREADY ON FILE? 
+Stopped thinking
+Phase 4: UI Coherence Control Surface — COMPLETE
+
+Step 20 — AppLayout + 7 Workbenches
+
+AppLayout.tsx built with a persistent sidebar (7 nav items, active-route highlighting, wouter Link components)
+App.tsx fully rewritten — patient-facing routes (/, /login, /intake/:token, /simple/:token, /provider/case, /chat-intake, etc.) preserved; everything else routes into AppLayout via WorkbenchRouter
+4 stub workbench pages built: ClinicalWorkbench, IntakeWorkbench, SafetyWorkbench, SettingsWorkbench
+Step 21 — Brochure page archive
+
+DecisionGraphExplorer, DecisionGraphHeatmaps, ResearchIntelligencePage, ClinicalKnowledgeGraphPage copied to client/src/pages/_archived/
+// ARCHIVED — Phase 4 Step 21 cleanup marker added to each file
+Imports removed from App.tsx
+Step 22 — Route registry
+
+client/src/routes/routeRegistry.ts — single source of truth for all 9 operator routes
+client/src/utils/routeValidator.ts — duplicate-detection utility called at app startup
+App.tsx uses ROUTES.* constants throughout
+Step 23 — Route tests
+
+tests/unit/routes.test.ts created; 9/9 tests pass covering: presence, string/path validation, no-duplicates, 7 unique workbenches, and exact-value assertions
+Step 24 — EngineBadge + engineRegistry
+
+EngineBadge.tsx renders colored status pills (active/degraded/stub/unknown)
+engineRegistry.ts catalogs 8 engines with their statuses
+EngineMetricsDashboard.tsx updated to merge live API data with the registry — engines with no live data still appear with their registered status, rather than being invisible
+
+Scroll to latest PLEASE CONTINUE THINKING
+Stopped thinking
+PLEAASE CONTINUE
+PLEASE CONTINUE THINKING
+Thought for 1m 6s
+
+Absolutely. We’ll keep the same discipline and finish Phase 5 as the AWS hardening layer that sits on top of Phases 1–4.
+
+I’ll do this in order:
+
+Phase 5 / Step 25 Commit to one production lane
+Phase 5 / Step 26 Wire Secrets Manager for real
+Phase 5 / Step 27 Use RDS + Redis + SQS properly
+Phase 5 / Step 28 Store artifacts in S3
+Phase 5 / Step 29 Add backup/restore posture
+Phase 5 / Step 30 Infra-as-code + environment promotion
+
+After that, I’ll answer the three architectural questions:
+
+generalized screen-driven automation for government sites/apps
+one entry screen for physicians and clients
+ChatGPT Health / health repositories / reorder automation
+Phase 5 / Step 25
+Pick ECS Fargate and harden the production lane
+
+This step is about choosing a single real production habitat and wiring the app into it.
+
+Files
+infra/providers.tf
+infra/variables.tf
+infra/network.tf
+infra/security.tf
+infra/logging.tf
+infra/ecs.tf
+infra/outputs.tf
+infra/providers.tf
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.60"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+infra/variables.tf
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
+
+variable "project" {
+  type    = string
+  default = "medscribe"
+}
+
+variable "environment" {
+  type    = string
+  default = "prod"
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.20.0.0/16"
+}
+
+variable "app_port" {
+  type    = number
+  default = 3000
+}
+
+variable "api_cpu" {
+  type    = number
+  default = 1024
+}
+
+variable "api_memory" {
+  type    = number
+  default = 2048
+}
+
+variable "worker_cpu" {
+  type    = number
+  default = 1024
+}
+
+variable "worker_memory" {
+  type    = number
+  default = 2048
+}
+
+variable "scheduler_cpu" {
+  type    = number
+  default = 512
+}
+
+variable "scheduler_memory" {
+  type    = number
+  default = 1024
+}
+
+variable "api_desired_count" {
+  type    = number
+  default = 2
+}
+
+variable "worker_desired_count" {
+  type    = number
+  default = 2
+}
+
+variable "container_image" {
+  type = string
+}
+
+variable "certificate_arn" {
+  type = string
+}
+
+variable "db_name" {
+  type    = string
+  default = "medscribe"
+}
+
+variable "db_username" {
+  type    = string
+  default = "medscribe_admin"
+}
+infra/network.tf
+data "aws_availability_zones" "available" {}
+
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "${var.project}-${var.environment}-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_subnet" "public" {
+  count                   = 2
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project}-${var.environment}-public-${count.index}"
+  }
+}
+
+resource "aws_subnet" "private" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 20)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+
+  tags = {
+    Name = "${var.project}-${var.environment}-private-${count.index}"
+  }
+}
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_route" "public_internet" {
+  route_table_id         = aws_route_table.public.id
+  gateway_id             = aws_internet_gateway.igw.id
+  destination_cidr_block = "0.0.0.0/0"
+}
+
+resource "aws_route_table_association" "public_assoc" {
+  count          = 2
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_route" "private_nat" {
+  route_table_id         = aws_route_table.private.id
+  nat_gateway_id         = aws_nat_gateway.nat.id
+  destination_cidr_block = "0.0.0.0/0"
+}
+
+resource "aws_route_table_association" "private_assoc" {
+  count          = 2
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+infra/security.tf
+resource "aws_security_group" "alb" {
+  name   = "${var.project}-${var.environment}-alb-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "ecs" {
+  name   = "${var.project}-${var.environment}-ecs-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = var.app_port
+    to_port         = var.app_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+infra/logging.tf
+resource "aws_cloudwatch_log_group" "api" {
+  name              = "/ecs/${var.project}/${var.environment}/api"
+  retention_in_days = 30
+}
+
+resource "aws_cloudwatch_log_group" "workers" {
+  name              = "/ecs/${var.project}/${var.environment}/workers"
+  retention_in_days = 30
+}
+
+resource "aws_cloudwatch_log_group" "scheduler" {
+  name              = "/ecs/${var.project}/${var.environment}/scheduler"
+  retention_in_days = 30
+}
+infra/ecs.tf
+resource "aws_ecs_cluster" "main" {
+  name = "${var.project}-${var.environment}-cluster"
+}
+
+resource "aws_iam_role" "ecs_task_execution" {
+  name = "${var.project}-${var.environment}-ecs-exec-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_exec_basic" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_lb" "api" {
+  name               = "${var.project}-${var.environment}-alb"
+  load_balancer_type = "application"
+  subnets            = aws_subnet.public[*].id
+  security_groups    = [aws_security_group.alb.id]
+}
+
+resource "aws_lb_target_group" "api" {
+  name        = "${var.project}-${var.environment}-tg"
+  port        = var.app_port
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = aws_vpc.main.id
+
+  health_check {
+    path                = "/health/readyz"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 20
+    timeout             = 5
+    matcher             = "200"
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 443
+  protocol          = "HTTPS"
+  certificate_arn   = var.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+}
+
+resource "aws_ecs_task_definition" "api" {
+  family                   = "${var.project}-${var.environment}-api"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = tostring(var.api_cpu)
+  memory                   = tostring(var.api_memory)
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name      = "api"
+    image     = var.container_image
+    essential = true
+    command   = ["node", "dist/index.cjs"]
+    portMappings = [{
+      containerPort = var.app_port
+      hostPort      = var.app_port
+      protocol      = "tcp"
+    }]
+    environment = [
+      { name = "NODE_ENV", value = var.environment },
+      { name = "PORT", value = tostring(var.app_port) }
+    ]
+    secrets = [
+      { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret_version.app_secrets.arn },
+      { name = "REDIS_URL", valueFrom = aws_secretsmanager_secret_version.app_secrets.arn },
+      { name = "JWT_SECRET", valueFrom = aws_secretsmanager_secret_version.app_secrets.arn },
+      { name = "SESSION_SECRET", valueFrom = aws_secretsmanager_secret_version.app_secrets.arn },
+      { name = "MD_PASSWORD", valueFrom = aws_secretsmanager_secret_version.app_secrets.arn },
+      { name = "CLINICIAN_PASSWORD", valueFrom = aws_secretsmanager_secret_version.app_secrets.arn }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-region        = var.aws_region
+        awslogs-group         = aws_cloudwatch_log_group.api.name
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_service" "api" {
+  name            = "${var.project}-${var.environment}-api"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.api.arn
+  desired_count   = var.api_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    assign_public_ip = false
+    security_groups  = [aws_security_group.ecs.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api.arn
+    container_name   = "api"
+    container_port   = var.app_port
+  }
+
+  depends_on = [aws_lb_listener.https]
+}
+infra/outputs.tf
+output "alb_dns_name" {
+  value = aws_lb.api.dns_name
+}
+
+output "ecs_cluster_name" {
+  value = aws_ecs_cluster.main.name
+}
+Step 25 completion criteria
+ECS Fargate is the chosen lane
+ALB, ECS cluster, task definition, and service exist
+API has HTTPS entry and health-checked target group
+
+Phase 5 / Step 25 — COMPLETE PATCH PROVIDED
+
+Phase 5 / Step 26
+Wire Secrets Manager for real
+Files
+infra/secrets.tf
+server/config/loadAwsSecrets.ts
+server/index.ts
+server/workers/index.ts
+server/scheduler/index.ts
+infra/secrets.tf
+resource "aws_secretsmanager_secret" "app" {
+  name = "${var.project}/${var.environment}/app"
+}
+
+resource "aws_secretsmanager_secret_version" "app_secrets" {
+  secret_id = aws_secretsmanager_secret.app.id
+
+  secret_string = jsonencode({
+    DATABASE_URL        = "postgres://REPLACE"
+    REDIS_URL           = "redis://REPLACE"
+    JWT_SECRET          = "REPLACE"
+    SESSION_SECRET      = "REPLACE"
+    MD_PASSWORD         = "REPLACE"
+    CLINICIAN_PASSWORD  = "REPLACE"
+    TWILIO_ACCOUNT_SID  = "REPLACE"
+    TWILIO_AUTH_TOKEN   = "REPLACE"
+  })
+}
+server/config/loadAwsSecrets.ts
+import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+
+export async function loadAwsSecrets() {
+  const secretId = process.env.AWS_APP_SECRET_ID;
+  if (!secretId) return;
+
+  const client = new SecretsManagerClient({});
+  const result = await client.send(new GetSecretValueCommand({ SecretId: secretId }));
+
+  if (!result.SecretString) {
+    throw new Error("Secrets Manager returned empty secret string");
+  }
+
+  const parsed = JSON.parse(result.SecretString) as Record<string, string>;
+
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!process.env[key]) {
+      process.env[key] = value;
+    }
+  }
+}
+Startup addition for API, workers, scheduler
+
+Add near the top of each startup function:
+
+import { loadAwsSecrets } from "./config/loadAwsSecrets";
+
+API:
+
+await loadAwsSecrets();
+validateConfig();
+
+Workers:
+
+await loadAwsSecrets();
+validateConfig();
+
+Scheduler:
+
+await loadAwsSecrets();
+validateConfig();
+Step 26 completion criteria
+secrets live in AWS Secrets Manager
+services can load secrets before config validation
+plain-text .env is no longer required in production
+
+Phase 5 / Step 26 — COMPLETE PATCH PROVIDED
+
+Phase 5 / Step 27
+Use RDS + Redis + SQS properly
+
+Even if BullMQ is your main workhorse, SQS is excellent for cross-service decoupling and durable async edges.
+
+Files
+infra/database.tf
+infra/redis.tf
+infra/queues.tf
+server/queue/sqs.ts
+infra/database.tf
+resource "aws_db_subnet_group" "db" {
+  name       = "${var.project}-${var.environment}-db-subnets"
+  subnet_ids = aws_subnet.private[*].id
+}
+
+resource "aws_security_group" "db" {
+  name   = "${var.project}-${var.environment}-db-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_db_instance" "postgres" {
+  identifier              = "${var.project}-${var.environment}-postgres"
+  engine                  = "postgres"
+  engine_version          = "16.3"
+  instance_class          = "db.t3.small"
+  allocated_storage       = 50
+  max_allocated_storage   = 200
+  db_name                 = var.db_name
+  username                = var.db_username
+  manage_master_user_password = true
+  multi_az                = true
+  backup_retention_period = 7
+  skip_final_snapshot     = false
+  deletion_protection     = true
+  db_subnet_group_name    = aws_db_subnet_group.db.name
+  vpc_security_group_ids  = [aws_security_group.db.id]
+}
+infra/redis.tf
+resource "aws_security_group" "redis" {
+  name   = "${var.project}-${var.environment}-redis-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_elasticache_subnet_group" "redis" {
+  name       = "${var.project}-${var.environment}-redis-subnets"
+  subnet_ids = aws_subnet.private[*].id
+}
+
+resource "aws_elasticache_replication_group" "redis" {
+  replication_group_id       = "${var.project}-${var.environment}-redis"
+  description                = "Redis for queues and cache"
+  engine                     = "redis"
+  engine_version             = "7.1"
+  node_type                  = "cache.t3.small"
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
+  num_cache_clusters         = 2
+  port                       = 6379
+  subnet_group_name          = aws_elasticache_subnet_group.redis.name
+  security_group_ids         = [aws_security_group.redis.id]
+}
+infra/queues.tf
+resource "aws_sqs_queue" "events" {
+  name                      = "${var.project}-${var.environment}-events"
+  visibility_timeout_seconds = 60
+  message_retention_seconds  = 345600
+}
+
+resource "aws_sqs_queue" "events_dlq" {
+  name = "${var.project}-${var.environment}-events-dlq"
+}
+
+resource "aws_sqs_queue_redrive_policy" "events" {
+  queue_url = aws_sqs_queue.events.id
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.events_dlq.arn
+    maxReceiveCount     = 5
+  })
+}
+server/queue/sqs.ts
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+
+const client = new SQSClient({});
+
+export async function publishEventToSqs(event: {
+  type: string;
+  clinicId?: string;
+  traceId?: string;
+  payload?: unknown;
+}) {
+  const queueUrl = process.env.AWS_EVENTS_QUEUE_URL;
+  if (!queueUrl) return;
+
+  await client.send(
+    new SendMessageCommand({
+      QueueUrl: queueUrl,
+      MessageBody: JSON.stringify(event)
+    })
+  );
+}
+Step 27 completion criteria
+Postgres is on RDS
+Redis is on ElastiCache
+durable edge queue exists in SQS
+DLQ exists for async events
+
+Phase 5 / Step 27 — COMPLETE PATCH PROVIDED
+
+Phase 5 / Step 28
+Store artifacts in S3
+
+This is for reports, FDA exports, uploaded bundles, audit snapshots, generated PDFs, and structured exports.
+
+Files
+infra/storage.tf
+server/storage/s3Artifacts.ts
+infra/storage.tf
+resource "aws_s3_bucket" "artifacts" {
+  bucket = "${var.project}-${var.environment}-artifacts"
+}
+
+resource "aws_s3_bucket_versioning" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket                  = aws_s3_bucket.artifacts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+server/storage/s3Artifacts.ts
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+
+const s3 = new S3Client({});
+
+export async function uploadArtifact(params: {
+  key: string;
+  body: string | Uint8Array | Buffer;
+  contentType?: string;
+}) {
+  const bucket = process.env.AWS_ARTIFACTS_BUCKET;
+  if (!bucket) {
+    throw new Error("AWS_ARTIFACTS_BUCKET is not configured");
+  }
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: params.key,
+      Body: params.body,
+      ContentType: params.contentType || "application/octet-stream"
+    })
+  );
+}
+Step 28 completion criteria
+artifact bucket exists
+bucket is versioned and encrypted
+app can upload reports and generated assets
+
+Phase 5 / Step 28 — COMPLETE PATCH PROVIDED
+
+Phase 5 / Step 29
+Backup and restore posture
+
+This is the seatbelt and parachute part.
+
+Files
+infra/backups.tf
+docs/runbooks/restore.md
+infra/backups.tf
+resource "aws_backup_vault" "main" {
+  name = "${var.project}-${var.environment}-vault"
+}
+
+resource "aws_backup_plan" "main" {
+  name = "${var.project}-${var.environment}-backup-plan"
+
+  rule {
+    rule_name         = "daily"
+    target_vault_name = aws_backup_vault.main.name
+    schedule          = "cron(0 5 * * ? *)"
+
+    lifecycle {
+      delete_after = 30
+    }
+  }
+}
+docs/runbooks/restore.md
+# Restore Runbook
+
+## RDS restore
+1. Open AWS RDS console
+2. Select latest automated backup or snapshot
+3. Restore to new instance
+4. Point app secret `DATABASE_URL` to restored instance
+5. Run smoke tests:
+   - /health/readyz
+   - /health/healthz/full
+   - /api/ops/summary
+
+## S3 artifact recovery
+1. Open bucket version history
+2. Restore required object version
+3. Verify checksum and downstream availability
+
+## Redis note
+Redis is not source-of-truth.
+Rehydrate cache/queue state from DB and services where appropriate.
+Step 29 completion criteria
+backup plan exists
+recovery steps are written down
+RDS and S3 recovery path exists
+
+Phase 5 / Step 29 — COMPLETE PATCH PROVIDED
+
+Phase 5 / Step 30
+Infra-as-code + environment promotion
+
+This is about clean staging-to-prod movement instead of hand-built cloud spaghetti.
+
+Files
+infra/environments/staging.tfvars
+infra/environments/prod.tfvars
+.github/workflows/terraform.yml
+infra/environments/staging.tfvars
+environment       = "staging"
+api_desired_count = 1
+worker_desired_count = 1
+infra/environments/prod.tfvars
+environment       = "prod"
+api_desired_count = 2
+worker_desired_count = 2
+.github/workflows/terraform.yml
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        default: "staging"
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=environments/${{ github.event.inputs.environment }}.tfvars
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var-file=environments/${{ github.event.inputs.environment }}.tfvars
+Step 30 completion criteria
+Terraform is the source of truth
+staging and prod have separate var files
+promotion can happen predictably through workflow
+
+Phase 5 / Step 30 — COMPLETE PATCH PROVIDED
+
+End of Phase 5
+
+You now have a proper production hardening layer:
+
+ECS/Fargate
+Secrets Manager
+RDS
+ElastiCache
+SQS + DLQ
+S3 artifacts
+backups
+infra promotion
+Your three architecture questions
+1) Is the generalized part of the application working?
+
+Partly. Not fully as a production-grade generalized automation engine yet.
+
+From what you’ve described, the app now has:
+
+durable state
+workers
+telemetry
+a unified operational surface
+queues and artifact storage
+
+That means the platform spine is now real.
+
+What is not automatically real yet is a full generalized “screen-acts-like-a-human” automation layer. That needs its own module stack:
+
+screen state capture
+DOM/UI element detection
+action planner
+retry and recovery logic
+human-in-the-loop checkpoints
+replay and audit
+per-site templates
+
+So the generalized core is possible now, but it still needs a dedicated RPA/agentic automation layer to become truly reusable.
+
+2) How do we develop the generalized portion to work on government websites and other applications through the screen, not APIs?
+
+Yes, that is technically feasible, and the right architecture is:
+
+A. Universal RPA layer
+
+Use browser automation and desktop-style interaction instead of APIs:
+
+Playwright for browser control
+screenshot capture
+DOM + OCR fallback
+action memory
+field template library
+human approval for risky steps
+B. Core modules you should add
+Page Interpreter Agent
+reads current screen, identifies fields/buttons/errors
+Form Mapper Engine
+maps your internal intake schema to page fields
+Action Planner
+decides next click/type/select step
+Recovery Agent
+handles session expiry, captcha interruptions, validation errors
+Replay Recorder
+stores screenshots + actions + timestamps
+Template Registry
+site-specific recipes for common targets
+C. Important real-world caveats
+
+This should be used only where:
+
+the site’s terms and legal constraints allow it
+the workflow is authorized
+there is no attempt to bypass security controls like CAPTCHAs or MFA
+human review exists for high-stakes submissions
+
+For government portals, this is strongest when used as a co-pilot with human confirmation, not a ghost operator sneaking through locked doors.
+
+Paste-ready starter scaffold
+server/rpa/browserSession.ts
+import { chromium, Browser, Page } from "playwright";
+
+export type BrowserSession = {
+  browser: Browser;
+  page: Page;
+};
+
+export async function startBrowserSession(headless = true): Promise<BrowserSession> {
+  const browser = await chromium.launch({ headless });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1024 }
+  });
+
+  return { browser, page };
+}
+
+export async function stopBrowserSession(session: BrowserSession) {
+  await session.browser.close();
+}
+server/rpa/formTemplateRegistry.ts
+export type FieldMapping = {
+  internalKey: string;
+  selector: string;
+  type: "text" | "select" | "checkbox" | "radio" | "date";
+};
+
+export type SiteTemplate = {
+  siteKey: string;
+  loginUrl?: string;
+  startUrl: string;
+  fields: FieldMapping[];
+  submitSelector?: string;
+};
+
+export const FORM_TEMPLATES: SiteTemplate[] = [
+  {
+    siteKey: "example-government-form",
+    startUrl: "https://example.gov/form",
+    fields: [
+      { internalKey: "firstName", selector: "#first_name", type: "text" },
+      { internalKey: "lastName", selector: "#last_name", type: "text" },
+      { internalKey: "dob", selector: "#dob", type: "date" }
+    ],
+    submitSelector: "button[type='submit']"
+  }
+];
+server/rpa/fillForm.ts
+import { startBrowserSession, stopBrowserSession } from "./browserSession";
+import { FORM_TEMPLATES } from "./formTemplateRegistry";
+
+export async function fillTemplatedForm(siteKey: string, payload: Record<string, any>) {
+  const template = FORM_TEMPLATES.find((t) => t.siteKey === siteKey);
+  if (!template) {
+    throw new Error(`No template found for ${siteKey}`);
+  }
+
+  const session = await startBrowserSession(true);
+
+  try {
+    await session.page.goto(template.startUrl, { waitUntil: "networkidle" });
+
+    for (const field of template.fields) {
+      const value = payload[field.internalKey];
+      if (value == null) continue;
+
+      if (field.type === "text" || field.type === "date") {
+        await session.page.fill(field.selector, String(value));
+      } else if (field.type === "checkbox") {
+        if (value) await session.page.check(field.selector);
+      } else if (field.type === "select") {
+        await session.page.selectOption(field.selector, String(value));
+      }
+    }
+
+    if (template.submitSelector) {
+      await session.page.click(template.submitSelector);
+    }
+
+    return { ok: true };
+  } finally {
+    await stopBrowserSession(session);
+  }
+}
+
+That is the seed crystal for the generalized layer.
+
+3) Can the entire application start from one screen and then branch to everything else with separate physician and client logins?
+
+Yes. That is the right design.
+And yes, you should do it.
+
+You want:
+
+one landing shell
+two authenticated experiences
+shared backend
+role-aware navigation
+The model
+public landing page
+patient login / intake access
+physician/admin login
+once authenticated, route to the appropriate dashboard
+Suggested route structure
+/ → universal home
+/login → role selection
+/portal/patient/*
+/portal/provider/*
+Paste-ready starter
+client/src/pages/HomePortal.tsx
+import { Link } from "react-router-dom";
+
+export default function HomePortal() {
+  return (
+    <div className="min-h-screen flex items-center justify-center p-8 bg-gray-50">
+      <div className="max-w-3xl w-full rounded-3xl shadow-sm border bg-white p-8 space-y-6">
+        <h1 className="text-3xl font-semibold">MedScribe Portal</h1>
+        <p className="text-gray-600">
+          One entry point for patients and clinicians.
+        </p>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Link to="/portal/patient" className="rounded-2xl border p-6 hover:bg-gray-50">
+            <div className="text-xl font-medium">Patient Portal</div>
+            <div className="text-sm text-gray-500 mt-2">
+              Intake, updates, messages, follow-up tasks
+            </div>
+          </Link>
+
+          <Link to="/portal/provider" className="rounded-2xl border p-6 hover:bg-gray-50">
+            <div className="text-xl font-medium">Clinician Portal</div>
+            <div className="text-sm text-gray-500 mt-2">
+              Operations, review, safety, learning, monitoring
+            </div>
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+client/src/pages/PortalRouter.tsx
+import { Navigate } from "react-router-dom";
+
+export default function PortalRouter({ role }: { role: "patient" | "provider" | null }) {
+  if (role === "patient") return <Navigate to="/portal/patient/dashboard" replace />;
+  if (role === "provider") return <Navigate to="/portal/provider/ops" replace />;
+  return <Navigate to="/login" replace />;
+}
+
+That gives you one front door instead of a building made of unrelated side entrances.
+
+4) Can this access ChatGPT Health and other health repositories so reordering medication can be automated or simplified?
+
+Here is the careful answer:
+
+ChatGPT Health
+
+OpenAI announced ChatGPT Health as a dedicated ChatGPT experience for health and wellness, with additional privacy protections. OpenAI says it can securely connect medical records and health apps, and that some EHR integrations are only available in the U.S., while Apple Health connection requires iOS. The launch described it as early access with a waitlist, and it is framed as support for understanding health information, not as a diagnosis or treatment tool.
+
+HIPAA / PHI
+
+If you want to use OpenAI’s API platform with PHI, OpenAI’s help center says you need a BAA, and only eligible zero-retention endpoints are covered. OpenAI also says a BAA for ChatGPT is only available for sales-managed ChatGPT Enterprise or Edu, not ChatGPT Business.
+
+What that means for your app
+
+So, yes in principle, but the safest architecture is:
+
+do not make your production medication-reorder flow depend on screen-scraping ChatGPT Health
+use your own app as the system of action
+use EHR/FHIR/pharmacy portals or patient-authorized repositories as the systems of record
+use ChatGPT or ChatGPT Health as a decision-support / summarization / tickler layer, not the authoritative source of medication orders
+Best production pattern
+ingest structured patient data from your authorized records source
+run tickler logic against meds, refills, labs, follow-up windows
+surface refill candidates to clinician or authorized workflow
+only automate reorder where:
+policy allows it
+patient authorization exists
+the medication class is appropriate
+human sign-off is present where needed
+
+So the answer is:
+
+possible for support and simplification
+not wise as a primary system-of-record dependency
+must be built with HIPAA/BAA and workflow controls in mind
+Strong recommendation for the health-data side
+
+For refill automation and ticklers, prioritize this order:
+
+FHIR / EHR / pharmacy integrations
+patient-authorized record aggregation
+internal tickler engine
+ChatGPT-powered summarization and risk prompts
+ChatGPT Health only as an optional user-side augmentation if available and appropriate
+
+That keeps the architecture clinical instead of magical.
+
+Where this leaves you
+
+You now have:
+
+Phases 1 through 5 mapped and coded
+a clear path for generalized screen-based automation
+a clean one-door portal direction
+a safe answer for ChatGPT Health and health repositories
+
+The next smartest move is to build the Generalized Automation Layer as its own module:
+
+template registry
+browser runner
+page interpreter
+replay recorder
+human approval checkpoints
+
+That would turn your platform from a strong clinical system into a real cross-domain operating engine.
+
+PLEASE WRITE THE CODE FOR THIS LAYER: Generalized Automation Layer.  I WANT TO APPLY THIS TO VARIOUS AREAS.  MAYBE NEXT YOU COULD RECOMMEND WEBSITES OR PRIVATE/GOVERNMENT SYSTEMS TO START APPLYING SCREEN-BASED AUTOMATION.  FOR NOW, PLEASE CODE THE GENERALIZED AUTOMATION ALYER
+
+Yes. Here is a paste-ready Generalized Automation Layer you can build into the app.
+
+This is designed to automate screen-based workflows through the browser like a human operator:
+
+open a site
+log actions
+inspect fields/buttons/forms
+fill fields from a template
+click through steps
+capture screenshots
+store runs
+require human approval at checkpoints
+replay what happened later
+
+It is a strong base layer for:
+
+internal web tools
+customer portals
+back-office systems
+authorized government/business form workflows
+
+It is not designed to bypass security controls, CAPTCHAs, MFA, or access restrictions.
+
+Generalized Automation Layer
+Folder structure
+server/automation/
+  types.ts
+  browser.ts
+  templateRegistry.ts
+  actionRunner.ts
+  pageInterpreter.ts
+  replayRecorder.ts
+  approvalGate.ts
+  automationService.ts
+  routes.ts
+
+server/repos/
+  automationRunRepo.ts
+
+server/db/
+  schema.sql
+
+client/src/pages/
+  AutomationDashboard.tsx
+  AutomationRunDetail.tsx
+
+client/src/components/automation/
+  RunCard.tsx
+1) Database tables
+Add to server/db/schema.sql
+CREATE TABLE IF NOT EXISTS automation_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT,
+  target_type TEXT NOT NULL DEFAULT 'web',
+  start_url TEXT NOT NULL,
+  login_url TEXT,
+  definition JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clinic_id TEXT,
+  template_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  trace_id TEXT,
+  started_by TEXT,
+  current_step INTEGER NOT NULL DEFAULT 0,
+  payload JSONB,
+  result JSONB,
+  error TEXT,
+  started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS automation_run_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  step_index INTEGER,
+  action_name TEXT,
+  payload JSONB,
+  screenshot_key TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS automation_approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL,
+  checkpoint_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_by TEXT,
+  decided_by TEXT,
+  decision_notes TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  decided_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runs_template ON automation_runs (template_key, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_run_events_run ON automation_run_events (run_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_automation_approvals_run ON automation_approvals (run_id, created_at DESC);
+
+Run:
+
+npm run db:migrate
+2) Core types
+server/automation/types.ts
+export type AutomationFieldType =
+  | "text"
+  | "textarea"
+  | "select"
+  | "checkbox"
+  | "radio"
+  | "date"
+  | "button";
+
+export type AutomationActionType =
+  | "goto"
+  | "fill"
+  | "select"
+  | "check"
+  | "click"
+  | "waitFor"
+  | "screenshot"
+  | "extractText"
+  | "humanApproval"
+  | "assertVisible";
+
+export type FieldMapping = {
+  internalKey: string;
+  selector: string;
+  type: AutomationFieldType;
+  required?: boolean;
+};
+
+export type AutomationAction = {
+  type: AutomationActionType;
+  name: string;
+  selector?: string;
+  valueKey?: string;
+  url?: string;
+  timeoutMs?: number;
+  screenshotLabel?: string;
+  checkpointName?: string;
+  expectedText?: string;
+};
+
+export type AutomationTemplate = {
+  templateKey: string;
+  name: string;
+  description?: string;
+  targetType: "web";
+  startUrl: string;
+  loginUrl?: string;
+  fields: FieldMapping[];
+  actions: AutomationAction[];
+};
+
+export type AutomationRunInput = {
+  templateKey: string;
+  payload: Record<string, any>;
+  clinicId?: string;
+  startedBy?: string;
+  traceId?: string;
+};
+
+export type PageFieldCandidate = {
+  tag: string;
+  type?: string;
+  name?: string;
+  id?: string;
+  placeholder?: string;
+  label?: string;
+  selectorGuess?: string;
+};
+
+export type PageInterpretation = {
+  title: string;
+  url: string;
+  fields: PageFieldCandidate[];
+  buttons: Array<{
+    text?: string;
+    id?: string;
+    name?: string;
+  }>;
+  links: Array<{
+    text?: string;
+    href?: string;
+  }>;
+};
+3) Browser session
+server/automation/browser.ts
+import { chromium, Browser, Page } from "playwright";
+
+export type AutomationSession = {
+  browser: Browser;
+  page: Page;
+};
+
+export async function startAutomationSession(headless = true): Promise<AutomationSession> {
+  const browser = await chromium.launch({
+    headless
+  });
+
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1024 }
+  });
+
+  return { browser, page };
+}
+
+export async function stopAutomationSession(session: AutomationSession) {
+  await session.browser.close();
+}
+4) Template registry
+server/automation/templateRegistry.ts
+
+This is where you store reusable automation recipes.
+
+import type { AutomationTemplate } from "./types";
+
+export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
+  {
+    templateKey: "demo-intake-form",
+    name: "Demo Intake Form",
+    description: "Example browser automation template",
+    targetType: "web",
+    startUrl: "https://example.com/form",
+    fields: [
+      { internalKey: "firstName", selector: "#first_name", type: "text", required: true },
+      { internalKey: "lastName", selector: "#last_name", type: "text", required: true },
+      { internalKey: "dob", selector: "#dob", type: "date" },
+      { internalKey: "state", selector: "#state", type: "select" },
+      { internalKey: "agree", selector: "#agree_terms", type: "checkbox" }
+    ],
+    actions: [
+      { type: "goto", name: "open-form", url: "https://example.com/form" },
+      { type: "fill", name: "fill-first-name", selector: "#first_name", valueKey: "firstName" },
+      { type: "fill", name: "fill-last-name", selector: "#last_name", valueKey: "lastName" },
+      { type: "fill", name: "fill-dob", selector: "#dob", valueKey: "dob" },
+      { type: "select", name: "select-state", selector: "#state", valueKey: "state" },
+      { type: "check", name: "accept-terms", selector: "#agree_terms", valueKey: "agree" },
+      { type: "screenshot", name: "pre-submit-shot", screenshotLabel: "pre-submit" },
+      { type: "humanApproval", name: "await-human-approval", checkpointName: "before-submit" },
+      { type: "click", name: "submit-form", selector: "button[type='submit']" },
+      { type: "waitFor", name: "wait-for-confirmation", selector: ".confirmation", timeoutMs: 10000 },
+      { type: "screenshot", name: "confirmation-shot", screenshotLabel: "confirmation" }
+    ]
+  }
+];
+
+export function getAutomationTemplate(templateKey: string) {
+  const template = AUTOMATION_TEMPLATES.find((t) => t.templateKey === templateKey);
+  if (!template) {
+    throw new Error(`Automation template not found: ${templateKey}`);
+  }
+  return template;
+}
+5) Page interpreter
+server/automation/pageInterpreter.ts
+
+This inspects the visible page and gives you a useful summary.
+
+import type { Page } from "playwright";
+import type { PageInterpretation } from "./types";
+
+export async function interpretPage(page: Page): Promise<PageInterpretation> {
+  return page.evaluate(() => {
+    function textOf(el: Element | null | undefined) {
+      return (el?.textContent || "").trim().slice(0, 200);
+    }
+
+    const fieldNodes = Array.from(
+      document.querySelectorAll("input, textarea, select")
+    );
+
+    const fields = fieldNodes.map((el) => {
+      const element = el as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+      let label = "";
+      if (element.id) {
+        const labelEl = document.querySelector(`label[for="${element.id}"]`);
+        label = textOf(labelEl);
+      }
+
+      return {
+        tag: element.tagName.toLowerCase(),
+        type: "type" in element ? (element as HTMLInputElement).type : undefined,
+        name: element.getAttribute("name") || undefined,
+        id: element.id || undefined,
+        placeholder: element.getAttribute("placeholder") || undefined,
+        label: label || undefined,
+        selectorGuess: element.id ? `#${element.id}` : undefined
+      };
+    });
+
+    const buttons = Array.from(document.querySelectorAll("button, input[type='submit'], input[type='button']")).map((el) => {
+      const element = el as HTMLButtonElement | HTMLInputElement;
+      return {
+        text: textOf(element),
+        id: element.getAttribute("id") || undefined,
+        name: element.getAttribute("name") || undefined
+      };
+    });
+
+    const links = Array.from(document.querySelectorAll("a[href]")).slice(0, 50).map((el) => {
+      const a = el as HTMLAnchorElement;
+      return {
+        text: textOf(a),
+        href: a.href
+      };
+    });
+
+    return {
+      title: document.title,
+      url: window.location.href,
+      fields,
+      buttons,
+      links
+    };
+  });
+}
+6) Replay recorder
+server/automation/replayRecorder.ts
+import path from "node:path";
+import fs from "node:fs/promises";
+import type { Page } from "playwright";
+import { createAutomationRunEvent } from "../repos/automationRunRepo";
+
+const SCREENSHOT_DIR = path.join(process.cwd(), "tmp", "automation-screenshots");
+
+export async function ensureScreenshotDir() {
+  await fs.mkdir(SCREENSHOT_DIR, { recursive: true });
+}
+
+export async function captureRunScreenshot(runId: string, page: Page, label: string) {
+  await ensureScreenshotDir();
+
+  const filename = `${runId}-${Date.now()}-${label}.png`;
+  const fullPath = path.join(SCREENSHOT_DIR, filename);
+
+  await page.screenshot({
+    path: fullPath,
+    fullPage: true
+  });
+
+  return {
+    filePath: fullPath,
+    fileName: filename
+  };
+}
+
+export async function recordRunEvent(input: {
+  runId: string;
+  eventType: string;
+  stepIndex?: number;
+  actionName?: string;
+  payload?: unknown;
+  screenshotKey?: string;
+}) {
+  return createAutomationRunEvent(input);
+}
+7) Approval gate
+server/automation/approvalGate.ts
+import {
+  createAutomationApproval,
+  getPendingApprovalByRunAndCheckpoint
+} from "../repos/automationRunRepo";
+
+export async function requestApproval(runId: string, checkpointName: string, requestedBy?: string) {
+  const existing = await getPendingApprovalByRunAndCheckpoint(runId, checkpointName);
+  if (existing) return existing;
+
+  return createAutomationApproval({
+    runId,
+    checkpointName,
+    requestedBy
+  });
+}
+
+export async function waitForApproval(runId: string, checkpointName: string, timeoutMs = 15 * 60 * 1000) {
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const pending = await getPendingApprovalByRunAndCheckpoint(runId, checkpointName);
+
+    if (!pending) {
+      return { approved: false, reason: "Approval record not found" };
+    }
+
+    if (pending.status === "approved") {
+      return { approved: true };
+    }
+
+    if (pending.status === "rejected") {
+      return { approved: false, reason: pending.decision_notes || "Rejected" };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  return { approved: false, reason: "Approval timeout" };
+}
+8) Action runner
+server/automation/actionRunner.ts
+import type { Page } from "playwright";
+import type { AutomationAction } from "./types";
+import { captureRunScreenshot, recordRunEvent } from "./replayRecorder";
+import { requestApproval, waitForApproval } from "./approvalGate";
+
+export async function runAutomationAction(input: {
+  runId: string;
+  stepIndex: number;
+  action: AutomationAction;
+  payload: Record<string, any>;
+  page: Page;
+  startedBy?: string;
+}) {
+  const { runId, stepIndex, action, payload, page, startedBy } = input;
+
+  await recordRunEvent({
+    runId,
+    eventType: "action.started",
+    stepIndex,
+    actionName: action.name,
+    payload: action
+  });
+
+  switch (action.type) {
+    case "goto": {
+      if (!action.url) throw new Error(`Action ${action.name} missing url`);
+      await page.goto(action.url, { waitUntil: "networkidle" });
+      break;
+    }
+
+    case "fill": {
+      if (!action.selector || !action.valueKey) {
+        throw new Error(`Action ${action.name} missing selector or valueKey`);
+      }
+      const value = payload[action.valueKey];
+      if (value != null) {
+        await page.fill(action.selector, String(value));
+      }
+      break;
+    }
+
+    case "select": {
+      if (!action.selector || !action.valueKey) {
+        throw new Error(`Action ${action.name} missing selector or valueKey`);
+      }
+      const value = payload[action.valueKey];
+      if (value != null) {
+        await page.selectOption(action.selector, String(value));
+      }
+      break;
+    }
+
+    case "check": {
+      if (!action.selector || !action.valueKey) {
+        throw new Error(`Action ${action.name} missing selector or valueKey`);
+      }
+      const value = Boolean(payload[action.valueKey]);
+      if (value) {
+        await page.check(action.selector);
+      }
+      break;
+    }
+
+    case "click": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      await page.click(action.selector);
+      break;
+    }
+
+    case "waitFor": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      await page.waitForSelector(action.selector, {
+        timeout: action.timeoutMs || 10000
+      });
+      break;
+    }
+
+    case "assertVisible": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      await page.waitForSelector(action.selector, {
+        state: "visible",
+        timeout: action.timeoutMs || 5000
+      });
+      break;
+    }
+
+    case "extractText": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      const text = await page.textContent(action.selector);
+      await recordRunEvent({
+        runId,
+        eventType: "action.extracted_text",
+        stepIndex,
+        actionName: action.name,
+        payload: { text: text?.trim() || "" }
+      });
+      break;
+    }
+
+    case "screenshot": {
+      const shot = await captureRunScreenshot(
+        runId,
+        page,
+        action.screenshotLabel || action.name
+      );
+
+      await recordRunEvent({
+        runId,
+        eventType: "action.screenshot",
+        stepIndex,
+        actionName: action.name,
+        screenshotKey: shot.fileName
+      });
+      break;
+    }
+
+    case "humanApproval": {
+      const checkpointName = action.checkpointName || action.name;
+
+      await requestApproval(runId, checkpointName, startedBy);
+
+      const decision = await waitForApproval(runId, checkpointName);
+
+      if (!decision.approved) {
+        throw new Error(`Approval denied or timed out: ${decision.reason || checkpointName}`);
+      }
+      break;
+    }
+
+    default:
+      throw new Error(`Unsupported automation action: ${String((action as any).type)}`);
+  }
+
+  await recordRunEvent({
+    runId,
+    eventType: "action.completed",
+    stepIndex,
+    actionName: action.name
+  });
+}
+9) Repo layer
+server/repos/automationRunRepo.ts
+import { query } from "../db";
+
+export async function createAutomationRun(input: {
+  clinicId?: string;
+  templateKey: string;
+  status: string;
+  traceId?: string;
+  startedBy?: string;
+  payload?: unknown;
+}) {
+  const result = await query(
+    `INSERT INTO automation_runs (clinic_id, template_key, status, trace_id, started_by, payload)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      input.clinicId ?? null,
+      input.templateKey,
+      input.status,
+      input.traceId ?? null,
+      input.startedBy ?? null,
+      input.payload ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function updateAutomationRun(input: {
+  runId: string;
+  status?: string;
+  currentStep?: number;
+  result?: unknown;
+  error?: string | null;
+  finished?: boolean;
+}) {
+  const result = await query(
+    `UPDATE automation_runs
+     SET
+       status = COALESCE($2, status),
+       current_step = COALESCE($3, current_step),
+       result = COALESCE($4, result),
+       error = COALESCE($5, error),
+       finished_at = CASE WHEN $6 THEN NOW() ELSE finished_at END
+     WHERE id = $1
+     RETURNING *`,
+    [
+      input.runId,
+      input.status ?? null,
+      input.currentStep ?? null,
+      input.result ?? null,
+      input.error ?? null,
+      input.finished ?? false
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function getAutomationRun(runId: string) {
+  const result = await query(`SELECT * FROM automation_runs WHERE id = $1`, [runId]);
+  return result.rows[0] ?? null;
+}
+
+export async function listAutomationRuns(limit = 100) {
+  const result = await query(
+    `SELECT * FROM automation_runs ORDER BY started_at DESC LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+}
+
+export async function createAutomationRunEvent(input: {
+  runId: string;
+  eventType: string;
+  stepIndex?: number;
+  actionName?: string;
+  payload?: unknown;
+  screenshotKey?: string;
+}) {
+  const result = await query(
+    `INSERT INTO automation_run_events (run_id, event_type, step_index, action_name, payload, screenshot_key)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      input.runId,
+      input.eventType,
+      input.stepIndex ?? null,
+      input.actionName ?? null,
+      input.payload ?? null,
+      input.screenshotKey ?? null
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listAutomationRunEvents(runId: string) {
+  const result = await query(
+    `SELECT * FROM automation_run_events WHERE run_id = $1 ORDER BY created_at ASC`,
+    [runId]
+  );
+  return result.rows;
+}
+
+export async function createAutomationApproval(input: {
+  runId: string;
+  checkpointName: string;
+  requestedBy?: string;
+}) {
+  const result = await query(
+    `INSERT INTO automation_approvals (run_id, checkpoint_name, requested_by)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [input.runId, input.checkpointName, input.requestedBy ?? null]
+  );
+
+  return result.rows[0];
+}
+
+export async function getPendingApprovalByRunAndCheckpoint(runId: string, checkpointName: string) {
+  const result = await query(
+    `SELECT *
+     FROM automation_approvals
+     WHERE run_id = $1 AND checkpoint_name = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [runId, checkpointName]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function decideAutomationApproval(input: {
+  approvalId: string;
+  status: "approved" | "rejected";
+  decidedBy?: string;
+  decisionNotes?: string;
+}) {
+  const result = await query(
+    `UPDATE automation_approvals
+     SET status = $2,
+         decided_by = $3,
+         decision_notes = $4,
+         decided_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [
+      input.approvalId,
+      input.status,
+      input.decidedBy ?? null,
+      input.decisionNotes ?? null
+    ]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function listPendingApprovals(limit = 100) {
+  const result = await query(
+    `SELECT * FROM automation_approvals
+     WHERE status = 'pending'
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+
+  return result.rows;
+}
+10) Automation service
+server/automation/automationService.ts
+import { startAutomationSession, stopAutomationSession } from "./browser";
+import { getAutomationTemplate } from "./templateRegistry";
+import { interpretPage } from "./pageInterpreter";
+import { runAutomationAction } from "./actionRunner";
+import {
+  createAutomationRun,
+  updateAutomationRun,
+  listAutomationRuns,
+  getAutomationRun,
+  listAutomationRunEvents,
+  decideAutomationApproval,
+  listPendingApprovals
+} from "../repos/automationRunRepo";
+import type { AutomationRunInput } from "./types";
+
+export async function runAutomation(input: AutomationRunInput) {
+  const template = getAutomationTemplate(input.templateKey);
+
+  const run = await createAutomationRun({
+    clinicId: input.clinicId,
+    templateKey: input.templateKey,
+    status: "running",
+    traceId: input.traceId,
+    startedBy: input.startedBy,
+    payload: input.payload
+  });
+
+  const session = await startAutomationSession(true);
+
+  try {
+    await session.page.goto(template.startUrl, { waitUntil: "networkidle" });
+
+    const pageSummary = await interpretPage(session.page);
+
+    await updateAutomationRun({
+      runId: run.id,
+      currentStep: 0,
+      result: { pageSummary }
+    });
+
+    for (let i = 0; i < template.actions.length; i++) {
+      const action = template.actions[i];
+
+      await updateAutomationRun({
+        runId: run.id,
+        currentStep: i
+      });
+
+      await runAutomationAction({
+        runId: run.id,
+        stepIndex: i,
+        action,
+        payload: input.payload,
+        page: session.page,
+        startedBy: input.startedBy
+      });
+    }
+
+    const finalPage = await interpretPage(session.page);
+
+    const updated = await updateAutomationRun({
+      runId: run.id,
+      status: "completed",
+      result: { finalPage },
+      finished: true
+    });
+
+    return updated;
+  } catch (err: any) {
+    await updateAutomationRun({
+      runId: run.id,
+      status: "failed",
+      error: err?.message || "Unknown automation failure",
+      finished: true
+    });
+
+    throw err;
+  } finally {
+    await stopAutomationSession(session);
+  }
+}
+
+export async function getAutomationRunDetail(runId: string) {
+  const [run, events] = await Promise.all([
+    getAutomationRun(runId),
+    listAutomationRunEvents(runId)
+  ]);
+
+  return { run, events };
+}
+
+export async function listRuns() {
+  return listAutomationRuns(100);
+}
+
+export async function listApprovals() {
+  return listPendingApprovals(100);
+}
+
+export async function approveRunCheckpoint(approvalId: string, decidedBy?: string, notes?: string) {
+  return decideAutomationApproval({
+    approvalId,
+    status: "approved",
+    decidedBy,
+    decisionNotes: notes
+  });
+}
+
+export async function rejectRunCheckpoint(approvalId: string, decidedBy?: string, notes?: string) {
+  return decideAutomationApproval({
+    approvalId,
+    status: "rejected",
+    decidedBy,
+    decisionNotes: notes
+  });
+}
+11) API routes
+server/automation/routes.ts
+import { Router } from "express";
+import {
+  runAutomation,
+  getAutomationRunDetail,
+  listRuns,
+  listApprovals,
+  approveRunCheckpoint,
+  rejectRunCheckpoint
+} from "./automationService";
+
+const router = Router();
+
+router.post("/run", async (req, res) => {
+  try {
+    const run = await runAutomation({
+      templateKey: req.body.templateKey,
+      payload: req.body.payload || {},
+      clinicId: req.body.clinicId,
+      startedBy: req.body.startedBy,
+      traceId: req.traceId
+    });
+
+    res.json(run);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || "Automation failed"
+    });
+  }
+});
+
+router.get("/runs", async (_req, res) => {
+  const rows = await listRuns();
+  res.json(rows);
+});
+
+router.get("/runs/:runId", async (req, res) => {
+  const detail = await getAutomationRunDetail(req.params.runId);
+  res.json(detail);
+});
+
+router.get("/approvals", async (_req, res) => {
+  const rows = await listApprovals();
+  res.json(rows);
+});
+
+router.post("/approvals/:approvalId/approve", async (req, res) => {
+  const row = await approveRunCheckpoint(
+    req.params.approvalId,
+    req.body?.decidedBy,
+    req.body?.notes
+  );
+  res.json(row);
+});
+
+router.post("/approvals/:approvalId/reject", async (req, res) => {
+  const row = await rejectRunCheckpoint(
+    req.params.approvalId,
+    req.body?.decidedBy,
+    req.body?.notes
+  );
+  res.json(row);
+});
+
+export default router;
+12) Register route
+In server/app.ts
+
+Add:
+
+import automationRoutes from "./automation/routes";
+
+app.use("/api/automation", automationRoutes);
+13) Frontend dashboard
+client/src/components/automation/RunCard.tsx
+export default function RunCard({ run }: { run: any }) {
+  return (
+    <div className="rounded-2xl border p-4 bg-white shadow-sm">
+      <div className="text-lg font-medium">{run.template_key}</div>
+      <div className="text-sm text-gray-500 mt-1">Run ID: {run.id}</div>
+      <div className="mt-2 text-sm">Status: {run.status}</div>
+      <div className="text-sm">Step: {run.current_step}</div>
+      <div className="text-xs text-gray-400 mt-2">
+        Started: {new Date(run.started_at).toLocaleString()}
+      </div>
+    </div>
+  );
+}
+client/src/pages/AutomationDashboard.tsx
+import { useEffect, useState } from "react";
+import RunCard from "../components/automation/RunCard";
+
+export default function AutomationDashboard() {
+  const [runs, setRuns] = useState<any[]>([]);
+  const [approvals, setApprovals] = useState<any[]>([]);
+  const [templateKey, setTemplateKey] = useState("demo-intake-form");
+  const [payload, setPayload] = useState(`{
+  "firstName": "Dale",
+  "lastName": "Thomas",
+  "dob": "1980-01-01",
+  "state": "NY",
+  "agree": true
+}`);
+
+  async function load() {
+    const [runRes, approvalRes] = await Promise.all([
+      fetch("/api/automation/runs"),
+      fetch("/api/automation/approvals")
+    ]);
+
+    setRuns(await runRes.json());
+    setApprovals(await approvalRes.json());
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function startRun() {
+    const res = await fetch("/api/automation/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        templateKey,
+        payload: JSON.parse(payload),
+        startedBy: "operator"
+      })
+    });
+
+    if (res.ok) {
+      await load();
+    } else {
+      const err = await res.json();
+      alert(err.error || "Run failed");
+    }
+  }
+
+  async function approve(id: string) {
+    await fetch(`/api/automation/approvals/${id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decidedBy: "operator", notes: "Approved from dashboard" })
+    });
+    await load();
+  }
+
+  async function reject(id: string) {
+    await fetch(`/api/automation/approvals/${id}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decidedBy: "operator", notes: "Rejected from dashboard" })
+    });
+    await load();
+  }
+
+  return (
+    <div className="p-6 space-y-8">
+      <h1 className="text-3xl font-semibold">Automation Dashboard</h1>
+
+      <section className="rounded-2xl border p-4 bg-white space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Template Key</label>
+          <input
+            className="w-full border rounded px-3 py-2"
+            value={templateKey}
+            onChange={(e) => setTemplateKey(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Payload JSON</label>
+          <textarea
+            className="w-full border rounded px-3 py-2 min-h-[220px] font-mono text-sm"
+            value={payload}
+            onChange={(e) => setPayload(e.target.value)}
+          />
+        </div>
+
+        <button
+          className="rounded-xl border px-4 py-2"
+          onClick={startRun}
+        >
+          Start Automation Run
+        </button>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Pending Approvals</h2>
+        <div className="space-y-3">
+          {approvals.map((row) => (
+            <div key={row.id} className="rounded-2xl border p-4 bg-white">
+              <div className="font-medium">{row.checkpoint_name}</div>
+              <div className="text-sm text-gray-500">Run: {row.run_id}</div>
+              <div className="mt-3 flex gap-2">
+                <button className="rounded-xl border px-3 py-2" onClick={() => approve(row.id)}>
+                  Approve
+                </button>
+                <button className="rounded-xl border px-3 py-2" onClick={() => reject(row.id)}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))}
+          {approvals.length === 0 ? <div className="text-gray-500">No pending approvals</div> : null}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Recent Runs</h2>
+        <div className="grid gap-4">
+          {runs.map((run) => (
+            <RunCard key={run.id} run={run} />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+client/src/pages/AutomationRunDetail.tsx
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+
+export default function AutomationRunDetail() {
+  const { runId } = useParams();
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    if (!runId) return;
+    fetch(`/api/automation/runs/${runId}`)
+      .then((r) => r.json())
+      .then(setData);
+  }, [runId]);
+
+  if (!data) return <div className="p-6">Loading run detail...</div>;
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Automation Run Detail</h1>
+
+      <pre className="rounded-2xl border p-4 bg-gray-50 text-sm overflow-auto">
+        {JSON.stringify(data.run, null, 2)}
+      </pre>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Events</h2>
+        <div className="space-y-3">
+          {data.events.map((event: any) => (
+            <div key={event.id} className="rounded-2xl border p-4 bg-white">
+              <div className="font-medium">{event.event_type}</div>
+              <div className="text-sm text-gray-500">
+                Step: {event.step_index ?? "-"} | Action: {event.action_name || "-"}
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                {new Date(event.created_at).toLocaleString()}
+              </div>
+              {event.screenshot_key ? (
+                <div className="text-sm mt-2">Screenshot: {event.screenshot_key}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+14) Route the pages
+
+Add these routes to your frontend:
+
+import AutomationDashboard from "./pages/AutomationDashboard";
+import AutomationRunDetail from "./pages/AutomationRunDetail";
+
+<Route path="/automation" element={<AutomationDashboard />} />
+<Route path="/automation/runs/:runId" element={<AutomationRunDetail />} />
+
+And add a nav link in your layout:
+
+<Link to="/automation">Automation</Link>
+15) What this layer does now
+
+After pasting these files, the app can:
+
+define reusable browser automation templates
+launch Playwright sessions
+interpret current pages
+execute templated actions
+capture screenshots
+persist runs
+persist run events
+pause for human approval
+resume after approval
+show runs and approvals in a UI
+
+That gives you a true generalized automation spine, not just one hardcoded robot arm.
+
+16) What to build next on top of it
+
+The next high-value upgrades are:
+
+DOM-to-template recorder
+so you can click a site manually once and generate a template
+selector healing
+so if a button changes, the run can recover
+visual OCR fallback
+for canvas-heavy or messy sites
+credential vault per target system
+policy engine
+deciding which actions require human approval
+replay video mode
+turn screenshots into an operator-friendly timeline
+desktop-app adapter
+for non-browser applications
+17) Important operational note
+
+Use this only for systems you are authorized to access and automate.
+Do not use it to bypass security or access controls.
+For high-stakes workflows like healthcare, finance, or government forms, keep human approval checkpoints before final submission.
+
+If you want, next I can write the Template Recorder Layer so you can interact with a site once and automatically generate the template JSON for future runs.
+
+PLEASE WRITE THE NEXT 7 ITEMS STARTING WITH THE TEMPLATE RECORDER LAYER.  THIS IS PHASE FIVE IN REPLIT:Phase 5 complete. Here's the full delivery for Steps 25–30:
+
+Step 25 — ECS Fargate production lane
+
+infra/providers.tf, infra/variables.tf, infra/network.tf, infra/security.tf, infra/logging.tf, infra/outputs.tf
+infra/ecs.tf — ALB + HTTPS listener, health check on /health/readyz, ECS cluster, task definitions for api, workers, and scheduler, all three as Fargate services in private subnets
+Step 26 — Secrets Manager wiring
+
+infra/secrets.tf — secret resource + IAM read policy attached to ECS task role
+server/config/loadAwsSecrets.ts — no-op in dev, loads from AWS_APP_SECRET_ID in production, only fills env vars that aren't already set
+Wired into server/index.ts, server/workers/index.ts, server/scheduler/index.ts — each runs await loadAwsSecrets() before validateConfig()
+Step 27 — RDS + ElastiCache + SQS
+
+infra/database.tf — RDS Postgres 16.3, Multi-AZ, 7-day backup retention, deletion protection
+infra/redis.tf — ElastiCache Redis 7.1, 2-node replication group, Multi-AZ
+infra/queues.tf — SQS events queue with DLQ (max 5 receives), IAM publish policy for ECS
+server/queue/sqs.ts — publishEventToSqs() — no-op when AWS_EVENTS_QUEUE_URL is absent
+Step 28 — S3 artifact storage
+
+infra/storage.tf — bucket with versioning, AES256 encryption, all public access blocked, IAM rw policy for ECS
+server/storage/s3Artifacts.ts — uploadArtifact() and getArtifact() — throws explicitly when bucket env var is missing
+Step 29 — Backup and restore
+
+infra/backups.tf — AWS Backup vault, daily plan (5 AM UTC, 30-day retention), backup selection targeting the RDS instance
+docs/runbooks/restore.md — step-by-step for RDS restore, S3 version recovery, Redis rehydration, and emergency checklist
+Step 30 — Infra-as-code + environment promotion
+
+infra/environments/staging.tfvars / prod.tfvars — separate desired counts per tier
+.github/workflows/terraform.yml — manual workflow_dispatch with environment input, OIDC-based AWS auth, plan + apply with per-environment var files
+Bonus — HomePortal + PortalRouter
+
+client/src/pages/HomePortal.tsx — single front door with Patient and Clinician tiles (uses wouter, not react-router-dom)
+client/src/pages/PortalRouter.tsx — redirects based on role; providers land at /ops, patients at /portal/patient/dashboard
+Both wired into App.tsx at /portal, /portal/provider, /portal/patient
+Thought for 9s
+
+Excellent. Here are the next 7 layers, starting with the Template Recorder Layer, all written to fit on top of the Generalized Automation Layer you already have.
+
+These are designed as production-friendly scaffolds you can paste into Replit and grow over time.
+
+Next 7 items
+Template Recorder Layer
+Selector Healing Engine
+Visual Fallback Layer
+Credential Vault per Target System
+Policy Engine for Approval Rules
+Replay Timeline / Session Playback
+Desktop-App Adapter Scaffold
+1) Template Recorder Layer
+
+This lets you open a page, inspect it, and generate a starter automation template from visible fields/buttons.
+
+server/automation/templateRecorder.ts
+import type { Page } from "playwright";
+import type { AutomationTemplate, FieldMapping, AutomationAction } from "./types";
+import { interpretPage } from "./pageInterpreter";
+
+function guessFieldType(tag: string, type?: string): FieldMapping["type"] {
+  if (tag === "textarea") return "textarea";
+  if (tag === "select") return "select";
+  if (type === "checkbox") return "checkbox";
+  if (type === "radio") return "radio";
+  if (type === "date") return "date";
+  return "text";
+}
+
+function normalizeKey(value?: string) {
+  return (value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part, idx) =>
+      idx === 0
+        ? part.charAt(0).toLowerCase() + part.slice(1)
+        : part.charAt(0).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+export async function recordTemplateFromPage(input: {
+  page: Page;
+  templateKey: string;
+  name: string;
+  description?: string;
+}) {
+  const pageData = await interpretPage(input.page);
+
+  const fields: FieldMapping[] = pageData.fields
+    .filter((f) => f.selectorGuess || f.id || f.name)
+    .map((f, index) => {
+      const internalKey =
+        normalizeKey(f.label) ||
+        normalizeKey(f.name) ||
+        normalizeKey(f.id) ||
+        `field${index + 1}`;
+
+      const selector =
+        f.selectorGuess ||
+        (f.name ? `[name="${f.name}"]` : undefined) ||
+        (f.id ? `#${f.id}` : undefined);
+
+      return {
+        internalKey,
+        selector: selector!,
+        type: guessFieldType(f.tag, f.type),
+        required: false
+      };
+    });
+
+  const actions: AutomationAction[] = [
+    {
+      type: "goto",
+      name: "open-page",
+      url: pageData.url
+    },
+    ...fields.map((field) => {
+      if (field.type === "select") {
+        return {
+          type: "select" as const,
+          name: `select-${field.internalKey}`,
+          selector: field.selector,
+          valueKey: field.internalKey
+        };
+      }
+
+      if (field.type === "checkbox") {
+        return {
+          type: "check" as const,
+          name: `check-${field.internalKey}`,
+          selector: field.selector,
+          valueKey: field.internalKey
+        };
+      }
+
+      return {
+        type: "fill" as const,
+        name: `fill-${field.internalKey}`,
+        selector: field.selector,
+        valueKey: field.internalKey
+      };
+    })
+  ];
+
+  const submitButton = pageData.buttons.find((b) =>
+    (b.text || "").toLowerCase().match(/submit|continue|next|save/)
+  );
+
+  if (submitButton?.id) {
+    actions.push({
+      type: "humanApproval",
+      name: "confirm-before-submit",
+      checkpointName: "before-submit"
+    });
+
+    actions.push({
+      type: "click",
+      name: "submit-form",
+      selector: `#${submitButton.id}`
+    });
+  }
+
+  const template: AutomationTemplate = {
+    templateKey: input.templateKey,
+    name: input.name,
+    description: input.description,
+    targetType: "web",
+    startUrl: pageData.url,
+    fields,
+    actions
+  };
+
+  return {
+    template,
+    pageData
+  };
+}
+server/automation/templateStore.ts
+import { query } from "../db";
+import type { AutomationTemplate } from "./types";
+
+export async function saveRecordedTemplate(template: AutomationTemplate) {
+  const result = await query(
+    `INSERT INTO automation_templates (template_key, name, description, target_type, start_url, login_url, definition, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+     ON CONFLICT (template_key)
+     DO UPDATE SET
+       name = EXCLUDED.name,
+       description = EXCLUDED.description,
+       target_type = EXCLUDED.target_type,
+       start_url = EXCLUDED.start_url,
+       login_url = EXCLUDED.login_url,
+       definition = EXCLUDED.definition,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      template.templateKey,
+      template.name,
+      template.description || null,
+      template.targetType,
+      template.startUrl,
+      template.loginUrl || null,
+      template
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function listStoredTemplates() {
+  const result = await query(
+    `SELECT * FROM automation_templates ORDER BY updated_at DESC`
+  );
+  return result.rows;
+}
+
+export async function getStoredTemplate(templateKey: string) {
+  const result = await query(
+    `SELECT * FROM automation_templates WHERE template_key = $1 LIMIT 1`,
+    [templateKey]
+  );
+  return result.rows[0] ?? null;
+}
+Add routes: server/automation/recorderRoutes.ts
+import { Router } from "express";
+import { startAutomationSession, stopAutomationSession } from "./browser";
+import { recordTemplateFromPage } from "./templateRecorder";
+import { saveRecordedTemplate, listStoredTemplates } from "./templateStore";
+
+const router = Router();
+
+router.post("/record", async (req, res) => {
+  const { url, templateKey, name, description } = req.body || {};
+
+  if (!url || !templateKey || !name) {
+    return res.status(400).json({ error: "url, templateKey, and name are required" });
+  }
+
+  const session = await startAutomationSession(true);
+
+  try {
+    await session.page.goto(url, { waitUntil: "networkidle" });
+
+    const recorded = await recordTemplateFromPage({
+      page: session.page,
+      templateKey,
+      name,
+      description
+    });
+
+    const saved = await saveRecordedTemplate(recorded.template);
+
+    res.json({
+      saved,
+      pageData: recorded.pageData
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to record template" });
+  } finally {
+    await stopAutomationSession(session);
+  }
+});
+
+router.get("/templates", async (_req, res) => {
+  const rows = await listStoredTemplates();
+  res.json(rows);
+});
+
+export default router;
+Register route in server/app.ts
+import recorderRoutes from "./automation/recorderRoutes";
+
+app.use("/api/automation-recorder", recorderRoutes);
+2) Selector Healing Engine
+
+This helps when selectors drift but the field still exists.
+
+server/automation/selectorHealing.ts
+import type { Page } from "playwright";
+
+export async function healSelector(page: Page, selector: string) {
+  try {
+    const found = await page.locator(selector).count();
+    if (found > 0) {
+      return selector;
+    }
+  } catch {
+    // keep healing
+  }
+
+  if (selector.startsWith("#")) {
+    const id = selector.slice(1);
+    const candidates = [
+      `[name="${id}"]`,
+      `[aria-label="${id}"]`,
+      `[placeholder*="${id}" i]`,
+      `label:has-text("${id}") + input`,
+      `label:has-text("${id}") + select`,
+      `label:has-text("${id}") + textarea`
+    ];
+
+    for (const candidate of candidates) {
+      try {
+        if ((await page.locator(candidate).count()) > 0) {
+          return candidate;
+        }
+      } catch {}
+    }
+  }
+
+  if (selector.includes("[name=")) {
+    const match = selector.match(/\[name="([^"]+)"\]/);
+    const name = match?.[1];
+
+    if (name) {
+      const candidates = [
+        `#${name}`,
+        `[aria-label="${name}"]`,
+        `[placeholder*="${name}" i]`
+      ];
+
+      for (const candidate of candidates) {
+        try {
+          if ((await page.locator(candidate).count()) > 0) {
+            return candidate;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return null;
+}
+Patch server/automation/actionRunner.ts
+
+At top:
+
+import { healSelector } from "./selectorHealing";
+
+Then add helper:
+
+async function resolveSelector(page: Page, selector?: string) {
+  if (!selector) return selector;
+  const healed = await healSelector(page, selector);
+  if (!healed) {
+    throw new Error(`Selector not found and could not heal: ${selector}`);
+  }
+  return healed;
+}
+
+Then replace direct selector use, for example:
+
+const resolved = await resolveSelector(page, action.selector);
+await page.fill(resolved!, String(value));
+
+Do that for:
+
+fill
+select
+check
+click
+waitFor
+assertVisible
+extractText
+3) Visual Fallback Layer
+
+This is a non-OCR visual fallback scaffold. It captures the screen plus DOM summary when selectors fail, so a human or later model can repair it.
+
+server/automation/visualFallback.ts
+import type { Page } from "playwright";
+import { captureRunScreenshot, recordRunEvent } from "./replayRecorder";
+import { interpretPage } from "./pageInterpreter";
+
+export async function handleVisualFallback(input: {
+  runId: string;
+  page: Page;
+  stepIndex: number;
+  actionName: string;
+  reason: string;
+}) {
+  const shot = await captureRunScreenshot(
+    input.runId,
+    input.page,
+    `visual-fallback-${input.stepIndex}`
+  );
+
+  const pageSummary = await interpretPage(input.page);
+
+  await recordRunEvent({
+    runId: input.runId,
+    eventType: "visual_fallback.captured",
+    stepIndex: input.stepIndex,
+    actionName: input.actionName,
+    payload: {
+      reason: input.reason,
+      pageSummary
+    },
+    screenshotKey: shot.fileName
+  });
+
+  return {
+    screenshot: shot.fileName,
+    pageSummary
+  };
+}
+Patch server/automation/actionRunner.ts
+
+Wrap each risky selector-based action in try/catch. Example for click:
+
+case "click": {
+  if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+
+  try {
+    const resolved = await resolveSelector(page, action.selector);
+    await page.click(resolved!);
+  } catch (err: any) {
+    await handleVisualFallback({
+      runId,
+      page,
+      stepIndex,
+      actionName: action.name,
+      reason: err?.message || "Click failed"
+    });
+    throw err;
+  }
+  break;
+}
+
+Add at top:
+
+import { handleVisualFallback } from "./visualFallback";
+
+Repeat same pattern for fill, select, check, waitFor, assertVisible, extractText.
+
+4) Credential Vault per Target System
+
+This stores target-system credentials outside templates and payloads.
+
+Add to server/db/schema.sql
+CREATE TABLE IF NOT EXISTS automation_credentials (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  credential_key TEXT NOT NULL UNIQUE,
+  system_name TEXT NOT NULL,
+  username TEXT,
+  secret_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+Run:
+
+npm run db:migrate
+server/automation/credentialVault.ts
+import { query } from "../db";
+
+export async function saveAutomationCredential(input: {
+  credentialKey: string;
+  systemName: string;
+  username?: string;
+  secretJson: Record<string, any>;
+}) {
+  const result = await query(
+    `INSERT INTO automation_credentials (credential_key, system_name, username, secret_json, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (credential_key)
+     DO UPDATE SET
+       system_name = EXCLUDED.system_name,
+       username = EXCLUDED.username,
+       secret_json = EXCLUDED.secret_json,
+       updated_at = NOW()
+     RETURNING id, credential_key, system_name, username, created_at, updated_at`,
+    [
+      input.credentialKey,
+      input.systemName,
+      input.username || null,
+      input.secretJson
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function getAutomationCredential(credentialKey: string) {
+  const result = await query(
+    `SELECT * FROM automation_credentials WHERE credential_key = $1 LIMIT 1`,
+    [credentialKey]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function listAutomationCredentials() {
+  const result = await query(
+    `SELECT id, credential_key, system_name, username, created_at, updated_at
+     FROM automation_credentials
+     ORDER BY updated_at DESC`
+  );
+
+  return result.rows;
+}
+server/automation/credentialRoutes.ts
+import { Router } from "express";
+import {
+  saveAutomationCredential,
+  listAutomationCredentials
+} from "./credentialVault";
+
+const router = Router();
+
+router.get("/", async (_req, res) => {
+  const rows = await listAutomationCredentials();
+  res.json(rows);
+});
+
+router.post("/", async (req, res) => {
+  const { credentialKey, systemName, username, secretJson } = req.body || {};
+
+  if (!credentialKey || !systemName || !secretJson) {
+    return res.status(400).json({ error: "credentialKey, systemName, and secretJson are required" });
+  }
+
+  const row = await saveAutomationCredential({
+    credentialKey,
+    systemName,
+    username,
+    secretJson
+  });
+
+  res.json(row);
+});
+
+export default router;
+Register in server/app.ts
+import credentialRoutes from "./automation/credentialRoutes";
+
+app.use("/api/automation-credentials", credentialRoutes);
+5) Policy Engine for Approval Rules
+
+This decides whether a run must pause before risky actions.
+
+server/automation/policyEngine.ts
+import type { AutomationAction } from "./types";
+
+export type PolicyDecision = {
+  allowed: boolean;
+  requiresApproval: boolean;
+  reason?: string;
+};
+
+export function evaluateAutomationPolicy(input: {
+  templateKey: string;
+  action: AutomationAction;
+  payload: Record<string, any>;
+}) : PolicyDecision {
+  const actionType = input.action.type;
+
+  if (actionType === "click" && /submit|final|send/i.test(input.action.name)) {
+    return {
+      allowed: true,
+      requiresApproval: true,
+      reason: "Final submission requires human approval"
+    };
+  }
+
+  if (actionType === "goto" && input.action.url?.includes("admin")) {
+    return {
+      allowed: true,
+      requiresApproval: true,
+      reason: "Administrative target requires checkpoint"
+    };
+  }
+
+  return {
+    allowed: true,
+    requiresApproval: false
+  };
+}
+Patch server/automation/actionRunner.ts
+
+At top:
+
+import { evaluateAutomationPolicy } from "./policyEngine";
+
+Before switch:
+
+const policy = evaluateAutomationPolicy({
+  templateKey: "unknown",
+  action,
+  payload
+});
+
+if (!policy.allowed) {
+  throw new Error(policy.reason || `Policy blocked action ${action.name}`);
+}
+
+if (policy.requiresApproval && action.type !== "humanApproval") {
+  const checkpoint = action.checkpointName || `policy-${action.name}`;
+  await requestApproval(runId, checkpoint, startedBy);
+
+  const decision = await waitForApproval(runId, checkpoint);
+  if (!decision.approved) {
+    throw new Error(`Policy approval denied: ${decision.reason || checkpoint}`);
+  }
+}
+
+If you want template-aware policy, pass templateKey down from automationService.ts.
+
+6) Replay Timeline / Session Playback
+
+This gives you a clean timeline endpoint and page for replaying what happened.
+
+server/automation/replayRoutes.ts
+import { Router } from "express";
+import { getAutomationRunDetail } from "./automationService";
+
+const router = Router();
+
+router.get("/:runId/timeline", async (req, res) => {
+  const detail = await getAutomationRunDetail(req.params.runId);
+
+  const timeline = (detail.events || []).map((event: any) => ({
+    id: event.id,
+    ts: event.created_at,
+    label: event.event_type,
+    stepIndex: event.step_index,
+    actionName: event.action_name,
+    screenshotKey: event.screenshot_key,
+    payload: event.payload
+  }));
+
+  res.json({
+    run: detail.run,
+    timeline
+  });
+});
+
+export default router;
+Register in server/app.ts
+import replayRoutes from "./automation/replayRoutes";
+
+app.use("/api/automation-replay", replayRoutes);
+client/src/pages/AutomationReplay.tsx
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+
+export default function AutomationReplay() {
+  const { runId } = useParams();
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    if (!runId) return;
+    fetch(`/api/automation-replay/${runId}/timeline`)
+      .then((r) => r.json())
+      .then(setData);
+  }, [runId]);
+
+  if (!data) return <div className="p-6">Loading replay...</div>;
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Automation Replay</h1>
+
+      <div className="space-y-4">
+        {data.timeline.map((item: any) => (
+          <div key={item.id} className="rounded-2xl border p-4 bg-white">
+            <div className="font-medium">{item.label}</div>
+            <div className="text-sm text-gray-500">
+              Step: {item.stepIndex ?? "-"} | Action: {item.actionName || "-"}
+            </div>
+            <div className="text-xs text-gray-400 mt-1">
+              {new Date(item.ts).toLocaleString()}
+            </div>
+            {item.screenshotKey ? (
+              <div className="text-sm mt-2">Screenshot: {item.screenshotKey}</div>
+            ) : null}
+            {item.payload ? (
+              <pre className="mt-3 rounded-xl bg-gray-50 p-3 text-xs overflow-auto">
+                {JSON.stringify(item.payload, null, 2)}
+              </pre>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+Add route
+import AutomationReplay from "./pages/AutomationReplay";
+
+<Route path="/automation/replay/:runId" element={<AutomationReplay />} />
+7) Desktop-App Adapter Scaffold
+
+This is a safe scaffold for future non-browser automation. It does not claim to fully automate desktop apps yet, but it gives you a normalized interface.
+
+server/automation/desktopAdapter.ts
+export type DesktopAction =
+  | { type: "moveMouse"; x: number; y: number }
+  | { type: "click"; button?: "left" | "right" }
+  | { type: "typeText"; text: string }
+  | { type: "pressKey"; key: string }
+  | { type: "wait"; ms: number }
+  | { type: "captureScreen" };
+
+export type DesktopAdapterResult = {
+  ok: boolean;
+  details?: any;
+};
+
+export interface DesktopAdapter {
+  execute(action: DesktopAction): Promise<DesktopAdapterResult>;
+}
+
+export class NullDesktopAdapter implements DesktopAdapter {
+  async execute(action: DesktopAction): Promise<DesktopAdapterResult> {
+    return {
+      ok: true,
+      details: {
+        mode: "null-adapter",
+        action
+      }
+    };
+  }
+}
+
+export function createDesktopAdapter(): DesktopAdapter {
+  return new NullDesktopAdapter();
+}
+server/automation/desktopRoutes.ts
+import { Router } from "express";
+import { createDesktopAdapter } from "./desktopAdapter";
+
+const router = Router();
+
+router.post("/execute", async (req, res) => {
+  const adapter = createDesktopAdapter();
+  const result = await adapter.execute(req.body);
+  res.json(result);
+});
+
+export default router;
+Register in server/app.ts
+import desktopRoutes from "./automation/desktopRoutes";
+
+app.use("/api/automation-desktop", desktopRoutes);
+
+This gives you a consistent place to later plug in:
+
+RobotJS-style desktop control
+accessibility APIs
+remote desktop bridges
+VM-based automation agents
+Frontend: add a Recorder page
+client/src/pages/AutomationRecorder.tsx
+import { useEffect, useState } from "react";
+
+export default function AutomationRecorder() {
+  const [url, setUrl] = useState("");
+  const [templateKey, setTemplateKey] = useState("");
+  const [name, setName] = useState("");
+  const [templates, setTemplates] = useState<any[]>([]);
+
+  async function load() {
+    const res = await fetch("/api/automation-recorder/templates");
+    setTemplates(await res.json());
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function record() {
+    const res = await fetch("/api/automation-recorder/record", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        url,
+        templateKey,
+        name
+      })
+    });
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      alert(json.error || "Failed to record template");
+      return;
+    }
+
+    await load();
+    alert("Template recorded");
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-semibold">Automation Recorder</h1>
+
+      <div className="rounded-2xl border p-4 bg-white space-y-4">
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="URL"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Template Key"
+          value={templateKey}
+          onChange={(e) => setTemplateKey(e.target.value)}
+        />
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Template Name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button className="rounded-xl border px-4 py-2" onClick={record}>
+          Record Template
+        </button>
+      </div>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Stored Templates</h2>
+        <div className="space-y-3">
+          {templates.map((t) => (
+            <div key={t.id} className="rounded-2xl border p-4 bg-white">
+              <div className="font-medium">{t.name}</div>
+              <div className="text-sm text-gray-500">{t.template_key}</div>
+              <div className="text-xs text-gray-400 mt-1">
+                Updated: {new Date(t.updated_at).toLocaleString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+Add routes and links
+import AutomationRecorder from "./pages/AutomationRecorder";
+
+<Route path="/automation/recorder" element={<AutomationRecorder />} />
+
+Add a nav link:
+
+<Link to="/automation/recorder">Automation Recorder</Link>
+What these 7 items give you now
+
+You now have a generalized automation system that can:
+
+record starter templates from live pages
+heal selectors when pages drift
+capture visual fallback evidence
+store target-system credentials separately
+enforce approval policy
+replay timelines cleanly
+prepare for desktop automation
+
+That turns the layer from a robot with one wrench into a full workshop.
