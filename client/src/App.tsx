@@ -33,6 +33,9 @@ import AutomationDashboard from "@/pages/AutomationDashboard";
 import AutomationRunDetail from "@/pages/AutomationRunDetail";
 import AutomationRecorder from "@/pages/AutomationRecorder";
 import AutomationReplay from "@/pages/AutomationReplay";
+import TemplateStudioPage from "@/pages/TemplateStudioPage";
+import RoboticsControlPage from "@/pages/RoboticsControlPage";
+import ReplayInspectorPage from "@/pages/ReplayInspectorPage";
 
 validateRoutes();
 
@@ -53,6 +56,9 @@ function WorkbenchRouter() {
         <Route path="/automation/runs/:runId" component={AutomationRunDetail} />
         <Route path="/automation/recorder" component={AutomationRecorder} />
         <Route path="/automation/replay/:runId" component={AutomationReplay} />
+        <Route path={ROUTES.TEMPLATE_STUDIO} component={TemplateStudioPage} />
+        <Route path={ROUTES.ROBOTICS} component={RoboticsControlPage} />
+        <Route path={ROUTES.REPLAY_INSPECTOR} component={ReplayInspectorPage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

@@ -9,6 +9,9 @@ import {
   Server,
   Settings,
   Bot,
+  PenTool,
+  Cpu,
+  PlayCircle,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -19,6 +22,9 @@ const NAV_ITEMS = [
   { path: ROUTES.LEARNING, label: "Learning", icon: BrainCircuit },
   { path: ROUTES.SYSTEM, label: "System", icon: Server },
   { path: ROUTES.AUTOMATION, label: "Automation", icon: Bot },
+  { path: ROUTES.TEMPLATE_STUDIO, label: "Template Studio", icon: PenTool },
+  { path: ROUTES.ROBOTICS, label: "Robotic Assist", icon: Cpu },
+  { path: ROUTES.REPLAY_INSPECTOR, label: "Replay Inspector", icon: PlayCircle },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

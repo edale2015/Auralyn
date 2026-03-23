@@ -9,4 +9,7 @@ export const ROUTES = {
   WORKERS: "/workers",
   CLINIC: "/clinic-health",
   AUTOMATION: "/automation",
+  TEMPLATE_STUDIO: "/template-studio",
+  ROBOTICS: "/robotics",
+  REPLAY_INSPECTOR: "/replay-inspector",
 };
