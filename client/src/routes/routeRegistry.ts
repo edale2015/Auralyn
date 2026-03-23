@@ -13,4 +13,6 @@ export const ROUTES = {
   ROBOTICS: "/robotics",
   REPLAY_INSPECTOR: "/replay-inspector",
   AUTONOMOUS_BRAIN: "/autonomous-brain",
+  MEMORY_EXPLORER: "/memory-explorer",
+  ROBOT_ADVANCED: "/robot-advanced",
 };
