@@ -15,4 +15,5 @@ export const ROUTES = {
   AUTONOMOUS_BRAIN: "/autonomous-brain",
   MEMORY_EXPLORER: "/memory-explorer",
   ROBOT_ADVANCED: "/robot-advanced",
+  ROBOT_CAMERA: "/robot-camera",
 };

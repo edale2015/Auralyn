@@ -13,6 +13,7 @@ import {
   Cpu,
   PlayCircle,
   Zap,
+  Eye,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { path: ROUTES.AUTONOMOUS_BRAIN, label: "Autonomous Brain", icon: Zap },
   { path: ROUTES.MEMORY_EXPLORER, label: "Memory Explorer", icon: BrainCircuit },
   { path: ROUTES.ROBOT_ADVANCED, label: "Robot Advanced", icon: Cpu },
+  { path: ROUTES.ROBOT_CAMERA, label: "Robot Vision", icon: Eye },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

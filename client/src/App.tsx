@@ -39,6 +39,7 @@ import ReplayInspectorPage from "@/pages/ReplayInspectorPage";
 import AutonomousBrainDashboard from "@/pages/AutonomousBrainDashboard";
 import MemoryExplorer from "@/pages/MemoryExplorer";
 import RobotControlAdvanced from "@/pages/RobotControlAdvanced";
+import RobotCamera from "@/pages/RobotCamera";
 
 validateRoutes();
 
@@ -65,6 +66,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.AUTONOMOUS_BRAIN} component={AutonomousBrainDashboard} />
         <Route path={ROUTES.MEMORY_EXPLORER} component={MemoryExplorer} />
         <Route path={ROUTES.ROBOT_ADVANCED} component={RobotControlAdvanced} />
+        <Route path={ROUTES.ROBOT_CAMERA} component={RobotCamera} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
