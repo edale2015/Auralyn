@@ -12,4 +12,5 @@ export const ROUTES = {
   TEMPLATE_STUDIO: "/template-studio",
   ROBOTICS: "/robotics",
   REPLAY_INSPECTOR: "/replay-inspector",
+  AUTONOMOUS_BRAIN: "/autonomous-brain",
 };

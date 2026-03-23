@@ -12,6 +12,7 @@ import {
   PenTool,
   Cpu,
   PlayCircle,
+  Zap,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { path: ROUTES.TEMPLATE_STUDIO, label: "Template Studio", icon: PenTool },
   { path: ROUTES.ROBOTICS, label: "Robotic Assist", icon: Cpu },
   { path: ROUTES.REPLAY_INSPECTOR, label: "Replay Inspector", icon: PlayCircle },
+  { path: ROUTES.AUTONOMOUS_BRAIN, label: "Autonomous Brain", icon: Zap },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 
