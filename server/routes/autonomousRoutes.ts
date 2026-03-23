@@ -12,6 +12,15 @@ import { clinicalSafetyGate } from "../clinical/safetyGate";
 import { computePerformance, getOutcomeLog, logOutcome } from "../learning/outcomeTracker";
 import { getMetricsSummary } from "../monitoring/metrics";
 import { aggregate, trainLocalModel } from "../federation/aggregator";
+import { runHospitalSystem } from "../hospital/fullSystem";
+import { buildTimeline, sampleTimeline } from "../timeline/timelineEngine";
+import { predictDeterioration } from "../timeline/predictor";
+import { runProcedure } from "../procedures/sequencer";
+import { strepWorkflow } from "../procedures/workflows/strep";
+import { mapBilling, getBillingCodes } from "../revenue/billing";
+import { calculateRevenue, getRevenueSummary, trackCase } from "../revenue/revenueTracker";
+import { optimizeRevenue } from "../revenue/optimizer";
+import { aggregateModels, distribute, getModelHistory } from "../network/globalAggregator";
 
 const router = express.Router();
 
@@ -77,6 +86,100 @@ router.post("/vision/alignment", async (req, res) => {
     const { tool, pose } = req.body;
     const result = await verifyToolAlignment(tool ?? "otoscope", pose ?? { x: 0, y: 0, z: 0 });
     res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/hospital", async (req, res) => {
+  try {
+    const result = await runHospitalSystem({
+      id: req.body.patientId ?? `anon-${Date.now()}`,
+      complaints: req.body.complaints ?? [],
+      vitals: req.body.vitals,
+      patientHistory: req.body.history,
+      history: req.body.timelineHistory,
+      payer: req.body.payer,
+    });
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/timeline/predict", async (req, res) => {
+  try {
+    const { history, patientId, riskScore } = req.body;
+    const states = history ?? sampleTimeline({ riskScore: riskScore ?? 0.4 });
+    const timeline = buildTimeline(states);
+    const prediction = predictDeterioration(timeline);
+    res.json({ ok: true, timeline, prediction });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/procedure", async (req, res) => {
+  try {
+    const { workflow, patientId, workflowName } = req.body;
+    const wf = workflow === "strep" ? strepWorkflow : (req.body.steps ?? strepWorkflow);
+    const result = await runProcedure(wf, { patientId: patientId ?? "anon" }, workflowName ?? workflow ?? "custom");
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/billing/map", async (req, res) => {
+  try {
+    const result = mapBilling(req.body);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/billing/codes", async (_req, res) => {
+  try {
+    res.json({ ok: true, codes: getBillingCodes() });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/revenue", async (_req, res) => {
+  try {
+    const summary = getRevenueSummary();
+    res.json({ ok: true, summary });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/revenue/optimize", async (req, res) => {
+  try {
+    const { decisions } = req.body;
+    const result = optimizeRevenue(decisions ?? []);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/network/aggregate", async (req, res) => {
+  try {
+    const { models } = req.body;
+    const global = aggregateModels(models ?? []);
+    const distribution = distribute(global);
+    res.json({ ok: true, global, distribution });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/network/history", async (_req, res) => {
+  try {
+    res.json({ ok: true, history: getModelHistory() });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
