@@ -1,0 +1,1201 @@
+
+What these 7 items give you now
+
+You now have a generalized automation system that can:
+
+record starter templates from live pages
+heal selectors when pages drift
+capture visual fallback evidence
+store target-system credentials separately
+enforce approval policy
+replay timelines cleanly
+prepare for desktop automation
+
+That turns the layer from a robot with one wrench into a full workshop.
+
+Recommended next move
+
+The next smartest layer would be Template Studio:
+
+edit recorded templates in the UI
+reorder steps
+test a single step
+save versions
+compare template revisions
+
+That would make the automation layer much easier to scale across many domains.  please make this template studio.  also make a separate module for potential robotic arm control for otoscope or EKG or things like that.
+
+Yes. Here’s a solid next layer that turns your automation stack into something surgeons would call instrument-grade instead of duct-tape-grade. 🛠️
+
+I’ll give you:
+
+Template Studio module
+
+Robotic Control module for otoscope / EKG / peripheral devices
+
+Suggested file structure
+
+Replit-ready code scaffolds you can drop into your existing Node/TypeScript + React system
+
+1. Template Studio
+What it should do
+The Template Studio sits on top of your recorder/replay engine and gives you a UI to:
+
+view a template
+
+edit steps
+
+reorder steps
+
+enable/disable steps
+
+test a single step
+
+save a version
+
+compare versions
+
+publish an approved version
+
+inspect selector healing + visual fallback evidence
+
+This becomes your control tower for scaling automation across many domains like:
+
+government forms
+
+medical intake
+
+insurance portals
+
+HR apps
+
+desktop workflows
+
+RPA task bundles
+
+Recommended architecture
+Backend
+TemplateRepository
+
+TemplateVersionService
+
+TemplateDiffService
+
+TemplateExecutionService
+
+TemplateStudioController
+
+Frontend
+TemplateStudioPage
+
+TemplateListPanel
+
+TemplateStepEditor
+
+TemplateVersionPanel
+
+TemplateDiffViewer
+
+StepTestRunner
+
+ApprovalBanner
+
+Template model
+// shared/types/templateStudio.ts
+export type StepActionType =
+  | "goto"
+  | "click"
+  | "type"
+  | "select"
+  | "checkbox"
+  | "radio"
+  | "waitFor"
+  | "extract"
+  | "assert"
+  | "screenshot"
+  | "upload"
+  | "keypress"
+  | "dragdrop"
+  | "custom";
+
+export interface SelectorCandidate {
+  type: "css" | "xpath" | "text" | "aria" | "label" | "data-testid" | "vision";
+  value: string;
+  confidence?: number;
+}
+
+export interface TemplateStep {
+  id: string;
+  name: string;
+  action: StepActionType;
+  url?: string;
+  selector?: string;
+  selectorCandidates?: SelectorCandidate[];
+  value?: string;
+  waitMs?: number;
+  timeoutMs?: number;
+  required?: boolean;
+  enabled: boolean;
+  approvalRequired?: boolean;
+  notes?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface TemplateVersion {
+  versionId: string;
+  templateId: string;
+  versionNumber: number;
+  createdAt: string;
+  createdBy: string;
+  status: "draft" | "approved" | "archived";
+  changelog?: string;
+  steps: TemplateStep[];
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  category: string;
+  description?: string;
+  tags: string[];
+  currentVersionId?: string;
+  createdAt: string;
+  updatedAt: string;
+  approvalPolicy?: {
+    requiresPublishApproval: boolean;
+    requiresRuntimeApproval: boolean;
+  };
+}
+Backend routes
+// server/routes/templateStudioRoutes.ts
+import express from "express";
+import {
+  listTemplates,
+  getTemplateById,
+  getTemplateVersion,
+  createTemplate,
+  saveDraftVersion,
+  approveVersion,
+  diffVersions,
+  testSingleStep,
+  reorderSteps,
+  publishVersion,
+} from "../templateStudio/controller";
+
+const router = express.Router();
+
+router.get("/templates", listTemplates);
+router.get("/templates/:templateId", getTemplateById);
+router.get("/templates/:templateId/versions/:versionId", getTemplateVersion);
+
+router.post("/templates", createTemplate);
+router.post("/templates/:templateId/draft", saveDraftVersion);
+router.post("/templates/:templateId/reorder", reorderSteps);
+router.post("/templates/:templateId/test-step", testSingleStep);
+router.post("/templates/:templateId/diff", diffVersions);
+router.post("/templates/:templateId/versions/:versionId/approve", approveVersion);
+router.post("/templates/:templateId/versions/:versionId/publish", publishVersion);
+
+export default router;
+Repository
+// server/templateStudio/repository.ts
+import fs from "fs/promises";
+import path from "path";
+import { Template, TemplateVersion } from "../../shared/types/templateStudio";
+
+const DATA_DIR = path.join(process.cwd(), "data", "template-studio");
+const TEMPLATES_FILE = path.join(DATA_DIR, "templates.json");
+
+async function ensureDir() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+}
+
+async function readJson<T>(file: string, fallback: T): Promise<T> {
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJson(file: string, data: any) {
+  await ensureDir();
+  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+}
+
+export class TemplateRepository {
+  async listTemplates(): Promise<Template[]> {
+    await ensureDir();
+    return readJson<Template[]>(TEMPLATES_FILE, []);
+  }
+
+  async saveTemplates(templates: Template[]) {
+    await writeJson(TEMPLATES_FILE, templates);
+  }
+
+  async getTemplate(templateId: string): Promise<Template | null> {
+    const templates = await this.listTemplates();
+    return templates.find(t => t.id === templateId) ?? null;
+  }
+
+  async upsertTemplate(template: Template): Promise<void> {
+    const templates = await this.listTemplates();
+    const idx = templates.findIndex(t => t.id === template.id);
+    if (idx >= 0) templates[idx] = template;
+    else templates.push(template);
+    await this.saveTemplates(templates);
+  }
+
+  versionFile(templateId: string) {
+    return path.join(DATA_DIR, `${templateId}.versions.json`);
+  }
+
+  async listVersions(templateId: string): Promise<TemplateVersion[]> {
+    return readJson<TemplateVersion[]>(this.versionFile(templateId), []);
+  }
+
+  async saveVersions(templateId: string, versions: TemplateVersion[]) {
+    await writeJson(this.versionFile(templateId), versions);
+  }
+
+  async getVersion(templateId: string, versionId: string): Promise<TemplateVersion | null> {
+    const versions = await this.listVersions(templateId);
+    return versions.find(v => v.versionId === versionId) ?? null;
+  }
+
+  async upsertVersion(version: TemplateVersion): Promise<void> {
+    const versions = await this.listVersions(version.templateId);
+    const idx = versions.findIndex(v => v.versionId === version.versionId);
+    if (idx >= 0) versions[idx] = version;
+    else versions.push(version);
+    await this.saveVersions(version.templateId, versions);
+  }
+}
+Diff service
+// server/templateStudio/diffService.ts
+import { TemplateStep, TemplateVersion } from "../../shared/types/templateStudio";
+
+export interface StepDiff {
+  stepId: string;
+  changeType: "added" | "removed" | "modified" | "unchanged";
+  before?: Partial<TemplateStep>;
+  after?: Partial<TemplateStep>;
+  changedFields?: string[];
+}
+
+export interface TemplateDiffResult {
+  fromVersionId: string;
+  toVersionId: string;
+  diffs: StepDiff[];
+}
+
+function stepFieldDiff(a?: TemplateStep, b?: TemplateStep): string[] {
+  if (!a || !b) return [];
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  const changed: string[] = [];
+
+  for (const key of keys) {
+    if (JSON.stringify((a as any)[key]) !== JSON.stringify((b as any)[key])) {
+      changed.push(key);
+    }
+  }
+  return changed;
+}
+
+export class TemplateDiffService {
+  diffVersions(from: TemplateVersion, to: TemplateVersion): TemplateDiffResult {
+    const beforeMap = new Map(from.steps.map(s => [s.id, s]));
+    const afterMap = new Map(to.steps.map(s => [s.id, s]));
+    const allIds = new Set([...beforeMap.keys(), ...afterMap.keys()]);
+    const diffs: StepDiff[] = [];
+
+    for (const stepId of allIds) {
+      const before = beforeMap.get(stepId);
+      const after = afterMap.get(stepId);
+
+      if (!before && after) {
+        diffs.push({ stepId, changeType: "added", after });
+      } else if (before && !after) {
+        diffs.push({ stepId, changeType: "removed", before });
+      } else if (before && after) {
+        const changedFields = stepFieldDiff(before, after);
+        diffs.push({
+          stepId,
+          changeType: changedFields.length ? "modified" : "unchanged",
+          before,
+          after,
+          changedFields,
+        });
+      }
+    }
+
+    return {
+      fromVersionId: from.versionId,
+      toVersionId: to.versionId,
+      diffs,
+    };
+  }
+}
+Single-step test runner
+// server/templateStudio/testSingleStepService.ts
+import { TemplateStep } from "../../shared/types/templateStudio";
+
+export interface StepTestResult {
+  success: boolean;
+  stepId: string;
+  message: string;
+  healedSelector?: string;
+  screenshotPath?: string;
+  durationMs: number;
+}
+
+export class TestSingleStepService {
+  async run(step: TemplateStep, page: any): Promise<StepTestResult> {
+    const started = Date.now();
+
+    try {
+      if (!step.enabled) {
+        return {
+          success: false,
+          stepId: step.id,
+          message: "Step is disabled",
+          durationMs: Date.now() - started,
+        };
+      }
+
+      switch (step.action) {
+        case "goto":
+          await page.goto(step.url, { waitUntil: "domcontentloaded" });
+          break;
+        case "click":
+          await page.click(step.selector);
+          break;
+        case "type":
+          await page.fill(step.selector, step.value ?? "");
+          break;
+        case "waitFor":
+          await page.waitForSelector(step.selector, { timeout: step.timeoutMs ?? 8000 });
+          break;
+        case "screenshot":
+          await page.screenshot({ path: `artifacts/${step.id}-${Date.now()}.png`, fullPage: true });
+          break;
+        default:
+          throw new Error(`Unsupported step action: ${step.action}`);
+      }
+
+      return {
+        success: true,
+        stepId: step.id,
+        message: "Step executed successfully",
+        durationMs: Date.now() - started,
+      };
+    } catch (error: any) {
+      let screenshotPath: string | undefined;
+
+      try {
+        screenshotPath = `artifacts/${step.id}-error-${Date.now()}.png`;
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+      } catch {
+        // ignore screenshot failure
+      }
+
+      return {
+        success: false,
+        stepId: step.id,
+        message: error.message ?? "Unknown step test error",
+        screenshotPath,
+        durationMs: Date.now() - started,
+      };
+    }
+  }
+}
+Controller
+// server/templateStudio/controller.ts
+import { Request, Response } from "express";
+import { randomUUID } from "crypto";
+import { TemplateRepository } from "./repository";
+import { TemplateDiffService } from "./diffService";
+
+const repo = new TemplateRepository();
+const diffService = new TemplateDiffService();
+
+export async function listTemplates(_req: Request, res: Response) {
+  const templates = await repo.listTemplates();
+  res.json({ templates });
+}
+
+export async function getTemplateById(req: Request, res: Response) {
+  const template = await repo.getTemplate(req.params.templateId);
+  const versions = await repo.listVersions(req.params.templateId);
+  if (!template) return res.status(404).json({ error: "Template not found" });
+  res.json({ template, versions });
+}
+
+export async function getTemplateVersion(req: Request, res: Response) {
+  const version = await repo.getVersion(req.params.templateId, req.params.versionId);
+  if (!version) return res.status(404).json({ error: "Version not found" });
+  res.json({ version });
+}
+
+export async function createTemplate(req: Request, res: Response) {
+  const now = new Date().toISOString();
+  const templateId = randomUUID();
+
+  const template = {
+    id: templateId,
+    name: req.body.name,
+    category: req.body.category ?? "general",
+    description: req.body.description ?? "",
+    tags: req.body.tags ?? [],
+    createdAt: now,
+    updatedAt: now,
+    approvalPolicy: {
+      requiresPublishApproval: true,
+      requiresRuntimeApproval: false,
+    },
+    currentVersionId: undefined,
+  };
+
+  await repo.upsertTemplate(template);
+  res.json({ template });
+}
+
+export async function saveDraftVersion(req: Request, res: Response) {
+  const template = await repo.getTemplate(req.params.templateId);
+  if (!template) return res.status(404).json({ error: "Template not found" });
+
+  const versions = await repo.listVersions(template.id);
+  const nextVersionNumber = versions.length + 1;
+
+  const version = {
+    versionId: randomUUID(),
+    templateId: template.id,
+    versionNumber: nextVersionNumber,
+    createdAt: new Date().toISOString(),
+    createdBy: req.body.createdBy ?? "system",
+    status: "draft" as const,
+    changelog: req.body.changelog ?? "",
+    steps: req.body.steps ?? [],
+  };
+
+  await repo.upsertVersion(version);
+  template.updatedAt = new Date().toISOString();
+  await repo.upsertTemplate(template);
+
+  res.json({ version });
+}
+
+export async function approveVersion(req: Request, res: Response) {
+  const version = await repo.getVersion(req.params.templateId, req.params.versionId);
+  if (!version) return res.status(404).json({ error: "Version not found" });
+
+  version.status = "approved";
+  await repo.upsertVersion(version);
+
+  res.json({ version });
+}
+
+export async function publishVersion(req: Request, res: Response) {
+  const template = await repo.getTemplate(req.params.templateId);
+  const version = await repo.getVersion(req.params.templateId, req.params.versionId);
+
+  if (!template || !version) {
+    return res.status(404).json({ error: "Template or version not found" });
+  }
+
+  if (version.status !== "approved") {
+    return res.status(400).json({ error: "Only approved versions can be published" });
+  }
+
+  template.currentVersionId = version.versionId;
+  template.updatedAt = new Date().toISOString();
+  await repo.upsertTemplate(template);
+
+  res.json({ template, publishedVersion: version });
+}
+
+export async function reorderSteps(req: Request, res: Response) {
+  const version = await repo.getVersion(req.params.templateId, req.body.versionId);
+  if (!version) return res.status(404).json({ error: "Version not found" });
+
+  const orderedIds: string[] = req.body.orderedStepIds ?? [];
+  const stepMap = new Map(version.steps.map(s => [s.id, s]));
+  version.steps = orderedIds.map(id => stepMap.get(id)).filter(Boolean) as any;
+
+  await repo.upsertVersion(version);
+  res.json({ version });
+}
+
+export async function diffVersions(req: Request, res: Response) {
+  const from = await repo.getVersion(req.params.templateId, req.body.fromVersionId);
+  const to = await repo.getVersion(req.params.templateId, req.body.toVersionId);
+
+  if (!from || !to) return res.status(404).json({ error: "Version not found" });
+
+  const diff = diffService.diffVersions(from, to);
+  res.json(diff);
+}
+
+export async function testSingleStep(req: Request, res: Response) {
+  // Hook your actual browser automation engine here.
+  // This is stubbed for clean integration.
+  res.json({
+    success: true,
+    result: {
+      stepId: req.body.step?.id ?? "unknown",
+      message: "Single-step test endpoint wired. Attach browser engine here.",
+      durationMs: 42,
+    },
+  });
+}
+2. Frontend Template Studio
+// client/src/pages/TemplateStudioPage.tsx
+import React, { useEffect, useState } from "react";
+
+type Template = {
+  id: string;
+  name: string;
+  category: string;
+  currentVersionId?: string;
+};
+
+type Step = {
+  id: string;
+  name: string;
+  action: string;
+  selector?: string;
+  value?: string;
+  enabled: boolean;
+};
+
+export default function TemplateStudioPage() {
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
+  const [selectedVersion, setSelectedVersion] = useState<any>(null);
+  const [selectedStep, setSelectedStep] = useState<Step | null>(null);
+
+  useEffect(() => {
+    fetch("/api/template-studio/templates")
+      .then(r => r.json())
+      .then(data => setTemplates(data.templates || []));
+  }, []);
+
+  async function openTemplate(templateId: string) {
+    const res = await fetch(`/api/template-studio/templates/${templateId}`);
+    const data = await res.json();
+    setSelectedTemplate(data.template);
+    const current =
+      data.versions?.find((v: any) => v.versionId === data.template.currentVersionId) ??
+      data.versions?.[data.versions.length - 1];
+    setSelectedVersion(current);
+    setSelectedStep(current?.steps?.[0] ?? null);
+  }
+
+  async function testStep(step: Step) {
+    const res = await fetch(`/api/template-studio/templates/${selectedTemplate.id}/test-step`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step }),
+    });
+    const data = await res.json();
+    alert(data.result?.message || "Step tested");
+  }
+
+  return (
+    <div className="p-4 grid grid-cols-12 gap-4 h-screen bg-slate-50">
+      <div className="col-span-3 bg-white rounded-2xl shadow p-4 overflow-auto">
+        <h2 className="text-xl font-semibold mb-3">Template Studio</h2>
+        <div className="space-y-2">
+          {templates.map(t => (
+            <button
+              key={t.id}
+              className="w-full text-left p-3 rounded-xl border hover:bg-slate-50"
+              onClick={() => openTemplate(t.id)}
+            >
+              <div className="font-medium">{t.name}</div>
+              <div className="text-xs text-slate-500">{t.category}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="col-span-4 bg-white rounded-2xl shadow p-4 overflow-auto">
+        <h3 className="text-lg font-semibold mb-3">Steps</h3>
+        {!selectedVersion && <div className="text-slate-500">Select a template</div>}
+        <div className="space-y-2">
+          {selectedVersion?.steps?.map((step: Step) => (
+            <div
+              key={step.id}
+              className={`p-3 rounded-xl border cursor-pointer ${
+                selectedStep?.id === step.id ? "border-blue-500 bg-blue-50" : ""
+              }`}
+              onClick={() => setSelectedStep(step)}
+            >
+              <div className="font-medium">{step.name}</div>
+              <div className="text-xs text-slate-500">
+                {step.action} {step.enabled ? "• enabled" : "• disabled"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="col-span-5 bg-white rounded-2xl shadow p-4 overflow-auto">
+        <h3 className="text-lg font-semibold mb-3">Step Editor</h3>
+        {!selectedStep && <div className="text-slate-500">Select a step</div>}
+        {selectedStep && (
+          <div className="space-y-3">
+            <label className="block">
+              <div className="text-sm font-medium">Name</div>
+              <input
+                className="w-full border rounded-lg p-2"
+                value={selectedStep.name}
+                onChange={e => setSelectedStep({ ...selectedStep, name: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">Action</div>
+              <input
+                className="w-full border rounded-lg p-2"
+                value={selectedStep.action}
+                onChange={e => setSelectedStep({ ...selectedStep, action: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">Selector</div>
+              <textarea
+                className="w-full border rounded-lg p-2 min-h-[90px]"
+                value={selectedStep.selector || ""}
+                onChange={e => setSelectedStep({ ...selectedStep, selector: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">Value</div>
+              <textarea
+                className="w-full border rounded-lg p-2 min-h-[90px]"
+                value={selectedStep.value || ""}
+                onChange={e => setSelectedStep({ ...selectedStep, value: e.target.value })}
+              />
+            </label>
+
+            <div className="flex gap-2">
+              <button
+                className="px-4 py-2 rounded-xl bg-blue-600 text-white"
+                onClick={() => testStep(selectedStep)}
+              >
+                Test Step
+              </button>
+              <button className="px-4 py-2 rounded-xl border">Save Draft</button>
+              <button className="px-4 py-2 rounded-xl border">Compare Versions</button>
+              <button className="px-4 py-2 rounded-xl border">Publish</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+3. Separate Robotic Arm Control Module
+Now for the second beast in the lab: device and robotic control.
+
+Important framing:
+
+A robotic module for otoscope positioning, camera guidance, EKG lead workflow, vitals peripherals, or assisted swab positioning can be built as a supervised control layer first.
+
+That means:
+
+not autonomous diagnosis
+
+not fully autonomous invasive action
+
+clinician-supervised movement
+
+hard safety boundaries
+
+soft velocity control
+
+dead-man switch
+
+emergency stop
+
+approved motion zones
+
+audit trace of every command
+
+That is the sane road.
+
+Suggested scope for v1
+Supported devices
+robotic arm carriage for otoscope positioning
+
+camera/light positioning arm for oral exam
+
+EKG assist module:
+
+lead placement guidance
+
+image overlay + confirmation
+
+not autonomous interpretation only
+
+digital stethoscope mount guidance
+
+swab-assist alignment scaffold
+
+Modes
+MANUAL_JOG
+
+GUIDED_POSITION
+
+TARGET_LOCK
+
+SAFE_HOME
+
+E_STOP
+
+Robotic control architecture
+// shared/types/robotics.ts
+export type RobotMode =
+  | "MANUAL_JOG"
+  | "GUIDED_POSITION"
+  | "TARGET_LOCK"
+  | "SAFE_HOME"
+  | "E_STOP";
+
+export interface RobotPose {
+  x: number;
+  y: number;
+  z: number;
+  rx: number;
+  ry: number;
+  rz: number;
+}
+
+export interface RobotLimits {
+  xMin: number; xMax: number;
+  yMin: number; yMax: number;
+  zMin: number; zMax: number;
+  maxVelocity: number;
+  maxAngularVelocity: number;
+}
+
+export interface RobotCommand {
+  commandId: string;
+  type:
+    | "moveToPose"
+    | "jog"
+    | "stop"
+    | "home"
+    | "setMode"
+    | "captureFrame"
+    | "attachTool"
+    | "detachTool";
+  pose?: RobotPose;
+  delta?: Partial<RobotPose>;
+  velocity?: number;
+  mode?: RobotMode;
+  tool?: "otoscope" | "ekg_camera" | "oral_camera" | "stethoscope";
+  issuedBy: string;
+  issuedAt: string;
+}
+
+export interface SafetyState {
+  estopActive: boolean;
+  humanPresent: boolean;
+  clinicianApproved: boolean;
+  collisionRisk: "LOW" | "MEDIUM" | "HIGH";
+  withinSafeZone: boolean;
+}
+Safety gate
+// server/robotics/safetyGate.ts
+import { RobotCommand, RobotLimits, SafetyState } from "../../shared/types/robotics";
+
+export class RoboticSafetyGate {
+  constructor(private limits: RobotLimits) {}
+
+  validate(command: RobotCommand, safety: SafetyState) {
+    if (safety.estopActive) {
+      return { allowed: false, reason: "E-STOP is active" };
+    }
+
+    if (!safety.humanPresent) {
+      return { allowed: false, reason: "No supervised operator detected" };
+    }
+
+    if (!safety.clinicianApproved && command.type !== "stop" && command.type !== "setMode") {
+      return { allowed: false, reason: "Clinician approval required" };
+    }
+
+    if (safety.collisionRisk === "HIGH") {
+      return { allowed: false, reason: "High collision risk" };
+    }
+
+    if (command.pose) {
+      const { x, y, z } = command.pose;
+      if (
+        x < this.limits.xMin || x > this.limits.xMax ||
+        y < this.limits.yMin || y > this.limits.yMax ||
+        z < this.limits.zMin || z > this.limits.zMax
+      ) {
+        return { allowed: false, reason: "Requested pose is outside safe bounds" };
+      }
+    }
+
+    if ((command.velocity ?? 0) > this.limits.maxVelocity) {
+      return { allowed: false, reason: "Velocity exceeds limit" };
+    }
+
+    return { allowed: true };
+  }
+}
+Device abstraction
+// server/robotics/deviceAdapter.ts
+import { RobotCommand, RobotPose } from "../../shared/types/robotics";
+
+export interface RobotDeviceAdapter {
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  getPose(): Promise<RobotPose>;
+  execute(command: RobotCommand): Promise<{ ok: boolean; message: string }>;
+}
+Mock adapter for development
+// server/robotics/mockRobotAdapter.ts
+import { RobotCommand, RobotPose } from "../../shared/types/robotics";
+import { RobotDeviceAdapter } from "./deviceAdapter";
+
+export class MockRobotAdapter implements RobotDeviceAdapter {
+  private pose: RobotPose = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 };
+
+  async connect() {}
+  async disconnect() {}
+
+  async getPose(): Promise<RobotPose> {
+    return this.pose;
+  }
+
+  async execute(command: RobotCommand): Promise<{ ok: boolean; message: string }> {
+    switch (command.type) {
+      case "moveToPose":
+        if (command.pose) this.pose = command.pose;
+        return { ok: true, message: "Moved to pose" };
+      case "jog":
+        this.pose = {
+          ...this.pose,
+          x: this.pose.x + (command.delta?.x ?? 0),
+          y: this.pose.y + (command.delta?.y ?? 0),
+          z: this.pose.z + (command.delta?.z ?? 0),
+          rx: this.pose.rx + (command.delta?.rx ?? 0),
+          ry: this.pose.ry + (command.delta?.ry ?? 0),
+          rz: this.pose.rz + (command.delta?.rz ?? 0),
+        };
+        return { ok: true, message: "Jog completed" };
+      case "stop":
+        return { ok: true, message: "Motion stopped" };
+      case "home":
+        this.pose = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 };
+        return { ok: true, message: "Returned home" };
+      default:
+        return { ok: true, message: `Executed ${command.type}` };
+    }
+  }
+}
+Robotic controller service
+// server/robotics/roboticController.ts
+import { randomUUID } from "crypto";
+import { MockRobotAdapter } from "./mockRobotAdapter";
+import { RoboticSafetyGate } from "./safetyGate";
+import { RobotCommand, SafetyState } from "../../shared/types/robotics";
+
+const adapter = new MockRobotAdapter();
+const safetyGate = new RoboticSafetyGate({
+  xMin: -200, xMax: 200,
+  yMin: -200, yMax: 200,
+  zMin: 0, zMax: 300,
+  maxVelocity: 40,
+  maxAngularVelocity: 20,
+});
+
+export class RoboticController {
+  async issueCommand(input: Omit<RobotCommand, "commandId" | "issuedAt">, safety: SafetyState) {
+    const command: RobotCommand = {
+      ...input,
+      commandId: randomUUID(),
+      issuedAt: new Date().toISOString(),
+    };
+
+    const gate = safetyGate.validate(command, safety);
+    if (!gate.allowed) {
+      return {
+        ok: false,
+        rejected: true,
+        reason: gate.reason,
+        command,
+      };
+    }
+
+    const result = await adapter.execute(command);
+
+    return {
+      ok: result.ok,
+      rejected: false,
+      message: result.message,
+      command,
+      pose: await adapter.getPose(),
+    };
+  }
+
+  async getPose() {
+    return adapter.getPose();
+  }
+}
+Robotics routes
+// server/routes/roboticsRoutes.ts
+import express from "express";
+import { RoboticController } from "../robotics/roboticController";
+
+const router = express.Router();
+const controller = new RoboticController();
+
+router.get("/pose", async (_req, res) => {
+  const pose = await controller.getPose();
+  res.json({ pose });
+});
+
+router.post("/command", async (req, res) => {
+  const result = await controller.issueCommand(req.body.command, req.body.safety);
+  res.json(result);
+});
+
+router.post("/estop", async (_req, res) => {
+  res.json({ ok: true, message: "E-STOP endpoint wired" });
+});
+
+export default router;
+4. Robotics UI panel
+// client/src/pages/RoboticsControlPage.tsx
+import React, { useEffect, useState } from "react";
+
+export default function RoboticsControlPage() {
+  const [pose, setPose] = useState<any>(null);
+
+  async function refreshPose() {
+    const res = await fetch("/api/robotics/pose");
+    const data = await res.json();
+    setPose(data.pose);
+  }
+
+  useEffect(() => {
+    refreshPose();
+  }, []);
+
+  async function jog(axis: "x" | "y" | "z", amount: number) {
+    await fetch("/api/robotics/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command: {
+          type: "jog",
+          delta: { [axis]: amount },
+          issuedBy: "clinician",
+        },
+        safety: {
+          estopActive: false,
+          humanPresent: true,
+          clinicianApproved: true,
+          collisionRisk: "LOW",
+          withinSafeZone: true,
+        },
+      }),
+    });
+    refreshPose();
+  }
+
+  async function home() {
+    await fetch("/api/robotics/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command: {
+          type: "home",
+          issuedBy: "clinician",
+        },
+        safety: {
+          estopActive: false,
+          humanPresent: true,
+          clinicianApproved: true,
+          collisionRisk: "LOW",
+          withinSafeZone: true,
+        },
+      }),
+    });
+    refreshPose();
+  }
+
+  async function estop() {
+    await fetch("/api/robotics/estop", { method: "POST" });
+    alert("E-STOP sent");
+  }
+
+  return (
+    <div className="p-6 bg-slate-50 min-h-screen">
+      <h1 className="text-2xl font-bold mb-4">Robotic Assist Control</h1>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl shadow p-4">
+          <h2 className="font-semibold mb-3">Pose</h2>
+          <pre className="text-sm bg-slate-100 rounded-xl p-3">
+            {JSON.stringify(pose, null, 2)}
+          </pre>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow p-4">
+          <h2 className="font-semibold mb-3">Manual Jog</h2>
+          <div className="grid grid-cols-3 gap-2">
+            <button className="border rounded-xl p-2" onClick={() => jog("x", -5)}>X-</button>
+            <button className="border rounded-xl p-2" onClick={() => jog("x", 5)}>X+</button>
+            <button className="border rounded-xl p-2" onClick={() => jog("y", -5)}>Y-</button>
+            <button className="border rounded-xl p-2" onClick={() => jog("y", 5)}>Y+</button>
+            <button className="border rounded-xl p-2" onClick={() => jog("z", -5)}>Z-</button>
+            <button className="border rounded-xl p-2" onClick={() => jog("z", 5)}>Z+</button>
+          </div>
+
+          <div className="mt-4 flex gap-2">
+            <button className="bg-blue-600 text-white rounded-xl px-4 py-2" onClick={home}>
+              Safe Home
+            </button>
+            <button className="bg-red-600 text-white rounded-xl px-4 py-2" onClick={estop}>
+              E-STOP
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+5. Suggested file tree
+server/
+  routes/
+    templateStudioRoutes.ts
+    roboticsRoutes.ts
+  templateStudio/
+    controller.ts
+    repository.ts
+    diffService.ts
+    testSingleStepService.ts
+  robotics/
+    deviceAdapter.ts
+    mockRobotAdapter.ts
+    roboticController.ts
+    safetyGate.ts
+
+shared/
+  types/
+    templateStudio.ts
+    robotics.ts
+
+client/
+  src/
+    pages/
+      TemplateStudioPage.tsx
+      RoboticsControlPage.tsx
+6. How these two modules fit your bigger system
+Template Studio becomes the editor for:
+browser automation templates
+
+desktop automation templates
+
+medical portal workflows
+
+government form fill workflows
+
+claims workflows
+
+credentialed task approval flows
+
+Robotic Control becomes the supervised hardware layer for:
+otoscope guidance
+
+oral camera positioning
+
+EKG placement assist
+
+vitals device orchestration
+
+telepresence exam hardware
+
+So one module edits the digital hands, the other supervises the physical hands.
+
+7. Smart next steps after this
+The best follow-on layers would be:
+
+For Template Studio
+drag-and-drop step ordering
+
+selector healing inspector
+
+visual step playback
+
+template variables and secrets binding
+
+environment promotion: dev → staging → prod
+
+For Robotics
+camera stream overlay with target boxes
+
+safe-zone calibration wizard
+
+clinician foot-pedal / dead-man switch
+
+device profile presets:
+
+ear exam
+
+mouth exam
+
+EKG assist
+
+motion audit replay
+
+8. My recommendation
+Build these next in this order:
+
+Template Studio
+
+Template Variables + Secrets binding
+
+Visual playback / replay inspector
+
+Robotic camera overlay + safety zones
+
+Hardware adapter layer for real devices
+
+That sequence keeps the machine from growing tentacles before it grows bones.
+
+If you want, I can next write the full integrated Replit bundle wiring for both modules, including:
+
+Express route registration
+
+React nav/sidebar buttons
+
+storage wiring
+
+audit logging
+
+approval middleware
+
+a basic drag-and-drop step reorder UI
+
+
+yes so please start #2 the #3 please.  
+
+Perfect. We’ll add the next two ribs to the skeleton:
+
+#2 Template Variables + Secrets Binding
+#3 Visual Playback / Replay Inspector
+
+These two make the system much more real-world usable. Without them, templates are frozen mannequins. With them, they can breathe, adapt, and show their work. 🧩
+

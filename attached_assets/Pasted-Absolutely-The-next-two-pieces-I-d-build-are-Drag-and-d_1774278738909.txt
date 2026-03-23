@@ -1,0 +1,1234 @@
+Absolutely. The next two pieces I’d build are:
+
+Drag-and-drop step reordering + inline visual selector healing inspector
+Execution Sandbox / Dry-Run Engine with DOM Snapshot Diff
+
+That second layer is the sharpest next move because it lets you test template changes safely before a live run. It is the difference between editing a plane mid-flight and using a wind tunnel first. 🛩️
+
+Part 1: Drag-and-drop step reordering + inline visual selector healing inspector
+What this adds
+Drag-and-drop step ordering
+reorder steps visually in Template Studio
+persist step order to the current draft version
+no more manual ID reshuffling
+Inline visual selector healing inspector
+test any selector against a live page
+see:
+original selector
+whether it matched
+healed candidates
+confidence
+DOM preview
+screenshot artifact
+accept a healed selector directly into the step
+1A. Backend: selector inspector service
+// server/templateStudio/selectorInspectorService.ts
+export interface SelectorCandidateResult {
+  selector: string;
+  strategy: string;
+  confidence: number;
+  matched: boolean;
+  previewText?: string;
+  previewHtml?: string;
+}
+
+export interface SelectorInspectionResult {
+  originalSelector: string;
+  originalMatched: boolean;
+  healedCandidates: SelectorCandidateResult[];
+  screenshotPath?: string;
+  domSummary?: {
+    inputs: Array<{ name?: string; id?: string; placeholder?: string; label?: string }>;
+    buttons: Array<{ text?: string; id?: string; ariaLabel?: string }>;
+    links: Array<{ text?: string; href?: string }>;
+  };
+}
+
+async function safeText(locator: any): Promise<string | undefined> {
+  try {
+    const text = await locator.innerText({ timeout: 1000 });
+    return text?.slice(0, 200);
+  } catch {
+    return undefined;
+  }
+}
+
+async function safeHtml(locator: any): Promise<string | undefined> {
+  try {
+    const html = await locator.evaluate((el: Element) => el.outerHTML);
+    return String(html).slice(0, 500);
+  } catch {
+    return undefined;
+  }
+}
+
+export class SelectorInspectorService {
+  async inspect(page: any, originalSelector: string): Promise<SelectorInspectionResult> {
+    let originalMatched = false;
+    const healedCandidates: SelectorCandidateResult[] = [];
+
+    try {
+      const count = await page.locator(originalSelector).count();
+      originalMatched = count > 0;
+    } catch {
+      originalMatched = false;
+    }
+
+    const domSummary = await this.buildDomSummary(page);
+
+    const candidateSelectors = this.buildCandidates(originalSelector, domSummary);
+
+    for (const candidate of candidateSelectors) {
+      try {
+        const locator = page.locator(candidate.selector).first();
+        const count = await page.locator(candidate.selector).count();
+        const matched = count > 0;
+
+        healedCandidates.push({
+          selector: candidate.selector,
+          strategy: candidate.strategy,
+          confidence: candidate.confidence,
+          matched,
+          previewText: matched ? await safeText(locator) : undefined,
+          previewHtml: matched ? await safeHtml(locator) : undefined,
+        });
+      } catch {
+        healedCandidates.push({
+          selector: candidate.selector,
+          strategy: candidate.strategy,
+          confidence: candidate.confidence,
+          matched: false,
+        });
+      }
+    }
+
+    const screenshotPath = `artifacts/selector-inspector-${Date.now()}.png`;
+    try {
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+    } catch {
+      // ignore
+    }
+
+    return {
+      originalSelector,
+      originalMatched,
+      healedCandidates: healedCandidates.sort((a, b) => {
+        if (a.matched !== b.matched) return a.matched ? -1 : 1;
+        return b.confidence - a.confidence;
+      }),
+      screenshotPath,
+      domSummary,
+    };
+  }
+
+  private buildCandidates(originalSelector: string, domSummary: SelectorInspectionResult["domSummary"]) {
+    const candidates: Array<{ selector: string; strategy: string; confidence: number }> = [];
+
+    candidates.push({
+      selector: originalSelector,
+      strategy: "original",
+      confidence: 1.0,
+    });
+
+    for (const input of domSummary?.inputs || []) {
+      if (input.id) {
+        candidates.push({
+          selector: `#${CSS.escape(input.id)}`,
+          strategy: "id",
+          confidence: 0.95,
+        });
+      }
+      if (input.name) {
+        candidates.push({
+          selector: `[name="${input.name}"]`,
+          strategy: "name",
+          confidence: 0.9,
+        });
+      }
+      if (input.placeholder) {
+        candidates.push({
+          selector: `[placeholder*="${input.placeholder.replace(/"/g, '\\"')}"]`,
+          strategy: "placeholder",
+          confidence: 0.75,
+        });
+      }
+      if (input.label) {
+        candidates.push({
+          selector: `label:has-text("${input.label.replace(/"/g, '\\"')}")`,
+          strategy: "label-nearby",
+          confidence: 0.72,
+        });
+      }
+    }
+
+    for (const btn of domSummary?.buttons || []) {
+      if (btn.id) {
+        candidates.push({
+          selector: `#${CSS.escape(btn.id)}`,
+          strategy: "button-id",
+          confidence: 0.92,
+        });
+      }
+      if (btn.ariaLabel) {
+        candidates.push({
+          selector: `[aria-label="${btn.ariaLabel.replace(/"/g, '\\"')}"]`,
+          strategy: "aria-label",
+          confidence: 0.88,
+        });
+      }
+      if (btn.text) {
+        candidates.push({
+          selector: `button:has-text("${btn.text.replace(/"/g, '\\"')}")`,
+          strategy: "button-text",
+          confidence: 0.82,
+        });
+      }
+    }
+
+    const deduped = new Map<string, { selector: string; strategy: string; confidence: number }>();
+    for (const c of candidates) {
+      if (!deduped.has(c.selector)) deduped.set(c.selector, c);
+    }
+    return [...deduped.values()];
+  }
+
+  private async buildDomSummary(page: any) {
+    return page.evaluate(() => {
+      function getLabelFor(el: Element): string | undefined {
+        const id = el.getAttribute("id");
+        if (id) {
+          const explicit = document.querySelector(`label[for="${id}"]`);
+          if (explicit?.textContent?.trim()) return explicit.textContent.trim();
+        }
+        const parentLabel = el.closest("label");
+        if (parentLabel?.textContent?.trim()) return parentLabel.textContent.trim();
+        return undefined;
+      }
+
+      const inputs = Array.from(document.querySelectorAll("input, textarea, select"))
+        .slice(0, 50)
+        .map((el: Element) => ({
+          name: el.getAttribute("name") || undefined,
+          id: el.getAttribute("id") || undefined,
+          placeholder: el.getAttribute("placeholder") || undefined,
+          label: getLabelFor(el),
+        }));
+
+      const buttons = Array.from(document.querySelectorAll("button, input[type=button], input[type=submit]"))
+        .slice(0, 50)
+        .map((el: Element) => ({
+          text: (el.textContent || el.getAttribute("value") || "").trim() || undefined,
+          id: el.getAttribute("id") || undefined,
+          ariaLabel: el.getAttribute("aria-label") || undefined,
+        }));
+
+      const links = Array.from(document.querySelectorAll("a"))
+        .slice(0, 50)
+        .map((el: Element) => ({
+          text: (el.textContent || "").trim() || undefined,
+          href: el.getAttribute("href") || undefined,
+        }));
+
+      return { inputs, buttons, links };
+    });
+  }
+}
+1B. Backend route for selector inspection
+// server/routes/templateSelectorRoutes.ts
+import express from "express";
+import { chromium } from "playwright";
+import { SelectorInspectorService } from "../templateStudio/selectorInspectorService";
+
+const router = express.Router();
+const inspector = new SelectorInspectorService();
+
+router.post("/inspect", async (req, res) => {
+  const { url, selector } = req.body as { url: string; selector: string };
+
+  if (!url || !selector) {
+    return res.status(400).json({ error: "url and selector are required" });
+  }
+
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const result = await inspector.inspect(page, selector);
+    res.json({ result });
+  } catch (error: any) {
+    res.status(500).json({
+      error: error?.message || "Selector inspection failed",
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
+export default router;
+
+Wire it in:
+
+// server/index.ts
+import templateSelectorRoutes from "./routes/templateSelectorRoutes";
+
+app.use("/api/template-selector", templateSelectorRoutes);
+1C. Backend: safer reorder endpoint with full step payload fallback
+
+Your current reorder endpoint works if all IDs are present. This version also supports saving the full reordered steps array directly.
+
+// replace reorderSteps in server/templateStudio/controller.ts
+export async function reorderSteps(req: Request, res: Response) {
+  const version = await repo.getVersion(req.params.templateId, req.body.versionId);
+  if (!version) return res.status(404).json({ error: "Version not found" });
+
+  if (Array.isArray(req.body.steps) && req.body.steps.length > 0) {
+    version.steps = req.body.steps;
+    await repo.upsertVersion(version);
+    return res.json({ version });
+  }
+
+  const orderedIds: string[] = req.body.orderedStepIds ?? [];
+  const stepMap = new Map(version.steps.map(s => [s.id, s]));
+  version.steps = orderedIds.map(id => stepMap.get(id)).filter(Boolean) as any;
+
+  await repo.upsertVersion(version);
+  res.json({ version });
+}
+1D. Frontend: drag-and-drop steps list
+
+This uses native drag events so you do not need another library yet.
+
+// client/src/components/template-studio/StepListDnD.tsx
+import React, { useState } from "react";
+
+type Step = {
+  id: string;
+  name: string;
+  action: string;
+  enabled: boolean;
+};
+
+function reorder<T>(items: T[], from: number, to: number): T[] {
+  const copy = [...items];
+  const [moved] = copy.splice(from, 1);
+  copy.splice(to, 0, moved);
+  return copy;
+}
+
+export default function StepListDnD({
+  steps,
+  selectedStepId,
+  onSelect,
+  onReorder,
+}: {
+  steps: Step[];
+  selectedStepId?: string;
+  onSelect: (step: Step) => void;
+  onReorder: (steps: Step[]) => void;
+}) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  return (
+    <div className="space-y-2">
+      {steps.map((step, index) => (
+        <div
+          key={step.id}
+          draggable
+          onDragStart={() => setDragIndex(index)}
+          onDragOver={e => e.preventDefault()}
+          onDrop={() => {
+            if (dragIndex == null || dragIndex === index) return;
+            onReorder(reorder(steps, dragIndex, index));
+            setDragIndex(null);
+          }}
+          className={`p-3 rounded-xl border cursor-move ${
+            selectedStepId === step.id ? "border-blue-500 bg-blue-50" : "bg-white"
+          }`}
+          onClick={() => onSelect(step)}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-medium">{step.name}</div>
+              <div className="text-xs text-slate-500">
+                {step.action} • {step.enabled ? "enabled" : "disabled"}
+              </div>
+            </div>
+            <div className="text-slate-400 text-lg">⋮⋮</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+1E. Frontend: inline visual selector healing inspector panel
+// client/src/components/template-studio/SelectorHealingInspector.tsx
+import React, { useState } from "react";
+
+type Candidate = {
+  selector: string;
+  strategy: string;
+  confidence: number;
+  matched: boolean;
+  previewText?: string;
+  previewHtml?: string;
+};
+
+export default function SelectorHealingInspector({
+  pageUrl,
+  selector,
+  onAcceptSelector,
+}: {
+  pageUrl: string;
+  selector: string;
+  onAcceptSelector: (selector: string) => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+
+  async function inspect() {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/template-selector/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: pageUrl, selector }),
+      });
+      const data = await res.json();
+      setResult(data.result);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-4 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-lg font-semibold">Selector Healing Inspector</h3>
+        <button
+          className="px-4 py-2 rounded-xl bg-blue-600 text-white disabled:opacity-50"
+          onClick={inspect}
+          disabled={!pageUrl || !selector || loading}
+        >
+          {loading ? "Inspecting..." : "Inspect Selector"}
+        </button>
+      </div>
+
+      <div className="text-sm text-slate-600">
+        <div><strong>Page URL:</strong> {pageUrl || "-"}</div>
+        <div><strong>Original selector:</strong> {selector || "-"}</div>
+      </div>
+
+      {result && (
+        <>
+          <div className={`rounded-xl p-3 text-sm ${result.originalMatched ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+            Original selector {result.originalMatched ? "matched successfully" : "did not match"}
+          </div>
+
+          <div className="space-y-3">
+            {(result.healedCandidates || []).map((c: Candidate, idx: number) => (
+              <div key={`${c.selector}-${idx}`} className="border rounded-xl p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-mono text-xs break-all">{c.selector}</div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {c.strategy} • confidence {c.confidence} • {c.matched ? "matched" : "not matched"}
+                    </div>
+                  </div>
+                  <button
+                    className="px-3 py-1 rounded-lg border text-sm"
+                    onClick={() => onAcceptSelector(c.selector)}
+                  >
+                    Use
+                  </button>
+                </div>
+
+                {c.previewText && (
+                  <div className="mt-2 text-sm">
+                    <strong>Text:</strong> {c.previewText}
+                  </div>
+                )}
+
+                {c.previewHtml && (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-sm text-slate-600">HTML preview</summary>
+                    <pre className="mt-2 bg-slate-50 rounded-lg p-2 text-xs overflow-auto whitespace-pre-wrap">
+                      {c.previewHtml}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {result.domSummary && (
+            <details className="border rounded-xl p-3">
+              <summary className="cursor-pointer font-medium">DOM summary</summary>
+              <pre className="mt-2 bg-slate-50 rounded-lg p-2 text-xs overflow-auto whitespace-pre-wrap">
+                {JSON.stringify(result.domSummary, null, 2)}
+              </pre>
+            </details>
+          )}
+
+          {result.screenshotPath && (
+            <div className="text-xs text-slate-500">
+              Screenshot artifact: {result.screenshotPath}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+1F. Update Template Studio page
+
+This wires in drag-drop and the selector inspector.
+
+// client/src/pages/TemplateStudioPage.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import StepListDnD from "../components/template-studio/StepListDnD";
+import SelectorHealingInspector from "../components/template-studio/SelectorHealingInspector";
+import VariableBindingsPanel from "../components/template-studio/VariableBindingsPanel";
+
+type Template = {
+  id: string;
+  name: string;
+  category: string;
+  currentVersionId?: string;
+};
+
+type Step = {
+  id: string;
+  name: string;
+  action: string;
+  selector?: string;
+  value?: string;
+  enabled: boolean;
+  url?: string;
+};
+
+export default function TemplateStudioPage() {
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
+  const [selectedVersion, setSelectedVersion] = useState<any>(null);
+  const [selectedStep, setSelectedStep] = useState<Step | null>(null);
+  const [draftSteps, setDraftSteps] = useState<Step[]>([]);
+  const [draftChangelog, setDraftChangelog] = useState("");
+  const pageUrl = useMemo(
+    () => selectedStep?.url || selectedVersion?.steps?.find((s: Step) => !!s.url)?.url || "",
+    [selectedStep, selectedVersion]
+  );
+
+  useEffect(() => {
+    fetch("/api/template-studio/templates")
+      .then(r => r.json())
+      .then(data => setTemplates(data.templates || []));
+  }, []);
+
+  async function openTemplate(templateId: string) {
+    const res = await fetch(`/api/template-studio/templates/${templateId}`);
+    const data = await res.json();
+    setSelectedTemplate(data.template);
+
+    const current =
+      data.versions?.find((v: any) => v.versionId === data.template.currentVersionId) ??
+      data.versions?.[data.versions.length - 1];
+
+    setSelectedVersion(current);
+    setDraftSteps(current?.steps || []);
+    setSelectedStep(current?.steps?.[0] ?? null);
+  }
+
+  async function saveReorderedSteps(nextSteps: Step[]) {
+    setDraftSteps(nextSteps);
+
+    if (!selectedTemplate || !selectedVersion) return;
+
+    const res = await fetch(`/api/template-studio/templates/${selectedTemplate.id}/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        versionId: selectedVersion.versionId,
+        steps: nextSteps,
+      }),
+    });
+
+    const data = await res.json();
+    setSelectedVersion(data.version);
+  }
+
+  async function saveDraftVersion() {
+    if (!selectedTemplate) return;
+
+    const res = await fetch(`/api/template-studio/templates/${selectedTemplate.id}/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        createdBy: "user",
+        changelog: draftChangelog || "Updated in Template Studio",
+        steps: draftSteps,
+        variables: selectedVersion?.variables || [],
+      }),
+    });
+
+    const data = await res.json();
+    setSelectedVersion(data.version);
+    setDraftChangelog("");
+    setSelectedStep(data.version?.steps?.[0] ?? null);
+  }
+
+  function updateSelectedStep(patch: Partial<Step>) {
+    if (!selectedStep) return;
+    const updated = { ...selectedStep, ...patch };
+    setSelectedStep(updated);
+    setDraftSteps(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+  }
+
+  async function testStep(step: Step) {
+    const res = await fetch(`/api/template-studio/templates/${selectedTemplate.id}/test-step`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step }),
+    });
+    const data = await res.json();
+    alert(data.result?.message || "Step tested");
+  }
+
+  return (
+    <div className="p-4 grid grid-cols-12 gap-4 min-h-screen bg-slate-50">
+      <div className="col-span-3 bg-white rounded-2xl shadow p-4 overflow-auto">
+        <h2 className="text-xl font-semibold mb-3">Template Studio</h2>
+        <div className="space-y-2">
+          {templates.map(t => (
+            <button
+              key={t.id}
+              className="w-full text-left p-3 rounded-xl border hover:bg-slate-50"
+              onClick={() => openTemplate(t.id)}
+            >
+              <div className="font-medium">{t.name}</div>
+              <div className="text-xs text-slate-500">{t.category}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="col-span-3 bg-white rounded-2xl shadow p-4 overflow-auto">
+        <h3 className="text-lg font-semibold mb-3">Steps</h3>
+        {!selectedVersion && <div className="text-slate-500">Select a template</div>}
+
+        {selectedVersion && (
+          <>
+            <StepListDnD
+              steps={draftSteps}
+              selectedStepId={selectedStep?.id}
+              onSelect={step => setSelectedStep(step)}
+              onReorder={saveReorderedSteps}
+            />
+
+            <div className="mt-4 border-t pt-4 space-y-2">
+              <textarea
+                className="w-full border rounded-lg p-2 min-h-[80px]"
+                placeholder="Draft changelog"
+                value={draftChangelog}
+                onChange={e => setDraftChangelog(e.target.value)}
+              />
+              <button className="w-full px-4 py-2 rounded-xl bg-blue-600 text-white" onClick={saveDraftVersion}>
+                Save New Draft Version
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="col-span-3 bg-white rounded-2xl shadow p-4 overflow-auto">
+        <h3 className="text-lg font-semibold mb-3">Step Editor</h3>
+        {!selectedStep && <div className="text-slate-500">Select a step</div>}
+
+        {selectedStep && (
+          <div className="space-y-3">
+            <label className="block">
+              <div className="text-sm font-medium">Name</div>
+              <input
+                className="w-full border rounded-lg p-2"
+                value={selectedStep.name}
+                onChange={e => updateSelectedStep({ name: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">Action</div>
+              <input
+                className="w-full border rounded-lg p-2"
+                value={selectedStep.action}
+                onChange={e => updateSelectedStep({ action: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">URL</div>
+              <input
+                className="w-full border rounded-lg p-2"
+                value={selectedStep.url || ""}
+                onChange={e => updateSelectedStep({ url: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">Selector</div>
+              <textarea
+                className="w-full border rounded-lg p-2 min-h-[90px]"
+                value={selectedStep.selector || ""}
+                onChange={e => updateSelectedStep({ selector: e.target.value })}
+              />
+            </label>
+
+            <label className="block">
+              <div className="text-sm font-medium">Value</div>
+              <textarea
+                className="w-full border rounded-lg p-2 min-h-[90px]"
+                value={selectedStep.value || ""}
+                onChange={e => updateSelectedStep({ value: e.target.value })}
+              />
+            </label>
+
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={!!selectedStep.enabled}
+                onChange={e => updateSelectedStep({ enabled: e.target.checked })}
+              />
+              <span className="text-sm">Enabled</span>
+            </label>
+
+            <div className="flex gap-2 flex-wrap">
+              <button
+                className="px-4 py-2 rounded-xl bg-blue-600 text-white"
+                onClick={() => testStep(selectedStep)}
+              >
+                Test Step
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="col-span-3 space-y-4 overflow-auto">
+        <SelectorHealingInspector
+          pageUrl={pageUrl}
+          selector={selectedStep?.selector || ""}
+          onAcceptSelector={(selector) => updateSelectedStep({ selector })}
+        />
+
+        {selectedVersion?.variables?.length > 0 && (
+          <VariableBindingsPanel variables={selectedVersion.variables} />
+        )}
+      </div>
+    </div>
+  );
+}
+Part 2: Next layer I recommend
+Execution Sandbox / Dry-Run Engine with DOM Snapshot Diff
+Why this is the right next engine
+
+After editing and healing selectors, the next danger is obvious:
+
+“Will this template still work before I run it for real?”
+
+So the best next layer is a Sandbox Runner that:
+
+runs a template in dry-run mode
+never clicks final submit unless explicitly allowed
+captures before/after DOM snapshots per step
+computes diffs
+flags risky changes
+gives a safety score before publish
+
+This becomes your staging lab for automation templates.
+
+What it does
+
+For each step, the Sandbox Engine can:
+
+execute or simulate the step
+capture:
+screenshot before
+DOM summary before
+screenshot after
+DOM summary after
+compute:
+fields added/removed
+buttons added/removed
+URL changed
+selector mismatch
+visibility changes
+mark step as:
+safe
+warning
+risky
+
+This pairs beautifully with Replay Inspector and Template Studio.
+
+2A. Shared types
+// shared/types/sandbox.ts
+export interface DomSnapshotSummary {
+  url: string;
+  title: string;
+  inputs: Array<{
+    tag: string;
+    type?: string;
+    name?: string;
+    id?: string;
+    placeholder?: string;
+    visibleText?: string;
+  }>;
+  buttons: Array<{
+    text?: string;
+    id?: string;
+    ariaLabel?: string;
+  }>;
+  links: Array<{
+    text?: string;
+    href?: string;
+  }>;
+}
+
+export interface SandboxStepResult {
+  stepId: string;
+  stepName: string;
+  action: string;
+  success: boolean;
+  status: "safe" | "warning" | "risky";
+  beforeScreenshot?: string;
+  afterScreenshot?: string;
+  beforeDom: DomSnapshotSummary;
+  afterDom: DomSnapshotSummary;
+  diff: {
+    urlChanged: boolean;
+    titleChanged: boolean;
+    inputCountDelta: number;
+    buttonCountDelta: number;
+    linkCountDelta: number;
+  };
+  warnings: string[];
+  errorMessage?: string;
+}
+
+export interface SandboxRunResult {
+  sandboxRunId: string;
+  templateId: string;
+  versionId: string;
+  startedAt: string;
+  finishedAt: string;
+  overallStatus: "safe" | "warning" | "risky" | "failed";
+  steps: SandboxStepResult[];
+}
+2B. DOM snapshot service
+// server/templateStudio/domSnapshotService.ts
+import { DomSnapshotSummary } from "../../shared/types/sandbox";
+
+export class DomSnapshotService {
+  async capture(page: any): Promise<DomSnapshotSummary> {
+    return page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll("input, textarea, select"))
+        .slice(0, 100)
+        .map((el: Element) => ({
+          tag: el.tagName.toLowerCase(),
+          type: el.getAttribute("type") || undefined,
+          name: el.getAttribute("name") || undefined,
+          id: el.getAttribute("id") || undefined,
+          placeholder: el.getAttribute("placeholder") || undefined,
+          visibleText: (el.textContent || "").trim() || undefined,
+        }));
+
+      const buttons = Array.from(document.querySelectorAll("button, input[type=button], input[type=submit]"))
+        .slice(0, 100)
+        .map((el: Element) => ({
+          text: (el.textContent || el.getAttribute("value") || "").trim() || undefined,
+          id: el.getAttribute("id") || undefined,
+          ariaLabel: el.getAttribute("aria-label") || undefined,
+        }));
+
+      const links = Array.from(document.querySelectorAll("a"))
+        .slice(0, 100)
+        .map((el: Element) => ({
+          text: (el.textContent || "").trim() || undefined,
+          href: el.getAttribute("href") || undefined,
+        }));
+
+      return {
+        url: window.location.href,
+        title: document.title,
+        inputs,
+        buttons,
+        links,
+      };
+    });
+  }
+}
+2C. DOM diff service
+// server/templateStudio/domDiffService.ts
+import { DomSnapshotSummary } from "../../shared/types/sandbox";
+
+export class DomDiffService {
+  diff(before: DomSnapshotSummary, after: DomSnapshotSummary) {
+    return {
+      urlChanged: before.url !== after.url,
+      titleChanged: before.title !== after.title,
+      inputCountDelta: after.inputs.length - before.inputs.length,
+      buttonCountDelta: after.buttons.length - before.buttons.length,
+      linkCountDelta: after.links.length - before.links.length,
+    };
+  }
+
+  classify(action: string, diff: ReturnType<DomDiffService["diff"]>) {
+    const warnings: string[] = [];
+
+    if (diff.urlChanged && action !== "goto") {
+      warnings.push("URL changed unexpectedly");
+    }
+    if (Math.abs(diff.inputCountDelta) > 5) {
+      warnings.push("Large input count change");
+    }
+    if (Math.abs(diff.buttonCountDelta) > 5) {
+      warnings.push("Large button count change");
+    }
+
+    let status: "safe" | "warning" | "risky" = "safe";
+    if (warnings.length > 0) status = "warning";
+    if (warnings.some(w => w.includes("unexpected"))) status = "risky";
+
+    return { status, warnings };
+  }
+}
+2D. Sandbox engine
+// server/templateStudio/sandboxEngine.ts
+import crypto from "crypto";
+import path from "path";
+import fs from "fs/promises";
+import { chromium } from "playwright";
+import { DomSnapshotService } from "./domSnapshotService";
+import { DomDiffService } from "./domDiffService";
+import { SandboxRunResult, SandboxStepResult } from "../../shared/types/sandbox";
+
+async function ensureDir(dir: string) {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+export class SandboxEngine {
+  private domSnapshotService = new DomSnapshotService();
+  private domDiffService = new DomDiffService();
+
+  async run(params: {
+    templateId: string;
+    versionId: string;
+    steps: any[];
+    allowSubmit?: boolean;
+  }): Promise<SandboxRunResult> {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const sandboxRunId = crypto.randomUUID();
+    const artifactDir = path.join(process.cwd(), "artifacts", "sandbox", sandboxRunId);
+    await ensureDir(artifactDir);
+
+    const startedAt = new Date().toISOString();
+    const results: SandboxStepResult[] = [];
+
+    try {
+      for (const step of params.steps) {
+        const beforeScreenshot = path.join(artifactDir, `${step.id}-before.png`);
+        const afterScreenshot = path.join(artifactDir, `${step.id}-after.png`);
+
+        let success = false;
+        let errorMessage: string | undefined;
+
+        const beforeDom = await this.domSnapshotService.capture(page).catch(() => ({
+          url: "",
+          title: "",
+          inputs: [],
+          buttons: [],
+          links: [],
+        }));
+
+        try {
+          await page.screenshot({ path: beforeScreenshot, fullPage: true }).catch(() => {});
+
+          if (step.action === "goto") {
+            await page.goto(step.url, { waitUntil: "domcontentloaded" });
+          } else if (step.action === "click") {
+            const looksLikeSubmit = /submit|final|send/i.test(step.name || "") || /submit|final|send/i.test(step.selector || "");
+            if (looksLikeSubmit && !params.allowSubmit) {
+              throw new Error("Sandbox blocked possible final submit click");
+            }
+            await page.click(step.selector);
+          } else if (step.action === "type") {
+            await page.fill(step.selector, step.value ?? "");
+          } else if (step.action === "waitFor") {
+            await page.waitForSelector(step.selector, { timeout: step.timeoutMs ?? 8000 });
+          }
+
+          success = true;
+        } catch (err: any) {
+          errorMessage = err?.message || "Sandbox step failed";
+        }
+
+        const afterDom = await this.domSnapshotService.capture(page).catch(() => ({
+          url: "",
+          title: "",
+          inputs: [],
+          buttons: [],
+          links: [],
+        }));
+
+        await page.screenshot({ path: afterScreenshot, fullPage: true }).catch(() => {});
+
+        const diff = this.domDiffService.diff(beforeDom, afterDom);
+        const classification = this.domDiffService.classify(step.action, diff);
+
+        results.push({
+          stepId: step.id,
+          stepName: step.name,
+          action: step.action,
+          success,
+          status: success ? classification.status : "risky",
+          beforeScreenshot,
+          afterScreenshot,
+          beforeDom,
+          afterDom,
+          diff,
+          warnings: success ? classification.warnings : [...classification.warnings, errorMessage || "Execution failed"],
+          errorMessage,
+        });
+
+        if (!success) break;
+      }
+
+      const overallStatus: SandboxRunResult["overallStatus"] = results.some(r => !r.success)
+        ? "failed"
+        : results.some(r => r.status === "risky")
+        ? "risky"
+        : results.some(r => r.status === "warning")
+        ? "warning"
+        : "safe";
+
+      return {
+        sandboxRunId,
+        templateId: params.templateId,
+        versionId: params.versionId,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        overallStatus,
+        steps: results,
+      };
+    } finally {
+      await browser.close();
+    }
+  }
+}
+2E. Sandbox routes
+// server/routes/templateSandboxRoutes.ts
+import express from "express";
+import { TemplateRepository } from "../templateStudio/repository";
+import { SandboxEngine } from "../templateStudio/sandboxEngine";
+
+const router = express.Router();
+const repo = new TemplateRepository();
+const sandboxEngine = new SandboxEngine();
+
+router.post("/run", async (req, res) => {
+  const { templateId, versionId, allowSubmit } = req.body as {
+    templateId: string;
+    versionId: string;
+    allowSubmit?: boolean;
+  };
+
+  const version = await repo.getVersion(templateId, versionId);
+  if (!version) {
+    return res.status(404).json({ error: "Version not found" });
+  }
+
+  try {
+    const result = await sandboxEngine.run({
+      templateId,
+      versionId,
+      steps: version.steps,
+      allowSubmit,
+    });
+
+    res.json({ result });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Sandbox run failed" });
+  }
+});
+
+export default router;
+
+Wire it in:
+
+// server/index.ts
+import templateSandboxRoutes from "./routes/templateSandboxRoutes";
+
+app.use("/api/template-sandbox", templateSandboxRoutes);
+2F. Sandbox UI page
+// client/src/pages/TemplateSandboxPage.tsx
+import React, { useState } from "react";
+
+export default function TemplateSandboxPage() {
+  const [templateId, setTemplateId] = useState("");
+  const [versionId, setVersionId] = useState("");
+  const [allowSubmit, setAllowSubmit] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function runSandbox() {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/template-sandbox/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId, versionId, allowSubmit }),
+      });
+      const data = await res.json();
+      setResult(data.result);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="p-6 bg-slate-50 min-h-screen space-y-4">
+      <h1 className="text-2xl font-bold">Template Sandbox</h1>
+
+      <div className="bg-white rounded-2xl shadow p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <input
+          className="border rounded-lg p-2"
+          placeholder="Template ID"
+          value={templateId}
+          onChange={e => setTemplateId(e.target.value)}
+        />
+        <input
+          className="border rounded-lg p-2"
+          placeholder="Version ID"
+          value={versionId}
+          onChange={e => setVersionId(e.target.value)}
+        />
+        <label className="flex items-center gap-2 border rounded-lg p-2">
+          <input
+            type="checkbox"
+            checked={allowSubmit}
+            onChange={e => setAllowSubmit(e.target.checked)}
+          />
+          <span>Allow final submit</span>
+        </label>
+
+        <button
+          className="md:col-span-3 px-4 py-2 rounded-xl bg-blue-600 text-white"
+          onClick={runSandbox}
+          disabled={loading}
+        >
+          {loading ? "Running sandbox..." : "Run Dry-Run Sandbox"}
+        </button>
+      </div>
+
+      {result && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl shadow p-4">
+            <div><strong>Run:</strong> {result.sandboxRunId}</div>
+            <div><strong>Status:</strong> {result.overallStatus}</div>
+            <div><strong>Started:</strong> {result.startedAt}</div>
+            <div><strong>Finished:</strong> {result.finishedAt}</div>
+          </div>
+
+          {result.steps.map((step: any) => (
+            <div key={step.stepId} className="bg-white rounded-2xl shadow p-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <div className="font-semibold">{step.stepName}</div>
+                  <div className="text-xs text-slate-500">{step.action}</div>
+                </div>
+                <div className={`px-3 py-1 rounded-full text-sm ${
+                  step.status === "safe"
+                    ? "bg-green-100 text-green-700"
+                    : step.status === "warning"
+                    ? "bg-yellow-100 text-yellow-700"
+                    : "bg-red-100 text-red-700"
+                }`}>
+                  {step.status}
+                </div>
+              </div>
+
+              <div className="mt-3 text-sm space-y-1">
+                <div><strong>Success:</strong> {String(step.success)}</div>
+                <div><strong>URL changed:</strong> {String(step.diff.urlChanged)}</div>
+                <div><strong>Title changed:</strong> {String(step.diff.titleChanged)}</div>
+                <div><strong>Input delta:</strong> {step.diff.inputCountDelta}</div>
+                <div><strong>Button delta:</strong> {step.diff.buttonCountDelta}</div>
+                <div><strong>Link delta:</strong> {step.diff.linkCountDelta}</div>
+                {step.errorMessage && <div className="text-red-700"><strong>Error:</strong> {step.errorMessage}</div>}
+              </div>
+
+              {step.warnings?.length > 0 && (
+                <div className="mt-3">
+                  <div className="font-medium mb-1">Warnings</div>
+                  <ul className="list-disc ml-5 text-sm">
+                    {step.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              <details className="mt-3">
+                <summary className="cursor-pointer font-medium">DOM snapshots</summary>
+                <pre className="mt-2 bg-slate-50 rounded-lg p-2 text-xs overflow-auto whitespace-pre-wrap">
+                  {JSON.stringify({ before: step.beforeDom, after: step.afterDom }, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+2G. Add to nav
+// client/src/config/nav.ts
+export const navItems = [
+  { label: "Template Studio", path: "/template-studio" },
+  { label: "Template Sandbox", path: "/template-sandbox" },
+  { label: "Replay Inspector", path: "/replay-inspector" },
+  { label: "Robotic Assist", path: "/robotics" },
+];
+Why this is the best next phase
+
+With these additions, your automation platform now has:
+
+recording
+editing
+healing
+secrets
+replay
+robotics scaffold
+sandbox testing
+
+That is the spine of a serious automation workbench.
+
+The next smartest phase after this would be:
+
+Template Promotion + Environment Registry
+
+So templates can move:
+
+draft
+sandbox-tested
+approved
+staging
+production
+
+with environment-specific bindings and publish gates.
+
+That is where the workshop becomes a factory.
+
+If you want, I’ll write that next as:
+Environment Registry + Promotion Pipeline + Release Approval Engine
+
+Voice chat ended
