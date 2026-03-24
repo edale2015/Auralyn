@@ -276,6 +276,10 @@ import queueRoutes from "./queue/queueRoutes";
 import { initControlTowerSocket } from "./controlTower/socket";
 import { startAnomalyEngine } from "./controlTower/anomalyEngine";
 import { startAlertEngine } from "./monitoring/alertEngine";
+import { startGovernanceLoop } from "./governance/auditAgent";
+import { startTwinSync } from "./twin/digitalTwin";
+import { startPredictiveLoop } from "./predictive/predictiveEngine";
+import resilientRoutes from "./routes/resilientRoutes";
 import { startSecretRotation } from "./config/secretRotation";
 import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
@@ -627,6 +631,7 @@ app.use("/api/shared-views", sharedViewsRoutes);
 app.use("/api/signed-board-exports", signedBoardExportsRoutes);
 app.use("/api/benchmark-trends", benchmarkTrendsRoutes);
 app.use("/api/monitoring", systemMonitoringRoutes);
+app.use("/api/resilient", resilientRoutes);
 app.use("/api/chaos", chaosRoutes);
 app.use("/api/rwe", rweRoutes);
 app.use("/api/adaptive-mapping", adaptiveMappingRoutes);
@@ -873,6 +878,9 @@ app.use((req, res, next) => {
       startNegotiationWorker(60_000);
       startAnomalyEngine(5000);
       startAlertEngine(10_000);
+      startGovernanceLoop(15_000);
+      startTwinSync(1_000);
+      startPredictiveLoop(5_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
     },
   );

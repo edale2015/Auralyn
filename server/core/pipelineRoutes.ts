@@ -3,6 +3,8 @@ import { runFullPipeline } from "./masterClinicalPipeline";
 import { isForcedEscalation } from "../safety/globalSafety";
 import { runAllTests, STANDARD_TEST_CASES } from "../test/testHarness";
 import { saveCase } from "../db/caseRepository";
+import { analyzeFailure, applyFix } from "../ai/autoDebugger";
+import { recordSREEvent } from "../sre/slaEngine";
 
 const router = Router();
 
@@ -55,13 +57,17 @@ router.post("/run", async (req, res) => {
       }).catch((e: Error) => console.error("[Pipeline] saveCase failed:", e.message));
     }
 
+    recordSREEvent(true);
     return res.json({ ok: true, result });
   } catch (e: any) {
+    recordSREEvent(false);
     if (isForcedEscalation(e)) {
       return res.status(200).json({ ok: true, result: { escalated: true, reason: e.reason } });
     }
-    console.error("[Pipeline] Unhandled error:", e?.message);
-    return res.status(500).json({ ok: false, error: e?.message ?? "Internal error" });
+    const analysis = await analyzeFailure(e, { caseId: req.body?.caseId });
+    await applyFix(analysis.suggestedFix, { caseId: req.body?.caseId });
+    console.error("[Pipeline] Unhandled error:", e?.message, "| fix:", analysis.suggestedFix.type);
+    return res.status(500).json({ ok: false, error: e?.message ?? "Internal error", suggestedFix: analysis.suggestedFix.type });
   }
 });
 

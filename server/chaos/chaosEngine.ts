@@ -86,3 +86,30 @@ export async function maybeDelay(scenario: ChaosScenario = "latency_spike", dela
     await new Promise((r) => setTimeout(r, delayMs));
   }
 }
+
+export async function withChaos<T>(fn: () => Promise<T>, probability = 0.05): Promise<T> {
+  if (state.enabled && Math.random() < probability) {
+    const type: ChaosScenario = "high_error_rate";
+    state.injectionLog.push({ type, injectedAt: Date.now() });
+    emitEvent({ type: "CHAOS_INJECTED", payload: { action: "withChaos_error", at: new Date().toISOString() } });
+    throw new Error("Chaos: injected failure");
+  }
+  return fn();
+}
+
+let _scheduler: ReturnType<typeof setInterval> | null = null;
+
+export function startChaosScheduler(intervalMs = 60_000): void {
+  if (_scheduler) return;
+  _scheduler = setInterval(() => {
+    if (state.enabled && isChaosActive("latency_spike")) {
+      console.log("[Chaos] Scheduled latency injection");
+      emitEvent({ type: "CHAOS_INJECTED", payload: { action: "scheduled_latency", at: new Date().toISOString() } });
+    }
+  }, intervalMs);
+  console.log(`[Chaos] Scheduler started (interval=${intervalMs}ms)`);
+}
+
+export function stopChaosScheduler(): void {
+  if (_scheduler) { clearInterval(_scheduler); _scheduler = null; }
+}
