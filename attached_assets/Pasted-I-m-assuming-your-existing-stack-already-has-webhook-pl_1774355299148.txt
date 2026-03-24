@@ -1,0 +1,595 @@
+I’m assuming your existing stack already has webhook plumbing and multi-channel routing foundations. The code below slots into that world rather than bulldozing it.
+
+Architecture
+Patient channels
+Telegram bot
+WhatsApp webhook
+Shared backend flow
+normalize inbound message
+attach/create session
+run patient-safe flow
+send next question or escalate
+Physician alerts
+Telegram alert bot and/or WhatsApp alert target
+alerts on:
+physician review required
+high-risk deterioration
+workflow failure
+robot safety stop
+1. Channel config
+// server/channels/channelConfig.ts
+
+export const channelConfig = {
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN || "",
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
+  },
+  whatsapp: {
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || "",
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN || "",
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || "",
+  },
+  physicianAlerts: {
+    telegramChatId: process.env.PHYSICIAN_ALERT_TELEGRAM_CHAT_ID || "",
+    whatsappTo: process.env.PHYSICIAN_ALERT_WHATSAPP_TO || "",
+  },
+};
+# .env.example
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+WHATSAPP_VERIFY_TOKEN=
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+PHYSICIAN_ALERT_TELEGRAM_CHAT_ID=
+PHYSICIAN_ALERT_WHATSAPP_TO=
+PUBLIC_BASE_URL=
+2. Unified message model
+// server/channels/types.ts
+
+export type ChannelName = "telegram" | "whatsapp";
+
+export interface IncomingPatientMessage {
+  channel: ChannelName;
+  externalUserId: string;
+  externalMessageId?: string;
+  text?: string;
+  imageUrl?: string;
+  audioUrl?: string;
+  timestamp: number;
+  raw?: any;
+}
+
+export interface OutgoingMessage {
+  channel: ChannelName;
+  to: string;
+  text: string;
+}
+3. Session store for chat users
+// server/channels/sessionStore.ts
+
+type ChatSession = {
+  sessionId: string;
+  channel: "telegram" | "whatsapp";
+  externalUserId: string;
+  createdAt: number;
+  updatedAt: number;
+  state: "awaiting_consent" | "intake_ready" | "collecting" | "physician_review";
+  complaint?: string;
+  answers: Record<string, any>;
+};
+
+const sessions = new Map<string, ChatSession>();
+
+function key(channel: string, externalUserId: string) {
+  return `${channel}:${externalUserId}`;
+}
+
+export function getOrCreateSession(channel: "telegram" | "whatsapp", externalUserId: string): ChatSession {
+  const k = key(channel, externalUserId);
+  const existing = sessions.get(k);
+  if (existing) {
+    existing.updatedAt = Date.now();
+    return existing;
+  }
+
+  const created: ChatSession = {
+    sessionId: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    channel,
+    externalUserId,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    state: "awaiting_consent",
+    answers: {},
+  };
+
+  sessions.set(k, created);
+  return created;
+}
+
+export function saveSession(session: ChatSession) {
+  session.updatedAt = Date.now();
+  sessions.set(key(session.channel, session.externalUserId), session);
+}
+4. Chat-safe intake orchestrator
+
+This wraps your existing patient-safe flow.
+
+// server/channels/chatIntakeEngine.ts
+
+import { getOrCreateSession, saveSession } from "./sessionStore";
+import type { IncomingPatientMessage } from "./types";
+import { runPatientFlow } from "../patient/patientFlow";
+
+const supportedComplaints = [
+  "sore_throat",
+  "cough",
+  "uri",
+  "rash",
+  "uti_simple",
+];
+
+function parseComplaint(text?: string): string | undefined {
+  if (!text) return undefined;
+  const t = text.toLowerCase();
+
+  if (t.includes("throat")) return "sore_throat";
+  if (t.includes("cough")) return "cough";
+  if (t.includes("uti") || t.includes("burning urination")) return "uti_simple";
+  if (t.includes("rash")) return "rash";
+  if (t.includes("cold") || t.includes("uri")) return "uri";
+
+  return undefined;
+}
+
+export async function handleChatIntake(msg: IncomingPatientMessage) {
+  const session = getOrCreateSession(msg.channel, msg.externalUserId);
+  const text = (msg.text || "").trim();
+
+  if (session.state === "awaiting_consent") {
+    if (/^yes\b/i.test(text) || /i agree/i.test(text)) {
+      session.state = "intake_ready";
+      saveSession(session);
+      return {
+        text:
+          "Consent received. Please briefly describe your main problem, like sore throat, cough, rash, or burning urination.",
+      };
+    }
+
+    return {
+      text:
+        "Before we begin: this tool helps collect information for clinical review and may escalate you to a physician. If you agree, reply YES.",
+    };
+  }
+
+  if (session.state === "intake_ready") {
+    const complaint = parseComplaint(text);
+    if (!complaint || !supportedComplaints.includes(complaint)) {
+      return {
+        text:
+          "That concern needs physician review rather than self-service chat. A physician review flag has been created. If this is urgent or severe, seek immediate care.",
+        escalate: true,
+        escalationReason: "out_of_scope_chat_complaint",
+      };
+    }
+
+    session.complaint = complaint;
+    session.state = "collecting";
+    saveSession(session);
+
+    return {
+      text: firstQuestionForComplaint(complaint),
+    };
+  }
+
+  if (session.state === "collecting") {
+    captureAnswer(session, text);
+    saveSession(session);
+
+    if (!hasMinimumAnswers(session)) {
+      return {
+        text: nextQuestion(session),
+      };
+    }
+
+    const result = await runPatientFlow({
+      complaint: session.complaint,
+      answers: session.answers,
+      source: session.channel,
+      sessionId: session.sessionId,
+    });
+
+    if (result.status === "physician_review" || result.status === "physician_required") {
+      session.state = "physician_review";
+      saveSession(session);
+      return {
+        text:
+          "Your information has been sent for physician review. If you develop severe symptoms, trouble breathing, chest pain, confusion, or worsening illness, seek urgent care immediately.",
+        escalate: true,
+        escalationReason: result.status,
+        result,
+      };
+    }
+
+    return {
+      text: formatSafePatientPlan(result),
+      result,
+    };
+  }
+
+  return {
+    text:
+      "Your case is already queued for physician review. Please wait for follow-up instructions.",
+  };
+}
+
+function firstQuestionForComplaint(complaint: string) {
+  switch (complaint) {
+    case "sore_throat":
+      return "How many days have you had the sore throat? Do you have fever, cough, or swollen neck glands?";
+    case "cough":
+      return "How long have you had the cough? Any fever, shortness of breath, or chest pain?";
+    case "rash":
+      return "When did the rash start? Is it painful, itchy, or spreading? You may upload a photo.";
+    case "uti_simple":
+      return "Do you have burning with urination, urgency, frequency, fever, back pain, or vomiting?";
+    default:
+      return "Please describe your symptoms in one or two short sentences.";
+  }
+}
+
+function captureAnswer(session: any, text: string) {
+  const idx = Object.keys(session.answers).length + 1;
+  session.answers[`q${idx}`] = text;
+}
+
+function hasMinimumAnswers(session: any) {
+  return Object.keys(session.answers).length >= 2;
+}
+
+function nextQuestion(session: any) {
+  if (session.complaint === "sore_throat") {
+    return "Do you have cough, white spots on the tonsils, or tender neck nodes?";
+  }
+  if (session.complaint === "cough") {
+    return "Any history of asthma, COPD, or pneumonia? Any wheezing?";
+  }
+  if (session.complaint === "rash") {
+    return "Is there fever, facial swelling, mouth sores, or trouble breathing?";
+  }
+  if (session.complaint === "uti_simple") {
+    return "Any pregnancy, fever, flank pain, or blood in the urine?";
+  }
+  return "Anything else important about your symptoms?";
+}
+
+function formatSafePatientPlan(result: any) {
+  const recommendation = result?.plan?.recommendation || "supportive care";
+  return `Based on your answers, the next step is: ${recommendation}. If symptoms worsen or you develop red-flag symptoms, seek urgent care.`;
+}
+5. Telegram send/receive
+// server/channels/telegramClient.ts
+
+import fetch from "node-fetch";
+import { channelConfig } from "./channelConfig";
+
+export async function sendTelegramMessage(chatId: string, text: string) {
+  const url = `https://api.telegram.org/bot${channelConfig.telegram.botToken}/sendMessage`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Telegram send failed: ${res.status} ${body}`);
+  }
+
+  return res.json();
+}
+// server/routes/telegramRoutes.ts
+
+import express from "express";
+import { handleChatIntake } from "../channels/chatIntakeEngine";
+import { sendTelegramMessage } from "../channels/telegramClient";
+import { sendPhysicianAlert } from "../alerts/physicianAlertService";
+
+export const telegramRouter = express.Router();
+
+telegramRouter.post("/api/webhooks/telegram/:secret", async (req, res) => {
+  try {
+    const secret = req.params.secret;
+    if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const update = req.body;
+    const message = update?.message;
+    if (!message?.chat?.id) return res.json({ ok: true, ignored: true });
+
+    const reply = await handleChatIntake({
+      channel: "telegram",
+      externalUserId: String(message.chat.id),
+      externalMessageId: String(message.message_id || ""),
+      text: message.text,
+      timestamp: Date.now(),
+      raw: update,
+    });
+
+    await sendTelegramMessage(String(message.chat.id), reply.text);
+
+    if (reply.escalate) {
+      await sendPhysicianAlert({
+        type: "patient_escalation",
+        channel: "telegram",
+        patientExternalUserId: String(message.chat.id),
+        summary: reply.escalationReason || "physician_review",
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "telegram_webhook_failed" });
+  }
+});
+6. WhatsApp send/receive
+
+This assumes Meta Cloud API style webhook. If you are using Twilio WhatsApp, the parser changes slightly, but the shape is the same beast in a different hat.
+
+// server/channels/whatsappClient.ts
+
+import fetch from "node-fetch";
+import { channelConfig } from "./channelConfig";
+
+export async function sendWhatsAppMessage(to: string, text: string) {
+  const url = `https://graph.facebook.com/v20.0/${channelConfig.whatsapp.phoneNumberId}/messages`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${channelConfig.whatsapp.accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: text },
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`WhatsApp send failed: ${res.status} ${body}`);
+  }
+
+  return res.json();
+}
+// server/routes/whatsappRoutes.ts
+
+import express from "express";
+import { handleChatIntake } from "../channels/chatIntakeEngine";
+import { sendWhatsAppMessage } from "../channels/whatsappClient";
+import { sendPhysicianAlert } from "../alerts/physicianAlertService";
+
+export const whatsappRouter = express.Router();
+
+whatsappRouter.get("/api/webhooks/whatsapp", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+
+  return res.sendStatus(403);
+});
+
+whatsappRouter.post("/api/webhooks/whatsapp", async (req, res) => {
+  try {
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+    const msg = value?.messages?.[0];
+    if (!msg?.from) return res.json({ ok: true, ignored: true });
+
+    const text = msg?.text?.body || "";
+    const from = String(msg.from);
+
+    const reply = await handleChatIntake({
+      channel: "whatsapp",
+      externalUserId: from,
+      externalMessageId: String(msg.id || ""),
+      text,
+      timestamp: Date.now(),
+      raw: req.body,
+    });
+
+    await sendWhatsAppMessage(from, reply.text);
+
+    if (reply.escalate) {
+      await sendPhysicianAlert({
+        type: "patient_escalation",
+        channel: "whatsapp",
+        patientExternalUserId: from,
+        summary: reply.escalationReason || "physician_review",
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "whatsapp_webhook_failed" });
+  }
+});
+7. Physician alert service
+// server/alerts/physicianAlertService.ts
+
+import { channelConfig } from "../channels/channelConfig";
+import { sendTelegramMessage } from "../channels/telegramClient";
+import { sendWhatsAppMessage } from "../channels/whatsappClient";
+
+type AlertPayload = {
+  type: "patient_escalation" | "high_risk" | "timeline_alert" | "robot_safety_stop";
+  channel?: "telegram" | "whatsapp";
+  patientExternalUserId?: string;
+  caseId?: string;
+  summary: string;
+};
+
+export async function sendPhysicianAlert(payload: AlertPayload) {
+  const text = formatAlert(payload);
+
+  const tasks: Promise<any>[] = [];
+
+  if (channelConfig.physicianAlerts.telegramChatId) {
+    tasks.push(sendTelegramMessage(channelConfig.physicianAlerts.telegramChatId, text));
+  }
+
+  if (channelConfig.physicianAlerts.whatsappTo) {
+    tasks.push(sendWhatsAppMessage(channelConfig.physicianAlerts.whatsappTo, text));
+  }
+
+  await Promise.allSettled(tasks);
+}
+
+function formatAlert(payload: AlertPayload) {
+  return [
+    `🚨 Physician Alert`,
+    `Type: ${payload.type}`,
+    payload.caseId ? `Case: ${payload.caseId}` : null,
+    payload.channel ? `Source: ${payload.channel}` : null,
+    payload.patientExternalUserId ? `Patient channel ID: ${payload.patientExternalUserId}` : null,
+    `Summary: ${payload.summary}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+8. Trigger physician alerts from risk and timeline engines
+// server/alerts/autoAlertHooks.ts
+
+import { sendPhysicianAlert } from "./physicianAlertService";
+
+export async function onHighRiskDecision(caseId: string, riskScore: number) {
+  if (riskScore >= 0.7) {
+    await sendPhysicianAlert({
+      type: "high_risk",
+      caseId,
+      summary: `Risk score ${riskScore.toFixed(2)} exceeded threshold.`,
+    });
+  }
+}
+
+export async function onTimelineDeterioration(caseId: string, prediction: any) {
+  if (prediction?.prediction === "HIGH_RISK_DETERIORATION") {
+    await sendPhysicianAlert({
+      type: "timeline_alert",
+      caseId,
+      summary: `Predicted deterioration in ${prediction.timeframe}.`,
+    });
+  }
+}
+
+export async function onRobotSafetyStop(caseId: string, reason: string) {
+  await sendPhysicianAlert({
+    type: "robot_safety_stop",
+    caseId,
+    summary: reason,
+  });
+}
+9. Wire routes into server
+// server/index.ts
+
+import express from "express";
+import { telegramRouter } from "./routes/telegramRoutes";
+import { whatsappRouter } from "./routes/whatsappRoutes";
+
+const app = express();
+app.use(express.json({ limit: "10mb" }));
+
+app.use(telegramRouter);
+app.use(whatsappRouter);
+
+// ...existing routes...
+10. Recommended physician workflow
+Telegram / WhatsApp for physicians
+
+Use it for:
+
+escalation alerts
+urgent review notifications
+high-risk predictions
+robot safety stops
+Web dashboard for physicians
+
+Keep it as the main cockpit for:
+
+full chart review
+override
+audit trail
+robot controls
+replay
+
+Chat is a doorbell, not the whole house.
+
+11. 5 more recommendations to improve the application
+1. Structured red-flag quick replies for chat
+
+Right now, patients type free text. Add button-style quick replies or enumerated responses for:
+
+chest pain
+shortness of breath
+severe headache
+confusion
+pregnancy
+fever
+
+Why it matters: cleaner data, fewer missed hazards, less linguistic spaghetti.
+
+2. Media intake normalization
+
+Add image/audio upload support in Telegram and WhatsApp and route them into your multimodal engine automatically:
+
+rash photo
+throat photo
+cough audio
+breathing sound
+
+Why it matters: your multimodal layer becomes real instead of decorative.
+
+3. Physician one-tap actions from alerts
+
+Include deep links in alerts such as:
+
+Open case
+Approve plan
+Force review
+Mark emergency escalation
+
+Why it matters: fewer clicks, faster response, less alert fatigue sludge.
+
+4. Chat-specific safety copy and patient education templates
+
+Build complaint-specific safe outputs:
+
+viral URI home care
+sore throat red flags
+rash emergency warnings
+UTI escalation guidance
+
+Why it matters: the system becomes understandable, not just technically correct.
+
+5. Queue prioritization engine
+
+Sort physician review cases by:
+
+risk score
+deterioration prediction
+pediatric/elderly status
+unresolved alert count
+time waiting
+
+Why it matters: your dashboard stops being a pile of cases and becomes a true control tower.

@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import MobileContainer from "@/components/MobileContainer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { RefreshCw, CheckCircle2, AlertTriangle, ChevronRight, Activity, BarChart3, Cpu, User, Clock } from "lucide-react";
+import { RefreshCw, CheckCircle2, ChevronRight, Activity, BarChart3, Cpu, User, Clock, Zap } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -28,55 +28,107 @@ function timeAgo(iso: string): string {
 
 function CaseCard({ c, onApprove, onOverride }: { c: any; onApprove: () => void; onOverride: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [swipeX, setSwipeX] = useState(0);
+  const [swipeHint, setSwipeHint] = useState<"approve" | "override" | null>(null);
+  const touchStartX = useRef<number | null>(null);
   const riskLevel = c.triage ?? c.urgency ?? "routine";
 
+  function onTouchStart(e: React.TouchEvent) {
+    touchStartX.current = e.touches[0].clientX;
+  }
+  function onTouchMove(e: React.TouchEvent) {
+    if (touchStartX.current === null) return;
+    const dx = e.touches[0].clientX - touchStartX.current;
+    setSwipeX(Math.max(-80, Math.min(80, dx)));
+    setSwipeHint(dx > 30 ? "approve" : dx < -30 ? "override" : null);
+  }
+  function onTouchEnd() {
+    if (swipeX > 60) onApprove();
+    else if (swipeX < -60) onOverride();
+    setSwipeX(0);
+    setSwipeHint(null);
+    touchStartX.current = null;
+  }
+
+  const swipeStyle: React.CSSProperties = { transform: `translateX(${swipeX}px)`, transition: swipeX === 0 ? "transform 0.2s" : "none" };
+
   return (
-    <Card className="mb-3 border shadow-sm active:scale-[0.99] transition-transform" data-testid={`card-case-${c.id}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-2">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="font-semibold text-gray-900 text-sm" data-testid={`text-complaint-${c.id}`}>
-                {(c.complaint ?? c.complaints?.[0] ?? "Unknown").replace(/_/g, " ")}
-              </span>
-              <Badge className={`text-xs ${RISK_COLORS[riskLevel] ?? RISK_COLORS.routine}`}>
-                {riskLevel}
-              </Badge>
+    <div className="relative mb-3 overflow-hidden rounded-xl">
+      {swipeHint === "approve" && (
+        <div className="absolute inset-y-0 left-0 w-16 bg-teal-100 flex items-center justify-center rounded-l-xl">
+          <CheckCircle2 className="w-6 h-6 text-teal-700" />
+        </div>
+      )}
+      {swipeHint === "override" && (
+        <div className="absolute inset-y-0 right-0 w-16 bg-red-100 flex items-center justify-center rounded-r-xl">
+          <span className="text-red-700 text-xs font-bold">OVR</span>
+        </div>
+      )}
+      <Card
+        className="border shadow-sm"
+        style={swipeStyle}
+        data-testid={`card-case-${c.id}`}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        <CardContent className="p-4">
+          <div className="flex items-start justify-between mb-2">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-semibold text-gray-900 text-sm" data-testid={`text-complaint-${c.id}`}>
+                  {(c.complaint ?? c.complaints?.[0] ?? "Unknown").replace(/_/g, " ")}
+                </span>
+                <Badge className={`text-xs ${RISK_COLORS[riskLevel] ?? RISK_COLORS.routine}`}>
+                  {riskLevel}
+                </Badge>
+              </div>
+              <p className="text-xs text-gray-500">
+                {c.aiRecommendation ?? c.recommendation ?? "Pending AI assessment"}
+              </p>
             </div>
-            <p className="text-xs text-gray-500">
-              {c.aiRecommendation ?? c.recommendation ?? "Pending AI assessment"}
-            </p>
+            <button onClick={() => setExpanded(v => !v)} className="ml-2 p-1" data-testid={`button-expand-${c.id}`}>
+              <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? "rotate-90" : ""}`} />
+            </button>
           </div>
-          <button onClick={() => setExpanded(v => !v)} className="ml-2 p-1" data-testid={`button-expand-${c.id}`}>
-            <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? "rotate-90" : ""}`} />
-          </button>
-        </div>
 
-        {expanded && (
-          <div className="mt-2 space-y-1 text-xs text-gray-600 border-t pt-2">
-            {c.riskScore !== undefined && <div>Risk Score: <span className="font-medium">{(c.riskScore * 100).toFixed(0)}%</span></div>}
-            {c.patientAge && <div>Age: <span className="font-medium">{c.patientAge}</span></div>}
-            {c.aiDiagnosis && <div>AI Dx: <span className="font-medium">{c.aiDiagnosis}</span></div>}
-          </div>
-        )}
+          {expanded && (
+            <div className="mt-2 space-y-1 text-xs text-gray-600 border-t pt-2">
+              {c.riskScore !== undefined && (
+                <div>Risk Score: <span className="font-medium">{(c.riskScore * 100).toFixed(0)}%</span></div>
+              )}
+              {c.patientAge && <div>Age: <span className="font-medium">{c.patientAge}</span></div>}
+              {c.aiDiagnosis && <div>AI Dx: <span className="font-medium">{c.aiDiagnosis}</span></div>}
+            </div>
+          )}
 
-        <div className="flex items-center gap-2 mt-3">
-          <div className="flex items-center gap-1 text-xs text-gray-400">
-            <Clock className="w-3 h-3" />
-            {c.createdAt ? timeAgo(c.createdAt) : "Just now"}
+          <div className="flex items-center gap-2 mt-3">
+            <div className="flex items-center gap-1 text-xs text-gray-400">
+              <Clock className="w-3 h-3" />
+              {c.createdAt ? timeAgo(c.createdAt) : "Just now"}
+            </div>
+            <div className="flex-1" />
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs border-red-200 text-red-700 hover:bg-red-50"
+              onClick={onOverride}
+              data-testid={`button-override-${c.id}`}
+            >
+              Override
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 text-xs bg-teal-600 hover:bg-teal-700"
+              onClick={onApprove}
+              data-testid={`button-approve-${c.id}`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve
+            </Button>
           </div>
-          <div className="flex-1" />
-          <Button size="sm" variant="outline" className="h-8 text-xs border-red-200 text-red-700 hover:bg-red-50"
-            onClick={onOverride} data-testid={`button-override-${c.id}`}>
-            Override
-          </Button>
-          <Button size="sm" className="h-8 text-xs bg-teal-600 hover:bg-teal-700"
-            onClick={onApprove} data-testid={`button-approve-${c.id}`}>
-            <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -97,6 +149,7 @@ function MetricsTab() {
         { label: "Accuracy", value: perf ? `${(perf.accuracy * 100).toFixed(1)}%` : "—", color: "text-teal-700" },
         { label: "Override Rate", value: perf ? `${(perf.overrideRate * 100).toFixed(1)}%` : "—", color: "text-orange-600" },
         { label: "Total Cases", value: perf?.totalCases ?? "—", color: "text-gray-900" },
+        { label: "Avg Latency", value: perf?.avgLatencyMs ? `${perf.avgLatencyMs}ms` : "—", color: "text-blue-700" },
         { label: "Recent Window", value: perf?.recentWindow ?? "—", color: "text-gray-900" },
       ].map(m => (
         <Card key={m.label}>
