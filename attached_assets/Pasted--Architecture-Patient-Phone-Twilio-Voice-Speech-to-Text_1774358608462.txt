@@ -1,0 +1,205 @@
+🧠 Architecture
+Patient Phone
+   ↓
+Twilio Voice
+   ↓
+Speech-to-Text (stream)
+   ↓
+AI Triage Agent (your system)
+   ↓
+Text-to-Speech
+   ↓
+Patient hears response
+⚙️ 1. Twilio Voice Webhook
+// server/voice/voiceWebhook.ts
+
+import express from "express";
+const router = express.Router();
+
+router.post("/api/voice/incoming", (req, res) => {
+  res.type("text/xml");
+  res.send(`
+    <Response>
+      <Say>Welcome. I will ask you a few questions to help triage your condition.</Say>
+      <Gather input="speech" action="/api/voice/process" method="POST">
+        <Say>Please briefly describe your problem.</Say>
+      </Gather>
+    </Response>
+  `);
+});
+
+export default router;
+🧠 2. Process Speech → AI → Response
+// server/voice/processVoice.ts
+
+import { runPatientFlow } from "../patient/patientFlow";
+
+export async function processVoiceInput(transcript: string) {
+
+  const result = await runPatientFlow({
+    complaint: transcript,
+    source: "voice"
+  });
+
+  return {
+    response: result.status === "physician_review"
+      ? "A physician will review your case shortly."
+      : "Based on your answers, supportive care is recommended."
+  };
+}
+🔁 3. Voice Response Loop
+router.post("/api/voice/process", async (req, res) => {
+  const speech = req.body.SpeechResult;
+
+  const result = await processVoiceInput(speech);
+
+  res.type("text/xml");
+  res.send(`
+    <Response>
+      <Say>${result.response}</Say>
+      <Gather input="speech" action="/api/voice/process">
+        <Say>Anything else you want to add?</Say>
+      </Gather>
+    </Response>
+  `);
+});
+🚨 4. Emergency Detection
+if (speech.includes("chest pain") || speech.includes("can't breathe")) {
+  return {
+    response: "This may be an emergency. Please hang up and call 911 immediately."
+  };
+}
+💥 Result
+patient calls like normal
+AI interviews them
+structured data goes into your system
+physician alerted if needed
+🤖 PART 2 — UI CONTROL AGENT (TYPE INTO SCREEN)
+
+This is what you asked:
+
+like Anthropic / OpenAI — control interfaces by typing and clicking
+
+We build a local UI agent that:
+
+types into fields
+clicks buttons
+reads screen
+works on:
+your browser
+your app
+even iPhone (via remote control layer)
+🧠 Architecture
+AI Agent
+   ↓
+Instruction
+   ↓
+UI Controller
+   ↓
+Keyboard + Mouse Automation
+   ↓
+Screen State Feedback
+⚙️ 1. Core UI Action Engine
+// server/uiAgent/uiController.ts
+
+import robot from "robotjs";
+
+export function typeText(text: string) {
+  robot.typeString(text);
+}
+
+export function click(x: number, y: number) {
+  robot.moveMouse(x, y);
+  robot.mouseClick();
+}
+
+export function pressEnter() {
+  robot.keyTap("enter");
+}
+🧠 2. AI Instruction Parser
+// server/uiAgent/actionParser.ts
+
+export function parseInstruction(instruction: string) {
+  if (instruction.includes("type")) {
+    return { action: "type", value: instruction.replace("type", "") };
+  }
+
+  if (instruction.includes("click")) {
+    return { action: "click", x: 500, y: 400 };
+  }
+
+  return { action: "unknown" };
+}
+🔁 3. Execute Actions
+// server/uiAgent/execute.ts
+
+import { typeText, click } from "./uiController";
+
+export function executeAction(action: any) {
+  if (action.action === "type") {
+    typeText(action.value);
+  }
+
+  if (action.action === "click") {
+    click(action.x, action.y);
+  }
+}
+🧠 4. Screen Feedback (basic)
+// server/uiAgent/screen.ts
+
+import screenshot from "screenshot-desktop";
+
+export async function captureScreen() {
+  return await screenshot({ format: "png" });
+}
+📱 iPHONE CONTROL (REALITY)
+
+Direct control of iPhone UI is restricted.
+
+But you can do this instead:
+
+Option A — Web App Control (BEST)
+your system runs in browser
+AI types into fields (JS DOM control)
+document.querySelector("input").value = "Hello";
+Option B — Remote Control via Mac
+use robotjs on Mac
+mirror iPhone screen
+control via coordinates
+Option C — Telegram/WhatsApp UI proxy
+AI sends structured messages
+user taps buttons
+acts like UI
+🧠 5. HIGH-LEVEL AI UI AGENT
+// server/uiAgent/aiController.ts
+
+import { parseInstruction } from "./actionParser";
+import { executeAction } from "./execute";
+
+export function runUIAgent(instruction: string) {
+  const action = parseInstruction(instruction);
+  executeAction(action);
+}
+💥 WHAT THIS UNLOCKS
+
+You now have:
+
+📞 Voice Agent
+patients call
+AI triages
+feeds system
+🤖 UI Agent
+fills forms automatically
+interacts with dashboards
+can assist physician workflows
+📱 iPhone Strategy
+browser-based control
+chat-based UI
+optional mirrored control
+⚡ REALITY CHECK (IMPORTANT)
+
+This is powerful, but:
+
+UI automation must be controlled
+voice triage must stay scoped
+physician always supervises
