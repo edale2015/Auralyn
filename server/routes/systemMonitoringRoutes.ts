@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { requireRole } from "../middleware/requireRole";
 import { getMetrics, resetMetrics } from "../monitoring/metricsStore";
+import { detectAnomaly } from "../monitoring/anomalyDetector";
+import { getAlertCount } from "../monitoring/alertEngine";
 import { getAuditLog } from "../middleware/auditMiddleware";
 import { runHighScaleSimulations } from "../engines/highScaleSimulationEngine";
 import { getSystemHealth, getRecentEngineLogs, logEngineStatus } from "../monitoring/systemMonitor";
@@ -255,6 +257,50 @@ router.get("/perf", requireRole(["admin", "physician"]), async (_req: Request, r
 router.post("/cache/invalidate", auth, (_req: Request, res: Response) => {
   invalidateTriageCache();
   res.json({ ok: true, message: "Triage response cache cleared" });
+});
+
+router.get("/dashboard", (_req: Request, res: Response) => {
+  const result = detectAnomaly();
+  res.json({
+    metrics: result.metrics,
+    anomalies: result.anomalies,
+    severity: result.severity,
+    status: result.anomalies.length ? "DEGRADED" : "HEALTHY",
+    alertsFired: getAlertCount(),
+    checkedAt: result.checkedAt,
+  });
+});
+
+router.get("/prometheus", (_req: Request, res: Response) => {
+  const m = getMetrics();
+  res.set("Content-Type", "text/plain; version=0.0.4");
+  res.send(
+    [
+      "# HELP latency_avg Average request latency in milliseconds",
+      "# TYPE latency_avg gauge",
+      `latency_avg ${m.avgLatency}`,
+      "",
+      "# HELP latency_p95 95th percentile request latency in milliseconds",
+      "# TYPE latency_p95 gauge",
+      `latency_p95 ${m.p95Latency}`,
+      "",
+      "# HELP error_rate Request error rate (0-1)",
+      "# TYPE error_rate gauge",
+      `error_rate ${m.errorRate}`,
+      "",
+      "# HELP total_requests Total requests processed",
+      "# TYPE total_requests counter",
+      `total_requests ${m.totalRequests}`,
+      "",
+      "# HELP total_errors Total request errors",
+      "# TYPE total_errors counter",
+      `total_errors ${m.totalErrors}`,
+      "",
+      "# HELP alerts_fired Total anomaly alerts fired",
+      "# TYPE alerts_fired counter",
+      `alerts_fired ${getAlertCount()}`,
+    ].join("\n")
+  );
 });
 
 export default router;

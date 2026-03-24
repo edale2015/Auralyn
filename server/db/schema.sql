@@ -201,3 +201,43 @@ CREATE TABLE IF NOT EXISTS automation_credentials (
 );
 
 CREATE INDEX IF NOT EXISTS idx_automation_credentials_key ON automation_credentials (credential_key);
+
+-- Clinical Case Persistence (Postgres source of truth + Redis cache)
+CREATE TABLE IF NOT EXISTS cases (
+  case_id TEXT PRIMARY KEY,
+  complaint TEXT NOT NULL,
+  diagnosis TEXT,
+  risk_score FLOAT,
+  physician TEXT,
+  price FLOAT,
+  billing_code TEXT,
+  disposition TEXT,
+  malpractice_risk FLOAT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS physicians (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  specialty TEXT,
+  performance FLOAT DEFAULT 1.0,
+  active_cases INT DEFAULT 0,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS claims (
+  claim_id TEXT PRIMARY KEY,
+  case_id TEXT REFERENCES cases(case_id) ON DELETE SET NULL,
+  payer TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  amount FLOAT,
+  billing_code TEXT,
+  submitted_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cases_created ON cases (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cases_risk ON cases (risk_score DESC);
+CREATE INDEX IF NOT EXISTS idx_claims_payer_status ON claims (payer, status);
+CREATE INDEX IF NOT EXISTS idx_claims_case ON claims (case_id);

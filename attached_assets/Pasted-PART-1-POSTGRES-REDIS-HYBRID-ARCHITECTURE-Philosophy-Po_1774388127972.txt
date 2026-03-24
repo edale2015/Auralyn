@@ -1,0 +1,232 @@
+PART 1 — POSTGRES + REDIS HYBRID ARCHITECTURE
+🧠 Philosophy
+Postgres → source of truth (durable, relational)
+Redis → speed (cache, pub/sub, queues)
+📁 server/db/postgres.ts
+import { Pool } from "pg";
+
+export const pg = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20
+});
+📁 server/db/schema.sql
+CREATE TABLE cases (
+  case_id TEXT PRIMARY KEY,
+  complaint TEXT,
+  diagnosis TEXT,
+  risk_score FLOAT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE physicians (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  specialty TEXT,
+  performance FLOAT,
+  active_cases INT
+);
+
+CREATE TABLE claims (
+  claim_id TEXT PRIMARY KEY,
+  payer TEXT,
+  status TEXT,
+  amount FLOAT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+📁 Case Persistence (Postgres + Redis cache)
+import { pg } from "./postgres";
+import { redis } from "../state/redisClient";
+
+export async function saveCase(caseData: any) {
+  await pg.query(
+    `INSERT INTO cases (case_id, complaint, diagnosis, risk_score)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (case_id) DO UPDATE SET diagnosis=$3`,
+    [
+      caseData.caseId,
+      caseData.complaint,
+      caseData.diagnosis,
+      caseData.riskScore
+    ]
+  );
+
+  await redis.set(`case:${caseData.caseId}`, JSON.stringify(caseData));
+}
+📁 Read-through Cache
+export async function getCase(caseId: string) {
+  const cached = await redis.get(`case:${caseId}`);
+  if (cached) return JSON.parse(cached);
+
+  const res = await pg.query(
+    `SELECT * FROM cases WHERE case_id=$1`,
+    [caseId]
+  );
+
+  if (!res.rows.length) return null;
+
+  await redis.set(`case:${caseId}`, JSON.stringify(res.rows[0]));
+
+  return res.rows[0];
+}
+📁 Redis roles
+// Redis is now used for:
+- WebSocket pub/sub
+- caching
+- queues
+- rate limiting
+☁️ PART 2 — HORIZONTAL SCALING (FLY + AWS)
+🪶 Fly.io Autoscale Config
+
+📁 deploy/fly.toml
+
+[services.concurrency]
+  type = "connections"
+  hard_limit = 200
+  soft_limit = 150
+
+[[services]]
+  internal_port = 5000
+
+[metrics]
+  port = 9091
+  path = "/metrics"
+⚡ Fly Autoscale Script
+
+📁 deploy/fly-scale.ts
+
+import { execSync } from "child_process";
+
+export function scaleFly(instances: number) {
+  execSync(`flyctl scale count ${instances}`);
+}
+☁️ AWS ECS Autoscaling
+
+📁 infra/autoscale.ts
+
+import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as appscaling from "aws-cdk-lib/aws-applicationautoscaling";
+
+export function attachAutoScaling(service: ecs.FargateService) {
+  const scaling = service.autoScaleTaskCount({
+    minCapacity: 2,
+    maxCapacity: 20
+  });
+
+  scaling.scaleOnCpuUtilization("CpuScaling", {
+    targetUtilizationPercent: 60
+  });
+
+  scaling.scaleOnMemoryUtilization("MemScaling", {
+    targetUtilizationPercent: 70
+  });
+}
+📁 Load-based Scaling Hook
+import { getAllRooms } from "../state/rooms";
+
+export function evaluateScale() {
+  const rooms = getAllRooms();
+
+  const highRisk = rooms.filter(r => r.riskScore > 0.7).length;
+
+  if (highRisk > 10) {
+    scaleFly(5);
+  }
+}
+📊 PART 3 — LIVE MONITORING + ANOMALY DETECTION
+
+This is your system nervous system
+
+📁 server/monitoring/metricsCollector.ts
+const metrics = {
+  latency: [] as number[],
+  errors: 0,
+  requests: 0
+};
+
+export function recordRequest(latency: number, error = false) {
+  metrics.requests++;
+  metrics.latency.push(latency);
+
+  if (error) metrics.errors++;
+}
+
+export function getMetrics() {
+  const avgLatency =
+    metrics.latency.reduce((a, b) => a + b, 0) /
+    (metrics.latency.length || 1);
+
+  return {
+    avgLatency,
+    errorRate: metrics.errors / (metrics.requests || 1),
+    total: metrics.requests
+  };
+}
+📁 server/monitoring/anomalyDetector.ts
+export function detectAnomaly(metrics: any) {
+  const anomalies = [];
+
+  if (metrics.avgLatency > 2000) {
+    anomalies.push("HIGH_LATENCY");
+  }
+
+  if (metrics.errorRate > 0.05) {
+    anomalies.push("HIGH_ERROR_RATE");
+  }
+
+  return anomalies;
+}
+📁 Alert Engine
+import { sendPhysicianAlert } from "../alerts/physicianAlertService";
+
+export async function handleAnomalies() {
+  const metrics = getMetrics();
+  const anomalies = detectAnomaly(metrics);
+
+  if (anomalies.length) {
+    await sendPhysicianAlert({
+      caseId: "system",
+      priority: "HIGH",
+      reason: anomalies.join(", ")
+    });
+  }
+}
+🔄 Monitoring Worker
+setInterval(async () => {
+  await handleAnomalies();
+}, 10000);
+🖥️ PART 4 — MONITORING DASHBOARD API
+router.get("/monitoring", (req, res) => {
+  const metrics = getMetrics();
+  const anomalies = detectAnomaly(metrics);
+
+  res.json({
+    metrics,
+    anomalies,
+    status: anomalies.length ? "DEGRADED" : "HEALTHY"
+  });
+});
+🧠 PART 5 — OPTIONAL: PROMETHEUS EXPORT
+router.get("/metrics", (req, res) => {
+  const m = getMetrics();
+
+  res.send(`
+# HELP latency_avg Average latency
+latency_avg ${m.avgLatency}
+
+# HELP error_rate Error rate
+error_rate ${m.errorRate}
+`);
+});
+🧬 FINAL ARCHITECTURE (NOW)
+DATA LAYER
+Postgres → truth
+Redis → speed + sync
+COMPUTE
+Fly.io (edge scaling)
+AWS ECS (heavy workloads)
+CONTROL
+Queue system (BullMQ)
+Pub/Sub sync (Redis)
+OBSERVABILITY
+metrics + anomaly detection
+alert system integration

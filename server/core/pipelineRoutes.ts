@@ -2,6 +2,7 @@ import { Router } from "express";
 import { runFullPipeline } from "./masterClinicalPipeline";
 import { isForcedEscalation } from "../safety/globalSafety";
 import { runAllTests, STANDARD_TEST_CASES } from "../test/testHarness";
+import { saveCase } from "../db/caseRepository";
 
 const router = Router();
 
@@ -38,6 +39,22 @@ router.post("/run", async (req, res) => {
       vitals,
       answers,
     });
+
+    if (!("escalated" in result && result.escalated)) {
+      const pipelineResult = result as any;
+      saveCase({
+        caseId: id,
+        complaint,
+        diagnosis: pipelineResult.disposition ?? complaint,
+        riskScore: pipelineResult.systemRisk ?? null,
+        physician: pipelineResult.physician ?? null,
+        price: pipelineResult.price ?? null,
+        billingCode: pipelineResult.billingCode ?? null,
+        disposition: pipelineResult.disposition ?? null,
+        malpracticeRisk: pipelineResult.malpracticeRisk ?? null,
+      }).catch((e: Error) => console.error("[Pipeline] saveCase failed:", e.message));
+    }
+
     return res.json({ ok: true, result });
   } catch (e: any) {
     if (isForcedEscalation(e)) {

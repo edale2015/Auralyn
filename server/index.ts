@@ -275,6 +275,7 @@ import visionRoutes from "./vision/visionRoutes";
 import queueRoutes from "./queue/queueRoutes";
 import { initControlTowerSocket } from "./controlTower/socket";
 import { startAnomalyEngine } from "./controlTower/anomalyEngine";
+import { startAlertEngine } from "./monitoring/alertEngine";
 import { startSecretRotation } from "./config/secretRotation";
 import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { initTraceStore } from "./traces/traceStore";
@@ -871,6 +872,7 @@ app.use((req, res, next) => {
       startOptimizerLoop(60_000);
       startNegotiationWorker(60_000);
       startAnomalyEngine(5000);
+      startAlertEngine(10_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
     },
   );
