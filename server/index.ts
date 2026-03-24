@@ -67,6 +67,9 @@ import protocolRoutes from "./routes/protocolRoutes";
 import deviceRoutes from "./routes/deviceRoutes";
 import { handleTwilioMediaStream, handleTwilioStatus } from "./voice/twilioVoiceFull";
 import { initWebRTCServer } from "./realtime/webrtcServer";
+import orchestrationRoutes from "./routes/orchestrationRoutes";
+import protocolLearningRoutes from "./routes/protocolLearningRoutes";
+import { initOrchestrationSocket } from "./orchestration/orchestrationSocket";
 import { questionImpactDebugRouter } from "./routes/questionImpactDebug";
 import { outcomeCaptureRouter } from "./routes/outcomeCapture";
 import { complaintQADashboardRouter } from "./routes/complaintQADashboard";
@@ -439,6 +442,8 @@ app.use("/api/protocol", protocolRoutes);
 app.use("/api/device", deviceRoutes);
 app.post("/api/voice/stream", handleTwilioMediaStream);
 app.post("/api/voice/status", handleTwilioStatus);
+app.use("/api/orchestration", orchestrationRoutes);
+app.use("/api/protocol-learning", protocolLearningRoutes);
 app.use("/api/questionImpactDebug", questionImpactDebugRouter);
 app.use("/api/outcomeCapture", outcomeCaptureRouter);
 app.use("/api/complaintQADashboard", complaintQADashboardRouter);
@@ -820,6 +825,7 @@ app.use((req, res, next) => {
       initControlTowerSocket(httpServer);
       initRealtimeGateway(httpServer);
       initWebRTCServer(httpServer);
+      initOrchestrationSocket(httpServer);
       startAnomalyEngine(5000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
     },
