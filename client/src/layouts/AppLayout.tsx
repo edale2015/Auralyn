@@ -14,6 +14,7 @@ import {
   PlayCircle,
   Zap,
   Eye,
+  Smartphone,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -31,6 +32,7 @@ const NAV_ITEMS = [
   { path: ROUTES.MEMORY_EXPLORER, label: "Memory Explorer", icon: BrainCircuit },
   { path: ROUTES.ROBOT_ADVANCED, label: "Robot Advanced", icon: Cpu },
   { path: ROUTES.ROBOT_CAMERA, label: "Robot Vision", icon: Eye },
+  { path: ROUTES.PHYSICIAN_MOBILE, label: "Mobile Dashboard", icon: Smartphone },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

@@ -16,4 +16,5 @@ export const ROUTES = {
   MEMORY_EXPLORER: "/memory-explorer",
   ROBOT_ADVANCED: "/robot-advanced",
   ROBOT_CAMERA: "/robot-camera",
+  PHYSICIAN_MOBILE: "/physician-mobile",
 };

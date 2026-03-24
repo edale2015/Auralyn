@@ -21,6 +21,8 @@ import { mapBilling, getBillingCodes } from "../revenue/billing";
 import { calculateRevenue, getRevenueSummary, trackCase } from "../revenue/revenueTracker";
 import { optimizeRevenue } from "../revenue/optimizer";
 import { aggregateModels, distribute, getModelHistory } from "../network/globalAggregator";
+import { runSafeAutonomous } from "../brain/autonomousSafe";
+import { checkAutonomy } from "../clinical/autonomyGate";
 
 const router = express.Router();
 
@@ -180,6 +182,30 @@ router.post("/network/aggregate", async (req, res) => {
 router.get("/network/history", async (_req, res) => {
   try {
     res.json({ ok: true, history: getModelHistory() });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/safe-run", async (req, res) => {
+  try {
+    const result = await runSafeAutonomous({
+      patientId: req.body.patientId,
+      complaints: req.body.complaints ?? [],
+      vitals: req.body.vitals,
+      history: req.body.history,
+      text: req.body.text,
+    });
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/autonomy-gate", async (req, res) => {
+  try {
+    const result = checkAutonomy(req.body);
+    res.json({ ok: true, result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
