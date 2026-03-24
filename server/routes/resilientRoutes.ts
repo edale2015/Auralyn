@@ -1,10 +1,12 @@
 import { Router, Request, Response } from "express";
 import { getRegionSummary, selectRegion, markRegionHealth } from "../infra/regionRegistry";
-import { getSREState, checkSLABreach, getErrorBudget } from "../sre/slaEngine";
+import { getSREState, checkSLABreach } from "../sre/slaEngine";
 import { getDebugLog } from "../ai/autoDebugger";
 import { getAgentSummary, registerAgent, heartbeat, setAgentHealth } from "../governance/agentRegistry";
 import { getAuditLog } from "../governance/auditAgent";
 import { getIncidents, getOpenIncidents, resolveIncident } from "../incident/incidentCommander";
+import { getTimeline, replayTimeline } from "../incident/timelineStore";
+import { simulateNYCOutage, recoverNYCRegion } from "../chaos/outageSimulation";
 import { getTwin } from "../twin/digitalTwin";
 import { predictFailure } from "../predictive/predictiveEngine";
 import { getMetrics } from "../monitoring/metricsStore";
@@ -90,6 +92,29 @@ router.get("/twin", (_req: Request, res: Response) => {
 
 router.get("/predict", (_req: Request, res: Response) => {
   res.json({ ok: true, prediction: predictFailure() });
+});
+
+router.get("/timeline", (_req: Request, res: Response) => {
+  res.json(getTimeline());
+});
+
+router.post("/simulate-outage", async (_req: Request, res: Response) => {
+  try {
+    const result = await simulateNYCOutage();
+    res.json({ ok: true, result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/recover-region", async (_req: Request, res: Response) => {
+  const result = await recoverNYCRegion();
+  res.json({ ok: true, result });
+});
+
+router.get("/replay-incidents", async (_req: Request, res: Response) => {
+  const result = await replayTimeline(100);
+  res.json(result);
 });
 
 export default router;

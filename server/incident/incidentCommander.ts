@@ -1,6 +1,7 @@
 import { sendPhysicianAlert } from "../alerts/physicianAlertService";
 import { invalidateTriageCache } from "../cache/triageCache";
 import { rollbackDeployment } from "../sre/slaEngine";
+import { recordEvent } from "./timelineStore";
 
 export type IncidentSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 export type IncidentStatus = "open" | "mitigating" | "resolved";
@@ -40,6 +41,7 @@ export function detectIncident(anomalies: string[]): Incident | null {
   incidents.push(incident);
   if (incidents.length > 100) incidents.shift();
   console.error(`[IncidentCommander] New incident ${incident.id}: ${incident.type} (${incident.severity})`);
+  recordEvent({ type: "INCIDENT", incidentId: incident.id, action: "detected", severity: incident.severity, detail: incident.type });
   return incident;
 }
 
@@ -71,6 +73,7 @@ export async function runIncidentPlaybook(incident: Incident): Promise<void> {
   incident.playbookActions = actions;
   incident.updatedAt = new Date().toISOString();
 
+  recordEvent({ type: "PLAYBOOK", incidentId: incident.id, action: actions.join(", "), severity: incident.severity });
   console.log(`[IncidentCommander] Playbook complete for ${incident.id}: ${actions.join(", ")}`);
 }
 
