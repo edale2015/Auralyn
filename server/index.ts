@@ -82,6 +82,8 @@ import contractRoutes, { startNegotiationWorker } from "./contracts/contractRout
 import financeRoutes from "./finance/financeRoutes";
 import regulatoryRoutes from "./regulatory/regulatoryRoutes";
 import workforceRoutes from "./workforce/workforceRoutes";
+import masterPipelineRoutes from "./core/pipelineRoutes";
+import jobRoutes from "./queue/jobRoutes";
 import { initOrchestrationSocket } from "./orchestration/orchestrationSocket";
 import { questionImpactDebugRouter } from "./routes/questionImpactDebug";
 import { outcomeCaptureRouter } from "./routes/outcomeCapture";
@@ -481,6 +483,10 @@ console.log("[Contracts] Autonomous insurer contracting pipeline at /api/contrac
 console.log("[Finance] IPO-level financial dashboard at /api/finance/*");
 console.log("[Regulatory] National licensing + compliance engine at /api/regulatory/*");
 console.log("[Workforce] AI physician workforce optimizer at /api/workforce/*");
+app.use("/api/pipeline", masterPipelineRoutes);
+app.use("/api/jobs", jobRoutes);
+console.log("[MasterPipeline] Full integrated clinical pipeline at /api/pipeline/*");
+console.log("[JobQueue] Retry-backed job queue (clinical_pipeline, credentialing, claim_submission) at /api/jobs/*");
 app.use("/api/questionImpactDebug", questionImpactDebugRouter);
 app.use("/api/outcomeCapture", outcomeCaptureRouter);
 app.use("/api/complaintQADashboard", complaintQADashboardRouter);
@@ -615,7 +621,6 @@ app.use("/api/executive-ops", executiveOpsRoutes);
 app.use("/api/legacy-mapper", legacyTabMapperRoutes);
 app.use("/api/integrations", clinicalIntegrationRoutes);
 app.use("/api/sheets-migration", googleSheetsMigrationRoutes);
-app.use("/api/pipeline", pipelineRoutes);
 app.use("/api/google-email", googleEmailRoutes);
 app.use("/api/shared-views", sharedViewsRoutes);
 app.use("/api/signed-board-exports", signedBoardExportsRoutes);
