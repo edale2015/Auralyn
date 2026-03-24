@@ -22,6 +22,16 @@ const incidents: Incident[] = [];
 export function detectIncident(anomalies: string[]): Incident | null {
   if (!anomalies.length) return null;
 
+  const type = anomalies.join(", ");
+
+  const existing = incidents.find(
+    (i) => i.status !== "resolved" && i.type === type
+  );
+  if (existing) {
+    existing.updatedAt = new Date().toISOString();
+    return existing;
+  }
+
   const severity: IncidentSeverity =
     anomalies.some((a) => a.includes("ERROR_RATE") || a.includes("BUDGET")) ? "CRITICAL" :
     anomalies.some((a) => a.includes("LATENCY")) ? "HIGH" :
@@ -29,7 +39,7 @@ export function detectIncident(anomalies: string[]): Incident | null {
 
   const incident: Incident = {
     id: `inc_${Date.now()}`,
-    type: anomalies.join(", "),
+    type,
     severity,
     status: "open",
     anomalies,

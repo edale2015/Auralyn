@@ -57,7 +57,7 @@ export function startTwinSync(intervalMs = 1_000): void {
       const openIncidents = getOpenIncidents().length;
 
       updateTwin({
-        activeCases: m.totalRequests,
+        activeCases: m.windowSize,
         avgLatency: m.avgLatency,
         p95Latency: m.p95Latency,
         errorRate: m.errorRate,

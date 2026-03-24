@@ -1,5 +1,6 @@
 import { detectAnomaly } from "./anomalyDetector";
 import { sendPhysicianAlert } from "../alerts/physicianAlertService";
+import { checkSLABreach, handleSLABreach } from "../sre/slaEngine";
 
 let alertTimer: ReturnType<typeof setInterval> | null = null;
 let lastAlertKey = "";
@@ -8,10 +9,13 @@ let alertCount = 0;
 async function handleAnomalies(): Promise<void> {
   const { anomalies, metrics, severity } = detectAnomaly();
 
+  const breach = checkSLABreach(metrics);
+  if (breach) {
+    await handleSLABreach(breach, metrics).catch(() => {});
+  }
+
   if (anomalies.length === 0) {
-    if (lastAlertKey !== "") {
-      lastAlertKey = "";
-    }
+    if (lastAlertKey !== "") lastAlertKey = "";
     return;
   }
 

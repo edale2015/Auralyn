@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { exec } from "child_process";
 import { sendPhysicianAlert } from "../alerts/physicianAlertService";
 
 export const SLA_CONFIG = {
@@ -44,11 +44,10 @@ export function rollbackDeployment(): void {
   breachLog.push({ type: "ROLLBACK", at: new Date().toISOString() });
   console.warn("[SRE] Triggering deployment rollback");
   if (process.env.NODE_ENV === "production") {
-    try {
-      execSync("flyctl releases rollback --yes", { timeout: 30_000 });
-    } catch (e: any) {
-      console.error("[SRE] Rollback exec failed:", e.message);
-    }
+    exec("flyctl releases rollback --yes", { timeout: 30_000 }, (err) => {
+      if (err) console.error("[SRE] Rollback exec failed:", err.message);
+      else console.log("[SRE] Rollback succeeded");
+    });
   } else {
     console.log("[SRE] Rollback skipped (non-production)");
   }

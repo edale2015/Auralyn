@@ -275,10 +275,11 @@ import visionRoutes from "./vision/visionRoutes";
 import queueRoutes from "./queue/queueRoutes";
 import { initControlTowerSocket } from "./controlTower/socket";
 import { startAnomalyEngine } from "./controlTower/anomalyEngine";
-import { startAlertEngine } from "./monitoring/alertEngine";
-import { startGovernanceLoop } from "./governance/auditAgent";
-import { startTwinSync } from "./twin/digitalTwin";
-import { startPredictiveLoop } from "./predictive/predictiveEngine";
+import { startAlertEngine, stopAlertEngine } from "./monitoring/alertEngine";
+import { startGovernanceLoop, stopGovernanceLoop } from "./governance/auditAgent";
+import { startTwinSync, stopTwinSync } from "./twin/digitalTwin";
+import { startPredictiveLoop, stopPredictiveLoop } from "./predictive/predictiveEngine";
+import { startChaosScheduler, stopChaosScheduler } from "./chaos/chaosEngine";
 import resilientRoutes from "./routes/resilientRoutes";
 import { startSecretRotation } from "./config/secretRotation";
 import { metricsMiddleware } from "./middleware/metricsMiddleware";
@@ -881,7 +882,24 @@ app.use((req, res, next) => {
       startGovernanceLoop(15_000);
       startTwinSync(1_000);
       startPredictiveLoop(5_000);
+      startChaosScheduler(60_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
+
+      const shutdown = (signal: string) => {
+        console.log(`[Shutdown] ${signal} received — stopping background engines`);
+        stopAlertEngine();
+        stopGovernanceLoop();
+        stopTwinSync();
+        stopPredictiveLoop();
+        stopChaosScheduler();
+        httpServer.close(() => {
+          console.log("[Shutdown] HTTP server closed");
+          process.exit(0);
+        });
+        setTimeout(() => process.exit(1), 10_000);
+      };
+      process.once("SIGTERM", () => shutdown("SIGTERM"));
+      process.once("SIGINT",  () => shutdown("SIGINT"));
     },
   );
 })();

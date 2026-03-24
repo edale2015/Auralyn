@@ -18,12 +18,31 @@ export interface CaseRecord {
 export async function saveCase(caseData: CaseRecord): Promise<void> {
   try {
     await pg.query(
-      `INSERT INTO cases (case_id, complaint, diagnosis, risk_score)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO cases (
+         case_id, complaint, diagnosis, risk_score,
+         physician, price, billing_code, disposition, malpractice_risk
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (case_id) DO UPDATE SET
-         diagnosis = EXCLUDED.diagnosis,
-         risk_score = EXCLUDED.risk_score`,
-      [caseData.caseId, caseData.complaint, caseData.diagnosis ?? caseData.complaint, caseData.riskScore ?? null]
+         diagnosis        = EXCLUDED.diagnosis,
+         risk_score       = EXCLUDED.risk_score,
+         physician        = EXCLUDED.physician,
+         price            = EXCLUDED.price,
+         billing_code     = EXCLUDED.billing_code,
+         disposition      = EXCLUDED.disposition,
+         malpractice_risk = EXCLUDED.malpractice_risk,
+         updated_at       = NOW()`,
+      [
+        caseData.caseId,
+        caseData.complaint,
+        caseData.diagnosis ?? caseData.complaint,
+        caseData.riskScore ?? null,
+        caseData.physician ?? null,
+        caseData.price ?? null,
+        caseData.billingCode ?? null,
+        caseData.disposition ?? null,
+        caseData.malpracticeRisk ?? null,
+      ]
     );
 
     const redis = await getRedisClient();
@@ -49,7 +68,9 @@ export async function getCase(caseId: string): Promise<CaseRecord | null> {
     }
 
     const res = await pg.query(
-      `SELECT case_id AS "caseId", complaint, diagnosis, risk_score AS "riskScore", created_at AS "createdAt"
+      `SELECT case_id AS "caseId", complaint, diagnosis, risk_score AS "riskScore",
+              physician, price, billing_code AS "billingCode", disposition,
+              malpractice_risk AS "malpracticeRisk", created_at AS "createdAt"
        FROM cases WHERE case_id = $1`,
       [caseId]
     );
@@ -71,7 +92,9 @@ export async function getCase(caseId: string): Promise<CaseRecord | null> {
 export async function listRecentCases(limit = 20): Promise<CaseRecord[]> {
   try {
     const res = await pg.query(
-      `SELECT case_id AS "caseId", complaint, diagnosis, risk_score AS "riskScore", created_at AS "createdAt"
+      `SELECT case_id AS "caseId", complaint, diagnosis, risk_score AS "riskScore",
+              physician, price, billing_code AS "billingCode", disposition,
+              malpractice_risk AS "malpracticeRisk", created_at AS "createdAt"
        FROM cases ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );

@@ -78,6 +78,8 @@ export function predictFailure(): PredictionResult {
 }
 
 let _loop: ReturnType<typeof setInterval> | null = null;
+let _lastAlertAt = 0;
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
 export function startPredictiveLoop(intervalMs = 5_000): void {
   if (_loop) return;
@@ -86,12 +88,16 @@ export function startPredictiveLoop(intervalMs = 5_000): void {
     const pred = predictFailure();
 
     if (pred.predicted && pred.confidence !== "low") {
-      console.warn("[Predictive] Failure predicted:", pred.reason);
-      await sendPhysicianAlert({
-        caseId: "system",
-        priority: "HIGH",
-        reason: `Predicted failure: ${pred.reason} (confidence=${pred.confidence})`,
-      }).catch(() => {});
+      const now = Date.now();
+      if (now - _lastAlertAt > ALERT_COOLDOWN_MS) {
+        _lastAlertAt = now;
+        console.warn("[Predictive] Failure predicted:", pred.reason);
+        await sendPhysicianAlert({
+          caseId: "system",
+          priority: "HIGH",
+          reason: `Predicted failure: ${pred.reason} (confidence=${pred.confidence})`,
+        }).catch(() => {});
+      }
     }
   }, intervalMs);
   console.log(`[Predictive] Engine started (interval=${intervalMs}ms)`);

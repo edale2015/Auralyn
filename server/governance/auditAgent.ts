@@ -1,4 +1,4 @@
-import { getAgents } from "./agentRegistry";
+import { getAgents, deregisterAgent } from "./agentRegistry";
 import { sendPhysicianAlert } from "../alerts/physicianAlertService";
 
 export type AuditFinding = {
@@ -10,6 +10,8 @@ export type AuditFinding = {
 
 const findingLog: AuditFinding[] = [];
 const STALE_MS = 60_000;
+const DEAD_MS = 5 * 60_000;
+const GRACE_MS = 30_000;
 
 export async function auditAgents(): Promise<AuditFinding[]> {
   const agents = getAgents();
@@ -18,7 +20,19 @@ export async function auditAgents(): Promise<AuditFinding[]> {
 
   for (const a of agents) {
     const lastSeen = new Date(a.lastSeenAt).getTime();
-    const stale = now - lastSeen > STALE_MS;
+    const registeredAt = new Date(a.registeredAt).getTime();
+    const ageMs = now - registeredAt;
+    const staleMs = now - lastSeen;
+
+    if (staleMs > DEAD_MS) {
+      deregisterAgent(a.id);
+      console.warn(`[Governance] Purged dead agent ${a.id} (silent for ${Math.round(staleMs / 60000)}m)`);
+      continue;
+    }
+
+    if (ageMs < GRACE_MS) continue;
+
+    const stale = staleMs > STALE_MS;
 
     if (!a.lastAction || stale) {
       findings.push({

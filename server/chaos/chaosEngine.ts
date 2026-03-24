@@ -91,7 +91,7 @@ export async function withChaos<T>(fn: () => Promise<T>, probability = 0.05): Pr
   if (state.enabled && Math.random() < probability) {
     const type: ChaosScenario = "high_error_rate";
     state.injectionLog.push({ type, injectedAt: Date.now() });
-    emitEvent({ type: "CHAOS_INJECTED", payload: { action: "withChaos_error", at: new Date().toISOString() } });
+    emitEvent({ type: "CHAOS_INJECTED", payload: { action: "withChaos_error", at: new Date().toISOString() }, timestamp: Date.now() });
     throw new Error("Chaos: injected failure");
   }
   return fn();

@@ -44,13 +44,6 @@ export async function simulateNYCOutage(): Promise<OutageResult> {
 
   if (incident) {
     incidentId = incident.id;
-    recordEvent({
-      type: "INCIDENT",
-      incidentId: incident.id,
-      action: "created",
-      severity: incident.severity,
-      detail: incident.type,
-    });
     await runIncidentPlaybook(incident);
     recordEvent({
       type: "INCIDENT",

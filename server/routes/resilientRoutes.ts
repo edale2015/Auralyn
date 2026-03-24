@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { getRegionSummary, selectRegion, markRegionHealth } from "../infra/regionRegistry";
+import { getRegionSummary, selectRegion, markRegionHealth, callWithFailover } from "../infra/regionRegistry";
 import { getSREState, checkSLABreach } from "../sre/slaEngine";
 import { getDebugLog } from "../ai/autoDebugger";
 import { getAgentSummary, registerAgent, heartbeat, setAgentHealth } from "../governance/agentRegistry";
@@ -29,8 +29,12 @@ router.get("/regions/best", (req: Request, res: Response) => {
 router.patch("/regions/:id/health", (req: Request, res: Response) => {
   const { id } = req.params;
   const { health, latencyMs } = req.body;
+  const VALID_HEALTH = ["healthy", "degraded", "down"] as const;
+  if (!VALID_HEALTH.includes(health)) {
+    return res.status(400).json({ ok: false, error: `health must be one of: ${VALID_HEALTH.join(", ")}` });
+  }
   markRegionHealth(id, health, latencyMs);
-  res.json({ ok: true, id, health });
+  return res.json({ ok: true, id, health });
 });
 
 router.get("/sre", (_req: Request, res: Response) => {
@@ -95,7 +99,18 @@ router.get("/predict", (_req: Request, res: Response) => {
 });
 
 router.get("/timeline", (_req: Request, res: Response) => {
-  res.json(getTimeline());
+  res.json({ ok: true, events: getTimeline(), total: getTimeline().length });
+});
+
+router.post("/failover-test", async (_req: Request, res: Response) => {
+  try {
+    const result = await callWithFailover(async (region) => {
+      return { region: region.id, latencyMs: region.latencyMs };
+    });
+    res.json({ ok: true, result });
+  } catch (e: any) {
+    res.status(503).json({ ok: false, error: e.message });
+  }
 });
 
 router.post("/simulate-outage", async (_req: Request, res: Response) => {
