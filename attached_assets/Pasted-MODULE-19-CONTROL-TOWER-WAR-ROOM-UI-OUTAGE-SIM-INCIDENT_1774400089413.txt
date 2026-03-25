@@ -1,0 +1,197 @@
+MODULE 19 — CONTROL TOWER (WAR ROOM UI + OUTAGE SIM + INCIDENT REPLAY)
+🖥️ 1. CONTROL TOWER UI (LIVE SYSTEM VIEW)
+📁 client/src/pages/ControlTower.tsx
+import { useEffect, useState } from "react";
+
+export default function ControlTower() {
+  const [twin, setTwin] = useState<any>({});
+  const [incidents, setIncidents] = useState<any[]>([]);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:5000/ws/orchestration");
+
+    ws.onopen = () => setConnected(true);
+
+    ws.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+
+      if (data.type === "twin") setTwin(data.payload);
+      if (data.type === "incidents") setIncidents(data.payload);
+    };
+
+    ws.onclose = () => setConnected(false);
+
+    return () => ws.close();
+  }, []);
+
+  return (
+    <div className="p-4 grid grid-cols-3 gap-4">
+      
+      {/* SYSTEM HEALTH */}
+      <div className="bg-gray-900 text-white p-4 rounded-xl">
+        <h2 className="text-xl font-bold">System Health</h2>
+        <p>Status: {twin.slaStatus}</p>
+        <p>Latency: {twin.avgLatency} ms</p>
+        <p>Error Rate: {twin.errorRate}</p>
+        <p>Active Cases: {twin.activeCases}</p>
+      </div>
+
+      {/* REGIONS */}
+      <div className="bg-gray-900 text-white p-4 rounded-xl">
+        <h2 className="text-xl font-bold">Regions</h2>
+        {twin.regionHealth?.map((r: any) => (
+          <div key={r.id}>
+            {r.name} — {r.health} ({r.latencyMs}ms)
+          </div>
+        ))}
+      </div>
+
+      {/* INCIDENTS */}
+      <div className="bg-gray-900 text-white p-4 rounded-xl">
+        <h2 className="text-xl font-bold">Incidents</h2>
+        {incidents.map(i => (
+          <div key={i.id} className="border p-2 my-1">
+            {i.type} — {i.severity} — {i.status}
+          </div>
+        ))}
+      </div>
+
+      {/* CONTROL BUTTONS */}
+      <div className="col-span-3 flex gap-4">
+        <button
+          className="bg-red-600 px-4 py-2 rounded"
+          onClick={() => fetch("/api/resilient/simulate-outage", { method: "POST" })}
+        >
+          Simulate NYC Outage
+        </button>
+
+        <button
+          className="bg-blue-600 px-4 py-2 rounded"
+          onClick={() => fetch("/api/resilient/replay-incidents")}
+        >
+          Replay Incidents
+        </button>
+      </div>
+
+      <div className="col-span-3 text-sm">
+        WebSocket: {connected ? "🟢 Connected" : "🔴 Disconnected"}
+      </div>
+    </div>
+  );
+}
+🔌 2. BACKEND — CONTROL TOWER FEED
+📁 server/ws/controlTowerFeed.ts
+import { getTwin } from "../twin/digitalTwin";
+import { getIncidents } from "../incident/incidentCommander";
+
+export function startControlTowerFeed(wss: any) {
+  wss.on("connection", (ws: any) => {
+    const interval = setInterval(() => {
+      ws.send(JSON.stringify({
+        type: "twin",
+        payload: getTwin()
+      }));
+
+      ws.send(JSON.stringify({
+        type: "incidents",
+        payload: getIncidents()
+      }));
+    }, 1000);
+
+    ws.on("close", () => clearInterval(interval));
+  });
+}
+💥 3. NYC OUTAGE SIMULATION (END-TO-END CHAOS)
+📁 server/chaos/outageSimulation.ts
+import { getRegions } from "../infra/regionRegistry";
+import { injectChaos } from "./chaosEngine";
+
+export async function simulateNYCOutage() {
+  const regions = getRegions();
+
+  const nyc = regions.find(r => r.id === "nyc");
+  if (!nyc) return;
+
+  nyc.health = "down";
+
+  // inject cascading failures
+  injectChaos("latency");
+  injectChaos("error");
+
+  return {
+    message: "NYC region outage simulated",
+    fallbackRegions: regions.filter(r => r.id !== "nyc")
+  };
+}
+📁 Route
+router.post("/simulate-outage", async (req, res) => {
+  const result = await simulateNYCOutage();
+  res.json({ ok: true, result });
+});
+🎬 4. INCIDENT TIMELINE + REPLAY
+📁 server/incident/timelineStore.ts
+const timeline: any[] = [];
+
+export function recordEvent(event: any) {
+  timeline.push({
+    ...event,
+    timestamp: Date.now()
+  });
+}
+
+export function getTimeline() {
+  return timeline;
+}
+📁 Hook everywhere
+recordEvent({
+  type: "INCIDENT",
+  incidentId,
+  action: "rollback"
+});
+📁 Replay Engine
+export async function replayTimeline() {
+  const events = getTimeline();
+
+  for (const e of events) {
+    console.log("Replaying:", e);
+
+    await new Promise(res => setTimeout(res, 300));
+  }
+
+  return { replayed: events.length };
+}
+📁 Route
+router.get("/replay-incidents", async (req, res) => {
+  const result = await replayTimeline();
+  res.json(result);
+});
+🧠 5. INCIDENT COMMANDER DASHBOARD (DETAIL VIEW)
+📁 client/src/components/IncidentTimeline.tsx
+import { useEffect, useState } from "react";
+
+export default function IncidentTimeline() {
+  const [events, setEvents] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/resilient/timeline")
+      .then(r => r.json())
+      .then(d => setEvents(d));
+  }, []);
+
+  return (
+    <div className="bg-black text-green-400 p-4 rounded">
+      <h2>Incident Timeline</h2>
+
+      {events.map((e, i) => (
+        <div key={i}>
+          {new Date(e.timestamp).toLocaleTimeString()} — {e.type} — {e.action}
+        </div>
+      ))}
+    </div>
+  );
+}
+🔌 Timeline API
+router.get("/timeline", (req, res) => {
+  res.json(getTimeline());
+});

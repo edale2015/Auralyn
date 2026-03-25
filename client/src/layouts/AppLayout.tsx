@@ -16,6 +16,7 @@ import {
   Eye,
   Smartphone,
   LayoutGrid,
+  Radio,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -34,7 +35,8 @@ const NAV_ITEMS = [
   { path: ROUTES.ROBOT_ADVANCED, label: "Robot Advanced", icon: Cpu },
   { path: ROUTES.ROBOT_CAMERA, label: "Robot Vision", icon: Eye },
   { path: ROUTES.PHYSICIAN_MOBILE, label: "Mobile Dashboard", icon: Smartphone },
-  { path: ROUTES.ORCHESTRATION, label: "Control Tower", icon: LayoutGrid },
+  { path: ROUTES.ORCHESTRATION, label: "Live Rooms", icon: LayoutGrid },
+  { path: ROUTES.CONTROL_TOWER, label: "War Room", icon: Radio },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

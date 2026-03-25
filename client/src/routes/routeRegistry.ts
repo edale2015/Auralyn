@@ -18,4 +18,5 @@ export const ROUTES = {
   ROBOT_CAMERA: "/robot-camera",
   PHYSICIAN_MOBILE: "/physician-mobile",
   ORCHESTRATION: "/orchestration",
+  CONTROL_TOWER: "/control-tower",
 };

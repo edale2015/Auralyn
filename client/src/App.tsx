@@ -42,6 +42,7 @@ import RobotControlAdvanced from "@/pages/RobotControlAdvanced";
 import RobotCamera from "@/pages/RobotCamera";
 import PhysicianMobile from "@/pages/PhysicianMobile";
 import OrchestrationDashboard from "@/pages/OrchestrationDashboard";
+import ControlTowerPage from "@/pages/ControlTowerPage";
 
 validateRoutes();
 
@@ -71,6 +72,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.ROBOT_CAMERA} component={RobotCamera} />
         <Route path={ROUTES.PHYSICIAN_MOBILE} component={PhysicianMobile} />
         <Route path={ROUTES.ORCHESTRATION} component={OrchestrationDashboard} />
+        <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
