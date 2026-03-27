@@ -53,7 +53,7 @@ export default function Login() {
     onSuccess: (result) => {
       if (result.ok) {
         toast({ title: "Login Successful", description: "Welcome back!" });
-        setLocation("/dashboard");
+        setLocation("/ops");
       } else {
         throw new Error(result.error || "Login failed");
       }
@@ -69,7 +69,7 @@ export default function Login() {
     },
     onSuccess: () => {
       toast({ title: "Login Successful", description: "Welcome!" });
-      setLocation("/admin");
+      setLocation("/ops");
     },
     onError: (error: Error) => {
       toast({ title: "Login Failed", description: error.message || "Invalid credentials", variant: "destructive" });
