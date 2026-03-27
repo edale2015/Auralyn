@@ -5,7 +5,12 @@ let redisClient: any = null;
 async function getRedisClient() {
   if (redisClient) return redisClient;
   const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) return null;
+  // Skip ioredis for Upstash — use @upstash/redis REST client via shared module
+  if (!redisUrl || redisUrl.includes("upstash.io")) {
+    const { getRedisAsync } = await import("../queue/redis");
+    redisClient = await getRedisAsync().catch(() => null);
+    return redisClient;
+  }
   try {
     const IORedis = (await import("ioredis")).default;
     redisClient = new IORedis(redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true });

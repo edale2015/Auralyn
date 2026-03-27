@@ -20,12 +20,18 @@ router.get("/summary", async (_req, res) => {
   }
 
   try {
-    const client = await getRedisAsync();
+    const client = await Promise.race([
+      getRedisAsync(),
+      new Promise<null>(r => setTimeout(() => r(null), 3000)),
+    ]);
     if (client) {
       redis.configured = true;
-      const pong = await client.ping();
+      const pong = await Promise.race([
+        client.ping(),
+        new Promise<string>(r => setTimeout(() => r("TIMEOUT"), 2000)),
+      ]);
       redis.ok = pong === "PONG";
-      if (!redis.ok) redis.error = "Redis ping failed";
+      if (!redis.ok) redis.error = pong === "TIMEOUT" ? "Redis ping timed out" : "Redis ping failed";
     } else {
       redis.configured = false;
       redis.ok = true; // not a failure — it's intentionally optional

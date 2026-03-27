@@ -5,12 +5,13 @@ let initialized = false;
 async function getRedis(): Promise<any | null> {
   if (initialized) return redisClient;
   initialized = true;
-  if (!process.env.REDIS_URL) return null;
   try {
-    const { default: IORedis } = await import("ioredis");
-    redisClient = new IORedis(process.env.REDIS_URL, { lazyConnect: true, connectTimeout: 3000 });
-    await redisClient.connect();
-    console.log("[RedisDeduper] Connected to Redis");
+    const { getRedisAsync } = await import("../queue/redis");
+    redisClient = await Promise.race([
+      getRedisAsync(),
+      new Promise<null>(r => setTimeout(() => r(null), 3000)),
+    ]);
+    if (redisClient) console.log("[RedisDeduper] Connected to Redis");
     return redisClient;
   } catch (e: any) {
     console.warn("[RedisDeduper] Redis unavailable, using in-memory fallback:", e?.message);

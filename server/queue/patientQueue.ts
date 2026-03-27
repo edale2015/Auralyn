@@ -24,7 +24,9 @@ let redisQueue: any = null;
 let redisWorker: any = null;
 
 async function initRedis(): Promise<boolean> {
-  if (!process.env.REDIS_URL) return false;
+  const redisUrl = process.env.REDIS_URL;
+  // Skip ioredis/BullMQ for Upstash REST — not TCP-compatible with BullMQ
+  if (!redisUrl || redisUrl.includes("upstash.io")) return false;
   try {
     const bullmq = await import("bullmq");
     const ioredis = await import("ioredis");
@@ -32,7 +34,7 @@ async function initRedis(): Promise<boolean> {
     Worker = bullmq.Worker;
     IORedis = ioredis.default;
 
-    const connection = new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
+    const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
     redisQueue = new Queue("patients", { connection });
 
     redisWorker = new Worker(
@@ -41,7 +43,7 @@ async function initRedis(): Promise<boolean> {
         const result = await runFullClinicalFlow(job.data);
         return result;
       },
-      { connection: new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null }) }
+      { connection: new IORedis(redisUrl, { maxRetriesPerRequest: null }) }
     );
 
     console.log("[PatientQueue] Redis/BullMQ queue initialized");

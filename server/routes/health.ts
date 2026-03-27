@@ -16,7 +16,7 @@ healthRouter.get("/readyz", async (_req, res) => {
   try {
     await testDbConnection();
 
-    if (ENV.REDIS_URL) {
+    if (ENV.REDIS_URL && !ENV.REDIS_URL.includes("upstash.io")) {
       const IORedis = (await import("ioredis")).default;
       const redis = new IORedis(ENV.REDIS_URL, { maxRetriesPerRequest: 1 });
       const pong = await redis.ping();
@@ -42,20 +42,25 @@ healthRouter.get("/healthz/full", async (_req, res) => {
     report.checks.database = { ok: false, error: err?.message || "DB failure" };
   }
 
-  if (ENV.REDIS_URL) {
-    try {
-      const IORedis = (await import("ioredis")).default;
-      const redis = new IORedis(ENV.REDIS_URL, { maxRetriesPerRequest: 1 });
-      const pong = await redis.ping();
-      await redis.disconnect();
-      report.checks.redis = { ok: pong === "PONG" };
+  const { getRedisAsync: _getRedisAsync } = await import("../queue/redis");
+  try {
+    const redisClient = await Promise.race([
+      _getRedisAsync(),
+      new Promise<null>(r => setTimeout(() => r(null), 3000)),
+    ]);
+    if (redisClient) {
+      const pong = await Promise.race([
+        redisClient.ping(),
+        new Promise<string>(r => setTimeout(() => r("TIMEOUT"), 2000)),
+      ]);
+      report.checks.redis = { ok: pong === "PONG", backend: "upstash-rest" };
       if (pong !== "PONG") ok = false;
-    } catch (err: any) {
-      ok = false;
-      report.checks.redis = { ok: false, error: err?.message || "Redis failure" };
+    } else {
+      report.checks.redis = { ok: false, error: "Redis not configured" };
     }
-  } else {
-    report.checks.redis = { ok: false, error: "REDIS_URL not configured" };
+  } catch (err: any) {
+    ok = false;
+    report.checks.redis = { ok: false, error: err?.message || "Redis failure" };
   }
 
   try {

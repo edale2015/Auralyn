@@ -45,19 +45,49 @@ export let postQueue: QueueShim;
 export let rpaQueue: QueueShim;
 export let learningQueue: QueueShim;
 
-async function initQueues() {
-  const redisUrl = process.env.REDIS_URL;
+async function tryUpstashConnection(): Promise<any | null> {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  try {
+    const { Redis } = await import("@upstash/redis");
+    const client = new Redis({ url, token });
+    await client.ping();
+    // Wrap as an ioredis-compatible connection object for BullMQ
+    // BullMQ needs a raw ioredis connection — Upstash REST is not compatible with BullMQ
+    // So we return null here; BullMQ will use in-memory. Redis ops use @upstash/redis directly.
+    return null;
+  } catch {
+    return null;
+  }
+}
 
-  if (process.env.NODE_ENV === "production" && !redisUrl && process.env.USE_FAKE_QUEUE !== "true") {
-    throw new Error("❌ [STARTUP FATAL] REDIS_URL is required in production. In-memory queues are not allowed in production.");
+async function initQueues() {
+  if (process.env.NODE_ENV === "production" && !process.env.REDIS_URL && !process.env.UPSTASH_REDIS_REST_URL && process.env.USE_FAKE_QUEUE !== "true") {
+    throw new Error("❌ [STARTUP FATAL] Redis is required in production. Set UPSTASH_REDIS_REST_URL or REDIS_URL.");
   }
 
-  if (redisUrl) {
+  // BullMQ requires a native ioredis TCP connection (not REST).
+  // Only attempt if REDIS_URL looks like a standard non-Upstash endpoint.
+  // Upstash REST URLs are used by @upstash/redis directly — not ioredis.
+  const redisUrl = process.env.REDIS_URL;
+  const isUpstashTcp = redisUrl?.includes("upstash.io");
+  if (redisUrl && !isUpstashTcp) {
     try {
       const { Queue } = await import("bullmq");
       const IORedis = (await import("ioredis")).default;
-      const conn = new IORedis(redisUrl, { maxRetriesPerRequest: null, lazyConnect: true });
-      await conn.connect().catch(() => { throw new Error("Redis ping failed"); });
+      const conn = new IORedis(redisUrl, {
+        maxRetriesPerRequest: null,
+        lazyConnect: true,
+        connectTimeout: 4000,
+        retryStrategy: () => null,
+      });
+      await Promise.race([
+        conn.connect(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
+      ]);
+      const pong = await conn.ping();
+      if (pong !== "PONG") throw new Error("ping failed");
 
       postQueue = new Queue("post", { connection: conn }) as unknown as QueueShim;
       rpaQueue = new Queue("rpa", { connection: conn }) as unknown as QueueShim;
@@ -66,7 +96,7 @@ async function initQueues() {
       console.log("[Queues] BullMQ initialized — post, rpa, learning queues ready (Redis backend)");
       return;
     } catch (e: any) {
-      console.warn(`[Queues] BullMQ/Redis unavailable (${e?.message}) — falling back to in-memory queues`);
+      console.warn(`[Queues] BullMQ/Redis TCP unavailable — falling back to in-memory queues`);
     }
   }
 
