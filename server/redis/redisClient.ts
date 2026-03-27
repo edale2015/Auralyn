@@ -1,95 +1,92 @@
 import { emitEvent } from "../controlTower/eventBus";
 import { isChaosActive } from "../chaos/chaosEngine";
 
-type RedisClientInstance = any;
-
-let primaryClient: RedisClientInstance = null;
-let secondaryClient: RedisClientInstance = null;
-let activeClient: RedisClientInstance = null;
-let initialized = false;
+// Upstash Redis REST client — works over HTTPS, no TCP port issues
+// Falls back gracefully when credentials are missing
+let _client: any = null;
+let _initialized = false;
 let usingFallback = false;
 
-async function createClient(url: string, label: string): Promise<RedisClientInstance | null> {
-  if (!url) return null;
+async function buildUpstashClient(): Promise<any | null> {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
   try {
-    const { default: IORedis } = await import("ioredis");
-    const client = new IORedis(url, {
-      lazyConnect: true,
-      connectTimeout: 3000,
-      maxRetriesPerRequest: 1,
-      retryStrategy: () => null,
-    });
-    await client.connect();
-    console.log(`[Redis] ${label} connected`);
+    const { Redis } = await import("@upstash/redis");
+    const client = new Redis({ url, token });
+    await client.ping();
+    console.log("[Redis] Upstash REST client connected");
     return client;
   } catch (e: any) {
-    console.warn(`[Redis] ${label} unavailable: ${e?.message}`);
+    console.warn("[Redis] Upstash REST unavailable:", e?.message);
     return null;
   }
 }
 
-async function switchToSecondary() {
-  if (usingFallback || !secondaryClient) return;
-  usingFallback = true;
-  activeClient = secondaryClient;
-  console.warn("[Redis] Primary failed — switched to secondary");
-  emitEvent({
-    type: "REGION_STATUS",
-    payload: { redis: "SECONDARY_ACTIVE", reason: "primary connection lost" },
-    timestamp: Date.now(),
-  });
-}
-
-export async function getRedisClient(): Promise<RedisClientInstance | null> {
-  if (!initialized) {
-    initialized = true;
-    primaryClient = await createClient(process.env.REDIS_PRIMARY ?? process.env.REDIS_URL ?? "", "primary Redis");
-    if (process.env.REDIS_SECONDARY) {
-      secondaryClient = await createClient(process.env.REDIS_SECONDARY, "secondary Redis");
-    }
-    activeClient = primaryClient ?? secondaryClient ?? null;
-
-    if (primaryClient) {
-      primaryClient.on("error", () => switchToSecondary().catch(() => {}));
-    }
+async function getClient(): Promise<any | null> {
+  if (_initialized) return _client;
+  _initialized = true;
+  _client = await buildUpstashClient();
+  if (!_client) {
+    usingFallback = true;
+    console.warn("[Redis] No Redis available — running without cache/queue persistence");
   }
-  return activeClient;
+  return _client;
 }
 
-export async function redisSet(key: string, value: string, opts?: { nx?: boolean; exSeconds?: number; pxMs?: number }): Promise<string | null> {
+// Public API — same interface as before so all callers stay unchanged
+
+export async function getRedisClient(): Promise<any | null> {
+  return getClient();
+}
+
+export async function redisSet(
+  key: string,
+  value: string,
+  opts?: { nx?: boolean; exSeconds?: number; pxMs?: number }
+): Promise<string | null> {
   if (isChaosActive("redis_down")) throw new Error("CHAOS_REDIS_DOWN: Redis failure injected");
-  const redis = await getRedisClient();
+  const redis = await getClient();
   if (!redis) return null;
   try {
-    const args: any[] = [key, value];
-    if (opts?.nx) args.push("NX");
-    if (opts?.exSeconds) { args.push("EX"); args.push(opts.exSeconds); }
-    if (opts?.pxMs) { args.push("PX"); args.push(opts.pxMs); }
-    return await redis.set(...args);
+    const setOpts: any = {};
+    if (opts?.nx) setOpts.nx = true;
+    if (opts?.exSeconds) setOpts.ex = opts.exSeconds;
+    if (opts?.pxMs) setOpts.px = opts.pxMs;
+    const result = await redis.set(key, value, Object.keys(setOpts).length ? setOpts : undefined);
+    return result as string | null;
   } catch (e: any) {
-    await switchToSecondary();
+    console.warn("[Redis] set error:", e?.message);
     return null;
   }
 }
 
 export async function redisDel(key: string): Promise<void> {
-  const redis = await getRedisClient();
+  const redis = await getClient();
   if (!redis) return;
   try { await redis.del(key); } catch {}
 }
 
 export async function redisIncr(key: string): Promise<number | null> {
-  const redis = await getRedisClient();
+  const redis = await getClient();
   if (!redis) return null;
-  try { return await redis.incr(key); } catch { return null; }
+  try { return await redis.incr(key) as number; } catch { return null; }
 }
 
 export async function redisExpire(key: string, seconds: number): Promise<void> {
-  const redis = await getRedisClient();
+  const redis = await getClient();
   if (!redis) return;
   try { await redis.expire(key, seconds); } catch {}
 }
 
 export function isUsingFallback(): boolean {
   return usingFallback;
+}
+
+// Compatibility: some files call getRedisOrNull() synchronously
+// Return null synchronously — async init happens lazily on first use
+export function getRedisOrNull(): null {
+  // Trigger async init in the background without blocking
+  getClient().catch(() => {});
+  return null;
 }

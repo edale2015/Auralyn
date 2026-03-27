@@ -4,7 +4,7 @@ import { listSystemEvents } from "../repos/systemEventRepo";
 import { listRecentJobs } from "../repos/jobRepo";
 import { listRecentMetricSnapshots } from "../repos/metricsRepo";
 import { testDbConnection } from "../db";
-import { getRedisOrNull } from "../queue/redis";
+import { getRedisAsync } from "../queue/redis";
 
 const router = Router();
 
@@ -20,7 +20,7 @@ router.get("/summary", async (_req, res) => {
   }
 
   try {
-    const client = getRedisOrNull();
+    const client = await getRedisAsync();
     if (client) {
       redis.configured = true;
       const pong = await client.ping();
