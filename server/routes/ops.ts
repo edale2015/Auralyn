@@ -10,7 +10,7 @@ const router = Router();
 
 router.get("/summary", async (_req, res) => {
   let database = { ok: false as boolean, error: undefined as string | undefined };
-  let redis = { ok: false as boolean, error: undefined as string | undefined };
+  let redis = { ok: false as boolean, configured: false as boolean, error: undefined as string | undefined };
 
   try {
     await testDbConnection();
@@ -22,13 +22,16 @@ router.get("/summary", async (_req, res) => {
   try {
     const client = getRedisOrNull();
     if (client) {
+      redis.configured = true;
       const pong = await client.ping();
       redis.ok = pong === "PONG";
       if (!redis.ok) redis.error = "Redis ping failed";
     } else {
-      redis.error = "REDIS_URL not configured";
+      redis.configured = false;
+      redis.ok = true; // not a failure — it's intentionally optional
     }
   } catch (err: any) {
+    redis.configured = true;
     redis.error = err?.message || "Redis failure";
   }
 
