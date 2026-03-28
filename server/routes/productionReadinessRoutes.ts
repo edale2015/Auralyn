@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { isFhirConfigured } from "../ehr/fhir/fhirClient";
 import { isSmartAuthConfigured } from "../ehr/fhir/fhirAuth";
+import { isSmartLaunchConfigured } from "../ehr/fhir/smartLaunch";
+import { isEpicAdapterConfigured } from "../ehr/fhir/epicAdapter";
 import { getBusStats, getRecentEvents } from "../events/bus";
 import { canRunAutonomousLearning, upsertLabeledStats } from "../learning/learningEligibility";
 import { getInteractionDb } from "../medications/interactions";
@@ -8,6 +10,11 @@ import { validatePrescriptionAuthority } from "../medications/deaGuard";
 import { runMedicationSafetyCheck } from "../medications/medSafetyService";
 import { isSyncEnabled } from "../migration/sheetsSyncAdapter";
 import { getAuditLogStats } from "../ops/auditEvents";
+import { getErxProvider } from "../medications/erxReal";
+import { listSupportedPayers } from "../billing/payerRules";
+import { getSecureAuditStats } from "../ops/secureAudit";
+import { getStatus as getModelFreezeStatus, canLearn } from "../release/modelFreeze";
+import { PRIORS_COUNT } from "../clinical/bayesianEngine";
 
 const router = Router();
 
@@ -34,6 +41,16 @@ router.get("/status", async (_req: Request, res: Response) => {
       multiComplaintFusion: { active: true, rules: 8, label: "Multi-Complaint Fusion Engine" },
       surescripts:     { enabled: process.env.SURESCRIPTS_ENABLED === "true", label: "Surescripts eRx Adapter" },
       immutableAudit:  { active: true, totalRecords: auditStats.total, fileSizeBytes: auditStats.fileSizeBytes, label: "Immutable Audit Pipeline" },
+      // ── Depth & Maturity Layer (8 new) ──────────────────────────────────────
+      smartLaunchFlow:      { active: isSmartLaunchConfigured(), configured: isSmartLaunchConfigured(), label: "SMART on FHIR Launch Flow" },
+      epicAdapter:          { active: isEpicAdapterConfigured(), configured: isEpicAdapterConfigured(), label: "Epic Sandbox Adapter" },
+      erxReal:              { active: true, provider: getErxProvider(), label: "Real eRx Connector" },
+      hccEngine:            { active: true, icdMappings: 20, label: "HCC Coding Engine" },
+      payerRules:           { active: true, payers: listSupportedPayers().length, label: "Payer-Specific Rules" },
+      bayesianDifferential: { active: true, diagnoses: PRIORS_COUNT, label: "Bayesian Differential Engine" },
+      secureAudit:          { active: true, ...getSecureAuditStats(), label: "Cryptographic Audit Log" },
+      modelFreeze:          { ...getModelFreezeStatus(), canLearn: canLearn(), label: "Model Freeze + Version Lock" },
+      studyPipeline:        { active: true, passThreshold: 0.85, label: "Validation Study Pipeline" },
     },
     ts: new Date().toISOString(),
   });

@@ -8,7 +8,7 @@ import StatusChip from "@/components/StatusChip"
 import LoadingCardSkeleton from "@/components/LoadingCardSkeleton"
 import SectionHeader from "@/components/SectionHeader"
 import { cn } from "@/lib/utils"
-import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText } from "lucide-react"
+import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical } from "lucide-react"
 
 type CheckResult = { name: string; ok: boolean; detail: string }
 type ProviderStatus = { provider: string; ok: boolean; latencyMs?: number; detail: string; checkedAt: string }
@@ -52,17 +52,27 @@ type LearningEligibility = {
 }
 
 const layerIcons: Record<string, any> = {
-  fhirR4:               { icon: Activity,     color: "text-blue-600",    bg: "bg-blue-50 dark:bg-blue-950" },
-  eventBus:             { icon: Radio,        color: "text-purple-600",  bg: "bg-purple-50 dark:bg-purple-950" },
-  medications:          { icon: Pill,         color: "text-rose-600",    bg: "bg-rose-50 dark:bg-rose-950" },
-  rlhfGating:           { icon: BookOpen,     color: "text-amber-600",   bg: "bg-amber-50 dark:bg-amber-950" },
-  sheetsSync:           { icon: GitBranch,    color: "text-green-600",   bg: "bg-green-50 dark:bg-green-950" },
-  repos:                { icon: Database,     color: "text-slate-600",   bg: "bg-slate-50 dark:bg-slate-950" },
-  rowLevelSecurity:     { icon: Lock,         color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
-  claimScrubber:        { icon: FileCheck,    color: "text-teal-600",    bg: "bg-teal-50 dark:bg-teal-950" },
-  multiComplaintFusion: { icon: Merge,        color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
-  surescripts:          { icon: Stethoscope,  color: "text-cyan-600",    bg: "bg-cyan-50 dark:bg-cyan-950" },
-  immutableAudit:       { icon: ScrollText,   color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
+  fhirR4:               { icon: Activity,      color: "text-blue-600",    bg: "bg-blue-50 dark:bg-blue-950" },
+  eventBus:             { icon: Radio,         color: "text-purple-600",  bg: "bg-purple-50 dark:bg-purple-950" },
+  medications:          { icon: Pill,          color: "text-rose-600",    bg: "bg-rose-50 dark:bg-rose-950" },
+  rlhfGating:           { icon: BookOpen,      color: "text-amber-600",   bg: "bg-amber-50 dark:bg-amber-950" },
+  sheetsSync:           { icon: GitBranch,     color: "text-green-600",   bg: "bg-green-50 dark:bg-green-950" },
+  repos:                { icon: Database,      color: "text-slate-600",   bg: "bg-slate-50 dark:bg-slate-950" },
+  rowLevelSecurity:     { icon: Lock,          color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
+  claimScrubber:        { icon: FileCheck,     color: "text-teal-600",    bg: "bg-teal-50 dark:bg-teal-950" },
+  multiComplaintFusion: { icon: Merge,         color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
+  surescripts:          { icon: Stethoscope,   color: "text-cyan-600",    bg: "bg-cyan-50 dark:bg-cyan-950" },
+  immutableAudit:       { icon: ScrollText,    color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
+  // ── Depth & Maturity Layer (8 new) ──────────────────────────────────────────
+  smartLaunchFlow:      { icon: LogIn,         color: "text-sky-600",     bg: "bg-sky-50 dark:bg-sky-950" },
+  epicAdapter:          { icon: Building2,     color: "text-violet-600",  bg: "bg-violet-50 dark:bg-violet-950" },
+  erxReal:              { icon: Send,          color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950" },
+  hccEngine:            { icon: BarChart3,     color: "text-lime-600",    bg: "bg-lime-50 dark:bg-lime-950" },
+  payerRules:           { icon: CreditCard,    color: "text-pink-600",    bg: "bg-pink-50 dark:bg-pink-950" },
+  bayesianDifferential: { icon: BrainCircuit,  color: "text-fuchsia-600", bg: "bg-fuchsia-50 dark:bg-fuchsia-950" },
+  secureAudit:          { icon: KeyRound,      color: "text-yellow-600",  bg: "bg-yellow-50 dark:bg-yellow-950" },
+  modelFreeze:          { icon: Snowflake,     color: "text-blue-400",    bg: "bg-blue-50 dark:bg-blue-950" },
+  studyPipeline:        { icon: FlaskConical,  color: "text-green-700",   bg: "bg-green-50 dark:bg-green-950" },
 }
 
 type ExtLayer = ProductionLayer & {
@@ -72,6 +82,18 @@ type ExtLayer = ProductionLayer & {
   rules?: number
   totalRecords?: number
   fileSizeBytes?: number
+  // Depth & Maturity fields
+  provider?: string
+  icdMappings?: number
+  payers?: number
+  diagnoses?: number
+  total?: number
+  chainHead?: string
+  frozen?: boolean
+  canLearn?: boolean
+  version?: string
+  versionLocked?: boolean
+  passThreshold?: number
 }
 
 function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "info" {
@@ -86,6 +108,16 @@ function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "inf
   if (key === "multiComplaintFusion") return layer.active ? "success" : "warning"
   if (key === "surescripts")          return layer.enabled ? "success" : "info"
   if (key === "immutableAudit")       return layer.active ? "success" : "warning"
+  // Depth & Maturity
+  if (key === "smartLaunchFlow")      return layer.configured ? "success" : "info"
+  if (key === "epicAdapter")          return layer.configured ? "success" : "info"
+  if (key === "erxReal")              return layer.active ? "success" : "warning"
+  if (key === "hccEngine")            return layer.active ? "success" : "warning"
+  if (key === "payerRules")           return layer.active ? "success" : "warning"
+  if (key === "bayesianDifferential") return layer.active ? "success" : "warning"
+  if (key === "secureAudit")          return layer.active ? "success" : "warning"
+  if (key === "modelFreeze")          return layer.frozen ? "warning" : "success"
+  if (key === "studyPipeline")        return layer.active ? "success" : "warning"
   return "info"
 }
 
@@ -101,6 +133,16 @@ function layerBadge(layer: ExtLayer, key: string): string {
   if (key === "multiComplaintFusion") return layer.active ? `${layer.rules ?? 8} syndromes` : "Inactive"
   if (key === "surescripts")          return layer.enabled ? "Live" : "Stub Mode"
   if (key === "immutableAudit")       return layer.active ? `${layer.totalRecords ?? 0} records` : "Inactive"
+  // Depth & Maturity
+  if (key === "smartLaunchFlow")      return layer.configured ? "EPIC-Ready" : "Env Needed"
+  if (key === "epicAdapter")          return layer.configured ? "Connected" : "Env Needed"
+  if (key === "erxReal")              return layer.active ? `${layer.provider ?? "stub"}` : "Inactive"
+  if (key === "hccEngine")            return layer.active ? `${layer.icdMappings ?? 20} ICD-10` : "Inactive"
+  if (key === "payerRules")           return layer.active ? `${layer.payers ?? 5} payers` : "Inactive"
+  if (key === "bayesianDifferential") return layer.active ? `${layer.diagnoses ?? 8} dx priors` : "Inactive"
+  if (key === "secureAudit")          return layer.active ? `${layer.total ?? 0} chained` : "Inactive"
+  if (key === "modelFreeze")          return layer.frozen ? "Frozen" : (layer.canLearn ? "Learning ON" : "Locked")
+  if (key === "studyPipeline")        return layer.active ? `≥${((layer.passThreshold ?? 0.85) * 100).toFixed(0)}% threshold` : "Inactive"
   return "Unknown"
 }
 
