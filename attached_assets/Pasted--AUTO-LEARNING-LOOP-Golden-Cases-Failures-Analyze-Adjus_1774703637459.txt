@@ -1,0 +1,135 @@
+🔁 AUTO-LEARNING LOOP
+Golden Cases → Failures → Analyze → Adjust Weights → Re-run → Improve
+⚖️ RLHF WEIGHT ENGINE
+
+Instead of fixed rules:
+
+fever + no cough = +2
+
+You now get:
+
+fever + no cough = +2.3 → +2.6 → +3.1 (based on outcomes)
+🔥 PART 1 — WEIGHT STORE (PERSISTENT MEMORY)
+File: server/learning/weightStore.ts
+import fs from "fs";
+
+const FILE = "./data/weights.json";
+
+let weights: Record<string, number> = {};
+
+export function loadWeights() {
+  if (fs.existsSync(FILE)) {
+    weights = JSON.parse(fs.readFileSync(FILE, "utf-8"));
+  }
+}
+
+export function getWeight(key: string) {
+  return weights[key] ?? 0;
+}
+
+export function updateWeight(key: string, delta: number) {
+  weights[key] = (weights[key] ?? 0) + delta;
+}
+
+export function saveWeights() {
+  fs.writeFileSync(FILE, JSON.stringify(weights, null, 2));
+}
+🔥 PART 2 — RLHF ENGINE
+File: server/learning/rlhfEngine.ts
+import { updateWeight, saveWeights } from "./weightStore";
+
+export function applyRLHF(result: any) {
+  const { expected, actual, trace } = result;
+
+  if (!trace) return;
+
+  const correct = expected?.diagnosis === actual?.diagnosis;
+
+  trace.forEach((node: any) => {
+    const key = node.name;
+
+    if (correct) {
+      updateWeight(key, +0.2); // reward
+    } else {
+      updateWeight(key, -0.3); // penalize
+    }
+  });
+
+  saveWeights();
+}
+🔥 PART 3 — AUTO LEARNING LOOP
+File: server/learning/autoLearningLoop.ts
+import { applyRLHF } from "./rlhfEngine";
+
+export async function runLearningCycle() {
+  console.log("🧠 Learning cycle started");
+
+  const cases = await getGoldenCases();
+  let results = [];
+
+  for (const c of cases) {
+    const result = await runFullClinicalFlow(c.input);
+
+    const enriched = {
+      expected: c.expected,
+      actual: result,
+      trace: result.trace,
+    };
+
+    applyRLHF(enriched);
+
+    results.push(enriched);
+  }
+
+  console.log("✅ Learning cycle complete");
+  return results;
+}
+🔥 PART 4 — API ENDPOINT
+File: server/api/learning.ts
+import express from "express";
+import { runLearningCycle } from "../learning/autoLearningLoop";
+
+const router = express.Router();
+
+router.post("/api/learning/run", async (req, res) => {
+  const results = await runLearningCycle();
+  res.json({ status: "complete", results });
+});
+
+export default router;
+🔥 PART 5 — CONTROL TOWER BUTTON
+
+Add this to your UI:
+
+<button
+  onClick={async () => {
+    const res = await fetch("/api/learning/run", { method: "POST" });
+    const data = await res.json();
+    console.log(data);
+  }}
+  className="bg-purple-600 text-white px-4 py-2"
+>
+  Run Learning Cycle 🧠
+</button>
+🔥 PART 6 — AUTO SCHEDULER
+File: server/scheduler/learningScheduler.ts
+import { runLearningCycle } from "../learning/autoLearningLoop";
+
+export function startLearningLoop() {
+  setInterval(() => {
+    runLearningCycle();
+  }, 1000 * 60 * 10); // every 10 minutes
+}
+🔥 PART 7 — USING WEIGHTS IN YOUR ENGINE
+
+Modify scoring:
+
+import { getWeight } from "../learning/weightStore";
+
+function scoreRule(rule, context) {
+  let base = rule.weight;
+
+  const learned = getWeight(rule.id);
+
+  return base + learned;
+}

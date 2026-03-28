@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { loadComplaintConfig } from "../services/complaintConfigLoader";
 import type { GoldenCase } from "./testGoldenRoutes";
+import { goldenStore } from "./testGoldenRoutes";
+import { reinforceOutcome } from "../learning/rlhfEngine";
+import { getAllWeights } from "../learning/weightStore";
 
 const router = Router();
 
@@ -186,7 +189,7 @@ export function getGoldenFailures(goldenStore: Map<string, GoldenCase>) {
   return Array.from(goldenStore.values()).filter(c => c.status === "fail");
 }
 
-// ─── POST /api/learning/suggest-fix ─────────────────────────────────────
+// ─── Learning / fix router (mounted at /api/learning) ───────────────────
 export const suggestFixRouter = Router();
 
 suggestFixRouter.post("/suggest-fix", async (req, res) => {
@@ -244,6 +247,49 @@ Return JSON ONLY (no markdown):
       source: "heuristic",
     });
   }
+});
+
+// ─── POST /api/learning/run-cycle — RLHF learning pass over all golden cases ──
+suggestFixRouter.post("/run-cycle", async (_req, res) => {
+  const cases = Array.from(goldenStore.values());
+  const adjustments: any[] = [];
+  let processed = 0;
+
+  for (const c of cases) {
+    const result = c.result as any;
+    const expected = c.expected as any;
+    if (!result || !expected) continue;
+
+    const predicted = {
+      diagnosis: result.diagnosis ?? result.topDiagnosis ?? result.status ?? "unknown",
+      triage:    result.triage ?? result.disposition ?? result.status ?? "unknown",
+    };
+    const actual = {
+      diagnosis: expected.diagnosis ?? expected.complaint_id ?? "unknown",
+      triage:    expected.disposition ?? expected.triage ?? "routine",
+      correct:   c.status === "pass",
+    };
+
+    try {
+      const r = reinforceOutcome(predicted, actual);
+      adjustments.push({
+        caseId: c.id,
+        status: c.status,
+        ...r,
+      });
+      processed++;
+    } catch {}
+  }
+
+  const weights = getAllWeights();
+  res.json({
+    ok: true,
+    processed,
+    totalCases: cases.length,
+    adjustments,
+    currentWeights: weights,
+    ranAt: new Date().toISOString(),
+  });
 });
 
 export default router;

@@ -51,6 +51,23 @@ router.get("/:id", (req, res) => {
   res.json({ ok: true, case: c });
 });
 
+// POST /api/test/golden/batch-save — batch upsert (must be before /:id catch)
+router.post("/batch-save", (req, res) => {
+  const { cases } = req.body as { cases: GoldenCase[] };
+  if (!Array.isArray(cases) || cases.length === 0)
+    return res.status(400).json({ ok: false, error: "cases array required" });
+  const saved: GoldenCase[] = [];
+  for (const body of cases) {
+    if (!body?.id) continue;
+    const existing = goldenStore.get(body.id) ?? {} as GoldenCase;
+    const merged: GoldenCase = { ...existing, ...body, id: body.id };
+    goldenStore.set(body.id, merged);
+    saved.push(merged);
+  }
+  auditLog({ actor: "auto_generator", action: "golden_batch_saved", entityType: "golden_case", entityId: `batch:${saved.length}` });
+  res.json({ ok: true, saved: saved.length, ids: saved.map(c => c.id) });
+});
+
 // POST /api/test/golden/save — upsert
 router.post("/save", (req, res) => {
   const body = req.body as GoldenCase;
