@@ -4,6 +4,7 @@ import type { GoldenCase } from "./testGoldenRoutes";
 import { goldenStore } from "./testGoldenRoutes";
 import { reinforceOutcome } from "../learning/rlhfEngine";
 import { getAllWeights } from "../learning/weightStore";
+import { allowWeightUpdate, isLearningFrozen } from "../learning/learningGuard";
 
 const router = Router();
 
@@ -251,14 +252,31 @@ Return JSON ONLY (no markdown):
 
 // ─── POST /api/learning/run-cycle — RLHF learning pass over all golden cases ──
 suggestFixRouter.post("/run-cycle", async (_req, res) => {
+  // Safety: abort if learning is frozen by release lock
+  if (isLearningFrozen()) {
+    return res.json({
+      ok: false,
+      blocked: true,
+      reason: "Learning is frozen — current version is locked. Unlock it first.",
+    });
+  }
+
   const cases = Array.from(goldenStore.values());
   const adjustments: any[] = [];
+  const skipped: string[]  = [];
   let processed = 0;
 
   for (const c of cases) {
     const result = c.result as any;
     const expected = c.expected as any;
     if (!result || !expected) continue;
+
+    // Safety: learning guard check
+    const guardInput = { ...result, correct: c.status === "pass", input: c.input, trace: result?.trace ?? [] };
+    if (!allowWeightUpdate(guardInput)) {
+      skipped.push(c.id);
+      continue;
+    }
 
     const predicted = {
       diagnosis: result.diagnosis ?? result.topDiagnosis ?? result.status ?? "unknown",
@@ -272,11 +290,7 @@ suggestFixRouter.post("/run-cycle", async (_req, res) => {
 
     try {
       const r = reinforceOutcome(predicted, actual);
-      adjustments.push({
-        caseId: c.id,
-        status: c.status,
-        ...r,
-      });
+      adjustments.push({ caseId: c.id, status: c.status, ...r });
       processed++;
     } catch {}
   }
@@ -285,6 +299,8 @@ suggestFixRouter.post("/run-cycle", async (_req, res) => {
   res.json({
     ok: true,
     processed,
+    skipped: skipped.length,
+    skippedIds: skipped,
     totalCases: cases.length,
     adjustments,
     currentWeights: weights,

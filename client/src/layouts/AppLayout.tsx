@@ -24,6 +24,7 @@ import {
   Globe2,
   Phone,
   GitBranch,
+  ShieldCheck,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -52,6 +53,7 @@ const NAV_ITEMS = [
   { path: "/experiments", label: "A/B Experiments", icon: FlaskConical },
   { path: "/voice-triage", label: "Voice Triage", icon: Phone },
   { path: "/decision-tree", label: "Decision Tree", icon: GitBranch },
+  { path: "/fda-dashboard", label: "FDA Dashboard", icon: ShieldCheck },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 
