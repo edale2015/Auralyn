@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import IncidentTimeline from "@/components/IncidentTimeline";
+import { Bot, FlaskConical, ChevronRight } from "lucide-react";
 
 /* ─── Types ────────────────────────────────────────────────── */
 interface TowerState {
@@ -141,6 +142,11 @@ export default function ControlTowerPage() {
   const [outageLoading, setOutageLoading] = useState(false);
   const [replayLoading, setReplayLoading] = useState(false);
   const [prediction, setPrediction] = useState<any>(null);
+  const [taskAgents, setTaskAgents]       = useState<any[]>([]);
+  const [busStats, setBusStats]           = useState<any>(null);
+  const [busLog, setBusLog]               = useState<any[]>([]);
+  const [evolutionStatus, setEvolutionStatus] = useState<any>(null);
+  const [evolutionRunning, setEvolutionRunning] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const orchWsRef = useRef<WebSocket | null>(null);
@@ -290,6 +296,55 @@ export default function ControlTowerPage() {
       toast({ title: "Learning failed", description: e.message, variant: "destructive" });
     } finally { setLearningLoading(false); }
   };
+
+  /* ── Agents + Evolution fetch ─────────────────────────── */
+  const fetchAgentsAndBus = useCallback(async () => {
+    try {
+      const [ra, rb, rl] = await Promise.allSettled([
+        fetch("/api/agent-evolution/agents/task"),
+        fetch("/api/agent-evolution/bus/stats"),
+        fetch("/api/agent-evolution/bus/log"),
+      ]);
+      if (ra.status === "fulfilled" && ra.value.ok) { const j = await ra.value.json(); setTaskAgents(j.agents ?? []); }
+      if (rb.status === "fulfilled" && rb.value.ok) { const j = await rb.value.json(); setBusStats(j.stats); }
+      if (rl.status === "fulfilled" && rl.value.ok) { const j = await rl.value.json(); setBusLog(j.log?.slice(0, 6) ?? []); }
+    } catch {}
+  }, []);
+
+  const fetchEvolution = useCallback(async () => {
+    try {
+      const r = await fetch("/api/agent-evolution/evolution/status");
+      if (!r.ok) return;
+      const j = await r.json();
+      setEvolutionStatus(j.evolution);
+    } catch {}
+  }, []);
+
+  const runEvolution = async () => {
+    setEvolutionRunning(true);
+    try {
+      const r = await fetch("/api/agent-evolution/evolution/run", { method: "POST" });
+      const j = await r.json();
+      const res = j.result;
+      toast({
+        title: res?.proposed
+          ? (res.approved ? `🧬 Evolution promoted: ${res.agent}` : `❌ Evolution rejected: ${res.agent}`)
+          : "🧬 No evolution needed — system nominal",
+        description: res?.reason ?? "",
+        variant: res?.proposed && !res.approved ? "destructive" : "default",
+      });
+      await fetchEvolution();
+    } catch (e: any) {
+      toast({ title: "Evolution failed", description: e.message, variant: "destructive" });
+    } finally { setEvolutionRunning(false); }
+  };
+
+  useEffect(() => {
+    fetchAgentsAndBus();
+    fetchEvolution();
+    const t = setInterval(() => { fetchAgentsAndBus(); fetchEvolution(); }, 5000);
+    return () => clearInterval(t);
+  }, [fetchAgentsAndBus, fetchEvolution]);
 
   const runOutage = async () => {
     setOutageLoading(true);
@@ -678,6 +733,161 @@ export default function ControlTowerPage() {
         </CardHeader>
         <CardContent className="bg-black/50 rounded-lg p-3">
           <IncidentTimeline events={timeline} />
+        </CardContent>
+      </Card>
+
+      {/* ── AGENT CONTROLLER ─────────────────────────────────── */}
+      <Card className="border border-border/60">
+        <CardHeader className="py-3 px-4 flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-blue-400" />
+            <CardTitle className="text-sm font-semibold">Agent Controller</CardTitle>
+            {busStats && (
+              <Badge variant="secondary" className="text-[10px]">{busStats.processed ?? 0} tasks processed</Badge>
+            )}
+            <Badge variant={taskAgents.some(a => a.status === "error") ? "destructive" : "default"} className="text-[10px]">
+              {taskAgents.filter(a => a.status === "idle").length}/{taskAgents.length} idle
+            </Badge>
+          </div>
+          <Button size="sm" variant="ghost" onClick={fetchAgentsAndBus} data-testid="btn-refresh-agents">Refresh</Button>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-3">
+          {/* Agent grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {taskAgents.map(agent => (
+              <div key={agent.name}
+                className={`rounded-lg px-3 py-2 border text-xs ${
+                  agent.status === "idle"  ? "border-green-800/40 bg-green-950/20"
+                  : agent.status === "busy"  ? "border-blue-800/40 bg-blue-950/20"
+                  : agent.status === "error" ? "border-red-800/40 bg-red-950/20"
+                  : "border-border/40 bg-muted/20"
+                }`}
+                data-testid={`card-agent-${agent.name}`}>
+                <p className="font-semibold truncate">{agent.name}</p>
+                <p className={`text-[10px] mt-0.5 ${
+                  agent.status === "idle" ? "text-green-400" : agent.status === "busy" ? "text-blue-400" : agent.status === "error" ? "text-red-400" : "text-muted-foreground"
+                }`}>{agent.status}</p>
+                {agent.lastRun && (
+                  <p className="text-[9px] text-muted-foreground mt-0.5">{new Date(agent.lastRun).toLocaleTimeString()}</p>
+                )}
+              </div>
+            ))}
+            {taskAgents.length === 0 && (
+              <div className="col-span-4 text-xs text-muted-foreground italic py-2">Loading agents…</div>
+            )}
+          </div>
+
+          {/* Bus stats + recent tasks */}
+          {busStats && (
+            <div className="flex items-center gap-4 text-xs text-muted-foreground bg-muted/20 rounded px-3 py-2">
+              <span>Queue depth: <strong className="text-foreground">{busStats.queueDepth}</strong></span>
+              <span>Processed: <strong className="text-foreground">{busStats.processed}</strong></span>
+              {Object.entries(busStats.byType ?? {}).slice(0, 4).map(([type, count]) => (
+                <span key={type} className="text-[10px]">{type}: {String(count)}</span>
+              ))}
+            </div>
+          )}
+
+          {busLog.length > 0 && (
+            <div className="space-y-1 max-h-28 overflow-y-auto">
+              {busLog.map((t, i) => (
+                <div key={i} className="flex items-center gap-2 text-[10px] bg-muted/20 rounded px-2 py-1" data-testid={`row-bus-task-${i}`}>
+                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <Badge variant="outline" className="text-[9px] h-3.5 px-1 shrink-0">{t.type}</Badge>
+                  <span className="text-muted-foreground shrink-0">{new Date(t.processedAt).toLocaleTimeString()}</span>
+                  <span className="truncate text-muted-foreground">{t.result?.safe ? "safe ✓" : t.result?.blocked ? "blocked" : t.result?.healed ? "healed" : t.result?.routed ? `→ ${t.result.physician ?? "pending"}` : JSON.stringify(t.result).slice(0, 50)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── EVOLUTION ENGINE ──────────────────────────────────── */}
+      <Card className="border border-border/60">
+        <CardHeader className="py-3 px-4 flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <FlaskConical className="h-4 w-4 text-amber-400" />
+            <CardTitle className="text-sm font-semibold">Evolution Engine</CardTitle>
+            {evolutionStatus && (
+              <Badge variant="secondary" className="text-[10px]">{evolutionStatus.cycleCount ?? 0} cycles</Badge>
+            )}
+            {evolutionStatus?.stats && (
+              <Badge variant={evolutionStatus.stats.approved > 0 ? "default" : "secondary"} className="text-[10px]">
+                {evolutionStatus.stats.approved} promoted · {evolutionStatus.stats.rejected} rejected
+              </Badge>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={fetchEvolution} data-testid="btn-refresh-evolution">Refresh</Button>
+            <Button size="sm" variant="outline" onClick={runEvolution} disabled={evolutionRunning} data-testid="btn-run-evolution">
+              {evolutionRunning ? "Evolving…" : "🧬 Run Cycle"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-3">
+          {evolutionStatus ? (
+            <>
+              {/* Current proposal */}
+              {evolutionStatus.lastProposal?.proposal ? (
+                <div className={`rounded-lg px-3 py-2 text-xs border ${evolutionStatus.lastProposal.proposal.urgency === "high" ? "border-red-800/40 bg-red-950/20" : evolutionStatus.lastProposal.proposal.urgency === "medium" ? "border-amber-800/40 bg-amber-950/20" : "border-border/40 bg-muted/20"}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold">{evolutionStatus.lastProposal.proposal.agent}</span>
+                    <Badge variant="outline" className="text-[9px] h-3.5 px-1">{evolutionStatus.lastProposal.proposal.urgency}</Badge>
+                    <span className="text-muted-foreground">{evolutionStatus.lastProposal.proposal.change}</span>
+                  </div>
+                  <p className="text-muted-foreground">{evolutionStatus.lastProposal.proposal.reason}</p>
+                </div>
+              ) : (
+                <div className="rounded-lg bg-green-950/20 border border-green-800/30 px-3 py-2 text-xs text-green-400">
+                  System nominal — no evolution proposal needed
+                </div>
+              )}
+
+              {/* Sandbox result */}
+              {evolutionStatus.lastSandboxResult && (
+                <div className="grid grid-cols-4 gap-2 text-xs">
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Pass Rate</p>
+                    <p className="font-bold text-sm">{(evolutionStatus.lastSandboxResult.passRate * 100).toFixed(0)}%</p>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Safety</p>
+                    <p className="font-bold text-sm">{(evolutionStatus.lastSandboxResult.safetyAccuracy * 100).toFixed(0)}%</p>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">F1</p>
+                    <p className="font-bold text-sm">{evolutionStatus.lastSandboxResult.f1Score?.toFixed(2) ?? "—"}</p>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Avg Latency</p>
+                    <p className="font-bold text-sm">{evolutionStatus.lastSandboxResult.avgLatencyMs}ms</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Promotion history */}
+              {evolutionStatus.promotionHistory?.length > 0 && (
+                <div className="space-y-1 max-h-28 overflow-y-auto">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Promotion History</p>
+                  {evolutionStatus.promotionHistory.map((p: any, i: number) => (
+                    <div key={i} className={`flex items-center gap-2 text-[10px] rounded px-2 py-1 ${p.verdict?.approved ? "bg-green-950/20" : "bg-red-950/20"}`} data-testid={`row-evolution-${i}`}>
+                      <span>{p.verdict?.approved ? "✅" : "❌"}</span>
+                      <span className="font-medium">{p.agent}</span>
+                      <span className="text-muted-foreground truncate">{p.proposal?.change}</span>
+                      <span className="text-muted-foreground shrink-0">{new Date(p.promotedAt).toLocaleTimeString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {evolutionStatus.lastCycleAt && (
+                <p className="text-[10px] text-muted-foreground">Last cycle: {new Date(evolutionStatus.lastCycleAt).toLocaleString()}</p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">Evolution engine initializing — first cycle runs in 10 minutes, or trigger manually.</p>
+          )}
         </CardContent>
       </Card>
 

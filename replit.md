@@ -28,6 +28,21 @@ A **Stress Test System** (`server/stress/`) allows for load generation and metri
 **PostgreSQL-backed Infrastructure** (5 new tables) supports learning records, diagnosis reinforcement, engine logs, simulations, and audit logs.
 **System Monitoring** (`server/monitoring/systemMonitor.ts`) includes DB-backed engine health logging and a **Predictive Failure Engine**. The **Autonomous Loop** (`server/system/autonomousLoop.ts`) runs learning and failure prediction. A **Safety Gate** (`server/safety/safetyGate.ts`) provides a non-bypassable safety layer. An **Immutable Audit Logger** (`server/audit/auditLogger.ts`) logs every clinical flow. **Explainability** is integrated into the master orchestrator. Three critical **Safety Engines** are implemented for drug interaction, pregnancy, and pediatric safety.
 
+### Autonomous Brain (Modules 20-23 + Hybrid Engine)
+- **Self-Learning Engine** (`server/selfLearning/`): 60s loop that retrains weights from outcomes and shifts routing thresholds.
+- **Golden Case Validator** (`server/golden/`): 300s loop running 10 curated ENT/flu cases; exposes pass-rate + safety-accuracy.
+- **Clinical Safety Guard** (`server/safetyGuard/`): non-bypassable block layer; dispatches Twilio SMS alerts for critical events via `alertDispatcher.ts`.
+- **FDA Validation Dashboard** (`/fda-dashboard`): Accuracy/Precision/Recall/F1/F-beta metrics, A–D grade badge, confusion matrix, per-case results, intelligence tab.
+- **Bayesian + RLHF Hybrid Scoring** (`server/bayesianEngine.ts`, `server/similarityEngine.ts`, `server/hybridScoringEngine.ts`): blends 4 signals — static Bayes, adaptive Bayes, RLHF weights, Jaccard similarity.
+
+### Multi-Agent Task Bus + Evolution Engine
+- **Task Bus** (`server/agents/taskBus.ts`): priority queue with SAFETY→SRE→ROUTING→REVENUE→LEARNING routing via `controllerAgent.ts`.
+- **Task Agent Registry** (`server/agents/taskAgentRegistry.ts`): 7 agents — Safety, SRE, Routing, Revenue, Learning, Governance, Simulation.
+- **Agent Executor** (`server/agents/agentExecutor.ts`): 1-second dispatch loop.
+- **Evolution Engine** (`server/evolution/`): 6-file system (store, engine, sandbox runner, validator, promotion engine, loop); 10-minute autonomous cycle; manually triggerable.
+- **API** at `/api/agent-evolution/*`: agents/task, bus/stats, bus/log, evolution/status, evolution/run.
+- **War Room panels** (ControlTowerPage `/control-tower`): Agent Controller panel (agent grid + bus stats + task log) + Evolution Engine panel (proposal, sandbox metrics, promotion history, manual trigger).
+
 ### Modules 20-22: Autonomous Brain Expansion (completed)
 - **Module 20 — System Monitor** (`/system-monitor`): Live WebSocket engine + skill health grid, degradation alerts, auto-healer log, case trace lookup. Backend: `healthRegistry.ts`, `trendMonitor.ts`, `autoHealer.ts`, `monitorSocket.ts` (`/ws/monitor`).
 - **Module 21 — Self-Learning Engine** (`server/learning/selfLearningEngine.ts`): Outcome-to-weight feedback loop (`runSelfLearning`, `applyDxWeights`) running every 60s. API at `/api/adaptive-intelligence/learning/*`.
