@@ -303,3 +303,78 @@ export type FdaExperiment = typeof fdaExperiments.$inferSelect;
 
 // Re-export chat models for OpenAI integration
 export * from "./models/chat";
+
+// ─── Production Clinic Layer (multi-tenant, FHIR-ready) ────────────────────
+
+export const clinicSites = pgTable("clinic_sites", {
+  id: serial("id").primaryKey(),
+  externalId: text("external_id").unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  ehrVendor: varchar("ehr_vendor", { length: 100 }),
+  fhirTenantKey: varchar("fhir_tenant_key", { length: 255 }),
+  plan: varchar("plan", { length: 50 }).default("basic").notNull(),
+  status: varchar("status", { length: 50 }).default("active").notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicSiteSchema = createInsertSchema(clinicSites).omit({ id: true, createdAt: true });
+export type InsertClinicSite = z.infer<typeof insertClinicSiteSchema>;
+export type ClinicSite = typeof clinicSites.$inferSelect;
+
+export const clinicPatients = pgTable("clinic_patients", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id").notNull(),
+  firstName: varchar("first_name", { length: 255 }).notNull(),
+  lastName: varchar("last_name", { length: 255 }).notNull(),
+  dob: varchar("dob", { length: 25 }),
+  sex: varchar("sex", { length: 50 }),
+  phone: varchar("phone", { length: 50 }),
+  email: varchar("email", { length: 255 }),
+  externalPatientId: varchar("external_patient_id", { length: 255 }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicPatientSchema = createInsertSchema(clinicPatients).omit({ id: true, createdAt: true });
+export type InsertClinicPatient = z.infer<typeof insertClinicPatientSchema>;
+export type ClinicPatient = typeof clinicPatients.$inferSelect;
+
+export const clinicEncounters = pgTable("clinic_encounters", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => clinicPatients.id),
+  complaint: varchar("complaint", { length: 120 }).notNull(),
+  encounterStatus: varchar("encounter_status", { length: 50 }).default("created").notNull(),
+  intakePayload: jsonb("intake_payload").$type<Record<string, unknown>>().default({}).notNull(),
+  triageResult: jsonb("triage_result").$type<Record<string, unknown>>(),
+  reviewed: boolean("reviewed").default(false).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicEncounterSchema = createInsertSchema(clinicEncounters).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertClinicEncounter = z.infer<typeof insertClinicEncounterSchema>;
+export type ClinicEncounter = typeof clinicEncounters.$inferSelect;
+
+export const clinicIntakeSessions = pgTable("clinic_intake_sessions", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id").notNull(),
+  patientId: integer("patient_id").references(() => clinicPatients.id),
+  channel: varchar("channel", { length: 50 }).notNull(),
+  consented: boolean("consented").default(false).notNull(),
+  sessionState: varchar("session_state", { length: 50 }).default("awaiting_consent").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicIntakeSessionSchema = createInsertSchema(clinicIntakeSessions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertClinicIntakeSession = z.infer<typeof insertClinicIntakeSessionSchema>;
+export type ClinicIntakeSession = typeof clinicIntakeSessions.$inferSelect;
+
+export const labeledOutcomeStats = pgTable("labeled_outcome_stats", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id"),
+  totalLabeledEncounters: integer("total_labeled_encounters").default(0).notNull(),
+  totalGoldenCases: integer("total_golden_cases").default(0).notNull(),
+  lastComputedAt: timestamp("last_computed_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertLabeledOutcomeStatsSchema = createInsertSchema(labeledOutcomeStats).omit({ id: true });
+export type InsertLabeledOutcomeStats = z.infer<typeof insertLabeledOutcomeStatsSchema>;
+export type LabeledOutcomeStats = typeof labeledOutcomeStats.$inferSelect;

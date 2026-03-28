@@ -1,19 +1,121 @@
-import { useQuery, useMutation } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
 import PageShell from "@/components/PageShell"
 import StatusChip from "@/components/StatusChip"
 import LoadingCardSkeleton from "@/components/LoadingCardSkeleton"
 import SectionHeader from "@/components/SectionHeader"
 import { cn } from "@/lib/utils"
+import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, FlaskConical, BookOpen, GitBranch } from "lucide-react"
 
 type CheckResult = { name: string; ok: boolean; detail: string }
 type ProviderStatus = { provider: string; ok: boolean; latencyMs?: number; detail: string; checkedAt: string }
 type MigrationStatus = { name: string; applied: boolean; appliedAt?: string }
 type ValidationRun = { id: string; startedAt: string; finishedAt?: string; status: string; validationResult?: any; smokeResult?: any }
 
+type ProductionLayer = {
+  label: string
+  configured?: boolean
+  active?: boolean
+  enabled?: boolean
+  allowed?: boolean
+  topics?: number
+  interactions?: number
+  tables?: string[]
+  labeled?: number
+  threshold?: number
+  pctToThreshold?: number
+  reason?: string | null
+}
+
+type ProductionStatus = {
+  ok: boolean
+  ts: string
+  layers: Record<string, ProductionLayer>
+}
+
+type EventBusStats = {
+  subscribedTopics: number
+  totalEvents: number
+  recentEvents?: any[]
+}
+
+type LearningEligibility = {
+  allowed: boolean
+  reason: string | null
+  labeled: number
+  goldenCases: number
+  threshold: number
+  pctToThreshold: number
+}
+
+const layerIcons: Record<string, any> = {
+  fhirR4:      { icon: Activity,     color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950" },
+  eventBus:    { icon: Radio,        color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950" },
+  medications: { icon: Pill,         color: "text-rose-600",   bg: "bg-rose-50 dark:bg-rose-950" },
+  rlhfGating:  { icon: BookOpen,     color: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950" },
+  sheetsSync:  { icon: GitBranch,    color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950" },
+  repos:       { icon: Database,     color: "text-slate-600",  bg: "bg-slate-50 dark:bg-slate-950" },
+}
+
+function layerStatus(layer: ProductionLayer, key: string): "success" | "warning" | "info" {
+  if (key === "fhirR4")      return layer.configured ? "success" : "warning"
+  if (key === "eventBus")    return layer.active ? "success" : "warning"
+  if (key === "medications") return layer.active ? "success" : "warning"
+  if (key === "rlhfGating")  return layer.allowed ? "success" : "warning"
+  if (key === "sheetsSync")  return layer.enabled ? "info" : "info"
+  if (key === "repos")       return layer.active ? "success" : "warning"
+  return "info"
+}
+
+function layerBadge(layer: ProductionLayer, key: string): string {
+  if (key === "fhirR4")      return layer.configured ? "Configured" : "Not Configured"
+  if (key === "eventBus")    return layer.active ? `${layer.topics ?? 0} topics` : "Inactive"
+  if (key === "medications") return layer.active ? `${layer.interactions ?? 0} rules` : "Inactive"
+  if (key === "rlhfGating")  return layer.allowed ? "Unlocked" : "Gated"
+  if (key === "sheetsSync")  return layer.enabled ? "Enabled" : "Disabled"
+  if (key === "repos")       return layer.active ? `${(layer.tables ?? []).length} tables` : "Inactive"
+  return "Unknown"
+}
+
 export default function ProductionReadinessPage() {
   const [showFullBundle, setShowFullBundle] = useState(false)
+  const [seedLabeled, setSeedLabeled] = useState(5000)
+  const qc = useQueryClient()
+
+  const { data: prodStatus, isLoading: prodLoading, refetch: refetchProd } = useQuery<ProductionStatus>({
+    queryKey: ["/api/production/status"],
+    queryFn: () => fetch("/api/production/status").then((r) => r.json()),
+    refetchInterval: 30000,
+  })
+
+  const { data: eventBusData, refetch: refetchBus } = useQuery<{ ok: boolean; stats: EventBusStats; recent: any[] }>({
+    queryKey: ["/api/production/event-bus"],
+    queryFn: () => fetch("/api/production/event-bus").then((r) => r.json()),
+    refetchInterval: 15000,
+  })
+
+  const { data: eligibilityData, refetch: refetchElig } = useQuery<{ ok: boolean } & LearningEligibility>({
+    queryKey: ["/api/production/learning-eligibility"],
+    queryFn: () => fetch("/api/production/learning-eligibility").then((r) => r.json()),
+    refetchInterval: 30000,
+  })
+
+  const seedMutation = useMutation({
+    mutationFn: (totalLabeledEncounters: number) =>
+      fetch("/api/production/learning-eligibility/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ totalLabeledEncounters }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      refetchElig()
+      refetchProd()
+      qc.invalidateQueries({ queryKey: ["/api/production/learning-eligibility"] })
+    },
+  })
 
   const { data: readinessData, isLoading, refetch } = useQuery({
     queryKey: ["/api/production-readiness"],
@@ -147,6 +249,141 @@ export default function ProductionReadinessPage() {
           </div>
         </section>
       )}
+
+      {/* ── Production Architecture Layers ─────────────────────────────── */}
+      <section>
+        <SectionHeader
+          title="Production Architecture Layers"
+          description="FHIR R4 interoperability, clinical event bus, medication safety, RLHF gating, repos"
+        />
+        {prodLoading ? (
+          <LoadingCardSkeleton count={3} />
+        ) : prodStatus?.layers ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {Object.entries(prodStatus.layers).map(([key, layer]) => {
+              const meta   = layerIcons[key] ?? { icon: Cpu, color: "text-slate-500", bg: "bg-slate-50 dark:bg-slate-950" }
+              const Icon   = meta.icon
+              const status = layerStatus(layer, key)
+              const badge  = layerBadge(layer, key)
+              return (
+                <div
+                  key={key}
+                  data-testid={`layer-card-${key}`}
+                  className="border rounded-xl p-4 bg-card flex flex-col gap-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className={cn("p-1.5 rounded-lg", meta.bg)}>
+                      <Icon className={cn("h-4 w-4", meta.color)} />
+                    </div>
+                    <span className="font-medium text-sm">{layer.label}</span>
+                    <StatusChip label={badge} level={status} className="ml-auto text-xs" />
+                  </div>
+                  {key === "repos" && layer.tables && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {layer.tables.map((t) => (
+                        <Badge key={t} variant="secondary" className="text-xs font-mono">{t}</Badge>
+                      ))}
+                    </div>
+                  )}
+                  {key === "fhirR4" && !layer.configured && (
+                    <p className="text-xs text-muted-foreground">Set <code className="font-mono">FHIR_BASE_URL</code> to enable R4 sync</p>
+                  )}
+                  {key === "rlhfGating" && layer.reason && (
+                    <p className="text-xs text-muted-foreground">{layer.reason}</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="border border-dashed rounded-xl p-6 text-center text-sm text-muted-foreground">No layer data yet</div>
+        )}
+        <div className="mt-2 flex justify-end">
+          <Button size="sm" variant="ghost" onClick={() => refetchProd()} data-testid="button-refresh-layers">
+            <RefreshCw className="h-3 w-3 mr-1" /> Refresh layers
+          </Button>
+        </div>
+      </section>
+
+      {/* ── Clinical Event Bus ────────────────────────────────────────────── */}
+      <section>
+        <SectionHeader title="Clinical Event Bus" description="Real-time event tracking across the care pipeline" />
+        {eventBusData ? (
+          <div className="space-y-3">
+            <div className="flex gap-4 text-sm flex-wrap">
+              <span>Topics: <strong data-testid="text-bus-topics">{eventBusData.stats?.subscribedTopics ?? 0}</strong></span>
+              <span>Total Events: <strong data-testid="text-bus-events">{eventBusData.stats?.totalEvents ?? 0}</strong></span>
+            </div>
+            {(eventBusData.recent?.length ?? 0) > 0 && (
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium">Topic</th>
+                      <th className="px-3 py-2 text-left font-medium">Event ID</th>
+                      <th className="px-3 py-2 text-left font-medium">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {eventBusData.recent.slice(0, 8).map((ev: any, i: number) => (
+                      <tr key={i} className="border-t" data-testid={`row-event-${i}`}>
+                        <td className="px-3 py-1.5 font-mono text-purple-700 dark:text-purple-400">{ev.topic}</td>
+                        <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[180px]">{ev.id}</td>
+                        <td className="px-3 py-1.5 text-muted-foreground">{new Date(ev.ts).toLocaleTimeString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Loading event bus stats…</p>
+        )}
+      </section>
+
+      {/* ── RLHF Learning Gate ─────────────────────────────────────────────── */}
+      <section>
+        <SectionHeader title="RLHF Autonomous Learning Gate" description="Autonomous learning only unlocks after 10,000 labeled encounters" />
+        {eligibilityData ? (
+          <div className="border rounded-xl p-4 space-y-3 bg-card">
+            <div className="flex items-center gap-3">
+              <StatusChip
+                label={eligibilityData.allowed ? "Learning Unlocked" : "Gated — Awaiting Labels"}
+                level={eligibilityData.allowed ? "success" : "warning"}
+              />
+              <span className="text-xs text-muted-foreground" data-testid="text-labeled-count">
+                {(eligibilityData.labeled ?? 0).toLocaleString()} / {(eligibilityData.threshold ?? 0).toLocaleString()} labeled
+              </span>
+            </div>
+            <Progress value={eligibilityData.pctToThreshold ?? 0} className="h-2" data-testid="progress-rlhf" />
+            {eligibilityData.reason && (
+              <p className="text-xs text-muted-foreground">{eligibilityData.reason}</p>
+            )}
+            <div className="flex items-center gap-2 pt-1 flex-wrap">
+              <span className="text-xs text-muted-foreground">Seed labeled count:</span>
+              <input
+                type="number"
+                data-testid="input-seed-labeled"
+                value={seedLabeled}
+                onChange={(e) => setSeedLabeled(Number(e.target.value))}
+                className="border rounded px-2 py-1 text-xs w-28"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="button-seed-labels"
+                onClick={() => seedMutation.mutate(seedLabeled)}
+                disabled={seedMutation.isPending}
+              >
+                {seedMutation.isPending ? "Seeding…" : "Seed Labels"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Loading eligibility…</p>
+        )}
+      </section>
 
       {/* Latest staging validation run */}
       <section>
