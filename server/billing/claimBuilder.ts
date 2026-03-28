@@ -1,4 +1,6 @@
 import { mapToBilling } from "./codingEngine";
+import { scrubClaim } from "./claimScrubber";
+import { logEvent } from "../ops/auditEvents";
 
 export interface ClaimData {
   claimId: string;
@@ -26,7 +28,7 @@ export function buildClaim(
     result.triage || "routine"
   );
 
-  return {
+  const claim: ClaimData = {
     claimId: `CLM-${Date.now()}-${claimCounter.toString().padStart(4, "0")}`,
     patientId: patient.id,
     diagnosis: billing.diagnosis,
@@ -39,4 +41,31 @@ export function buildClaim(
     createdAt: new Date().toISOString(),
     status: "draft",
   };
+
+  // D. Claim Scrubber — validate before returning
+  const scrub = scrubClaim({
+    icd10:         claim.icd10,
+    cpt:           claim.procedure,
+    patientId:     claim.patientId,
+    provider:      claim.provider,
+    dateOfService: claim.dateOfService,
+  });
+
+  if (!scrub.valid) {
+    logEvent({
+      type:     "CLAIM_SCRUB_FAILED",
+      entityId: claim.claimId,
+      severity: "warn",
+      payload:  { issues: scrub.issues, warnings: scrub.warnings, claim },
+    });
+  } else if (scrub.warnings.length > 0) {
+    logEvent({
+      type:     "CLAIM_SUBMITTED",
+      entityId: claim.claimId,
+      severity: "info",
+      payload:  { warnings: scrub.warnings, status: "draft" },
+    });
+  }
+
+  return claim;
 }

@@ -1,11 +1,13 @@
 import { Router, Request, Response } from "express";
 import { isFhirConfigured } from "../ehr/fhir/fhirClient";
+import { isSmartAuthConfigured } from "../ehr/fhir/fhirAuth";
 import { getBusStats, getRecentEvents } from "../events/bus";
 import { canRunAutonomousLearning, upsertLabeledStats } from "../learning/learningEligibility";
-import { detectInteractions, getInteractionDb } from "../medications/interactions";
+import { getInteractionDb } from "../medications/interactions";
 import { validatePrescriptionAuthority } from "../medications/deaGuard";
 import { runMedicationSafetyCheck } from "../medications/medSafetyService";
 import { isSyncEnabled } from "../migration/sheetsSyncAdapter";
+import { getAuditLogStats } from "../ops/auditEvents";
 
 const router = Router();
 
@@ -16,15 +18,22 @@ router.get("/status", async (_req: Request, res: Response) => {
     Promise.resolve(getBusStats()),
   ]);
 
+  const auditStats = getAuditLogStats();
+
   res.json({
     ok: true,
     layers: {
-      fhirR4:          { configured: isFhirConfigured(),  label: "FHIR R4 Interoperability" },
+      fhirR4:          { configured: isFhirConfigured(),  smartAuth: isSmartAuthConfigured(), label: "FHIR R4 Interoperability" },
       eventBus:        { active: true, topics: busStats.subscribedTopics, label: "Clinical Event Bus" },
       medications:     { active: true, interactions: getInteractionDb().length, label: "Medication Safety Engine" },
       rlhfGating:      { ...eligibility, label: "RLHF Learning Gate" },
       sheetsSync:      { enabled: isSyncEnabled(), label: "Sheets→Postgres Sync" },
       repos:           { active: true, tables: ["clinic_patients", "clinic_encounters", "clinic_intake_sessions", "labeled_outcome_stats"], label: "Production Repos" },
+      rowLevelSecurity:{ active: true, tables: 3, policies: 3, label: "Row-Level Security (RLS)" },
+      claimScrubber:   { active: true, priorAuthCpts: 6, label: "Claim Scrubber + Prior Auth" },
+      multiComplaintFusion: { active: true, rules: 8, label: "Multi-Complaint Fusion Engine" },
+      surescripts:     { enabled: process.env.SURESCRIPTS_ENABLED === "true", label: "Surescripts eRx Adapter" },
+      immutableAudit:  { active: true, totalRecords: auditStats.total, fileSizeBytes: auditStats.fileSizeBytes, label: "Immutable Audit Pipeline" },
     },
     ts: new Date().toISOString(),
   });

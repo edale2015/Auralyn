@@ -8,7 +8,7 @@ import StatusChip from "@/components/StatusChip"
 import LoadingCardSkeleton from "@/components/LoadingCardSkeleton"
 import SectionHeader from "@/components/SectionHeader"
 import { cn } from "@/lib/utils"
-import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, FlaskConical, BookOpen, GitBranch } from "lucide-react"
+import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText } from "lucide-react"
 
 type CheckResult = { name: string; ok: boolean; detail: string }
 type ProviderStatus = { provider: string; ok: boolean; latencyMs?: number; detail: string; checkedAt: string }
@@ -52,31 +52,55 @@ type LearningEligibility = {
 }
 
 const layerIcons: Record<string, any> = {
-  fhirR4:      { icon: Activity,     color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950" },
-  eventBus:    { icon: Radio,        color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950" },
-  medications: { icon: Pill,         color: "text-rose-600",   bg: "bg-rose-50 dark:bg-rose-950" },
-  rlhfGating:  { icon: BookOpen,     color: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950" },
-  sheetsSync:  { icon: GitBranch,    color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950" },
-  repos:       { icon: Database,     color: "text-slate-600",  bg: "bg-slate-50 dark:bg-slate-950" },
+  fhirR4:               { icon: Activity,     color: "text-blue-600",    bg: "bg-blue-50 dark:bg-blue-950" },
+  eventBus:             { icon: Radio,        color: "text-purple-600",  bg: "bg-purple-50 dark:bg-purple-950" },
+  medications:          { icon: Pill,         color: "text-rose-600",    bg: "bg-rose-50 dark:bg-rose-950" },
+  rlhfGating:           { icon: BookOpen,     color: "text-amber-600",   bg: "bg-amber-50 dark:bg-amber-950" },
+  sheetsSync:           { icon: GitBranch,    color: "text-green-600",   bg: "bg-green-50 dark:bg-green-950" },
+  repos:                { icon: Database,     color: "text-slate-600",   bg: "bg-slate-50 dark:bg-slate-950" },
+  rowLevelSecurity:     { icon: Lock,         color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
+  claimScrubber:        { icon: FileCheck,    color: "text-teal-600",    bg: "bg-teal-50 dark:bg-teal-950" },
+  multiComplaintFusion: { icon: Merge,        color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
+  surescripts:          { icon: Stethoscope,  color: "text-cyan-600",    bg: "bg-cyan-50 dark:bg-cyan-950" },
+  immutableAudit:       { icon: ScrollText,   color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
 }
 
-function layerStatus(layer: ProductionLayer, key: string): "success" | "warning" | "info" {
-  if (key === "fhirR4")      return layer.configured ? "success" : "warning"
-  if (key === "eventBus")    return layer.active ? "success" : "warning"
-  if (key === "medications") return layer.active ? "success" : "warning"
-  if (key === "rlhfGating")  return layer.allowed ? "success" : "warning"
-  if (key === "sheetsSync")  return layer.enabled ? "info" : "info"
-  if (key === "repos")       return layer.active ? "success" : "warning"
+type ExtLayer = ProductionLayer & {
+  tables?: number
+  policies?: number
+  priorAuthCpts?: number
+  rules?: number
+  totalRecords?: number
+  fileSizeBytes?: number
+}
+
+function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "info" {
+  if (key === "fhirR4")               return layer.configured ? "success" : "warning"
+  if (key === "eventBus")             return layer.active ? "success" : "warning"
+  if (key === "medications")          return layer.active ? "success" : "warning"
+  if (key === "rlhfGating")           return layer.allowed ? "success" : "warning"
+  if (key === "sheetsSync")           return "info"
+  if (key === "repos")                return layer.active ? "success" : "warning"
+  if (key === "rowLevelSecurity")     return layer.active ? "success" : "warning"
+  if (key === "claimScrubber")        return layer.active ? "success" : "warning"
+  if (key === "multiComplaintFusion") return layer.active ? "success" : "warning"
+  if (key === "surescripts")          return layer.enabled ? "success" : "info"
+  if (key === "immutableAudit")       return layer.active ? "success" : "warning"
   return "info"
 }
 
-function layerBadge(layer: ProductionLayer, key: string): string {
-  if (key === "fhirR4")      return layer.configured ? "Configured" : "Not Configured"
-  if (key === "eventBus")    return layer.active ? `${layer.topics ?? 0} topics` : "Inactive"
-  if (key === "medications") return layer.active ? `${layer.interactions ?? 0} rules` : "Inactive"
-  if (key === "rlhfGating")  return layer.allowed ? "Unlocked" : "Gated"
-  if (key === "sheetsSync")  return layer.enabled ? "Enabled" : "Disabled"
-  if (key === "repos")       return layer.active ? `${(layer.tables ?? []).length} tables` : "Inactive"
+function layerBadge(layer: ExtLayer, key: string): string {
+  if (key === "fhirR4")               return layer.configured ? "Configured" : "Not Configured"
+  if (key === "eventBus")             return layer.active ? `${layer.topics ?? 0} topics` : "Inactive"
+  if (key === "medications")          return layer.active ? `${layer.interactions ?? 0} rules` : "Inactive"
+  if (key === "rlhfGating")           return layer.allowed ? "Unlocked" : "Gated"
+  if (key === "sheetsSync")           return layer.enabled ? "Enabled" : "Disabled"
+  if (key === "repos")                return layer.active ? `${Array.isArray((layer as any).tables) ? (layer as any).tables.length : 4} tables` : "Inactive"
+  if (key === "rowLevelSecurity")     return layer.active ? `${layer.policies ?? 3} policies` : "Inactive"
+  if (key === "claimScrubber")        return layer.active ? `${layer.priorAuthCpts ?? 6} PA CPTs` : "Inactive"
+  if (key === "multiComplaintFusion") return layer.active ? `${layer.rules ?? 8} syndromes` : "Inactive"
+  if (key === "surescripts")          return layer.enabled ? "Live" : "Stub Mode"
+  if (key === "immutableAudit")       return layer.active ? `${layer.totalRecords ?? 0} records` : "Inactive"
   return "Unknown"
 }
 
