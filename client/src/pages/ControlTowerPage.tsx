@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import IncidentTimeline from "@/components/IncidentTimeline";
-import { Bot, FlaskConical, ChevronRight } from "lucide-react";
+import { Bot, FlaskConical, ChevronRight, Globe, CircleDot } from "lucide-react";
 
 /* ─── Types ────────────────────────────────────────────────── */
 interface TowerState {
@@ -147,6 +147,8 @@ export default function ControlTowerPage() {
   const [busLog, setBusLog]               = useState<any[]>([]);
   const [evolutionStatus, setEvolutionStatus] = useState<any>(null);
   const [evolutionRunning, setEvolutionRunning] = useState(false);
+  const [globalState, setGlobalState]     = useState<any>(null);
+  const [syncRunning, setSyncRunning]     = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const orchWsRef = useRef<WebSocket | null>(null);
@@ -345,6 +347,37 @@ export default function ControlTowerPage() {
     const t = setInterval(() => { fetchAgentsAndBus(); fetchEvolution(); }, 5000);
     return () => clearInterval(t);
   }, [fetchAgentsAndBus, fetchEvolution]);
+
+  /* ── Global Intelligence fetch ─────────────────────────── */
+  const fetchGlobalState = useCallback(async () => {
+    try {
+      const r = await fetch("/api/global-intelligence/status");
+      if (!r.ok) return;
+      const j = await r.json();
+      setGlobalState(j.state);
+    } catch {}
+  }, []);
+
+  const runGlobalSync = async () => {
+    setSyncRunning(true);
+    try {
+      const r = await fetch("/api/global-intelligence/sync", { method: "POST" });
+      const j = await r.json();
+      setGlobalState(j.state);
+      toast({
+        title: `🌐 Global sync complete`,
+        description: `${j.state?.connectedClinics} clinics · accuracy ${((j.state?.globalAccuracy ?? 0) * 100).toFixed(1)}%`,
+      });
+    } catch (e: any) {
+      toast({ title: "Sync failed", description: e.message, variant: "destructive" });
+    } finally { setSyncRunning(false); }
+  };
+
+  useEffect(() => {
+    fetchGlobalState();
+    const t = setInterval(fetchGlobalState, 15_000);
+    return () => clearInterval(t);
+  }, [fetchGlobalState]);
 
   const runOutage = async () => {
     setOutageLoading(true);
@@ -887,6 +920,114 @@ export default function ControlTowerPage() {
             </>
           ) : (
             <p className="text-xs text-muted-foreground italic">Evolution engine initializing — first cycle runs in 10 minutes, or trigger manually.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── GLOBAL INTELLIGENCE ──────────────────────────────── */}
+      <Card className="border border-border/60">
+        <CardHeader className="py-3 px-4 flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-cyan-400" />
+            <CardTitle className="text-sm font-semibold">Global Intelligence</CardTitle>
+            {globalState && (
+              <>
+                <Badge variant="secondary" className="text-[10px]">
+                  {globalState.connectedClinics} clinics online
+                </Badge>
+                <Badge
+                  variant={globalState.globalAccuracy >= 0.85 ? "default" : "secondary"}
+                  className="text-[10px]"
+                >
+                  {(globalState.globalAccuracy * 100).toFixed(1)}% accuracy
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">
+                  {globalState.modelVersion ?? "v—"}
+                </Badge>
+              </>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={fetchGlobalState} data-testid="btn-refresh-global">Refresh</Button>
+            <Button size="sm" variant="outline" onClick={runGlobalSync} disabled={syncRunning} data-testid="btn-run-global-sync">
+              {syncRunning ? "Syncing…" : "🌐 Sync Now"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-3">
+          {globalState ? (
+            <>
+              {/* Clinic nodes grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {(globalState.clinicNodes ?? []).map((node: any) => (
+                  <div
+                    key={node.clinicId}
+                    className={`rounded-lg px-3 py-2 border text-xs ${
+                      node.status === "online"   ? "border-cyan-800/40 bg-cyan-950/20"
+                      : node.status === "degraded" ? "border-amber-800/40 bg-amber-950/20"
+                      : "border-red-800/40 bg-red-950/20"
+                    }`}
+                    data-testid={`card-clinic-${node.clinicId}`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <CircleDot className={`h-3 w-3 shrink-0 ${
+                        node.status === "online" ? "text-cyan-400"
+                        : node.status === "degraded" ? "text-amber-400" : "text-red-400"
+                      }`} />
+                      <p className="font-semibold truncate">{node.region}</p>
+                    </div>
+                    <p className="text-muted-foreground text-[10px] mt-0.5 truncate">{node.clinicId}</p>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[10px]">{(node.accuracy * 100).toFixed(0)}% acc</span>
+                      <span className="text-[10px] text-muted-foreground">{node.sampleCount} cases</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Global model stats */}
+              {globalState.currentModel && (
+                <div className="grid grid-cols-4 gap-2 text-xs">
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Global Acc</p>
+                    <p className="font-bold text-sm text-cyan-400">{(globalState.currentModel.averageAccuracy * 100).toFixed(1)}%</p>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Clinics</p>
+                    <p className="font-bold text-sm">{globalState.currentModel.participatingClinics?.length ?? 0}</p>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Total Samples</p>
+                    <p className="font-bold text-sm">{globalState.currentModel.totalSamples?.toLocaleString()}</p>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 text-center">
+                    <p className="text-[9px] text-muted-foreground">Sync Cycles</p>
+                    <p className="font-bold text-sm">{globalState.cycleCount}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Distribution log */}
+              {globalState.distributionLog?.length > 0 && (
+                <div className="space-y-1 max-h-24 overflow-y-auto">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Distribution Log</p>
+                  {globalState.distributionLog.map((entry: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 text-[10px] bg-muted/20 rounded px-2 py-1" data-testid={`row-global-sync-${i}`}>
+                      <ChevronRight className="h-3 w-3 shrink-0 text-cyan-400" />
+                      <span className="text-muted-foreground shrink-0">{new Date(entry.at).toLocaleTimeString()}</span>
+                      <span>{entry.clinics} clinics</span>
+                      <span className="text-cyan-400">{(entry.accuracy * 100).toFixed(1)}% acc</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {globalState.lastSyncAt && (
+                <p className="text-[10px] text-muted-foreground">Last sync: {new Date(globalState.lastSyncAt).toLocaleString()} · No PHI shared — federated weights only</p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">Global sync initializing — first sync runs in 15 seconds, or trigger manually above.</p>
           )}
         </CardContent>
       </Card>

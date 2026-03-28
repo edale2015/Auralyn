@@ -285,6 +285,8 @@ import fdaValidationRoutes from "./routes/fdaValidationRoutes";
 import agentEvolutionRoutes from "./routes/agentEvolutionRoutes";
 import { startAgentExecutor, stopAgentExecutor } from "./agents/agentExecutor";
 import { startEvolutionLoop, stopEvolutionLoop } from "./evolution/evolutionLoop";
+import globalIntelligenceRoutes from "./routes/globalIntelligenceRoutes";
+import { startGlobalSyncLoop, stopGlobalSyncLoop } from "./global/globalSyncLoop";
 // Register task agents (side-effects: all 7 agents added to registry)
 import "./agents/taskAgentRegistry";
 import { startGovernanceLoop, stopGovernanceLoop } from "./governance/auditAgent";
@@ -631,6 +633,7 @@ app.use("/api/adaptive-insights", adaptiveInsightsRoutes);
 app.use("/api/adaptive-intelligence", adaptiveIntelligenceRoutes);
 app.use("/api/fda-validation", fdaValidationRoutes);
 app.use("/api/agent-evolution", agentEvolutionRoutes);
+app.use("/api/global-intelligence", globalIntelligenceRoutes);
 app.use("/api/pack-admin", packAdminRoutes);
 app.use("/api/pack-intake", packDrivenIntakeRoutes);
 app.use("/api/pack-simulator", packSimulatorRoutes);
@@ -903,6 +906,7 @@ app.use((req, res, next) => {
       startGoldenMonitor(300_000);
       startAgentExecutor(1_000);
       startEvolutionLoop(600_000);
+      startGlobalSyncLoop(600_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
 
       const shutdown = (signal: string) => {
@@ -917,6 +921,7 @@ app.use((req, res, next) => {
         stopGoldenMonitor();
         stopAgentExecutor();
         stopEvolutionLoop();
+        stopGlobalSyncLoop();
         httpServer.close(() => {
           console.log("[Shutdown] HTTP server closed");
           process.exit(0);

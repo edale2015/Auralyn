@@ -35,6 +35,14 @@ A **Stress Test System** (`server/stress/`) allows for load generation and metri
 - **FDA Validation Dashboard** (`/fda-dashboard`): Accuracy/Precision/Recall/F1/F-beta metrics, A–D grade badge, confusion matrix, per-case results, intelligence tab.
 - **Bayesian + RLHF Hybrid Scoring** (`server/bayesianEngine.ts`, `server/similarityEngine.ts`, `server/hybridScoringEngine.ts`): blends 4 signals — static Bayes, adaptive Bayes, RLHF weights, Jaccard similarity.
 
+### Global Intelligence Layer (Federated Learning)
+- **Exporter** (`server/global/exporter.ts`): builds a privacy-safe, non-PHI export payload from local engines (Golden pass rate, Bayesian snapshot, Similarity case count, local weights) for each sync cycle.
+- **Global Intelligence Store** (`server/global/globalIntelligenceStore.ts`): maintains 5 federated clinic nodes (NYC + 4 simulated regional clinics), runs weighted global aggregation, applies global weights back to local node via 70/30 blend ratio, tracks distribution log, exposes `applyGlobalBoost(localScore, dx)` for any scoring engine to use.
+- **Global Sync Loop** (`server/global/globalSyncLoop.ts`): fires 15s after startup, then every 10 minutes; fully integrated into server lifecycle with clean shutdown.
+- **API** at `/api/global-intelligence/*`: status, model-history, export, sync (POST), boost (POST).
+- **War Room panel** (ControlTowerPage `/control-tower`): clinic node grid with online/degraded/offline indicators, global model stats (accuracy / clinics / samples / cycles), distribution log, manual "Sync Now" button; auto-refreshes every 15s.
+- **Safety guarantees**: no PHI leaves system — only aggregated weights, pass rates, and patterns are shared.
+
 ### Multi-Agent Task Bus + Evolution Engine
 - **Task Bus** (`server/agents/taskBus.ts`): priority queue with SAFETY→SRE→ROUTING→REVENUE→LEARNING routing via `controllerAgent.ts`.
 - **Task Agent Registry** (`server/agents/taskAgentRegistry.ts`): 7 agents — Safety, SRE, Routing, Revenue, Learning, Governance, Simulation.
