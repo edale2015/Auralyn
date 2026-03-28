@@ -278,6 +278,9 @@ import { startAnomalyEngine } from "./controlTower/anomalyEngine";
 import { startAlertEngine, stopAlertEngine } from "./monitoring/alertEngine";
 import { startMonitorSocket } from "./ws/monitorSocket";
 import { startAutoHealer, stopAutoHealer } from "./monitoring/autoHealer";
+import { startSelfLearningLoop, stopSelfLearningLoop } from "./learning/selfLearningEngine";
+import { startGoldenMonitor, stopGoldenMonitor } from "./golden/goldenMonitor";
+import adaptiveIntelligenceRoutes from "./routes/adaptiveIntelligenceRoutes";
 import { startGovernanceLoop, stopGovernanceLoop } from "./governance/auditAgent";
 import { startTwinSync, stopTwinSync } from "./twin/digitalTwin";
 import { startPredictiveLoop, stopPredictiveLoop } from "./predictive/predictiveEngine";
@@ -619,6 +622,7 @@ app.use("/api/smart-intake", smartIntakeRoutes);
 app.use("/api/intelligence", intelligenceRoutes);
 app.use("/api/adaptive-control", adaptiveControlRoutes);
 app.use("/api/adaptive-insights", adaptiveInsightsRoutes);
+app.use("/api/adaptive-intelligence", adaptiveIntelligenceRoutes);
 app.use("/api/pack-admin", packAdminRoutes);
 app.use("/api/pack-intake", packDrivenIntakeRoutes);
 app.use("/api/pack-simulator", packSimulatorRoutes);
@@ -887,6 +891,8 @@ app.use((req, res, next) => {
       startChaosScheduler(60_000);
       startMonitorSocket(httpServer);
       startAutoHealer();
+      startSelfLearningLoop(60_000);
+      startGoldenMonitor(300_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
 
       const shutdown = (signal: string) => {
@@ -897,6 +903,8 @@ app.use((req, res, next) => {
         stopPredictiveLoop();
         stopChaosScheduler();
         stopAutoHealer();
+        stopSelfLearningLoop();
+        stopGoldenMonitor();
         httpServer.close(() => {
           console.log("[Shutdown] HTTP server closed");
           process.exit(0);

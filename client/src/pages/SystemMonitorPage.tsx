@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { Brain, Shield, AlertTriangle } from "lucide-react";
 
 /* ─── Types ───────────────────────────────────────────────── */
 type HealthStatus = "green" | "yellow" | "red" | "gray";
@@ -53,6 +54,55 @@ interface HealEntry {
   ts: number;
   engine: string;
   action: string;
+}
+
+interface LearningCycle {
+  cycleAt: string;
+  processed: number;
+  weightUpdates: number;
+  topAdjustments: Array<{ key: string; delta: number }>;
+}
+
+interface LearningSnapshot {
+  lastCycleAt: string | null;
+  totalCycles: number;
+  currentWeights: Record<string, number>;
+  weightHistory: Array<{ key: string; delta: number; timestamp: string }>;
+}
+
+interface GoldenResult {
+  caseId: string;
+  description: string;
+  passed: boolean;
+  blocked: boolean;
+  expectedBlock: boolean;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  latencyMs: number;
+  error?: string;
+}
+
+interface GoldenSummary {
+  ranAt: string;
+  total: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+  avgLatencyMs: number;
+  results: GoldenResult[];
+}
+
+interface SafetySummary {
+  totalBlocks: number;
+  criticalBlocks: number;
+  highBlocks: number;
+  last24hBlocks: number;
+}
+
+interface SafetyBlock {
+  ts: number;
+  reason: string;
+  level: string;
 }
 
 /* ─── Helpers ─────────────────────────────────────────────── */
@@ -112,6 +162,13 @@ export default function SystemMonitorPage() {
   const [trace, setTrace]             = useState<CaseTrace | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
   const [healing, setHealing]         = useState(false);
+  const [learningSnapshot, setLearningSnapshot] = useState<LearningSnapshot | null>(null);
+  const [learningCycles, setLearningCycles]     = useState<LearningCycle[]>([]);
+  const [learningRunning, setLearningRunning]   = useState(false);
+  const [goldenSummary, setGoldenSummary]       = useState<GoldenSummary | null>(null);
+  const [goldenRunning, setGoldenRunning]       = useState(false);
+  const [safetySummary, setSafetySummary]       = useState<SafetySummary | null>(null);
+  const [safetyBlocks, setSafetyBlocks]         = useState<SafetyBlock[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { toast } = useToast();
@@ -209,6 +266,90 @@ export default function SystemMonitorPage() {
       toast({ title: "Trace lookup failed", description: e.message, variant: "destructive" });
     } finally { setTraceLoading(false); }
   };
+
+  /* ── Fetch learning data ──────────────────────────────── */
+  const fetchLearning = useCallback(async () => {
+    try {
+      const [rs, rc] = await Promise.allSettled([
+        fetch("/api/adaptive-intelligence/learning/snapshot"),
+        fetch("/api/adaptive-intelligence/learning/cycles"),
+      ]);
+      if (rs.status === "fulfilled" && rs.value.ok) {
+        const j = await rs.value.json();
+        if (j.snapshot) setLearningSnapshot(j.snapshot);
+      }
+      if (rc.status === "fulfilled" && rc.value.ok) {
+        const j = await rc.value.json();
+        if (j.cycles) setLearningCycles(j.cycles.slice(0, 10));
+      }
+    } catch {}
+  }, []);
+
+  const triggerLearning = async () => {
+    setLearningRunning(true);
+    try {
+      const r = await fetch("/api/adaptive-intelligence/learning/run", { method: "POST" });
+      const j = await r.json();
+      toast({ title: "Learning cycle complete", description: `Processed: ${j.cycle?.processed ?? 0} outcomes · ${j.cycle?.weightUpdates ?? 0} weight updates` });
+      await fetchLearning();
+    } catch (e: any) {
+      toast({ title: "Learning failed", description: e.message, variant: "destructive" });
+    } finally { setLearningRunning(false); }
+  };
+
+  /* ── Fetch golden cases data ──────────────────────────── */
+  const fetchGolden = useCallback(async () => {
+    try {
+      const r = await fetch("/api/adaptive-intelligence/golden/status");
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.summary) setGoldenSummary(j.summary);
+    } catch {}
+  }, []);
+
+  const runGolden = async () => {
+    setGoldenRunning(true);
+    try {
+      const r = await fetch("/api/adaptive-intelligence/golden/run", { method: "POST" });
+      const j = await r.json();
+      setGoldenSummary(j.summary);
+      const failed = j.summary?.failed ?? 0;
+      toast({
+        title: failed === 0 ? "All golden cases passed ✅" : `⚠ ${failed} golden cases FAILED`,
+        description: `${j.summary?.passed}/${j.summary?.total} passed · avg ${j.summary?.avgLatencyMs}ms`,
+        variant: failed > 0 ? "destructive" : "default",
+      });
+    } catch (e: any) {
+      toast({ title: "Golden run failed", description: e.message, variant: "destructive" });
+    } finally { setGoldenRunning(false); }
+  };
+
+  /* ── Fetch safety data ────────────────────────────────── */
+  const fetchSafety = useCallback(async () => {
+    try {
+      const [rs, rb] = await Promise.allSettled([
+        fetch("/api/adaptive-intelligence/safety/summary"),
+        fetch("/api/adaptive-intelligence/safety/blocks"),
+      ]);
+      if (rs.status === "fulfilled" && rs.value.ok) {
+        const j = await rs.value.json();
+        if (j.summary) setSafetySummary(j.summary);
+      }
+      if (rb.status === "fulfilled" && rb.value.ok) {
+        const j = await rb.value.json();
+        if (j.blocks) setSafetyBlocks(j.blocks.slice(0, 15));
+      }
+    } catch {}
+  }, []);
+
+  /* ── Bootstrap ────────────────────────────────────────── */
+  useEffect(() => {
+    fetchLearning();
+    fetchGolden();
+    fetchSafety();
+    const t = setInterval(() => { fetchSafety(); fetchGolden(); fetchLearning(); }, 10_000);
+    return () => clearInterval(t);
+  }, [fetchLearning, fetchGolden, fetchSafety]);
 
   /* ── Derived ──────────────────────────────────────────── */
   const greenEngines  = engines.filter(e => e.status === "green").length;
@@ -514,6 +655,179 @@ export default function SystemMonitorPage() {
             <p className="text-xs text-muted-foreground italic">
               No trace found. Traces are recorded when cases pass through the clinical pipeline.
             </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Self-Learning Engine ────────────────────────────── */}
+      <Card className="border border-border/60">
+        <CardHeader className="py-3 px-4 flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Brain className="h-4 w-4 text-purple-400" />
+            <CardTitle className="text-sm font-semibold">Self-Learning Engine</CardTitle>
+            {learningSnapshot && (
+              <Badge variant="secondary" className="text-[10px]">{learningSnapshot.totalCycles} cycles</Badge>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={fetchLearning} data-testid="btn-refresh-learning">Refresh</Button>
+            <Button size="sm" variant="outline" onClick={triggerLearning} disabled={learningRunning} data-testid="btn-run-learning">
+              {learningRunning ? "Running…" : "Run Cycle"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-3">
+          {learningSnapshot ? (
+            <>
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="rounded bg-muted/40 p-2 text-center">
+                  <p className="text-muted-foreground">Total Cycles</p>
+                  <p className="font-bold text-base">{learningSnapshot.totalCycles}</p>
+                </div>
+                <div className="rounded bg-muted/40 p-2 text-center">
+                  <p className="text-muted-foreground">Last Cycle</p>
+                  <p className="font-bold text-sm">{learningSnapshot.lastCycleAt ? new Date(learningSnapshot.lastCycleAt).toLocaleTimeString() : "—"}</p>
+                </div>
+                <div className="rounded bg-muted/40 p-2 text-center">
+                  <p className="text-muted-foreground">Tracked Weights</p>
+                  <p className="font-bold text-base">{Object.keys(learningSnapshot.currentWeights).length}</p>
+                </div>
+              </div>
+              {learningCycles.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Recent Cycles</p>
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {learningCycles.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs bg-muted/20 rounded px-2 py-1" data-testid={`row-learning-cycle-${i}`}>
+                        <span className="text-muted-foreground shrink-0">{new Date(c.cycleAt).toLocaleTimeString()}</span>
+                        <span className="font-medium">{c.processed} outcomes</span>
+                        <span className="text-purple-400">{c.weightUpdates} weight updates</span>
+                        {c.topAdjustments?.[0] && (
+                          <span className="text-muted-foreground truncate">top: {c.topAdjustments[0].key} ({c.topAdjustments[0].delta > 0 ? "+" : ""}{c.topAdjustments[0].delta.toFixed(3)})</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">No learning data yet. Cycles run every 60s or trigger manually.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Golden Case Validator ───────────────────────────── */}
+      <Card className="border border-border/60">
+        <CardHeader className="py-3 px-4 flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-amber-400" />
+            <CardTitle className="text-sm font-semibold">Golden Case Validator</CardTitle>
+            {goldenSummary && (
+              <Badge variant={goldenSummary.failed === 0 ? "default" : "destructive"} className="text-[10px]">
+                {goldenSummary.passed}/{goldenSummary.total} passed
+              </Badge>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={fetchGolden} data-testid="btn-refresh-golden">Refresh</Button>
+            <Button size="sm" variant="outline" onClick={runGolden} disabled={goldenRunning} data-testid="btn-run-golden">
+              {goldenRunning ? "Validating…" : "Run Validation"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-3">
+          {goldenSummary ? (
+            <>
+              <div className="grid grid-cols-4 gap-2 text-xs">
+                <div className="rounded bg-muted/40 p-2 text-center">
+                  <p className="text-muted-foreground">Total</p>
+                  <p className="font-bold text-base">{goldenSummary.total}</p>
+                </div>
+                <div className="rounded bg-green-950/30 p-2 text-center">
+                  <p className="text-green-400">Passed</p>
+                  <p className="font-bold text-base text-green-400">{goldenSummary.passed}</p>
+                </div>
+                <div className={`rounded p-2 text-center ${goldenSummary.failed > 0 ? "bg-red-950/30" : "bg-muted/40"}`}>
+                  <p className={goldenSummary.failed > 0 ? "text-red-400" : "text-muted-foreground"}>Failed</p>
+                  <p className={`font-bold text-base ${goldenSummary.failed > 0 ? "text-red-400" : ""}`}>{goldenSummary.failed}</p>
+                </div>
+                <div className="rounded bg-muted/40 p-2 text-center">
+                  <p className="text-muted-foreground">Avg Latency</p>
+                  <p className="font-bold text-base">{goldenSummary.avgLatencyMs}ms</p>
+                </div>
+              </div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {goldenSummary.results.map((r, i) => (
+                  <div key={i} className={`flex items-start gap-2 text-xs rounded px-2 py-1 ${r.passed ? "bg-green-950/20" : "bg-red-950/20"}`} data-testid={`row-golden-${r.caseId}`}>
+                    <span className="shrink-0 mt-0.5">{r.passed ? "✅" : "❌"}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold truncate">{r.caseId}</p>
+                      <p className="text-muted-foreground truncate text-[10px]">{r.description}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-muted-foreground">{r.latencyMs}ms</p>
+                      {r.error && <p className="text-red-400 text-[10px] max-w-[120px] truncate" title={r.error}>{r.error}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground">Last run: {new Date(goldenSummary.ranAt).toLocaleString()}</p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">No validation results yet. Runs every 5min or trigger manually.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Clinical Safety Guard ───────────────────────────── */}
+      <Card className="border border-border/60">
+        <CardHeader className="py-3 px-4 flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-400" />
+            <CardTitle className="text-sm font-semibold">Clinical Safety Guard</CardTitle>
+            {safetySummary && (
+              <Badge variant={safetySummary.criticalBlocks > 0 ? "destructive" : "secondary"} className="text-[10px]">
+                {safetySummary.totalBlocks} total blocks
+              </Badge>
+            )}
+          </div>
+          <Button size="sm" variant="ghost" onClick={fetchSafety} data-testid="btn-refresh-safety">Refresh</Button>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-3">
+          {safetySummary ? (
+            <>
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="rounded bg-muted/40 p-2 text-center">
+                  <p className="text-muted-foreground">Total Blocks</p>
+                  <p className="font-bold text-base">{safetySummary.totalBlocks}</p>
+                </div>
+                <div className={`rounded p-2 text-center ${safetySummary.criticalBlocks > 0 ? "bg-red-950/30" : "bg-muted/40"}`}>
+                  <p className={safetySummary.criticalBlocks > 0 ? "text-red-400" : "text-muted-foreground"}>Critical</p>
+                  <p className={`font-bold text-base ${safetySummary.criticalBlocks > 0 ? "text-red-400" : ""}`}>{safetySummary.criticalBlocks}</p>
+                </div>
+                <div className={`rounded p-2 text-center ${safetySummary.highBlocks > 0 ? "bg-orange-950/30" : "bg-muted/40"}`}>
+                  <p className={safetySummary.highBlocks > 0 ? "text-orange-400" : "text-muted-foreground"}>High</p>
+                  <p className={`font-bold text-base ${safetySummary.highBlocks > 0 ? "text-orange-400" : ""}`}>{safetySummary.highBlocks}</p>
+                </div>
+              </div>
+              {safetyBlocks.length > 0 ? (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Recent Blocks</p>
+                  {safetyBlocks.map((b, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs bg-muted/20 rounded px-2 py-1" data-testid={`row-safety-block-${i}`}>
+                      <Badge variant={b.level === "critical" ? "destructive" : "secondary"} className="text-[10px] h-4 px-1 shrink-0">{b.level}</Badge>
+                      <span className="text-muted-foreground shrink-0">{new Date(b.ts).toLocaleTimeString()}</span>
+                      <span className="truncate">{b.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-green-400">No blocks recorded — all clear.</p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">No safety data yet.</p>
           )}
         </CardContent>
       </Card>

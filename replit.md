@@ -28,6 +28,13 @@ A **Stress Test System** (`server/stress/`) allows for load generation and metri
 **PostgreSQL-backed Infrastructure** (5 new tables) supports learning records, diagnosis reinforcement, engine logs, simulations, and audit logs.
 **System Monitoring** (`server/monitoring/systemMonitor.ts`) includes DB-backed engine health logging and a **Predictive Failure Engine**. The **Autonomous Loop** (`server/system/autonomousLoop.ts`) runs learning and failure prediction. A **Safety Gate** (`server/safety/safetyGate.ts`) provides a non-bypassable safety layer. An **Immutable Audit Logger** (`server/audit/auditLogger.ts`) logs every clinical flow. **Explainability** is integrated into the master orchestrator. Three critical **Safety Engines** are implemented for drug interaction, pregnancy, and pediatric safety.
 
+### Modules 20-22: Autonomous Brain Expansion (completed)
+- **Module 20 — System Monitor** (`/system-monitor`): Live WebSocket engine + skill health grid, degradation alerts, auto-healer log, case trace lookup. Backend: `healthRegistry.ts`, `trendMonitor.ts`, `autoHealer.ts`, `monitorSocket.ts` (`/ws/monitor`).
+- **Module 21 — Self-Learning Engine** (`server/learning/selfLearningEngine.ts`): Outcome-to-weight feedback loop (`runSelfLearning`, `applyDxWeights`) running every 60s. API at `/api/adaptive-intelligence/learning/*`.
+- **Module 22 — Golden Case Validator** (`server/golden/`): 10 curated ENT/flu cases (2 safety blocks), periodic validation every 5 min, results exposed at `/api/adaptive-intelligence/golden/*`.
+- **Module 23 — Clinical Safety Guard** (`server/safety/safetyGuard.ts`): Unified guard wrapping `safetyGate` + `guardrailEngine`, block log + summary at `/api/adaptive-intelligence/safety/*`.
+- System Monitor page extended with three live panels: Self-Learning cycles, Golden Case pass/fail results, Safety block log.
+
 ### System Design Choices
 - **Data Management**: Firebase Firestore is the primary data store, supplemented by SQLite for intake. PHI retention policies ensure split storage. NDJSON-backed stores are used for outcomes, message templates, and tenant configurations.
 - **Authentication**: Physician authentication uses password-only, session-based HMAC-signed httpOnly cookies. Patient intake uses token-based access with 6-digit code verification. A JWT-based role authentication layer (bcrypt passwords, 15-min access tokens, 7-day refresh tokens) supports admin, physician, nurse, staff, patient, and viewer roles.
