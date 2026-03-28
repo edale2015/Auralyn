@@ -4,7 +4,75 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import IncidentTimeline from "@/components/IncidentTimeline";
-import { Bot, FlaskConical, ChevronRight, Globe, CircleDot } from "lucide-react";
+import { Bot, FlaskConical, ChevronRight, Globe, CircleDot, FileJson, TerminalSquare, RefreshCw, RotateCcw, Stethoscope, Play, CheckCircle2, XCircle, Clock3 } from "lucide-react";
+
+const DEFAULT_GOLDEN_CASE = {
+  id: "new_case_01",
+  input: { complaint: "sore_throat", symptoms: ["fever", "tonsillar exudate", "no cough"], age: 21 },
+  expected: { diagnosis: "strep_throat", disposition: "routine_antibiotics" },
+};
+
+function safeStringify(v: unknown) {
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+function parseJsonSafe<T>(s: string, fallback: T): T {
+  try { return JSON.parse(s) as T; } catch { return fallback; }
+}
+
+function JsonEditor({ value, onChange, minHeight = 240 }: { value: string; onChange: (v: string) => void; minHeight?: number }) {
+  return (
+    <textarea
+      spellCheck={false}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="w-full rounded-lg border border-border/40 bg-gray-950 p-3 font-mono text-xs text-gray-100 outline-none resize-y"
+      style={{ minHeight }}
+      data-testid="json-editor"
+    />
+  );
+}
+
+function TraceOutput({ value }: { value: unknown }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/40 bg-gray-950">
+      <div className="border-b border-gray-800 px-3 py-2 text-xs font-medium text-gray-400 flex items-center gap-2">
+        <TerminalSquare className="h-3.5 w-3.5" /> Trace / Output
+      </div>
+      <pre className="max-h-[360px] overflow-auto p-3 text-[11px] leading-5 text-gray-100">{safeStringify(value)}</pre>
+    </div>
+  );
+}
+
+function DiffView({ expected, actual }: { expected: unknown; actual: unknown }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="rounded-lg border border-green-800/40 bg-green-950/20 p-3">
+        <p className="text-[10px] font-semibold text-green-400 uppercase tracking-wide mb-1.5 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Expected</p>
+        <pre className="text-[11px] text-green-100 leading-5 overflow-auto max-h-48">{safeStringify(expected)}</pre>
+      </div>
+      <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-3">
+        <p className="text-[10px] font-semibold text-blue-400 uppercase tracking-wide mb-1.5 flex items-center gap-1"><Stethoscope className="h-3 w-3" /> Actual</p>
+        <pre className="text-[11px] text-blue-100 leading-5 overflow-auto max-h-48">{safeStringify(actual)}</pre>
+      </div>
+    </div>
+  );
+}
+
+function TraceTree({ trace }: { trace: any[] }) {
+  if (!trace?.length) return null;
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Reasoning Trace</p>
+      {trace.map((node: any, i: number) => (
+        <div key={i} className="border-l-2 border-blue-500/40 pl-3 py-0.5">
+          <p className="text-xs font-semibold">{node.name ?? node.step ?? `Step ${i + 1}`}</p>
+          {node.reason && <p className="text-[11px] text-muted-foreground">{node.reason}</p>}
+          {node.score !== undefined && <p className="text-[11px] text-blue-400">score: {node.score}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /* ─── Types ────────────────────────────────────────────────── */
 interface TowerState {
@@ -149,6 +217,22 @@ export default function ControlTowerPage() {
   const [evolutionRunning, setEvolutionRunning] = useState(false);
   const [globalState, setGlobalState]     = useState<any>(null);
   const [syncRunning, setSyncRunning]     = useState(false);
+
+  // Golden Case Lab
+  const [goldenCases,    setGoldenCases]    = useState<any[]>([]);
+  const [selectedGolden, setSelectedGolden] = useState<any | null>(null);
+  const [goldenDraft,    setGoldenDraft]    = useState(safeStringify(DEFAULT_GOLDEN_CASE));
+  const [goldenResult,   setGoldenResult]   = useState<any>(null);
+  const [goldenLoading,  setGoldenLoading]  = useState(false);
+  const [goldenSaving,   setGoldenSaving]   = useState(false);
+  const [goldenDeleting, setGoldenDeleting] = useState(false);
+
+  // Recent Runs
+  const [runs,        setRuns]        = useState<any[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+
+  // Engine control overrides
+  const [engineOverrides, setEngineOverrides] = useState<Record<string, any>>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const orchWsRef = useRef<WebSocket | null>(null);
@@ -413,6 +497,118 @@ export default function ControlTowerPage() {
       toast({ title: "Replay failed", description: e.message, variant: "destructive" });
     } finally { setReplayLoading(false); }
   };
+
+  /* ── Golden Case Lab ────────────────────────────────────── */
+  const fetchGoldenCases = useCallback(async () => {
+    try {
+      const r = await fetch("/api/test/golden");
+      const j = await r.json();
+      if (j.ok) setGoldenCases(j.cases ?? []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchGoldenCases(); }, [fetchGoldenCases]);
+
+  const runGoldenCase = async () => {
+    let parsed: any;
+    try { parsed = JSON.parse(goldenDraft); }
+    catch { toast({ title: "Invalid JSON", description: "Check the editor for syntax errors", variant: "destructive" }); return; }
+    setGoldenLoading(true);
+    setGoldenResult(null);
+    try {
+      const r = await fetch("/api/test/golden/run-golden", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed),
+      });
+      const j = await r.json();
+      setGoldenResult(j);
+      await fetchGoldenCases();
+      toast({ title: j.passed ? "✅ Case passed" : "❌ Case failed", description: `Latency: ${j.latencyMs}ms` });
+    } catch (e: any) {
+      toast({ title: "Run error", description: e.message, variant: "destructive" });
+    } finally { setGoldenLoading(false); }
+  };
+
+  const saveGolden = async () => {
+    let parsed: any;
+    try { parsed = JSON.parse(goldenDraft); }
+    catch { toast({ title: "Invalid JSON", description: "Check the editor for syntax errors", variant: "destructive" }); return; }
+    setGoldenSaving(true);
+    try {
+      const r = await fetch("/api/test/golden/save", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed),
+      });
+      const j = await r.json();
+      if (j.ok) { await fetchGoldenCases(); toast({ title: "Saved", description: `Case "${parsed.id}" saved` }); }
+    } catch (e: any) {
+      toast({ title: "Save error", description: e.message, variant: "destructive" });
+    } finally { setGoldenSaving(false); }
+  };
+
+  const deleteGolden = async (id: string) => {
+    setGoldenDeleting(true);
+    try {
+      const r = await fetch("/api/test/golden/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        await fetchGoldenCases();
+        if (selectedGolden?.id === id) { setSelectedGolden(null); setGoldenDraft(safeStringify(DEFAULT_GOLDEN_CASE)); }
+        toast({ title: "Deleted", description: `Case "${id}" removed` });
+      }
+    } catch (e: any) {
+      toast({ title: "Delete error", description: e.message, variant: "destructive" });
+    } finally { setGoldenDeleting(false); }
+  };
+
+  /* ── Recent Runs ──────────────────────────────────────────── */
+  const fetchRuns = useCallback(async () => {
+    setRunsLoading(true);
+    try {
+      const r = await fetch("/api/control-tower/runs?limit=15");
+      const j = await r.json();
+      if (j.ok) setRuns(j.runs ?? []);
+    } catch {} finally { setRunsLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchRuns(); const t = setInterval(fetchRuns, 30_000); return () => clearInterval(t); }, [fetchRuns]);
+
+  /* ── Engine Control ──────────────────────────────────────── */
+  const fetchEngineOverrides = useCallback(async () => {
+    try {
+      const r = await fetch("/api/monitoring/engine-overrides");
+      const j = await r.json();
+      if (j.ok) setEngineOverrides(j.overrides ?? {});
+    } catch {}
+  }, []);
+
+  const restartEngine = async (engine: string) => {
+    try {
+      const r = await fetch("/api/monitoring/restart", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ engine }),
+      });
+      const j = await r.json();
+      toast({ title: `🔄 Restarting ${engine}`, description: j.message });
+      setTimeout(() => fetchEngineOverrides(), 2500);
+    } catch (e: any) {
+      toast({ title: "Restart failed", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const checkEngine = async (engine: string) => {
+    try {
+      const r = await fetch("/api/monitoring/check", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ engine }),
+      });
+      const j = await r.json();
+      await fetchEngineOverrides();
+      toast({ title: `🩺 ${engine} is ${j.status}`, description: `Latency: ${j.latencyMs}ms` });
+    } catch (e: any) {
+      toast({ title: "Health check failed", description: e.message, variant: "destructive" });
+    }
+  };
+
+  useEffect(() => { fetchEngineOverrides(); }, [fetchEngineOverrides]);
 
   /* ── Derived values ───────────────────────────────────────── */
   const avgLatency = state
@@ -1070,6 +1266,206 @@ export default function ControlTowerPage() {
               Queue Stats
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── ENGINE CONTROL ───────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-blue-400" /> Engine Control
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[
+              { key: "triage",          label: "Triage Engine" },
+              { key: "scoring",         label: "Scoring Engine" },
+              { key: "safety",          label: "Safety Check" },
+              { key: "learning",        label: "Learning / RLHF" },
+              { key: "digital_twin",    label: "Digital Twin" },
+              { key: "predictive",      label: "Predictive" },
+              { key: "golden_monitor",  label: "Golden Monitor" },
+              { key: "evolution",       label: "Evolution" },
+              { key: "global_sync",     label: "Global Sync" },
+            ].map(({ key, label }) => {
+              const ovr = engineOverrides[key];
+              const status = ovr?.status ?? "unknown";
+              const colorMap: Record<string, string> = {
+                healthy: "text-green-400", degraded: "text-yellow-400",
+                restarting: "text-blue-400", unknown: "text-gray-400",
+              };
+              return (
+                <div key={key} className="rounded-lg border border-border/30 bg-muted/10 p-3 flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-medium">{label}</p>
+                    {ovr ? (
+                      <p className={`text-[10px] ${colorMap[status] ?? "text-gray-400"}`}>
+                        {status}{ovr.note ? ` — ${ovr.note}` : ""}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground">not checked</p>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <Button
+                      size="sm" variant="outline" className="h-7 px-2 text-[10px]"
+                      onClick={() => checkEngine(key)}
+                      data-testid={`btn-check-${key}`}
+                    >
+                      <Stethoscope className="h-3 w-3 mr-1" /> Check
+                    </Button>
+                    <Button
+                      size="sm" variant="secondary" className="h-7 px-2 text-[10px]"
+                      onClick={() => restartEngine(key)}
+                      data-testid={`btn-restart-${key}`}
+                    >
+                      <RotateCcw className="h-3 w-3 mr-1" /> Restart
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── GOLDEN CASE LAB ───────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileJson className="h-4 w-4 text-yellow-400" /> Golden Case Lab
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Saved cases chips */}
+          {goldenCases.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-2">Saved Cases ({goldenCases.length})</p>
+              <div className="flex flex-wrap gap-2">
+                {goldenCases.map((c: any) => {
+                  const statusColor = c.status === "pass" ? "bg-green-500/20 text-green-400 border-green-500/30"
+                    : c.status === "fail" ? "bg-red-500/20 text-red-400 border-red-500/30"
+                    : "bg-gray-500/20 text-gray-400 border-gray-500/30";
+                  return (
+                    <div key={c.id}
+                      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] cursor-pointer ${statusColor}`}
+                      onClick={() => { setSelectedGolden(c); setGoldenDraft(safeStringify(c)); setGoldenResult(null); }}
+                      data-testid={`golden-case-chip-${c.id}`}
+                    >
+                      {c.status === "pass" ? <CheckCircle2 className="h-3 w-3" />
+                        : c.status === "fail" ? <XCircle className="h-3 w-3" />
+                        : <Clock3 className="h-3 w-3" />}
+                      {c.id}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* JSON editor */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium">Case Definition (JSON)</p>
+              <div className="flex gap-2">
+                {selectedGolden && (
+                  <Button size="sm" variant="destructive" className="h-7 px-2 text-[10px]"
+                    onClick={() => deleteGolden(selectedGolden.id)} disabled={goldenDeleting}
+                    data-testid="btn-golden-delete"
+                  >
+                    <XCircle className="h-3 w-3 mr-1" /> {goldenDeleting ? "Deleting…" : "Delete"}
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="h-7 px-2 text-[10px]"
+                  onClick={() => { setSelectedGolden(null); setGoldenDraft(safeStringify(DEFAULT_GOLDEN_CASE)); setGoldenResult(null); }}
+                  data-testid="btn-golden-new"
+                >
+                  New
+                </Button>
+                <Button size="sm" variant="secondary" className="h-7 px-2 text-[10px]"
+                  onClick={saveGolden} disabled={goldenSaving}
+                  data-testid="btn-golden-save"
+                >
+                  {goldenSaving ? "Saving…" : "Save"}
+                </Button>
+                <Button size="sm" className="h-7 px-2 text-[10px]"
+                  onClick={runGoldenCase} disabled={goldenLoading}
+                  data-testid="btn-golden-run"
+                >
+                  <Play className="h-3 w-3 mr-1" /> {goldenLoading ? "Running…" : "Run"}
+                </Button>
+              </div>
+            </div>
+            <JsonEditor value={goldenDraft} onChange={setGoldenDraft} minHeight={200} />
+          </div>
+
+          {/* Results */}
+          {goldenResult && (
+            <div className="space-y-3 rounded-xl border border-border/30 bg-muted/10 p-4">
+              <div className="flex items-center gap-2">
+                {goldenResult.passed
+                  ? <CheckCircle2 className="h-4 w-4 text-green-400" />
+                  : <XCircle className="h-4 w-4 text-red-400" />}
+                <p className={`text-sm font-semibold ${goldenResult.passed ? "text-green-400" : "text-red-400"}`}>
+                  {goldenResult.passed ? "Case Passed" : "Case Failed"}
+                </p>
+                <Badge variant="outline" className="text-[10px]">{goldenResult.latencyMs}ms</Badge>
+              </div>
+              <DiffView expected={goldenResult.expected} actual={goldenResult.actual} />
+              {goldenResult.trace?.length > 0 && <TraceTree trace={goldenResult.trace} />}
+              <TraceOutput value={goldenResult.case?.result} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── RECENT RUNS ──────────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TerminalSquare className="h-4 w-4 text-purple-400" /> Recent Runs
+            <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-[10px]"
+              onClick={fetchRuns} disabled={runsLoading}
+              data-testid="btn-refresh-runs"
+            >
+              <RefreshCw className={`h-3 w-3 mr-1 ${runsLoading ? "animate-spin" : ""}`} /> Refresh
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {runs.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">{runsLoading ? "Loading…" : "No runs recorded yet."}</p>
+          ) : (
+            <div className="space-y-2">
+              {runs.map((run: any) => {
+                const statusColor = run.status === "success" ? "text-green-400 bg-green-500/10 border-green-500/20"
+                  : run.status === "failed" ? "text-red-400 bg-red-500/10 border-red-500/20"
+                  : run.status === "running" ? "text-blue-400 bg-blue-500/10 border-blue-500/20"
+                  : "text-gray-400 bg-gray-500/10 border-gray-500/20";
+                return (
+                  <div key={run.id}
+                    className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${statusColor}`}
+                    data-testid={`run-row-${run.id}`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {run.status === "success" ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                        : run.status === "failed" ? <XCircle className="h-3.5 w-3.5 shrink-0" />
+                        : <Clock3 className="h-3.5 w-3.5 shrink-0" />}
+                      <span className="font-medium truncate">{run.kind.replace(/_/g, " ")}</span>
+                      {run.summary && (
+                        <span className="text-[11px] text-muted-foreground truncate hidden sm:block">— {run.summary}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                      {run.durationMs && <span className="text-[10px] opacity-70">{run.durationMs}ms</span>}
+                      {run.startedAt && <span className="text-[10px] opacity-50">{new Date(run.startedAt).toLocaleTimeString()}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
 

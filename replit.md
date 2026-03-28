@@ -50,6 +50,7 @@ A **Stress Test System** (`server/stress/`) allows for load generation and metri
 - **Evolution Engine** (`server/evolution/`): 6-file system (store, engine, sandbox runner, validator, promotion engine, loop); 10-minute autonomous cycle; manually triggerable.
 - **API** at `/api/agent-evolution/*`: agents/task, bus/stats, bus/log, evolution/status, evolution/run.
 - **War Room panels** (ControlTowerPage `/control-tower`): Agent Controller panel (agent grid + bus stats + task log) + Evolution Engine panel (proposal, sandbox metrics, promotion history, manual trigger).
+- **ControlTowerPage enhancements** (completed): Engine Control panel (per-engine health Check + Restart via `/api/monitoring/check|restart`), Golden Case Lab (JSON editor, chip selector, save/delete/run with DiffView + TraceTree result display), Recent Runs feed (from `/api/control-tower/runs`, 10-run seed, status badges). Backend: `server/routes/testGoldenRoutes.ts`, `server/routes/engineControlRoutes.ts`, `server/routes/recentRunsRoutes.ts`.
 
 ### Modules 20-22: Autonomous Brain Expansion (completed)
 - **Module 20 — System Monitor** (`/system-monitor`): Live WebSocket engine + skill health grid, degradation alerts, auto-healer log, case trace lookup. Backend: `healthRegistry.ts`, `trendMonitor.ts`, `autoHealer.ts`, `monitorSocket.ts` (`/ws/monitor`).

@@ -1,0 +1,119 @@
+Control-tower-ui
+· typescript
+import React, { useEffect, useMemo, useState } from "react";
+                <Card
+                  title="Golden Case Editor"
+                  subtitle="Edit locally, then run. Add save wiring later if you want persistent file writes."
+                  icon={<FileJson className="h-5 w-5 text-slate-700" />}
+                >
+                  <div className="space-y-4">
+                    <JsonEditor value={goldenDraft} onChange={setGoldenDraft} minHeight={320} />
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        onClick={() => runGoldenCase()}
+                        disabled={goldenLoading}
+                        className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-60"
+                      >
+                        {goldenLoading ? "Running..." : "Run Golden Case"}
+                      </button>
+                      <button
+                        onClick={() => setGoldenDraft(safeStringify(DEFAULT_GOLDEN_CASE))}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+                      >
+                        Reset Sample
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+
+
+                <Card
+                  title="Golden Result"
+                  subtitle="Compare expected vs actual, then hunt drift like a bloodhound with a spreadsheet habit."
+                  icon={<Activity className="h-5 w-5 text-slate-700" />}
+                >
+                  <TraceViewer value={goldenResult || { note: "Run a golden case to inspect the result." }} />
+                </Card>
+              </div>
+            </div>
+          )}
+
+
+          {activeTab === "runs" && (
+            <Card
+              title="Recent Runs"
+              subtitle="Recent automation runs pulled from `/api/automation/runs` when available."
+              icon={<Activity className="h-5 w-5 text-slate-700" />}
+            >
+              <div className="space-y-3">
+                {runs.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">
+                    No recent runs found. Wire this panel to your run-history endpoint if the path differs.
+                  </div>
+                ) : (
+                  runs.map((run) => (
+                    <div key={run.id} className="rounded-2xl border border-slate-200 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="font-medium text-slate-800">{run.id}</div>
+                          <div className="mt-1 text-sm text-slate-500">{run.kind}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Pill
+                            tone={
+                              run.status === "success" || run.status === "pass"
+                                ? "green"
+                                : run.status === "failed" || run.status === "error"
+                                  ? "red"
+                                  : "yellow"
+                            }
+                          >
+                            {run.status}
+                          </Pill>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-1 gap-2 text-sm text-slate-500 md:grid-cols-3">
+                        <div>Started: {run.startedAt ? new Date(run.startedAt).toLocaleString() : "—"}</div>
+                        <div>Duration: {run.durationMs != null ? `${run.durationMs} ms` : "—"}</div>
+                        <div>Summary: {run.summary || "—"}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+
+
+Built. It’s in the canvas as control-tower-ui.tsx.
+
+What’s inside:
+
+Overview
+Engine Monitor
+Skills Lab
+Agent Lab
+Golden Cases
+Recent Runs
+JSON editors and trace viewers wired for:
+POST /api/skill-layer/run
+POST /api/agent/run
+GET /api/monitoring/health
+GET /api/monitoring/perf
+GET /api/test/golden
+POST /api/test/run-golden
+GET /api/automation/runs
+
+To wire it into your app, the fastest path is:
+
+Add the page as a route like /control-tower
+Add a sidebar item called Control Tower or War Room
+If your endpoint paths differ, change the fetch paths near the top of the file
+
+I

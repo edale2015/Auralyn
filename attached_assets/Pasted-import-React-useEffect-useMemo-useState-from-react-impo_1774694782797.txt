@@ -1,0 +1,458 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import {
+  Activity,
+  AlertTriangle,
+  Bot,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  Cpu,
+  FileJson,
+  FlaskConical,
+  Play,
+  RefreshCw,
+  Shield,
+  TerminalSquare,
+  XCircle,
+} from "lucide-react";
+
+/**
+ * Control Tower UI
+ *
+ * Drop-in page for a React/Vite frontend.
+ *
+ * What this gives you:
+ * - Live Engine Monitor
+ * - Skills Lab (run one skill with JSON input)
+ * - Agent Lab (run one agent with JSON input)
+ * - Golden Cases (list / run / inspect / edit draft JSON locally)
+ * - Recent Runs panel
+ * - Trace viewer for results
+ *
+ * Adjust API_BASE if needed, or wire through your existing api.ts.
+ */
+
+const API_BASE = "";
+
+const DEFAULT_SKILL_PAYLOAD = {
+  complaint: "sore_throat",
+  symptoms: ["fever", "sore throat", "no cough"],
+  age: 33,
+  pmh: [],
+  meds: [],
+  allergies: [],
+};
+
+const DEFAULT_AGENT_PAYLOAD = {
+  sessionId: "demo-session-001",
+  complaint: "sore_throat",
+  patient: {
+    age: 33,
+    state: "NY",
+  },
+  input: {
+    symptoms: ["fever", "sore throat", "no cough"],
+  },
+};
+
+const DEFAULT_GOLDEN_CASE = {
+  id: "sore_throat_01",
+  input: {
+    complaint: "sore_throat",
+    symptoms: ["fever", "tonsillar exudate", "no cough"],
+    age: 21,
+  },
+  expected: {
+    diagnosis: "strep_throat",
+    disposition: "routine_antibiotics",
+  },
+};
+
+type TabKey = "overview" | "engines" | "skills" | "agents" | "golden" | "runs";
+
+type EngineStatus = {
+  name: string;
+  status: "healthy" | "degraded" | "down" | "unknown";
+  lastRun?: string;
+  latencyMs?: number;
+  errors?: number;
+  details?: string;
+};
+
+type RunRecord = {
+  id: string;
+  kind: string;
+  status: string;
+  startedAt?: string;
+  durationMs?: number;
+  summary?: string;
+};
+
+type GoldenCase = {
+  id: string;
+  status?: string;
+  input?: unknown;
+  expected?: unknown;
+  result?: unknown;
+};
+
+function classNames(...parts: Array<string | false | null | undefined>) {
+  return parts.filter(Boolean).join(" ");
+}
+
+function safeStringify(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseJson<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function useClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`);
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  return (await res.json()) as T;
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`POST ${path} failed: ${res.status} ${text}`);
+  }
+  return (await res.json()) as T;
+}
+
+function Pill({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "green" | "yellow" | "red" | "blue";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "bg-emerald-100 text-emerald-700"
+      : tone === "yellow"
+        ? "bg-amber-100 text-amber-700"
+        : tone === "red"
+          ? "bg-rose-100 text-rose-700"
+          : tone === "blue"
+            ? "bg-sky-100 text-sky-700"
+            : "bg-slate-100 text-slate-700";
+
+  return (
+    <span className={classNames("rounded-full px-2.5 py-1 text-xs font-medium", toneClass)}>
+      {children}
+    </span>
+  );
+}
+
+function Card({
+  title,
+  subtitle,
+  icon,
+  right,
+  children,
+  className,
+}: {
+  title: string;
+  subtitle?: string;
+  icon?: React.ReactNode;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={classNames("rounded-3xl border border-slate-200 bg-white shadow-sm", className)}>
+      <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-slate-900">
+            {icon}
+            <h3 className="text-lg font-semibold">{title}</h3>
+          </div>
+          {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
+        </div>
+        {right}
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
+
+function SectionButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={classNames(
+        "flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left transition",
+        active ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
+      )}
+    >
+      <span className="flex items-center gap-3 text-sm font-medium">
+        {icon}
+        {label}
+      </span>
+      <ChevronRight className="h-4 w-4 opacity-70" />
+    </button>
+  );
+}
+
+function StatusDot({ status }: { status: EngineStatus["status"] }) {
+  const color =
+    status === "healthy"
+      ? "bg-emerald-500"
+      : status === "degraded"
+        ? "bg-amber-500"
+        : status === "down"
+          ? "bg-rose-500"
+          : "bg-slate-300";
+  return <span className={classNames("inline-block h-2.5 w-2.5 rounded-full", color)} />;
+}
+
+function JsonEditor({
+  value,
+  onChange,
+  minHeight = 260,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  minHeight?: number;
+}) {
+  return (
+    <textarea
+      spellCheck={false}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-2xl border border-slate-200 bg-slate-950 p-4 font-mono text-sm text-slate-100 outline-none ring-0"
+      style={{ minHeight }}
+    />
+  );
+}
+
+function TraceViewer({ value }: { value: unknown }) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+      <div className="border-b border-slate-800 px-4 py-3 text-sm font-medium text-slate-300">Trace / Output</div>
+      <pre className="max-h-[520px] overflow-auto p-4 text-xs leading-6 text-slate-100">
+        {safeStringify(value)}
+      </pre>
+    </div>
+  );
+}
+
+export default function ControlTowerUI() {
+  const now = useClock();
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+
+  const [engines, setEngines] = useState<EngineStatus[]>([]);
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [engineLoading, setEngineLoading] = useState(false);
+
+  const [skillName, setSkillName] = useState("redFlagDetector");
+  const [skillPayload, setSkillPayload] = useState(safeStringify(DEFAULT_SKILL_PAYLOAD));
+  const [skillResult, setSkillResult] = useState<any>(null);
+  const [skillLoading, setSkillLoading] = useState(false);
+  const [skillError, setSkillError] = useState<string | null>(null);
+
+  const [agentName, setAgentName] = useState("triageAgent");
+  const [agentPayload, setAgentPayload] = useState(safeStringify(DEFAULT_AGENT_PAYLOAD));
+  const [agentResult, setAgentResult] = useState<any>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+
+  const [goldenCases, setGoldenCases] = useState<GoldenCase[]>([]);
+  const [selectedGolden, setSelectedGolden] = useState<GoldenCase | null>(null);
+  const [goldenDraft, setGoldenDraft] = useState(safeStringify(DEFAULT_GOLDEN_CASE));
+  const [goldenResult, setGoldenResult] = useState<any>(null);
+  const [goldenLoading, setGoldenLoading] = useState(false);
+  const [goldenError, setGoldenError] = useState<string | null>(null);
+
+  const summary = useMemo(() => {
+    const healthy = engines.filter((e) => e.status === "healthy").length;
+    const degraded = engines.filter((e) => e.status === "degraded").length;
+    const down = engines.filter((e) => e.status === "down").length;
+    return { total: engines.length, healthy, degraded, down };
+  }, [engines]);
+
+  async function loadOverview() {
+    setEngineLoading(true);
+    setEngineError(null);
+    try {
+      const health = await apiGet<any>("/api/monitoring/health");
+      const list = Object.entries(health?.engines || {}).map(([name, v]: any) => ({
+        name,
+        status: v?.status || "unknown",
+        lastRun: v?.lastRun,
+        latencyMs: v?.latencyMs,
+        errors: v?.errors || 0,
+      }));
+      setEngines(list);
+    } catch (e: any) {
+      setEngineError(e.message);
+    } finally {
+      setEngineLoading(false);
+    }
+  }
+
+  async function loadGoldenCases() {
+    try {
+      const res = await apiGet<any>("/api/test/golden");
+      setGoldenCases(res?.cases || res || []);
+    } catch {}
+  }
+
+  useEffect(() => {
+    loadOverview();
+    loadGoldenCases();
+  }, []);
+
+  // ==========================
+  // NEW FEATURES
+  // ==========================
+
+  // SAVE
+  async function saveGolden() {
+    const parsed = parseJson(goldenDraft, DEFAULT_GOLDEN_CASE);
+    await apiPost("/api/test/golden/save", parsed);
+    await loadGoldenCases();
+  }
+
+  // DELETE
+  async function deleteGolden(id: string) {
+    await apiPost("/api/test/golden/delete", { id });
+    await loadGoldenCases();
+  }
+
+  // ENGINE ACTIONS
+  async function restartEngine(name: string) {
+    await apiPost("/api/monitoring/restart", { engine: name });
+    await loadOverview();
+  }
+
+  async function healthCheckEngine(name: string) {
+    await apiPost("/api/monitoring/check", { engine: name });
+    await loadOverview();
+  }
+
+  // ==========================
+  // DIFF VIEW
+  // ==========================
+  function DiffView({ expected, actual }: any) {
+    return (
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-emerald-50 p-3 rounded">
+          <div className="font-semibold text-emerald-700">Expected</div>
+          <pre className="text-xs">{safeStringify(expected)}</pre>
+        </div>
+        <div className="bg-rose-50 p-3 rounded">
+          <div className="font-semibold text-rose-700">Actual</div>
+          <pre className="text-xs">{safeStringify(actual)}</pre>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================
+  // TRACE TREE
+  // ==========================
+  function TraceTree({ trace }: any) {
+    if (!trace) return <div>No trace</div>;
+
+    return (
+      <div className="text-xs space-y-2">
+        {trace.map((node: any, i: number) => (
+          <div key={i} className="border-l pl-3">
+            <div className="font-semibold">{node.name}</div>
+            <div className="text-slate-500">{node.reason}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ==========================
+  // UI
+  // ==========================
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Control Tower (Enhanced)</h1>
+
+      {/* ENGINE CONTROL */}
+      <div>
+        <h2 className="font-semibold mb-2">Engines</h2>
+        {engines.map((e) => (
+          <div key={e.name} className="flex gap-2 items-center">
+            <span>{e.name}</span>
+            <button onClick={() => restartEngine(e.name)}>Restart</button>
+            <button onClick={() => healthCheckEngine(e.name)}>Check</button>
+          </div>
+        ))}
+      </div>
+
+      {/* GOLDEN CASES */}
+      <div>
+        <h2 className="font-semibold">Golden Cases</h2>
+        <textarea
+          value={goldenDraft}
+          onChange={(e) => setGoldenDraft(e.target.value)}
+          className="w-full h-40 bg-black text-white"
+        />
+        <div className="flex gap-2 mt-2">
+          <button onClick={saveGolden}>Save</button>
+          {selectedGolden && (
+            <button onClick={() => deleteGolden(selectedGolden.id)}>Delete</button>
+          )}
+          <button onClick={() => runGoldenCase()}>Run</button>
+        </div>
+      </div>
+
+      {/* DIFF */}
+      {goldenResult && (
+        <DiffView
+          expected={goldenResult.expected}
+          actual={goldenResult.actual}
+        />
+      )}
+
+      {/* TRACE */}
+      {goldenResult?.trace && (
+        <TraceTree trace={goldenResult.trace} />
+      )}
+    </div>
+  );
+}
