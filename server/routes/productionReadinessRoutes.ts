@@ -17,6 +17,20 @@ import { getStatus as getModelFreezeStatus, canLearn } from "../release/modelFre
 import { PRIORS_COUNT } from "../clinical/bayesianEngine";
 import { getIntendedUseSummary } from "../fda/intendedUse";
 import { getQueueStats } from "../learning/reviewQueue";
+import { getReviewStats } from "../clinical/review/physicianReview";
+import { getLiabilityStats } from "../clinical/review/liability";
+import { getWeightStats } from "../learning/biasAwareRLHF";
+import { getBiasGuardStats } from "../learning/confirmationBiasGuard";
+import { getDriftState } from "../learning/driftControl";
+import { getEscalationStats } from "../clinical/escalationGuard";
+import { getSafeLearningStats } from "../learning/safeLearningPipeline";
+import { getAsyncLLMStats } from "../llm/asyncLLM";
+import { getAuditQueueStats } from "../ops/auditQueue";
+import { getRLHFQueueStats } from "../learning/rlhfQueue";
+import { getRegionSummary } from "../infra/regionRouter";
+import { getRateLimiterStats } from "../infra/rateLimiter";
+import { getCacheStats } from "../infra/cache";
+import { getPerformanceStats } from "../infra/performanceGuard";
 
 const router = Router();
 
@@ -62,6 +76,23 @@ router.get("/status", async (_req: Request, res: Response) => {
       fdaIntendedUse:       { active: true, ...getIntendedUseSummary(), label: "FDA Intended Use Statement" },
       rlhfReviewQueue:      { active: true, ...getQueueStats(), label: "RLHF Human-Gated Review Queue" },
       masterSafetyPipeline: { active: true, stages: 5, label: "Master Safety Pipeline" },
+      // ── Physician Governance & Safe Learning Layer (7 new) ──────────────────
+      physicianReview:      { active: true, ...getReviewStats(), label: "Physician Review + Override" },
+      liabilityTracking:    { active: true, ...getLiabilityStats(), label: "Liability Tracking Engine" },
+      biasAwareRLHF:        { active: true, ...getWeightStats(), label: "Bias-Aware RLHF Engine" },
+      confirmationBiasGuard:{ active: true, ...getBiasGuardStats(), label: "Anti-Confirmation Bias Filter" },
+      driftCircuitBreaker:  { active: true, ...getDriftState(), label: "Drift Circuit Breaker + Rollback" },
+      escalationGuard:      { active: true, ...getEscalationStats(), label: "ER Escalation Control" },
+      safeLearningPipeline: { active: true, ...getSafeLearningStats(), label: "Master Safe Learning Pipeline" },
+      // ── Scalability & Infrastructure Layer (8 new) ──────────────────────────
+      asyncLLM:             { active: true, ...getAsyncLLMStats(), label: "Async LLM Engine (Off Critical Path)" },
+      asyncAuditQueue:      { active: true, ...getAuditQueueStats(), label: "Async Audit Queue" },
+      rlhfBatchQueue:       { active: true, ...getRLHFQueueStats(), label: "RLHF Batch Queue (Decoupled)" },
+      regionRouter:         { active: true, ...getRegionSummary(), label: "Multi-Region Data Router" },
+      rateLimiter:          { active: true, ...getRateLimiterStats(), label: "Load Shedding + Rate Limiter" },
+      cacheLayer:           { active: true, ...getCacheStats(), label: "Hot-Path Cache Layer" },
+      performanceGuard:     { active: true, ...getPerformanceStats(), label: "Latency Guard (withTimeout)" },
+      safeAsyncPipeline:    { active: true, stages: 3, asyncPaths: ["llm", "audit", "learning"], label: "Safe Async Pipeline Execution" },
     },
     ts: new Date().toISOString(),
   });

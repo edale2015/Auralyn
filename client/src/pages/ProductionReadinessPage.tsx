@@ -8,7 +8,7 @@ import StatusChip from "@/components/StatusChip"
 import LoadingCardSkeleton from "@/components/LoadingCardSkeleton"
 import SectionHeader from "@/components/SectionHeader"
 import { cn } from "@/lib/utils"
-import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical, GitMerge, HeartPulse, Baby, Heart, Brain, FileText, ClipboardCheck, ShieldAlert } from "lucide-react"
+import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical, GitMerge, HeartPulse, Baby, Heart, Brain, FileText, ClipboardCheck, ShieldAlert, UserCheck, Scale, Zap, Filter, CircuitBoard, TrendingDown, Layers, Cpu as CpuIcon, ListTodo, Globe, Gauge, HardDrive, Timer, Workflow } from "lucide-react"
 
 type CheckResult = { name: string; ok: boolean; detail: string }
 type ProviderStatus = { provider: string; ok: boolean; latencyMs?: number; detail: string; checkedAt: string }
@@ -82,6 +82,23 @@ const layerIcons: Record<string, any> = {
   fdaIntendedUse:       { icon: FileText,      color: "text-blue-700",    bg: "bg-blue-50 dark:bg-blue-950" },
   rlhfReviewQueue:      { icon: ClipboardCheck,color: "text-amber-700",   bg: "bg-amber-50 dark:bg-amber-950" },
   masterSafetyPipeline: { icon: ShieldAlert,   color: "text-emerald-700", bg: "bg-emerald-50 dark:bg-emerald-950" },
+  // ── Physician Governance & Safe Learning Layer (7 new) ──────────────────────
+  physicianReview:       { icon: UserCheck,    color: "text-sky-700",     bg: "bg-sky-50 dark:bg-sky-950" },
+  liabilityTracking:     { icon: Scale,        color: "text-slate-600",   bg: "bg-slate-50 dark:bg-slate-950" },
+  biasAwareRLHF:         { icon: Zap,          color: "text-yellow-600",  bg: "bg-yellow-50 dark:bg-yellow-950" },
+  confirmationBiasGuard: { icon: Filter,       color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
+  driftCircuitBreaker:   { icon: CircuitBoard, color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
+  escalationGuard:       { icon: TrendingDown, color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
+  safeLearningPipeline:  { icon: Layers,       color: "text-teal-700",    bg: "bg-teal-50 dark:bg-teal-950" },
+  // ── Scalability & Infrastructure Layer (8 new) ──────────────────────────────
+  asyncLLM:              { icon: CpuIcon,      color: "text-cyan-700",    bg: "bg-cyan-50 dark:bg-cyan-950" },
+  asyncAuditQueue:       { icon: ListTodo,     color: "text-lime-700",    bg: "bg-lime-50 dark:bg-lime-950" },
+  rlhfBatchQueue:        { icon: Database,     color: "text-purple-500",  bg: "bg-purple-50 dark:bg-purple-950" },
+  regionRouter:          { icon: Globe,        color: "text-blue-500",    bg: "bg-blue-50 dark:bg-blue-950" },
+  rateLimiter:           { icon: Gauge,        color: "text-rose-500",    bg: "bg-rose-50 dark:bg-rose-950" },
+  cacheLayer:            { icon: HardDrive,    color: "text-amber-500",   bg: "bg-amber-50 dark:bg-amber-950" },
+  performanceGuard:      { icon: Timer,        color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-950" },
+  safeAsyncPipeline:     { icon: Workflow,     color: "text-violet-700",  bg: "bg-violet-50 dark:bg-violet-950" },
 }
 
 type ExtLayer = ProductionLayer & {
@@ -115,6 +132,49 @@ type ExtLayer = ProductionLayer & {
   pending?: number
   approved?: number
   rejected?: number
+  // Governance fields
+  total?: number
+  overrides?: number
+  overrideRate?: number
+  critical?: number
+  high?: number
+  updates?: number
+  avgDelta?: number
+  checked?: number
+  flagged?: number
+  flagRate?: number
+  locked?: boolean
+  lockReason?: string
+  historyCount?: number
+  erRate?: number
+  erCount?: number
+  threshold?: number
+  totalRuns?: number
+  updateCount?: number
+  blockCount?: number
+  updateRate?: number
+  // Scalability fields
+  complete?: number
+  failed?: number
+  avgDurationMs?: number
+  queued?: number
+  processing?: number
+  processedCount?: number
+  supportedRegions?: number
+  regions?: string[]
+  maxConcurrent?: number
+  currentConcurrent?: number
+  perIpMax?: number
+  trackedIps?: number
+  size?: number
+  activeEntries?: number
+  hitRate?: number
+  totalHits?: number
+  totalMisses?: number
+  timeoutCount?: number
+  timeoutRate?: number
+  defaultTimeoutMs?: number
+  asyncPaths?: string[]
 }
 
 function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "info" {
@@ -148,6 +208,23 @@ function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "inf
   if (key === "fdaIntendedUse")       return layer.active ? "success" : "info"
   if (key === "rlhfReviewQueue")      return layer.active ? "success" : "warning"
   if (key === "masterSafetyPipeline") return layer.active ? "success" : "warning"
+  // Governance
+  if (key === "physicianReview")       return layer.active ? "success" : "warning"
+  if (key === "liabilityTracking")     return layer.active ? "success" : "warning"
+  if (key === "biasAwareRLHF")         return layer.active ? "success" : "warning"
+  if (key === "confirmationBiasGuard") return layer.active ? "success" : "warning"
+  if (key === "driftCircuitBreaker")   return layer.locked ? "warning" : "success"
+  if (key === "escalationGuard")       return layer.active ? "success" : "warning"
+  if (key === "safeLearningPipeline")  return layer.active ? "success" : "warning"
+  // Scalability
+  if (key === "asyncLLM")              return layer.active ? "success" : "warning"
+  if (key === "asyncAuditQueue")       return layer.active ? "success" : "warning"
+  if (key === "rlhfBatchQueue")        return layer.active ? "success" : "warning"
+  if (key === "regionRouter")          return layer.active ? "success" : "info"
+  if (key === "rateLimiter")           return layer.active ? "success" : "warning"
+  if (key === "cacheLayer")            return layer.active ? "success" : "info"
+  if (key === "performanceGuard")      return layer.active ? "success" : "warning"
+  if (key === "safeAsyncPipeline")     return layer.active ? "success" : "warning"
   return "info"
 }
 
@@ -182,6 +259,23 @@ function layerBadge(layer: ExtLayer, key: string): string {
   if (key === "fdaIntendedUse")       return layer.active ? `Class ${layer.deviceClass ?? "II"} SaMD` : "Inactive"
   if (key === "rlhfReviewQueue")      return layer.active ? `${layer.pending ?? 0} pending` : "Inactive"
   if (key === "masterSafetyPipeline") return layer.active ? `${layer.stages ?? 5} stages` : "Inactive"
+  // Governance
+  if (key === "physicianReview")       return layer.active ? `${layer.total ?? 0} reviews` : "Inactive"
+  if (key === "liabilityTracking")     return layer.active ? `${layer.critical ?? 0} critical` : "Inactive"
+  if (key === "biasAwareRLHF")         return layer.active ? `${layer.updates ?? 0} updates` : "Inactive"
+  if (key === "confirmationBiasGuard") return layer.active ? `${layer.checked ?? 0} checked` : "Inactive"
+  if (key === "driftCircuitBreaker")   return layer.locked ? "LOCKED" : "Unlocked"
+  if (key === "escalationGuard")       return layer.active ? `${((layer.erRate ?? 0) * 100).toFixed(0)}% ER rate` : "Inactive"
+  if (key === "safeLearningPipeline")  return layer.active ? `${layer.totalRuns ?? 0} runs` : "Inactive"
+  // Scalability
+  if (key === "asyncLLM")              return layer.active ? `${layer.complete ?? 0} completed` : "Inactive"
+  if (key === "asyncAuditQueue")       return layer.active ? `${layer.processedCount ?? 0} stored` : "Inactive"
+  if (key === "rlhfBatchQueue")        return layer.active ? `${layer.processed ?? 0} processed` : "Inactive"
+  if (key === "regionRouter")          return layer.active ? `${layer.supportedRegions ?? 5} regions` : "Inactive"
+  if (key === "rateLimiter")           return layer.active ? `${layer.maxConcurrent ?? 200} max` : "Inactive"
+  if (key === "cacheLayer")            return layer.active ? `${layer.hitRate ?? 0}% hit rate` : "Inactive"
+  if (key === "performanceGuard")      return layer.active ? `${layer.defaultTimeoutMs ?? 2000}ms timeout` : "Inactive"
+  if (key === "safeAsyncPipeline")     return layer.active ? `${layer.stages ?? 3} async paths` : "Inactive"
   return "Unknown"
 }
 
