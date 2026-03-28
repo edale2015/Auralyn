@@ -8,7 +8,7 @@ import StatusChip from "@/components/StatusChip"
 import LoadingCardSkeleton from "@/components/LoadingCardSkeleton"
 import SectionHeader from "@/components/SectionHeader"
 import { cn } from "@/lib/utils"
-import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical } from "lucide-react"
+import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical, GitMerge, HeartPulse, Baby, Heart, Brain, FileText, ClipboardCheck, ShieldAlert } from "lucide-react"
 
 type CheckResult = { name: string; ok: boolean; detail: string }
 type ProviderStatus = { provider: string; ok: boolean; latencyMs?: number; detail: string; checkedAt: string }
@@ -73,6 +73,15 @@ const layerIcons: Record<string, any> = {
   secureAudit:          { icon: KeyRound,      color: "text-yellow-600",  bg: "bg-yellow-50 dark:bg-yellow-950" },
   modelFreeze:          { icon: Snowflake,     color: "text-blue-400",    bg: "bg-blue-50 dark:bg-blue-950" },
   studyPipeline:        { icon: FlaskConical,  color: "text-green-700",   bg: "bg-green-50 dark:bg-green-950" },
+  // ── Clinical Safety Remediation Layer (8 new) ────────────────────────────────
+  conflictResolver:     { icon: GitMerge,      color: "text-orange-500",  bg: "bg-orange-50 dark:bg-orange-950" },
+  sepsisDetection:      { icon: HeartPulse,    color: "text-red-700",     bg: "bg-red-50 dark:bg-red-950" },
+  pediatricSafety:      { icon: Baby,          color: "text-pink-500",    bg: "bg-pink-50 dark:bg-pink-950" },
+  obstetricSafety:      { icon: Heart,         color: "text-rose-600",    bg: "bg-rose-50 dark:bg-rose-950" },
+  mentalHealthCrisis:   { icon: Brain,         color: "text-violet-600",  bg: "bg-violet-50 dark:bg-violet-950" },
+  fdaIntendedUse:       { icon: FileText,      color: "text-blue-700",    bg: "bg-blue-50 dark:bg-blue-950" },
+  rlhfReviewQueue:      { icon: ClipboardCheck,color: "text-amber-700",   bg: "bg-amber-50 dark:bg-amber-950" },
+  masterSafetyPipeline: { icon: ShieldAlert,   color: "text-emerald-700", bg: "bg-emerald-50 dark:bg-emerald-950" },
 }
 
 type ExtLayer = ProductionLayer & {
@@ -94,6 +103,18 @@ type ExtLayer = ProductionLayer & {
   version?: string
   versionLocked?: boolean
   passThreshold?: number
+  // Clinical safety fields
+  strategies?: number
+  tools?: string[]
+  tool?: string
+  pathways?: number
+  stages?: number
+  deviceClass?: string
+  humanInLoop?: boolean
+  clinicalConditions?: number
+  pending?: number
+  approved?: number
+  rejected?: number
 }
 
 function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "info" {
@@ -118,6 +139,15 @@ function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "inf
   if (key === "secureAudit")          return layer.active ? "success" : "warning"
   if (key === "modelFreeze")          return layer.frozen ? "warning" : "success"
   if (key === "studyPipeline")        return layer.active ? "success" : "warning"
+  // Clinical Safety
+  if (key === "conflictResolver")     return layer.active ? "success" : "warning"
+  if (key === "sepsisDetection")      return layer.active ? "success" : "warning"
+  if (key === "pediatricSafety")      return layer.active ? "success" : "warning"
+  if (key === "obstetricSafety")      return layer.active ? "success" : "warning"
+  if (key === "mentalHealthCrisis")   return layer.active ? "success" : "warning"
+  if (key === "fdaIntendedUse")       return layer.active ? "success" : "info"
+  if (key === "rlhfReviewQueue")      return layer.active ? "success" : "warning"
+  if (key === "masterSafetyPipeline") return layer.active ? "success" : "warning"
   return "info"
 }
 
@@ -143,6 +173,15 @@ function layerBadge(layer: ExtLayer, key: string): string {
   if (key === "secureAudit")          return layer.active ? `${layer.total ?? 0} chained` : "Inactive"
   if (key === "modelFreeze")          return layer.frozen ? "Frozen" : (layer.canLearn ? "Learning ON" : "Locked")
   if (key === "studyPipeline")        return layer.active ? `≥${((layer.passThreshold ?? 0.85) * 100).toFixed(0)}% threshold` : "Inactive"
+  // Clinical Safety
+  if (key === "conflictResolver")     return layer.active ? `${layer.strategies ?? 4} strategies` : "Inactive"
+  if (key === "sepsisDetection")      return layer.active ? (layer.tools as any)?.join(" + ") ?? "qSOFA + NEWS2" : "Inactive"
+  if (key === "pediatricSafety")      return layer.active ? layer.tool ?? "PEWS" : "Inactive"
+  if (key === "obstetricSafety")      return layer.active ? `${layer.pathways ?? 4} pathways` : "Inactive"
+  if (key === "mentalHealthCrisis")   return layer.active ? (layer.tools as any)?.join(" + ") ?? "PHQ-9 + C-SSRS" : "Inactive"
+  if (key === "fdaIntendedUse")       return layer.active ? `Class ${layer.deviceClass ?? "II"} SaMD` : "Inactive"
+  if (key === "rlhfReviewQueue")      return layer.active ? `${layer.pending ?? 0} pending` : "Inactive"
+  if (key === "masterSafetyPipeline") return layer.active ? `${layer.stages ?? 5} stages` : "Inactive"
   return "Unknown"
 }
 

@@ -15,6 +15,8 @@ import { listSupportedPayers } from "../billing/payerRules";
 import { getSecureAuditStats } from "../ops/secureAudit";
 import { getStatus as getModelFreezeStatus, canLearn } from "../release/modelFreeze";
 import { PRIORS_COUNT } from "../clinical/bayesianEngine";
+import { getIntendedUseSummary } from "../fda/intendedUse";
+import { getQueueStats } from "../learning/reviewQueue";
 
 const router = Router();
 
@@ -51,6 +53,15 @@ router.get("/status", async (_req: Request, res: Response) => {
       secureAudit:          { active: true, ...getSecureAuditStats(), label: "Cryptographic Audit Log" },
       modelFreeze:          { ...getModelFreezeStatus(), canLearn: canLearn(), label: "Model Freeze + Version Lock" },
       studyPipeline:        { active: true, passThreshold: 0.85, label: "Validation Study Pipeline" },
+      // ── Clinical Safety Remediation Layer (8 new) ───────────────────────────
+      conflictResolver:     { active: true, strategies: 4, label: "Hybrid Engine Conflict Resolver" },
+      sepsisDetection:      { active: true, tools: ["qSOFA", "NEWS2"], label: "Sepsis Detection (qSOFA + NEWS2)" },
+      pediatricSafety:      { active: true, tool: "PEWS", label: "Pediatric Safety (PEWS)" },
+      obstetricSafety:      { active: true, pathways: 4, label: "Obstetric Emergency Pathways" },
+      mentalHealthCrisis:   { active: true, tools: ["PHQ-9", "C-SSRS"], label: "Mental Health Crisis (PHQ-9 + C-SSRS)" },
+      fdaIntendedUse:       { active: true, ...getIntendedUseSummary(), label: "FDA Intended Use Statement" },
+      rlhfReviewQueue:      { active: true, ...getQueueStats(), label: "RLHF Human-Gated Review Queue" },
+      masterSafetyPipeline: { active: true, stages: 5, label: "Master Safety Pipeline" },
     },
     ts: new Date().toISOString(),
   });
