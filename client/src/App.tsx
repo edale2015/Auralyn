@@ -45,6 +45,11 @@ import OrchestrationDashboard from "@/pages/OrchestrationDashboard";
 import ControlTowerPage from "@/pages/ControlTowerPage";
 import SystemMonitorPage from "@/pages/SystemMonitorPage";
 import FDADashboardPage from "@/pages/FDADashboardPage";
+import PriorAuthPage from "@/pages/PriorAuthPage";
+import EligibilityPage from "@/pages/EligibilityPage";
+import PopulationHealthPage from "@/pages/PopulationHealthPage";
+import ExperimentsPage from "@/pages/ExperimentsPage";
+import VoiceTriagePage from "@/pages/VoiceTriagePage";
 
 validateRoutes();
 
@@ -77,6 +82,11 @@ function WorkbenchRouter() {
         <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
+        <Route path="/prior-auth" component={PriorAuthPage} />
+        <Route path="/eligibility" component={EligibilityPage} />
+        <Route path="/population-health" component={PopulationHealthPage} />
+        <Route path="/experiments" component={ExperimentsPage} />
+        <Route path="/voice-triage" component={VoiceTriagePage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

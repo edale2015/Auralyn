@@ -1,6 +1,7 @@
 import { runPatientFlow } from "../patient/patientFlow";
 import { routeCall, handleConversation, endCall } from "./callCenter";
 import { auditLog } from "../security/auditLogger";
+import { startSession, appendTranscript, setSessionResult, endSession } from "./voiceSessionStore";
 
 const EMERGENCY_PHRASES = [
   "chest pain", "chest pressure", "can't breathe", "cannot breathe",
@@ -27,6 +28,7 @@ export async function processVoiceInput(
   const safe = (speechResult ?? "").trim();
 
   auditLog({ actor: "voice_triage", action: "speech_received", entityType: "call", entityId: callSid, details: { length: safe.length } });
+  appendTranscript(callSid, safe, "patient");
 
   if (!safe) {
     return {
@@ -42,7 +44,9 @@ export async function processVoiceInput(
 
   if (detectEmergency(safe)) {
     auditLog({ actor: "voice_triage", action: "emergency_detected", entityType: "call", entityId: callSid });
+    appendTranscript(callSid, EMERGENCY_TTS, "ai");
     endCall(callSid);
+    endSession(callSid, "emergency");
     return {
       twiml: `<Response><Say>${buildSay(EMERGENCY_TTS)}</Say><Hangup /></Response>`,
       shouldEnd: true,
@@ -63,12 +67,14 @@ export async function processVoiceInput(
 
     if (result.status === "emergency_911") {
       endCall(callSid);
+      endSession(callSid, "emergency");
       return {
         twiml: `<Response><Say>${buildSay(EMERGENCY_TTS)}</Say><Hangup /></Response>`,
         shouldEnd: true,
       };
     }
 
+    setSessionResult(callSid, result);
     if (result.status === "physician_review" || result.status === "physician_required") {
       clinicalResponse = "Thank you. A physician will review your case shortly. You will receive a follow-up. If symptoms worsen, seek care immediately.";
     } else if (result.status === "self_service_complete") {
@@ -78,12 +84,15 @@ export async function processVoiceInput(
   } catch (_) {}
 
   if (!conv.continue) {
+    appendTranscript(callSid, clinicalResponse, "ai");
     endCall(callSid);
+    endSession(callSid, "completed");
     return {
       twiml: `<Response><Say>${buildSay(clinicalResponse)}</Say><Hangup /></Response>`,
       shouldEnd: true,
     };
   }
+  appendTranscript(callSid, clinicalResponse, "ai");
 
   return {
     twiml: `<Response>

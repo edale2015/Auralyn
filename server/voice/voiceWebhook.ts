@@ -2,6 +2,7 @@ import express from "express";
 import { processVoiceInput } from "./processVoice";
 import { getCallCenterStats } from "./callCenter";
 import { auditLog } from "../security/auditLogger";
+import { startSession } from "./voiceSessionStore";
 
 const router = express.Router();
 
@@ -10,6 +11,7 @@ router.post("/incoming", (req, res) => {
   const from = req.body?.From ?? "unknown";
 
   auditLog({ actor: "voice_webhook", action: "call_incoming", entityType: "call", entityId: callSid, details: { from } });
+  startSession(callSid, from);
 
   res.type("text/xml");
   res.send(`<?xml version="1.0" encoding="UTF-8"?>

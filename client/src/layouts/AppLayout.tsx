@@ -19,6 +19,10 @@ import {
   Radio,
   MonitorDot,
   FlaskConical,
+  FileCheck,
+  CreditCard,
+  Globe2,
+  Phone,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -41,6 +45,11 @@ const NAV_ITEMS = [
   { path: ROUTES.CONTROL_TOWER, label: "War Room", icon: Radio },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
+  { path: "/prior-auth", label: "Prior Auth", icon: FileCheck },
+  { path: "/eligibility", label: "Eligibility", icon: CreditCard },
+  { path: "/population-health", label: "Population Health", icon: Globe2 },
+  { path: "/experiments", label: "A/B Experiments", icon: FlaskConical },
+  { path: "/voice-triage", label: "Voice Triage", icon: Phone },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 
