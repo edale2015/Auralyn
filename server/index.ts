@@ -276,6 +276,8 @@ import queueRoutes from "./queue/queueRoutes";
 import { initControlTowerSocket } from "./controlTower/socket";
 import { startAnomalyEngine } from "./controlTower/anomalyEngine";
 import { startAlertEngine, stopAlertEngine } from "./monitoring/alertEngine";
+import { startMonitorSocket } from "./ws/monitorSocket";
+import { startAutoHealer, stopAutoHealer } from "./monitoring/autoHealer";
 import { startGovernanceLoop, stopGovernanceLoop } from "./governance/auditAgent";
 import { startTwinSync, stopTwinSync } from "./twin/digitalTwin";
 import { startPredictiveLoop, stopPredictiveLoop } from "./predictive/predictiveEngine";
@@ -883,6 +885,8 @@ app.use((req, res, next) => {
       startTwinSync(1_000);
       startPredictiveLoop(5_000);
       startChaosScheduler(60_000);
+      startMonitorSocket(httpServer);
+      startAutoHealer();
       if (process.env.NODE_ENV === "production") startSecretRotation();
 
       const shutdown = (signal: string) => {
@@ -892,6 +896,7 @@ app.use((req, res, next) => {
         stopTwinSync();
         stopPredictiveLoop();
         stopChaosScheduler();
+        stopAutoHealer();
         httpServer.close(() => {
           console.log("[Shutdown] HTTP server closed");
           process.exit(0);

@@ -303,4 +303,44 @@ router.get("/prometheus", (_req: Request, res: Response) => {
   );
 });
 
+/* ─── Health Registry — engines / skills / traces ─────────── */
+import {
+  getEngines as getRegistryEngines,
+  getSkills as getRegistrySkills,
+  getCaseTrace,
+  getAllCaseTraces,
+} from "../monitoring/healthRegistry";
+import { detectDegradation, getAllLatencyHistories } from "../monitoring/trendMonitor";
+import { autoHeal, getHealLog } from "../monitoring/autoHealer";
+
+router.get("/engines", (_req: Request, res: Response) => {
+  res.json({ ok: true, engines: getRegistryEngines() });
+});
+
+router.get("/skills", (_req: Request, res: Response) => {
+  res.json({ ok: true, skills: getRegistrySkills() });
+});
+
+router.get("/trace/:caseId", (req: Request, res: Response) => {
+  const trace = getCaseTrace(req.params.caseId);
+  res.json({ ok: true, trace: trace ?? null });
+});
+
+router.get("/traces", (_req: Request, res: Response) => {
+  res.json({ ok: true, traces: getAllCaseTraces() });
+});
+
+router.get("/degradation", (_req: Request, res: Response) => {
+  res.json({ ok: true, alerts: detectDegradation(), history: getAllLatencyHistories() });
+});
+
+router.post("/heal", (_req: Request, res: Response) => {
+  const actions = autoHeal();
+  res.json({ ok: true, actions });
+});
+
+router.get("/heal-log", (_req: Request, res: Response) => {
+  res.json({ ok: true, log: getHealLog() });
+});
+
 export default router;

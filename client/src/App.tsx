@@ -43,6 +43,7 @@ import RobotCamera from "@/pages/RobotCamera";
 import PhysicianMobile from "@/pages/PhysicianMobile";
 import OrchestrationDashboard from "@/pages/OrchestrationDashboard";
 import ControlTowerPage from "@/pages/ControlTowerPage";
+import SystemMonitorPage from "@/pages/SystemMonitorPage";
 
 validateRoutes();
 
@@ -73,6 +74,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.PHYSICIAN_MOBILE} component={PhysicianMobile} />
         <Route path={ROUTES.ORCHESTRATION} component={OrchestrationDashboard} />
         <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
+        <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

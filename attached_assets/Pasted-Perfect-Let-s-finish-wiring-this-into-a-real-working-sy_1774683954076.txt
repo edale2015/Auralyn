@@ -1,0 +1,668 @@
+Perfect. Let’s finish wiring this into a real, working system you can drop into your app and actually use without guessing what’s happening under the hood.
+
+We’re building three things that all talk to each other:
+
+🧠 Engine Health Monitor
+🧩 Skill Health Monitor
+🔍 Per-Case Execution Trace
+
+Think of it like:
+
+Engines = organs
+Skills = reflexes
+Trace = what happened during this specific “patient visit”
+🧱 PART 1 — BACKEND (THE HEARTBEAT SYSTEM)
+
+We’ll create a central in-memory registry (you can later persist to Postgres if you want).
+
+📁 1. Create: server/monitoring/healthRegistry.ts
+
+This is your single source of truth.
+
+type HealthStatus = "green" | "yellow" | "red" | "gray";
+
+export interface EngineHealth {
+  name: string;
+  status: HealthStatus;
+  lastHeartbeat: number;
+  lastSuccess?: number;
+  lastFailure?: number;
+  latencyMs?: number;
+  errorCount: number;
+  notes?: string;
+}
+
+export interface SkillHealth {
+  name: string;
+  status: HealthStatus;
+  lastCalled?: number;
+  successCount: number;
+  failureCount: number;
+  avgLatencyMs?: number;
+  lastError?: string;
+}
+
+export interface SkillTrace {
+  skill: string;
+  status: "success" | "failed" | "skipped";
+  latencyMs?: number;
+  input?: any;
+  output?: any;
+  reason?: string;
+}
+
+export interface CaseTrace {
+  caseId: string;
+  startedAt: number;
+  steps: SkillTrace[];
+}
+
+const engineMap = new Map<string, EngineHealth>();
+const skillMap = new Map<string, SkillHealth>();
+const caseMap = new Map<string, CaseTrace>();
+
+// ---------------- ENGINE ----------------
+
+export function registerEngine(name: string) {
+  engineMap.set(name, {
+    name,
+    status: "gray",
+    lastHeartbeat: Date.now(),
+    errorCount: 0
+  });
+}
+
+export function heartbeatEngine(name: string) {
+  const e = engineMap.get(name);
+  if (!e) return;
+  e.lastHeartbeat = Date.now();
+  e.status = "green";
+}
+
+export function recordEngineSuccess(name: string, latencyMs: number) {
+  const e = engineMap.get(name);
+  if (!e) return;
+  e.lastSuccess = Date.now();
+  e.latencyMs = latencyMs;
+  e.status = latencyMs > 2000 ? "yellow" : "green";
+}
+
+export function recordEngineFailure(name: string, err: string) {
+  const e = engineMap.get(name);
+  if (!e) return;
+  e.lastFailure = Date.now();
+  e.errorCount += 1;
+  e.status = "red";
+  e.notes = err;
+}
+
+export function getEngines() {
+  return Array.from(engineMap.values());
+}
+
+// ---------------- SKILL ----------------
+
+export function registerSkill(name: string) {
+  skillMap.set(name, {
+    name,
+    status: "gray",
+    successCount: 0,
+    failureCount: 0
+  });
+}
+
+export function recordSkillSuccess(name: string, latencyMs: number) {
+  const s = skillMap.get(name);
+  if (!s) return;
+
+  s.lastCalled = Date.now();
+  s.successCount += 1;
+  s.avgLatencyMs =
+    ((s.avgLatencyMs || 0) + latencyMs) / 2;
+
+  s.status = latencyMs > 1500 ? "yellow" : "green";
+}
+
+export function recordSkillFailure(name: string, err: string) {
+  const s = skillMap.get(name);
+  if (!s) return;
+
+  s.lastCalled = Date.now();
+  s.failureCount += 1;
+  s.status = "red";
+  s.lastError = err;
+}
+
+export function getSkills() {
+  return Array.from(skillMap.values());
+}
+
+// ---------------- TRACE ----------------
+
+export function startCase(caseId: string) {
+  caseMap.set(caseId, {
+    caseId,
+    startedAt: Date.now(),
+    steps: []
+  });
+}
+
+export function addTraceStep(caseId: string, step: SkillTrace) {
+  const c = caseMap.get(caseId);
+  if (!c) return;
+  c.steps.push(step);
+}
+
+export function getCaseTrace(caseId: string) {
+  return caseMap.get(caseId);
+}
+🌐 PART 2 — API ROUTES
+📁 server/routes/monitoring.ts
+import express from "express";
+import {
+  getEngines,
+  getSkills,
+  getCaseTrace
+} from "../monitoring/healthRegistry";
+
+const router = express.Router();
+
+router.get("/engines", (_, res) => {
+  res.json({ ok: true, engines: getEngines() });
+});
+
+router.get("/skills", (_, res) => {
+  res.json({ ok: true, skills: getSkills() });
+});
+
+router.get("/trace/:caseId", (req, res) => {
+  const trace = getCaseTrace(req.params.caseId);
+  res.json({ ok: true, trace });
+});
+
+export default router;
+📁 Add to server/index.ts
+import monitoringRoutes from "./routes/monitoring";
+
+app.use("/api/monitoring", monitoringRoutes);
+🔌 PART 3 — INSTRUMENT YOUR SYSTEM
+
+Now we wire this into your real engines + skills.
+
+🧠 ENGINE WRAP EXAMPLE
+
+Wherever your engines run:
+
+import {
+  registerEngine,
+  heartbeatEngine,
+  recordEngineSuccess,
+  recordEngineFailure
+} from "../monitoring/healthRegistry";
+
+registerEngine("diagnosis");
+
+async function runDiagnosisEngine(input) {
+  const start = Date.now();
+  heartbeatEngine("diagnosis");
+
+  try {
+    const result = await actualDiagnosis(input);
+
+    recordEngineSuccess("diagnosis", Date.now() - start);
+    return result;
+
+  } catch (e: any) {
+    recordEngineFailure("diagnosis", e.message);
+    throw e;
+  }
+}
+🧩 SKILL WRAP EXAMPLE
+import {
+  registerSkill,
+  recordSkillSuccess,
+  recordSkillFailure,
+  addTraceStep
+} from "../monitoring/healthRegistry";
+
+registerSkill("centor_score");
+
+async function runCentor(caseId: string, input: any) {
+  const start = Date.now();
+
+  try {
+    const output = calculateCentor(input);
+
+    recordSkillSuccess("centor_score", Date.now() - start);
+
+    addTraceStep(caseId, {
+      skill: "centor_score",
+      status: "success",
+      latencyMs: Date.now() - start,
+      input,
+      output
+    });
+
+    return output;
+
+  } catch (e: any) {
+    recordSkillFailure("centor_score", e.message);
+
+    addTraceStep(caseId, {
+      skill: "centor_score",
+      status: "failed",
+      reason: e.message
+    });
+
+    throw e;
+  }
+}
+🔍 START TRACE IN PIPELINE
+
+In your main flow:
+
+import { startCase } from "../monitoring/healthRegistry";
+
+function runFullClinicalFlow(caseId: string, input: any) {
+  startCase(caseId);
+
+  // continue pipeline...
+}
+🎨 PART 4 — FRONTEND (REACT DASHBOARD)
+📁 client/src/pages/SystemMonitor.tsx
+import { useEffect, useState } from "react";
+
+export default function SystemMonitor() {
+  const [engines, setEngines] = useState([]);
+  const [skills, setSkills] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/monitoring/engines")
+      .then(r => r.json())
+      .then(d => setEngines(d.engines));
+
+    fetch("/api/monitoring/skills")
+      .then(r => r.json())
+      .then(d => setSkills(d.skills));
+  }, []);
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>🧠 Engine Health</h2>
+      {engines.map((e: any) => (
+        <div key={e.name}>
+          {e.name} — {e.status} — latency: {e.latencyMs}
+        </div>
+      ))}
+
+      <h2 style={{ marginTop: 30 }}>🧩 Skill Health</h2>
+      {skills.map((s: any) => (
+        <div key={s.name}>
+          {s.name} — {s.status} — success: {s.successCount}
+        </div>
+      ))}
+    </div>
+  );
+}
+📁 Add Route
+<Route path="/system-monitor" element={<SystemMonitor />} />
+🔍 CASE TRACE PAGE
+📁 CaseTrace.tsx
+import { useEffect, useState } from "react";
+
+export default function CaseTrace({ caseId }: { caseId: string }) {
+  const [trace, setTrace] = useState<any>(null);
+
+  useEffect(() => {
+    fetch(`/api/monitoring/trace/${caseId}`)
+      .then(r => r.json())
+      .then(d => setTrace(d.trace));
+  }, [caseId]);
+
+  if (!trace) return <div>Loading...</div>;
+
+  return (
+    <div>
+      <h3>Case Trace</h3>
+      {trace.steps.map((s: any, i: number) => (
+        <div key={i}>
+          {s.skill} — {s.status} — {s.latencyMs}ms
+        </div>
+      ))}
+    </div>
+  );
+}
+🚨 OPTIONAL (HIGHLY RECOMMENDED)
+Add auto synthetic tests
+setInterval(() => {
+  runFullClinicalFlow("test-case", {
+    complaint: "sore throat",
+    fever: true
+  });
+}, 300000);
+
+This ensures:
+
+engines still respond
+skills still work
+nothing silently broke
+🧭 HOW YOU USE THIS (NON-TECHNICAL)
+
+Now your workflow becomes simple:
+
+Morning check
+Click System Monitor
+Look:
+engines mostly green?
+skills mostly green?
+If something feels off
+Open Case Trace
+Enter case ID
+See exactly:
+what ran
+what failed
+what was skipped
+If system is acting weird
+Check:
+is an engine red?
+is a skill failing repeatedly?
+🚀 WHAT YOU JUST BUILT
+
+You now have:
+
+A live brain monitor
+A skill-level debugger
+A case-level truth recorder
+
+Most systems stop at “it works.”
+Yours now answers:
+
+“What exactly happened, where, and why?”
+
+If you want next (high-value upgrades)
+
+I can build you:
+
+🔴 Real-time WebSocket streaming (live updating monitor)
+📊 Charts (failure trends, latency curves)
+🧠 Auto-healing (restart failing engines automatically)
+🚨 Smart alerts (only alert when meaningful)
+🧬 RLHF tie-in (learn from failed skills automatically)
+
+Just tell me “next layer” and I’ll wire it in cleanly.
+
+next layer
+
+Now we give your system a nervous system and reflexes ⚡🧠
+Right now it can observe. Next, it will react, heal, and warn you intelligently.
+
+This is the layer where your platform stops being a dashboard…
+…and starts acting like an autonomous operator assistant.
+
+🚀 NEXT LAYER — REAL-TIME + ALERTS + AUTO-HEALING
+
+We’re adding 4 major capabilities:
+
+⚡ Live updates (no refresh needed)
+🚨 Smart alerts (no spam, only meaningful signals)
+🔧 Auto-healing (restart failing engines)
+📊 Trend awareness (catch slow degradation before failure)
+🧠 PART 1 — LIVE REAL-TIME MONITOR (WebSocket)
+
+Right now your monitor is like checking a clock manually.
+We’re turning it into a heart monitor that never blinks.
+
+📁 server/ws/monitorSocket.ts
+import { Server } from "ws";
+import { getEngines, getSkills } from "../monitoring/healthRegistry";
+
+let wss: Server;
+
+export function startMonitorSocket(server: any) {
+  wss = new Server({ server, path: "/ws/monitor" });
+
+  wss.on("connection", (ws) => {
+    const interval = setInterval(() => {
+      ws.send(JSON.stringify({
+        type: "monitor_update",
+        engines: getEngines(),
+        skills: getSkills(),
+        ts: Date.now()
+      }));
+    }, 2000);
+
+    ws.on("close", () => clearInterval(interval));
+  });
+}
+📁 Add to server/index.ts
+import { startMonitorSocket } from "./ws/monitorSocket";
+
+const server = app.listen(PORT, () => {
+  console.log("Server running");
+});
+
+startMonitorSocket(server);
+🎨 Frontend (Live Updating)
+import { useEffect, useState } from "react";
+
+export default function LiveMonitor() {
+  const [data, setData] = useState<any>({ engines: [], skills: [] });
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000/ws/monitor");
+
+    ws.onmessage = (msg) => {
+      const parsed = JSON.parse(msg.data);
+      setData(parsed);
+    };
+
+    return () => ws.close();
+  }, []);
+
+  return (
+    <div>
+      <h2>Live Monitor ⚡</h2>
+
+      <h3>Engines</h3>
+      {data.engines.map((e: any) => (
+        <div key={e.name}>
+          {e.name} — {e.status}
+        </div>
+      ))}
+
+      <h3>Skills</h3>
+      {data.skills.map((s: any) => (
+        <div key={s.name}>
+          {s.name} — {s.status}
+        </div>
+      ))}
+    </div>
+  );
+}
+🚨 PART 2 — SMART ALERT ENGINE
+
+We do NOT want spam.
+
+We want:
+
+only meaningful alerts
+cooldowns
+deduplication
+severity levels
+📁 server/monitoring/alertEngine.ts
+import { getEngines, getSkills } from "./healthRegistry";
+
+const lastAlertMap = new Map<string, number>();
+const COOLDOWN = 5 * 60 * 1000;
+
+export function evaluateAlerts() {
+  const now = Date.now();
+  const alerts: any[] = [];
+
+  const engines = getEngines();
+  const skills = getSkills();
+
+  for (const e of engines) {
+    if (e.status === "red") {
+      if (!shouldAlert(e.name, now)) continue;
+
+      alerts.push({
+        type: "ENGINE_DOWN",
+        name: e.name,
+        severity: "critical"
+      });
+    }
+  }
+
+  for (const s of skills) {
+    if (s.failureCount > 5) {
+      if (!shouldAlert(s.name, now)) continue;
+
+      alerts.push({
+        type: "SKILL_FAILING",
+        name: s.name,
+        severity: "warning"
+      });
+    }
+  }
+
+  return alerts;
+}
+
+function shouldAlert(key: string, now: number) {
+  const last = lastAlertMap.get(key) || 0;
+  if (now - last < COOLDOWN) return false;
+
+  lastAlertMap.set(key, now);
+  return true;
+}
+🧪 Run alert loop
+setInterval(() => {
+  const alerts = evaluateAlerts();
+
+  alerts.forEach(a => {
+    console.log("🚨 ALERT:", a);
+  });
+
+}, 10000);
+🔧 PART 3 — AUTO-HEALING ENGINE
+
+Now we give your system reflexes.
+
+📁 server/monitoring/autoHealer.ts
+import { getEngines } from "./healthRegistry";
+
+export function autoHeal() {
+  const engines = getEngines();
+
+  for (const e of engines) {
+    if (e.status === "red") {
+      console.log(`🔧 Restarting engine: ${e.name}`);
+      restartEngine(e.name);
+    }
+  }
+}
+
+function restartEngine(name: string) {
+  // Plug into your engine scheduler
+  // Example:
+  // engineScheduler.restart(name)
+
+  console.log(`Engine ${name} restarted`);
+}
+Run healer loop
+setInterval(() => {
+  autoHeal();
+}, 15000);
+📊 PART 4 — TREND MONITOR (SLOW FAILURE DETECTION)
+
+This catches things BEFORE they break.
+
+📁 trendMonitor.ts
+const latencyHistory = new Map<string, number[]>();
+
+export function trackLatency(name: string, latency: number) {
+  const arr = latencyHistory.get(name) || [];
+  arr.push(latency);
+
+  if (arr.length > 20) arr.shift();
+  latencyHistory.set(name, arr);
+}
+
+export function detectDegradation() {
+  for (const [name, arr] of latencyHistory.entries()) {
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+
+    if (avg > 2000) {
+      console.log(`⚠️ Degrading: ${name}`);
+    }
+  }
+}
+🧭 HOW YOU USE THIS (NOW)
+🔹 Normal operation
+
+You open Live Monitor:
+
+things move in real time
+green = good
+yellow = slowing
+red = broken
+🔹 When something breaks
+
+System automatically:
+
+detects it
+alerts you (no spam)
+attempts restart
+🔹 You investigate
+open Case Trace
+see which skill failed
+fix root cause
+🧠 WHAT YOU JUST ADDED
+
+Your system now has:
+
+Before
+visibility
+Now
+awareness
+reaction
+protection
+🧬 NEXT POSSIBLE LAYERS (HIGH IMPACT)
+
+If you say “continue”, I can build:
+
+1. 🧠 Self-learning loop (RLHF for failures)
+
+System automatically:
+
+learns from failed cases
+adjusts weights
+2. 📱 SMS / WhatsApp alerts (Twilio)
+
+You get:
+
+“Diagnosis engine down”
+“NYC latency spike”
+3. 🧭 Control Tower integration
+
+Merge this into your War Room UI:
+
+flashing alerts
+auto-recovery logs
+live system map
+4. 🧪 Golden-case validator
+
+System continuously runs:
+
+50+ known clinical cases
+verifies correct outputs
+
+If your goal is:
+👉 10,000 patients/day safely
+
+Then the next layer I recommend is:
+
+👉 Self-learning + Golden Case Validator + Clinical Safety Guard
+
+Say “build safety layer” and I’ll wire it directly into your system.

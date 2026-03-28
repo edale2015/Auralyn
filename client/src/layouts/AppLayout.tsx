@@ -17,6 +17,7 @@ import {
   Smartphone,
   LayoutGrid,
   Radio,
+  MonitorDot,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -37,6 +38,7 @@ const NAV_ITEMS = [
   { path: ROUTES.PHYSICIAN_MOBILE, label: "Mobile Dashboard", icon: Smartphone },
   { path: ROUTES.ORCHESTRATION, label: "Live Rooms", icon: LayoutGrid },
   { path: ROUTES.CONTROL_TOWER, label: "War Room", icon: Radio },
+  { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 
