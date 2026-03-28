@@ -84,6 +84,35 @@ function PulseDot({ alive }: { alive: boolean }) {
   );
 }
 
+/* ─── EKG / Heartbeat animation ─────────────────────────────── */
+function Heartbeat({ alive }: { alive: boolean }) {
+  return (
+    <div className="flex items-center gap-2" data-testid="twin-heartbeat">
+      <svg viewBox="0 0 120 40" className="w-28 h-8" fill="none">
+        <polyline
+          points="0,20 18,20 26,4 34,36 42,20 54,20 60,2 66,38 72,20 84,20 90,14 96,26 102,20 120,20"
+          stroke={alive ? "#22c55e" : "#6b7280"}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={alive ? "opacity-100" : "opacity-40"}
+          style={alive ? { animation: "ekgScroll 1.4s linear infinite" } : {}}
+        />
+        <style>{`
+          @keyframes ekgScroll {
+            0%   { stroke-dasharray: 200; stroke-dashoffset: 200; }
+            60%  { stroke-dasharray: 200; stroke-dashoffset: 0; }
+            100% { stroke-dasharray: 200; stroke-dashoffset: -200; }
+          }
+        `}</style>
+      </svg>
+      <span className={`text-xs font-mono font-bold ${alive ? "text-green-400" : "text-muted-foreground"}`}>
+        {alive ? "LIVE" : "SYNCING"}
+      </span>
+    </div>
+  );
+}
+
 /* ─── Mini spark bar ────────────────────────────────────────── */
 function SparkBar({ value, max, colorClass }: { value: number; max: number; colorClass: string }) {
   const pct = Math.min(100, Math.round((value / (max || 1)) * 100));
@@ -334,13 +363,39 @@ export default function ControlTowerPage() {
       </div>
 
       {/* ══════════════════════════════════════════════════════
+          STICKY QUICK COMMANDS
+      ══════════════════════════════════════════════════════ */}
+      <div className="sticky top-0 z-20 bg-background/95 backdrop-blur border rounded-lg px-4 py-2.5 flex flex-wrap items-center gap-2 shadow-md"
+        data-testid="sticky-command-bar">
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1 font-medium">Commands:</span>
+        <Button size="sm" variant="destructive" onClick={runOutage} disabled={outageLoading} data-testid="quick-btn-outage">
+          {outageLoading ? "…" : "💥 NYC Outage"}
+        </Button>
+        <Button size="sm" variant="outline" onClick={recoverRegion} data-testid="quick-btn-recover">✅ Recover NYC</Button>
+        <Button size="sm" variant="outline" onClick={runReplay} disabled={replayLoading} data-testid="quick-btn-replay">
+          {replayLoading ? "…" : "▶ Replay"}
+        </Button>
+        <Button size="sm" variant="outline" onClick={fetchPrediction} data-testid="quick-btn-predict">🔮 Predict</Button>
+        <Button size="sm" variant="outline" onClick={runStress} disabled={stressLoading} data-testid="quick-btn-stress">
+          {stressLoading ? "…" : "⚡ Stress"}
+        </Button>
+        <Button size="sm" variant="outline" onClick={runLearning} disabled={learningLoading} data-testid="quick-btn-learning">
+          {learningLoading ? "…" : "🧠 Learn"}
+        </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button size="sm" variant="ghost" onClick={() => window.open("/api/monitoring/dashboard","_blank")} data-testid="quick-btn-dash">Dashboard</Button>
+          <Button size="sm" variant="ghost" onClick={() => window.open("/api/resilient/twin","_blank")} data-testid="quick-btn-twin-json">Twin JSON</Button>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════
           DIGITAL TWIN LIVE SNAPSHOT PANEL
       ══════════════════════════════════════════════════════ */}
       <div className={`rounded-xl border-2 p-5 space-y-4 transition-all duration-700 ${slaBg(twin.slaStatus)}`}
         data-testid="twin-snapshot-panel">
         {/* Panel header */}
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <span className="text-sm font-semibold tracking-wide uppercase text-muted-foreground">Digital Twin · Live System Snapshot</span>
             {twin.syncedAt && (
               <Badge variant="outline" className="text-[10px] font-mono">
@@ -348,15 +403,18 @@ export default function ControlTowerPage() {
               </Badge>
             )}
           </div>
-          <Badge
-            className={`text-sm font-bold px-3 py-0.5 ${
-              twin.slaStatus === "OK" ? "bg-green-600 text-white" :
-              twin.slaStatus === "BREACH" ? "bg-red-600 text-white" :
-              twin.slaStatus === "DEGRADED" ? "bg-yellow-500 text-black" :
-              "bg-muted text-muted-foreground"}`}
-            data-testid="sla-status">
-            {twin.slaStatus ?? "—"} SLA
-          </Badge>
+          <div className="flex items-center gap-3">
+            <Heartbeat alive={isTwinFresh} />
+            <Badge
+              className={`text-sm font-bold px-3 py-0.5 ${
+                twin.slaStatus === "OK" ? "bg-green-600 text-white" :
+                twin.slaStatus === "BREACH" ? "bg-red-600 text-white" :
+                twin.slaStatus === "DEGRADED" ? "bg-yellow-500 text-black" :
+                "bg-muted text-muted-foreground"}`}
+              data-testid="sla-status">
+              {twin.slaStatus ?? "—"} SLA
+            </Badge>
+          </div>
         </div>
 
         {/* KPI row */}
