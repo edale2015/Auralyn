@@ -18,6 +18,7 @@ import {
   LayoutGrid,
   Radio,
   MonitorDot,
+  FlaskConical,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -39,6 +40,7 @@ const NAV_ITEMS = [
   { path: ROUTES.ORCHESTRATION, label: "Live Rooms", icon: LayoutGrid },
   { path: ROUTES.CONTROL_TOWER, label: "War Room", icon: Radio },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
+  { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

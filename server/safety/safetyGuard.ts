@@ -1,5 +1,6 @@
 import { runSafetyGate } from "./safetyGate";
 import { applyGuardrailGate } from "./guardrailEngine";
+import { dispatchAlert } from "../alerting/alertDispatcher";
 
 export type SafetyLevel = "low" | "medium" | "high" | "critical";
 
@@ -85,6 +86,9 @@ export function runSafetyGuard(output: any): SafetyGuardResult {
 function block(reason: string, level: SafetyLevel, checks: any): SafetyGuardResult {
   blockLog.push({ ts: Date.now(), reason, level });
   if (blockLog.length > 200) blockLog.shift();
+  if (level === "critical") {
+    dispatchAlert({ level: "critical", type: "SafetyBlock", message: reason }).catch(() => {});
+  }
   return { allowed: false, level, reason, checks, blockedAt: new Date().toISOString() };
 }
 

@@ -44,6 +44,7 @@ import PhysicianMobile from "@/pages/PhysicianMobile";
 import OrchestrationDashboard from "@/pages/OrchestrationDashboard";
 import ControlTowerPage from "@/pages/ControlTowerPage";
 import SystemMonitorPage from "@/pages/SystemMonitorPage";
+import FDADashboardPage from "@/pages/FDADashboardPage";
 
 validateRoutes();
 
@@ -75,6 +76,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.ORCHESTRATION} component={OrchestrationDashboard} />
         <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
+        <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
