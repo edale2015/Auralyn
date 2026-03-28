@@ -23,6 +23,7 @@ import {
   CreditCard,
   Globe2,
   Phone,
+  GitBranch,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -50,6 +51,7 @@ const NAV_ITEMS = [
   { path: "/population-health", label: "Population Health", icon: Globe2 },
   { path: "/experiments", label: "A/B Experiments", icon: FlaskConical },
   { path: "/voice-triage", label: "Voice Triage", icon: Phone },
+  { path: "/decision-tree", label: "Decision Tree", icon: GitBranch },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

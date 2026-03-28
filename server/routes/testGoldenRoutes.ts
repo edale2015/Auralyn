@@ -38,6 +38,12 @@ router.get("/", (_req, res) => {
   res.json({ ok: true, cases: Array.from(goldenStore.values()) });
 });
 
+// GET /api/test/golden/failures — only failed cases (must be before /:id)
+router.get("/failures", (_req, res) => {
+  const failures = Array.from(goldenStore.values()).filter(c => c.status === "fail");
+  res.json({ ok: true, failures, count: failures.length });
+});
+
 // GET /api/test/golden/:id — single case
 router.get("/:id", (req, res) => {
   const c = goldenStore.get(req.params.id);
@@ -114,4 +120,5 @@ router.post("/run-golden", async (req, res) => {
   }
 });
 
+export { goldenStore };
 export default router;

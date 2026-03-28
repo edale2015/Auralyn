@@ -302,6 +302,7 @@ import cdsHooksRouter from "./cds/cdsHooks";
 import testGoldenRoutes from "./routes/testGoldenRoutes";
 import engineControlRoutes from "./routes/engineControlRoutes";
 import recentRunsRoutes from "./routes/recentRunsRoutes";
+import decisionTreeRoutes, { suggestFixRouter } from "./routes/decisionTreeRoutes";
 // Register task agents (side-effects: all 7 agents added to registry)
 import "./agents/taskAgentRegistry";
 import { startGovernanceLoop, stopGovernanceLoop } from "./governance/auditAgent";
@@ -664,6 +665,8 @@ app.use("/cds-hooks", cdsHooksRouter);
 app.use("/api/test/golden", testGoldenRoutes);
 app.use("/api/monitoring", engineControlRoutes);
 app.use("/api/control-tower", recentRunsRoutes);
+app.use("/api/decision-tree", decisionTreeRoutes);
+app.use("/api/learning", suggestFixRouter);
 app.use("/api/pack-admin", packAdminRoutes);
 app.use("/api/pack-intake", packDrivenIntakeRoutes);
 app.use("/api/pack-simulator", packSimulatorRoutes);

@@ -1,0 +1,150 @@
+// DECISION TREE EXPLORER + COVERAGE HEATMAP + AUTO CASE GENERATOR
+
+import React, { useEffect, useState } from "react";
+import ReactFlow, { Background, Controls } from "reactflow";
+import "reactflow/dist/style.css";
+
+const API = "";
+
+async function apiGet(path) {
+  const res = await fetch(API + path);
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(API + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export default function DecisionTreeExplorer() {
+  const [complaint, setComplaint] = useState("sore_throat");
+  const [nodes, setNodes] = useState([]);
+  const [edges, setEdges] = useState([]);
+  const [coverage, setCoverage] = useState({});
+  const [generatedCases, setGeneratedCases] = useState([]);
+
+  // =====================
+  // LOAD TREE
+  // =====================
+  async function loadTree() {
+    const data = await apiGet(`/api/decision-tree/${complaint}`);
+    const coverageData = await apiGet(`/api/test/coverage/${complaint}`);
+
+    setCoverage(coverageData || {});
+
+    const formattedNodes = data.nodes.map((n) => {
+      const hit = coverageData?.[n.id];
+
+      let bg = "white";
+      if (hit > 10) bg = "#bbf7d0"; // green
+      else if (hit > 0) bg = "#fef08a"; // yellow
+      else bg = "#fecaca"; // red
+
+      return {
+        id: n.id,
+        data: { label: n.label },
+        position: { x: Math.random() * 400, y: Math.random() * 400 },
+        style: {
+          background: bg,
+          padding: 10,
+          borderRadius: 10,
+          border: "1px solid #ddd",
+        },
+      };
+    });
+
+    const formattedEdges = data.edges.map((e, i) => ({
+      id: "e" + i,
+      source: e.from,
+      target: e.to,
+    }));
+
+    setNodes(formattedNodes);
+    setEdges(formattedEdges);
+  }
+
+  useEffect(() => {
+    loadTree();
+  }, [complaint]);
+
+  // =====================
+  // AUTO CASE GENERATOR
+  // =====================
+  async function generateCases() {
+    const res = await apiPost("/api/test/generate-cases", {
+      complaint,
+    });
+
+    setGeneratedCases(res.cases || []);
+  }
+
+  // =====================
+  // SAVE GENERATED CASES
+  // =====================
+  async function saveCases() {
+    await apiPost("/api/test/golden/batch-save", {
+      cases: generatedCases,
+    });
+    alert("Saved to golden cases");
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Decision Tree + Coverage Heatmap 🔥</h1>
+
+      {/* INPUT */}
+      <input
+        value={complaint}
+        onChange={(e) => setComplaint(e.target.value)}
+        className="border p-2 rounded"
+      />
+
+      {/* TREE */}
+      <div style={{ height: 500 }} className="border rounded">
+        <ReactFlow nodes={nodes} edges={edges} fitView>
+          <Background />
+          <Controls />
+        </ReactFlow>
+      </div>
+
+      {/* LEGEND */}
+      <div className="flex gap-4 text-sm">
+        <div>🟢 well tested</div>
+        <div>🟡 partially tested</div>
+        <div>🔴 untested</div>
+      </div>
+
+      {/* GENERATOR */}
+      <div>
+        <h2 className="font-semibold">Auto Case Generator</h2>
+        <button
+          onClick={generateCases}
+          className="bg-black text-white px-4 py-2"
+        >
+          Generate Missing Cases
+        </button>
+
+        {generatedCases.length > 0 && (
+          <div>
+            <button
+              onClick={saveCases}
+              className="bg-green-600 text-white px-3 py-1 mt-2"
+            >
+              Save All
+            </button>
+
+            {generatedCases.map((c, i) => (
+              <pre key={i} className="text-xs border p-2 mt-2">
+                {JSON.stringify(c, null, 2)}
+              </pre>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -50,6 +50,7 @@ import EligibilityPage from "@/pages/EligibilityPage";
 import PopulationHealthPage from "@/pages/PopulationHealthPage";
 import ExperimentsPage from "@/pages/ExperimentsPage";
 import VoiceTriagePage from "@/pages/VoiceTriagePage";
+import DecisionTreePage from "@/pages/DecisionTreePage";
 
 validateRoutes();
 
@@ -87,6 +88,7 @@ function WorkbenchRouter() {
         <Route path="/population-health" component={PopulationHealthPage} />
         <Route path="/experiments" component={ExperimentsPage} />
         <Route path="/voice-triage" component={VoiceTriagePage} />
+        <Route path="/decision-tree" component={DecisionTreePage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

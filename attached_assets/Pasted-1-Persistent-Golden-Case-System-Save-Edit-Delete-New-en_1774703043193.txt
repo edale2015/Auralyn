@@ -1,0 +1,448 @@
+1. 💾 Persistent Golden Case System (Save / Edit / Delete)
+New endpoints your UI expects:
+POST /api/test/golden/save
+POST /api/test/golden/delete
+GET  /api/test/golden
+How you use it:
+Paste/edit JSON in the editor
+Click Save
+It persists to backend
+Click Delete to remove
+Click Run to test immediately
+
+👉 This becomes your clinical memory + regression brain
+
+2. 🌳 Step-by-Step Trace Tree (YOUR SYSTEM’S “THOUGHTS”)
+
+Now when a case runs, you see:
+
+intakeNormalization
+  → cleaned symptoms
+
+redFlagDetector
+  → no critical flags
+
+centorScore
+  → score = 3
+
+diagnosisCluster
+  → strep throat likely
+
+👉 This lets you answer:
+
+WHY did it decide that?
+WHERE did it go wrong?
+3. 🔁 Engine Control (Restart + Health Check)
+
+Each engine now has buttons:
+
+Restart 🔄
+Health Check ❤️
+Required backend:
+POST /api/monitoring/restart
+POST /api/monitoring/check
+
+Example:
+
+{ "engine": "diagnosis" }
+
+👉 This turns your system into a live ops platform
+
+4. ⚖️ Diff View (Expected vs Actual)
+
+When a golden case fails, you now see:
+
+Expected	Actual
+strep throat	viral pharyngitis
+
+👉 Instant insight:
+
+Wrong diagnosis?
+Wrong disposition?
+Missing rule?
+
+This is your debugging microscope 🔬
+
+🧠 NOW… THE BIG ONE
+🚀 HOW TO USE YOUR VISUAL DECISION TREE
+
+This is where your system evolves from:
+
+“rules engine”
+
+to:
+
+navigable clinical intelligence map
+
+🧩 WHAT YOUR DECISION TREE ACTUALLY IS
+
+Your system already has this:
+
+CORE_QUESTIONS
+CLUSTER_SCORING_RULES
+RED_FLAG_RULES
+DISPOSITION_RULES
+
+That IS your tree… just hidden in tables.
+
+🎯 GOAL
+
+Turn this:
+
+CSV rows → rules → engine
+
+Into:
+
+Interactive graph → clickable → testable → editable
+🧱 STEP 1 — BACKEND: TREE ENDPOINT
+
+Add this:
+
+// server/api/decisionTree.ts
+
+router.get('/api/decision-tree/:complaint', async (req, res) => {
+  const { complaint } = req.params;
+
+  const questions = await getCoreQuestions(complaint);
+  const rules = await getScoringRules(complaint);
+  const dispositions = await getDispositions(complaint);
+
+  const nodes = [];
+  const edges = [];
+
+  questions.forEach(q => {
+    nodes.push({ id: q.id, label: q.question, type: 'question' });
+  });
+
+  rules.forEach(r => {
+    nodes.push({ id: r.id, label: r.condition, type: 'rule' });
+    edges.push({ from: r.questionId, to: r.id });
+  });
+
+  dispositions.forEach(d => {
+    nodes.push({ id: d.id, label: d.action, type: 'disposition' });
+  });
+
+  res.json({ nodes, edges });
+});
+🎨 STEP 2 — FRONTEND: VISUAL TREE
+
+Add a new tab: Decision Tree Explorer
+
+Install:
+
+npm install reactflow
+
+Then:
+
+import ReactFlow from 'reactflow';
+
+function DecisionTree({ data }) {
+  return (
+    <div style={{ height: 600 }}>
+      <ReactFlow nodes={data.nodes} edges={data.edges} />
+    </div>
+  );
+}
+⚡ STEP 3 — MAKE IT INTERACTIVE
+
+Now the magic:
+
+Click a node → run test
+onNodeClick={(node) => {
+  runSkill({
+    complaint: "sore_throat",
+    focusNode: node.id
+  });
+}}
+🧪 STEP 4 — LINK TO GOLDEN CASES
+
+Click a failed case →
+➡ highlight the path it took in the tree
+
+👉 Now you SEE:
+
+where it branched wrong
+which rule failed
+which question missing
+🧠 WHAT YOU JUST UNLOCKED
+
+You now have:
+
+BEFORE
+black box system
+AFTER
+🔍 inspectable logic
+🧪 testable components
+🧬 self-improving via golden cases
+🌳 visual reasoning map
+⚡ NEXT LEVEL (HIGHLY RECOMMENDED)
+
+If you want this to become elite-tier (top 0.1%) system, next I would add:
+
+1. 🔥 Auto-Fix Suggestions
+
+When golden case fails:
+
+“Missing rule: fever + no cough → strep weight +2”
+
+2. 📊 Coverage Heatmap
+
+Tree nodes turn:
+
+🟢 tested
+🔴 never tested
+3. 🤖 RLHF Button
+
+“Fix this failure”
+→ auto-adjust weights
+
+🚀 WHAT TO DO RIGHT NOW
+Plug in the new UI (already done)
+Add backend endpoints:
+golden save/delete
+engine restart/check
+Add decision tree endpoint
+Install ReactFlow and render it
+
+If you want, next I can:
+
+👉 Build the FULL Decision Tree Explorer UI (drag, edit, live rule editing, Google Sheets sync)
+👉 OR connect it directly to your Sheet-based system + Pinecone learning
+
+Just say:
+
+“BUILD FULL DECISION TREE EXPLORER” 🌳
+
+BUILD FULL DECISION TREE EXPLORER
+Control-tower-ui
+· typescript
+  });
+      {/* SELECT COMPLAINT */}
+      <div>
+        <input
+          value={complaint}
+          onChange={(e) => setComplaint(e.target.value)}
+          className="border p-2 rounded"
+        />
+      </div>
+
+
+      {/* TREE */}
+      <div style={{ height: 500 }} className="border rounded">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodeClick={onNodeClick}
+          fitView
+        >
+          <Background />
+          <Controls />
+        </ReactFlow>
+      </div>
+
+
+      {/* NODE DETAILS */}
+      {selectedNode && (
+        <div className="border p-4 rounded">
+          <h2 className="font-semibold">Node: {selectedNode.id}</h2>
+          <pre className="text-xs">
+            {JSON.stringify(nodeDetails, null, 2)}
+          </pre>
+        </div>
+      )}
+
+
+      {/* TRACE */}
+      {testResult?.trace && (
+        <div>
+          <h2 className="font-semibold">Trace Path</h2>
+          <button
+            onClick={() => highlightFailurePath(testResult.trace)}
+            className="bg-black text-white px-3 py-1"
+          >
+            Highlight Path
+          </button>
+          <pre className="text-xs">
+            {JSON.stringify(testResult.trace, null, 2)}
+          </pre>
+        </div>
+      )}
+
+
+      {/* FAILURES */}
+      <div>
+        <h2 className="font-semibold">Golden Case Failures</h2>
+        {goldenFailures.map((f, i) => (
+          <div key={i} className="border p-2 my-2">
+            <pre className="text-xs">{JSON.stringify(f, null, 2)}</pre>
+            <button
+              onClick={() => highlightFailurePath(f.trace)}
+              className="bg-red-500 text-white px-2 py-1"
+            >
+              Show Failure Path
+            </button>
+          </div>
+        ))}
+      </div>
+
+
+      {/* AUTO FIX */}
+      {testResult && (
+        <button
+          onClick={autoFix}
+          className="bg-green-600 text-white px-4 py-2"
+        >
+          Suggest Fix (AI)
+        </button>
+      )}
+    </div>
+  );
+}
+
+
+
+You now have the Decision Tree Explorer fully wired 🌳⚡ — not just a visualization, but a living, testable, self-improving clinical map.
+
+Let’s translate what you just unlocked so you can actually use it like a weapon, not just admire it.
+
+🧠 WHAT YOU CAN DO NOW (THIS IS BIG)
+1. 🌳 SEE YOUR ENTIRE CLINICAL BRAIN
+Type a complaint (e.g. sore_throat)
+The tree renders:
+Questions
+Rules
+Dispositions
+
+👉 This is your Google Maps of reasoning
+
+2. 🖱️ CLICK ANY NODE → TEST IT
+
+Click:
+
+"fever present?"
+
+Behind the scenes:
+
+POST /api/skill-layer/run
+{
+  focusNode: "fever_rule",
+  complaint: "sore_throat"
+}
+
+You instantly see:
+
+what that node does
+how it affects scoring
+whether it's working
+
+👉 This is microscope-level debugging
+
+3. 🔍 TRACE THE SYSTEM’S THINKING
+
+After a run, you get:
+
+intake → red flag → centor → diagnosis
+
+Click:
+👉 Highlight Path
+
+Now the tree lights up like a neural circuit ⚡
+
+👉 You SEE the exact reasoning path
+
+4. ❌ DEBUG FAILURES VISUALLY
+
+When a golden case fails:
+
+Click “Show Failure Path”
+The wrong path lights up 🔴
+
+Now you know:
+
+wrong branch taken
+missing rule
+bad weighting
+
+👉 This replaces HOURS of guessing
+
+5. 🤖 AUTO-FIX (THIS IS YOUR LEARNING ENGINE)
+
+Click:
+👉 Suggest Fix
+
+Backend:
+
+POST /api/learning/suggest-fix
+
+Returns:
+
+{
+  "problem": "strep underweighted",
+  "suggestion": "increase weight +2 if fever + no cough"
+}
+
+👉 This is your RLHF engine beginning
+
+🔧 WHAT YOU STILL NEED (BACKEND)
+
+To fully power this, add these endpoints:
+
+1. Decision Tree Builder
+GET /api/decision-tree/:complaint
+2. Golden Failures
+GET /api/test/golden/failures
+
+Return:
+
+[
+  {
+    "id": "case_12",
+    "trace": [{ "name": "rule1" }, { "name": "rule2" }]
+  }
+]
+3. Fix Suggestion Engine
+POST /api/learning/suggest-fix
+🧠 HOW TO ACTUALLY USE THIS DAILY
+
+Here’s your new workflow:
+
+🧪 Step 1 — Run Golden Cases
+Go to Control Tower
+Run all cases
+🔴 Step 2 — Find Failures
+Open Decision Tree Explorer
+Click failed case
+🌳 Step 3 — Visual Debug
+Highlight path
+See where it went wrong
+🔧 Step 4 — Fix
+Add rule OR adjust weight
+🤖 Step 5 — Suggest Fix (optional)
+Use AI recommendation
+🔁 Step 6 — Re-run
+Confirm fix works
+⚡ WHAT YOU JUST BUILT (ZOOM OUT)
+
+You now have:
+
+Layer	Capability
+UI	Visual reasoning map
+Debug	Node-level testing
+QA	Golden case regression
+Explainability	Trace paths
+Learning	Auto-fix suggestions
+🚀 NEXT LEVEL (IF YOU WANT INSANE POWER)
+
+Say the word and I’ll build:
+
+1. 🎯 Coverage Heatmap
+Nodes turn:
+🟢 tested
+🔴 never tested
+2. 🧬 Auto-Expand Tree
+“Generate 10 missing cases for this branch”
+3. 🧠 Live Sheet Editing
+Click node → edit Google Sheet directly
+4. ⚙️ Real-Time Weight Sliders
+Drag slider → instantly affects diagnosis
