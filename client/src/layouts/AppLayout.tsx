@@ -25,6 +25,7 @@ import {
   Phone,
   GitBranch,
   ShieldCheck,
+  Hospital,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -54,6 +55,7 @@ const NAV_ITEMS = [
   { path: "/voice-triage", label: "Voice Triage", icon: Phone },
   { path: "/decision-tree", label: "Decision Tree", icon: GitBranch },
   { path: "/fda-dashboard", label: "FDA Dashboard", icon: ShieldCheck },
+  { path: "/live-clinic", label: "Live Clinic", icon: Hospital },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 

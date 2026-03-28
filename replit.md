@@ -1,7 +1,7 @@
 # ENT Flu Slice - Medical Triage System
 
 ## Overview
-"env_flu_slice" is an AI-powered medical triage platform for flu-like symptoms, leveraging WhatsApp for initial patient assessments. It aims to provide diagnoses and treatment plans for physician review, automate patient communication, and enhance healthcare efficiency and access. The system is designed for continuous improvement through a self-developing AI architecture, with a vision to transform medical triage into a more efficient, patient-centric process with market potential to revolutionize medical triage.
+"env_flu_slice" is an AI-powered medical triage platform for flu-like symptoms, leveraging WhatsApp for initial patient assessments. It aims to provide diagnoses and treatment plans for physician review, automate patient communication, and enhance healthcare efficiency and access. The system is designed for continuous improvement through a self-developing AI architecture, with a vision to transform medical triage into a more efficient, patient-centric process.
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
@@ -12,7 +12,7 @@ Preferred communication style: Simple, everyday language.
 The system employs a constrained agent architecture with a plan/act/observe loop and a multi-system triage pipeline. It features a unified sheets registry for data configuration and diagnostic candidate generation, and a clinical state builder that deterministically assembles an auditable clinical state. A modular, skill-based orchestration layer handles clinical triage, supported by an active control plane for rollouts and rule governance. An intelligence layer provides explainability and failure-driven rule suggestions, with an extended learning loop for continuous improvement. The Clinical Intelligence Planning Layer (CIPL) automatically identifies areas for improvement, resolves knowledge gaps, detects model drift, and prioritizes enhancements. A Clinical Governance & Deployment Layer ensures the safety of clinical changes before deployment. The entire clinical AI system follows a 12-layer architecture encompassing Interface, Normalization, State, Knowledge, Safety, Reasoning, Decision, Learning, Analytics, Governance, Integration, and Orchestration.
 
 ### UI/UX Decisions
-The frontend is built with React 18, TypeScript, `shadcn/ui`, and Tailwind CSS, offering intuitive interfaces for physicians, patients, and administrators. Key interfaces include physician login, patient intake, case status, visit summaries, physician dashboard, administrative consoles, and specialized dashboards like the Clinical Simulation Lab, Clinical Control Tower, Executive Dashboard, Stress Test Dashboard, Patient Queue Dashboard, Payer Intelligence Dashboard, Strategy Command Center, Enterprise Command Center, Template Studio, Replay Inspector, Robotics Control Page, and Autonomous Operator System dashboard.
+The frontend is built with React 18, TypeScript, `shadcn/ui`, and Tailwind CSS, offering intuitive interfaces for physicians, patients, and administrators. Key interfaces include physician login, patient intake, case status, visit summaries, physician dashboard, administrative consoles, and specialized dashboards like the Clinical Simulation Lab, Clinical Control Tower, Executive Dashboard, Stress Test Dashboard, Patient Queue Dashboard, Payer Intelligence Dashboard, Strategy Command Center, Enterprise Command Center, Template Studio, Replay Inspector, Robotics Control Page, and Autonomous Operator System dashboard. The Decision Tree Explorer provides an interactive ReactFlow visualization with coverage heatmaps, auto case generation, and RLHF learning cycles. The **FDA Validation Dashboard** (`/fda-dashboard`) provides a 4-panel view of Safety Guard blocks, Drift Detector, FDA Validation metrics, and the Release Manager with CFR-11 audit trail. The **Live Clinic Console** (`/live-clinic`) is a multi-tenant clinic operating system supporting encounter lifecycle (intake → AI triage → CPT/ICD-10 payor optimization → claim generation → clearinghouse submission), per-clinic dashboards, and tenant roster management.
 
 ### Technical Implementations
 The backend uses Express 5, Node.js, and TypeScript, providing REST API endpoints. It incorporates Centor score calculation, red flag detection, a supervisor gate for patient-facing outputs, and robust LLM integrations with rate limiting, per-run budgets, and a circuit breaker.
@@ -27,43 +27,10 @@ A **Stress Test System** (`server/stress/`) allows for load generation and metri
 **FDA Submission Package** (`server/fda/`) runs validation against test datasets and generates reports. A **Live Patient Queue** (`server/patient/`) manages patient sessions and real-time queueing.
 **PostgreSQL-backed Infrastructure** (5 new tables) supports learning records, diagnosis reinforcement, engine logs, simulations, and audit logs.
 **System Monitoring** (`server/monitoring/systemMonitor.ts`) includes DB-backed engine health logging and a **Predictive Failure Engine**. The **Autonomous Loop** (`server/system/autonomousLoop.ts`) runs learning and failure prediction. A **Safety Gate** (`server/safety/safetyGate.ts`) provides a non-bypassable safety layer. An **Immutable Audit Logger** (`server/audit/auditLogger.ts`) logs every clinical flow. **Explainability** is integrated into the master orchestrator. Three critical **Safety Engines** are implemented for drug interaction, pregnancy, and pediatric safety.
-
-### Autonomous Brain (Modules 20-23 + Hybrid Engine)
-- **Self-Learning Engine** (`server/selfLearning/`): 60s loop that retrains weights from outcomes and shifts routing thresholds.
-- **Golden Case Validator** (`server/golden/`): 300s loop running 10 curated ENT/flu cases; exposes pass-rate + safety-accuracy.
-- **Clinical Safety Guard** (`server/safetyGuard/`): non-bypassable block layer; dispatches Twilio SMS alerts for critical events via `alertDispatcher.ts`.
-- **FDA Validation Dashboard** (`/fda-dashboard`): Accuracy/Precision/Recall/F1/F-beta metrics, A–D grade badge, confusion matrix, per-case results, intelligence tab.
-- **Bayesian + RLHF Hybrid Scoring** (`server/bayesianEngine.ts`, `server/similarityEngine.ts`, `server/hybridScoringEngine.ts`): blends 4 signals — static Bayes, adaptive Bayes, RLHF weights, Jaccard similarity.
-
-### Global Intelligence Layer (Federated Learning)
-- **Exporter** (`server/global/exporter.ts`): builds a privacy-safe, non-PHI export payload from local engines (Golden pass rate, Bayesian snapshot, Similarity case count, local weights) for each sync cycle.
-- **Global Intelligence Store** (`server/global/globalIntelligenceStore.ts`): maintains 5 federated clinic nodes (NYC + 4 simulated regional clinics), runs weighted global aggregation, applies global weights back to local node via 70/30 blend ratio, tracks distribution log, exposes `applyGlobalBoost(localScore, dx)` for any scoring engine to use.
-- **Global Sync Loop** (`server/global/globalSyncLoop.ts`): fires 15s after startup, then every 10 minutes; fully integrated into server lifecycle with clean shutdown.
-- **API** at `/api/global-intelligence/*`: status, model-history, export, sync (POST), boost (POST).
-- **War Room panel** (ControlTowerPage `/control-tower`): clinic node grid with online/degraded/offline indicators, global model stats (accuracy / clinics / samples / cycles), distribution log, manual "Sync Now" button; auto-refreshes every 15s.
-- **Safety guarantees**: no PHI leaves system — only aggregated weights, pass rates, and patterns are shared.
-
-### Multi-Agent Task Bus + Evolution Engine
-- **Task Bus** (`server/agents/taskBus.ts`): priority queue with SAFETY→SRE→ROUTING→REVENUE→LEARNING routing via `controllerAgent.ts`.
-- **Task Agent Registry** (`server/agents/taskAgentRegistry.ts`): 7 agents — Safety, SRE, Routing, Revenue, Learning, Governance, Simulation.
-- **Agent Executor** (`server/agents/agentExecutor.ts`): 1-second dispatch loop.
-- **Evolution Engine** (`server/evolution/`): 6-file system (store, engine, sandbox runner, validator, promotion engine, loop); 10-minute autonomous cycle; manually triggerable.
-- **API** at `/api/agent-evolution/*`: agents/task, bus/stats, bus/log, evolution/status, evolution/run.
-- **War Room panels** (ControlTowerPage `/control-tower`): Agent Controller panel (agent grid + bus stats + task log) + Evolution Engine panel (proposal, sandbox metrics, promotion history, manual trigger).
-- **ControlTowerPage enhancements** (completed): Engine Control panel (per-engine health Check + Restart via `/api/monitoring/check|restart`), Golden Case Lab (JSON editor, chip selector, save/delete/run with DiffView + TraceTree result display), Recent Runs feed (from `/api/control-tower/runs`, 10-run seed, status badges). Backend: `server/routes/testGoldenRoutes.ts`, `server/routes/engineControlRoutes.ts`, `server/routes/recentRunsRoutes.ts`.
-- **Decision Tree Explorer** (`/decision-tree`): Full interactive ReactFlow visualization with three major systems:
-  - **Coverage Heatmap**: `GET /api/test/coverage/:complaint` counts node hits from golden case traces; toggle "Heatmap" button colors nodes green/yellow/red by test hit count with live coverage % stats.
-  - **Auto Case Generator**: "Generate Cases" button → `POST /api/test/generate-cases` uses GPT-4o-mini (heuristic fallback) to synthesize test cases targeting uncovered nodes; "Save All" → `POST /api/test/golden/batch-save` pushes directly into golden lab.
-  - **RLHF Learning Cycle**: "Run RLHF" button → `POST /api/learning/run-cycle` runs reinforcement over all golden cases with results, shows weight adjustments per case in sidebar.
-  - Node click: detail inspect + hit count badge + "Test Node" + "Suggest Fix". Golden failures + per-case path highlight. 78 complaints, 63 nodes/62 edges for ent_sore_throat live from Google Sheets.
-  - Backend: `server/routes/decisionTreeRoutes.ts` (suggestFixRouter), `server/routes/testCoverageRoutes.ts`, `server/routes/testGoldenRoutes.ts`. Frontend: `client/src/pages/DecisionTreePage.tsx`.
-
-### Modules 20-22: Autonomous Brain Expansion (completed)
-- **Module 20 — System Monitor** (`/system-monitor`): Live WebSocket engine + skill health grid, degradation alerts, auto-healer log, case trace lookup. Backend: `healthRegistry.ts`, `trendMonitor.ts`, `autoHealer.ts`, `monitorSocket.ts` (`/ws/monitor`).
-- **Module 21 — Self-Learning Engine** (`server/learning/selfLearningEngine.ts`): Outcome-to-weight feedback loop (`runSelfLearning`, `applyDxWeights`) running every 60s. API at `/api/adaptive-intelligence/learning/*`.
-- **Module 22 — Golden Case Validator** (`server/golden/`): 10 curated ENT/flu cases (2 safety blocks), periodic validation every 5 min, results exposed at `/api/adaptive-intelligence/golden/*`.
-- **Module 23 — Clinical Safety Guard** (`server/safety/safetyGuard.ts`): Unified guard wrapping `safetyGate` + `guardrailEngine`, block log + summary at `/api/adaptive-intelligence/safety/*`.
-- System Monitor page extended with three live panels: Self-Learning cycles, Golden Case pass/fail results, Safety block log.
+The **Autonomous Brain** includes a **Self-Learning Engine** (`server/selfLearning/`) for retraining weights and shifting routing thresholds, a **Golden Case Validator** (`server/golden/`) for periodic validation of curated cases, and a **Clinical Safety Guard** (`server/safetyGuard/`) for critical event alerts. An **FDA Validation Dashboard** displays performance metrics. **Bayesian + RLHF Hybrid Scoring** blends static Bayes, adaptive Bayes, RLHF weights, and Jaccard similarity.
+A **Global Intelligence Layer** utilizes federated learning with an **Exporter** (`server/global/exporter.ts`) for privacy-safe data export, a **Global Intelligence Store** (`server/global/globalIntelligenceStore.ts`) for weighted aggregation and application of global weights, and a **Global Sync Loop** (`server/global/globalSyncLoop.ts`). It also includes a **War Room panel** for monitoring clinic nodes and global model stats.
+A **Multi-Agent Task Bus + Evolution Engine** manages tasks with a priority queue and a registry of 7 agents (Safety, SRE, Routing, Revenue, Learning, Governance, Simulation). The **Evolution Engine** (`server/evolution/`) provides an autonomous cycle for proposal, sandbox metrics, and promotion. These are monitored through **War Room panels**.
+A **System Monitor** (`/system-monitor`) provides a live WebSocket engine + skill health grid, degradation alerts, auto-healer log, and case trace lookup. It integrates live panels for Self-Learning cycles, Golden Case pass/fail results, and Safety block logs.
 
 ### System Design Choices
 - **Data Management**: Firebase Firestore is the primary data store, supplemented by SQLite for intake. PHI retention policies ensure split storage. NDJSON-backed stores are used for outcomes, message templates, and tenant configurations.
