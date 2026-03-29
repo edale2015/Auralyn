@@ -24,6 +24,7 @@ import {
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
   BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar, ShieldCheck,
+  CircleDollarSign,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -39,6 +40,7 @@ const NAV_SECTIONS = [
       { path: "/operations-cockpit",  label: "Operations Cockpit",          icon: Zap },
       { path: "/clinical-cockpit",   label: "Telemedicine Cockpit",        icon: Stethoscope },
       { path: "/production-readiness", label: "Production Readiness", icon: Zap },
+      { path: "/billing-intelligence", label: "Billing Intelligence", icon: CircleDollarSign },
       { path: "/ehr-dead-letter", label: "EHR Dead Letter Review", icon: Zap },
       { path: "/reminder-timeline", label: "Reminder Timeline", icon: Zap },
       { path: "/multilingual-templates", label: "Multilingual Templates", icon: Zap },

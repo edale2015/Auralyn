@@ -54,6 +54,7 @@ import DecisionTreePage from "@/pages/DecisionTreePage";
 import FDAValidationPage from "@/pages/FDAValidationPage";
 import LiveClinicPage from "@/pages/LiveClinicPage";
 import ProductionReadinessPage from "@/pages/ProductionReadinessPage";
+import BillingIntelligencePage from "@/pages/BillingIntelligencePage";
 
 validateRoutes();
 
@@ -95,6 +96,7 @@ function WorkbenchRouter() {
         <Route path="/fda-dashboard" component={FDAValidationPage} />
         <Route path="/live-clinic" component={LiveClinicPage} />
         <Route path="/production-readiness" component={ProductionReadinessPage} />
+        <Route path="/billing-intelligence" component={BillingIntelligencePage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

@@ -1,0 +1,34 @@
+
+9. PRIORITIZED ROADMAP
+Ordered by ROI and urgency:
+1. Migrate off Google Sheets immediately. PostgreSQL or Supabase. This is not optional — it is a patient safety issue at any meaningful scale.
+2. Build FHIR R4 integration layer. Without EHR connectivity, adoption requires workflow disruption that most clinics won't accept.
+3. Define and lock intended use statement. Every other regulatory and product decision flows from this. Without it, you're building toward an undefined regulatory target.
+4. Add sepsis, pediatric, and mental health crisis pathways. These are the highest-liability gaps in clinical coverage.
+5. Make LLM calls async. Remove from critical clinical path. Latency in diagnosis is unacceptable.
+6. Build clinic-level ROI dashboard. Required for the land-and-expand sales motion. Administrators approve renewals, not physicians.
+7. Implement HCC capture layer. Highest near-term revenue feature for value-based care clients.
+8. Add multi-complaint fusion to reasoning engine. Current linear tree fails on complex presentations.
+9. Anchor knowledge model to SNOMED CT/ICD-10 at storage level. Prevents ontology drift from corrupting downstream ML.
+10. Design explicit human review gate for RLHF weight changes. Required for regulatory compliance and physician trust.
+
+10. IF I WERE BUILDING THIS
+What I would redesign from scratch:
+The backend. Google Sheets must go — replaced with a purpose-built clinical data model in PostgreSQL with row-level security for multi-tenancy, FHIR-native data structures, and an event streaming layer for async clinical workflows.
+The RLHF system architecture. I would not allow autonomous weight adjustment in production. Instead, weight changes would be proposed, queued, reviewed by a clinical informaticist, approved, and then deployed as a named version. Fully auditable. Fully reversible. FDA-compliant.
+The reasoning engine's complaint intake. I would add a structured clinical NLP layer that maps free-text chief complaints to SNOMED concepts before the decision tree is traversed. This dramatically improves consistency and makes the downstream ML meaningful.
+What I would keep:
+The Golden Case System concept is excellent and undervalued. Build it aggressively. The Coverage Heatmap is a genuinely innovative approach to clinical logic QA that I haven't seen described elsewhere. The multi-tenant deployment architecture is correctly designed in concept. The FDA Validation System framework is the right instinct — most clinical AI companies bolt this on after the fact and pay dearly for it.
+
+INVESTOR LENS
+At Series A, the fundable story is: "We are building the clinical reasoning layer that sits between the patient and the physician, reducing diagnostic error and optimizing reimbursement, with a proprietary validation dataset that compounds as a moat." That's a real pitch.
+What blocks investment today: the Google Sheets backend signals prototype-stage infrastructure to any technical due diligence reviewer. It will kill a term sheet. The second blocker is the absence of an intended use statement and any FDA pre-submission meeting documentation. Healthcare investors above $5M check for this.
+FDA REVIEWER MODE
+Fails immediately: No intended use statement. No software risk classification (IEC 62304). No description of human factors validation (real physicians tested this under realistic conditions). The autonomous RLHF weight modification in production would require a predetermination request at minimum.
+Evidence missing: Clinical validation study with prospective data, not just golden cases. Bias and equity analysis across demographic subgroups. Cybersecurity documentation (FDA now requires this explicitly for SaMD).
+COMPETITOR BENCHMARK
+Versus Ada Health: Ada wins on probabilistic reasoning depth and rare-disease coverage. You win (potentially) on workflow integration and the operational dashboard. Ada has no billing optimization layer — that's a real differentiator.
+Versus K Health: K Health wins on consumer acquisition and telehealth integration. You win on clinical depth and physician-facing tools. K Health's clinical reasoning is relatively shallow compared to what's described here.
+Versus Babylon Health: Babylon collapsed partly because they over-promised clinical capability and under-delivered on safety validation. The lesson: don't replicate their go-to-market aggression without the validation infrastructure to back it up. Your FDA Validation System is a direct answer to what killed Babylon — keep investing in it.
+
+Bottom line: This is a serious, ambitious system with a genuinely innovative architecture in several areas. The critical path to real-world deployment runs through four things: replace the backend, define the intended use, add the missing safety pathways, and build the FHIR integration. Everything else is refinement. Get those four right and this is fundable and deployable. Leave them unresolved and the system cannot safely leave the prototype stage.
