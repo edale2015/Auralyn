@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { runFinalPipeline, getFinalPipelineStats } from "../clinical/finalPipeline";
 import { normalizeChiefComplaint, structuredIntake, getNLPIntakeStats } from "../clinical/nlpIntake";
 import {
   proposeWeightUpdate, approveProposals, rejectProposals, rollbackVersion,
@@ -165,11 +166,38 @@ router.post("/human-factors/demo", (_req, res) => {
   res.json({ interactions: [i1, i2, i3], summary: getActionSummary(), stats: getHumanFactorsStats() });
 });
 
+/* ── FINAL GOVERNED PIPELINE ──────────────────────────────────────── */
+router.post("/pipeline/run", (req, res) => {
+  const { freeText, complaint, symptoms, vitals, history, patientId, encounterId, physicianId, clinicId, ageYears, isPregnant, actualOutcome } = req.body;
+  if (!freeText && !complaint && (!Array.isArray(symptoms) || symptoms.length === 0)) {
+    res.status(400).json({ error: "Provide freeText, complaint, or symptoms[]" }); return;
+  }
+  const result = runFinalPipeline({ freeText, complaint, symptoms, vitals, history, patientId, encounterId, physicianId, clinicId, ageYears, isPregnant, actualOutcome });
+  res.json(result);
+});
+
+router.get("/pipeline/stats", (_req, res) => res.json(getFinalPipelineStats()));
+
+router.post("/pipeline/demo", (_req, res) => {
+  const result = runFinalPipeline({
+    freeText:    "chest pain and shortness of breath with leg swelling",
+    symptoms:    ["chest pain", "shortness of breath", "leg swelling"],
+    vitals:      { heartRate: 112, respiratoryRate: 22, oxygenSaturation: 94 },
+    patientId:   "DEMO-PT-001",
+    encounterId: "DEMO-ENC-001",
+    physicianId: "MD-DEMO-001",
+    clinicId:    "CLINIC-001",
+    ageYears:    48,
+    isPregnant:  false,
+  });
+  res.json(result);
+});
+
 /* ── STATUS ───────────────────────────────────────────────────────── */
 router.get("/status", (_req, res) => {
   res.json({
     tier:    "Final Layer",
-    modules: 7,
+    modules: 8,
     nlpIntake:        getNLPIntakeStats(),
     versionedRLHF:    getVersionedRLHFStats(),
     fdaCompliance:    getComplianceStats(),
@@ -177,6 +205,7 @@ router.get("/status", (_req, res) => {
     biasAnalysis:     getBiasAnalysisStats(),
     security:         getSecurityStats(),
     humanFactors:     getHumanFactorsStats(),
+    finalPipeline:    getFinalPipelineStats(),
   });
 });
 

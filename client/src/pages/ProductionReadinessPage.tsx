@@ -125,6 +125,7 @@ const layerIcons: Record<string, any> = {
   biasAnalysis:          { icon: Scale,        color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
   securityLogging:       { icon: ShieldAlert,  color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
   humanFactors:          { icon: UserCheck,    color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
+  finalPipeline:         { icon: Workflow,     color: "text-emerald-700", bg: "bg-emerald-50 dark:bg-emerald-950" },
 }
 
 type ExtLayer = ProductionLayer & {
@@ -277,6 +278,7 @@ function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "inf
   if (key === "biasAnalysis")          return layer.active ? "success" : "warning"
   if (key === "securityLogging")       return layer.active ? "success" : "warning"
   if (key === "humanFactors")          return layer.active ? "success" : "warning"
+  if (key === "finalPipeline")         return layer.active ? "success" : "warning"
   return "info"
 }
 
@@ -354,6 +356,7 @@ function layerBadge(layer: ExtLayer, key: string): string {
   if (key === "biasAnalysis")          return layer.active ? `${(layer as any).supportedAxes?.length ?? 4} axes` : "Inactive"
   if (key === "securityLogging")       return layer.active ? `${(layer as any).eventTypes ?? 11} event types` : "Inactive"
   if (key === "humanFactors")          return layer.active ? `${(layer as any).trackedActionTypes ?? 12} actions` : "Inactive"
+  if (key === "finalPipeline")         return layer.active ? `${(layer as any).stages ?? 7} stages` : "Inactive"
   return "Unknown"
 }
 

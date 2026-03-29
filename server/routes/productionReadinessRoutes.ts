@@ -57,6 +57,7 @@ import { getProspectiveStudyStats } from "../fda/prospectiveStudy";
 import { getBiasAnalysisStats } from "../fda/biasAnalysis";
 import { getSecurityStats } from "../ops/security";
 import { getHumanFactorsStats } from "../clinical/humanFactors";
+import { getFinalPipelineStats } from "../clinical/finalPipeline";
 
 const router = Router();
 
@@ -145,6 +146,7 @@ router.get("/status", async (_req: Request, res: Response) => {
       biasAnalysis:         { ...getBiasAnalysisStats(), label: "Bias / Equity Analysis" },
       securityLogging:      { ...getSecurityStats(), label: "Cybersecurity Event Logging (FDA)" },
       humanFactors:         { ...getHumanFactorsStats(), label: "Human Factors Tracking" },
+      finalPipeline:        { ...getFinalPipelineStats(), label: "Final Governed Pipeline (Section 8)" },
     },
     ts: new Date().toISOString(),
   });
