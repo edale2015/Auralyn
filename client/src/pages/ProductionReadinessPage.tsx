@@ -117,6 +117,14 @@ const layerIcons: Record<string, any> = {
   priorAuthEngine:       { icon: Clipboard,    color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
   modifierEngine:        { icon: FileWarning,  color: "text-rose-600",    bg: "bg-rose-50 dark:bg-rose-950" },
   preSubmissionPipeline: { icon: PackageCheck, color: "text-cyan-700",    bg: "bg-cyan-50 dark:bg-cyan-950" },
+  // ── Final Layer
+  nlpIntake:             { icon: FileText,     color: "text-violet-600",  bg: "bg-violet-50 dark:bg-violet-950" },
+  versionedRLHF:         { icon: GitMerge,     color: "text-blue-700",    bg: "bg-blue-50 dark:bg-blue-950" },
+  fdaCompliance:         { icon: ShieldCheck,  color: "text-green-700",   bg: "bg-green-50 dark:bg-green-950" },
+  prospectiveStudy:      { icon: FlaskConical, color: "text-teal-700",    bg: "bg-teal-50 dark:bg-teal-950" },
+  biasAnalysis:          { icon: Scale,        color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
+  securityLogging:       { icon: ShieldAlert,  color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
+  humanFactors:          { icon: UserCheck,    color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
 }
 
 type ExtLayer = ProductionLayer & {
@@ -261,6 +269,14 @@ function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "inf
   if (key === "priorAuthEngine")       return layer.active ? "success" : "warning"
   if (key === "modifierEngine")        return layer.active ? "success" : "warning"
   if (key === "preSubmissionPipeline") return layer.active ? "success" : "warning"
+  // Final Layer
+  if (key === "nlpIntake")             return layer.active ? "success" : "warning"
+  if (key === "versionedRLHF")         return layer.active ? "success" : "warning"
+  if (key === "fdaCompliance")         return (layer as any).readinessLevel === "green" ? "success" : (layer as any).readinessLevel === "yellow" ? "warning" : "error"
+  if (key === "prospectiveStudy")      return layer.active ? "success" : "warning"
+  if (key === "biasAnalysis")          return layer.active ? "success" : "warning"
+  if (key === "securityLogging")       return layer.active ? "success" : "warning"
+  if (key === "humanFactors")          return layer.active ? "success" : "warning"
   return "info"
 }
 
@@ -330,6 +346,14 @@ function layerBadge(layer: ExtLayer, key: string): string {
   if (key === "priorAuthEngine")       return layer.active ? `${(layer as any).coveredProcedures ?? 8} procedures` : "Inactive"
   if (key === "modifierEngine")        return layer.active ? `Mod 25/59/51` : "Inactive"
   if (key === "preSubmissionPipeline") return layer.active ? `${(layer as any).stages ?? 4} gate checks` : "Inactive"
+  // Final Layer
+  if (key === "nlpIntake")             return layer.active ? `${(layer as any).keywordRules ?? 15} ICD rules` : "Inactive"
+  if (key === "versionedRLHF")         return layer.active ? `${(layer as any).approvedVersions ?? 0} versions` : "Inactive"
+  if (key === "fdaCompliance")         return `Score ${(layer as any).readinessScore ?? 80}% • ${(layer as any).openGaps ?? 0} gaps`
+  if (key === "prospectiveStudy")      return layer.active ? `${(layer as any).totalStudies ?? 0} studies` : "Inactive"
+  if (key === "biasAnalysis")          return layer.active ? `${(layer as any).supportedAxes?.length ?? 4} axes` : "Inactive"
+  if (key === "securityLogging")       return layer.active ? `${(layer as any).eventTypes ?? 11} event types` : "Inactive"
+  if (key === "humanFactors")          return layer.active ? `${(layer as any).trackedActionTypes ?? 12} actions` : "Inactive"
   return "Unknown"
 }
 

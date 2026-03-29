@@ -49,6 +49,14 @@ import { getHCCCaptureStats } from "../billing/hccCapture";
 import { getPriorAuthStats } from "../billing/priorAuth";
 import { getModifierStats } from "../billing/modifierEngine";
 import { getPreSubmissionStats } from "../billing/preSubmission";
+// Final Layer — Clinical NLP, Governed RLHF, FDA Compliance, Validation, Bias, Security, Human Factors
+import { getNLPIntakeStats } from "../clinical/nlpIntake";
+import { getVersionedRLHFStats } from "../learning/versionedRLHF";
+import { getComplianceStats } from "../fda/compliance";
+import { getProspectiveStudyStats } from "../fda/prospectiveStudy";
+import { getBiasAnalysisStats } from "../fda/biasAnalysis";
+import { getSecurityStats } from "../ops/security";
+import { getHumanFactorsStats } from "../clinical/humanFactors";
 
 const router = Router();
 
@@ -129,6 +137,14 @@ router.get("/status", async (_req: Request, res: Response) => {
       priorAuthEngine:      { ...getPriorAuthStats(), label: "Prior Auth Detection Engine" },
       modifierEngine:       { ...getModifierStats(), label: "CPT Modifier Validation Engine" },
       preSubmissionPipeline:{ ...getPreSubmissionStats(), label: "Pre-Submission Billing Pipeline" },
+      // ── Final Layer: Clinical NLP, Governed RLHF, FDA Compliance, Validation, Bias, Security, Human Factors ──
+      nlpIntake:            { ...getNLPIntakeStats(), label: "Clinical NLP Intake (SNOMED Mapping)" },
+      versionedRLHF:        { ...getVersionedRLHFStats(), label: "Governed RLHF (Versioned + Approval)" },
+      fdaCompliance:        { ...getComplianceStats(), label: "FDA SaMD Compliance Profile" },
+      prospectiveStudy:     { ...getProspectiveStudyStats(), label: "Prospective Validation Study" },
+      biasAnalysis:         { ...getBiasAnalysisStats(), label: "Bias / Equity Analysis" },
+      securityLogging:      { ...getSecurityStats(), label: "Cybersecurity Event Logging (FDA)" },
+      humanFactors:         { ...getHumanFactorsStats(), label: "Human Factors Tracking" },
     },
     ts: new Date().toISOString(),
   });
