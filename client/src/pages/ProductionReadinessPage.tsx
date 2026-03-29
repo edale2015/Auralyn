@@ -8,7 +8,7 @@ import StatusChip from "@/components/StatusChip"
 import LoadingCardSkeleton from "@/components/LoadingCardSkeleton"
 import SectionHeader from "@/components/SectionHeader"
 import { cn } from "@/lib/utils"
-import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical, GitMerge, HeartPulse, Baby, Heart, Brain, FileText, ClipboardCheck, ShieldAlert, UserCheck, Scale, Zap, Filter, CircuitBoard, TrendingDown, Layers, Cpu as CpuIcon, ListTodo, Globe, Gauge, HardDrive, Timer, Workflow } from "lucide-react"
+import { Activity, ShieldCheck, Cpu, Pill, Database, Radio, RefreshCw, BookOpen, GitBranch, Lock, FileCheck, Merge, Stethoscope, ScrollText, LogIn, Building2, Send, BarChart3, CreditCard, BrainCircuit, KeyRound, Snowflake, FlaskConical, GitMerge, HeartPulse, Baby, Heart, Brain, FileText, ClipboardCheck, ShieldAlert, UserCheck, Scale, Zap, Filter, CircuitBoard, TrendingDown, Layers, Cpu as CpuIcon, ListTodo, Globe, Gauge, HardDrive, Timer, Workflow, AlertTriangle, Search, Bell, BellOff, MessageSquare, Stethoscope as Scope2, DollarSign, TrendingUp, LineChart, BookMarked, GitFork, Dna, Receipt, FileWarning, Clipboard, PackageCheck } from "lucide-react"
 
 type CheckResult = { name: string; ok: boolean; detail: string }
 type ProviderStatus = { provider: string; ok: boolean; latencyMs?: number; detail: string; checkedAt: string }
@@ -99,6 +99,24 @@ const layerIcons: Record<string, any> = {
   cacheLayer:            { icon: HardDrive,    color: "text-amber-500",   bg: "bg-amber-50 dark:bg-amber-950" },
   performanceGuard:      { icon: Timer,        color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-950" },
   safeAsyncPipeline:     { icon: Workflow,     color: "text-violet-700",  bg: "bg-violet-50 dark:bg-violet-950" },
+  // ── Tier 6: Observability, UX & Business Intelligence ──────────────────────
+  incidentControl:       { icon: AlertTriangle,color: "text-red-600",     bg: "bg-red-50 dark:bg-red-950" },
+  distributedTracing:    { icon: Search,       color: "text-blue-600",    bg: "bg-blue-50 dark:bg-blue-950" },
+  systemAlerts:          { icon: Bell,         color: "text-yellow-600",  bg: "bg-yellow-50 dark:bg-yellow-950" },
+  alertFatigue:          { icon: BellOff,      color: "text-slate-600",   bg: "bg-slate-50 dark:bg-slate-950" },
+  physicianSummary:      { icon: MessageSquare,color: "text-indigo-600",  bg: "bg-indigo-50 dark:bg-indigo-950" },
+  patientExplanation:    { icon: BookMarked,   color: "text-teal-600",    bg: "bg-teal-50 dark:bg-teal-950" },
+  financeEngine:         { icon: DollarSign,   color: "text-green-600",   bg: "bg-green-50 dark:bg-green-950" },
+  roiEngine:             { icon: TrendingUp,   color: "text-emerald-700", bg: "bg-emerald-50 dark:bg-emerald-950" },
+  growthMetrics:         { icon: LineChart,    color: "text-lime-700",    bg: "bg-lime-50 dark:bg-lime-950" },
+  // ── Tier 7: Knowledge Representation & Hybrid Reasoning ─────────────────────
+  diagnosisOntology:     { icon: Dna,          color: "text-fuchsia-700", bg: "bg-fuchsia-50 dark:bg-fuchsia-950" },
+  hybridReasoning:       { icon: GitFork,      color: "text-violet-600",  bg: "bg-violet-50 dark:bg-violet-950" },
+  // ── Tier 8: Advanced Billing Optimization ────────────────────────────────────
+  hccCapture:            { icon: BarChart3,    color: "text-amber-700",   bg: "bg-amber-50 dark:bg-amber-950" },
+  priorAuthEngine:       { icon: Clipboard,    color: "text-orange-600",  bg: "bg-orange-50 dark:bg-orange-950" },
+  modifierEngine:        { icon: FileWarning,  color: "text-rose-600",    bg: "bg-rose-50 dark:bg-rose-950" },
+  preSubmissionPipeline: { icon: PackageCheck, color: "text-cyan-700",    bg: "bg-cyan-50 dark:bg-cyan-950" },
 }
 
 type ExtLayer = ProductionLayer & {
@@ -225,6 +243,24 @@ function layerStatus(layer: ExtLayer, key: string): "success" | "warning" | "inf
   if (key === "cacheLayer")            return layer.active ? "success" : "info"
   if (key === "performanceGuard")      return layer.active ? "success" : "warning"
   if (key === "safeAsyncPipeline")     return layer.active ? "success" : "warning"
+  // Tier 6
+  if (key === "incidentControl")       return layer.active ? "success" : "warning"
+  if (key === "distributedTracing")    return layer.active ? "success" : "warning"
+  if (key === "systemAlerts")          return layer.active ? "success" : "warning"
+  if (key === "alertFatigue")          return layer.active ? "success" : "warning"
+  if (key === "physicianSummary")      return layer.active ? "success" : "warning"
+  if (key === "patientExplanation")    return layer.active ? "success" : "warning"
+  if (key === "financeEngine")         return layer.active ? "success" : "warning"
+  if (key === "roiEngine")             return layer.active ? "success" : "warning"
+  if (key === "growthMetrics")         return layer.active ? "success" : "warning"
+  // Tier 7
+  if (key === "diagnosisOntology")     return layer.active ? "success" : "warning"
+  if (key === "hybridReasoning")       return layer.active ? "success" : "warning"
+  // Tier 8
+  if (key === "hccCapture")            return layer.active ? "success" : "warning"
+  if (key === "priorAuthEngine")       return layer.active ? "success" : "warning"
+  if (key === "modifierEngine")        return layer.active ? "success" : "warning"
+  if (key === "preSubmissionPipeline") return layer.active ? "success" : "warning"
   return "info"
 }
 
@@ -276,6 +312,24 @@ function layerBadge(layer: ExtLayer, key: string): string {
   if (key === "cacheLayer")            return layer.active ? `${layer.hitRate ?? 0}% hit rate` : "Inactive"
   if (key === "performanceGuard")      return layer.active ? `${layer.defaultTimeoutMs ?? 2000}ms timeout` : "Inactive"
   if (key === "safeAsyncPipeline")     return layer.active ? `${layer.stages ?? 3} async paths` : "Inactive"
+  // Tier 6
+  if (key === "incidentControl")       return layer.active ? `${(layer as any).open ?? 0} open` : "Inactive"
+  if (key === "distributedTracing")    return layer.active ? `${(layer as any).buffered ?? 0} traces` : "Inactive"
+  if (key === "systemAlerts")          return layer.active ? `${(layer as any).total ?? 0} fired` : "Inactive"
+  if (key === "alertFatigue")          return layer.active ? `${(layer as any).suppressRate ?? 0}% suppressed` : "Inactive"
+  if (key === "physicianSummary")      return layer.active ? "1-line output" : "Inactive"
+  if (key === "patientExplanation")    return layer.active ? `${(layer as any).urgencyLevels ?? 4} urgency levels` : "Inactive"
+  if (key === "financeEngine")         return layer.active ? `$${(layer as any).demoAvgRevenuePerEncounter ?? 0}/enc` : "Inactive"
+  if (key === "roiEngine")             return layer.active ? `$${(layer as any).hccUpliftPerPatient ?? 320}/pt HCC` : "Inactive"
+  if (key === "growthMetrics")         return layer.active ? `LTV/CAC ≥${(layer as any).ltvCacThreshold ?? 3}` : "Inactive"
+  // Tier 7
+  if (key === "diagnosisOntology")     return layer.active ? `${(layer as any).conceptCount ?? 15} concepts` : "Inactive"
+  if (key === "hybridReasoning")       return layer.active ? `${(layer as any).fusionPatterns ?? 4} patterns` : "Inactive"
+  // Tier 8
+  if (key === "hccCapture")            return layer.active ? `${(layer as any).uniqueHCCCodes ?? 6} HCC codes` : "Inactive"
+  if (key === "priorAuthEngine")       return layer.active ? `${(layer as any).coveredProcedures ?? 8} procedures` : "Inactive"
+  if (key === "modifierEngine")        return layer.active ? `Mod 25/59/51` : "Inactive"
+  if (key === "preSubmissionPipeline") return layer.active ? `${(layer as any).stages ?? 4} gate checks` : "Inactive"
   return "Unknown"
 }
 

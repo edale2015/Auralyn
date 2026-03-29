@@ -31,6 +31,24 @@ import { getRegionSummary } from "../infra/regionRouter";
 import { getRateLimiterStats } from "../infra/rateLimiter";
 import { getCacheStats } from "../infra/cache";
 import { getPerformanceStats } from "../infra/performanceGuard";
+// Tier 6 — Observability, UX & Business Intelligence
+import { getIncidentStats } from "../monitoring/incidents";
+import { getTracingStats } from "../monitoring/tracing";
+import { getSystemAlertStats } from "../monitoring/systemAlerts";
+import { getAlertFatigueStats } from "../clinical/alertFatigue";
+import { getPhysicianSummaryStats } from "../clinical/physicianSummary";
+import { getPatientExplanationStats } from "../patient/patientExplanation";
+import { getFinanceEngineStats } from "../admin/financeEngine";
+import { getROIStats } from "../admin/roiEngine";
+import { getGrowthMetricStats } from "../admin/growthMetrics";
+// Tier 7 — Knowledge Representation & Hybrid Reasoning
+import { getOntologyStats } from "../ontology/diagnosisOntology";
+import { getHybridReasoningStats } from "../clinical/hybridReasoning";
+// Tier 8 — Advanced Billing Optimization
+import { getHCCCaptureStats } from "../billing/hccCapture";
+import { getPriorAuthStats } from "../billing/priorAuth";
+import { getModifierStats } from "../billing/modifierEngine";
+import { getPreSubmissionStats } from "../billing/preSubmission";
 
 const router = Router();
 
@@ -93,6 +111,24 @@ router.get("/status", async (_req: Request, res: Response) => {
       cacheLayer:           { active: true, ...getCacheStats(), label: "Hot-Path Cache Layer" },
       performanceGuard:     { active: true, ...getPerformanceStats(), label: "Latency Guard (withTimeout)" },
       safeAsyncPipeline:    { active: true, stages: 3, asyncPaths: ["llm", "audit", "learning"], label: "Safe Async Pipeline Execution" },
+      // ── Tier 6: Observability, UX & Business Intelligence (9 new) ───────────
+      incidentControl:      { ...getIncidentStats(), label: "Incident Control System" },
+      distributedTracing:   { ...getTracingStats(), label: "Distributed Trace Engine" },
+      systemAlerts:         { ...getSystemAlertStats(), label: "Automated Health Alerts" },
+      alertFatigue:         { ...getAlertFatigueStats(), label: "Alert Fatigue Suppression" },
+      physicianSummary:     { ...getPhysicianSummaryStats(), label: "Physician 1-Line Summary Engine" },
+      patientExplanation:   { ...getPatientExplanationStats(), label: "Patient Explanation Layer" },
+      financeEngine:        { ...getFinanceEngineStats(), label: "Financial Analytics Engine" },
+      roiEngine:            { ...getROIStats(), label: "Clinic ROI Engine" },
+      growthMetrics:        { ...getGrowthMetricStats(), label: "LTV/CAC Growth Metrics" },
+      // ── Tier 7: Knowledge Representation & Hybrid Reasoning (2 new) ─────────
+      diagnosisOntology:    { ...getOntologyStats(), label: "SNOMED/ICD Diagnosis Ontology" },
+      hybridReasoning:      { ...getHybridReasoningStats(), label: "Hybrid Reasoning Engine (Fusion + Bayesian)" },
+      // ── Tier 8: Advanced Billing Optimization (5 new) ────────────────────────
+      hccCapture:           { ...getHCCCaptureStats(), label: "HCC Capture Engine (Risk Adjustment)" },
+      priorAuthEngine:      { ...getPriorAuthStats(), label: "Prior Auth Detection Engine" },
+      modifierEngine:       { ...getModifierStats(), label: "CPT Modifier Validation Engine" },
+      preSubmissionPipeline:{ ...getPreSubmissionStats(), label: "Pre-Submission Billing Pipeline" },
     },
     ts: new Date().toISOString(),
   });
