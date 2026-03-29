@@ -24,6 +24,10 @@ import { trackPhysicianInteraction }  from "./humanFactors";
 import { canLearn }                   from "../release/modelFreeze";
 import { publish }                    from "../events/bus";
 import { Topics }                     from "../events/topics";
+import { recordFlywheelEntry, inferSpecialty } from "../moat/flywheelEngine";
+import { recordNetworkContribution }           from "../moat/networkLearning";
+import { evaluateRarity }                      from "../moat/rareCaseEngine";
+import { updateClinicValue }                   from "../moat/clinicLockIn";
 
 export interface FinalPipelineInput {
   freeText?:    string;
@@ -60,7 +64,7 @@ export interface FinalPipelineOutput {
   fhirSyncQueued:     boolean;
 }
 
-const PIPELINE_VERSION = "1.1.0";
+const PIPELINE_VERSION = "1.2.0";
 
 export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput {
   const start       = Date.now();
@@ -226,6 +230,44 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
     fhirSyncQueued = true;
   } catch { /* non-blocking */ }
 
+  // ── 9. Moat Data Flywheel (async, non-blocking) ────────────────────────────
+  const clinicId  = (input as any).clinicId ?? "default";
+  const diagnosis = fusionResult?.suspicion ?? reasoning.topDiagnosis ?? "unknown";
+  const specialty = inferSpecialty(input.complaint ?? "", diagnosis);
+  ;(async () => {
+    try {
+      const rarity = await evaluateRarity(diagnosis);
+      await Promise.all([
+        recordFlywheelEntry({
+          encounterId,
+          clinicId,
+          complaint:    input.complaint ?? "",
+          topDiagnosis: diagnosis,
+          disposition:  safetyDisposition,
+          confidence:   reasoning.confidence,
+          fusionHit:    !!fusionResult,
+          rareCase:     rarity.rare,
+          specialty,
+          validated:    false,   // set to true when physician confirms
+          ts:           new Date().toISOString(),
+        }),
+        recordNetworkContribution({
+          clinicId,
+          specialty,
+          diagnosis,
+          disposition: safetyDisposition,
+          ts: new Date().toISOString(),
+        }),
+        updateClinicValue(clinicId, {
+          encounters:   1,
+          diagnoses:    [diagnosis],
+          specialties:  [specialty],
+          rarePatterns: rarity.rare ? 1 : 0,
+        }),
+      ]);
+    } catch { /* fire-and-forget — never block triage */ }
+  })();
+
   return {
     encounterId,
     patientId,
@@ -250,7 +292,7 @@ export function getFinalPipelineStats() {
   return {
     active:          true,
     pipelineVersion: PIPELINE_VERSION,
-    stages:          8,
+    stages:          9,
     stageNames: [
       "NLP Intake",
       "Multi-Complaint Fusion",
@@ -261,6 +303,7 @@ export function getFinalPipelineStats() {
       "Security Log",
       "Human Factors Telemetry",
       "FHIR Sync Trigger",
+      "Moat Data Flywheel",
     ],
   };
 }

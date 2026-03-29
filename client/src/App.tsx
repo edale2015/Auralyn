@@ -56,6 +56,7 @@ import LiveClinicPage from "@/pages/LiveClinicPage";
 import ProductionReadinessPage from "@/pages/ProductionReadinessPage";
 import BillingIntelligencePage from "@/pages/BillingIntelligencePage";
 import ArchitecturalCompliancePage from "@/pages/ArchitecturalCompliancePage";
+import MoatIntelligencePage from "@/pages/MoatIntelligencePage";
 
 validateRoutes();
 
@@ -99,6 +100,7 @@ function WorkbenchRouter() {
         <Route path="/production-readiness" component={ProductionReadinessPage} />
         <Route path="/billing-intelligence" component={BillingIntelligencePage} />
         <Route path="/architectural-compliance" component={ArchitecturalCompliancePage} />
+        <Route path="/moat-intelligence" component={MoatIntelligencePage} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
