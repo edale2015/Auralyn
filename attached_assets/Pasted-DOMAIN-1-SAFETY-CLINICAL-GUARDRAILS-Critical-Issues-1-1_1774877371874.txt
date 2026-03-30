@@ -1,0 +1,749 @@
+DOMAIN 1: SAFETY & CLINICAL GUARDRAILS
+Critical Issues
+1.1 Safety Veto Agent Has No Independent Data Path
+The Safety Veto Agent currently receives its input from the same data pipeline as the other two agents. This means if the upstream Intake Engine or Channel Normalizer corrupts, hallucinates, or misclassifies symptoms, all three agents debate on bad data — and the Safety Veto Agent cannot catch what it never sees.
+typescript// CURRENT RISK: All agents share one input object
+interface DebateInput {
+  symptoms: ExtractedSymptom[];
+  modifiers: ClinicalModifier[];
+  redFlags: RedFlag[];
+}
+
+// RECOMMENDED: Safety agent gets a parallel raw-input feed
+interface SafetyAgentInput {
+  rawPatientText: string;           // unprocessed original message
+  extractedSymptoms: ExtractedSymptom[];
+  redFlagOverrides: HardStopRule[]; // independent rule engine, not LLM-derived
+  patientDemographics: Demographics;
+  priorDispositions: DispositionHistory[];
+}
+
+// Safety gate should re-run red flag detection independently
+class SafetyVetoAgent {
+  async evaluate(input: SafetyAgentInput): Promise<SafetyVerdict> {
+    const independentRedFlags = await this.runHardRuleEngine(input.rawPatientText);
+    const llmRedFlags = input.redFlagOverrides;
+    // Union of both — never intersection
+    const allFlags = [...new Set([...independentRedFlags, ...llmRedFlags])];
+    return this.verdict(allFlags, input);
+  }
+}
+HIPAA Breach Pathway: If a corrupted intake miscategorizes chest pain as musculoskeletal pain and all three agents debate on that corrupted input, a missed ER_NOW disposition could result in patient harm. The subsequent incident investigation would expose the full case record including PHI to legal discovery, triggering a HIPAA breach notification obligation under 45 CFR §164.400.
+FDA Classification Impact: An autonomous Safety Veto Agent that operates without an independent verification path may constitute a Class II medical device function requiring 510(k) clearance under the FDA's 2021 AI/ML-Based SaMD Action Plan.
+
+1.2 Missing Hard-Stop Rules Beyond ER_NOW / ER_URGENT
+The current system has two emergency escalation tiers. Clinical reality requires at least five:
+typescriptenum DispositionTier {
+  ER_NOW = 'ER_NOW',           // Call 911 / immediate life threat
+  ER_URGENT = 'ER_URGENT',     // Go to ER within 1 hour
+  URGENT_CARE = 'URGENT_CARE', // See provider within 4 hours — MISSING
+  TELEHEALTH_NOW = 'TELEHEALTH_NOW', // Synchronous virtual visit — MISSING
+  NEXT_DAY = 'NEXT_DAY',       // Schedule within 24 hours — MISSING
+  ROUTINE = 'ROUTINE',         // Standard appointment
+  SELF_CARE = 'SELF_CARE'      // Home management with instructions
+}
+
+// Hard stop rules that must bypass debate engine entirely
+const ABSOLUTE_HARD_STOPS: HardStopRule[] = [
+  { symptom: 'chest_pain_with_diaphoresis', disposition: DispositionTier.ER_NOW },
+  { symptom: 'stridor_in_child_under_5', disposition: DispositionTier.ER_NOW },
+  { symptom: 'altered_mental_status', disposition: DispositionTier.ER_NOW },
+  { symptom: 'pregnancy_with_bleeding', disposition: DispositionTier.ER_NOW },
+  { symptom: 'testicular_pain_acute_onset', disposition: DispositionTier.ER_URGENT },
+  { symptom: 'unilateral_vision_loss_sudden', disposition: DispositionTier.ER_NOW },
+  { symptom: 'fever_infant_under_90_days', disposition: DispositionTier.ER_NOW },
+  { symptom: 'suicidal_ideation_active', disposition: DispositionTier.ER_NOW }
+];
+HIPAA Breach Pathway: A missed testicular torsion or pediatric epiglottitis that is debated rather than hard-stopped creates legal discovery exposure of the entire platform's decision logs, constituting a de facto PHI breach under the Breach Notification Rule.
+FDA Classification Impact: The absence of hard-stop bypass logic for life-threatening conditions pushes this system toward Class III SaMD territory — autonomous diagnosis without adequate safety controls — potentially requiring PMA (Premarket Approval) rather than 510(k).
+
+1.3 Fourth Agent Recommendation: Adversarial "Red Team" Agent
+The current 3-agent system has no mechanism to challenge a case where all agents agree. A fourth agent should be added whose sole purpose is to argue against the consensus:
+typescriptclass RedTeamAgent implements ClinicalAgent {
+  name = 'RedTeamAgent';
+  
+  async evaluate(
+    consensus: AgentConsensus,
+    input: ClinicalCase
+  ): Promise<RedTeamVerdict> {
+    // Always argue for the HIGHER acuity disposition
+    const challengeDisposition = this.escalateOneLevel(consensus.disposition);
+    const counterEvidence = await this.findMissedSymptoms(input);
+    const alternativeDifferentials = await this.generateAlternativeDx(input);
+    
+    return {
+      challengeDisposition,
+      counterEvidence,
+      alternativeDifferentials,
+      // Force physician review if RedTeam finds meaningful counter-evidence
+      requiresPhysicianReview: counterEvidence.length > 0,
+      confidence: this.calculateChallengeConfidence(counterEvidence)
+    };
+  }
+  
+  private escalateOneLevel(disposition: DispositionTier): DispositionTier {
+    const escalationMap: Record<DispositionTier, DispositionTier> = {
+      [DispositionTier.SELF_CARE]: DispositionTier.ROUTINE,
+      [DispositionTier.ROUTINE]: DispositionTier.NEXT_DAY,
+      [DispositionTier.NEXT_DAY]: DispositionTier.TELEHEALTH_NOW,
+      [DispositionTier.TELEHEALTH_NOW]: DispositionTier.URGENT_CARE,
+      [DispositionTier.URGENT_CARE]: DispositionTier.ER_URGENT,
+      [DispositionTier.ER_URGENT]: DispositionTier.ER_NOW,
+      [DispositionTier.ER_NOW]: DispositionTier.ER_NOW
+    };
+    return escalationMap[disposition];
+  }
+}
+Industry Benchmark Delta: Epic's clinical decision support uses adversarial testing at the model level but not at runtime. MedScribe has an opportunity to exceed Epic's standard here by making adversarial challenge a live runtime process rather than a pre-deployment testing artifact.
+
+1.4 Pediatric Safety Gaps
+The platform handles pediatric complaints but has no age-stratified safety logic:
+typescriptinterface PediatricSafetyProfile {
+  ageMonths: number;
+  weightKg?: number;
+  
+  // Age-specific hard stops Epic uses in pediatric triage
+  hardStops: {
+    feverThresholdCelsius: number;    // <3mo: any fever = ER_NOW
+    respiratoryRateThreshold: number;  // age-stratified
+    heartRateThreshold: number;        // age-stratified
+    requiresWeightForDosing: boolean;
+  };
+}
+
+// Age-stratified fever rules — currently absent from MedScribe
+const PEDIATRIC_FEVER_RULES: PediatricSafetyProfile[] = [
+  { ageMonths: 3,  hardStops: { feverThresholdCelsius: 38.0, requiresWeightForDosing: true, respiratoryRateThreshold: 60, heartRateThreshold: 180 }},
+  { ageMonths: 36, hardStops: { feverThresholdCelsius: 38.5, requiresWeightForDosing: true, respiratoryRateThreshold: 40, heartRateThreshold: 160 }},
+  { ageMonths: 144, hardStops: { feverThresholdCelsius: 39.0, requiresWeightForDosing: false, respiratoryRateThreshold: 30, heartRateThreshold: 130 }}
+];
+HIPAA Breach Pathway: A pediatric safety failure that results in patient harm triggers mandatory state reporting in addition to HIPAA — in most states, harm to a minor during a medical interaction triggers mandatory reporting obligations that would expose platform operations to regulatory investigation.
+
+DOMAIN 2: FDA SaMD & HIPAA COMPLIANCE
+Critical Issues
+2.1 Current FDA Regulatory Posture Assessment
+Based on the system description, MedScribe currently operates as a Class II SaMD under FDA's 2019 framework — it provides clinical decision support that a clinician reviews before action is taken. However, several features push it toward Class III autonomous diagnosis:
+FeatureCurrent Classification RiskAutonomous ER_NOW disposition without physician pre-approvalClass III exposureRLHF policy evolution without human review gatesClass III exposureSafety Veto Agent with hard veto powerClass II if gated, Class III if autonomousMulti-agent consensus without mandatory physician confirmationClass III exposure
+Recommended Regulatory Posture:
+typescript// Minimum viable human-in-the-loop checkpoint to maintain Class II status
+interface PhysicianCheckpoint {
+  // These dispositions MUST have physician approval before delivery to patient
+  requiresApproval: DispositionTier[];
+  
+  // Maximum time physician has to review before system auto-escalates
+  reviewTimeoutMinutes: number;
+  
+  // What happens on timeout
+  timeoutBehavior: 'escalate_disposition' | 'hold_delivery' | 'notify_on_call';
+  
+  // Audit trail for FDA
+  approvalRecord: {
+    physicianId: string;
+    timestamp: Date;
+    decision: 'approved' | 'overridden';
+    overrideReason?: string;
+    timeToReviewSeconds: number;
+  };
+}
+
+const PHYSICIAN_CHECKPOINT_CONFIG: PhysicianCheckpoint = {
+  requiresApproval: [
+    DispositionTier.ER_NOW,
+    DispositionTier.ER_URGENT,
+    DispositionTier.URGENT_CARE
+  ],
+  reviewTimeoutMinutes: 10,
+  timeoutBehavior: 'escalate_disposition',
+  approvalRecord: {} as any // populated at runtime
+};
+FDA Classification Impact: Implementing mandatory physician approval for all ER_NOW and ER_URGENT dispositions is the single most important step to maintain Class II status and avoid PMA requirements. Without this, the system is operating as an autonomous diagnostic device.
+
+2.2 Immutable Audit Trail — Missing Hash Chain Verification
+The system mentions hash chains in the audit directory but does not describe verification. A write-only hash chain without read-verification is not FDA-compliant:
+typescript// RECOMMENDED: Tamper-evident audit record with verification
+interface ClinicalAuditRecord {
+  recordId: string;
+  caseId: string;
+  timestamp: Date;
+  eventType: AuditEventType;
+  
+  // PHI fields — encrypted at rest, AES-256
+  patientIdHash: string;         // SHA-256 of patient identifier
+  channelType: ChannelType;      // WhatsApp / Telegram / Web
+  
+  // Clinical decision fields
+  agentVerdicts: AgentVerdict[];
+  consensusDisposition: DispositionTier;
+  physicianOverride?: PhysicianOverride;
+  
+  // Immutability chain
+  previousRecordHash: string;    // SHA-256 of previous record
+  currentRecordHash: string;     // SHA-256 of this record's content
+  merkleRoot?: string;           // For batch verification
+  
+  // FDA SaMD required fields
+  modelVersion: string;          // Which model version made this decision
+  policyMode: PolicyMode;        // conservative/balanced/probabilistic
+  agentWeights: AgentWeights;    // EMA weights at time of decision
+  confidenceScore: number;
+  redFlagsEvaluated: RedFlag[];
+}
+
+enum AuditEventType {
+  CASE_INITIATED = 'CASE_INITIATED',
+  SYMPTOM_EXTRACTED = 'SYMPTOM_EXTRACTED',
+  RED_FLAG_DETECTED = 'RED_FLAG_DETECTED',
+  AGENT_VERDICT_SUBMITTED = 'AGENT_VERDICT_SUBMITTED',
+  CONSENSUS_REACHED = 'CONSENSUS_REACHED',
+  PHYSICIAN_REVIEW_REQUESTED = 'PHYSICIAN_REVIEW_REQUESTED',
+  PHYSICIAN_APPROVED = 'PHYSICIAN_APPROVED',
+  PHYSICIAN_OVERRIDDEN = 'PHYSICIAN_OVERRIDDEN',
+  DISPOSITION_DELIVERED = 'DISPOSITION_DELIVERED',
+  OUTCOME_RECORDED = 'OUTCOME_RECORDED',
+  POLICY_UPDATED = 'POLICY_UPDATED',
+  DRIFT_DETECTED = 'DRIFT_DETECTED'
+}
+HIPAA Breach Pathway: Without tamper-evident audit logs, MedScribe cannot demonstrate to OCR that PHI was not accessed or modified improperly during an incident. Under 45 CFR §164.312(b), audit controls are a required implementation specification. Absence of verifiable audit integrity is a direct HIPAA Security Rule violation — OCR penalty tier: Tier 3 ($10,000–$50,000 per violation).
+Industry Benchmark Delta: Amazon HealthLake uses S3 Object Lock with WORM (Write Once Read Many) storage for audit records plus CloudTrail for access logging. Epic uses a dual-write audit system with nightly hash verification jobs. MedScribe's current hash chain approach without verification falls short of both.
+
+2.3 RLHF Learning Loop — Autonomous Policy Evolution Regulatory Risk
+The current system allows policy modes to evolve automatically. This is a significant FDA regulatory risk:
+typescript// CURRENT RISK: Autonomous policy promotion
+class LearningLoop {
+  async evolvePolicy(driftMetrics: DriftMetrics): Promise<void> {
+    if (driftMetrics.performanceDelta > this.threshold) {
+      await this.promotePolicyMode(this.candidatePolicy); // DANGEROUS — no human gate
+    }
+  }
+}
+
+// RECOMMENDED: Human-gated policy promotion
+class SafeLearningLoop {
+  async proposePolicy(driftMetrics: DriftMetrics): Promise<PolicyProposal> {
+    const proposal: PolicyProposal = {
+      proposalId: uuid(),
+      candidatePolicy: this.candidatePolicy,
+      supportingMetrics: driftMetrics,
+      safetyImpactAssessment: await this.assessSafetyImpact(),
+      affectedCaseTypes: await this.identifyAffectedCaseTypes(),
+      status: 'PENDING_PHYSICIAN_REVIEW',
+      expiresAt: addHours(new Date(), 72)
+    };
+    
+    // Never auto-promote — always require human approval
+    await this.notifyMedicalDirector(proposal);
+    await this.auditLog.record(AuditEventType.POLICY_UPDATE_PROPOSED, proposal);
+    return proposal;
+  }
+  
+  async approvePolicy(
+    proposalId: string,
+    approvingPhysicianId: string,
+    approvalNotes: string
+  ): Promise<void> {
+    // Only this method can promote a policy — never autonomous
+    await this.auditLog.record(AuditEventType.POLICY_UPDATED, {
+      proposalId,
+      approvingPhysicianId,
+      approvalNotes,
+      timestamp: new Date()
+    });
+    await this.promotePolicyMode(proposalId);
+  }
+}
+FDA Classification Impact: Autonomous policy evolution without human review gates constitutes autonomous adaptation of a clinical decision algorithm — this triggers FDA's requirement for a predetermined change control plan (PCCP) under the 2023 Marketing Submission Recommendations for AI/ML-Based SaMD. Without a PCCP on file, every autonomous policy update is technically an unapproved device modification.
+
+DOMAIN 3: OBSERVABILITY & MONITORING
+Critical Issues
+3.1 Engine Health Monitoring Strategy for 70 Engines
+typescript// Recommended: Universal engine health wrapper
+interface EngineHealthMetrics {
+  engineId: string;
+  engineVersion: string;
+  lastInvocationAt: Date;
+  invocationCount24h: number;
+  errorRate24h: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  p99LatencyMs: number;
+  lastErrorMessage?: string;
+  inputValidationFailureRate: number;
+  outputSchemaViolationRate: number;
+  
+  // Clinical-specific metrics
+  dispositionDistribution: Record<DispositionTier, number>;
+  redFlagDetectionRate: number;
+  confidenceScoreDistribution: ConfidenceHistogram;
+}
+
+// Universal wrapper that every engine must implement
+abstract class MonitoredClinicalEngine {
+  abstract engineId: string;
+  abstract engineVersion: string;
+  
+  private metrics: EngineHealthMetrics;
+  
+  async invoke<TInput, TOutput>(
+    input: TInput,
+    handler: (input: TInput) => Promise<TOutput>
+  ): Promise<TOutput> {
+    const start = Date.now();
+    try {
+      this.validateInput(input);
+      const output = await handler(input);
+      this.validateOutput(output);
+      this.recordSuccess(Date.now() - start);
+      return output;
+    } catch (error) {
+      this.recordError(error, Date.now() - start);
+      throw error;
+    }
+  }
+  
+  getHealthMetrics(): EngineHealthMetrics {
+    return this.metrics;
+  }
+  
+  abstract validateInput(input: unknown): void;
+  abstract validateOutput(output: unknown): void;
+}
+3.2 Clinical SLO Definitions
+typescript// SLOs specific to clinical AI — not standard software SLOs
+interface ClinicalSLO {
+  name: string;
+  target: number;
+  measurement: string;
+  breachAction: 'alert' | 'circuit_break' | 'halt_system';
+}
+
+const CLINICAL_SLOS: ClinicalSLO[] = [
+  {
+    name: 'ER_NOW_Sensitivity',
+    target: 0.99,    // Must catch 99% of true emergencies
+    measurement: 'true_positive_rate_er_now_dispositions',
+    breachAction: 'halt_system'
+  },
+  {
+    name: 'ER_NOW_False_Positive_Rate',
+    target: 0.15,    // Max 15% false ER_NOW — balance safety vs. over-triage
+    measurement: 'false_positive_rate_er_now_dispositions',
+    breachAction: 'alert'
+  },
+  {
+    name: 'Intake_Completion_Rate',
+    target: 0.95,
+    measurement: 'cases_reaching_disposition_over_cases_initiated',
+    breachAction: 'alert'
+  },
+  {
+    name: 'Physician_Review_Latency',
+    target: 300,     // 5 minutes max for physician review packet delivery
+    measurement: 'seconds_from_consensus_to_physician_notification',
+    breachAction: 'circuit_break'
+  },
+  {
+    name: 'Agent_Consensus_Rate',
+    target: 0.80,    // 80% of cases should reach unanimous consensus
+    measurement: 'unanimous_consensus_cases_over_total_cases',
+    breachAction: 'alert'
+  },
+  {
+    name: 'Demographic_Parity_Delta',
+    target: 0.05,    // Max 5% disposition rate difference across demographic groups
+    measurement: 'max_disposition_rate_difference_across_demographics',
+    breachAction: 'alert'  // HIPAA civil rights exposure if breached
+  }
+];
+3.3 Missing Phase 7 Health Endpoint
+typescript// /api/phase7/health — full specification
+interface Phase7HealthResponse {
+  status: 'healthy' | 'degraded' | 'critical';
+  timestamp: Date;
+  
+  learningLoop: {
+    isRunning: boolean;
+    lastRunAt: Date;
+    lastRunDurationMs: number;
+    casesProcessedLast24h: number;
+    outcomeLoggerLag: number;       // How far behind is outcome logging
+  };
+  
+  driftState: {
+    currentDriftScore: number;
+    driftThreshold: number;
+    circuitBreakerStatus: 'closed' | 'open' | 'half-open';
+    lastDriftDetectedAt?: Date;
+    policyProposalsPending: number;
+    policyProposalsAwaitingApproval: number;
+  };
+  
+  agentWeights: {
+    hybridAgent: number;
+    bayesianAgent: number;
+    safetyVetoAgent: number;
+    lastUpdatedAt: Date;
+    weightDriftFromBaseline: number;
+  };
+  
+  rlhf: {
+    trainingDataPointsCollected: number;
+    lastModelUpdateAt?: Date;
+    pendingHumanReviewItems: number;
+    labelQualityScore: number;
+  };
+  
+  alerts: Phase7Alert[];
+}
+Industry Benchmark Delta: Nuance DAX maintains a real-time model performance dashboard that tracks specialty-specific accuracy, physician correction rates, and documentation quality scores. MedScribe has no equivalent specialty-stratified performance tracking. Amazon HealthLake provides ML model monitoring via Amazon SageMaker Model Monitor with automatic drift detection and retraining triggers — MedScribe's manual EMA approach is significantly less robust.
+
+DOMAIN 4: ARCHITECTURE & SCALABILITY
+Critical Issues
+4.1 Redis Persistence Activation Strategy
+typescript// Current risk: in-memory agent config wiped on restart
+// Recommended: Redis persistence with graceful fallback
+
+interface AgentConfigStore {
+  // Persisted in Redis with TTL-based refresh
+  agentWeights: Record<AgentName, number>;
+  policyMode: PolicyMode;
+  debateHistory: DebateRecord[];
+  driftState: DriftState;
+  circuitBreakerState: CircuitBreakerState;
+}
+
+class ResilientAgentConfigManager {
+  private redis: RedisClient;
+  private inMemoryFallback: Map<string, AgentConfigStore>;
+  private readonly TTL_SECONDS = 86400; // 24 hours
+  
+  async getConfig(agentId: string): Promise<AgentConfigStore> {
+    try {
+      const cached = await this.redis.get(`agent:config:${agentId}`);
+      if (cached) return JSON.parse(cached);
+      
+      // Redis miss — load from PostgreSQL and warm cache
+      const fromDb = await this.loadFromPostgres(agentId);
+      await this.redis.setex(
+        `agent:config:${agentId}`,
+        this.TTL_SECONDS,
+        JSON.stringify(fromDb)
+      );
+      return fromDb;
+    } catch (redisError) {
+      // Redis failure — use in-memory fallback, log incident
+      await this.observability.recordIncident({
+        severity: 'HIGH',
+        component: 'RedisAgentConfig',
+        message: 'Redis unavailable — using in-memory fallback',
+        error: redisError
+      });
+      return this.inMemoryFallback.get(agentId) ?? await this.loadFromPostgres(agentId);
+    }
+  }
+  
+  async persistConfig(agentId: string, config: AgentConfigStore): Promise<void> {
+    // Write-through: Redis + PostgreSQL simultaneously
+    await Promise.all([
+      this.redis.setex(`agent:config:${agentId}`, this.TTL_SECONDS, JSON.stringify(config)),
+      this.postgres.upsert('agent_configs', { agentId, config, updatedAt: new Date() })
+    ]);
+    this.inMemoryFallback.set(agentId, config);
+  }
+}
+4.2 Engine Versioning Interface
+typescript// Contract-first engine versioning — prevents downstream breakage
+interface VersionedClinicalEngine<TInput, TOutput> {
+  engineId: string;
+  version: SemanticVersion;
+  inputSchema: JSONSchema;    // Validated at runtime
+  outputSchema: JSONSchema;   // Validated at runtime
+  
+  // Backward compatibility declaration
+  compatibleWith: SemanticVersion[];
+  
+  // Feature flag support
+  featureFlags: EngineFeatureFlag[];
+  
+  invoke(input: TInput): Promise<TOutput>;
+  healthCheck(): Promise<EngineHealthMetrics>;
+  
+  // Contract test — run against golden cases
+  runContractTests(): Promise<ContractTestResult>;
+}
+
+// Feature flag wrapper for safe engine modification
+class FeatureFlaggedEngine<TInput, TOutput> 
+  implements VersionedClinicalEngine<TInput, TOutput> {
+  
+  constructor(
+    private stable: VersionedClinicalEngine<TInput, TOutput>,
+    private candidate: VersionedClinicalEngine<TInput, TOutput>,
+    private flagKey: string,
+    private flagStore: FeatureFlagStore
+  ) {}
+  
+  async invoke(input: TInput): Promise<TOutput> {
+    const useCandidate = await this.flagStore.isEnabled(
+      this.flagKey,
+      { percentage: 10 }  // Shadow mode: 10% traffic to candidate
+    );
+    
+    if (useCandidate) {
+      // Run both — compare outputs, use stable result for patient
+      const [stableResult, candidateResult] = await Promise.all([
+        this.stable.invoke(input),
+        this.candidate.invoke(input).catch(e => ({ error: e }))
+      ]);
+      
+      // Log divergence for analysis
+      if (this.diverges(stableResult, candidateResult)) {
+        await this.logDivergence(input, stableResult, candidateResult);
+      }
+      
+      return stableResult; // Always return stable to patient
+    }
+    
+    return this.stable.invoke(input);
+  }
+}
+4.3 Google Sheets as Clinical Rule Store — Production Risk
+This is the highest architectural risk in the system. Google Sheets has no SLA, no HIPAA BAA by default, and no transactional consistency guarantees.
+typescript// Recommended: Replace Google Sheets with versioned PostgreSQL rule store
+// Keep Sheets as a human-friendly editing interface only
+
+interface ClinicalRuleStore {
+  // Rules live in PostgreSQL — Sheets is just the editor UI
+  getRules(packId: string, version?: string): Promise<ClinicalRule[]>;
+  publishRules(rules: ClinicalRule[], publishedBy: string): Promise<RuleVersion>;
+  rollbackRules(packId: string, targetVersion: string): Promise<void>;
+  
+  // Sheets sync — one-way, Sheets → staging only, never directly to production
+  syncFromSheets(sheetsId: string): Promise<StagingRuleSet>;
+  validateStagingRules(stagingId: string): Promise<ValidationResult>;
+  promoteToProduction(stagingId: string, approvedBy: string): Promise<void>;
+}
+HIPAA Breach Pathway: If clinical rules stored in Google Sheets are accessed by unauthorized Google account holders — or if Google's infrastructure is compromised — PHI-adjacent data (symptom patterns, disposition thresholds) could be exposed. Without a Google HIPAA BAA, this is a direct Business Associate Agreement violation under 45 CFR §164.308(b).
+
+DOMAIN 5: LEARNING LOOP & DRIFT MANAGEMENT
+Critical Issues
+5.1 EMA α=0.1 Assessment for Clinical AI
+An EMA with α=0.1 gives approximately 10% weight to the most recent observation and retains 90% from history. For clinical AI this creates two competing risks:
+
+Too slow: A systematically failing agent could degrade for weeks before the weight shifts meaningfully
+Too fast for rare events: A single high-profile correct call on a rare case type could inappropriately boost an agent's weight
+
+typescript// Recommended: Adaptive EMA with safety floor
+class AdaptiveClinicalEMA {
+  private readonly SAFETY_FLOOR_WEIGHT = 0.15; // Safety agent minimum weight
+  private readonly BASE_ALPHA = 0.1;
+  
+  calculateWeight(
+    agentId: string,
+    recentAccuracy: number,
+    caseVolume: number,
+    caseComplexity: CaseComplexity
+  ): number {
+    // Increase alpha (learn faster) when volume is high and complexity is low
+    // Decrease alpha (learn slower) when volume is low — avoid noise
+    const adaptiveAlpha = this.BASE_ALPHA * 
+      Math.min(caseVolume / 100, 2.0) * // Cap at 2x base alpha
+      (1 / caseComplexity.score);        // Learn slower on complex cases
+    
+    const rawWeight = this.ema(recentAccuracy, adaptiveAlpha);
+    
+    // Safety agent can never drop below floor weight
+    if (agentId === 'SafetyVetoAgent') {
+      return Math.max(rawWeight, this.SAFETY_FLOOR_WEIGHT);
+    }
+    
+    return rawWeight;
+  }
+}
+5.2 Safe Drift Circuit Breaker with Human-in-the-Loop
+typescript// Drift circuit breaker with mandatory human approval gate
+class SafeDriftCircuitBreaker {
+  private state: 'CLOSED' | 'OPEN' | 'HALF_OPEN' = 'CLOSED';
+  
+  async evaluateDrift(metrics: DriftMetrics): Promise<DriftDecision> {
+    const driftScore = this.calculateDriftScore(metrics);
+    
+    // Tier 1: Monitor only
+    if (driftScore < 0.1) {
+      return { action: 'MONITOR', requiresHumanReview: false };
+    }
+    
+    // Tier 2: Alert medical director, increase monitoring frequency
+    if (driftScore < 0.25) {
+      await this.alertMedicalDirector(metrics, 'DRIFT_WARNING');
+      return { action: 'ALERT', requiresHumanReview: false };
+    }
+    
+    // Tier 3: Open circuit — freeze policy updates, require human review
+    if (driftScore < 0.5) {
+      this.state = 'OPEN';
+      await this.freezePolicyUpdates();
+      await this.createHumanReviewTicket(metrics, 'DRIFT_SIGNIFICANT');
+      return { 
+        action: 'CIRCUIT_OPEN', 
+        requiresHumanReview: true,
+        reviewDeadlineHours: 24
+      };
+    }
+    
+    // Tier 4: Emergency — rollback to last known good policy
+    this.state = 'OPEN';
+    await this.rollbackToLastKnownGood();
+    await this.pageOnCallPhysician(metrics, 'DRIFT_CRITICAL');
+    await this.auditLog.record(AuditEventType.DRIFT_DETECTED, {
+      metrics,
+      action: 'EMERGENCY_ROLLBACK',
+      timestamp: new Date()
+    });
+    return {
+      action: 'EMERGENCY_ROLLBACK',
+      requiresHumanReview: true,
+      reviewDeadlineHours: 4
+    };
+  }
+}
+FDA Classification Impact: Autonomous drift response without human gates is an unapproved algorithm modification under FDA's PCCP framework. Every tier above Tier 1 must create a human-reviewable audit record to maintain compliance.
+HIPAA Breach Pathway — Demographic Drift: If the learning loop drifts toward systematically undertriaging a specific demographic group (e.g., consistently downgrading chest pain severity scores for women or elderly patients), this constitutes a violation of Section 1557 of the ACA (nondiscrimination in health programs) in addition to creating HIPAA exposure. OCR has explicitly stated that algorithmic bias resulting in disparate health outcomes is actionable under federal civil rights law.
+
+DOMAIN 6: MULTI-AGENT DEBATE ARCHITECTURE
+Critical Issues
+6.1 Consensus Failure Handler
+typescript// What happens when all agents agree but are collectively wrong
+class ConsensusFailureHandler {
+  
+  async detectAndHandle(
+    consensus: AgentConsensus,
+    input: ClinicalCase
+  ): Promise<HandledConsensus> {
+    
+    // Trigger mandatory physician review if:
+    const requiresPhysicianReview = 
+      consensus.confidence < CONFIDENCE_FLOOR ||           // Low confidence
+      consensus.agentAgreementType === 'UNANIMOUS_LOW' ||  // All agreed but all uncertain
+      this.hasUnexplainedRedFlags(input, consensus) ||     // Red flags not addressed
+      this.isRareCaseType(input) ||                        // Unusual presentation
+      this.demographicRiskFlag(input);                     // High-risk demographic pattern
+    
+    if (requiresPhysicianReview) {
+      return {
+        ...consensus,
+        disposition: this.conservativeDisposition(consensus.disposition),
+        requiresPhysicianReview: true,
+        reviewReason: this.buildReviewReason(consensus, input),
+        // Escalate disposition one level as safety measure
+        adjustedDisposition: this.escalateOneLevel(consensus.disposition)
+      };
+    }
+    
+    return { ...consensus, requiresPhysicianReview: false };
+  }
+  
+  private readonly CONFIDENCE_FLOOR = 0.72; // Below this = mandatory physician review
+}
+6.2 Confidence Calibration Floor
+Based on clinical AI literature and comparison to Epic's CDSS thresholds:
+typescriptconst CONFIDENCE_THRESHOLDS: Record<DispositionTier, number> = {
+  [DispositionTier.ER_NOW]: 0.85,      // Very high bar — false negative = death
+  [DispositionTier.ER_URGENT]: 0.80,
+  [DispositionTier.URGENT_CARE]: 0.75,
+  [DispositionTier.TELEHEALTH_NOW]: 0.70,
+  [DispositionTier.NEXT_DAY]: 0.65,
+  [DispositionTier.ROUTINE]: 0.60,
+  [DispositionTier.SELF_CARE]: 0.85    // Also high bar — false positive = missed emergency
+};
+
+// Below threshold = automatic physician escalation regardless of agent consensus
+function requiresPhysicianEscalation(
+  disposition: DispositionTier,
+  confidence: number
+): boolean {
+  return confidence < CONFIDENCE_THRESHOLDS[disposition];
+}
+HIPAA / Malpractice Breach Pathway: A consensus failure that results in a missed ER_NOW disposition — where the patient suffers harm — creates simultaneous exposure under: (1) HIPAA Breach Notification Rule if the case record is subsequently accessed during legal discovery; (2) State medical malpractice law for the supervising physician who received and approved the AI packet; (3) FDA adverse event reporting requirements under 21 CFR Part 803 if the device contributed to serious injury. This triple exposure makes consensus failure handling the highest legal risk component in the system.
+
+DOMAIN 7: MISSING FEATURES & ROADMAP PRIORITIES
+Critical Issues
+7.1 Missing High-Risk Clinical Packs
+Benchmarked against Epic's ambulatory triage modules and Nuance DAX complaint coverage:
+Missing PackRisk LevelComplaint Volume in UCFDA Impact if AddedStroke / NeurologicalCRITICALHighRequires 510(k) amendmentMental Health / SuicidalityCRITICALMediumRequires 510(k) amendmentAllergic Reaction / AnaphylaxisCRITICALMediumExisting 510(k) scopeUrological (non-testicular)HIGHHighExisting scopeDermatologicalMEDIUMVery HighExisting scopeMusculoskeletal / FractureMEDIUMVery HighExisting scopePediatric Fever StratifiedCRITICALHighRequires pediatric 510(k)
+7.2 Standardized ClinicalPack Schema
+typescript// Universal pack schema — makes every future pack consistent and auditable
+interface ClinicalPack {
+  packId: string;
+  packVersion: SemanticVersion;
+  complaintCategories: string[];
+  
+  // Decision tree — CSV-driven at runtime
+  decisionTree: DecisionNode[];
+  
+  // Scoring instruments used in this pack
+  scoringInstruments: ScoringInstrument[]; // e.g., Centor, HEART-lite, PHQ-2
+  
+  // Hard stops specific to this pack
+  hardStops: HardStopRule[];
+  
+  // Demographic modifiers
+  demographicModifiers: DemographicModifier[];
+  
+  // FDA audit metadata
+  clinicalEvidenceBase: string[];      // Citations for decision logic
+  lastClinicalReviewDate: Date;
+  reviewingPhysicianId: string;
+  fdaClassification: SaMDClass;
+  
+  // Testing requirements
+  goldenCases: GoldenCase[];           // Minimum 20 per pack
+  minimumSensitivity: number;          // For ER_NOW dispositions
+  minimumSpecificity: number;
+}
+7.3 CI/CD Golden Case Automation
+typescript// Production-safe golden case CI/CD strategy
+interface GoldenCaseRunnerConfig {
+  // Run on every PR — block merge if sensitivity drops
+  prGate: {
+    minimumERNowSensitivity: 0.99;
+    minimumOverallAccuracy: 0.90;
+    blockOnFailure: true;
+  };
+  
+  // Run nightly against production traffic sample
+  nightlyRun: {
+    sampleSize: 500;
+    includeRecentCases: true;
+    alertThreshold: 0.02;  // Alert if accuracy drops 2% from baseline
+  };
+  
+  // Run before any policy promotion
+  policyGate: {
+    requiredBeforePromotion: true;
+    minimumCasesRun: 1000;
+    requiresPhysicianSignOff: true;
+  };
+}
+
+SUMMARY DELIVERABLE A: Prioritized Action Matrix
+RecommendationClinical RiskHIPAA RiskFDA RiskComplexityImpactPriorityPhysician approval gate for ER_NOW/URGENTCRITICALHIGHHIGHLOWCRITICALP0Independent Safety Agent data pathCRITICALHIGHHIGHMEDIUMCRITICALP0Immutable audit trail with verificationHIGHCRITICALHIGHMEDIUMHIGHP0Human-gated policy promotionHIGHMEDIUMCRITICALMEDIUMHIGHP0Redis persistence activationHIGHMEDIUMLOWLOWHIGHP1Age-stratified pediatric safety rulesCRITICALHIGHHIGHMEDIUMHIGHP14th Red Team AgentMEDIUMLOWMEDIUMHIGHHIGHP1Engine health monitoring (all 70)MEDIUMMEDIUMMEDIUMHIGHHIGHP1Replace Google Sheets with rule storeHIGHHIGHLOWHIGHMEDIUMP1Confidence floor + consensus handlerHIGHHIGHHIGHMEDIUMHIGHP1Demographic drift detectionMEDIUMHIGHMEDIUMMEDIUMHIGHP2Missing clinical packs (stroke, MH)CRITICALMEDIUMHIGHHIGHHIGHP2Adaptive EMA for agent weightsMEDIUMLOWMEDIUMMEDIUMMEDIUMP2CI/CD golden case automationLOWLOWMEDIUMMEDIUMHIGHP2Phase 7 health endpointLOWLOWLOWLOWMEDIUMP3
+
+SUMMARY DELIVERABLE B: FDA Regulatory Posture Summary
+Current Status: MedScribe is operating in a regulatory gray zone. Features consistent with Class II SaMD (physician reviews all decisions) are undermined by features consistent with Class III autonomous diagnosis (Safety Veto Agent with hard veto power, autonomous policy evolution, ER_NOW dispositions without mandatory pre-approval).
+To Maintain Class II and Proceed Under 510(k):
+
+Implement mandatory physician pre-approval for all ER_NOW and ER_URGENT dispositions
+Implement a PCCP (Predetermined Change Control Plan) and submit to FDA before enabling autonomous learning loop policy updates
+Disable autonomous Safety Veto without physician confirmation — reclassify as decision support only
+File 510(k) for the ENT and Flu packs as the initial submission scope
+
+Features Requiring New 510(k) or Amendment:
+
+Adding stroke/neurological pack
+Adding mental health/suicidality pack
+Adding pediatric-specific triage with age-stratified hard stops
+Enabling any fully autonomous disposition delivery without physician review
+
+
+SUMMARY DELIVERABLE C: HIPAA Breach Risk Register
+Breach ScenarioPHI Identifiers at RiskFailure VectorOCR CategoryPenalty TierRemediation PriorityMissed ER_NOW → legal discovery of full case recordName, condition, messages, locationConsensus failure on life-threatening presentationWillful neglectTier 4: $50K+ per violationP0Google Sheets unauthorized accessSymptom patterns, rule thresholdsNo HIPAA BAA with GoogleNo BAA = automatic violationTier 3: $10K–$50KP0Audit log tampering (no hash verification)All case PHIInsider threat or breach during incidentSecurity Rule §164.312(b)Tier 3: $10K–$50KP0Autonomous policy drift → demographic undertriageAge, race, sex (indirect)Learning loop bias without human oversightACA §1557 + HIPAATier 4 + civil rights actionP1In-memory agent config wipe → misconfigured safety weightsAll case PHI during misconfigured periodContainer restart during high-volume periodSecurity Rule §164.308Tier 2: $1K–$10KP1WhatsApp/Telegram channel PHI in logsPatient messages, symptomsUnencrypted channel payload loggingSecurity Rule §164.312(a)Tier 2: $1K–$10KP1RLHF training data contains identifiable PHIName, symptoms, outcomesOutcome logger captures raw patient textPrivacy Rule §164.502Tier 3: $10K–$50KP1

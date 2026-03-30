@@ -323,6 +323,7 @@ import architectureComplianceRoutes from "./routes/architectureComplianceRoutes"
 import { moatRoutes } from "./routes/moatRoutes";
 import { phase9Routes } from "./phase9/routes/phase9Routes";
 import intelRoutes            from "./observability/intel/intelRoutes";
+import complianceRoutes       from "./compliance/complianceRoutes";
 import unifiedRoutes          from "./routes/unifiedRoutes";
 import executiveRoutes        from "./routes/executiveRoutes";
 import controlTowerRoutes     from "./routes/controlTowerRoutes";
@@ -705,6 +706,7 @@ app.use("/api/governance", physicianGovernanceRoutes);
 app.use("/api/scalability", scalabilityRoutes);
 app.use("/api/observability", observabilityRoutes);
 app.use("/api/intel", intelRoutes);
+app.use("/api/compliance", complianceRoutes);
 app.use("/api/knowledge", knowledgeRoutes);
 app.use("/api/billing-optimization", billingOptimizationRoutes);
 app.use("/api/final-layer", finalLayerRoutes);
