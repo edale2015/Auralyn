@@ -3,6 +3,8 @@ import cookieParser from "cookie-parser";
 import { clinicalRateLimiter, authRateLimiter, webhookRateLimiter } from "./middleware/rateLimiter";
 import { clinicalDeadline, standardDeadline } from "./middleware/requestDeadline";
 import { idempotency } from "./middleware/idempotency";
+import { correlationId } from "./hardening/middleware/correlationId";
+import { requestLogger } from "./hardening/middleware/requestLogger";
 import { phiBoundary } from "./middleware/phiBoundary";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -365,6 +367,8 @@ declare module "http" {
 }
 
 app.use(cookieParser());
+app.use(correlationId);
+app.use(requestLogger);
 app.use(metricsMiddleware);
 app.use(traceMiddleware);
 
