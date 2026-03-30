@@ -153,6 +153,64 @@ router.get("/dependency-graph", (_req: Request, res: Response) => {
   }
 });
 
+router.get("/connected-services", async (_req: Request, res: Response) => {
+  const checks = await Promise.allSettled([
+    (async () => {
+      const key = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+      if (!key) return { id: "openai", name: "OpenAI / ChatGPT", status: "unconfigured", latencyMs: null, detail: "No API key found" };
+      const t0 = Date.now();
+      const r = await fetch("https://api.openai.com/v1/models", { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(4000) });
+      return { id: "openai", name: "OpenAI / ChatGPT", status: r.ok ? "connected" : "error", latencyMs: Date.now() - t0, detail: r.ok ? `HTTP ${r.status}` : `HTTP ${r.status}` };
+    })(),
+    (async () => {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) return { id: "telegram", name: "Telegram Bot", status: "unconfigured", latencyMs: null, detail: "No bot token found" };
+      const t0 = Date.now();
+      const r = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(4000) });
+      const body = await r.json() as any;
+      return { id: "telegram", name: "Telegram Bot", status: (r.ok && body.ok) ? "connected" : "error", latencyMs: Date.now() - t0, detail: body.ok ? `@${body.result?.username}` : body.description };
+    })(),
+    (async () => {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const tok = process.env.TWILIO_AUTH_TOKEN;
+      if (!sid || !tok) return { id: "whatsapp", name: "WhatsApp (Twilio)", status: "unconfigured", latencyMs: null, detail: "No Twilio credentials found" };
+      const t0 = Date.now();
+      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}.json`, { headers: { Authorization: `Basic ${Buffer.from(`${sid}:${tok}`).toString("base64")}` }, signal: AbortSignal.timeout(4000) });
+      return { id: "whatsapp", name: "WhatsApp (Twilio)", status: r.ok ? "connected" : "error", latencyMs: Date.now() - t0, detail: r.ok ? `HTTP ${r.status}` : `HTTP ${r.status}` };
+    })(),
+    (async () => {
+      const url = process.env.UPSTASH_REDIS_REST_URL;
+      const tok = process.env.UPSTASH_REDIS_REST_TOKEN;
+      if (!url || !tok) return { id: "redis", name: "Redis (Upstash)", status: "unconfigured", latencyMs: null, detail: "No Upstash credentials found" };
+      const t0 = Date.now();
+      const r = await fetch(`${url}/ping`, { headers: { Authorization: `Bearer ${tok}` }, signal: AbortSignal.timeout(4000) });
+      const body = await r.json() as any;
+      return { id: "redis", name: "Redis (Upstash)", status: (r.ok && body.result === "PONG") ? "connected" : "error", latencyMs: Date.now() - t0, detail: body.result || `HTTP ${r.status}` };
+    })(),
+    (async () => {
+      return { id: "langchain", name: "LangChain", status: "embedded", latencyMs: null, detail: "In-process library — no remote ping needed" };
+    })(),
+    (async () => {
+      const healthy = !!process.env.DATABASE_URL || !!process.env.PGHOST;
+      return { id: "postgres", name: "PostgreSQL", status: healthy ? "connected" : "unconfigured", latencyMs: null, detail: healthy ? "DB credentials present" : "No DB credentials" };
+    })(),
+  ]);
+
+  const services = checks.map((c, i) => {
+    if (c.status === "fulfilled") return c.value;
+    return { id: `service_${i}`, name: `Service ${i}`, status: "error", latencyMs: null, detail: (c.reason as any)?.message ?? "unknown error" };
+  });
+
+  res.json({
+    checkedAt: new Date().toISOString(),
+    total: services.length,
+    connected: services.filter((s: any) => s.status === "connected").length,
+    unconfigured: services.filter((s: any) => s.status === "unconfigured").length,
+    errors: services.filter((s: any) => s.status === "error").length,
+    services,
+  });
+});
+
 router.post("/golden/run", async (req: Request, res: Response) => {
   const { fileName } = req.body as { fileName?: string };
   try {

@@ -58,6 +58,7 @@ import BillingIntelligencePage from "@/pages/BillingIntelligencePage";
 import ArchitecturalCompliancePage from "@/pages/ArchitecturalCompliancePage";
 import MoatIntelligencePage from "@/pages/MoatIntelligencePage";
 import ExecutiveCommandPage from "@/pages/ExecutiveCommandPage";
+import ComponentHubPage from "@/pages/ComponentHubPage";
 
 validateRoutes();
 
@@ -88,6 +89,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.PHYSICIAN_MOBILE} component={PhysicianMobile} />
         <Route path={ROUTES.ORCHESTRATION} component={OrchestrationDashboard} />
         <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
+        <Route path={ROUTES.COMPONENT_HUB} component={ComponentHubPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

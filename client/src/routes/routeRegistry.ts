@@ -19,4 +19,5 @@ export const ROUTES = {
   PHYSICIAN_MOBILE: "/physician-mobile",
   ORCHESTRATION: "/orchestration",
   CONTROL_TOWER: "/control-tower",
+  COMPONENT_HUB: "/component-hub",
 };

@@ -26,9 +26,11 @@ import {
   GitBranch,
   ShieldCheck,
   Hospital,
+  LayoutDashboard,
 } from "lucide-react";
 
 const NAV_ITEMS = [
+  { path: ROUTES.COMPONENT_HUB, label: "Component Hub", icon: LayoutDashboard },
   { path: ROUTES.OPS, label: "Operations", icon: Activity },
   { path: ROUTES.CLINICAL, label: "Clinical Review", icon: Stethoscope },
   { path: ROUTES.INTAKE, label: "Intake", icon: ClipboardList },
