@@ -1,0 +1,139 @@
+STEP 1 — CREATE NEW CORE FILE (NO RISK)
+➜ Create:
+/server/system/runAutonomousPipeline.ts
+import { runFullClinicalFlow } from "../orchestrator/runFullClinicalFlow";
+import crypto from "crypto";
+
+export async function runAutonomousPipeline(ctx: any) {
+  const start = Date.now();
+
+  try {
+    // 1. Run your real engine
+    const result = await runFullClinicalFlow(ctx.input || ctx);
+
+    // 2. Add unified metadata layer
+    const enriched = {
+      ...result,
+      _meta: {
+        pipeline: "autonomous",
+        requestId: crypto.randomUUID(),
+        durationMs: Date.now() - start,
+        timestamp: Date.now()
+      }
+    };
+
+    return enriched;
+
+  } catch (err: any) {
+    return {
+      error: "pipeline_failed",
+      message: err.message,
+      _meta: {
+        pipeline: "autonomous",
+        failed: true
+      }
+    };
+  }
+}
+
+✅ Safe
+✅ No dependencies broken
+✅ Pure wrapper
+
+🔥 STEP 2 — ADD UNIFIED ROUTE (NO COLLISIONS)
+➜ Create:
+/server/routes/unifiedRoutes.ts
+import express from "express";
+import { runAutonomousPipeline } from "../system/runAutonomousPipeline";
+
+const router = express.Router();
+
+router.post("/run", async (req, res) => {
+  const result = await runAutonomousPipeline(req.body);
+  res.json(result);
+});
+
+export default router;
+🔥 STEP 3 — PATCH YOUR MAIN SERVER
+➜ Open:
+/server/index.ts
+➜ ADD THIS IMPORT:
+import unifiedRoutes from "./routes/unifiedRoutes";
+➜ ADD THIS LINE:
+app.use("/api", unifiedRoutes);
+
+✅ That’s it
+No refactor required
+No breakage risk
+
+🔥 STEP 4 — CONTROL TOWER (SAFE ADD)
+➜ Create:
+/server/phase6/controlTower/controlTowerFeed.ts
+export function getControlTowerData() {
+  return {
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: Date.now()
+  };
+}
+➜ Create route:
+/server/routes/controlTowerRoutes.ts
+import express from "express";
+import { getControlTowerData } from "../phase6/controlTower/controlTowerFeed";
+
+const router = express.Router();
+
+router.get("/control-tower", (req, res) => {
+  res.json(getControlTowerData());
+});
+
+export default router;
+➜ Add to index.ts:
+import controlTowerRoutes from "./routes/controlTowerRoutes";
+
+app.use("/api", controlTowerRoutes);
+🔥 STEP 5 — ADD EXECUTIVE VIEW
+➜ Create:
+/server/routes/executiveRoutes.ts
+import express from "express";
+
+const router = express.Router();
+
+router.get("/executive", (req, res) => {
+  res.json({
+    system: "Med-Scribe AI",
+    status: "operational",
+    uptime: process.uptime()
+  });
+});
+
+export default router;
+➜ Register:
+import executiveRoutes from "./routes/executiveRoutes";
+
+app.use("/api", executiveRoutes);
+🔥 STEP 6 — DO NOT TOUCH YOUR CORE LOGIC
+
+Leave ALL of this untouched:
+
+your orchestrator
+scoring engines
+diagnosis clustering
+safety rules
+sheets integration
+FDA system
+🧠 WHAT YOU NOW HAVE (AFTER PATCH)
+New endpoints:
+POST /api/run
+GET  /api/control-tower
+GET  /api/executive
+Execution flow:
+Request
+ ↓
+/api/run
+ ↓
+runAutonomousPipeline
+ ↓
+runFullClinicalFlow (your system)
+ ↓
+Response + metadata

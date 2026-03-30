@@ -9,7 +9,8 @@
  * Raw patient data never leaves the originating clinic's partition.
  */
 
-import { getRedisAsync } from "../queue/redis";
+import { getRedisAsync }     from "../queue/redis";
+import { addDpNoise, getDpMetadata } from "./differentialPrivacy";
 
 const REDIS_CLINIC_CASES_KEY  = "moat:network:clinic_cases";     // hash: clinicId → count
 const REDIS_SPECIALTY_KEY     = "moat:network:specialty_counts"; // hash: specialty → count
@@ -36,11 +37,12 @@ export async function recordNetworkContribution(c: NetworkContribution): Promise
   } catch { /* fire-and-forget */ }
 }
 
-export async function getNetworkStats(): Promise<{
+export async function getNetworkStats(applyDp = true): Promise<{
   activeClinicCount: number;
   totalNetworkCases: number;
   specialtyBreakdown: Array<{ specialty: string; cases: number; share: number }>;
   perClinicContributions: Array<{ clinicId: string; cases: number }>;
+  privacyMetadata?: ReturnType<typeof getDpMetadata>;
 }> {
   const r = await getRedisAsync();
   if (!r) {
@@ -53,9 +55,12 @@ export async function getNetworkStats(): Promise<{
       r.hgetall(REDIS_SPECIALTY_KEY),
     ]);
 
+    /* Apply Laplace noise to per-clinic case counts (Recommendation #1)
+     * so individual clinics cannot be re-identified via rare-case counts.
+     * Noise is applied at query time — raw Redis values remain clean. */
     const perClinic = Object.entries(clinicHash ?? {}).map(([clinicId, cnt]) => ({
       clinicId,
-      cases: Number(cnt),
+      cases: applyDp ? addDpNoise(Number(cnt)) : Number(cnt),
     })).sort((a, b) => b.cases - a.cases);
 
     const totalNetworkCases = perClinic.reduce((s, c) => s + c.cases, 0);
@@ -73,6 +78,7 @@ export async function getNetworkStats(): Promise<{
       totalNetworkCases,
       specialtyBreakdown,
       perClinicContributions: perClinic,
+      ...(applyDp ? { privacyMetadata: getDpMetadata() } : {}),
     };
   } catch {
     return { activeClinicCount: 0, totalNetworkCases: 0, specialtyBreakdown: [], perClinicContributions: [] };

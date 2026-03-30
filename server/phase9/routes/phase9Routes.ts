@@ -16,6 +16,9 @@ import { getExecutiveSummary }            from "../executive/executiveDashboard"
 import { runContinuousLearning }          from "../learning/continuousLearning";
 import { getPolicyWeights, evolvePolicy, getPolicyHistory, getCurrentPolicyMode } from "../learning/policyEvolution";
 import { recordOutcome }                  from "../../outcomes/outcomeTracker";
+import { recordDebateResolution, getDebateResolutionHistory } from "../debate/debateOutcomeRecorder";
+import { runDiscoveryAgents, getLatestDiscovery } from "../discovery/discoveryAgents";
+import { getControlTowerData }           from "../../phase6/controlTower/controlTowerFeed";
 
 export const phase9Routes = Router();
 
@@ -102,5 +105,56 @@ phase9Routes.post("/outcome", (req, res) => {
     return res.json({ recorded: true, outcome });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : "Outcome recording failed" });
+  }
+});
+
+/* ── debate outcome recorder (Rec #2 — closes the learning loop) ─────────── */
+phase9Routes.post("/debate/resolve", async (req, res) => {
+  try {
+    const { caseId, debatedDiagnosis, actualDiagnosis, disposition, agentVotes } = req.body;
+    if (!caseId || !debatedDiagnosis || !actualDiagnosis || !disposition || !Array.isArray(agentVotes)) {
+      return res.status(400).json({ error: "caseId, debatedDiagnosis, actualDiagnosis, disposition, agentVotes[] required" });
+    }
+    const result = await recordDebateResolution(caseId, debatedDiagnosis, actualDiagnosis, disposition, agentVotes);
+    return res.json({ recorded: true, result });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : "Debate resolution failed" });
+  }
+});
+
+phase9Routes.get("/debate/history", async (_req, res) => {
+  try {
+    const history = await getDebateResolutionHistory(50);
+    return res.json({ history, count: history.length });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : "History fetch failed" });
+  }
+});
+
+/* ── discovery agents (Rec #4 — anomalous pattern detection) ────────────── */
+phase9Routes.get("/discovery/run", async (_req, res) => {
+  try {
+    const result = await runDiscoveryAgents();
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : "Discovery run failed" });
+  }
+});
+
+phase9Routes.get("/discovery/latest", async (_req, res) => {
+  try {
+    const result = await getLatestDiscovery();
+    return res.json(result ?? { findings: [], totalCasesAnalyzed: 0, ranAt: null });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : "Discovery fetch failed" });
+  }
+});
+
+/* ── phase 6 control tower feed ─────────────────────────────────────────── */
+phase9Routes.get("/tower-feed", (_req, res) => {
+  try {
+    return res.json(getControlTowerData());
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : "Tower feed failed" });
   }
 });

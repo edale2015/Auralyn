@@ -15,6 +15,7 @@ import { runDifferential }  from "../../clinical/bayesianEngine";
 import { safetyPipeline }   from "../../clinical/safetyPipeline";
 import { getOutcomeStats }  from "../../outcomes/outcomeTracker";
 import { getRedisAsync }    from "../../queue/redis";
+import { emitEvent }        from "../../controlTower/eventBus";
 
 export interface AgentOpinion {
   agent:      string;
@@ -155,7 +156,7 @@ export async function runDebate(input: {
   const diagnosisDisagree   = new Set(opinions.map(o => o.diagnosis)).size > 1;
   const dispositionDisagree = new Set(opinions.map(o => o.disposition)).size > 1;
 
-  return {
+  const result: DebateResult = {
     opinions,
     consensus,
     disagreement:     diagnosisDisagree || dispositionDisagree,
@@ -167,6 +168,25 @@ export async function runDebate(input: {
     debateMs:  Date.now() - start,
     debatedAt: new Date().toISOString(),
   };
+
+  /* Recommendation #5 — Real-time WebSocket push via Control Tower event bus
+   * Broadcasts debate disagreements so physicians see agent conflicts live. */
+  if (result.disagreement || result.safetyVetoed) {
+    emitEvent({
+      type:      "DEBATE_DISAGREEMENT",
+      payload: {
+        disagreementType:       result.disagreementType,
+        safetyVetoed:           result.safetyVetoed,
+        modelAveragedDiagnosis: result.modelAveragedDiagnosis,
+        confidenceDelta:        result.confidenceDelta,
+        agentCount:             opinions.length,
+        complaint:              input.complaint,
+      },
+      timestamp: Date.now(),
+    });
+  }
+
+  return result;
 }
 
 export async function getDebateAgentStats() {
