@@ -43,6 +43,7 @@ const NAV_SECTIONS = [
       { path: "/billing-intelligence", label: "Billing Intelligence", icon: CircleDollarSign },
       { path: "/architectural-compliance", label: "Architectural Compliance", icon: ShieldCheck },
       { path: "/moat-intelligence", label: "Moat Intelligence", icon: Shield },
+      { path: "/executive-command", label: "Executive Command", icon: Cpu },
       { path: "/ehr-dead-letter", label: "EHR Dead Letter Review", icon: Zap },
       { path: "/reminder-timeline", label: "Reminder Timeline", icon: Zap },
       { path: "/multilingual-templates", label: "Multilingual Templates", icon: Zap },
