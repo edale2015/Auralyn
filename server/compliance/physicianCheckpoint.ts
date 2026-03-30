@@ -5,12 +5,10 @@
  * dispositions. This is the single most important control for maintaining
  * Class II SaMD status under FDA's 2021 AI/ML Action Plan.
  *
- * Without this gate, the system is operating as an autonomous diagnostic
- * device — Class III territory requiring PMA approval.
- *
- * MY ADDITION: Escalation-on-timeout logic. If physician doesn't respond
- * within reviewTimeoutMinutes, the disposition is automatically escalated
- * one tier (ER_URGENT → ER_NOW) and on-call physician is paged.
+ * CLAUDE REVIEW ADDITIONS (Round 2):
+ *   - Tier-specific timeouts: ER_NOW=5min, ER_URGENT=10min, URGENT_CARE=20min
+ *   - batchApproveUrgentCare() — physician can clear multiple URGENT_CARE cases at once
+ *   - Reduced operational burden while maintaining full audit trail
  */
 
 import { randomUUID }   from "crypto";
@@ -25,26 +23,41 @@ export const DISPOSITIONS_REQUIRING_APPROVAL: DispositionTier[] = [
   DispositionTier.URGENT_CARE,
 ];
 
+/**
+ * Claude rec: tier-specific timeouts.
+ * ER_NOW: 5 min — fastest escalation, immediate life threat
+ * ER_URGENT: 10 min — high urgency, hour-window
+ * URGENT_CARE: 20 min — defensible per clinical literature
+ */
+export const TIER_SPECIFIC_TIMEOUTS: Record<string, number> = {
+  [DispositionTier.ER_NOW]:      5,
+  [DispositionTier.ER_URGENT]:   10,
+  [DispositionTier.URGENT_CARE]: 20,
+};
+
+/** Legacy constant kept for backward-compat — use TIER_SPECIFIC_TIMEOUTS per disposition */
 export const REVIEW_TIMEOUT_MINUTES = 10;
 
 export interface PhysicianApprovalRecord {
-  approvalId:          string;
-  caseId:              string;
-  traceId:             string;
-  proposedDisposition: DispositionTier;
-  modelVersion:        string;
-  agentWeights:        Record<string, number>;
-  confidenceScore:     number;
-  redFlagsEvaluated:   string[];
-  requestedAt:         string;
-  timeoutAt:           string;
-  status:              "PENDING" | "APPROVED" | "OVERRIDDEN" | "TIMED_OUT";
-  physicianId?:        string;
-  reviewedAt?:         string;
-  decision?:           "approved" | "overridden";
+  approvalId:           string;
+  caseId:               string;
+  traceId:              string;
+  proposedDisposition:  DispositionTier;
+  modelVersion:         string;
+  agentWeights:         Record<string, number>;
+  confidenceScore:      number;
+  redFlagsEvaluated:    string[];
+  requestedAt:          string;
+  timeoutAt:            string;
+  timeoutMinutes:       number;    // which tier-specific timeout was applied
+  status:               "PENDING" | "APPROVED" | "OVERRIDDEN" | "TIMED_OUT";
+  physicianId?:         string;
+  reviewedAt?:          string;
+  decision?:            "approved" | "overridden";
   overrideDisposition?: DispositionTier;
-  overrideReason?:     string;
+  overrideReason?:      string;
   timeToReviewSeconds?: number;
+  batchApprovalId?:     string;    // set when part of a batch approval
 }
 
 const pendingApprovals = new Map<string, PhysicianApprovalRecord>();
@@ -61,10 +74,11 @@ export async function createPhysicianApprovalRequest(params: {
   confidenceScore:     number;
   redFlagsEvaluated:   string[];
 }): Promise<PhysicianApprovalRecord> {
-  const approvalId = randomUUID();
-  const traceId    = createTraceId();
-  const requestedAt = new Date();
-  const timeoutAt   = new Date(requestedAt.getTime() + REVIEW_TIMEOUT_MINUTES * 60_000);
+  const approvalId    = randomUUID();
+  const traceId       = createTraceId();
+  const requestedAt   = new Date();
+  const timeoutMinutes = TIER_SPECIFIC_TIMEOUTS[params.disposition] ?? REVIEW_TIMEOUT_MINUTES;
+  const timeoutAt     = new Date(requestedAt.getTime() + timeoutMinutes * 60_000);
 
   const record: PhysicianApprovalRecord = {
     approvalId,
@@ -77,6 +91,7 @@ export async function createPhysicianApprovalRequest(params: {
     redFlagsEvaluated:   params.redFlagsEvaluated,
     requestedAt:         requestedAt.toISOString(),
     timeoutAt:           timeoutAt.toISOString(),
+    timeoutMinutes,
     status:              "PENDING",
   };
 
@@ -86,49 +101,47 @@ export async function createPhysicianApprovalRequest(params: {
     traceId,
     step:     "PHYSICIAN_REVIEW_REQUESTED",
     input:    { caseId: params.caseId, disposition: params.disposition },
-    output:   { approvalId, timeoutAt: record.timeoutAt },
+    output:   { approvalId, timeoutAt: record.timeoutAt, timeoutMinutes },
     metadata: { modelVersion: params.modelVersion, confidence: params.confidenceScore },
   });
 
   emitEvent({
     type:      "PHYSICIAN_REVIEW_REQUIRED",
-    payload:   { approvalId, caseId: params.caseId, disposition: params.disposition, timeoutAt: record.timeoutAt },
+    payload:   { approvalId, caseId: params.caseId, disposition: params.disposition, timeoutAt: record.timeoutAt, timeoutMinutes },
     timestamp: Date.now(),
   });
 
   logger.info("physician_approval_requested", {
-    approvalId, caseId: params.caseId, disposition: params.disposition,
+    approvalId, caseId: params.caseId, disposition: params.disposition, timeoutMinutes,
   });
 
-  // MY ADDITION: Schedule timeout escalation
-  const timeoutMs = REVIEW_TIMEOUT_MINUTES * 60_000;
   setTimeout(async () => {
     const pending = pendingApprovals.get(approvalId);
     if (pending && pending.status === "PENDING") {
       await handleApprovalTimeout(approvalId);
     }
-  }, timeoutMs).unref();
+  }, timeoutMinutes * 60_000).unref();
 
   return record;
 }
 
 export async function recordPhysicianDecision(params: {
-  approvalId:           string;
-  physicianId:          string;
-  decision:             "approved" | "overridden";
-  overrideDisposition?: DispositionTier;
-  overrideReason?:      string;
+  approvalId:            string;
+  physicianId:           string;
+  decision:              "approved" | "overridden";
+  overrideDisposition?:  DispositionTier;
+  overrideReason?:       string;
 }): Promise<PhysicianApprovalRecord | null> {
   const record = pendingApprovals.get(params.approvalId);
   if (!record) return null;
 
   const reviewedAt = new Date();
-  record.status             = params.decision === "approved" ? "APPROVED" : "OVERRIDDEN";
-  record.physicianId        = params.physicianId;
-  record.reviewedAt         = reviewedAt.toISOString();
-  record.decision           = params.decision;
+  record.status              = params.decision === "approved" ? "APPROVED" : "OVERRIDDEN";
+  record.physicianId         = params.physicianId;
+  record.reviewedAt          = reviewedAt.toISOString();
+  record.decision            = params.decision;
   record.overrideDisposition = params.overrideDisposition;
-  record.overrideReason     = params.overrideReason;
+  record.overrideReason      = params.overrideReason;
   record.timeToReviewSeconds = Math.round(
     (reviewedAt.getTime() - new Date(record.requestedAt).getTime()) / 1000
   );
@@ -149,6 +162,62 @@ export async function recordPhysicianDecision(params: {
   return record;
 }
 
+/**
+ * Claude rec: Batch approval for URGENT_CARE cases.
+ * Allows a physician to approve multiple URGENT_CARE cases in one action,
+ * reducing operational burden while maintaining per-record audit trail.
+ * Only works on URGENT_CARE — ER_NOW and ER_URGENT require individual review.
+ */
+export async function batchApproveUrgentCare(params: {
+  approvalIds:         string[];
+  physicianId:         string;
+  batchApprovalReason: string;
+}): Promise<{ approved: PhysicianApprovalRecord[]; skipped: string[] }> {
+  const batchId = randomUUID();
+  const approved: PhysicianApprovalRecord[] = [];
+  const skipped:  string[] = [];
+
+  for (const approvalId of params.approvalIds) {
+    const record = pendingApprovals.get(approvalId);
+    if (!record || record.status !== "PENDING") {
+      skipped.push(approvalId);
+      continue;
+    }
+    if (record.proposedDisposition !== DispositionTier.URGENT_CARE) {
+      skipped.push(approvalId);
+      continue;
+    }
+
+    const reviewedAt = new Date();
+    record.status              = "APPROVED";
+    record.physicianId         = params.physicianId;
+    record.reviewedAt          = reviewedAt.toISOString();
+    record.decision            = "approved";
+    record.overrideReason      = params.batchApprovalReason;
+    record.batchApprovalId     = batchId;
+    record.timeToReviewSeconds = Math.round(
+      (reviewedAt.getTime() - new Date(record.requestedAt).getTime()) / 1000
+    );
+
+    await auditStep({
+      traceId:  record.traceId,
+      step:     "PHYSICIAN_APPROVED",
+      input:    { approvalId, physicianId: params.physicianId, batchId },
+      output:   { decision: "approved", batchApproval: true, batchApprovalReason: params.batchApprovalReason },
+      metadata: { timeToReviewSeconds: record.timeToReviewSeconds },
+    });
+
+    approved.push(record);
+  }
+
+  logger.info("batch_urgent_care_approval", {
+    batchId, approvedCount: approved.length, skippedCount: skipped.length,
+    physicianId: params.physicianId,
+  });
+
+  return { approved, skipped };
+}
+
 async function handleApprovalTimeout(approvalId: string): Promise<void> {
   const record = pendingApprovals.get(approvalId);
   if (!record) return;
@@ -161,16 +230,15 @@ async function handleApprovalTimeout(approvalId: string): Promise<void> {
     step:     "PHYSICIAN_REVIEW_TIMEOUT",
     input:    { approvalId, originalDisposition: record.proposedDisposition },
     output:   { escalatedTo: escalated, action: "auto_escalated" },
-    metadata: { timeoutMinutes: REVIEW_TIMEOUT_MINUTES },
+    metadata: { timeoutMinutes: record.timeoutMinutes },
   });
 
   emitEvent({
-    type:      "ALERT",
-    payload:   {
-      message:  `Physician review timed out for case ${record.caseId}. Auto-escalated from ${record.proposedDisposition} to ${escalated}.`,
+    type: "ALERT",
+    payload: {
+      message:  `Physician review timed out for case ${record.caseId} (${record.timeoutMinutes}min). Auto-escalated from ${record.proposedDisposition} to ${escalated}.`,
       severity: "HIGH",
-      approvalId,
-      escalatedTo: escalated,
+      approvalId, escalatedTo: escalated,
     },
     timestamp: Date.now(),
   });
@@ -178,6 +246,7 @@ async function handleApprovalTimeout(approvalId: string): Promise<void> {
   logger.warn("physician_review_timeout", {
     approvalId, caseId: record.caseId,
     originalDisposition: record.proposedDisposition, escalatedTo: escalated,
+    timeoutMinutes: record.timeoutMinutes,
   });
 }
 
@@ -187,4 +256,8 @@ export function getPendingApprovals(): PhysicianApprovalRecord[] {
 
 export function getApprovalRecord(approvalId: string): PhysicianApprovalRecord | undefined {
   return pendingApprovals.get(approvalId);
+}
+
+export function getAllApprovals(): PhysicianApprovalRecord[] {
+  return Array.from(pendingApprovals.values());
 }

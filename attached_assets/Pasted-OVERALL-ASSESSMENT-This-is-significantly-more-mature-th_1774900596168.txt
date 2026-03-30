@@ -1,0 +1,625 @@
+OVERALL ASSESSMENT
+This is significantly more mature than the original system description suggested. The interfaces are well-structured, the safety philosophy is sound, and the review questions embedded in each file show strong clinical and regulatory self-awareness. The recommendations below focus on gaps, edge cases, and specific improvements — not rebuilding what's already working well.
+
+DOMAIN 1 — SAFETY & CLINICAL GUARDRAILS
+Gaps in the 10 Hard-Stop Rules
+The current 10 rules are solid but missing several high-value patterns:
+typescript// Recommended additions to ABSOLUTE_HARD_STOPS:
+
+// HS-011: Aortic dissection pattern
+{ ruleId: "HS-011", symptomKey: "tearing_back_pain_sudden",
+  keywords: ["tearing", "ripping", "worst back pain", "radiating to back"],
+  disposition: DispositionTier.ER_NOW,
+  rationale: "Aortic dissection — classic tearing back pain, mortality >1%/hour untreated",
+  bypassDebate: true, fdaAuditCode: "VASCULAR-001" },
+
+// HS-012: Sepsis — fever + altered behavior in elderly  
+{ ruleId: "HS-012", symptomKey: "sepsis_elderly_altered",
+  keywords: ["confused", "not acting right", "very weak", "fever", "chills"],
+  disposition: DispositionTier.ER_URGENT, // age-gated: apply when age > 65
+  rationale: "Atypical sepsis presentation in elderly — altered behavior may be only sign",
+  bypassDebate: false, fdaAuditCode: "SEPSIS-001" },
+
+// HS-013: Peritonsillar abscess with airway compromise
+{ ruleId: "HS-013", symptomKey: "hot_potato_voice_drooling",
+  keywords: ["hot potato voice", "drooling", "can't swallow", "muffled voice", "trismus"],
+  disposition: DispositionTier.ER_NOW,
+  rationale: "PTA with airway compromise — rapid progression to obstruction",
+  bypassDebate: true, fdaAuditCode: "ENT-AIRWAY-001" },
+
+// HS-014: Carbon monoxide — often misdiagnosed as flu
+{ ruleId: "HS-014", symptomKey: "co_poisoning_pattern",
+  keywords: ["everyone sick", "whole family sick", "heater on", "winter", "headache improving outside"],
+  disposition: DispositionTier.ER_NOW,
+  rationale: "CO poisoning mimics flu — whole-household symptom onset is sentinel finding",
+  bypassDebate: true, fdaAuditCode: "TOXIC-001" },
+
+// HS-015: Meningitis triad
+{ ruleId: "HS-015", symptomKey: "meningitis_triad",
+  keywords: ["stiff neck", "fever", "light hurts", "photophobia", "rash"],
+  disposition: DispositionTier.ER_NOW,
+  rationale: "Classic meningitis presentation — bacterial meningitis mortality 20-30% without treatment",
+  bypassDebate: true, fdaAuditCode: "NEURO-001" }
+Review Question Answer #1: Epic and Nuance both cover CO poisoning and meningitis explicitly. The ENT Flu slice is particularly exposed on CO poisoning — flu-like presentation in winter is the classic missed CO case.
+
+Disposition System Review
+The 7-tier ladder is clinically complete. One gap: no CALL_911 disposition distinct from ER_NOW. Some patients need active dispatch assistance, not just instruction to go to the ER. Recommend:
+typescript// Consider adding:
+export enum DispositionTier {
+  CALL_911   = "CALL_911",    // System initiates 911 — patient cannot self-transport
+  ER_NOW     = "ER_NOW",      // Call 911 yourself / go immediately
+  // ... rest unchanged
+}
+
+Pediatric SIRS Thresholds — Review Question #4
+The current SIRS thresholds need updating. The 2023 Sepsis-3 pediatric criteria (Phoenix Criteria) replaced the old SIRS-based pediatric sepsis definition:
+typescript// Current: SIRS-based (4 criteria)
+// Recommended: Add Phoenix Score alongside SIRS for Sepsis-3 alignment
+
+export interface PediatricSepsisScore {
+  // Phoenix Sepsis Score (Lancet 2024)
+  respiratoryScore:     number;  // 0-3 based on SpO2/FiO2, PaO2/FiO2, resp support
+  cardiovascularScore:  number;  // 0-6 based on vasoactive drugs, lactate, MAP
+  coagulationScore:     number;  // 0-2 based on platelets, INR, D-dimer, fibrinogen
+  neurologicalScore:    number;  // 0-2 based on GCS, pupil reactivity
+  totalPhoenixScore:    number;
+  sepsisMeetsCriteria:  boolean; // Phoenix score ≥ 2 = pediatric sepsis
+}
+
+Vital Signs — Review Question #5
+The current qSOFA + NEWS + Shock Index combination is good. Two additions worth considering:
+PEWS (Pediatric Early Warning Score) — not currently present, important since the system handles pediatric cases:
+typescriptexport interface PEWSScore {
+  behaviorScore:       number;  // 0-3
+  cardiovascularScore: number;  // 0-3
+  respiratoryScore:    number;  // 0-3
+  totalScore:          number;
+  // PEWS ≥ 4 = consider urgent escalation
+  // PEWS ≥ 6 = consider immediate escalation
+  isEscalationNeeded:  boolean;
+}
+CURB-65 for pneumonia (highly relevant to Flu pack):
+typescriptexport interface CURB65Score {
+  confusion:        boolean;
+  uremiaBUN_gt19:   boolean;
+  respiratoryRate:  boolean;  // ≥30/min
+  lowBP:            boolean;  // SBP <90 or DBP ≤60
+  age65OrOver:      boolean;
+  score:            number;   // 0-5
+  // 0-1: home treatment, 2: consider hospital, 3+: hospital/ICU
+  recommendedCare:  "home" | "consider_hospital" | "hospital" | "icu";
+}
+
+Contradiction Detector Gap
+The contradictionDetected field is present in SafetyVerdict but there's no specification for what percentage of contradictions should be expected as a baseline. Without a baseline, you can't detect if contradiction detection is breaking:
+typescript// Add to SLO definitions in Domain 3:
+{
+  id: "CONTRADICTION_DETECTION_RATE",
+  name: "LLM vs Raw Text Contradiction Detection Rate",
+  target: 0.03,   // ~3% of cases should show contradiction — if 0%, detector is broken
+  unit: "ratio",
+  higherIsBetter: false,
+  breachAction: "alert",
+  fdaAuditRequired: true
+}
+
+DOMAIN 2 — FDA SaMD & HIPAA COMPLIANCE
+Review Question #1 — Physician Review Timeout
+10 minutes is too short for real-world physician coverage. Nuance DAX uses 15 minutes. The clinical literature on remote physician triage suggests:
+
+ER_NOW: 5 minutes max (justify 10-minute escalation behavior)
+ER_URGENT: 10 minutes is appropriate
+URGENT_CARE: 15–20 minutes is defensible
+
+Recommend tier-specific timeouts:
+typescriptexport const TIER_SPECIFIC_TIMEOUTS: Record<string, number> = {
+  ER_NOW:      5,   // minutes — fastest possible escalation
+  ER_URGENT:   10,
+  URGENT_CARE: 20,
+};
+
+Review Question #2 — URGENT_CARE Pre-Approval Burden
+URGENT_CARE requiring physician pre-approval for Class II maintenance is operationally justifiable — include it. The volume argument against it is manageable if you add:
+typescript// Batch approval interface — physician can approve multiple URGENT_CARE cases at once
+export declare function batchApproveUrgentCare(params: {
+  approvalIds:         string[];
+  physicianId:         string;
+  batchApprovalReason: string;
+}): Promise<PhysicianApprovalRecord[]>;
+
+Review Question #4 — Merkle Batch Verification and §164.312(b)
+The Merkle approach satisfies §164.312(b) if and only if you also implement:
+
+Scheduled verification jobs (not just on-demand) — OCR requires evidence of regular integrity checking
+Verification results stored separately from the records being verified (otherwise tampering can cover tracks)
+
+typescript// Add to audit verifier:
+export interface ScheduledVerificationRecord {
+  jobId:           string;
+  scheduledAt:     string;      // when the job was triggered
+  completedAt:     string;
+  result:          ChainVerificationResult;
+  triggeredBy:     "scheduled" | "manual" | "incident";
+  storedSeparately: true;       // this record lives in a separate audit_verifications table
+}
+
+// Recommended: run verifyAuditBatch() nightly, verifyFullAuditChain() weekly
+export declare function scheduleAuditVerification(
+  frequency: "nightly" | "weekly",
+  handler: () => Promise<void>
+): void;
+```
+
+---
+
+### Review Question #5 — Missing HIPAA Breach Pathways
+
+The 7-entry register is solid. Two additional entries OCR has penalized other AI platforms for:
+
+**BR-008: WhatsApp/Telegram PHI in unencrypted application logs**
+```
+hipaaSection: "45 CFR §164.312(a)(2)(iv)"
+triggerCondition: "Patient messages containing PHI (symptoms, age, complaints) 
+                   logged to application logs in plaintext"
+riskLevel: "HIGH"
+mitigationNotes: "All channel payload logs must be scrubbed of PHI before writing. 
+                  Log only metadata: timestamp, channel type, message hash, case ID."
+```
+
+**BR-009: RLHF training data containing identifiable symptom patterns**
+```
+hipaaSection: "45 CFR §164.502 (minimum necessary)"  
+triggerCondition: "Outcome logger captures raw patient text for RLHF training 
+                   without de-identification — PHI in training dataset"
+riskLevel: "HIGH"
+mitigationNotes: "Training data must be de-identified per Safe Harbor (§164.514(b)) 
+                  or Expert Determination before use in RLHF pipeline."
+
+Missing Audit Event Types
+The AuditEventType enum is missing several events that OCR expects to see in clinical AI audit logs:
+typescriptexport enum AuditEventType {
+  // ... existing entries ...
+  
+  // Missing events:
+  HARD_STOP_TRIGGERED       = "HARD_STOP_TRIGGERED",     // which rule, what text matched
+  RED_TEAM_CHALLENGED       = "RED_TEAM_CHALLENGED",     // Red Team found counter-evidence
+  CONSENSUS_FAILURE         = "CONSENSUS_FAILURE",       // confidence below floor
+  DEMOGRAPHIC_FLAG_DETECTED = "DEMOGRAPHIC_FLAG_DETECTED", // parity monitor triggered
+  AUDIT_VERIFICATION_RUN    = "AUDIT_VERIFICATION_RUN",  // scheduled or manual verify
+  GOLDEN_CASE_RUN           = "GOLDEN_CASE_RUN",         // CI/nightly golden case results
+  PACK_REGISTERED           = "PACK_REGISTERED",         // new clinical pack added
+  PACK_ROLLBACK             = "PACK_ROLLBACK",           // pack version rolled back
+  CHANNEL_PAYLOAD_SCRUBBED  = "CHANNEL_PAYLOAD_SCRUBBED" // PHI scrubbing confirmation
+}
+
+DOMAIN 3 — OBSERVABILITY & MONITORING
+Review Question #1 — Missing SLOs
+Two SLOs that Epic's ambulatory CDSS monitors that are absent:
+typescript// Add to CLINICAL_SLOS:
+
+{
+  id: "PHYSICIAN_OVERRIDE_RATE",
+  name: "Physician Override Rate",
+  description: "% of AI dispositions overridden by physicians — high rate = AI accuracy problem",
+  target: 0.10,           // alert if >10% of dispositions are overridden
+  unit: "ratio",
+  higherIsBetter: false,
+  breachAction: "alert",
+  fdaAuditRequired: true  // FDA wants to see override rates in SaMD performance data
+},
+{
+  id: "RED_TEAM_CHALLENGE_RATE",
+  name: "Red Team Challenge Rate",
+  description: "% of cases where Red Team finds material counter-evidence",
+  target: 0.08,           // expect ~5-8% — if 0%, Red Team is broken; if >15%, agents are weak
+  unit: "ratio",
+  higherIsBetter: false,  // flag both too-low (broken) and too-high (agent quality degraded)
+  breachAction: "alert",
+  fdaAuditRequired: false
+}
+
+Review Question #2 — 25% Circuit Breaker Threshold
+25% is too lenient for clinical AI. A standard software service might tolerate 25% error rate before circuit breaking. For a clinical decision engine, the threshold should be:
+
+Safety-critical engines (red flag detection, hard stop evaluation): 5% error rate
+Clinical reasoning engines (differential, scoring): 10% error rate
+Support engines (billing, logging, formatting): 25% is fine
+
+typescriptexport enum EngineCircuitBreakerThreshold {
+  SAFETY_CRITICAL = 0.05,   // red flag, hard stop, pediatric safety
+  CLINICAL        = 0.10,   // differential, scoring, intake
+  SUPPORT         = 0.25,   // billing, formatting, channel normalization
+}
+
+// Add to MonitoredClinicalEngine:
+abstract readonly circuitBreakerThreshold: EngineCircuitBreakerThreshold;
+
+Review Question #3 — 24h Rolling Window
+24 hours is appropriate for routine monitoring but too long to detect acute degradation. Recommend a dual-window approach:
+typescriptexport interface EngineHealthMetrics {
+  // ... existing fields ...
+  
+  // Add short-window metrics alongside 24h metrics
+  errorRate1h:  number;   // 1-hour rolling — catches acute failures fast
+  errorRate24h: number;   // existing — trend analysis
+  
+  // Circuit breaker should trip on 1h rate, not 24h rate
+  circuitBreakerTriggeredBy: "1h_window" | "24h_window" | "manual";
+}
+
+Review Question #4 — Per-Complaint-Category SLOs
+Yes, add them. Nuance DAX tracks specialty-stratified accuracy. For this system:
+typescript// Per-complaint-category sensitivity SLOs
+const COMPLAINT_CATEGORY_SLOS = [
+  { category: "chest_pain",    minimumERNowSensitivity: 0.99 },
+  { category: "sore_throat",   minimumERNowSensitivity: 0.95 },
+  { category: "ear_pain",      minimumERNowSensitivity: 0.95 },
+  { category: "cough",         minimumERNowSensitivity: 0.97 },
+  { category: "fever_adult",   minimumERNowSensitivity: 0.97 },
+  { category: "fever_child",   minimumERNowSensitivity: 0.99 },  // higher bar for pediatric
+  { category: "dizziness",     minimumERNowSensitivity: 0.97 },
+];
+
+Phase 7 Health — Missing Fields
+The Phase7HealthResponse is well-designed. Two additions:
+typescriptexport interface Phase7HealthResponse {
+  // ... existing fields ...
+
+  // Missing: last known good policy state (for rollback reference)
+  lastKnownGoodPolicy: {
+    mode:        PolicyMode;
+    promotedAt:  string;
+    promotedBy:  string;
+  } | null;
+
+  // Missing: demographic monitor summary
+  demographicMonitor: {
+    lastAnalysisAt:    string | null;
+    flaggedGroups:     string[];
+    maxParityDelta:    number;
+    groupsWithMinData: number;   // groups with ≥30 cases
+  };
+}
+
+DOMAIN 4 — ARCHITECTURE & SCALABILITY
+Review Question #1 — Shadow Traffic Percentage
+10% is appropriate to start. Epic uses 5% for high-risk clinical engines, 20% for low-risk support engines. Recommend making this configurable per engine type rather than a flat 10%:
+typescriptexport declare class FeatureFlaggedEngine<TInput, TOutput> {
+  constructor(
+    stable:     VersionedClinicalEngine<TInput, TOutput>,
+    candidate:  VersionedClinicalEngine<TInput, TOutput>,
+    shadowPct?: number,  // default: 0.10
+    engineRisk?: "safety_critical" | "clinical" | "support"  // ADD THIS
+    // Overrides shadowPct: safety_critical → 0.05, clinical → 0.10, support → 0.20
+  );
+}
+
+Review Question #2 — Auto-Disable at >5% Error Rate Delta
+The >5% auto-disable should NOT require human approval to disable (speed matters when a candidate is failing). However, re-enabling shadow mode after auto-disable SHOULD require human approval:
+typescriptexport declare class FeatureFlaggedEngine<TInput, TOutput> {
+  // ... existing ...
+  
+  // Add:
+  readonly autoDisabledAt?: string;      // set when auto-disabled
+  readonly autoDisableReason?: string;   // error rate delta that triggered it
+  
+  // Re-enabling requires human authorization
+  enableShadowWithAuth(authorizedBy: string, reason: string): void;
+  
+  // Auto-disable remains instant — no auth needed to protect patients
+  // disableShadow() remains unchanged
+}
+
+Review Question #3 — Redis TTL for Agent Weights
+24 hours is too short for weights that update slowly. Recommend:
+typescriptexport const REDIS_TTL_CONFIG = {
+  agentAccuracy:   7 * 24 * 3600,  // 7 days — weights update slowly, long TTL
+  policyWeights:   24 * 3600,      // 24h — policy mode can change, shorter TTL
+  driftState:      1 * 3600,       // 1h — drift is time-sensitive, short TTL
+  debateHistory:   48 * 3600,      // 48h — useful for recent case review
+};
+
+Review Question #4 — Minimum Viable Google Sheets Migration
+The minimum viable path that closes the HIPAA BAA gap without a full rewrite:
+typescript// Phase 1 (2 weeks): Add Google Workspace HIPAA BAA
+// Google offers HIPAA BAAs for Workspace customers — this is the fastest fix.
+// Add to BR-006 mitigation notes.
+
+// Phase 2 (4 weeks): PostgreSQL staging table — keep Sheets as editor
+export interface SheetsToPostgresSyncJob {
+  syncId:      string;
+  sheetsId:    string;
+  syncedAt:    string;
+  ruleCount:   number;
+  status:      "staging" | "validated" | "promoted" | "rejected";
+  validationErrors: string[];
+  promotedBy?: string;
+  // Rules go: Sheets → staging table → validation → physician approval → production table
+}
+
+// Phase 3 (8 weeks): Full ClinicalRuleStore implementation as specified in D4 interface
+
+Review Question #5 — Breaking Changes to VersionedClinicalEngine Interface
+Recommend explicit deprecation lifecycle:
+typescriptexport interface VersionedClinicalEngine<TInput, TOutput> {
+  // ... existing ...
+  
+  // Add deprecation support:
+  deprecatedAt?:    string;     // ISO date when this engine version was deprecated
+  sunsetAt?:        string;     // ISO date after which this version will be removed
+  migrationTarget?: string;     // engineId of the replacement
+}
+
+// Rule: 90-day deprecation window for clinical engines (safety-critical)
+// Rule: 30-day deprecation window for support engines
+// Rule: Breaking changes to core interface require a major version bump
+
+DOMAIN 5 — LEARNING LOOP & DRIFT MANAGEMENT
+Review Question #1 — Adaptive Alpha Formula Soundness
+The formula BASE_ALPHA × min(volume/100, 2.0) × (1/complexity) has a critical edge case: when caseVolume = 0 (system just restarted), alpha = 0 and the EMA never updates. Add a floor:
+typescript// Recommended fix:
+const adaptiveAlpha = Math.max(
+  BASE_ALPHA * Math.min(caseVolume / 100, MAX_ALPHA_MULTIPLIER) * (1 / complexity),
+  0.01  // minimum alpha floor — EMA always updates at least a little
+);
+The medical AI literature (specifically Caruana et al. on online learning in clinical systems) suggests stratified learning rates by outcome severity — ER_NOW accuracy should have a slower, more conservative learning rate than ROUTINE:
+typescriptexport const OUTCOME_SEVERITY_ALPHA_MULTIPLIER: Record<string, number> = {
+  ER_NOW:      0.5,   // learn 2x slower on most critical cases — conservatism by design
+  ER_URGENT:   0.7,
+  URGENT_CARE: 1.0,
+  ROUTINE:     1.0,
+  SELF_CARE:   1.0,
+};
+
+Review Question #2 — Safety Floor of 0.15
+0.15 is too low. If the Safety Veto Agent genuinely performs at only 15% accuracy, you have a systemic problem that the floor is masking. Recommend:
+typescript// Two separate concepts:
+const SAFETY_FLOOR_WEIGHT = 0.20;     // Raise from 0.15 to 0.20 — meaningful voice
+const SAFETY_FLOOR_TRIGGER_ALERT = 0.25; // Alert medical director if weight drops below this
+const SAFETY_FLOOR_PAUSE_SYSTEM = 0.18;  // Pause new cases if weight drops this low
+
+Review Question #3 — Drift Tier Thresholds
+Yes, ER_NOW false negatives alone should trip Tier 3. The current formula max(|performanceDelta|, erNowFalseNegRate × 2.0) is close but the ×2.0 multiplier isn't aggressive enough. A single ER_NOW false negative in a small sample should be treated as a serious signal:
+typescript// Recommended drift score formula update:
+function computeDriftScore(metrics: DriftMetrics): number {
+  let score = Math.abs(metrics.performanceDelta);
+  
+  // ER_NOW false negatives are existential — weight them heavily
+  if (metrics.erNowFalseNegRate !== undefined) {
+    if (metrics.erNowFalseNegRate > 0.02) {  // >2% FNR = immediate Tier 3
+      score = Math.max(score, 0.26);          // force to CIRCUIT_OPEN minimum
+    } else {
+      score = Math.max(score, metrics.erNowFalseNegRate * 3.0);  // raise from 2x to 3x
+    }
+  }
+  
+  if (metrics.demographicParityDelta && metrics.demographicParityDelta > 0.05) {
+    score += metrics.demographicParityDelta * 0.5;
+  }
+  
+  return Math.min(score, 1.0);
+}
+
+Review Question #4 — Minimum Sample Size of 30
+30 is too low for statistical reliability but raising it too high delays detection. The literature on online clinical AI monitoring suggests 50–100 per group as the minimum:
+typescript// Stratified minimum sample sizes:
+export const MINIMUM_SAMPLE_SIZES = {
+  globalAnalysis:      100,  // global parity — raise from 30 to 100
+  perGroupAnalysis:     50,  // per demographic group — raise from 30 to 50
+  erNowOnlyAnalysis:    20,  // ER_NOW-only analysis can use smaller samples (rare event)
+};
+
+Review Question #5 — Track SELF_CARE Rate for Over-Discharge
+Yes, absolutely. Over-discharge (sending someone home who should have been seen) is as dangerous as under-triage. Add:
+typescriptexport interface ParityAnalysis {
+  // ... existing fields ...
+  
+  // Add over-discharge monitoring:
+  selfCareRateByGroup: Array<{
+    group:           DemographicGroup | string;
+    selfCareRate:    number;
+    deltaFromGlobal: number;
+    flagged:         boolean;  // delta > 5% from global SELF_CARE rate
+    sampleSize:      number;
+  }>;
+  
+  // Combined risk: high SELF_CARE rate + low ER_NOW rate for same group = over-discharge pattern
+  overDischargeRisk: Array<{
+    group:       string;
+    riskScore:   number;   // combined score from both metrics
+    flagged:     boolean;
+  }>;
+}
+
+DOMAIN 6 — MULTI-AGENT DEBATE
+Review Question #1 — Missing Red Team Patterns
+The current 8 patterns are good. Add these high-value missed patterns relevant to ENT/Flu slice:
+typescript// Additional Red Team patterns to add:
+
+{ key: "aaa_pattern",
+  keywords: ["pulsating", "abdominal mass", "back pain", "flank pain", "older male"],
+  severity: "high",
+  notes: "AAA — especially in males >65 with back/flank pain" },
+
+{ key: "orthostatic_hypotension",
+  keywords: ["dizzy standing", "black out standing", "lightheaded standing up", "falls"],
+  severity: "medium",
+  notes: "Orthostatic hypotension — dehydration, medication, sepsis signal" },
+
+{ key: "productive_cough_hemoptysis",
+  keywords: ["blood in sputum", "coughing blood", "pink frothy", "rust colored"],
+  severity: "high",
+  notes: "Hemoptysis — TB, PE, malignancy, pneumonia with cavitation" },
+
+{ key: "Ludwig_angina_pattern",
+  keywords: ["floor of mouth", "neck swelling", "dental pain", "can't swallow",
+             "tooth pain", "jaw swelling"],
+  severity: "high",
+  notes: "Ludwig's angina — rapidly fatal dental space infection, relevant to ENT slice" },
+
+{ key: "epiglottitis_adult",
+  keywords: ["severe sore throat", "can't swallow", "sitting forward", "drooling",
+             "tripod position", "no voice"],
+  severity: "high",
+  notes: "Adult epiglottitis — less common than pediatric but same mortality risk" }
+
+Review Question #2 — Confidence Floor of 0.72
+0.72 as a universal floor and 0.85 for ER_NOW are clinically reasonable and consistent with the Epic CDSS literature. One refinement: the SELF_CARE floor at 0.85 deserves its own rationale statement in the interface comment, since developers may find it counterintuitive that a low-acuity disposition has the same floor as ER_NOW:
+typescript// Add to CONFIDENCE_THRESHOLDS comment:
+// SELF_CARE: 0.85 — NOT because SELF_CARE is high-risk, but because
+// false positive SELF_CARE = a real emergency sent home. The floor is
+// high to protect against systematic undertriage masked as self-care.
+
+Review Question #3 — Red Team Trigger Bar
+The 1+ high-severity missed symptom bar is correct. Lowering it to any missed symptom would generate too many false triggers. However, add one nuance: the bar should be lower for pediatric patients:
+typescript// Context-aware Red Team trigger logic:
+function redTeamRequiresPhysicianReview(
+  verdict: RedTeamVerdict,
+  context: { isPediatric: boolean; isElderly: boolean; isPregnant: boolean }
+): boolean {
+  if (context.isPediatric || context.isPregnant) {
+    return verdict.missedSymptoms.length >= 1;  // Any missed symptom for vulnerable groups
+  }
+  return verdict.counterEvidence.length >= 1;   // High-severity only for general population
+}
+
+Review Question #4 — Red Team Voting
+Keep Red Team non-voting. Including it in Bayesian averaging would dilute the Safety Veto Agent's influence and introduce bias toward escalation in every case. The non-voting adversarial role is the correct architecture — it should flag, not vote.
+However, add a Red Team confidence weight that influences the physician review escalation threshold:
+typescriptexport interface RedTeamVerdict {
+  // ... existing fields ...
+  
+  // Add: how much the Red Team challenge should lower the confidence threshold
+  // for physician review — high challenge confidence = lower threshold
+  confidenceThresholdAdjustment: number;  // 0 to -0.15 (negative = lower the bar)
+}
+
+Review Question #5 — Per-Debate Timeout
+Yes, add a timeout. Without one, a slow LLM call can block patient disposition indefinitely:
+typescriptexport const DEBATE_TIMEOUT_CONFIG = {
+  singleAgentTimeoutMs:  8000,   // 8 seconds per agent
+  totalDebateTimeoutMs: 20000,   // 20 seconds for full 3+1 agent debate
+  
+  // On timeout: use most conservative opinion received so far
+  timeoutBehavior: "use_most_conservative_available_opinion" as const,
+  
+  // If no opinions received at all: escalate to physician with timeout flag
+  zeroOpinionsBehavior: "physician_escalation_with_timeout_flag" as const,
+};
+
+// Add to DebateResult:
+export interface DebateResult {
+  // ... existing fields ...
+  timedOut:        boolean;
+  agentsCompleted: number;   // how many of 4 agents completed before timeout
+}
+
+DOMAIN 7 — CLINICAL PACKS & ROADMAP
+Review Question #1 — 20 Golden Cases Sufficient for 510(k)?
+20 is the absolute minimum and FDA will likely push back on it. The FDA's 2021 AI/ML Action Plan and recent De Novo decisions suggest:
+
+Minimum for 510(k) submission: 50 golden cases per complaint category
+Recommended: 100 per category for ER_NOW-capable packs
+For packs requiring 510(k) amendment (stroke, mental health): 200+ with prospective validation data
+
+typescript// Update pack validation rules:
+export const PACK_VALIDATION_THRESHOLDS = {
+  minimumGoldenCases:             50,   // raise from 20 to 50
+  minimumCriticalGoldenCases:      5,   // raise from 3 to 5
+  minimumGoldenCasesFor510k:     100,   // for packs being included in 510(k) submission
+  minimumGoldenCasesAmendment:   200,   // for packs requiring 510(k) amendment
+};
+
+Review Question #2 — 510(k) Predicates for Stroke and Mental Health Packs
+Stroke/Neurological:
+
+Predicate device: Viz.ai LVO (K183315) — AI-based stroke detection
+Alternative: RapidAI Stroke (K191994)
+These are Class II — 510(k) path is clear but requires prospective clinical validation data
+
+Mental Health/Suicidality:
+
+This is the most complex regulatory pathway
+Closest predicate: FDA's De Novo authorization for Woebot (DEN200018) — but that's wellness, not triage
+A suicidality triage tool with autonomous escalation capability likely requires De Novo not 510(k), because no clear predicate exists for AI-based suicidality triage in a chat interface
+Recommend getting a pre-submission meeting with FDA (Q-submission) before building this pack
+
+
+Review Question #3 — Annual vs Semi-Annual Clinical Review
+ER_NOW-heavy packs should require semi-annual review. Proposed rule:
+typescript// Add to ClinicalPack validation:
+export function getRequiredReviewCadenceMonths(pack: ClinicalPack): number {
+  const hasHighERNowRate = pack.goldenCases.filter(
+    c => c.expectedDisposition === "ER_NOW"
+  ).length / pack.goldenCases.length > 0.20;
+  
+  if (pack.fdaClassification === "Class_III_PMA") return 6;
+  if (hasHighERNowRate) return 6;    // semi-annual for ER_NOW-heavy packs
+  return 12;                          // annual for low-acuity packs
+}
+
+// Add to PackValidationResult warnings:
+// "Clinical review older than 6 months for ER_NOW-heavy pack — semi-annual review required"
+
+Review Question #4 — Scoring Instrument Registry
+Yes, build a registry. Free-form strings in ScoringInstrument.name means no validation. A physician could register a pack with a misspelled instrument name and it would pass:
+typescriptexport enum RegisteredScoringInstrument {
+  CENTOR_SCORE    = "Centor Score",
+  MCISAAC_SCORE   = "McIsaac Score",       // Modified Centor
+  HEART_LITE      = "HEART-lite Score",
+  PHQ2            = "PHQ-2",
+  PHQ9            = "PHQ-9",
+  NEWS2           = "NEWS2",
+  PEWS            = "PEWS",
+  CURB65          = "CURB-65",
+  QSOFA           = "qSOFA",
+  SHOCK_INDEX     = "Shock Index",
+  PECARN          = "PECARN",               // pediatric head injury
+  WELLS_PE        = "Wells Score (PE)",
+  WELLS_DVT       = "Wells Score (DVT)",
+  OTTAWA_ANKLE    = "Ottawa Ankle Rules",
+  OTTAWA_KNEE     = "Ottawa Knee Rules",
+}
+
+// Update ScoringInstrument:
+export interface ScoringInstrument {
+  name: RegisteredScoringInstrument;  // Change from string to enum
+  // ... rest unchanged
+}
+
+Review Question #5 — Missing Pack Priority Order
+Based on clinical risk and FDA complexity:
+PriorityPackWhy1AnaphylaxisHighest clinical urgency, existing 510(k) scope, straightforward2Pediatric Fever StratifiedAge bands already implemented in D1 — pack is 80% done3Musculoskeletal / FractureVery high urgent care volume, existing scope, low FDA complexity4UrologicalHigh volume, existing scope, testicular torsion hard stop already present5DermatologicalHigh volume, lower urgency, existing scope6Stroke / NeurologicalCRITICAL risk but requires 510(k) amendment — build last to get clearance right7Mental HealthLikely requires De Novo — longest path, build only after Q-submission with FDA
+
+CROSS-CUTTING RECOMMENDATIONS
+These apply across all domains:
+1. Add a traceId to every interface that doesn't already have one — audit correlation requires end-to-end trace IDs from channel intake to disposition delivery. Several domain 5 and 6 interfaces are missing traceId.
+2. The bypassDebate: boolean on HardStopRule needs a fallback path — what happens if the hard stop evaluation itself throws an error? The system needs a safe default:
+typescript// Add to evaluateHardStops:
+export interface HardStopResult {
+  // ... existing fields ...
+  evaluationError?: string;   // if the hard stop check itself fails
+  fallbackBehavior: "escalate_to_er_urgent" | "require_physician_review";
+  // On evaluation error: never allow disposition to proceed — always escalate
+}
+3. No rate limiting on channel intake — a patient (or bad actor) sending rapid-fire messages should not flood the debate engine with concurrent cases. Add:
+typescriptexport interface ChannelRateLimit {
+  maxCasesPerPatientPer24h: number;   // 3 — prevents abuse and ensures quality intake
+  maxConcurrentCasesGlobal: number;   // configurable per deployment
+  burstWindowSeconds:       number;   // 60 — max messages in one minute
+  onLimitReached:           "queue" | "reject_with_message" | "route_to_physician";
+}
+4. No explicit consent capture interface — HIPAA requires documentation of patient consent for AI-assisted triage. Add:
+typescriptexport interface PatientConsentRecord {
+  sessionId:         string;
+  consentGivenAt:    string;
+  consentVersion:    string;   // which consent text version was shown
+  channel:           string;   // WhatsApp / Telegram / Web
+  consentMethod:     "explicit_checkbox" | "reply_yes" | "implicit_by_use";
+  consentText:       string;   // exact text shown to patient
+  ipAddressHash?:    string;   // hashed, not raw
+}
+5. The modelVersion field in audit records needs a formal versioning strategy — currently it appears to be a free-form string. Tie it to the SemanticVersion interface from Domain 4 and store model version in a model_versions table for traceability.
+
+FINAL PRIORITY ADDITIONS TO ACTION MATRIX
+New RecommendationClinical RiskHIPAA RiskFDA RiskComplexityPriorityAdd HS-011–015 (CO, meningitis, dissection, PTA, sepsis-elderly)CRITICALHIGHMEDIUMLOWP0Tier-specific physician review timeoutsHIGHMEDIUMHIGHLOWP01h rolling window for engine circuit breakerHIGHLOWMEDIUMLOWP1Raise golden case minimum to 50LOWLOWHIGHLOWP1Phoenix Score alongside SIRS for pediatric sepsisHIGHLOWMEDIUMMEDIUMP1CURB-65 for Flu pack pneumonia riskHIGHLOWLOWLOWP1Demographic over-discharge monitoring (SELF_CARE rate)HIGHHIGHMEDIUMLOWP1ER_NOW FNR >2% directly triggers Tier 3 driftCRITICALHIGHHIGHLOWP0Scoring instrument registry (enum not string)LOWLOWMEDIUMLOWP2Per-debate timeout with conservative fallbackHIGHLOWMEDIUMLOWP1Rate limiting on channel intakeMEDIUMHIGHLOWMEDIUMP2Patient consent capture interfaceLOWCRITICALLOWLOWP1Scheduled audit verification jobsLOWCRITICALHIGHLOWP1BR-008 + BR-009 added to breach registerLOWHIGHLOWLOWP1Semi-annual review for ER_NOW-heavy packsLOWLOWHIGHLOWP2

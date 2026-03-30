@@ -24,6 +24,10 @@ import { evaluateHardStops }          from "../safety/hardStopRules";
 import { evaluatePediatricSafety }    from "../safety/pediatricSafetyRules";
 import { assessVitalSigns }           from "../safety/vitalSignsThresholds";
 import { runIndependentSafetyEvaluation } from "../safety/independentSafetyPath";
+import { scoreSessionQuality }        from "../observability/sessionQualityScorer";
+import { evaluateRateLimit, getActiveGlobalCaseCount } from "../safety/channelRateLimit";
+import { recordPatientConsent, hasValidConsent, getConsentRecord, getConsentSummary } from "./patientConsent";
+import { getSchedulerStatus, runManualVerification, getVerificationLog } from "../audit/scheduledAuditVerifier";
 
 import {
   createPhysicianApprovalRequest,
@@ -31,8 +35,10 @@ import {
   getPendingApprovals,
   getApprovalRecord,
   requiresPhysicianApproval,
+  batchApproveUrgentCare,
   DISPOSITIONS_REQUIRING_APPROVAL,
   REVIEW_TIMEOUT_MINUTES,
+  TIER_SPECIFIC_TIMEOUTS,
 } from "./physicianCheckpoint";
 
 import {
@@ -143,6 +149,7 @@ router.get("/physician-checkpoint/config", (_req: Request, res: Response) => {
   return res.json({
     dispositionsRequiringApproval: DISPOSITIONS_REQUIRING_APPROVAL,
     reviewTimeoutMinutes:          REVIEW_TIMEOUT_MINUTES,
+    tierSpecificTimeouts:          TIER_SPECIFIC_TIMEOUTS,
     timeoutBehavior:               "escalate_disposition",
   });
 });
@@ -195,6 +202,23 @@ router.get("/physician-checkpoint/:approvalId", (req: Request, res: Response) =>
   const record = getApprovalRecord(req.params.approvalId);
   if (!record) return res.status(404).json({ error: "not found" });
   return res.json({ record });
+});
+
+/**
+ * POST /api/compliance/physician-checkpoint/batch-approve
+ * Batch approve multiple URGENT_CARE cases (Claude rec)
+ */
+router.post("/physician-checkpoint/batch-approve", async (req: Request, res: Response) => {
+  try {
+    const { approvalIds = [], physicianId, batchApprovalReason } = req.body;
+    if (!physicianId || approvalIds.length === 0) {
+      return res.status(400).json({ error: "physicianId and approvalIds[] are required" });
+    }
+    const result = await batchApproveUrgentCare({ approvalIds, physicianId, batchApprovalReason: batchApprovalReason ?? "Batch approval" });
+    return res.json({ approved: result.approved.length, skipped: result.skipped });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
 });
 
 // ─── DOMAIN 2: Policy Proposal Gate ──────────────────────────────────────────
@@ -270,6 +294,82 @@ router.get("/audit-verify/batch", async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 100;
     const result = await verifyAuditBatch(limit);
     return res.json(result);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+/**
+ * GET /api/compliance/audit-verify/scheduled — scheduled verifier status (Claude rec)
+ */
+router.get("/audit-verify/scheduled", (_req: Request, res: Response) => {
+  return res.json(getSchedulerStatus());
+});
+
+router.get("/audit-verify/scheduled/log", (_req: Request, res: Response) => {
+  return res.json({ log: getVerificationLog() });
+});
+
+router.post("/audit-verify/scheduled/run", async (req: Request, res: Response) => {
+  try {
+    const frequency = req.body.frequency ?? "nightly";
+    const result = await runManualVerification(frequency);
+    return res.json(result);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// ─── PATIENT CONSENT (Claude rec) ────────────────────────────────────────────
+
+router.post("/consent/record", async (req: Request, res: Response) => {
+  try {
+    const { sessionId, channel, method, language } = req.body;
+    if (!sessionId || !channel || !method) return res.status(400).json({ error: "sessionId, channel, and method are required" });
+    const record = await recordPatientConsent({ sessionId, channel, method, language });
+    return res.status(201).json({ record });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+router.get("/consent/:sessionId", (req: Request, res: Response) => {
+  const record = getConsentRecord(req.params.sessionId);
+  if (!record) return res.status(404).json({ hasValidConsent: false });
+  return res.json({ hasValidConsent: true, record });
+});
+
+router.get("/consent", (_req: Request, res: Response) => {
+  return res.json(getConsentSummary());
+});
+
+// ─── CHANNEL RATE LIMIT (Claude rec) ─────────────────────────────────────────
+
+router.post("/rate-limit/evaluate", (req: Request, res: Response) => {
+  const { patientKey } = req.body;
+  if (!patientKey) return res.status(400).json({ error: "patientKey is required" });
+  const decision = evaluateRateLimit(patientKey);
+  return res.json({ ...decision, activeGlobalCases: getActiveGlobalCaseCount() });
+});
+
+// ─── SESSION QUALITY (MY ADDITION) ───────────────────────────────────────────
+
+router.post("/session-quality/score", (req: Request, res: Response) => {
+  try {
+    const score = scoreSessionQuality({
+      rawText:                      req.body.rawText ?? "",
+      extractedSymptoms:            req.body.extractedSymptoms ?? [],
+      symptomOnsetPresent:          req.body.symptomOnsetPresent ?? false,
+      durationPresent:              req.body.durationPresent ?? false,
+      severityRated:                req.body.severityRated ?? false,
+      ageProvided:                  req.body.ageProvided ?? false,
+      genderProvided:               req.body.genderProvided ?? false,
+      medicationsProvided:          req.body.medicationsProvided ?? false,
+      wordCount:                    req.body.wordCount ?? (req.body.rawText ?? "").split(/\s+/).filter(Boolean).length,
+      clarifyingQuestionsAnswered:  req.body.clarifyingQuestionsAnswered ?? 0,
+      clarifyingQuestionsAsked:     req.body.clarifyingQuestionsAsked ?? 0,
+    });
+    return res.json(score);
   } catch (e: any) {
     return res.status(500).json({ error: e?.message });
   }

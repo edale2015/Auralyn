@@ -1,29 +1,27 @@
 /**
- * MY ADDITION — DOMAIN 2: HIPAA Breach Risk Register
+ * HIPAA Breach Risk Register
  *
- * Implements SUMMARY DELIVERABLE C from the Claude 7-Domain Review:
- * a live risk register of identified HIPAA breach exposure pathways,
- * each with a risk level, the triggering condition, and mitigation status.
+ * Live register of identified HIPAA breach exposure pathways.
+ * Satisfies 45 CFR §164.308(a)(1) Risk Analysis requirement.
  *
- * This register is surfaced at GET /api/compliance/breach-register and
- * reviewed by the HIPAA Security Officer. It also provides audit evidence
- * that the organization actively identifies and manages breach risks
- * (45 CFR §164.308(a)(1) — Risk Analysis requirement).
+ * CLAUDE REVIEW ADDITIONS (Round 2):
+ *   - BR-008: WhatsApp/Telegram PHI in unencrypted application logs
+ *   - BR-009: RLHF training data containing identifiable symptom patterns
  */
 
-export type BreachRiskLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+export type BreachRiskLevel  = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type MitigationStatus = "IMPLEMENTED" | "IN_PROGRESS" | "PLANNED" | "ACCEPTED";
 
 export interface BreachRiskEntry {
   id:                  string;
   title:               string;
-  hipaaSection:        string;    // e.g., "45 CFR §164.312(b)"
+  hipaaSection:        string;
   fdaImpact:           string;
   triggerCondition:    string;
   riskLevel:           BreachRiskLevel;
   mitigationStatus:    MitigationStatus;
   mitigationNotes:     string;
-  implementedControls: string[];  // which files/systems implement the mitigation
+  implementedControls: string[];
   lastReviewedAt?:     string;
 }
 
@@ -47,7 +45,7 @@ export const BREACH_RISK_REGISTER: BreachRiskEntry[] = [
     triggerCondition: "Life-threatening condition debated rather than hard-stopped; patient harm; full platform decision logs exposed in legal discovery",
     riskLevel: "CRITICAL",
     mitigationStatus: "IMPLEMENTED",
-    mitigationNotes: "10 absolute hard-stop rules bypass debate engine entirely. Pediatric SIRS screening with age-stratified thresholds.",
+    mitigationNotes: "15 absolute hard-stop rules bypass debate engine entirely (expanded from 10 in Round 2 to include HS-011–015: aortic dissection, elderly sepsis, PTA, CO poisoning, meningitis). Pediatric SIRS screening with age-stratified thresholds.",
     implementedControls: ["server/safety/hardStopRules.ts", "server/safety/pediatricSafetyRules.ts"],
   },
   {
@@ -58,8 +56,8 @@ export const BREACH_RISK_REGISTER: BreachRiskEntry[] = [
     triggerCondition: "OCR audit finds no audit chain verification capability — write-only hash chain without read-verification fails §164.312(b). Tier 3 OCR penalty: $10K–$50K per violation.",
     riskLevel: "CRITICAL",
     mitigationStatus: "IMPLEMENTED",
-    mitigationNotes: "auditVerifier.ts implements full chain verification + Merkle batch verification. Exposed at GET /api/compliance/audit-verify.",
-    implementedControls: ["server/audit/auditVerifier.ts"],
+    mitigationNotes: "auditVerifier.ts implements full chain verification + Merkle batch verification. Scheduled nightly batch + weekly full chain verification added in Round 2 per OCR requirement (evidence of regular integrity checking).",
+    implementedControls: ["server/audit/auditVerifier.ts", "server/audit/scheduledAuditVerifier.ts"],
   },
   {
     id: "BR-004",
@@ -80,7 +78,7 @@ export const BREACH_RISK_REGISTER: BreachRiskEntry[] = [
     triggerCondition: "ER_NOW or ER_URGENT disposition delivered to patient without physician review; system operating as autonomous diagnostic device",
     riskLevel: "CRITICAL",
     mitigationStatus: "IMPLEMENTED",
-    mitigationNotes: "physicianCheckpoint.ts creates approval record for all ER_NOW, ER_URGENT, URGENT_CARE. 10-minute timeout auto-escalates and pages on-call.",
+    mitigationNotes: "physicianCheckpoint.ts creates approval record for all ER_NOW, ER_URGENT, URGENT_CARE. Tier-specific timeouts added in Round 2: ER_NOW=5min, ER_URGENT=10min, URGENT_CARE=20min.",
     implementedControls: ["server/compliance/physicianCheckpoint.ts"],
   },
   {
@@ -91,7 +89,7 @@ export const BREACH_RISK_REGISTER: BreachRiskEntry[] = [
     triggerCondition: "Unauthorized Google account holder accesses symptom patterns / disposition thresholds; Google infrastructure compromise exposes PHI-adjacent data",
     riskLevel: "HIGH",
     mitigationStatus: "PLANNED",
-    mitigationNotes: "Recommended migration: Sheets as editor UI only, rules stored in PostgreSQL with version history and staged promotion. Requires HIPAA BAA from Google or full migration.",
+    mitigationNotes: "Phase 1 (2 weeks): Add Google Workspace HIPAA BAA — fastest fix, Google offers BAA for Workspace customers. Phase 2 (4 weeks): Sheets as editor UI only, rules stored in PostgreSQL with staged promotion. Phase 3 (8 weeks): Full ClinicalRuleStore implementation.",
     implementedControls: [],
   },
   {
@@ -102,16 +100,39 @@ export const BREACH_RISK_REGISTER: BreachRiskEntry[] = [
     triggerCondition: "Learning loop drifts to systematically undertriage a demographic group (e.g., women with chest pain). HIPAA civil rights exposure + state mandatory reporting.",
     riskLevel: "HIGH",
     mitigationStatus: "IMPLEMENTED",
-    mitigationNotes: "demographicDriftMonitor.ts tracks per-group ER_NOW rates. DEMOGRAPHIC_PARITY_DELTA SLO triggers alert at >5% disparity.",
+    mitigationNotes: "demographicDriftMonitor.ts tracks per-group ER_NOW rates and now also SELF_CARE over-discharge rates (Round 2). DEMOGRAPHIC_PARITY_DELTA SLO triggers alert at >5% disparity.",
     implementedControls: ["server/learning/demographicDriftMonitor.ts", "server/observability/clinicalSLOs.ts"],
+  },
+  // ── Claude Review Round 2 Additions ──────────────────────────────────────
+  {
+    id: "BR-008",
+    title: "WhatsApp/Telegram PHI in Unencrypted Application Logs",
+    hipaaSection: "45 CFR §164.312(a)(2)(iv) — Encryption and Decryption",
+    fdaImpact: "HIPAA breach if PHI in logs — channel payload logs may contain patient messages",
+    triggerCondition: "Patient messages containing PHI (symptoms, age, complaints) logged to application logs in plaintext. WhatsApp/Telegram webhook payloads written to stdout/log files without scrubbing.",
+    riskLevel: "HIGH",
+    mitigationStatus: "IMPLEMENTED",
+    mitigationNotes: "PHI scrubber middleware in server/middleware/phiScrubber.ts strips patient-identifiable content from all channel payloads before logging. Logs only metadata: timestamp, channel type, message hash, case ID. Confirmed via CHANNEL_PAYLOAD_SCRUBBED audit event.",
+    implementedControls: ["server/middleware/phiScrubber.ts"],
+  },
+  {
+    id: "BR-009",
+    title: "RLHF Training Data Containing Identifiable Symptom Patterns",
+    hipaaSection: "45 CFR §164.502 — Minimum Necessary; 45 CFR §164.514(b) — Safe Harbor De-identification",
+    fdaImpact: "PHI in training dataset — requires de-identification per Safe Harbor before RLHF use",
+    triggerCondition: "Outcome logger captures raw patient text for RLHF training without de-identification. Symptom patterns + age + channel = potentially re-identifiable PHI under Safe Harbor analysis.",
+    riskLevel: "HIGH",
+    mitigationStatus: "PLANNED",
+    mitigationNotes: "Training data must be de-identified per Safe Harbor (§164.514(b)) or Expert Determination before use in RLHF pipeline. Minimum: strip 18 Safe Harbor identifiers from outcomeLogger before writing to training store. Recommend Expert Determination review for symptom pattern datasets.",
+    implementedControls: [],
   },
 ];
 
 let riskRegisterLastUpdated = new Date().toISOString();
 
 export function getBreachRiskRegister(): {
-  register: BreachRiskEntry[];
-  summary: { critical: number; high: number; medium: number; low: number; implemented: number; pending: number };
+  register:    BreachRiskEntry[];
+  summary:     { critical: number; high: number; medium: number; low: number; implemented: number; pending: number };
   lastUpdated: string;
 } {
   const summary = {
@@ -125,11 +146,7 @@ export function getBreachRiskRegister(): {
   return { register: BREACH_RISK_REGISTER, summary, lastUpdated: riskRegisterLastUpdated };
 }
 
-export function updateMitigationStatus(
-  id: string,
-  status: MitigationStatus,
-  notes?: string
-): boolean {
+export function updateMitigationStatus(id: string, status: MitigationStatus, notes?: string): boolean {
   const entry = BREACH_RISK_REGISTER.find(r => r.id === id);
   if (!entry) return false;
   entry.mitigationStatus = status;

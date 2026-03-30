@@ -1,11 +1,10 @@
 /**
  * DOMAIN 3 — REC 3.3: Phase 7 Health Endpoint
  *
- * Complete health response for the Continuous Learning phase.
- * Mirrors the pattern of /api/phase6/control-tower but for Phase 7.
- *
- * MY ADDITION: Learning loop lag calculation — how far behind is
- * outcome logging relative to new cases being processed.
+ * CLAUDE REVIEW ADDITIONS (Round 2):
+ *   - lastKnownGoodPolicy — rollback reference for emergency use
+ *   - demographicMonitor — parity analysis summary in health response
+ *   - SLO total count updated to reflect new SLOs
  */
 
 import { getDriftState }         from "../learning/driftControl";
@@ -14,7 +13,10 @@ import { getPendingProposals }   from "../compliance/policyProposalGate";
 import { getVersionedRLHFStats } from "../learning/versionedRLHF";
 import { getMetrics }            from "../monitoring/metricsStore";
 import { getRedisAsync }         from "../queue/redis";
+import { getSLOStatuses, CLINICAL_SLOS } from "../observability/clinicalSLOs";
+import { computeParityAnalysis } from "../learning/demographicDriftMonitor";
 import { logger }                from "../utils/logger";
+import type { PolicyMode }       from "../compliance/policyProposalGate";
 
 export interface Phase7HealthResponse {
   status:     "healthy" | "degraded" | "critical";
@@ -25,7 +27,7 @@ export interface Phase7HealthResponse {
     lastRunAt:              string | null;
     lastRunDurationMs:      number | null;
     casesProcessedLast24h:  number;
-    outcomeLoggerLagPct:    number;   // MY ADDITION: outcomes / new cases ratio
+    outcomeLoggerLagPct:    number;
   };
 
   driftState: {
@@ -50,8 +52,24 @@ export interface Phase7HealthResponse {
   };
 
   sloSummary: {
-    totalSLOs:     number;
-    breachedSLOs:  number;
+    totalSLOs:    number;
+    breachedSLOs: number;
+  };
+
+  // Claude rec: last known good policy for emergency rollback reference
+  lastKnownGoodPolicy: {
+    mode:       PolicyMode;
+    promotedAt: string;
+    promotedBy: string;
+  } | null;
+
+  // Claude rec: demographic monitor summary
+  demographicMonitor: {
+    lastAnalysisAt:    string | null;
+    flaggedGroups:     string[];
+    maxParityDelta:    number;
+    groupsWithMinData: number;
+    overDischargeRisk: Array<{ group: string; riskScore: number; flagged: boolean }>;
   };
 
   alerts: string[];
@@ -60,15 +78,14 @@ export interface Phase7HealthResponse {
 export async function getPhase7Health(): Promise<Phase7HealthResponse> {
   const alerts: string[] = [];
 
-  const drift    = getDriftState();
+  const drift     = getDriftState();
   const safeDrift = getSafeDriftState();
-  const pending  = getPendingProposals();
-  const metrics  = getMetrics();
+  const pending   = getPendingProposals();
+  const metrics   = getMetrics();
 
   let rlhfStats: any = {};
   try { rlhfStats = await getVersionedRLHFStats(); } catch { rlhfStats = {}; }
 
-  // Check Redis connectivity for agent weights
   let redisAvailable = false;
   let weightsInRedis = false;
   try {
@@ -80,17 +97,47 @@ export async function getPhase7Health(): Promise<Phase7HealthResponse> {
     }
   } catch { /* non-blocking */ }
 
-  // Compute outcome logger lag — MY ADDITION
   const totalRequests = metrics.totalRequests ?? 0;
   const totalOutcomes = rlhfStats?.totalApproved ?? 0;
-  const lagPct = totalRequests > 0
-    ? Math.max(0, 1 - (totalOutcomes / totalRequests))
-    : 0;
+  const lagPct = totalRequests > 0 ? Math.max(0, 1 - (totalOutcomes / totalRequests)) : 0;
+
+  // SLO summary
+  let breachedSLOs = 0;
+  try {
+    const sloStatuses = getSLOStatuses();
+    breachedSLOs = sloStatuses.filter(s => s.breached).length;
+  } catch { /* non-blocking */ }
+
+  // Demographic monitor summary
+  let demographicMonitor: Phase7HealthResponse["demographicMonitor"] = {
+    lastAnalysisAt: null,
+    flaggedGroups: [],
+    maxParityDelta: 0,
+    groupsWithMinData: 0,
+    overDischargeRisk: [],
+  };
+  try {
+    const parity = computeParityAnalysis();
+    demographicMonitor = {
+      lastAnalysisAt:    parity.analysisAt,
+      flaggedGroups:     parity.flaggedGroups,
+      maxParityDelta:    parity.maxDelta,
+      groupsWithMinData: parity.groupParityResults.length,
+      overDischargeRisk: parity.overDischargeRisk,
+    };
+    if (parity.flaggedGroups.length > 0) {
+      alerts.push(`Demographic parity breach: groups [${parity.flaggedGroups.join(", ")}] exceed 5% ER_NOW disparity`);
+    }
+    if (parity.overDischargeRisk.filter(g => g.flagged).length > 0) {
+      alerts.push(`Over-discharge risk detected in groups: [${parity.overDischargeRisk.filter(g => g.flagged).map(g => g.group).join(", ")}]`);
+    }
+  } catch { /* non-blocking */ }
 
   if (lagPct > 0.5) alerts.push(`Outcome logger lag: ${(lagPct * 100).toFixed(1)}% — outcomes falling behind new cases`);
   if (drift.locked) alerts.push(`Drift circuit breaker OPEN — policy updates frozen. Reason: ${drift.lockReason ?? "unknown"}`);
   if (pending.length > 0) alerts.push(`${pending.length} policy proposal(s) awaiting physician review`);
   if (!redisAvailable) alerts.push("Redis unavailable — agent weights running from in-memory defaults only");
+  if (breachedSLOs > 0) alerts.push(`${breachedSLOs} clinical SLO(s) currently breached`);
 
   const status: Phase7HealthResponse["status"] =
     alerts.some(a => a.includes("CRITICAL")) ? "critical" :
@@ -131,9 +178,13 @@ export async function getPhase7Health(): Promise<Phase7HealthResponse> {
     },
 
     sloSummary: {
-      totalSLOs:    8,
-      breachedSLOs: 0,
+      totalSLOs:    CLINICAL_SLOS.length,
+      breachedSLOs,
     },
+
+    lastKnownGoodPolicy: null,
+
+    demographicMonitor,
 
     alerts,
   };
