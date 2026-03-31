@@ -22,6 +22,21 @@ The system incorporates a Multi-Agent Debate Engine where three clinical agents 
 ### System Design Choices
 Data management uses Firebase Firestore, SQLite, and NDJSON-backed stores, with PHI retention policies. Authentication involves password-only, session-based HMAC for physicians and token-based access for patients, with JWT-based role authentication. Security and quality hardening include bcrypt, JWT security, rate limiting, and PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance includes an agent registry, audit agent, incident commander, digital twin, and predictive engine. The Autonomous Operator System is an AI-powered form automation engine. A Template Studio allows visual template editing. The Replay Inspector audits automation runs. A Robotics Control Module manages medical device orchestration. An Autonomous Learning Console provides a unified dashboard for self-testing, self-learning, and governance, including simulation, learning queue, drift monitor, audit trail, versions, and safety modes.
 
+**System Control Tower** (`/system-control-tower`): Full system observability and control dashboard with 10 panels:
+- Agents (7 clinical agents with toggle/start/stop)
+- Engines (live latency + error rate for all 10 engines)
+- Integrations (Postgres, OpenAI, Redis, Telegram, EHR, FHIR, Twilio status)
+- KB Skills (row counts from 4 KB tables)
+- Architecture Layers (12-layer toggle panel)
+- Robot Exam (otoscope, vitals, EKG device control + device registry)
+- Live Patients (WebSocket `/ws/patient-stream` real-time vitals feed + patient state table)
+- Deterioration Alerts (KB-driven `/api/sysctrl/alerts/:patientId` + `kb_deterioration_rules`)
+- Voice Intake (multimodal NLP processing via `/api/sysctrl/voice`)
+- System Logs (live tail of all backend events)
+- Header: health summary bar, seed rules button, demo stream button
+- 7 new DB tables: `robot_devices`, `robot_commands`, `robot_results`, `patient_live_stream`, `patient_state`, `patient_multimodal_inputs`, `kb_deterioration_rules`
+- 9 frontend components in `client/src/components/tower/` (AgentsPanel, EnginesPanel, IntegrationsPanel, LivePatientsPanel, DeteriorationAlertsPanel, VoiceIntakePanel, SkillsLayersPanel, LiveLogsPanel, RobotExamPanel)
+
 **Clinical Control Tower Decision Engine** (`/clinical-control-tower`): A new KB-driven dashboard with:
 - `POST /api/control/analyze` — full reasoning pipeline: Advanced Bayesian diagnosis → confidence/uncertainty scoring → adaptive question ranking → counterfactual explainer → workup optimizer
 - `POST /api/control/seed` — seeds 44 rows across 5 new KB tables

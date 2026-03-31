@@ -856,3 +856,74 @@ export const kbQuestionUtility = pgTable("kb_question_utility", {
 });
 export const insertKbQuestionUtilitySchema = createInsertSchema(kbQuestionUtility).omit({ id: true, createdAt: true });
 export type KbQuestionUtility = typeof kbQuestionUtility.$inferSelect;
+
+// ── Robotic Exam & Patient Stream Tables ─────────────────────────────────────
+
+export const robotDevices = pgTable("robot_devices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  deviceId: text("device_id").notNull().unique(),
+  type: text("type").notNull(),
+  status: text("status").notNull().default("offline"),
+  lastSeen: timestamp("last_seen").default(sql`CURRENT_TIMESTAMP`),
+});
+export type RobotDevice = typeof robotDevices.$inferSelect;
+
+export const robotCommands = pgTable("robot_commands", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  deviceId: text("device_id").notNull(),
+  command: text("command").notNull(),
+  payload: jsonb("payload"),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export type RobotCommand = typeof robotCommands.$inferSelect;
+
+export const robotResults = pgTable("robot_results", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  deviceId: text("device_id").notNull(),
+  resultType: text("result_type").notNull(),
+  data: jsonb("data"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export type RobotResult = typeof robotResults.$inferSelect;
+
+export const patientLiveStream = pgTable("patient_live_stream", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: text("patient_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  value: real("value").notNull(),
+  timestamp: timestamp("timestamp").default(sql`CURRENT_TIMESTAMP`),
+});
+export type PatientLiveStream = typeof patientLiveStream.$inferSelect;
+
+export const patientState = pgTable("patient_state", {
+  patientId: text("patient_id").primaryKey(),
+  currentDx: text("current_dx"),
+  currentDisposition: text("current_disposition"),
+  riskScore: real("risk_score").default(0),
+  lastUpdated: timestamp("last_updated").default(sql`CURRENT_TIMESTAMP`),
+});
+export type PatientState = typeof patientState.$inferSelect;
+
+export const patientMultimodalInputs = pgTable("patient_multimodal_inputs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: text("patient_id").notNull(),
+  type: text("type").notNull(),
+  content: text("content"),
+  processed: jsonb("processed"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export type PatientMultimodalInput = typeof patientMultimodalInputs.$inferSelect;
+
+export const kbDeteriorationRules = pgTable("kb_deterioration_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  featureKey: text("feature_key").notNull(),
+  threshold: real("threshold").notNull(),
+  trend: text("trend").notNull(),
+  action: text("action").notNull(),
+  riskWeight: real("risk_weight").notNull().default(1.0),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export const insertKbDeteriorationRuleSchema = createInsertSchema(kbDeteriorationRules).omit({ id: true, createdAt: true });
+export type KbDeteriorationRule = typeof kbDeteriorationRules.$inferSelect;

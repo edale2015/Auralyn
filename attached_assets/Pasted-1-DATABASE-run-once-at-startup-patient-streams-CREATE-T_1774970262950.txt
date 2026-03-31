@@ -1,0 +1,276 @@
+1) DATABASE (run once at startup)
+-- patient streams
+CREATE TABLE IF NOT EXISTS patient_live_stream (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id TEXT,
+  feature_key TEXT,
+  value FLOAT,
+  timestamp TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS patient_state (
+  patient_id TEXT PRIMARY KEY,
+  current_dx TEXT,
+  current_disposition TEXT,
+  risk_score FLOAT,
+  last_updated TIMESTAMP DEFAULT now()
+);
+
+-- multimodal inputs
+CREATE TABLE IF NOT EXISTS patient_multimodal_inputs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id TEXT,
+  type TEXT, -- voice | image | text
+  content TEXT,
+  processed JSONB,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+-- deterioration rules
+CREATE TABLE IF NOT EXISTS kb_deterioration_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  feature_key TEXT,
+  threshold FLOAT,
+  trend TEXT, -- rising | falling
+  action TEXT, -- ALERT | ER_NOW
+  risk_weight FLOAT,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- confidence rules (if not already created)
+CREATE TABLE IF NOT EXISTS kb_confidence_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_id TEXT,
+  min_confidence FLOAT,
+  action TEXT,
+  priority INT DEFAULT 1,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- workup cost tables
+CREATE TABLE IF NOT EXISTS kb_workup_costs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_name TEXT UNIQUE,
+  cost FLOAT,
+  sensitivity FLOAT,
+  specificity FLOAT,
+  turnaround_minutes INT,
+  risk_score FLOAT DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS kb_test_utility (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_name TEXT,
+  diagnosis TEXT,
+  info_gain FLOAT,
+  is_active BOOLEAN DEFAULT TRUE
+);
+⚙️ 2) BACKEND — WEBSOCKET (LIVE STREAM)
+// server/ws/patientStream.ts
+import { WebSocketServer } from 'ws'
+
+export const wss = new WebSocketServer({ port: 8081 })
+
+export function broadcastUpdate(payload: any) {
+  const msg = JSON.stringify(payload)
+  wss.clients.forEach(c => {
+    if (c.readyState === 1) c.send(msg)
+  })
+}
+⚙️ 3) BACKEND — DETERIORATION ENGINE
+// server/engine/deteriorationEngine.ts
+export async function detectDeterioration(db: any, patientId: string) {
+  const series = await db.patient_live_stream.findRecent(patientId)
+  const rules = await db.kb_deterioration_rules.findAll({ is_active: true })
+
+  let risk = 0
+  const alerts: any[] = []
+
+  for (const r of rules) {
+    const vals = series.filter((s: any) => s.feature_key === r.feature_key).map((s: any) => s.value)
+    if (vals.length < 2) continue
+
+    const delta = vals[vals.length - 1] - vals[0]
+
+    if (r.trend === 'rising' && delta > r.threshold) {
+      risk += r.risk_weight
+      alerts.push({ ...r, delta })
+    }
+  }
+
+  return { risk, alerts }
+}
+⚙️ 4) BACKEND — CONTROL ROUTES
+// server/routes/controlRoutes.ts
+import express from 'express'
+import { broadcastUpdate } from '../ws/patientStream'
+import { detectDeterioration } from '../engine/deteriorationEngine'
+
+const router = express.Router()
+
+// LIVE STREAM (push sample or from pipeline)
+router.post('/stream', async (req, res) => {
+  const { patient_id, feature_key, value } = req.body
+
+  await req.db.patient_live_stream.insert({ patient_id, feature_key, value })
+
+  broadcastUpdate({ patient_id, feature_key, value })
+
+  res.json({ ok: true })
+})
+
+// ALERTS
+router.get('/alerts/:patientId', async (req, res) => {
+  const out = await detectDeterioration(req.db, req.params.patientId)
+  res.json(out)
+})
+
+// VOICE
+router.post('/voice', async (req, res) => {
+  const { audio } = req.body
+
+  // stub: plug your provider here
+  const transcript = "Patient reports severe shoulder pain for 2 days"
+
+  const structured = {
+    symptoms: ["shoulder pain"],
+    severity: "severe",
+    duration: "2 days"
+  }
+
+  await req.db.patient_multimodal_inputs.insert({
+    patient_id: req.body.patient_id,
+    type: 'voice',
+    content: transcript,
+    processed: structured
+  })
+
+  res.json({ transcript, structured })
+})
+
+export default router
+⚙️ 5) REGISTER ROUTES
+// server/index.ts
+import controlRoutes from './routes/controlRoutes'
+
+app.use('/api/control', controlRoutes)
+🎛️ 6) FRONTEND — CONTROL TOWER PAGE
+// client/src/pages/ControlTowerV2.tsx
+import { useEffect, useState } from 'react'
+import LivePatients from '../components/LivePatients'
+import AlertsPanel from '../components/AlertsPanel'
+import VoicePanel from '../components/VoicePanel'
+import DecisionTree from '../components/DecisionTree'
+import ScoringPanel from '../components/ScoringPanel'
+import QuestionPanel from '../components/QuestionPanel'
+import CounterfactualPanel from '../components/CounterfactualPanel'
+
+export default function ControlTowerV2() {
+  const [stream, setStream] = useState<any[]>([])
+  const [alerts, setAlerts] = useState<any[]>([])
+
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:8081')
+
+    ws.onmessage = e => {
+      const data = JSON.parse(e.data)
+      setStream(prev => [data, ...prev.slice(0, 20)])
+    }
+  }, [])
+
+  return (
+    <div className="grid grid-cols-4 gap-4 p-4">
+      <LivePatients data={stream} />
+      <DecisionTree />
+      <ScoringPanel />
+      <QuestionPanel />
+      <CounterfactualPanel />
+      <VoicePanel />
+      <AlertsPanel alerts={alerts} />
+    </div>
+  )
+}
+🧍 7) LIVE PATIENT PANEL
+// client/components/LivePatients.tsx
+export default function LivePatients({ data }) {
+  return (
+    <div className="card">
+      <h3>Live Patients</h3>
+      {data.map((d, i) => (
+        <div key={i}>
+          {d.patient_id} — {d.feature_key}: {d.value}
+        </div>
+      ))}
+    </div>
+  )
+}
+⚠️ 8) ALERT PANEL
+// client/components/AlertsPanel.tsx
+export default function AlertsPanel({ alerts }) {
+  return (
+    <div className="card">
+      <h3>Alerts</h3>
+      {alerts.map((a, i) => (
+        <div key={i} style={{ color: 'red' }}>
+          {a.feature_key} rising ({a.delta}) → {a.action}
+        </div>
+      ))}
+    </div>
+  )
+}
+🎤 9) VOICE PANEL
+// client/components/VoicePanel.tsx
+export default function VoicePanel() {
+  const send = async () => {
+    await fetch('/api/control/voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patient_id: 'demo', audio: 'blob' })
+    })
+  }
+
+  return (
+    <div className="card">
+      <h3>Voice Intake</h3>
+      <button onClick={send}>Record / Upload</button>
+    </div>
+  )
+}
+🧠 10) DASHBOARD ACCESS (SIDEBAR)
+
+Add:
+
+// client/layout/Sidebar.tsx
+{
+  name: "Control Tower V2",
+  path: "/control-tower-v2",
+  icon: "Activity"
+}
+🧪 11) TEST FLOW
+POST stream:
+POST /api/control/stream
+{ "patient_id":"p1","feature_key":"heart_rate","value":130 }
+Watch dashboard update live
+Hit:
+GET /api/control/alerts/p1
+See alerts panel populate
+Use voice → structured data → pipeline
+🧭 RESULT
+
+You now have ONE place to:
+
+🟢 Monitor
+live patients
+vitals
+alerts
+🟡 Debug
+scoring
+decision tree
+feature contributions
+🔵 Upgrade
+KB edits instantly propagate
+🔴 Troubleshoot
+counterfactuals
+uncertainty
+missing questions

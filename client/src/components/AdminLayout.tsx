@@ -158,6 +158,7 @@ const NAV_SECTIONS = [
       { path: "/simulation-lab", label: "Simulation Laboratory", icon: FlaskConical },
       { path: "/control-tower", label: "Clinical Control Tower", icon: Radar },
       { path: "/clinical-control-tower", label: "CCT Decision Engine", icon: Brain },
+      { path: "/system-control-tower", label: "System Control Tower", icon: Cpu },
       { path: "/knowledge-graph", label: "Knowledge Graph", icon: Network },
       { path: "/schema-validator", label: "Schema Validator", icon: ShieldCheck },
       { path: "/clinical-governance", label: "Clinical Governance", icon: Shield },

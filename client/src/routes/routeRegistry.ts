@@ -30,4 +30,5 @@ export const ROUTES = {
   SKILL_LAYER_REVIEW: "/skill-layer-review",
   KNOWLEDGE_GRAPH: "/knowledge-graph",
   CLINICAL_CONTROL_TOWER: "/clinical-control-tower",
+  SYSTEM_CONTROL_TOWER: "/system-control-tower",
 };
