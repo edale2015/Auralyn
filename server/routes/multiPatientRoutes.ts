@@ -3,6 +3,12 @@ import { db } from "../db";
 import { sql as drizzleSql } from "drizzle-orm";
 import { computeAdmissionRisk, seedAdmissionRules } from "../engine/admissionRisk";
 import { sendSMS, sendWhatsApp } from "../services/smsService";
+import {
+  selectHospital,
+  seedHospitals,
+  seedEmsUnits,
+  sendPhysicianAlert,
+} from "../engine/hospitalRouting";
 
 const router = express.Router();
 
@@ -190,6 +196,148 @@ router.get("/outreach-log", async (req: Request, res: Response) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── GET /api/command/hospitals ────────────────────────────────────────────────
+router.get("/hospitals", async (_req: Request, res: Response) => {
+  try {
+    const result = await db.execute(drizzleSql`
+      SELECT id, name, lat, lon, services, is_active FROM kb_hospitals WHERE is_active = TRUE ORDER BY name
+    `);
+    res.json({ ok: true, hospitals: (result.rows ?? result) as any[] });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/command/hospitals/seed ─────────────────────────────────────────
+router.post("/hospitals/seed", async (_req: Request, res: Response) => {
+  try {
+    const hospitals = await seedHospitals();
+    const emsUnits  = await seedEmsUnits();
+    res.json({ ok: true, hospitals, emsUnits });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/command/hospital-route ─────────────────────────────────────────
+router.post("/hospital-route", async (req: Request, res: Response) => {
+  try {
+    const { lat, lon, service = "emergency" } = req.body;
+    if (lat === undefined || lon === undefined) {
+      return res.status(400).json({ error: "lat and lon are required" });
+    }
+    const hospital = await selectHospital({ lat: Number(lat), lon: Number(lon) }, service);
+    if (!hospital) {
+      return res.json({ ok: true, hospital: null, message: "No matching hospitals found" });
+    }
+    return res.json({ ok: true, hospital, neededService: service });
+  } catch (e: any) { return res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/command/ems-units ────────────────────────────────────────────────
+router.get("/ems-units", async (_req: Request, res: Response) => {
+  try {
+    const result = await db.execute(drizzleSql`
+      SELECT id, unit_name, lat, lon, status FROM ems_units ORDER BY unit_name
+    `);
+    res.json({ ok: true, units: (result.rows ?? result) as any[] });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/command/physician-alert ─────────────────────────────────────────
+router.post("/physician-alert", async (req: Request, res: Response) => {
+  try {
+    const { patientId, physicianName, physicianPhone, message } = req.body;
+    if (!physicianPhone || !message) {
+      return res.status(400).json({ error: "physicianPhone and message are required" });
+    }
+    const result = await sendPhysicianAlert(
+      patientId ?? "unknown",
+      physicianName ?? "Physician",
+      physicianPhone,
+      message
+    );
+    return res.json(result);
+  } catch (e: any) { return res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/command/physician-alerts ─────────────────────────────────────────
+router.get("/physician-alerts", async (req: Request, res: Response) => {
+  try {
+    const patientId = req.query.patientId as string | undefined;
+    const result = patientId
+      ? await db.execute(drizzleSql`
+          SELECT * FROM physician_alerts WHERE patient_id = ${patientId} ORDER BY created_at DESC LIMIT 50
+        `)
+      : await db.execute(drizzleSql`
+          SELECT * FROM physician_alerts ORDER BY created_at DESC LIMIT 100
+        `);
+    res.json({ ok: true, alerts: (result.rows ?? result) as any[] });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/command/system-health ────────────────────────────────────────────
+router.get("/system-health", async (_req: Request, res: Response) => {
+  const results: Array<{ name: string; pass: boolean; detail?: string; durationMs?: number }> = [];
+
+  async function probe(name: string, fn: () => Promise<string>) {
+    const t0 = Date.now();
+    try {
+      const detail = await fn();
+      results.push({ name, pass: true, detail, durationMs: Date.now() - t0 });
+    } catch (e: any) {
+      results.push({ name, pass: false, detail: e.message?.slice(0, 80), durationMs: Date.now() - t0 });
+    }
+  }
+
+  await probe("Patient Grid",   async () => {
+    const r = await db.execute(drizzleSql`SELECT COUNT(*)::int cnt FROM patient_dashboard_state`);
+    const cnt = ((r.rows ?? r) as any[])[0]?.cnt ?? 0;
+    return `${cnt} patients`;
+  });
+
+  await probe("KB Admission Rules", async () => {
+    const r = await db.execute(drizzleSql`SELECT COUNT(*)::int cnt FROM kb_admission_rules WHERE is_active = TRUE`);
+    const cnt = ((r.rows ?? r) as any[])[0]?.cnt ?? 0;
+    if (cnt === 0) throw new Error("No rules seeded");
+    return `${cnt} active rules`;
+  });
+
+  await probe("Hospital Network", async () => {
+    const r = await db.execute(drizzleSql`SELECT COUNT(*)::int cnt FROM kb_hospitals WHERE is_active = TRUE`);
+    const cnt = ((r.rows ?? r) as any[])[0]?.cnt ?? 0;
+    return `${cnt} hospitals`;
+  });
+
+  await probe("EMS Units", async () => {
+    const r = await db.execute(drizzleSql`SELECT COUNT(*)::int cnt FROM ems_units`);
+    const cnt = ((r.rows ?? r) as any[])[0]?.cnt ?? 0;
+    return `${cnt} units`;
+  });
+
+  await probe("Outreach Log", async () => {
+    const r = await db.execute(drizzleSql`SELECT COUNT(*)::int cnt FROM patient_outreach`);
+    const cnt = ((r.rows ?? r) as any[])[0]?.cnt ?? 0;
+    return `${cnt} events`;
+  });
+
+  await probe("Physician Alerts", async () => {
+    const r = await db.execute(drizzleSql`SELECT COUNT(*)::int cnt FROM physician_alerts`);
+    const cnt = ((r.rows ?? r) as any[])[0]?.cnt ?? 0;
+    return `${cnt} logged`;
+  });
+
+  await probe("Admission Risk Engine", async () => {
+    const result = await computeAdmissionRisk({ age_over_65: true, chest_pain: true });
+    if (result.score === 0 && result.totalRules === 0) throw new Error("Engine returned 0 rules");
+    return `score=${result.score.toFixed(2)} level=${result.level}`;
+  });
+
+  await probe("Hospital Routing", async () => {
+    const h = await selectHospital({ lat: 37.774, lon: -122.419 }, "emergency");
+    return h ? `→ ${h.name} (${h.dist?.toFixed(1)}km)` : "No hospitals found";
+  });
+
+  const passed = results.filter(r => r.pass).length;
+  res.json({ ok: true, results, passed, failed: results.length - passed, total: results.length });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

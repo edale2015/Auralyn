@@ -76,26 +76,43 @@ The system is 100% Knowledge Base (KB)-driven for diagnosis, with all clinical d
 - `/api/kb/*` — full CRUD for all 11 core KB tables  
 - `/api/advanced-reasoning/*` — interactions, temporal patterns, outcomes, learning queue, health
 
-## Multi-Patient Command Grid (`/multi-patient-command`)
+## Multi-Patient Command Grid (`/multi-patient-command`) — COMPLETE (8 modules)
 
-Three-pane hospital-style command dashboard:
-- **Left pane**: Risk-sorted patient grid (MultiPatientGrid.tsx) — patients sorted by `risk_score DESC`, color-coded risk badges (CRITICAL/HIGH/MODERATE/LOW), vitals mini-strip, 30s auto-refresh
-- **Middle pane**: Selected patient clinical detail — top diagnosis, disposition, vitals, risk flags, predictive admission risk score with progress bar
-- **Right pane**: Outreach Agent (OutreachPanel.tsx) — per-patient SMS/WhatsApp/voice TTS Twilio triggers with outreach history log
+Three-pane + bottom-strip hospital-style command dashboard with all 8 optional modules:
 
-**New DB tables**: `patient_dashboard_state` (8 demo patients auto-seeded), `patient_outreach` (log), `kb_admission_rules` (16 rules)
+**Layout**:
+- **Left pane**: Risk-sorted patient grid (MultiPatientGrid.tsx) — 8 demo patients sorted by `risk_score DESC`, color-coded CRITICAL/HIGH/MODERATE/LOW badges, vitals mini-strip, 30s auto-refresh
+- **Middle pane (3 tabs)**: Clinical detail · ICU Waveforms (Recharts LineChart HR/SpO₂/SBP/Temp) · Hospital + EMS routing
+- **Right pane (2 tabs)**: Automated Outreach (SMS/WhatsApp/Voice TTS) · Physician Auto-Paging
+- **Bottom strip**: System Health Panel — 8-probe live health check (8/8 PASS)
 
-**Backend engine** (`server/engine/admissionRisk.ts`): KB-driven admission risk scoring — sums weighted rules from `kb_admission_rules` table; score thresholds: critical≥0.8, high≥0.6, moderate≥0.35, low<0.35
+**DB tables**: `patient_dashboard_state` (8 demo patients), `patient_outreach`, `kb_admission_rules` (32 rules), `kb_hospitals` (6), `ems_units` (4), `physician_alerts`
+
+**Backend engines**:
+- `server/engine/admissionRisk.ts` — KB-driven risk scoring; thresholds: critical≥0.8, high≥0.6, moderate≥0.35
+- `server/engine/hospitalRouting.ts` — Haversine distance routing; `selectHospital()`, `seedHospitals()`, `seedEmsUnits()`, `sendPhysicianAlert()`
 
 **API Routes** (`/api/command/*`):
-- `GET /api/command/grid` — risk-sorted patients (auto-seeds 8 demo patients if empty)
+- `GET /api/command/grid` — risk-sorted patients (auto-seeds 8 if empty)
 - `POST /api/command/grid/upsert` — upsert patient state
-- `GET /api/command/admission-risk` — list 16 KB rules
+- `GET /api/command/admission-risk` — list KB rules
 - `POST /api/command/admission-risk/compute` — compute risk from feature flags
-- `POST /api/command/admission-risk/seed` — seed 16 KB rules
+- `POST /api/command/admission-risk/seed` — seed 32 KB rules
 - `POST /api/command/outreach` — send SMS or WhatsApp via Twilio
-- `POST /api/command/voice-call` — initiate TTS Twilio voice call via TwiML
+- `POST /api/command/voice-call` — initiate TTS Twilio voice call
 - `GET /api/command/outreach-log` — per-patient outreach history
+- `GET /api/command/hospitals` — list 6 active hospitals
+- `POST /api/command/hospitals/seed` — seed hospitals + EMS units
+- `POST /api/command/hospital-route` — Haversine-best hospital match
+- `GET /api/command/ems-units` — list 4 EMS units with status
+- `POST /api/command/physician-alert` — page physician via Twilio SMS + log
+- `GET /api/command/physician-alerts` — alert history (by patientId or all)
+- `GET /api/command/system-health` — 8-probe health check (grid/rules/hospitals/EMS/outreach/alerts/risk engine/routing)
+
+**Frontend components** (`client/src/components/command/`):
+- `MultiPatientGrid.tsx`, `OutreachPanel.tsx`, `HospitalRoutingPanel.tsx`, `ICUWaveform.tsx`, `PhysicianAlertPanel.tsx`, `SystemHealthPanel.tsx`
+
+**Seed**: POST `/api/command/admission-risk/seed` + POST `/api/command/hospitals/seed` to load all demo data
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API

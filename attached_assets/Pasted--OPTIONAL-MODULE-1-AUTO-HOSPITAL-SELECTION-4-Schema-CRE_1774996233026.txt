@@ -1,0 +1,159 @@
+🧩 OPTIONAL MODULE 1 — AUTO HOSPITAL SELECTION
+4
+🧾 Schema
+CREATE TABLE IF NOT EXISTS kb_hospitals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT,
+  lat FLOAT,
+  lon FLOAT,
+  services TEXT[],         -- ["ICU","cardiology","trauma"]
+  is_active BOOLEAN DEFAULT TRUE
+);
+⚙️ Engine
+// server/engine/hospitalRouting.ts
+function distance(a, b) {
+  return Math.sqrt((a.lat - b.lat)**2 + (a.lon - b.lon)**2)
+}
+
+export async function selectHospital(db, patient, neededService) {
+  const hospitals = await db.kb_hospitals.findAll({ is_active: true })
+
+  return hospitals
+    .filter(h => h.services.includes(neededService))
+    .map(h => ({
+      ...h,
+      dist: distance(patient.location, h)
+    }))
+    .sort((a,b)=>a.dist-b.dist)[0]
+}
+🎛️ UI
+export default function HospitalRouting({ hospital }) {
+  return (
+    <div className="card">
+      <h3>Hospital Routing</h3>
+      <p>{hospital.name}</p>
+      <p>Distance: {hospital.dist.toFixed(2)}</p>
+    </div>
+  )
+}
+🚑 OPTIONAL MODULE 2 — EMS ETA TRACKING
+4
+🧾 Schema
+CREATE TABLE IF NOT EXISTS ems_units (
+  id UUID PRIMARY KEY,
+  lat FLOAT,
+  lon FLOAT,
+  status TEXT
+);
+⚙️ Engine
+export function computeETA(unit, patient) {
+  const dist = Math.sqrt((unit.lat-patient.lat)**2 + (unit.lon-patient.lon)**2)
+  return dist * 3 // rough minutes
+}
+🎛️ UI
+export default function EMSPanel({ eta }) {
+  return (
+    <div className="card">
+      <h3>EMS ETA</h3>
+      <p>{eta} minutes</p>
+    </div>
+  )
+}
+📈 OPTIONAL MODULE 3 — ICU WAVEFORM GRAPHS
+4
+⚙️ UI (Recharts)
+import { LineChart, Line, XAxis, YAxis } from 'recharts'
+
+export default function ICUWaveform({ data }) {
+  return (
+    <LineChart width={300} height={200} data={data}>
+      <XAxis dataKey="time" />
+      <YAxis />
+      <Line type="monotone" dataKey="hr" stroke="#ff0000" />
+      <Line type="monotone" dataKey="spo2" stroke="#00aa00" />
+    </LineChart>
+  )
+}
+📣 OPTIONAL MODULE 4 — PHYSICIAN AUTO-PAGING
+4
+🧾 Schema
+CREATE TABLE IF NOT EXISTS physician_alerts (
+  id UUID PRIMARY KEY,
+  patient_id TEXT,
+  message TEXT,
+  status TEXT,
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Backend
+export async function sendPhysicianAlert(db, patient, msg) {
+  await db.physician_alerts.insert({
+    patient_id: patient.id,
+    message: msg,
+    status: 'sent'
+  })
+
+  await sendSMS(patient.physician_phone, msg)
+}
+🎛️ UI
+export default function PhysicianAlertPanel({ patient }) {
+  return (
+    <div className="card">
+      <button>Page Physician</button>
+    </div>
+  )
+}
+🧠 NOW — CRITICAL STEP: SYSTEM INTEGRATION TESTING
+
+You’ve built everything. Now we make sure it works together as one organism.
+
+🧪 MASTER TEST HARNESS
+Backend
+// server/tests/fullSystemTest.ts
+export async function runFullTest() {
+  const results = []
+
+  results.push(await testIntake())
+  results.push(await testDiagnosis())
+  results.push(await testWorkup())
+  results.push(await testAdmission())
+  results.push(await testEMS())
+  results.push(await testRobot())
+  results.push(await testLearning())
+
+  return results
+}
+🧭 DASHBOARD PANEL — “SYSTEM HEALTH”
+export default function SystemHealth({ results }) {
+  return (
+    <div className="card">
+      <h3>System Health</h3>
+      {results.map((r,i)=>(
+        <div key={i}>
+          {r.name}: {r.pass ? '✅' : '❌'}
+        </div>
+      ))}
+    </div>
+  )
+}
+🔁 REQUIRED CROSS-SYSTEM VALIDATIONS
+1. Intake → Diagnosis
+questions affect dx probabilities
+2. Diagnosis → Workup
+workup changes based on dx
+3. Diagnosis → Admission
+admission logic triggers correctly
+4. Risk → EMS
+high risk → EMS panel active
+5. Robot → Diagnosis
+robot data influences dx
+6. Learning → KB
+approved changes update behavior
+🧠 FINAL DASHBOARD INTEGRATION
+
+Add all panels:
+
+import ICUWaveform from './ICUWaveform'
+import HospitalRouting from './HospitalRouting'
+import EMSPanel from './EMSPanel'
+import PhysicianAlertPanel from './PhysicianAlertPanel'
+import SystemHealth from './SystemHealth'
