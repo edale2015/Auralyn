@@ -796,3 +796,63 @@ export const insertKbKnowledgeChangeSchema = createInsertSchema(kbKnowledgeChang
 export type InsertKbKnowledgeChange = z.infer<typeof insertKbKnowledgeChangeSchema>;
 export type KbKnowledgeChange = typeof kbKnowledgeChanges.$inferSelect;
 export type LabeledOutcomeStats = typeof labeledOutcomeStats.$inferSelect;
+
+// ── Clinical Control Tower Tables ─────────────────────────────────────────────
+
+export const kbConfidenceRules = pgTable("kb_confidence_rules", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id"),
+  minConfidence: real("min_confidence").notNull(),
+  action: text("action").notNull(),
+  description: text("description"),
+  priority: integer("priority").default(1).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbConfidenceRuleSchema = createInsertSchema(kbConfidenceRules).omit({ id: true, createdAt: true });
+export type KbConfidenceRule = typeof kbConfidenceRules.$inferSelect;
+
+export const kbDiagnosisRisk = pgTable("kb_diagnosis_risk", {
+  id: serial("id").primaryKey(),
+  diagnosis: text("diagnosis").notNull().unique(),
+  minDisposition: text("min_disposition").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisRiskSchema = createInsertSchema(kbDiagnosisRisk).omit({ id: true, createdAt: true });
+export type KbDiagnosisRisk = typeof kbDiagnosisRisk.$inferSelect;
+
+export const kbWorkupCosts = pgTable("kb_workup_costs", {
+  id: serial("id").primaryKey(),
+  testName: text("test_name").notNull().unique(),
+  cost: real("cost").notNull().default(0),
+  sensitivity: real("sensitivity"),
+  specificity: real("specificity"),
+  turnaroundMinutes: integer("turnaround_minutes"),
+  riskScore: real("risk_score").default(0),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbWorkupCostSchema = createInsertSchema(kbWorkupCosts).omit({ id: true, createdAt: true });
+export type KbWorkupCost = typeof kbWorkupCosts.$inferSelect;
+
+export const kbTestUtility = pgTable("kb_test_utility", {
+  id: serial("id").primaryKey(),
+  testName: text("test_name").notNull(),
+  diagnosis: text("diagnosis").notNull(),
+  infoGain: real("info_gain").notNull().default(0),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbTestUtilitySchema = createInsertSchema(kbTestUtility).omit({ id: true, createdAt: true });
+export type KbTestUtility = typeof kbTestUtility.$inferSelect;
+
+export const kbQuestionUtility = pgTable("kb_question_utility", {
+  id: serial("id").primaryKey(),
+  questionKey: text("question_key").notNull(),
+  diagnosis: text("diagnosis").notNull(),
+  infoGain: real("info_gain").notNull().default(0),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbQuestionUtilitySchema = createInsertSchema(kbQuestionUtility).omit({ id: true, createdAt: true });
+export type KbQuestionUtility = typeof kbQuestionUtility.$inferSelect;

@@ -331,6 +331,7 @@ import { startScheduledAuditVerification } from "./audit/scheduledAuditVerifier"
 import unifiedRoutes          from "./routes/unifiedRoutes";
 import executiveRoutes        from "./routes/executiveRoutes";
 import controlTowerRoutes     from "./routes/controlTowerRoutes";
+import controlTowerClinicalRoutes from "./routes/controlTowerClinicalRoutes";
 import { hydrateFromRedis } from "./learning/versionedRLHF";
 import engineControlRoutes from "./routes/engineControlRoutes";
 import recentRunsRoutes from "./routes/recentRunsRoutes";
@@ -793,6 +794,7 @@ app.use("/api/dependencies", dependenciesRoutes);
 app.use("/api/engine-metrics", engineMetricsRoutes);
 app.use("/api/workers", workersRoutes);
 app.use("/api/clinic-health", clinicHealthRoutes);
+app.use("/api/control", controlTowerClinicalRoutes);
 console.log("[StressTest] Load generator, metrics analyzer, run history at /api/stress/*");
 console.log("[RPA] Browser automation templates, run engine, custom tasks at /api/rpa/*");
 console.log("[Vision] GPT-4o screenshot analysis + smart form fill at /api/vision/*");

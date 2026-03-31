@@ -22,6 +22,13 @@ The system incorporates a Multi-Agent Debate Engine where three clinical agents 
 ### System Design Choices
 Data management uses Firebase Firestore, SQLite, and NDJSON-backed stores, with PHI retention policies. Authentication involves password-only, session-based HMAC for physicians and token-based access for patients, with JWT-based role authentication. Security and quality hardening include bcrypt, JWT security, rate limiting, and PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance includes an agent registry, audit agent, incident commander, digital twin, and predictive engine. The Autonomous Operator System is an AI-powered form automation engine. A Template Studio allows visual template editing. The Replay Inspector audits automation runs. A Robotics Control Module manages medical device orchestration. An Autonomous Learning Console provides a unified dashboard for self-testing, self-learning, and governance, including simulation, learning queue, drift monitor, audit trail, versions, and safety modes.
 
+**Clinical Control Tower Decision Engine** (`/clinical-control-tower`): A new KB-driven dashboard with:
+- `POST /api/control/analyze` — full reasoning pipeline: Advanced Bayesian diagnosis → confidence/uncertainty scoring → adaptive question ranking → counterfactual explainer → workup optimizer
+- `POST /api/control/seed` — seeds 44 rows across 5 new KB tables
+- 5 new DB tables: `kb_confidence_rules`, `kb_diagnosis_risk`, `kb_workup_costs`, `kb_test_utility`, `kb_question_utility`
+- 5 backend engines: `confidenceDisposition.ts`, `workupOptimizer.ts`, `counterfactualExplainer.ts`, `nextBestQuestion.ts`, `buildDecisionTree.ts`
+- 5 frontend components in `client/src/components/tower/`: `DecisionTreeViz.tsx` (react-d3-tree), `ScoringConsole.tsx`, `AdaptiveQuestioningPanel.tsx`, `CounterfactualPanel.tsx`, `WorkupOptimizer.tsx`
+
 The system is 100% Knowledge Base (KB)-driven for diagnosis, with all clinical decisions managed via Postgres KB tables. All 5 legacy hardcoded systems have been replaced:
 - `weightStore.ts` → write-through to `kb_clinical_weights` + `kb_weight_events`
 - `redFlagMap.ts` → DB-first from `kb_red_flag_rules` with sync fallback

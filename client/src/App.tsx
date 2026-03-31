@@ -68,6 +68,7 @@ import GoldenCasesPage from "@/pages/GoldenCasesPage";
 import SkillLayerAdminPage from "@/pages/SkillLayerAdminPage";
 import SkillLayerReviewPage from "@/pages/SkillLayerReviewPage";
 import ClinicalKnowledgeGraphPage from "@/pages/ClinicalKnowledgeGraphPage";
+import ClinicalControlTowerPage from "@/pages/ClinicalControlTowerPage";
 
 validateRoutes();
 
@@ -108,6 +109,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.SKILL_LAYER_ADMIN} component={SkillLayerAdminPage} />
         <Route path={ROUTES.SKILL_LAYER_REVIEW} component={SkillLayerReviewPage} />
         <Route path={ROUTES.KNOWLEDGE_GRAPH} component={ClinicalKnowledgeGraphPage} />
+        <Route path={ROUTES.CLINICAL_CONTROL_TOWER} component={ClinicalControlTowerPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />
