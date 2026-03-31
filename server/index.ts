@@ -979,6 +979,9 @@ app.use((req, res, next) => {
       initAsyncWorkerHandlers();
       startAutonomousLoop(60_000);
       startEngines();
+      // Warm KB runtime cache — loads diagnosis priors, red flag rules, and treatment rules
+      // from Postgres into memory so all pipeline entry-points read from the KB.
+      import("./kb/kbRuntime").then(({ warmKbCache }) => warmKbCache()).catch(() => {});
       runFailoverLoop(60_000);
       startRecoveryLoop(10_000);
       initControlTowerSocket(httpServer);

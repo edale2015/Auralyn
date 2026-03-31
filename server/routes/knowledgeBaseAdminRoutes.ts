@@ -12,10 +12,16 @@ import {
 } from "../../shared/schema";
 import { eq, desc, and, ilike, count, or } from "drizzle-orm";
 import { seedKnowledgeBase } from "../kb/kbSeeder";
+import { reloadAndRewireKbCache, getKbCacheStatus } from "../kb/kbRuntime";
 
 const router = Router();
 
 function changeId() { return `kc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
+
+// Domains that are wired into the live pipeline — changes to these must reload the cache
+const PIPELINE_CRITICAL_DOMAINS = new Set([
+  "diagnosis_rule", "red_flag_rule", "treatment_rule",
+]);
 
 async function logChange(domain: string, recordId: string, action: string, oldVal: any, newVal: any, rationale?: string) {
   try {
@@ -31,12 +37,34 @@ async function logChange(domain: string, recordId: string, action: string, oldVa
       status: "deployed",
     });
   } catch { /* non-blocking */ }
+
+  // Auto-reload pipeline cache for domains wired into the live decision engine
+  if (PIPELINE_CRITICAL_DOMAINS.has(domain)) {
+    reloadAndRewireKbCache().catch(() => {});
+  }
 }
+
+// ── Cache status ──────────────────────────────────────────────────────────────
+router.get("/cache-status", (_req: Request, res: Response) => {
+  res.json(getKbCacheStatus());
+});
+
+// Force-reload endpoint for ops dashboard
+router.post("/cache-reload", async (_req: Request, res: Response) => {
+  try {
+    await reloadAndRewireKbCache();
+    res.json({ ok: true, status: getKbCacheStatus() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ── Seed trigger ─────────────────────────────────────────────────────────────
 router.post("/seed", async (_req: Request, res: Response) => {
   try {
     await seedKnowledgeBase();
+    // Reload pipeline cache immediately after seeding so new data is live
+    reloadAndRewireKbCache().catch(() => {});
     res.json({ ok: true, message: "Knowledge base seeded" });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

@@ -32,11 +32,43 @@ function parseCsv(filePath: string): Record<string, string>[] {
 
 const CSV = path.join(process.cwd(), "server/data/csv");
 
+export async function upsertBayesianPriors(): Promise<void> {
+  const BAYESIAN_PRIORS = [
+    { ruleId: "DX_BAY_INFLUENZA_A",        complaintId: "bayesian_global", diagnosisId: "influenza_a",              diagnosisLabel: "Influenza A",            baseProbability: 0.18, featureLikelihoods: { fever: 0.92, "body aches": 0.85, headache: 0.75, cough: 0.80, fatigue: 0.88, "sore throat": 0.50, "runny nose": 0.55, chills: 0.78 } },
+    { ruleId: "DX_BAY_COVID19",            complaintId: "bayesian_global", diagnosisId: "covid19",                  diagnosisLabel: "COVID-19",               baseProbability: 0.14, featureLikelihoods: { fever: 0.88, cough: 0.75, "loss of smell": 0.65, "loss of taste": 0.60, fatigue: 0.82, "shortness of breath": 0.45, headache: 0.60, "sore throat": 0.52 } },
+    { ruleId: "DX_BAY_STREP_PHARYNGITIS",  complaintId: "bayesian_global", diagnosisId: "strep_pharyngitis",        diagnosisLabel: "Strep Pharyngitis",      baseProbability: 0.12, featureLikelihoods: { "sore throat": 0.96, fever: 0.78, "tonsillar exudate": 0.70, lymphadenopathy: 0.75, headache: 0.45, "absence of cough": 0.80 } },
+    { ruleId: "DX_BAY_VIRAL_URI",          complaintId: "bayesian_global", diagnosisId: "viral_uri",                diagnosisLabel: "Viral URI",              baseProbability: 0.25, featureLikelihoods: { "runny nose": 0.90, congestion: 0.88, "sore throat": 0.70, cough: 0.65, "mild fever": 0.35, sneezing: 0.80 } },
+    { ruleId: "DX_BAY_SINUSITIS",          complaintId: "bayesian_global", diagnosisId: "sinusitis",                diagnosisLabel: "Sinusitis",              baseProbability: 0.10, featureLikelihoods: { "sinus pressure": 0.88, "facial pain": 0.75, congestion: 0.82, headache: 0.65, "purulent discharge": 0.70, fever: 0.30, "post-nasal drip": 0.72 } },
+    { ruleId: "DX_BAY_OTITIS_MEDIA",       complaintId: "bayesian_global", diagnosisId: "otitis_media",             diagnosisLabel: "Otitis Media",           baseProbability: 0.08, featureLikelihoods: { "ear pain": 0.95, fever: 0.65, "hearing loss": 0.55, "ear fullness": 0.72, discharge: 0.35 } },
+    { ruleId: "DX_BAY_PNEUMONIA",          complaintId: "bayesian_global", diagnosisId: "pneumonia",                diagnosisLabel: "Pneumonia",              baseProbability: 0.06, featureLikelihoods: { fever: 0.88, "productive cough": 0.82, "shortness of breath": 0.72, "chest pain": 0.55, fatigue: 0.78, rigors: 0.60 } },
+    { ruleId: "DX_BAY_ALLERGIC_RHINITIS",  complaintId: "bayesian_global", diagnosisId: "allergic_rhinitis",        diagnosisLabel: "Allergic Rhinitis",      baseProbability: 0.07, featureLikelihoods: { sneezing: 0.88, "runny nose": 0.85, "itchy eyes": 0.80, congestion: 0.78, "no fever": 0.90, "seasonal pattern": 0.70 } },
+    { ruleId: "DX_BAY_ROTATOR_CUFF",       complaintId: "bayesian_global", diagnosisId: "rotator_cuff_injury",      diagnosisLabel: "Rotator Cuff Injury",    baseProbability: 0.30, featureLikelihoods: { "shoulder pain": 0.95, "painful arc": 0.82, weakness: 0.75, "lateral pain": 0.78, "no trauma": 0.60, "gradual onset": 0.70, "night pain": 0.68, "overhead activity pain": 0.80, "age over 40": 0.72, "loss of external rotation": 0.55 } },
+    { ruleId: "DX_BAY_SHOULDER_DISLOC",   complaintId: "bayesian_global", diagnosisId: "shoulder_dislocation",     diagnosisLabel: "Shoulder Dislocation",   baseProbability: 0.08, featureLikelihoods: { trauma: 0.92, deformity: 0.85, "arm held at side": 0.80, "severe pain": 0.90, "loss of external rotation": 0.75, "young male": 0.55, "shoulder pain": 0.95, "inability to move arm": 0.88 } },
+    { ruleId: "DX_BAY_AC_JOINT",           complaintId: "bayesian_global", diagnosisId: "ac_joint_injury",          diagnosisLabel: "AC Joint Injury",        baseProbability: 0.12, featureLikelihoods: { trauma: 0.88, "top of shoulder tender": 0.92, "step deformity": 0.70, "direct fall onto shoulder": 0.80, "shoulder pain": 0.95, "arm adduction pain": 0.72, "cross-body pain": 0.68 } },
+    { ruleId: "DX_BAY_CERVICAL_RADICULOP", complaintId: "bayesian_global", diagnosisId: "cervical_radiculopathy",   diagnosisLabel: "Cervical Radiculopathy", baseProbability: 0.15, featureLikelihoods: { "neck pain": 0.85, "arm pain": 0.82, tingling: 0.78, "numbness fingers": 0.75, "shoulder pain": 0.70, "weakness arm": 0.65, "radiation to hand": 0.72, "no trauma": 0.60 } },
+  ];
+  for (const bp of BAYESIAN_PRIORS) {
+    await db.insert(kbDiagnosisRules).values({
+      ruleId: bp.ruleId, complaintId: bp.complaintId, diagnosisId: bp.diagnosisId,
+      diagnosisLabel: bp.diagnosisLabel, icdCode: null, baseProbability: bp.baseProbability,
+      featureLikelihoods: bp.featureLikelihoods as any, cannotMiss: false,
+      basePoints: 50, clusterPriority: 10, active: true,
+    }).onConflictDoUpdate({
+      target: kbDiagnosisRules.ruleId,
+      set: { baseProbability: bp.baseProbability, featureLikelihoods: bp.featureLikelihoods as any, active: true },
+    });
+  }
+  console.log(`[KB Seeder] Upserted ${BAYESIAN_PRIORS.length} Bayesian core priors into kb_diagnosis_rules`);
+}
+
 export async function seedKnowledgeBase(): Promise<void> {
+  // Always upsert Bayesian priors (even on re-seed, to apply any code-level updates)
+  await upsertBayesianPriors();
+
   const existing = await db.execute(sql`SELECT COUNT(*) as n FROM kb_complaints`);
   const count = Number((existing.rows[0] as any)?.n ?? 0);
   if (count > 0) {
-    console.log(`[KB Seeder] Already seeded (${count} complaints). Skipping.`);
+    console.log(`[KB Seeder] Already seeded (${count} complaints). Skipping CSV import.`);
     return;
   }
 

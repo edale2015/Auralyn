@@ -1,3 +1,5 @@
+import { getKbTreatmentsSync } from "../kb/kbRuntime";
+
 export type Disposition = "self_care" | "office_followup" | "telemed_now" | "urgent_care" | "er_now";
 
 export interface TreatmentPlan {
@@ -136,10 +138,75 @@ export function generateAutoPlan(input: { chiefComplaint?: string; redFlags?: st
     };
   }
 
+  // ── KB-driven treatment lookup for complaints not in hardcoded list ──────
+  // When the KB has treatment rules for this complaint, build a plan from them.
+  const kbTreatments = getKbTreatmentsSync({ complaintId: cc });
+  if (kbTreatments.length > 0) {
+    const firstLine = kbTreatments.filter(t => t.isFirstLine);
+    const meds = (firstLine.length > 0 ? firstLine : kbTreatments.slice(0, 3)).map(t => ({
+      name: t.medicationName,
+      dose: t.adultDose ?? "per clinician guidance",
+      instructions: [
+        t.route ? `Route: ${t.route}` : null,
+        t.renalAdjust ? `Renal adjust: ${t.renalAdjust}` : null,
+        t.notes ?? null,
+      ].filter(Boolean).join(". ") || "As directed.",
+    }));
+    return {
+      proposedDisposition: "telemed_now",
+      differential: [{ diagnosis: cc, probability: 0.5 }],
+      proposedPlan: {
+        summary: `KB-derived treatment plan for ${cc}. Clinician review required.`,
+        diagnosisLabel: cc,
+        meds,
+        homeCare: [],
+        followUp: ["Clinician review and confirmation required before dispensing."],
+        returnPrecautions: ["Worsening symptoms", "New symptoms", "No improvement in 48 hours"],
+        patientMessage: `A suggested treatment plan has been generated for your complaint. A clinician will review and confirm.`,
+      },
+      reviewReason: "kb_treatment_plan_requires_review",
+    };
+  }
+
   return {
     proposedDisposition: "telemed_now",
     differential: [{ diagnosis: "undifferentiated_complaint", probability: 0.5 }],
     proposedPlan: null,
     reviewReason: "unsupported_complaint_pathway",
+  };
+}
+
+/**
+ * Enrich an existing plan with KB treatment overrides.
+ * Called after hardcoded plan generation to overlay KB-managed medications.
+ * This is the mechanism that makes Test 3 (medication layer) work.
+ */
+export function enrichPlanWithKbTreatments(
+  plan: AutoPlanResult,
+  chiefComplaint: string
+): AutoPlanResult {
+  if (!plan.proposedPlan) return plan;
+  const cc = chiefComplaint.toLowerCase();
+  const kbTreatments = getKbTreatmentsSync({ complaintId: cc });
+  if (kbTreatments.length === 0) return plan;
+
+  const firstLine = kbTreatments.filter(t => t.isFirstLine);
+  const kbMeds = (firstLine.length > 0 ? firstLine : kbTreatments.slice(0, 3)).map(t => ({
+    name: t.medicationName,
+    dose: t.adultDose ?? "per clinician guidance",
+    instructions: [
+      t.route ? `Route: ${t.route}` : null,
+      t.contraindications ? `Avoid if: ${t.contraindications}` : null,
+      t.notes ?? null,
+    ].filter(Boolean).join(". ") || "As directed.",
+  }));
+
+  // KB medications replace the hardcoded ones when KB has active rules
+  return {
+    ...plan,
+    proposedPlan: {
+      ...plan.proposedPlan,
+      meds: kbMeds,
+    },
   };
 }

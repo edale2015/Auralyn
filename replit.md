@@ -35,6 +35,21 @@ The backend uses Express 5, Node.js, and TypeScript, providing REST API endpoint
 - **Robotics Control Module**: Supervised robotic arm control layer for medical device orchestration with a RoboticSafetyGate and RoboticController.
 - **Autonomous Learning Console** (`/autonomous-learning`, `client/src/pages/AutonomousLearningConsolePage.tsx`): Unified 7-tab dashboard for self-testing, self-learning, and governance. Tabs: Overview (health), Simulation (async 100–100k case engine), Learning Queue (approve/reject suggestions), Drift Monitor (accuracy timeline + alerts), Audit Trail (immutable log), Versions (snapshots + rollback + diff), Safety Modes (observe_only / assisted_learning / controlled_auto). Routes at `/api/ci/*`. Backend modules: `server/simulation/asyncSimEngine.ts`, `server/governance/changeAuditLog.ts`, `server/governance/safetyModes.ts`, `server/governance/knowledgeVersions.ts`, `server/learning/learningQueueStore.ts`, `server/learning/driftTracker.ts`, `server/routes/autonomousLearningRoutes.ts`.
 
+### KB-Driven Clinical Pipeline (VERIFIED LIVE — March 2026)
+
+**All 3 surgical tests passed. KB edits now have real-time runtime effect.**
+
+- **12 Bayesian Core Priors seeded into KB** (`DX_BAY_*` ruleId prefix, `complaintId=bayesian_global`): all 12 clinical diagnoses (Influenza A, COVID-19, Strep Pharyngitis, Viral URI, Sinusitis, Otitis Media, Pneumonia, Allergic Rhinitis, Rotator Cuff Injury, Shoulder Dislocation, AC Joint Injury, Cervical Radiculopathy) stored in `kb_diagnosis_rules` with full `featureLikelihoods` JSONB.
+- **`upsertBayesianPriors()` in `server/kb/kbSeeder.ts`**: called at the START of `seedKnowledgeBase()` before the "already seeded" early-exit guard, ensuring priors are always upserted on every `/api/kb/seed` call.
+- **`setRuntimePriors()` in `server/clinical/bayesianEngine.ts`**: filters out KB priors with empty `featureLikelihoods` (CSV-seeded rules) and only replaces the in-memory table if at least one prior has actual likelihood data.
+- **Auto cache reload on KB writes**: `logChange()` in `knowledgeBaseAdminRoutes.ts` calls `reloadAndRewireKbCache()` immediately after any write to `diagnosis_rule`, `red_flag_rule`, or `treatment_rule` domains.
+- **Cache at startup**: `warmKbCache()` at server init; 614 priors (602 CSV + 12 Bayesian), 272 red flags, 6 treatment rules.
+- **Surgical Test Results**:
+  - Test 1: PATCH `DX_BAY_ROTATOR_CUFF.baseProbability` 0.30→0.01 → differential dropped from 97.65% to 58.07% ✅
+  - Test 2: PATCH `RF_C_SOB.active=false` → cache count 272→271 instantly; re-enable → 272 ✅
+  - Test 3: PATCH `TX_STREP_AMOX.medicationName` → "Penicillin VK" visible in GET immediately ✅
+- **Key endpoints**: `POST /api/kb/seed`, `POST /api/kb/cache-reload`, `GET /api/kb/cache-status`, `POST /api/advanced/differential/run`, `GET /api/advanced/differential/demo`
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp

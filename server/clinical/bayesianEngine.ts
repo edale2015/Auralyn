@@ -197,9 +197,40 @@ export function bayesianUpdate(
     .sort((a, b) => b.posterior - a.posterior);
 }
 
-/** Run the differential engine with the built-in prior table */
+/**
+ * Run the differential engine.
+ * Uses KB-loaded priors when available (set via setRuntimePriors),
+ * falls back to the hardcoded PRIORS table when KB is empty.
+ */
+let _runtimePriors: DiagnosisPrior[] | null = null;
+
+export function setRuntimePriors(priors: DiagnosisPrior[]): void {
+  // Only replace if KB priors have actual featureLikelihoods data.
+  // CSV-seeded rules often lack likelihoods — don't replace the hardcoded table with empty shells.
+  const withLikelihoods = priors.filter(p => Object.keys(p.featureLikelihoods || {}).length > 0);
+  if (withLikelihoods.length > 0) {
+    _runtimePriors = withLikelihoods;
+    (global as any).__kbPriorsCount = withLikelihoods.length;
+    console.info(
+      `[BayesianEngine] Runtime priors set from KB: ${withLikelihoods.length} ` +
+      `(${priors.length - withLikelihoods.length} skipped — no featureLikelihoods)`
+    );
+  } else {
+    _runtimePriors = null;
+    console.info(`[BayesianEngine] KB priors have no featureLikelihoods — keeping hardcoded PRIORS table`);
+  }
+}
+
+export function clearRuntimePriors(): void {
+  _runtimePriors = null;
+}
+
+export function getActivePriors(): DiagnosisPrior[] {
+  return _runtimePriors && _runtimePriors.length > 0 ? _runtimePriors : PRIORS;
+}
+
 export function runDifferential(symptoms: string[]): DifferentialResult[] {
-  return bayesianUpdate(PRIORS, symptoms);
+  return bayesianUpdate(getActivePriors(), symptoms);
 }
 
 /** Return the top N differentials above a minimum confidence threshold */

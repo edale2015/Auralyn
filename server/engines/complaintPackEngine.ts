@@ -1,6 +1,7 @@
 import { complaintPacks } from "../config/complaintPacks";
 import { ComplaintPack } from "../../shared/complaintPacks";
 import { evaluateRule } from "./ruleParser";
+import { getKbRedFlagsSync } from "../kb/kbRuntime";
 
 export function findComplaintPack(chiefComplaint: string): ComplaintPack | null {
   const normalized = chiefComplaint.trim().toLowerCase();
@@ -52,7 +53,8 @@ export function evaluateComplaintEscalation(
   let escalate = false;
   let review = false;
 
-  const anyRedFlag = pack.redFlagTriggers.some(
+  // ── Layer 1: hardcoded pack trigger IDs ──────────────────────────────────
+  const anyPackRedFlag = pack.redFlagTriggers.some(
     flag => answers[flag] === true || answers[flag] === "yes"
   );
 
@@ -62,6 +64,36 @@ export function evaluateComplaintEscalation(
       escalate = true;
     }
   }
+
+  // ── Layer 2: KB red flag rules (expression-based) ─────────────────────────
+  // These are loaded from the Postgres kb_red_flag_rules table via kbRuntime cache.
+  // triggerExpr is evaluated using the same ruleParser that handles autoEscalateRules.
+  const kbRedFlags = getKbRedFlagsSync(pack.complaintId);
+  let anyKbRedFlag = false;
+  for (const rf of kbRedFlags) {
+    if (rf.triggerExpr) {
+      try {
+        const hit = evaluateRule(
+          rf.triggerExpr,
+          answers as Record<string, string | boolean | number>,
+          { anyRedFlag: anyPackRedFlag }
+        );
+        if (hit) {
+          reasons.push(`kb_red_flag:${rf.ruleId}:${rf.action}`);
+          anyKbRedFlag = true;
+          if (rf.severity === "HARD" || rf.action === "ER_SEND" || rf.action === "CALL_911" || rf.action === "ER_NOW") {
+            escalate = true;
+          } else {
+            review = true;
+          }
+        }
+      } catch {
+        // ignore malformed expressions
+      }
+    }
+  }
+
+  const anyRedFlag = anyPackRedFlag || anyKbRedFlag;
 
   for (const rule of pack.autoEscalateRules) {
     if (evaluateRule(rule, answers as Record<string, string | boolean | number>, { anyRedFlag })) {
