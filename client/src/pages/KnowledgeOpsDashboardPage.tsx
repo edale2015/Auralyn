@@ -4,12 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import {
   BarChart3, Database, AlertTriangle, CheckCircle, RefreshCw,
   Shield, Activity, FileText, Stethoscope, Pill, BookOpen, Search,
   TrendingUp, Info, Clock, ExternalLink, Brain, Zap, XCircle,
-  AlertCircle, ChevronDown, ChevronRight,
+  AlertCircle, ChevronDown, ChevronRight, FlaskConical, GitBranch, Play,
 } from "lucide-react";
 import { Link } from "wouter";
 import { ROUTES } from "@/routes/routeRegistry";
@@ -629,7 +630,7 @@ export default function KnowledgeOpsDashboardPage() {
                 { n: 8, step: "Disposition Rules", desc: "Define when each disposition fires — connect to red flag results and scores." },
                 { n: 9, step: "Plan Templates", desc: "Add discharge text, home care instructions, return precautions." },
                 { n: 10, step: "Golden Cases", desc: "Add ≥3 golden cases per complaint (one per severity/modifier). Set status to Approved." },
-                { n: 11, step: "Simulation", desc: "Learning Console → Simulation — run 100+ cases and inspect failures." },
+                { n: 11, step: "Simulation", desc: "Use the Simulation Lab below — run 1,000–10,000 synthetic cases and inspect failures before deploying." },
               ].map(item => (
                 <div key={item.n} className="flex items-start gap-3">
                   <div className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{item.n}</div>
@@ -648,6 +649,227 @@ export default function KnowledgeOpsDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── Simulation Lab ─────────────────────────────────────────────────── */}
+      <SimulationLabPanel />
+
+      {/* ── Decision Trace ──────────────────────────────────────────────────── */}
+      <DecisionTracePanel />
     </div>
+  );
+}
+
+// ── Simulation Lab ────────────────────────────────────────────────────────────
+function SimulationLabPanel() {
+  const { toast } = useToast();
+  const [cases, setCases] = useState(1000);
+  const [result, setResult] = useState<any>(null);
+
+  const run = useMutation({
+    mutationFn: async () => {
+      const resp = await apiRequest("/api/kb/simulate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cases }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error ?? "Simulation failed");
+      return data;
+    },
+    onSuccess: (data) => { setResult(data); toast({ title: `Simulation complete — ${data.accuracyRate} accuracy` }); },
+    onError: (e: any) => toast({ title: "Simulation error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-l-4 border-purple-400">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <FlaskConical className="h-5 w-5 text-purple-600" /> Simulation Lab — Monte Carlo Engine Test
+          </CardTitle>
+          {result && (
+            <Badge className={`text-sm px-3 py-1 ${parseFloat(result.accuracyRate) >= 75 ? "bg-green-100 text-green-800" : parseFloat(result.accuracyRate) >= 50 ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-800"}`}>
+              {result.accuracyRate} accuracy
+            </Badge>
+          )}
+        </div>
+        <p className="text-sm text-muted-foreground">Runs synthetic symptom sets through the Bayesian engine to measure accuracy, identify weak diagnoses, and surface remediation actions — before deploying rule changes.</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-medium min-w-[80px]">Cases to run:</label>
+          <Input type="number" min={100} max={10000} step={500} value={cases} onChange={e => setCases(Math.min(10000, Math.max(100, Number(e.target.value))))} className="w-32" data-testid="input-simulation-cases" />
+          <Button onClick={() => run.mutate()} disabled={run.isPending} data-testid="button-run-simulation" className="bg-purple-600 hover:bg-purple-700 text-white">
+            <Play className="h-4 w-4 mr-1" />{run.isPending ? `Running ${cases.toLocaleString()} cases…` : `Run ${cases.toLocaleString()} Cases`}
+          </Button>
+        </div>
+
+        {result && (
+          <div className="space-y-4">
+            {/* Accuracy bar */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-sm"><span>Overall top-1 accuracy</span><span className="font-semibold">{result.accuracyRate}</span></div>
+              <Progress value={parseFloat(result.accuracyRate)} className="h-3" />
+              <p className="text-xs text-muted-foreground">Engine source: {result.engineSource} · {result.activePriors} active priors · {result.n.toLocaleString()} synthetic cases</p>
+            </div>
+
+            {/* Diagnosis clusters */}
+            <div>
+              <p className="text-sm font-semibold mb-2">Diagnosis Clusters (by frequency)</p>
+              <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
+                {result.clusters?.map((c: any) => (
+                  <div key={c.diagnosis} className="flex items-center gap-3 text-xs">
+                    <div className="w-36 truncate font-medium">{c.diagnosis}</div>
+                    <div className="flex-1">
+                      <div className="bg-muted rounded-full h-2 overflow-hidden">
+                        <div className="bg-purple-500 h-full" style={{ width: c.pctOfTotal }} />
+                      </div>
+                    </div>
+                    <span className="w-10 text-right">{c.pctOfTotal}</span>
+                    <span className="text-muted-foreground w-20 text-right">avg P={c.avgPosterior}</span>
+                    <Badge variant="outline" className="text-xs">{c.source}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Per-diagnosis accuracy */}
+            <div>
+              <p className="text-sm font-semibold mb-2">Per-Diagnosis Match Rate</p>
+              <div className="rounded border overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/50"><tr><th className="text-left p-2">Diagnosis</th><th className="text-left p-2">Cases</th><th className="text-left p-2">Match Rate</th><th className="text-left p-2">Avg Posterior</th></tr></thead>
+                  <tbody className="divide-y">
+                    {result.diagnosisReport?.map((d: any) => (
+                      <tr key={d.diagnosis} className="hover:bg-muted/30">
+                        <td className="p-2 font-medium">{d.diagnosis}</td>
+                        <td className="p-2">{d.casesGenerated}</td>
+                        <td className="p-2">
+                          <Badge className={`text-xs ${parseFloat(d.topMatchRate) >= 75 ? "bg-green-100 text-green-800" : parseFloat(d.topMatchRate) >= 50 ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-800"}`}>
+                            {d.topMatchRate}
+                          </Badge>
+                        </td>
+                        <td className="p-2">{d.avgPosterior}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Fix suggestions */}
+            {result.fixSuggestions?.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-semibold flex items-center gap-2 text-amber-700"><AlertTriangle className="h-4 w-4" /> Suggested Fixes ({result.fixSuggestions.length})</p>
+                {result.fixSuggestions.map((f: any, i: number) => (
+                  <div key={i} className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950 p-3 space-y-1">
+                    <p className="text-sm font-medium">{f.diagnosis}</p>
+                    <p className="text-xs text-amber-700 dark:text-amber-300">{f.issue}</p>
+                    <p className="text-xs text-muted-foreground">Action: {f.action}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {result.fixSuggestions?.length === 0 && (
+              <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 dark:bg-green-950 rounded-md p-3">
+                <CheckCircle className="h-4 w-4" /> All diagnoses performing within acceptable accuracy thresholds. No remediation needed.
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Decision Trace ─────────────────────────────────────────────────────────────
+function DecisionTracePanel() {
+  const { toast } = useToast();
+  const [symptomInput, setSymptomInput] = useState("sore throat, fever, tonsillar exudate");
+  const [result, setResult] = useState<any>(null);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  const trace = useMutation({
+    mutationFn: async () => {
+      const symptoms = symptomInput.split(",").map(s => s.trim()).filter(Boolean);
+      const resp = await apiRequest("/api/kb/trace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symptoms }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error ?? "Trace failed");
+      return data;
+    },
+    onSuccess: (data) => { setResult(data); setExpanded({}); },
+    onError: (e: any) => toast({ title: "Trace error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-l-4 border-blue-400">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <GitBranch className="h-5 w-5 text-blue-600" /> Decision Trace — Full Provenance
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">Enter symptoms to see exactly which DB rule drove each diagnosis — ruleId, tableName, version, posterior, matched features.</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex gap-2">
+          <Input
+            value={symptomInput}
+            onChange={e => setSymptomInput(e.target.value)}
+            placeholder="sore throat, fever, tonsillar exudate, lymphadenopathy"
+            data-testid="input-trace-symptoms"
+            className="flex-1"
+          />
+          <Button onClick={() => trace.mutate()} disabled={trace.isPending} data-testid="button-run-trace">
+            <Search className="h-4 w-4 mr-1" />{trace.isPending ? "Tracing…" : "Trace"}
+          </Button>
+        </div>
+
+        {result && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground border-b pb-2">
+              <Badge className={result.engineSource === "KB_DB" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}>{result.engineSource}</Badge>
+              <span>{result.activePriorCount} active priors</span>
+              <span>Cache age: {result.cacheAge}</span>
+              <span>Symptoms: {result.symptoms?.join(", ")}</span>
+            </div>
+            {result.trace?.map((t: any) => (
+              <div key={t.rank} className={`rounded-md border p-3 space-y-2 ${t.rank === 1 ? "border-blue-300 bg-blue-50 dark:bg-blue-950" : ""}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">{t.rank}</span>
+                    <span className="font-semibold">{t.diagnosis}</span>
+                    <Badge className={t.confidence === "high" ? "bg-green-100 text-green-800" : t.confidence === "moderate" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"}>{t.confidence}</Badge>
+                    <span className="text-sm font-mono">{(t.posterior * 100).toFixed(1)}%</span>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => setExpanded(p => ({ ...p, [t.rank]: !p[t.rank] }))}>
+                    {expanded[t.rank] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  </Button>
+                </div>
+                {/* Provenance line — always visible */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground pl-8">
+                  <span><span className="font-medium text-foreground">Source:</span> {t.tableName ?? t.source}</span>
+                  {t.ruleId && <span><span className="font-medium text-foreground">Rule ID:</span> {t.ruleId}</span>}
+                  {t.version && <span><span className="font-medium text-foreground">Version:</span> v{t.version}</span>}
+                  <span><span className="font-medium text-foreground">Matched:</span> {t.matchedFeatures?.join(", ") || "none"}</span>
+                </div>
+                {/* Expanded: featureLikelihoods */}
+                {expanded[t.rank] && t.featureLikelihoods && (
+                  <div className="pl-8 pt-1">
+                    <p className="text-xs font-medium mb-1">Full feature likelihoods (P(symptom | {t.diagnosis})):</p>
+                    <div className="grid grid-cols-2 gap-1">
+                      {Object.entries(t.featureLikelihoods as Record<string, number>).sort(([,a],[,b]) => b - a).map(([sym, prob]) => (
+                        <div key={sym} className="flex items-center gap-2 text-xs">
+                          <div className="flex-1 flex items-center gap-1">
+                            <span className={t.matchedFeatures?.includes(sym) ? "font-semibold text-blue-700 dark:text-blue-300" : "text-muted-foreground"}>{sym}</span>
+                            {t.matchedFeatures?.includes(sym) && <CheckCircle className="h-3 w-3 text-blue-500" />}
+                          </div>
+                          <span className="font-mono text-xs w-10 text-right">{(prob * 100).toFixed(0)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -79,7 +79,7 @@ function extractRows(result: any): any[] {
 async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
   try {
     const result = await db.execute(
-      sql`SELECT diagnosis_label, base_probability, feature_likelihoods
+      sql`SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods, version
           FROM kb_diagnosis_rules
           WHERE active = true
           ORDER BY cluster_priority ASC, base_probability DESC`
@@ -88,6 +88,9 @@ async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
       diagnosis: String(r.diagnosis_label ?? r.diagnosisLabel ?? ""),
       baseProbability: Number(r.base_probability ?? r.baseProbability ?? 0),
       featureLikelihoods: (r.feature_likelihoods ?? r.featureLikelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? r.ruleId ?? ""),
+      version: Number(r.version ?? 1),
+      tableName: "kb_diagnosis_rules",
     }));
   } catch (err) {
     console.warn("[KbRuntime] Failed to load diagnosis priors from DB:", err);

@@ -58,22 +58,55 @@ function ActionBadge({ action }: { action: string }) {
 }
 
 // ─── Generic CRUD dialog ─────────────────────────────────────────────────────
-function EditDialog({ open, onClose, title, fields, initialValues, onSave, isLoading }: {
+function EditDialog({ open, onClose, title, fields, initialValues, onSave, isLoading, serverErrors, serverWarnings }: {
   open: boolean; onClose: () => void; title: string;
-  fields: { key: string; label: string; type?: string; required?: boolean; options?: string[] }[];
+  fields: { key: string; label: string; type?: string; required?: boolean; options?: string[]; hint?: string }[];
   initialValues?: Record<string, any>; onSave: (vals: Record<string, any>) => void; isLoading?: boolean;
+  serverErrors?: string[]; serverWarnings?: string[];
 }) {
   const [vals, setVals] = useState<Record<string, any>>(initialValues ?? {});
+  const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({});
   const set = (k: string, v: any) => setVals(p => ({ ...p, [k]: v }));
-  const handleSave = () => onSave(vals);
+
+  const handleSave = () => {
+    // Parse any JSON fields before saving
+    const out: Record<string, any> = { ...vals };
+    const errs: Record<string, string> = {};
+    for (const f of fields) {
+      if (f.type === "json" && typeof out[f.key] === "string") {
+        try { out[f.key] = JSON.parse(out[f.key]); errs[f.key] = ""; }
+        catch { errs[f.key] = "Invalid JSON — check syntax"; }
+      }
+    }
+    setJsonErrors(errs);
+    if (Object.values(errs).some(Boolean)) return;
+    onSave(out);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
+
+        {/* Server-side validation errors (422) */}
+        {serverErrors && serverErrors.length > 0 && (
+          <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950 p-3 space-y-1">
+            <p className="text-xs font-semibold text-red-700 dark:text-red-300 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Validation failed — cannot save:</p>
+            {serverErrors.map((e, i) => <p key={i} className="text-xs text-red-600 dark:text-red-400 pl-4">• {e}</p>)}
+          </div>
+        )}
+        {serverWarnings && serverWarnings.length > 0 && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950 p-3 space-y-1">
+            <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Warnings:</p>
+            {serverWarnings.map((w, i) => <p key={i} className="text-xs text-amber-600 dark:text-amber-400 pl-4">• {w}</p>)}
+          </div>
+        )}
+
         <div className="grid gap-3 py-2">
           {fields.map(f => (
             <div key={f.key} className="grid gap-1">
               <label className="text-sm font-medium">{f.label}{f.required && <span className="text-red-500 ml-1">*</span>}</label>
+              {f.hint && <p className="text-xs text-muted-foreground">{f.hint}</p>}
               {f.options ? (
                 <Select value={String(vals[f.key] ?? "")} onValueChange={v => set(f.key, v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -81,6 +114,17 @@ function EditDialog({ open, onClose, title, fields, initialValues, onSave, isLoa
                 </Select>
               ) : f.type === "textarea" ? (
                 <Textarea value={String(vals[f.key] ?? "")} onChange={e => set(f.key, e.target.value)} rows={3} />
+              ) : f.type === "json" ? (
+                <div className="space-y-1">
+                  <Textarea
+                    value={typeof vals[f.key] === "object" ? JSON.stringify(vals[f.key], null, 2) : String(vals[f.key] ?? "{}")}
+                    onChange={e => set(f.key, e.target.value)}
+                    rows={6}
+                    className="font-mono text-xs"
+                    placeholder='{"symptom name": 0.85, "another symptom": 0.60}'
+                  />
+                  {jsonErrors[f.key] && <p className="text-xs text-red-500">{jsonErrors[f.key]}</p>}
+                </div>
               ) : f.type === "boolean" ? (
                 <Select value={String(vals[f.key] ?? "true")} onValueChange={v => set(f.key, v === "true")}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -98,7 +142,7 @@ function EditDialog({ open, onClose, title, fields, initialValues, onSave, isLoa
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={isLoading}>{isLoading ? "Saving..." : "Save"}</Button>
+          <Button onClick={handleSave} disabled={isLoading} data-testid="button-dialog-save">{isLoading ? "Saving..." : "Save"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -473,18 +517,42 @@ function SimpleTableTab({ endpoint, title, columns, fields, idKey, editUrlFn, de
   const { toast } = useToast();
   const [editRow, setEditRow] = useState<any>(null);
   const [creating, setCreating] = useState(false);
+  const [serverErrors, setServerErrors] = useState<string[]>([]);
+  const [serverWarnings, setServerWarnings] = useState<string[]>([]);
 
   const { data: rows = [], isLoading } = useQuery<any[]>({ queryKey: [endpoint] });
 
   const save = useMutation({
     mutationFn: async (vals: any) => {
+      let resp: Response;
       if (editRow?.[idKey] && !creating) {
-        return (await apiRequest(editUrlFn(editRow), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(vals) })).json();
+        resp = await apiRequest(editUrlFn(editRow), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(vals) });
+      } else {
+        resp = await apiRequest(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(vals) });
       }
-      return (await apiRequest(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(vals) })).json();
+      const data = await resp.json();
+      if (!resp.ok) {
+        // Surface 422 validation errors inside the dialog
+        const errs: string[] = data.errors ?? (data.error ? [data.error] : ["Save failed"]);
+        const warns: string[] = data.warnings ?? [];
+        setServerErrors(errs);
+        setServerWarnings(warns);
+        throw new Error(errs[0] ?? "Validation failed");
+      }
+      setServerErrors([]);
+      setServerWarnings([]);
+      return data;
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: [endpoint] }); qc.invalidateQueries({ queryKey: ["/api/kb/stats"] }); setEditRow(null); setCreating(false); toast({ title: "Saved" }); },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [endpoint] });
+      qc.invalidateQueries({ queryKey: ["/api/kb/stats"] });
+      setEditRow(null); setCreating(false);
+      toast({ title: "Saved" });
+    },
+    onError: (e: any) => {
+      // Don't toast 422 — errors are shown in the dialog
+      if (!serverErrors.length) toast({ title: "Error", description: e.message, variant: "destructive" });
+    },
   });
 
   const del = useMutation({
@@ -495,7 +563,9 @@ function SimpleTableTab({ endpoint, title, columns, fields, idKey, editUrlFn, de
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Button onClick={() => { setEditRow(newDefault ?? {}); setCreating(true); }}><Plus className="h-4 w-4 mr-1" /> Add {title}</Button>
+        <Button onClick={() => { setEditRow(newDefault ?? {}); setCreating(true); setServerErrors([]); setServerWarnings([]); }}>
+          <Plus className="h-4 w-4 mr-1" /> Add {title}
+        </Button>
       </div>
       {isLoading ? <div className="text-center py-8 text-muted-foreground">Loading…</div> : (
         <div className="rounded-md border overflow-hidden">
@@ -509,7 +579,7 @@ function SimpleTableTab({ endpoint, title, columns, fields, idKey, editUrlFn, de
                   {columns.map(c => <td key={c.key} className="p-3 max-w-xs truncate">{c.render ? c.render(r[c.key], r) : String(r[c.key] ?? "")}</td>)}
                   <td className="p-3">
                     <div className="flex gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => { setEditRow(r); setCreating(false); }}><Edit2 className="h-4 w-4" /></Button>
+                      <Button size="sm" variant="ghost" data-testid={`button-edit-${r[idKey]}`} onClick={() => { setEditRow(r); setCreating(false); setServerErrors([]); setServerWarnings([]); }}><Edit2 className="h-4 w-4" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => del.mutate(r)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
                     </div>
                   </td>
@@ -522,7 +592,9 @@ function SimpleTableTab({ endpoint, title, columns, fields, idKey, editUrlFn, de
       )}
       {editRow !== null && (
         <EditDialog open title={creating ? `Add ${title}` : `Edit ${title}`} fields={fields} initialValues={editRow}
-          onSave={vals => save.mutate(vals)} isLoading={save.isPending} onClose={() => { setEditRow(null); setCreating(false); }} />
+          onSave={vals => save.mutate(vals)} isLoading={save.isPending}
+          serverErrors={serverErrors} serverWarnings={serverWarnings}
+          onClose={() => { setEditRow(null); setCreating(false); setServerErrors([]); setServerWarnings([]); }} />
       )}
     </div>
   );
@@ -778,6 +850,12 @@ export default function KnowledgeBasePage() {
               { key: "complaintId", label: "Complaint" },
               { key: "diagnosisLabel", label: "Diagnosis" },
               { key: "baseProbability", label: "Base Prob", render: v => `${(Number(v) * 100).toFixed(0)}%` },
+              { key: "featureLikelihoods", label: "Bayesian Features", render: v => {
+                const count = Object.keys(v ?? {}).length;
+                return count > 0
+                  ? <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">{count} features</Badge>
+                  : <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 flex items-center gap-1"><AlertTriangle className="h-3 w-3" />No likelihoods</Badge>;
+              }},
               { key: "cannotMiss", label: "Cannot Miss", render: v => v ? <Badge className="bg-red-100 text-red-800">Yes</Badge> : null },
               { key: "active", label: "Status", render: v => <StatusBadge active={v} /> },
             ]}
@@ -787,7 +865,13 @@ export default function KnowledgeBasePage() {
               { key: "diagnosisId", label: "Diagnosis ID", required: true },
               { key: "diagnosisLabel", label: "Diagnosis Label", required: true },
               { key: "icdCode", label: "ICD-10 Code" },
-              { key: "baseProbability", label: "Base Probability (0-1)", type: "number" },
+              { key: "baseProbability", label: "Base Probability (0–1)", type: "number" },
+              {
+                key: "featureLikelihoods",
+                label: "Feature Likelihoods (JSON)",
+                type: "json",
+                hint: 'P(symptom | diagnosis) pairs in [0,1]. Required for Bayesian differential engine. Example: {"fever": 0.85, "sore throat": 0.72}',
+              },
               { key: "basePoints", label: "Base Points", type: "number" },
               { key: "clusterPriority", label: "Cluster Priority", type: "number" },
               { key: "cannotMiss", label: "Cannot Miss", type: "boolean" },

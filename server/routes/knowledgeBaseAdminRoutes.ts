@@ -821,6 +821,160 @@ router.get("/audit-report", async (_req: Request, res: Response) => {
   }
 });
 
+// ── Decision Trace — full provenance per differential result ─────────────────
+router.post("/trace", async (req: Request, res: Response) => {
+  const { symptoms = [] } = req.body;
+  if (!Array.isArray(symptoms) || symptoms.length === 0) {
+    return res.status(400).json({ error: "symptoms must be a non-empty array of strings" });
+  }
+  try {
+    const { runDifferential, getSourceTrace } = await import("../clinical/bayesianEngine");
+    const { getKbCacheStatus } = await import("../kb/kbRuntime");
+    const cacheStatus = getKbCacheStatus();
+    const sourceTrace = getSourceTrace();
+    const cacheAgeMs = cacheStatus?.priors ? Date.now() - (Date.now() - cacheStatus.priors.ageMs) : 0;
+    const cacheAgeSec = cacheStatus?.priors ? Math.round(cacheStatus.priors.ageMs / 1000) : null;
+
+    const differentials = runDifferential(symptoms);
+    return res.json({
+      ok: true,
+      symptoms,
+      engineSource: sourceTrace.source,
+      cacheAge: cacheAgeSec !== null ? `${cacheAgeSec}s` : "unknown",
+      activePriorCount: sourceTrace.priorCount,
+      trace: differentials.map((d, i) => ({
+        rank: i + 1,
+        diagnosis: d.diagnosis,
+        posterior: d.posterior,
+        confidence: d.confidence,
+        matchedFeatures: d.matchedFeatures,
+        // Full provenance
+        source: d.source ?? sourceTrace.source,
+        ruleId: d.ruleId ?? null,
+        version: d.version ?? null,
+        tableName: d.tableName ?? (d.source === "KB_DB" ? "kb_diagnosis_rules" : "HARDCODED_PRIORS"),
+        featureLikelihoods: d.featureLikelihoods ?? null,
+      })),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Monte Carlo Simulation — run N synthetic cases through the Bayesian engine ─
+router.post("/simulate", async (req: Request, res: Response) => {
+  const n = Math.min(Number(req.body?.cases ?? 1000), 10000);
+  if (n < 1) return res.status(400).json({ error: "cases must be >= 1" });
+  try {
+    const { getActivePriors, topDifferentials, getSourceTrace } = await import("../clinical/bayesianEngine");
+    const priors = getActivePriors();
+    if (priors.length === 0) {
+      return res.status(503).json({ error: "No active priors loaded. Run POST /api/kb/cache-reload first." });
+    }
+
+    // Weighted random selection helper
+    const totalWeight = priors.reduce((s, p) => s + p.baseProbability, 0);
+    function pickPrior() {
+      let r = Math.random() * totalWeight;
+      for (const p of priors) {
+        r -= p.baseProbability;
+        if (r <= 0) return p;
+      }
+      return priors[priors.length - 1];
+    }
+
+    const clusters: Record<string, { count: number; posteriorSum: number; source: string }> = {};
+    const perDxStats: Record<string, { generated: number; correct: number; posteriorSum: number }> = {};
+    let correct = 0;
+
+    for (let i = 0; i < n; i++) {
+      const truePrior = pickPrior();
+      const trueDx = truePrior.diagnosis;
+
+      // Generate symptoms via Bernoulli trials on featureLikelihoods
+      const symptoms: string[] = [];
+      for (const [sym, prob] of Object.entries(truePrior.featureLikelihoods)) {
+        if (Math.random() < prob) symptoms.push(sym);
+      }
+      // Ensure at least 1 symptom
+      if (symptoms.length === 0) {
+        const first = Object.keys(truePrior.featureLikelihoods)[0];
+        if (first) symptoms.push(first);
+      }
+
+      const diff = topDifferentials(symptoms, 3, 0.01);
+      const top1 = diff[0]?.diagnosis ?? "none";
+      const top1Posterior = diff[0]?.posterior ?? 0;
+      const top1Source = diff[0]?.source ?? "unknown";
+
+      if (top1 === trueDx) correct++;
+
+      if (!clusters[top1]) clusters[top1] = { count: 0, posteriorSum: 0, source: top1Source };
+      clusters[top1].count++;
+      clusters[top1].posteriorSum += top1Posterior;
+
+      if (!perDxStats[trueDx]) perDxStats[trueDx] = { generated: 0, correct: 0, posteriorSum: 0 };
+      perDxStats[trueDx].generated++;
+      if (top1 === trueDx) perDxStats[trueDx].correct++;
+      perDxStats[trueDx].posteriorSum += top1Posterior;
+    }
+
+    const sourceTrace = getSourceTrace();
+    const accuracyRate = (correct / n * 100).toFixed(1);
+
+    // Per-diagnosis stats
+    const diagnosisReport = Object.entries(perDxStats).map(([dx, s]) => ({
+      diagnosis: dx,
+      casesGenerated: s.generated,
+      topMatchRate: `${(s.correct / s.generated * 100).toFixed(0)}%`,
+      avgPosterior: Number((s.posteriorSum / s.generated).toFixed(3)),
+    })).sort((a, b) => parseFloat(b.topMatchRate) - parseFloat(a.topMatchRate));
+
+    // Cluster list
+    const clusterList = Object.entries(clusters).map(([dx, c]) => ({
+      diagnosis: dx,
+      casesCaptured: c.count,
+      pctOfTotal: `${(c.count / n * 100).toFixed(1)}%`,
+      avgPosterior: Number((c.posteriorSum / c.count).toFixed(3)),
+      source: c.source,
+    })).sort((a, b) => b.casesCaptured - a.casesCaptured);
+
+    // Fix suggestions — diagnoses with low accuracy or low posterior
+    const fixSuggestions: Array<{ diagnosis: string; issue: string; action: string }> = [];
+    for (const stat of diagnosisReport) {
+      const matchPct = parseFloat(stat.topMatchRate);
+      if (matchPct < 50) {
+        fixSuggestions.push({
+          diagnosis: stat.diagnosis,
+          issue: `Low top-1 match rate (${stat.topMatchRate}) — often confused with competing diagnoses`,
+          action: `Review featureLikelihoods in kb_diagnosis_rules for '${stat.diagnosis}'. Increase weights for pathognomonic features, decrease for shared symptoms.`,
+        });
+      } else if (stat.avgPosterior < 0.12) {
+        fixSuggestions.push({
+          diagnosis: stat.diagnosis,
+          issue: `Low average posterior (${(stat.avgPosterior * 100).toFixed(0)}%) even when top-1 — weak discrimination`,
+          action: `Add more distinctive featureLikelihoods to kb_diagnosis_rules for '${stat.diagnosis}', or increase baseProbability if underrepresented.`,
+        });
+      }
+    }
+
+    return res.json({
+      ok: true,
+      n,
+      engineSource: sourceTrace.source,
+      activePriors: priors.length,
+      accuracyRate: `${accuracyRate}%`,
+      accuracy: { correct, incorrect: n - correct, rate: `${accuracyRate}%` },
+      clusters: clusterList,
+      diagnosisReport,
+      fixSuggestions,
+      simulatedAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // Source of truth audit endpoint
 router.get("/audit/source-map", (_req: Request, res: Response) => {
   res.json({

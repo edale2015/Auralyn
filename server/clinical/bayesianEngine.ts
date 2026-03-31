@@ -16,6 +16,10 @@ export interface DiagnosisPrior {
   diagnosis: string;
   baseProbability: number;                     // P(D) — unconditional prevalence
   featureLikelihoods: Record<string, number>;  // P(symptom | D)
+  // Provenance — populated when loaded from kb_diagnosis_rules
+  ruleId?: string;
+  version?: number;
+  tableName?: string;
 }
 
 export interface DifferentialResult {
@@ -23,8 +27,13 @@ export interface DifferentialResult {
   posterior:   number;     // P(D | symptoms), normalized
   confidence:  "high" | "moderate" | "low";
   matchedFeatures: string[];
+  featureLikelihoods?: Record<string, number>;  // full likelihood map (for trace)
   /** Which source was used for this diagnosis prior */
   source?: "KB_DB" | "FALLBACK_HARDCODED";
+  // Full provenance chain
+  ruleId?: string;
+  version?: number;
+  tableName?: string;
 }
 
 /** Source trace — which prior table is currently active in the Bayesian engine */
@@ -203,6 +212,10 @@ export function bayesianUpdate(
         posterior: Number(posterior.toFixed(4)),
         confidence: posterior >= 0.35 ? "high" : posterior >= 0.15 ? "moderate" : "low",
         matchedFeatures: matched,
+        featureLikelihoods: prior.featureLikelihoods,
+        ruleId: prior.ruleId,
+        version: prior.version,
+        tableName: prior.tableName,
       } as DifferentialResult;
     })
     .sort((a, b) => b.posterior - a.posterior);
