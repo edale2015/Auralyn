@@ -25,8 +25,31 @@ export interface FhirObservation {
   valueString?: string;
 }
 
+export interface FhirDiagnosticReport {
+  resourceType: "DiagnosticReport";
+  id?: string;
+  status: "final" | "preliminary" | "amended";
+  code: { text: string; coding?: Array<{ system: string; code: string; display: string }> };
+  subject: { reference: string };
+  effectiveDateTime?: string;
+  conclusion?: string;
+  result?: Array<{ reference: string }>;
+  presentedForm?: Array<{ contentType: string; data: string }>;
+}
+
+export interface FhirMedicationRequest {
+  resourceType: "MedicationRequest";
+  id?: string;
+  status: "active" | "completed" | "stopped";
+  intent: "order";
+  medicationCodeableConcept: { text: string };
+  subject: { reference: string };
+  dosageInstruction?: Array<{ text: string }>;
+  reasonCode?: Array<{ text: string }>;
+}
+
 export interface FhirBundle {
   resourceType: "Bundle";
   type: "transaction" | "searchset";
-  entry: Array<{ resource: FhirPatient | FhirEncounter | FhirObservation }>;
+  entry: Array<{ resource: FhirPatient | FhirEncounter | FhirObservation | FhirDiagnosticReport | FhirMedicationRequest }>;
 }

@@ -1,4 +1,10 @@
-import { mapInternalEncounterToFhir, mapInternalPatientToFhir, mapTriageResultToFhirObservations } from "./fhirMapper";
+import {
+  mapInternalEncounterToFhir,
+  mapInternalPatientToFhir,
+  mapTriageResultToFhirObservations,
+  mapTriageResultToFhirDiagnosticReport,
+  mapTreatmentToFhirMedicationRequest,
+} from "./fhirMapper";
 import { fhirPost, isFhirConfigured } from "./fhirClient";
 
 export interface FhirSyncResult {
@@ -23,17 +29,34 @@ export async function syncEncounterToFhir(input: {
     const createdPatient = await fhirPost<any>("/Patient", mapInternalPatientToFhir(input.patient));
     const fhirPatientId = createdPatient.id;
 
-    await fhirPost("/Encounter", mapInternalEncounterToFhir(input.encounter, fhirPatientId));
+    const createdEncounter = await fhirPost<any>("/Encounter", mapInternalEncounterToFhir(input.encounter, fhirPatientId));
+    const fhirEncounterId = createdEncounter?.id;
 
     const observations = mapTriageResultToFhirObservations(input.encounter, fhirPatientId);
     for (const obs of observations) {
       await fhirPost("/Observation", obs);
     }
 
+    const diagnosticReport = mapTriageResultToFhirDiagnosticReport(input.encounter, fhirPatientId, fhirEncounterId);
+    await fhirPost("/DiagnosticReport", diagnosticReport);
+
+    const treatments: Array<any> = input.encounter.triageResult?.treatments ?? input.encounter.result?.treatments ?? [];
+    const medRequests = treatments.map((t: any) =>
+      mapTreatmentToFhirMedicationRequest(
+        { name: t.name ?? t.drug ?? t, dose: t.dose, route: t.route, indication: t.indication ?? input.encounter.complaint },
+        fhirPatientId,
+      )
+    );
+    for (const med of medRequests) {
+      await fhirPost("/MedicationRequest", med);
+    }
+
     return {
       ok: true,
       fhirPatientId,
-      resourcesCreated: 1 + 1 + observations.length,
+      fhirEncounterId,
+      resourcesCreated: 1 + 1 + observations.length + 1 + medRequests.length,
+      resourceTypes: ["Patient", "Encounter", ...observations.map(() => "Observation"), "DiagnosticReport", ...medRequests.map(() => "MedicationRequest")],
     };
   } catch (err) {
     return {

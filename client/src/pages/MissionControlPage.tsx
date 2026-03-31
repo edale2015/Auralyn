@@ -405,10 +405,10 @@ export default function MissionControlPage() {
               <p className="font-semibold text-blue-600 mb-1">📋 Remaining fallback patterns</p>
               <ul className="space-y-0.5 text-muted-foreground">
                 <li>LLM GPT-4o fallback if KB score ties — logged, not silent</li>
-                <li>Voice STT — currently text-only; real STT via Whisper pending</li>
-                <li>Telegram/Twilio integration — configured but not active in env</li>
-                <li>ECW / FHIR bridge — stub endpoints, full HL7 mapping in roadmap</li>
+                <li>ECW EHR bridge — set EHR_ENDPOINT env var to activate full sync</li>
+                <li>FHIR bridge — set FHIR_BASE_URL env var to activate (all R4 resources implemented)</li>
                 <li>Multi-tenant patient auth — session-based, not OIDC</li>
+                <li>Twilio voice IVR streaming — mocked for dev; enable with real Twilio Media Stream URL</li>
               </ul>
             </div>
           </div>

@@ -9,6 +9,12 @@ import { eq, desc, sql as drizzleSql } from "drizzle-orm";
 import { broadcastPatientEvent } from "../ws/patientStream";
 import { detectDeterioration, seedDeteriorationRules } from "../engine/deteriorationEngine";
 import { getEngines, getSkills } from "../monitoring/healthRegistry";
+import { speechToText, convertWebmToWav } from "../replit_integrations/audio/client";
+import { sendSMS, sendWhatsApp } from "../services/smsService";
+import { telegramSendMessage } from "../services/telegramClient";
+import { isFhirConfigured } from "../ehr/fhir/fhirClient";
+import { syncEncounterToFhir } from "../ehr/fhir/fhirService";
+import { ENV } from "../config/env";
 
 const router = express.Router();
 
@@ -90,17 +96,22 @@ router.get("/integrations", async (_req: Request, res: Response) => {
     dbOk = true;
   } catch {}
 
-  const openaiOk = !!(process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ENV_VAR);
-  const redisOk = !!(process.env.REDIS_URL || process.env.UPSTASH_REDIS_REST_URL);
+  const openaiOk = !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY);
+  const redisOk  = !!(process.env.REDIS_URL || process.env.UPSTASH_REDIS_REST_URL);
+  const telegramOk = !!ENV.TELEGRAM_BOT_TOKEN;
+  const twilioSmsOk = !!(ENV.TWILIO_SID && ENV.TWILIO_AUTH_TOKEN && ENV.TWILIO_NUMBER);
+  const twilioWaOk  = !!(ENV.TWILIO_SID && ENV.TWILIO_AUTH_TOKEN && ENV.TWILIO_WHATSAPP);
+  const fhirOk   = !!process.env.FHIR_BASE_URL;
 
   res.json([
-    { name: "PostgreSQL",  status: dbOk ? "ok" : "error",   icon: "database" },
-    { name: "OpenAI GPT",  status: openaiOk ? "ok" : "warn", icon: "brain" },
-    { name: "Redis / Cache", status: redisOk ? "ok" : "warn", icon: "zap" },
-    { name: "Telegram",    status: "warn",  icon: "message-circle" },
-    { name: "ECW (EHR)",   status: "pending", icon: "file-text" },
-    { name: "FHIR Bridge", status: "pending", icon: "activity" },
-    { name: "Twilio SMS",  status: "warn",  icon: "phone" },
+    { name: "PostgreSQL",       status: dbOk ? "ok" : "error",          icon: "database",        detail: dbOk ? "connected" : "unreachable" },
+    { name: "OpenAI / STT",     status: openaiOk ? "ok" : "warn",        icon: "brain",           detail: openaiOk ? "gpt-4o-mini-transcribe active" : "key missing" },
+    { name: "Redis / Cache",    status: redisOk ? "ok" : "warn",         icon: "zap",             detail: redisOk ? "Upstash connected" : "not configured" },
+    { name: "Telegram Bot",     status: telegramOk ? "ok" : "warn",      icon: "message-circle",  detail: telegramOk ? "token set" : "TELEGRAM_BOT_TOKEN missing" },
+    { name: "Twilio SMS",       status: twilioSmsOk ? "ok" : "warn",     icon: "phone",           detail: twilioSmsOk ? `from ...${ENV.TWILIO_NUMBER?.slice(-4)}` : "missing creds" },
+    { name: "Twilio WhatsApp",  status: twilioWaOk ? "ok" : "warn",      icon: "message-circle",  detail: twilioWaOk ? `from ...${ENV.TWILIO_WHATSAPP?.slice(-4)}` : "missing creds" },
+    { name: "FHIR R4 Bridge",   status: fhirOk ? "ok" : "pending",       icon: "activity",        detail: fhirOk ? process.env.FHIR_BASE_URL : "Set FHIR_BASE_URL to enable" },
+    { name: "ECW (EHR)",        status: process.env.EHR_ENDPOINT ? "ok" : "pending", icon: "file-text", detail: process.env.EHR_ENDPOINT || "Set EHR_ENDPOINT to enable" },
   ]);
 });
 
@@ -181,21 +192,45 @@ router.post("/seed-deterioration", async (_req: Request, res: Response) => {
 });
 
 // ── Voice / Multimodal ────────────────────────────────────────────────────────
+// Accepts either:
+//   { patient_id, text }           — plain-text intake (dashboard UI)
+//   { patient_id, audio, format }  — base64-encoded audio → real STT via OpenAI
 router.post("/voice", async (req: Request, res: Response) => {
   try {
-    const { patient_id = "demo", text } = req.body;
-    const transcript = text ?? "Patient reports symptoms via voice intake";
+    const { patient_id = "demo", text, audio, format = "webm" } = req.body;
+
+    let transcript: string;
+    let sttUsed = false;
+
+    if (audio) {
+      // Real audio transcription path
+      const audioBuffer = Buffer.from(audio, "base64");
+      const wavBuffer = format === "webm" ? await convertWebmToWav(audioBuffer) : audioBuffer;
+      transcript = await speechToText(wavBuffer, format === "webm" ? "wav" : (format as any));
+      sttUsed = true;
+      pushSysLog("info", `STT transcribed for ${patient_id}: "${transcript.slice(0, 80)}"`);
+    } else {
+      transcript = text ?? "Patient reports symptoms via voice intake";
+    }
+
+    const SYMPTOM_RE = /\b(pain|fever|cough|nausea|headache|fatigue|sore throat|runny nose|vomiting|diarrhea|rash|chills|shortness of breath|ear pain)\b/gi;
     const structured = {
-      symptoms: transcript.match(/\b(pain|fever|cough|nausea|headache|fatigue)\b/gi) ?? [],
+      symptoms: [...new Set((transcript.match(SYMPTOM_RE) ?? []).map(s => s.toLowerCase()))],
       raw: transcript,
+      sttUsed,
+      model: sttUsed ? "gpt-4o-mini-transcribe" : "text",
     };
+
     await db.insert(patientMultimodalInputs).values({
       patientId: patient_id, type: "voice", content: transcript, processed: structured,
     });
     broadcastPatientEvent({ type: "voice", patient_id, structured, ts: Date.now() });
     pushSysLog("info", `Voice intake: ${patient_id} — "${transcript.slice(0, 60)}"`);
     res.json({ transcript, structured });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) {
+    pushSysLog("error", `Voice intake failed: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Robot Devices ─────────────────────────────────────────────────────────────
@@ -250,6 +285,106 @@ router.get("/robot-results", async (_req: Request, res: Response) => {
     const rows = await db.select().from(robotResults).orderBy(desc(robotResults.createdAt)).limit(20);
     res.json(rows);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Messaging — Telegram & Twilio ─────────────────────────────────────────────
+router.get("/messaging-status", (_req: Request, res: Response) => {
+  const telegramOk = !!ENV.TELEGRAM_BOT_TOKEN;
+  const twilioSmsOk = !!(ENV.TWILIO_SID && ENV.TWILIO_AUTH_TOKEN && ENV.TWILIO_NUMBER);
+  const twilioWaOk  = !!(ENV.TWILIO_SID && ENV.TWILIO_AUTH_TOKEN && ENV.TWILIO_WHATSAPP);
+
+  res.json({
+    telegram: {
+      configured: telegramOk,
+      status: telegramOk ? "ok" : "missing_token",
+      webhook: "/api/webhooks/telegram/patient/:secret",
+    },
+    twilio_sms: {
+      configured: twilioSmsOk,
+      status: twilioSmsOk ? "ok" : "missing_credentials",
+      from: ENV.TWILIO_NUMBER ? `...${ENV.TWILIO_NUMBER.slice(-4)}` : null,
+    },
+    twilio_whatsapp: {
+      configured: twilioWaOk,
+      status: twilioWaOk ? "ok" : "missing_credentials",
+      from: ENV.TWILIO_WHATSAPP ? `...${ENV.TWILIO_WHATSAPP.slice(-4)}` : null,
+    },
+  });
+});
+
+router.post("/messaging-test", async (req: Request, res: Response) => {
+  const { channel, to, message = "Auralyn system test ✓" } = req.body;
+  if (!channel || !to) {
+    return res.status(400).json({ error: "channel and to are required" });
+  }
+
+  try {
+    let result: any;
+    if (channel === "sms") {
+      result = await sendSMS(to, message);
+    } else if (channel === "whatsapp") {
+      result = await sendWhatsApp(to, message);
+    } else if (channel === "telegram") {
+      if (!ENV.TELEGRAM_BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN not configured");
+      result = await telegramSendMessage({ botToken: ENV.TELEGRAM_BOT_TOKEN, chatId: to, text: message });
+    } else {
+      return res.status(400).json({ error: `Unknown channel: ${channel}. Use sms, whatsapp, or telegram` });
+    }
+    pushSysLog("info", `Messaging test: ${channel} → ${to}`);
+    res.json({ ok: true, channel, to, result });
+  } catch (e: any) {
+    pushSysLog("error", `Messaging test failed (${channel}): ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── FHIR Bridge ───────────────────────────────────────────────────────────────
+router.get("/fhir-status", (_req: Request, res: Response) => {
+  const configured = isFhirConfigured();
+  res.json({
+    configured,
+    baseUrl: process.env.FHIR_BASE_URL ?? null,
+    status: configured ? "ok" : "not_configured",
+    smartAuth: !!(process.env.FHIR_CLIENT_ID && process.env.FHIR_TOKEN_URL),
+    supportedResources: ["Patient", "Encounter", "Observation", "DiagnosticReport", "MedicationRequest"],
+    hint: configured ? undefined : "Set FHIR_BASE_URL to enable sync. Optional: FHIR_CLIENT_ID + FHIR_CLIENT_SECRET + FHIR_TOKEN_URL for SMART auth.",
+  });
+});
+
+router.post("/fhir-test-sync", async (req: Request, res: Response) => {
+  if (!isFhirConfigured()) {
+    return res.status(422).json({
+      ok: false,
+      skipped: true,
+      message: "FHIR_BASE_URL is not configured. Add it as an environment variable to enable FHIR sync.",
+    });
+  }
+  try {
+    const demoEncounter = req.body.encounter ?? {
+      complaint: "sore throat",
+      triageResult: {
+        topDiagnosis: "Pharyngitis",
+        disposition: "Treat and discharge",
+        confidence: 0.87,
+        treatments: [{ name: "Amoxicillin", dose: "500mg", route: "oral", indication: "Pharyngitis" }],
+        redFlags: [],
+      },
+    };
+    const demoPatient = req.body.patient ?? {
+      firstName: "Test", lastName: "Patient",
+      dob: "1990-01-01", sex: "unknown",
+    };
+    const result = await syncEncounterToFhir({
+      clinicId: "auralyn-test",
+      encounter: demoEncounter,
+      patient: demoPatient,
+    });
+    pushSysLog("info", `FHIR test sync: ${result.resourcesCreated} resources → ${process.env.FHIR_BASE_URL}`);
+    res.json(result);
+  } catch (e: any) {
+    pushSysLog("error", `FHIR sync failed: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── System Health Summary ─────────────────────────────────────────────────────
