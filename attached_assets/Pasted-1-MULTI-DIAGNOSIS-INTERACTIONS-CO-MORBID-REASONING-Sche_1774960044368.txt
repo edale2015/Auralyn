@@ -1,0 +1,309 @@
+1) MULTI-DIAGNOSIS INTERACTIONS (CO-MORBID REASONING)
+🧾 Schema
+-- Pairwise interactions (can extend to triples later)
+CREATE TABLE kb_diagnosis_interactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  dx_a TEXT NOT NULL,                         -- "CHF"
+  dx_b TEXT NOT NULL,                         -- "PNEUMONIA"
+  interaction_type TEXT NOT NULL,             -- synergy | exclusion | conditional | risk_boost
+  strength FLOAT NOT NULL DEFAULT 0.0,        -- [-1.0 .. +1.0]
+  conditions JSONB,                           -- optional: { "fever": true, "age": {">":65} }
+  notes TEXT,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+-- Optional higher-order clusters (advanced)
+CREATE TABLE kb_diagnosis_clusters (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cluster_id TEXT,
+  diagnoses TEXT[],                           -- ["CHF","PNEUMONIA"]
+  boost FLOAT DEFAULT 0.0,                    -- cluster synergy
+  is_active BOOLEAN DEFAULT TRUE
+);
+⚙️ Engine (pairwise adjustment over base scores)
+// server/engine/coMorbidityEngine.ts
+type DxScore = { diagnosis: string; score: number; meta?: any }
+
+function meetsConditions(input: any, cond?: any): boolean {
+  if (!cond) return true
+  for (const [k, v] of Object.entries(cond)) {
+    if (typeof v === 'object' && v !== null) {
+      if ('>' in v && !(input[k] > (v as any)['>'])) return false
+      if ('<' in v && !(input[k] < (v as any)['<'])) return false
+    } else {
+      if (input[k] !== v) return false
+    }
+  }
+  return true
+}
+
+export async function applyCoMorbidityAdjustments(
+  input: any,
+  baseResults: DxScore[]
+): Promise<DxScore[]> {
+  const interactions = await db.kb_diagnosis_interactions.findAll({ is_active: true })
+
+  // map for quick access
+  const map = new Map(baseResults.map(r => [r.diagnosis, { ...r }]))
+
+  for (const inter of interactions) {
+    if (!meetsConditions(input, inter.conditions)) continue
+
+    const a = map.get(inter.dx_a)
+    const b = map.get(inter.dx_b)
+    if (!a || !b) continue
+
+    // log-space adjustment
+    const adj = inter.strength // e.g., +0.3 synergy, -0.8 exclusion
+    if (inter.interaction_type === 'synergy') {
+      a.score += adj
+      b.score += adj
+    } else if (inter.interaction_type === 'risk_boost') {
+      // boost only if both present signals
+      if (a.score > -5 && b.score > -5) {
+        a.score += adj
+        b.score += adj
+      }
+    } else if (inter.interaction_type === 'exclusion') {
+      // penalize the weaker of the two
+      if (a.score > b.score) b.score += adj // adj negative
+      else a.score += adj
+    } else if (inter.interaction_type === 'conditional') {
+      a.score += adj
+      b.score += adj
+    }
+
+    a.meta = { ...(a.meta || {}), interaction: inter }
+    b.meta = { ...(b.meta || {}), interaction: inter }
+  }
+
+  return Array.from(map.values()).sort((x, y) => y.score - x.score)
+}
+🔌 Pipeline hook
+// after base Bayesian scoring
+const base = await runAdvancedDiagnosis(input)
+const withCoMorbid = await applyCoMorbidityAdjustments(input, base)
+⏳ 2) TEMPORAL REASONING (SYMPTOMS OVER TIME)
+🧾 Schema
+CREATE TABLE kb_temporal_patterns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  diagnosis TEXT NOT NULL,
+  feature_key TEXT NOT NULL,                  -- "fever", "pain"
+  pattern_type TEXT NOT NULL,                 -- rising | falling | persistent | intermittent | acute_onset
+  duration_hours INT,                         -- optional thresholds
+  likelihood FLOAT NOT NULL,                  -- multiplier in log-space
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Store per-case time series (optional, if not already present)
+CREATE TABLE patient_time_series (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id TEXT,
+  feature_key TEXT,
+  t TIMESTAMP,
+  value FLOAT
+);
+⚙️ Engine
+// server/engine/temporalEngine.ts
+type Series = { t: number; v: number }[]
+
+function detectPattern(series: Series): 'rising'|'falling'|'persistent'|'intermittent'|'acute_onset' {
+  if (!series || series.length < 2) return 'persistent'
+  const first = series[0].v
+  const last = series[series.length - 1].v
+  const diffs = series.slice(1).map((p, i) => p.v - series[i].v)
+
+  const up = diffs.filter(d => d > 0).length
+  const down = diffs.filter(d => d < 0).length
+
+  if (last - first > 0 && up > down) return 'rising'
+  if (last - first < 0 && down > up) return 'falling'
+  const signChanges = diffs.reduce((c, d, i) => (i>0 && Math.sign(d) !== Math.sign(diffs[i-1]) ? c+1 : c), 0)
+  if (signChanges >= 2) return 'intermittent'
+  if (series.length <= 3 && Math.abs(last - first) > 0.5) return 'acute_onset'
+  return 'persistent'
+}
+
+export async function applyTemporalAdjustments(
+  caseId: string,
+  baseResults: { diagnosis: string; score: number }[]
+) {
+  const patterns = await db.kb_temporal_patterns.findAll({ is_active: true })
+  const seriesByFeature = await db.patient_time_series.groupByFeature(caseId) // {feature_key: Series}
+
+  const out = baseResults.map(r => ({ ...r }))
+
+  for (const p of patterns) {
+    const series = seriesByFeature[p.feature_key]
+    if (!series) continue
+    const pat = detectPattern(series)
+
+    if (pat === p.pattern_type) {
+      const idx = out.findIndex(x => x.diagnosis === p.diagnosis)
+      if (idx >= 0) {
+        out[idx].score += Math.log(p.likelihood)
+        ;(out[idx] as any).temporal = { feature: p.feature_key, pattern: pat }
+      }
+    }
+  }
+
+  return out.sort((a, b) => b.score - a.score)
+}
+🔌 Pipeline hook
+const withTemporal = await applyTemporalAdjustments(caseId, withCoMorbid)
+📊 3) REAL-WORLD OUTCOME LEARNING (SAFE, GOVERNED)
+🧾 Schema
+CREATE TABLE kb_outcomes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id TEXT,
+  predicted_dx TEXT,
+  actual_dx TEXT,
+  predicted_disposition TEXT,
+  actual_disposition TEXT,
+  correct BOOLEAN,
+  clinician_override BOOLEAN,
+  outcome_severity TEXT,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE kb_learning_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rule_id TEXT,
+  feature_key TEXT,
+  delta FLOAT,                               -- proposed adjustment
+  confidence FLOAT,
+  source TEXT,                               -- simulation | real_world
+  status TEXT DEFAULT 'pending',              -- pending | approved | rejected | deployed
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Learning Engine (generates suggestions, not auto-changes)
+// server/learning/outcomeLearningEngine.ts
+export async function generateLearningEvents() {
+  const rows = await db.kb_outcomes.findRecent({ limit: 10000 })
+
+  const byDx: Record<string, { total: number; errors: number }> = {}
+
+  for (const r of rows) {
+    if (!byDx[r.predicted_dx]) byDx[r.predicted_dx] = { total: 0, errors: 0 }
+    byDx[r.predicted_dx].total++
+    if (!r.correct) byDx[r.predicted_dx].errors++
+  }
+
+  const events = []
+  for (const [dx, stats] of Object.entries(byDx)) {
+    const errRate = stats.errors / Math.max(1, stats.total)
+    if (errRate > 0.15) {
+      // propose down-weight base prior slightly
+      events.push({
+        rule_id: `DX_BAY_${dx.toUpperCase()}`,
+        feature_key: '__base__',
+        delta: -0.05,
+        confidence: Math.min(0.95, errRate + 0.5),
+        source: 'real_world'
+      })
+    }
+  }
+
+  for (const e of events) {
+    await db.kb_learning_events.insert(e)
+  }
+
+  return events
+}
+⚙️ Apply Approved Changes (with audit + versioning)
+// server/learning/applyApprovedChanges.ts
+export async function applyApprovedLearningEvents() {
+  const events = await db.kb_learning_events.findAll({ status: 'approved' })
+
+  for (const e of events) {
+    if (e.feature_key === '__base__') {
+      const rule = await db.kb_diagnosis_rules.findOne({ rule_id: e.rule_id })
+      const newVal = Math.max(0.001, rule.base_probability + e.delta)
+
+      await db.kb_diagnosis_rules.update({
+        rule_id: e.rule_id,
+        base_probability: newVal
+      })
+    } else {
+      const f = await db.kb_feature_models.findOne({
+        rule_id: e.rule_id,
+        feature_key: e.feature_key
+      })
+      if (!f) continue
+      const newVal = Math.min(0.999, Math.max(0.001, (f.p_present || 0.5) + e.delta))
+
+      await db.kb_feature_models.update({
+        id: f.id,
+        p_present: newVal
+      })
+    }
+
+    await db.kb_learning_events.update({
+      id: e.id,
+      status: 'deployed'
+    })
+
+    await db.changeAuditLog.append({
+      type: 'learning_deploy',
+      payload: e
+    })
+  }
+}
+🔌 Pipeline hook (post-decision)
+await db.kb_outcomes.insert({
+  case_id,
+  predicted_dx: topDx,
+  actual_dx: clinicianDx || null,
+  predicted_disposition,
+  actual_disposition: clinicianDisp || null,
+  correct: !!clinicianDx && clinicianDx === topDx,
+  clinician_override: !!clinicianDx && clinicianDx !== topDx
+})
+🧩 FINAL PIPELINE (ALL THREE INTEGRATED)
+// canonical flow
+const base = await runAdvancedDiagnosis(input)
+const withCoMorbid = await applyCoMorbidityAdjustments(input, base)
+const withTemporal = await applyTemporalAdjustments(caseId, withCoMorbid)
+
+// then → treatment → disposition → safety → audit
+🧪 MUST-PASS TESTS
+Co-morbidity: CHF + pneumonia → both boosted (synergy)
+Exclusion: viral URI vs bacterial strep → one suppressed
+Temporal: rising fever → infection ↑, falling fever → ↓
+Learning: repeated misclassification → suggestion appears → approve → score shifts on next run
+Trace: each adjustment logs interaction, temporal, learning_event in decision trace
+🧭 FINAL INSTRUCTION TO REPLIT
+Writing
+
+Implement three advanced reasoning modules fully integrated into the KB-driven pipeline:
+
+Co-morbidity Engine
+Add kb_diagnosis_interactions and optional clusters
+Apply pairwise log-score adjustments (synergy, exclusion, conditional)
+Expose interaction hits in trace
+Temporal Engine
+Add kb_temporal_patterns and patient_time_series
+Detect patterns (rising, falling, intermittent, acute_onset)
+Apply likelihood adjustments per diagnosis
+Expose temporal contributions in trace
+Outcome Learning System
+Add kb_outcomes and kb_learning_events
+Generate suggestions from real-world errors and simulations
+Require approval workflow before applying
+Apply changes to kb_diagnosis_rules / kb_feature_models
+Log all deployments to audit trail and create version snapshots
+
+Constraints:
+
+100% KB-driven (no CSV/TS fallbacks)
+Full traceability: show rule IDs, interaction IDs, temporal patterns, learning events
+Safety: no auto-deploy for high-risk domains; enforce approval + regression test
+
+Deliver:
+
+schemas
+engines
+routes
+UI hooks (learning queue + trace panels)
+proof via simulation + trace logs

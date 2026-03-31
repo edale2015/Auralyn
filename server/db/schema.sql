@@ -352,3 +352,91 @@ CREATE TABLE IF NOT EXISTS kb_weight_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_kb_weight_events_key ON kb_weight_events (key, created_at DESC);
+
+-- ── Advanced Reasoning: Co-morbidity Engine ──────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS kb_diagnosis_interactions (
+  id SERIAL PRIMARY KEY,
+  dx_a TEXT NOT NULL,
+  dx_b TEXT NOT NULL,
+  interaction_type TEXT NOT NULL DEFAULT 'synergy',
+  strength FLOAT NOT NULL DEFAULT 0.0,
+  conditions JSONB,
+  notes TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_dx_interactions_pair
+  ON kb_diagnosis_interactions (dx_a, dx_b, interaction_type);
+
+CREATE TABLE IF NOT EXISTS kb_diagnosis_clusters (
+  id SERIAL PRIMARY KEY,
+  cluster_id TEXT NOT NULL UNIQUE,
+  diagnoses TEXT[] NOT NULL DEFAULT '{}',
+  boost FLOAT NOT NULL DEFAULT 0.0,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ── Advanced Reasoning: Temporal Engine ──────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS kb_temporal_patterns (
+  id SERIAL PRIMARY KEY,
+  diagnosis TEXT NOT NULL,
+  feature_key TEXT NOT NULL,
+  pattern_type TEXT NOT NULL,
+  duration_hours INT,
+  likelihood FLOAT NOT NULL DEFAULT 1.0,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_temporal_patterns_uniq
+  ON kb_temporal_patterns (diagnosis, feature_key, pattern_type);
+
+CREATE TABLE IF NOT EXISTS patient_time_series (
+  id SERIAL PRIMARY KEY,
+  case_id TEXT NOT NULL,
+  feature_key TEXT NOT NULL,
+  t TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  value FLOAT NOT NULL,
+  unit TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_patient_ts_case ON patient_time_series (case_id, feature_key, t);
+
+-- ── Advanced Reasoning: Outcome Learning System ───────────────────────────────
+
+CREATE TABLE IF NOT EXISTS kb_outcomes (
+  id SERIAL PRIMARY KEY,
+  case_id TEXT NOT NULL,
+  predicted_dx TEXT,
+  actual_dx TEXT,
+  predicted_disposition TEXT,
+  actual_disposition TEXT,
+  correct BOOLEAN,
+  clinician_override BOOLEAN NOT NULL DEFAULT false,
+  outcome_severity TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_outcomes_case ON kb_outcomes (case_id);
+CREATE INDEX IF NOT EXISTS idx_kb_outcomes_dx ON kb_outcomes (predicted_dx, correct);
+
+CREATE TABLE IF NOT EXISTS kb_learning_events (
+  id SERIAL PRIMARY KEY,
+  rule_id TEXT NOT NULL,
+  feature_key TEXT NOT NULL DEFAULT '__base__',
+  delta FLOAT NOT NULL,
+  confidence FLOAT NOT NULL DEFAULT 0.5,
+  source TEXT NOT NULL DEFAULT 'simulation',
+  status TEXT NOT NULL DEFAULT 'pending',
+  rationale TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMP,
+  deployed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_learning_events_status ON kb_learning_events (status, created_at DESC);

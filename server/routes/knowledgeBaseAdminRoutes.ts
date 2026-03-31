@@ -1121,6 +1121,186 @@ router.post("/simulate", async (req: Request, res: Response) => {
   }
 });
 
+// ─── Feature Models CRUD ──────────────────────────────────────────────────────
+router.get("/feature-models", async (req: Request, res: Response) => {
+  try {
+    const { rule_id, feature_type } = req.query as Record<string, string>;
+    let q = db.select().from(kbFeatureModels).orderBy(kbFeatureModels.ruleId, kbFeatureModels.featureKey);
+    const rows = await (rule_id
+      ? db.select().from(kbFeatureModels).where(eq(kbFeatureModels.ruleId, rule_id)).orderBy(kbFeatureModels.featureKey)
+      : feature_type
+        ? db.select().from(kbFeatureModels).where(eq(kbFeatureModels.featureType, feature_type)).orderBy(kbFeatureModels.ruleId)
+        : q);
+    res.json(rows);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/feature-models", async (req: Request, res: Response) => {
+  try {
+    const parsed = insertKbFeatureModelSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
+    const [row] = await db.insert(kbFeatureModels).values(parsed.data).onConflictDoUpdate({
+      target: [kbFeatureModels.ruleId, kbFeatureModels.featureKey],
+      set: { ...parsed.data, source: "ui_edit" },
+    }).returning();
+    invalidateAdvancedEngineCache();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/feature-models/:id", async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const [row] = await db.update(kbFeatureModels).set({ ...req.body, source: "ui_edit" }).where(eq(kbFeatureModels.id, id)).returning();
+    invalidateAdvancedEngineCache();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/feature-models/:id", async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    await db.delete(kbFeatureModels).where(eq(kbFeatureModels.id, id));
+    invalidateAdvancedEngineCache();
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/feature-models/migrate", async (req: Request, res: Response) => {
+  try {
+    const result = await migrateFeatureLikelihoodsToModels();
+    res.json(result);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Clinical Weights CRUD ────────────────────────────────────────────────────
+router.get("/clinical-weights", async (_req: Request, res: Response) => {
+  try {
+    const rows = await db.select().from(kbClinicalWeights).orderBy(kbClinicalWeights.key);
+    res.json(rows);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/clinical-weights", async (req: Request, res: Response) => {
+  try {
+    const parsed = insertKbClinicalWeightSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
+    const [row] = await db.insert(kbClinicalWeights).values(parsed.data).onConflictDoUpdate({
+      target: kbClinicalWeights.key,
+      set: { value: parsed.data.value, description: parsed.data.description, updatedAt: new Date() },
+    }).returning();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/clinical-weights/:id", async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { value, description } = req.body;
+    const [row] = await db.update(kbClinicalWeights).set({ value: parseFloat(value), description, updatedAt: new Date() }).where(eq(kbClinicalWeights.id, id)).returning();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/clinical-weights/:id", async (req: Request, res: Response) => {
+  try {
+    await db.delete(kbClinicalWeights).where(eq(kbClinicalWeights.id, parseInt(req.params.id)));
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Complaint Packs CRUD ─────────────────────────────────────────────────────
+router.get("/complaint-packs", async (req: Request, res: Response) => {
+  try {
+    const { complaint_id } = req.query as Record<string, string>;
+    const rows = complaint_id
+      ? await db.select().from(kbComplaintPacks).where(eq(kbComplaintPacks.complaintId, complaint_id)).orderBy(desc(kbComplaintPacks.version))
+      : await db.select().from(kbComplaintPacks).orderBy(kbComplaintPacks.complaintId, desc(kbComplaintPacks.version));
+    res.json(rows);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/complaint-packs", async (req: Request, res: Response) => {
+  try {
+    const parsed = insertKbComplaintPackSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
+    const [row] = await db.insert(kbComplaintPacks).values(parsed.data).returning();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/complaint-packs/:id", async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const [row] = await db.update(kbComplaintPacks).set({ ...req.body, updatedAt: new Date() }).where(eq(kbComplaintPacks.id, id)).returning();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/complaint-packs/:id", async (req: Request, res: Response) => {
+  try {
+    await db.delete(kbComplaintPacks).where(eq(kbComplaintPacks.id, parseInt(req.params.id)));
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Engine Routing CRUD ──────────────────────────────────────────────────────
+router.get("/engine-routing", async (req: Request, res: Response) => {
+  try {
+    const { complaint_id } = req.query as Record<string, string>;
+    const rows = complaint_id
+      ? await db.select().from(kbEngineRouting).where(eq(kbEngineRouting.complaintId, complaint_id)).orderBy(kbEngineRouting.priority)
+      : await db.select().from(kbEngineRouting).orderBy(kbEngineRouting.complaintId, kbEngineRouting.priority);
+    res.json(rows);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/engine-routing", async (req: Request, res: Response) => {
+  try {
+    const parsed = insertKbEngineRoutingSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
+    const [row] = await db.insert(kbEngineRouting).values(parsed.data).returning();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/engine-routing/:id", async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const [row] = await db.update(kbEngineRouting).set({ ...req.body, updatedAt: new Date() }).where(eq(kbEngineRouting.id, id)).returning();
+    res.json(row);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/engine-routing/:id", async (req: Request, res: Response) => {
+  try {
+    await db.delete(kbEngineRouting).where(eq(kbEngineRouting.id, parseInt(req.params.id)));
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/engine-routing/seed", async (req: Request, res: Response) => {
+  try {
+    const defaults = [
+      { complaintId: "sore_throat", engineType: "bayesian", config: { advanced: true }, priority: 10, isActive: true },
+      { complaintId: "ear_pain", engineType: "bayesian", config: { advanced: true }, priority: 10, isActive: true },
+      { complaintId: "cough", engineType: "bayesian", config: { advanced: true }, priority: 10, isActive: true },
+      { complaintId: "fever", engineType: "bayesian", config: { advanced: true }, priority: 10, isActive: true },
+      { complaintId: "sinus_pressure", engineType: "bayesian", config: { advanced: true }, priority: 10, isActive: true },
+      { complaintId: "chest_pain", engineType: "critical", config: { redFlagFirst: true }, priority: 1, isActive: true },
+      { complaintId: "headache", engineType: "critical", config: { redFlagFirst: true }, priority: 1, isActive: true },
+    ];
+    let inserted = 0;
+    for (const d of defaults) {
+      try {
+        await db.insert(kbEngineRouting).values(d as any);
+        inserted++;
+      } catch { /* skip duplicates */ }
+    }
+    res.json({ seeded: inserted });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 // Source of truth audit endpoint
 router.get("/audit/source-map", (_req: Request, res: Response) => {
   res.json({

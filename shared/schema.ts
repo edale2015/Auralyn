@@ -686,6 +686,96 @@ export const insertKbEngineRoutingSchema = createInsertSchema(kbEngineRouting).o
 export type InsertKbEngineRouting = z.infer<typeof insertKbEngineRoutingSchema>;
 export type KbEngineRouting = typeof kbEngineRouting.$inferSelect;
 
+// ── Advanced Reasoning: Co-morbidity interactions ─────────────────────────────
+export const kbDiagnosisInteractions = pgTable("kb_diagnosis_interactions", {
+  id: serial("id").primaryKey(),
+  dxA: text("dx_a").notNull(),
+  dxB: text("dx_b").notNull(),
+  interactionType: text("interaction_type").notNull().default("synergy"),
+  strength: real("strength").notNull().default(0),
+  conditions: jsonb("conditions").$type<Record<string, unknown>>(),
+  notes: text("notes"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisInteractionSchema = createInsertSchema(kbDiagnosisInteractions).omit({ id: true, createdAt: true });
+export type InsertKbDiagnosisInteraction = z.infer<typeof insertKbDiagnosisInteractionSchema>;
+export type KbDiagnosisInteraction = typeof kbDiagnosisInteractions.$inferSelect;
+
+export const kbDiagnosisClusters = pgTable("kb_diagnosis_clusters", {
+  id: serial("id").primaryKey(),
+  clusterId: text("cluster_id").notNull().unique(),
+  diagnoses: text("diagnoses").array().notNull().default([]),
+  boost: real("boost").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisClusterSchema = createInsertSchema(kbDiagnosisClusters).omit({ id: true, createdAt: true });
+export type InsertKbDiagnosisCluster = z.infer<typeof insertKbDiagnosisClusterSchema>;
+export type KbDiagnosisCluster = typeof kbDiagnosisClusters.$inferSelect;
+
+// ── Advanced Reasoning: Temporal patterns ─────────────────────────────────────
+export const kbTemporalPatterns = pgTable("kb_temporal_patterns", {
+  id: serial("id").primaryKey(),
+  diagnosis: text("diagnosis").notNull(),
+  featureKey: text("feature_key").notNull(),
+  patternType: text("pattern_type").notNull(),
+  durationHours: integer("duration_hours"),
+  likelihood: real("likelihood").notNull().default(1.0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbTemporalPatternSchema = createInsertSchema(kbTemporalPatterns).omit({ id: true, createdAt: true });
+export type InsertKbTemporalPattern = z.infer<typeof insertKbTemporalPatternSchema>;
+export type KbTemporalPattern = typeof kbTemporalPatterns.$inferSelect;
+
+export const patientTimeSeries = pgTable("patient_time_series", {
+  id: serial("id").primaryKey(),
+  caseId: text("case_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  t: timestamp("t").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  value: real("value").notNull(),
+  unit: text("unit"),
+});
+export const insertPatientTimeSeriesSchema = createInsertSchema(patientTimeSeries).omit({ id: true });
+export type InsertPatientTimeSeries = z.infer<typeof insertPatientTimeSeriesSchema>;
+export type PatientTimeSeries = typeof patientTimeSeries.$inferSelect;
+
+// ── Outcome Learning System ───────────────────────────────────────────────────
+export const kbOutcomes = pgTable("kb_outcomes", {
+  id: serial("id").primaryKey(),
+  caseId: text("case_id").notNull(),
+  predictedDx: text("predicted_dx"),
+  actualDx: text("actual_dx"),
+  predictedDisposition: text("predicted_disposition"),
+  actualDisposition: text("actual_disposition"),
+  correct: boolean("correct"),
+  clinicianOverride: boolean("clinician_override").notNull().default(false),
+  outcomeSeverity: text("outcome_severity"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbOutcomeSchema = createInsertSchema(kbOutcomes).omit({ id: true, createdAt: true });
+export type InsertKbOutcome = z.infer<typeof insertKbOutcomeSchema>;
+export type KbOutcome = typeof kbOutcomes.$inferSelect;
+
+export const kbLearningEvents = pgTable("kb_learning_events", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),
+  featureKey: text("feature_key").notNull().default("__base__"),
+  delta: real("delta").notNull(),
+  confidence: real("confidence").notNull().default(0.5),
+  source: text("source").notNull().default("simulation"),
+  status: text("status").notNull().default("pending"),
+  rationale: text("rationale"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  deployedAt: timestamp("deployed_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbLearningEventSchema = createInsertSchema(kbLearningEvents).omit({ id: true, createdAt: true });
+export type InsertKbLearningEvent = z.infer<typeof insertKbLearningEventSchema>;
+export type KbLearningEvent = typeof kbLearningEvents.$inferSelect;
+
 export const kbKnowledgeChanges = pgTable("kb_knowledge_changes", {
   id: serial("id").primaryKey(),
   changeId: text("change_id").notNull().unique(),

@@ -13,9 +13,12 @@ import {
   Database, Plus, Search, Edit2, Trash2, CheckCircle, XCircle, Copy,
   AlertTriangle, Pill, Activity, FileText, ClipboardCheck, TestTube,
   Stethoscope, Shield, BookOpen, ChevronRight, RefreshCw, Download,
+  GitBranch, TrendingUp, Brain, ThumbsUp, ThumbsDown, Zap,
+  BarChart2, Sliders, Cpu, Package,
 } from "lucide-react";
+import DiagnosisFeatureEditor from "@/components/DiagnosisFeatureEditor";
 
-type Tab = "complaints" | "questions" | "modifiers" | "redflags" | "workup" | "diagnosis" | "features" | "treatment" | "disposition" | "templates" | "golden" | "audit";
+type Tab = "complaints" | "questions" | "modifiers" | "redflags" | "workup" | "diagnosis" | "features" | "feature-models" | "clinical-weights" | "complaint-packs" | "engine-routing" | "treatment" | "disposition" | "templates" | "golden" | "audit" | "interactions" | "temporal" | "learning";
 
 const TABS: { key: Tab; label: string; icon: any; endpoint: string }[] = [
   { key: "complaints", label: "Complaint Registry", icon: BookOpen, endpoint: "/api/kb/complaints" },
@@ -25,6 +28,13 @@ const TABS: { key: Tab; label: string; icon: any; endpoint: string }[] = [
   { key: "workup", label: "Workup Rules", icon: TestTube, endpoint: "/api/kb/workup" },
   { key: "diagnosis", label: "Diagnosis Rules", icon: Stethoscope, endpoint: "/api/kb/diagnosis" },
   { key: "features", label: "Feature Likelihoods", icon: Activity, endpoint: "/api/kb/feature-likelihoods" },
+  { key: "feature-models", label: "Feature Models", icon: BarChart2, endpoint: "/api/kb/feature-models" },
+  { key: "interactions", label: "Co-morbidity", icon: GitBranch, endpoint: "/api/advanced-reasoning/interactions" },
+  { key: "temporal", label: "Temporal Patterns", icon: TrendingUp, endpoint: "/api/advanced-reasoning/temporal-patterns" },
+  { key: "learning", label: "Learning Queue", icon: Brain, endpoint: "/api/advanced-reasoning/learning/queue" },
+  { key: "clinical-weights", label: "Clinical Weights", icon: Sliders, endpoint: "/api/kb/clinical-weights" },
+  { key: "engine-routing", label: "Engine Routing", icon: Cpu, endpoint: "/api/kb/engine-routing" },
+  { key: "complaint-packs", label: "Complaint Packs", icon: Package, endpoint: "/api/kb/complaint-packs" },
   { key: "treatment", label: "Treatment", icon: Pill, endpoint: "/api/kb/treatment" },
   { key: "disposition", label: "Disposition", icon: ChevronRight, endpoint: "/api/kb/disposition" },
   { key: "templates", label: "Plan Templates", icon: FileText, endpoint: "/api/kb/templates" },
@@ -760,6 +770,315 @@ function AuditTab() {
   );
 }
 
+// ─── Feature Models Tab ───────────────────────────────────────────────────────
+function FeatureModelsTab() {
+  const [selectedRule, setSelectedRule] = useState("");
+  const { data: rules = [] } = useQuery<any[]>({
+    queryKey: ["/api/kb/diagnosis"],
+    queryFn: async () => (await fetch("/api/kb/diagnosis")).json(),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 items-center">
+        <Select value={selectedRule} onValueChange={setSelectedRule}>
+          <SelectTrigger className="w-72" data-testid="select-diagnosis-rule"><SelectValue placeholder="Select a diagnosis rule…" /></SelectTrigger>
+          <SelectContent>
+            {(rules as any[]).map((r: any) => <SelectItem key={r.ruleId} value={r.ruleId}>{r.ruleId} — {r.diagnosisLabel ?? r.ruleId}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <span className="text-xs text-muted-foreground">{rules.length} rules available</span>
+      </div>
+      <DiagnosisFeatureEditor ruleId={selectedRule} />
+    </div>
+  );
+}
+
+// ─── Clinical Weights Tab ─────────────────────────────────────────────────────
+function ClinicalWeightsTab() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { data: weights = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/kb/clinical-weights"],
+    queryFn: async () => (await fetch("/api/kb/clinical-weights")).json(),
+  });
+
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editVal, setEditVal] = useState("");
+
+  const saveMut = useMutation({
+    mutationFn: async ({ id, value }: { id: number; value: number }) => {
+      const r = await fetch(`/api/kb/clinical-weights/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      });
+      return r.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Weight updated" });
+      setEditId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/clinical-weights"] });
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      {isLoading ? <div className="text-center py-8 text-muted-foreground">Loading…</div> : (
+        <div className="rounded-md border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50">
+              <tr>{["Key","Value","Description","Last Updated",""].map(h => <th key={h} className="text-left p-3 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y">
+              {(weights as any[]).map((w: any) => (
+                <tr key={w.id} className="hover:bg-muted/30">
+                  <td className="p-3 font-mono text-sm">{w.key}</td>
+                  <td className="p-3">
+                    {editId === w.id ? (
+                      <div className="flex gap-1">
+                        <Input type="number" step="any" value={editVal} onChange={e => setEditVal(e.target.value)} className="h-7 w-24 text-sm" data-testid={`input-weight-val-${w.id}`} />
+                        <Button size="sm" className="h-7 text-xs" onClick={() => saveMut.mutate({ id: w.id, value: parseFloat(editVal) })}>Save</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditId(null)}>Cancel</Button>
+                      </div>
+                    ) : (
+                      <span className="font-mono font-bold">{parseFloat(w.value).toFixed(4)}</span>
+                    )}
+                  </td>
+                  <td className="p-3 text-xs text-muted-foreground">{w.description ?? "—"}</td>
+                  <td className="p-3 text-xs text-muted-foreground">{w.updated_at ? new Date(w.updated_at).toLocaleString() : "—"}</td>
+                  <td className="p-3">
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditId(w.id); setEditVal(String(w.value)); }} data-testid={`btn-edit-weight-${w.id}`}><Edit2 className="h-3 w-3" /></Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {weights.length === 0 && <div className="text-center py-8 text-muted-foreground text-sm">No weights stored yet. Run the outcome learning engine to populate.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Engine Routing Tab ───────────────────────────────────────────────────────
+function EngineRoutingTab() {
+  const { toast } = useToast();
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" onClick={async () => {
+          const r = await fetch("/api/kb/engine-routing/seed", { method: "POST" });
+          const d = await r.json();
+          toast({ title: `Seeded ${d.seeded} engine routing rules` });
+        }}>
+          <RefreshCw className="h-4 w-4 mr-1" /> Seed Default Routing
+        </Button>
+      </div>
+      <SimpleTableTab
+        endpoint="/api/kb/engine-routing" title="Engine Route"
+        columns={[
+          { key: "complaint_id", label: "Complaint ID" },
+          { key: "engine_type", label: "Engine", render: v => {
+            const colors: Record<string, string> = { bayesian: "bg-blue-100 text-blue-800", critical: "bg-red-100 text-red-800", rule_based: "bg-amber-100 text-amber-800" };
+            return <Badge className={`text-xs ${colors[String(v)] ?? ""}`}>{String(v)}</Badge>;
+          }},
+          { key: "priority", label: "Priority", render: v => <span className="font-mono font-bold">{String(v)}</span> },
+          { key: "config", label: "Config", render: v => <code className="text-xs text-muted-foreground">{JSON.stringify(v).slice(0, 60)}</code> },
+          { key: "is_active", label: "Status", render: v => <StatusBadge active={v} /> },
+        ]}
+        fields={[
+          { key: "complaintId", label: "Complaint ID", required: true },
+          { key: "engineType", label: "Engine Type", options: ["bayesian", "critical", "rule_based"], required: true },
+          { key: "priority", label: "Priority (lower = higher priority)", type: "number", required: true },
+        ]}
+        idKey="id" editUrlFn={r => `/api/kb/engine-routing/${r.id}`} deleteUrlFn={r => `/api/kb/engine-routing/${r.id}`}
+      />
+    </div>
+  );
+}
+
+// ─── Complaint Packs Tab ──────────────────────────────────────────────────────
+function ComplaintPacksTab() {
+  const { data: packs = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/kb/complaint-packs"],
+    queryFn: async () => (await fetch("/api/kb/complaint-packs")).json(),
+  });
+
+  return (
+    <div className="space-y-4">
+      {isLoading ? <div className="text-center py-8 text-muted-foreground">Loading…</div> : packs.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <Package className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">No complaint packs in database. These are seeded automatically from complaint pack definitions.</p>
+        </div>
+      ) : (
+        <div className="rounded-md border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50">
+              <tr>{["Complaint ID","Questions","Findings","Modifiers","Version","Status"].map(h => <th key={h} className="text-left p-3 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y">
+              {(packs as any[]).map((p: any) => (
+                <tr key={p.id} className="hover:bg-muted/30">
+                  <td className="p-3 font-mono text-sm">{p.complaint_id}</td>
+                  <td className="p-3 text-center"><Badge variant="outline">{Array.isArray(p.questions) ? p.questions.length : 0}</Badge></td>
+                  <td className="p-3 text-center"><Badge variant="outline">{Array.isArray(p.findings) ? p.findings.length : 0}</Badge></td>
+                  <td className="p-3 text-center"><Badge variant="outline">{Array.isArray(p.modifiers) ? p.modifiers.length : 0}</Badge></td>
+                  <td className="p-3 font-mono text-xs">v{p.version}</td>
+                  <td className="p-3"><StatusBadge active={p.is_active} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Learning Queue Tab ───────────────────────────────────────────────────────
+function LearningQueueTab() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [status, setStatus] = useState("pending");
+
+  const { data: events = [], isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["/api/advanced-reasoning/learning/queue", status],
+    queryFn: async () => (await fetch(`/api/advanced-reasoning/learning/queue?status=${status}`)).json(),
+  });
+
+  const { data: stats } = useQuery<any>({
+    queryKey: ["/api/advanced-reasoning/health"],
+    queryFn: async () => (await fetch("/api/advanced-reasoning/health")).json(),
+    refetchInterval: 30000,
+  });
+
+  const reviewMut = useMutation({
+    mutationFn: async ({ id, action }: { id: number; action: string }) => {
+      const r = await fetch(`/api/advanced-reasoning/learning/${id}/review`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, reviewedBy: "clinician" }),
+      });
+      return r.json();
+    },
+    onSuccess: (_, vars) => {
+      toast({ title: vars.action === "approve" ? "Event approved" : "Event rejected" });
+      queryClient.invalidateQueries({ queryKey: ["/api/advanced-reasoning/learning/queue"] });
+    },
+  });
+
+  const generateMut = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/advanced-reasoning/learning/generate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "real_world" }),
+      });
+      return r.json();
+    },
+    onSuccess: (d) => {
+      toast({ title: `Generated ${d.generated} learning suggestions` });
+      refetch();
+    },
+  });
+
+  const applyMut = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/advanced-reasoning/learning/apply", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewedBy: "clinician" }),
+      });
+      return r.json();
+    },
+    onSuccess: (d) => {
+      toast({ title: `Applied ${d.applied} approved events` });
+      queryClient.invalidateQueries({ queryKey: ["/api/advanced-reasoning/learning/queue"] });
+    },
+  });
+
+  const STATUS_COLORS: Record<string, string> = {
+    pending: "bg-amber-100 text-amber-800",
+    approved: "bg-green-100 text-green-800",
+    rejected: "bg-red-100 text-red-800",
+    deployed: "bg-blue-100 text-blue-800",
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Stats bar */}
+      {stats && (
+        <div className="grid grid-cols-4 gap-3">
+          <Card className="p-3"><div className="text-2xl font-bold">{stats.learning?.pendingEvents ?? 0}</div><div className="text-xs text-muted-foreground">Pending Events</div></Card>
+          <Card className="p-3"><div className="text-2xl font-bold">{stats.coMorbidity?.interactions ?? 0}</div><div className="text-xs text-muted-foreground">Interactions</div></Card>
+          <Card className="p-3"><div className="text-2xl font-bold">{stats.temporal?.patterns ?? 0}</div><div className="text-xs text-muted-foreground">Temporal Patterns</div></Card>
+          <Card className="p-3"><div className="text-2xl font-bold">{stats.outcomes7d?.total ?? 0}</div><div className="text-xs text-muted-foreground">Outcomes (7d)</div></Card>
+        </div>
+      )}
+      <div className="flex gap-2 items-center">
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {["pending","approved","rejected","deployed"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button size="sm" variant="outline" onClick={() => generateMut.mutate()} disabled={generateMut.isPending}>
+          <Brain className="h-4 w-4 mr-1" />{generateMut.isPending ? "Generating…" : "Generate Suggestions"}
+        </Button>
+        <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => applyMut.mutate()} disabled={applyMut.isPending}>
+          <Zap className="h-4 w-4 mr-1" />{applyMut.isPending ? "Applying…" : "Apply Approved"}
+        </Button>
+      </div>
+      {isLoading ? <div className="text-center py-8 text-muted-foreground">Loading…</div> : events.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <Brain className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          <p>No {status} learning events. Click "Generate Suggestions" to analyse outcome data.</p>
+        </div>
+      ) : (
+        <div className="rounded-md border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50">
+              <tr>{["Rule","Feature","Δ Delta","Confidence","Source","Status","Actions"].map(h => <th key={h} className="text-left p-3 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y">
+              {events.map((e: any) => (
+                <tr key={e.id} className="hover:bg-muted/30">
+                  <td className="p-3 font-mono text-xs">{e.rule_id}</td>
+                  <td className="p-3 text-xs">{e.feature_key === "__base__" ? <Badge variant="outline">base prob</Badge> : e.feature_key}</td>
+                  <td className="p-3">
+                    <span className={`font-mono font-bold ${Number(e.delta) < 0 ? "text-red-600" : "text-green-600"}`}>
+                      {Number(e.delta) > 0 ? "+" : ""}{Number(e.delta).toFixed(3)}
+                    </span>
+                  </td>
+                  <td className="p-3">
+                    <div className="flex items-center gap-1">
+                      <div className="w-12 bg-muted rounded-full h-1.5"><div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.round(Number(e.confidence) * 100)}%` }} /></div>
+                      <span className="text-xs">{Math.round(Number(e.confidence) * 100)}%</span>
+                    </div>
+                  </td>
+                  <td className="p-3"><Badge variant="outline" className="text-xs">{e.source}</Badge></td>
+                  <td className="p-3"><Badge className={`text-xs ${STATUS_COLORS[e.status] ?? ""}`}>{e.status}</Badge></td>
+                  <td className="p-3">
+                    {e.status === "pending" && (
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="ghost" className="h-7 text-green-600" onClick={() => reviewMut.mutate({ id: e.id, action: "approve" })} data-testid={`btn-approve-${e.id}`}>
+                          <ThumbsUp className="h-3 w-3 mr-1" />Approve
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => reviewMut.mutate({ id: e.id, action: "reject" })} data-testid={`btn-reject-${e.id}`}>
+                          <ThumbsDown className="h-3 w-3 mr-1" />Reject
+                        </Button>
+                      </div>
+                    )}
+                    {e.status === "deployed" && <span className="text-xs text-muted-foreground">Applied {e.deployed_at ? new Date(e.deployed_at).toLocaleDateString() : ""}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function KnowledgeBasePage() {
   const [activeTab, setActiveTab] = useState<Tab>("complaints");
@@ -999,6 +1318,87 @@ export default function KnowledgeBasePage() {
             idKey="templateKey" editUrlFn={r => `/api/kb/templates/${r.templateKey}`} deleteUrlFn={r => `/api/kb/templates/${r.templateKey}`}
           />
         )}
+
+        {activeTab === "interactions" && (
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={async () => {
+                await fetch("/api/advanced-reasoning/interactions/seed", { method: "POST" });
+                window.location.reload();
+              }}>
+                <RefreshCw className="h-4 w-4 mr-1" /> Seed Canonical Interactions
+              </Button>
+            </div>
+            <SimpleTableTab
+              endpoint="/api/advanced-reasoning/interactions" title="Diagnosis Interaction"
+              columns={[
+                { key: "dx_a", label: "Diagnosis A" },
+                { key: "dx_b", label: "Diagnosis B" },
+                { key: "interaction_type", label: "Type", render: v => {
+                  const colors: Record<string, string> = { synergy: "bg-green-100 text-green-800", exclusion: "bg-red-100 text-red-800", risk_boost: "bg-amber-100 text-amber-800", conditional: "bg-blue-100 text-blue-800" };
+                  return <Badge className={`text-xs ${colors[String(v)] ?? ""}`}>{String(v)}</Badge>;
+                }},
+                { key: "strength", label: "Strength", render: v => <span className={`font-mono font-bold text-sm ${Number(v) < 0 ? "text-red-600" : "text-green-600"}`}>{Number(v) > 0 ? "+" : ""}{Number(v).toFixed(2)}</span> },
+                { key: "notes", label: "Notes", render: v => <span className="text-xs text-muted-foreground truncate max-w-[200px] inline-block">{String(v ?? "")}</span> },
+                { key: "is_active", label: "Status", render: v => <StatusBadge active={v} /> },
+              ]}
+              fields={[
+                { key: "dxA", label: "Diagnosis A", required: true },
+                { key: "dxB", label: "Diagnosis B", required: true },
+                { key: "interactionType", label: "Type", options: ["synergy", "exclusion", "risk_boost", "conditional"], required: true },
+                { key: "strength", label: "Strength [-1..+1]", type: "number", required: true },
+                { key: "notes", label: "Notes" },
+              ]}
+              idKey="id" editUrlFn={r => `/api/advanced-reasoning/interactions/${r.id}`} deleteUrlFn={r => `/api/advanced-reasoning/interactions/${r.id}`}
+            />
+          </div>
+        )}
+
+        {activeTab === "temporal" && (
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={async () => {
+                await fetch("/api/advanced-reasoning/temporal-patterns/seed", { method: "POST" });
+                window.location.reload();
+              }}>
+                <RefreshCw className="h-4 w-4 mr-1" /> Seed Temporal Patterns
+              </Button>
+            </div>
+            <SimpleTableTab
+              endpoint="/api/advanced-reasoning/temporal-patterns" title="Temporal Pattern"
+              columns={[
+                { key: "diagnosis", label: "Diagnosis" },
+                { key: "feature_key", label: "Feature" },
+                { key: "pattern_type", label: "Pattern", render: v => {
+                  const colors: Record<string, string> = { rising: "bg-red-100 text-red-800", falling: "bg-blue-100 text-blue-800", persistent: "bg-amber-100 text-amber-800", intermittent: "bg-purple-100 text-purple-800", acute_onset: "bg-rose-100 text-rose-800" };
+                  return <Badge className={`text-xs ${colors[String(v)] ?? ""}`}>{String(v).replace("_", " ")}</Badge>;
+                }},
+                { key: "likelihood", label: "Likelihood ×", render: v => (
+                  <div className="flex items-center gap-1">
+                    <span className={`font-mono font-bold text-sm ${Number(v) > 1 ? "text-green-600" : "text-red-600"}`}>{Number(v).toFixed(2)}×</span>
+                  </div>
+                )},
+                { key: "duration_hours", label: "Duration (h)", render: v => v ? `${v}h` : "—" },
+                { key: "is_active", label: "Status", render: v => <StatusBadge active={v} /> },
+              ]}
+              fields={[
+                { key: "diagnosis", label: "Diagnosis Label", required: true },
+                { key: "featureKey", label: "Feature Key (e.g. fever)", required: true },
+                { key: "patternType", label: "Pattern Type", options: ["rising","falling","persistent","intermittent","acute_onset"], required: true },
+                { key: "likelihood", label: "Likelihood multiplier (e.g. 1.8)", type: "number", required: true },
+                { key: "durationHours", label: "Min duration hours (optional)", type: "number" },
+              ]}
+              idKey="id" editUrlFn={r => `/api/advanced-reasoning/temporal-patterns/${r.id}`} deleteUrlFn={r => `/api/advanced-reasoning/temporal-patterns/${r.id}`}
+            />
+          </div>
+        )}
+
+        {activeTab === "learning" && <LearningQueueTab />}
+
+        {activeTab === "feature-models" && <FeatureModelsTab />}
+        {activeTab === "clinical-weights" && <ClinicalWeightsTab />}
+        {activeTab === "engine-routing" && <EngineRoutingTab />}
+        {activeTab === "complaint-packs" && <ComplaintPacksTab />}
 
         {activeTab === "golden" && <GoldenCasesTab />}
         {activeTab === "audit" && <AuditTab />}
