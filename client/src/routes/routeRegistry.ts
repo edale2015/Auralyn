@@ -24,4 +24,9 @@ export const ROUTES = {
   AUTONOMOUS_LEARNING: "/autonomous-learning",
   KNOWLEDGE_BASE: "/knowledge-base",
   KNOWLEDGE_OPS: "/knowledge-ops",
+  KNOWLEDGE_HUB: "/knowledge-hub",
+  GOLDEN_CASES: "/golden-cases",
+  SKILL_LAYER_ADMIN: "/skill-layer-admin",
+  SKILL_LAYER_REVIEW: "/skill-layer-review",
+  KNOWLEDGE_GRAPH: "/knowledge-graph",
 };

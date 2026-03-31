@@ -63,6 +63,11 @@ import ClinicalTestBenchPage from "@/pages/ClinicalTestBenchPage";
 import AutonomousLearningConsolePage from "@/pages/AutonomousLearningConsolePage";
 import KnowledgeBasePage from "@/pages/KnowledgeBasePage";
 import KnowledgeOpsDashboardPage from "@/pages/KnowledgeOpsDashboardPage";
+import KnowledgeHubPage from "@/pages/KnowledgeHubPage";
+import GoldenCasesPage from "@/pages/GoldenCasesPage";
+import SkillLayerAdminPage from "@/pages/SkillLayerAdminPage";
+import SkillLayerReviewPage from "@/pages/SkillLayerReviewPage";
+import ClinicalKnowledgeGraphPage from "@/pages/ClinicalKnowledgeGraphPage";
 
 validateRoutes();
 
@@ -98,6 +103,11 @@ function WorkbenchRouter() {
         <Route path={ROUTES.AUTONOMOUS_LEARNING} component={AutonomousLearningConsolePage} />
         <Route path={ROUTES.KNOWLEDGE_BASE} component={KnowledgeBasePage} />
         <Route path={ROUTES.KNOWLEDGE_OPS} component={KnowledgeOpsDashboardPage} />
+        <Route path={ROUTES.KNOWLEDGE_HUB} component={KnowledgeHubPage} />
+        <Route path={ROUTES.GOLDEN_CASES} component={GoldenCasesPage} />
+        <Route path={ROUTES.SKILL_LAYER_ADMIN} component={SkillLayerAdminPage} />
+        <Route path={ROUTES.SKILL_LAYER_REVIEW} component={SkillLayerReviewPage} />
+        <Route path={ROUTES.KNOWLEDGE_GRAPH} component={ClinicalKnowledgeGraphPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

@@ -24,7 +24,7 @@ import {
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
   BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar, ShieldCheck,
-  CircleDollarSign,
+  CircleDollarSign, Database,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -105,6 +105,15 @@ const NAV_SECTIONS = [
       { path: "/messaging-status", label: "Channel Status", icon: MessageSquare },
       { path: "/conversation-optimization", label: "Conversation Optimizer", icon: MessageCircle },
       { path: "/shadow-mode-ops", label: "Shadow Mode", icon: Eye },
+    ],
+  },
+  {
+    label: "Clinical Knowledge",
+    items: [
+      { path: "/knowledge-hub", label: "Knowledge Hub", icon: Brain },
+      { path: "/knowledge-base", label: "KB Admin (11 Tables)", icon: Database },
+      { path: "/knowledge-ops", label: "KB Ops Dashboard", icon: Gauge },
+      { path: "/knowledge-graph", label: "Knowledge Graph", icon: Network },
     ],
   },
   {
