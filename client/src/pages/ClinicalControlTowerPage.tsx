@@ -7,19 +7,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import {
   Play, Database, Loader2, ChevronDown, ChevronUp,
-  Brain, HelpCircle, FlipHorizontal, Target, Stethoscope, Zap
+  Brain, HelpCircle, FlipHorizontal, Target, Stethoscope, Zap,
+  Star, Thermometer, Activity, RefreshCw, Clock, Copy, Check
 } from "lucide-react";
 import DecisionTreeViz from "@/components/tower/DecisionTreeViz";
 import ScoringConsole from "@/components/tower/ScoringConsole";
 import AdaptiveQuestioningPanel from "@/components/tower/AdaptiveQuestioningPanel";
 import CounterfactualPanel from "@/components/tower/CounterfactualPanel";
 import WorkupOptimizer from "@/components/tower/WorkupOptimizer";
+import SmartIntakePanel from "@/components/tower/SmartIntakePanel";
+import ConfidenceHeatmap from "@/components/tower/ConfidenceHeatmap";
+import IntegrationHealthPanel from "@/components/tower/IntegrationHealthPanel";
+import SimulationLoopPanel from "@/components/tower/SimulationLoopPanel";
+import TimelinePanel from "@/components/tower/TimelinePanel";
 
 const SAMPLE_INPUTS = {
   strep: {
@@ -42,6 +47,21 @@ const SAMPLE_INPUTS = {
   },
 };
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  function doCopy() {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <button onClick={doCopy} className="ml-1 inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors" title="Copy case ID">
+      {copied ? <Check className="h-2.5 w-2.5 text-green-500" /> : <Copy className="h-2.5 w-2.5" />}
+    </button>
+  );
+}
+
 export default function ClinicalControlTowerPage() {
   const { toast } = useToast();
 
@@ -51,6 +71,7 @@ export default function ClinicalControlTowerPage() {
   const [budget, setBudget] = useState("1000");
   const [answeredKeys, setAnsweredKeys] = useState<string[]>([]);
   const [showRaw, setShowRaw] = useState(false);
+  const [activeTab, setActiveTab] = useState("scoring");
 
   const analyzeMutation = useMutation({
     mutationFn: async () => {
@@ -67,6 +88,7 @@ export default function ClinicalControlTowerPage() {
       });
       return res.json();
     },
+    onSuccess: () => setActiveTab("scoring"),
     onError: (e: Error) => toast({ title: "Analysis failed", description: e.message, variant: "destructive" }),
   });
 
@@ -90,6 +112,20 @@ export default function ClinicalControlTowerPage() {
     setAnsweredKeys(prev => [...new Set([...prev, key])]);
   }
 
+  const ROW1_TABS = [
+    { value: "scoring",        label: "Scores",   icon: Brain },
+    { value: "questions",      label: "Qx",       icon: HelpCircle },
+    { value: "counterfactuals",label: "CFx",      icon: FlipHorizontal },
+    { value: "workup",         label: "Wkup",     icon: Target },
+  ];
+  const ROW2_TABS = [
+    { value: "smart",    label: "Smart",  icon: Star },
+    { value: "heatmap",  label: "Heat",   icon: Thermometer },
+    { value: "health",   label: "Health", icon: Activity },
+    { value: "sim",      label: "Sim",    icon: RefreshCw },
+    { value: "timeline", label: "TL",     icon: Clock },
+  ];
+
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden">
       {/* Header */}
@@ -97,11 +133,18 @@ export default function ClinicalControlTowerPage() {
         <div className="flex items-center gap-3">
           <Brain className="h-5 w-5 text-primary" />
           <div>
-            <h1 className="text-base font-bold leading-tight">CCT Decision Engine</h1>
-            <p className="text-xs text-muted-foreground">KB-Driven Clinical Control Tower</p>
+            <h1 className="text-base font-bold leading-tight">CCT Decision Engine v2</h1>
+            <p className="text-xs text-muted-foreground">KB-Driven Clinical Control Tower + 5-Upgrade Intelligence Suite</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {result?.caseId && (
+            <Badge variant="outline" className="gap-1 text-xs font-mono">
+              <Clock className="h-3 w-3" />
+              {result.caseId.slice(0, 8)}…
+              <CopyButton text={result.caseId} />
+            </Badge>
+          )}
           {result && (
             <Badge variant="outline" className="gap-1 text-xs">
               <Database className="h-3 w-3" />
@@ -133,7 +176,6 @@ export default function ClinicalControlTowerPage() {
           </div>
           <ScrollArea className="flex-1">
             <div className="p-3 space-y-3">
-              {/* Sample buttons */}
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Load sample</p>
                 <div className="flex flex-col gap-1">
@@ -216,6 +258,19 @@ export default function ClinicalControlTowerPage() {
                   {(analyzeMutation.error as Error).message}
                 </p>
               )}
+
+              {result?.smartQuestions?.length > 0 && (
+                <div className="rounded-lg border bg-amber-50/50 p-2 space-y-1">
+                  <p className="text-xs font-medium text-amber-800 flex items-center gap-1">
+                    <Star className="h-3 w-3" />Smart Next Questions
+                  </p>
+                  {(result.smartQuestions as any[]).slice(0, 3).map((q: any) => (
+                    <p key={q.key} className={`text-xs ${q.isRedFlag ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                      {q.isRedFlag ? "⚠ " : ""}{q.displayText}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           </ScrollArea>
         </div>
@@ -247,28 +302,32 @@ export default function ClinicalControlTowerPage() {
           </div>
         </div>
 
-        {/* RIGHT: Tabbed panels */}
+        {/* RIGHT: Tabbed panels — 2 rows (4 + 5) */}
         <div className="w-96 shrink-0 border-l flex flex-col overflow-hidden">
-          <Tabs defaultValue="scoring" className="flex flex-col h-full">
-            <div className="border-b bg-card px-2 pt-2 shrink-0">
-              <TabsList className="grid grid-cols-4 h-8 w-full">
-                <TabsTrigger value="scoring" className="text-xs gap-1" data-testid="tab-scoring">
-                  <Brain className="h-3 w-3" />Scores
-                </TabsTrigger>
-                <TabsTrigger value="questions" className="text-xs gap-1" data-testid="tab-questions">
-                  <HelpCircle className="h-3 w-3" />Qx
-                </TabsTrigger>
-                <TabsTrigger value="counterfactuals" className="text-xs gap-1" data-testid="tab-counterfactuals">
-                  <FlipHorizontal className="h-3 w-3" />CFx
-                </TabsTrigger>
-                <TabsTrigger value="workup" className="text-xs gap-1" data-testid="tab-workup">
-                  <Target className="h-3 w-3" />Wkup
-                </TabsTrigger>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
+            <div className="border-b bg-card px-2 pt-2 shrink-0 space-y-1">
+              {/* Row 1 — core clinical (4) */}
+              <TabsList className="grid grid-cols-4 h-7 w-full">
+                {ROW1_TABS.map(t => (
+                  <TabsTrigger key={t.value} value={t.value} className="text-xs gap-0.5 px-1" data-testid={`tab-${t.value}`}>
+                    <t.icon className="h-3 w-3" />{t.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {/* Row 2 — intelligence suite (5) */}
+              <TabsList className="grid grid-cols-5 h-7 w-full">
+                {ROW2_TABS.map(t => (
+                  <TabsTrigger key={t.value} value={t.value} className="text-xs gap-0.5 px-1" data-testid={`tab-${t.value}`}>
+                    <t.icon className="h-3 w-3" />{t.label}
+                  </TabsTrigger>
+                ))}
               </TabsList>
             </div>
 
             <ScrollArea className="flex-1">
               <div className="p-3">
+
+                {/* ── Row 1: Core clinical ───────────────────── */}
                 <TabsContent value="scoring" className="mt-0">
                   {result?.scoring ? (
                     <ScoringConsole data={result.scoring} />
@@ -304,6 +363,28 @@ export default function ClinicalControlTowerPage() {
                     <EmptyState icon={Target} message="Run analysis to see workup optimizer" />
                   )}
                 </TabsContent>
+
+                {/* ── Row 2: Intelligence Suite ─────────────── */}
+                <TabsContent value="smart" className="mt-0">
+                  <SmartIntakePanel questions={result?.smartQuestions} />
+                </TabsContent>
+
+                <TabsContent value="heatmap" className="mt-0">
+                  <ConfidenceHeatmap data={result?.heatmap} />
+                </TabsContent>
+
+                <TabsContent value="health" className="mt-0">
+                  <IntegrationHealthPanel />
+                </TabsContent>
+
+                <TabsContent value="sim" className="mt-0">
+                  <SimulationLoopPanel />
+                </TabsContent>
+
+                <TabsContent value="timeline" className="mt-0">
+                  <TimelinePanel caseId={result?.caseId} />
+                </TabsContent>
+
               </div>
             </ScrollArea>
           </Tabs>
@@ -323,6 +404,11 @@ export default function ClinicalControlTowerPage() {
             <Badge variant="outline" className="ml-1 text-xs py-0">
               {result.uniqueRules ?? 0} rules
             </Badge>
+            {result.caseId && (
+              <span className="ml-2 font-mono text-muted-foreground">
+                case: {result.caseId.slice(0, 8)}…
+              </span>
+            )}
           </button>
           {showRaw && (
             <ScrollArea className="h-40 border-t">
