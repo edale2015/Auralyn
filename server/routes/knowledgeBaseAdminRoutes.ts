@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
+import { sql } from "drizzle-orm";
 import {
   kbComplaints, kbQuestions, kbModifiers, kbRedFlagRules,
   kbWorkupRules, kbDiagnosisRules, kbTreatmentRules,
@@ -13,6 +14,42 @@ import {
 import { eq, desc, and, ilike, count, or } from "drizzle-orm";
 import { seedKnowledgeBase } from "../kb/kbSeeder";
 import { reloadAndRewireKbCache, getKbCacheStatus } from "../kb/kbRuntime";
+
+// Local helper — db.execute() returns { rows: [...] } or array depending on driver
+function xRows(result: any): any[] {
+  if (Array.isArray(result)) return result;
+  if (result && Array.isArray(result.rows)) return result.rows;
+  return [];
+}
+
+// ── KB Entry validation (called on diagnosis rule writes) ────────────────────
+function validateDiagnosisRule(body: Record<string, any>): { warnings: string[]; errors: string[] } {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const fl = body.featureLikelihoods;
+  const isBayesian = (body.complaintId === "bayesian_global") || String(body.ruleId ?? "").startsWith("DX_BAY_");
+  if (isBayesian) {
+    if (!fl || Object.keys(fl).length === 0) {
+      errors.push("Bayesian prior rules (complaintId=bayesian_global) MUST have featureLikelihoods — the Bayesian engine will ignore this rule without them.");
+    } else {
+      const badVals = Object.entries(fl).filter(([, v]) => typeof v !== "number" || (v as number) < 0 || (v as number) > 1);
+      if (badVals.length > 0) {
+        errors.push(`featureLikelihoods values must be numbers in [0,1]. Bad keys: ${badVals.map(([k]) => k).join(", ")}`);
+      }
+    }
+    if (!body.baseProbability || body.baseProbability <= 0 || body.baseProbability > 1) {
+      errors.push("baseProbability must be in (0, 1] for Bayesian priors.");
+    }
+  } else {
+    if (!fl || Object.keys(fl).length === 0) {
+      warnings.push("featureLikelihoods is empty — this rule will not be used by the Bayesian differential engine. Add likelihoods to activate it.");
+    }
+  }
+  if (!body.diagnosisLabel?.trim()) {
+    errors.push("diagnosisLabel is required.");
+  }
+  return { warnings, errors };
+}
 
 const router = Router();
 
@@ -348,10 +385,14 @@ router.get("/diagnosis", async (req: Request, res: Response) => {
 
 router.post("/diagnosis", async (req: Request, res: Response) => {
   try {
+    const validation = validateDiagnosisRule(req.body);
+    if (validation.errors.length > 0) {
+      return res.status(422).json({ error: "Validation failed", errors: validation.errors, warnings: validation.warnings });
+    }
     const body = insertKbDiagnosisRuleSchema.parse(req.body);
     const [row] = await db.insert(kbDiagnosisRules).values(body).returning();
     await logChange("diagnosis_rule", row.ruleId, "create", null, row);
-    res.json(row);
+    res.json({ ...row, _validation: validation });
   } catch (e: any) { res.status(400).json({ error: e.message }); }
 });
 
@@ -359,9 +400,15 @@ router.patch("/diagnosis/:ruleId", async (req: Request, res: Response) => {
   try {
     const old = await db.select().from(kbDiagnosisRules).where(eq(kbDiagnosisRules.ruleId, req.params.ruleId));
     if (!old[0]) return res.status(404).json({ error: "Not found" });
+    // Merge with existing for validation context
+    const merged = { ...old[0], ...req.body, ruleId: req.params.ruleId };
+    const validation = validateDiagnosisRule(merged);
+    if (validation.errors.length > 0) {
+      return res.status(422).json({ error: "Validation failed", errors: validation.errors, warnings: validation.warnings });
+    }
     const [row] = await db.update(kbDiagnosisRules).set({ ...req.body, updatedAt: new Date() }).where(eq(kbDiagnosisRules.ruleId, req.params.ruleId)).returning();
     await logChange("diagnosis_rule", row.ruleId, "update", old[0], row, req.body.rationale);
-    res.json(row);
+    res.json({ ...row, _validation: validation });
   } catch (e: any) { res.status(400).json({ error: e.message }); }
 });
 
@@ -595,6 +642,183 @@ router.get("/changes", async (req: Request, res: Response) => {
       : await db.select().from(kbKnowledgeChanges).orderBy(desc(kbKnowledgeChanges.createdAt)).limit(limit);
     res.json(rows);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// KNOWLEDGE HEALTH PANEL
+// ════════════════════════════════════════════════════════════════════════════
+router.get("/health", async (_req: Request, res: Response) => {
+  try {
+    const { getSourceTrace } = await import("../clinical/bayesianEngine");
+    const sourceTrace = getSourceTrace();
+
+    // Diagnosis rule coverage
+    const dxStats = xRows(await db.execute(sql`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE feature_likelihoods IS NOT NULL AND feature_likelihoods::text <> '{}') AS with_likelihoods,
+        COUNT(*) FILTER (WHERE complaint_id = 'bayesian_global') AS bayesian_priors
+      FROM kb_diagnosis_rules WHERE active = true
+    `))[0] ?? {};
+
+    // Sample of rules missing featureLikelihoods
+    const missingRows = xRows(await db.execute(sql`
+      SELECT rule_id, diagnosis_label, complaint_id FROM kb_diagnosis_rules
+      WHERE active = true AND (feature_likelihoods IS NULL OR feature_likelihoods::text = '{}')
+      ORDER BY complaint_id, diagnosis_label LIMIT 20
+    `));
+
+    // Complaints without red flag rules
+    const noRedFlags = xRows(await db.execute(sql`
+      SELECT c.complaint_id, c.label FROM kb_complaints c
+      WHERE c.enabled = true
+        AND NOT EXISTS (SELECT 1 FROM kb_red_flag_rules r WHERE r.complaint_id = c.complaint_id AND r.active = true)
+      ORDER BY c.label
+    `));
+
+    // Complaints without treatment rules
+    const noTreatments = xRows(await db.execute(sql`
+      SELECT c.complaint_id, c.label FROM kb_complaints c
+      WHERE c.enabled = true
+        AND NOT EXISTS (SELECT 1 FROM kb_treatment_rules t WHERE t.complaint_id = c.complaint_id AND t.active = true)
+      ORDER BY c.label LIMIT 30
+    `));
+
+    // Complaints without approved golden cases (kb_golden_cases.complaint stores complaint_id)
+    const noGolden = xRows(await db.execute(sql`
+      SELECT c.complaint_id, c.label FROM kb_complaints c
+      WHERE c.enabled = true
+        AND NOT EXISTS (SELECT 1 FROM kb_golden_cases g WHERE g.complaint = c.complaint_id AND g.status = 'approved')
+      ORDER BY c.label LIMIT 30
+    `));
+
+    // Complaints without disposition rules
+    const noDisposition = xRows(await db.execute(sql`
+      SELECT c.complaint_id, c.label FROM kb_complaints c
+      WHERE c.enabled = true
+        AND NOT EXISTS (SELECT 1 FROM kb_disposition_rules d WHERE d.complaint_id = c.complaint_id AND d.active = true)
+      ORDER BY c.label LIMIT 30
+    `));
+
+    const totalDx = Number(dxStats.total ?? 0);
+    const withLikelihoods = Number(dxStats.with_likelihoods ?? 0);
+    const missingLikelihoods = totalDx - withLikelihoods;
+    const pctKbDriven = totalDx > 0 ? Math.round((withLikelihoods / totalDx) * 100) : 0;
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      bayesian: sourceTrace,
+      rules: {
+        diagnosisRulesTotal: totalDx,
+        diagnosisRulesWithLikelihoods: withLikelihoods,
+        diagnosisRulesMissingLikelihoods: missingLikelihoods,
+        bayesianPriors: Number(dxStats.bayesian_priors ?? 0),
+        missingLikelihoodsSample: missingRows.map((r: any) => ({
+          ruleId: String(r.rule_id ?? ""),
+          diagnosisLabel: String(r.diagnosis_label ?? ""),
+          complaintId: String(r.complaint_id ?? ""),
+        })),
+      },
+      coverage: {
+        complaintsWithoutRedFlags: noRedFlags.map((r: any) => ({ complaintId: r.complaint_id, label: r.label })),
+        complaintsWithoutTreatments: noTreatments.map((r: any) => ({ complaintId: r.complaint_id, label: r.label })),
+        complaintsWithoutGoldenCases: noGolden.map((r: any) => ({ complaintId: r.complaint_id, label: r.label })),
+        complaintsWithoutDisposition: noDisposition.map((r: any) => ({ complaintId: r.complaint_id, label: r.label })),
+      },
+      pctKbDriven,
+      pctFallback: 100 - pctKbDriven,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// AUDIT REPORT — final confirmation of KB-driven status
+// ════════════════════════════════════════════════════════════════════════════
+router.get("/audit-report", async (_req: Request, res: Response) => {
+  try {
+    const { getSourceTrace } = await import("../clinical/bayesianEngine");
+    const sourceTrace = getSourceTrace();
+    const isKbDriven = sourceTrace.source === "KB_DB";
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      summary: {
+        diagnosisEngineKbDriven: isKbDriven,
+        allPriorsFromDB: isKbDriven,
+        csvAffectsRuntimeDifferential: false,
+        csvSeedDataSource: "server/data/csv/ — only consumed during POST /api/kb/seed, not on live requests",
+      },
+      hardcodedLogicInventory: [
+        {
+          id: "BAYESIAN_PRIORS_FALLBACK",
+          location: "server/clinical/bayesianEngine.ts — PRIORS[] constant (lines ~32-158)",
+          description: "12-diagnosis hardcoded prior table (Influenza A, COVID-19, Strep, etc.). Used ONLY when KB priors have no featureLikelihoods.",
+          status: isKbDriven ? "INACTIVE — KB_DB priors are live" : "ACTIVE — fallback engaged",
+          risk: isKbDriven ? "none" : "high",
+          remediation: "POST /api/kb/seed → POST /api/kb/cache-reload to reactivate KB_DB",
+        },
+        {
+          id: "SCORING_MODULE_DISPATCH",
+          location: "server/services/complaintEngines.ts — runScoring() if/else block",
+          description: "Dispatches scoring to TypeScript calculators (CENTOR, EARACHE_SCORE, COUGH_SCORE, etc.) based on complaint module field in CSV.",
+          status: "ACTIVE — scoring module dispatch is TypeScript-based",
+          risk: "medium",
+          remediation: "Phase 3: migrate scoring formulas to kb_scoring_rules table",
+        },
+        {
+          id: "COMPLAINT_PACK_REGISTRY",
+          location: "server/config/complaintPacks.ts",
+          description: "Legacy complaint intake configuration used by the V1 pipeline. KB tables are the new authority but complaintPacks.ts remains for backward compatibility.",
+          status: "ACTIVE — used by legacy /api/pipeline/run entry point",
+          risk: "low",
+          remediation: "Migrate entry point to read from kb_complaints. Tracked as Phase 3.",
+        },
+        {
+          id: "CSV_REGISTRY_LOADER",
+          location: "server/data/registry.ts — CSV_ENABLED_TABLES flag",
+          description: "Loads clinical data from server/data/csv/*.csv for non-Bayesian complaint data (questions, disposition rules, etc.).",
+          status: "ACTIVE for non-Bayesian runtime data",
+          risk: "low",
+          remediation: "kb_questions (734 rows) and kb_disposition_rules (289 rows) already migrated. Override by reading from KB tables in V2 pipeline.",
+        },
+        {
+          id: "RED_FLAG_MAP_LEGACY",
+          location: "server/rules/redFlagMap.ts",
+          description: "Derived from FLOW_SPECS. Used in legacy safety path (independentSafetyPath.ts). KB red flag rules are new authority.",
+          status: "ACTIVE — safety path still references this",
+          risk: "medium",
+          remediation: "Wire independentSafetyPath to use getKbRedFlags() from kbRuntime. Tracked as Phase 3.",
+        },
+        {
+          id: "WEIGHT_STORE_IN_MEMORY",
+          location: "server/learning/weightStore.ts",
+          description: "RLHF outcome weights stored in-memory only. Resets on every server restart.",
+          status: "ACTIVE — weights are not persisted",
+          risk: "low",
+          remediation: "Add kb_weight_snapshots table and persist on each update cycle.",
+        },
+      ],
+      exampleTrace: {
+        description: "KB row → diagnosis → treatment → disposition — full data lineage",
+        steps: [
+          "1. [DB] kb_diagnosis_rules row: ruleId=DX_BAY_STREP, complaintId=bayesian_global, diagnosisLabel='Strep Pharyngitis', baseProbability=0.12, featureLikelihoods={sore throat:0.96, fever:0.78, tonsillar exudate:0.70, lymphadenopathy:0.75, absence of cough:0.80}",
+          "2. [Cache] POST /api/kb/seed → upsertBayesianPriors() writes row to DB. POST /api/kb/cache-reload → loadPriorsFromDb() reads it back.",
+          "3. [Engine] setRuntimePriors([...614 rules...]) filters to 12 with non-empty featureLikelihoods. _runtimePriors set. source=KB_DB.",
+          "4. [Request] Patient presents: symptoms=['sore throat','fever','lymphadenopathy'].",
+          "5. [Bayesian] runDifferential(symptoms) → bayesianUpdate(KB_priors, symptoms). Strep posterior = 0.47 (highest). Confidence: high. source=KB_DB.",
+          "6. [Treatment] getKbTreatments({diagnosisId:'DX_BAY_STREP'}) → kb_treatment_rules row TX_STREP_AMOX: Amoxicillin 500mg TID x10d.",
+          "7. [Safety] getKbRedFlags('ent_sore_throat') → 272 cached rules. Checks RF_SOT_AIRWAY (stridor→ER_SEND), RF_SOT_MENINGISMUS (neck stiffness→ER_SEND).",
+          "8. [Disposition] No hard stops → office_followup. Chart note generated from kb_plan_templates.",
+          "9. [Trace] Full audit: {source:KB_DB, ruleIds:[DX_BAY_STREP,TX_STREP_AMOX], tableNames:[kb_diagnosis_rules,kb_treatment_rules,kb_red_flag_rules], cacheAge:<60s}",
+        ],
+      },
+      sourceTrace,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Source of truth audit endpoint

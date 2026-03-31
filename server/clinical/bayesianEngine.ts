@@ -23,6 +23,17 @@ export interface DifferentialResult {
   posterior:   number;     // P(D | symptoms), normalized
   confidence:  "high" | "moderate" | "low";
   matchedFeatures: string[];
+  /** Which source was used for this diagnosis prior */
+  source?: "KB_DB" | "FALLBACK_HARDCODED";
+}
+
+/** Source trace — which prior table is currently active in the Bayesian engine */
+export interface SourceTrace {
+  source: "KB_DB" | "FALLBACK_HARDCODED";
+  priorCount: number;
+  priorsWithLikelihoods: number;
+  fallbackReason: string | null;
+  activatedAt: string | null;
 }
 
 // ── Prior probability table (ENT/Flu-slice + Musculoskeletal scope) ──────────
@@ -203,6 +214,7 @@ export function bayesianUpdate(
  * falls back to the hardcoded PRIORS table when KB is empty.
  */
 let _runtimePriors: DiagnosisPrior[] | null = null;
+let _priorsActivatedAt: string | null = null;
 
 export function setRuntimePriors(priors: DiagnosisPrior[]): void {
   // Only replace if KB priors have actual featureLikelihoods data.
@@ -210,6 +222,7 @@ export function setRuntimePriors(priors: DiagnosisPrior[]): void {
   const withLikelihoods = priors.filter(p => Object.keys(p.featureLikelihoods || {}).length > 0);
   if (withLikelihoods.length > 0) {
     _runtimePriors = withLikelihoods;
+    _priorsActivatedAt = new Date().toISOString();
     (global as any).__kbPriorsCount = withLikelihoods.length;
     console.info(
       `[BayesianEngine] Runtime priors set from KB: ${withLikelihoods.length} ` +
@@ -217,20 +230,52 @@ export function setRuntimePriors(priors: DiagnosisPrior[]): void {
     );
   } else {
     _runtimePriors = null;
-    console.info(`[BayesianEngine] KB priors have no featureLikelihoods — keeping hardcoded PRIORS table`);
+    _priorsActivatedAt = null;
+    console.warn(
+      `[BayesianEngine] KB priors have no featureLikelihoods — FALLBACK to hardcoded PRIORS table. ` +
+      `Seed via POST /api/kb/seed to restore KB authority.`
+    );
   }
 }
 
 export function clearRuntimePriors(): void {
   _runtimePriors = null;
+  _priorsActivatedAt = null;
 }
 
 export function getActivePriors(): DiagnosisPrior[] {
   return _runtimePriors && _runtimePriors.length > 0 ? _runtimePriors : PRIORS;
 }
 
+/** Returns the current source trace for the Bayesian engine — which prior table is live */
+export function getSourceTrace(): SourceTrace {
+  if (_runtimePriors && _runtimePriors.length > 0) {
+    return {
+      source: "KB_DB",
+      priorCount: _runtimePriors.length,
+      priorsWithLikelihoods: _runtimePriors.length, // all filtered to have likelihoods
+      fallbackReason: null,
+      activatedAt: _priorsActivatedAt,
+    };
+  }
+  return {
+    source: "FALLBACK_HARDCODED",
+    priorCount: PRIORS.length,
+    priorsWithLikelihoods: PRIORS.filter(p => Object.keys(p.featureLikelihoods).length > 0).length,
+    fallbackReason: _runtimePriors === null
+      ? "KB priors not yet loaded — call POST /api/kb/seed + POST /api/kb/cache-reload"
+      : "No KB priors had featureLikelihoods — run kbSeeder.upsertBayesianPriors()",
+    activatedAt: null,
+  };
+}
+
 export function runDifferential(symptoms: string[]): DifferentialResult[] {
-  return bayesianUpdate(getActivePriors(), symptoms);
+  const usingKb = Boolean(_runtimePriors && _runtimePriors.length > 0);
+  const sourceTag: "KB_DB" | "FALLBACK_HARDCODED" = usingKb ? "KB_DB" : "FALLBACK_HARDCODED";
+  if (!usingKb) {
+    console.warn("[BayesianEngine] FALLBACK — differential using hardcoded PRIORS, not KB_DB");
+  }
+  return bayesianUpdate(getActivePriors(), symptoms).map(r => ({ ...r, source: sourceTag }));
 }
 
 /** Return the top N differentials above a minimum confidence threshold */

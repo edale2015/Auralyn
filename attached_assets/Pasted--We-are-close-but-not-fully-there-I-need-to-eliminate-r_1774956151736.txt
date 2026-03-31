@@ -1,0 +1,119 @@
+}
+We are close, but not fully there. I need to eliminate remaining architectural gaps and enforce a single, fully KB-driven system.
+
+CRITICAL REQUIREMENTS — PHASE 2
+
+1. Enforce SINGLE SOURCE OF TRUTH
+
+- Postgres KB tables must be the ONLY runtime source
+- Remove or disable:
+  - CSV-based rule loading
+  - hidden fallback logic
+  - duplicated priors
+- If fallback is required:
+  - it must be explicitly logged in trace
+  - must be visible in UI
+  - must be removable
+
+2. Fully KB-DRIVE THE DIAGNOSIS ENGINE
+
+- Diagnosis must come entirely from:
+  - kb_diagnosis_rules
+  - featureLikelihoods
+  - KB-defined scoring
+- No complaint-specific TypeScript logic
+- Fusion logic must be expressed in KB rules
+- Bayesian + rule-based hybrid must be configurable in KB
+
+3. CLOSE THE LEARNING LOOP
+
+After any approved change:
+- auto-run regression simulations
+- compare:
+  - before vs after accuracy
+  - red flag sensitivity
+  - false reassurance rate
+- auto-generate validation report
+
+If performance worsens:
+- auto-flag
+- suggest rollback
+
+4. ADD “SOURCE TRACE VISIBILITY”
+
+For every decision, expose:
+
+- source = DB / fallback / cache
+- rule ID
+- table name
+- version ID
+
+In UI:
+- show “KB-driven” vs “fallback-driven”
+- highlight any non-KB logic
+
+5. ADD “KNOWLEDGE HEALTH PANEL”
+
+In KB Ops Dashboard:
+
+Show:
+- % of logic coming from KB vs fallback
+- number of rules missing featureLikelihoods
+- incomplete diagnosis rules
+- complaints without full rule coverage
+- golden case coverage gaps
+- most unstable complaints
+
+6. AUTO-VALIDATE KB ENTRIES
+
+When a KB rule is created/edited:
+
+- validate:
+  - featureLikelihoods not empty
+  - required fields present
+  - conflicts with existing rules
+- block invalid rules from entering runtime
+
+7. FORCE ALL ENTRY POINTS THROUGH SAME PIPELINE
+
+Audit and confirm:
+
+- test bench
+- simulation engine
+- live patient flow
+- learning engine
+
+All must use:
+- same KB-driven pipeline
+- same safety stack
+- same diagnosis engine
+
+No parallel logic paths allowed.
+
+8. ADD “SIMULATE BEFORE DEPLOY” ENFORCEMENT
+
+For high-risk changes:
+
+- require simulation before approval
+- show predicted impact
+- block deploy if unsafe
+
+9. ADD “AUTO-ROLLBACK TRIGGERS”
+
+If after deployment:
+- accuracy drops > threshold
+- red flag miss increases
+- false reassurance increases
+
+→ auto-revert to previous version
+
+10. FINAL CONFIRMATION I NEED
+
+Provide:
+
+- list of ALL remaining hardcoded medical logic
+- confirmation diagnosis engine is fully KB-driven
+- confirmation all priors now come from DB
+- confirmation no CSV/TS logic affects runtime decisions
+- example trace proving:
+  KB row → diagnosis → treatment → dispositio
