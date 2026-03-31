@@ -1,0 +1,158 @@
+1) MULTI-PATIENT COMMAND GRID (Hospital-style view)
+🧾 Schema
+CREATE TABLE IF NOT EXISTS patient_dashboard_state (
+  patient_id TEXT PRIMARY KEY,
+  name TEXT,
+  chief_complaint TEXT,
+  top_dx TEXT,
+  disposition TEXT,
+  risk_score FLOAT,
+  last_update TIMESTAMP DEFAULT now()
+);
+⚙️ Backend Aggregation
+// server/routes/patientGrid.ts
+router.get('/grid', async (req, res) => {
+  const rows = await req.db.patient_dashboard_state.findAll()
+
+  res.json(rows)
+})
+🎛️ UI (Grid)
+// client/components/MultiPatientGrid.tsx
+export default function MultiPatientGrid({ patients }) {
+  return (
+    <div className="grid grid-cols-4 gap-2">
+      {patients.map(p => (
+        <div key={p.patient_id} className="card">
+          <strong>{p.name}</strong>
+          <p>{p.chief_complaint}</p>
+          <p>{p.top_dx}</p>
+          <p style={{ color: p.risk_score > 0.7 ? 'red' : 'green' }}>
+            Risk: {p.risk_score.toFixed(2)}
+          </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+🔥 Upgrade (real-time sorting)
+patients.sort((a,b)=>b.risk_score-a.risk_score)
+
+👉 highest-risk patient always floats to top
+
+📞 2) AUTOMATED TRIAGE CALL / SMS AGENT
+🧾 Schema
+CREATE TABLE IF NOT EXISTS patient_outreach (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id TEXT,
+  channel TEXT,        -- sms | whatsapp | voice
+  message TEXT,
+  status TEXT,
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Backend Agent
+// server/agents/outreachAgent.ts
+export async function runOutreachAgent(db, patient) {
+  if (patient.risk_score > 0.7) {
+    const msg = `We recommend urgent evaluation. Reply YES to confirm.`
+
+    await db.patient_outreach.insert({
+      patient_id: patient.patient_id,
+      channel: 'sms',
+      message: msg,
+      status: 'sent'
+    })
+
+    await sendSMS(patient.phone, msg)
+  }
+}
+🎤 Voice call agent (basic)
+// server/agents/voiceAgent.ts
+export async function runVoiceCall(patient) {
+  await twilio.calls.create({
+    to: patient.phone,
+    from: process.env.TWILIO_NUMBER,
+    twiml: `<Response><Say>Please seek urgent care immediately.</Say></Response>`
+  })
+}
+🎛️ UI Panel
+// client/components/OutreachPanel.tsx
+export default function OutreachPanel({ patient }) {
+  const send = async () => {
+    await fetch('/api/agents/outreach', {
+      method:'POST',
+      body: JSON.stringify(patient)
+    })
+  }
+
+  return (
+    <div className="card">
+      <button onClick={send}>Send Alert</button>
+    </div>
+  )
+}
+📊 3) PREDICTIVE ADMISSION RISK SCORING
+🧾 Schema
+CREATE TABLE IF NOT EXISTS kb_admission_rules (
+  id UUID PRIMARY KEY,
+  feature_key TEXT,
+  weight FLOAT
+);
+⚙️ Engine
+// server/engine/admissionRisk.ts
+export async function computeAdmissionRisk(db, input) {
+  const rules = await db.kb_admission_rules.findAll()
+
+  let score = 0
+
+  for (const r of rules) {
+    if (input[r.feature_key]) {
+      score += r.weight
+    }
+  }
+
+  return Math.min(1, score)
+}
+🔌 Hook
+const risk = await computeAdmissionRisk(db, input)
+
+await db.patient_dashboard_state.update({
+  patient_id,
+  risk_score: risk
+})
+🎛️ UI (overlay on grid)
+<p className={risk > 0.7 ? 'text-red-500' : 'text-green-500'}>
+  Admission Risk: {risk.toFixed(2)}
+</p>
+🧠 MASTER DASHBOARD UPDATE
+// ControlTowerV4.tsx
+import MultiPatientGrid from './MultiPatientGrid'
+import OutreachPanel from './OutreachPanel'
+
+export default function ControlTowerV4({ data }) {
+  return (
+    <div className="grid grid-cols-4 gap-4">
+      <MultiPatientGrid patients={data.patients} />
+      <OutreachPanel />
+    </div>
+  )
+}
+🔗 ROUTES
+GET  /api/control/grid
+POST /api/agents/outreach
+POST /api/agents/voice
+GET  /api/control/admission-risk
+🧪 TEST SCENARIOS
+✅ High-risk patient
+HR ↑, severe pain
+→ risk score ↑
+→ floats to top
+→ outreach triggered
+✅ Low-risk patient
+
+→ stays lower in grid
+→ no outreach
+
+✅ Multi-patient view
+
+→ see 20+ patients simultaneously
+→ sorted by urgency

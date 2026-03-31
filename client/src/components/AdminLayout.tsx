@@ -24,7 +24,7 @@ import {
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
   BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar, ShieldCheck,
-  CircleDollarSign, Database,
+  CircleDollarSign, Database, Grid3X3,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -159,6 +159,7 @@ const NAV_SECTIONS = [
       { path: "/control-tower", label: "Clinical Control Tower", icon: Radar },
       { path: "/clinical-control-tower", label: "CCT Decision Engine", icon: Brain },
       { path: "/system-control-tower", label: "System Control Tower", icon: Cpu },
+      { path: "/multi-patient-command", label: "Multi-Patient Command Grid", icon: Grid3X3 },
       { path: "/knowledge-graph", label: "Knowledge Graph", icon: Network },
       { path: "/schema-validator", label: "Schema Validator", icon: ShieldCheck },
       { path: "/clinical-governance", label: "Clinical Governance", icon: Shield },

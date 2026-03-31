@@ -76,9 +76,30 @@ The system is 100% Knowledge Base (KB)-driven for diagnosis, with all clinical d
 - `/api/kb/*` — full CRUD for all 11 core KB tables  
 - `/api/advanced-reasoning/*` — interactions, temporal patterns, outcomes, learning queue, health
 
+## Multi-Patient Command Grid (`/multi-patient-command`)
+
+Three-pane hospital-style command dashboard:
+- **Left pane**: Risk-sorted patient grid (MultiPatientGrid.tsx) — patients sorted by `risk_score DESC`, color-coded risk badges (CRITICAL/HIGH/MODERATE/LOW), vitals mini-strip, 30s auto-refresh
+- **Middle pane**: Selected patient clinical detail — top diagnosis, disposition, vitals, risk flags, predictive admission risk score with progress bar
+- **Right pane**: Outreach Agent (OutreachPanel.tsx) — per-patient SMS/WhatsApp/voice TTS Twilio triggers with outreach history log
+
+**New DB tables**: `patient_dashboard_state` (8 demo patients auto-seeded), `patient_outreach` (log), `kb_admission_rules` (16 rules)
+
+**Backend engine** (`server/engine/admissionRisk.ts`): KB-driven admission risk scoring — sums weighted rules from `kb_admission_rules` table; score thresholds: critical≥0.8, high≥0.6, moderate≥0.35, low<0.35
+
+**API Routes** (`/api/command/*`):
+- `GET /api/command/grid` — risk-sorted patients (auto-seeds 8 demo patients if empty)
+- `POST /api/command/grid/upsert` — upsert patient state
+- `GET /api/command/admission-risk` — list 16 KB rules
+- `POST /api/command/admission-risk/compute` — compute risk from feature flags
+- `POST /api/command/admission-risk/seed` — seed 16 KB rules
+- `POST /api/command/outreach` — send SMS or WhatsApp via Twilio
+- `POST /api/command/voice-call` — initiate TTS Twilio voice call via TwiML
+- `GET /api/command/outreach-log` — per-patient outreach history
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
-*   **Messaging Integration**: Twilio for WhatsApp
+*   **Messaging Integration**: Twilio for WhatsApp, SMS, and Voice TTS
 *   **Database**: Firebase Firestore, SQLite, PostgreSQL
 *   **Data Configuration**: Google Sheets
 *   **Cloud Storage**: Firebase Storage
