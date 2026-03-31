@@ -1,6 +1,7 @@
 import { processInput, MultimodalInput } from "../multimodal/multimodalEngine";
 import { clinicalReasoning } from "../orchestrator/clinicalFusion";
 import { clinicalSafetyGate } from "../clinical/safetyGate";
+import { safetyPipeline } from "../clinical/safetyPipeline";
 import { runWorkflow, WorkflowType } from "../workflows/workflowEngine";
 import { logOutcome, updateModel, computePerformance } from "../learning/outcomeTracker";
 import { auditLog } from "../security/auditLogger";
@@ -24,6 +25,7 @@ export interface FullLoopResult {
   decision?: any;
   workflowResult?: any;
   safetyGate?: { allowed: boolean; reason?: string };
+  safetyPipelineResult?: ReturnType<typeof safetyPipeline>;
   multimodal?: any;
   performanceSummary?: ReturnType<typeof computePerformance>;
   completedAt: string;
@@ -53,6 +55,7 @@ export async function runSystem(input: FullLoopInput): Promise<FullLoopResult> {
 
   const uncertainty = 1 - (reasoning.scores.centor?.score ?? 0) / 4;
 
+  // ── Safety gate (fast threshold-based check) ─────────────────────────────
   const safety = clinicalSafetyGate({
     riskScore,
     uncertainty,
@@ -60,14 +63,49 @@ export async function runSystem(input: FullLoopInput): Promise<FullLoopResult> {
     actorId: "full_loop",
   });
 
-  if (!safety.allowed) {
-    logOutcome(input.id, {
-      patientId: input.id,
-      predicted: reasoning.recommendation,
-      physicianOverridden: false,
-      riskScore,
+  // ── Master safety pipeline (sepsis / PEWS / OB / MH / conflict resolver) ─
+  let spResult: ReturnType<typeof safetyPipeline> | undefined;
+  try {
+    spResult = safetyPipeline({
+      patientId:   input.id,
+      ageYears:    input.history?.age,
+      vitals:      input.vitals
+        ? {
+            heartRate:       (input.vitals as any).heartRate,
+            respiratoryRate: (input.vitals as any).respRate ?? (input.vitals as any).respiratoryRate,
+            tempC:           (input.vitals as any).temperature ?? (input.vitals as any).tempC,
+            systolicBP:      (input.vitals as any).systolicBp ?? (input.vitals as any).systolicBP,
+            spo2:            (input.vitals as any).oxygenSaturation ?? (input.vitals as any).spo2,
+          }
+        : undefined,
+      deterministic: {
+        disposition: reasoning.scores.overallRisk === "high" ? "ER_NOW"
+          : reasoning.scores.overallRisk === "moderate" ? "URGENT_24H" : "ROUTINE_72H",
+        diagnosis: reasoning.recommendation,
+      },
+      probabilistic: null,
     });
 
+    // Safety pipeline override: if it escalates to ER_NOW, respect it immediately
+    if (spResult.disposition === "ER_NOW" || spResult.overrides.sepsis || spResult.overrides.pediatric || spResult.overrides.obstetric || spResult.overrides.mentalHealth) {
+      logOutcome(input.id, { patientId: input.id, predicted: reasoning.recommendation, physicianOverridden: true, riskScore: 1.0 });
+      logMetric("full_loop.latency", Date.now() - start, "latency");
+      auditLog({ actor: "full_loop", action: "safety_pipeline_escalated", patientId: input.id, riskScore: 1.0, details: { trigger: spResult.trigger, disposition: spResult.disposition } });
+      return {
+        status: "safety_blocked",
+        decision: { ...reasoning, safetyOverride: spResult.trigger, safetyDisposition: spResult.disposition },
+        safetyGate: safety,
+        safetyPipelineResult: spResult,
+        multimodal: multimodalData,
+        completedAt: new Date().toISOString(),
+      };
+    }
+  } catch (spErr: any) {
+    auditLog({ actor: "full_loop", action: "safety_pipeline_error", patientId: input.id, details: { error: spErr.message } });
+  }
+
+  if (!safety.allowed) {
+    logOutcome(input.id, { patientId: input.id, predicted: reasoning.recommendation, physicianOverridden: false, riskScore });
     logMetric("full_loop.latency", Date.now() - start, "latency");
     auditLog({ actor: "full_loop", action: "blocked_by_safety_gate", patientId: input.id, riskScore });
 
@@ -75,6 +113,7 @@ export async function runSystem(input: FullLoopInput): Promise<FullLoopResult> {
       status: safety.requiredAction === "hard_stop" ? "safety_blocked" : "physician_review",
       decision: reasoning,
       safetyGate: safety,
+      safetyPipelineResult: spResult,
       multimodal: multimodalData,
       completedAt: new Date().toISOString(),
     };
@@ -96,12 +135,7 @@ export async function runSystem(input: FullLoopInput): Promise<FullLoopResult> {
     console.warn("[FullLoop] Workflow failed:", err.message);
   }
 
-  logOutcome(input.id, {
-    patientId: input.id,
-    predicted: reasoning.recommendation,
-    correct: true,
-    riskScore,
-  });
+  logOutcome(input.id, { patientId: input.id, predicted: reasoning.recommendation, correct: true, riskScore });
 
   const performance = computePerformance();
   updateModel(performance);
@@ -114,6 +148,7 @@ export async function runSystem(input: FullLoopInput): Promise<FullLoopResult> {
     decision: reasoning,
     workflowResult,
     safetyGate: safety,
+    safetyPipelineResult: spResult,
     multimodal: multimodalData,
     performanceSummary: performance,
     completedAt: new Date().toISOString(),

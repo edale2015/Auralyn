@@ -1,0 +1,107 @@
+Please close the architectural gap so the Test Bench exercises the same production-grade clinical pipeline used for real decisions.
+
+Required changes:
+
+1. Unify the inference path
+
+* Route the Golden Case runner and Test Bench through the true production pipeline, not the simplified fullLoop-only path.
+* Preferred approach: make runPatientFlow / golden case execution call finalPipeline.ts as the canonical path.
+* If finalPipeline cannot fully replace fullLoop yet, then fullLoop.ts must call safetyPipeline.ts before final disposition is returned.
+* There should be one canonical orchestrator for all clinical execution paths.
+
+2. Ensure master safety logic is always reached
+
+* The following must fire during golden cases, test bench runs, and production runs:
+
+  * sepsis / qSOFA / NEWS2 logic
+  * PEWS pediatric logic
+  * obstetric emergency logic
+  * suicide / psychiatric emergency logic
+  * hard stop hierarchy (CALL_911 > ER_NOW > URGENT_24H > routine)
+  * conflictResolver.ts when deterministic and probabilistic outputs disagree
+
+3. Wire learned scoring into the active path
+
+* Integrate hybridScoringEngine.ts into the scoring used by clinicalFusion / full disposition generation.
+* The active scoring path must read current RLHF / weightStore weights.
+* Add trace output showing:
+
+  * base score
+  * learned weight adjustments
+  * final score
+  * version of weights used
+
+4. Fix Test Bench operational defects
+
+* Stress Test button should work from the frontend without silent 403 failure.
+* Either:
+
+  * provide the required bearer token in frontend requests, or
+  * expose a safe internal admin proxy for authorized UI users.
+* For large runs, the UI must use async /run instead of sync /run-sync when requested counts exceed the sync cap.
+* Show visible errors in UI instead of silent failures.
+
+5. Make knowledge/config sources fully traceable
+
+* Identify where the former Google Sheets clinical knowledge now lives:
+
+  * sheet sync tables
+  * CSV/config files
+  * database tables
+  * cached JSON/materialized config
+* Produce a clear source-of-truth map for:
+
+  * complaints
+  * core questions
+  * red flags
+  * scoring rules
+  * disposition rules
+  * diagnosis ranking
+  * medication / treatment recommendations
+  * patient instructions / templates
+
+6. Build end-to-end decision traceability
+
+* For every test case and live run, output a structured reasoning trace that links:
+
+  * source config row / rule ID / table name
+  * intermediate scores
+  * red flag hits
+  * hard stop hits
+  * conflict resolution outcome
+  * final diagnosis ranking
+  * final disposition
+* I want to be able to trace a final disposition back to the exact knowledge rows/rules that caused it.
+
+7. Make clinical knowledge editable and reviewable
+
+* If Google Sheets is still the source of truth, identify the exact tabs and sync path.
+* If knowledge was migrated out of Sheets, show where it now resides and how edits are made safely.
+* Build or document the review/update workflow for:
+
+  * changing first-line medication
+  * changing dose or frequency
+  * changing disposition rules
+  * changing complaint questions
+  * changing red flags
+
+8. Medication recommendation governance
+
+* Show exactly where first-line medication and dosing are defined.
+* Refactor if necessary so medication choice and dosing are not buried in code.
+* Medication guidance should come from an editable clinical config layer with versioning, audit log, and test coverage.
+* When a medication or dose changes, I want:
+
+  * config diff
+  * affected complaints/diagnoses
+  * regression test rerun
+  * audit log entry
+
+9. Deliverables I want back
+
+* A map of all clinical execution paths and which one is canonical
+* A source-of-truth map for clinical knowledge
+* A before/after list of disconnected layers now connected
+* Sample trace showing sheet/config row → score/rule → final disposition
+* Exact files changed
+* Any remaining parallel paths or safety gaps still not closed
