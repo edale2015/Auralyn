@@ -667,7 +667,7 @@ function SimulationLabPanel() {
 
   const run = useMutation({
     mutationFn: async () => {
-      const resp = await apiRequest("/api/kb/simulate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cases }) });
+      const resp = await fetch("/api/kb/simulate", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ cases }) });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error ?? "Simulation failed");
       return data;
@@ -789,7 +789,7 @@ function DecisionTracePanel() {
   const trace = useMutation({
     mutationFn: async () => {
       const symptoms = symptomInput.split(",").map(s => s.trim()).filter(Boolean);
-      const resp = await apiRequest("/api/kb/trace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symptoms }) });
+      const resp = await fetch("/api/kb/trace", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ symptoms }) });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error ?? "Trace failed");
       return data;

@@ -524,15 +524,17 @@ function SimpleTableTab({ endpoint, title, columns, fields, idKey, editUrlFn, de
 
   const save = useMutation({
     mutationFn: async (vals: any) => {
-      let resp: Response;
-      if (editRow?.[idKey] && !creating) {
-        resp = await apiRequest(editUrlFn(editRow), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(vals) });
-      } else {
-        resp = await apiRequest(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(vals) });
-      }
+      // Use fetch directly so we can inspect 422 validation responses without throwing
+      const url = (editRow?.[idKey] && !creating) ? editUrlFn(editRow) : endpoint;
+      const method = (editRow?.[idKey] && !creating) ? "PATCH" : "POST";
+      const resp = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      body: JSON.stringify(vals),
+      });
       const data = await resp.json();
       if (!resp.ok) {
-        // Surface 422 validation errors inside the dialog
         const errs: string[] = data.errors ?? (data.error ? [data.error] : ["Save failed"]);
         const warns: string[] = data.warnings ?? [];
         setServerErrors(errs);
@@ -550,7 +552,6 @@ function SimpleTableTab({ endpoint, title, columns, fields, idKey, editUrlFn, de
       toast({ title: "Saved" });
     },
     onError: (e: any) => {
-      // Don't toast 422 — errors are shown in the dialog
       if (!serverErrors.length) toast({ title: "Error", description: e.message, variant: "destructive" });
     },
   });

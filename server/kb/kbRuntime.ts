@@ -79,7 +79,7 @@ function extractRows(result: any): any[] {
 async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
   try {
     const result = await db.execute(
-      sql`SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods, version
+      sql`SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods
           FROM kb_diagnosis_rules
           WHERE active = true
           ORDER BY cluster_priority ASC, base_probability DESC`
@@ -89,7 +89,7 @@ async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
       baseProbability: Number(r.base_probability ?? r.baseProbability ?? 0),
       featureLikelihoods: (r.feature_likelihoods ?? r.featureLikelihoods ?? {}) as Record<string, number>,
       ruleId: String(r.rule_id ?? r.ruleId ?? ""),
-      version: Number(r.version ?? 1),
+      version: 1,  // kb_diagnosis_rules has no version column — default to 1
       tableName: "kb_diagnosis_rules",
     }));
   } catch (err) {
