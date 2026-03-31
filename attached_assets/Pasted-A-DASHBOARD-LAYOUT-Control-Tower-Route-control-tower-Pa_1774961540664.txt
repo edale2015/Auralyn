@@ -1,0 +1,240 @@
+A. DASHBOARD LAYOUT (Control Tower)
+Route
+/control-tower
+Panels
+Left: Case Input + Live Trace
+Center: Decision Tree Visualizer
+Right (tabs):
+Scoring Console
+Questioning Panel
+Counterfactuals
+Workup Optimizer
+Bottom: Audit / Rule Trace / Version
+🌳 B. DECISION TREE VISUALIZER
+🧾 Node schema (frontend)
+// client/src/types/decisionTree.ts
+export type TreeNode = {
+  id: string
+  label: string
+  type: 'question' | 'finding' | 'rule' | 'dx' | 'action'
+  value?: any
+  score?: number
+  source?: 'KB_DB' | 'FALLBACK'
+  children?: TreeNode[]
+}
+⚙️ Backend: build tree from trace
+// server/trace/buildDecisionTree.ts
+export function buildDecisionTree(trace: any): TreeNode {
+  return {
+    id: 'root',
+    label: 'Clinical Flow',
+    type: 'rule',
+    children: [
+      {
+        id: 'questions',
+        label: 'Questions',
+        type: 'question',
+        children: trace.questions.map((q: any) => ({
+          id: q.id,
+          label: `${q.key}: ${q.value}`,
+          type: 'question'
+        }))
+      },
+      {
+        id: 'findings',
+        label: 'Findings',
+        type: 'finding',
+        children: trace.findings.map((f: any) => ({
+          id: f.key,
+          label: `${f.key}: ${f.value}`,
+          type: 'finding'
+        }))
+      },
+      {
+        id: 'diagnosis',
+        label: 'Diagnosis',
+        type: 'dx',
+        children: trace.differential.map((d: any) => ({
+          id: d.ruleId,
+          label: `${d.name} (${(d.posterior*100).toFixed(1)}%)`,
+          type: 'dx',
+          score: d.posterior,
+          source: d.source
+        }))
+      },
+      {
+        id: 'disposition',
+        label: `Disposition: ${trace.disposition}`,
+        type: 'action'
+      }
+    ]
+  }
+}
+🎛️ React component
+// client/src/components/DecisionTree.tsx
+import React from 'react'
+import Tree from 'react-d3-tree'
+
+export default function DecisionTree({ data }) {
+  return (
+    <div style={{ width: '100%', height: '600px' }}>
+      <Tree
+        data={data}
+        orientation="vertical"
+        pathFunc="step"
+        renderCustomNodeElement={({ nodeDatum }) => (
+          <g>
+            <circle r={15} fill="#2563eb" />
+            <text fill="black" x="20" dy="5">
+              {nodeDatum.label}
+            </text>
+          </g>
+        )}
+      />
+    </div>
+  )
+}
+📊 C. SCORING + UNCERTAINTY CONSOLE
+⚙️ Backend scoring debug endpoint
+GET /api/trace/scoring?caseId=123
+
+Returns:
+
+{
+  "top_dx": "rotator_cuff",
+  "posterior": 0.67,
+  "uncertainty": 0.33,
+  "margin": 0.21,
+  "contributors": [
+    { "feature": "painful_arc", "logContribution": 1.8 },
+    { "feature": "weakness", "logContribution": 1.4 }
+  ]
+}
+🎛️ React panel
+// client/src/components/ScoringPanel.tsx
+export default function ScoringPanel({ data }) {
+  return (
+    <div>
+      <h3>Top Diagnosis</h3>
+      <p>{data.top_dx} ({(data.posterior*100).toFixed(1)}%)</p>
+
+      <h4>Uncertainty</h4>
+      <p>{(data.uncertainty*100).toFixed(1)}%</p>
+
+      <h4>Feature Contributions</h4>
+      {data.contributors.map(c => (
+        <div key={c.feature}>
+          {c.feature}: {c.logContribution.toFixed(2)}
+        </div>
+      ))}
+    </div>
+  )
+}
+❓ D. ADAPTIVE QUESTIONING PANEL (Next-Best Question)
+🧾 Schema
+CREATE TABLE IF NOT EXISTS kb_question_utility (
+  question_key TEXT,
+  diagnosis TEXT,
+  info_gain FLOAT
+);
+⚙️ Engine
+// server/engine/nextBestQuestion.ts
+export async function getNextBestQuestion(currentDx: any[], answered: string[]) {
+  const q = await db.kb_question_utility.findAll()
+
+  const scores: Record<string, number> = {}
+
+  for (const dx of currentDx) {
+    for (const row of q) {
+      if (row.diagnosis === dx.diagnosis && !answered.includes(row.question_key)) {
+        scores[row.question_key] = (scores[row.question_key] || 0) +
+          dx.posterior * row.info_gain
+      }
+    }
+  }
+
+  return Object.entries(scores)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+}
+🎛️ UI
+// client/src/components/QuestioningPanel.tsx
+export default function QuestioningPanel({ questions }) {
+  return (
+    <div>
+      <h3>Next Best Questions</h3>
+      {questions.map(q => (
+        <button key={q[0]}>
+          {q[0]} ({q[1].toFixed(2)})
+        </button>
+      ))}
+    </div>
+  )
+}
+🔍 E. COUNTERFACTUAL PANEL (UI)
+// client/src/components/CounterfactualPanel.tsx
+export default function CounterfactualPanel({ data }) {
+  return (
+    <div>
+      <h3>What Would Change the Diagnosis?</h3>
+      {data.map((c, i) => (
+        <div key={i}>
+          Change {c.feature} → {c.change} → {c.new_top}
+        </div>
+      ))}
+    </div>
+  )
+}
+🧪 F. ROUTES TO ADD
+// server/routes/controlTowerRoutes.ts
+router.get('/tree/:caseId', buildTree)
+router.get('/scoring/:caseId', getScoring)
+router.get('/questions/:caseId', getNextQuestions)
+router.get('/counterfactuals/:caseId', getCounterfactuals)
+🧭 G. MAIN DASHBOARD PAGE
+// client/src/pages/ControlTower.tsx
+import DecisionTree from '../components/DecisionTree'
+import ScoringPanel from '../components/ScoringPanel'
+import QuestioningPanel from '../components/QuestioningPanel'
+import CounterfactualPanel from '../components/CounterfactualPanel'
+
+export default function ControlTower({ data }) {
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      <div>
+        <h2>Case Input</h2>
+      </div>
+
+      <div className="col-span-2">
+        <DecisionTree data={data.tree} />
+      </div>
+
+      <div>
+        <ScoringPanel data={data.scoring} />
+        <QuestioningPanel questions={data.questions} />
+        <CounterfactualPanel data={data.counterfactuals} />
+      </div>
+    </div>
+  )
+}
+🧠 WHAT YOU NOW HAVE
+
+From the dashboard you can:
+
+🟢 Monitor
+full decision tree
+diagnosis probabilities
+uncertainty
+feature contributions
+🟡 Debug
+which rule fired
+which feature mattered
+why diagnosis won
+🔵 Improve
+edit KB rules
+rerun simulation
+see impact instantly
+🔴 Troubleshoot
+counterfactual flips
+missing questions
+weak features

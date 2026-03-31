@@ -1,0 +1,263 @@
+1) UNCERTAINTY-AWARE DISPOSITION (CONFIDENCE GATING)
+🧾 Schema
+-- Controls escalation based on uncertainty
+CREATE TABLE IF NOT EXISTS kb_confidence_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_id TEXT,                         -- or 'global'
+  min_confidence FLOAT,                      -- threshold
+  action TEXT,                               -- MONITOR | URGENT | ER_NOW
+  description TEXT,
+  priority INTEGER DEFAULT 1,
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Optional: per-diagnosis risk floor
+CREATE TABLE IF NOT EXISTS kb_diagnosis_risk (
+  diagnosis TEXT PRIMARY KEY,
+  min_disposition TEXT,                      -- e.g. cannot go below URGENT
+  is_active BOOLEAN DEFAULT TRUE
+);
+⚙️ Engine
+// server/engine/confidenceDisposition.ts
+type Dx = { diagnosis: string; posterior: number }
+
+function softmaxLogScores(items: { score: number }[]) {
+  const max = Math.max(...items.map(i => i.score))
+  const exps = items.map(i => Math.exp(i.score - max))
+  const Z = exps.reduce((a, b) => a + b, 0)
+  return exps.map(e => e / Z)
+}
+
+export async function computeDispositionWithUncertainty(
+  complaintId: string,
+  logScored: { diagnosis: string; score: number }[],
+  baseDisposition: string
+) {
+  const posteriors = softmaxLogScores(logScored)
+  const ranked = logScored
+    .map((d, i) => ({ ...d, posterior: posteriors[i] }))
+    .sort((a, b) => b.posterior - a.posterior)
+
+  const top = ranked[0]
+  const second = ranked[1]
+  const uncertainty = 1 - (top?.posterior || 0)
+  const margin = (top?.posterior || 0) - (second?.posterior || 0)
+
+  const rules = await db.kb_confidence_rules.findAll({
+    complaint_id: complaintId
+  })
+
+  let escalated = baseDisposition
+
+  for (const r of rules.sort((a, b) => a.priority - b.priority)) {
+    if (uncertainty >= r.min_confidence) {
+      escalated = r.action
+    }
+  }
+
+  // Diagnosis-specific floor (cannot go lower than X)
+  const risk = await db.kb_diagnosis_risk.findOne({
+    diagnosis: top?.diagnosis
+  })
+  if (risk && risk.min_disposition) {
+    const order = ['MONITOR', 'URGENT', 'ER_NOW', 'CALL_911']
+    if (order.indexOf(escalated) < order.indexOf(risk.min_disposition)) {
+      escalated = risk.min_disposition
+    }
+  }
+
+  return {
+    disposition: escalated,
+    uncertainty,
+    margin,
+    top_dx: top?.diagnosis,
+    trace: {
+      uncertainty,
+      margin,
+      rule_hits: rules.map(r => r.id)
+    }
+  }
+}
+🔌 Hook
+const diag = await runAdvancedDiagnosis(input)           // log scores
+const disp = await computeDispositionWithUncertainty(
+  complaintId,
+  diag,
+  baseDisposition
+)
+💸 2) COST-AWARE WORKUP OPTIMIZATION
+🧾 Schema
+CREATE TABLE IF NOT EXISTS kb_workup_costs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_name TEXT UNIQUE,
+  cost FLOAT,
+  sensitivity FLOAT,
+  specificity FLOAT,
+  turnaround_minutes INT,
+  risk_score FLOAT DEFAULT 0,                -- radiation, invasiveness
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Optional: diagnostic value of a test for a Dx
+CREATE TABLE IF NOT EXISTS kb_test_utility (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_name TEXT,
+  diagnosis TEXT,
+  info_gain FLOAT,                           -- expected log-likelihood gain
+  is_active BOOLEAN DEFAULT TRUE
+);
+⚙️ Engine (greedy value/cost selector)
+// server/engine/workupOptimizer.ts
+type CandidateTest = {
+  test_name: string
+  utility: number
+  cost: number
+  risk: number
+}
+
+export async function optimizeWorkup(
+  currentDx: { diagnosis: string; posterior: number }[],
+  budget = 1000
+) {
+  const tests = await db.kb_workup_costs.findAll({ is_active: true })
+  const utils = await db.kb_test_utility.findAll({ is_active: true })
+
+  // Compute utility weighted by current differential
+  const scored: CandidateTest[] = []
+
+  for (const t of tests) {
+    let u = 0
+    for (const d of currentDx) {
+      const tu = utils.find(x => x.test_name === t.test_name && x.diagnosis === d.diagnosis)
+      if (tu) u += d.posterior * tu.info_gain
+    }
+    const value = u / Math.max(1, t.cost) - (t.risk_score || 0)
+    scored.push({
+      test_name: t.test_name,
+      utility: value,
+      cost: t.cost,
+      risk: t.risk_score || 0
+    })
+  }
+
+  // Greedy selection under budget
+  const selected: CandidateTest[] = []
+  let remaining = budget
+
+  for (const t of scored.sort((a, b) => b.utility - a.utility)) {
+    if (t.cost <= remaining && t.utility > 0) {
+      selected.push(t)
+      remaining -= t.cost
+    }
+  }
+
+  return {
+    recommended: selected.map(t => t.test_name),
+    total_cost: budget - remaining,
+    trace: selected
+  }
+}
+🔌 Hook
+const dxWithPosterior = softmaxNormalize(diag)
+const workup = await optimizeWorkup(dxWithPosterior, 500)
+🔍 3) COUNTERFACTUAL EXPLAINER
+
+“What single change would flip the diagnosis?”
+
+🧾 (no new table required)
+
+Uses kb_feature_models
+
+⚙️ Engine
+// server/engine/counterfactualExplainer.ts
+export async function generateCounterfactuals(input: any, baseResults: any[]) {
+  const top = baseResults[0]
+  const features = await db.kb_feature_models.findAll({
+    rule_id: `DX_BAY_${top.diagnosis.toUpperCase()}`
+  })
+
+  const suggestions = []
+
+  for (const f of features) {
+    const current = input[f.feature_key]
+
+    // Try flipping boolean
+    if (f.feature_type === 'boolean') {
+      const flipped = !current
+      const newInput = { ...input, [f.feature_key]: flipped }
+
+      const newRes = await runAdvancedDiagnosis(newInput)
+      const newTop = newRes[0]
+
+      if (newTop.diagnosis !== top.diagnosis) {
+        suggestions.push({
+          feature: f.feature_key,
+          change: flipped,
+          new_top: newTop.diagnosis,
+          impact: 'diagnosis_flip'
+        })
+      }
+    }
+
+    // Numeric perturbation
+    if (f.feature_type === 'numeric') {
+      const delta = f.std_dev || 10
+      const newInput = { ...input, [f.feature_key]: current + delta }
+      const newRes = await runAdvancedDiagnosis(newInput)
+      if (newRes[0].diagnosis !== top.diagnosis) {
+        suggestions.push({
+          feature: f.feature_key,
+          change: `+${delta}`,
+          new_top: newRes[0].diagnosis,
+          impact: 'diagnosis_flip'
+        })
+      }
+    }
+  }
+
+  return suggestions.slice(0, 5) // top 5 most impactful
+}
+🔌 Hook
+const counterfactuals = await generateCounterfactuals(input, diag)
+🧪 REQUIRED TESTS
+✅ Uncertainty gating
+low confidence → escalates disposition
+✅ Cost optimization
+high-cost/low-value tests excluded
+✅ Counterfactual
+flipping a key feature changes diagnosis
+🧭 FINAL INSTRUCTION TO REPLIT
+Writing
+
+Add three advanced clinical reasoning modules:
+
+Uncertainty-aware disposition
+Implement kb_confidence_rules and kb_diagnosis_risk
+Compute posterior uncertainty and margin
+Escalate disposition based on thresholds
+Expose uncertainty and rule hits in trace
+Cost-aware workup optimization
+Implement kb_workup_costs and kb_test_utility
+Select tests based on expected information gain / cost
+Respect budget and risk constraints
+Expose cost + utility trace
+Counterfactual explainer
+For top diagnosis, test minimal feature changes
+Return features that would flip diagnosis
+Support boolean and numeric perturbations
+Show explanation in UI
+
+Constraints:
+
+100% KB-driven
+Fully traceable
+No fallback logic
+Integrate into canonical pipeline
+
+Deliver:
+
+schemas
+engines
+API routes
+UI integration hooks
+validation tests

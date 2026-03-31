@@ -133,7 +133,7 @@ export async function runClinicalPipeline(
   trace.triage = triage;
 
   const plans = await repo.getPlans();
-  const plan = generatePlanFromTemplate(diagnosis || "unknown", plans);
+  const plan = await generatePlanFromTemplate(diagnosis || "unknown");
 
   const clinicalTrace: ClinicalTrace = {
     questions: Object.entries(input.answers).map(([id, answer]) => ({

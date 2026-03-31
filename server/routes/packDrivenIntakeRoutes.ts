@@ -17,7 +17,7 @@ import { complaintPacks } from "../config/complaintPacks";
 
 const router = express.Router();
 
-router.post("/evaluate", (req, res) => {
+router.post("/evaluate", async (req, res) => {
   const chiefComplaint = String(req.body.chiefComplaint || "");
   const answers = req.body.answers || {};
 
@@ -50,7 +50,7 @@ router.post("/evaluate", (req, res) => {
     answers
   );
 
-  const plan = generatePlanFromTemplate(
+  const plan = await generatePlanFromTemplate(
     pack.planTemplateKey,
     evaluation.finalDisposition,
     answers

@@ -42,6 +42,12 @@ The system is 100% Knowledge Base (KB)-driven for diagnosis, with all clinical d
 - `kb_engine_routing`: complaint-to-engine dispatch routing (14 entries)
 - `kb_complaint_packs`: structured complaint question/finding/modifier packs
 
+**Plan Templates fully migrated (Phase 4)**:
+- `server/engines/planTemplateEngine.ts` is now async DB-first with fallback to hardcoded `planTemplates.ts`
+- All callers updated to `await`: `packDrivenIntakeRoutes.ts`, `packSimulatorRoutes.ts`, `unifiedClinicalPipeline.ts`
+- `POST /api/kb/templates/seed` seeds 5 hardcoded templates into `kb_plan_templates`; meds serialized as JSON in `medicationInstructions`
+- Plan Templates tab in KB UI has "Import from planTemplates.ts" seed button
+
 **Knowledge Base Admin Page** (client/src/pages/KnowledgeBasePage.tsx) — 19 tabs covering all KB tables with full CRUD, seeders, and the DiagnosisFeatureEditor (client/src/components/DiagnosisFeatureEditor.tsx) for visual editing of boolean/categorical/numeric/range feature models with live LR preview.
 
 **API Routes**:

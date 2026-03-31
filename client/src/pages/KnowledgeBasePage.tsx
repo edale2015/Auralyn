@@ -1295,28 +1295,39 @@ export default function KnowledgeBasePage() {
         )}
 
         {activeTab === "templates" && (
-          <SimpleTableTab
-            endpoint="/api/kb/templates" title="Plan Template"
-            columns={[
-              { key: "templateKey", label: "Key" },
-              { key: "diagnosisLabel", label: "Diagnosis" },
-              { key: "defaultDisposition", label: "Disposition", render: v => <Badge variant="outline">{v}</Badge> },
-              { key: "active", label: "Status", render: v => <StatusBadge active={v} /> },
-            ]}
-            fields={[
-              { key: "templateKey", label: "Template Key", required: true },
-              { key: "complaintId", label: "Complaint ID" },
-              { key: "diagnosisLabel", label: "Diagnosis Label", required: true },
-              { key: "defaultDisposition", label: "Default Disposition", options: ["er_now", "er_send", "urgent_care", "office_followup", "self_care", "telemed_now"] },
-              { key: "summary", label: "Clinical Summary", type: "textarea" },
-              { key: "patientMessage", label: "Patient Message", type: "textarea" },
-              { key: "dischargeText", label: "Discharge Text", type: "textarea" },
-              { key: "erPrecautions", label: "ER Precautions", type: "textarea" },
-              { key: "medicationInstructions", label: "Medication Instructions", type: "textarea" },
-              { key: "active", label: "Active", type: "boolean" },
-            ]}
-            idKey="templateKey" editUrlFn={r => `/api/kb/templates/${r.templateKey}`} deleteUrlFn={r => `/api/kb/templates/${r.templateKey}`}
-          />
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" data-testid="button-seed-templates" onClick={async () => {
+                const r = await fetch("/api/kb/templates/seed", { method: "POST" });
+                const j = await r.json();
+                toast({ title: `Seeded ${j.inserted} plan templates (${j.skipped} already existed)` });
+              }}>
+                <RefreshCw className="h-4 w-4 mr-1" /> Import from planTemplates.ts
+              </Button>
+            </div>
+            <SimpleTableTab
+              endpoint="/api/kb/templates" title="Plan Template"
+              columns={[
+                { key: "templateKey", label: "Key" },
+                { key: "diagnosisLabel", label: "Diagnosis" },
+                { key: "defaultDisposition", label: "Disposition", render: v => <Badge variant="outline">{v}</Badge> },
+                { key: "active", label: "Status", render: v => <StatusBadge active={v} /> },
+              ]}
+              fields={[
+                { key: "templateKey", label: "Template Key", required: true },
+                { key: "complaintId", label: "Complaint ID" },
+                { key: "diagnosisLabel", label: "Diagnosis Label", required: true },
+                { key: "defaultDisposition", label: "Default Disposition", options: ["er_now", "er_send", "urgent_care", "office_followup", "self_care", "telemed_now"] },
+                { key: "summary", label: "Clinical Summary", type: "textarea" },
+                { key: "patientMessage", label: "Patient Message", type: "textarea" },
+                { key: "dischargeText", label: "Discharge Text", type: "textarea" },
+                { key: "erPrecautions", label: "ER Precautions", type: "textarea" },
+                { key: "medicationInstructions", label: "Medication Instructions (JSON)", type: "textarea" },
+                { key: "active", label: "Active", type: "boolean" },
+              ]}
+              idKey="templateKey" editUrlFn={r => `/api/kb/templates/${r.templateKey}`} deleteUrlFn={r => `/api/kb/templates/${r.templateKey}`}
+            />
+          </div>
         )}
 
         {activeTab === "interactions" && (

@@ -34,7 +34,7 @@ router.post("/run", async (req, res) => {
 
   const evaluation = evaluateSymptomPack(parsedSymptom, parsedModifiers, parsedAlgorithms, answers);
 
-  const plan = generatePlanFromTemplate(parsedSymptom.planTemplateKey);
+  const plan = await generatePlanFromTemplate(parsedSymptom.planTemplateKey);
 
   res.json({
     symptomPackId,

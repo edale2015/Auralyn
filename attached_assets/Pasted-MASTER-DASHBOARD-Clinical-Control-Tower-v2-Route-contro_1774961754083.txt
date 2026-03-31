@@ -1,0 +1,281 @@
+MASTER DASHBOARD: “Clinical Control Tower v2”
+Route
+/control-tower-v2
+Panels
+Panel	Purpose
+🧍 Live Patients	Real-time streams
+🌳 Decision Tree	reasoning
+📊 Scoring	probabilities
+❓ Questions	next-best
+🔍 Counterfactuals	explainability
+🎤 Voice Intake	multimodal
+⚠️ Alerts	deterioration
+🧪 Simulation	test + replay
+📡 1) REAL-TIME PATIENT MONITORING STREAM
+🧾 Schema
+CREATE TABLE patient_live_stream (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id TEXT,
+  feature_key TEXT,
+  value FLOAT,
+  timestamp TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE patient_state (
+  patient_id TEXT PRIMARY KEY,
+  current_dx TEXT,
+  current_disposition TEXT,
+  risk_score FLOAT,
+  last_updated TIMESTAMP
+);
+⚙️ WebSocket Server
+// server/ws/patientStream.ts
+import WebSocket from 'ws'
+
+const wss = new WebSocket.Server({ port: 8080 })
+
+export function broadcastUpdate(data) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data))
+    }
+  })
+}
+🔌 Hook into pipeline
+await db.patient_live_stream.insert({
+  patient_id,
+  feature_key: 'heart_rate',
+  value: input.heart_rate
+})
+
+broadcastUpdate({
+  patient_id,
+  heart_rate: input.heart_rate,
+  dx: topDx,
+  risk: riskScore
+})
+🎛️ UI
+// client/components/LivePatientPanel.tsx
+export default function LivePatientPanel() {
+  const [patients, setPatients] = useState([])
+
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:8080')
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data)
+      setPatients(prev => [...prev, data])
+    }
+  }, [])
+
+  return (
+    <div>
+      <h3>Live Patients</h3>
+      {patients.map((p, i) => (
+        <div key={i}>
+          {p.patient_id} — HR: {p.heart_rate} — Risk: {p.risk}
+        </div>
+      ))}
+    </div>
+  )
+}
+🎤 2) VOICE + MULTIMODAL TRIAGE
+🧾 Schema
+CREATE TABLE patient_multimodal_inputs (
+  id UUID PRIMARY KEY,
+  patient_id TEXT,
+  type TEXT,           -- voice | image | text
+  content TEXT,
+  processed JSONB,
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Voice ingestion
+// server/routes/voice.ts
+router.post('/voice', async (req, res) => {
+  const { audio } = req.body
+
+  const transcript = await openai.audio.transcriptions.create({
+    file: audio,
+    model: 'gpt-4o-transcribe'
+  })
+
+  const structured = await extractClinicalEntities(transcript.text)
+
+  res.json({ transcript, structured })
+})
+🧠 Entity extraction
+async function extractClinicalEntities(text: string) {
+  return await openai.chat.completions.create({
+    model: 'gpt-5',
+    messages: [{
+      role: 'system',
+      content: 'Extract symptoms, duration, severity, vitals'
+    }, {
+      role: 'user',
+      content: text
+    }]
+  })
+}
+🖼️ Image (future-ready)
+// rash, throat, etc.
+const result = await openai.images.analyze({
+  image,
+  task: 'medical'
+})
+🎛️ UI
+// client/components/VoicePanel.tsx
+export default function VoicePanel() {
+  return (
+    <div>
+      <h3>Voice Intake</h3>
+      <button>Record</button>
+      <div>Transcript + extracted symptoms appear here</div>
+    </div>
+  )
+}
+⚠️ 3) PREDICTIVE DETERIORATION ALERTS
+🧾 Schema
+CREATE TABLE kb_deterioration_rules (
+  id UUID PRIMARY KEY,
+  feature_key TEXT,
+  threshold FLOAT,
+  trend TEXT,              -- rising, falling
+  action TEXT,             -- ALERT, ER_NOW
+  risk_weight FLOAT
+);
+⚙️ Engine
+// server/engine/deteriorationEngine.ts
+export async function detectDeterioration(patientId) {
+  const series = await db.patient_live_stream.findRecent(patientId)
+  const rules = await db.kb_deterioration_rules.findAll()
+
+  let risk = 0
+  const alerts = []
+
+  for (const r of rules) {
+    const values = series
+      .filter(s => s.feature_key === r.feature_key)
+      .map(s => s.value)
+
+    if (values.length < 2) continue
+
+    const trend = values[values.length - 1] - values[0]
+
+    if (r.trend === 'rising' && trend > r.threshold) {
+      risk += r.risk_weight
+      alerts.push(r)
+    }
+  }
+
+  return { risk, alerts }
+}
+🔌 Hook
+const { risk, alerts } = await detectDeterioration(patientId)
+
+if (risk > 0.7) {
+  triggerAlert(patientId, alerts)
+}
+🎛️ UI
+// client/components/AlertPanel.tsx
+export default function AlertPanel({ alerts }) {
+  return (
+    <div>
+      <h3>Alerts</h3>
+      {alerts.map((a, i) => (
+        <div key={i} style={{ color: 'red' }}>
+          {a.feature_key} rising → {a.action}
+        </div>
+      ))}
+    </div>
+  )
+}
+🧭 FULL CONTROL TOWER PAGE
+// client/pages/ControlTowerV2.tsx
+import LivePatientPanel from '../components/LivePatientPanel'
+import DecisionTree from '../components/DecisionTree'
+import ScoringPanel from '../components/ScoringPanel'
+import QuestioningPanel from '../components/QuestioningPanel'
+import CounterfactualPanel from '../components/CounterfactualPanel'
+import VoicePanel from '../components/VoicePanel'
+import AlertPanel from '../components/AlertPanel'
+
+export default function ControlTowerV2({ data }) {
+  return (
+    <div className="grid grid-cols-4 gap-4">
+      <LivePatientPanel />
+      <DecisionTree data={data.tree} />
+      <ScoringPanel data={data.scoring} />
+      <QuestioningPanel questions={data.questions} />
+      <CounterfactualPanel data={data.counterfactuals} />
+      <VoicePanel />
+      <AlertPanel alerts={data.alerts} />
+    </div>
+  )
+}
+🧪 ROUTES
+/api/control/live
+/api/control/voice
+/api/control/alerts
+/api/control/stream
+🧠 WHAT YOU NOW HAVE
+
+From ONE dashboard you can:
+
+🟢 Monitor
+live patients
+vitals
+trends
+alerts
+🟡 Understand
+decision tree
+scoring
+uncertainty
+🔵 Improve
+KB edits
+simulation
+learning
+🔴 Predict
+deterioration
+escalation before failure
+🧭 FINAL INSTRUCTION TO REPLIT
+Writing
+
+Add a unified Clinical Control Tower V2 dashboard with:
+
+Real-time patient monitoring
+WebSocket-based live stream
+patient_live_stream table
+live UI panel
+Voice + multimodal triage
+voice transcription endpoint
+structured extraction
+UI recording panel
+Predictive deterioration alerts
+kb_deterioration_rules table
+detection engine
+alert panel
+Integration
+all modules feed into canonical pipeline
+full traceability
+no fallback logic
+UI
+single dashboard with all panels
+responsive grid layout
+real-time updates
+
+Goal:
+Full monitoring, updating, troubleshooting, and prediction from one interface.
+
+🚀 Final Take
+
+You now have:
+
+🧠 reasoning engine
+🧪 testing lab
+🎛 control dashboard
+📡 live monitoring
+🎤 multimodal intake
+⚠️ predictive alerts
+
+This is no longer a clinical app.
+
+It’s a real-time clinical intelligence system

@@ -677,6 +677,33 @@ router.delete("/templates/:templateKey", async (req: Request, res: Response) => 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+router.post("/templates/seed", async (_req: Request, res: Response) => {
+  try {
+    const { planTemplates } = await import("../config/planTemplates");
+    let inserted = 0;
+    let skipped = 0;
+    for (const t of planTemplates) {
+      const existing = await db.select({ k: kbPlanTemplates.templateKey })
+        .from(kbPlanTemplates).where(eq(kbPlanTemplates.templateKey, t.key));
+      if (existing.length > 0) { skipped++; continue; }
+      await db.insert(kbPlanTemplates).values({
+        templateKey: t.key,
+        diagnosisLabel: t.diagnosisLabel,
+        defaultDisposition: t.defaultDisposition,
+        summary: t.summary,
+        homeCare: t.homeCare,
+        followUp: t.followUp,
+        returnPrecautions: t.returnPrecautions,
+        patientMessage: t.patientMessage,
+        medicationInstructions: t.meds.length ? JSON.stringify(t.meds) : null,
+        active: true,
+      });
+      inserted++;
+    }
+    res.json({ ok: true, inserted, skipped });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 // ════════════════════════════════════════════════════════════════════════════
 // GOLDEN CASES
 // ════════════════════════════════════════════════════════════════════════════
