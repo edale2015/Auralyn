@@ -1,4 +1,5 @@
 export const ROUTES = {
+  MISSION_CONTROL: "/mission-control",
   OPS: "/ops",
   CLINICAL: "/clinical",
   INTAKE: "/intake",

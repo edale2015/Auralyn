@@ -248,6 +248,61 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </SidebarHeader>
 
           <SidebarContent className="overflow-y-auto">
+            {/* Pinned Mission Control — parent command center */}
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <Link href="/mission-control">
+                      <SidebarMenuButton
+                        data-active={location === "/mission-control"}
+                        className="data-[active=true]:bg-sidebar-accent w-full font-semibold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 mb-1"
+                        data-testid="nav-mission-control"
+                      >
+                        <Cpu className="w-4 h-4" />
+                        <span className="flex-1 text-sm">Mission Control</span>
+                      </SidebarMenuButton>
+                    </Link>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <Link href="/system-control-tower">
+                      <SidebarMenuButton
+                        data-active={location === "/system-control-tower"}
+                        className="data-[active=true]:bg-sidebar-accent w-full"
+                        data-testid="nav-system-control-tower"
+                      >
+                        <Activity className="w-4 h-4" />
+                        <span className="flex-1 text-sm">System Control Tower</span>
+                      </SidebarMenuButton>
+                    </Link>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <Link href="/clinical-control-tower">
+                      <SidebarMenuButton
+                        data-active={location === "/clinical-control-tower"}
+                        className="data-[active=true]:bg-sidebar-accent w-full"
+                        data-testid="nav-clinical-control-tower"
+                      >
+                        <Brain className="w-4 h-4" />
+                        <span className="flex-1 text-sm">Clinical Control Tower</span>
+                      </SidebarMenuButton>
+                    </Link>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <Link href="/autonomous-learning">
+                      <SidebarMenuButton
+                        data-active={location === "/autonomous-learning"}
+                        className="data-[active=true]:bg-sidebar-accent w-full"
+                        data-testid="nav-autonomous-learning"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span className="flex-1 text-sm">Autonomous Learning</span>
+                      </SidebarMenuButton>
+                    </Link>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
             {NAV_SECTIONS.map((section) => (
               <SidebarGroup key={section.label}>
                 <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
