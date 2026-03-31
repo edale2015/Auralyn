@@ -33,6 +33,7 @@ The backend uses Express 5, Node.js, and TypeScript, providing REST API endpoint
 - **Template Studio**: Visual template editing environment with version control, diff comparison, and step testing.
 - **Replay Inspector**: Black-box recorder for automation run auditing.
 - **Robotics Control Module**: Supervised robotic arm control layer for medical device orchestration with a RoboticSafetyGate and RoboticController.
+- **Autonomous Learning Console** (`/autonomous-learning`, `client/src/pages/AutonomousLearningConsolePage.tsx`): Unified 7-tab dashboard for self-testing, self-learning, and governance. Tabs: Overview (health), Simulation (async 100–100k case engine), Learning Queue (approve/reject suggestions), Drift Monitor (accuracy timeline + alerts), Audit Trail (immutable log), Versions (snapshots + rollback + diff), Safety Modes (observe_only / assisted_learning / controlled_auto). Routes at `/api/ci/*`. Backend modules: `server/simulation/asyncSimEngine.ts`, `server/governance/changeAuditLog.ts`, `server/governance/safetyModes.ts`, `server/governance/knowledgeVersions.ts`, `server/learning/learningQueueStore.ts`, `server/learning/driftTracker.ts`, `server/routes/autonomousLearningRoutes.ts`.
 
 ## External Dependencies
 *   **AI Integration**: OpenAI API

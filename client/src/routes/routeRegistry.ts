@@ -21,4 +21,5 @@ export const ROUTES = {
   CONTROL_TOWER: "/control-tower",
   COMPONENT_HUB: "/component-hub",
   TEST_BENCH: "/test-bench",
+  AUTONOMOUS_LEARNING: "/autonomous-learning",
 };

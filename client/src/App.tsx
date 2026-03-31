@@ -60,6 +60,7 @@ import MoatIntelligencePage from "@/pages/MoatIntelligencePage";
 import ExecutiveCommandPage from "@/pages/ExecutiveCommandPage";
 import ComponentHubPage from "@/pages/ComponentHubPage";
 import ClinicalTestBenchPage from "@/pages/ClinicalTestBenchPage";
+import AutonomousLearningConsolePage from "@/pages/AutonomousLearningConsolePage";
 
 validateRoutes();
 
@@ -92,6 +93,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
         <Route path={ROUTES.COMPONENT_HUB} component={ComponentHubPage} />
         <Route path={ROUTES.TEST_BENCH} component={ClinicalTestBenchPage} />
+        <Route path={ROUTES.AUTONOMOUS_LEARNING} component={AutonomousLearningConsolePage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />
