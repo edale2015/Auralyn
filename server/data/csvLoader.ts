@@ -1,5 +1,16 @@
+/**
+ * CSV Loader — DISABLED by default
+ *
+ * All clinical data now lives in Postgres KB tables.
+ * Set ALLOW_CSV=true in environment to re-enable (emergency fallback only).
+ *
+ * Source of truth: kb_* tables (see knowledgeBaseAdminRoutes.ts)
+ */
+
 import fs from "fs";
 import path from "path";
+
+const CSV_ALLOWED = process.env.ALLOW_CSV === "true";
 
 type SheetRow = Record<string, any>;
 
@@ -29,6 +40,11 @@ function parseCsvLine(line: string): string[] {
 }
 
 export function loadCsvFile(filePath: string): SheetRow[] {
+  if (!CSV_ALLOWED) {
+    console.warn(`[CsvLoader] CSV loader is DISABLED. Set ALLOW_CSV=true to re-enable. Requested: ${filePath}`);
+    return [];
+  }
+
   if (!fs.existsSync(filePath)) return [];
 
   const raw = fs.readFileSync(filePath, "utf-8");
@@ -53,6 +69,11 @@ export function loadCsvFile(filePath: string): SheetRow[] {
 const CSV_DIR = path.resolve(process.cwd(), "server/data/csv");
 
 export function loadCsvTable(tableName: string): SheetRow[] | null {
+  if (!CSV_ALLOWED) {
+    console.warn(`[CsvLoader] CSV loader DISABLED — table '${tableName}' not loaded. Use KB tables instead.`);
+    return null;
+  }
+
   const filePath = path.join(CSV_DIR, `${tableName}.csv`);
   if (!fs.existsSync(filePath)) return null;
   try {

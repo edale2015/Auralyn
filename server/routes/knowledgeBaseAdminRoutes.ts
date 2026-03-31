@@ -17,8 +17,14 @@ import { reloadAndRewireKbCache, getKbCacheStatus } from "../kb/kbRuntime";
 import { migrateToFeatureTable, validateFeatureCoverage } from "../kb/migrateCsvToKb";
 import {
   kbFeatureLikelihoods, kbClinicalWeights, kbComplaintModules, kbComplaintPacks,
-  insertKbFeatureLikelihoodSchema,
+  kbFeatureModels, kbEngineRouting,
+  insertKbFeatureLikelihoodSchema, insertKbFeatureModelSchema, insertKbEngineRoutingSchema,
+  insertKbClinicalWeightSchema, insertKbComplaintModuleSchema, insertKbComplaintPackSchema,
 } from "../../shared/schema";
+import { migrateFeatureLikelihoodsToModels, invalidateAdvancedEngineCache } from "../kb/kbAdvancedDiagnosisEngine";
+import { invalidateRedFlagCache } from "../rules/redFlagMap";
+import { FLOW_SPECS } from "../testing/specs";
+import { complaintPacks as hardcodedComplaintPacks } from "../config/complaintPacks";
 
 // Local helper — db.execute() returns { rows: [...] } or array depending on driver
 function xRows(result: any): any[] {
@@ -1141,11 +1147,11 @@ router.get("/audit/source-map", (_req: Request, res: Response) => {
       tabsExpected: ["COMPLAINT_REGISTRY","CORE_QUESTIONS","RED_FLAG_RULES","DISPOSITION_RULES","OUTPUT_TEMPLATES","CLUSTER_SCORING_RULES","DX_CANDIDATES","DX_PRIORITY","GLOBAL_MEDICATIONS_MASTER","GLOBAL_MODIFIERS_CLEAN"],
     },
     hardcodedStillActive: [
-      "server/config/complaintPacks.ts — used by legacy complaint intake pipeline",
-      "server/config/planTemplates.ts — used by legacy plan builder",
-      "server/clinical/bayesianEngine.ts PRIORS — 12 hardcoded diagnosis priors",
-      "server/rules/redFlagMap.ts — derived from FLOW_SPECS, used in legacy safety path",
-      "server/learning/weightStore.ts — in-memory only, no persistence",
+      "server/config/planTemplates.ts — used by legacy plan builder (Phase 4 target)",
+      "server/clinical/bayesianEngine.ts PRIORS — 12 hardcoded priors MIGRATED to kb_feature_likelihoods (100% KB_DB)",
+      "server/rules/redFlagMap.ts — NOW DB-backed with FLOW_SPECS fallback (seed via /api/kb/red-flag-rules/seed)",
+      "server/learning/weightStore.ts — NOW write-through to kb_clinical_weights (persisted)",
+      "server/data/csvLoader.ts — NOW DISABLED (ALLOW_CSV guard). CSV not loaded unless ALLOW_CSV=true",
     ],
     canonicalPipelineEntryPoints: {
       verified: ["POST /api/pipeline/run", "POST /api/triage", "GET /api/ci/sim/run"],

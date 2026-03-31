@@ -648,6 +648,44 @@ export const insertKbComplaintPackSchema = createInsertSchema(kbComplaintPacks).
 export type InsertKbComplaintPack = z.infer<typeof insertKbComplaintPackSchema>;
 export type KbComplaintPack = typeof kbComplaintPacks.$inferSelect;
 
+// ── Phase 3+: Full probabilistic feature model (replaces kb_feature_likelihoods) ──────────────
+export const kbFeatureModels = pgTable("kb_feature_models", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  featureType: text("feature_type").notNull().default("boolean"), // boolean | categorical | numeric | range
+  pPresent: real("p_present"),          // P(feature present | Dx)
+  pAbsent: real("p_absent"),            // P(feature absent | Dx)
+  categoricalMap: jsonb("categorical_map").$type<Record<string, number>>(), // {"mild":0.3,"severe":0.9}
+  mean: real("mean"),
+  stdDev: real("std_dev"),
+  minValue: real("min_value"),
+  maxValue: real("max_value"),
+  weight: real("weight").default(1.0).notNull(),
+  isRequired: boolean("is_required").default(false).notNull(),
+  source: text("source").default("manual").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbFeatureModelSchema = createInsertSchema(kbFeatureModels).omit({ id: true, createdAt: true });
+export type InsertKbFeatureModel = z.infer<typeof insertKbFeatureModelSchema>;
+export type KbFeatureModel = typeof kbFeatureModels.$inferSelect;
+
+// ── Phase 3+: Engine routing (replaces SCORING_MODULE_DISPATCH) ─────────────────────────────
+export const kbEngineRouting = pgTable("kb_engine_routing", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  engineType: text("engine_type").notNull().default("bayesian"), // bayesian | rule | hybrid | legacy
+  config: jsonb("config").$type<Record<string, unknown>>().default({}).notNull(),
+  priority: integer("priority").default(50).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbEngineRoutingSchema = createInsertSchema(kbEngineRouting).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbEngineRouting = z.infer<typeof insertKbEngineRoutingSchema>;
+export type KbEngineRouting = typeof kbEngineRouting.$inferSelect;
+
 export const kbKnowledgeChanges = pgTable("kb_knowledge_changes", {
   id: serial("id").primaryKey(),
   changeId: text("change_id").notNull().unique(),

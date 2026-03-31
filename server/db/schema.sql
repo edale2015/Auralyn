@@ -241,3 +241,114 @@ CREATE INDEX IF NOT EXISTS idx_cases_created ON cases (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cases_risk ON cases (risk_score DESC);
 CREATE INDEX IF NOT EXISTS idx_claims_payer_status ON claims (payer, status);
 CREATE INDEX IF NOT EXISTS idx_claims_case ON claims (case_id);
+
+-- ── Phase 3: KB Normalized Tables ───────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS kb_red_flag_rules (
+  id SERIAL PRIMARY KEY,
+  rule_id TEXT NOT NULL UNIQUE,
+  complaint_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  trigger_expr TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'HARD',
+  action TEXT NOT NULL DEFAULT 'ER_SEND',
+  immediate_actions TEXT,
+  rationale TEXT,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_clinical_weights (
+  id SERIAL PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  value REAL NOT NULL,
+  description TEXT,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_complaint_modules (
+  id SERIAL PRIMARY KEY,
+  complaint_id TEXT NOT NULL,
+  module_type TEXT NOT NULL,
+  module_config JSONB NOT NULL DEFAULT '{}',
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_complaint_packs (
+  id SERIAL PRIMARY KEY,
+  complaint_id TEXT NOT NULL,
+  questions JSONB NOT NULL DEFAULT '[]',
+  findings JSONB NOT NULL DEFAULT '[]',
+  modifiers JSONB NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_feature_likelihoods (
+  id SERIAL PRIMARY KEY,
+  rule_id TEXT NOT NULL,
+  feature_key TEXT NOT NULL,
+  feature_value TEXT DEFAULT 'yes',
+  likelihood REAL NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  source TEXT NOT NULL DEFAULT 'ui_edit',
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (rule_id, feature_key, feature_value)
+);
+
+-- ── Phase 3+: Advanced probabilistic feature model ───────────────────────────
+
+CREATE TABLE IF NOT EXISTS kb_feature_models (
+  id SERIAL PRIMARY KEY,
+  rule_id TEXT NOT NULL,
+  feature_key TEXT NOT NULL,
+  feature_type TEXT NOT NULL DEFAULT 'boolean',
+  p_present REAL,
+  p_absent REAL,
+  categorical_map JSONB,
+  mean REAL,
+  std_dev REAL,
+  min_value REAL,
+  max_value REAL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  is_required BOOLEAN NOT NULL DEFAULT false,
+  source TEXT NOT NULL DEFAULT 'manual',
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (rule_id, feature_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_feature_models_rule ON kb_feature_models (rule_id);
+
+-- ── Phase 3+: Engine routing (replaces SCORING_MODULE_DISPATCH) ──────────────
+
+CREATE TABLE IF NOT EXISTS kb_engine_routing (
+  id SERIAL PRIMARY KEY,
+  complaint_id TEXT NOT NULL,
+  engine_type TEXT NOT NULL DEFAULT 'bayesian',
+  config JSONB NOT NULL DEFAULT '{}',
+  priority INTEGER NOT NULL DEFAULT 50,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_engine_routing_complaint ON kb_engine_routing (complaint_id);
+
+-- ── Weights history for RLHF persistence ────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS kb_weight_events (
+  id SERIAL PRIMARY KEY,
+  key TEXT NOT NULL,
+  delta REAL NOT NULL,
+  new_value REAL NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_weight_events_key ON kb_weight_events (key, created_at DESC);
