@@ -377,4 +377,236 @@ export const labeledOutcomeStats = pgTable("labeled_outcome_stats", {
 });
 export const insertLabeledOutcomeStatsSchema = createInsertSchema(labeledOutcomeStats).omit({ id: true });
 export type InsertLabeledOutcomeStats = z.infer<typeof insertLabeledOutcomeStatsSchema>;
+
+// ─── Knowledge Base Admin Tables ─────────────────────────────────────────────
+
+export const kbComplaints = pgTable("kb_complaints", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull().unique(),
+  system: text("system").notNull().default("GENERAL"),
+  label: text("label").notNull(),
+  aliases: text("aliases").array().default([]).notNull(),
+  defaultCluster: text("default_cluster"),
+  scoringModule: text("scoring_module"),
+  graphId: text("graph_id"),
+  engineType: text("engine_type").default("STANDARD"),
+  enabled: boolean("enabled").default(true).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbComplaintSchema = createInsertSchema(kbComplaints).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbComplaint = z.infer<typeof insertKbComplaintSchema>;
+export type KbComplaint = typeof kbComplaints.$inferSelect;
+
+export const kbQuestions = pgTable("kb_questions", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  questionId: text("question_id").notNull(),
+  prompt: text("prompt").notNull(),
+  type: text("type").notNull().default("yes_no"),
+  required: boolean("required").default(false).notNull(),
+  priority: integer("priority").default(50).notNull(),
+  category: text("category"),
+  askIf: text("ask_if"),
+  conditionalOn: jsonb("conditional_on").$type<Record<string, unknown>>().default({}).notNull(),
+  linkedDiagnoses: text("linked_diagnoses").array().default([]).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbQuestionSchema = createInsertSchema(kbQuestions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbQuestion = z.infer<typeof insertKbQuestionSchema>;
+export type KbQuestion = typeof kbQuestions.$inferSelect;
+
+export const kbModifiers = pgTable("kb_modifiers", {
+  id: serial("id").primaryKey(),
+  modifierId: text("modifier_id").notNull().unique(),
+  label: text("label").notNull(),
+  description: text("description"),
+  appliesTo: text("applies_to").array().default([]).notNull(),
+  addDiagnoses: text("add_diagnoses").array().default([]).notNull(),
+  removeDiagnoses: text("remove_diagnoses").array().default([]).notNull(),
+  workupChanges: jsonb("workup_changes").$type<Record<string, unknown>>().default({}).notNull(),
+  medChanges: jsonb("med_changes").$type<Record<string, unknown>>().default({}).notNull(),
+  dispositionThresholdShift: real("disposition_threshold_shift").default(0),
+  active: boolean("active").default(true).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbModifierSchema = createInsertSchema(kbModifiers).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbModifier = z.infer<typeof insertKbModifierSchema>;
+export type KbModifier = typeof kbModifiers.$inferSelect;
+
+export const kbRedFlagRules = pgTable("kb_red_flag_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  label: text("label").notNull(),
+  triggerExpr: text("trigger_expr").notNull(),
+  severity: text("severity").notNull().default("HARD"),
+  action: text("action").notNull().default("ER_SEND"),
+  immediateActions: text("immediate_actions"),
+  rationale: text("rationale"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbRedFlagRuleSchema = createInsertSchema(kbRedFlagRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbRedFlagRule = z.infer<typeof insertKbRedFlagRuleSchema>;
+export type KbRedFlagRule = typeof kbRedFlagRules.$inferSelect;
+
+export const kbWorkupRules = pgTable("kb_workup_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  testName: text("test_name").notNull(),
+  testType: text("test_type").notNull().default("labs"),
+  triggerExpr: text("trigger_expr"),
+  modifierOverrides: jsonb("modifier_overrides").$type<Record<string, unknown>>().default({}).notNull(),
+  priority: integer("priority").default(50).notNull(),
+  rationale: text("rationale"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbWorkupRuleSchema = createInsertSchema(kbWorkupRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbWorkupRule = z.infer<typeof insertKbWorkupRuleSchema>;
+export type KbWorkupRule = typeof kbWorkupRules.$inferSelect;
+
+export const kbDiagnosisRules = pgTable("kb_diagnosis_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  diagnosisId: text("diagnosis_id").notNull(),
+  diagnosisLabel: text("diagnosis_label").notNull(),
+  icdCode: text("icd_code"),
+  baseProbability: real("base_probability").default(0.1).notNull(),
+  featureLikelihoods: jsonb("feature_likelihoods").$type<Record<string, number>>().default({}).notNull(),
+  cannotMiss: boolean("cannot_miss").default(false).notNull(),
+  basePoints: integer("base_points").default(1),
+  clusterPriority: integer("cluster_priority").default(50),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisRuleSchema = createInsertSchema(kbDiagnosisRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbDiagnosisRule = z.infer<typeof insertKbDiagnosisRuleSchema>;
+export type KbDiagnosisRule = typeof kbDiagnosisRules.$inferSelect;
+
+export const kbTreatmentRules = pgTable("kb_treatment_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id"),
+  diagnosisId: text("diagnosis_id"),
+  medicationName: text("medication_name").notNull(),
+  medicationGroup: text("medication_group"),
+  isFirstLine: boolean("is_first_line").default(true).notNull(),
+  adultDose: text("adult_dose"),
+  adultMaxDose: text("adult_max_dose"),
+  pediatricDose: text("pediatric_dose"),
+  route: text("route"),
+  renalAdjust: text("renal_adjust"),
+  hepaticAdjust: text("hepatic_adjust"),
+  pregnancyCategory: text("pregnancy_category"),
+  contraindications: text("contraindications"),
+  allergyCrossReacts: text("allergy_cross_reacts").array().default([]).notNull(),
+  keyInteractions: text("key_interactions"),
+  commonSideEffects: text("common_side_effects"),
+  notes: text("notes"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbTreatmentRuleSchema = createInsertSchema(kbTreatmentRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbTreatmentRule = z.infer<typeof insertKbTreatmentRuleSchema>;
+export type KbTreatmentRule = typeof kbTreatmentRules.$inferSelect;
+
+export const kbDispositionRules = pgTable("kb_disposition_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  priority: integer("priority").default(50).notNull(),
+  whenExpr: text("when_expr").notNull(),
+  dispositionLevel: text("disposition_level").notNull(),
+  rationaleTemplateId: text("rationale_template_id"),
+  confidenceHint: text("confidence_hint").default("MODERATE"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDispositionRuleSchema = createInsertSchema(kbDispositionRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbDispositionRule = z.infer<typeof insertKbDispositionRuleSchema>;
+export type KbDispositionRule = typeof kbDispositionRules.$inferSelect;
+
+export const kbPlanTemplates = pgTable("kb_plan_templates", {
+  id: serial("id").primaryKey(),
+  templateKey: text("template_key").notNull().unique(),
+  complaintId: text("complaint_id"),
+  diagnosisLabel: text("diagnosis_label").notNull(),
+  defaultDisposition: text("default_disposition").notNull(),
+  summary: text("summary"),
+  homeCare: text("home_care").array().default([]).notNull(),
+  followUp: text("follow_up").array().default([]).notNull(),
+  returnPrecautions: text("return_precautions").array().default([]).notNull(),
+  patientMessage: text("patient_message"),
+  dischargeText: text("discharge_text"),
+  erPrecautions: text("er_precautions"),
+  medicationInstructions: text("medication_instructions"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbPlanTemplateSchema = createInsertSchema(kbPlanTemplates).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbPlanTemplate = z.infer<typeof insertKbPlanTemplateSchema>;
+export type KbPlanTemplate = typeof kbPlanTemplates.$inferSelect;
+
+export const kbGoldenCases = pgTable("kb_golden_cases", {
+  id: serial("id").primaryKey(),
+  caseId: text("case_id").notNull().unique(),
+  complaint: text("complaint").notNull(),
+  title: text("title").notNull(),
+  structuredInputs: jsonb("structured_inputs").$type<Record<string, unknown>>().default({}).notNull(),
+  modifiers: text("modifiers").array().default([]).notNull(),
+  clinicalFindings: jsonb("clinical_findings").$type<Record<string, unknown>>().default({}).notNull(),
+  workupResults: jsonb("workup_results").$type<Record<string, unknown>>().default({}).notNull(),
+  expectedDiagnosis: text("expected_diagnosis").notNull(),
+  expectedDifferential: jsonb("expected_differential").$type<string[]>().default([]).notNull(),
+  expectedDisposition: text("expected_disposition").notNull(),
+  expectedWorkup: text("expected_workup").array().default([]).notNull(),
+  expectedTreatment: jsonb("expected_treatment").$type<Record<string, unknown>>().default({}).notNull(),
+  expectedRedFlags: text("expected_red_flags").array().default([]).notNull(),
+  explanation: text("explanation"),
+  version: integer("version").default(1).notNull(),
+  author: text("author").default("system"),
+  status: text("status").notNull().default("draft"),
+  tags: text("tags").array().default([]).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbGoldenCaseSchema = createInsertSchema(kbGoldenCases).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbGoldenCase = z.infer<typeof insertKbGoldenCaseSchema>;
+export type KbGoldenCase = typeof kbGoldenCases.$inferSelect;
+
+export const kbKnowledgeChanges = pgTable("kb_knowledge_changes", {
+  id: serial("id").primaryKey(),
+  changeId: text("change_id").notNull().unique(),
+  domain: text("domain").notNull(),
+  recordId: text("record_id").notNull(),
+  action: text("action").notNull(),
+  changedBy: text("changed_by").default("system"),
+  oldValue: jsonb("old_value").$type<Record<string, unknown>>(),
+  newValue: jsonb("new_value").$type<Record<string, unknown>>(),
+  rationale: text("rationale"),
+  status: text("status").notNull().default("draft"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  deployedAt: timestamp("deployed_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbKnowledgeChangeSchema = createInsertSchema(kbKnowledgeChanges).omit({ id: true, createdAt: true });
+export type InsertKbKnowledgeChange = z.infer<typeof insertKbKnowledgeChangeSchema>;
+export type KbKnowledgeChange = typeof kbKnowledgeChanges.$inferSelect;
 export type LabeledOutcomeStats = typeof labeledOutcomeStats.$inferSelect;

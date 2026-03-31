@@ -22,4 +22,6 @@ export const ROUTES = {
   COMPONENT_HUB: "/component-hub",
   TEST_BENCH: "/test-bench",
   AUTONOMOUS_LEARNING: "/autonomous-learning",
+  KNOWLEDGE_BASE: "/knowledge-base",
+  KNOWLEDGE_OPS: "/knowledge-ops",
 };

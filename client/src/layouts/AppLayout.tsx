@@ -28,10 +28,14 @@ import {
   Hospital,
   LayoutDashboard,
   Brain,
+  Database,
+  BarChart3,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { path: ROUTES.COMPONENT_HUB, label: "Component Hub", icon: LayoutDashboard },
+  { path: ROUTES.KNOWLEDGE_BASE, label: "Knowledge Base", icon: Database },
+  { path: ROUTES.KNOWLEDGE_OPS, label: "KB Ops Dashboard", icon: BarChart3 },
   { path: ROUTES.TEST_BENCH, label: "Test Bench", icon: FlaskConical },
   { path: ROUTES.AUTONOMOUS_LEARNING, label: "Learning Console", icon: Brain },
   { path: ROUTES.OPS, label: "Operations", icon: Activity },

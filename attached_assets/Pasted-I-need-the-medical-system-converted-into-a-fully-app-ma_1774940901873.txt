@@ -1,0 +1,497 @@
+I need the medical system converted into a fully app-managed, knowledge-base-driven platform so that new golden cases, new complaint logic, new modifiers, new workup rules, new diagnosis logic, new red flags, and new treatment/dosing logic can all be added, edited, tested, monitored, and learned from inside the app without writing new code each time.
+
+This is the goal:
+A clinician/admin should be able to use the dashboard to add or modify medical logic and golden cases, run large simulations, inspect failures, trace decisions back to the knowledge source, and improve the system from inside the app.
+
+PART 1. SINGLE SOURCE OF TRUTH AUDIT
+
+First, perform a full audit of where the clinical knowledge actually lives today.
+
+I need a source-of-truth map for each of the following:
+
+* complaint registry
+* core questions
+* modifier rules
+* clinical findings
+* red flags / emergency rules / hard stops
+* workup rules
+* diagnosis rules / differential scoring
+* medication selection
+* dosing logic
+* disposition rules
+* output / plan templates
+* golden cases
+* learning / RLHF weights
+
+For each domain above, tell me exactly:
+
+1. Is the source of truth currently:
+
+   * Google Sheets
+   * synced CSV / JSON
+   * Postgres tables
+   * Firestore
+   * hardcoded TypeScript
+   * in-memory store
+   * some combination
+2. What exact file/table/path is currently used at runtime?
+3. Is it editable through the app today?
+4. If not editable through the app, why not?
+5. Is the runtime engine actually reading from it, or only from exported snapshots or legacy code?
+
+I want an explicit before/after map showing:
+
+* what still depends on hardcoded files
+* what still bypasses the knowledge base
+* what still bypasses the canonical pipeline
+
+PART 2. GOOGLE SHEETS KNOWLEDGE BASE CLARIFICATION
+
+I thought the Google Sheets knowledge base was the foundation of medical decision-making.
+
+I need you to verify whether that is still true.
+
+Please answer these questions precisely:
+
+1. Are the Google Sheets tabs still the active source of truth for clinical decisions?
+2. If yes, which tabs are active at runtime?
+3. If no, when and how were they copied or migrated?
+4. If they were copied into CSV/JSON/DB, which copy is now authoritative?
+5. Are the app decisions still traceable back to the original sheet row IDs or not?
+
+I need a clear list of the actual knowledge tables/tabs currently used, such as:
+
+* COMPLAINT_REGISTRY
+* CORE_QUESTIONS
+* CLUSTER_SCORING_RULES
+* RED_FLAG_RULES
+* DISPOSITION_RULES
+* DX_PRIORITY
+* OUTPUT_TEMPLATES
+* medication/treatment tables
+* modifier tables
+* workup tables
+* diagnosis tables
+* golden case tables
+
+If any of these do not currently exist, create them in a normalized way.
+
+PART 3. BUILD AN IN-APP KNOWLEDGE BASE ADMIN CONSOLE
+
+Build a full in-app admin console so the clinical knowledge can be viewed and edited from the dashboard.
+
+I need UI panels for:
+
+1. Complaint Registry
+
+* add/edit complaint
+* activate/deactivate complaint
+* link complaint to question sets, modifier logic, workup rules, diagnosis logic, treatment logic, and disposition logic
+
+2. Core Questions / Skill Logic
+
+* add/edit complaint-specific questions
+* order questions
+* conditional branching
+* required vs optional
+* link to complaint and diagnosis logic
+
+3. Modifier / Context Engine
+
+* modifiers such as:
+
+  * pregnancy
+  * infant / pediatric
+  * elderly
+  * CHF
+  * CKD
+  * COPD
+  * penicillin allergy
+  * immunocompromised
+  * anticoagulated
+  * etc.
+* modifiers must be able to:
+
+  * add/remove diagnoses
+  * change question flow
+  * change workup
+  * change meds/dosing
+  * change disposition threshold
+
+4. Clinical Findings Layer
+
+* structured findings:
+
+  * vital signs
+  * severe pain
+  * constant pain
+  * rebound tenderness
+  * guarding
+  * icteric sclera
+  * point tenderness
+  * absent pulse
+  * sensation loss
+  * weakness
+  * focal deficits
+* support derived findings:
+
+  * hypotension
+  * tachycardia
+  * hypoxia
+  * fever
+  * shock-like profile
+
+5. Red Flag / Hard Stop Layer
+
+* editable CALL_911 / ER_NOW / URGENT rules
+* must support strict priority hierarchy
+* must support early and late execution
+* must not require code edits
+
+6. Workup Layer
+
+* editable test rules:
+
+  * labs
+  * imaging
+  * EKG
+  * bedside tests
+  * monitoring
+* must support modifier-aware changes
+
+  * pregnancy changes CT to ultrasound when appropriate
+  * infant changes thresholds
+  * CHF changes workup and risk
+* this should be editable in app
+
+7. Diagnosis Layer
+
+* editable differential builder
+* editable scoring rules / Bayesian weights / ranking logic
+* diagnosis candidates
+* cannot-miss diagnoses
+* diagnostic confidence logic
+* visible rule contributions
+* all editable in app
+
+8. Treatment Layer
+
+* editable first-line medication
+* editable alternative medication
+* editable contraindications
+* editable dose / frequency / duration
+* modifier-aware dosing
+* allergy-aware substitutions
+* pediatric and renal dosing adjustments
+* pregnancy medication restrictions
+
+9. Disposition Layer
+
+* editable disposition rules
+* support diagnosis severity + confidence + red flags + modifiers + workup abnormalities
+* must be traceable and editable in app
+
+10. Output Templates / Plans
+
+* discharge text
+* home care text
+* ER precautions
+* return precautions
+* follow-up instructions
+* medication instructions
+* editable in app
+
+11. Golden Case Console
+
+* create new golden case
+* edit existing golden case
+* clone existing case
+* assign complaint
+* define expected diagnosis, expected disposition, expected workup, expected plan
+* tag cases by complaint, severity, modifier, age, system, risk level
+* activate/deactivate cases
+* bulk import/export
+* no code required to add a new golden case
+
+PART 4. GOLDEN CASES MUST BE DATA, NOT CODE
+
+Golden cases should no longer be written as TypeScript fixtures spread across files.
+
+Move them into a proper database-backed or sheet-backed model.
+
+Each golden case should include:
+
+* case_id
+* complaint
+* structured inputs
+* modifiers
+* clinical findings
+* workup results if applicable
+* expected diagnosis
+* expected differential
+* expected disposition
+* expected workup
+* expected treatment / med / dose
+* expected red flags
+* explanation / rationale
+* version
+* owner / author
+* status (draft / approved / retired)
+
+Build full CRUD in the app.
+
+Adding shoulder pain or any other complaint should work like this:
+
+1. Add complaint in Complaint Registry
+2. Add question logic in Core Questions
+3. Add modifiers if needed
+4. Add clinical findings rules
+5. Add red flag rules
+6. Add workup rules
+7. Add diagnosis candidates and scoring
+8. Add treatment/dosing options
+9. Add disposition rules
+10. Add golden cases
+11. Run test bench / simulation from the app
+
+No TypeScript edits should be needed for normal clinical expansion.
+
+PART 5. MASS TESTING / SIMULATION / LEARNING INSIDE THE APP
+
+Build a large-scale simulation engine accessible from the dashboard.
+
+I need to be able to:
+
+* select one or more golden cases
+* generate thousands of case variations
+* vary age, modifiers, symptoms, severity, findings, and workup results
+* run async large-volume testing
+* view progress in the UI
+* compare expected vs actual outcomes
+* inspect failure clusters
+* rerun after edits
+
+UI requirements:
+
+* Run 100 / 1,000 / 10,000 / custom number of simulations
+* async queue-backed execution
+* cancellation support
+* progress bar
+* summary metrics
+* links to failed cases
+
+Output should show:
+
+* diagnosis accuracy
+* disposition accuracy
+* red flag sensitivity
+* false reassurance rate
+* medication selection errors
+* dosing errors
+* workup errors
+* confidence drift
+* common failure clusters
+
+PART 6. FAILURE ANALYZER / CORRECTION WORKFLOW
+
+Build an in-app failure analyzer so I can see exactly what logic went wrong and fix it from the dashboard.
+
+For each failed case, show:
+
+* input values
+* modifiers applied
+* findings detected
+* red flags triggered or missed
+* workup recommended
+* diagnosis ranking
+* treatment chosen
+* disposition chosen
+* expected vs actual
+* confidence
+* exact rule IDs / row IDs hit
+* exact score contributions
+* source table / knowledge row used
+
+Also show failure clusters like:
+
+* pregnancy cases getting wrong imaging
+* penicillin allergy cases getting wrong antibiotic
+* CHF cases getting NSAIDs
+* severe abdominal pain cases not escalating
+* infants getting wrong disposition threshold
+
+Allow direct jump from failure to the relevant editor:
+
+* modifier editor
+* workup editor
+* diagnosis editor
+* treatment editor
+* disposition editor
+* red flag editor
+* golden case editor
+
+PART 7. FULL TRACEABILITY FROM KNOWLEDGE TABLES TO FINAL DECISION
+
+I need every decision traceable from the UI all the way back to the knowledge source.
+
+For every test case and live case, show:
+
+* complaint selected
+* question rows used
+* modifiers applied
+* clinical findings detected
+* red flag rule hits
+* workup rule hits
+* diagnosis rule hits
+* medication/dose rule hits
+* disposition rule hits
+* final safety override hits
+
+Each item should display:
+
+* source table name
+* source row ID
+* rule ID
+* value / threshold used
+* result produced
+
+I should be able to click from a final disposition back to the exact knowledge row that caused it.
+
+PART 8. UNIFIED EXECUTION PIPELINE
+
+Make sure all app functions use one canonical clinical pipeline.
+
+Required high-level execution order:
+
+1. Intake
+2. Modifier / Context Layer
+3. Clinical Findings Layer
+4. Early Red Flag / Hard Stop Layer
+5. Core Question / Skill Layer
+6. Workup Layer
+7. Diagnosis Layer
+8. Treatment Layer
+9. Disposition Layer
+10. Final Safety Override
+11. Audit / Learning
+
+Audit all entry points and ensure they use the canonical path:
+
+* dashboard test bench
+* golden case runner
+* live patient flow
+* SMS / WhatsApp / Telegram
+* voice / phone flow
+* stress runner
+* batch simulation
+* physician review reruns
+* FDA / compliance test routes
+
+No parallel legacy path should bypass the master safety stack or knowledge base.
+
+PART 9. REMOVE HARDCODED MEDICAL LOGIC WHEREVER POSSIBLE
+
+Search for hardcoded logic in TypeScript and identify all medical logic that should be moved into editable tables or app-managed config.
+
+Examples:
+
+* shoulder pain rules
+* sepsis thresholds
+* red flags
+* medication choices
+* antibiotic substitution for allergy
+* pediatric thresholds
+* pregnancy imaging changes
+* CHF medication restrictions
+* renal dosing
+* disposition cutoffs
+
+Normal medical knowledge changes should not require code edits.
+
+Code should provide generic engines, not complaint-specific hardcoded logic.
+
+PART 10. KNOWLEDGE BASE STORAGE AND ACCESS
+
+If Google Sheets remains the source of truth:
+
+* make the active tabs visible from the app
+* show last sync time
+* show sheet ID/tab name
+* allow sync status inspection
+* allow import/reload
+* allow row-level traceability back to the sheet
+
+If Postgres becomes the runtime source of truth:
+
+* create normalized tables for all knowledge domains
+* optionally support sheet import/export
+* show version history and audit log
+* allow app editing with approval flow
+
+Preferred model:
+
+* Postgres runtime tables as canonical runtime source
+* Google Sheets import/export adapter for clinician-friendly bulk editing
+* app UI for direct editing and governance
+
+PART 11. APPROVAL / VERSIONING / GOVERNANCE
+
+Add governance so medical logic changes are safe.
+
+Requirements:
+
+* draft vs approved knowledge changes
+* versioning for all rule tables
+* audit log of who changed what and when
+* compare versions
+* rollback support
+* approval workflow for sensitive changes
+* regression test rerun requirement before promotion
+
+If a medication or dose is changed, I want:
+
+* diff of old vs new
+* affected complaints / diagnoses
+* required regression tests
+* approval status
+* deployment status
+
+PART 12. MONITORING / OPS DASHBOARD
+
+Build an operations dashboard for knowledge health and model health.
+
+Show:
+
+* total active complaints
+* total active golden cases
+* complaints without enough golden cases
+* rules without test coverage
+* stale knowledge tables
+* sync failures
+* simulation failure trends
+* top failure clusters
+* top overridden rules
+* red flag misses
+* confidence drift
+* learning changes over time
+* most-edited clinical domains
+
+PART 13. WHAT I NEED YOU TO DELIVER BACK TO ME
+
+Please deliver:
+
+1. a source-of-truth audit of the current system
+2. a map of how Google Sheets are currently being used
+3. a list of all current knowledge tables/tabs/files and whether they are active at runtime
+4. a plan to migrate hardcoded logic into app-managed knowledge
+5. the app UI panels for editing and monitoring knowledge
+6. the golden case CRUD system
+7. the large-scale simulation/test bench system
+8. the failure analyzer and correction workflow
+9. full traceability from knowledge row to final decision
+10. confirmation that new complaints and new golden cases can be added from inside the app without new code
+11. any remaining hardcoded medical logic that still cannot yet be managed from the app
+
+Most important outcome:
+I want the medical decision system to behave like a clinical knowledge platform, not a code project.
+Normal medical expansion, correction, monitoring, and learning should happen inside the app and through the knowledge base, not through writing new TypeScript every time.
