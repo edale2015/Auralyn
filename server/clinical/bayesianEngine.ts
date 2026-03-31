@@ -25,8 +25,8 @@ export interface DifferentialResult {
   matchedFeatures: string[];
 }
 
-// ── Prior probability table (ENT/Flu-slice scope) ────────────────────────────
-export const PRIORS_COUNT = 8; // number of entries in PRIORS below
+// ── Prior probability table (ENT/Flu-slice + Musculoskeletal scope) ──────────
+export const PRIORS_COUNT = 12; // updated when new entries are added to PRIORS below
 
 const PRIORS: DiagnosisPrior[] = [
   {
@@ -102,6 +102,49 @@ const PRIORS: DiagnosisPrior[] = [
       "sneezing":          0.88, "runny nose":         0.85,
       "itchy eyes":        0.80, "congestion":         0.78,
       "no fever":          0.90, "seasonal pattern":   0.70,
+    },
+  },
+
+  // ── Musculoskeletal / Shoulder ────────────────────────────────────────────
+  {
+    diagnosis: "Rotator Cuff Injury",
+    baseProbability: 0.30,    // most common shoulder dx in adults > 40
+    featureLikelihoods: {
+      "shoulder pain":        0.95, "painful arc":           0.82,
+      "weakness":             0.75, "lateral pain":          0.78,
+      "no trauma":            0.60, "gradual onset":         0.70,
+      "night pain":           0.68, "overhead activity pain": 0.80,
+      "age over 40":          0.72, "loss of external rotation": 0.55,
+    },
+  },
+  {
+    diagnosis: "Shoulder Dislocation",
+    baseProbability: 0.08,
+    featureLikelihoods: {
+      "trauma":               0.92, "deformity":             0.85,
+      "arm held at side":     0.80, "severe pain":           0.90,
+      "loss of external rotation": 0.75, "young male":       0.55,
+      "shoulder pain":        0.95, "inability to move arm": 0.88,
+    },
+  },
+  {
+    diagnosis: "AC Joint Injury",
+    baseProbability: 0.12,
+    featureLikelihoods: {
+      "trauma":               0.88, "top of shoulder tender": 0.92,
+      "step deformity":       0.70, "direct fall onto shoulder": 0.80,
+      "shoulder pain":        0.95, "arm adduction pain":    0.72,
+      "cross-body pain":      0.68,
+    },
+  },
+  {
+    diagnosis: "Cervical Radiculopathy",
+    baseProbability: 0.15,
+    featureLikelihoods: {
+      "neck pain":            0.85, "arm pain":              0.82,
+      "tingling":             0.78, "numbness fingers":      0.75,
+      "shoulder pain":        0.70, "weakness arm":          0.65,
+      "radiation to hand":    0.72, "no trauma":             0.60,
     },
   },
 ];

@@ -52,6 +52,46 @@ const goldenStore: Map<string, GoldenCase> = new Map([
     expected: { diagnosis: "sepsis", disposition: "ER_NOW", canonicalDisposition: "ER_NOW", broadCategory: "emergency", notes: "qSOFA: RR≥22 + SBP≤100 + altered mentation = score 3 → safetyPipeline triggers ER_NOW." },
     status:   "pending",
   }],
+
+  // ── SHOULDER PAIN GOLDEN CASES ────────────────────────────────────────────
+  // Validates the full shoulder clinical skill: complaintPack, Bayesian priors,
+  // fusion patterns, plan templates. 6 cases cover all clinical archetypes.
+  ["shoulder_rotator_cuff_chronic", {
+    id:       "shoulder_rotator_cuff_chronic",
+    input:    { complaint: "shoulder_pain", symptoms: ["shoulder pain", "painful arc", "weakness", "lateral pain", "no trauma", "gradual onset", "age over 40"], age: 55, ageYears: 55 },
+    expected: { diagnosis: "rotator_cuff", disposition: "MONITOR", canonicalDisposition: "MONITOR", broadCategory: "selfcare", notes: "Atraumatic, gradual rotator cuff pattern. No fusion escalation (MODERATE). No vitals → safety passthrough → MONITOR." },
+    status:   "pending",
+  }],
+  ["shoulder_cervical_radiculopathy", {
+    id:       "shoulder_cervical_radiculopathy",
+    input:    { complaint: "shoulder_pain", symptoms: ["shoulder pain", "neck pain", "arm pain", "tingling", "numbness fingers"], age: 48, ageYears: 48 },
+    expected: { diagnosis: "cervical_radiculopathy", disposition: "MONITOR", canonicalDisposition: "MONITOR", broadCategory: "selfcare", notes: "Cervical radiculopathy masquerading as shoulder pain. CERVICAL_RADICULOPATHY fusion = MODERATE → no escalation → MONITOR." },
+    status:   "pending",
+  }],
+  ["shoulder_ac_joint_trauma", {
+    id:       "shoulder_ac_joint_trauma",
+    input:    { complaint: "shoulder_pain", symptoms: ["shoulder pain", "trauma", "top of shoulder tender", "step deformity"], age: 28, ageYears: 28 },
+    expected: { diagnosis: "ac_joint_injury", disposition: "URGENT", canonicalDisposition: "URGENT", broadCategory: "urgent", notes: "AC joint injury with step deformity (Grade ≥III) + trauma. Visible step deformity triggers SHOULDER_DISLOCATION HIGH rule → URGENT. Correct clinical disposition: same-day ED evaluation for possible surgical repair." },
+    status:   "pending",
+  }],
+  ["shoulder_dislocation_deformity", {
+    id:       "shoulder_dislocation_deformity",
+    input:    { complaint: "shoulder_pain", symptoms: ["shoulder pain", "trauma", "deformity", "arm held at side", "inability to move arm"], age: 22, ageYears: 22 },
+    expected: { diagnosis: "shoulder_dislocation", disposition: "URGENT", canonicalDisposition: "URGENT", broadCategory: "urgent", notes: "Traumatic shoulder dislocation with deformity. SHOULDER_DISLOCATION fusion = HIGH → safetyDisposition = URGENT. Needs ED reduction." },
+    status:   "pending",
+  }],
+  ["shoulder_vascular_no_pulse", {
+    id:       "shoulder_vascular_no_pulse",
+    input:    { complaint: "shoulder_pain", symptoms: ["shoulder pain", "trauma", "no pulse", "pulseless wrist"], age: 34, ageYears: 34 },
+    expected: { diagnosis: "vascular_compromise", disposition: "ER_NOW", canonicalDisposition: "ER_NOW", broadCategory: "emergency", notes: "Shoulder injury + absent wrist pulse → axillary artery injury. SHOULDER_VASCULAR_EMERGENCY fusion = CRITICAL → ER_NOW." },
+    status:   "pending",
+  }],
+  ["shoulder_brachial_plexus_trauma", {
+    id:       "shoulder_brachial_plexus_trauma",
+    input:    { complaint: "shoulder_pain", symptoms: ["shoulder pain", "trauma", "no sensation", "hand weakness", "grip loss"], age: 26, ageYears: 26 },
+    expected: { diagnosis: "brachial_plexus_injury", disposition: "ER_NOW", canonicalDisposition: "ER_NOW", broadCategory: "emergency", notes: "Post-trauma brachial plexus injury — absent sensation + hand weakness. SHOULDER_BRACHIAL_PLEXUS fusion = CRITICAL → ER_NOW." },
+    status:   "pending",
+  }],
 ]);
 
 // ── CRUD (static routes MUST come before /:id wildcard) ─────────────────────
@@ -96,9 +136,10 @@ router.get("/knowledge-map", (_req, res) => {
         editPath: "Edit safetyPipeline.ts threshold values (qSOFA score cutoff, PEWS escalation score). Edit conflictResolver.ts disposition ranking.",
       },
       diagnosisRanking: {
-        file: "server/clinical/hybridReasoning.ts (FUSION_PATTERNS) + server/clinical/bayesianEngine.ts",
-        description: "Fusion patterns for compound syndromes (PE triad, sepsis, centor strep, flu). Bayesian priors for dx ranking.",
-        editPath: "Add/edit entries in FUSION_PATTERNS array in hybridReasoning.ts. Edit PRIORS in bayesianEngine.ts.",
+        file: "server/clinical/hybridReasoning.ts (FUSION_PATTERNS) + server/clinical/bayesianEngine.ts + server/clinical/multiComplaintFusion.ts",
+        description: "Fusion patterns for compound syndromes (PE triad, sepsis, centor strep, flu, shoulder vascular/dislocation). Bayesian priors for dx ranking. PRIORS_COUNT=12 (8 ENT+flu, 4 musculoskeletal).",
+        editPath: "Add/edit entries in FUSION_PATTERNS array in hybridReasoning.ts. Edit PRIORS in bayesianEngine.ts. Add FusionRule objects in multiComplaintFusion.ts RULES array (first-match wins, critical rules first).",
+        activeComplaintSkills: ["sore_throat", "cough", "ear_pain", "fever_mild", "shoulder_pain", "knee_pain", "ankle_pain"],
       },
       medications: {
         file: "server/config/planTemplates.ts",
@@ -112,8 +153,9 @@ router.get("/knowledge-map", (_req, res) => {
       },
       hardStops: {
         file: "server/safety/hardStopRules.ts",
-        description: "Deterministic CALL_911 > ER_NOW > URGENT_24H hierarchy. Non-negotiable rules that cannot be overridden.",
-        editPath: "Edit hardStopRules.ts — add/modify HardStopRule objects with condition functions.",
+        description: "Deterministic CALL_911 > ER_NOW > URGENT_24H hierarchy. Non-negotiable rules that cannot be overridden. HS-001–HS-015: ENT/respiratory/neuro. HS-016–HS-017: shoulder neurovascular emergencies (open fracture, absent pulse/sensation). Note: evaluated in independentSafetyPath — shoulder vascular in main pipeline uses multiComplaintFusion CRITICAL rules instead.",
+        editPath: "Edit hardStopRules.ts — add HardStopRule objects with ruleId (next is HS-018), keywords[], disposition, fdaAuditCode.",
+        ruleCount: 17,
       },
       bayesianPriors: {
         file: "server/clinical/bayesianEngine.ts",

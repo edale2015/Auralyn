@@ -14,6 +14,60 @@ export interface HybridReasoningResult {
 }
 
 const FUSION_PATTERNS = [
+  // ── Shoulder neurovascular emergency — highest priority ───────────────────
+  {
+    name: "SHOULDER_VASCULAR_EMERGENCY",
+    symptoms: ["shoulder pain", "trauma", "no pulse"],
+    diagnosis: "S40.011A",
+    label: "Shoulder injury with vascular compromise",
+    priority: "CRITICAL",
+    confidence: 0.97,
+  },
+  {
+    name: "SHOULDER_BRACHIAL_PLEXUS",
+    symptoms: ["shoulder pain", "trauma", "no sensation", "hand weakness"],
+    diagnosis: "S14.3XXA",
+    label: "Brachial plexus injury",
+    priority: "CRITICAL",
+    confidence: 0.94,
+  },
+  // ── Shoulder dislocation ──────────────────────────────────────────────────
+  {
+    name: "SHOULDER_DISLOCATION",
+    symptoms: ["shoulder pain", "trauma", "deformity", "arm held at side"],
+    diagnosis: "S43.006A",
+    label: "Shoulder dislocation",
+    priority: "HIGH",
+    confidence: 0.89,
+  },
+  // ── AC joint injury ───────────────────────────────────────────────────────
+  {
+    name: "AC_JOINT_INJURY",
+    symptoms: ["shoulder pain", "trauma", "top of shoulder tender", "step deformity"],
+    diagnosis: "S43.506A",
+    label: "Acromioclavicular joint injury",
+    priority: "MODERATE",
+    confidence: 0.84,
+  },
+  // ── Rotator cuff impingement / tear ──────────────────────────────────────
+  {
+    name: "ROTATOR_CUFF_PATTERN",
+    symptoms: ["shoulder pain", "painful arc", "weakness", "lateral pain"],
+    diagnosis: "M75.1",
+    label: "Rotator cuff impingement / tear",
+    priority: "MODERATE",
+    confidence: 0.80,
+  },
+  // ── Cervical radiculopathy masquerading as shoulder pain ──────────────────
+  {
+    name: "CERVICAL_RADICULOPATHY",
+    symptoms: ["shoulder pain", "neck pain", "tingling", "arm pain"],
+    diagnosis: "M54.12",
+    label: "Cervical radiculopathy",
+    priority: "MODERATE",
+    confidence: 0.79,
+  },
+  // ── Existing patterns ─────────────────────────────────────────────────────
   {
     name: "PE_TRIAD",
     symptoms: ["chest_pain", "shortness_of_breath", "leg_swelling"],

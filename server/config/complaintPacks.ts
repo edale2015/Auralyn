@@ -581,6 +581,61 @@ export const complaintPacks: ComplaintPack[] = [
     likelyDisposition: "self_care",
     planTemplateKey: "constipation_basic",
   },
+  // ── SHOULDER PAIN ──────────────────────────────────────────────────────────
+  // Clinical logic layer:
+  //   Step 1 — Trauma screen (mechanism of injury)
+  //   Step 2 — Neurovascular check (pulse, sensation, hand strength)
+  //   Step 3 — Body-part spread (neck, arm, ribs, hand)
+  //   Step 4 — Point tenderness localization (AC, bicipital groove, greater tuberosity)
+  //   Step 5 — Movement / ROM assessment
+  //   Auto-escalate: any neurovascular compromise → physician_required
+  //   Red flags: no pulse, no sensation, deformity with vascular signs, fever + warmth (septic)
+  {
+    complaintId: "shoulder_pain",
+    aliases: ["shoulder pain", "shoulder injury", "shoulder hurts", "rotator cuff", "shoulder ache"],
+    title: "Shoulder Pain",
+    coreQuestions: [
+      // Step 1 — Mechanism / Trauma
+      { id: "trauma", prompt: "Was there a fall, direct blow, or accident that caused this pain?", type: "yes_no", required: true, priority: 1 },
+      { id: "deformity", prompt: "Is there any visible deformity, bump, or abnormal shape in the shoulder area?", type: "yes_no", required: true, priority: 2 },
+      // Step 2 — Neurovascular (critical safety screen)
+      { id: "pulse_present", prompt: "Can you feel a normal pulse at your wrist?", type: "yes_no", required: true, priority: 3 },
+      { id: "sensation_intact", prompt: "Do you have normal sensation (can feel touch) in your hand and fingers?", type: "yes_no", required: true, priority: 4 },
+      { id: "hand_strength", prompt: "Can you grip and squeeze normally with the affected hand?", type: "yes_no", priority: 5 },
+      // Step 3 — Spread / other body parts
+      { id: "neck_involved", prompt: "Is there also neck pain, or does pain shoot down the arm?", type: "yes_no", priority: 6 },
+      { id: "arm_involved", prompt: "Does pain or weakness spread into the elbow, forearm, or hand?", type: "yes_no", priority: 7 },
+      { id: "ribs_involved", prompt: "Is there also rib pain or chest-wall tenderness?", type: "yes_no", priority: 8 },
+      // Step 4 — Point tenderness localization
+      { id: "tender_location", prompt: "Where is the most tender spot? (top of shoulder / front / side / back)", type: "select", options: ["top_ac_joint", "front_bicipital_groove", "side_greater_tuberosity", "back_posterior", "diffuse"], priority: 9 },
+      // Step 5 — Movement / ROM
+      { id: "can_raise_arm", prompt: "Can you raise your arm above your head, even if painful?", type: "yes_no", priority: 10 },
+      { id: "external_rotation", prompt: "Can you rotate your arm outward (like opening a door)?", type: "yes_no", priority: 11 },
+      // Additional context
+      { id: "fever", prompt: "Any fever, warmth, or redness around the joint?", type: "yes_no", priority: 12 },
+      { id: "duration", prompt: "How long has the pain been present?", type: "duration", priority: 13 },
+      { id: "age_onset", prompt: "Did this come on suddenly or gradually over weeks/months?", type: "select", options: ["sudden_acute", "gradual_weeks", "gradual_months"], priority: 14 },
+    ],
+    // Red flags — any of these → force physician review or escalation
+    redFlagTriggers: ["pulse_present", "sensation_intact", "hand_strength", "deformity", "fever"],
+    // Auto-escalate rules — neurovascular compromise cannot be managed remotely
+    autoEscalateRules: [
+      "pulse_present=no",          // Absent pulse → axillary artery injury → ER_NOW
+      "sensation_intact=no",        // Absent sensation → brachial plexus injury → ER_NOW
+      "hand_strength=no AND trauma=yes", // Acute weakness post-trauma → brachial plexus
+      "fever=yes AND deformity=yes",   // Septic joint vs traumatic — needs imaging
+    ],
+    autoReviewRules: [
+      "trauma=yes",                  // All trauma gets physician review
+      "neck_involved=yes",           // Possible cervical radiculopathy
+      "can_raise_arm=no",            // Functional loss → rotator cuff tear vs dislocation
+      "external_rotation=no AND trauma=yes", // Posterior dislocation
+      "fever=yes",                   // Possible septic arthritis
+      "deformity=yes",               // Dislocation / AC injury
+    ],
+    likelyDisposition: "office_followup",
+    planTemplateKey: "ortho_shoulder_atraumatic",
+  },
   {
     complaintId: "hemorrhoids_rectal_pain",
     aliases: ["hemorrhoids", "rectal pain", "anal pain"],

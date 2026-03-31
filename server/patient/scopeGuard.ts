@@ -11,6 +11,10 @@ export const SAFE_COMPLAINTS = [
   "conjunctivitis",
   "cold_symptoms",
   "mild_back_pain",
+  // Musculoskeletal — atraumatic or low-mechanism
+  "shoulder_pain",
+  "knee_pain",
+  "ankle_pain",
 ];
 
 export const ESCALATION_REQUIRED_COMPLAINTS = [

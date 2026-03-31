@@ -166,6 +166,23 @@ export const ABSOLUTE_HARD_STOPS: HardStopRule[] = [
     rationale: "Classic meningitis presentation — bacterial meningitis mortality 20–30% without treatment",
     confidence: 0.97, bypassDebate: true, fdaAuditCode: "NEURO-003",
   },
+  // ── Shoulder Neurovascular Emergencies ────────────────────────────────────
+  // NOTE: These rules are evaluated in independentSafetyPath (not finalPipeline).
+  //       Multi-complaint fusion engine handles shoulder vascular in the main pipeline.
+  {
+    ruleId: "HS-016", symptomKey: "shoulder_neurovascular_compromise",
+    keywords: ["no pulse", "absent pulse", "pulseless wrist", "no sensation hand", "absent sensation", "hand numb and weak", "grip gone", "can't feel fingers"],
+    disposition: DispositionTier.CALL_911,
+    rationale: "Shoulder injury with absent distal pulse or sensation → axillary artery injury or complete brachial plexus avulsion. Limb-threatening emergency — CALL 911.",
+    confidence: 0.98, bypassDebate: true, fdaAuditCode: "ORTHO-001",
+  },
+  {
+    ruleId: "HS-017", symptomKey: "shoulder_open_fracture",
+    keywords: ["bone through skin", "bone sticking out", "open wound bone", "bone exposed", "open fracture"],
+    disposition: DispositionTier.CALL_911,
+    rationale: "Open fracture/dislocation — infection and vascular risk. Immediate surgical evaluation required.",
+    confidence: 0.99, bypassDebate: true, fdaAuditCode: "ORTHO-002",
+  },
 ];
 
 export interface HardStopResult {

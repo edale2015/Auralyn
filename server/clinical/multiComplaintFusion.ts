@@ -96,6 +96,38 @@ const RULES: FusionRule[] = [
       return m.length >= 2 ? m : null;
     },
   },
+  // ── Shoulder neurovascular emergency ──────────────────────────────────────
+  {
+    suspicion: "shoulder vascular compromise",
+    priority:  "CRITICAL",
+    rationale: "Shoulder injury with absent pulse or absent sensation — axillary artery / brachial plexus injury",
+    match: (_, s) => {
+      const m: string[] = [];
+      if (s.has("shoulder pain") || s.has("shoulder injury")) m.push("shoulder pain");
+      if (s.has("no pulse") || s.has("absent pulse") || s.has("pulseless wrist")) m.push("absent pulse");
+      if (s.has("no sensation") || s.has("absent sensation") || s.has("hand numb")) m.push("absent sensation");
+      if (s.has("hand weakness") || s.has("grip loss") || s.has("can't grip")) m.push("hand weakness");
+      // Must have shoulder AND at least one vascular/neuro sign
+      if (!m.includes("shoulder pain")) return null;
+      const vascularNeuro = m.filter(x => x !== "shoulder pain");
+      return vascularNeuro.length >= 1 ? m : null;
+    },
+  },
+  {
+    suspicion: "shoulder dislocation",
+    priority:  "HIGH",
+    rationale: "Trauma + visible deformity pattern — shoulder dislocation, imaging and reduction required",
+    match: (_, s) => {
+      const m: string[] = [];
+      if (s.has("shoulder pain") || s.has("shoulder injury")) m.push("shoulder pain");
+      if (s.has("trauma") || s.has("fall") || s.has("injury")) m.push("trauma");
+      if (s.has("deformity") || s.has("step deformity") || s.has("abnormal shape")) m.push("deformity");
+      if (s.has("arm held at side") || s.has("can't move arm") || s.has("inability to move arm")) m.push("arm immobile");
+      // Must have shoulder + trauma + (deformity OR arm immobile)
+      const hasDeformity = m.includes("deformity") || m.includes("arm immobile");
+      return (m.includes("shoulder pain") && m.includes("trauma") && hasDeformity) ? m : null;
+    },
+  },
   {
     suspicion: "hypertensive urgency",
     priority:  "HIGH",
