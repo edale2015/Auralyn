@@ -20,4 +20,5 @@ export const ROUTES = {
   ORCHESTRATION: "/orchestration",
   CONTROL_TOWER: "/control-tower",
   COMPONENT_HUB: "/component-hub",
+  TEST_BENCH: "/test-bench",
 };

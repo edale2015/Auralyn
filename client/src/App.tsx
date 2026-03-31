@@ -59,6 +59,7 @@ import ArchitecturalCompliancePage from "@/pages/ArchitecturalCompliancePage";
 import MoatIntelligencePage from "@/pages/MoatIntelligencePage";
 import ExecutiveCommandPage from "@/pages/ExecutiveCommandPage";
 import ComponentHubPage from "@/pages/ComponentHubPage";
+import ClinicalTestBenchPage from "@/pages/ClinicalTestBenchPage";
 
 validateRoutes();
 
@@ -90,6 +91,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.ORCHESTRATION} component={OrchestrationDashboard} />
         <Route path={ROUTES.CONTROL_TOWER} component={ControlTowerPage} />
         <Route path={ROUTES.COMPONENT_HUB} component={ComponentHubPage} />
+        <Route path={ROUTES.TEST_BENCH} component={ClinicalTestBenchPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

@@ -137,5 +137,45 @@ router.post("/run-golden", async (req, res) => {
   }
 });
 
+// POST /api/test/golden/run-all — run every case in the store concurrently
+router.post("/run-all", async (_req, res) => {
+  const cases = Array.from(goldenStore.values());
+  if (cases.length === 0) return res.json({ ok: true, ran: 0, passed: 0, failed: 0, passRate: 0, results: [] });
+
+  const { runPatientFlow } = await import("../patient/patientFlow").catch(() => ({ runPatientFlow: null }));
+  if (!runPatientFlow) return res.status(500).json({ ok: false, error: "Patient flow not available" });
+
+  const results = await Promise.all(cases.map(async (c) => {
+    const input = (c.input as any) ?? {};
+    const expected = (c.expected as any) ?? {};
+    const start = Date.now();
+    try {
+      const result = await runPatientFlow({
+        complaint:  input.complaint ?? "general",
+        complaints: input.symptoms  ?? [input.complaint ?? "general"],
+        text:       (input.symptoms ?? []).join(", "),
+        history:    { age: input.age },
+      });
+      const latencyMs = Date.now() - start;
+      const actualDisposition  = (result.disposition ?? result.status ?? "").toLowerCase();
+      const expectedDisposition = (expected.disposition ?? expected.status ?? "").toLowerCase();
+      const passed = expectedDisposition
+        ? actualDisposition.includes(expectedDisposition) || expectedDisposition.includes(actualDisposition)
+        : true;
+      const enriched: GoldenCase = { ...c, result: { ...result, latencyMs }, status: passed ? "pass" : "fail", ranAt: new Date().toISOString() };
+      goldenStore.set(c.id, enriched);
+      return { id: c.id, passed, latencyMs, actual: result, expected, failReason: passed ? null : `expected "${expectedDisposition}" got "${actualDisposition}"` };
+    } catch (err: any) {
+      goldenStore.set(c.id, { ...c, status: "fail", ranAt: new Date().toISOString() });
+      return { id: c.id, passed: false, latencyMs: Date.now() - start, error: err.message, expected };
+    }
+  }));
+
+  const passed = results.filter(r => r.passed).length;
+  const failed  = results.length - passed;
+  auditLog({ actor: "test_bench", action: "golden_run_all", entityType: "golden_cases", entityId: `batch:${results.length}` });
+  res.json({ ok: true, ran: results.length, passed, failed, passRate: Math.round((passed / results.length) * 100), results });
+});
+
 export { goldenStore };
 export default router;
