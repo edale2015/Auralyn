@@ -136,40 +136,49 @@ function KnowledgeHealthPanel() {
         </Button>
       </div>
 
-      {/* KB coverage bar */}
+      {/* Phase 3: KB-driven percentage bar */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-sm">
           <span className="font-medium flex items-center gap-1.5">
-            <Zap className="h-4 w-4 text-yellow-500" /> Diagnosis Rules Coverage
+            <Zap className="h-4 w-4 text-yellow-500" /> Phase 3: KB-Driven Coverage
           </span>
-          <span className="text-muted-foreground">
+          <span className="text-muted-foreground text-xs">
             <span className="text-green-700 font-semibold">{rules?.diagnosisRulesWithLikelihoods ?? 0}</span>
             {" / "}
-            <span>{rules?.diagnosisRulesTotal ?? 0}</span>
-            {" have featureLikelihoods"}
+            <span>{rules?.bayesianPriors ?? 0}</span>
+            {" Bayesian priors have feature rows"}
           </span>
         </div>
         <div className="flex items-center gap-3">
           <Progress value={pctKbDriven ?? 0} className="flex-1 h-3" />
           <span className="text-sm font-semibold w-14 text-right">
-            <span className="text-green-700">{pctKbDriven ?? 0}%</span> KB
+            <span className={pctKbDriven === 100 ? "text-green-600" : "text-yellow-600"}>{pctKbDriven ?? 0}%</span>
           </span>
         </div>
-        <div className="text-xs text-muted-foreground">
-          {rules?.diagnosisRulesMissingLikelihoods ?? 0} rules without featureLikelihoods — they will NOT be used by the Bayesian engine.
-          {rules?.bayesianPriors != null && (
-            <span className="ml-1 text-blue-600">{rules.bayesianPriors} are Bayesian priors (complaintId=bayesian_global).</span>
-          )}
+        {/* Phase 3 feature table stats */}
+        <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+            <span><strong>{rules?.featureTable?.rows ?? 0}</strong> feature rows in <code className="font-mono bg-muted px-0.5 rounded">kb_feature_likelihoods</code></span>
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+            <span><strong>{rules?.featureTable?.uniqueRules ?? 0}</strong> unique diagnosis rules covered</span>
+          </span>
+          {(rules?.diagnosisRulesMissingLikelihoods ?? 0) === 0
+            ? <span className="text-green-600 font-medium">✓ 100% KB-driven — no hardcoded fallbacks</span>
+            : <span className="text-yellow-600">{rules.diagnosisRulesMissingLikelihoods} priors still using JSONB fallback</span>
+          }
         </div>
       </div>
 
-      {/* Rules missing likelihoods — sample */}
+      {/* Rules missing feature rows — sample */}
       {(rules?.diagnosisRulesMissingLikelihoods ?? 0) > 0 && (
         <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:bg-yellow-950/30 p-3">
           <div className="flex items-center gap-2 mb-2">
             <AlertCircle className="h-4 w-4 text-yellow-600 shrink-0" />
             <span className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
-              {rules.diagnosisRulesMissingLikelihoods} rules missing featureLikelihoods (sample of up to 20):
+              {rules.diagnosisRulesMissingLikelihoods} Bayesian priors missing from <code className="font-mono text-xs">kb_feature_likelihoods</code>:
             </span>
           </div>
           <div className="space-y-1 max-h-40 overflow-y-auto">
@@ -177,12 +186,11 @@ function KnowledgeHealthPanel() {
               <div key={r.ruleId} className="flex items-center gap-2 text-xs font-mono">
                 <span className="text-muted-foreground w-32 truncate shrink-0">{r.ruleId}</span>
                 <span className="text-yellow-800 dark:text-yellow-200 truncate">{r.diagnosisLabel}</span>
-                <span className="text-muted-foreground shrink-0">[{r.complaintId}]</span>
               </div>
             ))}
           </div>
           <div className="text-xs text-yellow-700 dark:text-yellow-300 mt-2">
-            To add featureLikelihoods: KB Admin → Diagnosis Rules → edit rule → set probability weights per symptom.
+            Run <strong>Phase 3 Migration</strong> below to populate the normalized feature table from existing data.
           </div>
         </div>
       )}
@@ -650,12 +658,127 @@ export default function KnowledgeOpsDashboardPage() {
         </Card>
       </div>
 
+      {/* ── Phase 3: Feature Normalizer ─────────────────────────────────────── */}
+      <Phase3MigrationPanel />
+
       {/* ── Simulation Lab ─────────────────────────────────────────────────── */}
       <SimulationLabPanel />
 
       {/* ── Decision Trace ──────────────────────────────────────────────────── */}
       <DecisionTracePanel />
     </div>
+  );
+}
+
+// ── Phase 3: Migration Panel ───────────────────────────────────────────────────
+function Phase3MigrationPanel() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [result, setResult] = useState<any>(null);
+
+  const { data: coverage } = useQuery<any>({ queryKey: ["/api/kb/feature-coverage"] });
+
+  const migrate = useMutation({
+    mutationFn: async () => {
+      const resp = await fetch("/api/kb/migrate-to-feature-table", {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error ?? "Migration failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      setResult(data.migration);
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kb/feature-coverage"] });
+      toast({ title: `Migration complete — ${data.migration.pctKbDriven}% KB-driven` });
+    },
+    onError: (e: any) => toast({ title: "Migration error", description: e.message, variant: "destructive" }),
+  });
+
+  const isFullyCovered = (coverage?.pctKbDriven ?? 0) === 100;
+
+  return (
+    <Card className={`border-l-4 ${isFullyCovered ? "border-green-400" : "border-amber-400"}`}>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Database className="h-5 w-5 text-blue-600" /> Phase 3: Feature Normalizer
+            <Badge className={`ml-1 ${isFullyCovered ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+              {coverage?.pctKbDriven ?? "…"}% KB-driven
+            </Badge>
+          </CardTitle>
+          <Button
+            size="sm"
+            variant={isFullyCovered ? "outline" : "default"}
+            onClick={() => migrate.mutate()}
+            disabled={migrate.isPending}
+            data-testid="button-phase3-migrate"
+          >
+            <RefreshCw className={`h-4 w-4 mr-1 ${migrate.isPending ? "animate-spin" : ""}`} />
+            {migrate.isPending ? "Migrating…" : isFullyCovered ? "Re-run Migration" : "Run Migration"}
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Moves all clinical likelihood data from JSONB blobs and hardcoded TypeScript constants into the normalized
+          <code className="mx-1 font-mono text-xs bg-muted px-1 rounded">kb_feature_likelihoods</code>
+          table. After migration, every diagnosis decision is traceable to a specific Postgres row.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Coverage summary */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: "Bayesian rules", val: coverage?.total ?? "—", color: "text-blue-700" },
+            { label: "Covered", val: coverage?.covered ?? "—", color: "text-green-700" },
+            { label: "Feature rows", val: coverage?.featureRows ?? "—", color: "text-purple-700" },
+            { label: "Missing", val: coverage?.missing?.length ?? "—", color: (coverage?.missing?.length ?? 0) === 0 ? "text-green-600" : "text-red-600" },
+          ].map(s => (
+            <div key={s.label} className="text-center p-3 bg-muted/40 rounded-lg">
+              <div className={`text-xl font-bold ${s.color}`}>{s.val}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Migration result */}
+        {result && (
+          <div className="rounded-lg border border-green-200 bg-green-50 dark:bg-green-950/30 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <span className="text-sm font-semibold text-green-800 dark:text-green-200">Migration completed in {result.durationMs}ms</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-xs">
+              <div><span className="font-medium">Priors migrated:</span> {result.priorsProcessed}/12</div>
+              <div><span className="font-medium">JSONB rules:</span> {result.jsonbRulesProcessed}</div>
+              <div><span className="font-medium">Feature rows:</span> {result.featureRowsInserted} new → {result.featureRowsTotal} total</div>
+            </div>
+            {result.errors?.length > 0 && (
+              <div className="text-xs text-red-700 dark:text-red-300 mt-1">
+                Errors: {result.errors.join("; ")}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Missing rules list */}
+        {(coverage?.missing?.length ?? 0) > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 p-3">
+            <div className="text-xs font-semibold text-amber-800 dark:text-amber-200 mb-2">
+              {coverage.missing.length} priors still missing feature rows:
+            </div>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {coverage.missing.map((r: any) => (
+                <div key={r.ruleId} className="text-xs font-mono flex gap-2">
+                  <span className="text-muted-foreground shrink-0 w-36 truncate">{r.ruleId}</span>
+                  <span className="text-amber-800 dark:text-amber-200">{r.diagnosisLabel}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

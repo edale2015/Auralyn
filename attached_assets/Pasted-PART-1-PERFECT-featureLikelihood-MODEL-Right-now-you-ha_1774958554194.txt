@@ -1,0 +1,280 @@
+PART 1 — PERFECT featureLikelihood MODEL
+
+Right now you have:
+
+positive evidence only
+binary matching
+
+We’ll upgrade to a full probabilistic model:
+
+🧾 NEW TABLE: kb_feature_models (REPLACES simple likelihoods)
+CREATE TABLE kb_feature_models (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rule_id TEXT NOT NULL,
+
+  feature_key TEXT NOT NULL,              -- "painful_arc"
+  feature_type TEXT NOT NULL,             -- boolean | categorical | numeric | range
+
+  -- POSITIVE EVIDENCE
+  p_present FLOAT,                        -- P(feature present | Dx)
+
+  -- NEGATIVE EVIDENCE
+  p_absent FLOAT,                         -- P(feature absent | Dx)
+
+  -- CATEGORICAL VALUES (JSON)
+  categorical_map JSONB,                  -- { "mild":0.3, "moderate":0.6, "severe":0.9 }
+
+  -- NUMERIC MODEL
+  mean FLOAT,
+  std_dev FLOAT,
+
+  -- RANGE MODEL
+  min_value FLOAT,
+  max_value FLOAT,
+
+  weight FLOAT DEFAULT 1.0,
+  is_required BOOLEAN DEFAULT FALSE,      -- if true, absence penalizes heavily
+
+  source TEXT DEFAULT 'manual',
+  created_at TIMESTAMP DEFAULT now()
+);
+🧠 WHAT THIS ENABLES
+✅ Positive evidence
+painful_arc = yes → increases probability
+✅ Negative evidence
+painful_arc = no → decreases probability
+✅ Continuous values
+heart_rate = 130 → higher likelihood for sepsis
+✅ Categorical severity
+pain = severe → higher weight than mild
+🧠 NEW SCORING ENGINE (DROP-IN)
+File: kbAdvancedDiagnosisEngine.ts
+function gaussian(x, mean, std) {
+  return Math.exp(-((x - mean) ** 2) / (2 * std ** 2))
+}
+
+export async function runAdvancedDiagnosis(input: any) {
+  const diagnoses = await db.kb_diagnosis_rules.findAll({ is_active: true })
+
+  const results = []
+
+  for (const dx of diagnoses) {
+    const features = await db.kb_feature_models.findAll({
+      rule_id: dx.rule_id
+    })
+
+    let score = Math.log(dx.base_probability)
+
+    for (const f of features) {
+      const val = input[f.feature_key]
+
+      // BOOLEAN
+      if (f.feature_type === 'boolean') {
+        if (val === true) score += Math.log(f.p_present || 0.5)
+        else score += Math.log(f.p_absent || 0.5)
+      }
+
+      // CATEGORICAL
+      else if (f.feature_type === 'categorical') {
+        const likelihood = f.categorical_map?.[val] || 0.01
+        score += Math.log(likelihood)
+      }
+
+      // NUMERIC
+      else if (f.feature_type === 'numeric') {
+        const likelihood = gaussian(val, f.mean, f.std_dev)
+        score += Math.log(likelihood)
+      }
+
+      // RANGE
+      else if (f.feature_type === 'range') {
+        if (val >= f.min_value && val <= f.max_value) {
+          score += Math.log(f.p_present || 0.8)
+        } else {
+          score += Math.log(f.p_absent || 0.2)
+        }
+      }
+    }
+
+    results.push({
+      diagnosis: dx.diagnosis_name,
+      score,
+      source: 'KB_DB'
+    })
+  }
+
+  return results.sort((a, b) => b.score - a.score)
+}
+🧬 PART 2 — DIAGNOSIS UI EDITOR (CLINICIAN SAFE)
+
+We need to prevent clinicians from accidentally breaking math.
+
+🎛️ UI DESIGN (React)
+Component: DiagnosisEditor.tsx
+🧾 Section 1 — Diagnosis Header
+Diagnosis name
+Complaint
+Base probability slider (0–1)
+Cannot-miss toggle
+Severity dropdown
+🧾 Section 2 — Feature Builder
+
+Each feature is a card
+
+🧠 Feature Card UI
+
+Feature: painful_arc
+Type: [Boolean ▼]
+
+If Boolean:
+
+P(present | Dx): [0.85 slider]
+P(absent | Dx): [0.15 slider]
+
+If Categorical:
+
+Add values:
+mild → 0.3
+moderate → 0.6
+severe → 0.9
+
+If Numeric:
+
+Mean: 120
+Std Dev: 15
+
+If Range:
+
+Min: 60
+Max: 120
+Inside likelihood: 0.8
+Outside likelihood: 0.2
+🔒 SAFETY GUARDS
+sliders enforce 0–1
+auto-normalization option
+warnings:
+missing features
+extreme probabilities
+contradictions
+🔍 LIVE PREVIEW PANEL
+
+Right side:
+
+Given:
+painful_arc = yes
+weakness = yes
+
+→ Rotator cuff probability: 72%
+
+👉 This is HUGE for usability
+
+🧬 PART 3 — FINISH REMAINING PHASE 3 ITEMS
+
+You had 5 remaining. Here’s the clean implementation.
+
+✅ 1. RED_FLAG_MAP_LEGACY → DB
+Table: kb_red_flag_rules
+CREATE TABLE kb_red_flag_rules (
+  id UUID PRIMARY KEY,
+  complaint_id TEXT,
+  condition_expr TEXT,
+  action TEXT,                  -- CALL_911, ER_NOW
+  priority INTEGER,
+  is_active BOOLEAN
+);
+✅ 2. SCORING_MODULE_DISPATCH → DB
+Table: kb_engine_routing
+CREATE TABLE kb_engine_routing (
+  complaint_id TEXT,
+  engine_type TEXT,             -- bayesian, rule, hybrid
+  config JSONB
+);
+✅ 3. COMPLAINT_PACK_REGISTRY → DB
+
+Already close. Just ensure:
+
+fully CRUD
+versioned
+linked to questions + findings
+✅ 4. CSV_REGISTRY_LOADER → DELETE
+
+After migration:
+
+if (process.env.ALLOW_CSV !== 'true') {
+  throw new Error('CSV loader disabled')
+}
+✅ 5. WEIGHT_STORE_IN_MEMORY → DB
+
+Already defined:
+
+kb_clinical_weights
+Backend loader:
+const weights = await db.kb_clinical_weights.findAll()
+🧪 FINAL VALIDATION TESTS (MANDATORY)
+
+After all this:
+
+✅ Test A — negative evidence
+
+Input:
+
+painful_arc = no
+
+→ rotator cuff probability should DROP
+
+✅ Test B — continuous
+heart_rate = 140
+
+→ sepsis probability increases
+
+✅ Test C — UI edit
+
+Change:
+
+painful_arc likelihood 0.8 → 0.2
+
+→ rerun → immediate effect
+
+✅ Test D — no fallback
+
+Logs should show:
+
+source: KB_DB
+fallback: NONE
+🧭 FINAL MESSAGE TO REPLIT
+Writing
+
+Complete Phase 3 by upgrading diagnosis modeling, UI, and remaining legacy migrations.
+
+Replace simple featureLikelihoods with kb_feature_models:
+support boolean, categorical, numeric, and range features
+include positive and negative evidence
+enforce validation
+Implement advanced Bayesian engine:
+use log-likelihood
+support gaussian for numeric features
+support categorical mapping
+no fallback logic
+Build Diagnosis Editor UI:
+safe sliders (0–1)
+feature cards per type
+live probability preview
+validation warnings
+Migrate remaining legacy systems:
+redFlagMap → kb_red_flag_rules
+scoring dispatch → kb_engine_routing
+complaint packs → fully DB-backed
+remove CSV loader entirely
+persist weights in kb_clinical_weights
+Enforce:
+100% KB-driven diagnosis
+zero fallback usage
+full traceability
+
+Deliver:
+
+schema
+backend engine
+UI editor
+validation layer
+proof via simulation + trace logs

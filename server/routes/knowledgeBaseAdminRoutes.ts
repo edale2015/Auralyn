@@ -14,6 +14,11 @@ import {
 import { eq, desc, and, ilike, count, or } from "drizzle-orm";
 import { seedKnowledgeBase } from "../kb/kbSeeder";
 import { reloadAndRewireKbCache, getKbCacheStatus } from "../kb/kbRuntime";
+import { migrateToFeatureTable, validateFeatureCoverage } from "../kb/migrateCsvToKb";
+import {
+  kbFeatureLikelihoods, kbClinicalWeights, kbComplaintModules, kbComplaintPacks,
+  insertKbFeatureLikelihoodSchema,
+} from "../../shared/schema";
 
 // Local helper — db.execute() returns { rows: [...] } or array depending on driver
 function xRows(result: any): any[] {
@@ -106,6 +111,121 @@ router.post("/seed", async (_req: Request, res: Response) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — MIGRATION + FEATURE LIKELIHOODS (normalized table)
+// ════════════════════════════════════════════════════════════════════════════
+
+// POST /api/kb/migrate-to-feature-table — idempotent: move all JSONB + hardcoded PRIORS to normalized table
+router.post("/migrate-to-feature-table", async (_req: Request, res: Response) => {
+  try {
+    const result = await migrateToFeatureTable();
+    // Reload engine cache so new feature rows are immediately live
+    await reloadAndRewireKbCache();
+    res.json({ ok: true, migration: result, cacheStatus: getKbCacheStatus() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/kb/feature-coverage — which bayesian_global rules are missing feature rows
+router.get("/feature-coverage", async (_req: Request, res: Response) => {
+  try {
+    const missing = await validateFeatureCoverage();
+    const totalResult = await db.execute(sql`
+      SELECT COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE EXISTS (
+               SELECT 1 FROM kb_feature_likelihoods f WHERE f.rule_id = r.rule_id AND f.active = true
+             ))::int AS covered
+      FROM kb_diagnosis_rules r
+      WHERE r.active = true AND r.complaint_id = 'bayesian_global'
+    `);
+    const row = xRows(totalResult)[0] ?? {};
+    const total = Number(row.total ?? 0);
+    const covered = Number(row.covered ?? 0);
+    const featureRowsResult = await db.execute(sql`SELECT COUNT(*)::int AS n FROM kb_feature_likelihoods WHERE active = true`);
+    const featureRows = Number(xRows(featureRowsResult)[0]?.n ?? 0);
+    res.json({
+      total,
+      covered,
+      pctKbDriven: total > 0 ? Math.round(covered * 100 / total) : 0,
+      featureRows,
+      missing,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/kb/feature-likelihoods — list all (optionally by ruleId)
+router.get("/feature-likelihoods", async (req: Request, res: Response) => {
+  try {
+    const { ruleId, q } = req.query as Record<string, string>;
+    let rows;
+    if (ruleId) {
+      rows = await db.select().from(kbFeatureLikelihoods)
+        .where(eq(kbFeatureLikelihoods.ruleId, ruleId))
+        .orderBy(desc(kbFeatureLikelihoods.likelihood));
+    } else if (q) {
+      rows = await db.select().from(kbFeatureLikelihoods)
+        .where(ilike(kbFeatureLikelihoods.featureKey, `%${q}%`))
+        .orderBy(kbFeatureLikelihoods.ruleId, desc(kbFeatureLikelihoods.likelihood));
+    } else {
+      rows = await db.select().from(kbFeatureLikelihoods)
+        .orderBy(kbFeatureLikelihoods.ruleId, desc(kbFeatureLikelihoods.likelihood));
+    }
+    res.json(rows);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/kb/feature-likelihoods — add a feature row
+router.post("/feature-likelihoods", async (req: Request, res: Response) => {
+  try {
+    const body = insertKbFeatureLikelihoodSchema.parse(req.body);
+    if (body.likelihood < 0 || body.likelihood > 1) {
+      return res.status(422).json({ errors: ["likelihood must be between 0 and 1"] });
+    }
+    const [row] = await db.insert(kbFeatureLikelihoods).values(body).returning();
+    await logChange("feature_likelihood", `${row.ruleId}:${row.featureKey}`, "create", null, row);
+    res.json(row);
+  } catch (e: any) {
+    if (e.code === "23505") return res.status(409).json({ error: "Feature row already exists for this rule_id + feature_key + feature_value. Use PATCH to update it." });
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// PATCH /api/kb/feature-likelihoods/:id — update a feature row
+router.patch("/feature-likelihoods/:id", async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const old = await db.select().from(kbFeatureLikelihoods).where(eq(kbFeatureLikelihoods.id, id));
+    if (!old[0]) return res.status(404).json({ error: "Feature row not found" });
+    if (req.body.likelihood !== undefined && (req.body.likelihood < 0 || req.body.likelihood > 1)) {
+      return res.status(422).json({ errors: ["likelihood must be between 0 and 1"] });
+    }
+    const [row] = await db.update(kbFeatureLikelihoods)
+      .set({ ...req.body, source: "ui_edit" })
+      .where(eq(kbFeatureLikelihoods.id, id))
+      .returning();
+    await logChange("feature_likelihood", `${row.ruleId}:${row.featureKey}`, "update", old[0], row);
+    res.json(row);
+  } catch (e: any) { res.status(400).json({ error: e.message }); }
+});
+
+// DELETE /api/kb/feature-likelihoods/:id — soft-delete a feature row
+router.delete("/feature-likelihoods/:id", async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const old = await db.select().from(kbFeatureLikelihoods).where(eq(kbFeatureLikelihoods.id, id));
+    if (!old[0]) return res.status(404).json({ error: "Feature row not found" });
+    const [row] = await db.update(kbFeatureLikelihoods)
+      .set({ active: false })
+      .where(eq(kbFeatureLikelihoods.id, id))
+      .returning();
+    await logChange("feature_likelihood", `${old[0].ruleId}:${old[0].featureKey}`, "delete", old[0], row);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Stats / overview ─────────────────────────────────────────────────────────
@@ -652,20 +772,31 @@ router.get("/health", async (_req: Request, res: Response) => {
     const { getSourceTrace } = await import("../clinical/bayesianEngine");
     const sourceTrace = getSourceTrace();
 
-    // Diagnosis rule coverage
+    // Diagnosis rule coverage — Phase 3: compute from kb_feature_likelihoods (normalized table)
     const dxStats = xRows(await db.execute(sql`
       SELECT
-        COUNT(*) AS total,
-        COUNT(*) FILTER (WHERE feature_likelihoods IS NOT NULL AND feature_likelihoods::text <> '{}') AS with_likelihoods,
-        COUNT(*) FILTER (WHERE complaint_id = 'bayesian_global') AS bayesian_priors
-      FROM kb_diagnosis_rules WHERE active = true
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE EXISTS (
+          SELECT 1 FROM kb_feature_likelihoods f WHERE f.rule_id = r.rule_id AND f.active = true
+        ))::int AS with_likelihoods_normalized,
+        COUNT(*) FILTER (WHERE feature_likelihoods IS NOT NULL AND feature_likelihoods::text <> '{}')::int AS with_likelihoods_jsonb,
+        COUNT(*) FILTER (WHERE complaint_id = 'bayesian_global')::int AS bayesian_priors
+      FROM kb_diagnosis_rules r WHERE active = true
     `))[0] ?? {};
 
-    // Sample of rules missing featureLikelihoods
+    // Feature table totals
+    const featureTableStats = xRows(await db.execute(sql`
+      SELECT COUNT(*)::int AS total_rows,
+             COUNT(DISTINCT rule_id)::int AS unique_rules
+      FROM kb_feature_likelihoods WHERE active = true
+    `))[0] ?? {};
+
+    // Sample of bayesian_global rules missing feature rows (Phase 3 gap)
     const missingRows = xRows(await db.execute(sql`
-      SELECT rule_id, diagnosis_label, complaint_id FROM kb_diagnosis_rules
-      WHERE active = true AND (feature_likelihoods IS NULL OR feature_likelihoods::text = '{}')
-      ORDER BY complaint_id, diagnosis_label LIMIT 20
+      SELECT rule_id, diagnosis_label, complaint_id FROM kb_diagnosis_rules r
+      WHERE active = true AND complaint_id = 'bayesian_global'
+        AND NOT EXISTS (SELECT 1 FROM kb_feature_likelihoods f WHERE f.rule_id = r.rule_id AND f.active = true)
+      ORDER BY diagnosis_label LIMIT 20
     `));
 
     // Complaints without red flag rules
@@ -701,18 +832,27 @@ router.get("/health", async (_req: Request, res: Response) => {
     `));
 
     const totalDx = Number(dxStats.total ?? 0);
-    const withLikelihoods = Number(dxStats.with_likelihoods ?? 0);
-    const missingLikelihoods = totalDx - withLikelihoods;
-    const pctKbDriven = totalDx > 0 ? Math.round((withLikelihoods / totalDx) * 100) : 0;
+    const bayesianPriors = Number(dxStats.bayesian_priors ?? 0);
+    // Phase 3: pctKbDriven = % of bayesian_global rules covered by kb_feature_likelihoods table
+    const withNormalized = Number(dxStats.with_likelihoods_normalized ?? 0);
+    const withJsonb = Number(dxStats.with_likelihoods_jsonb ?? 0);
+    const pctKbDriven = bayesianPriors > 0
+      ? Math.round((withNormalized / bayesianPriors) * 100)
+      : (totalDx > 0 ? Math.round((withNormalized / totalDx) * 100) : 0);
+    const featureRows = Number(featureTableStats.total_rows ?? 0);
+    const featureRulesCount = Number(featureTableStats.unique_rules ?? 0);
 
     res.json({
       generatedAt: new Date().toISOString(),
       bayesian: sourceTrace,
       rules: {
         diagnosisRulesTotal: totalDx,
-        diagnosisRulesWithLikelihoods: withLikelihoods,
-        diagnosisRulesMissingLikelihoods: missingLikelihoods,
-        bayesianPriors: Number(dxStats.bayesian_priors ?? 0),
+        bayesianPriors,
+        // Phase 3 metric: rules covered by normalized kb_feature_likelihoods table
+        diagnosisRulesWithLikelihoods: withNormalized,
+        diagnosisRulesWithLikelihoodsJsonb: withJsonb,
+        diagnosisRulesMissingLikelihoods: bayesianPriors - withNormalized,
+        featureTable: { rows: featureRows, uniqueRules: featureRulesCount },
         missingLikelihoodsSample: missingRows.map((r: any) => ({
           ruleId: String(r.rule_id ?? ""),
           diagnosisLabel: String(r.diagnosis_label ?? ""),

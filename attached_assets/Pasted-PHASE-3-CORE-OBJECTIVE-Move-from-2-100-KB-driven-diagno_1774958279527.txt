@@ -1,0 +1,235 @@
+PHASE 3 — CORE OBJECTIVE
+
+Move from 2% → 100% KB-driven diagnosis engine
+
+That means:
+
+every diagnosis rule
+every likelihood
+every weight
+comes from Postgres KB tables, not CSV, not TS, not memory
+🧬 1. DATABASE SCHEMA (FOUNDATION)
+
+This replaces fragile featureLikelihoods: {} blobs with structured, queryable data.
+
+🧾 Table: kb_diagnosis_rules
+CREATE TABLE kb_diagnosis_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rule_id TEXT UNIQUE NOT NULL,              -- DX_BAY_ROTATOR_CUFF
+  diagnosis_name TEXT NOT NULL,
+  complaint_id TEXT NOT NULL,                -- shoulder_pain, bayesian_global
+  base_probability FLOAT NOT NULL DEFAULT 0.01,
+  cannot_miss BOOLEAN DEFAULT FALSE,
+  severity TEXT CHECK (severity IN ('LOW','MODERATE','HIGH','CRITICAL')),
+  is_active BOOLEAN DEFAULT TRUE,
+  version INTEGER DEFAULT 1,
+  created_at TIMESTAMP DEFAULT now(),
+  updated_at TIMESTAMP DEFAULT now()
+);
+🧾 Table: kb_feature_likelihoods (CRITICAL TABLE)
+CREATE TABLE kb_feature_likelihoods (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rule_id TEXT NOT NULL,                     -- FK to kb_diagnosis_rules.rule_id
+  feature_key TEXT NOT NULL,                 -- e.g. "painful_arc"
+  feature_value TEXT,                        -- "yes", "no", "severe"
+  likelihood FLOAT NOT NULL,                 -- P(feature | diagnosis)
+  weight FLOAT DEFAULT 1.0,                  -- optional scaling
+  source TEXT DEFAULT 'imported_csv',        -- audit origin
+  created_at TIMESTAMP DEFAULT now()
+);
+
+👉 This is the heart of the system.
+
+🧾 Table: kb_clinical_weights (replaces in-memory weight store)
+CREATE TABLE kb_clinical_weights (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key TEXT UNIQUE NOT NULL,                  -- e.g. "prior_weight", "symptom_weight"
+  value FLOAT NOT NULL,
+  description TEXT,
+  updated_at TIMESTAMP DEFAULT now()
+);
+🧾 Table: kb_complaint_modules
+CREATE TABLE kb_complaint_modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_id TEXT NOT NULL,
+  module_type TEXT NOT NULL,                 -- scoring, workup, diagnosis, etc.
+  module_config JSONB,
+  is_active BOOLEAN DEFAULT TRUE
+);
+🧾 Table: kb_complaint_packs
+CREATE TABLE kb_complaint_packs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_id TEXT NOT NULL,
+  questions JSONB,
+  findings JSONB,
+  modifiers JSONB,
+  version INTEGER DEFAULT 1,
+  is_active BOOLEAN DEFAULT TRUE
+);
+🧬 2. CSV → DB MIGRATION TEMPLATE
+
+This is the transformation layer.
+
+Example CSV (current broken state)
+{
+  "diagnosis": "rotator_cuff",
+  "baseProbability": 0.3,
+  "featureLikelihoods": {
+    "painful_arc": 0.8,
+    "weakness": 0.7
+  }
+}
+Migration output (DB rows)
+kb_diagnosis_rules
+{
+  "rule_id": "DX_BAY_ROTATOR_CUFF",
+  "diagnosis_name": "rotator_cuff",
+  "complaint_id": "shoulder_pain",
+  "base_probability": 0.3
+}
+kb_feature_likelihoods
+[
+  { "feature_key": "painful_arc", "feature_value": "yes", "likelihood": 0.8 },
+  { "feature_key": "weakness", "feature_value": "yes", "likelihood": 0.7 }
+]
+⚙️ 3. BACKEND MIGRATION ENGINE
+File: server/migrations/migrateCsvToKb.ts
+import fs from 'fs'
+import { db } from '../db'
+
+export async function migrateCsvPriors(csvData: any[]) {
+  for (const row of csvData) {
+    const ruleId = `DX_BAY_${row.diagnosis.toUpperCase()}`
+
+    await db.kb_diagnosis_rules.upsert({
+      rule_id: ruleId,
+      diagnosis_name: row.diagnosis,
+      complaint_id: row.complaint || 'bayesian_global',
+      base_probability: row.baseProbability || 0.01
+    })
+
+    if (row.featureLikelihoods) {
+      for (const [feature, likelihood] of Object.entries(row.featureLikelihoods)) {
+        await db.kb_feature_likelihoods.insert({
+          rule_id: ruleId,
+          feature_key: feature,
+          feature_value: 'yes',
+          likelihood: likelihood as number
+        })
+      }
+    }
+  }
+}
+🧠 4. NEW DIAGNOSIS ENGINE (KB-ONLY)
+File: server/engine/kbDiagnosisEngine.ts
+export async function runDiagnosis(input: any) {
+  const diagnoses = await db.kb_diagnosis_rules.findAll({ is_active: true })
+
+  const results = []
+
+  for (const dx of diagnoses) {
+    const features = await db.kb_feature_likelihoods.findAll({
+      rule_id: dx.rule_id
+    })
+
+    let score = Math.log(dx.base_probability)
+
+    for (const f of features) {
+      if (input[f.feature_key] === f.feature_value) {
+        score += Math.log(f.likelihood * (f.weight || 1))
+      }
+    }
+
+    results.push({
+      diagnosis: dx.diagnosis_name,
+      score,
+      source: 'KB_DB'
+    })
+  }
+
+  return results.sort((a, b) => b.score - a.score)
+}
+🧪 5. VALIDATION LAYER (PREVENT YOUR OLD BUG)
+File: validateDiagnosisRules.ts
+export function validateRule(rule, features) {
+  if (!features || features.length === 0) {
+    throw new Error(`Invalid rule ${rule.rule_id}: missing featureLikelihoods`)
+  }
+}
+
+👉 This prevents the “empty likelihood collapse” bug you hit.
+
+📊 6. HEALTH METRIC FIX (your 2% → 100%)
+Query:
+SELECT 
+  COUNT(*) FILTER (WHERE EXISTS (
+    SELECT 1 FROM kb_feature_likelihoods f WHERE f.rule_id = r.rule_id
+  )) * 100.0 / COUNT(*) AS pct_kb_driven
+FROM kb_diagnosis_rules r;
+🧠 7. WHAT THIS UNLOCKS IMMEDIATELY
+
+Once this is done:
+
+✅ Adding shoulder pain
+just add rows
+no code
+✅ Fixing diagnosis errors
+edit likelihood
+rerun sim
+✅ Learning system works properly
+suggestions → DB → test → deploy
+✅ No more silent failures
+validation blocks bad rules
+⚠️ 8. IMPORTANT CLEANUP (DO THIS AFTER)
+
+After migration:
+
+disable CSV loader
+remove fallback priors
+log any fallback usage (should be ZERO)
+🧭 WHAT TO TELL REPLIT (FINAL INSTRUCTION)
+Writing
+
+Execute Phase 3 for full KB-driven diagnosis.
+
+Create normalized tables:
+kb_diagnosis_rules
+kb_feature_likelihoods
+kb_clinical_weights
+kb_complaint_modules
+kb_complaint_packs
+Build CSV → DB migration:
+convert featureLikelihoods into kb_feature_likelihoods rows
+upsert all diagnosis rules
+ensure no rule exists without features
+Replace diagnosis engine:
+remove CSV + fallback logic
+use only Postgres KB tables
+log source as KB_DB
+Add validation:
+block rules with empty featureLikelihoods
+surface errors in UI
+Update health metrics:
+compute % KB-driven based on feature coverage
+After migration:
+disable CSV_REGISTRY_LOADER
+disable fallback priors
+ensure 100% of diagnosis comes from KB
+
+Deliver:
+
+migration script
+updated engine
+validation layer
+before/after KB-driven percentage
+proof via trace of DB-only diagnosis execution
+🧠 Final Take
+
+Right now your system is like:
+
+a brilliant doctor reading from 3 different textbooks at once 📚📚📚
+
+After this Phase 3:
+
+it becomes a single, unified clinical brain
+where every thought comes from one place, is traceable, testable, and improvable

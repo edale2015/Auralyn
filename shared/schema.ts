@@ -590,6 +590,64 @@ export const insertKbGoldenCaseSchema = createInsertSchema(kbGoldenCases).omit({
 export type InsertKbGoldenCase = z.infer<typeof insertKbGoldenCaseSchema>;
 export type KbGoldenCase = typeof kbGoldenCases.$inferSelect;
 
+// ── Phase 3: Normalized feature likelihoods (replaces JSONB blob in kb_diagnosis_rules) ─────────
+export const kbFeatureLikelihoods = pgTable("kb_feature_likelihoods", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),                     // FK to kb_diagnosis_rules.rule_id
+  featureKey: text("feature_key").notNull(),             // e.g. "painful arc", "fever"
+  featureValue: text("feature_value").default("yes"),    // "yes" | "no" | "severe" etc.
+  likelihood: real("likelihood").notNull(),              // P(feature | diagnosis) 0..1
+  weight: real("weight").default(1.0).notNull(),         // optional scaling
+  source: text("source").default("ui_edit").notNull(),   // hardcoded_prior | jsonb_migration | ui_edit
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbFeatureLikelihoodSchema = createInsertSchema(kbFeatureLikelihoods).omit({ id: true, createdAt: true });
+export type InsertKbFeatureLikelihood = z.infer<typeof insertKbFeatureLikelihoodSchema>;
+export type KbFeatureLikelihood = typeof kbFeatureLikelihoods.$inferSelect;
+
+// ── Phase 3: Clinical weights (replaces in-memory weight store) ────────────────────────────────
+export const kbClinicalWeights = pgTable("kb_clinical_weights", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),                   // e.g. "prior_weight", "symptom_weight"
+  value: real("value").notNull(),
+  description: text("description"),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbClinicalWeightSchema = createInsertSchema(kbClinicalWeights).omit({ id: true, updatedAt: true });
+export type InsertKbClinicalWeight = z.infer<typeof insertKbClinicalWeightSchema>;
+export type KbClinicalWeight = typeof kbClinicalWeights.$inferSelect;
+
+// ── Phase 3: Complaint modules (replaces SCORING_MODULE_DISPATCH) ───────────────────────────────
+export const kbComplaintModules = pgTable("kb_complaint_modules", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  moduleType: text("module_type").notNull(),             // scoring | workup | diagnosis | triage
+  moduleConfig: jsonb("module_config").$type<Record<string, unknown>>().default({}).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbComplaintModuleSchema = createInsertSchema(kbComplaintModules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbComplaintModule = z.infer<typeof insertKbComplaintModuleSchema>;
+export type KbComplaintModule = typeof kbComplaintModules.$inferSelect;
+
+// ── Phase 3: Complaint packs (replaces COMPLAINT_PACK_REGISTRY) ─────────────────────────────────
+export const kbComplaintPacks = pgTable("kb_complaint_packs", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  questions: jsonb("questions").$type<unknown[]>().default([]).notNull(),
+  findings: jsonb("findings").$type<unknown[]>().default([]).notNull(),
+  modifiers: jsonb("modifiers").$type<unknown[]>().default([]).notNull(),
+  version: integer("version").default(1).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbComplaintPackSchema = createInsertSchema(kbComplaintPacks).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbComplaintPack = z.infer<typeof insertKbComplaintPackSchema>;
+export type KbComplaintPack = typeof kbComplaintPacks.$inferSelect;
+
 export const kbKnowledgeChanges = pgTable("kb_knowledge_changes", {
   id: serial("id").primaryKey(),
   changeId: text("change_id").notNull().unique(),

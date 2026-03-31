@@ -15,7 +15,7 @@ import {
   Stethoscope, Shield, BookOpen, ChevronRight, RefreshCw, Download,
 } from "lucide-react";
 
-type Tab = "complaints" | "questions" | "modifiers" | "redflags" | "workup" | "diagnosis" | "treatment" | "disposition" | "templates" | "golden" | "audit";
+type Tab = "complaints" | "questions" | "modifiers" | "redflags" | "workup" | "diagnosis" | "features" | "treatment" | "disposition" | "templates" | "golden" | "audit";
 
 const TABS: { key: Tab; label: string; icon: any; endpoint: string }[] = [
   { key: "complaints", label: "Complaint Registry", icon: BookOpen, endpoint: "/api/kb/complaints" },
@@ -24,6 +24,7 @@ const TABS: { key: Tab; label: string; icon: any; endpoint: string }[] = [
   { key: "redflags", label: "Red Flags", icon: AlertTriangle, endpoint: "/api/kb/red-flags" },
   { key: "workup", label: "Workup Rules", icon: TestTube, endpoint: "/api/kb/workup" },
   { key: "diagnosis", label: "Diagnosis Rules", icon: Stethoscope, endpoint: "/api/kb/diagnosis" },
+  { key: "features", label: "Feature Likelihoods", icon: Activity, endpoint: "/api/kb/feature-likelihoods" },
   { key: "treatment", label: "Treatment", icon: Pill, endpoint: "/api/kb/treatment" },
   { key: "disposition", label: "Disposition", icon: ChevronRight, endpoint: "/api/kb/disposition" },
   { key: "templates", label: "Plan Templates", icon: FileText, endpoint: "/api/kb/templates" },
@@ -879,6 +880,37 @@ export default function KnowledgeBasePage() {
               { key: "active", label: "Active", type: "boolean" },
             ]}
             idKey="ruleId" editUrlFn={r => `/api/kb/diagnosis/${r.ruleId}`} deleteUrlFn={r => `/api/kb/diagnosis/${r.ruleId}`}
+          />
+        )}
+
+        {activeTab === "features" && (
+          <SimpleTableTab
+            endpoint="/api/kb/feature-likelihoods" title="Feature Likelihood"
+            columns={[
+              { key: "ruleId", label: "Diagnosis Rule" },
+              { key: "featureKey", label: "Feature / Symptom" },
+              { key: "featureValue", label: "Value", render: v => <Badge variant="outline" className="text-xs">{v ?? "yes"}</Badge> },
+              { key: "likelihood", label: "P(feature|Dx)", render: v => (
+                <div className="flex items-center gap-2">
+                  <div className="w-16 bg-muted rounded-full h-2 shrink-0">
+                    <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${Math.round(Number(v ?? 0) * 100)}%` }} />
+                  </div>
+                  <span className="text-xs font-mono">{Number(v ?? 0).toFixed(2)}</span>
+                </div>
+              )},
+              { key: "weight", label: "Weight", render: v => <span className="text-xs font-mono">{Number(v ?? 1).toFixed(2)}</span> },
+              { key: "source", label: "Origin", render: v => <Badge variant="outline" className={`text-xs ${v === "hardcoded_prior" ? "border-amber-300 text-amber-700" : v === "jsonb_migration" ? "border-blue-300 text-blue-700" : "border-green-300 text-green-700"}`}>{String(v ?? "").replace("_", " ")}</Badge> },
+              { key: "active", label: "Status", render: v => <StatusBadge active={v} /> },
+            ]}
+            fields={[
+              { key: "ruleId", label: "Rule ID (e.g. DX_BAY_ROTATOR_CUFF)", required: true },
+              { key: "featureKey", label: "Feature Key (symptom name)", required: true },
+              { key: "featureValue", label: "Feature Value (default: yes)" },
+              { key: "likelihood", label: "Likelihood P(feature|Dx) 0–1", type: "number", required: true },
+              { key: "weight", label: "Weight multiplier (default: 1.0)", type: "number" },
+              { key: "active", label: "Active", type: "boolean" },
+            ]}
+            idKey="id" editUrlFn={r => `/api/kb/feature-likelihoods/${r.id}`} deleteUrlFn={r => `/api/kb/feature-likelihoods/${r.id}`}
           />
         )}
 

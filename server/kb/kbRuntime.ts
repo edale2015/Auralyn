@@ -78,18 +78,54 @@ function extractRows(result: any): any[] {
 
 async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
   try {
-    const result = await db.execute(
-      sql`SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods
-          FROM kb_diagnosis_rules
-          WHERE active = true
-          ORDER BY cluster_priority ASC, base_probability DESC`
-    );
-    return extractRows(result).map((r: any) => ({
-      diagnosis: String(r.diagnosis_label ?? r.diagnosisLabel ?? ""),
-      baseProbability: Number(r.base_probability ?? r.baseProbability ?? 0),
-      featureLikelihoods: (r.feature_likelihoods ?? r.featureLikelihoods ?? {}) as Record<string, number>,
-      ruleId: String(r.rule_id ?? r.ruleId ?? ""),
-      version: 1,  // kb_diagnosis_rules has no version column — default to 1
+    // Phase 3: Prefer normalized kb_feature_likelihoods JOIN (authoritative source)
+    // Falls back to JSONB blob in kb_diagnosis_rules for rules not yet migrated.
+    const result = await db.execute(sql`
+      SELECT
+        r.rule_id,
+        r.diagnosis_label,
+        r.base_probability,
+        jsonb_object_agg(f.feature_key, f.likelihood * f.weight) AS feature_likelihoods,
+        count(f.id)::int AS feature_count
+      FROM kb_diagnosis_rules r
+      JOIN kb_feature_likelihoods f
+        ON f.rule_id = r.rule_id AND f.active = true
+      WHERE r.active = true
+      GROUP BY r.rule_id, r.diagnosis_label, r.base_probability, r.cluster_priority
+      HAVING count(f.id) > 0
+      ORDER BY r.cluster_priority ASC, r.base_probability DESC
+    `);
+
+    const normalized = extractRows(result).map((r: any) => ({
+      diagnosis: String(r.diagnosis_label ?? ""),
+      baseProbability: Number(r.base_probability ?? 0),
+      featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? ""),
+      version: 1,
+      tableName: "kb_feature_likelihoods",  // Phase 3: source is the normalized table
+    }));
+
+    if (normalized.length > 0) {
+      console.info(`[KbRuntime] Loaded ${normalized.length} priors from kb_feature_likelihoods (Phase 3 normalized table)`);
+      return normalized;
+    }
+
+    // Legacy fallback: kb_diagnosis_rules.featureLikelihoods JSONB (pre-Phase-3 rules only)
+    console.warn("[KbRuntime] kb_feature_likelihoods empty — falling back to JSONB blob (run POST /api/kb/migrate-to-feature-table)");
+    const legacyResult = await db.execute(sql`
+      SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods
+      FROM kb_diagnosis_rules
+      WHERE active = true
+        AND feature_likelihoods IS NOT NULL
+        AND feature_likelihoods::text != '{}'
+      ORDER BY cluster_priority ASC, base_probability DESC
+    `);
+    return extractRows(legacyResult).map((r: any) => ({
+      diagnosis: String(r.diagnosis_label ?? ""),
+      baseProbability: Number(r.base_probability ?? 0),
+      featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? ""),
+      version: 1,
       tableName: "kb_diagnosis_rules",
     }));
   } catch (err) {
