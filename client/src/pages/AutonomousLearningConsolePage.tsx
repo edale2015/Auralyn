@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -16,6 +17,7 @@ import {
   Play, RotateCcw, TrendingDown, TrendingUp, Minus, GitBranch, Archive,
   Eye, Zap, Lock, FlaskConical, ListChecks, FileText, BarChart3,
   ChevronDown, ChevronUp, RefreshCw, AlertOctagon, BookOpen, Cpu,
+  ArrowRight, Shuffle,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1296,6 +1298,25 @@ export default function AutonomousLearningConsolePage() {
         <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
           <Shield className="h-3 w-3 mr-1" /> Physician-Gated
         </Badge>
+      </div>
+
+      {/* Related dashboards callout — first-class navigation to improvement centers */}
+      <div className="flex items-center gap-2 p-3 rounded-lg border bg-muted/20 flex-wrap" data-testid="related-dashboards-bar-learning">
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 mr-1">Improvement Centers →</span>
+        <Link href="/clinical-improvement-lab">
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10" data-testid="link-clinical-improvement-lab">
+            <FlaskConical size={11} /> Clinical Improvement Lab
+            <span className="hidden md:inline text-[10px] opacity-60 ml-1">— Evidence · Calibration · FDA</span>
+            <ArrowRight size={10} className="ml-auto opacity-40" />
+          </Button>
+        </Link>
+        <Link href="/care-pathway-optimizer">
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10" data-testid="link-care-pathway-optimizer">
+            <Shuffle size={11} /> Care Pathway Optimizer
+            <span className="hidden md:inline text-[10px] opacity-60 ml-1">— A/B Experiments · Auto-Suggestions</span>
+            <ArrowRight size={10} className="ml-auto opacity-40" />
+          </Button>
+        </Link>
       </div>
 
       <Tabs defaultValue="overview" className="w-full">

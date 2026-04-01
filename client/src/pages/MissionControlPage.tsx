@@ -8,7 +8,7 @@ import {
   Database, Layers, Plug, Radio, AlertTriangle, Terminal,
   BookOpen, Star, FlaskConical, ShieldCheck, GitBranch,
   FileText, ArrowRight, Stethoscope, TrendingUp, BarChart3,
-  Search, Settings, Zap
+  Search, Settings, Zap, Shuffle,
 } from "lucide-react";
 
 interface SystemHealth {
@@ -85,25 +85,53 @@ const TOWERS = [
     ],
     checklist: ["E","F","G"],
   },
+  {
+    id: "improvement",
+    title: "Clinical Improvement Lab",
+    subtitle: "Pathways · Experiments · Analytics · FDA",
+    href: "/clinical-improvement-lab",
+    color: "from-rose-600 to-pink-800",
+    ring: "ring-rose-500",
+    icon: FlaskConical,
+    panels: [
+      "Ingest guidelines → GPT-4o extracts rules",
+      "PubMed auto-fetch + evidence scoring (RCT +4, meta +5)",
+      "Gap analysis vs current KB rules",
+      "Physician peer-review queue — approve / reject",
+      "Evidence ranking leaderboard (credibility × recency × impact)",
+      "Confidence calibration curve + Brier score",
+      "Causal ATE / IPW doubly-robust treatment effects",
+      "Real-world outcome mismatch detection",
+      "Payer metrics (avg cost, readmissions, LOS by Dx)",
+      "FDA-ready validation report + JSON export",
+      "A/B pathway experiments → Care Pathway Optimizer →",
+      "Auto-suggestion engine (add/reorder/remove steps)",
+    ],
+    checklist: ["I"],
+    extraHref: "/care-pathway-optimizer",
+    extraLabel: "Care Pathway Optimizer →",
+  },
 ];
 
 const QUICK_LINKS = [
-  { label: "Knowledge Base",        href: "/knowledge-base",        icon: Database,     group: "Update" },
-  { label: "Knowledge Hub",         href: "/knowledge-hub",          icon: BookOpen,     group: "Update" },
-  { label: "Skill Layer Admin",     href: "/skill-layer-admin",      icon: Layers,       group: "Update" },
-  { label: "Skill Layer Review",    href: "/skill-layer-review",     icon: ShieldCheck,  group: "Update" },
-  { label: "Knowledge Ops",         href: "/knowledge-ops",          icon: Settings,     group: "Update" },
-  { label: "Golden Cases",          href: "/golden-cases",           icon: Star,         group: "Simulate" },
-  { label: "Simulation Lab",        href: "/simulation-lab",         icon: FlaskConical, group: "Simulate" },
-  { label: "Knowledge Graph",       href: "/knowledge-graph",        icon: Search,       group: "Trace" },
-  { label: "Clinical Governance",   href: "/clinical-governance",    icon: GitBranch,    group: "Govern" },
-  { label: "FDA Validation",        href: "/fda-dashboard",          icon: FileText,     group: "Govern" },
-  { label: "Clinical Test Bench",   href: "/test-bench",             icon: Stethoscope,  group: "Test" },
-  { label: "Autonomous Brain",      href: "/autonomous-brain",       icon: Zap,          group: "Test" },
-  { label: "Decision Tree",         href: "/decision-tree",          icon: TrendingUp,   group: "Trace" },
-  { label: "Exec Dashboard",        href: "/exec-dashboard",         icon: BarChart3,    group: "Monitor" },
-  { label: "System Monitor",        href: "/system-monitor",         icon: Activity,     group: "Monitor" },
-  { label: "Voice Triage",          href: "/voice-triage",           icon: Radio,        group: "Operate" },
+  { label: "Knowledge Base",          href: "/knowledge-base",            icon: Database,     group: "Update" },
+  { label: "Knowledge Hub",           href: "/knowledge-hub",             icon: BookOpen,     group: "Update" },
+  { label: "Skill Layer Admin",       href: "/skill-layer-admin",         icon: Layers,       group: "Update" },
+  { label: "Skill Layer Review",      href: "/skill-layer-review",        icon: ShieldCheck,  group: "Update" },
+  { label: "Knowledge Ops",           href: "/knowledge-ops",             icon: Settings,     group: "Update" },
+  { label: "Golden Cases",            href: "/golden-cases",              icon: Star,         group: "Simulate" },
+  { label: "Simulation Lab",          href: "/simulation-lab",            icon: FlaskConical, group: "Simulate" },
+  { label: "Improvement Lab",         href: "/clinical-improvement-lab",  icon: FlaskConical, group: "Improve" },
+  { label: "Pathway Optimizer",       href: "/care-pathway-optimizer",    icon: Shuffle,      group: "Improve" },
+  { label: "Knowledge Graph",         href: "/knowledge-graph",           icon: Search,       group: "Trace" },
+  { label: "Clinical Governance",     href: "/clinical-governance",       icon: GitBranch,    group: "Govern" },
+  { label: "FDA Validation",          href: "/fda-dashboard",             icon: FileText,     group: "Govern" },
+  { label: "Clinical Test Bench",     href: "/test-bench",                icon: Stethoscope,  group: "Test" },
+  { label: "Autonomous Brain",        href: "/autonomous-brain",          icon: Zap,          group: "Test" },
+  { label: "Decision Tree",           href: "/decision-tree",             icon: TrendingUp,   group: "Trace" },
+  { label: "Exec Dashboard",          href: "/exec-dashboard",            icon: BarChart3,    group: "Monitor" },
+  { label: "System Monitor",          href: "/system-monitor",            icon: Activity,     group: "Monitor" },
+  { label: "Voice Triage",            href: "/voice-triage",              icon: Radio,        group: "Operate" },
 ];
 
 const CHECKLIST_SECTIONS = [
@@ -210,6 +238,25 @@ const CHECKLIST_SECTIONS = [
       { label: "Trace each step back to KB row / rule ID", done: true },
     ],
   },
+  {
+    section: "I", title: "Clinical Improvement & Pathway Optimization", color: "text-rose-600",
+    items: [
+      { label: "Ingest clinical guidelines (text / PubMed)", done: true },
+      { label: "GPT-4o rule extraction from guidelines", done: true },
+      { label: "Gap analysis — guideline vs current KB", done: true },
+      { label: "Physician peer-review queue (approve/reject)", done: true },
+      { label: "Evidence ranking by study type + recency + impact", done: true },
+      { label: "Confidence calibration curve (10-bin, Brier score)", done: true },
+      { label: "Causal ATE / IPW doubly-robust treatment effects", done: true },
+      { label: "Real-world patient outcome mismatch detection", done: true },
+      { label: "Payer metrics (cost, readmission, LOS by diagnosis)", done: true },
+      { label: "FDA-ready validation report with JSON export", done: true },
+      { label: "A/B care pathway experiment engine (simulation)", done: true },
+      { label: "Auto-suggestion engine (add/reorder/remove steps)", done: true },
+      { label: "Pathway suggestion apply / promote workflow", done: true },
+      { label: "Specialty review cycles auto-generation", done: true },
+    ],
+  },
 ];
 
 const GROUP_COLORS: Record<string, string> = {
@@ -220,6 +267,7 @@ const GROUP_COLORS: Record<string, string> = {
   Test:    "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
   Monitor: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   Operate: "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
+  Improve: "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
 };
 
 function CheckItem({ label, done }: { label: string; done: boolean }) {
@@ -273,14 +321,14 @@ export default function MissionControlPage() {
           </div>
         </div>
 
-        {/* Three towers */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4" data-testid="towers-grid">
-          {TOWERS.map(tower => {
+        {/* Four towers — 2×2 on large screens */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" data-testid="towers-grid">
+          {TOWERS.map((tower: any) => {
             const Icon = tower.icon;
             return (
               <div
                 key={tower.id}
-                className={`rounded-xl border-2 ring-2 ring-transparent hover:${tower.ring} transition-all overflow-hidden bg-card`}
+                className={`rounded-xl border-2 ring-2 ring-transparent hover:${tower.ring} transition-all overflow-hidden bg-card flex flex-col`}
                 data-testid={`tower-card-${tower.id}`}
               >
                 <div className={`bg-gradient-to-r ${tower.color} p-4 text-white`}>
@@ -290,25 +338,32 @@ export default function MissionControlPage() {
                   </div>
                   <p className="text-xs text-white/80">{tower.subtitle}</p>
                   <div className="mt-2 flex flex-wrap gap-1">
-                    {tower.checklist.map(c => (
-                      <Badge key={c} className="text-xs py-0 bg-white/20 text-white border-white/30">Section {c}</Badge>
+                    {tower.checklist.map((c: string) => (
+                      <Badge key={c} className="text-xs py-0 bg-white/20 text-white border-white/30">§{c}</Badge>
                     ))}
                   </div>
                 </div>
-                <div className="p-3 space-y-1">
-                  {tower.panels.map((p, i) => (
+                <div className="p-3 space-y-1 flex-1">
+                  {tower.panels.map((p: string, i: number) => (
                     <div key={i} className="flex items-start gap-1.5 text-xs">
                       <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0 mt-0.5" />
                       <span className="text-muted-foreground">{p}</span>
                     </div>
                   ))}
-                  <div className="pt-2">
-                    <Link href={tower.href}>
-                      <Button size="sm" className="w-full h-7 text-xs" data-testid={`button-open-${tower.id}`}>
-                        Open {tower.title.split(" ")[0]} Tower <ArrowRight className="h-3 w-3 ml-1" />
+                </div>
+                <div className="p-3 pt-0 space-y-1.5">
+                  <Link href={tower.href}>
+                    <Button size="sm" className="w-full h-7 text-xs" data-testid={`button-open-${tower.id}`}>
+                      Open {tower.title.split(" ").slice(0, 2).join(" ")} <ArrowRight className="h-3 w-3 ml-1" />
+                    </Button>
+                  </Link>
+                  {tower.extraHref && (
+                    <Link href={tower.extraHref}>
+                      <Button size="sm" variant="outline" className="w-full h-7 text-xs" data-testid={`button-open-${tower.id}-extra`}>
+                        <Shuffle className="h-3 w-3 mr-1" /> {tower.extraLabel}
                       </Button>
                     </Link>
-                  </div>
+                  )}
                 </div>
               </div>
             );

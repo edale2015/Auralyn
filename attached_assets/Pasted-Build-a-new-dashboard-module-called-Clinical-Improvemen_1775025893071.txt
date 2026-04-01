@@ -1,0 +1,211 @@
+Build a new dashboard module called Clinical Improvement Lab and add Automated Care Pathway Optimization plus proactive self-review tools.
+
+Route and access
+Add route: /clinical-improvement-lab
+Add it to Mission Control, Clinical QA, and Autonomous Learning navigation
+Make it one-click accessible from the dashboard system for monitoring, upgrading, and troubleshooting
+Main purpose
+
+This dashboard should let me:
+
+review and optimize care pathways
+experiment with decision-tree branches
+run thousands of simulated cases against alternate pathways
+detect inconsistencies, holes, fragile branches, and unused rules
+compare pathway versions before promoting changes
+Part 1. Automated Care Pathway Optimization
+
+Create these tables:
+
+care_pathways
+pathway_id
+complaint_id
+name
+version
+steps JSONB
+is_active
+timestamps
+pathway_experiments
+experiment_name
+complaint_id
+pathway_a_id
+pathway_b_id
+case_count
+status
+results JSONB
+timestamps
+pathway_metrics
+pathway_id
+complaint_id
+accuracy
+red_flag_sensitivity
+false_reassurance_rate
+avg_cost
+avg_steps
+avg_time_ms
+admission_rate
+timestamps
+pathway_suggestions
+complaint_id
+current_pathway_id
+suggestion_type
+suggestion JSONB
+rationale
+confidence
+status
+timestamps
+
+Build:
+
+pathway runner
+pathway A/B experiment engine
+metrics summarizer
+pathway suggestion engine
+
+The experiment engine must compare alternate pathways on:
+
+accuracy
+red flag sensitivity
+false reassurance
+cost
+step count
+time
+admission rate
+Part 2. Trial Branch Sandbox
+
+Add an experiment sandbox UI where I can:
+
+clone an existing pathway or complaint tree
+edit one branch or one rule
+save as trial version
+run 1k / 10k / 50k cases
+compare trial vs production
+see expected impact before promotion
+promote the better branch if approved
+
+The dashboard should support examples like:
+
+for headache: add BP check
+for women of childbearing age with headache: consider pregnancy
+for asthma: ask albuterol frequency
+and then run thousands of cases to see if the change helps
+Part 3. 5 proactive intelligence features
+
+Add these five continuous-review features:
+
+1. Branch fragility scanner
+
+Continuously identify branches where small rule changes create large output swings.
+Show:
+
+complaint
+branch
+sensitivity score
+why it is fragile
+2. Cross-complaint modifier coverage audit
+
+Continuously scan modifiers such as:
+
+pregnancy
+CHF
+CKD
+anticoagulation
+penicillin allergy
+Show where they are missing across complaints/systems.
+3. Outcome-weighted recommendation ranking
+
+Rank suggestions not just by confidence, but by:
+
+expected safety gain
+expected cost reduction
+expected reduction in false reassurance
+expected admission impact
+4. Silent-failure detector
+
+Detect KB rules that are rarely or never triggered in simulation or live operation.
+Show:
+
+rule ID
+complaint
+domain
+last triggered
+suspicion reason
+5. Automatic trial-branch promoter
+
+Support sandbox experiments where a branch can be promoted only after:
+
+simulation passes
+no safety regression
+approval is granted
+audit trail is written
+Part 4. Dashboard panels
+
+Add these panels to Clinical Improvement Lab:
+
+Pathway Explorer
+system filter
+complaint filter
+active pathway versions
+quick metrics
+Pathway Optimizer
+run A/B comparisons
+show metrics side-by-side
+Trial Branch Sandbox
+clone, edit, run, compare, promote
+Fragility Scanner
+list fragile branches and severity
+Modifier Coverage Audit
+matrix of modifiers vs complaints/systems
+Silent Failure Detector
+unreachable / underused / stale rules
+Suggestion Queue
+ranked by expected impact
+approve / reject / edit / simulate
+Promotion History
+which trial branches were promoted
+before/after metrics
+audit links
+Part 5. Routes
+
+Add backend routes under /api/pathways and /api/improvement-lab for:
+
+list/create/update pathways
+run pathway experiments
+generate pathway suggestions
+clone trial branch
+run sandbox simulation
+fragility scan
+modifier coverage audit
+silent failure scan
+ranked suggestions
+promotion history
+Part 6. Audit and governance
+
+Every experiment and promotion must be auditable.
+Log:
+
+who made the trial change
+old branch
+new branch
+simulation results
+approval decision
+promotion time
+rollback option
+
+No high-risk branch should auto-promote without approval.
+
+Part 7. Acceptance criteria
+
+I should be able to:
+
+review a complaint pathway
+clone it
+add or edit a branch
+run thousands of cases
+compare production vs trial
+see whether safety and outcomes improve
+approve and promote the better branch
+inspect fragility, modifier gaps, and unused rules from the same dashboard
+
+Goal:
+Make the system continuously self-reviewing and experimentally improvable from the dashboard, without needing code edits for normal clinical pathway refinement.

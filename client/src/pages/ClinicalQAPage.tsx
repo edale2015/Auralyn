@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import AdminLayout from "@/components/AdminLayout";
 import SystemExplorer from "@/components/qa/SystemExplorer";
 import TreeAuditPanel from "@/components/qa/TreeAuditPanel";
@@ -7,9 +8,11 @@ import ConsistencyMatrix from "@/components/qa/ConsistencyMatrix";
 import MedicationReview from "@/components/qa/MedicationReview";
 import AuditInsights from "@/components/qa/AuditInsights";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   Activity,
+  ArrowRight,
   BookOpen,
   BrainCircuit,
   FlaskConical,
@@ -17,8 +20,14 @@ import {
   Layers,
   Pill,
   Search,
+  Shuffle,
   Sparkles,
 } from "lucide-react";
+
+const RELATED_DASHBOARDS = [
+  { href: "/clinical-improvement-lab", label: "Clinical Improvement Lab", icon: FlaskConical, desc: "Evidence ingestion · Gap analysis · Calibration · FDA report", color: "border-violet-500/30 text-violet-400 hover:bg-violet-500/10" },
+  { href: "/care-pathway-optimizer", label: "Care Pathway Optimizer", icon: Shuffle, desc: "A/B pathway experiments · Simulation engine · Auto-suggestions", color: "border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10" },
+];
 
 type ActivePanel = "tree" | "suggestion" | "consistency" | "medications" | "audit";
 
@@ -65,6 +74,20 @@ export default function ClinicalQAPage() {
               </Badge>
             ))}
           </div>
+        </div>
+
+        {/* Related dashboards callout */}
+        <div className="flex items-center gap-2 px-4 py-2 border-b bg-muted/10 flex-shrink-0 flex-wrap" data-testid="related-dashboards-bar">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 mr-1">Next steps →</span>
+          {RELATED_DASHBOARDS.map(d => (
+            <Link key={d.href} href={d.href}>
+              <Button size="sm" variant="outline" className={cn("h-7 text-xs gap-1.5", d.color)} data-testid={`link-${d.href.slice(1)}`}>
+                <d.icon size={11} /> {d.label}
+                <span className="hidden sm:inline text-[10px] opacity-60 ml-1">— {d.desc}</span>
+                <ArrowRight size={10} className="ml-auto opacity-40" />
+              </Button>
+            </Link>
+          ))}
         </div>
 
         {/* 3-column layout */}

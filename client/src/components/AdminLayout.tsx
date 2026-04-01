@@ -24,7 +24,7 @@ import {
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
   BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar, ShieldCheck,
-  CircleDollarSign, Database, Grid3X3,
+  CircleDollarSign, Database, Grid3X3, Shuffle,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -51,8 +51,6 @@ const NAV_SECTIONS = [
       { path: "/review-queue-v2", label: "Review Queue", icon: ClipboardCheck },
       { path: "/complaint-qa", label: "Complaint QA", icon: BarChart3 },
       { path: "/clinical-qa", label: "Clinical QA Dashboard", icon: FlaskConical },
-      { path: "/clinical-improvement-lab", label: "Clinical Improvement Lab", icon: FlaskConical },
-      { path: "/care-pathway-optimizer", label: "Care Pathway Optimizer", icon: FlaskConical },
       { path: "/clinical-validation", label: "Clinical Validation", icon: HeartPulse },
       { path: "/clinical-workflow-health", label: "Workflow Health", icon: Activity },
     ],
@@ -163,7 +161,6 @@ const NAV_SECTIONS = [
       { path: "/clinical-control-tower", label: "CCT Decision Engine", icon: Brain },
       { path: "/system-control-tower", label: "System Control Tower", icon: Cpu },
       { path: "/multi-patient-command", label: "Multi-Patient Command Grid", icon: Grid3X3 },
-      { path: "/knowledge-graph", label: "Knowledge Graph", icon: Network },
       { path: "/schema-validator", label: "Schema Validator", icon: ShieldCheck },
       { path: "/clinical-governance", label: "Clinical Governance", icon: Shield },
       { path: "/clinical-version-control", label: "Version Control", icon: GitBranch },
@@ -205,6 +202,56 @@ const NAV_SECTIONS = [
       { path: "/patient-queue", label: "Live Patient Queue", icon: Activity },
       { path: "/stress-test", label: "Stress Test & Metrics", icon: Zap },
     ],
+  },
+];
+
+const PINNED_COMMAND_CENTERS = [
+  {
+    path: "/mission-control",
+    label: "Mission Control",
+    icon: Cpu,
+    testId: "nav-mission-control",
+    className: "font-semibold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 mb-1",
+  },
+  {
+    path: "/system-control-tower",
+    label: "System Control Tower",
+    icon: Activity,
+    testId: "nav-system-control-tower",
+    className: "",
+  },
+  {
+    path: "/clinical-control-tower",
+    label: "Clinical Control Tower",
+    icon: Brain,
+    testId: "nav-clinical-control-tower",
+    className: "",
+  },
+  {
+    path: "/autonomous-learning",
+    label: "Autonomous Learning",
+    icon: Sparkles,
+    testId: "nav-autonomous-learning",
+    className: "",
+  },
+];
+
+const PINNED_IMPROVEMENT_CENTERS = [
+  {
+    path: "/clinical-improvement-lab",
+    label: "Clinical Improvement Lab",
+    icon: FlaskConical,
+    testId: "nav-clinical-improvement-lab",
+    badge: "Self-Improving",
+    badgeClass: "border-violet-500/30 text-violet-400 bg-violet-500/10",
+  },
+  {
+    path: "/care-pathway-optimizer",
+    label: "Care Pathway Optimizer",
+    icon: Shuffle,
+    testId: "nav-care-pathway-optimizer",
+    badge: "A/B Engine",
+    badgeClass: "border-indigo-500/30 text-indigo-400 bg-indigo-500/10",
   },
 ];
 
@@ -252,61 +299,56 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </SidebarHeader>
 
           <SidebarContent className="overflow-y-auto">
-            {/* Pinned Mission Control — parent command center */}
+            {/* ── Pinned: Core Command Centers ── */}
             <SidebarGroup>
+              <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-3 pt-2 pb-0">Command Centers</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <SidebarMenuItem>
-                    <Link href="/mission-control">
-                      <SidebarMenuButton
-                        data-active={location === "/mission-control"}
-                        className="data-[active=true]:bg-sidebar-accent w-full font-semibold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 mb-1"
-                        data-testid="nav-mission-control"
-                      >
-                        <Cpu className="w-4 h-4" />
-                        <span className="flex-1 text-sm">Mission Control</span>
-                      </SidebarMenuButton>
-                    </Link>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <Link href="/system-control-tower">
-                      <SidebarMenuButton
-                        data-active={location === "/system-control-tower"}
-                        className="data-[active=true]:bg-sidebar-accent w-full"
-                        data-testid="nav-system-control-tower"
-                      >
-                        <Activity className="w-4 h-4" />
-                        <span className="flex-1 text-sm">System Control Tower</span>
-                      </SidebarMenuButton>
-                    </Link>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <Link href="/clinical-control-tower">
-                      <SidebarMenuButton
-                        data-active={location === "/clinical-control-tower"}
-                        className="data-[active=true]:bg-sidebar-accent w-full"
-                        data-testid="nav-clinical-control-tower"
-                      >
-                        <Brain className="w-4 h-4" />
-                        <span className="flex-1 text-sm">Clinical Control Tower</span>
-                      </SidebarMenuButton>
-                    </Link>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <Link href="/autonomous-learning">
-                      <SidebarMenuButton
-                        data-active={location === "/autonomous-learning"}
-                        className="data-[active=true]:bg-sidebar-accent w-full"
-                        data-testid="nav-autonomous-learning"
-                      >
-                        <Sparkles className="w-4 h-4" />
-                        <span className="flex-1 text-sm">Autonomous Learning</span>
-                      </SidebarMenuButton>
-                    </Link>
-                  </SidebarMenuItem>
+                  {PINNED_COMMAND_CENTERS.map(item => (
+                    <SidebarMenuItem key={item.path}>
+                      <Link href={item.path}>
+                        <SidebarMenuButton
+                          data-active={location === item.path}
+                          className={`data-[active=true]:bg-sidebar-accent w-full ${item.className}`}
+                          data-testid={item.testId}
+                        >
+                          <item.icon className="w-4 h-4" />
+                          <span className="flex-1 text-sm">{item.label}</span>
+                        </SidebarMenuButton>
+                      </Link>
+                    </SidebarMenuItem>
+                  ))}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
+
+            {/* ── Pinned: Improvement & Optimization Centers ── */}
+            <SidebarGroup>
+              <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-3 pt-1 pb-0">Improvement Centers</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {PINNED_IMPROVEMENT_CENTERS.map(item => (
+                    <SidebarMenuItem key={item.path}>
+                      <Link href={item.path}>
+                        <SidebarMenuButton
+                          data-active={location === item.path}
+                          className="data-[active=true]:bg-sidebar-accent w-full"
+                          data-testid={item.testId}
+                        >
+                          <item.icon className="w-4 h-4" />
+                          <span className="flex-1 text-sm truncate">{item.label}</span>
+                          <Badge variant="outline" className={`text-[9px] h-4 px-1 hidden data-[active=true]:flex flex-shrink-0 ${item.badgeClass}`}>
+                            {item.badge}
+                          </Badge>
+                        </SidebarMenuButton>
+                      </Link>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            {/* ── All other nav sections ── */}
             {NAV_SECTIONS.map((section) => (
               <SidebarGroup key={section.label}>
                 <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
