@@ -62,6 +62,15 @@ function DenialPredictorTab() {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 flex gap-2.5 items-start" data-testid="denial-predictor-disclaimer">
+        <AlertTriangle size={14} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="text-xs font-semibold text-yellow-400 mb-0.5">Statistical Estimates Only — Not for Clinical or Coding Decisions</div>
+          <div className="text-[11px] text-yellow-300/80 leading-relaxed">
+            Denial risk predictions are statistical estimates based on limited historical data and should <strong>not</strong> be used to alter clinical documentation, select CPT/ICD-10 codes, or justify billing modifications. Using AI predictions to modify coding with intent to circumvent expected denials may constitute billing fraud under 18 U.S.C. § 1347. All predictions require human verification by a qualified billing compliance officer before any action is taken.
+          </div>
+        </div>
+      </div>
       <Card className="border border-border/50">
         <div className="flex items-center gap-2 px-4 py-3 border-b">
           <ShieldAlert size={14} className="text-red-400" />

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createHmac, timingSafeEqual } from "crypto";
 import { randomUUID } from "crypto";
 import { processMessage, sendReply } from "../channels";
 import { type MessageEvent } from "../channels/messageEvent";
@@ -12,9 +13,46 @@ import { addPatientMessage, addSystemMessage } from "../assistant/telemedicineSe
 
 const router = Router();
 
-// Twilio sends x-www-form-urlencoded: From=whatsapp:+1234...&Body=text
+function validateTwilioSignature(req: any): boolean {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) {
+    console.warn("[WhatsApp] TWILIO_AUTH_TOKEN not set — skipping signature validation (INSECURE)");
+    return true;
+  }
+
+  const twilioSignature = req.headers["x-twilio-signature"] as string | undefined;
+  if (!twilioSignature) {
+    console.error("[WhatsApp] ⛔ Missing X-Twilio-Signature header — rejecting request");
+    return false;
+  }
+
+  const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  const params: Record<string, string> = req.body ?? {};
+
+  const sortedKeys = Object.keys(params).sort();
+  const paramString = sortedKeys.map(k => `${k}${params[k]}`).join("");
+  const stringToSign = url + paramString;
+
+  const expectedSig = createHmac("sha1", authToken)
+    .update(stringToSign, "utf8")
+    .digest("base64");
+
+  try {
+    const expected = Buffer.from(expectedSig);
+    const received = Buffer.from(twilioSignature);
+    if (expected.length !== received.length) return false;
+    return timingSafeEqual(expected, received);
+  } catch {
+    return false;
+  }
+}
+
 router.post("/whatsapp/webhook", async (req, res) => {
-  // Respond immediately — Twilio requires acknowledgement within 15 seconds
+  if (!validateTwilioSignature(req)) {
+    console.error("[WhatsApp] ⛔ Signature validation FAILED — possible spoofed request. Rejecting.");
+    return res.status(403).send("Forbidden");
+  }
+
   res.status(200).set("Content-Type", "text/xml").send("<Response></Response>");
 
   try {
@@ -26,7 +64,6 @@ router.post("/whatsapp/webhook", async (req, res) => {
 
     const externalUserId = rawFrom.replace(/^whatsapp:/, "");
 
-    // Build MessageEvent for the main conversation orchestrator (Sheets-driven, full pipeline)
     const event: MessageEvent = {
       channel: "whatsapp",
       externalUserId,
@@ -38,18 +75,14 @@ router.post("/whatsapp/webhook", async (req, res) => {
       media: [],
     };
 
-    // Route through the full clinical conversation orchestrator
-    // This uses Sheets-loaded questions, red-flag rules, and sends replies back to the patient
     const result = await processMessage(event);
 
-    // Send replies to the patient via Twilio WhatsApp
     for (const reply of result.replies) {
       await sendReply(`whatsapp:${externalUserId}`, reply).catch((e: any) =>
         console.error("[WhatsApp] sendReply error:", e?.message)
       );
     }
 
-    // Also maintain the telemedicine doctor-review thread for physician oversight
     const caseId = caseIdFromChannel("whatsapp", externalUserId);
     ensureConversation(caseId, "whatsapp", externalUserId);
     addPatientMessage(caseId, text);
@@ -69,7 +102,6 @@ router.post("/whatsapp/webhook", async (req, res) => {
   }
 });
 
-// Twilio GET verification
 router.get("/whatsapp/webhook", (_req, res) => {
   res.status(200).send("OK");
 });

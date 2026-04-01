@@ -174,12 +174,20 @@ Abstract: ${abstract.slice(0, 2000)}`;
     const rules = parsed.rules ?? [];
     for (const rule of rules) {
       await db.execute(sql`
-        INSERT INTO guideline_recommendations (document_id, complaint, recommendation, rationale, rule_type, confidence)
-        VALUES (${docId}, ${rule.complaint ?? complaint ?? "general"}, ${rule.recommendation}, ${rule.rationale ?? ""}, ${rule.rule_type ?? "general"}, ${rule.confidence ?? 0.75})
+        INSERT INTO guideline_recommendations (document_id, complaint, recommendation, rationale, rule_type, confidence, status)
+        VALUES (${docId}, ${rule.complaint ?? complaint ?? "general"}, ${rule.recommendation}, ${rule.rationale ?? ""}, ${rule.rule_type ?? "general"}, ${rule.confidence ?? 0.75}, 'pending')
       `);
     }
 
-    return res.json({ ok: true, pmid, rulesExtracted: rules.length, summary: parsed.summary });
+    return res.json({
+      ok: true,
+      pmid,
+      rulesExtracted: rules.length,
+      summary: parsed.summary,
+      aiGenerated: true,
+      requiresPhysicianReview: true,
+      complianceNote: "All AI-extracted rules are quarantined in 'pending' status. A licensed physician must review and explicitly approve each rule before it can influence clinical decisions. This is a mandatory safety requirement (PRODUCTION_FLAGS.REQUIRE_PHYSICIAN_REVIEW_FOR_AI_RULES = true).",
+    });
   } catch (e: any) { return res.status(500).json({ error: e.message }); }
 });
 

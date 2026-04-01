@@ -1,6 +1,10 @@
 import express, { type Request, Response, NextFunction, Router } from "express";
 import cookieParser from "cookie-parser";
 import { clinicalRateLimiter, authRateLimiter, webhookRateLimiter } from "./middleware/rateLimiter";
+import { globalSafetyGate } from "./middleware/globalSafetyGate";
+import { startDeadLetterMonitor } from "./services/ehrDeadLetterMonitor";
+import { initAuditHashChain } from "./services/auditHashChain";
+import { getProductionFlags } from "./config/productionFlags";
 import { clinicalDeadline, standardDeadline } from "./middleware/requestDeadline";
 import { idempotency } from "./middleware/idempotency";
 import { correlationId } from "./hardening/middleware/correlationId";
@@ -410,6 +414,8 @@ app.use(express.urlencoded({
     req.rawBody = buf;
   },
 }));
+
+app.use(globalSafetyGate);
 
 app.get("/api/healthz", (_req, res) => {
   res.json({ ok: true, ts: Date.now(), uptime: process.uptime() });
@@ -1039,9 +1045,17 @@ app.use((req, res, next) => {
       startGovernanceLoop(15_000);
       startTwinSync(1_000);
       startPredictiveLoop(5_000);
-      startChaosScheduler(60_000);
+      const flags = getProductionFlags();
+      if (flags.CHAOS_ENGINEERING_ENABLED) {
+        startChaosScheduler(60_000);
+        console.log("[Chaos] Chaos engineering ENABLED — runs on schedule");
+      } else {
+        console.log("[Chaos] Chaos engineering DISABLED (production flag = false)");
+      }
       startMonitorSocket(httpServer);
       startEventWorkers();
+      startDeadLetterMonitor(60_000);
+      initAuditHashChain().catch((e: any) => console.warn("[AUDIT-CHAIN] Init warning:", e?.message));
       hydrateFromRedis().catch((e) => console.warn("[RLHF] Hydration warning:", e?.message));
       import("./governor/governorLoop").then(({ startGovernorLoop }) => startGovernorLoop(30_000)).catch((e) => console.warn("[Governor] Loop start failed:", e?.message));
       startAutoHealer();

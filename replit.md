@@ -22,6 +22,73 @@ The system incorporates a Multi-Agent Debate Engine where three clinical agents 
 ### System Design Choices
 Data management uses Firebase Firestore, SQLite, and NDJSON-backed stores, with PHI retention policies. Authentication involves password-only, session-based HMAC for physicians and token-based access for patients, with JWT-based role authentication. Security and quality hardening include bcrypt, JWT security, rate limiting, and PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance includes an agent registry, audit agent, incident commander, digital twin, and predictive engine. The Autonomous Operator System is an AI-powered form automation engine. A Template Studio allows visual template editing. The Replay Inspector audits automation runs. A Robotics Control Module manages medical device orchestration. An Autonomous Learning Console provides a unified dashboard for self-testing, self-learning, and governance, including simulation, learning queue, drift monitor, audit trail, versions, and safety modes. The Multi-Patient Command Grid provides a three-pane, hospital-style dashboard with risk-sorted patient grids, clinical details, ICU waveforms, hospital/EMS routing, automated outreach, and physician auto-paging.
 
+## Security, Safety & Compliance Architecture (12-Fix Hardening)
+
+All 12 critical fixes from Claude's architecture review are implemented:
+
+### T01 — RLHF Safety Governor (`server/governor/governorLoop.ts`)
+- Delta cap ±2% per cycle prevents runaway weight drift
+- Minimum 100 clinical outcomes required before any weight update
+- Pending proposals stored to DB (`agent_weight_snapshots`) and loaded on startup
+- Physician review queue: high-confidence proposals flagged for human approval
+
+### T02 — PHI Guard for OpenAI (`server/middleware/phiGuardOpenAI.ts`)
+- Regex scan strips 18 HIPAA identifiers from all messages before OpenAI API calls
+- Every scrubbed call written to `phi_guard_audit_log` with field-level match details
+- Wrapper `phiGuardedChat()` replaces direct OpenAI calls in clinical flows
+
+### T03 — Twilio Webhook HMAC Validation (`server/middleware/twilioSignatureValidator.ts`)
+- HMAC-SHA1 validation using `TWILIO_AUTH_TOKEN` on all `/twilio/webhook` and `/telegram/webhook` endpoints
+- Invalid signatures rejected with 403 before any message processing
+- Raw body preserved in `req.rawBody` via express.json verify hook
+
+### T04 — EHR Dead Letter Monitor (`server/services/ehrDeadLetterMonitor.ts`)
+- Background service (60s interval) checks `ehr_dead_letters` table
+- Any record unprocessed >15 minutes triggers clinical alert via `AlertDispatcher`
+- Registered in server startup via `startDeadLetterMonitor(60_000)`
+
+### T05 — Immutable Audit Hash-Chain (`server/services/auditHashChain.ts`)
+- SHA-256 chained audit log in `audit_hash_chain` DB table
+- Each entry includes `prev_hash` — tampering breaks chain
+- Nightly verification job auto-runs on startup; verify endpoint: `GET /api/governance/verify-chain`
+- Returns `{ ok, chainIntact, valid, totalEntries, errors }`
+
+### T06 — Mandatory Physician Review Gate (`server/routes/improvementLabRoutes.ts`)
+- All AI-extracted PubMed rules inserted with `status = 'pending'`
+- No bypass path exists — rules cannot become active without physician approval
+- GPT-4o-mini extraction pipeline always routes through review queue
+
+### T07 — Study Design Weighting (`server/routes/analyticsRoutes.ts`)
+- Evidence scoring formula restructured: RCT=0.95, cohort=0.60, case_report=0.20
+- Weights: 35% evidence quality × study design + 25% effect size + 20% sample + 15% recency + 5% authority
+- Prevents case reports from being scored equivalently to RCTs
+
+### T08 — Legal Disclaimers (UI)
+- **510(k) Disclaimer** (`GovernanceCommandCenterPage.tsx` FDA tab): Red banner — "This is NOT a Submittable 510(k) Document" with full legal text per 21 CFR Part 807
+- **Denial Prediction Disclaimer** (`RevenueWarRoomPage.tsx` DenialPredictorTab): Yellow banner — "Statistical Estimates Only" with 18 U.S.C. § 1347 fraud warning
+
+### T09 — BAA Compliance Matrix (`GovernanceCommandCenterPage.tsx`)
+- New "BAA Compliance" tab with 6-vendor matrix (OpenAI, Twilio, Firebase, Google Sheets, AWS, Upstash Redis)
+- Flags which vendors touch PHI and require BAA signatures per HIPAA §164.308(b)(1)
+- Shows count of unsigned required BAAs with actionable next-steps checklist
+
+### T10 — Role-Based Page Guards (`client/src/components/RoleGuard.tsx`)
+- `RoleGuard` component wraps 6 sensitive routes in `App.tsx`
+- `/governance-command-center`, `/system-war-room`, `/executive-command`, `/skill-layer-admin` → admin only
+- `/revenue-war-room`, `/clinical-improvement-lab` → admin or physician
+- Unauthenticated users see "Authentication Required"; wrong-role users see "Access Denied" (`data-testid: access-denied`)
+
+### T11 — Production Feature Flags (`server/config/productionFlags.ts`)
+- `PRODUCTION_FLAGS.CHAOS_ENGINEERING_ENABLED` — false in prod, controlled by `NODE_ENV`
+- `PRODUCTION_FLAGS.SHADOW_MODE_ENABLED` — false in prod
+- `PRODUCTION_FLAGS.RLHF_MIN_OUTCOMES_THRESHOLD` — 100 in prod, 10 in dev
+- Chaos scheduler only started when flag is true (logged on startup)
+
+### T12 — Global Safety Gate (`server/middleware/globalSafetyGate.ts`)
+- Middleware registered on all routes immediately after body parsers
+- Checks DB health before every request; returns 503 if DB is unavailable (fail-closed)
+- Skips health check endpoints (`/api/healthz`) to avoid circular dependency
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp, SMS, and Voice TTS

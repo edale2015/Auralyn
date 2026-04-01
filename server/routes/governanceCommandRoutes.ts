@@ -5,6 +5,7 @@ import { evaluatePolicyChange } from "../governance/policyGuard";
 import { saveSnapshot, listSnapshots } from "../governance/versionStore";
 import { getSystemSnapshot } from "../data/dataAccessLayer";
 import { runGoldenValidation } from "../validation/runGoldenValidation";
+import { verifyAuditChain } from "../services/auditHashChain";
 
 const router = Router();
 
@@ -598,6 +599,15 @@ router.get("/snapshots", async (_req, res) => {
     res.json({ ok: true, snapshots });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.get("/verify-chain", async (_req, res) => {
+  try {
+    const result = await verifyAuditChain();
+    res.json({ ok: result.valid, chainIntact: result.valid, ...result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, chainIntact: false, error: e.message });
   }
 });
 

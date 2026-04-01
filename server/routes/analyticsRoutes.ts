@@ -30,21 +30,42 @@ router.get("/evidence-ranking", async (_req, res) => {
 
     const rows = (await db.execute(sql`SELECT * FROM guideline_evidence ORDER BY relevance_score DESC NULLS LAST, credibility_score DESC NULLS LAST`)).rows as any[];
 
+    const STUDY_DESIGN_WEIGHTS: Record<string, number> = {
+      systematic_review: 1.00,
+      meta_analysis:     0.98,
+      rct:               0.95,
+      randomized_trial:  0.95,
+      cohort:            0.60,
+      case_control:      0.50,
+      cross_sectional:   0.40,
+      case_series:       0.30,
+      case_report:       0.20,
+      expert_opinion:    0.15,
+    };
+
+    function studyDesignWeight(r: any): number {
+      if (r.study_design && STUDY_DESIGN_WEIGHTS[r.study_design]) {
+        return STUDY_DESIGN_WEIGHTS[r.study_design];
+      }
+      return r.evidence_level === "A" ? 0.90 : r.evidence_level === "B" ? 0.55 : 0.25;
+    }
+
     const ranked = rows.map(r => {
       const levelWeight = r.evidence_level === "A" ? 1.0 : r.evidence_level === "B" ? 0.75 : 0.5;
       const recencyWeight = Math.max(0, 1 - (2026 - (r.year ?? 2020)) * 0.04);
-      const citationWeight = Math.min((r.citation_count ?? 0) / 10000, 1.0);
-      const combined = 0.40 * (r.relevance_score ?? 0.5)
-                     + 0.30 * (r.credibility_score ?? 0.5)
+      const sdWeight = studyDesignWeight(r);
+      const combined = 0.35 * (r.relevance_score ?? 0.5)
+                     + 0.25 * (r.credibility_score ?? 0.5)
                      + 0.20 * levelWeight
-                     + 0.05 * recencyWeight
-                     + 0.05 * citationWeight;
+                     + 0.15 * sdWeight
+                     + 0.05 * recencyWeight;
       return {
         ...r,
         recommendation: r.title ?? r.summary ?? `Guideline ${r.id}`,
         score: parseFloat(((r.score ?? 0) + combined * 5).toFixed(2)),
         level_weight: levelWeight, recency_weight: recencyWeight,
-        citation_weight: citationWeight, combined_score: parseFloat(combined.toFixed(4)),
+        study_design_weight: sdWeight, combined_score: parseFloat(combined.toFixed(4)),
+        study_design: r.study_design ?? (r.evidence_level === "A" ? "rct" : r.evidence_level === "B" ? "cohort" : "expert_opinion"),
       };
     }).sort((a, b) => b.combined_score - a.combined_score);
 

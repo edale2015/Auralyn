@@ -302,10 +302,19 @@ function FDAPackageTab() {
             )}
           </div>
 
+          <div className="rounded-lg border border-red-500/40 bg-red-500/8 px-4 py-3 flex gap-2.5 items-start mb-2" data-testid="fda-legal-disclaimer">
+            <AlertTriangle size={14} className="text-red-400 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="text-xs font-semibold text-red-400 mb-0.5">Legal Disclaimer — This is NOT a Submittable 510(k) Document</div>
+              <div className="text-[11px] text-red-300/80 leading-relaxed">
+                This tool generates a structured data package for internal review purposes only. A valid FDA 510(k) submission under 21 CFR Part 807 requires: device history files, risk analysis (ISO 14971), software lifecycle documentation (IEC 62304), clinical performance data, and a formal substantial equivalence argument to a predicate device — none of which can be auto-generated. Do not submit this output to the FDA or represent it as regulatory clearance documentation. Engage a qualified regulatory attorney before any FDA submission.
+              </div>
+            </div>
+          </div>
           {!pkg && !loading && (
             <div className="bg-muted/20 rounded-lg p-6 text-center space-y-2">
               <ShieldCheck size={32} className="mx-auto text-muted-foreground/40" />
-              <div className="text-xs text-muted-foreground">Click Generate to build a submission-ready FDA SaMD package</div>
+              <div className="text-xs text-muted-foreground">Click Generate to build an internal FDA SaMD preparation package</div>
               <div className="text-[10px] text-muted-foreground">Includes: intended use, system description, validation metrics, risk analysis, audit summary</div>
             </div>
           )}
@@ -647,6 +656,85 @@ function MalpracticeRiskTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tab 6: BAA Compliance Matrix
+// ─────────────────────────────────────────────────────────────────────────────
+const BAA_VENDORS = [
+  { vendor: "OpenAI", service: "GPT-4o / GPT-4o-mini", touches_phi: true,  baa_status: "REQUIRED",  baa_signed: false, notes: "Clinical reasoning, guideline extraction, physician coaching — all may include patient context. BAA must be signed before production use with PHI." },
+  { vendor: "Twilio", service: "WhatsApp, SMS, Voice TTS", touches_phi: true, baa_status: "REQUIRED", baa_signed: false, notes: "Patient intake messages, voice triage output, SMS reminders — all carry PHI. Twilio offers a BAA under their HIPAA-eligible plan." },
+  { vendor: "Firebase / Google", service: "Firestore, Cloud Storage, Auth", touches_phi: true,  baa_status: "REQUIRED", baa_signed: false, notes: "Patient session state and messaging stored in Firestore. Google Cloud offers a BAA via Cloud Platform agreement." },
+  { vendor: "Google Sheets", service: "Runtime clinical configuration", touches_phi: false, baa_status: "REVIEW",   baa_signed: false, notes: "Configuration source for complaint packs. PHI should not transit this service, but any accidental logging creates exposure. Plan migration to DB-backed config." },
+  { vendor: "AWS / CloudTrail", service: "Recommended: Audit log immutability", touches_phi: false, baa_status: "RECOMMENDED", baa_signed: false, notes: "For write-once external audit log shipping to satisfy HIPAA immutability requirements. AWS HIPAA BAA available." },
+  { vendor: "Upstash Redis", service: "RLHF state caching", touches_phi: false, baa_status: "REVIEW", baa_signed: false, notes: "If RLHF state includes patient-derived outcome data, a BAA may be required." },
+];
+
+function BAAComplianceTab() {
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-orange-500/40 bg-orange-500/8 px-4 py-3 flex gap-2.5 items-start" data-testid="baa-compliance-warning">
+        <AlertTriangle size={14} className="text-orange-400 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="text-xs font-semibold text-orange-400 mb-0.5">HIPAA BAA Inventory — Action Required</div>
+          <div className="text-[11px] text-orange-300/80 leading-relaxed">
+            Under HIPAA §164.308(b)(1), a Business Associate Agreement (BAA) is required with every vendor that creates, receives, maintains, or transmits Protected Health Information (PHI) on your behalf. A missing BAA converts routine operations into reportable breach events under the HITECH Act. Items marked REQUIRED below must have signed BAAs before any PHI transits that service.
+          </div>
+        </div>
+      </div>
+
+      <Card className="border border-border/50">
+        <div className="flex items-center gap-2 px-4 py-3 border-b">
+          <ClipboardCheck size={14} className="text-blue-400" />
+          <span className="text-xs font-semibold">Vendor BAA Status Matrix</span>
+          <Badge variant="destructive" className="ml-auto text-[10px]">
+            {BAA_VENDORS.filter(v => v.baa_status === "REQUIRED" && !v.baa_signed).length} Unsigned Required BAAs
+          </Badge>
+        </div>
+        <div className="divide-y divide-border/30">
+          {BAA_VENDORS.map(v => (
+            <div key={v.vendor} className="p-4 flex gap-4 items-start" data-testid={`baa-row-${v.vendor.toLowerCase()}`}>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-semibold">{v.vendor}</span>
+                  <span className="text-[10px] text-muted-foreground">{v.service}</span>
+                  {v.touches_phi && (
+                    <Badge variant="outline" className="text-[9px] h-4 border-red-500/40 text-red-400 px-1.5">Touches PHI</Badge>
+                  )}
+                </div>
+                <div className="text-[11px] text-muted-foreground leading-relaxed">{v.notes}</div>
+              </div>
+              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <Badge
+                  variant={v.baa_status === "REQUIRED" ? "destructive" : v.baa_status === "RECOMMENDED" ? "secondary" : "outline"}
+                  className="text-[10px]"
+                >
+                  {v.baa_status}
+                </Badge>
+                <div className={`flex items-center gap-1 text-[10px] font-semibold ${v.baa_signed ? "text-green-400" : "text-red-400"}`}>
+                  {v.baa_signed ? <CheckCircle size={11} /> : <XCircle size={11} />}
+                  {v.baa_signed ? "Signed" : "Not Signed"}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card className="border border-border/50 p-4">
+        <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-2 font-semibold">Next Steps</div>
+        <ol className="space-y-1.5 text-xs text-muted-foreground list-decimal list-inside">
+          <li>Engage legal counsel to review BAA requirements for all vendors marked REQUIRED</li>
+          <li>Sign OpenAI BAA via OpenAI Enterprise agreement before using GPT models with any patient data</li>
+          <li>Enable Twilio HIPAA-eligible plan and execute BAA with Twilio account team</li>
+          <li>Execute Google Cloud BAA covering Firebase Firestore and Cloud Storage under your GCP organization</li>
+          <li>Migrate runtime configuration from Google Sheets to a validated database-backed config store</li>
+          <li>Verify Upstash Redis RLHF caching does not store patient-derived outcome identifiers</li>
+          <li>Implement write-once external audit log shipping (AWS CloudTrail or equivalent) within next sprint</li>
+        </ol>
+      </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main Page
 // ─────────────────────────────────────────────────────────────────────────────
 export default function GovernanceCommandCenterPage() {
@@ -685,6 +773,10 @@ export default function GovernanceCommandCenterPage() {
             <TabsTrigger value="malpractice" className="text-xs h-6 px-3" data-testid="tab-malpractice">
               <Scale size={11} className="mr-1.5" /> Malpractice Risk
             </TabsTrigger>
+            <TabsTrigger value="baa" className="text-xs h-6 px-3" data-testid="tab-baa">
+              <ClipboardCheck size={11} className="mr-1.5" />
+              <span className="flex items-center gap-1">BAA Compliance <Badge variant="destructive" className="text-[8px] h-3.5 px-1 ml-0.5">4</Badge></span>
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="audit"><AuditTrailTab /></TabsContent>
@@ -692,6 +784,7 @@ export default function GovernanceCommandCenterPage() {
           <TabsContent value="fda"><FDAPackageTab /></TabsContent>
           <TabsContent value="quality"><QualityPayerTab /></TabsContent>
           <TabsContent value="malpractice"><MalpracticeRiskTab /></TabsContent>
+          <TabsContent value="baa"><BAAComplianceTab /></TabsContent>
         </Tabs>
       </div>
     </div>

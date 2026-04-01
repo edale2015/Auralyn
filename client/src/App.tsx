@@ -8,6 +8,7 @@ import { AuthProvider } from "./context/AuthContext";
 import AppLayout from "./layouts/AppLayout";
 import { ROUTES } from "./routes/routeRegistry";
 import { validateRoutes } from "./utils/routeValidator";
+import RoleGuard from "@/components/RoleGuard";
 
 import Login from "@/pages/Login";
 import PatientIntake from "@/pages/PatientIntake";
@@ -118,16 +119,16 @@ function WorkbenchRouter() {
         <Route path={ROUTES.KNOWLEDGE_OPS} component={KnowledgeOpsDashboardPage} />
         <Route path={ROUTES.KNOWLEDGE_HUB} component={KnowledgeHubPage} />
         <Route path={ROUTES.GOLDEN_CASES} component={GoldenCasesPage} />
-        <Route path={ROUTES.SKILL_LAYER_ADMIN} component={SkillLayerAdminPage} />
+        <Route path={ROUTES.SKILL_LAYER_ADMIN}>{() => <RoleGuard allowedRoles={["admin"]}><SkillLayerAdminPage /></RoleGuard>}</Route>
         <Route path={ROUTES.SKILL_LAYER_REVIEW} component={SkillLayerReviewPage} />
         <Route path={ROUTES.KNOWLEDGE_GRAPH} component={ClinicalKnowledgeGraphPage} />
         <Route path={ROUTES.CLINICAL_CONTROL_TOWER} component={ClinicalControlTowerPage} />
         <Route path={ROUTES.SYSTEM_CONTROL_TOWER} component={SystemControlTowerPage} />
         <Route path="/multi-patient-command" component={MultiPatientCommandPage} />
         <Route path="/clinical-qa" component={ClinicalQAPage} />
-        <Route path="/clinical-improvement-lab" component={ClinicalImprovementLabPage} />
+        <Route path="/clinical-improvement-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalImprovementLabPage /></RoleGuard>}</Route>
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
-        <Route path="/governance-command-center" component={GovernanceCommandCenterPage} />
+        <Route path="/governance-command-center">{() => <RoleGuard allowedRoles={["admin"]}><GovernanceCommandCenterPage /></RoleGuard>}</Route>
         <Route path="/skill-map" component={SkillMapPage} />
         <Route path="/skill-intelligence-lab" component={SkillIntelligenceLabPage} />
         <Route path="/skill-evolution-lab" component={SkillEvolutionLabPage} />
@@ -144,11 +145,11 @@ function WorkbenchRouter() {
         <Route path="/live-clinic" component={LiveClinicPage} />
         <Route path="/production-readiness" component={ProductionReadinessPage} />
         <Route path="/billing-intelligence" component={BillingIntelligencePage} />
-        <Route path="/revenue-war-room" component={RevenueWarRoomPage} />
-        <Route path="/system-war-room" component={SystemWarRoomPage} />
+        <Route path="/revenue-war-room">{() => <RoleGuard allowedRoles={["admin", "physician"]}><RevenueWarRoomPage /></RoleGuard>}</Route>
+        <Route path="/system-war-room">{() => <RoleGuard allowedRoles={["admin"]}><SystemWarRoomPage /></RoleGuard>}</Route>
         <Route path="/architectural-compliance" component={ArchitecturalCompliancePage} />
         <Route path="/moat-intelligence" component={MoatIntelligencePage} />
-        <Route path="/executive-command" component={ExecutiveCommandPage} />
+        <Route path="/executive-command">{() => <RoleGuard allowedRoles={["admin"]}><ExecutiveCommandPage /></RoleGuard>}</Route>
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
