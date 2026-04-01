@@ -12,15 +12,16 @@ import {
   CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 
+type CalibBin = { id: number; bin_index: number; predicted_prob: number; actual_freq: number | null; count: number };
 type CalibData = {
   ok: boolean;
-  curve: { bin: number; predicted: number; actual: number | null; n: number }[];
+  bins: CalibBin[];
   brier: number | null;
-  sampleSize: number;
+  n: number;
 };
 
-type CausalModel = { treatment: string; ate: number; ate_dr: number; sample_size: number; updated_at: string };
-type CausalData = { ok: boolean; models: CausalModel[] };
+type CausalModel = { id: number; treatment: string; ate: number; ate_dr: number; n_samples: number; updated_at: string };
+type CausalData = { ok: boolean; treatments: CausalModel[] };
 
 export default function CalibrationTab() {
   const { toast } = useToast();
@@ -47,16 +48,16 @@ export default function CalibrationTab() {
     onError: (e: any) => toast({ title: "Seed failed", description: e.message, variant: "destructive" }),
   });
 
-  const calibCurve = (calibQ.data?.curve ?? []).map(b => ({
-    label: `${b.bin * 10}–${b.bin * 10 + 10}%`,
-    predicted: b.predicted,
-    actual: b.actual,
-    n: b.n,
+  const calibCurve = (calibQ.data?.bins ?? []).map(b => ({
+    label: `${Math.round(b.predicted_prob * 100)}%`,
+    predicted: b.predicted_prob,
+    actual: b.actual_freq,
+    n: b.count,
   }));
 
   const brier = calibQ.data?.brier;
-  const n = calibQ.data?.sampleSize ?? 0;
-  const models = causalQ.data?.models ?? [];
+  const n = calibQ.data?.n ?? 0;
+  const models = causalQ.data?.treatments ?? [];
 
   return (
     <ScrollArea className="flex-1">
@@ -143,7 +144,7 @@ export default function CalibrationTab() {
                             ATE: {ate > 0 ? "+" : ""}{ate.toFixed(3)}
                           </span>
                           <span className="text-[10px] text-muted-foreground">DR: {ate_dr > 0 ? "+" : ""}{ate_dr.toFixed(3)}</span>
-                          <span className="text-[10px] text-muted-foreground ml-auto">N={m.sample_size}</span>
+                          <span className="text-[10px] text-muted-foreground ml-auto">N={m.n_samples ?? 0}</span>
                         </div>
                       </div>
                     </div>

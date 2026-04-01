@@ -198,6 +198,54 @@ router.get("/outcomes", async (_req, res) => {
   }
 });
 
+// ─── Outcomes Seed ────────────────────────────────────────────────────────────
+router.post("/outcomes/seed", async (_req, res) => {
+  try {
+    const complaints = ["sore_throat", "earache", "headache", "nasal_congestion", "cough", "fever"];
+    const dxes       = ["GAS_pharyngitis", "viral_pharyngitis", "AOM", "OME", "migraine", "tension_headache", "sinusitis", "URTI", "influenza"];
+    const payers     = ["Medicare", "Medicaid", "BCBS", "Aetna", "UnitedHealth", "Cigna", "Self-Pay"];
+    let seeded = 0;
+    for (let i = 0; i < 50; i++) {
+      const complaint = complaints[Math.floor(Math.random() * complaints.length)];
+      const predicted = dxes[Math.floor(Math.random() * dxes.length)];
+      const actual    = Math.random() < 0.78 ? predicted : dxes[Math.floor(Math.random() * dxes.length)];
+      await db.execute(sql`
+        INSERT INTO patient_outcomes (complaint_id, predicted_dx, actual_dx, predicted_score, outcome_match, days_to_resolution, payer, cost)
+        VALUES (${complaint}, ${predicted}, ${actual}, ${0.5 + Math.random() * 0.45}, ${predicted === actual}, ${3 + Math.floor(Math.random() * 14)}, ${payers[Math.floor(Math.random() * payers.length)]}, ${50 + Math.random() * 450})
+      `);
+      seeded++;
+    }
+    res.json({ ok: true, seeded });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─── Payer Seed ────────────────────────────────────────────────────────────────
+router.post("/payer/seed", async (_req, res) => {
+  try {
+    const payers     = ["Medicare", "Medicaid", "BCBS", "Aetna", "UnitedHealth", "Cigna", "Self-Pay"];
+    const complaints = ["sore_throat", "earache", "headache", "nasal_congestion", "cough"];
+    const dxes       = ["GAS_pharyngitis", "AOM", "migraine", "sinusitis", "URTI"];
+    let seeded = 0;
+    for (const payer of payers) {
+      for (let i = 0; i < 8; i++) {
+        const complaint = complaints[Math.floor(Math.random() * complaints.length)];
+        const predicted = dxes[Math.floor(Math.random() * dxes.length)];
+        const actual    = Math.random() < 0.78 ? predicted : dxes[Math.floor(Math.random() * dxes.length)];
+        await db.execute(sql`
+          INSERT INTO patient_outcomes (complaint_id, predicted_dx, actual_dx, predicted_score, outcome_match, days_to_resolution, payer, cost)
+          VALUES (${complaint}, ${predicted}, ${actual}, ${0.5 + Math.random() * 0.45}, ${predicted === actual}, ${3 + Math.floor(Math.random() * 14)}, ${payer}, ${50 + Math.random() * 450})
+        `);
+        seeded++;
+      }
+    }
+    res.json({ ok: true, seeded });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ─── Submit Outcome ───────────────────────────────────────────────────────────
 router.post("/outcomes/submit", async (req, res) => {
   try {

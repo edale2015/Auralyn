@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
+import { evaluatePolicyChange } from "../governance/policyGuard";
+import { saveSnapshot, listSnapshots } from "../governance/versionStore";
+import { getSystemSnapshot } from "../data/dataAccessLayer";
+import { runGoldenValidation } from "../validation/runGoldenValidation";
 
 const router = Router();
 
@@ -155,7 +159,15 @@ router.post("/policy/optimize", async (req, res) => {
     }
 
     const impact = { ...perf };
-    const safeToApply = requiresApproval.length === 0;
+
+    // Additional governance guard — check if this policy domain is auto-appliable
+    const guardResult = evaluatePolicyChange({ target: name.toUpperCase() });
+    const safeToApply = requiresApproval.length === 0 && guardResult.safeToApply;
+
+    // Snapshot current state before any changes (for rollback)
+    if (safeToApply) {
+      await saveSnapshot(`pre-optimize:${name}`, { policyName: name, params, perf });
+    }
 
     await qExec(`
       INSERT INTO policy_updates (policy_name, change, impact, status)
@@ -192,6 +204,8 @@ router.post("/policy/approve", async (req, res) => {
       UPDATE policy_updates SET status = 'approved', approved_by = '${approvedBy || "admin"}'
       WHERE id = ${updateId}
     `);
+    // Save approval snapshot for rollback trail
+    await saveSnapshot(`policy-approved:${updateId}`, { updateId, approvedBy: approvedBy || "admin", approvedAt: new Date().toISOString() });
     res.json({ ok: true, message: "Policy update approved" });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
@@ -541,6 +555,47 @@ router.get("/payer-report", async (_req, res) => {
     };
 
     res.json({ ok: true, payers: payerData, overall });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GOLDEN CASE VALIDATION (mandatory deployment gate)
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.post("/validate-golden", async (_req, res) => {
+  try {
+    const report = await runGoldenValidation();
+    // Save a snapshot of the validation result
+    await saveSnapshot(`golden-validation:${Date.now()}`, report as any);
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYSTEM SNAPSHOT (real-data war room metrics)
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get("/system-snapshot", async (_req, res) => {
+  try {
+    const snapshot = await getSystemSnapshot();
+    res.json({ ok: true, snapshot });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VERSION SNAPSHOTS (rollback trail)
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get("/snapshots", async (_req, res) => {
+  try {
+    const snapshots = await listSnapshots(20);
+    res.json({ ok: true, snapshots });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

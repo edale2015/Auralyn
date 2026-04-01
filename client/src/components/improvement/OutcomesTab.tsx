@@ -17,7 +17,7 @@ type OutcomeData = {
   clusters: { dx: string; count: number }[];
   recent: any[];
 };
-type PayerData = { ok: boolean; data: any[] };
+type PayerData = { ok: boolean; payers: { payer: string; claim_count: number; avg_cost: number; denial_rate: number; match_rate: number }[] };
 type FdaData   = { ok: boolean; report: any };
 
 export default function OutcomesTab() {
@@ -40,7 +40,7 @@ export default function OutcomesTab() {
   });
 
   const outcomes = outQ.data;
-  const payerData = payQ.data?.data ?? [];
+  const payerData = payQ.data?.payers ?? [];
   const fda = fdaQ.data?.report;
 
   const mismatchPct = outcomes ? (outcomes.mismatchRate * 100).toFixed(1) : null;
@@ -115,14 +115,17 @@ export default function OutcomesTab() {
             ) : (
               <div className="space-y-1.5">
                 {payerData.map(p => (
-                  <div key={p.diagnosis} className="flex items-center gap-2 text-xs py-1 border-b border-border/30 last:border-0">
-                    <span className="font-mono text-[10px] text-muted-foreground w-24 truncate flex-shrink-0">{p.diagnosis}</span>
-                    <span className="font-bold text-foreground">${parseFloat(p.avg_cost ?? 0).toFixed(0)}</span>
+                  <div key={p.payer} className="flex items-center gap-2 text-xs py-1 border-b border-border/30 last:border-0">
+                    <span className="font-semibold text-[11px] w-28 truncate flex-shrink-0">{p.payer}</span>
+                    <span className="font-bold text-foreground">${parseFloat(String(p.avg_cost ?? 0)).toFixed(0)}</span>
                     <span className="text-muted-foreground text-[10px]">avg cost</span>
-                    <span className="text-[10px] text-muted-foreground ml-auto">LOS {parseFloat(p.avg_los ?? 0).toFixed(1)}d</span>
-                    {parseFloat(p.readmission_rate ?? 0) > 0 && (
+                    <span className="text-[10px] text-muted-foreground">{p.claim_count} claims</span>
+                    <span className="text-[10px] text-muted-foreground ml-auto">
+                      {(parseFloat(String(p.match_rate ?? 0)) * 100).toFixed(0)}% match
+                    </span>
+                    {parseFloat(String(p.denial_rate ?? 0)) > 0.05 && (
                       <Badge variant="outline" className="text-[9px] h-3.5 px-1 border-red-500/30 text-red-400">
-                        {(parseFloat(p.readmission_rate ?? 0) * 100).toFixed(0)}% readmit
+                        {(parseFloat(String(p.denial_rate ?? 0)) * 100).toFixed(0)}% deny
                       </Badge>
                     )}
                   </div>
@@ -159,41 +162,34 @@ export default function OutcomesTab() {
             ) : (
               <div className="space-y-2 text-[11px]">
                 <div className="flex items-start gap-2">
-                  <span className="text-muted-foreground w-28 flex-shrink-0">Intended Use:</span>
-                  <span className="text-foreground">{fda.intended_use}</span>
+                  <span className="text-muted-foreground w-28 flex-shrink-0">Report Type:</span>
+                  <span className="text-foreground">{fda.report_type}</span>
                 </div>
-                <div className="flex gap-4 flex-wrap">
-                  {[
-                    { label: "KB Rules", value: fda.system?.total_kb_rules, color: "text-blue-400" },
-                    { label: "Systems", value: fda.system?.clinical_systems, color: "text-cyan-400" },
-                    { label: "Complaints", value: fda.system?.total_complaints, color: "text-purple-400" },
-                  ].map(s => (
-                    <div key={s.label} className="text-center">
-                      <div className={cn("text-lg font-black", s.color)}>{s.value}</div>
-                      <div className="text-[10px] text-muted-foreground">{s.label}</div>
-                    </div>
-                  ))}
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground w-28 flex-shrink-0">System:</span>
+                  <span className="text-foreground text-[10px]">{fda.system}</span>
                 </div>
-                {fda.validation && (
-                  <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-border/40">
+                {fda.performance && (
+                  <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-border/40">
                     {[
-                      { k: "Accuracy",    v: fda.validation.accuracy,    col: "text-green-400" },
-                      { k: "Sensitivity", v: fda.validation.sensitivity, col: "text-blue-400" },
-                      { k: "Specificity", v: fda.validation.specificity, col: "text-cyan-400" },
-                      { k: "F1",          v: fda.validation.f1,          col: "text-purple-400" },
+                      { k: "Sessions",      v: fda.performance.total_sessions,         col: "text-blue-400",   raw: true },
+                      { k: "Red Flag Rules",v: fda.performance.red_flag_rules_active,   col: "text-red-400",    raw: true },
+                      { k: "Match Rate",    v: fda.performance.outcome_match_rate,       col: "text-green-400",  raw: false },
+                      { k: "Avg Confidence",v: fda.performance.avg_predicted_confidence, col: "text-cyan-400",   raw: true },
                     ].map(m => (
-                      <div key={m.k} className="text-center p-1 rounded bg-muted/20">
-                        <div className={cn("text-sm font-bold", m.col)}>{typeof m.v === "number" ? (m.v * 100).toFixed(1) + "%" : "—"}</div>
+                      <div key={m.k} className="text-center p-1.5 rounded bg-muted/20">
+                        <div className={cn("text-base font-black", m.col)}>{m.raw ? m.v : `${m.v}%`}</div>
                         <div className="text-[9px] text-muted-foreground">{m.k}</div>
                       </div>
                     ))}
                   </div>
                 )}
-                <div className="flex gap-2 pt-1">
+                <div className="flex gap-2 pt-1 flex-wrap">
+                  {fda.compliance?.hipaa && <Badge variant="outline" className="text-[9px] border-green-500/30 text-green-400">HIPAA ✓</Badge>}
+                  {fda.compliance?.fda_510k_applicable && <Badge variant="outline" className="text-[9px] border-blue-500/30 text-blue-400">510(k) ✓</Badge>}
                   <Badge variant="outline" className="text-[9px] border-green-500/30 text-green-400">Audit Trail ✓</Badge>
-                  <Badge variant="outline" className="text-[9px] border-green-500/30 text-green-400">Peer Review ✓</Badge>
                   <Badge variant="outline" className="text-[9px] border-green-500/30 text-green-400">Guideline-Backed ✓</Badge>
-                  <Badge variant="outline" className="text-[9px] border-blue-500/30 text-blue-400">v{fda.version}</Badge>
+                  <Badge variant="outline" className="text-[9px] border-violet-500/30 text-violet-400">{fda.version}</Badge>
                 </div>
               </div>
             )}

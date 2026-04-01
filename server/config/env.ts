@@ -41,6 +41,15 @@ export const ENV = {
 
   STAGING: process.env.STAGING === "true",
   PRODUCTION_GUARD: process.env.PRODUCTION_GUARD !== "false",
+
+  // Safety / governance flags
+  REQUIRE_PHYSICIAN_APPROVAL: process.env.REQUIRE_PHYSICIAN_APPROVAL === "true",
+  ALLOW_AUTO_POLICY_LOW_RISK: process.env.ALLOW_AUTO_POLICY_LOW_RISK === "true",
+  DEFAULT_TIMEOUT_MS: Number(process.env.DEFAULT_TIMEOUT_MS || 4000),
+
+  // Feature toggles
+  ENABLE_META: process.env.ENABLE_META === "true",
+  ENABLE_RLHF: process.env.ENABLE_RLHF === "true",
 } as const;
 
 export function isProduction() { return ENV.NODE_ENV === "production"; }
