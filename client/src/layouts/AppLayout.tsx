@@ -30,6 +30,7 @@ import {
   Brain,
   Database,
   BarChart3,
+  Landmark,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -55,6 +56,7 @@ const NAV_ITEMS = [
   { path: ROUTES.PHYSICIAN_MOBILE, label: "Mobile Dashboard", icon: Smartphone },
   { path: ROUTES.ORCHESTRATION, label: "Live Rooms", icon: LayoutGrid },
   { path: ROUTES.CONTROL_TOWER, label: "War Room", icon: Radio },
+  { path: "/revenue-war-room", label: "Revenue War Room", icon: Landmark },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
   { path: "/prior-auth", label: "Prior Auth", icon: FileCheck },
