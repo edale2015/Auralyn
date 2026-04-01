@@ -73,6 +73,7 @@ import SystemControlTowerPage from "@/pages/SystemControlTowerPage";
 import MultiPatientCommandPage from "@/pages/MultiPatientCommandPage";
 import ClinicalQAPage from "@/pages/ClinicalQAPage";
 import ClinicalImprovementLabPage from "@/pages/ClinicalImprovementLabPage";
+import CarePathwayOptimizerPage from "@/pages/CarePathwayOptimizerPage";
 import MissionControlPage from "@/pages/MissionControlPage";
 
 validateRoutes();
@@ -119,6 +120,7 @@ function WorkbenchRouter() {
         <Route path="/multi-patient-command" component={MultiPatientCommandPage} />
         <Route path="/clinical-qa" component={ClinicalQAPage} />
         <Route path="/clinical-improvement-lab" component={ClinicalImprovementLabPage} />
+        <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
         <Route path={ROUTES.MISSION_CONTROL} component={MissionControlPage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />

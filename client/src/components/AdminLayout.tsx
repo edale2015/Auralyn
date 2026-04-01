@@ -52,6 +52,7 @@ const NAV_SECTIONS = [
       { path: "/complaint-qa", label: "Complaint QA", icon: BarChart3 },
       { path: "/clinical-qa", label: "Clinical QA Dashboard", icon: FlaskConical },
       { path: "/clinical-improvement-lab", label: "Clinical Improvement Lab", icon: FlaskConical },
+      { path: "/care-pathway-optimizer", label: "Care Pathway Optimizer", icon: FlaskConical },
       { path: "/clinical-validation", label: "Clinical Validation", icon: HeartPulse },
       { path: "/clinical-workflow-health", label: "Workflow Health", icon: Activity },
     ],

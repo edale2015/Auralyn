@@ -58,6 +58,62 @@ Evidence-driven KB evolution dashboard — ingests guidelines, detects gaps, ena
 **Full Flow**:
 Upload guideline → GPT-4o extracts rules → physician reviews → approved rules go to `kb_knowledge_changes` → KB evolution
 
+## Analytics Engine (`/api/analytics/*`) — COMPLETE
+
+New DB tables: `guideline_evidence`, `guideline_rankings`, `specialty_review_cycles`, `specialty_review_items`, `patient_outcomes`, `calibration_data`, `calibration_models`, `treatment_effect_data`, `causal_model_state`, `treatment_policy`, `payer_outcomes`, `validation_runs`
+
+**API Routes**:
+- `GET /api/analytics/evidence-ranking` — ranked guideline evidence by source type × sample size × recency × impact
+- `POST /api/analytics/evidence-score` — score a recommendation (RCT +4, meta-analysis +5, cohort +3, expert +1)
+- `GET /api/analytics/calibration` — 10-bin calibration curve + Brier score
+- `POST /api/analytics/calibration/seed` — seed 200 synthetic calibration points + 1 validation run
+- `GET /api/analytics/causal` — ATE (IPW + doubly-robust) per treatment from causal_model_state
+- `POST /api/analytics/causal/seed` — load 4 demo treatment effects (amoxicillin, azithromycin, ibuprofen, steroids_croup)
+- `POST /api/analytics/causal/submit` — submit new outcome → recompute ATE
+- `GET /api/analytics/outcomes` — mismatch rate, clusters, recent cases
+- `POST /api/analytics/outcomes/seed` — 8 synthetic patient outcomes
+- `GET /api/analytics/payer` — avg cost, readmission rate, LOS by diagnosis
+- `POST /api/analytics/payer/seed` — 8 synthetic payer rows
+- `GET /api/analytics/fda-report` — FDA-ready JSON (validation metrics, safety gates, traceability, system stats)
+- `GET /api/analytics/review-cycles` — specialty review cycle list
+- `POST /api/analytics/review-cycles/generate` — auto-generate 6 specialty cycles (ENT, PULM, CARDIO, NEURO, GI, GU)
+
+**Clinical Improvement Lab now has 6 middle tabs** (updated):
+- Tab 1: PubMed Auto-Ingestion
+- Tab 2: Gap Analysis
+- Tab 3: Evidence Scores (scatter vs KB base probability)
+- Tab 4: **Evidence Ranking** — guideline credibility scores (RCT/meta/cohort/expert + sample size + recency + IF); ranked list with progress bars
+- Tab 5: **Calibration** — confidence calibration curve (10 bins, Brier score); ATE panel (treatment effects, IPW + doubly-robust)
+- Tab 6: **Outcomes & FDA** — real-world mismatch rate + mismatch cluster chart; payer metrics table; FDA-ready report with export JSON
+
+## Care Pathway Optimizer (`/care-pathway-optimizer`) — COMPLETE
+
+New DB tables: `care_pathways`, `pathway_experiments`, `pathway_metrics`, `pathway_suggestions`
+
+A/B pathway experimentation dashboard — clinical wind tunnel for optimizing decision tree sequences.
+
+**Layout**: 3-column — Pathway Library (left) | A/B Experiment Runner + Results (middle) | Auto-Suggestions Queue (right)
+
+**Features**:
+- **Pathway Library**: 4 seeded demo pathways (SORE_THROAT_V1/V2, HEADACHE_V1/V2); expandable to see step-by-step sequence with type color-coding
+- **A/B Experiment Runner**: Select any 2 pathways + case count (100–2000); simulation engine runs N cases through both pathways computing: accuracy, RF sensitivity, false reassurance rate, avg cost, avg steps, avg time, admission rate
+- **Metric Comparison Table**: Side-by-side A vs B with color-coded winner per metric
+- **Auto-Suggestion Engine**: After each experiment, rules-based engine generates pathway improvement suggestions (add_step, reorder_step, remove_step) with confidence scores
+- **Suggestions Queue**: Right pane shows all pending suggestions with rationale, confidence, and "Apply Suggestion" button
+- **Experiment History**: Recent experiments with case counts and accuracy comparison
+
+**API Routes** (`/api/optimizer/*`):
+- `POST /api/optimizer/seed` — load 4 demo pathways
+- `GET /api/optimizer/` — list pathways
+- `POST /api/optimizer/` — create/update pathway
+- `POST /api/optimizer/experiment` — run A/B simulation (up to 2000 cases), saves metrics + suggestions
+- `GET /api/optimizer/experiments` — recent experiment history
+- `GET /api/optimizer/suggestions?status=pending` — filtered suggestion queue
+- `PATCH /api/optimizer/suggestions/:id` — update suggestion status
+- `GET /api/optimizer/metrics` — pathway performance history
+
+**Simulation Engine**: Deterministic simulation based on pathway config flags — strict_mode RF improves sensitivity 0.81→0.93, workup step adds $140–$340 cost, findings step +2% accuracy, pregnancy check +1% accuracy
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp, SMS, and Voice TTS
