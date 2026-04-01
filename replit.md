@@ -114,6 +114,35 @@ A/B pathway experimentation dashboard — clinical wind tunnel for optimizing de
 
 **Simulation Engine**: Deterministic simulation based on pathway config flags — strict_mode RF improves sensitivity 0.81→0.93, workup step adds $140–$340 cost, findings step +2% accuracy, pregnancy check +1% accuracy
 
+## Skill Graph (`/knowledge-graph` → "Skill Graph" tab) — COMPLETE
+
+New DB tables: `skill_nodes`, `skill_edges`
+
+A persistent, materialized node/edge graph built on demand from the live KB tables. Visualized with React Flow on the Knowledge Graph page (9th tab).
+
+**Build endpoint** (`POST /api/skill-graph/build`): Scans all active KB tables and materializes:
+- **complaint nodes** — from `kb_complaints` (1 per active complaint)
+- **modifier nodes** — from `kb_modifiers` (global, system-wide modifiers)
+- **skill nodes** — from `kb_questions` (1 per distinct question_id)
+- **rule nodes** — from `kb_red_flag_rules` + `kb_diagnosis_rules`
+- **edges**: complaint → modifier (`uses`), complaint → skill (`uses`), complaint → red_flag_rule (`triggers`), complaint → diagnosis_rule (`triggers`)
+- Degree counters (`degree_in`, `degree_out`) updated after build
+
+**API Routes** (`/api/skill-graph/*`):
+- `POST /api/skill-graph/build` — materialize graph from live KB (returns nodeCount, edgeCount, breakdown)
+- `GET /api/skill-graph/stats` — { built, nodeCount, edgeCount, byType[], byRel[] }
+- `GET /api/skill-graph/nodes?type=&system=` — filtered node list
+- `GET /api/skill-graph/edges?relationship=` — filtered edge list
+- `GET /api/skill-graph/coverage` — { summary, issues[], modifier_matrix[] } — orphan + gap analysis
+
+**Frontend Panel** (4 sub-tabs):
+- **Canvas** — React Flow canvas (MiniMap, Controls, Background); column-based auto-layout; type filter (complaint/modifier/skill/rule) + system filter; edge labels + animated "triggers" edges; legend overlay; up to 500 edges rendered
+- **Coverage Evaluator** — 4 stat cards (total nodes, total edges, orphans, coverage %); issue list with critical/high/medium severity (orphans, sparse complaints, unlinked skills/rules)
+- **Modifier Matrix** — per-complaint progress bar showing how many of the system-wide modifiers are connected; color-coded (green ≥80%, yellow ≥50%, red <50%)
+- **Node List** — type breakdown cards + paginated node rows (200 max); degree indicators; applies type + system filters
+
+**Typical build stats**: ~1,294 nodes · ~1,986 edges from current KB; 100% coverage (0 orphans) with all modifiers connected to all complaints.
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp, SMS, and Voice TTS

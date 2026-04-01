@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import SkillGraphPanel from "@/components/knowledge/SkillGraphPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -827,6 +828,7 @@ export default function ClinicalKnowledgeGraphPage() {
           <TabsTrigger value="adaptive" className="gap-1.5" data-testid="tab-kg-adaptive"><Zap className="h-3.5 w-3.5" />Adaptive Questions</TabsTrigger>
           <TabsTrigger value="import" className="gap-1.5" data-testid="tab-kg-import"><Upload className="h-3.5 w-3.5" />Data Import</TabsTrigger>
           <TabsTrigger value="planner" className="gap-1.5" data-testid="tab-kg-planner"><Brain className="h-3.5 w-3.5" />AI Planner</TabsTrigger>
+          <TabsTrigger value="skillgraph" className="gap-1.5" data-testid="tab-kg-skillgraph"><Network className="h-3.5 w-3.5" />Skill Graph</TabsTrigger>
         </TabsList>
 
         <TabsContent value="explorer"><PanelExplorer /></TabsContent>
@@ -837,6 +839,7 @@ export default function ClinicalKnowledgeGraphPage() {
         <TabsContent value="adaptive"><PanelAdaptiveQuestions /></TabsContent>
         <TabsContent value="import"><PanelDataImport /></TabsContent>
         <TabsContent value="planner"><PanelAIPlanner /></TabsContent>
+        <TabsContent value="skillgraph" className="h-full flex flex-col"><SkillGraphPanel /></TabsContent>
       </Tabs>
     </div>
   );

@@ -1,0 +1,187 @@
+1) AUTOMATIC SKILL GENERATION (FROM GUIDELINES)
+🧾 Schema
+CREATE TABLE IF NOT EXISTS generated_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT,
+  complaint TEXT,
+  logic JSONB,
+  source TEXT, -- guideline | pubmed
+  confidence FLOAT,
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Backend
+// server/qa/generateSkills.ts
+export async function generateSkillsFromGuideline(text: string) {
+  const response = await openai.chat.completions.create({
+    model: "gpt-5",
+    messages: [
+      {
+        role: "system",
+        content: `
+Convert clinical text into skill modules.
+Each skill should include:
+- name
+- complaint
+- triggers
+- actions
+Return JSON array.
+`
+      },
+      { role: "user", content: text }
+    ]
+  })
+
+  return JSON.parse(response.choices[0].message.content)
+}
+🔌 Route
+router.post('/generate-skills', async (req, res) => {
+  const skills = await generateSkillsFromGuideline(req.body.text)
+
+  for (const s of skills) {
+    await req.db.generated_skills.insert({
+      name: s.name,
+      complaint: s.complaint,
+      logic: s,
+      source: 'guideline',
+      confidence: 0.9
+    })
+  }
+
+  res.json(skills)
+})
+🎛️ UI
+// SkillGenerationPanel.tsx
+export default function SkillGenerationPanel() {
+  const [text, setText] = useState('')
+  const [skills, setSkills] = useState([])
+
+  const run = async () => {
+    const res = await fetch('/api/qa/generate-skills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    })
+    setSkills(await res.json())
+  }
+
+  return (
+    <div className="card">
+      <h3>Generate Skills</h3>
+      <textarea onChange={e=>setText(e.target.value)} />
+      <button onClick={run}>Generate</button>
+
+      {skills.map(s=>(
+        <div key={s.name}>{s.name}</div>
+      ))}
+    </div>
+  )
+}
+🧠 2) SKILL PRUNING ENGINE
+🧾 Schema
+CREATE TABLE IF NOT EXISTS skill_usage_stats (
+  skill_id TEXT,
+  usage_count INT,
+  last_used TIMESTAMP,
+  outcome_impact FLOAT
+);
+⚙️ Engine
+// server/qa/pruneSkills.ts
+export async function findPrunableSkills(db) {
+  const stats = await db.skill_usage_stats.findAll()
+
+  return stats
+    .filter(s =>
+      s.usage_count < 5 &&
+      s.outcome_impact < 0.01
+    )
+    .map(s => ({
+      skill_id: s.skill_id,
+      reason: "Low usage + low impact"
+    }))
+}
+🔌 Route
+router.get('/prune-skills', async (req, res) => {
+  const result = await findPrunableSkills(req.db)
+  res.json(result)
+})
+🎛️ UI
+// SkillPrunePanel.tsx
+export default function SkillPrunePanel({ data }) {
+  return (
+    <div className="card">
+      <h3>Prunable Skills</h3>
+      {data.map(s=>(
+        <div key={s.skill_id}>
+          {s.skill_id} — {s.reason}
+        </div>
+      ))}
+    </div>
+  )
+}
+🧠 3) SKILL IMPORTANCE SCORING
+🧾 Schema
+CREATE TABLE IF NOT EXISTS skill_importance (
+  skill_id TEXT PRIMARY KEY,
+  impact_score FLOAT,
+  safety_score FLOAT,
+  frequency FLOAT,
+  combined_score FLOAT
+);
+⚙️ Engine
+// server/qa/skillImportance.ts
+export async function computeSkillImportance(db) {
+  const stats = await db.skill_usage_stats.findAll()
+
+  return stats.map(s => {
+    const impact = s.outcome_impact || 0
+    const freq = Math.log(s.usage_count + 1)
+
+    const combined = 0.6 * impact + 0.4 * freq
+
+    return {
+      skill_id: s.skill_id,
+      impact_score: impact,
+      frequency: freq,
+      combined_score: combined
+    }
+  })
+}
+🔌 Route
+router.get('/skill-importance', async (req, res) => {
+  const data = await computeSkillImportance(req.db)
+  res.json(data)
+})
+🎛️ UI
+// SkillImportancePanel.tsx
+export default function SkillImportance({ data }) {
+  return (
+    <div className="card">
+      <h3>Skill Importance</h3>
+      {data.sort((a,b)=>b.combined_score-a.combined_score).map(s=>(
+        <div key={s.skill_id}>
+          {s.skill_id} — {s.combined_score.toFixed(2)}
+        </div>
+      ))}
+    </div>
+  )
+}
+🧭 DASHBOARD INTEGRATION
+// SkillIntelligenceDashboard.tsx
+import SkillGenerationPanel from './SkillGenerationPanel'
+import SkillPrunePanel from './SkillPrunePanel'
+import SkillImportancePanel from './SkillImportancePanel'
+
+export default function SkillIntelligenceDashboard({ data }) {
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      <SkillGenerationPanel />
+      <SkillPrunePanel data={data.prunable} />
+      <SkillImportancePanel data={data.importance} />
+    </div>
+  )
+}
+🔗 ROUTES SUMMARY
+POST /api/qa/generate-skills
+GET  /api/qa/prune-skills
+GET  /api/qa/skill-importance

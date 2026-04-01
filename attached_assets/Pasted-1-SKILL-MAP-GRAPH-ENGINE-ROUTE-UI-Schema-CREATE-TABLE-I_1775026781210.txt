@@ -1,0 +1,198 @@
+1) SKILL MAP (GRAPH ENGINE + ROUTE + UI)
+🧾 Schema
+CREATE TABLE IF NOT EXISTS skill_nodes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT,
+  type TEXT -- skill | complaint | modifier | rule
+);
+
+CREATE TABLE IF NOT EXISTS skill_edges (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_node TEXT,
+  to_node TEXT,
+  relationship TEXT -- handles | uses | modifies | depends_on
+);
+⚙️ Backend
+// server/qa/skillGraph.ts
+export async function buildSkillGraph(db: any) {
+  const skills = await db.kb_skills.findAll()
+  const complaints = await db.kb_complaints.findAll()
+  const modifiers = await db.kb_modifiers.findAll()
+
+  const nodes = [
+    ...skills.map((s: any) => ({ id: s.id, label: s.name, type: 'skill' })),
+    ...complaints.map((c: any) => ({ id: c.id, label: c.name, type: 'complaint' })),
+    ...modifiers.map((m: any) => ({ id: m.id, label: m.name, type: 'modifier' }))
+  ]
+
+  const edges: any[] = []
+
+  for (const s of skills) {
+    for (const c of complaints) {
+      if (s.complaints?.includes(c.id)) {
+        edges.push({
+          id: `${s.id}-${c.id}`,
+          source: s.id,
+          target: c.id,
+          label: 'handles'
+        })
+      }
+    }
+
+    for (const m of modifiers) {
+      if (s.modifiers?.includes(m.id)) {
+        edges.push({
+          id: `${s.id}-${m.id}`,
+          source: s.id,
+          target: m.id,
+          label: 'modifies'
+        })
+      }
+    }
+  }
+
+  return { nodes, edges }
+}
+🔌 Route
+// server/routes/skillRoutes.ts
+router.get('/skill-graph', async (req, res) => {
+  const graph = await buildSkillGraph(req.db)
+  res.json(graph)
+})
+🎛️ UI
+// client/components/SkillGraph.tsx
+import ReactFlow from 'reactflow'
+
+export default function SkillGraph({ graph }) {
+  return (
+    <div style={{ height: 600 }}>
+      <ReactFlow nodes={graph.nodes} edges={graph.edges} />
+    </div>
+  )
+}
+🧠 2) SKILL COVERAGE EVALUATOR
+⚙️ Backend
+// server/qa/skillCoverage.ts
+export async function evaluateSkillCoverage(db: any) {
+  const complaints = await db.kb_complaints.findAll()
+  const skills = await db.kb_skills.findAll()
+
+  const issues: any[] = []
+
+  for (const c of complaints) {
+    const relatedSkills = skills.filter((s: any) =>
+      s.complaints?.includes(c.id)
+    )
+
+    if (relatedSkills.length === 0) {
+      issues.push({
+        type: 'CRITICAL',
+        complaint: c.name,
+        issue: 'No skill coverage'
+      })
+    }
+
+    const hasModifiers = relatedSkills.some((s: any) => s.modifiers?.length)
+    if (!hasModifiers) {
+      issues.push({
+        type: 'WARNING',
+        complaint: c.name,
+        issue: 'Missing modifier logic'
+      })
+    }
+  }
+
+  return issues
+}
+🔌 Route
+router.get('/skill-coverage', async (req, res) => {
+  const issues = await evaluateSkillCoverage(req.db)
+  res.json(issues)
+})
+🎛️ UI
+// client/components/SkillCoveragePanel.tsx
+export default function SkillCoveragePanel({ issues }) {
+  return (
+    <div className="card">
+      <h3>Skill Coverage</h3>
+      {issues.map((i, idx) => (
+        <div key={idx}>
+          [{i.type}] {i.complaint}: {i.issue}
+        </div>
+      ))}
+    </div>
+  )
+}
+🚀 3) OPTIMAL SKILL ANALYZER (RECOMMENDER)
+⚙️ Backend
+// server/qa/skillOptimizer.ts
+export async function suggestSkills(db: any) {
+  const complaints = await db.kb_complaints.findAll()
+  const skills = await db.kb_skills.findAll()
+
+  const suggestions: any[] = []
+
+  for (const c of complaints) {
+    const relatedSkills = skills.filter((s: any) =>
+      s.complaints?.includes(c.id)
+    )
+
+    if (relatedSkills.length < 3) {
+      suggestions.push({
+        complaint: c.name,
+        suggestion: 'Add diagnostic + safety skill',
+        reason: 'Low skill density'
+      })
+    }
+
+    if (!relatedSkills.some((s: any) => s.name.includes('red_flag'))) {
+      suggestions.push({
+        complaint: c.name,
+        suggestion: 'Add red flag skill',
+        reason: 'Missing emergency detection'
+      })
+    }
+  }
+
+  return suggestions
+}
+🔌 Route
+router.get('/skill-suggestions', async (req, res) => {
+  const suggestions = await suggestSkills(req.db)
+  res.json(suggestions)
+})
+🎛️ UI
+// client/components/SkillSuggestionPanel.tsx
+export default function SkillSuggestions({ data }) {
+  return (
+    <div className="card">
+      <h3>Skill Suggestions</h3>
+      {data.map((s, i) => (
+        <div key={i}>
+          {s.complaint} → {s.suggestion}
+        </div>
+      ))}
+    </div>
+  )
+}
+🧭 DASHBOARD PAGE (ALL 3 TOGETHER)
+// client/pages/SkillMapDashboard.tsx
+import SkillGraph from '../components/SkillGraph'
+import SkillCoveragePanel from '../components/SkillCoveragePanel'
+import SkillSuggestions from '../components/SkillSuggestionPanel'
+
+export default function SkillMapDashboard({ graph, coverage, suggestions }) {
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      <SkillGraph graph={graph} />
+      <SkillCoveragePanel issues={coverage} />
+      <SkillSuggestions data={suggestions} />
+    </div>
+  )
+}
+🔗 ADD ROUTE
+{
+  name: "Skill Map",
+  path: "/skill-map",
+  icon: "Share2"
+}
