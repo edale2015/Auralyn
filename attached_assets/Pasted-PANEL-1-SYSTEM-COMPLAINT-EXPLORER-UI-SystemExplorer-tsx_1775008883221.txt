@@ -1,0 +1,180 @@
+PANEL 1 — SYSTEM / COMPLAINT EXPLORER
+🎛️ UI
+// SystemExplorer.tsx
+export default function SystemExplorer({ systems, complaints }) {
+  return (
+    <div className="card">
+      <h3>Clinical Systems</h3>
+
+      <select>
+        <option>ENT</option>
+        <option>Pulmonary</option>
+        <option>Neuro</option>
+      </select>
+
+      <h4>Complaints</h4>
+      {complaints.map(c => (
+        <button key={c}>{c}</button>
+      ))}
+    </div>
+  )
+}
+⚙️ Backend
+GET /api/qa/systems
+GET /api/qa/complaints?system=ENT
+🌳 PANEL 2 — DECISION TREE REVIEW
+
+You already have tree rendering. Now add:
+
+🔍 Enhancements
+highlight:
+missing branches
+unused questions
+unreachable paths
+⚙️ Gap detection
+// server/qa/treeAudit.ts
+export function auditTree(tree) {
+  const issues = []
+
+  if (!tree.questions.includes('blood_pressure')) {
+    issues.push("Missing BP check for headache")
+  }
+
+  return issues
+}
+🤖 PANEL 3 — AI SUGGESTION ENGINE
+This is what you specifically asked for
+⚙️ Backend
+// server/qa/suggestionEngine.ts
+export async function generateSuggestions(complaint, context) {
+  const suggestions = []
+
+  if (complaint === 'headache' && context.femaleAge < 50) {
+    suggestions.push("Consider pregnancy test")
+  }
+
+  if (complaint === 'asthma') {
+    suggestions.push("Check albuterol frequency")
+  }
+
+  if (complaint === 'headache') {
+    suggestions.push("Check blood pressure")
+  }
+
+  return suggestions
+}
+🎛️ UI
+// SuggestionPanel.tsx
+export default function SuggestionPanel({ suggestions }) {
+  return (
+    <div className="card">
+      <h3>AI Suggestions</h3>
+      {suggestions.map((s,i)=>(
+        <div key={i}>
+          💡 {s}
+        </div>
+      ))}
+    </div>
+  )
+}
+🔥 Upgrade (important)
+
+Make suggestions:
+
+clickable → auto-add to KB
+editable before applying
+simulatable before commit
+🔄 PANEL 4 — CROSS-SYSTEM CONSISTENCY VIEW
+🧠 This is huge
+Example view:
+Rule	ENT	Pulm	Neuro
+Check BP	❌	❌	✅
+Check pregnancy	❌	❌	❌
+Check meds	✅	✅	❌
+⚙️ Backend
+GET /api/qa/consistency
+🎛️ UI
+// ConsistencyMatrix.tsx
+export default function Matrix({ data }) {
+  return (
+    <table>
+      {data.map(row => (
+        <tr>
+          <td>{row.rule}</td>
+          <td>{row.ent}</td>
+          <td>{row.pulm}</td>
+          <td>{row.neuro}</td>
+        </tr>
+      ))}
+    </table>
+  )
+}
+💊 PANEL 5 — GLOBAL MEDICATION REVIEW
+all meds
+all dosing
+all contraindications
+Example flags:
+“NSAIDs used in CHF cases”
+“Amoxicillin used despite penicillin allergy”
+🧾 PANEL 6 — AUDIT INTELLIGENCE (THIS IS WHAT YOU WANT)
+
+You already have logs.
+
+Now you add analysis of logs.
+
+⚙️ Backend
+// server/qa/auditAnalyzer.ts
+export function analyzeAudit(logs) {
+  return {
+    frequentErrors: findPatterns(logs),
+    drift: detectDrift(logs),
+    riskyChanges: flagHighRisk(logs)
+  }
+}
+🎛️ UI
+// AuditInsights.tsx
+export default function AuditInsights({ insights }) {
+  return (
+    <div className="card">
+      <h3>Audit Insights</h3>
+
+      <p>Top Errors:</p>
+      {insights.frequentErrors.map(e => <div>{e}</div>)}
+
+      <p>Drift Alerts:</p>
+      {insights.drift.map(d => <div>{d}</div>)}
+    </div>
+  )
+}
+🔗 FULL PAGE
+// ClinicalQA.tsx
+export default function ClinicalQA({ data }) {
+  return (
+    <div className="grid grid-cols-4 gap-4">
+      <SystemExplorer />
+      <DecisionTree />
+      <SuggestionPanel />
+      <ConsistencyMatrix />
+      <AuditInsights />
+    </div>
+  )
+}
+🧠 WHAT THIS GIVES YOU
+
+Now you can:
+
+🟢 Review
+ENT only
+headache only
+meds only
+🟡 Detect
+missing rules
+inconsistencies
+unsafe logic
+🔵 Improve
+accept AI suggestions
+simulate before applying
+🔴 Understand
+audit logs → insights
+drift patterns
+system weaknesses

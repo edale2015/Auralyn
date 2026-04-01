@@ -114,6 +114,33 @@ Three-pane + bottom-strip hospital-style command dashboard with all 8 optional m
 
 **Seed**: POST `/api/command/admission-risk/seed` + POST `/api/command/hospitals/seed` to load all demo data
 
+## Clinical QA Dashboard (`/clinical-qa`) — COMPLETE (6 panels)
+
+3-column KB quality assurance dashboard:
+
+**Layout**:
+- **Left pane**: System Explorer — 19 clinical systems (ENT, PULM, NEURO, GU, GI, CARDIO…) with complaint list filtered per system; each complaint shows Q/RF/Tx coverage counts
+- **Middle pane (3 tabs)**: Gap Audit · Consistency Matrix · Medication Review
+- **Right pane (2 tabs)**: AI Suggestions (GPT-4o) · Audit Intelligence
+
+**6 Panels**:
+1. **System/Complaint Explorer** — System grid (19 systems) + complaint list with coverage badges (Q/RF/Tx counts per complaint)
+2. **Gap Audit** (`tab-tree`) — detects: no questions, no red flags, no treatments, unlinked questions; summary stats bar; issue list grouped by type with severity colors
+3. **AI Suggestion Engine** (`tab-suggestion`) — GPT-4o generates 5–8 specific suggestions per complaint; each clickable to expand, editable proposedRule textarea, "Apply to KB" queues to `kb_knowledge_changes`
+4. **Consistency Matrix** (`tab-consistency`) — 8 universal rules × 6 systems matrix (✓/✗ per cell), per-row coverage progress bar
+5. **Medication Review** (`tab-medications`) — all 6 treatment rules grouped by class; safety flags for missing contraindications, Penicillin allergy missing, QT warning missing
+6. **Audit Intelligence** (`tab-audit`) — drift detector (this week vs last week %), change-frequency chart by domain, high-frequency change alerts, pending review queue
+
+**API Routes** (`/api/qa/*`):
+- `GET /api/qa/systems` — 19 systems with complaint counts
+- `GET /api/qa/complaints?system=ENT` — complaints with Q/RF/Tx coverage stats
+- `GET /api/qa/tree-audit?system=ENT&complaint=sore_throat` — gap detection issues + summary
+- `POST /api/qa/suggestions` — GPT-4o clinical suggestions for a complaint
+- `POST /api/qa/suggestions/apply` — queue suggestion to `kb_knowledge_changes`
+- `GET /api/qa/consistency` — 8×6 cross-system consistency matrix
+- `GET /api/qa/medications` — treatment rules + safety flags by group
+- `GET /api/qa/audit-insights` — drift, byDomain, recentChanges, riskyChanges, pendingReview
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp, SMS, and Voice TTS
