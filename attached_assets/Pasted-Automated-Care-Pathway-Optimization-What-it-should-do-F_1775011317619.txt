@@ -1,0 +1,563 @@
+Automated Care Pathway Optimization
+What it should do
+
+For each complaint or syndrome, the system should learn and compare pathways such as:
+
+ask question A before B
+order test X before Y
+skip low-value workup in low-risk cases
+escalate earlier when certain patterns appear
+choose faster or safer branch sequences
+reduce false reassurance, delays, and unnecessary testing
+Core idea
+
+A care pathway is a versioned sequence of steps with decision points.
+
+Example for chest pain:
+
+intake
+modifiers
+vitals/findings
+red flag check
+EKG
+troponin if indicated
+diagnosis ranking
+disposition
+
+The optimizer compares alternate versions of this pathway and measures which performs better on:
+
+safety
+accuracy
+time
+cost
+unnecessary testing
+admissions avoided or caught appropriately
+1. Schema
+CREATE TABLE IF NOT EXISTS care_pathways (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pathway_id TEXT UNIQUE,
+  complaint_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  version INT DEFAULT 1,
+  steps JSONB NOT NULL,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT now(),
+  updated_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS pathway_experiments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  experiment_name TEXT NOT NULL,
+  complaint_id TEXT NOT NULL,
+  pathway_a_id TEXT NOT NULL,
+  pathway_b_id TEXT NOT NULL,
+  case_count INT DEFAULT 1000,
+  status TEXT DEFAULT 'pending',
+  results JSONB,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS pathway_metrics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pathway_id TEXT NOT NULL,
+  complaint_id TEXT NOT NULL,
+  accuracy FLOAT,
+  red_flag_sensitivity FLOAT,
+  false_reassurance_rate FLOAT,
+  avg_cost FLOAT,
+  avg_steps FLOAT,
+  avg_time_ms FLOAT,
+  admission_rate FLOAT,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS pathway_suggestions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  complaint_id TEXT NOT NULL,
+  current_pathway_id TEXT,
+  suggestion_type TEXT, -- reorder_step | add_step | remove_step | split_branch | lower_threshold
+  suggestion JSONB NOT NULL,
+  rationale TEXT,
+  confidence FLOAT,
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT now()
+);
+2. Pathway runner
+// server/pathways/runPathway.ts
+type PathwayStep =
+  | { type: 'questions'; config?: any }
+  | { type: 'modifiers'; config?: any }
+  | { type: 'findings'; config?: any }
+  | { type: 'red_flags'; config?: any }
+  | { type: 'workup'; config?: any }
+  | { type: 'diagnosis'; config?: any }
+  | { type: 'treatment'; config?: any }
+  | { type: 'disposition'; config?: any }
+
+export async function runCarePathway(db: any, pathway: any, input: any) {
+  const trace: any[] = []
+  let state = { ...input }
+
+  for (const step of pathway.steps as PathwayStep[]) {
+    const started = Date.now()
+
+    if (step.type === 'questions') {
+      state.questions = await getSmartQuestions(db, state.dxDist || [], state.asked || [], state.complaint_id)
+    } else if (step.type === 'modifiers') {
+      state.modifiers = await applyModifiers(db, state)
+    } else if (step.type === 'findings') {
+      state.findings = await extractFindings(state)
+    } else if (step.type === 'red_flags') {
+      state.redFlags = await runRedFlags(db, state)
+    } else if (step.type === 'workup') {
+      state.workup = await optimizeWorkup(state.dxDist || [], step.config?.budget || 500)
+    } else if (step.type === 'diagnosis') {
+      state.dxDist = await runAdvancedDiagnosis(state)
+    } else if (step.type === 'treatment') {
+      state.treatment = await chooseTreatment(state)
+    } else if (step.type === 'disposition') {
+      state.disposition = await computeDispositionWithUncertainty(
+        state.complaint_id,
+        state.dxDist || [],
+        state.baseDisposition || 'MONITOR'
+      )
+    }
+
+    trace.push({
+      step: step.type,
+      duration_ms: Date.now() - started,
+      snapshot: JSON.parse(JSON.stringify(state))
+    })
+
+    if (state.redFlags?.triggerEmergency) break
+  }
+
+  return { state, trace }
+}
+3. Experiment engine
+// server/pathways/pathwayExperiment.ts
+function avg(arr: number[]) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+}
+
+export async function comparePathways(
+  db: any,
+  pathwayA: any,
+  pathwayB: any,
+  cases: any[]
+) {
+  const resultsA = []
+  const resultsB = []
+
+  for (const c of cases) {
+    resultsA.push(await runCarePathway(db, pathwayA, c))
+    resultsB.push(await runCarePathway(db, pathwayB, c))
+  }
+
+  const summarize = (runs: any[]) => {
+    const correct = runs.filter(r => r.state.expected_dx && r.state.dxDist?.[0]?.diagnosis === r.state.expected_dx).length
+    const emergencyCaught = runs.filter(r => r.state.expected_emergency && r.state.redFlags?.triggerEmergency).length
+    const falseReassurance = runs.filter(r =>
+      r.state.expected_emergency &&
+      !r.state.redFlags?.triggerEmergency &&
+      r.state.disposition?.disposition === 'MONITOR'
+    ).length
+
+    return {
+      accuracy: correct / Math.max(1, runs.length),
+      red_flag_sensitivity: emergencyCaught / Math.max(1, runs.filter(r => r.state.expected_emergency).length),
+      false_reassurance_rate: falseReassurance / Math.max(1, runs.length),
+      avg_cost: avg(runs.map(r => r.state.workup?.total_cost || 0)),
+      avg_steps: avg(runs.map(r => r.trace.length)),
+      avg_time_ms: avg(runs.map(r => r.trace.reduce((s: number, t: any) => s + t.duration_ms, 0))),
+      admission_rate: runs.filter(r => ['ADMIT', 'OBSERVE'].includes(r.state.disposition?.disposition)).length / Math.max(1, runs.length)
+    }
+  }
+
+  return {
+    A: summarize(resultsA),
+    B: summarize(resultsB)
+  }
+}
+4. Suggestion engine
+// server/pathways/pathwaySuggestionEngine.ts
+export function suggestPathwayImprovements(metrics: any, complaintId: string, pathwayId: string) {
+  const suggestions = []
+
+  if (metrics.false_reassurance_rate > 0.03) {
+    suggestions.push({
+      complaint_id: complaintId,
+      current_pathway_id: pathwayId,
+      suggestion_type: 'add_step',
+      suggestion: {
+        insert_before: 'disposition',
+        step: { type: 'red_flags', config: { strict_mode: true } }
+      },
+      rationale: 'False reassurance rate is above threshold. Add another safety gate before disposition.',
+      confidence: 0.91
+    })
+  }
+
+  if (metrics.avg_cost > 250 && metrics.accuracy < 0.9) {
+    suggestions.push({
+      complaint_id: complaintId,
+      current_pathway_id: pathwayId,
+      suggestion_type: 'reorder_step',
+      suggestion: {
+        move_step: 'questions',
+        before: 'workup'
+      },
+      rationale: 'High cost with modest accuracy suggests workup is firing too early.',
+      confidence: 0.84
+    })
+  }
+
+  if (metrics.avg_steps > 8) {
+    suggestions.push({
+      complaint_id: complaintId,
+      current_pathway_id: pathwayId,
+      suggestion_type: 'remove_step',
+      suggestion: {
+        step: 'duplicate findings review'
+      },
+      rationale: 'Pathway is too long and may be redundant.',
+      confidence: 0.63
+    })
+  }
+
+  return suggestions
+}
+5. Routes
+// server/routes/pathwayRoutes.ts
+import express from 'express'
+const router = express.Router()
+
+router.get('/pathways', async (req, res) => {
+  const rows = await req.db.care_pathways.findAll()
+  res.json(rows)
+})
+
+router.post('/pathways', async (req, res) => {
+  const row = await req.db.care_pathways.insert(req.body)
+  res.json(row)
+})
+
+router.patch('/pathways/:id', async (req, res) => {
+  const row = await req.db.care_pathways.update({ id: req.params.id, ...req.body })
+  res.json(row)
+})
+
+router.post('/pathways/experiment', async (req, res) => {
+  const { pathwayAId, pathwayBId, cases } = req.body
+  const pathwayA = await req.db.care_pathways.findOne({ pathway_id: pathwayAId })
+  const pathwayB = await req.db.care_pathways.findOne({ pathway_id: pathwayBId })
+
+  const results = await comparePathways(req.db, pathwayA, pathwayB, cases)
+  res.json(results)
+})
+
+router.post('/pathways/suggest', async (req, res) => {
+  const { metrics, complaintId, pathwayId } = req.body
+  const suggestions = suggestPathwayImprovements(metrics, complaintId, pathwayId)
+
+  for (const s of suggestions) {
+    await req.db.pathway_suggestions.insert(s)
+  }
+
+  res.json(suggestions)
+})
+
+export default router
+6. Dashboard panel
+// client/src/components/qa/CarePathwayOptimizer.tsx
+import { useState } from 'react'
+
+export default function CarePathwayOptimizer() {
+  const [result, setResult] = useState<any>(null)
+
+  const runExperiment = async () => {
+    const res = await fetch('/api/pathways/experiment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pathwayAId: 'HEADACHE_V1', pathwayBId: 'HEADACHE_V2', cases: [] })
+    })
+    setResult(await res.json())
+  }
+
+  return (
+    <div className="card">
+      <h3>Care Pathway Optimizer</h3>
+      <button onClick={runExperiment}>Run A/B Pathway Test</button>
+
+      {result && (
+        <>
+          <div>Pathway A Accuracy: {result.A.accuracy}</div>
+          <div>Pathway B Accuracy: {result.B.accuracy}</div>
+          <div>Pathway A Cost: {result.A.avg_cost}</div>
+          <div>Pathway B Cost: {result.B.avg_cost}</div>
+          <div>Pathway A False Reassurance: {result.A.false_reassurance_rate}</div>
+          <div>Pathway B False Reassurance: {result.B.false_reassurance_rate}</div>
+        </>
+      )}
+    </div>
+  )
+}
+7. What this unlocks
+
+You can now do exactly the kind of experiment you described:
+
+try a branch that adds:
+“if headache + female childbearing age → consider pregnancy”
+“if headache → check BP”
+“if asthma → ask albuterol frequency”
+run several thousand cases
+compare:
+accuracy
+safety
+cost
+false reassurance
+admissions
+
+That turns the system into a clinical wind tunnel.
+
+5 more recommendations to make the Clinical Improvement Dashboard more intelligent and proactive
+1. Branch fragility scanner
+
+Continuously identify branches where tiny rule changes cause large output swings.
+
+Example:
+
+one missing BP rule changes 12% of headache dispositions
+
+That tells you which pathways are glass, not steel.
+
+2. Cross-complaint modifier coverage audit
+
+Continuously scan modifiers like:
+
+pregnancy
+CHF
+CKD
+anticoagulation
+penicillin allergy
+
+and show where they are missing across complaints and systems.
+
+This catches invisible holes fast.
+
+3. Outcome-weighted recommendation ranking
+
+When the dashboard suggests changes, rank them not just by confidence, but by:
+
+expected safety gain
+expected cost reduction
+expected reduction in false reassurance
+expected effect on admissions
+
+That makes the queue smarter than a simple to-do list.
+
+4. Silent-failure detector
+
+Scan for rules that exist in the KB but are rarely or never triggered in simulations or live use.
+
+These may be:
+
+unreachable
+redundant
+outdated
+badly connected
+
+A dashboard should shame these into visibility.
+
+5. Automatic “trial branch” sandbox
+
+Make a dedicated experiment tab where you can:
+
+clone a pathway
+edit one branch
+run 1k/10k/50k cases
+compare against production
+promote if better
+
+This is probably the highest-ROI addition because it operationalizes experimentation instead of treating it as a special project.
+
+Recommended dashboard structure
+
+Add a new dashboard or tab:
+
+Clinical Improvement Lab
+
+Guideline ingestion
+Gap audit
+Consistency matrix
+Medication review
+Audit intelligence
+Experiment sandbox
+Pathway optimizer
+Trial branch simulator
+Suggestion review queue
+
+That becomes the workshop where the brain is rebuilt safely.
+
+Answer to your implied question
+
+Yes, the system should be able to continuously review itself for:
+
+inconsistencies
+holes
+fragile logic
+missing modifiers
+underused rules
+unsafe branches
+beneficial experiments
+
+That is the natural next step, and it fits perfectly with the golden cases and 10,000-run testing you already have.
+
+If you want, I can turn this into a single compact Replit task block next.
+
+YES
+
+Here is the compact Replit task block.
+
+Writing
+
+Build a new dashboard module called Clinical Improvement Lab and add Automated Care Pathway Optimization plus proactive self-review tools.
+
+Route and access
+Add route: /clinical-improvement-lab
+Add it to Mission Control, Clinical QA, and Autonomous Learning navigation
+Make it one-click accessible from the dashboard system for monitoring, upgrading, and troubleshooting
+Main purpose
+
+This dashboard should let me:
+
+review and optimize care pathways
+experiment with decision-tree branches
+run thousands of simulated cases against alternate pathways
+detect inconsistencies, holes, fragile branches, and unused rules
+compare pathway versions before promoting changes
+Part 1. Automated Care Pathway Optimization
+
+Create these tables:
+
+care_pathways
+pathway_id
+complaint_id
+name
+version
+steps JSONB
+is_active
+timestamps
+pathway_experiments
+experiment_name
+complaint_id
+pathway_a_id
+pathway_b_id
+case_count
+status
+results JSONB
+timestamps
+pathway_metrics
+pathway_id
+complaint_id
+accuracy
+red_flag_sensitivity
+false_reassurance_rate
+avg_cost
+avg_steps
+avg_time_ms
+admission_rate
+timestamps
+pathway_suggestions
+complaint_id
+current_pathway_id
+suggestion_type
+suggestion JSONB
+rationale
+confidence
+status
+timestamps
+
+Build:
+
+pathway runner
+pathway A/B experiment engine
+metrics summarizer
+pathway suggestion engine
+
+The experiment engine must compare alternate pathways on:
+
+accuracy
+red flag sensitivity
+false reassurance
+cost
+step count
+time
+admission rate
+Part 2. Trial Branch Sandbox
+
+Add an experiment sandbox UI where I can:
+
+clone an existing pathway or complaint tree
+edit one branch or one rule
+save as trial version
+run 1k / 10k / 50k cases
+compare trial vs production
+see expected impact before promotion
+promote the better branch if approved
+
+The dashboard should support examples like:
+
+for headache: add BP check
+for women of childbearing age with headache: consider pregnancy
+for asthma: ask albuterol frequency
+and then run thousands of cases to see if the change helps
+Part 3. 5 proactive intelligence features
+
+Add these five continuous-review features:
+
+1. Branch fragility scanner
+
+Continuously identify branches where small rule changes create large output swings.
+Show:
+
+complaint
+branch
+sensitivity score
+why it is fragile
+2. Cross-complaint modifier coverage audit
+
+Continuously scan modifiers such as:
+
+pregnancy
+CHF
+CKD
+anticoagulation
+penicillin allergy
+Show where they are missing across complaints/systems.
+3. Outcome-weighted recommendation ranking
+
+Rank suggestions not just by confidence, but by:
+
+expected safety gain
+expected cost reduction
+expected reduction in false reassurance
+expected admission impact
+4. Silent-failure detector
+
+Detect KB rules that are rarely or never triggered in simulation or live operation.
+Show:
+
+rule ID
+complaint
+domain
+last triggered
+suspicion reason
+5. Automatic trial-branch promoter
+
+Support sandbox experiments where a branch can be promoted only after:
+
+simulation passes
+no safety regression
+approval is granted
+audit trail is
