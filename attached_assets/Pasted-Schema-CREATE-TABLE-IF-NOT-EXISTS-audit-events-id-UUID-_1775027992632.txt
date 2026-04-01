@@ -1,0 +1,142 @@
+Schema
+CREATE TABLE IF NOT EXISTS audit_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type TEXT,               -- decision | change | learning | override
+  entity TEXT,             -- skill, rule, pathway
+  entity_id TEXT,
+  before JSONB,
+  after JSONB,
+  user_id TEXT,
+  source TEXT,             -- system | clinician | learning_engine
+  created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_reports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  report JSONB,
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Audit logger
+// server/audit/auditLogger.ts
+export async function logAudit(db: any, event: any) {
+  await db.audit_events.insert({
+    type: event.type,
+    entity: event.entity,
+    entity_id: event.entity_id,
+    before: event.before,
+    after: event.after,
+    user_id: event.user_id,
+    source: event.source
+  })
+}
+⚙️ Report generator
+// server/audit/generateAuditReport.ts
+export async function generateAuditReport(db: any) {
+  const events = await db.audit_events.findAll()
+
+  const summary = {
+    total_changes: events.length,
+    system_changes: events.filter(e=>e.source==='system').length,
+    clinician_changes: events.filter(e=>e.source==='clinician').length,
+    learning_changes: events.filter(e=>e.source==='learning_engine').length
+  }
+
+  const report = {
+    summary,
+    timestamp: new Date()
+  }
+
+  await db.audit_reports.insert({ report })
+
+  return report
+}
+🔌 Route
+router.get('/audit-report', async (req, res) => {
+  const report = await generateAuditReport(req.db)
+  res.json(report)
+})
+🎛️ UI
+export default function AuditPanel({ report }) {
+  return (
+    <div className="card">
+      <h3>Audit Summary</h3>
+      <p>Total Changes: {report.summary.total_changes}</p>
+      <p>System: {report.summary.system_changes}</p>
+      <p>Clinician: {report.summary.clinician_changes}</p>
+    </div>
+  )
+}
+⚙️ 2) REAL-TIME POLICY OPTIMIZATION
+🎯 Goal
+
+Adjust decision policies live based on:
+
+outcomes
+cost
+safety
+confidence
+
+WITHOUT unsafe auto-changes
+
+🧾 Schema
+CREATE TABLE IF NOT EXISTS policy_state (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  policy_name TEXT,
+  parameters JSONB,
+  performance JSONB,
+  updated_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS policy_updates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  policy_name TEXT,
+  change JSONB,
+  impact JSONB,
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT now()
+);
+⚙️ Engine
+// server/policy/optimizePolicy.ts
+export async function optimizePolicy(db: any, metrics: any) {
+  const current = await db.policy_state.findOne({ policy_name: 'triage' })
+
+  let updated = { ...current.parameters }
+
+  if (metrics.false_reassurance_rate > 0.03) {
+    updated.threshold += 0.05
+  }
+
+  if (metrics.cost > 200) {
+    updated.workup_budget -= 50
+  }
+
+  const change = {
+    before: current.parameters,
+    after: updated
+  }
+
+  await db.policy_updates.insert({
+    policy_name: 'triage',
+    change,
+    impact: metrics
+  })
+
+  return change
+}
+🛡️ Safety gate
+if (change.affects.includes('red_flags') || change.affects.includes('medication')) {
+  requireManualApproval()
+}
+🎛️ UI
+export default function PolicyPanel({ changes }) {
+  return (
+    <div className="card">
+      <h3>Policy Optimization</h3>
+      {changes.map(c=>(
+        <div>
+          Threshold: {c.after.threshold}
+        </div>
+      ))}
+    </div>
+  )
+}

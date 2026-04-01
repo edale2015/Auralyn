@@ -236,6 +236,33 @@ const PINNED_COMMAND_CENTERS = [
   },
 ];
 
+const PINNED_SKILL_LABS = [
+  {
+    path: "/skill-map",
+    label: "Skill Map",
+    icon: Network,
+    testId: "nav-skill-map",
+    badge: "Graph",
+    badgeClass: "border-blue-500/30 text-blue-400 bg-blue-500/10",
+  },
+  {
+    path: "/skill-intelligence-lab",
+    label: "Skill Intelligence Lab",
+    icon: Microscope,
+    testId: "nav-skill-intelligence-lab",
+    badge: "AI Gen",
+    badgeClass: "border-emerald-500/30 text-emerald-400 bg-emerald-500/10",
+  },
+  {
+    path: "/skill-evolution-lab",
+    label: "Skill Evolution Lab",
+    icon: Activity,
+    testId: "nav-skill-evolution-lab",
+    badge: "Evolve",
+    badgeClass: "border-teal-500/30 text-teal-400 bg-teal-500/10",
+  },
+];
+
 const PINNED_IMPROVEMENT_CENTERS = [
   {
     path: "/clinical-improvement-lab",
@@ -328,6 +355,32 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <SidebarGroupContent>
                 <SidebarMenu>
                   {PINNED_IMPROVEMENT_CENTERS.map(item => (
+                    <SidebarMenuItem key={item.path}>
+                      <Link href={item.path}>
+                        <SidebarMenuButton
+                          data-active={location === item.path}
+                          className="data-[active=true]:bg-sidebar-accent w-full"
+                          data-testid={item.testId}
+                        >
+                          <item.icon className="w-4 h-4" />
+                          <span className="flex-1 text-sm truncate">{item.label}</span>
+                          <Badge variant="outline" className={`text-[9px] h-4 px-1 hidden data-[active=true]:flex flex-shrink-0 ${item.badgeClass}`}>
+                            {item.badge}
+                          </Badge>
+                        </SidebarMenuButton>
+                      </Link>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            {/* ── Skill Labs ── */}
+            <SidebarGroup>
+              <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-3 pt-1 pb-0">Skill Labs</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {PINNED_SKILL_LABS.map(item => (
                     <SidebarMenuItem key={item.path}>
                       <Link href={item.path}>
                         <SidebarMenuButton

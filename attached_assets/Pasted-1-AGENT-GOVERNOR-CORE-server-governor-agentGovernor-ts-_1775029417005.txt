@@ -1,0 +1,148 @@
+1. AGENT GOVERNOR CORE
+📁 server/governor/agentGovernor.ts
+import { predictFailureRisk } from "../monitoring/failurePredictor";
+import { rerouteDecision } from "./rerouter";
+import { db } from "../db";
+import { encounters } from "../db/schema";
+
+interface AgentStatus {
+  agent: string;
+  health: "healthy" | "degraded" | "failing";
+  riskScore: number;
+  action?: string;
+}
+
+export async function evaluateAgents(): Promise<AgentStatus[]> {
+  const agents = ["diagnosis", "scoring", "billing", "safety", "learning"];
+
+  const results: AgentStatus[] = [];
+
+  for (const agent of agents) {
+    const risk = await predictFailureRisk(agent);
+
+    let health: AgentStatus["health"] = "healthy";
+    let action = "";
+
+    if (risk > 0.7) {
+      health = "failing";
+      action = "reroute";
+      await rerouteDecision(agent);
+    } else if (risk > 0.4) {
+      health = "degraded";
+      action = "monitor";
+    }
+
+    results.push({
+      agent,
+      health,
+      riskScore: risk,
+      action,
+    });
+  }
+
+  return results;
+}
+⚠️ 2. FAILURE PREDICTION ENGINE
+📁 server/monitoring/failurePredictor.ts
+import { db } from "../db";
+import { encounters } from "../db/schema";
+
+export async function predictFailureRisk(agent: string): Promise<number> {
+  const data = await db.select().from(encounters);
+
+  const total = data.length || 1;
+
+  const errorRate =
+    data.filter(e => Number(e.correctDiagnosis) < 0.7).length / total;
+
+  const escalationRate =
+    data.filter(e => e.escalated).length / total;
+
+  const latency =
+    data.reduce((sum, e) => sum + Number(e.decisionTimeMs || 0), 0) / total;
+
+  // Normalize latency (simple heuristic)
+  const latencyScore = Math.min(latency / 5000, 1);
+
+  const risk =
+    errorRate * 0.4 +
+    escalationRate * 0.3 +
+    latencyScore * 0.3;
+
+  return Math.min(risk, 1);
+}
+🔁 3. SELF-HEALING REROUTER
+📁 server/governor/rerouter.ts
+let fallbackMap: Record<string, string> = {
+  diagnosis: "rule_based_diagnosis",
+  scoring: "basic_scoring",
+  billing: "safe_billing",
+  safety: "strict_safety",
+  learning: "frozen_learning",
+};
+
+export async function rerouteDecision(agent: string) {
+  const fallback = fallbackMap[agent];
+
+  console.log(`🔁 Rerouting ${agent} → ${fallback}`);
+
+  // In real system: update routing registry
+  globalThis["ACTIVE_AGENT_OVERRIDE"] = {
+    ...(globalThis["ACTIVE_AGENT_OVERRIDE"] || {}),
+    [agent]: fallback,
+  };
+}
+🧠 4. GOVERNOR LOOP (AUTONOMOUS)
+📁 server/governor/governorLoop.ts
+import { evaluateAgents } from "./agentGovernor";
+
+export function startGovernorLoop() {
+  setInterval(async () => {
+    const status = await evaluateAgents();
+
+    console.log("🧭 Governor Status:", status);
+
+    const failing = status.filter(s => s.health === "failing");
+
+    if (failing.length > 0) {
+      console.log("🚨 Critical agents failing:", failing);
+    }
+  }, 5000);
+}
+📡 5. WAR ROOM INTEGRATION (AGENT VISIBILITY)
+📁 Update: server/warroom/warRoomEngine.ts
+import { evaluateAgents } from "../governor/agentGovernor";
+
+export async function getSystemSnapshot() {
+  const base = await import("./warRoomEngine_base");
+  const baseSnapshot = await base.getSystemSnapshot();
+
+  const agents = await evaluateAgents();
+
+  return {
+    ...baseSnapshot,
+    agents,
+  };
+}
+🖥️ 6. FRONTEND AGENT PANEL
+📁 client/src/components/AgentStatusPanel.tsx
+export default function AgentStatusPanel({ agents }: any) {
+  return (
+    <div className="bg-white shadow p-4 rounded">
+      <h2 className="font-semibold">Agent Health</h2>
+
+      {agents.map((a: any) => (
+        <div key={a.agent} className="flex justify-between">
+          <span>{a.agent}</span>
+          <span>{a.health}</span>
+          <span>{(a.riskScore * 100).toFixed(1)}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+🔌 7. FINAL SERVER WIRING
+📁 Update: server/index.ts
+import { startGovernorLoop } from "./governor/governorLoop";
+
+startGovernorLoop();
