@@ -75,6 +75,7 @@ import MultiPatientCommandPage from "@/pages/MultiPatientCommandPage";
 import ClinicalQAPage from "@/pages/ClinicalQAPage";
 import ClinicalImprovementLabPage from "@/pages/ClinicalImprovementLabPage";
 import CarePathwayOptimizerPage from "@/pages/CarePathwayOptimizerPage";
+import GovernanceCommandCenterPage from "@/pages/GovernanceCommandCenterPage";
 import SkillMapPage from "@/pages/SkillMapPage";
 import SkillIntelligenceLabPage from "@/pages/SkillIntelligenceLabPage";
 import SkillEvolutionLabPage from "@/pages/SkillEvolutionLabPage";
@@ -125,6 +126,7 @@ function WorkbenchRouter() {
         <Route path="/clinical-qa" component={ClinicalQAPage} />
         <Route path="/clinical-improvement-lab" component={ClinicalImprovementLabPage} />
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
+        <Route path="/governance-command-center" component={GovernanceCommandCenterPage} />
         <Route path="/skill-map" component={SkillMapPage} />
         <Route path="/skill-intelligence-lab" component={SkillIntelligenceLabPage} />
         <Route path="/skill-evolution-lab" component={SkillEvolutionLabPage} />
