@@ -33,4 +33,5 @@ export const ROUTES = {
   CLINICAL_CONTROL_TOWER: "/clinical-control-tower",
   SYSTEM_CONTROL_TOWER: "/system-control-tower",
   INTEGRATION_HEALTH: "/integration-health",
+  ENGINE_MAINTENANCE: "/engine-maintenance",
 };

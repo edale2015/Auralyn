@@ -2001,6 +2001,10 @@ export async function registerRoutes(
   app.post("/api/admin/dev/run-tests", requireProviderAuth, requireAdmin, runTests);
   app.post("/api/admin/dev/apply-patch", requireProviderAuth, requireAdmin, applyPatch);
 
+  // Engine maintenance, diagnostics, and observability
+  const { default: engineMaintenanceRouter } = await import("./routes/engineMaintenanceRoutes");
+  app.use("/api/engine-maintenance", engineMaintenanceRouter);
+
   return httpServer;
 }
 
