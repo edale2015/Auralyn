@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import OpenAI from "openai";
+import { applyPHIGuard } from "../middleware/phiGuardOpenAI";
 
 const router = Router();
 
@@ -45,12 +46,13 @@ Return a JSON object with this structure:
 
 Extract 4-10 specific, actionable rules. Be precise.`;
 
-    const completion = await getOpenAI().chat.completions.create({
+    const ingestParams: any = {
       model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       max_tokens: 1500,
-    });
+    };
+    const completion = await getOpenAI().chat.completions.create(applyPHIGuard(ingestParams, "improvementLab/ingest"));
 
     const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
 
@@ -144,12 +146,13 @@ router.post("/pubmed/ingest", async (req: Request, res: Response) => {
 
 Abstract: ${abstract.slice(0, 2000)}`;
 
-    const completion = await getOpenAI().chat.completions.create({
+    const pubmedParams: any = {
       model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       max_tokens: 800,
-    });
+    };
+    const completion = await getOpenAI().chat.completions.create(applyPHIGuard(pubmedParams, "improvementLab/pubmed-ingest"));
     const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
 
     // Save article

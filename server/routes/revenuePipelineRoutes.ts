@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import OpenAI from "openai";
 import { requireRole } from "../middleware/requireRole";
+import { applyPHIGuard } from "../middleware/phiGuardOpenAI";
 import { autoFixEncounter } from "../billing/autoFixEngine";
 import { logClaimOutcome, getClaimOutcomeStats, getOutcomeLog, getLearnedDenialScore } from "../billing/claimOutcomeLearning";
 import { routeToPhysician, registerPhysician, getPhysicianRegistry, detectSpecialty, releasePhysicianLoad } from "../billing/smartPhysicianRouter";
@@ -255,7 +256,7 @@ const coachingSchema = z.object({
   topDiagnoses: z.array(z.string()).optional().default([]),
 });
 
-router.post("/coaching", async (req, res) => {
+router.post("/coaching", requireRole(["admin", "physician", "nurse"]), async (req, res) => {
   const parsed = coachingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
 
@@ -285,12 +286,14 @@ Rule-based flags: ${ruleBasedFeedback.join(" | ")}
 
 Respond with a JSON object: { "recommendations": ["...", "...", "..."], "summary": "one sentence overall assessment", "strengths": ["..."], "focus_area": "single top priority" }`;
 
-    const completion = await getOpenAI().chat.completions.create({
+    const coachingParams: any = {
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       max_tokens: 500,
-    });
+    };
+    const safeCoachingParams = applyPHIGuard(coachingParams, "revenuePipeline/coaching");
+    const completion = await getOpenAI().chat.completions.create(safeCoachingParams);
 
     const ai = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
     res.json({

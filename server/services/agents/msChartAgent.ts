@@ -1,4 +1,5 @@
 import { openai } from "../../replit_integrations/audio/client";
+import { applyPHIGuard } from "../../middleware/phiGuardOpenAI";
 
 export interface ChartSection {
   title: string;
@@ -30,7 +31,7 @@ export async function buildChartSections(caseData: any): Promise<ChartSection[]>
       noteDraft: caseData?.noteDraft,
     };
 
-    const response = await openai.chat.completions.create({
+    const rawParams: any = {
       model: "gpt-4o",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -39,7 +40,9 @@ export async function buildChartSections(caseData: any): Promise<ChartSection[]>
       temperature: 0.2,
       max_tokens: 1200,
       response_format: { type: "json_object" },
-    });
+    };
+    const safeParams = applyPHIGuard(rawParams, "msChartAgent");
+    const response = await openai.chat.completions.create(safeParams);
 
     const raw = response.choices[0]?.message?.content;
     if (!raw) throw new Error("Empty response from OpenAI");

@@ -18,7 +18,21 @@ function statusText(s: string) {
 
 const SESSION_DURATION_MS = 30 * 60 * 1000;
 
+const FIRESTORE_ACTIVE = (process.env.STORAGE_DRIVER ?? "").toLowerCase() === "firestore";
+
+function guardClinicalWrite(operation: string): void {
+  if (FIRESTORE_ACTIVE) {
+    const msg = `[SQLiteStore][SECURITY] Clinical write blocked: "${operation}" attempted on SQLite while STORAGE_DRIVER=firestore. All clinical data must go through Firestore.`;
+    console.error(msg);
+    throw new Error(`SQLite clinical write blocked in Firestore mode: ${operation}`);
+  }
+}
+
 export function makeSqliteStore(): StorageDriver {
+  if (FIRESTORE_ACTIVE) {
+    console.warn("[SQLiteStore] WARNING: SQLiteStore created while STORAGE_DRIVER=firestore. Clinical writes will be blocked — only read operations and OTP sessions are permitted.");
+  }
+
   const dbPath = process.env.DB_PATH || path.join(process.cwd(), "data.sqlite");
   const db = new Database(dbPath);
 
@@ -126,6 +140,7 @@ export function makeSqliteStore(): StorageDriver {
       const row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token) as any;
       if (row) return { caseId: row.case_id, status: row.status, currentStep: row.current_step };
 
+      guardClinicalWrite("getOrCreateCaseForToken");
       const caseId = `CASE_${nowMs()}_${Math.random().toString(16).slice(2)}`;
       const ts = nowMs();
       db.prepare(`
@@ -137,6 +152,7 @@ export function makeSqliteStore(): StorageDriver {
     },
 
     async setCaseDraft(token, draft) {
+      guardClinicalWrite("setCaseDraft");
       let row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token) as any;
       if (!row) {
         await this.getOrCreateCaseForToken(token);
@@ -154,6 +170,7 @@ export function makeSqliteStore(): StorageDriver {
     },
 
     async setCaseSubmitted(token, intake, assistant) {
+      guardClinicalWrite("setCaseSubmitted");
       let row = db.prepare(`SELECT * FROM cases WHERE token = ? ORDER BY created_at DESC LIMIT 1`).get(token) as any;
       const caseId = row?.case_id || (await this.getOrCreateCaseForToken(token)).caseId;
 
@@ -187,6 +204,7 @@ export function makeSqliteStore(): StorageDriver {
     },
 
     async signCase(caseId: string) {
+      guardClinicalWrite("signCase");
       const row = db.prepare(`SELECT * FROM cases WHERE case_id = ?`).get(caseId) as any;
       if (!row) throw new Error("Not found.");
       const intake = JSON.parse(row.intake_json || "{}");
@@ -216,6 +234,7 @@ export function makeSqliteStore(): StorageDriver {
     },
 
     async setExternalEhr(caseId: string, ehr: ExternalEhr) {
+      guardClinicalWrite("setExternalEhr");
       db.prepare(`UPDATE cases SET external_ehr_json=?, updated_at=? WHERE case_id=?`)
         .run(JSON.stringify(ehr), nowMs(), caseId);
     },
@@ -231,6 +250,7 @@ export function makeSqliteStore(): StorageDriver {
     },
 
     async addFileMeta(meta: FileMeta) {
+      guardClinicalWrite("addFileMeta");
       db.prepare(`
         INSERT INTO files (file_id, token, original_name, mime_type, storage_mode, storage_path, bucket, object_path, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

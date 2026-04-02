@@ -1,6 +1,7 @@
 import { getSheetsClient } from "../sheets/sheetsClient";
+import { createHash } from "crypto";
 
-type CacheEntry = { expiresAt: number; value: Record<string, any> };
+type CacheEntry = { expiresAt: number; value: Record<string, any>; fingerprint?: string };
 let CACHE: CacheEntry = { expiresAt: 0, value: {} };
 const TTL_MS = 5 * 60 * 1000;
 
@@ -114,7 +115,12 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
     rules[key] = validateRule(key, parsed, rawValue);
   }
 
-  CACHE = { expiresAt: now + TTL_MS, value: rules };
+  const newFingerprint = createHash("sha256").update(JSON.stringify(rules)).digest("hex");
+  const prevFingerprint = CACHE.fingerprint;
+  if (prevFingerprint && prevFingerprint !== newFingerprint) {
+    console.warn(`[EntFluRules][AUDIT] Config change detected — CLINICAL_RULES fingerprint changed from ${prevFingerprint.slice(0, 12)}... to ${newFingerprint.slice(0, 12)}... at ${new Date().toISOString()}`);
+  }
+  CACHE = { expiresAt: now + TTL_MS, value: rules, fingerprint: newFingerprint };
   
   const ruleCount = Object.keys(rules).length;
   if (ruleCount === 0) {
@@ -123,7 +129,7 @@ export async function getEntFluRules(): Promise<Record<string, any>> {
   - rule_key is not empty
   Defaults will be used for all clinical rules.`);
   } else {
-    console.log(`[EntFluRules] Loaded ${ruleCount} rules from Google Sheets (cached for 5 min)`);
+    console.log(`[EntFluRules] Loaded ${ruleCount} rules from Google Sheets fp=${newFingerprint.slice(0, 12)}... (cached for 5 min)`);
   }
   
   return rules;

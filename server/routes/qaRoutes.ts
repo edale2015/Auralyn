@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import OpenAI from "openai";
+import { applyPHIGuard } from "../middleware/phiGuardOpenAI";
 
 const router = Router();
 
@@ -184,12 +185,13 @@ Generate 5-8 specific, actionable clinical QA suggestions. For each:
 
 Respond as JSON array: [{ "type": "...", "title": "...", "description": "...", "priority": "high|medium|low", "proposedRule": "..." }]`;
 
-    const completion = await getOpenAI().chat.completions.create({
+    const qaParams: any = {
       model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       max_tokens: 1200,
-    });
+    };
+    const completion = await getOpenAI().chat.completions.create(applyPHIGuard(qaParams, "qaRoutes/suggest"));
 
     const raw = JSON.parse(completion.choices[0].message.content ?? "{}");
     const suggestions = Array.isArray(raw) ? raw : (raw.suggestions ?? raw.items ?? []);

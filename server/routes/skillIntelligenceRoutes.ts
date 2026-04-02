@@ -2,6 +2,7 @@ import express from "express";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import OpenAI from "openai";
+import { applyPHIGuard } from "../middleware/phiGuardOpenAI";
 
 const router = express.Router();
 
@@ -47,7 +48,7 @@ router.post("/generate-skills", async (req, res) => {
     if (!text) return res.status(400).json({ ok: false, error: "text is required" });
 
     const openai = getOpenAI();
-    const response = await openai.chat.completions.create({
+    const skillParams: any = {
       model: "gpt-4o",
       messages: [
         {
@@ -59,7 +60,8 @@ Return a JSON array of skill objects. Return only valid JSON, no markdown.`,
         { role: "user", content: text },
       ],
       temperature: 0.3,
-    });
+    };
+    const response = await openai.chat.completions.create(applyPHIGuard(skillParams, "skillIntelligence/generate-skills"));
 
     const raw = response.choices[0].message.content ?? "[]";
     let skills: any[] = [];

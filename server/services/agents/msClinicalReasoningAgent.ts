@@ -1,4 +1,5 @@
 import { openai } from "../../replit_integrations/audio/client";
+import { applyPHIGuard } from "../../middleware/phiGuardOpenAI";
 
 export interface ReasoningResult {
   hypothesis: string;
@@ -26,7 +27,7 @@ export async function runClinicalReasoning(symptoms: string[], history: string[]
       history.length > 0 ? `Patient history: ${history.join(", ")}` : null,
     ].filter(Boolean).join("\n");
 
-    const response = await openai.chat.completions.create({
+    const rawParams: any = {
       model: "gpt-4o",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -35,7 +36,9 @@ export async function runClinicalReasoning(symptoms: string[], history: string[]
       temperature: 0.2,
       max_tokens: 700,
       response_format: { type: "json_object" },
-    });
+    };
+    const safeParams = applyPHIGuard(rawParams, "msClinicalReasoningAgent");
+    const response = await openai.chat.completions.create(safeParams);
 
     const raw = response.choices[0]?.message?.content;
     if (!raw) throw new Error("Empty response from OpenAI");

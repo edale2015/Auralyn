@@ -1,4 +1,5 @@
 import { getSheetsClient } from "../sheets/sheetsClient";
+import { createHash } from "crypto";
 
 export type FlowQuestion = {
   id: string;
@@ -11,9 +12,13 @@ export type FlowQuestion = {
   helpText?: string | null;
 };
 
-type CacheEntry = { expiresAt: number; value: FlowQuestion[] };
+type CacheEntry = { expiresAt: number; value: FlowQuestion[]; fingerprint: string };
 
 const CACHE: Record<string, CacheEntry> = {};
+
+function computeFingerprint(data: unknown): string {
+  return createHash("sha256").update(JSON.stringify(data)).digest("hex");
+}
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function envOrThrow(name: string): string {
@@ -158,9 +163,14 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
   - question_id and question_text are not empty`);
   }
 
-  CACHE[flowId] = { expiresAt: now + CACHE_TTL_MS, value: cleaned };
+  const newFingerprint = computeFingerprint(cleaned);
+  const prevFingerprint = CACHE[flowId]?.fingerprint;
+  if (prevFingerprint && prevFingerprint !== newFingerprint) {
+    console.warn(`[SheetFlowLoader][AUDIT] Config change detected for flow="${flowId}" — fingerprint changed from ${prevFingerprint.slice(0, 12)}... to ${newFingerprint.slice(0, 12)}... at ${new Date().toISOString()}`);
+  }
+  CACHE[flowId] = { expiresAt: now + CACHE_TTL_MS, value: cleaned, fingerprint: newFingerprint };
 
-  console.log(`[SheetFlowLoader] Loaded ${cleaned.length} questions for flow ${flowId} from Google Sheets (cached for 5 min)`);
+  console.log(`[SheetFlowLoader] Loaded ${cleaned.length} questions for flow ${flowId} from Google Sheets fp=${newFingerprint.slice(0, 12)}... (cached for 5 min)`);
   return cleaned;
 }
 
