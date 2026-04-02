@@ -17,17 +17,18 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { 
   ClipboardList, 
   CheckCircle, 
   Clock, 
-  History, 
-  Settings, 
   LogOut,
   Stethoscope,
   AlertTriangle,
-  Users
+  Users,
+  Activity,
+  RefreshCw,
 } from "lucide-react";
 import PatientQueue from "@/components/PatientQueue";
 import CaseDetail from "@/components/CaseDetail";
@@ -187,14 +188,71 @@ export default function Dashboard() {
               </h2>
             </div>
             <div className="flex items-center gap-2">
+              {isLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
               {pendingCount > 0 && (
                 <Badge variant="outline" className="gap-1">
                   <Clock className="w-3 h-3" />
                   {pendingCount} pending
                 </Badge>
               )}
+              {urgentCount > 0 && (
+                <Badge variant="destructive" className="gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  {urgentCount} urgent
+                </Badge>
+              )}
             </div>
           </header>
+
+          {/* Stats Summary Row */}
+          <div className="grid grid-cols-4 gap-0 border-b bg-muted/20">
+            {[
+              {
+                label: "Pending Review",
+                value: isLoading ? null : pendingCount,
+                icon: Clock,
+                color: pendingCount > 0 ? "text-amber-600" : "text-muted-foreground",
+                testId: "stat-pending",
+              },
+              {
+                label: "Urgent Cases",
+                value: isLoading ? null : urgentCount,
+                icon: AlertTriangle,
+                color: urgentCount > 0 ? "text-red-600" : "text-muted-foreground",
+                testId: "stat-urgent",
+              },
+              {
+                label: "Approved",
+                value: isLoading ? null : encounters.filter(e => e.status === "approved" || e.status === "reviewed").length,
+                icon: CheckCircle,
+                color: "text-green-600",
+                testId: "stat-approved",
+              },
+              {
+                label: "Total Cases",
+                value: isLoading ? null : encounters.length,
+                icon: ClipboardList,
+                color: "text-blue-600",
+                testId: "stat-total",
+              },
+            ].map((stat) => (
+              <div
+                key={stat.label}
+                className="flex items-center gap-3 px-4 py-3 border-r last:border-r-0"
+                data-testid={stat.testId}
+              >
+                <stat.icon className={`w-4 h-4 flex-shrink-0 ${stat.color}`} />
+                <div>
+                  {isLoading ? (
+                    <Skeleton className="h-5 w-8 mb-0.5" />
+                  ) : (
+                    <div className={`text-lg font-bold leading-none ${stat.color}`}>{stat.value}</div>
+                  )}
+                  <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">{stat.label}</div>
+                </div>
+              </div>
+            ))}
+          </div>
 
           <main className="flex-1 overflow-hidden flex">
             <div className={`flex-1 overflow-auto ${selectedEncounterId ? "hidden lg:block lg:w-1/2 lg:border-r" : ""}`}>

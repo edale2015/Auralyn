@@ -4,6 +4,9 @@ import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
 import {
   Loader2,
   Shield,
@@ -13,6 +16,7 @@ import {
   GitPullRequest,
   ClipboardList,
   ArrowRight,
+  Settings2,
 } from "lucide-react";
 
 type DashboardData = {
@@ -42,9 +46,11 @@ const CHECKLIST = [
 
 export default function ShadowModeOps() {
   const { authFetch } = useAuth();
+  const { toast } = useToast();
   const [analytics, setAnalytics] = useState<DashboardData | null>(null);
   const [config, setConfig] = useState<ShadowConfig | null>(null);
   const [loading, setLoading] = useState(false);
+  const [toggling, setToggling] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   async function load() {
@@ -74,6 +80,29 @@ export default function ShadowModeOps() {
       setError(err?.message ?? "Failed to load ops dashboard");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleToggle(key: keyof ShadowConfig, newValue: boolean) {
+    if (!config) return;
+    setToggling(key);
+    try {
+      const res = await authFetch("/api/shadowMode/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: newValue }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.config) setConfig(data.config);
+        toast({ title: "Config updated", description: `${key} set to ${newValue}` });
+      } else {
+        toast({ title: "Update failed", description: "Could not save setting", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Network error", description: "Could not reach server", variant: "destructive" });
+    } finally {
+      setToggling(null);
     }
   }
 
