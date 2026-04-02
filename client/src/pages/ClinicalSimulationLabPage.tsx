@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import {
   TrendingDown, TrendingUp, Activity,
   Brain, ThumbsUp, ThumbsDown, Clock, Gauge, Bell, BrainCircuit,
   CheckCheck, CircleDot, Siren, Lock,
+  Sparkles, Wrench, LayoutGrid, ListOrdered, ChevronUp, ArrowRight,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -546,6 +547,27 @@ function LearningQueueItem({
   rejecting: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [explaining, setExplaining] = useState(false);
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  async function handleExplain() {
+    setExpanded(true);
+    if (explanation) return;
+    setExplaining(true);
+    try {
+      const r = await apiRequest("POST", "/api/simulation-lab/ai/explain-proposal", {
+        title: item.title, description: item.description, rationale: item.rationale,
+        type: item.type, riskLevel: item.riskLevel,
+        affectedComplaints: item.affectedComplaints, reasons: item.reasons, linkedCases: item.linkedCases,
+      });
+      const data = await r.json();
+      if (data.ok) setExplanation(data.explanation);
+      else toast({ title: "AI unavailable", description: "Could not generate explanation.", variant: "destructive" });
+    } catch {
+      toast({ title: "Error", description: "Failed to get AI explanation.", variant: "destructive" });
+    } finally { setExplaining(false); }
+  }
 
   return (
     <div
@@ -598,6 +620,21 @@ function LearningQueueItem({
                   <span className="font-semibold">Rationale:</span> {item.rationale}
                 </div>
               )}
+              {(explaining || explanation) && (
+                <div className="rounded-md border border-violet-500/30 bg-violet-500/5 px-3 py-2">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Sparkles size={9} className="text-violet-400" />
+                    <span className="text-[9px] font-semibold text-violet-400 uppercase tracking-wider">AI Explanation</span>
+                  </div>
+                  {explaining ? (
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <Loader2 size={9} className="animate-spin" /> Analyzing proposal…
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-foreground/90 leading-relaxed">{explanation}</p>
+                  )}
+                </div>
+              )}
               {item.linkedCases?.length > 0 && (
                 <div className="text-[9px] text-muted-foreground">
                   Linked cases: {item.linkedCases.slice(0, 8).join(", ")}
@@ -611,14 +648,27 @@ function LearningQueueItem({
           )}
         </div>
         <div className="flex flex-col gap-1 items-end shrink-0">
-          <button
-            className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-            onClick={() => setExpanded(e => !e)}
-            data-testid={`expand-queue-item-${item.id}`}
-          >
-            {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-            {expanded ? "Less" : "More"}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              className="text-[9px] text-violet-400/80 hover:text-violet-300 flex items-center gap-0.5 transition-colors"
+              onClick={handleExplain}
+              disabled={explaining}
+              data-testid={`explain-${item.id}`}
+              title="Get AI explanation"
+            >
+              {explaining ? <Loader2 size={9} className="animate-spin" /> : <Sparkles size={9} />}
+              Explain
+            </button>
+            <span className="text-muted-foreground/40 text-[10px]">·</span>
+            <button
+              className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+              onClick={() => setExpanded(e => !e)}
+              data-testid={`expand-queue-item-${item.id}`}
+            >
+              {expanded ? <ChevronUp size={9} /> : <ChevronDown size={9} />}
+              {expanded ? "Less" : "More"}
+            </button>
+          </div>
           {item.status === "pending" && (
             <div className="flex gap-1 mt-1">
               <Button
@@ -710,6 +760,347 @@ function DriftAlertItem({ alert, onResolve, resolving }: { alert: any; onResolve
           {resolving ? <Loader2 size={9} className="animate-spin" /> : <CheckCircle size={9} />}
           Resolve
         </Button>
+      )}
+    </div>
+  );
+}
+
+// ─── Fix Generator ────────────────────────────────────────────────────────────
+function FixGeneratorSection({ run }: { run: any }) {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<any[] | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+
+  const failures = useMemo(() =>
+    (run?.results ?? []).filter((r: any) => !r.dispositionCorrect || r.redFlagMiss),
+    [run]
+  );
+
+  const topPatterns = useMemo(() => {
+    const counts: Record<string, { count: number; complaints: Set<string> }> = {};
+    for (const f of failures) {
+      const reasons: string[] = [...(f.failureReasons ?? f.reasons ?? [])];
+      if (f.redFlagMiss) reasons.push("missed_red_flag");
+      if (!f.dispositionCorrect) reasons.push("disposition_error");
+      for (const r of reasons) {
+        if (!counts[r]) counts[r] = { count: 0, complaints: new Set() };
+        counts[r].count++;
+        if (f.complaint) counts[r].complaints.add(f.complaint);
+      }
+    }
+    return Object.entries(counts)
+      .map(([reason, v]) => ({ reason, count: v.count, complaints: [...v.complaints] }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [failures]);
+
+  async function generate() {
+    if (!topPatterns.length) {
+      toast({ title: "No failures", description: "No failure patterns detected in this run.", variant: "destructive" });
+      return;
+    }
+    setLoading(true);
+    setSuggestions(null);
+    try {
+      const r = await apiRequest("POST", "/api/simulation-lab/ai/fix-suggestions", {
+        topPatterns,
+        failures: failures.slice(0, 10),
+        passRate: run?.passRate,
+        redFlagMisses: run?.redFlagMisses,
+      });
+      const data = await r.json();
+      if (data.ok) setSuggestions(data.suggestions ?? []);
+      else toast({ title: "AI error", description: "Fix generator returned an error.", variant: "destructive" });
+    } catch {
+      toast({ title: "Error", description: "Could not contact fix generator.", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const TARGET_COLORS: Record<string, string> = {
+    "Knowledge Base": "border-blue-500/40 bg-blue-500/5 text-blue-300",
+    "Disposition": "border-orange-500/40 bg-orange-500/5 text-orange-300",
+    "Red-flag": "border-red-500/40 bg-red-500/5 text-red-300",
+    "Bayesian": "border-purple-500/40 bg-purple-500/5 text-purple-300",
+    "Question": "border-cyan-500/40 bg-cyan-500/5 text-cyan-300",
+  };
+
+  function getTargetColor(target: string) {
+    for (const [k, v] of Object.entries(TARGET_COLORS)) {
+      if (target?.includes(k)) return v;
+    }
+    return "border-border/40 bg-muted/5 text-muted-foreground";
+  }
+
+  return (
+    <section data-testid="section-fix-generator">
+      <div className="flex items-center gap-2 mb-2">
+        <Wrench size={12} className="text-amber-400" />
+        <span className="text-xs font-bold">Fix Generator</span>
+        {topPatterns.length > 0 && (
+          <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-amber-500/30 text-amber-400">
+            {topPatterns.length} pattern{topPatterns.length !== 1 ? "s" : ""}
+          </Badge>
+        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2.5 text-[9px] gap-1.5 border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
+            onClick={generate}
+            disabled={loading || !topPatterns.length}
+            data-testid="button-generate-fixes"
+          >
+            {loading ? <Loader2 size={9} className="animate-spin" /> : <Sparkles size={9} />}
+            {suggestions ? "Regenerate" : "Generate Fix Suggestions"}
+          </Button>
+          <button className="text-muted-foreground hover:text-foreground" onClick={() => setCollapsed(c => !c)}>
+            {collapsed ? <ChevronDown size={11} /> : <ChevronUp size={11} />}
+          </button>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <>
+          {/* Top patterns ranked bar */}
+          <div className="space-y-1 mb-3">
+            {topPatterns.length === 0 ? (
+              <div className="text-[10px] text-muted-foreground text-center py-3 bg-muted/10 rounded">
+                No failure patterns detected — this run passed all cases.
+              </div>
+            ) : (
+              topPatterns.map((p, i) => (
+                <div
+                  key={p.reason}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded bg-muted/10 border border-border/30"
+                  data-testid={`pattern-${i}`}
+                >
+                  <span className="text-[9px] font-mono text-muted-foreground w-4 text-right shrink-0">{p.count}×</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[10px] font-semibold">{p.reason.replace(/_/g, " ")}</span>
+                    {p.complaints.length > 0 && (
+                      <span className="text-[9px] text-muted-foreground ml-2">
+                        {p.complaints.slice(0, 3).map((c: string) => c.replace(/_/g, " ")).join(", ")}
+                        {p.complaints.length > 3 && ` +${p.complaints.length - 3}`}
+                      </span>
+                    )}
+                  </div>
+                  <div className="h-1.5 bg-muted/20 rounded-full overflow-hidden w-20 shrink-0">
+                    <div
+                      className="h-full bg-amber-400/70 rounded-full"
+                      style={{ width: `${Math.min(100, (p.count / (topPatterns[0]?.count || 1)) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Loading */}
+          {loading && (
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground py-4 justify-center">
+              <Loader2 size={11} className="animate-spin text-amber-400" />
+              AI is analyzing failure patterns and generating targeted fixes…
+            </div>
+          )}
+
+          {/* AI suggestions */}
+          {suggestions && suggestions.length > 0 && (
+            <div className="space-y-3" data-testid="fix-suggestions">
+              {suggestions.map((s: any, i: number) => (
+                <div key={i} className="border border-border/40 rounded-lg overflow-hidden" data-testid={`fix-group-${i}`}>
+                  <div className="px-3 py-1.5 bg-muted/20 border-b border-border/30 flex items-center gap-2">
+                    <ListOrdered size={10} className="text-amber-400" />
+                    <span className="text-[10px] font-bold capitalize">{(s.pattern ?? "").replace(/_/g, " ")}</span>
+                  </div>
+                  <div className="p-3 space-y-2">
+                    {(s.fixes ?? []).map((fix: any, fi: number) => (
+                      <div key={fi} className={cn("border rounded px-3 py-2", getTargetColor(fix.target ?? ""))} data-testid={`fix-${i}-${fi}`}>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <ArrowRight size={9} />
+                          <span className="text-[9px] font-bold uppercase tracking-wider opacity-80">{fix.target}</span>
+                        </div>
+                        <div className="text-[10px] leading-snug font-medium">{fix.change}</div>
+                        {fix.impact && (
+                          <div className="text-[9px] text-muted-foreground italic mt-0.5">{fix.impact}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {suggestions && suggestions.length === 0 && !loading && (
+            <div className="text-[10px] text-muted-foreground text-center py-2">No suggestions generated.</div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// ─── Heatmap Tab ─────────────────────────────────────────────────────────────
+function HeatmapTab({ run }: { run: RunResult | null }) {
+  const failures = useMemo(() =>
+    (run?.results ?? []).filter((r: any) => !r.dispositionCorrect || r.redFlagMiss),
+    [run]
+  );
+
+  const { complaints, reasons, grid } = useMemo(() => {
+    const complaintSet = new Set<string>();
+    const reasonSet = new Set<string>();
+    const raw: Record<string, Record<string, number>> = {};
+
+    for (const f of failures) {
+      const complaint = f.complaint ?? "unknown";
+      const rs: string[] = [...(f.failureReasons ?? f.reasons ?? [])];
+      if (f.redFlagMiss) rs.push("missed_red_flag");
+      if (!f.dispositionCorrect) rs.push("disposition_error");
+
+      complaintSet.add(complaint);
+      for (const r of rs) {
+        reasonSet.add(r);
+        if (!raw[complaint]) raw[complaint] = {};
+        raw[complaint][r] = (raw[complaint][r] ?? 0) + 1;
+      }
+    }
+
+    const complaints = [...complaintSet].sort();
+    const reasons = [...reasonSet].sort();
+    const grid = complaints.map(c => reasons.map(r => raw[c]?.[r] ?? 0));
+    return { complaints, reasons, grid };
+  }, [failures]);
+
+  const topComplaints = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const f of failures) {
+      const c = f.complaint ?? "unknown";
+      counts[c] = (counts[c] ?? 0) + 1;
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  }, [failures]);
+
+  const maxCell = useMemo(() => Math.max(1, ...grid.flat()), [grid]);
+
+  function heatColor(v: number) {
+    if (v === 0) return "bg-muted/10 text-transparent";
+    const pct = v / maxCell;
+    if (pct > 0.75) return "bg-red-500/80 text-white font-bold";
+    if (pct > 0.5)  return "bg-orange-500/70 text-white font-semibold";
+    if (pct > 0.25) return "bg-yellow-500/60 text-foreground font-medium";
+    return "bg-yellow-400/30 text-foreground";
+  }
+
+  if (!run) return null;
+
+  if (failures.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
+        <CheckCircle size={36} className="text-green-400/50" />
+        <div>
+          <div className="text-sm font-semibold mb-1 text-green-400">No Failures</div>
+          <div className="text-xs text-muted-foreground">All {run.totalCases} cases passed — no heatmap data to display.</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-auto p-5 space-y-6">
+      {/* Top complaint failure bar */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <BarChart3 size={13} className="text-violet-400" />
+          <span className="text-sm font-bold">Complaint Failure Rate</span>
+          <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-violet-500/30 text-violet-400">
+            Top {topComplaints.length}
+          </Badge>
+        </div>
+        <div className="space-y-1.5">
+          {topComplaints.map(([complaint, count]) => (
+            <div key={complaint} className="flex items-center gap-2" data-testid={`complaint-bar-${complaint}`}>
+              <div className="w-36 shrink-0 text-[10px] text-right text-muted-foreground truncate">
+                {complaint.replace(/_/g, " ")}
+              </div>
+              <div className="flex-1 h-5 bg-muted/20 rounded overflow-hidden">
+                <div
+                  className="h-full bg-violet-500/60 rounded flex items-center pl-1.5"
+                  style={{ width: `${Math.max(8, (count / (topComplaints[0]?.[1] || 1)) * 100)}%` }}
+                >
+                  <span className="text-[9px] text-white font-semibold whitespace-nowrap">{count} failure{count !== 1 ? "s" : ""}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Heatmap grid */}
+      {complaints.length > 0 && reasons.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <LayoutGrid size={13} className="text-cyan-400" />
+            <span className="text-sm font-bold">Failure Heatmap</span>
+            <span className="text-[10px] text-muted-foreground">Complaint × Failure Type</span>
+          </div>
+          <div className="overflow-auto max-h-[420px] border border-border/30 rounded-lg">
+            <table className="text-[9px] border-collapse w-full">
+              <thead>
+                <tr className="bg-muted/30 sticky top-0 z-10">
+                  <th className="text-left px-2 py-1.5 font-semibold text-muted-foreground border-b border-r border-border/30 min-w-[120px]">
+                    Complaint
+                  </th>
+                  {reasons.map(r => (
+                    <th key={r} className="px-1.5 py-1.5 text-center font-semibold text-muted-foreground border-b border-border/30 min-w-[80px]">
+                      <div className="writing-mode-vertical" style={{ writingMode: "vertical-lr", transform: "rotate(180deg)", maxHeight: 80, whiteSpace: "nowrap" }}>
+                        {r.replace(/_/g, " ")}
+                      </div>
+                    </th>
+                  ))}
+                  <th className="px-2 py-1.5 text-center font-semibold text-muted-foreground border-b border-l border-border/30">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {complaints.map((c, ci) => {
+                  const rowTotal = grid[ci].reduce((a, b) => a + b, 0);
+                  return (
+                    <tr key={c} className="border-b border-border/20 hover:bg-muted/10">
+                      <td className="px-2 py-1 border-r border-border/30 font-medium text-[9px] text-muted-foreground whitespace-nowrap">
+                        {c.replace(/_/g, " ")}
+                      </td>
+                      {grid[ci].map((v, ri) => (
+                        <td key={ri} className={cn("px-1 py-1 text-center text-[9px] border-border/20", heatColor(v))} data-testid={`heatcell-${c}-${reasons[ri]}`}>
+                          {v > 0 ? v : ""}
+                        </td>
+                      ))}
+                      <td className="px-2 py-1 text-center font-bold border-l border-border/30 text-[9px]">
+                        {rowTotal}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* Legend */}
+          <div className="flex items-center gap-3 mt-2 text-[9px] text-muted-foreground flex-wrap">
+            <span className="font-semibold">Intensity:</span>
+            {[
+              { label: "Low", cls: "bg-yellow-400/30" },
+              { label: "Moderate", cls: "bg-yellow-500/60" },
+              { label: "High", cls: "bg-orange-500/70" },
+              { label: "Critical", cls: "bg-red-500/80" },
+            ].map(l => (
+              <div key={l.label} className="flex items-center gap-1">
+                <div className={cn("w-3 h-3 rounded", l.cls)} />
+                <span>{l.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1014,6 +1405,10 @@ function LearningEngineTab({ run }: { run: any }) {
             )}
           </section>
         )}
+
+        {/* ── Fix Generator ──────────────────────────────────────────────── */}
+        {run && <FixGeneratorSection run={run} />}
+
       </div>
     </div>
   );
@@ -1092,6 +1487,9 @@ export default function ClinicalSimulationLabPage() {
                   <TabsTrigger value="learning" className="text-[10px] h-6 px-3" data-testid="tab-learning">
                     <BrainCircuit size={10} className="mr-1.5" /> Learning Engine
                   </TabsTrigger>
+                  <TabsTrigger value="heatmap" className="text-[10px] h-6 px-3" data-testid="tab-heatmap">
+                    <LayoutGrid size={10} className="mr-1.5" /> Heatmap
+                  </TabsTrigger>
                 </TabsList>
               </div>
 
@@ -1106,6 +1504,9 @@ export default function ClinicalSimulationLabPage() {
               </TabsContent>
               <TabsContent value="learning" className="flex-1 overflow-hidden m-0 data-[state=active]:flex data-[state=active]:flex-col">
                 <LearningEngineTab run={run} />
+              </TabsContent>
+              <TabsContent value="heatmap" className="flex-1 overflow-hidden m-0 data-[state=active]:flex data-[state=active]:flex-col">
+                <HeatmapTab run={run} />
               </TabsContent>
             </Tabs>
           )}

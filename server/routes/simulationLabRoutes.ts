@@ -1,4 +1,5 @@
 import express from "express";
+import OpenAI from "openai";
 import { runSimulationBatch } from "../simulation/simulationRunner";
 import { clearSimulationRuns, getSimulationRun, listSimulationRuns } from "../simulation/simulationStore";
 import { getLearningStats } from "../simulation/simulationLearningBridge";
@@ -364,6 +365,117 @@ router.post("/simulation-lab/top50/push-to-learning", (req, res) => {
     const pushed = pushRunToLearningQueue(runResult);
     recordTop50DriftSnapshot(runResult);
     res.json({ ok: true, pushed });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─── AI endpoints ─────────────────────────────────────────────────────────────
+
+function getOpenAI() {
+  return new OpenAI({
+    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
+    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  });
+}
+
+router.post("/simulation-lab/ai/explain-proposal", async (req, res) => {
+  try {
+    const { title, description, rationale, type, riskLevel, affectedComplaints, reasons, linkedCases } = req.body;
+    if (!title) return res.status(400).json({ ok: false, error: "title required" });
+
+    const prompt = `You are a clinical AI governance expert. Explain the following autonomous learning proposal in plain language for a physician or administrator who needs to decide whether to approve or reject it.
+
+PROPOSAL:
+- Title: ${title}
+- Type: ${type ?? "unknown"}
+- Risk Level: ${riskLevel ?? "unknown"}
+- Affected Complaints: ${(affectedComplaints ?? []).join(", ") || "none specified"}
+- Description: ${description ?? "none"}
+- Rationale: ${rationale ?? "none"}
+- Failure Reasons Detected: ${(reasons ?? []).join(", ") || "none"}
+- Linked Cases: ${(linkedCases ?? []).slice(0, 5).join(", ") || "none"}
+
+Provide a concise (3–5 sentence) plain-language explanation:
+1. What clinical risk or gap this proposal addresses
+2. Why the AI flagged it (what data pattern triggered it)
+3. What approving it would change in the system
+4. Any caution or contraindication the reviewer should consider
+
+Be direct, specific, and avoid jargon. If riskLevel is critical or high, start with a clinical urgency note.`;
+
+    const completion = await getOpenAI().chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 300,
+      temperature: 0.3,
+    });
+
+    const explanation = completion.choices[0]?.message?.content?.trim() ?? "Unable to generate explanation.";
+    res.json({ ok: true, explanation });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/simulation-lab/ai/fix-suggestions", async (req, res) => {
+  try {
+    const { topPatterns, failures, passRate, redFlagMisses } = req.body;
+    if (!topPatterns?.length && !failures?.length) {
+      return res.status(400).json({ ok: false, error: "topPatterns or failures required" });
+    }
+
+    const patternSummary = (topPatterns ?? []).slice(0, 8).map((p: any) =>
+      `- ${p.reason}: ${p.count} cases (complaints: ${(p.complaints ?? []).join(", ")})`
+    ).join("\n");
+
+    const failureSummary = (failures ?? []).slice(0, 5).map((f: any) =>
+      `- Case ${f.caseId ?? "?"}: expected ${f.expectedDisposition}, got ${f.predictedDisposition}${f.redFlagMiss ? " [RED FLAG MISS]" : ""}`
+    ).join("\n");
+
+    const prompt = `You are a senior clinical informatics engineer reviewing failure patterns from an AI triage system (Auralyn/ENT). The system failed ${redFlagMisses ?? 0} red-flag cases and has a pass rate of ${passRate != null ? Math.round(passRate * 100) + "%" : "unknown"}.
+
+TOP FAILURE PATTERNS:
+${patternSummary || "none available"}
+
+SAMPLE FAILURES:
+${failureSummary || "none available"}
+
+For each of the top failure patterns, suggest 1–2 concrete, actionable fixes. Each fix must specify:
+1. WHERE to fix it (Knowledge Base rule, Disposition threshold, Red-flag rule, Bayesian prior, or Question weight)
+2. WHAT to change (be specific — e.g., "Add 'tearing quality' as a mandatory red-flag feature for chest_pain → aortic_dissection")
+3. EXPECTED IMPACT (brief, 1 sentence)
+
+Format as a JSON array:
+[
+  {
+    "pattern": "disposition_error",
+    "fixes": [
+      { "target": "Disposition threshold", "change": "Lower er_now threshold for chest_pain with diaphoresis from 0.75 to 0.60", "impact": "Reduces under-triage of atypical ACS presentations" }
+    ]
+  }
+]
+
+Return ONLY the JSON array, no prose.`;
+
+    const completion = await getOpenAI().chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 700,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    });
+
+    const raw = completion.choices[0]?.message?.content?.trim() ?? "{}";
+    let parsed: any;
+    try {
+      const obj = JSON.parse(raw);
+      parsed = Array.isArray(obj) ? obj : obj.fixes ?? obj.suggestions ?? Object.values(obj)[0] ?? [];
+    } catch {
+      parsed = [];
+    }
+
+    res.json({ ok: true, suggestions: parsed });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
