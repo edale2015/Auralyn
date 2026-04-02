@@ -771,6 +771,29 @@ function FixGeneratorSection({ run }: { run: any }) {
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<any[] | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [queuedFixes, setQueuedFixes] = useState<Set<string>>(new Set());
+
+  const queueFixMutation = useMutation({
+    mutationFn: async ({ fix, pattern }: { fix: any; pattern: string }) => {
+      const res = await apiRequest("POST", "/api/ci/learning/queue", {
+        type: "kb_fix_suggestion",
+        riskLevel: fix.target?.toLowerCase().includes("red") ? "critical" : "high",
+        title: `AI Fix: ${fix.target}`,
+        rationale: fix.change,
+        affectedComplaints: (run?.complaint ? [run.complaint] : []),
+        reasons: [fix.impact ?? "", `From pattern: ${pattern}`],
+        confidence: 0.75,
+      });
+      return res.json();
+    },
+    onSuccess: (_data, { fix }) => {
+      const key = `${fix.target}-${fix.change}`;
+      setQueuedFixes(prev => new Set([...prev, key]));
+      queryClient.invalidateQueries({ queryKey: ["/api/ci/learning/queue"] });
+      toast({ title: "Queued for physician review", description: "Fix has been added to the governance queue." });
+    },
+    onError: () => toast({ title: "Queue failed", description: "Could not queue this fix.", variant: "destructive" }),
+  });
 
   const failures = useMemo(() =>
     (run?.results ?? []).filter((r: any) => !r.dispositionCorrect || r.redFlagMiss),
@@ -916,18 +939,40 @@ function FixGeneratorSection({ run }: { run: any }) {
                     <span className="text-[10px] font-bold capitalize">{(s.pattern ?? "").replace(/_/g, " ")}</span>
                   </div>
                   <div className="p-3 space-y-2">
-                    {(s.fixes ?? []).map((fix: any, fi: number) => (
-                      <div key={fi} className={cn("border rounded px-3 py-2", getTargetColor(fix.target ?? ""))} data-testid={`fix-${i}-${fi}`}>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <ArrowRight size={9} />
-                          <span className="text-[9px] font-bold uppercase tracking-wider opacity-80">{fix.target}</span>
+                    {(s.fixes ?? []).map((fix: any, fi: number) => {
+                      const fixKey = `${fix.target}-${fix.change}`;
+                      const isQueued = queuedFixes.has(fixKey);
+                      return (
+                        <div key={fi} className={cn("border rounded px-3 py-2", getTargetColor(fix.target ?? ""))} data-testid={`fix-${i}-${fi}`}>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <ArrowRight size={9} />
+                            <span className="text-[9px] font-bold uppercase tracking-wider opacity-80 flex-1">{fix.target}</span>
+                            <button
+                              className={cn(
+                                "text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border transition-all flex-shrink-0",
+                                isQueued
+                                  ? "bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400"
+                                  : "bg-background/60 hover:bg-background border-border/50 text-muted-foreground hover:text-foreground"
+                              )}
+                              disabled={isQueued || queueFixMutation.isPending}
+                              onClick={(e) => { e.stopPropagation(); queueFixMutation.mutate({ fix, pattern: s.pattern ?? "" }); }}
+                              data-testid={`button-queue-fix-${i}-${fi}`}
+                            >
+                              {isQueued ? "✓ Queued" : "Queue for Review"}
+                            </button>
+                          </div>
+                          {fix.kbRuleId && (
+                            <span className="text-[8px] font-mono px-1 py-0.5 rounded bg-background/70 border border-border/40 text-muted-foreground mr-1 inline-block mb-0.5" data-testid={`badge-kb-rule-id-${i}-${fi}`}>
+                              KB: {fix.kbRuleId}
+                            </span>
+                          )}
+                          <div className="text-[10px] leading-snug font-medium">{fix.change}</div>
+                          {fix.impact && (
+                            <div className="text-[9px] text-muted-foreground italic mt-0.5">{fix.impact}</div>
+                          )}
                         </div>
-                        <div className="text-[10px] leading-snug font-medium">{fix.change}</div>
-                        {fix.impact && (
-                          <div className="text-[9px] text-muted-foreground italic mt-0.5">{fix.impact}</div>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ))}

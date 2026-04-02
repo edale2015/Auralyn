@@ -346,30 +346,90 @@ Detection events are logged to `phiAuditLog[]` with timestamp, caller hint, and 
 
 ---
 
-## PART 6 — QUESTIONS FOR CLAUDE
+## PART 6 — QUESTIONS FOR CLAUDE (RESOLVED IN SUBSEQUENT SESSION)
 
 **On the simulation lab:**
-1. Is a 50-case failure pack with 80% pass threshold the right validation standard for a Class II SaMD? What does FDA 510(k) guidance say about minimum validation case counts?
-2. Should failure cases be versioned and immutable once created (golden cases can't be edited, only deprecated and replaced)?
-3. Should pack results be stored in DB with run timestamps for longitudinal regression tracking?
+1. Is a 50-case failure pack with 80% pass threshold the right validation standard for a Class II SaMD? What does FDA 510(k) guidance say about minimum validation case counts? — *Open (clinical policy decision)*
+2. Should failure cases be versioned and immutable once created (golden cases can't be edited, only deprecated and replaced)? — **✅ RESOLVED (Q2, see Part 8)**
+3. Should pack results be stored in DB with run timestamps for longitudinal regression tracking? — *Pack runs already DB-persisted to `simulation_pack_runs`. Heatmap data now also DB-persisted (see Q9 resolution).*
 
 **On the learning engine:**
-4. The auto-learning loop (RLHF + outcome learning + drift monitoring) runs continuously in the background. Is there a risk of it generating proposals faster than the governance queue can process them, creating a backlog that overwhelms reviewers?
-5. Should there be a "learning freeze" mechanism — a single switch that pauses ALL learning signals from being promoted, for use during incident response or regulatory audits?
+4. Risk of proposal backlog overwhelming reviewers? — *Open (monitoring/capacity design question)*
+5. Should there be a "learning freeze" mechanism? — **✅ RESOLVED — Learning Freeze toggle implemented in AdminDashboard SystemControls wired to `POST /api/fda-dashboard/release/freeze`.**
 
 **On the AI features (Explain + Fix Generator):**
-6. Using GPT-4o to explain its own learning proposals creates a circular dependency — the AI's governance is being evaluated by the same AI. Is this architecturally sound for a HIPAA/FDA context?
-7. Should fix suggestions reference specific KB row IDs/rule names rather than natural language descriptions, to make them actionable without ambiguity?
-8. What's the regulatory classification of AI-generated fix suggestions? If a physician acts on a suggestion and harms a patient, who bears liability?
+6. AI explaining its own proposals — circular dependency? — *Open (governance policy)*
+7. Should fix suggestions reference specific KB row IDs? — **✅ RESOLVED (Q7, see Part 8)**
+8. Regulatory liability for AI-generated fix suggestions? — *Open (legal/regulatory question)*
 
 **On the heatmap:**
-9. Is client-side computation of the heatmap acceptable, or should failure analytics be a server-side aggregation stored per run for auditability?
-10. Should the heatmap be included in regulatory submission artifacts (validation reports, post-market surveillance)?
+9. Should heatmap be server-side aggregated per run for auditability? — **✅ RESOLVED (Q9, see Part 8)**
+10. Should heatmap be in regulatory submission artifacts? — *Open (regulatory strategy)*
 
 **On overall architecture:**
-11. The system has both a legacy clinician auth system (single password, `CLINICIAN_PASSWORD`) and a JWT role-based system. This dual-auth creates confusion and potential security gaps. Should the legacy system be deprecated?
-12. Is PostgreSQL the right datastore for a 66-layer clinical KB, or would a dedicated clinical graph DB (e.g., Neo4j for the decision tree layer) improve querying and validation?
-13. Given the autonomous learning loop runs 24/7, what audit artifact does the system produce that could be submitted to an FDA inspector on demand?
+11. Should the legacy CLINICIAN_PASSWORD auth be deprecated? — **✅ RESOLVED (Q11, see Part 8)**
+12. Is PostgreSQL the right datastore for the 66-layer KB? — *Open (infrastructure decision)*
+13. Audit artifact for FDA inspector on demand? — *`POST /api/audit/export-package` generates a 90-day FDA audit package.*
+
+---
+
+## PART 8 — POST-REVIEW IMPLEMENTATIONS (Q2, Q7, Q9, Q11, Fix Queue Button)
+
+### Q2 — Golden Case Versioning & Immutability
+**File:** `server/routes/goldenCases.ts`
+
+**What changed:**
+- `PUT /:id` now rejects any attempt to edit clinical fields (`complaint`, `answers`, `symptoms`, `expectedDiagnosis`, `expectedDisposition`) with HTTP 409 `GOLDEN_CASE_IMMUTABLE`.
+- New `POST /:id/deprecate` endpoint: marks a case as deprecated (sets `status: "deprecated"`, `deprecatedAt`, `deprecatedBy`, `deprecationReason`).
+- New `POST /:id/supersede` endpoint: the ONLY way to modify clinical content — atomically deprecates the old case and creates a new versioned replacement with `version: N+1`, `supersedes: oldId`.
+- `DELETE /:id` now returns HTTP 405 `HARD_DELETE_DISABLED` — cases cannot be hard-deleted to preserve FDA audit traceability. Use deprecate instead.
+- **Status: ✅ RESOLVED**
+
+### Q7 — Fix Suggestions Reference KB Row IDs
+**File:** `server/routes/simulationLabRoutes.ts` (POST `/api/simulation-lab/ai/fix-suggestions`)
+
+**What changed:**
+- Before calling GPT-4o, the endpoint now queries `kbRedFlagRules` and `kbDispositionRules` for all complaints involved in the failure patterns.
+- KB rules are included in the prompt as a structured context block: `kbRuleId:"rf-42" complaint:"chest_pain" label:"..." trigger:"..." severity:HARD`.
+- GPT-4o is instructed to include a `kbRuleId` field in each fix (e.g., `"kbRuleId": "rf-42"`) when a live KB rule directly relates to the suggestion. `null` if no matching rule.
+- Frontend `FixGeneratorSection` renders a `KB: rf-42` monospace badge above each fix description when a `kbRuleId` is returned.
+- DB query is non-fatal — if KB query fails, the endpoint falls back to generating suggestions without KB context.
+- **Status: ✅ RESOLVED**
+
+### Q9 — Heatmap Server-Side Persistence Per Run
+**Files:** `server/simulation/simulationStore.ts`, `server/routes/simulationLabRoutes.ts`
+
+**What changed:**
+- New `simulation_run_heatmaps` table created on boot (no FK to avoid async race). Stores `run_id`, `heatmap_data` (JSONB), `complaints` (TEXT[]), `reasons` (TEXT[]).
+- `computeHeatmapFromResults(results)` function in simulationStore: server-side implementation of the complaint × failure-reason grid computation.
+- `saveHeatmap(runId, heatmapData)` and `getHeatmap(runId)` exported from simulationStore.
+- Both `POST /simulation-lab/top50/run` and `POST /simulation-lab/top50/run-pack/:packId` now auto-compute and persist the heatmap immediately after each run.
+- New `GET /api/simulation-lab/runs/:runId/heatmap` endpoint: retrieves persisted heatmap for any historical run by ID.
+- Client-side real-time computation remains for immediate display; DB persistence is for auditability and historical comparison.
+- **Status: ✅ RESOLVED**
+
+### Q11 — Legacy Auth Deprecation
+**Files:** `server/routes.auth.ts`, `client/src/pages/AdminDashboard.tsx`
+
+**What changed:**
+- All three legacy auth endpoints (`POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`) now return four RFC-standard deprecation headers on every response (including 401s):
+  - `Deprecation: true`
+  - `Sunset: 2026-12-31T00:00:00Z`
+  - `Link: </api/roleAuth/login>; rel="successor-version"`
+  - `Warning: 299 - "This legacy auth endpoint is deprecated. Migrate to POST /api/roleAuth/login"`
+- Successful login/me responses also include `_deprecated: true` and `_deprecationNotice` in the JSON body.
+- AdminDashboard now shows a persistent amber deprecation notice banner identifying the sunset date and migration path.
+- **Status: ✅ RESOLVED — Legacy system not yet removed (backward compat maintained). Removal target: v2.0.0 / 2026-12-31.**
+
+### Fix Generator "Queue for Review" Button
+**File:** `client/src/pages/ClinicalSimulationLabPage.tsx` (`FixGeneratorSection`)
+
+**What changed:**
+- Each AI fix suggestion card now has a "Queue for Review" button.
+- Clicking it POSTs to `POST /api/ci/learning/queue` with type `kb_fix_suggestion`, riskLevel derived from fix target type, and the fix content as the rationale.
+- Button state toggles to "✓ Queued" (green) after successful submission and becomes disabled to prevent duplicates.
+- Invalidates the learning queue TanStack Query cache so the governance queue reflects the new proposal immediately.
+- **Status: ✅ RESOLVED**
 
 ---
 

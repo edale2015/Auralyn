@@ -5,7 +5,10 @@ import { applyPHIGuard } from "../middleware/phiGuardOpenAI";
 import { heavyRateLimit } from "../middleware/redisRateLimit";
 import { getRedisAsync } from "../queue/redis";
 import { runSimulationBatch } from "../simulation/simulationRunner";
-import { clearSimulationRuns, getSimulationRun, listSimulationRuns } from "../simulation/simulationStore";
+import { clearSimulationRuns, getSimulationRun, listSimulationRuns, saveHeatmap, getHeatmap, computeHeatmapFromResults } from "../simulation/simulationStore";
+import { db } from "../db";
+import { eq, inArray } from "drizzle-orm";
+import { kbComplaints, kbRedFlagRules, kbDispositionRules } from "../../shared/schema";
 import { getLearningStats } from "../simulation/simulationLearningBridge";
 import { runProtocolBenchmark } from "../simulation/protocolBenchmarkEngine";
 import { acie } from "../improvement/automatedImprovementEngine";
@@ -340,6 +343,11 @@ router.post("/simulation-lab/top50/run", (_req, res) => {
     const result = runTop50Evaluation(cases);
     const pushed = pushRunToLearningQueue(result);
     recordTop50DriftSnapshot(result);
+    // Q9: Persist server-side heatmap for longitudinal auditability
+    if (result.runId && result.results?.length) {
+      const heatmap = computeHeatmapFromResults(result.results);
+      saveHeatmap(result.runId, heatmap).catch(() => {});
+    }
     res.json({ ok: true, learningItemsPushed: pushed, ...result });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
@@ -354,7 +362,23 @@ router.post("/simulation-lab/top50/run-pack/:packId", (req, res) => {
     const result = runTop50Evaluation(cases);
     const pushed = pushRunToLearningQueue(result);
     recordTop50DriftSnapshot(result, packId);
+    // Q9: Persist server-side heatmap for longitudinal auditability
+    if (result.runId && result.results?.length) {
+      const heatmap = computeHeatmapFromResults(result.results);
+      saveHeatmap(result.runId, heatmap).catch(() => {});
+    }
     res.json({ ok: true, packId, learningItemsPushed: pushed, ...result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Q9: Heatmap retrieval by runId — server-persisted for historical comparison & audit
+router.get("/simulation-lab/runs/:runId/heatmap", async (req, res) => {
+  try {
+    const heatmap = await getHeatmap(req.params.runId);
+    if (!heatmap) return res.status(404).json({ ok: false, error: "heatmap_not_found", runId: req.params.runId });
+    res.json({ ok: true, runId: req.params.runId, ...heatmap });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -450,6 +474,53 @@ router.post("/simulation-lab/ai/fix-suggestions", heavyRateLimit(), async (req, 
       return res.status(400).json({ ok: false, error: "topPatterns or failures required" });
     }
 
+    // ── Q7: Enrich with real KB rule IDs from the database ────────────────────
+    // Pull affected complaint names from failure patterns and query KB for matching rules.
+    // This allows GPT-4o to reference exact DB row IDs in its suggestions, making them
+    // directly actionable without ambiguity.
+    const affectedComplaints = Array.from(new Set(
+      (topPatterns ?? []).flatMap((p: any) => p.complaints ?? [])
+        .concat((failures ?? []).map((f: any) => f.complaint).filter(Boolean))
+    )).slice(0, 8) as string[];
+
+    let kbContext = "";
+    try {
+      const [, redFlagRows, dispositionRows] = await Promise.all([
+        affectedComplaints.length > 0
+          ? db.select({ id: kbComplaints.id, complaintId: kbComplaints.complaintId, label: kbComplaints.label })
+              .from(kbComplaints)
+              .where(inArray(kbComplaints.complaintId, affectedComplaints))
+              .limit(10)
+          : Promise.resolve([]),
+        affectedComplaints.length > 0
+          ? db.select({ id: kbRedFlagRules.id, complaintId: kbRedFlagRules.complaintId, label: kbRedFlagRules.label, triggerExpr: kbRedFlagRules.triggerExpr, severity: kbRedFlagRules.severity })
+              .from(kbRedFlagRules)
+              .where(inArray(kbRedFlagRules.complaintId, affectedComplaints))
+              .limit(20)
+          : Promise.resolve([]),
+        affectedComplaints.length > 0
+          ? db.select({ id: kbDispositionRules.id, complaintId: kbDispositionRules.complaintId, dispositionLevel: kbDispositionRules.dispositionLevel, whenExpr: kbDispositionRules.whenExpr, confidenceHint: kbDispositionRules.confidenceHint })
+              .from(kbDispositionRules)
+              .where(inArray(kbDispositionRules.complaintId, affectedComplaints))
+              .limit(20)
+          : Promise.resolve([]),
+      ]);
+
+      const rfLines = redFlagRows.map((r: any) => `  - kbRuleId:"rf-${r.id}" complaint:"${r.complaintId}" label:"${r.label}" trigger:"${r.triggerExpr}" severity:${r.severity}`).join("\n");
+      const dispLines = dispositionRows.map((r: any) => `  - kbRuleId:"disp-${r.id}" complaint:"${r.complaintId}" level:"${r.dispositionLevel}" when:"${r.whenExpr}" confidence:${r.confidenceHint}`).join("\n");
+
+      kbContext = rfLines || dispLines ? `
+LIVE KB RULES FOR AFFECTED COMPLAINTS (reference these exact kbRuleIds in your fixes):
+Red-Flag Rules:
+${rfLines || "  (none found)"}
+Disposition Rules:
+${dispLines || "  (none found)"}
+` : "";
+    } catch (kbErr: any) {
+      // Non-fatal — proceed without KB context if DB query fails
+      kbContext = "";
+    }
+
     const patternSummary = (topPatterns ?? []).slice(0, 8).map((p: any) =>
       `- ${p.reason}: ${p.count} cases (complaints: ${(p.complaints ?? []).join(", ")})`
     ).join("\n");
@@ -465,18 +536,19 @@ ${patternSummary || "none available"}
 
 SAMPLE FAILURES:
 ${failureSummary || "none available"}
-
+${kbContext}
 For each of the top failure patterns, suggest 1–2 concrete, actionable fixes. Each fix must specify:
 1. WHERE to fix it (Knowledge Base rule, Disposition threshold, Red-flag rule, Bayesian prior, or Question weight)
 2. WHAT to change (be specific — e.g., "Add 'tearing quality' as a mandatory red-flag feature for chest_pain → aortic_dissection")
 3. EXPECTED IMPACT (brief, 1 sentence)
+4. kbRuleId — if a live KB rule is provided above that directly relates to this fix, reference its exact kbRuleId (e.g. "rf-42" or "disp-17"). Otherwise use null.
 
 Format as a JSON array:
 [
   {
     "pattern": "disposition_error",
     "fixes": [
-      { "target": "Disposition threshold", "change": "Lower er_now threshold for chest_pain with diaphoresis from 0.75 to 0.60", "impact": "Reduces under-triage of atypical ACS presentations" }
+      { "target": "Disposition threshold", "kbRuleId": "disp-17", "change": "Lower er_now threshold for chest_pain with diaphoresis from 0.75 to 0.60", "impact": "Reduces under-triage of atypical ACS presentations" }
     ]
   }
 ]
