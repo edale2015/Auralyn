@@ -34,4 +34,5 @@ export const ROUTES = {
   SYSTEM_CONTROL_TOWER: "/system-control-tower",
   INTEGRATION_HEALTH: "/integration-health",
   ENGINE_MAINTENANCE: "/engine-maintenance",
+  AGENT_LAB: "/agent-lab",
 };

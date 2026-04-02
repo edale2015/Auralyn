@@ -86,6 +86,7 @@ import SkillEvolutionLabPage from "@/pages/SkillEvolutionLabPage";
 import MissionControlPage from "@/pages/MissionControlPage";
 import IntegrationHealthPage from "@/pages/IntegrationHealthPage";
 import EngineMaintenancePage from "@/pages/EngineMaintenancePage";
+import AgentLabPage from "@/pages/AgentLabPage";
 
 validateRoutes();
 
@@ -141,6 +142,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.MISSION_CONTROL} component={MissionControlPage} />
         <Route path={ROUTES.INTEGRATION_HEALTH}>{() => <RoleGuard allowedRoles={["admin"]}><IntegrationHealthPage /></RoleGuard>}</Route>
         <Route path={ROUTES.ENGINE_MAINTENANCE}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><EngineMaintenancePage /></RoleGuard>}</Route>
+        <Route path={ROUTES.AGENT_LAB}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><AgentLabPage /></RoleGuard>}</Route>
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

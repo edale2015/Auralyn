@@ -2005,6 +2005,11 @@ export async function registerRoutes(
   const { default: engineMaintenanceRouter } = await import("./routes/engineMaintenanceRoutes");
   app.use("/api/engine-maintenance", engineMaintenanceRouter);
 
+  // Agent & Skill Lab — live inspection, testing, toggling, and troubleshooting
+  const { default: agentLabRouter } = await import("./routes/agentLabRoutes");
+  app.use("/api/agent-lab", agentLabRouter);
+  console.log("[AgentLab] Agent & Skill Lab endpoints registered at /api/agent-lab/*");
+
   return httpServer;
 }
 
