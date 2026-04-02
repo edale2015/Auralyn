@@ -58,6 +58,7 @@ const NAV_ITEMS = [
   { path: ROUTES.CONTROL_TOWER, label: "War Room", icon: Radio },
   { path: "/revenue-war-room", label: "Revenue War Room", icon: Landmark },
   { path: "/system-war-room", label: "System War Room", icon: Activity },
+  { path: "/simulation-lab", label: "Simulation Lab", icon: FlaskConical },
   { path: "/clinical-improvement-lab", label: "Clinical Improvement Lab", icon: FlaskConical },
   { path: "/care-pathway-optimizer", label: "Care Pathway Optimizer", icon: GitBranch },
   { path: "/governance-command-center", label: "Governance Command Center", icon: ShieldCheck },

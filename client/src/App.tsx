@@ -76,6 +76,7 @@ import SystemControlTowerPage from "@/pages/SystemControlTowerPage";
 import MultiPatientCommandPage from "@/pages/MultiPatientCommandPage";
 import ClinicalQAPage from "@/pages/ClinicalQAPage";
 import ClinicalImprovementLabPage from "@/pages/ClinicalImprovementLabPage";
+import ClinicalSimulationLabPage from "@/pages/ClinicalSimulationLabPage";
 import CarePathwayOptimizerPage from "@/pages/CarePathwayOptimizerPage";
 import GovernanceCommandCenterPage from "@/pages/GovernanceCommandCenterPage";
 import SkillMapPage from "@/pages/SkillMapPage";
@@ -126,6 +127,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.SYSTEM_CONTROL_TOWER} component={SystemControlTowerPage} />
         <Route path="/multi-patient-command" component={MultiPatientCommandPage} />
         <Route path="/clinical-qa" component={ClinicalQAPage} />
+        <Route path="/simulation-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalSimulationLabPage /></RoleGuard>}</Route>
         <Route path="/clinical-improvement-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalImprovementLabPage /></RoleGuard>}</Route>
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
         <Route path="/governance-command-center">{() => <RoleGuard allowedRoles={["admin"]}><GovernanceCommandCenterPage /></RoleGuard>}</Route>
