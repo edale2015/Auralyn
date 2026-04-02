@@ -1,5 +1,9 @@
 import express from "express";
 import OpenAI from "openai";
+import { createHash } from "crypto";
+import { applyPHIGuard } from "../middleware/phiGuardOpenAI";
+import { heavyRateLimit } from "../middleware/redisRateLimit";
+import { getRedisAsync } from "../queue/redis";
 import { runSimulationBatch } from "../simulation/simulationRunner";
 import { clearSimulationRuns, getSimulationRun, listSimulationRuns } from "../simulation/simulationStore";
 import { getLearningStats } from "../simulation/simulationLearningBridge";
@@ -379,10 +383,26 @@ function getOpenAI() {
   });
 }
 
-router.post("/simulation-lab/ai/explain-proposal", async (req, res) => {
+router.post("/simulation-lab/ai/explain-proposal", heavyRateLimit(), async (req, res) => {
   try {
-    const { title, description, rationale, type, riskLevel, affectedComplaints, reasons, linkedCases } = req.body;
+    const { proposalId, title, description, rationale, type, riskLevel, affectedComplaints, reasons, linkedCases } = req.body;
     if (!title) return res.status(400).json({ ok: false, error: "title required" });
+
+    // Redis cache — cache by proposalId or a hash of the proposal content (24-hour TTL)
+    const cacheKey = proposalId
+      ? `explain-proposal:${proposalId}`
+      : `explain-proposal:${createHash("sha256").update(JSON.stringify({ title, type, riskLevel, description, rationale })).digest("hex").slice(0, 16)}`;
+
+    try {
+      const redis = await getRedisAsync();
+      if (redis) {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          const explanation = typeof cached === "string" ? cached : JSON.stringify(cached);
+          return res.json({ ok: true, explanation, cached: true });
+        }
+      }
+    } catch { /* cache miss — continue */ }
 
     const prompt = `You are a clinical AI governance expert. Explain the following autonomous learning proposal in plain language for a physician or administrator who needs to decide whether to approve or reject it.
 
@@ -404,21 +424,26 @@ Provide a concise (3–5 sentence) plain-language explanation:
 
 Be direct, specific, and avoid jargon. If riskLevel is critical or high, start with a clinical urgency note.`;
 
-    const completion = await getOpenAI().chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 300,
-      temperature: 0.3,
-    });
-
+    const safeParams = applyPHIGuard(
+      { model: "gpt-4o", messages: [{ role: "user", content: prompt }], max_tokens: 300, temperature: 0.3 },
+      "simulationLabRoutes/explain-proposal"
+    );
+    const completion = await getOpenAI().chat.completions.create(safeParams);
     const explanation = completion.choices[0]?.message?.content?.trim() ?? "Unable to generate explanation.";
-    res.json({ ok: true, explanation });
+
+    // Store in Redis cache with 24-hour TTL
+    try {
+      const redis = await getRedisAsync();
+      if (redis) await redis.set(cacheKey, explanation, { ex: 86400 });
+    } catch { /* cache write failure is non-fatal */ }
+
+    res.json({ ok: true, explanation, cached: false });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-router.post("/simulation-lab/ai/fix-suggestions", async (req, res) => {
+router.post("/simulation-lab/ai/fix-suggestions", heavyRateLimit(), async (req, res) => {
   try {
     const { topPatterns, failures, passRate, redFlagMisses } = req.body;
     if (!topPatterns?.length && !failures?.length) {
@@ -458,13 +483,11 @@ Format as a JSON array:
 
 Return ONLY the JSON array, no prose.`;
 
-    const completion = await getOpenAI().chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 700,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-    });
+    const safeFixParams = applyPHIGuard(
+      { model: "gpt-4o", messages: [{ role: "user", content: prompt }], max_tokens: 700, temperature: 0.2, response_format: { type: "json_object" } },
+      "simulationLabRoutes/fix-suggestions"
+    );
+    const completion = await getOpenAI().chat.completions.create(safeFixParams);
 
     const raw = completion.choices[0]?.message?.content?.trim() ?? "{}";
     let parsed: any;

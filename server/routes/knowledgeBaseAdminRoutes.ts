@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { requireRole } from "../middleware/requireRole";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import {
@@ -63,6 +64,14 @@ function validateDiagnosisRule(body: Record<string, any>): { warnings: string[];
 }
 
 const router = Router();
+
+// Physician-gate: all KB write operations (POST/PATCH/DELETE) require admin or physician role
+router.use((req, res, next) => {
+  if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method)) {
+    return requireRole(["admin", "physician"])(req, res, next);
+  }
+  next();
+});
 
 function changeId() { return `kc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
 

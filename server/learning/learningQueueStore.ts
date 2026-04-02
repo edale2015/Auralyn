@@ -10,6 +10,8 @@
  *                     rejected
  */
 
+import { db } from "../db";
+import { sql } from "drizzle-orm";
 import { logAuditEvent } from "../governance/changeAuditLog";
 import { requiresManualApproval } from "../governance/safetyModes";
 import type { SimCaseResult, SimSummaryMetrics } from "../simulation/asyncSimEngine";
@@ -59,6 +61,112 @@ export interface LearningQueueItem {
 
 const queue = new Map<string, LearningQueueItem>();
 
+// ── DB persistence ──────────────────────────────────────────────────────────
+
+async function ensureLearningQueueTable(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS learning_queue_items (
+      id                       TEXT PRIMARY KEY,
+      type                     TEXT NOT NULL,
+      title                    TEXT NOT NULL,
+      description              TEXT NOT NULL DEFAULT '',
+      rationale                TEXT NOT NULL DEFAULT '',
+      before_state             JSONB,
+      after_state              JSONB,
+      affected_complaints      JSONB,
+      linked_cases             JSONB,
+      linked_sim_run_id        TEXT,
+      confidence               DOUBLE PRECISION NOT NULL DEFAULT 0,
+      risk_level               TEXT NOT NULL DEFAULT 'low',
+      requires_manual_approval BOOLEAN NOT NULL DEFAULT TRUE,
+      status                   TEXT NOT NULL DEFAULT 'pending',
+      created_at               BIGINT NOT NULL,
+      updated_at               BIGINT NOT NULL,
+      reviewed_by              TEXT,
+      reviewed_at              BIGINT,
+      review_note              TEXT,
+      deployed_at              BIGINT
+    )
+  `);
+}
+
+async function persistQueueItem(item: LearningQueueItem): Promise<void> {
+  try {
+    await db.execute(sql`
+      INSERT INTO learning_queue_items (
+        id, type, title, description, rationale,
+        before_state, after_state, affected_complaints, linked_cases, linked_sim_run_id,
+        confidence, risk_level, requires_manual_approval, status,
+        created_at, updated_at, reviewed_by, reviewed_at, review_note, deployed_at
+      ) VALUES (
+        ${item.id}, ${item.type}, ${item.title}, ${item.description}, ${item.rationale},
+        CAST(${JSON.stringify(item.before ?? null)} AS jsonb),
+        CAST(${JSON.stringify(item.after ?? null)} AS jsonb),
+        CAST(${JSON.stringify(item.affectedComplaints ?? null)} AS jsonb),
+        CAST(${JSON.stringify(item.linkedCases ?? null)} AS jsonb),
+        ${item.linkedSimRunId ?? null},
+        ${item.confidence}, ${item.riskLevel}, ${item.requiresManualApproval}, ${item.status},
+        ${item.createdAt}, ${item.updatedAt},
+        ${item.reviewedBy ?? null}, ${item.reviewedAt ?? null},
+        ${item.reviewNote ?? null}, ${item.deployedAt ?? null}
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        status                   = EXCLUDED.status,
+        updated_at               = EXCLUDED.updated_at,
+        reviewed_by              = EXCLUDED.reviewed_by,
+        reviewed_at              = EXCLUDED.reviewed_at,
+        review_note              = EXCLUDED.review_note,
+        deployed_at              = EXCLUDED.deployed_at
+    `);
+  } catch (e: any) {
+    console.error("[LearningQueue] DB persist error:", e?.message);
+  }
+}
+
+async function loadQueueFromDb(): Promise<void> {
+  try {
+    const result = await db.execute(sql`
+      SELECT * FROM learning_queue_items ORDER BY created_at DESC
+    `);
+    const rows = (result.rows ?? result) as any[];
+    for (const row of rows) {
+      const item: LearningQueueItem = {
+        id:                     row.id,
+        type:                   row.type,
+        title:                  row.title,
+        description:            row.description,
+        rationale:              row.rationale,
+        before:                 row.before_state ?? undefined,
+        after:                  row.after_state ?? undefined,
+        affectedComplaints:     row.affected_complaints ?? undefined,
+        linkedCases:            row.linked_cases ?? undefined,
+        linkedSimRunId:         row.linked_sim_run_id ?? undefined,
+        confidence:             Number(row.confidence),
+        riskLevel:              row.risk_level as RiskLevel,
+        requiresManualApproval: Boolean(row.requires_manual_approval),
+        status:                 row.status as SuggestionStatus,
+        createdAt:              Number(row.created_at),
+        updatedAt:              Number(row.updated_at),
+        reviewedBy:             row.reviewed_by ?? undefined,
+        reviewedAt:             row.reviewed_at ? Number(row.reviewed_at) : undefined,
+        reviewNote:             row.review_note ?? undefined,
+        deployedAt:             row.deployed_at ? Number(row.deployed_at) : undefined,
+      };
+      queue.set(item.id, item);
+    }
+    console.log(`[LearningQueue] Loaded ${rows.length} items from DB`);
+  } catch (e: any) {
+    console.error("[LearningQueue] DB load error:", e?.message);
+  }
+}
+
+export async function initLearningQueue(): Promise<void> {
+  await ensureLearningQueueTable();
+  await loadQueueFromDb();
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
 function uid(): string {
   return `lrn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -84,6 +192,7 @@ export function addLearningQueueItem(item: Omit<LearningQueueItem, "id" | "creat
     updatedAt:              Date.now(),
   };
   queue.set(fullItem.id, fullItem);
+  persistQueueItem(fullItem).catch(() => {}); // fire-and-forget DB persistence
   logAuditEvent({
     action:     "suggestion_created",
     source:     "system",
@@ -111,6 +220,7 @@ export function updateSuggestionStatus(
   if (reviewNote) item.reviewNote = reviewNote;
   if (status === "deployed") item.deployedAt = Date.now();
   queue.set(id, item);
+  persistQueueItem(item).catch(() => {}); // fire-and-forget DB persistence
   const auditAction = status === "approved" ? "suggestion_approved"
     : status === "rejected"  ? "suggestion_rejected"
     : status === "deployed"  ? "suggestion_deployed"

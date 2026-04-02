@@ -4,6 +4,8 @@ import { clinicalRateLimiter, authRateLimiter, webhookRateLimiter } from "./midd
 import { globalSafetyGate } from "./middleware/globalSafetyGate";
 import { startDeadLetterMonitor } from "./services/ehrDeadLetterMonitor";
 import { initAuditHashChain } from "./services/auditHashChain";
+import { initLearningQueue } from "./learning/learningQueueStore";
+import { initShadowModeFromRedis } from "./config/shadowMode";
 import { getProductionFlags } from "./config/productionFlags";
 import { clinicalDeadline, standardDeadline } from "./middleware/requestDeadline";
 import { idempotency } from "./middleware/idempotency";
@@ -1056,6 +1058,8 @@ app.use((req, res, next) => {
       startEventWorkers();
       startDeadLetterMonitor(60_000);
       initAuditHashChain().catch((e: any) => console.warn("[AUDIT-CHAIN] Init warning:", e?.message));
+      initLearningQueue().catch((e: any) => console.warn("[LearningQueue] Init warning:", e?.message));
+      initShadowModeFromRedis().catch((e: any) => console.warn("[ShadowMode] Init warning:", e?.message));
       hydrateFromRedis().catch((e) => console.warn("[RLHF] Hydration warning:", e?.message));
       import("./governor/governorLoop").then(({ startGovernorLoop }) => startGovernorLoop(30_000)).catch((e) => console.warn("[Governor] Loop start failed:", e?.message));
       startAutoHealer();
