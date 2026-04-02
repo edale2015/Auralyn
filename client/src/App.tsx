@@ -84,6 +84,7 @@ import SkillMapPage from "@/pages/SkillMapPage";
 import SkillIntelligenceLabPage from "@/pages/SkillIntelligenceLabPage";
 import SkillEvolutionLabPage from "@/pages/SkillEvolutionLabPage";
 import MissionControlPage from "@/pages/MissionControlPage";
+import IntegrationHealthPage from "@/pages/IntegrationHealthPage";
 
 validateRoutes();
 
@@ -137,6 +138,7 @@ function WorkbenchRouter() {
         <Route path="/skill-intelligence-lab" component={SkillIntelligenceLabPage} />
         <Route path="/skill-evolution-lab" component={SkillEvolutionLabPage} />
         <Route path={ROUTES.MISSION_CONTROL} component={MissionControlPage} />
+        <Route path={ROUTES.INTEGRATION_HEALTH}>{() => <RoleGuard allowedRoles={["admin"]}><IntegrationHealthPage /></RoleGuard>}</Route>
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

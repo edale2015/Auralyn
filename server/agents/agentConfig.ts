@@ -1,14 +1,10 @@
 /**
  * Agent Configuration Store
  *
- * Rec 1:  toggleAgent() now writes a structured audit entry so every
- *         enable/disable is permanently traceable (who, when, why).
- * Rec 10: getAgentRegistry() alias added so systemMap.ts can import a
- *         consistent name without breaking existing callers of getAgentConfig().
- *
- * Note: state is in-memory. A Redis-persistence layer can be added by
- * importing getRedisAsync() and calling hset("agent:config", name, JSON)
- * on each toggle — gated behind the existing UPSTASH_REDIS_REST_URL env var.
+ * - toggleAgent() writes a structured audit entry for every enable/disable
+ * - Safety agent cannot be disabled (patient protection invariant)
+ * - Agent config is persisted to Redis (Upstash) so restarts preserve overrides
+ * - getAgentRegistry() / getAgentConfig() are equivalent aliases
  */
 
 interface AgentConfigEntry {
@@ -19,14 +15,14 @@ interface AgentConfigEntry {
 }
 
 interface AgentToggleAuditEntry {
-  agent:      string;
-  action:     "enabled" | "disabled";
-  by:         string;
-  reason?:    string;
-  timestamp:  string;
+  agent:     string;
+  action:    "enabled" | "disabled";
+  by:        string;
+  reason?:   string;
+  timestamp: string;
 }
 
-const agentConfig: Record<string, AgentConfigEntry> = {
+const DEFAULT_CONFIG: Record<string, AgentConfigEntry> = {
   safety:    { enabled: true },
   triage:    { enabled: true },
   diagnosis: { enabled: true },
@@ -35,8 +31,44 @@ const agentConfig: Record<string, AgentConfigEntry> = {
   followup:  { enabled: true },
 };
 
+const agentConfig: Record<string, AgentConfigEntry> = { ...DEFAULT_CONFIG };
+
 const _auditLog: AgentToggleAuditEntry[] = [];
 const MAX_AUDIT_ENTRIES = 500;
+
+async function persistToRedis(): Promise<void> {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return;
+  try {
+    const value = encodeURIComponent(JSON.stringify(agentConfig));
+    await fetch(`${url}/set/agent:config/${value}/EX/86400`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {}
+}
+
+async function loadFromRedis(): Promise<void> {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return;
+  try {
+    const res = await fetch(`${url}/get/agent:config`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const json = (await res.json()) as { result: string | null };
+    if (json.result) {
+      const loaded = JSON.parse(decodeURIComponent(json.result)) as Record<string, AgentConfigEntry>;
+      for (const [name, cfg] of Object.entries(loaded)) {
+        if (name === "safety") continue;
+        agentConfig[name] = cfg;
+      }
+      console.log("[AgentConfig] Loaded persisted config from Redis");
+    }
+  } catch {}
+}
+
+loadFromRedis().catch(() => {});
 
 function writeToggleAudit(entry: AgentToggleAuditEntry) {
   _auditLog.push(entry);
@@ -50,8 +82,7 @@ function writeToggleAudit(entry: AgentToggleAuditEntry) {
       reason:    entry.reason,
       timestamp: entry.timestamp,
     });
-  } catch {
-  }
+  } catch {}
 }
 
 export function isAgentEnabled(name: string): boolean {
@@ -73,9 +104,9 @@ export function toggleAgent(
 
   agentConfig[name].enabled = enabled;
   if (!enabled) {
-    agentConfig[name].disabledAt = new Date().toISOString();
-    agentConfig[name].disabledBy = opts?.by || "system";
-    agentConfig[name].reason = opts?.reason;
+    agentConfig[name].disabledAt  = new Date().toISOString();
+    agentConfig[name].disabledBy  = opts?.by || "system";
+    agentConfig[name].reason      = opts?.reason;
   } else {
     delete agentConfig[name].disabledAt;
     delete agentConfig[name].disabledBy;
@@ -89,6 +120,8 @@ export function toggleAgent(
     reason:    opts?.reason,
     timestamp: new Date().toISOString(),
   });
+
+  persistToRedis().catch(() => {});
 
   return { success: true };
 }

@@ -32,4 +32,5 @@ export const ROUTES = {
   KNOWLEDGE_GRAPH: "/knowledge-graph",
   CLINICAL_CONTROL_TOWER: "/clinical-control-tower",
   SYSTEM_CONTROL_TOWER: "/system-control-tower",
+  INTEGRATION_HEALTH: "/integration-health",
 };

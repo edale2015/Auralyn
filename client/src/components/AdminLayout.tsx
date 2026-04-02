@@ -161,6 +161,7 @@ const NAV_SECTIONS = [
       { path: "/control-tower", label: "Clinical Control Tower", icon: Radar },
       { path: "/clinical-control-tower", label: "CCT Decision Engine", icon: Brain },
       { path: "/system-control-tower", label: "System Control Tower", icon: Cpu },
+      { path: "/integration-health", label: "Integration Health", icon: Activity },
       { path: "/multi-patient-command", label: "Multi-Patient Command Grid", icon: Grid3X3 },
       { path: "/schema-validator", label: "Schema Validator", icon: ShieldCheck },
       { path: "/clinical-governance", label: "Clinical Governance", icon: Shield },

@@ -1,8 +1,14 @@
-import OpenAI from "openai";
 import { CircuitBreaker } from "../../utils/circuitBreaker";
 import { logger } from "../../utils/logger";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _client: any = null;
+async function getClient() {
+  if (!_client) {
+    const OpenAI = (await import("openai")).default;
+    _client = new OpenAI();
+  }
+  return _client;
+}
 
 /**
  * Named circuit breaker for the OpenAI API.
@@ -25,7 +31,8 @@ export interface LlmResponse {
 export async function safeLlmCall(prompt: string, model = "gpt-4.1-mini"): Promise<LlmResponse> {
   try {
     const response = await breaker.call(async () => {
-      const completion = await client.chat.completions.create({
+      const c = await getClient();
+      const completion = await c.chat.completions.create({
         model,
         messages: [{ role: "user", content: prompt }],
       });
@@ -52,5 +59,5 @@ export async function safeLlmCall(prompt: string, model = "gpt-4.1-mini"): Promi
 }
 
 export function getLlmBreakerStatus() {
-  return breaker.getStatus();
+  return breaker.getState();
 }
