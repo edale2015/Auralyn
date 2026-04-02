@@ -9,17 +9,29 @@ interface RoleGuardProps {
 }
 
 interface AuthUser {
-  id: number;
-  username: string;
+  userId: string;
   role: string;
   email?: string;
+  displayName?: string;
+  organizationId?: string;
 }
 
 export function useCurrentUser() {
   return useQuery<AuthUser | null>({
-    queryKey: ["/api/auth/me"],
+    queryKey: ["/api/roleAuth/me"],
     retry: false,
     staleTime: 30_000,
+    queryFn: async () => {
+      const token = localStorage.getItem("app_auth_token");
+      if (!token) return null;
+      const res = await fetch("/api/roleAuth/me", {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401 || !res.ok) return null;
+      const data = await res.json();
+      return data.user ?? data ?? null;
+    },
   });
 }
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,8 @@ import {
   BookOpen, GitBranch, Database, RefreshCw, ChevronDown, ChevronRight,
   Loader2, Info, BarChart3, ExternalLink, Filter, Zap, ShieldAlert,
   TrendingDown, TrendingUp, Activity,
+  Brain, ThumbsUp, ThumbsDown, Clock, Gauge, Bell, BrainCircuit,
+  CheckCheck, CircleDot, Siren, Lock,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -515,6 +517,508 @@ function FailureAnatomyTab({ run }: { run: RunResult | null }) {
   );
 }
 
+// ─── Learning Engine Tab ──────────────────────────────────────────────────────
+const RISK_COLORS: Record<string, string> = {
+  critical: "bg-red-500/10 text-red-400 border-red-500/30",
+  high:     "bg-orange-500/10 text-orange-400 border-orange-500/30",
+  medium:   "bg-yellow-500/10 text-yellow-400 border-yellow-500/30",
+  low:      "bg-blue-500/10 text-blue-400 border-blue-500/30",
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  red_flag_addition:    "Red Flag Rule",
+  weight_adjustment:    "Weight Adjust",
+  disposition_threshold: "Threshold",
+  complaint_expansion:  "Complaint",
+  evidence_update:      "Evidence",
+  protocol_alignment:   "Protocol",
+  contra_indicator:     "Contra",
+  safety_override:      "Safety",
+};
+
+function LearningQueueItem({
+  item, onApprove, onReject, approving, rejecting,
+}: {
+  item: any;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  approving: boolean;
+  rejecting: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div
+      className={cn(
+        "border rounded-lg overflow-hidden transition-colors",
+        item.riskLevel === "critical" ? "border-red-500/40 bg-red-500/5" :
+        item.riskLevel === "high"     ? "border-orange-500/40 bg-orange-500/5" :
+        "border-border/50",
+      )}
+      data-testid={`queue-item-${item.id}`}
+    >
+      <div className="px-4 py-2.5 flex items-start gap-3">
+        <div className="mt-0.5 shrink-0">
+          {item.riskLevel === "critical" ? <Siren size={13} className="text-red-400" /> :
+           item.riskLevel === "high"     ? <AlertTriangle size={13} className="text-orange-400" /> :
+                                          <CircleDot size={13} className="text-yellow-400" />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-mono text-muted-foreground">{item.id?.slice(-6)}</span>
+            <Badge variant="outline" className={cn("text-[9px] h-4 px-1.5 border", RISK_COLORS[item.riskLevel] ?? "")}>
+              {item.riskLevel?.toUpperCase()}
+            </Badge>
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-border/40 text-muted-foreground">
+              {TYPE_LABELS[item.type] ?? item.type}
+            </Badge>
+            {item.confidence && (
+              <span className="text-[9px] text-muted-foreground">
+                {Math.round(item.confidence * 100)}% confidence
+              </span>
+            )}
+          </div>
+          <div className="text-xs font-semibold mt-1 leading-snug">{item.title}</div>
+          {item.affectedComplaints?.length > 0 && (
+            <div className="flex gap-1 flex-wrap mt-1">
+              {item.affectedComplaints.slice(0, 4).map((c: string) => (
+                <span key={c} className="text-[9px] bg-muted/40 rounded px-1.5 py-0.5">{c.replace(/_/g, " ")}</span>
+              ))}
+            </div>
+          )}
+          {expanded && (
+            <div className="mt-2 space-y-1.5">
+              {item.description && (
+                <div className="text-[10px] text-muted-foreground leading-relaxed border-l-2 border-muted pl-2">
+                  {item.description}
+                </div>
+              )}
+              {item.rationale && (
+                <div className="text-[10px] text-blue-300/80 leading-relaxed">
+                  <span className="font-semibold">Rationale:</span> {item.rationale}
+                </div>
+              )}
+              {item.linkedCases?.length > 0 && (
+                <div className="text-[9px] text-muted-foreground">
+                  Linked cases: {item.linkedCases.slice(0, 8).join(", ")}
+                  {item.linkedCases.length > 8 && ` +${item.linkedCases.length - 8} more`}
+                </div>
+              )}
+              {item.linkedSimRunId && (
+                <div className="text-[9px] text-muted-foreground font-mono">Run: {item.linkedSimRunId}</div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col gap-1 items-end shrink-0">
+          <button
+            className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+            onClick={() => setExpanded(e => !e)}
+            data-testid={`expand-queue-item-${item.id}`}
+          >
+            {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            {expanded ? "Less" : "More"}
+          </button>
+          {item.status === "pending" && (
+            <div className="flex gap-1 mt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[9px] gap-1 border-green-500/40 text-green-400 hover:bg-green-500/10"
+                onClick={() => onApprove(item.id)}
+                disabled={approving || rejecting}
+                data-testid={`approve-${item.id}`}
+              >
+                {approving ? <Loader2 size={9} className="animate-spin" /> : <ThumbsUp size={9} />}
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[9px] gap-1 border-red-500/40 text-red-400 hover:bg-red-500/10"
+                onClick={() => onReject(item.id)}
+                disabled={approving || rejecting}
+                data-testid={`reject-${item.id}`}
+              >
+                {rejecting ? <Loader2 size={9} className="animate-spin" /> : <ThumbsDown size={9} />}
+                Reject
+              </Button>
+            </div>
+          )}
+          {item.status === "approved" && (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-green-500/40 text-green-400">
+              <CheckCheck size={8} className="mr-1" /> Approved
+            </Badge>
+          )}
+          {item.status === "rejected" && (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-red-500/40 text-red-400">
+              <XCircle size={8} className="mr-1" /> Rejected
+            </Badge>
+          )}
+          {item.status === "deployed" && (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-blue-500/40 text-blue-400">
+              <CheckCheck size={8} className="mr-1" /> Deployed
+            </Badge>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DriftAlertItem({ alert, onResolve, resolving }: { alert: any; onResolve: (id: string) => void; resolving: boolean }) {
+  const id = alert.alertId ?? alert.id;
+  const isResolved = alert.level === "resolved" || !!alert.resolvedAt;
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-3 px-4 py-2.5 rounded-lg border",
+        alert.level === "critical" ? "border-red-500/40 bg-red-500/5" :
+        alert.level === "warning"  ? "border-orange-500/40 bg-orange-500/5" :
+        alert.level === "watchlist"? "border-yellow-500/30 bg-yellow-500/5" :
+                                     "border-border/40 bg-muted/5",
+      )}
+      data-testid={`drift-alert-${id}`}
+    >
+      <Bell size={12} className={cn("mt-0.5 shrink-0",
+        alert.level === "critical"  ? "text-red-400" :
+        alert.level === "warning"   ? "text-orange-400" :
+        alert.level === "watchlist" ? "text-yellow-400" : "text-muted-foreground"
+      )} />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-semibold leading-snug">
+          {alert.detail ?? alert.title ?? alert.metric ?? "Drift alert"}
+        </div>
+        {alert.metric && (
+          <div className="text-[9px] font-mono text-muted-foreground mt-0.5">
+            {alert.metric}: baseline {typeof alert.baselineValue === "number" ? (alert.baselineValue * 100).toFixed(1) + "%" : alert.baselineValue}
+            {" → "}current {typeof alert.currentValue === "number" ? (alert.currentValue * 100).toFixed(1) + "%" : alert.currentValue}
+            {" ("}Δ {typeof alert.delta === "number" ? (alert.delta * 100).toFixed(1) + "%" : alert.delta}{")"}
+          </div>
+        )}
+        <div className="text-[9px] text-muted-foreground mt-0.5">Level: <span className="capitalize">{alert.level}</span></div>
+      </div>
+      {!isResolved && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-[9px] gap-1 border-muted hover:bg-muted/20 shrink-0"
+          onClick={() => onResolve(id)}
+          disabled={resolving}
+          data-testid={`resolve-alert-${id}`}
+        >
+          {resolving ? <Loader2 size={9} className="animate-spin" /> : <CheckCircle size={9} />}
+          Resolve
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function LearningEngineTab({ run }: { run: any }) {
+  const { toast } = useToast();
+  const [queueStatus, setQueueStatus] = useState<"pending" | "approved" | "rejected" | "all">("pending");
+  const [actingId, setActingId] = useState<string | null>(null);
+  const [actingAction, setActingAction] = useState<"approve" | "reject" | null>(null);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+
+  const statsQ = useQuery<any>({ queryKey: ["/api/ci/learning/queue/stats"], refetchInterval: 10_000 });
+  const driftQ = useQuery<any>({ queryKey: ["/api/ci/drift/stats"], refetchInterval: 15_000 });
+  const alertsQ = useQuery<any>({ queryKey: ["/api/ci/drift/alerts"], refetchInterval: 15_000 });
+
+  const queueKey = queueStatus === "all"
+    ? "/api/ci/learning/queue?limit=30"
+    : `/api/ci/learning/queue?status=${queueStatus}&limit=30`;
+  const queueQ = useQuery<any>({ queryKey: [queueKey], refetchInterval: 12_000 });
+
+  const approveMut = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/ci/learning/queue/${id}/approve`, { reviewedBy: "admin" }).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Approved", description: "Learning proposal approved and queued for deployment." });
+      queryClient.invalidateQueries({ queryKey: [queueKey] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ci/learning/queue/stats"] });
+    },
+    onError: () => toast({ title: "Error", description: "Could not approve proposal.", variant: "destructive" }),
+    onSettled: () => { setActingId(null); setActingAction(null); },
+  });
+
+  const rejectMut = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/ci/learning/queue/${id}/reject`, { reviewedBy: "admin" }).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Rejected", description: "Proposal rejected and archived." });
+      queryClient.invalidateQueries({ queryKey: [queueKey] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ci/learning/queue/stats"] });
+    },
+    onError: () => toast({ title: "Error", description: "Could not reject proposal.", variant: "destructive" }),
+    onSettled: () => { setActingId(null); setActingAction(null); },
+  });
+
+  const resolveMut = useMutation({
+    mutationFn: async (alertId: string) => apiRequest("POST", `/api/ci/drift/alerts/${alertId}/resolve`, {}).then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Alert resolved", description: "Drift alert marked as resolved." });
+      queryClient.invalidateQueries({ queryKey: ["/api/ci/drift/alerts"] });
+    },
+    onError: () => toast({ title: "Error", description: "Could not resolve alert.", variant: "destructive" }),
+    onSettled: () => setResolvingId(null),
+  });
+
+  const pushToLearningMut = useMutation({
+    mutationFn: async () => {
+      if (!run) throw new Error("No run to push");
+      return apiRequest("POST", "/api/simulation-lab/top50/push-to-learning", run).then(r => r.json());
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Pushed to learning queue", description: `${data.pushed ?? 0} learning signal(s) generated from this run.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/ci/learning/queue/stats"] });
+      queryClient.invalidateQueries({ queryKey: [queueKey] });
+    },
+    onError: () => toast({ title: "Error", description: "Could not push to learning queue.", variant: "destructive" }),
+  });
+
+  const stats = statsQ.data;
+  const drift = driftQ.data;
+  const alerts: any[] = alertsQ.data?.active ?? [];
+  const queueItems: any[] = Array.isArray(queueQ.data) ? queueQ.data : (queueQ.data?.items ?? []);
+
+  const activeAlerts = alerts.filter((a: any) => a.level !== "resolved" && !a.resolvedAt);
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="px-4 py-3 border-b shrink-0">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BrainCircuit size={14} className="text-violet-400" />
+            <span className="text-sm font-bold">Learning Control Panel</span>
+            {(statsQ.isLoading || driftQ.isLoading) && <Loader2 size={10} className="animate-spin text-muted-foreground" />}
+          </div>
+          {run && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[10px] gap-1.5 border-violet-500/40 text-violet-400 hover:bg-violet-500/10"
+              onClick={() => pushToLearningMut.mutate()}
+              disabled={pushToLearningMut.isPending}
+              data-testid="button-push-to-learning"
+            >
+              {pushToLearningMut.isPending ? <Loader2 size={10} className="animate-spin" /> : <Brain size={10} />}
+              Push Run to Learning
+            </Button>
+          )}
+        </div>
+
+        {/* Stat ribbon */}
+        <div className="grid grid-cols-4 gap-2 mt-3">
+          {[
+            { label: "Pending", value: stats?.pending ?? "—", color: "text-yellow-400", icon: <Clock size={10} /> },
+            { label: "Approved", value: stats?.approved ?? "—", color: "text-green-400", icon: <CheckCheck size={10} /> },
+            { label: "Deployed", value: stats?.deployed ?? "—", color: "text-blue-400", icon: <CheckCircle size={10} /> },
+            { label: "Active Alerts", value: activeAlerts.length, color: activeAlerts.length > 0 ? "text-red-400" : "text-muted-foreground", icon: <Bell size={10} /> },
+          ].map(s => (
+            <div key={s.label} className="bg-muted/20 rounded-lg px-3 py-2 flex items-center gap-2">
+              <span className={s.color}>{s.icon}</span>
+              <div>
+                <div className={cn("text-sm font-black leading-none", s.color)}>{s.value}</div>
+                <div className="text-[9px] text-muted-foreground mt-0.5">{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto p-4 space-y-5">
+
+        {/* ── Drift Monitor ─────────────────────────────────────────────── */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <Gauge size={12} className="text-orange-400" />
+            <span className="text-xs font-bold">Drift Monitor</span>
+            {drift && (() => {
+              const lvl = drift.criticalAlerts > 0 ? "critical" : drift.activeAlerts > 0 ? "warning" : "ok";
+              return (
+                <Badge variant="outline" className={cn("text-[9px] h-4 px-1.5 ml-auto",
+                  lvl === "critical" ? "border-red-500/40 text-red-400" :
+                  lvl === "warning"  ? "border-orange-500/40 text-orange-400" :
+                                       "border-green-500/40 text-green-400",
+                )}>
+                  {lvl.toUpperCase()}
+                </Badge>
+              );
+            })()}
+          </div>
+
+          {driftQ.isLoading ? (
+            <div className="text-[10px] text-muted-foreground p-3">Loading drift data…</div>
+          ) : drift ? (
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: "Latest Accuracy", value: drift.latestAccuracy != null ? `${(drift.latestAccuracy * 100).toFixed(1)}%` : "—", trend: drift.accuracyTrend === "improving" ? "up" : drift.accuracyTrend === "degrading" ? "down" : undefined },
+                { label: "Baseline Accuracy", value: drift.baselineAccuracy != null ? `${(drift.baselineAccuracy * 100).toFixed(1)}%` : "—" },
+                { label: "Active Alerts", value: drift.activeAlerts ?? "—", color: (drift.activeAlerts ?? 0) > 0 ? "text-red-400" : undefined },
+                { label: "Critical Alerts", value: drift.criticalAlerts ?? "—", color: (drift.criticalAlerts ?? 0) > 0 ? "text-red-400" : undefined },
+                { label: "Total Snapshots", value: drift.totalSnapshots ?? "—" },
+                { label: "Trend", value: drift.accuracyTrend ?? "stable", trend: drift.accuracyTrend === "improving" ? "up" : drift.accuracyTrend === "degrading" ? "down" : undefined },
+              ].map(m => (
+                <div key={m.label} className="bg-muted/20 rounded px-3 py-2">
+                  <div className="flex items-center gap-1">
+                    <span className={cn("text-xs font-bold", (m as any).color)}>{m.value}</span>
+                    {m.trend === "up" && <TrendingUp size={9} className="text-green-400" />}
+                    {m.trend === "down" && <TrendingDown size={9} className="text-red-400" />}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground">{m.label}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10px] text-muted-foreground p-3 bg-muted/10 rounded">
+              No drift snapshots yet. Run a simulation to generate baseline data.
+            </div>
+          )}
+
+          {/* Active alerts */}
+          {activeAlerts.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                Active Drift Alerts ({activeAlerts.length})
+              </div>
+              {activeAlerts.slice(0, 5).map((alert: any) => (
+                <DriftAlertItem
+                  key={alert.id}
+                  alert={alert}
+                  onResolve={(id) => { setResolvingId(id); resolveMut.mutate(id); }}
+                  resolving={resolvingId === alert.id && resolveMut.isPending}
+                />
+              ))}
+              {activeAlerts.length > 5 && (
+                <div className="text-[9px] text-muted-foreground text-center">
+                  +{activeAlerts.length - 5} more alerts not shown
+                </div>
+              )}
+            </div>
+          )}
+          {!alertsQ.isLoading && activeAlerts.length === 0 && (
+            <div className="mt-2 flex items-center gap-2 text-[10px] text-green-400 bg-green-500/5 border border-green-500/20 rounded px-3 py-1.5">
+              <CheckCircle size={10} /> No active drift alerts
+            </div>
+          )}
+        </section>
+
+        {/* ── Learning Queue ────────────────────────────────────────────── */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <Brain size={12} className="text-violet-400" />
+            <span className="text-xs font-bold">Governance Queue</span>
+            <div className="ml-auto flex gap-1">
+              {(["pending", "approved", "rejected", "all"] as const).map(s => (
+                <button
+                  key={s}
+                  onClick={() => setQueueStatus(s)}
+                  className={cn(
+                    "text-[9px] px-2 py-0.5 rounded border transition-colors",
+                    queueStatus === s
+                      ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                      : "border-border/30 text-muted-foreground hover:border-border",
+                  )}
+                  data-testid={`filter-queue-${s}`}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {queueQ.isLoading ? (
+            <div className="text-[10px] text-muted-foreground p-3">Loading queue…</div>
+          ) : queueItems.length === 0 ? (
+            <div className="text-center py-8 space-y-2">
+              <Lock size={20} className="mx-auto text-muted-foreground/30" />
+              <div className="text-[10px] text-muted-foreground">
+                {queueStatus === "pending"
+                  ? "No pending proposals. Run a simulation to generate learning signals."
+                  : `No ${queueStatus} items in the queue.`}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {queueItems.map((item: any) => (
+                <LearningQueueItem
+                  key={item.id}
+                  item={item}
+                  onApprove={(id) => { setActingId(id); setActingAction("approve"); approveMut.mutate(id); }}
+                  onReject={(id) => { setActingId(id); setActingAction("reject"); rejectMut.mutate(id); }}
+                  approving={actingId === item.id && actingAction === "approve" && approveMut.isPending}
+                  rejecting={actingId === item.id && actingAction === "reject" && rejectMut.isPending}
+                />
+              ))}
+              {queueItems.length >= 30 && (
+                <div className="text-[9px] text-muted-foreground text-center pt-1">
+                  Showing 30 most recent. Use the CI dashboard for full history.
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* ── Signal Explorer ───────────────────────────────────────────── */}
+        {run && (
+          <section>
+            <div className="flex items-center gap-2 mb-2">
+              <Activity size={12} className="text-cyan-400" />
+              <span className="text-xs font-bold">Last Run Signal Summary</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { label: "Pass Rate", value: `${Math.round(run.passRate * 100)}%`, color: run.passRate >= 0.7 ? "text-green-400" : run.passRate >= 0.5 ? "text-yellow-400" : "text-red-400" },
+                { label: "Red-Flag Misses", value: run.redFlagMisses, color: run.redFlagMisses > 0 ? "text-red-400" : "text-green-400" },
+                { label: "Total Cases", value: run.totalCases, color: "text-foreground" },
+                { label: "Critical Failures", value: run.criticalFailures?.length ?? 0, color: (run.criticalFailures?.length ?? 0) > 0 ? "text-red-400" : "text-green-400" },
+              ].map(m => (
+                <div key={m.label} className="bg-muted/20 rounded px-3 py-2 flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground">{m.label}</span>
+                  <span className={cn("text-sm font-black", m.color)}>{m.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {run.criticalFailures?.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                  Critical Failures ({run.criticalFailures.length})
+                </div>
+                {run.criticalFailures.slice(0, 5).map((cf: any) => (
+                  <div key={cf.caseId} className="flex items-start gap-2 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded-lg" data-testid={`critical-failure-${cf.caseId}`}>
+                    <ShieldAlert size={10} className="text-red-400 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-semibold">{cf.caseId}</span>
+                        <span className="text-[9px] text-muted-foreground">{cf.complaint?.replace(/_/g, " ")}</span>
+                        {cf.severity === "critical" && <Badge variant="destructive" className="text-[8px] h-3.5 px-1">CRITICAL</Badge>}
+                      </div>
+                      {cf.clinicalNote && <div className="text-[9px] text-muted-foreground mt-0.5">{cf.clinicalNote}</div>}
+                      <div className="flex gap-3 text-[9px] mt-0.5">
+                        <span className="text-muted-foreground">Expected: <span className="text-foreground">{cf.expected}</span></span>
+                        <span className="text-muted-foreground">Got: <span className="text-red-300">{cf.predicted}</span></span>
+                      </div>
+                      {cf.reasons?.length > 0 && (
+                        <div className="text-[9px] text-orange-300/80 mt-0.5">Reason: {cf.reasons[0]}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {run.criticalFailures.length > 5 && (
+                  <div className="text-[9px] text-muted-foreground text-center">
+                    +{run.criticalFailures.length - 5} more
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PACK_STUBS: Pack[] = [
   { id: "misleading", label: "Misleading Presentations", description: "Atypical MI, masked SAH, PE as anxiety", count: 10 },
@@ -585,6 +1089,9 @@ export default function ClinicalSimulationLabPage() {
                     <AlertTriangle size={10} className="mr-1.5" />
                     Failures ({run.results.filter(r => !r.dispositionCorrect || r.redFlagMiss).length})
                   </TabsTrigger>
+                  <TabsTrigger value="learning" className="text-[10px] h-6 px-3" data-testid="tab-learning">
+                    <BrainCircuit size={10} className="mr-1.5" /> Learning Engine
+                  </TabsTrigger>
                 </TabsList>
               </div>
 
@@ -596,6 +1103,9 @@ export default function ClinicalSimulationLabPage() {
               </TabsContent>
               <TabsContent value="failures" className="flex-1 overflow-auto m-0">
                 <FailureAnatomyTab run={run} />
+              </TabsContent>
+              <TabsContent value="learning" className="flex-1 overflow-hidden m-0 data-[state=active]:flex data-[state=active]:flex-col">
+                <LearningEngineTab run={run} />
               </TabsContent>
             </Tabs>
           )}

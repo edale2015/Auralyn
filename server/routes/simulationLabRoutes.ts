@@ -18,6 +18,11 @@ import {
 } from "../simulation/simulationEvaluator";
 import { classifyFailure } from "../simulation/failureTaxonomyEngine";
 import { aggregateFailures } from "../simulation/failureAggregator";
+import { scoreCase } from "../simulation/scoringEngine";
+import { analyzeFailure } from "../simulation/failureAnalyzer";
+import { validateDisposition } from "../simulation/dispositionValidator";
+import { addLearningQueueItem } from "../learning/learningQueueStore";
+import { recordDriftSnapshot } from "../learning/driftTracker";
 
 const router = express.Router();
 
@@ -171,7 +176,36 @@ function runTop50Evaluation(cases: any[]) {
 
     const evaluation = evaluateSimulationCase(simCase, prediction);
     const failure = classifyFailure(simCase, prediction);
-    results.push({ ...evaluation, failure, prediction, pack: simCase.pack, packLabel: simCase.packLabel, clinicalNote: simCase.clinicalNote, tags: simCase.tags });
+
+    const scoring = scoreCase(
+      { diagnosis: prediction.predictedTopDiagnosis, disposition: prediction.predictedDisposition, redFlagMiss: evaluation.redFlagMiss, confidence: prediction.confidence },
+      { diagnosis: simCase.expectedTopDiagnosis, disposition: simCase.expectedDisposition },
+    );
+
+    const failureAnalysis = (!scoring.passed || scoring.criticalFailure)
+      ? analyzeFailure(
+          { diagnosis: prediction.predictedTopDiagnosis, disposition: prediction.predictedDisposition, redFlagMiss: evaluation.redFlagMiss, confidence: prediction.confidence, features: simCase.features, age: simCase.age, pack: simCase.pack, tags: simCase.tags },
+          { diagnosis: simCase.expectedTopDiagnosis, disposition: simCase.expectedDisposition },
+        )
+      : null;
+
+    const dispositionValidation = validateDisposition(
+      { disposition: prediction.predictedDisposition },
+      { disposition: simCase.expectedDisposition },
+    );
+
+    results.push({
+      ...evaluation,
+      failure,
+      prediction,
+      scoring,
+      failureAnalysis,
+      dispositionValidation,
+      pack: simCase.pack,
+      packLabel: simCase.packLabel,
+      clinicalNote: simCase.clinicalNote,
+      tags: simCase.tags,
+    });
   }
 
   const cleanResults = results.map(({ failure, ...r }) => r);
@@ -207,15 +241,101 @@ function runTop50Evaluation(cases: any[]) {
       clinicalNote: r.clinicalNote,
       expected: r.expectedDisposition,
       predicted: r.predictedDisposition,
+      reasons: r.failureAnalysis?.reasons ?? [],
+      severity: r.dispositionValidation?.severity ?? "none",
     })),
   };
+}
+
+function pushRunToLearningQueue(runResult: any): number {
+  const { results, runId, passRate, redFlagMisses } = runResult;
+  let pushed = 0;
+
+  if (redFlagMisses > 0) {
+    addLearningQueueItem({
+      type: "red_flag_addition",
+      title: `${redFlagMisses} red-flag miss${redFlagMisses > 1 ? "es" : ""} in top-50 simulation`,
+      description: `Simulation run ${runId} produced ${redFlagMisses} red-flag miss(es). Emergency cases were routed below ER level.`,
+      rationale: "Red-flag misses represent potential patient safety events. Immediate red-flag rule review recommended.",
+      linkedSimRunId: runId,
+      linkedCases: results.filter((r: any) => r.redFlagMiss).map((r: any) => r.caseId),
+      affectedComplaints: [...new Set(results.filter((r: any) => r.redFlagMiss).map((r: any) => r.complaint))] as string[],
+      confidence: 0.92,
+      riskLevel: "critical",
+    });
+    pushed++;
+  }
+
+  if (passRate < 0.6) {
+    addLearningQueueItem({
+      type: "weight_adjustment",
+      title: `Low top-50 pass rate — ${Math.round(passRate * 100)}% — systemic miscalibration`,
+      description: `Only ${Math.round(passRate * 100)}% of curated failure cases passed. Bayesian weights or disposition thresholds are miscalibrated.`,
+      rationale: "High failure rate on curated cases indicates the system cannot handle known hard scenarios. Comprehensive recalibration needed.",
+      linkedSimRunId: runId,
+      linkedCases: results.filter((r: any) => !r.dispositionCorrect).slice(0, 15).map((r: any) => r.caseId),
+      affectedComplaints: [...new Set(results.filter((r: any) => !r.dispositionCorrect).map((r: any) => r.complaint))] as string[],
+      confidence: 0.85,
+      riskLevel: "high",
+    });
+    pushed++;
+  }
+
+  const byComplaint: Record<string, number[]> = {};
+  results.forEach((r: any) => {
+    if (!r.dispositionCorrect) {
+      if (!byComplaint[r.complaint]) byComplaint[r.complaint] = [];
+      byComplaint[r.complaint].push(1);
+    }
+  });
+
+  for (const [complaint, fails] of Object.entries(byComplaint)) {
+    if (fails.length >= 2) {
+      addLearningQueueItem({
+        type: "disposition_threshold",
+        title: `Repeated disposition errors for ${complaint.replace(/_/g, " ")}`,
+        description: `${fails.length} top-50 cases for '${complaint}' had incorrect disposition. Threshold tuning recommended.`,
+        rationale: "Clustered failures in one complaint suggest a systematic bias in the disposition rules or Bayesian priors for that complaint.",
+        linkedSimRunId: runId,
+        linkedCases: results.filter((r: any) => r.complaint === complaint && !r.dispositionCorrect).map((r: any) => r.caseId),
+        affectedComplaints: [complaint],
+        confidence: 0.78,
+        riskLevel: "medium",
+      });
+      pushed++;
+    }
+  }
+
+  return pushed;
+}
+
+function recordTop50DriftSnapshot(runResult: any, complaint?: string) {
+  const { results, summary, runId } = runResult;
+  const erNowCases = results.filter((r: any) => r.expectedDisposition === "er_now");
+  const erNowCorrect = erNowCases.filter((r: any) => r.dispositionCorrect).length;
+  const erNowSensitivity = erNowCases.length ? erNowCorrect / erNowCases.length : 1;
+  const falseReassuranceRate = results.filter((r: any) => r.redFlagMiss).length / (results.length || 1);
+  const avgConf = results.reduce((sum: number, r: any) => sum + (r.confidence ?? 0.5), 0) / (results.length || 1);
+
+  recordDriftSnapshot({
+    simRunId: runId,
+    complaint,
+    accuracy: summary.accuracy ?? (summary.passCount / (summary.total || 1)),
+    safetyAccuracy: erNowSensitivity,
+    falseReassuranceRate,
+    er_now_sensitivity: erNowSensitivity,
+    avgConfidence: avgConf,
+    totalCases: results.length,
+  });
 }
 
 router.post("/simulation-lab/top50/run", (_req, res) => {
   try {
     const cases = top50Cases();
     const result = runTop50Evaluation(cases);
-    res.json({ ok: true, ...result });
+    const pushed = pushRunToLearningQueue(result);
+    recordTop50DriftSnapshot(result);
+    res.json({ ok: true, learningItemsPushed: pushed, ...result });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -227,7 +347,23 @@ router.post("/simulation-lab/top50/run-pack/:packId", (req, res) => {
     const cases = packCases(packId);
     if (!cases.length) return res.status(404).json({ ok: false, error: "pack_not_found" });
     const result = runTop50Evaluation(cases);
-    res.json({ ok: true, packId, ...result });
+    const pushed = pushRunToLearningQueue(result);
+    recordTop50DriftSnapshot(result, packId);
+    res.json({ ok: true, packId, learningItemsPushed: pushed, ...result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/simulation-lab/top50/push-to-learning", (req, res) => {
+  try {
+    const runResult = req.body;
+    if (!runResult?.results?.length) {
+      return res.status(400).json({ ok: false, error: "No run result provided" });
+    }
+    const pushed = pushRunToLearningQueue(runResult);
+    recordTop50DriftSnapshot(runResult);
+    res.json({ ok: true, pushed });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
