@@ -183,6 +183,44 @@ export const ABSOLUTE_HARD_STOPS: HardStopRule[] = [
     rationale: "Open fracture/dislocation — infection and vascular risk. Immediate surgical evaluation required.",
     confidence: 0.99, bypassDebate: true, fdaAuditCode: "ORTHO-002",
   },
+
+  // ── NEONATE — any illness in 0-28 days ──────────────────────────────────
+  {
+    ruleId: "HS-018", symptomKey: "neonate_any_illness",
+    keywords: ["newborn", "3 weeks old", "2 weeks old", "1 week old", "4 weeks old", "infant under 1 month", "28 days old", "3-week-old", "2-week-old"],
+    disposition: DispositionTier.CALL_911,
+    rationale: "Neonates (0-28 days) have immature immune systems. Any fever, poor feeding, lethargy, or illness requires immediate ER evaluation. Sepsis in this age group can be fulminant within hours.",
+    confidence: 0.99, bypassDebate: true, fdaAuditCode: "PEDS-002",
+    ageGate: { maxAgeMonths: 1, description: "Neonates 0-28 days — any illness is an emergency" },
+  },
+
+  // ── OVERDOSE / POISONING / INGESTION ────────────────────────────────────
+  {
+    ruleId: "HS-019", symptomKey: "overdose_or_poisoning",
+    keywords: [
+      "overdose", "took too many pills", "took too much", "ingested", "swallowed pills",
+      "accidental ingestion", "medication overdose", "drug overdose", "poisoning",
+      "bleach ingestion", "chemical ingestion", "carbon monoxide", "fume inhalation",
+      "suicidal overdose", "intentional overdose",
+    ],
+    disposition: DispositionTier.CALL_911,
+    rationale: "Overdose and poisoning — time-critical toxicological emergency. Minutes matter for antidote administration (e.g., Narcan, N-acetylcysteine). Dispatch 911, do not delay for virtual triage.",
+    confidence: 0.99, bypassDebate: true, fdaAuditCode: "TOX-001",
+  },
+
+  // ── PEDIATRIC FEBRILE SEIZURE ────────────────────────────────────────────
+  {
+    ruleId: "HS-020", symptomKey: "pediatric_febrile_seizure",
+    keywords: [
+      "febrile seizure", "seizure with fever", "convulsion with fever",
+      "shaking with high fever", "fitting with temperature", "child had seizure",
+      "baby had seizure", "toddler seizure",
+    ],
+    disposition: DispositionTier.ER_NOW,
+    rationale: "Febrile seizure in a child requires ER evaluation to rule out meningitis, encephalitis, and status epilepticus. First febrile seizure or seizure > 5 minutes = ER_NOW.",
+    confidence: 0.97, bypassDebate: true, fdaAuditCode: "PEDS-003",
+    ageGate: { maxAgeMonths: 72, description: "Children under 6 years — febrile seizure risk group" },
+  },
 ];
 
 export interface HardStopResult {

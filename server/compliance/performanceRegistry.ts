@@ -7,11 +7,13 @@ export interface PerformanceEntry {
   timestamp: string;
 }
 
+const MAX_REGISTRY_SIZE = 5000;
 const registry: PerformanceEntry[] = [];
 
 export function logPerformance(entry: Omit<PerformanceEntry, "timestamp">): PerformanceEntry {
   const full: PerformanceEntry = { ...entry, timestamp: new Date().toISOString() };
   registry.push(full);
+  if (registry.length > MAX_REGISTRY_SIZE) registry.shift();
   return full;
 }
 

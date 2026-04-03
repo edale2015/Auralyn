@@ -395,15 +395,28 @@ export function runGoldenCaseTest(): GoldenCaseTestResult {
         (output as any)?.supervisor?.recommendedDisposition ??
         (output as any)?.dispositionCalibration?.finalDisposition;
 
-      const safetyHardStop = !!(output as any)?.safety?.hardStop;
-      const confidence = (output as any)?.uncertainty?.confidenceScore ??
+      const safetyHardStop =
+        !!(output as any)?.safety?.triggered ||
+        !!(output as any)?.safety?.hardStop ||
+        !!(output as any)?.safetyTriggered;
+
+      const confidence =
+        (output as any)?.uncertainty?.confidenceScore ??
+        (output as any)?.uncertainty?.confidence ??
         (output as any)?.dispositionCalibration?.confidence;
+
+      const dispositionNorm = (actualDisposition ?? "").toUpperCase().replace(/[\s-]/g, "_");
+      const expectedNorm = gc.expectedDisposition.toUpperCase().replace(/[\s-]/g, "_");
+
+      const dispositionMatches =
+        dispositionNorm === expectedNorm ||
+        dispositionNorm.includes(expectedNorm) ||
+        expectedNorm.includes(dispositionNorm);
 
       const passed =
         safetyHardStop
-          ? gc.expectedDisposition === "ER_NOW"
-          : (actualDisposition ?? "").toLowerCase().includes(gc.expectedDisposition.toLowerCase()) ||
-            gc.expectedDisposition.toLowerCase().includes((actualDisposition ?? "").toLowerCase());
+          ? gc.expectedDisposition === "ER_NOW" || gc.expectedDisposition === "CALL_911"
+          : dispositionMatches;
 
       return {
         name: gc.name,

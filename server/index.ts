@@ -385,6 +385,10 @@ import clinicHealthRoutes from "./routes/clinicHealth";
 import { traceMiddleware } from "./middleware/trace";
 import { startTelemetry, stopTelemetry } from "./monitoring/otel";
 import { runMigrations } from "./db/migrate";
+import { systemInventoryRouter } from "./routes/systemInventory";
+import { startEventLoopMonitor, stopEventLoopMonitor } from "./monitoring/eventLoopMonitor";
+import { startDriftMonitor, stopDriftMonitor } from "./fda/performanceDriftAlert";
+import { registerLoop, heartbeatLoop, stopLoop } from "./monitoring/loopRegistry";
 
 const config = loadConfig();
 
@@ -682,6 +686,8 @@ app.use("/api/visualization", clinicalVisualizationRouter);
 app.use("/api/conversation-opt", conversationOptimizationRouter);
 app.use("/api/clinical-intelligence", decisionReplayRouter);
 app.use("/api/system-brain", systemReviewRouter);
+app.use("/api/system", systemInventoryRouter);
+console.log("[SystemInventory] System inventory + version manifest at /api/system/*");
 app.use("/api", simulationLabRoutes);
 app.use("/api", coverageMatrixRoutes);
 app.use("/api", channelSimulationRoutes);
@@ -1074,6 +1080,14 @@ app.use((req, res, next) => {
       hydrateFromRedis().catch((e) => console.warn("[RLHF] Hydration warning:", e?.message));
       import("./governor/governorLoop").then(({ startGovernorLoop }) => startGovernorLoop(30_000)).catch((e) => console.warn("[Governor] Loop start failed:", e?.message));
       startAutoHealer();
+      startEventLoopMonitor();
+      startDriftMonitor(120_000);
+      registerLoop("autoHealer", "Engine health reset + stale detection", 15_000);
+      registerLoop("goldenMonitor", "Clinical golden case regression suite", 300_000);
+      registerLoop("alertEngine", "Clinical alert escalation engine", 10_000);
+      registerLoop("governanceLoop", "Audit governance agent", 15_000);
+      registerLoop("predictiveLoop", "Failure prediction engine", 5_000);
+      registerLoop("autonomousLoop", "Unified learning + drift detection", 60_000);
       startSelfLearningLoop(60_000);
       startGoldenMonitor(300_000);
       startAgentExecutor(1_000);
@@ -1089,6 +1103,8 @@ app.use((req, res, next) => {
         stopPredictiveLoop();
         stopChaosScheduler();
         stopAutoHealer();
+        stopEventLoopMonitor();
+        stopDriftMonitor();
         stopSelfLearningLoop();
         stopGoldenMonitor();
         stopAgentExecutor();
