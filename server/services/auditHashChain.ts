@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
+import { appendExternalAuditRecord } from "../audit/externalAuditStore";
 
 export interface HashedAuditEntry {
   id?: number;
@@ -41,6 +42,7 @@ export async function appendAuditEntry(
         ${prevHash}
       )
     `);
+    await appendExternalAuditRecord({ eventType, eventData, actor: actor ?? "system", timestamp, hash, prevHash });
   } catch (e: any) {
     console.error("[AUDIT-CHAIN] Failed to persist audit entry:", e?.message);
   }

@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction, Router } from "express";
 import cookieParser from "cookie-parser";
 import { clinicalRateLimiter, authRateLimiter, webhookRateLimiter } from "./middleware/rateLimiter";
 import { globalSafetyGate } from "./middleware/globalSafetyGate";
+import { tenantContextMiddleware } from "./middleware/tenantContext";
 import { startDeadLetterMonitor } from "./services/ehrDeadLetterMonitor";
 import { initAuditHashChain } from "./services/auditHashChain";
 import { initLearningQueue } from "./learning/learningQueueStore";
@@ -422,6 +423,7 @@ app.use(express.urlencoded({
   },
 }));
 
+app.use(tenantContextMiddleware);
 app.use(globalSafetyGate);
 
 app.get("/api/healthz", (_req, res) => {

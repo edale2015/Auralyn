@@ -23,7 +23,7 @@ export function tenantContextMiddleware(req: TenantRequest, res: Response, next:
 
   req.tenantId = tenantId;
 
-  pool.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId])
+  pool.query(`SELECT set_config('app.current_tenant_id', $1, true), set_config('app.clinic_id', $1, true)`, [tenantId])
     .then(() => next())
     .catch(next);
 }

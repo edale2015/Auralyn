@@ -1,21 +1,8 @@
 export function getOrCreateCorrelationId(): string {
-  const key = 'auralyn_correlation_id';
-  try {
-    const existing = sessionStorage.getItem(key);
-    if (existing) return existing;
-    const id = crypto.randomUUID();
-    sessionStorage.setItem(key, id);
-    return id;
-  } catch {
-    return crypto.randomUUID();
-  }
-}
-
-export async function apiFetch(
-  input: RequestInfo | URL,
-  init: RequestInit = {},
-): Promise<Response> {
-  const headers = new Headers(init.headers ?? {});
-  headers.set('x-correlation-id', getOrCreateCorrelationId());
-  return fetch(input, { ...init, headers });
+  const key = "app_correlation_id";
+  const existing = sessionStorage.getItem(key);
+  if (existing) return existing;
+  const id = `corr_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  sessionStorage.setItem(key, id);
+  return id;
 }

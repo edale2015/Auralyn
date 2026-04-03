@@ -6,6 +6,7 @@ import { selectPhysician } from "../routing/loadBalancer";
 import { trackEvent } from "../growth/funnelEngine";
 import { logCFR11Entry } from "../fda/cfr11AuditLogger";
 import { storeCaseMemory } from "../memory/caseMemoryStore";
+import { evaluateAcuityFastPath } from "../intake/acuityFastPath";
 
 export interface PipelineInput {
   caseId: string;
@@ -107,6 +108,24 @@ export async function runFullPipeline(
     entityId: input.caseId,
     details: { complaint: input.complaint, symptoms: input.symptoms },
   });
+
+  const fastPath = evaluateAcuityFastPath({ complaint: input.complaint, answers: input.answers as any, symptoms: input.symptoms });
+  if (fastPath.triggered) {
+    await sendPhysicianAlert({
+      caseId: input.caseId,
+      priority: "CRITICAL",
+      reason: fastPath.reason ?? "Emergency fast-path triggered",
+    });
+    return {
+      caseId: input.caseId,
+      escalated: true,
+      reason: fastPath.reason ?? "Emergency fast-path triggered",
+      systemRisk: 1,
+      malpracticeRisk: 1,
+      alertSent: true,
+      completedAt: new Date().toISOString(),
+    };
+  }
 
   const memoryMatches = await findSimilarCases(
     `${input.complaint} ${input.symptoms.join(" ")}`,

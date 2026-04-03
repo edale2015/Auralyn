@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getOrCreateCorrelationId } from "./correlation";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -9,7 +10,10 @@ async function throwIfResNotOk(res: Response) {
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    "x-correlation-id": getOrCreateCorrelationId(),
+  };
 }
 
 export async function apiRequest(
