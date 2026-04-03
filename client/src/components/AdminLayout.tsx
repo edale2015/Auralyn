@@ -24,7 +24,7 @@ import {
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
   BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar, ShieldCheck,
-  CircleDollarSign, Database, Grid3X3, Shuffle, Landmark, BookOpen,
+  CircleDollarSign, Database, Grid3X3, Shuffle, Landmark, BookOpen, Smartphone,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -145,6 +145,7 @@ const NAV_SECTIONS = [
     label: "Completion Modules",
     items: [
       { path: "/autonomous-intake", label: "Autonomous Intake", icon: Bot },
+      { path: "/compact-intake", label: "Compact Structured Intake", icon: Smartphone },
       { path: "/rl-policy", label: "RL Policy Trainer", icon: BrainCircuit },
       { path: "/care-pathways", label: "Care Pathways", icon: MapPin },
       { path: "/clinical-copilot", label: "Clinician Copilot", icon: Lightbulb },

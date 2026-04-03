@@ -39,4 +39,7 @@ export const ROUTES = {
   PATIENT_GRID: "/patient-grid",
   SYSTEM_OPS_GRID: "/system-ops-grid",
   KB_EXPLORER: "/kb-explorer",
+  CONVERSATION_OPTIMIZATION: "/conversation-optimization",
+  GOLD_REVIEW: "/gold-reviews",
+  COMPACT_INTAKE: "/compact-intake",
 };

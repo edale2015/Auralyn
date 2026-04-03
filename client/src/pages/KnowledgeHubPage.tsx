@@ -10,7 +10,8 @@ import {
   Brain, Database, FlaskConical, Shield, Target, Network,
   RefreshCw, CheckCircle2, AlertCircle, ArrowRight,
   ClipboardList, Stethoscope, Pill, Zap, Activity, Settings,
-  Eye, BarChart3, BookOpen,
+  Eye, BarChart3, BookOpen, MessageCircle, Cpu, ClipboardCheck,
+  Smartphone,
 } from "lucide-react";
 
 interface CacheStatus {
@@ -95,6 +96,51 @@ const HUB_LINKS = [
     badgeColor: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300",
     tabs: [],
   },
+  {
+    href: "/kb-explorer",
+    icon: BookOpen,
+    title: "KB Protocol Explorer",
+    description: "Deep-dive into every complaint protocol: 7 tabs covering questions (734), diagnoses (617), red flags (272), disposition rules (289), workup tests, medications, and discharge plans.",
+    badge: "New",
+    badgeColor: "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300",
+    tabs: ["Overview", "Questions", "Diagnoses", "Decision Tree", "Workup / Tests", "Medications", "Discharge Plan"],
+  },
+  {
+    href: "/gold-reviews",
+    icon: ClipboardCheck,
+    title: "Gold Review Workbench",
+    description: "Physician clinical review interface for producing canonical gold-standard responses: top diagnosis, disposition, must-ask questions, workup, medications to consider or avoid, and red flags.",
+    badge: "Clinical",
+    badgeColor: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+    tabs: [],
+  },
+  {
+    href: "/conversation-optimization",
+    icon: MessageCircle,
+    title: "AI Conversation Audit",
+    description: "Review AI-patient exchanges for tone, empathy, completeness, and safety. Audit transcripts, apply coaching goals (de-escalation, clarity, engagement), and generate optimized rewrites.",
+    badge: "Patient AI",
+    badgeColor: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
+    tabs: ["Audit", "Tone Optimizer", "Coaching"],
+  },
+  {
+    href: "/system-ops-grid",
+    icon: Cpu,
+    title: "System Ops Grid",
+    description: "Real-time operations matrix — clinical engine health, queue depths, scheduler status, memory system, multi-tenant orchestration, and adaptive intelligence. Admin-only.",
+    badge: "Ops",
+    badgeColor: "bg-gray-100 text-gray-800 dark:bg-gray-800/50 dark:text-gray-300",
+    tabs: [],
+  },
+  {
+    href: "/compact-intake",
+    icon: Smartphone,
+    title: "Compact Patient Intake",
+    description: "Structured patient-facing intake form — complaint selector, safety toggles, severity slider, duration radio, and symptom checkboxes. Telegram/WhatsApp-optimized. Minimal scrolling.",
+    badge: "Patient UI",
+    badgeColor: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
+    tabs: [],
+  },
 ];
 
 const QUICK_ACTIONS = [
@@ -104,6 +150,10 @@ const QUICK_ACTIONS = [
   { label: "Pack Builder", href: "/pack-builder", icon: ClipboardList, desc: "Build and simulate complaint packs" },
   { label: "Formulary", href: "/formulary", icon: Pill, desc: "View medication safety rules" },
   { label: "Clinical Validation", href: "/clinical-validation", icon: Stethoscope, desc: "Run the clinical validation suite" },
+  { label: "KB Explorer", href: "/kb-explorer", icon: BookOpen, desc: "Browse all 78 complaint protocols across 7 tabs" },
+  { label: "Gold Reviews", href: "/gold-reviews", icon: ClipboardCheck, desc: "Physician canonical response workbench" },
+  { label: "Conversation Audit", href: "/conversation-optimization", icon: MessageCircle, desc: "Review and improve AI-patient exchanges" },
+  { label: "Compact Intake", href: "/compact-intake", icon: Smartphone, desc: "Structured patient intake — no free text" },
 ];
 
 export default function KnowledgeHubPage() {

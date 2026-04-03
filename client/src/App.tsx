@@ -91,6 +91,9 @@ import PhysicianCommandStrip from "@/pages/PhysicianCommandStrip";
 import PatientGridPage from "@/pages/PatientGridPage";
 import SystemOpsGridPage from "@/pages/SystemOpsGridPage";
 import KBExplorerPage from "@/pages/KBExplorerPage";
+import ConversationOptimizationPage from "@/pages/ConversationOptimizationPage";
+import GoldReviewWorkbench from "@/pages/GoldReviewWorkbench";
+import CompactIntakePage from "@/pages/CompactIntakePage";
 
 validateRoutes();
 
@@ -151,6 +154,9 @@ function WorkbenchRouter() {
         <Route path={ROUTES.PATIENT_GRID}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><PatientGridPage /></RoleGuard>}</Route>
         <Route path={ROUTES.SYSTEM_OPS_GRID}>{() => <RoleGuard allowedRoles={["admin"]}><SystemOpsGridPage /></RoleGuard>}</Route>
         <Route path={ROUTES.KB_EXPLORER}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><KBExplorerPage /></RoleGuard>}</Route>
+        <Route path={ROUTES.CONVERSATION_OPTIMIZATION}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><ConversationOptimizationPage /></RoleGuard>}</Route>
+        <Route path={ROUTES.GOLD_REVIEW}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><GoldReviewWorkbench /></RoleGuard>}</Route>
+        <Route path={ROUTES.COMPACT_INTAKE} component={CompactIntakePage} />
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />
