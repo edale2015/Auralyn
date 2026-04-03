@@ -189,3 +189,55 @@ All 12 critical fixes from Claude's architecture review are implemented:
 - `tests/unit/ottawaRules.test.ts` — 10 tests for Ottawa Ankle + Knee
 - `tests/unit/centorScore.test.ts` — 8 tests for Centor
 - `tests/unit/wellsScore.test.ts` — 8 tests for Wells PE
+
+## Production Upgrade Patch (Claude Patch — Session 4)
+
+### Meta-KB Entity Store (3 new tables, adapted to serial PKs)
+- `kb_sources` — Provenance tracking for KB entities (CSV, JSON, manual, LLM, system)
+- `kb_entity_store` — Generic versioned entity store on top of domain-specific KB tables; unique index on `(entity_type, entity_key)`; `status` lifecycle (draft/active/deprecated)
+- `kb_entity_versions` — Immutable version history for every KB entity; CASCADE delete tied to parent entity
+- `server/kb/kbTypes.ts` — TypeScript types for `KbEntityType`, `KbEntityStatus`, `KbSourceType`
+- `server/kb/kbRepository.ts` — CRUD layer: `upsertKbEntity()`, `getKbEntity()`, `listKbEntities()`, `setKbEntityStatus()`, `getEntityVersionHistory()`, `countKbEntities()`; auto-version-bumps on every upsert
+- `server/kb/kbResolver.ts` — `resolveComplaintPack()` joins entity store with domain KB tables; `resolveEntityPackByType()` for generic pack resolution
+- `server/kb/migration/fullKbMigration.ts` — Reads from all 9 domain-specific KB tables → writes to `kb_entity_store`; `runFullKbMigration()` idempotent with upsert semantics
+- `server/scripts/runFullKbMigration.ts` — Standalone migration runner script
+
+### Golden Case DB Persistence (2 new tables)
+- `golden_case_runs` — Per-run result history tied to `kb_golden_cases`; stores score, pass/fail, fail_reason, run_batch timestamp
+- `golden_case_coverage` — Coverage matrix by (complaint × risk_band × age_band); unique index; `count` vs `target_count` gap tracking
+- `server/golden/types.ts` — `GoldenCaseResult`, `GoldenCaseBatchResult`, `CoverageGap` interfaces
+- `server/golden/goldenCaseRepository.ts` — `listActiveGoldenCases()`, `persistRunResults()`, `getRunHistory()`, `upsertCoverageMatrix()`, `getCoverageGaps()`, `getCoverageMatrix()`
+- `server/golden/goldenCaseExpansion.ts` — `buildCoverageMatrix()` computes (complaint × 4 risk bands × 3 age bands) matrix; `generateExpansionTemplates()` returns gaps needing new cases
+- `server/golden/goldenCaseRunner.ts` — DB-backed batch runner: loads active cases → calls `runSystem()` → scores vs expected → `persistRunResults()` → `buildCoverageMatrix()`
+
+### BullMQ Production Infrastructure (adapted to existing getRedis() pattern)
+- `server/queues/bullmq/connection.ts` — Singleton ioredis factory; respects `REDIS_URL`; gracefully disables if Upstash REST URL (https://) detected; `lazyConnect: true` to prevent startup noise
+- `server/queues/bullmq/queueNames.ts` — 11 named queues: triage, notification, learning, golden-case, auto-healing, audit, ehr-outbound, explanation, webhook, report, metrics
+- `server/queues/bullmq/defaultJobOptions.ts` — Default (3 attempts, exponential backoff), critical (5 attempts, priority 1), and low-priority options
+- `server/queues/bullmq/queueFactory.ts` — Registry of BullMQ Queue instances; `getQueue()`, `initAllQueues()`, `closeAllQueues()`
+- `server/queues/bullmq/jobTracker.ts` — Drizzle-backed job tracking against `queue_jobs` table: `trackJobQueued()`, `trackJobStatus()`, `listTrackedJobs()`
+- `server/queues/bullmq/baseWorker.ts` — `createTrackedWorker()` wraps handler with dual tracking (Drizzle `queue_jobs` + existing raw `jobs` table via `upsertJobRecord()`)
+- `server/queues/bullmq/health.ts` — `getQueuesHealth()` returns job counts per queue
+- `server/queues/bullmq/gracefulShutdown.ts` — `registerWorkerForShutdown()` + `gracefulShutdown()` for clean process exit
+
+### 6 New BullMQ Workers (added to registerWorkers.ts)
+- `auditWorker.ts` — Writes to `triage_audit_logs` via `appendAuditLog()` from `server/repos/auditRepo.ts`; concurrency 10
+- `ehrOutboundWorker.ts` — Calls `sendToEhr()` from `server/services/ehrAdapter.ts`; concurrency 3
+- `explanationWorker.ts` — Enqueues LLM explanation via `enqueueExplanation()` from `server/llm/asyncLLM.ts`; concurrency 2
+- `webhookWorker.ts` — Delivers HTTP POST webhooks with `fetch()` + 15s timeout; concurrency 5
+- `reportWorker.ts` — Builds daily reports using `goldenCaseRuns` + `kbGoldenCases` counts; concurrency 2
+- `metricsWorker.ts` — Rolls up `kbLearningEvents` count + golden case pass rate; concurrency 3
+
+### Unified Publisher API
+- `server/queues/publishers.ts` — Typed publisher for all 11 queues: `publishers.triage.runTriage()`, `publishers.audit.log()`, `publishers.ehr.deliver()`, `publishers.goldenCase.runBatch()`, `publishers.metrics.rollup()`, etc.
+
+### Production Scheduler
+- `server/scheduler/productionScheduler.ts` — `startProductionScheduler()` / `stopProductionScheduler()`; 3 scheduled jobs: golden-case-batch (hourly), metrics-rollup (15 min), executive-report (daily); gracefully disabled when Redis unavailable
+
+### New API Routes
+- `/api/kb` — KB entity CRUD: `GET /entities`, `GET /entities/:type/:key`, `GET /entities/:id/history`, `PUT /entities/:type/:key/status`, `GET /resolve/:complaint`, `GET /resolve-type/:entityType`, `GET /stats`, `POST /migrate`
+- `/api/golden` — Golden case monitoring: `GET /cases`, `GET /cases/:id/history`, `GET /runs/:runBatch`, `POST /run` (sync or async via `?async=true`), `GET /coverage`, `GET /coverage/gaps`, `POST /coverage/rebuild`, `GET /expansion/templates`
+- `/api/queues` — Queue admin: `GET /health`, `GET /jobs`, `GET /status`, `POST /init`, `POST /publish/*`
+
+### Queue Jobs Table (new Drizzle table)
+- `queue_jobs` — Drizzle-backed BullMQ job tracking; unique index on `(queue_name, job_id)`; parallel to existing raw-SQL `jobs` table (no conflict)

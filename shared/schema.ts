@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -953,3 +953,119 @@ export const clinicalRules = pgTable("clinical_rules", {
 export const insertClinicalRuleSchema = createInsertSchema(clinicalRules).omit({ id: true, createdAt: true });
 export type InsertClinicalRule = z.infer<typeof insertClinicalRuleSchema>;
 export type ClinicalRule = typeof clinicalRules.$inferSelect;
+
+// ── Meta-KB Entity Store (Production Upgrade Patch) ──────────────────────────
+// A versioned, generic entity store sitting on top of the domain-specific KB tables.
+// kbSources tracks provenance; kbEntityStore holds the current version of any KB entity;
+// kbEntityVersions provides an immutable audit trail of all changes.
+
+export const kbSources = pgTable("kb_sources", {
+  id: serial("id").primaryKey(),
+  sourceKey: text("source_key").notNull(),
+  sourceType: text("source_type").notNull(),  // "csv" | "json" | "manual" | "llm"
+  name: text("name").notNull(),
+  description: text("description"),
+  isAuthoritative: boolean("is_authoritative").notNull().default(false),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_kb_sources_key").on(t.sourceKey)]);
+
+export const insertKbSourceSchema = createInsertSchema(kbSources).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbSource = z.infer<typeof insertKbSourceSchema>;
+export type KbSource = typeof kbSources.$inferSelect;
+
+export const kbEntityStore = pgTable("kb_entity_store", {
+  id: serial("id").primaryKey(),
+  entityType: text("entity_type").notNull(),  // "complaint" | "red_flag_rule" | "workup_rule" etc.
+  entityKey: text("entity_key").notNull(),     // domain-unique key, e.g. "sore_throat"
+  title: text("title").notNull(),
+  status: text("status").notNull().default("draft"),  // "draft" | "active" | "deprecated"
+  version: integer("version").notNull().default(1),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  currentContent: jsonb("current_content").$type<Record<string, unknown>>().notNull().default({}),
+  sourceId: integer("source_id").references(() => kbSources.id),
+  createdBy: text("created_by").default("system"),
+  updatedBy: text("updated_by").default("system"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_kb_entity_type_key").on(t.entityType, t.entityKey)]);
+
+export const insertKbEntityStoreSchema = createInsertSchema(kbEntityStore).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbEntityStore = z.infer<typeof insertKbEntityStoreSchema>;
+export type KbEntityStore = typeof kbEntityStore.$inferSelect;
+
+export const kbEntityVersions = pgTable("kb_entity_versions", {
+  id: serial("id").primaryKey(),
+  entityId: integer("entity_id").notNull().references(() => kbEntityStore.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  title: text("title").notNull(),
+  content: jsonb("content").$type<Record<string, unknown>>().notNull(),
+  changeSummary: text("change_summary"),
+  changedBy: text("changed_by").default("system"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertKbEntityVersionSchema = createInsertSchema(kbEntityVersions).omit({ id: true, createdAt: true });
+export type InsertKbEntityVersion = z.infer<typeof insertKbEntityVersionSchema>;
+export type KbEntityVersion = typeof kbEntityVersions.$inferSelect;
+
+// ── Golden Case Run Persistence (Production Upgrade Patch) ────────────────────
+// Separate from kbGoldenCases (which stores the case definitions), these tables
+// record the history of every monitor run and the aggregate coverage matrix.
+
+export const goldenCaseRuns = pgTable("golden_case_runs", {
+  id: serial("id").primaryKey(),
+  goldenCaseId: integer("golden_case_id").notNull().references(() => kbGoldenCases.id, { onDelete: "cascade" }),
+  runBatch: text("run_batch").notNull(),          // ISO timestamp string identifying the batch
+  systemVersion: text("system_version").notNull().default("1.0.0"),
+  engineVersion: text("engine_version").notNull().default("1.0.0"),
+  result: jsonb("result").$type<Record<string, unknown>>().notNull().default({}),
+  score: real("score").notNull().default(0),
+  passed: boolean("passed").notNull().default(false),
+  failReason: text("fail_reason"),
+  runAt: timestamp("run_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertGoldenCaseRunSchema = createInsertSchema(goldenCaseRuns).omit({ id: true, runAt: true });
+export type InsertGoldenCaseRun = z.infer<typeof insertGoldenCaseRunSchema>;
+export type GoldenCaseRun = typeof goldenCaseRuns.$inferSelect;
+
+export const goldenCaseCoverage = pgTable("golden_case_coverage", {
+  id: serial("id").primaryKey(),
+  complaint: text("complaint").notNull(),
+  riskBand: text("risk_band").notNull(),    // "low" | "medium" | "high" | "critical"
+  ageBand: text("age_band").notNull(),      // "pediatric" | "adult" | "elderly"
+  count: integer("count").notNull().default(0),
+  targetCount: integer("target_count").notNull().default(3),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_golden_coverage").on(t.complaint, t.riskBand, t.ageBand)]);
+
+export const insertGoldenCaseCoverageSchema = createInsertSchema(goldenCaseCoverage).omit({ id: true, updatedAt: true });
+export type InsertGoldenCaseCoverage = z.infer<typeof insertGoldenCaseCoverageSchema>;
+export type GoldenCaseCoverage = typeof goldenCaseCoverage.$inferSelect;
+
+// ── BullMQ Job Tracking via Drizzle (Production Upgrade Patch) ────────────────
+// Drizzle-backed job record store; the existing raw-SQL `jobs` table via jobRepo.ts
+// remains untouched for backward compat. This table is written to by the new
+// queues/bullmq/jobTracker.ts and exposed via /api/queues routes.
+
+export const queueJobs = pgTable("queue_jobs", {
+  id: serial("id").primaryKey(),
+  queueName: text("queue_name").notNull(),
+  jobId: text("job_id").notNull(),
+  jobName: text("job_name").notNull(),
+  status: text("status").notNull().default("queued"),  // "queued" | "processing" | "completed" | "failed"
+  attemptsMade: integer("attempts_made").notNull().default(0),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  error: text("error"),
+  clinicId: text("clinic_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_queue_jobs_job_id").on(t.queueName, t.jobId)]);
+
+export const insertQueueJobSchema = createInsertSchema(queueJobs).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertQueueJob = z.infer<typeof insertQueueJobSchema>;
+export type QueueJob = typeof queueJobs.$inferSelect;

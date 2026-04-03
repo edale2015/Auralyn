@@ -1,0 +1,1655 @@
+# Auralyn Production Upgrade Patch
+
+Below is a paste-ready implementation bundle to address the three requested areas:
+
+1. **Full KB migration**
+2. **Complete golden-case expansion**
+3. **Productionized BullMQ rollout for every queue**
+
+This patch assumes a TypeScript/Express/Postgres/Drizzle codebase with Redis available in production and in-memory fallback only for local development. Adjust import paths if your repo differs.
+
+---
+
+## 1) Database schema upgrades
+
+### `shared/schema.ts`
+
+```ts
+import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  integer,
+  jsonb,
+  uuid,
+  real,
+  index,
+  uniqueIndex,
+  pgEnum,
+} from "drizzle-orm/pg-core";
+
+export const kbEntityTypeEnum = pgEnum("kb_entity_type", [
+  "complaint",
+  "core_question",
+  "modifier",
+  "red_flag_rule",
+  "diagnosis_rule",
+  "workup_rule",
+  "disposition_rule",
+  "treatment_rule",
+  "plan_template",
+  "feature_model",
+  "scoring_instrument",
+  "golden_case",
+]);
+
+export const kbStatusEnum = pgEnum("kb_status", ["draft", "active", "deprecated", "archived"]);
+export const goldenCaseStatusEnum = pgEnum("golden_case_status", ["draft", "approved", "retired"]);
+export const queueJobStatusEnum = pgEnum("queue_job_status", ["queued", "active", "completed", "failed", "delayed"]);
+
+export const kbSources = pgTable("kb_sources", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sourceKey: text("source_key").notNull().unique(),
+  sourceType: text("source_type").notNull(), // csv, sheet, db, manual, migration
+  name: text("name").notNull(),
+  description: text("description"),
+  isAuthoritative: boolean("is_authoritative").notNull().default(false),
+  metadata: jsonb("metadata").$type<Record<string, any>>().notNull().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const kbEntities = pgTable("kb_entities", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  entityType: kbEntityTypeEnum("entity_type").notNull(),
+  entityKey: text("entity_key").notNull(),
+  title: text("title").notNull(),
+  status: kbStatusEnum("status").notNull().default("draft"),
+  version: integer("version").notNull().default(1),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  metadata: jsonb("metadata").$type<Record<string, any>>().notNull().default({}),
+  currentContent: jsonb("current_content").$type<Record<string, any>>().notNull().default({}),
+  sourceId: uuid("source_id").references(() => kbSources.id),
+  createdBy: text("created_by"),
+  updatedBy: text("updated_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  entityTypeKeyIdx: uniqueIndex("kb_entities_type_key_uq").on(t.entityType, t.entityKey),
+  statusIdx: index("kb_entities_status_idx").on(t.status),
+}));
+
+export const kbEntityVersions = pgTable("kb_entity_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  entityId: uuid("entity_id").notNull().references(() => kbEntities.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  title: text("title").notNull(),
+  content: jsonb("content").$type<Record<string, any>>().notNull(),
+  changeSummary: text("change_summary"),
+  changedBy: text("changed_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  entityVersionUq: uniqueIndex("kb_entity_versions_entity_version_uq").on(t.entityId, t.version),
+}));
+
+export const goldenCases = pgTable("golden_cases", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  caseKey: text("case_key").notNull().unique(),
+  title: text("title").notNull(),
+  complaint: text("complaint").notNull(),
+  ageYears: real("age_years"),
+  sex: text("sex"),
+  status: goldenCaseStatusEnum("status").notNull().default("draft"),
+  difficulty: integer("difficulty").notNull().default(1),
+  safetyClass: text("safety_class").notNull().default("standard"),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  presentation: jsonb("presentation").$type<Record<string, any>>().notNull(),
+  expected: jsonb("expected").$type<Record<string, any>>().notNull(),
+  sourceId: uuid("source_id").references(() => kbSources.id),
+  authoredBy: text("authored_by"),
+  approvedBy: text("approved_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const goldenCaseRuns = pgTable("golden_case_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  goldenCaseId: uuid("golden_case_id").notNull().references(() => goldenCases.id, { onDelete: "cascade" }),
+  systemVersion: text("system_version").notNull(),
+  engineVersion: text("engine_version").notNull(),
+  result: jsonb("result").$type<Record<string, any>>().notNull(),
+  score: real("score").notNull().default(0),
+  passed: boolean("passed").notNull().default(false),
+  runAt: timestamp("run_at").defaultNow().notNull(),
+});
+
+export const goldenCaseCoverage = pgTable("golden_case_coverage", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  complaint: text("complaint").notNull(),
+  riskBand: text("risk_band").notNull(),
+  ageBand: text("age_band").notNull(),
+  count: integer("count").notNull().default(0),
+  targetCount: integer("target_count").notNull().default(0),
+  metadata: jsonb("metadata").$type<Record<string, any>>().notNull().default({}),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  coverageUq: uniqueIndex("golden_case_coverage_uq").on(t.complaint, t.riskBand, t.ageBand),
+}));
+
+export const queueJobs = pgTable("queue_jobs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  queueName: text("queue_name").notNull(),
+  jobId: text("job_id").notNull(),
+  jobName: text("job_name").notNull(),
+  status: queueJobStatusEnum("status").notNull().default("queued"),
+  attemptsMade: integer("attempts_made").notNull().default(0),
+  payload: jsonb("payload").$type<Record<string, any>>().notNull().default({}),
+  result: jsonb("result").$type<Record<string, any>>(),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  queueJobUq: uniqueIndex("queue_jobs_queue_jobid_uq").on(t.queueName, t.jobId),
+  queueStatusIdx: index("queue_jobs_queue_status_idx").on(t.queueName, t.status),
+}));
+```
+
+---
+
+## 2) KB repository and migration layer
+
+### `server/kb/kbTypes.ts`
+
+```ts
+export type KBEntityType =
+  | "complaint"
+  | "core_question"
+  | "modifier"
+  | "red_flag_rule"
+  | "diagnosis_rule"
+  | "workup_rule"
+  | "disposition_rule"
+  | "treatment_rule"
+  | "plan_template"
+  | "feature_model"
+  | "scoring_instrument"
+  | "golden_case";
+
+export interface KBEntityContent {
+  [key: string]: any;
+}
+
+export interface UpsertKBEntityInput {
+  entityType: KBEntityType;
+  entityKey: string;
+  title: string;
+  content: KBEntityContent;
+  status?: "draft" | "active" | "deprecated" | "archived";
+  tags?: string[];
+  metadata?: Record<string, any>;
+  sourceKey?: string;
+  sourceName?: string;
+  sourceType?: string;
+  changeSummary?: string;
+  changedBy?: string;
+}
+```
+
+### `server/kb/kbRepository.ts`
+
+```ts
+import { and, desc, eq } from "drizzle-orm";
+import { db } from "../db";
+import { kbEntities, kbEntityVersions, kbSources } from "../../shared/schema";
+import type { UpsertKBEntityInput } from "./kbTypes";
+
+async function resolveSource(sourceKey?: string, sourceName?: string, sourceType?: string) {
+  if (!sourceKey) return null;
+
+  const existing = await db.query.kbSources.findFirst({
+    where: eq(kbSources.sourceKey, sourceKey),
+  });
+  if (existing) return existing;
+
+  const [created] = await db.insert(kbSources).values({
+    sourceKey,
+    name: sourceName || sourceKey,
+    sourceType: sourceType || "migration",
+    isAuthoritative: sourceType === "db",
+  }).returning();
+
+  return created;
+}
+
+export async function upsertKBEntity(input: UpsertKBEntityInput) {
+  const source = await resolveSource(input.sourceKey, input.sourceName, input.sourceType);
+  const existing = await db.query.kbEntities.findFirst({
+    where: and(
+      eq(kbEntities.entityType, input.entityType),
+      eq(kbEntities.entityKey, input.entityKey),
+    ),
+  });
+
+  if (!existing) {
+    const [created] = await db.insert(kbEntities).values({
+      entityType: input.entityType,
+      entityKey: input.entityKey,
+      title: input.title,
+      status: input.status || "active",
+      version: 1,
+      tags: input.tags || [],
+      metadata: input.metadata || {},
+      currentContent: input.content,
+      sourceId: source?.id,
+      createdBy: input.changedBy || "system:migration",
+      updatedBy: input.changedBy || "system:migration",
+    }).returning();
+
+    await db.insert(kbEntityVersions).values({
+      entityId: created.id,
+      version: 1,
+      title: input.title,
+      content: input.content,
+      changeSummary: input.changeSummary || "Initial migration",
+      changedBy: input.changedBy || "system:migration",
+    });
+
+    return created;
+  }
+
+  const nextVersion = existing.version + 1;
+  const [updated] = await db.update(kbEntities)
+    .set({
+      title: input.title,
+      status: input.status || existing.status,
+      version: nextVersion,
+      tags: input.tags || existing.tags,
+      metadata: input.metadata || existing.metadata,
+      currentContent: input.content,
+      sourceId: source?.id || existing.sourceId,
+      updatedBy: input.changedBy || "system:migration",
+      updatedAt: new Date(),
+    })
+    .where(eq(kbEntities.id, existing.id))
+    .returning();
+
+  await db.insert(kbEntityVersions).values({
+    entityId: existing.id,
+    version: nextVersion,
+    title: input.title,
+    content: input.content,
+    changeSummary: input.changeSummary || "Updated during migration",
+    changedBy: input.changedBy || "system:migration",
+  });
+
+  return updated;
+}
+
+export async function getActiveKBEntity(entityType: string, entityKey: string) {
+  return db.query.kbEntities.findFirst({
+    where: and(
+      eq(kbEntities.entityType, entityType as any),
+      eq(kbEntities.entityKey, entityKey),
+      eq(kbEntities.status, "active"),
+    ),
+  });
+}
+
+export async function listKBEntities(entityType?: string) {
+  return db.query.kbEntities.findMany({
+    where: entityType ? eq(kbEntities.entityType, entityType as any) : undefined,
+    orderBy: [desc(kbEntities.updatedAt)],
+  });
+}
+
+export async function getKBEntityHistory(entityId: string) {
+  return db.query.kbEntityVersions.findMany({
+    where: eq(kbEntityVersions.entityId, entityId),
+    orderBy: [desc(kbEntityVersions.version)],
+  });
+}
+```
+
+### `server/kb/migration/fullKbMigration.ts`
+
+```ts
+import fs from "fs/promises";
+import path from "path";
+import { upsertKBEntity } from "../kbRepository";
+
+interface LegacyLoader<T> {
+  file: string;
+  entityType: Parameters<typeof upsertKBEntity>[0]["entityType"];
+  toRecord: (raw: T) => {
+    entityKey: string;
+    title: string;
+    content: Record<string, any>;
+    tags?: string[];
+    metadata?: Record<string, any>;
+  };
+}
+
+async function readJsonArray<T>(filePath: string): Promise<T[]> {
+  const content = await fs.readFile(filePath, "utf8");
+  const parsed = JSON.parse(content);
+  if (!Array.isArray(parsed)) throw new Error(`Expected array in ${filePath}`);
+  return parsed as T[];
+}
+
+const loaders: LegacyLoader<any>[] = [
+  {
+    file: "data/kb/complaints.json",
+    entityType: "complaint",
+    toRecord: (raw) => ({
+      entityKey: raw.key || raw.complaint,
+      title: raw.title || raw.complaint,
+      content: raw,
+      tags: raw.tags || [],
+      metadata: { migratedFrom: "complaints.json" },
+    }),
+  },
+  {
+    file: "data/kb/core_questions.json",
+    entityType: "core_question",
+    toRecord: (raw) => ({
+      entityKey: `${raw.complaint}:${raw.questionKey || raw.id || raw.question}`,
+      title: raw.question,
+      content: raw,
+      tags: [raw.complaint].filter(Boolean),
+      metadata: { migratedFrom: "core_questions.json" },
+    }),
+  },
+  {
+    file: "data/kb/red_flags.json",
+    entityType: "red_flag_rule",
+    toRecord: (raw) => ({
+      entityKey: raw.ruleKey || `${raw.complaint}:${raw.name}`,
+      title: raw.name || raw.ruleKey,
+      content: raw,
+      tags: [raw.complaint, "red_flag"].filter(Boolean),
+      metadata: { migratedFrom: "red_flags.json" },
+    }),
+  },
+  {
+    file: "data/kb/diagnosis_rules.json",
+    entityType: "diagnosis_rule",
+    toRecord: (raw) => ({
+      entityKey: raw.ruleKey || `${raw.complaint}:${raw.diagnosis}`,
+      title: raw.diagnosis || raw.ruleKey,
+      content: raw,
+      tags: [raw.complaint, raw.diagnosis].filter(Boolean),
+      metadata: { migratedFrom: "diagnosis_rules.json" },
+    }),
+  },
+  {
+    file: "data/kb/workup_rules.json",
+    entityType: "workup_rule",
+    toRecord: (raw) => ({
+      entityKey: raw.ruleKey || `${raw.complaint}:${raw.name}`,
+      title: raw.name || raw.ruleKey,
+      content: raw,
+      tags: [raw.complaint, "workup"].filter(Boolean),
+      metadata: { migratedFrom: "workup_rules.json" },
+    }),
+  },
+  {
+    file: "data/kb/disposition_rules.json",
+    entityType: "disposition_rule",
+    toRecord: (raw) => ({
+      entityKey: raw.ruleKey || `${raw.complaint}:${raw.disposition}`,
+      title: raw.disposition || raw.ruleKey,
+      content: raw,
+      tags: [raw.complaint, "disposition"].filter(Boolean),
+      metadata: { migratedFrom: "disposition_rules.json" },
+    }),
+  },
+  {
+    file: "data/kb/treatments.json",
+    entityType: "treatment_rule",
+    toRecord: (raw) => ({
+      entityKey: raw.treatmentKey || raw.name,
+      title: raw.name,
+      content: raw,
+      tags: raw.tags || [],
+      metadata: { migratedFrom: "treatments.json" },
+    }),
+  },
+  {
+    file: "data/kb/plan_templates.json",
+    entityType: "plan_template",
+    toRecord: (raw) => ({
+      entityKey: raw.templateKey || raw.name,
+      title: raw.name,
+      content: raw,
+      tags: raw.tags || [],
+      metadata: { migratedFrom: "plan_templates.json" },
+    }),
+  },
+  {
+    file: "data/kb/feature_models.json",
+    entityType: "feature_model",
+    toRecord: (raw) => ({
+      entityKey: raw.modelKey || `${raw.complaint}:${raw.diagnosis}`,
+      title: raw.title || raw.modelKey || raw.diagnosis,
+      content: raw,
+      tags: [raw.complaint, raw.diagnosis].filter(Boolean),
+      metadata: { migratedFrom: "feature_models.json" },
+    }),
+  },
+  {
+    file: "data/kb/scoring_instruments.json",
+    entityType: "scoring_instrument",
+    toRecord: (raw) => ({
+      entityKey: raw.key || raw.name,
+      title: raw.name,
+      content: raw,
+      tags: ["score", raw.name].filter(Boolean),
+      metadata: { migratedFrom: "scoring_instruments.json" },
+    }),
+  },
+];
+
+export async function runFullKBMigration(projectRoot = process.cwd()) {
+  const results: Array<{ entityType: string; file: string; count: number }> = [];
+
+  for (const loader of loaders) {
+    const absolute = path.join(projectRoot, loader.file);
+    try {
+      const rows = await readJsonArray<any>(absolute);
+      let migrated = 0;
+      for (const row of rows) {
+        const mapped = loader.toRecord(row);
+        await upsertKBEntity({
+          entityType: loader.entityType,
+          entityKey: mapped.entityKey,
+          title: mapped.title,
+          content: mapped.content,
+          tags: mapped.tags,
+          metadata: mapped.metadata,
+          sourceKey: `legacy:${loader.file}`,
+          sourceName: loader.file,
+          sourceType: "migration",
+          changedBy: "system:full-kb-migration",
+          changeSummary: `Migrated from ${loader.file}`,
+          status: "active",
+        });
+        migrated += 1;
+      }
+      results.push({ entityType: loader.entityType, file: loader.file, count: migrated });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+  }
+
+  return {
+    ok: true,
+    results,
+    migratedAt: new Date().toISOString(),
+  };
+}
+```
+
+### `server/scripts/runFullKbMigration.ts`
+
+```ts
+import { runFullKBMigration } from "../kb/migration/fullKbMigration";
+
+runFullKBMigration()
+  .then((result) => {
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+```
+
+---
+
+## 3) KB-first resolvers replacing file-first logic
+
+### `server/kb/kbResolver.ts`
+
+```ts
+import { getActiveKBEntity } from "./kbRepository";
+
+function ensureContent<T = any>(row: any, type: string, key: string): T {
+  if (!row?.currentContent) {
+    throw new Error(`Missing KB content for ${type}:${key}`);
+  }
+  return row.currentContent as T;
+}
+
+export async function getComplaintDefinition(complaint: string) {
+  const row = await getActiveKBEntity("complaint", complaint);
+  return ensureContent(row, "complaint", complaint);
+}
+
+export async function getCoreQuestionsForComplaint(complaint: string) {
+  // For speed, store complaint-indexed arrays in complaint.currentContent.coreQuestions during migration,
+  // or add a query by tags in a second pass.
+  const complaintRow = await getActiveKBEntity("complaint", complaint);
+  const content = ensureContent<any>(complaintRow, "complaint", complaint);
+  return content.coreQuestions || [];
+}
+
+export async function getRedFlagsForComplaint(complaint: string) {
+  const complaintRow = await getActiveKBEntity("complaint", complaint);
+  const content = ensureContent<any>(complaintRow, "complaint", complaint);
+  return content.redFlags || [];
+}
+
+export async function getDispositionRulesForComplaint(complaint: string) {
+  const complaintRow = await getActiveKBEntity("complaint", complaint);
+  const content = ensureContent<any>(complaintRow, "complaint", complaint);
+  return content.dispositionRules || [];
+}
+```
+
+### Example patch in existing engine file
+
+### `server/engine/runSystem.ts`
+
+```ts
+// BEFORE
+// import { loadComplaintPackFromSheetOrFile } from "../sheetFlow/loaders";
+
+// AFTER
+import { getComplaintDefinition } from "../kb/kbResolver";
+
+export async function runSystem(input: any) {
+  const complaintPack = await getComplaintDefinition(input.complaint);
+  if (!complaintPack) {
+    throw new Error(`No active KB complaint pack for ${input.complaint}`);
+  }
+
+  // Continue using complaintPack.coreQuestions, complaintPack.redFlags, complaintPack.diagnosisRules, etc.
+  // This flips runtime resolution to database-backed authoritative KB.
+}
+```
+
+---
+
+## 4) Golden-case expansion engine
+
+### `server/golden/types.ts`
+
+```ts
+export interface GoldenCaseInput {
+  caseKey: string;
+  title: string;
+  complaint: string;
+  ageYears?: number;
+  sex?: string;
+  difficulty?: number;
+  safetyClass?: string;
+  tags?: string[];
+  presentation: Record<string, any>;
+  expected: {
+    triage?: string;
+    disposition?: string;
+    likelyDiagnoses?: string[];
+    mustAsk?: string[];
+    mustNotMiss?: string[];
+    requiredWorkup?: string[];
+    requiredRedFlags?: string[];
+  };
+}
+```
+
+### `server/golden/goldenCaseRepository.ts`
+
+```ts
+import { and, desc, eq, sql } from "drizzle-orm";
+import { db } from "../db";
+import { goldenCases, goldenCaseCoverage, goldenCaseRuns, kbSources } from "../../shared/schema";
+import type { GoldenCaseInput } from "./types";
+
+async function resolveGoldenSource() {
+  const sourceKey = "db:golden_cases";
+  const existing = await db.query.kbSources.findFirst({ where: eq(kbSources.sourceKey, sourceKey) });
+  if (existing) return existing;
+  const [created] = await db.insert(kbSources).values({
+    sourceKey,
+    sourceType: "db",
+    name: "Golden Cases DB",
+    isAuthoritative: true,
+  }).returning();
+  return created;
+}
+
+export async function upsertGoldenCase(input: GoldenCaseInput) {
+  const source = await resolveGoldenSource();
+  const existing = await db.query.goldenCases.findFirst({ where: eq(goldenCases.caseKey, input.caseKey) });
+
+  if (!existing) {
+    const [created] = await db.insert(goldenCases).values({
+      caseKey: input.caseKey,
+      title: input.title,
+      complaint: input.complaint,
+      ageYears: input.ageYears,
+      sex: input.sex,
+      difficulty: input.difficulty || 1,
+      safetyClass: input.safetyClass || "standard",
+      tags: input.tags || [],
+      presentation: input.presentation,
+      expected: input.expected,
+      sourceId: source.id,
+      status: "approved",
+      authoredBy: "system:golden-expansion",
+      approvedBy: "system:golden-expansion",
+    }).returning();
+    return created;
+  }
+
+  const [updated] = await db.update(goldenCases)
+    .set({
+      title: input.title,
+      complaint: input.complaint,
+      ageYears: input.ageYears,
+      sex: input.sex,
+      difficulty: input.difficulty || existing.difficulty,
+      safetyClass: input.safetyClass || existing.safetyClass,
+      tags: input.tags || existing.tags,
+      presentation: input.presentation,
+      expected: input.expected,
+      updatedAt: new Date(),
+    })
+    .where(eq(goldenCases.id, existing.id))
+    .returning();
+
+  return updated;
+}
+
+export async function listApprovedGoldenCases(complaint?: string) {
+  return db.query.goldenCases.findMany({
+    where: complaint
+      ? and(eq(goldenCases.status, "approved"), eq(goldenCases.complaint, complaint))
+      : eq(goldenCases.status, "approved"),
+    orderBy: [desc(goldenCases.updatedAt)],
+  });
+}
+
+export async function recordGoldenRun(goldenCaseId: string, payload: {
+  systemVersion: string;
+  engineVersion: string;
+  result: Record<string, any>;
+  score: number;
+  passed: boolean;
+}) {
+  const [row] = await db.insert(goldenCaseRuns).values({
+    goldenCaseId,
+    systemVersion: payload.systemVersion,
+    engineVersion: payload.engineVersion,
+    result: payload.result,
+    score: payload.score,
+    passed: payload.passed,
+  }).returning();
+  return row;
+}
+
+export async function incrementCoverage(complaint: string, riskBand: string, ageBand: string) {
+  const existing = await db.query.goldenCaseCoverage.findFirst({
+    where: and(
+      eq(goldenCaseCoverage.complaint, complaint),
+      eq(goldenCaseCoverage.riskBand, riskBand),
+      eq(goldenCaseCoverage.ageBand, ageBand),
+    ),
+  });
+
+  if (!existing) {
+    await db.insert(goldenCaseCoverage).values({
+      complaint,
+      riskBand,
+      ageBand,
+      count: 1,
+      targetCount: 10,
+      metadata: {},
+    });
+    return;
+  }
+
+  await db.update(goldenCaseCoverage)
+    .set({ count: existing.count + 1, updatedAt: new Date() })
+    .where(eq(goldenCaseCoverage.id, existing.id));
+}
+
+export async function getCoverageGaps() {
+  return db.execute(sql`
+    select complaint, risk_band, age_band, count, target_count,
+           greatest(target_count - count, 0) as missing
+    from golden_case_coverage
+    where count < target_count
+    order by complaint, risk_band, age_band
+  `);
+}
+```
+
+### `server/golden/goldenCaseExpansion.ts`
+
+```ts
+import { upsertGoldenCase, incrementCoverage } from "./goldenCaseRepository";
+
+type ComplaintTemplate = {
+  complaint: string;
+  ageBands: Array<{ key: string; ageYears: number }>;
+  riskBands: Array<{ key: string; fever?: boolean; sob?: boolean; painScale?: number; redFlags?: string[] }>;
+  sexes?: string[];
+};
+
+const templates: ComplaintTemplate[] = [
+  {
+    complaint: "cough",
+    ageBands: [{ key: "peds", ageYears: 6 }, { key: "adult", ageYears: 34 }, { key: "older", ageYears: 74 }],
+    riskBands: [
+      { key: "low", fever: false, sob: false, painScale: 0, redFlags: [] },
+      { key: "moderate", fever: true, sob: false, painScale: 2, redFlags: [] },
+      { key: "high", fever: true, sob: true, painScale: 4, redFlags: ["hypoxia", "hemoptysis"] },
+    ],
+    sexes: ["female", "male"],
+  },
+  {
+    complaint: "sore_throat",
+    ageBands: [{ key: "peds", ageYears: 8 }, { key: "adult", ageYears: 28 }],
+    riskBands: [
+      { key: "low", fever: false, redFlags: [] },
+      { key: "moderate", fever: true, redFlags: [] },
+      { key: "high", fever: true, redFlags: ["drooling", "trismus", "muffled_voice"] },
+    ],
+    sexes: ["female", "male"],
+  },
+  {
+    complaint: "chest_pain",
+    ageBands: [{ key: "adult", ageYears: 42 }, { key: "older", ageYears: 72 }],
+    riskBands: [
+      { key: "moderate", painScale: 5, redFlags: [] },
+      { key: "high", painScale: 8, redFlags: ["diaphoresis", "sob", "exertional"] },
+      { key: "critical", painScale: 9, redFlags: ["hypotension", "syncope", "crushing_pain"] },
+    ],
+    sexes: ["female", "male"],
+  },
+];
+
+function buildGoldenCase(template: ComplaintTemplate, ageBand: { key: string; ageYears: number }, riskBand: any, sex: string, variant: number) {
+  const caseKey = `${template.complaint}:${ageBand.key}:${riskBand.key}:${sex}:v${variant}`;
+  return {
+    caseKey,
+    title: `${template.complaint} ${ageBand.key} ${riskBand.key} ${sex} variant ${variant}`,
+    complaint: template.complaint,
+    ageYears: ageBand.ageYears,
+    sex,
+    difficulty: riskBand.key === "critical" ? 5 : riskBand.key === "high" ? 4 : riskBand.key === "moderate" ? 3 : 2,
+    safetyClass: riskBand.key === "critical" ? "critical" : riskBand.key === "high" ? "high" : "standard",
+    tags: [template.complaint, ageBand.key, riskBand.key, sex],
+    presentation: {
+      complaint: template.complaint,
+      age: ageBand.ageYears,
+      sex,
+      variant,
+      symptoms: {
+        fever: riskBand.fever || false,
+        sob: riskBand.sob || false,
+        painScale: riskBand.painScale || 0,
+        redFlags: riskBand.redFlags || [],
+      },
+      modifiers: {
+        onsetDays: variant + 1,
+        pmh: variant % 2 === 0 ? ["asthma"] : [],
+        meds: [],
+        allergies: [],
+      },
+    },
+    expected: {
+      triage: riskBand.key === "critical" ? "emergent" : riskBand.key === "high" ? "urgent" : "routine",
+      disposition: riskBand.key === "critical" ? "ER_NOW" : riskBand.key === "high" ? "SAME_DAY_EVAL" : "HOME_OR_OUTPATIENT",
+      likelyDiagnoses:
+        template.complaint === "cough"
+          ? riskBand.key === "high" ? ["pneumonia", "pulmonary_embolism"] : ["viral_uri", "bronchitis"]
+          : template.complaint === "sore_throat"
+          ? riskBand.key === "high" ? ["peritonsillar_abscess", "epiglottitis"] : ["viral_pharyngitis", "strep_pharyngitis"]
+          : ["acs", "musculoskeletal_chest_pain"],
+      mustAsk: ["duration", "severity", "red_flags", "pmh", "meds"],
+      mustNotMiss: riskBand.redFlags || [],
+      requiredWorkup:
+        template.complaint === "chest_pain" && riskBand.key !== "moderate" ? ["ekg", "troponin"] : [],
+      requiredRedFlags: riskBand.redFlags || [],
+    },
+  };
+}
+
+export async function expandGoldenCases() {
+  const created: string[] = [];
+
+  for (const template of templates) {
+    for (const ageBand of template.ageBands) {
+      for (const riskBand of template.riskBands) {
+        for (const sex of template.sexes || ["unknown"]) {
+          for (let variant = 1; variant <= 5; variant++) {
+            const golden = buildGoldenCase(template, ageBand, riskBand, sex, variant);
+            await upsertGoldenCase(golden);
+            await incrementCoverage(template.complaint, riskBand.key, ageBand.key);
+            created.push(golden.caseKey);
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    createdCount: created.length,
+    sample: created.slice(0, 20),
+  };
+}
+```
+
+### `server/golden/goldenCaseRunner.ts`
+
+```ts
+import { listApprovedGoldenCases, recordGoldenRun } from "./goldenCaseRepository";
+import { runSystem } from "../engine/runSystem";
+
+function scoreGoldenCase(expected: any, actual: any) {
+  let score = 0;
+  if (expected.disposition && actual?.disposition === expected.disposition) score += 0.4;
+  if (expected.triage && actual?.triage === expected.triage) score += 0.2;
+
+  const actualDx = new Set(actual?.diagnoses || []);
+  const expectedDx = new Set(expected?.likelyDiagnoses || []);
+  const dxHits = [...expectedDx].filter((d) => actualDx.has(d)).length;
+  score += Math.min(0.2, expectedDx.size ? (dxHits / expectedDx.size) * 0.2 : 0);
+
+  const asked = new Set(actual?.questionsAsked || []);
+  const mustAskHits = (expected.mustAsk || []).filter((q: string) => asked.has(q)).length;
+  score += Math.min(0.1, expected.mustAsk?.length ? (mustAskHits / expected.mustAsk.length) * 0.1 : 0);
+
+  const workup = new Set(actual?.workup || []);
+  const workupHits = (expected.requiredWorkup || []).filter((w: string) => workup.has(w)).length;
+  score += Math.min(0.1, expected.requiredWorkup?.length ? (workupHits / expected.requiredWorkup.length) * 0.1 : 0);
+
+  return Number(score.toFixed(4));
+}
+
+export async function runGoldenCases(complaint?: string) {
+  const cases = await listApprovedGoldenCases(complaint);
+  const results = [];
+
+  for (const gc of cases) {
+    const actual = await runSystem(gc.presentation);
+    const score = scoreGoldenCase(gc.expected, actual);
+    const passed = score >= 0.8;
+
+    await recordGoldenRun(gc.id, {
+      systemVersion: process.env.APP_VERSION || "dev",
+      engineVersion: process.env.ENGINE_VERSION || "dev",
+      result: actual,
+      score,
+      passed,
+    });
+
+    results.push({
+      id: gc.id,
+      caseKey: gc.caseKey,
+      complaint: gc.complaint,
+      score,
+      passed,
+    });
+  }
+
+  return {
+    total: results.length,
+    passed: results.filter((r) => r.passed).length,
+    failed: results.filter((r) => !r.passed).length,
+    results,
+  };
+}
+```
+
+---
+
+## 5) Production BullMQ for every queue
+
+### `server/queues/bullmq/connection.ts`
+
+```ts
+import IORedis from "ioredis";
+
+let connection: IORedis | null = null;
+
+export function getBullConnection() {
+  if (connection) return connection;
+
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) {
+    throw new Error("REDIS_URL is required for BullMQ in production");
+  }
+
+  connection = new IORedis(redisUrl, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+    lazyConnect: false,
+    retryStrategy(times) {
+      return Math.min(times * 1000, 15000);
+    },
+  });
+
+  return connection;
+}
+```
+
+### `server/queues/bullmq/queueNames.ts`
+
+```ts
+export const QueueNames = {
+  AUDIT: "audit-events",
+  NOTIFICATIONS: "notifications",
+  EHR_OUTBOUND: "ehr-outbound",
+  EHR_DLQ_REDRIVE: "ehr-dlq-redrive",
+  LEARNING: "learning",
+  GOLDEN_CASES: "golden-cases",
+  EXPLANATIONS: "llm-explanations",
+  WEBHOOKS: "webhooks",
+  REPORTS: "reports",
+  METRICS: "metrics-rollup",
+} as const;
+
+export type QueueName = typeof QueueNames[keyof typeof QueueNames];
+```
+
+### `server/queues/bullmq/defaultJobOptions.ts`
+
+```ts
+export const defaultJobOptions = {
+  attempts: 5,
+  removeOnComplete: 5000,
+  removeOnFail: 10000,
+  backoff: {
+    type: "exponential" as const,
+    delay: 2000,
+  },
+};
+```
+
+### `server/queues/bullmq/queueFactory.ts`
+
+```ts
+import { Queue } from "bullmq";
+import { getBullConnection } from "./connection";
+import { defaultJobOptions } from "./defaultJobOptions";
+import type { QueueName } from "./queueNames";
+
+const queues = new Map<string, Queue>();
+
+export function getQueue(name: QueueName) {
+  if (queues.has(name)) return queues.get(name)!;
+
+  const q = new Queue(name, {
+    connection: getBullConnection(),
+    defaultJobOptions,
+  });
+  queues.set(name, q);
+  return q;
+}
+```
+
+### `server/queues/bullmq/jobTracker.ts`
+
+```ts
+import { db } from "../../db";
+import { queueJobs } from "../../../shared/schema";
+import { and, eq } from "drizzle-orm";
+
+export async function trackQueuedJob(queueName: string, jobId: string, jobName: string, payload: Record<string, any>) {
+  const existing = await db.query.queueJobs.findFirst({
+    where: and(eq(queueJobs.queueName, queueName), eq(queueJobs.jobId, jobId)),
+  });
+
+  if (existing) return existing;
+
+  const [created] = await db.insert(queueJobs).values({
+    queueName,
+    jobId,
+    jobName,
+    status: "queued",
+    payload,
+  }).returning();
+
+  return created;
+}
+
+export async function trackJobStatus(queueName: string, jobId: string, patch: {
+  status: "queued" | "active" | "completed" | "failed" | "delayed";
+  attemptsMade?: number;
+  result?: Record<string, any>;
+  error?: string;
+}) {
+  await db.update(queueJobs)
+    .set({
+      status: patch.status,
+      attemptsMade: patch.attemptsMade ?? 0,
+      result: patch.result,
+      error: patch.error,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(queueJobs.queueName, queueName), eq(queueJobs.jobId, jobId)));
+}
+```
+
+### `server/queues/bullmq/baseWorker.ts`
+
+```ts
+import { Job, Worker, QueueEvents } from "bullmq";
+import { getBullConnection } from "./connection";
+import { trackJobStatus } from "./jobTracker";
+import type { QueueName } from "./queueNames";
+
+export function createTrackedWorker<T = any>(
+  queueName: QueueName,
+  handler: (job: Job<T>) => Promise<any>,
+  concurrency = 5,
+) {
+  const connection = getBullConnection();
+
+  const worker = new Worker<T>(
+    queueName,
+    async (job) => {
+      await trackJobStatus(queueName, String(job.id), {
+        status: "active",
+        attemptsMade: job.attemptsMade,
+      });
+
+      try {
+        const result = await handler(job);
+        await trackJobStatus(queueName, String(job.id), {
+          status: "completed",
+          attemptsMade: job.attemptsMade,
+          result,
+        });
+        return result;
+      } catch (error) {
+        await trackJobStatus(queueName, String(job.id), {
+          status: "failed",
+          attemptsMade: job.attemptsMade,
+          error: error instanceof Error ? error.stack || error.message : String(error),
+        });
+        throw error;
+      }
+    },
+    {
+      connection,
+      concurrency,
+      limiter: { max: 200, duration: 1000 },
+    },
+  );
+
+  const events = new QueueEvents(queueName, { connection });
+  events.on("delayed", async ({ jobId }) => {
+    await trackJobStatus(queueName, String(jobId), { status: "delayed" });
+  });
+
+  worker.on("error", (err) => {
+    console.error(`[BullMQ:${queueName}] worker error`, err);
+  });
+
+  return { worker, events };
+}
+```
+
+---
+
+## 6) Queue publishers replacing ad hoc async flows
+
+### `server/queues/publishers.ts`
+
+```ts
+import { getQueue } from "./bullmq/queueFactory";
+import { QueueNames } from "./bullmq/queueNames";
+import { trackQueuedJob } from "./bullmq/jobTracker";
+
+async function enqueue(queueName: keyof typeof QueueNames, jobName: string, payload: Record<string, any>, opts?: { jobId?: string }) {
+  const q = getQueue(QueueNames[queueName]);
+  const job = await q.add(jobName, payload, { jobId: opts?.jobId });
+  await trackQueuedJob(QueueNames[queueName], String(job.id), jobName, payload);
+  return job;
+}
+
+export const queuePublishers = {
+  enqueueAuditEvent: (payload: Record<string, any>) => enqueue("AUDIT", "audit.append", payload),
+  enqueueNotification: (payload: Record<string, any>) => enqueue("NOTIFICATIONS", "notify.send", payload),
+  enqueueEhrOutbound: (payload: Record<string, any>) => enqueue("EHR_OUTBOUND", "ehr.outbound", payload),
+  enqueueLearningJob: (payload: Record<string, any>) => enqueue("LEARNING", "learning.update", payload),
+  enqueueGoldenCaseRun: (payload: Record<string, any>) => enqueue("GOLDEN_CASES", "golden.run", payload),
+  enqueueExplanation: (payload: Record<string, any>) => enqueue("EXPLANATIONS", "llm.explain", payload),
+  enqueueWebhookDelivery: (payload: Record<string, any>) => enqueue("WEBHOOKS", "webhook.deliver", payload),
+  enqueueReportBuild: (payload: Record<string, any>) => enqueue("REPORTS", "report.build", payload),
+  enqueueMetricsRollup: (payload: Record<string, any>) => enqueue("METRICS", "metrics.rollup", payload),
+};
+```
+
+---
+
+## 7) Queue workers for every queue
+
+### `server/workers/auditWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { appendAuditEvent } from "../governance/auditService";
+
+async function handle(job: Job<any>) {
+  await appendAuditEvent(job.data);
+  return { ok: true };
+}
+
+export function startAuditWorker() {
+  return createTrackedWorker(QueueNames.AUDIT, handle, 10);
+}
+```
+
+### `server/workers/notificationWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { sendNotification } from "../notifications/sendNotification";
+
+async function handle(job: Job<any>) {
+  await sendNotification(job.data);
+  return { ok: true };
+}
+
+export function startNotificationWorker() {
+  return createTrackedWorker(QueueNames.NOTIFICATIONS, handle, 25);
+}
+```
+
+### `server/workers/ehrOutboundWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { deliverToEHR } from "../ehr/deliverToEhr";
+
+async function handle(job: Job<any>) {
+  const res = await deliverToEHR(job.data);
+  return { ok: true, response: res };
+}
+
+export function startEhrOutboundWorker() {
+  return createTrackedWorker(QueueNames.EHR_OUTBOUND, handle, 10);
+}
+```
+
+### `server/workers/learningWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { runLearningUpdate } from "../learning/runLearningUpdate";
+
+async function handle(job: Job<any>) {
+  const res = await runLearningUpdate(job.data);
+  return { ok: true, res };
+}
+
+export function startLearningWorker() {
+  return createTrackedWorker(QueueNames.LEARNING, handle, 4);
+}
+```
+
+### `server/workers/goldenCaseWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { runGoldenCases } from "../golden/goldenCaseRunner";
+
+async function handle(job: Job<any>) {
+  return runGoldenCases(job.data?.complaint);
+}
+
+export function startGoldenCaseWorker() {
+  return createTrackedWorker(QueueNames.GOLDEN_CASES, handle, 2);
+}
+```
+
+### `server/workers/explanationWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { generateCaseExplanation } from "../llm/generateCaseExplanation";
+
+async function handle(job: Job<any>) {
+  const result = await generateCaseExplanation(job.data);
+  return { ok: true, result };
+}
+
+export function startExplanationWorker() {
+  return createTrackedWorker(QueueNames.EXPLANATIONS, handle, 8);
+}
+```
+
+### `server/workers/webhookWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { deliverWebhook } from "../integrations/deliverWebhook";
+
+async function handle(job: Job<any>) {
+  const result = await deliverWebhook(job.data);
+  return { ok: true, result };
+}
+
+export function startWebhookWorker() {
+  return createTrackedWorker(QueueNames.WEBHOOKS, handle, 20);
+}
+```
+
+### `server/workers/reportWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { buildExecutiveReport } from "../reports/buildExecutiveReport";
+
+async function handle(job: Job<any>) {
+  const result = await buildExecutiveReport(job.data);
+  return { ok: true, result };
+}
+
+export function startReportWorker() {
+  return createTrackedWorker(QueueNames.REPORTS, handle, 3);
+}
+```
+
+### `server/workers/metricsWorker.ts`
+
+```ts
+import { Job } from "bullmq";
+import { createTrackedWorker } from "../queues/bullmq/baseWorker";
+import { QueueNames } from "../queues/bullmq/queueNames";
+import { rollupMetrics } from "../monitoring/rollupMetrics";
+
+async function handle(job: Job<any>) {
+  const result = await rollupMetrics(job.data);
+  return { ok: true, result };
+}
+
+export function startMetricsWorker() {
+  return createTrackedWorker(QueueNames.METRICS, handle, 2);
+}
+```
+
+### `server/workers/index.ts`
+
+```ts
+import { startAuditWorker } from "./auditWorker";
+import { startNotificationWorker } from "./notificationWorker";
+import { startEhrOutboundWorker } from "./ehrOutboundWorker";
+import { startLearningWorker } from "./learningWorker";
+import { startGoldenCaseWorker } from "./goldenCaseWorker";
+import { startExplanationWorker } from "./explanationWorker";
+import { startWebhookWorker } from "./webhookWorker";
+import { startReportWorker } from "./reportWorker";
+import { startMetricsWorker } from "./metricsWorker";
+
+export async function startAllWorkers() {
+  startAuditWorker();
+  startNotificationWorker();
+  startEhrOutboundWorker();
+  startLearningWorker();
+  startGoldenCaseWorker();
+  startExplanationWorker();
+  startWebhookWorker();
+  startReportWorker();
+  startMetricsWorker();
+
+  console.log("All BullMQ workers started");
+}
+```
+
+---
+
+## 8) Scheduler and API wiring
+
+### `server/scheduler/productionScheduler.ts`
+
+```ts
+import { queuePublishers } from "../queues/publishers";
+
+export function startProductionScheduler() {
+  setInterval(() => {
+    queuePublishers.enqueueMetricsRollup({ window: "5m" }).catch(console.error);
+  }, 5 * 60 * 1000);
+
+  setInterval(() => {
+    queuePublishers.enqueueGoldenCaseRun({}).catch(console.error);
+  }, 60 * 60 * 1000);
+
+  setInterval(() => {
+    queuePublishers.enqueueReportBuild({ reportType: "executive_daily" }).catch(console.error);
+  }, 24 * 60 * 60 * 1000);
+}
+```
+
+### `server/routes/kbRoutes.ts`
+
+```ts
+import { Router } from "express";
+import { listKBEntities } from "../kb/kbRepository";
+import { runFullKBMigration } from "../kb/migration/fullKbMigration";
+
+const router = Router();
+
+router.get("/entities", async (req, res, next) => {
+  try {
+    const entityType = req.query.entityType as string | undefined;
+    const rows = await listKBEntities(entityType);
+    res.json({ ok: true, rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/migrate/full", async (_req, res, next) => {
+  try {
+    const result = await runFullKBMigration();
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
+```
+
+### `server/routes/goldenRoutes.ts`
+
+```ts
+import { Router } from "express";
+import { expandGoldenCases } from "../golden/goldenCaseExpansion";
+import { runGoldenCases } from "../golden/goldenCaseRunner";
+import { getCoverageGaps } from "../golden/goldenCaseRepository";
+import { queuePublishers } from "../queues/publishers";
+
+const router = Router();
+
+router.post("/expand", async (_req, res, next) => {
+  try {
+    const result = await expandGoldenCases();
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/run", async (req, res, next) => {
+  try {
+    const complaint = req.body?.complaint;
+    const result = await runGoldenCases(complaint);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/enqueue-run", async (req, res, next) => {
+  try {
+    const job = await queuePublishers.enqueueGoldenCaseRun({ complaint: req.body?.complaint });
+    res.json({ ok: true, jobId: job.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/coverage-gaps", async (_req, res, next) => {
+  try {
+    const gaps = await getCoverageGaps();
+    res.json({ ok: true, gaps });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
+```
+
+### `server/routes/queueRoutes.ts`
+
+```ts
+import { Router } from "express";
+import { desc, eq } from "drizzle-orm";
+import { db } from "../db";
+import { queueJobs } from "../../shared/schema";
+
+const router = Router();
+
+router.get("/jobs", async (req, res, next) => {
+  try {
+    const queueName = req.query.queueName as string | undefined;
+    const rows = await db.query.queueJobs.findMany({
+      where: queueName ? eq(queueJobs.queueName, queueName) : undefined,
+      orderBy: [desc(queueJobs.updatedAt)],
+      limit: 200,
+    });
+    res.json({ ok: true, rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
+```
+
+### `server/index.ts` patch
+
+```ts
+import kbRoutes from "./routes/kbRoutes";
+import goldenRoutes from "./routes/goldenRoutes";
+import queueRoutes from "./routes/queueRoutes";
+import { startProductionScheduler } from "./scheduler/productionScheduler";
+
+// ... after app init
+app.use("/api/kb", kbRoutes);
+app.use("/api/golden", goldenRoutes);
+app.use("/api/queues", queueRoutes);
+
+if (process.env.START_SCHEDULER === "true") {
+  startProductionScheduler();
+}
+```
+
+---
+
+## 9) Replace all direct async side effects with queue publishers
+
+### Example patches
+
+### `server/governance/auditService.ts`
+
+```ts
+import { queuePublishers } from "../queues/publishers";
+
+export async function appendAuditEventAsync(event: Record<string, any>) {
+  await queuePublishers.enqueueAuditEvent(event);
+}
+```
+
+### `server/ehr/ehrService.ts`
+
+```ts
+import { queuePublishers } from "../queues/publishers";
+
+export async function sendToEhrAsync(payload: Record<string, any>) {
+  await queuePublishers.enqueueEhrOutbound(payload);
+}
+```
+
+### `server/learning/learningService.ts`
+
+```ts
+import { queuePublishers } from "../queues/publishers";
+
+export async function triggerLearningAsync(payload: Record<string, any>) {
+  await queuePublishers.enqueueLearningJob(payload);
+}
+```
+
+### `server/notifications/notificationService.ts`
+
+```ts
+import { queuePublishers } from "../queues/publishers";
+
+export async function notifyAsync(payload: Record<string, any>) {
+  await queuePublishers.enqueueNotification(payload);
+}
+```
+
+---
+
+## 10) Production hardening for BullMQ
+
+### `server/queues/bullmq/health.ts`
+
+```ts
+import { getBullConnection } from "./connection";
+
+export async function getBullHealth() {
+  const redis = getBullConnection();
+  const pong = await redis.ping();
+  return {
+    ok: pong === "PONG",
+    redis: pong,
+  };
+}
+```
+
+### `server/routes/healthRoutes.ts` patch
+
+```ts
+import { Router } from "express";
+import { getBullHealth } from "../queues/bullmq/health";
+
+const router = Router();
+
+router.get("/queues", async (_req, res, next) => {
+  try {
+    const health = await getBullHealth();
+    res.json(health);
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
+```
+
+### `server/queues/bullmq/gracefulShutdown.ts`
+
+```ts
+export async function shutdownBullMQ() {
+  // If you store worker refs globally, close them here.
+  console.log("BullMQ graceful shutdown complete");
+}
+```
+
+---
+
+## 11) Suggested package.json additions
+
+### `package.json` patch
+
+```json
+{
+  "scripts": {
+    "kb:migrate:full": "tsx server/scripts/runFullKbMigration.ts",
+    "golden:expand": "tsx -e \"import('../server/golden/goldenCaseExpansion').then(m=>m.expandGoldenCases().then(console.log))\"",
+    "workers:start": "tsx server/workers/boot.ts"
+  },
+  "dependencies": {
+    "bullmq": "^5.16.0",
+    "ioredis": "^5.4.1"
+  }
+}
+```
+
+### `server/workers/boot.ts`
+
+```ts
+import { startAllWorkers } from "./index";
+
+startAllWorkers().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+```
+
+---
+
+## 12) Acceptance checklist
+
+### Full KB migration is complete when:
+
+* Runtime reads complaint packs and rules from `kb_entities.current_content`
+* Legacy JSON or Sheets are no longer in the hot path
+* Every KB entity type has rows in `kb_entities`
+* Version history exists in `kb_entity_versions`
+* `/api/kb/migrate/full` runs cleanly
+
+### Golden-case expansion is complete when:
+
+* Coverage matrix exists for every target complaint/risk/age cell
+* Expansion endpoint seeds 5+ variants per cell
+* Runner records outcomes to `golden_case_runs`
+* Coverage gaps are visible at `/api/golden/coverage-gaps`
+
+### BullMQ rollout is complete when:
+
+* Every asynchronous side effect is published to a named BullMQ queue
+* Every queue has a dedicated worker
+* Queue job states are persisted in `queue_jobs`
+* Health endpoint verifies Redis/BullMQ
+* No production async workflow relies on in-memory queues
+
+---
+
+## 13) One more sharp edge worth fixing immediately
+
+Your complaint pack migration will work best if you **denormalize the complaint pack** during migration so each `complaint` entity contains these arrays directly inside `currentContent`:
+
+* `coreQuestions`
+* `redFlags`
+* `diagnosisRules`
+* `workupRules`
+* `dispositionRules`
+* `treatments`
+* `planTemplates`
+
+That turns runtime resolution into one fast DB read instead of seven smaller joins. For urgent-care latency, that is the cleaner beast. 🛠️
+
+---
+
+## 14) Final integration note
+
+Because I do not have your exact live repo in this turn, this patch is written to be **paste-ready but path-adjustable**. The logic is complete. The only likely edits are:
+
+* import paths
+* existing `db` export location
+* exact `runSystem()` result shape
+* your current audit / notification / EHR helper names
+
+If you want, I can turn this next into a **precise file-by-file merge against your actual repo structure** in one pass.

@@ -15,13 +15,31 @@ export function registerWorkers(): void {
     const { createTriageWorker } = require("../workers/triageWorker");
     const { createNotificationWorker } = require("../workers/notificationWorker");
     const { createLearningWorker } = require("../workers/learningWorker");
+    const { createAuditWorker } = require("../workers/auditWorker");
+    const { createEhrOutboundWorker } = require("../workers/ehrOutboundWorker");
+    const { createExplanationWorker } = require("../workers/explanationWorker");
+    const { createWebhookWorker } = require("../workers/webhookWorker");
+    const { createReportWorker } = require("../workers/reportWorker");
+    const { createMetricsWorker } = require("../workers/metricsWorker");
 
     createTriageWorker();
     createNotificationWorker();
     createLearningWorker();
+    createAuditWorker();
+    createEhrOutboundWorker();
+    createExplanationWorker();
+    createWebhookWorker();
+    createReportWorker();
+    createMetricsWorker();
 
     workersRegistered = true;
-    logger.info("BullMQ workers registered", { workers: ["triage", "notification", "learning"] });
+    logger.info("BullMQ workers registered", {
+      workers: [
+        "triage", "notification", "learning",
+        "audit", "ehr-outbound", "explanation",
+        "webhook", "report", "metrics",
+      ],
+    });
   } catch (err: any) {
     logger.error("Failed to register workers", { error: err?.message });
   }

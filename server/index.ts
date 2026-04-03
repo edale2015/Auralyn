@@ -292,6 +292,11 @@ import stressRoutes from "./stress/stressRoutes";
 import rpaRoutes from "./rpa/rpaRoutes";
 import visionRoutes from "./vision/visionRoutes";
 import queueRoutes from "./queue/queueRoutes";
+import kbEntityRoutes from "./routes/kbRoutes";
+import goldenMonitorRoutes from "./routes/goldenRoutes";
+import queueAdminRoutes from "./routes/queueAdminRoutes";
+import { startProductionScheduler, stopProductionScheduler } from "./scheduler/productionScheduler";
+import { initAllQueues } from "./queues/bullmq/queueFactory";
 import { initControlTowerSocket } from "./controlTower/socket";
 import { startAnomalyEngine } from "./controlTower/anomalyEngine";
 import { startAlertEngine, stopAlertEngine } from "./monitoring/alertEngine";
@@ -836,6 +841,9 @@ console.log("[FDAPackage] Validation runner, metrics engine, report generator, e
 console.log("[PatientQueue] Live patient queue + physician approve/override/escalate at /api/patients/*");
 app.use("/api/vision", visionRoutes);
 app.use("/api/queue", queueRoutes);
+app.use("/api/kb", kbEntityRoutes);
+app.use("/api/golden", goldenMonitorRoutes);
+app.use("/api/queues", queueAdminRoutes);
 app.use("/api/ops", opsRoutes);
 app.use("/api/dependencies", dependenciesRoutes);
 app.use("/api/engine-metrics", engineMetricsRoutes);
@@ -1095,6 +1103,9 @@ app.use((req, res, next) => {
       startGlobalSyncLoop(600_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();
 
+      initAllQueues();
+      startProductionScheduler();
+
       const shutdown = (signal: string) => {
         console.log(`[Shutdown] ${signal} received — stopping background engines`);
         stopAlertEngine();
@@ -1110,6 +1121,7 @@ app.use((req, res, next) => {
         stopAgentExecutor();
         stopEvolutionLoop();
         stopGlobalSyncLoop();
+        stopProductionScheduler();
         httpServer.close(() => {
           console.log("[Shutdown] HTTP server closed");
           process.exit(0);
