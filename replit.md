@@ -241,3 +241,54 @@ All 12 critical fixes from Claude's architecture review are implemented:
 
 ### Queue Jobs Table (new Drizzle table)
 - `queue_jobs` — Drizzle-backed BullMQ job tracking; unique index on `(queue_name, job_id)`; parallel to existing raw-SQL `jobs` table (no conflict)
+
+---
+
+## Auralyn Patch Pack (ChatGPT + Claude Deep Evaluation — April 2026)
+
+### SQL Migrations (7 new tables, run directly via psql)
+- `governance_flags` — System-wide flags: `validation_lock` for model freeze
+- `outbox_events` — Transactional outbox for PostgreSQL → Firestore consistency (aggregate_type, event_type, payload_json, processed_at, failure_count)
+- `electronic_signatures` — FDA 21 CFR Part 11 e-signatures: printed_name, meaning, statement_text, signature_digest (SHA-256 canonical hash), metadata_json
+- `physician_overrides` — Structured override records: output_fingerprint, reason_category (9-category enum), ai_disposition, ai_diagnoses_json
+- `kb_deficiency_signals` — Auto-generated KB quality alerts: severity (medium/high), signal_source (single_physician_repeat/cross_physician_consensus)
+- `kb_population_priors` — Population-specific Bayesian prior multipliers keyed by population_flag
+- `scoring_system_versions` — Version history of SCORING_SYSTEMS sheet loads with content_hash deduplication
+- Columns added: `tenant_id` on queue_jobs/audit_hash_chain/kb tables; `kb_version_hash`+`detected_language` on encounters
+
+### Clinical Safety Layer
+- `server/clinical/acuityPreClassifier.ts` — Extended from 7 to 14 fast-path conditions; added ectopic pregnancy rupture, testicular torsion, meningococcal sepsis, aortic dissection, CO poisoning, adult epiglottitis, pediatric intussusception; each with `erNowMessage` and `specificityFlag`
+- `server/clinical/populationFlags.ts` — Detects 5 population modifier flags from clinical state: immunocompromised, elderlyOver75, pregnant, pediatricUnder2, dialysisDependent
+- `server/clinical/bayesianPriorService.ts` — Population-specific prior multipliers from DB with 5-min cache; `invalidatePriorCache()` for emergency eviction
+- `server/clinical/bayesianFallback.ts` — 0.40 posterior confidence threshold: below → uncertain differential + physician_review priority elevated to `urgent`
+- `server/clinical/debatePolicy.ts` — Documented 4-rule debate resolution matrix: (1) Safety veto absolute, (2) Consensus, (3) Higher acuity wins, (4) Merged differential; version AURALYN_DEBATE_POLICY_v2026_04
+
+### Governance & Regulatory
+- `server/governance/audit.ts` — Thin wrapper routing `appendAuditEvent()` through existing immutable hash chain
+- `server/governance/modelFreeze.ts` — `POST/GET /api/governance/model-freeze`; `assertModelPromotionAllowed()` throws 423 if validation_lock is active
+- `server/governance/sqliteDeprecationGuard.ts` — Blocks PHI writes to SQLite; hard deadline 2026-07-02; scans for 10 PHI field name tokens
+- `server/governance/productionChecklist.ts` — 12-item production readiness checklist: WAF, private subnets, TLS 1.2+, BAAs, 7-year audit retention, immutable sink, pen test, SQLite deprecation, SCORING_SYSTEMS health, physician review gate, model freeze
+
+### Physician Workflow
+- `server/physician/part11SignatureService.ts` — `createPart11Signature()`: requires password re-verification, captures printed name + meaning + statement, produces SHA-256 digest of canonical record, stored in electronic_signatures
+- `server/physician/overrideLearning.ts` — `recordOverrideAndMaybeSignal()`: 9-category structured override; auto-creates kb_deficiency_signals at ≥3 same-physician repeats (medium) or ≥3 cross-physician (high)
+
+### Knowledge Base
+- `server/kb/priorInvalidationRoute.ts` — `POST /api/kb/priors/invalidate` (admin); `GET /api/kb/priors/cache-stats`; both write to audit chain
+- `server/kb/kbConsistencyAudit.ts` — `runKbConsistencyAudit()`: daily comparison of kb_entity_store vs 4 domain tables; writes result to audit chain
+- `server/kb/scoringSystemsLoader.ts` — `loadScoringSystemsOrFail()`: BLOCKING on empty/malformed SCORING_SYSTEMS sheet (per Claude Q6); halts KB load cycle rather than silently degrading. Persists version record to scoring_system_versions on every successful load
+
+### Infrastructure
+- `server/db/outbox.ts` — `createEncounterWithOutbox()`: writes encounter + outbox_event atomically in a single transaction; `writeOutboxEvent()` for standalone events
+- `server/jobs/outboxWorker.ts` — `flushOutbox()`: SELECT FOR UPDATE SKIP LOCKED batch flush to Firestore writer; tracks failure_count and last_error; `getOutboxLag()` for monitoring
+- `server/queues/clinicalQueue.ts` — `enqueueClinicalJobOrFail()`: hard-fails (503) when Redis unavailable instead of silently falling back to in-memory queue; writes rejection to audit chain
+- `server/middleware/tenantContextHardFail.ts` — `tenantContextHardFail()` / `requireTenantContext()`: returns 400 TENANT_CONTEXT_REQUIRED when tenant cannot be resolved from header or session
+- `server/i18n/multilingualIntake.ts` — 8-language NYC intake: detect → normalize to English → run pipeline → localize output; `createGoogleTranslationProvider()` adapter (GCP HIPAA addendum required); languages: en/es/zh/bn/ru/ar/ht/ko
+- `server/sheets/phiScanner.ts` — `assertNoPhiInSheetsContent()`: throws on 14 PHI regex patterns in Sheets content; halts cache load cycle; `scanAndWarn()` for non-blocking monitoring
+- `server/jobs/backpressuredLoop.ts` — `startBackpressuredLoop()`: setTimeout-after-completion pattern; eliminates concurrent execution buildup from setInterval
+- `server/jobs/advisoryScheduler.ts` — `runWithAdvisoryLock()`: wraps jobs in `pg_try_advisory_lock`; only one instance executes across horizontal scale
+- `server/scheduler/productionScheduler.ts` (refactored) — All 3 BullMQ jobs now use backpressuredLoop + advisoryScheduler; KB consistency audit added as 4th job (no Redis dependency)
+
+### Routes Registered in server/index.ts
+- `app.use("/api/kb", priorInvalidationRouter)` — Prior cache invalidation + stats
+- `app.use(modelFreezeRouter)` — Model validation lock (mounts at `/api/governance/model-freeze`)

@@ -1,72 +1,81 @@
 import { publishers } from "../queues/publishers";
 import { isBullAvailable } from "../queues/bullmq/connection";
 import { logger } from "../utils/logger";
+import { startBackpressuredLoop, BackpressuredLoopHandle } from "../jobs/backpressuredLoop";
+import { runWithAdvisoryLock } from "../jobs/advisoryScheduler";
+import { runKbConsistencyAudit } from "../kb/kbConsistencyAudit";
 
-interface ScheduledJob {
-  name: string;
-  intervalMs: number;
-  handler: () => Promise<void>;
-}
-
-const _timers: NodeJS.Timeout[] = [];
+const _handles: BackpressuredLoopHandle[] = [];
 let _started = false;
 
-const SCHEDULED_JOBS: ScheduledJob[] = [
-  {
-    name: "golden-case-batch",
-    intervalMs: 60 * 60 * 1000, // every hour
-    handler: async () => {
-      await publishers.goldenCase.runBatch({});
-      logger.info("[Scheduler] Golden case batch enqueued");
+function makeLockedJob(
+  name: string,
+  intervalMs: number,
+  task: () => Promise<void>
+): BackpressuredLoopHandle {
+  return startBackpressuredLoop(
+    name,
+    intervalMs,
+    async () => {
+      const { ran } = await runWithAdvisoryLock(name, task);
+      if (!ran) {
+        logger.info(`[Scheduler] ${name} — advisory lock held by another instance, skipping`);
+      }
     },
-  },
-  {
-    name: "metrics-rollup",
-    intervalMs: 15 * 60 * 1000, // every 15 minutes
-    handler: async () => {
-      await publishers.metrics.rollup({});
-      logger.info("[Scheduler] Metrics rollup enqueued");
-    },
-  },
-  {
-    name: "executive-report",
-    intervalMs: 24 * 60 * 60 * 1000, // every 24 hours
-    handler: async () => {
-      await publishers.report.buildExecutive({ reportType: "daily_summary" });
-      logger.info("[Scheduler] Executive report enqueued");
-    },
-  },
-];
+    (ctx) => logger.warn(`[Scheduler] Job ${ctx.loop} failed`, { err: String((ctx.err as any)?.message ?? ctx.err) })
+  );
+}
 
 export function startProductionScheduler(): void {
   if (_started) return;
 
   if (!isBullAvailable()) {
-    logger.info("[Scheduler] Redis unavailable — scheduler not started");
-    return;
+    logger.info("[Scheduler] Redis unavailable — BullMQ scheduler not started (KB consistency still runs)");
   }
 
   _started = true;
 
-  for (const job of SCHEDULED_JOBS) {
-    const timer = setInterval(async () => {
-      try {
-        await job.handler();
-      } catch (e: any) {
-        logger.warn(`[Scheduler] Job ${job.name} failed`, { message: e?.message });
-      }
-    }, job.intervalMs);
+  if (isBullAvailable()) {
+    _handles.push(
+      makeLockedJob("golden-case-batch", 60 * 60 * 1000, async () => {
+        await publishers.goldenCase.runBatch({});
+        logger.info("[Scheduler] Scheduled job: golden-case-batch (every 3600s)");
+      })
+    );
 
-    _timers.push(timer);
-    logger.info(`[Scheduler] Scheduled job: ${job.name} (every ${job.intervalMs / 1000}s)`);
+    _handles.push(
+      makeLockedJob("metrics-rollup", 15 * 60 * 1000, async () => {
+        await publishers.metrics.rollup({});
+        logger.info("[Scheduler] Scheduled job: metrics-rollup (every 900s)");
+      })
+    );
+
+    _handles.push(
+      makeLockedJob("executive-report", 24 * 60 * 60 * 1000, async () => {
+        await publishers.report.buildExecutive({ reportType: "daily_summary" });
+        logger.info("[Scheduler] Scheduled job: executive-report (every 86400s)");
+      })
+    );
   }
 
-  logger.info(`[Scheduler] Production scheduler started with ${SCHEDULED_JOBS.length} jobs`);
+  _handles.push(
+    makeLockedJob("kb-consistency-audit", 24 * 60 * 60 * 1000, async () => {
+      const result = await runKbConsistencyAudit();
+      logger.info(`[Scheduler] KB consistency audit complete — severity: ${result.severity}`);
+    })
+  );
+
+  const jobCount = _handles.length;
+  const bullJobCount = isBullAvailable() ? 3 : 0;
+  logger.info(
+    `[Scheduler] Production scheduler started with ${jobCount} jobs ` +
+    `(${bullJobCount} BullMQ + 1 advisory-locked KB audit) — all with backpressure`
+  );
 }
 
 export function stopProductionScheduler(): void {
-  for (const t of _timers) clearInterval(t);
-  _timers.length = 0;
+  for (const handle of _handles) handle.stop();
+  _handles.length = 0;
   _started = false;
   logger.info("[Scheduler] Production scheduler stopped");
 }
