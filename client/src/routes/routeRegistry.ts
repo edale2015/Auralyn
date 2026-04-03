@@ -36,4 +36,5 @@ export const ROUTES = {
   ENGINE_MAINTENANCE: "/engine-maintenance",
   AGENT_LAB: "/agent-lab",
   PHYSICIAN_COMMAND_STRIP: "/physician-command-strip",
+  PATIENT_GRID: "/patient-grid",
 };

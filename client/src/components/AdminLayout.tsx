@@ -185,6 +185,8 @@ const NAV_SECTIONS = [
       { path: "/pack-questions", label: "Pack Questions", icon: ClipboardList },
       { path: "/pack-audit-log", label: "Pack Audit Log", icon: Shield },
       { path: "/coverage-dashboard", label: "Coverage Dashboard", icon: BarChart3 },
+      { path: "/patient-grid", label: "Patient Grid (High Volume)", icon: Grid3X3 },
+      { path: "/physician-command-strip", label: "Physician Command Strip", icon: HeartPulse },
       { path: "/physician-dashboard", label: "Physician Control Center", icon: HeartPulse },
       { path: "/executive-dashboard", label: "Executive Dashboard", icon: Building2 },
       { path: "/self-improve", label: "Improvement Engine", icon: Brain },

@@ -3,7 +3,7 @@ import { getCommandStripQueue } from "../physician/commandStripQueue";
 import { batchApproveCases } from "../physician/batchSignatureService";
 import { getPhysicianInbox, routePhysicianReply, getInboxStats, ingestChannelEvent } from "../inbox/physicianInboxBroker";
 import { getAmbientHealthSnapshot } from "../monitoring/ambientHealthAggregator";
-import { updateSession } from "../patient/sessionStorePg";
+import { updateSession, getSessionById } from "../patient/sessionStorePg";
 import { appendAuditEvent } from "../governance/audit";
 import { PhysicianTier } from "../physician/triageRouter";
 
@@ -67,6 +67,19 @@ commandStripRouter.post("/api/command-strip/cases/:id/override", async (req: any
       payload: { reasonCategory, freeText, newDisposition },
     });
     res.json({ ok: true, action: "overridden", caseId: req.params.id });
+  } catch (err) { next(err); }
+});
+
+commandStripRouter.post("/api/command-strip/cases/:id/flag", async (req: any, res, next) => {
+  try {
+    const { actorId, tenantId } = getActor(req);
+    const session = await getSessionById(req.params.id);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    const current = (session.override_data ?? session.overrideData ?? {}) as Record<string, any>;
+    const newFollowUp = !current.followUp;
+    await updateSession(req.params.id, { overrideData: { ...current, followUp: newFollowUp } });
+    await appendAuditEvent({ tenantId, actorId, action: newFollowUp ? "FOLLOW_UP_FLAGGED" : "FOLLOW_UP_CLEARED", entityType: "session", entityId: req.params.id, payload: { followUp: newFollowUp } });
+    res.json({ ok: true, followUp: newFollowUp, caseId: req.params.id });
   } catch (err) { next(err); }
 });
 

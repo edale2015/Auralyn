@@ -26,6 +26,7 @@ export interface CommandStripCase {
   batchEligible: boolean;
   channel: string;
   priorOverrideExists: boolean;
+  followUp: boolean;
 }
 
 export interface CommandStripPage {
@@ -89,6 +90,7 @@ export async function getCommandStripQueue(params: {
       priorOverrideExists,
     });
 
+    const overrideData = (s as any).override_data ?? (s as any).overrideData ?? {};
     cases.push({
       id: s.id,
       patientName: (s as any).patientName ?? (s as any).name ?? "Patient",
@@ -113,6 +115,7 @@ export async function getCommandStripQueue(params: {
       batchEligible: tierAssignment.batchEligible,
       channel: (s as any).channel ?? "web",
       priorOverrideExists,
+      followUp: overrideData?.followUp === true,
     });
   }
 
