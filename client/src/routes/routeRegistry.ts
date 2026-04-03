@@ -37,4 +37,5 @@ export const ROUTES = {
   AGENT_LAB: "/agent-lab",
   PHYSICIAN_COMMAND_STRIP: "/physician-command-strip",
   PATIENT_GRID: "/patient-grid",
+  SYSTEM_OPS_GRID: "/system-ops-grid",
 };

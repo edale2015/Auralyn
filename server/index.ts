@@ -299,6 +299,7 @@ import { startProductionScheduler, stopProductionScheduler } from "./scheduler/p
 import { priorInvalidationRouter } from "./kb/priorInvalidationRoute";
 import { modelFreezeRouter } from "./governance/modelFreeze";
 import { commandStripRouter } from "./routes/commandStripRoutes";
+import { systemOpsRouter } from "./routes/systemOpsRoutes";
 import { initAllQueues } from "./queues/bullmq/queueFactory";
 import { initControlTowerSocket } from "./controlTower/socket";
 import { startAnomalyEngine } from "./controlTower/anomalyEngine";
@@ -850,6 +851,7 @@ app.use("/api/golden", goldenMonitorRoutes);
 app.use("/api/queues", queueAdminRoutes);
 app.use(modelFreezeRouter);
 app.use(commandStripRouter);
+app.use(systemOpsRouter);
 app.use("/api/ops", opsRoutes);
 app.use("/api/dependencies", dependenciesRoutes);
 app.use("/api/engine-metrics", engineMetricsRoutes);
