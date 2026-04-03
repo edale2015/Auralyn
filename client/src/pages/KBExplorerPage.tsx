@@ -87,12 +87,58 @@ interface TreatmentRule {
   active: boolean;
 }
 
+interface QuestionRule {
+  id: number;
+  complaint_id: string;
+  question_id: string;
+  prompt: string;
+  type: string;
+  required: boolean;
+  priority: number;
+  category: string | null;
+  ask_if: string | null;
+  linked_diagnoses: string[];
+  active: boolean;
+}
+
+interface WorkupRule {
+  id: number;
+  rule_id: string;
+  complaint_id: string;
+  test_name: string;
+  test_type: string;
+  trigger_expr: string | null;
+  priority: number;
+  rationale: string | null;
+  active: boolean;
+}
+
+interface PlanTemplate {
+  id: number;
+  template_key: string;
+  complaint_id: string | null;
+  diagnosis_label: string;
+  default_disposition: string;
+  summary: string | null;
+  home_care: string[];
+  follow_up: string[];
+  return_precautions: string[];
+  patient_message: string | null;
+  discharge_text: string | null;
+  er_precautions: string | null;
+  medication_instructions: string | null;
+  active: boolean;
+}
+
 interface Protocol {
   complaint: Complaint;
   diagnoses: DiagnosisRule[];
   redFlags: RedFlagRule[];
   dispositions: DispositionRule[];
   treatments: TreatmentRule[];
+  questions: QuestionRule[];
+  workup: WorkupRule[];
+  plans: PlanTemplate[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -313,7 +359,7 @@ function DecisionTree({ redFlags, dispositions }: { redFlags: RedFlagRule[]; dis
 
 // ─── Protocol Panel ───────────────────────────────────────────────────────────
 
-type Tab = "overview" | "diagnoses" | "tree" | "treatments";
+type Tab = "overview" | "diagnoses" | "tree" | "treatments" | "questions" | "workup" | "plans";
 
 function ProtocolPanel({ complaintId, onClose }: { complaintId: string; onClose: () => void }) {
   const qc = useQueryClient();
@@ -355,6 +401,24 @@ function ProtocolPanel({ complaintId, onClose }: { complaintId: string; onClose:
     onSuccess: () => { toast({ title: "Treatment updated" }); invalidate(); },
   });
 
+  const patchQ = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      apiRequest("PATCH", `/api/kb-explorer/questions/${id}`, body),
+    onSuccess: () => { toast({ title: "Question updated" }); invalidate(); },
+  });
+
+  const patchWu = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      apiRequest("PATCH", `/api/kb-explorer/workup-rules/${id}`, body),
+    onSuccess: () => { toast({ title: "Workup rule updated" }); invalidate(); },
+  });
+
+  const patchPlan = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      apiRequest("PATCH", `/api/kb-explorer/plan-templates/${id}`, body),
+    onSuccess: () => { toast({ title: "Discharge plan updated" }); invalidate(); },
+  });
+
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center text-slate-400">
@@ -365,15 +429,18 @@ function ProtocolPanel({ complaintId, onClose }: { complaintId: string; onClose:
 
   if (!data) return null;
 
-  const { complaint, diagnoses, redFlags, dispositions, treatments } = data;
+  const { complaint, diagnoses, redFlags, dispositions, treatments, questions, workup, plans } = data;
   const hardFlags = redFlags.filter(r => r.severity === "HARD");
   const canMissDx = diagnoses.filter(d => d.cannot_miss);
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
     { key: "overview", label: "Overview", icon: <BookOpen className="h-3.5 w-3.5" /> },
+    { key: "questions", label: "Questions", icon: <ClipboardList className="h-3.5 w-3.5" />, count: questions.length },
     { key: "diagnoses", label: "Diagnoses", icon: <FlaskConical className="h-3.5 w-3.5" />, count: diagnoses.length },
     { key: "tree", label: "Decision Tree", icon: <GitBranch className="h-3.5 w-3.5" /> },
+    { key: "workup", label: "Workup / Tests", icon: <FlaskConical className="h-3.5 w-3.5" />, count: workup.length },
     { key: "treatments", label: "Medications", icon: <Pill className="h-3.5 w-3.5" />, count: treatments.length },
+    { key: "plans", label: "Discharge Plan", icon: <ClipboardList className="h-3.5 w-3.5" />, count: plans.length },
   ];
 
   return (
@@ -420,11 +487,14 @@ function ProtocolPanel({ complaintId, onClose }: { complaintId: string; onClose:
         </div>
 
         {/* Stats bar */}
-        <div className="flex gap-4 text-xs text-slate-500">
-          <span data-testid="stat-diagnoses"><strong className="text-slate-700 dark:text-slate-300">{diagnoses.length}</strong> diagnoses</span>
-          <span data-testid="stat-redflags"><strong className="text-slate-700 dark:text-slate-300">{redFlags.length}</strong> red flags</span>
+        <div className="flex gap-3 text-xs text-slate-500 flex-wrap">
+          <span data-testid="stat-diagnoses"><strong className="text-slate-700 dark:text-slate-300">{diagnoses.length}</strong> dx</span>
+          <span data-testid="stat-redflags"><strong className="text-slate-700 dark:text-slate-300">{redFlags.length}</strong> flags</span>
           <span data-testid="stat-dispositions"><strong className="text-slate-700 dark:text-slate-300">{dispositions.length}</strong> disposition rules</span>
-          <span data-testid="stat-treatments"><strong className="text-slate-700 dark:text-slate-300">{treatments.length}</strong> medications</span>
+          <span data-testid="stat-questions"><strong className="text-slate-700 dark:text-slate-300">{questions.length}</strong> questions</span>
+          <span data-testid="stat-workup"><strong className="text-slate-700 dark:text-slate-300">{workup.length}</strong> workup rules</span>
+          <span data-testid="stat-treatments"><strong className="text-slate-700 dark:text-slate-300">{treatments.length}</strong> meds</span>
+          <span data-testid="stat-plans"><strong className="text-slate-700 dark:text-slate-300">{plans.length}</strong> discharge plans</span>
         </div>
 
         {/* Tabs */}
@@ -733,6 +803,240 @@ function ProtocolPanel({ complaintId, onClose }: { complaintId: string; onClose:
                       <EditableField value={tx.notes}
                         onSave={(v) => patchTx.mutate({ id: tx.id, body: { notes: v } })}
                         multiline testId={`tx-notes-${tx.id}`}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ─── Questions ─────────────────────────────────────────────────────── */}
+        {tab === "questions" && (
+          <div className="p-4">
+            {questions.length === 0 && (
+              <p className="text-slate-400 text-xs text-center py-8">No questions in KB for this complaint.</p>
+            )}
+            <div className="space-y-0">
+              {questions.map((q, i) => (
+                <div key={q.id} className={`flex gap-3 py-2.5 border-b border-slate-100 dark:border-slate-800 text-xs ${!q.active ? "opacity-50" : ""}`}
+                  data-testid={`q-row-${q.id}`}>
+                  {/* Priority badge */}
+                  <div className="shrink-0 flex flex-col items-center gap-1 w-14">
+                    <span className="font-mono font-bold text-slate-400 text-[11px]">#{i + 1}</span>
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                      q.category === "safety" ? "bg-red-100 text-red-600" :
+                      q.category === "centor" ? "bg-blue-100 text-blue-600" :
+                      q.category === "history" ? "bg-slate-100 text-slate-600" :
+                      "bg-slate-100 text-slate-500"
+                    }`}>{q.category ?? "—"}</span>
+                    {q.required && <span className="text-[9px] text-amber-600 font-bold">REQ</span>}
+                  </div>
+
+                  {/* Prompt */}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-slate-700 dark:text-slate-200 leading-snug mb-0.5">
+                      <EditableField value={q.prompt}
+                        onSave={(v) => patchQ.mutate({ id: q.id, body: { prompt: v } })}
+                        multiline testId={`q-prompt-${q.id}`}
+                      />
+                    </div>
+                    {q.ask_if && (
+                      <div className="text-[10px] text-slate-400">
+                        Ask if: <code className="bg-slate-50 dark:bg-slate-800 px-1 rounded">{q.ask_if}</code>
+                      </div>
+                    )}
+                    {q.linked_diagnoses.length > 0 && (
+                      <div className="flex gap-1 flex-wrap mt-0.5">
+                        {q.linked_diagnoses.map(d => (
+                          <span key={d} className="text-[9px] bg-violet-50 text-violet-600 px-1 rounded">{d}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Type + toggle */}
+                  <div className="shrink-0 flex flex-col items-end gap-1">
+                    <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded font-mono">{q.type}</span>
+                    <Switch checked={q.active}
+                      onCheckedChange={(v) => patchQ.mutate({ id: q.id, body: { active: v } })}
+                      className="scale-75 data-[state=checked]:bg-emerald-500"
+                      data-testid={`q-active-${q.id}`}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ─── Workup / Tests ────────────────────────────────────────────────── */}
+        {tab === "workup" && (
+          <div className="p-4">
+            {workup.length === 0 && (
+              <p className="text-slate-400 text-xs text-center py-8">No workup rules in KB for this complaint.</p>
+            )}
+            <div className="space-y-2">
+              {workup.map(w => (
+                <div key={w.id} className={`rounded-lg border p-3 text-xs ${
+                  w.test_type === "bedside" ? "border-teal-200 bg-teal-50/30 dark:bg-teal-950/10" :
+                  w.test_type === "EKG" ? "border-red-200 bg-red-50/30 dark:bg-red-950/10" :
+                  w.test_type === "imaging" ? "border-blue-200 bg-blue-50/30 dark:bg-blue-950/10" :
+                  "border-slate-200 dark:border-slate-700"
+                } ${!w.active ? "opacity-50" : ""}`} data-testid={`wu-card-${w.id}`}>
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                      w.test_type === "bedside" ? "bg-teal-500 text-white" :
+                      w.test_type === "EKG" ? "bg-red-500 text-white" :
+                      w.test_type === "imaging" ? "bg-blue-500 text-white" :
+                      w.test_type === "labs" ? "bg-violet-500 text-white" :
+                      "bg-slate-400 text-white"
+                    }`}>{w.test_type}</span>
+                    <span className="font-bold text-slate-800 dark:text-white text-sm">
+                      <EditableField value={w.test_name}
+                        onSave={(v) => patchWu.mutate({ id: w.id, body: { test_name: v } })}
+                        testId={`wu-name-${w.id}`}
+                      />
+                    </span>
+                    <Switch checked={w.active}
+                      onCheckedChange={(v) => patchWu.mutate({ id: w.id, body: { active: v } })}
+                      className="scale-75 ml-auto data-[state=checked]:bg-emerald-500"
+                      data-testid={`wu-active-${w.id}`}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    {w.trigger_expr && (
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase text-slate-400 mb-0.5">Order when</p>
+                        <code className="text-[11px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-700 dark:text-slate-300 block">
+                          {w.trigger_expr}
+                        </code>
+                      </div>
+                    )}
+                    {w.rationale && (
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase text-slate-400 mb-0.5">Rationale</p>
+                        <EditableField value={w.rationale}
+                          onSave={(v) => patchWu.mutate({ id: w.id, body: { rationale: v } })}
+                          multiline testId={`wu-rationale-${w.id}`}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ─── Discharge Plans ───────────────────────────────────────────────── */}
+        {tab === "plans" && (
+          <div className="p-4 space-y-3">
+            {plans.length === 0 && (
+              <p className="text-slate-400 text-xs text-center py-8">No discharge plan templates for this complaint.</p>
+            )}
+            {plans.map(p => (
+              <div key={p.id} className={`rounded-lg border border-slate-200 dark:border-slate-700 p-4 text-xs ${!p.active ? "opacity-50" : ""}`}
+                data-testid={`plan-card-${p.id}`}>
+                <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+                  <div>
+                    <span className="font-bold text-slate-800 dark:text-white text-sm">{p.diagnosis_label}</span>
+                    {p.complaint_id && (
+                      <span className="ml-2 text-[10px] text-slate-400">({p.complaint_id})</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${DISP_COLORS[p.default_disposition] ?? "bg-slate-200 text-slate-700"}`}>
+                      {DISP_LABELS[p.default_disposition] ?? p.default_disposition}
+                    </span>
+                    <Switch checked={p.active}
+                      onCheckedChange={(v) => patchPlan.mutate({ id: p.id, body: { active: v } })}
+                      className="scale-75 data-[state=checked]:bg-emerald-500"
+                      data-testid={`plan-active-${p.id}`}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {p.summary && (
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase text-slate-400 mb-0.5">Summary</p>
+                      <EditableField value={p.summary}
+                        onSave={(v) => patchPlan.mutate({ id: p.id, body: { summary: v } })}
+                        multiline testId={`plan-summary-${p.id}`}
+                      />
+                    </div>
+                  )}
+
+                  {p.patient_message && (
+                    <div className="rounded bg-blue-50 dark:bg-blue-950/20 border border-blue-200 p-2">
+                      <p className="text-[10px] font-semibold uppercase text-blue-500 mb-0.5">Patient Message</p>
+                      <EditableField value={p.patient_message}
+                        onSave={(v) => patchPlan.mutate({ id: p.id, body: { patient_message: v } })}
+                        multiline testId={`plan-msg-${p.id}`}
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {p.home_care.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase text-slate-400 mb-1">Home Care</p>
+                        <ul className="space-y-0.5">
+                          {p.home_care.map((item, i) => (
+                            <li key={i} className="flex gap-1.5 text-slate-600 dark:text-slate-300">
+                              <span className="text-emerald-400 shrink-0">✓</span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {p.follow_up.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase text-slate-400 mb-1">Follow-up</p>
+                        <ul className="space-y-0.5">
+                          {p.follow_up.map((item, i) => (
+                            <li key={i} className="flex gap-1.5 text-slate-600 dark:text-slate-300">
+                              <span className="text-blue-400 shrink-0">→</span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {p.return_precautions.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase text-slate-400 mb-1">Return If…</p>
+                        <ul className="space-y-0.5">
+                          {p.return_precautions.map((item, i) => (
+                            <li key={i} className="flex gap-1.5 text-slate-600 dark:text-slate-300">
+                              <span className="text-red-400 shrink-0">!</span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  {p.er_precautions && (
+                    <div className="rounded bg-red-50 dark:bg-red-950/20 border border-red-200 p-2">
+                      <p className="text-[10px] font-semibold uppercase text-red-500 mb-0.5">ER Precautions</p>
+                      <EditableField value={p.er_precautions}
+                        onSave={(v) => patchPlan.mutate({ id: p.id, body: { er_precautions: v } })}
+                        multiline testId={`plan-er-${p.id}`}
+                      />
+                    </div>
+                  )}
+
+                  {p.discharge_text && (
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase text-slate-400 mb-0.5">Discharge Text</p>
+                      <EditableField value={p.discharge_text}
+                        onSave={(v) => patchPlan.mutate({ id: p.id, body: { discharge_text: v } })}
+                        multiline testId={`plan-discharge-${p.id}`}
                       />
                     </div>
                   )}

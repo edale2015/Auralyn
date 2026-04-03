@@ -49,7 +49,7 @@ kbExplorerRouter.get("/api/kb-explorer/complaints", async (_req: Request, res: R
 });
 
 // ─── GET /api/kb-explorer/complaints/:id ─────────────────────────────────────
-// Full protocol for one complaint: diagnoses + red flags + dispositions + treatments
+// Full protocol for one complaint: all 7 linked tables
 kbExplorerRouter.get("/api/kb-explorer/complaints/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -59,6 +59,9 @@ kbExplorerRouter.get("/api/kb-explorer/complaints/:id", async (req: Request, res
       { rows: redFlags },
       { rows: dispositions },
       { rows: treatments },
+      { rows: questions },
+      { rows: workup },
+      { rows: plans },
     ] = await Promise.all([
       pool.query(`SELECT * FROM kb_complaints WHERE complaint_id = $1`, [id]),
       pool.query(`
@@ -81,6 +84,21 @@ kbExplorerRouter.get("/api/kb-explorer/complaints/:id", async (req: Request, res
         WHERE complaint_id = $1
         ORDER BY is_first_line DESC, medication_name
       `, [id]),
+      pool.query(`
+        SELECT * FROM kb_questions
+        WHERE complaint_id = $1
+        ORDER BY priority ASC
+      `, [id]),
+      pool.query(`
+        SELECT * FROM kb_workup_rules
+        WHERE complaint_id = $1
+        ORDER BY priority ASC, test_type
+      `, [id]),
+      pool.query(`
+        SELECT * FROM kb_plan_templates
+        WHERE complaint_id = $1 OR complaint_id IS NULL
+        ORDER BY template_key
+      `, [id]),
     ]);
 
     if (!complaint.length) {
@@ -93,10 +111,34 @@ kbExplorerRouter.get("/api/kb-explorer/complaints/:id", async (req: Request, res
       redFlags,
       dispositions,
       treatments,
+      questions,
+      workup,
+      plans,
     });
   } catch (err) {
     console.error("[kbExplorer] protocol error:", err);
     res.status(500).json({ error: "Failed to load protocol" });
+  }
+});
+
+// ─── GET /api/kb-explorer/system-rules ───────────────────────────────────────
+// Global (non-complaint) rules: modifiers, deterioration, confidence, weights
+kbExplorerRouter.get("/api/kb-explorer/system-rules", async (_req: Request, res: Response) => {
+  try {
+    const [
+      { rows: modifiers },
+      { rows: deterioration },
+      { rows: confidence },
+      { rows: weights },
+    ] = await Promise.all([
+      pool.query(`SELECT * FROM kb_modifiers ORDER BY label`),
+      pool.query(`SELECT * FROM kb_deterioration_rules ORDER BY feature_key`),
+      pool.query(`SELECT * FROM kb_confidence_rules ORDER BY priority`),
+      pool.query(`SELECT * FROM kb_clinical_weights ORDER BY key`),
+    ]);
+    res.json({ modifiers, deterioration, confidence, weights });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load system rules" });
   }
 });
 
@@ -187,6 +229,79 @@ kbExplorerRouter.patch("/api/kb-explorer/treatment-rules/:id", async (req: Reque
     sets.push(`updated_at = NOW()`);
     vals.push(id);
     await pool.query(`UPDATE kb_treatment_rules SET ${sets.join(", ")} WHERE id = $${idx}`, vals);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Update failed" });
+  }
+});
+
+// ─── PATCH /api/kb-explorer/questions/:id ────────────────────────────────────
+kbExplorerRouter.patch("/api/kb-explorer/questions/:id", async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id);
+  const { prompt, type, required, priority, category, ask_if, active } = req.body;
+  try {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+    if (prompt !== undefined) { sets.push(`prompt = $${idx++}`); vals.push(prompt); }
+    if (type !== undefined) { sets.push(`type = $${idx++}`); vals.push(type); }
+    if (required !== undefined) { sets.push(`required = $${idx++}`); vals.push(required); }
+    if (priority !== undefined) { sets.push(`priority = $${idx++}`); vals.push(parseInt(priority)); }
+    if (category !== undefined) { sets.push(`category = $${idx++}`); vals.push(category); }
+    if (ask_if !== undefined) { sets.push(`ask_if = $${idx++}`); vals.push(ask_if); }
+    if (active !== undefined) { sets.push(`active = $${idx++}`); vals.push(active); }
+    if (!sets.length) return res.status(400).json({ error: "Nothing to update" });
+    sets.push(`updated_at = NOW()`);
+    vals.push(id);
+    await pool.query(`UPDATE kb_questions SET ${sets.join(", ")} WHERE id = $${idx}`, vals);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Update failed" });
+  }
+});
+
+// ─── PATCH /api/kb-explorer/workup-rules/:id ─────────────────────────────────
+kbExplorerRouter.patch("/api/kb-explorer/workup-rules/:id", async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id);
+  const { test_name, test_type, trigger_expr, rationale, priority, active } = req.body;
+  try {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+    if (test_name !== undefined) { sets.push(`test_name = $${idx++}`); vals.push(test_name); }
+    if (test_type !== undefined) { sets.push(`test_type = $${idx++}`); vals.push(test_type); }
+    if (trigger_expr !== undefined) { sets.push(`trigger_expr = $${idx++}`); vals.push(trigger_expr); }
+    if (rationale !== undefined) { sets.push(`rationale = $${idx++}`); vals.push(rationale); }
+    if (priority !== undefined) { sets.push(`priority = $${idx++}`); vals.push(parseInt(priority)); }
+    if (active !== undefined) { sets.push(`active = $${idx++}`); vals.push(active); }
+    if (!sets.length) return res.status(400).json({ error: "Nothing to update" });
+    sets.push(`updated_at = NOW()`);
+    vals.push(id);
+    await pool.query(`UPDATE kb_workup_rules SET ${sets.join(", ")} WHERE id = $${idx}`, vals);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Update failed" });
+  }
+});
+
+// ─── PATCH /api/kb-explorer/plan-templates/:id ───────────────────────────────
+kbExplorerRouter.patch("/api/kb-explorer/plan-templates/:id", async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id);
+  const { summary, patient_message, discharge_text, er_precautions, medication_instructions, active } = req.body;
+  try {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+    if (summary !== undefined) { sets.push(`summary = $${idx++}`); vals.push(summary); }
+    if (patient_message !== undefined) { sets.push(`patient_message = $${idx++}`); vals.push(patient_message); }
+    if (discharge_text !== undefined) { sets.push(`discharge_text = $${idx++}`); vals.push(discharge_text); }
+    if (er_precautions !== undefined) { sets.push(`er_precautions = $${idx++}`); vals.push(er_precautions); }
+    if (medication_instructions !== undefined) { sets.push(`medication_instructions = $${idx++}`); vals.push(medication_instructions); }
+    if (active !== undefined) { sets.push(`active = $${idx++}`); vals.push(active); }
+    if (!sets.length) return res.status(400).json({ error: "Nothing to update" });
+    sets.push(`updated_at = NOW()`);
+    vals.push(id);
+    await pool.query(`UPDATE kb_plan_templates SET ${sets.join(", ")} WHERE id = $${idx}`, vals);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Update failed" });
