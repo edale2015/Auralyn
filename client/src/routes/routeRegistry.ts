@@ -38,4 +38,5 @@ export const ROUTES = {
   PHYSICIAN_COMMAND_STRIP: "/physician-command-strip",
   PATIENT_GRID: "/patient-grid",
   SYSTEM_OPS_GRID: "/system-ops-grid",
+  KB_EXPLORER: "/kb-explorer",
 };

@@ -90,6 +90,7 @@ import AgentLabPage from "@/pages/AgentLabPage";
 import PhysicianCommandStrip from "@/pages/PhysicianCommandStrip";
 import PatientGridPage from "@/pages/PatientGridPage";
 import SystemOpsGridPage from "@/pages/SystemOpsGridPage";
+import KBExplorerPage from "@/pages/KBExplorerPage";
 
 validateRoutes();
 
@@ -149,6 +150,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.PHYSICIAN_COMMAND_STRIP}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><PhysicianCommandStrip /></RoleGuard>}</Route>
         <Route path={ROUTES.PATIENT_GRID}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><PatientGridPage /></RoleGuard>}</Route>
         <Route path={ROUTES.SYSTEM_OPS_GRID}>{() => <RoleGuard allowedRoles={["admin"]}><SystemOpsGridPage /></RoleGuard>}</Route>
+        <Route path={ROUTES.KB_EXPLORER}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><KBExplorerPage /></RoleGuard>}</Route>
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

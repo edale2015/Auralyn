@@ -24,7 +24,7 @@ import {
   TrendingUp, Layers, HeartPulse, Lightbulb, Video, Globe,
   ClipboardList, LineChart, Code2, MessageCircle, Building2,
   BrainCircuit, MapPin, Brain, Lock, Target, Microscope, Network, Radar, ShieldCheck,
-  CircleDollarSign, Database, Grid3X3, Shuffle, Landmark,
+  CircleDollarSign, Database, Grid3X3, Shuffle, Landmark, BookOpen,
 } from "lucide-react";
 
 const NAV_SECTIONS = [
@@ -185,6 +185,7 @@ const NAV_SECTIONS = [
       { path: "/pack-questions", label: "Pack Questions", icon: ClipboardList },
       { path: "/pack-audit-log", label: "Pack Audit Log", icon: Shield },
       { path: "/coverage-dashboard", label: "Coverage Dashboard", icon: BarChart3 },
+      { path: "/kb-explorer", label: "Knowledge Base Explorer", icon: BookOpen },
       { path: "/system-ops-grid", label: "System Operations Grid", icon: Cpu },
       { path: "/patient-grid", label: "Patient Grid (High Volume)", icon: Grid3X3 },
       { path: "/physician-command-strip", label: "Physician Command Strip", icon: HeartPulse },
