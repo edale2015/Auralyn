@@ -1,5 +1,6 @@
 import { getSheetsClient } from "../sheets/sheetsClient";
 import { createHash } from "crypto";
+import { scrubText } from "../middleware/phiScrubber";
 
 export type FlowQuestion = {
   id: string;
@@ -154,6 +155,18 @@ export async function getFlowQuestionsFromSheet(flowId: string): Promise<FlowQue
     if (rest.choices && rest.choices.length === 0) rest.choices = null;
     return rest;
   });
+
+  // PHI defense-in-depth: scan template text fields for accidental PHI
+  // (question templates should never contain patient data — this catches admin errors)
+  let totalPhiRedactions = 0;
+  for (const q of cleaned) {
+    const textScan = scrubText(q.text);
+    const helpScan = q.helpText ? scrubText(q.helpText) : { redactedCount: 0 };
+    totalPhiRedactions += textScan.redactedCount + helpScan.redactedCount;
+  }
+  if (totalPhiRedactions > 0) {
+    console.error(`[SheetFlowLoader][PHI-ALERT] PHI patterns detected in CLINICAL_QUESTIONS sheet for flow="${flowId}" (${totalPhiRedactions} redaction(s)). Remove PHI from spreadsheet template immediately.`);
+  }
 
   // Warn if no questions found - this might indicate a configuration issue
   if (cleaned.length === 0) {

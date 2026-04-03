@@ -149,3 +149,43 @@ All 12 critical fixes from Claude's architecture review are implemented:
 *   **Data Configuration**: Google Sheets
 *   **Cloud Storage**: Firebase Storage
 *   **Authentication**: Google OAuth2 (for Gmail API)
+## Second Claude Architecture Review — Deficiency Fixes
+
+### PHI Guard: Twilio Voice TTS (`server/voice/twilioVoiceFull.ts`)
+- All TTS output now passes through `scrubText()` before injection into TwiML `<Say>` elements
+- Redaction events are traced with `phi_redacted_from_tts` for HIPAA audit purposes
+- Closes HIPAA gap: patient PHI can no longer leak through voice output channel
+
+### PHI Defense: Sheet Flow Loader (`server/flows/sheetFlowLoader.ts`)
+- Added PHI scan on clinical question templates loaded from Google Sheets
+- Logs `PHI-ALERT` to console if any PHI patterns found in template text fields
+- Defense-in-depth against administrator accidentally entering PHI in the spreadsheet
+
+### New Scoring Instruments
+- **PERC Rule** (`server/services/scoring/percRule.ts`) — 8-criterion PE rule-out with `percNegative` flag; `computePERCRule()`
+- **CURB-65** (`server/services/scoring/curb65Score.ts`) — CAP severity scoring with 30-day mortality risk categories; `computeCURB65Score()`
+- **Ottawa Ankle & Knee Rules** (`server/services/scoring/ottawaRules.ts`) — Fracture rule-out decisions; `computeOttawaAnkleRule()` and `computeOttawaKneeRule()`
+
+### Scoring Registry Updated (`server/services/scoring/scoringRegistry.ts`)
+- All 7 instruments now registered: CENTOR, WELLS_PE, HEART, PERC, CURB65, OTTAWA_ANKLE, OTTAWA_KNEE
+- Added `clinicalUse` field to `ScoringSystemMeta` for each instrument
+
+### Golden Case Expansion (`server/services/engineDiagnosticsService.ts`)
+- Expanded from 4 to **25 golden cases** covering STEMI, stroke, sepsis, SAH, anaphylaxis, ectopic, torsion, respiratory, pediatric emergencies
+- Added **17 ER_NOW escalation cases** including atypical presentations (diabetic silent MI, posterior stroke, pediatric sepsis without fever, elderly AMS/UTI)
+- **New 100% escalation threshold**: `escalationOk` — escalation cases must pass at 100% (not 97%); missed escalations log as CRITICAL
+- Added `escalationPassRate`, `totalEscalationCases`, `escalationOk` to `GoldenCaseTestResult` interface
+
+### Versioned Clinical Rules Table (`clinical_rules`)
+- New table created in PostgreSQL with RLS-compatible structure
+- Columns: `rule_key`, `version`, `complaint_cluster`, `rule_type`, `snomed_code`, `evidence_source`, `rule_body (JSONB)`, `authored_by`, `approved_by`, `effective_date`, `expiry_date`, `is_active`, `tenant_id`
+- Foundation for tier-1 DB KB migration (replacing Sheets as source of truth)
+- Unique index on `(rule_key, version, tenant_id)` prevents duplicate versions
+- Partial index on `(complaint_cluster, is_active) WHERE is_active = true` for fast active-rule queries
+
+### Unit Tests Added (82 total, 10 test files)
+- `tests/unit/percRule.test.ts` — 6 tests for PERC rule
+- `tests/unit/curb65Score.test.ts` — 8 tests for CURB-65
+- `tests/unit/ottawaRules.test.ts` — 10 tests for Ottawa Ankle + Knee
+- `tests/unit/centorScore.test.ts` — 8 tests for Centor
+- `tests/unit/wellsScore.test.ts` — 8 tests for Wells PE

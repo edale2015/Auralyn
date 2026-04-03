@@ -51,6 +51,7 @@ export interface EngineScanResult {
 
 export interface GoldenCaseTestResult {
   ok: boolean;
+  escalationOk: boolean;
   durationMs: number;
   testedAt: string;
   cases: Array<{
@@ -61,9 +62,12 @@ export interface GoldenCaseTestResult {
     passed: boolean;
     safetyHardStop: boolean;
     confidence: number | undefined;
+    isEscalation: boolean;
     error?: string;
   }>;
   passRate: number;
+  escalationPassRate: number;
+  totalEscalationCases: number;
   summary: string;
 }
 
@@ -211,34 +215,167 @@ export function runGoldenCaseTest(): GoldenCaseTestResult {
     symptoms: string[];
     ageYears: number;
     expectedDisposition: string;
+    isEscalation: boolean;
+    presentationType?: "typical" | "atypical";
   }> = [
+    // ── CHEST PAIN / STEMI (typical + atypical) ─────────────────────────────
     {
-      name: "Chest Pain — Expected ER_NOW",
+      name: "Chest Pain STEMI — Typical (ER_NOW)",
       complaint: "chest pain",
       symptoms: ["severe chest pain", "left arm pain", "diaphoresis", "shortness of breath"],
-      ageYears: 58,
-      expectedDisposition: "ER_NOW",
+      ageYears: 58, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
     },
     {
-      name: "Severe Headache — Expected ER_NOW",
-      complaint: "severe sudden headache",
-      symptoms: ["worst headache of life", "sudden onset", "neck stiffness"],
-      ageYears: 42,
-      expectedDisposition: "ER_NOW",
+      name: "Chest Pain STEMI — Atypical Diabetic (jaw pain + nausea, ER_NOW)",
+      complaint: "jaw pain and nausea",
+      symptoms: ["jaw pain", "nausea", "sweating", "epigastric pain", "fatigue"],
+      ageYears: 64, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
     },
     {
-      name: "Mild Sore Throat — Expected Self-Care or Urgent-Care",
+      name: "Chest Pain STEMI — Atypical Female (indigestion + diaphoresis, ER_NOW)",
+      complaint: "indigestion",
+      symptoms: ["indigestion", "diaphoresis", "chest tightness", "shortness of breath"],
+      ageYears: 55, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
+    },
+    // ── STROKE (typical + atypical) ──────────────────────────────────────────
+    {
+      name: "Stroke FAST — Typical (ER_NOW)",
+      complaint: "facial droop",
+      symptoms: ["facial droop", "arm weakness", "slurred speech", "sudden onset"],
+      ageYears: 67, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    {
+      name: "Stroke — Atypical Posterior (vertigo + diplopia, ER_NOW)",
+      complaint: "severe dizziness",
+      symptoms: ["sudden severe dizziness", "double vision", "difficulty walking", "arm weakness"],
+      ageYears: 71, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
+    },
+    // ── SEPSIS (typical + atypical) ──────────────────────────────────────────
+    {
+      name: "Sepsis — Typical (ER_NOW)",
+      complaint: "fever and confusion",
+      symptoms: ["confusion", "fever 103", "rapid heart rate", "low blood pressure", "not acting right"],
+      ageYears: 72, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    {
+      name: "Sepsis — Atypical Pediatric (no fever, lethargy + fast breathing, ER_NOW)",
+      complaint: "very tired and breathing fast",
+      symptoms: ["lethargy", "fast breathing", "poor feeding", "mottled skin", "cold hands"],
+      ageYears: 1, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
+    },
+    {
+      name: "Sepsis — Atypical Elderly UTI with AMS (ER_NOW)",
+      complaint: "confusion and not acting right",
+      symptoms: ["confusion", "not acting right", "decreased urine output", "low blood pressure", "rapid heart rate"],
+      ageYears: 82, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
+    },
+    // ── THUNDERCLAP HEADACHE / SAH ────────────────────────────────────────────
+    {
+      name: "Thunderclap Headache SAH — Typical (ER_NOW)",
+      complaint: "worst headache of my life",
+      symptoms: ["worst headache of life", "sudden onset", "neck stiffness", "photophobia"],
+      ageYears: 42, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    {
+      name: "Thunderclap Headache — Atypical Brief/Resolved (ER_NOW)",
+      complaint: "severe headache that went away",
+      symptoms: ["sudden severe headache", "resolved in 20 minutes", "worst ever", "nausea"],
+      ageYears: 38, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
+    },
+    // ── SEVERE DYSPNEA / RESPIRATORY FAILURE ─────────────────────────────────
+    {
+      name: "Severe Dyspnea — SpO2 Drop (ER_NOW)",
+      complaint: "difficulty breathing",
+      symptoms: ["shortness of breath", "trouble breathing at rest", "low oxygen", "cannot speak full sentences"],
+      ageYears: 61, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    {
+      name: "Severe Dyspnea — Pediatric Respiratory Distress (ER_NOW)",
+      complaint: "baby breathing very fast",
+      symptoms: ["fast breathing", "grunting", "retractions", "nasal flaring", "poor color"],
+      ageYears: 0, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    // ── ANAPHYLAXIS ───────────────────────────────────────────────────────────
+    {
+      name: "Anaphylaxis — Classic (ER_NOW)",
+      complaint: "allergic reaction",
+      symptoms: ["hives", "throat swelling", "difficulty breathing", "wheezing", "ate peanuts"],
+      ageYears: 24, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    {
+      name: "Anaphylaxis — Atypical Isolated Hypotension (ER_NOW)",
+      complaint: "feeling faint after bee sting",
+      symptoms: ["bee sting", "low blood pressure", "rapid heart rate", "dizziness", "near fainting"],
+      ageYears: 45, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "atypical",
+    },
+    // ── ALTERED MENTAL STATUS ─────────────────────────────────────────────────
+    {
+      name: "Altered Mental Status — Hypoglycemia (ER_NOW)",
+      complaint: "unresponsive diabetic",
+      symptoms: ["confusion", "unresponsive", "diabetic", "diaphoresis", "seizure-like"],
+      ageYears: 55, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    // ── ABDOMINAL EMERGENCIES ─────────────────────────────────────────────────
+    {
+      name: "Ruptured Ectopic — Typical (ER_NOW)",
+      complaint: "severe abdominal pain",
+      symptoms: ["severe sharp abdominal pain", "missed period", "positive pregnancy test", "shoulder pain", "dizziness"],
+      ageYears: 27, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    {
+      name: "Testicular Torsion — (ER_NOW)",
+      complaint: "sudden severe scrotal pain",
+      symptoms: ["sudden severe testicular pain", "swollen testicle", "nausea", "high-riding testicle"],
+      ageYears: 17, expectedDisposition: "ER_NOW", isEscalation: true, presentationType: "typical",
+    },
+    // ── NON-ESCALATION CASES (high specificity, should NOT trigger ER_NOW) ────
+    {
+      name: "Mild Sore Throat — Urgent Care (NOT ER_NOW)",
       complaint: "sore throat",
-      symptoms: ["sore throat", "mild difficulty swallowing"],
-      ageYears: 28,
-      expectedDisposition: "self_care_with_precautions",
+      symptoms: ["sore throat", "mild difficulty swallowing", "no fever"],
+      ageYears: 28, expectedDisposition: "self_care_with_precautions", isEscalation: false,
     },
     {
-      name: "Pediatric High Fever — Expected ER_NOW or Urgent",
-      complaint: "fever",
-      symptoms: ["fever 104", "lethargy", "stiff neck"],
-      ageYears: 2,
-      expectedDisposition: "ER_NOW",
+      name: "URI/Cold — Self-Care (NOT ER_NOW)",
+      complaint: "runny nose and cough",
+      symptoms: ["runny nose", "congestion", "mild cough", "low-grade fever"],
+      ageYears: 35, expectedDisposition: "self_care_with_precautions", isEscalation: false,
+    },
+    {
+      name: "Ankle Sprain — Non-Emergency (NOT ER_NOW)",
+      complaint: "twisted ankle",
+      symptoms: ["ankle pain", "swelling", "able to walk with limp", "no numbness"],
+      ageYears: 22, expectedDisposition: "urgent_care", isEscalation: false,
+    },
+    {
+      name: "Low Back Pain — Non-Emergency (NOT ER_NOW)",
+      complaint: "low back pain",
+      symptoms: ["low back pain", "worsens with movement", "no leg weakness", "no bowel changes"],
+      ageYears: 40, expectedDisposition: "urgent_care", isEscalation: false,
+    },
+    {
+      name: "Ear Infection — Non-Emergency (NOT ER_NOW)",
+      complaint: "ear pain",
+      symptoms: ["ear pain", "decreased hearing", "mild fever", "no facial paralysis"],
+      ageYears: 6, expectedDisposition: "urgent_care", isEscalation: false,
+    },
+    {
+      name: "Pink Eye — Non-Emergency (NOT ER_NOW)",
+      complaint: "red eye and discharge",
+      symptoms: ["red eye", "discharge", "itching", "no vision loss", "no pain"],
+      ageYears: 32, expectedDisposition: "urgent_care", isEscalation: false,
+    },
+    {
+      name: "Mild UTI — Non-Emergency (NOT ER_NOW)",
+      complaint: "painful urination",
+      symptoms: ["burning urination", "frequent urination", "mild lower abdominal pain", "no fever", "no flank pain"],
+      ageYears: 30, expectedDisposition: "urgent_care", isEscalation: false,
+    },
+    {
+      name: "Skin Laceration — Urgent Care (NOT ER_NOW)",
+      complaint: "cut on hand",
+      symptoms: ["laceration", "bleeding controlled", "no tendon involvement", "intact sensation"],
+      ageYears: 45, expectedDisposition: "urgent_care", isEscalation: false,
     },
   ];
 
@@ -276,6 +413,7 @@ export function runGoldenCaseTest(): GoldenCaseTestResult {
         passed,
         safetyHardStop,
         confidence,
+        isEscalation: gc.isEscalation,
       };
     } catch (err: any) {
       return {
@@ -286,6 +424,7 @@ export function runGoldenCaseTest(): GoldenCaseTestResult {
         passed: false,
         safetyHardStop: false,
         confidence: undefined,
+        isEscalation: gc.isEscalation,
         error: err?.message ?? String(err),
       };
     }
@@ -294,17 +433,35 @@ export function runGoldenCaseTest(): GoldenCaseTestResult {
   const passed = results.filter(r => r.passed).length;
   const passRate = results.length > 0 ? passed / results.length : 0;
 
-  const summary =
-    passRate === 1
-      ? "All golden cases passed."
-      : `${passed}/${results.length} golden cases passed. Review failures immediately — patient safety at risk.`;
+  const escalationResults = results.filter(r => r.isEscalation);
+  const escalationPassed = escalationResults.filter(r => r.passed).length;
+  const escalationPassRate = escalationResults.length > 0 ? escalationPassed / escalationResults.length : 1;
+
+  // CRITICAL: Escalation (ER_NOW) cases MUST hit 100% — 97% means 3-in-100 missed escalations
+  // which is clinically unacceptable for STEMI, stroke, anaphylaxis, and ruptured ectopic.
+  const escalationOk = escalationPassRate === 1.0;
+  const overallOk = passRate >= 0.90;
+
+  const missedEscalations = escalationResults.filter(r => !r.passed).map(r => r.name);
+
+  let summary: string;
+  if (escalationOk && overallOk) {
+    summary = `All ${escalationResults.length} escalation cases passed (100%). Overall: ${passed}/${results.length} (${Math.round(passRate * 100)}%).`;
+  } else if (!escalationOk) {
+    summary = `CRITICAL: ${missedEscalations.length} escalation case(s) MISSED — ${missedEscalations.join("; ")}. Patient safety at risk — immediate review required.`;
+  } else {
+    summary = `Escalation cases OK (100%). Overall: ${passed}/${results.length} (${Math.round(passRate * 100)}%). Review non-escalation failures.`;
+  }
 
   return {
-    ok: passRate >= 0.75,
+    ok: overallOk && escalationOk,
+    escalationOk,
     durationMs: Date.now() - start,
     testedAt,
     cases: results,
     passRate,
+    escalationPassRate,
+    totalEscalationCases: escalationResults.length,
     summary,
   };
 }

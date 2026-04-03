@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { handleVoiceStream } from "../multimodal/voiceAgent";
 import { trace } from "../lib/traceLogger";
+import { scrubText } from "../middleware/phiScrubber";
 
 interface TwilioStreamEvent {
   event: string;
@@ -53,7 +54,11 @@ export async function handleTwilioMediaStream(req: Request, res: Response): Prom
     }
 
     if (chunk.text) {
-      twiml.push(`<Say voice="alice">${escapeXml(chunk.text)}</Say>`);
+      const { scrubbed, redactedCount } = scrubText(chunk.text);
+      if (redactedCount > 0) {
+        trace("twilio_voice_full", "phi_redacted_from_tts", { callSid, redactedCount });
+      }
+      twiml.push(`<Say voice="alice">${escapeXml(scrubbed)}</Say>`);
     }
 
     if (chunk.done) break;

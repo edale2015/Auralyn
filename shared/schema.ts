@@ -927,3 +927,29 @@ export const kbDeteriorationRules = pgTable("kb_deterioration_rules", {
 });
 export const insertKbDeteriorationRuleSchema = createInsertSchema(kbDeteriorationRules).omit({ id: true, createdAt: true });
 export type KbDeteriorationRule = typeof kbDeteriorationRules.$inferSelect;
+
+// ── Clinical Rules — Versioned KB Tier-1 Foundation ───────────────────────────
+// Each row is one immutable version of a clinical decision rule.
+// Active rule = isActive=true + no expiryDate (or expiryDate in future).
+// Superseded rules are expired (expiryDate set) but never deleted for audit trail.
+export const clinicalRules = pgTable("clinical_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ruleKey: text("rule_key").notNull(),
+  version: integer("version").notNull().default(1),
+  complaintCluster: text("complaint_cluster").notNull(),
+  ruleType: text("rule_type").notNull(),
+  snomedCode: text("snomed_code"),
+  evidenceSource: text("evidence_source"),
+  ruleBody: jsonb("rule_body").notNull(),
+  authoredBy: text("authored_by").notNull().default("system"),
+  approvedBy: text("approved_by"),
+  effectiveDate: timestamp("effective_date").notNull().default(sql`CURRENT_TIMESTAMP`),
+  expiryDate: timestamp("expiry_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  tenantId: text("tenant_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertClinicalRuleSchema = createInsertSchema(clinicalRules).omit({ id: true, createdAt: true });
+export type InsertClinicalRule = z.infer<typeof insertClinicalRuleSchema>;
+export type ClinicalRule = typeof clinicalRules.$inferSelect;
