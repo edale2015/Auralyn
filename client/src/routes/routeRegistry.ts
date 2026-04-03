@@ -35,4 +35,5 @@ export const ROUTES = {
   INTEGRATION_HEALTH: "/integration-health",
   ENGINE_MAINTENANCE: "/engine-maintenance",
   AGENT_LAB: "/agent-lab",
+  PHYSICIAN_COMMAND_STRIP: "/physician-command-strip",
 };

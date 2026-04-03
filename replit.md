@@ -292,3 +292,67 @@ All 12 critical fixes from Claude's architecture review are implemented:
 ### Routes Registered in server/index.ts
 - `app.use("/api/kb", priorInvalidationRouter)` — Prior cache invalidation + stats
 - `app.use(modelFreezeRouter)` — Model validation lock (mounts at `/api/governance/model-freeze`)
+- `app.use(commandStripRouter)` — All command strip endpoints (see below)
+
+---
+
+## Physician Command Strip — 500 Patients/Day Feature Set
+
+### Backend Files
+
+**Three-Tier Triage Router** (`server/physician/triageRouter.ts`)
+- `assignTier()` — pure function: input debate outcome + disposition + confidence + flags → Tier 1/2/3 with rationale
+- Tier 1 (notify-only, SLA 4h): CONSENSUS + HOME_CARE + conf ≥ 0.85 + no flags
+- Tier 2 (eyes-on 30s, SLA 2h): CONSENSUS URGENT_CARE or any population/red flag
+- Tier 3 (full review 15min): VETO_BLOCK, HIGHER_ACUITY_WINS, MERGED_DIFFERENTIAL, ER_NOW, conf < 0.40, prior override exists
+
+**Command Strip Queue** (`server/physician/commandStripQueue.ts`)
+- `getCommandStripQueue()` — loads all pending sessions, assigns tiers, sorts T3→T2→T1 oldest-first
+- Checks `physician_overrides` table for prior override fingerprint matches
+- Returns `tierCounts`, `batchEligibleCount`, and `batchEligible` flag per case
+
+**Batch Part 11 Signature Service** (`server/physician/batchSignatureService.ts`)
+- `batchApproveCases()` — batch-approves up to 100 Tier-1 cases under one SHA-256 Part 11 signature
+- Canonical statement includes exact selection criteria — legally equivalent to radiologist batch read attestation
+- Stores batch signature in `electronic_signatures`, links all cases via `batchSignatureId` + `batchId`
+- Throws 401 on credential verification failure, 400 on empty batch, 400 on oversized batch (>100)
+
+**Physician Inbox Broker** (`server/inbox/physicianInboxBroker.ts`)
+- `ingestChannelEvent()` — normalizes events from whatsapp/telegram/web/chatgpt/voice/sms with deduplication
+- `computePriority()` — classifies critical/high/normal/low from text patterns + event type
+- `getPhysicianInbox()` — priority-sorted, filterable by channel and priority
+- `routePhysicianReply()` — routes physician approve/escalate/override/flag back to originating channel adapter
+- `registerChannelAdapter()` — pluggable adapter interface for each messaging channel
+
+**Ambient Health Aggregator** (`server/monitoring/ambientHealthAggregator.ts`)
+- `getAmbientHealthSnapshot()` — returns 6 health dots: KB, Debate Engine, Scoring Systems, Messaging Gateway, PHI Scanner, Outbox Lag
+- Each dot: green/amber/red/gray with detail text and plain-English degradedMessage for amber/red
+- All 6 checks run in parallel via `Promise.all()`
+
+**Command Strip API Routes** (`server/routes/commandStripRoutes.ts`)
+- `GET  /api/command-strip/queue` — tiered patient queue (filter by tier, paginated)
+- `POST /api/command-strip/cases/:id/approve` — single approve + audit log
+- `POST /api/command-strip/cases/:id/escalate` — single escalate + audit log
+- `POST /api/command-strip/cases/:id/override` — structured override with 9-category dropdown
+- `POST /api/command-strip/batch-approve` — batch Part 11 sign + approve Tier-1 cases
+- `GET  /api/command-strip/inbox` — unified physician inbox across all channels
+- `GET  /api/command-strip/inbox/stats` — inbox volume by channel and priority
+- `POST /api/command-strip/inbox/reply` — physician reply routed to originating channel
+- `POST /api/command-strip/inbox/ingest` — channel adapter event injection endpoint
+- `GET  /api/command-strip/health` — 6-dot ambient health snapshot
+
+### Frontend Files
+
+- `client/src/pages/PhysicianCommandStrip.tsx` — Full command strip page at `/physician-command-strip` (role-gated: admin/physician/clinician). Two-tab layout: Queue + Inbox. Keyboard shortcuts: J/K navigate, Space select, A approve, E escalate, O override. 15s auto-refresh on queue, 10s on inbox. Tier filter pills. Ambient health bar embedded at top. Batch select + sign workflow integrated.
+
+- `client/src/components/physician/CommandCard.tsx` — Per-case card: disposition color, tier badge, channel badge, diagnoses, red/population flags, ER now message, SLA breach indicator, inline override form with 9-category dropdown. Four action buttons: Approve / Escalate / Override / (deferred via checkbox).
+
+- `client/src/components/physician/AmbientHealthBar.tsx` — Row of 6 colored dots with tooltip on hover (label + detail + degradedMessage). Auto-refreshes every 30s. Amber/red dots pulse. Alert message if any dot is degraded.
+
+- `client/src/components/physician/BatchApproveBar.tsx` — Sticky bottom bar. Shows count of selected and how many are batch-eligible. PIN/password input with Enter-to-submit. Calls `POST /api/command-strip/batch-approve`. On success: shows signature ID in toast, clears selection.
+
+- `client/src/components/physician/TierBadge.tsx` — Color-coded tier pill (emerald/amber/red) with animated pulse dot for Tier 3.
+
+### Route Registration
+- `ROUTES.PHYSICIAN_COMMAND_STRIP = "/physician-command-strip"` added to `client/src/routes/routeRegistry.ts`
+- Route added to `WorkbenchRouter` in `App.tsx` with `RoleGuard` (admin/physician/clinician)
