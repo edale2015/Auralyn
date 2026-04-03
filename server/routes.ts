@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage, type FlowQuestion } from "./storage";
+import { correlationMiddleware } from "./middleware/correlation";
+import { buildDomainRouters } from "./routes/domainIndex";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { generateToken, generateCode, expiresAtMinutes, INTAKE_EXPIRY_MINUTES, BASE_URL } from "./intake/intakeAuth";
 import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
@@ -433,6 +435,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Correlation ID — must be first so all routes have req.correlationId and x-correlation-id header
+  app.use(correlationMiddleware);
+
   // Increase body limit for potential audio payloads
   app.use((req, res, next) => {
     if (req.headers['content-type']?.includes('application/json')) {
@@ -2009,6 +2014,10 @@ export async function registerRoutes(
   const { default: agentLabRouter } = await import("./routes/agentLabRoutes");
   app.use("/api/agent-lab", agentLabRouter);
   console.log("[AgentLab] Agent & Skill Lab endpoints registered at /api/agent-lab/*");
+
+  // Domain-split routers (clinical fast-path, agent registry, evolution proposals, tenant config)
+  app.use("/api/domain", buildDomainRouters());
+  console.log("[DomainRouters] Mounted at /api/domain/* (fast-path, registry, evolution, tenant config)");
 
   return httpServer;
 }

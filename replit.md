@@ -89,6 +89,59 @@ All 12 critical fixes from Claude's architecture review are implemented:
 - Checks DB health before every request; returns 503 if DB is unavailable (fail-closed)
 - Skips health check endpoints (`/api/healthz`) to avoid circular dependency
 
+## Claude Upgrade Bundle (Applied 2026-04-03)
+
+### Acuity Pre-Classifier (`server/clinical/acuityPreClassifier.ts`)
+- Pure-logic fast-path that fires BEFORE the AI pipeline for life-threatening presentations
+- Detects: STEMI, stroke (FAST), severe dyspnea, sepsis, altered mental status, thunderclap headache, anaphylaxis
+- Returns `ER_NOW | CONTINUE_PIPELINE` disposition with signal, confidence, and rationale
+- Exposed at `POST /api/domain/clinical-domain/fast-path`
+
+### Correlation ID Middleware (`server/middleware/correlation.ts`)
+- Mounted as the very first middleware in `registerRoutes`
+- Propagates or generates `x-correlation-id` header across all requests and responses
+- All request logs now include `correlationId` field
+- Frontend library at `client/src/lib/correlation.ts` — tracks per-session correlation ID in sessionStorage and injects header into all `apiFetch` calls
+
+### Durable Queue Factory (`server/queue/queueFactory.ts` + `clinicalPipelineQueue.ts`)
+- BullMQ-based queue factory with idempotency keys (SHA-256 of `encounterId:tenantId:stage:correlationId`)
+- Gracefully disabled if `REDIS_URL` is not an ioredis-compatible URL
+- Stages: intake → triage → reasoning → output → claim_submission
+
+### Unified Agent Registry (`server/agents/unifiedAgentRegistry.ts`)
+- DB-backed (PostgreSQL `agent_registry` table) replacing in-memory maps
+- Heartbeat upsert, degradation sweep (marks missed heartbeats), and list/get queries
+- Exposed via `GET/POST /api/domain/agents-domain/registry`
+
+### Evolution Service (`server/evolution/evolutionService.ts`)
+- Full proposal lifecycle: pending → staging → approved → canary → promoted | rolled_back
+- DB-backed (`evolution_proposals` table) with full audit timestamps
+- Exposed via `GET/POST/approve/rollback /api/domain/admin-domain/evolution/proposals`
+
+### Tenant Config Service (`server/tenancy/tenantConfigService.ts`)
+- DB-backed (`tenant_configs` table, RLS-protected with `app.current_tenant_id` session variable)
+- Version-incremented upserts; exposed via `GET/PUT /api/domain/admin-domain/tenants`
+
+### Tenant Context Middleware (`server/middleware/tenantContext.ts`)
+- Sets `app.current_tenant_id` Postgres session variable per-request for RLS enforcement
+- Reads from `req.user.tenantId` or `X-Tenant-Id` header
+
+### External Audit Sink (`server/observability/externalAuditSink.ts`)
+- S3 write-once sink with COMPLIANCE object lock (7-year retention)
+- Gracefully logs to console when `AUDIT_S3_BUCKET` is not configured
+
+### Domain Router Architecture (`server/routes/domainIndex.ts`)
+- 6 domain routers mounted at `/api/domain/*`: clinical-domain, billing-domain, learning-domain, agents-domain, admin-domain, observability
+- Worker thread stubs in `server/workers/` for golden-case validation and auto-healing
+
+### Physician Override Dialog (`client/src/components/PhysicianOverrideDialog.tsx`)
+- Shadcn Dialog with correlation ID injection, required rationale field, and structured POST to `/api/clinical/encounters/:id/override`
+
+### SQL Migrations Applied
+- `agent_registry` table (002)
+- `evolution_proposals` table (003)
+- `tenant_configs` table (004, with RLS policy on `tenant_id`)
+
 ## External Dependencies
 *   **AI Integration**: OpenAI API
 *   **Messaging Integration**: Twilio for WhatsApp, SMS, and Voice TTS

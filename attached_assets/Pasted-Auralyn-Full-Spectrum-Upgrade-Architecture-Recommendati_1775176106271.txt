@@ -1,0 +1,126 @@
+Auralyn Full-Spectrum Upgrade — Architecture Recommendations
+This is the most mature version of this system I've seen across the three review sessions. The shift from ENT/flu slice to full urgent care scope is clinically ambitious and the infrastructure has genuinely matured — the SHA-256 audit chain, circuit breakers, SLO framework, PHI guard wrapper, and deterministic fallback are all meaningful improvements. What follows is honest, prioritized, and specific.
+
+1. CLINICAL SAFETY & COVERAGE FOR FULL URGENT CARE SCOPE
+KB Expansion Strategy
+The answer is retrieval-augmented generation (RAG) backed by a structured clinical ontology, not more Sheets tabs.
+More Sheets tabs will fail at full urgent care scope for the same reason a filing cabinet fails as a database — it scales by manual labor, has no schema enforcement, and produces silent errors when structure drifts. You already have 241 rules; full urgent care scope requires 800–1,200 validated rules across all complaint clusters. That is not a Sheets problem. That is a database problem.
+The recommended architecture:
+Tier 1 — Structured ontology in PostgreSQL. Every clinical rule, red flag, scoring threshold, and disposition criterion lives in a versioned rules table with columns for: complaint cluster (SNOMED-mapped), rule type (red flag / scoring / disposition), clinical evidence source, version, authored-by, approved-by, effective date, and expiry date. This replaces the authoritative role of Google Sheets.
+Tier 2 — RAG layer for reasoning augmentation. A vector store (pgvector in your existing PostgreSQL, or Pinecone) indexes clinical guidelines — UpToDate summaries, ACC/AHA guidelines, ACEP criteria — chunked at the paragraph level. The GPT-4o reasoning layer queries this store per case to augment its prompt with the top-3 relevant guideline excerpts. This gives you evidence-based reasoning without hardcoding every clinical nuance into rules.
+Tier 3 — Google Sheets demoted to proposal interface only. Clinicians draft new rules in Sheets. A validation pipeline (syntax check, ontology mapping, duplicate detection, required field completeness) runs before any proposed rule enters the PostgreSQL pending queue. Sheets never writes directly to production.
+This three-tier architecture maintains the clinical team's ability to author rules in a familiar interface while eliminating Sheets as a single point of clinical failure.
+Red Flag Validation Across Complaint Categories
+The er_now_sensitivity ≥ 97% SLO validated against 10 golden cases is the most dangerous gap in the current system. Ten cases cannot validate red flag detection across a complaint space that includes STEMI, stroke, ruptured ectopic, testicular torsion, meningitis, and epiglottitis — each with different presenting features, different base rates, and different time-to-escalation requirements.
+Recommended validation expansion:
+Define a minimum golden case count per complaint cluster based on annual visit prevalence in urgent care. For the highest-acuity clusters — chest pain, stroke/TIA, abdominal emergencies, sepsis — a minimum of 15 golden cases each, with at least 5 designed to test atypical presentations (silent MI in diabetics, posterior stroke without obvious deficits, pediatric sepsis without fever). For lower-acuity clusters, 5–8 cases each.
+The 5-minute golden case monitor is well-designed. Extend it: run the full golden case suite on every KB version promotion, and require 100% er_now sensitivity on the escalation cases (not 97% — 97% means 3 in 100 missed escalations, which is clinically unacceptable for STEMI and stroke). The 97% threshold is appropriate for aggregate sensitivity across all complaint types; for life-threatening escalation cases specifically, the threshold must be 100%.
+Add atypical presentation cases explicitly. The system will see: women with chest pain presenting as jaw pain and nausea, elderly patients with UTI presenting as altered mental status, pediatric appendicitis presenting with diarrhea, not right lower quadrant pain. If these aren't in the golden case suite, the red flag detection is validated only on textbook presentations.
+Single Pipeline vs. Acuity-Branching
+The current single 66-layer pipeline for all complaints is architecturally clean but clinically wrong for the highest-acuity presentations.
+Recommended: Acuity fast-path at Layer 1, not a full pipeline redesign.
+Do not redesign the pipeline architecture. Instead, add an acuity pre-classifier at the intake layer that runs before Layer 1 proper. The pre-classifier does one thing: evaluate the first 3–5 symptom inputs against a short list of life-threatening pattern signatures (chest pain + diaphoresis, sudden severe headache, unilateral facial droop + arm weakness, difficulty breathing at rest, altered mental status). If any pattern matches, the case is immediately routed to a 3-layer fast path: (1) red flag confirmation, (2) ER NOW disposition with specific language, (3) direct contact instruction. The full 66-layer pipeline is bypassed entirely.
+This gives you worst-case time-to-ER-escalation of under 30 seconds for STEMI/stroke presentations, while preserving the full pipeline for the 95%+ of cases that aren't immediately life-threatening. The fast path should have its own golden case suite and its own SLO (target: 100% sensitivity, < 30 second time-to-escalation).
+
+2. RELIABILITY & FAULT TOLERANCE
+In-Memory Queues — Migrate to Redis Immediately
+Clinical pipeline, credentialing, and claim submission jobs lost on restart is not a reliability gap — it is a patient safety gap for the clinical pipeline queue and a revenue integrity gap for claim submission. Redis is already deployed. There is no defensible reason to keep these queues in-memory.
+Migration priority order:
+First: clinical_pipeline — a restart during active patient intake means that patient's case is silently dropped. No restart should ever lose a case in progress.
+Second: claim_submission — lost claim jobs mean revenue leakage and potential duplicate submission risk when the job is manually retried.
+Third: credentialing — lower urgency, but still should not be lost.
+Use BullMQ with your Upstash Redis client. Each job gets a unique idempotency key (encounter ID + job type + timestamp hash) so retries after failure never produce duplicate clinical events or duplicate claim submissions. Claim submission idempotency is specifically required here — submitting the same claim twice to a clearinghouse is a billing compliance issue.
+Routes.ts Monolith Decomposition
+A 2,015-line routes.ts with 130 modules registered in a single async function has three concrete failure modes: (1) a syntax error anywhere in the file prevents the entire server from starting, (2) a route registration bug in one clinical domain silently affects route resolution in others due to Express's sequential matching, (3) it cannot be tested, deployed, or reviewed in isolation.
+Recommended decomposition:
+Organize routes into 8 domain routers, each in its own file, each independently testable:
+clinicalRouter — intake, triage, pipeline, disposition
+billingRouter — coding, claims, clearinghouse, denial management
+learningRouter — RLHF, outcome feedback, Bayesian recalibration
+agentRouter — agent registry, circuit breaker controls, evolution proposals
+adminRouter — tenant management, user management, KB management
+observabilityRouter — SLOs, golden case runner, engine health
+authRouter — JWT issuance, refresh, role management
+integrationsRouter — Twilio, WhatsApp, Telegram webhooks
+Each domain router exports a single Express Router. The main server/index.ts registers 8 routers instead of 130 modules. This is a 3–5 day refactor with high return — it enables independent testing, isolated deployments, and makes the route surface auditable.
+Agent Registry Consolidation
+Three parallel registries with no unified source of truth means agent state can diverge silently. The specific risk: the governance registry marks an agent healthy, the coordinator registry has it in warning state, and the task bus continues dispatching to it based on the governance registry's stale health reading.
+Recommended pattern: Single PostgreSQL-backed agent registry as source of truth.
+Each agent has one row in an agent_registry table: agent_id, type (coordinator/task/governance/ms), status, last_heartbeat, circuit_breaker_state, p95_latency, success_rate, version. All three current registries write to and read from this table. In-memory caches (30-second TTL) are acceptable for read performance. State divergence becomes impossible when there is one row per agent.
+The heartbeat-based health tracking you already have for governance agents should be the pattern for all agents. Any agent that misses 3 consecutive heartbeats (90 seconds) is automatically marked degraded and traffic is rerouted.
+Evolution Engine — Human-in-the-Loop Approval Pattern
+The evolution engine producing advisory-only proposals with no apply path is the right instinct for a regulated medical device. Here is the complete recommended pattern:
+Proposal → Staging → Validation → Approval → Canary → Promotion
+Proposals from the evolution engine write to an evolution_proposals table with: proposal_id, target_agent, parameter_change (before/after JSON diff), urgency, rationale, proposed_at, status (pending/staging/approved/rejected/rolled_back).
+A physician or clinical informaticist reviews proposals in the Agent Lab UI. Approval triggers deployment to a staging agent instance (not production) that runs against the golden case suite. If golden case pass rate meets threshold (100% on escalation cases, 90%+ overall), the proposal is promotable.
+Promotion deploys to a canary (10% of production traffic) for 24 hours. If SLOs hold, full promotion. If any SLO breach occurs during canary, automatic rollback to the prior parameter set with an incident record linking back to the proposal_id.
+This pattern satisfies FDA's Predetermined Change Control Plan requirements for adaptive algorithms — every change is proposed, reviewed, validated, staged, and monitored before full deployment.
+
+3. FDA/HIPAA COMPLIANCE HARDENING
+Immutable Audit Chain
+The SHA-256 hash chain starting from a GENESIS block is the right architecture. The gap is that PostgreSQL rows can be deleted by anyone with database credentials. The hash chain detects tampering after the fact — it does not prevent it, and detection after the fact doesn't satisfy HIPAA's requirement for integrity controls that prevent unauthorized alteration.
+Required addition: Ship the hash chain to a write-once external store in real time. AWS CloudTrail, Google Cloud Audit Logs, or a dedicated append-only S3 bucket with Object Lock enabled. Every audit event written to PostgreSQL is simultaneously written to the external store. The external store is inaccessible to the application's database credentials. Tampering with PostgreSQL records becomes detectable by comparing against the external store — and the external store itself is tamper-proof by infrastructure design.
+PHI Guard Completeness
+The applyPHIGuard() wrapper on all OpenAI call sites is well-designed. Three gaps to close:
+Twilio voice output. Voice TTS content delivered to patients via Twilio must pass through the PHI guard before being handed to Twilio's TTS engine. If the guard only covers OpenAI call sites, a chart note summary read aloud via voice may contain PHI transmitted through Twilio without PHI scrubbing.
+Webhook inputs. Inbound Twilio, WhatsApp, and Telegram webhooks must be HMAC signature-validated before any content is processed. An unvalidated webhook can inject arbitrary content into the clinical pipeline. This is both a security control and a PHI integrity control — you cannot guarantee that PHI handling is correct if you cannot guarantee that the content is from a legitimate source.
+Google Sheets cache. The SHA-256 fingerprinting on KB load detects changes but does not prevent a Sheets editor from accidentally including patient-identifiable examples in rule descriptions. Add a PHI scan on the loaded Sheets content at cache load time — any detected PHI in configuration data should halt the load and alert.
+BAA Inventory
+Based on the stack description, the following vendors must have signed BAAs before PHI touches their systems:
+OpenAI — BAA is available under the API enterprise agreement, not the standard API terms. Verify the agreement type in use.
+Twilio — Twilio's HIPAA BAA covers SMS and voice. WhatsApp Business API via Twilio may have separate terms — verify coverage explicitly.
+Firebase/Firestore — Google Cloud's BAA covers Firestore when used under a Google Cloud agreement with HIPAA addendum. The Firebase console (firebase.google.com) has separate terms. Confirm which is in use.
+Upstash Redis — Upstash offers a HIPAA-compliant tier. Confirm the account tier and BAA status given that Redis is now storing RLHF proposals and will store clinical pipeline jobs after the migration.
+Google Sheets — This is the most problematic. Google Workspace offers a BAA, but Google Sheets as a clinical configuration tool means PHI could be entered into Sheets by administrators (e.g., example cases in rule descriptions). Even if the Sheets data is configuration-only today, the BAA must cover this use case explicitly.
+Frontend Observability for FDA Compliance
+OpenTelemetry on the backend only means there is no trace correlation between a user action in the React frontend and the backend pipeline execution that action triggered. For a regulated device, FDA expects you to be able to reconstruct: who initiated a clinical action, what they saw on screen, what they did, and what the system did in response — as a linked sequence.
+Recommended minimum for FDA compliance:
+Add a correlation ID to every clinical action initiated from the frontend (intake submission, physician override, disposition change). The correlation ID is generated client-side, included in the API request, and propagated through the entire backend pipeline trace. The frontend logs: user_id, role, action_type, correlation_id, component, timestamp to a structured event store (not just the browser console).
+For physician override events specifically — where a physician changes a disposition or diagnosis from what the AI recommended — the frontend must capture: original AI recommendation, override value, override rationale (free text field, required), physician_id, timestamp, and correlation_id linking to the backend trace. This is the highest-signal clinical data in the system and is essential for both RLHF training data quality and FDA audit response.
+
+4. SCALABILITY & MULTI-TENANCY
+Row-Level Security for Tenant Isolation
+Application-layer tenant isolation in a 130-module route system will fail. The probability that at least one query across 1,814 server-side TypeScript files is missing its WHERE tenant_id = ? clause is not zero — and in a codebase this size, it is near-certain. A cross-tenant data exposure in a medical system is a reportable HIPAA breach affecting all tenants simultaneously.
+PostgreSQL Row-Level Security (RLS) is the required pattern:
+sqlALTER TABLE encounters ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON encounters
+  USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+Every database connection sets app.current_tenant_id at the session level from the authenticated JWT before any query runs. Drizzle ORM supports this via a connection middleware hook. Once RLS is enabled, a missing WHERE tenant_id clause does not return another tenant's data — it returns nothing, and the query can be diagnosed and fixed without a breach event.
+Add a mandatory CI test: authenticate as Tenant A, attempt to retrieve a known Tenant B record by ID, assert the result is empty. This test must pass on every deployment.
+SL8 Tenant Config Persistence
+Per-clinic feature flags and capacity rules in-memory means a restart resets all tenant configurations. For a multi-tenant SaaS platform, this means a server restart during peak clinic hours silently changes clinical behavior for every tenant simultaneously — disabling features that were enabled, resetting capacity rules that were configured.
+Move SL8 tenant configuration to PostgreSQL with a tenant_configs table: tenant_id, feature_flags (JSONB), capacity_rules (JSONB), case_mix_config (JSONB), version, updated_at, updated_by. Load into a Redis cache with a 60-second TTL. Any in-memory SL8 state is treated as a cache, not as the source of truth.
+Background Loop Isolation
+The auto-healer (10 seconds), autonomous learning loop (60 seconds), golden case monitor (5 minutes), and circuit breaker management all running in the same Node.js event loop as patient triage request handling is a reliability risk. Under peak load, the event loop is shared — a slow learning loop iteration blocks triage response latency.
+Recommended: Move all background loops to Node.js worker_threads. The main process handles HTTP requests exclusively. Workers communicate results back to the main process via message passing. This also means a crash in a background loop (unhandled exception) does not take down the HTTP server.
+
+5. MAINTAINABILITY & TECHNICAL DEBT REDUCTION
+Google Sheets Migration Path — Concrete Timeline
+Google Sheets as authoritative KB source is the highest maintainability and reliability debt in the system. The recommended migration:
+Weeks 1–2: Build the PostgreSQL clinical rules schema (complaint_cluster, rule_type, clinical_content, evidence_source, version, status, approved_by, effective_date). Migrate all current Sheets content into this schema. Keep Sheets as a read-only mirror during transition.
+Weeks 3–4: Build the Sheets-to-PostgreSQL proposal pipeline. Clinicians author in Sheets; a scheduled job (hourly) detects new or changed rows, validates them (schema check, ontology mapping, required fields), and writes validated proposals to a kb_proposals table with status pending_review.
+Week 5: Build the KB review UI in the existing Clinical Improvement Lab — show pending proposals, diff view against current production rules, one-click approve/reject with required rationale. Approved proposals promote to production with a version increment.
+Week 6: Decommission Google Sheets as a direct production dependency. All KB reads now come from PostgreSQL. The 5-minute rolling cache and SHA-256 fingerprinting move to the PostgreSQL version hash. Google Sheets becomes an optional authoring tool, not a production dependency.
+This migration eliminates your most dangerous single point of clinical failure in 6 weeks without disrupting clinical operations.
+Testing Coverage Minimum for Regulated Device
+With 1,814 server-side TypeScript files and 130 route modules, untested clinical logic is your most likely source of undetected regression.
+Minimum required test coverage for FDA SaMD:
+Unit tests for every clinical scoring instrument (Centor, Wells, PERC, CURB-65, Ottawa, etc.) with both typical and boundary-condition inputs. These are pure functions — they should be 100% covered and run in under 1 second.
+Integration tests for the full clinical pipeline using the 10 existing golden cases plus the expanded suite. Every golden case runs as an integration test in CI — a pipeline regression that changes a disposition breaks the build.
+Route-level smoke tests for all 130 route modules confirming: authentication is enforced, response schema matches expected shape, error responses are handled gracefully.
+The golden case monitor running every 5 minutes in production is a good operational safeguard, but it is not a substitute for pre-deployment test coverage. The golden cases should run in CI before deployment and in production after deployment.
+
+PRIORITIZED MASTER RECOMMENDATION LIST
+Ordered by urgency and patient safety impact:
+1. Acuity pre-classifier fast path — chest pain, stroke, severe dyspnea route to ER NOW in under 30 seconds, bypassing the full pipeline. Patient safety priority, deploy first.
+2. Redis queue migration — clinical_pipeline queue to BullMQ/Redis with idempotency keys. No patient case should ever be lost on restart.
+3. Row-level security — PostgreSQL RLS for tenant isolation plus CI cross-tenant test. Prevents the class of breach that affects all tenants simultaneously.
+4. Evolution engine approval pipeline — proposal → staging → golden case validation → physician approval → canary → promotion. Required for FDA PCCP compliance.
+5. External write-once audit log — ship hash chain events to append-only external store in real time. Closes the "immutable" audit log gap.
+6. Routes.ts decomposition — 8 domain routers, independently testable. 3–5 day refactor with outsized maintainability return.
+7. Golden case expansion — 15 cases per high-acuity cluster, 100% escalation sensitivity threshold for life-threatening presentations.
+8. Agent registry unification — single PostgreSQL-backed registry as source of truth for all agent types.
+9. Google Sheets migration — 6-week path to PostgreSQL-backed KB with Sheets as authoring interface only.
+10. BAA inventory audit — document and verify BAA coverage for OpenAI, Twilio, Firebase, Upstash, and Google Workspace before next patient encounter. This is a legal deliverable, not an engineering one.
+
+The system has matured significantly. The SHA-256 audit chain, circuit breaker architecture, PHI guard wrapper pattern, and SLO framework are genuine production-grade components. The remaining gaps are concentrated in three areas: clinical coverage validation at full urgent care scope, infrastructure reliability (in-memory queues, in-memory tenant config), and the Google Sheets dependency. Address those three and this system is substantially closer to a defensible FDA submission and a safe multi-clinic deployment.
