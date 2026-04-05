@@ -94,6 +94,7 @@ import KBExplorerPage from "@/pages/KBExplorerPage";
 import ConversationOptimizationPage from "@/pages/ConversationOptimizationPage";
 import GoldReviewWorkbench from "@/pages/GoldReviewWorkbench";
 import CompactIntakePage from "@/pages/CompactIntakePage";
+import MessagingFlowPage from "@/pages/MessagingFlowPage";
 
 validateRoutes();
 
@@ -157,6 +158,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.CONVERSATION_OPTIMIZATION}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><ConversationOptimizationPage /></RoleGuard>}</Route>
         <Route path={ROUTES.GOLD_REVIEW}>{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><GoldReviewWorkbench /></RoleGuard>}</Route>
         <Route path={ROUTES.COMPACT_INTAKE} component={CompactIntakePage} />
+        <Route path={ROUTES.MESSAGING_FLOW}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><MessagingFlowPage /></RoleGuard>}</Route>
         <Route path="/system-monitor" component={SystemMonitorPage} />
         <Route path="/fda-dashboard" component={FDADashboardPage} />
         <Route path="/prior-auth" component={PriorAuthPage} />

@@ -11,7 +11,7 @@ import {
   RefreshCw, CheckCircle2, AlertCircle, ArrowRight,
   ClipboardList, Stethoscope, Pill, Zap, Activity, Settings,
   Eye, BarChart3, BookOpen, MessageCircle, Cpu, ClipboardCheck,
-  Smartphone,
+  Smartphone, MessageSquare,
 } from "lucide-react";
 
 interface CacheStatus {
@@ -154,6 +154,7 @@ const QUICK_ACTIONS = [
   { label: "Gold Reviews", href: "/gold-reviews", icon: ClipboardCheck, desc: "Physician canonical response workbench" },
   { label: "Conversation Audit", href: "/conversation-optimization", icon: MessageCircle, desc: "Review and improve AI-patient exchanges" },
   { label: "Compact Intake", href: "/compact-intake", icon: Smartphone, desc: "Structured patient intake — no free text" },
+  { label: "Messaging Flow", href: "/messaging-flow", icon: MessageSquare, desc: "Preview Telegram & WhatsApp bot flows for all complaints" },
 ];
 
 export default function KnowledgeHubPage() {

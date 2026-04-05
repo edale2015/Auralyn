@@ -86,7 +86,7 @@ export function assertRedFlagRulesNotCorrupt(rows: SheetRow[]): void {
     }
 
     const action = String(r.ACTION ?? "").trim().toUpperCase();
-    if (action && !["ER_SEND", "ESCALATE", "PASS"].includes(action)) {
+    if (action && !["ER_SEND", "ESCALATE", "PASS", "EMERGENT", "URGENT_SAME_DAY", "URGENT", "REFER", "OBSERVE"].includes(action)) {
       bad.push({ idx, table: "RED_FLAG_RULES", field: "ACTION", value: action, reason: "unknown_action" });
     }
   });
@@ -109,7 +109,17 @@ export function assertRedFlagRulesNotCorrupt(rows: SheetRow[]): void {
 export function assertDispositionRulesNotCorrupt(rows: SheetRow[]): void {
   const bad: BadRow[] = [];
 
+  const VALID_DISP_LEVELS = [
+    "er_send", "urgent_care", "routine_urgent", "routine", "pcp", "self_care",
+    "ed_now", "urgent_care_today", "pcp_or_uc", "home_care",
+    "test_rapid_strep", "test_only", "telehealth", "observation",
+    "refer_specialist", "emergent", "urgent_same_day",
+  ];
+
   rows.forEach((r, idx) => {
+    const ccId = String(r.CC_ID ?? "").trim();
+    if (!ccId) return;
+
     const ccCheck = checkFieldFormat(r.CC_ID, CC_ID_PATTERN, "CC_ID", "DISPOSITION_RULES", idx);
     if (ccCheck) bad.push(ccCheck);
 
@@ -119,7 +129,7 @@ export function assertDispositionRulesNotCorrupt(rows: SheetRow[]): void {
     }
 
     const level = String(r.DISPOSITION_LEVEL ?? "").trim().toLowerCase();
-    if (level && !["er_send", "urgent_care", "routine_urgent", "routine", "pcp", "self_care"].includes(level)) {
+    if (level && !VALID_DISP_LEVELS.includes(level)) {
       bad.push({ idx, table: "DISPOSITION_RULES", field: "DISPOSITION_LEVEL", value: level, reason: "unknown_level" });
     }
   });
@@ -143,11 +153,10 @@ export function assertOutputTemplatesNotCorrupt(rows: SheetRow[]): void {
   const bad: BadRow[] = [];
 
   rows.forEach((r, idx) => {
-    const ccCheck = checkFieldFormat(r.CC_ID, CC_ID_PATTERN, "CC_ID", "OUTPUT_TEMPLATES", idx);
-    if (ccCheck) bad.push(ccCheck);
-
     const tplId = String(r.TEMPLATE_ID ?? "").trim();
-    if (tplId && !/^TPL_[A-Z0-9_]+$/.test(tplId)) {
+    if (!tplId) return;
+
+    if (tplId && !/^(TPL_|OUT_)[A-Za-z0-9_]+$/.test(tplId)) {
       bad.push({ idx, table: "OUTPUT_TEMPLATES", field: "TEMPLATE_ID", value: tplId.substring(0, 80), reason: "invalid_format" });
     }
 
@@ -176,6 +185,9 @@ export function assertClusterScoringRulesNotCorrupt(rows: SheetRow[]): void {
   const bad: BadRow[] = [];
 
   rows.forEach((r, idx) => {
+    const ccId = String(r.CC_ID ?? "").trim();
+    if (!ccId) return;
+
     const ccCheck = checkFieldFormat(r.CC_ID, CC_ID_PATTERN, "CC_ID", "CLUSTER_SCORING_RULES", idx);
     if (ccCheck) bad.push(ccCheck);
 

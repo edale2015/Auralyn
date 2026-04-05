@@ -91,6 +91,10 @@ export function matchComplaintFromText(
   return null;
 }
 
+export function listEnabledComplaints(): RegistryRow[] {
+  return loadRegistry();
+}
+
 export function resetComplaintMatchCache(): void {
   CACHE = null;
 }

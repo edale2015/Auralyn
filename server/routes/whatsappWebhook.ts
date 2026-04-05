@@ -10,6 +10,7 @@ import {
   setLastResult,
 } from "../integrations/conversationStore";
 import { addPatientMessage, addSystemMessage } from "../assistant/telemedicineSessionService";
+import { handleWhatsAppKBIntake } from "../whatsapp/kbIntake";
 
 const router = Router();
 
@@ -63,6 +64,16 @@ router.post("/whatsapp/webhook", async (req, res) => {
     if (!rawFrom || !text) return;
 
     const externalUserId = rawFrom.replace(/^whatsapp:/, "");
+
+    const kbHandled = await handleWhatsAppKBIntake({ from: rawFrom, text, messageSid }).catch((e: any) => {
+      console.error("[WhatsApp KB] Error:", e?.message);
+      return false;
+    });
+
+    if (kbHandled) {
+      console.log(`[WhatsApp KB] caseId=n/a handled=true from=${rawFrom}`);
+      return;
+    }
 
     const event: MessageEvent = {
       channel: "whatsapp",

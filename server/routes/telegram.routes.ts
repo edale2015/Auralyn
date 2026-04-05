@@ -1,5 +1,12 @@
 import { Router } from "express";
-import { telegramSendMessage } from "../services/telegramClient";
+import {
+  telegramSendMessage,
+  telegramSendKeyboard,
+  telegramAnswerCallbackQuery,
+  telegramEditMessageReplyMarkup,
+  buildQuestionKeyboard,
+  buildComplaintKeyboard,
+} from "../services/telegramClient";
 import { handleBotCommand } from "../chat/botCommandHandler";
 import {
   getActiveCaseId,
@@ -14,9 +21,9 @@ import {
   setTriage,
   setCaseState,
 } from "../services/caseService";
-import { matchComplaintFromText } from "../services/complaintMatchService";
+import { matchComplaintFromText, listEnabledComplaints } from "../services/complaintMatchService";
 import { getNextRequiredQuestion } from "../services/questionFlowService";
-import { runTriage } from "../services/triageService";
+import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
 
 export const telegramRouter = Router();
 
@@ -46,6 +53,52 @@ function parseAnswer(text: string, answerType: string): string | number | null {
   return text.trim() || null;
 }
 
+function getTopComplaints(n = 20) {
+  try {
+    const all = listEnabledComplaints();
+    return all.slice(0, n).map((c: any) => ({ slug: c.CC_ID ?? c.slug, label: c.LABEL ?? c.label ?? c.CC_ID }));
+  } catch {
+    return [
+      { slug: "sore_throat", label: "Sore Throat" },
+      { slug: "chest_pain", label: "Chest Pain" },
+      { slug: "cough", label: "Cough" },
+      { slug: "headache", label: "Headache" },
+      { slug: "abdominal_pain", label: "Abdominal Pain" },
+      { slug: "dizziness", label: "Dizziness" },
+    ];
+  }
+}
+
+async function sendWelcomeWithComplaints(botToken: string, chatId: number | string, name: string) {
+  const complaints = getTopComplaints(20);
+  const keyboard = buildComplaintKeyboard(complaints);
+  await telegramSendKeyboard({
+    botToken,
+    chatId,
+    text: `👋 Hi ${name}! I'm the Auralyn triage assistant.\n\nTap your main symptom below, or type it in your own words:\n\n<i>⚠️ If this is an emergency, call 911 immediately.</i>`,
+    keyboard,
+  });
+}
+
+async function sendQuestion(
+  botToken: string,
+  chatId: number | string,
+  question: { Q_ID: string; QUESTION_TEXT: string; ANSWER_TYPE: string },
+  progress: string
+) {
+  const keyboard = buildQuestionKeyboard(question.Q_ID, question.ANSWER_TYPE);
+  const label = question.ANSWER_TYPE === "number"
+    ? `${question.QUESTION_TEXT}\n\n<i>Tap a number (1 = mild, 10 = severe)</i>`
+    : question.QUESTION_TEXT;
+
+  await telegramSendKeyboard({
+    botToken,
+    chatId,
+    text: `${progress}\n\n${label}`,
+    keyboard,
+  });
+}
+
 async function runTriageAndSend(params: {
   caseId: string;
   complaintSlug: string;
@@ -54,11 +107,11 @@ async function runTriageAndSend(params: {
   chatId: number | string;
   threadId: string;
 }): Promise<void> {
-  const triage = await runTriage({
+  await telegramSendMessage({ botToken: params.botToken, chatId: params.chatId, text: "⏳ Analyzing your answers…" });
+
+  const triage = await runOrchestratorTriage({
     complaintSlug: params.complaintSlug,
     answers: params.answers,
-    rulesetVersion: "local",
-    dxPriorityVersion: "local",
   });
 
   const needsReview =
@@ -69,28 +122,125 @@ async function runTriageAndSend(params: {
   const nextState = needsReview ? "NEEDS_REVIEW" : "TRIAGED";
   await setTriage(params.caseId, triage, nextState as any);
 
+  const dispositionEmoji: Record<string, string> = {
+    er_send: "🔴",
+    urgent_care: "🟠",
+    pcp: "🟡",
+    self_care: "🟢",
+  };
+  const emoji = dispositionEmoji[triage.disposition] ?? "🔵";
+
   const lines: string[] = [
-    `<b>Assessment complete</b>`,
+    `<b>Assessment complete ✅</b>`,
     ``,
-    `Disposition: <b>${triage.disposition}</b>`,
-    `Top diagnosis: <b>${triage.topCluster}</b>`,
-    `Confidence: <b>${triage.confidence}</b>`,
+    `${emoji} Disposition: <b>${triage.disposition?.replace(/_/g, " ").toUpperCase()}</b>`,
+    `📋 Top finding: <b>${triage.topCluster ?? "—"}</b>`,
+    `📊 Confidence: <b>${triage.confidence}</b>`,
   ];
 
-  if (needsReview) {
-    lines.push(
-      "",
-      "A clinician will review your case before final advice is sent."
-    );
+  if ((triage.rfTriggered?.length ?? 0) > 0) {
+    lines.push(`\n⚠️ <b>Red flag(s) noted — seek care promptly.</b>`);
   }
 
-  await telegramSendMessage({
-    botToken: params.botToken,
-    chatId: params.chatId,
-    text: lines.join("\n"),
-  });
+  if (needsReview) {
+    lines.push(`\n👨‍⚕️ A clinician will review your case before final advice is sent.`);
+  }
 
+  lines.push(`\n<i>This is AI-assisted clinical decision support only. Not a substitute for physician evaluation.</i>`);
+
+  await telegramSendMessage({ botToken: params.botToken, chatId: params.chatId, text: lines.join("\n") });
   await clearActiveCaseId({ channel: "telegram", threadId: params.threadId });
+}
+
+async function handleCallbackQuery(
+  botToken: string,
+  callbackQuery: {
+    id: string;
+    from: { id: number; first_name: string };
+    message?: { chat: { id: number }; message_id: number };
+    data?: string;
+  }
+) {
+  const chatId = callbackQuery.message?.chat?.id;
+  if (!chatId) return;
+  const messageId = callbackQuery.message?.message_id;
+  const data = callbackQuery.data ?? "";
+  const threadId = String(chatId);
+
+  await telegramAnswerCallbackQuery({ botToken, callbackQueryId: callbackQuery.id });
+  if (messageId) {
+    await telegramEditMessageReplyMarkup({ botToken, chatId, messageId });
+  }
+
+  if (data.startsWith("cc:")) {
+    const slug = data.slice(3);
+    const complaints = getTopComplaints(40);
+    const found = complaints.find((c) => c.slug === slug);
+    const display = found?.label ?? slug.replace(/_/g, " ");
+
+    const oldCaseId = await getActiveCaseId({ channel: "telegram", threadId });
+    if (oldCaseId) {
+      const old = await getCase(oldCaseId);
+      if (old?.state === "DRAFT") await setCaseState(oldCaseId, "CLOSED");
+    }
+    await clearActiveCaseId({ channel: "telegram", threadId });
+
+    const created = await createCase({
+      channel: "telegram",
+      threadId,
+      userId: threadId,
+      complaintSlug: slug,
+      complaintDisplay: display,
+      engine: "GENERIC_V1",
+    });
+
+    await setActiveCaseId({ channel: "telegram", threadId, activeCaseId: created.caseId });
+
+    const firstQ = getNextRequiredQuestion({ complaintSlug: slug, answers: {} });
+
+    if (!firstQ) {
+      await telegramSendMessage({ botToken, chatId, text: `Got it — <b>${display}</b>. Processing…` });
+      await runTriageAndSend({ caseId: created.caseId, complaintSlug: slug, answers: {}, botToken, chatId, threadId });
+      return;
+    }
+
+    await sendQuestion(botToken, chatId, firstQ, `📋 <b>${display}</b> — Question 1`);
+    return;
+  }
+
+  if (data.startsWith("q:")) {
+    const parts = data.split(":");
+    const qId = parts[1];
+    const rawVal = parts.slice(2).join(":");
+
+    const caseId = await getActiveCaseId({ channel: "telegram", threadId });
+    if (!caseId) {
+      await telegramSendMessage({ botToken, chatId, text: "No active session. Type your symptom or tap /start." });
+      return;
+    }
+
+    const c = await getCase(caseId);
+    if (!c) {
+      await telegramSendMessage({ botToken, chatId, text: "Session expired. Type /start to begin again." });
+      return;
+    }
+
+    const answers = (c.answers?.structured ?? {}) as Record<string, any>;
+    const val = rawVal === "yes" ? "yes" : rawVal === "no" ? "no" : (isNaN(Number(rawVal)) ? rawVal : Number(rawVal));
+    const patch: Record<string, any> = { [qId]: val };
+    const updated = await mergeAnswers(caseId, patch);
+
+    const updatedAnswers = (updated.answers?.structured ?? {}) as Record<string, any>;
+    const answeredCount = Object.keys(updatedAnswers).length;
+    const nextQ = getNextRequiredQuestion({ complaintSlug: c.complaint.slug, answers: updatedAnswers });
+
+    if (nextQ) {
+      await sendQuestion(botToken, chatId, nextQ, `📋 Question ${answeredCount + 1}`);
+    } else {
+      await runTriageAndSend({ caseId, complaintSlug: c.complaint.slug, answers: updatedAnswers, botToken, chatId, threadId });
+    }
+    return;
+  }
 }
 
 telegramRouter.post("/webhook", async (req, res) => {
@@ -106,6 +256,12 @@ telegramRouter.post("/webhook", async (req, res) => {
     }
 
     const update = req.body;
+
+    if (update?.callback_query) {
+      await handleCallbackQuery(botToken, update.callback_query);
+      return res.json({ ok: true });
+    }
+
     const msg = update?.message ?? update?.edited_message;
     if (!msg) return res.json({ ok: true });
 
@@ -114,6 +270,7 @@ telegramRouter.post("/webhook", async (req, res) => {
 
     const threadId = String(chatId);
     const text: string = (msg.text ?? "").trim();
+    const firstName = msg.from?.first_name ?? "there";
 
     const botCmd = await handleBotCommand(text, chatId);
     if (botCmd.handled) {
@@ -124,17 +281,25 @@ telegramRouter.post("/webhook", async (req, res) => {
     if (text.toLowerCase() === "/start" || text.toLowerCase() === "/reset") {
       const oldCaseId = await getActiveCaseId({ channel: "telegram", threadId });
       if (oldCaseId) {
-        const oldCase = await getCase(oldCaseId);
-        if (oldCase && oldCase.state === "DRAFT") {
-          await setCaseState(oldCaseId, "CLOSED");
-        }
+        const old = await getCase(oldCaseId);
+        if (old?.state === "DRAFT") await setCaseState(oldCaseId, "CLOSED");
       }
       await clearActiveCaseId({ channel: "telegram", threadId });
+      await sendWelcomeWithComplaints(botToken, chatId, firstName);
+      return res.json({ ok: true });
+    }
+
+    if (text.toLowerCase() === "/help") {
       await telegramSendMessage({
         botToken,
         chatId,
-        text: "Welcome! What's your main symptom?\n(Example: cough, fever, chest pain, rash, headache, sore throat)",
+        text: `<b>Auralyn Triage Bot</b>\n\n/start — Begin a new triage session\n/reset — Clear current session\n/status — System status\n\nOr just type your symptom and I'll guide you through a few quick questions.\n\n<i>This is not a substitute for emergency care. Call 911 for emergencies.</i>`,
       });
+      return res.json({ ok: true });
+    }
+
+    if (text.toLowerCase() === "/status") {
+      await telegramSendMessage({ botToken, chatId, text: "✅ Auralyn Triage System — <b>Online</b>\nAll clinical engines operational." });
       return res.json({ ok: true });
     }
 
@@ -144,10 +309,13 @@ telegramRouter.post("/webhook", async (req, res) => {
     if (!c) {
       const match = matchComplaintFromText(text);
       if (!match) {
-        await telegramSendMessage({
+        const complaints = getTopComplaints(20);
+        const keyboard = buildComplaintKeyboard(complaints);
+        await telegramSendKeyboard({
           botToken,
           chatId,
-          text: "I didn't recognize that symptom. Could you describe your main complaint?\n(Example: cough, fever, chest pain, rash, headache, back pain)",
+          text: `I didn't quite catch that. Tap your symptom below, or try typing it differently:`,
+          keyboard,
         });
         return res.json({ ok: true });
       }
@@ -162,55 +330,26 @@ telegramRouter.post("/webhook", async (req, res) => {
       });
 
       caseId = created.caseId;
-      await setActiveCaseId({
-        channel: "telegram",
-        threadId,
-        activeCaseId: caseId,
-      });
+      await setActiveCaseId({ channel: "telegram", threadId, activeCaseId: caseId });
       c = created;
 
-      await appendMessage(caseId, {
-        ts: new Date().toISOString(),
-        dir: "in",
-        channel: "telegram",
-        text,
-      });
+      await appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "telegram", text });
 
-      const firstQ = getNextRequiredQuestion({
-        complaintSlug: match.slug,
-        answers: {},
-      });
-
+      const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
       if (!firstQ) {
-        await telegramSendMessage({
-          botToken,
-          chatId,
-          text: `Got it — <b>${match.display}</b>. Processing your assessment now…`,
-        });
+        await telegramSendMessage({ botToken, chatId, text: `Got it — <b>${match.display}</b>. Processing…` });
         await runTriageAndSend({ caseId, complaintSlug: match.slug, answers: {}, botToken, chatId, threadId });
         return res.json({ ok: true });
       }
 
-      await telegramSendMessage({
-        botToken,
-        chatId,
-        text: `Got it — <b>${match.display}</b>. I'll ask a few questions.\n\n${firstQ.QUESTION_TEXT}`,
-      });
+      await sendQuestion(botToken, chatId, firstQ, `📋 <b>${match.display}</b> — Question 1`);
       return res.json({ ok: true });
     }
 
-    await appendMessage(caseId!, {
-      ts: new Date().toISOString(),
-      dir: "in",
-      channel: "telegram",
-      text,
-    });
+    await appendMessage(caseId!, { ts: new Date().toISOString(), dir: "in", channel: "telegram", text });
 
     const answers = (c.answers?.structured ?? {}) as Record<string, any>;
-    const nextQ = getNextRequiredQuestion({
-      complaintSlug: c.complaint.slug,
-      answers,
-    });
+    const nextQ = getNextRequiredQuestion({ complaintSlug: c.complaint.slug, answers });
 
     if (!nextQ) {
       await runTriageAndSend({ caseId: caseId!, complaintSlug: c.complaint.slug, answers, botToken, chatId, threadId });
@@ -219,47 +358,26 @@ telegramRouter.post("/webhook", async (req, res) => {
 
     const parsed = parseAnswer(text, nextQ.ANSWER_TYPE);
     if (parsed === null) {
-      const hint =
-        nextQ.ANSWER_TYPE === "number"
-          ? "Please reply with a number."
-          : "Please reply yes or no.";
-      await telegramSendMessage({
+      const keyboard = buildQuestionKeyboard(nextQ.Q_ID, nextQ.ANSWER_TYPE);
+      await telegramSendKeyboard({
         botToken,
         chatId,
-        text: `${hint}\n\n${nextQ.QUESTION_TEXT}`,
+        text: `${nextQ.ANSWER_TYPE === "number" ? "Please tap a number (1–10)." : "Please tap Yes or No."}\n\n${nextQ.QUESTION_TEXT}`,
+        keyboard,
       });
       return res.json({ ok: true });
     }
 
     const patch: Record<string, any> = { [nextQ.Q_ID]: parsed };
     const updated = await mergeAnswers(caseId!, patch);
-
     const updatedAnswers = (updated.answers?.structured ?? {}) as Record<string, any>;
-    const next2 = getNextRequiredQuestion({
-      complaintSlug: updated.complaint.slug,
-      answers: updatedAnswers,
-    });
+    const answeredCount = Object.keys(updatedAnswers).length;
+    const next2 = getNextRequiredQuestion({ complaintSlug: updated.complaint.slug, answers: updatedAnswers });
 
     if (next2) {
-      await telegramSendMessage({
-        botToken,
-        chatId,
-        text: next2.QUESTION_TEXT,
-      });
+      await sendQuestion(botToken, chatId, next2, `📋 Question ${answeredCount + 1}`);
     } else {
-      await telegramSendMessage({
-        botToken,
-        chatId,
-        text: "Thanks — processing your assessment now…",
-      });
-      await runTriageAndSend({
-        caseId: caseId!,
-        complaintSlug: updated.complaint.slug,
-        answers: updatedAnswers,
-        botToken,
-        chatId,
-        threadId,
-      });
+      await runTriageAndSend({ caseId: caseId!, complaintSlug: updated.complaint.slug, answers: updatedAnswers, botToken, chatId, threadId });
     }
 
     return res.json({ ok: true });

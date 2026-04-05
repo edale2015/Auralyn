@@ -42,4 +42,5 @@ export const ROUTES = {
   CONVERSATION_OPTIMIZATION: "/conversation-optimization",
   GOLD_REVIEW: "/gold-reviews",
   COMPACT_INTAKE: "/compact-intake",
+  MESSAGING_FLOW: "/messaging-flow",
 };
