@@ -43,4 +43,5 @@ export const ROUTES = {
   GOLD_REVIEW: "/gold-reviews",
   COMPACT_INTAKE: "/compact-intake",
   MESSAGING_FLOW: "/messaging-flow",
+  AI_INTERACTION_MONITOR: "/ai-interaction-monitor",
 };

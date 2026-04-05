@@ -1,5 +1,6 @@
 import { ClinicalSkillOrchestrator } from "../orchestrator/clinicalSkillOrchestrator";
 import type { CaseTriage, Disposition, Confidence } from "../models/caseTypes";
+import { logInteraction } from "./interactionAuditService";
 
 function normalizeDisposition(raw: string): Disposition {
   const s = (raw ?? "").toLowerCase().replace(/[\s_-]+/g, "_");
@@ -33,11 +34,19 @@ function buildNarrativeText(
 export async function runOrchestratorTriage(params: {
   complaintSlug: string;
   answers: Record<string, unknown>;
+  sessionId?: string;
+  caseId?: string;
+  channel?: "telegram" | "whatsapp" | "web" | "api";
 }): Promise<CaseTriage> {
+  const sessionId = params.sessionId ?? `API_${Date.now()}`;
+  const channel = params.channel ?? "api";
   const rawText = buildNarrativeText(params.complaintSlug, params.answers);
+
   const orchestrator = new ClinicalSkillOrchestrator();
+  const t0 = Date.now();
+
   const state = await orchestrator.run({
-    caseId: `INTAKE_${Date.now()}`,
+    caseId: params.caseId ?? sessionId,
     rawText,
     modifiers: { complaint_override: params.complaintSlug },
     knownFacts: {},
@@ -45,6 +54,7 @@ export async function runOrchestratorTriage(params: {
     config: { strictMode: false, enableAudit: false },
   });
 
+  const latencyMs = Date.now() - t0;
   const sr = state.skillResults ?? {};
   const rawDisp =
     state.finalDisposition ??
@@ -59,6 +69,21 @@ export async function runOrchestratorTriage(params: {
   const confidence = normalizeConfidence(
     sr.apply_clinical_score?.result?.confidence ?? "LOW"
   );
+
+  const skillSequence = Object.keys(sr).join(" > ");
+  const responseText = `disposition=${rawDisp} | confidence=${confidence} | skills=[${skillSequence}] | red_flags=${rawFlags.join(",")}`;
+
+  logInteraction({
+    sessionId,
+    caseId: params.caseId,
+    channel,
+    direction: "llm_call",
+    skillName: "orchestrator",
+    promptText: rawText,
+    responseText,
+    modelUsed: "clinical-orchestrator-v1",
+    latencyMs,
+  }).catch(() => {});
 
   return {
     disposition,

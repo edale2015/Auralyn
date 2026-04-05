@@ -15,6 +15,20 @@ import {
 import { matchComplaintFromText, listEnabledComplaints } from "../services/complaintMatchService";
 import { getNextRequiredQuestion } from "../services/questionFlowService";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
+import {
+  logInteraction,
+  startSession,
+  incrementMessageCount,
+  endSession,
+  recordCsat,
+  recordNps,
+} from "../services/interactionAuditService";
+import { analyzeMood, buildTonePrefix } from "../services/moodToneService";
+import {
+  setSurveyState,
+  getSurveyState,
+  clearSurveyState,
+} from "../services/surveyStateService";
 
 function formatQuestionAsMenu(q: { Q_ID: string; QUESTION_TEXT: string; ANSWER_TYPE: string }, progress: string): string {
   if (q.ANSWER_TYPE === "number") {
@@ -25,15 +39,12 @@ function formatQuestionAsMenu(q: { Q_ID: string; QUESTION_TEXT: string; ANSWER_T
 
 function parseWhatsAppAnswer(text: string, answerType: string): string | number | null {
   const t = text.trim().toLowerCase();
-
   if (answerType === "number") {
     const n = Number(t.replace(/[^0-9]/g, ""));
     return isNaN(n) || n < 1 || n > 10 ? null : n;
   }
-
   if (t === "1" || ["yes", "y", "true", "yep", "yeah", "si"].includes(t)) return "yes";
   if (t === "2" || ["no", "n", "false", "nope", "nah"].includes(t)) return "no";
-
   return null;
 }
 
@@ -60,11 +71,9 @@ function formatTriageResult(triage: any): string {
     `📋 Top finding: ${triage.topCluster ?? "—"}`,
     `📊 Confidence: ${triage.confidence}`,
   ];
-
   if ((triage.rfTriggered?.length ?? 0) > 0) {
     lines.push(``, `⚠️ *Red flag(s) noted — seek care promptly.*`);
   }
-
   lines.push(``, `_This is AI-assisted clinical decision support only. Not a substitute for physician evaluation._`);
   return lines.join("\n");
 }
@@ -87,6 +96,9 @@ async function runTriageAndSend(params: {
   const triage = await runOrchestratorTriage({
     complaintSlug: params.complaintSlug,
     answers: params.answers,
+    sessionId: params.caseId,
+    caseId: params.caseId,
+    channel: "whatsapp",
   });
 
   const needsReview =
@@ -95,8 +107,28 @@ async function runTriageAndSend(params: {
     (triage.consistencyFlags?.length ?? 0) > 0;
 
   await setTriage(params.caseId, triage, (needsReview ? "NEEDS_REVIEW" : "TRIAGED") as any);
-  await sendWhatsAppMessage(params.to, formatTriageResult(triage));
+  const resultText = formatTriageResult(triage);
+  await sendWhatsAppMessage(params.to, resultText);
+
+  logInteraction({
+    sessionId: params.caseId,
+    caseId: params.caseId,
+    channel: "whatsapp",
+    direction: "outbound",
+    skillName: "triage_result",
+    messageText: resultText,
+    responseText: `disposition=${triage.disposition}|confidence=${triage.confidence}`,
+  }).catch(() => {});
+
+  await endSession(params.caseId, triage.disposition);
   await clearActiveCaseId({ channel: "whatsapp", threadId: params.threadId });
+
+  setTimeout(async () => {
+    const surveyText = `📋 *Quick feedback*\n\nHow would you rate your experience today?\n\n5️⃣ Excellent  4️⃣ Good  3️⃣ Okay  2️⃣ Poor  1️⃣ Very poor\n\nReply 1–5`;
+    await sendWhatsAppMessage(params.to, surveyText);
+    await setSurveyState("whatsapp", params.threadId, params.caseId, "csat");
+    logInteraction({ sessionId: params.caseId, channel: "whatsapp", direction: "outbound", skillName: "csat_survey", messageText: surveyText }).catch(() => {});
+  }, 2000);
 }
 
 export async function handleWhatsAppKBIntake(params: {
@@ -109,6 +141,8 @@ export async function handleWhatsAppKBIntake(params: {
   const cleanFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
   const rawText = text.trim();
 
+  const mood = analyzeMood(rawText);
+
   if (rawText.toLowerCase() === "/start" || rawText.toLowerCase() === "hi" || rawText.toLowerCase() === "hello") {
     const oldCaseId = await getActiveCaseId({ channel: "whatsapp", threadId });
     if (oldCaseId) {
@@ -116,6 +150,7 @@ export async function handleWhatsAppKBIntake(params: {
       if (old?.state === "DRAFT") await setCaseState(oldCaseId, "CLOSED");
     }
     await clearActiveCaseId({ channel: "whatsapp", threadId });
+    await clearSurveyState("whatsapp", threadId);
     await sendWhatsAppMessage(cleanFrom, buildComplaintMenu());
     return true;
   }
@@ -127,8 +162,30 @@ export async function handleWhatsAppKBIntake(params: {
       if (old?.state === "DRAFT") await setCaseState(oldCaseId, "CLOSED");
     }
     await clearActiveCaseId({ channel: "whatsapp", threadId });
+    await clearSurveyState("whatsapp", threadId);
     await sendWhatsAppMessage(cleanFrom, "Session cleared. Send your symptom or 'hi' to start again.");
     return true;
+  }
+
+  const survey = await getSurveyState("whatsapp", threadId);
+  if (survey) {
+    const n = parseInt(rawText.trim());
+    if (survey.phase === "csat" && !isNaN(n) && n >= 1 && n <= 5) {
+      await recordCsat(survey.sessionId, n);
+      logInteraction({ sessionId: survey.sessionId, channel: "whatsapp", direction: "inbound", skillName: "csat_reply", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+      await setSurveyState("whatsapp", threadId, survey.sessionId, "nps");
+      const npsText = `Thanks! One more — how likely are you to recommend Auralyn to someone you know?\n\n0 = Not at all   10 = Absolutely yes\n\nReply 0–10`;
+      await sendWhatsAppMessage(cleanFrom, npsText);
+      logInteraction({ sessionId: survey.sessionId, channel: "whatsapp", direction: "outbound", skillName: "nps_survey", messageText: npsText }).catch(() => {});
+      return true;
+    }
+    if (survey.phase === "nps" && !isNaN(n) && n >= 0 && n <= 10) {
+      await recordNps(survey.sessionId, n);
+      await clearSurveyState("whatsapp", threadId);
+      logInteraction({ sessionId: survey.sessionId, channel: "whatsapp", direction: "inbound", skillName: "nps_reply", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+      await sendWhatsAppMessage(cleanFrom, `🙏 Thank you! Your feedback helps us improve care. Stay well.`);
+      return true;
+    }
   }
 
   const caseId = await getActiveCaseId({ channel: "whatsapp", threadId });
@@ -146,7 +203,8 @@ export async function handleWhatsAppKBIntake(params: {
     }
 
     if (!match) {
-      await sendWhatsAppMessage(cleanFrom, buildComplaintMenu());
+      const tonePrefix = buildTonePrefix(mood.mood);
+      await sendWhatsAppMessage(cleanFrom, tonePrefix + buildComplaintMenu());
       return true;
     }
 
@@ -159,7 +217,11 @@ export async function handleWhatsAppKBIntake(params: {
       engine: "GENERIC_V1",
     });
 
+    await startSession(created.caseId, created.caseId, "whatsapp");
     await setActiveCaseId({ channel: "whatsapp", threadId, activeCaseId: created.caseId });
+
+    logInteraction({ sessionId: created.caseId, caseId: created.caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+    await incrementMessageCount(created.caseId);
     await appendMessage(created.caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText });
 
     const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
@@ -180,6 +242,8 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
+  logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+  await incrementMessageCount(caseId);
   await appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText });
 
   const answers = (c.answers?.structured ?? {}) as Record<string, any>;

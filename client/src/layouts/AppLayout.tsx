@@ -61,6 +61,7 @@ const NAV_ITEMS = [
   { path: "/simulation-lab", label: "Simulation Lab", icon: FlaskConical },
   { path: "/clinical-improvement-lab", label: "Clinical Improvement Lab", icon: FlaskConical },
   { path: "/care-pathway-optimizer", label: "Care Pathway Optimizer", icon: GitBranch },
+  { path: ROUTES.AI_INTERACTION_MONITOR, label: "Interaction Monitor", icon: Eye },
   { path: "/governance-command-center", label: "Governance Command Center", icon: ShieldCheck },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
