@@ -77,6 +77,7 @@ import MultiPatientCommandPage from "@/pages/MultiPatientCommandPage";
 import ClinicalQAPage from "@/pages/ClinicalQAPage";
 import ClinicalImprovementLabPage from "@/pages/ClinicalImprovementLabPage";
 import ClinicalSimulationLabPage from "@/pages/ClinicalSimulationLabPage";
+import ComplaintLabPage from "@/pages/ComplaintLabPage";
 import ClinicalDecisionPipelinePage from "@/pages/ClinicalDecisionPipelinePage";
 import CarePathwayOptimizerPage from "@/pages/CarePathwayOptimizerPage";
 import GovernanceCommandCenterPage from "@/pages/GovernanceCommandCenterPage";
@@ -141,6 +142,7 @@ function WorkbenchRouter() {
         <Route path="/multi-patient-command" component={MultiPatientCommandPage} />
         <Route path="/clinical-qa" component={ClinicalQAPage} />
         <Route path="/simulation-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalSimulationLabPage /></RoleGuard>}</Route>
+        <Route path="/complaint-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ComplaintLabPage /></RoleGuard>}</Route>
         <Route path="/clinical-pipeline">{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><ClinicalDecisionPipelinePage /></RoleGuard>}</Route>
         <Route path="/clinical-improvement-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalImprovementLabPage /></RoleGuard>}</Route>
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />

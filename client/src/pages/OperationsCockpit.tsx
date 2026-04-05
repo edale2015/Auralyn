@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import StatCard from "../components/ops/StatCard";
 import { Badge } from "@/components/ui/badge";
 
@@ -96,6 +97,23 @@ export default function OperationsCockpit() {
             Last updated: {lastUpdated.toLocaleTimeString()}
           </span>
         )}
+      </div>
+
+      {/* Quick Access Tools */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { href: "/ai-interaction-monitor", label: "Interaction Monitor", desc: "Audit every AI ↔ patient exchange, mood, CSAT, NPS", color: "border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-900/20" },
+          { href: "/complaint-lab", label: "Complaint Lab", desc: "Run simulations, watch processing, edit KB rules live", color: "border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-900/20" },
+          { href: "/simulation-lab", label: "Simulation Lab", desc: "Bulk case runs and failure analysis", color: "border-amber-200 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-900/20" },
+          { href: "/knowledge-hub", label: "Knowledge Hub", desc: "Browse and manage the clinical KB", color: "border-green-200 dark:border-green-800 hover:bg-green-50 dark:hover:bg-green-900/20" },
+        ].map(({ href, label, desc, color }) => (
+          <Link key={href} href={href}>
+            <a className={`block rounded-xl border p-4 cursor-pointer transition-colors ${color}`} data-testid={`quick-link-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+              <div className="font-semibold text-sm text-gray-800 dark:text-gray-100 mb-1">{label}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">{desc}</div>
+            </a>
+          </Link>
+        ))}
       </div>
 
       {/* Service Health Row */}
