@@ -1,0 +1,573 @@
+This one is also a real improvement. It correctly identifies the big structural problems in the old auth path: the token-shape mismatch, the admin 403 bug, split secret resolution, the production-reachable dev fallback, and the duplicate role types. The rewrite fixes those by centralizing verification in verifyAccessToken, using AuthRole as the shared role source, and letting RBAC determine physician-level access instead of relying on a phantom decoded.physician field.
+
+I still would not call it final-hardening yet. A few gaps remain:
+
+1. No runtime validation of the decoded JWT payload
+verifyAccessToken() returns jwt.verify(...) as AuthTokenPayload, which is a TypeScript promise, not a runtime guarantee. A token signed with the right secret but containing malformed claims could still get cast into req.user. Add a schema check after verification so id, role, and optional clinicId are actually validated before use.
+
+2. Algorithm / issuer / audience are not pinned
+The rewrite signs with jwt.sign(..., { expiresIn: "12h" }), but it does not explicitly set or verify algorithm, issuer, or audience. For a clinical system, I would pin those instead of leaving the contract loose and implicit.
+
+3. Secret validation happens too late
+getJwtSecret() throws only when auth code is exercised. That means a bad deployment can still boot and then fail at request time. Better pattern: validate and cache the secret during server startup, so misconfiguration explodes immediately instead of halfway through a clinic day. The current version removes the dangerous fallback, which is good, but it still fails at runtime rather than fail-fast at boot.
+
+4. The RBAC check is slightly redundant
+This line:
+
+rbacService.can(decoded.role, "clinical:run") ||
+rbacService.can(decoded.role, "*")
+
+does not need the second half if can() already treats "*" in the stored permission set as universal access. Admin already passes can(role, "clinical:run") because admin has ["*"]. The extra check is harmless, but it is a tiny code-smell pebble in the shoe.
+
+5. Token contents are broader than they need to be
+The access token currently includes email as part of the bearer payload. That works, but for security minimization I would usually keep JWT claims leaner: sub, role, clinicId, jti, maybe sessionVersion, and fetch email server-side if needed. Less PHI-ish surface drifting around in bearer tokens is usually the tidier lane.
+
+6. No revocation / session invalidation story yet
+This rewrite fixes verification consistency, but not token invalidation. If you need forced logout, role downgrade, emergency offboarding, or incident response, you still need a jti or token version check against server-side state. Right now the model is still “valid until expiry if the signature is good.” The file’s tests cover valid, expired, forged, and role-based denial, but not revocation.
+
+7. The tests may still be brittle depending on how ENV is loaded
+The test block sets process.env.JWT_SECRET, while the rewritten auth path reads from ENV.JWT_SECRET. If ENV snapshots environment variables at import time, these tests can become sneaky little mirages unless the env is set before module import or ENV is mocked properly.
+
+My verdict: yes, this is directionally strong and materially safer than the original, especially because it fixes the admin lockout and eliminates the split-secret logic. But before I’d stamp it “production-ready,” I would add: payload schema validation, issuer/audience/algorithm pinning, startup-time secret validation, token revocation support, and slimmer JWT claims. The castle is standing now; I’d still add the iron hinges.
+
+Here is the exact next patch I would make first:
+
+import jwt from "jsonwebtoken";
+import { z } from "zod";
+import { ENV } from "../config/env";
+
+export type AuthRole = "admin" | "physician" | "reviewer" | "staff";
+
+const TokenPayloadSchema = z.object({
+  id: z.string().min(1),
+  email: z.string().email().optional(),
+  role: z.enum(["admin", "physician", "reviewer", "staff"]),
+  clinicId: z.string().min(1).optional(),
+  iat: z.number().optional(),
+  exp: z.number().optional(),
+  iss: z.string().optional(),
+  aud: z.union([z.string(), z.array(z.string())]).optional(),
+  jti: z.string().optional(),
+});
+
+export type AuthTokenPayload = z.infer<typeof TokenPayloadSchema>;
+
+const JWT_SECRET = (() => {
+  const secret = ENV.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured.");
+  }
+  if (secret.length < 32) {
+    throw new Error("JWT_SECRET must be at least 32 characters.");
+  }
+  return secret;
+})();
+
+const JWT_ISSUER = "auralyn-auth";
+const JWT_AUDIENCE = "auralyn-api";
+
+export function signAccessToken(user: {
+  id: string;
+  role: AuthRole;
+  clinicId?: string;
+}): string {
+  return jwt.sign(
+    {
+      sub: user.id,
+      id: user.id,
+      role: user.role,
+      clinicId: user.clinicId,
+    },
+    JWT_SECRET,
+    {
+      algorithm: "HS256",
+      expiresIn: "30m",
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      jwtid: crypto.randomUUID(),
+    }
+  );
+}
+
+export function verifyAccessToken(token: string): AuthTokenPayload {
+  const decoded = jwt.verify(token, JWT_SECRET, {
+    algorithms: ["HS256"],
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
+
+  return TokenPayloadSchema.parse(decoded);
+}
+please continue
+Thought for 17s
+
+Continuing from that auth block, the next layer I’d add is the part that turns a good rewrite into a production-grade auth spine: runtime claim validation, a single generic permission middleware, revocation/session invalidation, and startup fail-fast config. Those are the missing ribs after the file’s fixes for token-shape mismatch, admin lockout, split secret handling, and the dev-secret fallback.
+
+1. Make roles and claims a single source of truth
+
+Right now the uploaded rewrite correctly moves toward one shared AuthRole type and one verifyAccessToken() path. I’d take that one step further and split the type contract into a tiny shared module so the auth layer, RBAC, middleware, and tests all drink from the same well.
+
+// server/auth/authTypes.ts
+import { z } from "zod";
+
+export const AuthRoleSchema = z.enum([
+  "admin",
+  "physician",
+  "reviewer",
+  "staff",
+]);
+
+export type AuthRole = z.infer<typeof AuthRoleSchema>;
+
+export const AccessTokenClaimsSchema = z.object({
+  sub: z.string().min(1),
+  role: AuthRoleSchema,
+  clinicId: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  tokenVersion: z.number().int().nonnegative(),
+  jti: z.string().min(1),
+  iat: z.number().optional(),
+  exp: z.number().optional(),
+  iss: z.string(),
+  aud: z.union([z.string(), z.array(z.string())]),
+});
+
+export type AccessTokenClaims = z.infer<typeof AccessTokenClaimsSchema>;
+2. Harden unifiedAuth.ts all the way
+
+The file’s rewrite already removes the dangerous dev fallback and centralizes signing and verification. I’d keep that direction, but pin issuer, audience, and algorithm, validate claims at runtime, and add sub, jti, and tokenVersion so you can actually revoke sessions later instead of just waiting for expiry.
+
+// server/auth/unifiedAuth.ts
+import crypto from "crypto";
+import jwt, { JsonWebTokenError, TokenExpiredError } from "jsonwebtoken";
+import { ENV } from "../config/env";
+import {
+  AccessTokenClaims,
+  AccessTokenClaimsSchema,
+  AuthRole,
+} from "./authTypes";
+
+export interface AuthUser {
+  id: string;
+  email?: string;
+  role: AuthRole;
+  clinicId?: string;
+  tokenVersion: number;
+}
+
+const JWT_ISSUER = "auralyn-auth";
+const JWT_AUDIENCE = "auralyn-api";
+const JWT_ALGORITHM: jwt.Algorithm = "HS256";
+const ACCESS_TOKEN_TTL = "30m";
+
+const JWT_SECRET = (() => {
+  const secret = ENV.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured.");
+  }
+  if (secret.length < 32) {
+    throw new Error("JWT_SECRET must be at least 32 characters.");
+  }
+  return secret;
+})();
+
+export function signAccessToken(user: AuthUser): string {
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      clinicId: user.clinicId,
+      tokenVersion: user.tokenVersion,
+    },
+    JWT_SECRET,
+    {
+      algorithm: JWT_ALGORITHM,
+      expiresIn: ACCESS_TOKEN_TTL,
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      jwtid: crypto.randomUUID(),
+    }
+  );
+}
+
+export function verifyAccessToken(token: string): AccessTokenClaims {
+  const decoded = jwt.verify(token, JWT_SECRET, {
+    algorithms: [JWT_ALGORITHM],
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
+
+  return AccessTokenClaimsSchema.parse(decoded);
+}
+
+export function isTokenExpiredError(err: unknown): err is TokenExpiredError {
+  return err instanceof TokenExpiredError;
+}
+
+export function isJwtError(err: unknown): err is JsonWebTokenError {
+  return err instanceof JsonWebTokenError;
+}
+3. Replace requirePhysician with a generic permission gate
+
+The uploaded rewrite correctly points out that the old middleware was checking for fields that were never issued and that admin was wrongly blocked from physician routes. The cleanest fix is to stop making “physician” a special snowflake middleware and instead use one authenticated base middleware plus one permission middleware. That preserves the file’s admin fix while making future route policy much less brittle.
+
+// server/auth/rbacService.ts
+import type { AuthRole } from "./authTypes";
+
+export type Permission =
+  | "*"
+  | "clinical:run"
+  | "clinical:override"
+  | "clinical:view"
+  | "view:analytics"
+  | "view:dashboard"
+  | "billing:view"
+  | "billing:manage"
+  | "tenant:manage"
+  | "user:manage"
+  | "ehr:read"
+  | "ehr:write"
+  | "deployment:manage"
+  | "audit:view";
+
+const ROLE_PERMISSIONS: Record<AuthRole, Permission[]> = {
+  admin: ["*"],
+  physician: [
+    "clinical:run",
+    "clinical:override",
+    "clinical:view",
+    "view:analytics",
+    "view:dashboard",
+    "ehr:read",
+    "ehr:write",
+    "audit:view",
+  ],
+  reviewer: [
+    "clinical:view",
+    "view:analytics",
+    "view:dashboard",
+    "audit:view",
+  ],
+  staff: [
+    "billing:view",
+    "billing:manage",
+    "view:dashboard",
+    "audit:view",
+  ],
+};
+
+export class RBACService {
+  can(role: AuthRole, action: Permission): boolean {
+    const perms = ROLE_PERMISSIONS[role] ?? [];
+    return perms.includes("*") || perms.includes(action);
+  }
+
+  canAll(role: AuthRole, actions: Permission[]): boolean {
+    return actions.every((action) => this.can(role, action));
+  }
+
+  getPermissions(role: AuthRole): Permission[] {
+    return ROLE_PERMISSIONS[role] ?? [];
+  }
+}
+
+export const rbacService = new RBACService();
+// server/auth/authzMiddleware.ts
+import { Request, Response, NextFunction } from "express";
+import { verifyAccessToken, isJwtError, isTokenExpiredError } from "./unifiedAuth";
+import { AccessTokenClaims } from "./authTypes";
+import { rbacService, Permission } from "./rbacService";
+import { authSessionService } from "./authSessionService";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AccessTokenClaims;
+    }
+  }
+}
+
+function extractBearerToken(req: Request): string | null {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return null;
+  return auth.slice("Bearer ".length);
+}
+
+export async function requireAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const token = extractBearerToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing bearer token" });
+    return;
+  }
+
+  let claims: AccessTokenClaims;
+  try {
+    claims = verifyAccessToken(token);
+  } catch (err) {
+    if (isTokenExpiredError(err)) {
+      res.status(401).json({ error: "Token expired" });
+      return;
+    }
+    if (isJwtError(err)) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    res.status(401).json({ error: "Authentication failed" });
+    return;
+  }
+
+  const active = await authSessionService.isTokenActive({
+    userId: claims.sub,
+    tokenVersion: claims.tokenVersion,
+    jti: claims.jti,
+  });
+
+  if (!active) {
+    res.status(401).json({ error: "Session revoked" });
+    return;
+  }
+
+  req.user = claims;
+  next();
+}
+
+export function requirePermission(permission: Permission) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+
+    if (!rbacService.can(req.user.role, permission)) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
+
+    next();
+  };
+}
+
+// Backward-compatible drop-in for old physician routes
+export const requirePhysician = [
+  requireAuth,
+  requirePermission("clinical:run"),
+];
+4. Add real revocation and forced logout
+
+This is the big missing piece. The uploaded rewrite improves verification, but it still leaves you with “signed = valid until expiry.” In a medical system, you usually want emergency offboarding, role downgrade, password-reset invalidation, and targeted token kill-switches. That means token versioning plus a revoked JTI table. The file did not address this yet.
+
+// shared/schema.ts
+import {
+  pgTable,
+  text,
+  integer,
+  timestamp,
+  varchar,
+  bigserial,
+  index,
+} from "drizzle-orm/pg-core";
+
+export const users = pgTable("users", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  role: text("role").notNull(),
+  clinicId: text("clinic_id"),
+  tokenVersion: integer("token_version").notNull().default(0),
+});
+
+export const revokedTokens = pgTable(
+  "revoked_tokens",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    jti: varchar("jti", { length: 128 }).notNull().unique(),
+    userId: text("user_id").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull().defaultNow(),
+    reason: text("reason"),
+  },
+  (table) => ({
+    jtiIdx: index("revoked_tokens_jti_idx").on(table.jti),
+    userIdx: index("revoked_tokens_user_idx").on(table.userId),
+  })
+);
+// server/auth/authSessionService.ts
+import { db } from "../db";
+import { revokedTokens, users } from "../../shared/schema";
+import { eq } from "drizzle-orm";
+
+export const authSessionService = {
+  async isTokenActive({
+    userId,
+    tokenVersion,
+    jti,
+  }: {
+    userId: string;
+    tokenVersion: number;
+    jti: string;
+  }): Promise<boolean> {
+    const userRows = await db
+      .select({ tokenVersion: users.tokenVersion })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!userRows.length) return false;
+    if (userRows[0].tokenVersion !== tokenVersion) return false;
+
+    const revokedRows = await db
+      .select({ jti: revokedTokens.jti })
+      .from(revokedTokens)
+      .where(eq(revokedTokens.jti, jti))
+      .limit(1);
+
+    return revokedRows.length === 0;
+  },
+
+  async revokeToken({
+    jti,
+    userId,
+    reason,
+  }: {
+    jti: string;
+    userId: string;
+    reason?: string;
+  }): Promise<void> {
+    await db.insert(revokedTokens).values({
+      jti,
+      userId,
+      reason: reason ?? null,
+    });
+  },
+
+  async revokeAllUserSessions(userId: string): Promise<void> {
+    const row = await db
+      .select({ tokenVersion: users.tokenVersion })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!row.length) return;
+
+    await db
+      .update(users)
+      .set({ tokenVersion: row[0].tokenVersion + 1 })
+      .where(eq(users.id, userId));
+  },
+};
+5. Add startup validation so bad config dies immediately
+
+The uploaded rewrite removes the dangerous fallback secret, which is exactly right. I’d finish that thought by validating auth config during server boot instead of waiting until the first authenticated request to discover the system is misconfigured. That turns a lurking trapdoor into a loud alarm bell.
+
+// server/startup/validateSecurityConfig.ts
+import { ENV } from "../config/env";
+
+export function validateSecurityConfig(): void {
+  if (!ENV.JWT_SECRET) {
+    throw new Error("Startup failed: JWT_SECRET is missing.");
+  }
+
+  if (ENV.JWT_SECRET.length < 32) {
+    throw new Error("Startup failed: JWT_SECRET must be at least 32 characters.");
+  }
+
+  if (!ENV.SESSION_COOKIE_SECRET || ENV.SESSION_COOKIE_SECRET.length < 32) {
+    throw new Error(
+      "Startup failed: SESSION_COOKIE_SECRET must be configured and at least 32 characters."
+    );
+  }
+}
+// server/index.ts
+import { validateSecurityConfig } from "./startup/validateSecurityConfig";
+
+validateSecurityConfig();
+// then continue bootstrapping Express, DB, routes, etc.
+6. Add audit hooks for auth failures and privilege decisions
+
+Since you care about traceability, I’d also log auth outcomes distinctly: missing token, expired token, invalid signature, revoked session, forbidden permission. The uploaded rewrite already separates expired vs invalid at the response layer, which is good. I’d mirror that into the audit trail so compliance review is not left reading tea leaves.
+
+// server/auth/authAudit.ts
+import { auditStep } from "../audit/auditLogger";
+
+export async function auditAuthEvent(params: {
+  traceId: string;
+  step:
+    | "auth_missing_token"
+    | "auth_token_expired"
+    | "auth_invalid_token"
+    | "auth_session_revoked"
+    | "auth_permission_denied"
+    | "auth_success";
+  input?: unknown;
+  output?: unknown;
+  metadata?: Record<string, unknown>;
+}) {
+  await auditStep({
+    traceId: params.traceId,
+    step: params.step,
+    input: params.input ?? null,
+    output: params.output ?? null,
+    metadata: params.metadata ?? {},
+  });
+}
+7. Route usage becomes simple and much safer
+// server/routes/clinical.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+
+const router = Router();
+
+router.post(
+  "/run",
+  requireAuth,
+  requirePermission("clinical:run"),
+  async (req, res) => {
+    res.json({
+      ok: true,
+      user: req.user,
+      message: "Clinical engine run permitted.",
+    });
+  }
+);
+
+router.post(
+  "/override",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    res.json({
+      ok: true,
+      user: req.user,
+      message: "Clinical override permitted.",
+    });
+  }
+);
+
+export default router;
+8. The test cases I’d add next
+
+The file already includes strong tests for physician pass, admin pass, expired token, forged token, and staff denial. I’d add these four because they cover the still-missing production edges.
+
+// 1. Token with valid signature but malformed role claim -> 401
+// 2. Token signed correctly but wrong issuer/audience -> 401
+// 3. Token signed correctly but user tokenVersion incremented -> 401 Session revoked
+// 4. Token jti inserted into revoked_tokens -> 401 Session revoked
+Bottom line
+
+The uploaded rewrite fixed the core correctness bugs. That part is solid: unify verification, unify roles, remove the fallback secret, and let admin inherit physician-level access through RBAC rather than special-case spaghetti.
+
+The next step is to make auth operationally survivable:
+
+validate claims at runtime
+pin issuer/audience/algorithm
+support revocation and forced logout
+fail fast at startup
+audit auth failures distinctly
+use generic permission middleware instead of route-specific role folklore
+
+That turns the auth layer from “works when happy” into “behaves under fire.” 🛡️
+
+I can continue with the next block after auth in the same style and give you the remaining hardening patches one by one.

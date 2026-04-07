@@ -1,0 +1,274 @@
+
+A) Bugs and Mismatches Found
+1. Token shape mismatch — the core bug
+signAccessToken produces { id, email, role, clinicId? }. requirePhysician expects { sub, role?, physician? }. The field sub is never set by signAccessToken — it uses id. The field physician is never set by anything. So a legitimately issued token will always fail requirePhysician's check because decoded.physician is undefined and the role check is the only fallback — which works for role === "physician" but not for admins (bug #3 below).
+2. Admin role silently locked out of physician endpoints
+The check is:
+typescriptif (!decoded.physician && decoded.role !== "physician")
+An admin token has role: "admin", not "physician". decoded.physician is never set. So admins always get a 403 on physician routes, even though rbacService gives them "*" permissions. This is a privilege logic gap — admin should be a superset of physician access.
+3. Two independent JWT secret resolution paths
+unifiedAuth.ts uses ENV.JWT_SECRET (your config layer). requirePhysician.ts reads process.env.JWT_SECRET directly. If ENV normalizes, transforms, or provides a fallback differently than raw process.env, the secrets can differ. A token signed by one path will fail verification on the other with a cryptic "invalid signature" error that looks like a bad token, not a misconfiguration.
+4. Dev secret fallback is dangerous when NODE_ENV is unset or misconfigured
+Both files fall back to "dev-jwt-secret-DO-NOT-USE-IN-PROD" if JWT_SECRET is missing and NODE_ENV !== "production". If a production deployment launches with NODE_ENV unset (e.g. a misconfigured Docker container), the fallback activates silently. Any attacker who knows the dev secret (it's in your source code) can forge tokens that pass verification in production. The fallback should never exist in a path that can reach production.
+5. Expired token behavior across paths
+jwt.verify throws TokenExpiredError for expired tokens in both paths — so this is consistent. However, since requirePhysician catches all errors with a generic catch block, an expired token and a forged token both return 401 "Invalid or expired token" with no distinction. For audit logging purposes (HIPAA §164.312(b)), you want to know whether a request failed due to expiry vs. forgery.
+6. rbacService uses UserRole type but unifiedAuth uses AuthRole
+These are defined separately. If they ever diverge (e.g. someone adds a role to one and not the other), the RBAC check silently returns false for valid users. There should be one shared role type.
+
+B) Rewritten requirePhysician.ts
+typescript// server/auth/requirePhysician.ts
+import { Request, Response, NextFunction } from "express";
+import { verifyAccessToken, AuthTokenPayload } from "./unifiedAuth";
+import { rbacService } from "./rbacService";
+import { JsonWebTokenError, TokenExpiredError } from "jsonwebtoken";
+
+// Augment Express request so downstream handlers get a typed user
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthTokenPayload;
+    }
+  }
+}
+
+/**
+ * Enforces physician-level access.
+ *
+ * Accepted roles: "physician" and "admin" (admin is a superset of all permissions).
+ *
+ * Uses verifyAccessToken exclusively — one verification path, one secret,
+ * one token shape. Never reads process.env or JWT_SECRET directly.
+ */
+export function requirePhysician(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const auth = req.headers.authorization;
+
+  if (!auth?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Missing bearer token" });
+    return;
+  }
+
+  const token = auth.slice("Bearer ".length);
+
+  let decoded: AuthTokenPayload;
+  try {
+    decoded = verifyAccessToken(token);
+  } catch (err) {
+    // Distinguish expiry from forgery for audit trail clarity
+    if (err instanceof TokenExpiredError) {
+      res.status(401).json({ error: "Token expired" });
+    } else if (err instanceof JsonWebTokenError) {
+      res.status(401).json({ error: "Invalid token" });
+    } else {
+      res.status(401).json({ error: "Authentication failed" });
+    }
+    return;
+  }
+
+  // Admin has "*" permissions — always passes physician-level routes
+  // Physician has explicit clinical permissions — also passes
+  const hasAccess =
+    rbacService.can(decoded.role, "clinical:run") ||
+    rbacService.can(decoded.role, "*");
+
+  if (!hasAccess) {
+    res.status(403).json({ error: "Physician access required" });
+    return;
+  }
+
+  // Attach the full typed user to the request — no shape ambiguity downstream
+  req.user = decoded;
+  next();
+}
+
+C) Rewritten rbacService.ts
+Key fixes: one shared AuthRole type (imported from unifiedAuth), explicit admin wildcard comment, and a hasPermission method that correctly handles "*" as a true superset check.
+typescript// server/auth/rbacService.ts
+import type { AuthRole } from "./unifiedAuth";
+
+// AuthRole is the single source of truth for all role strings.
+// Do not define a separate UserRole type — keep them unified.
+
+export type Permission =
+  | "*"
+  | "clinical:run"
+  | "clinical:override"
+  | "clinical:view"
+  | "view:analytics"
+  | "view:dashboard"
+  | "billing:view"
+  | "billing:manage"
+  | "tenant:manage"
+  | "user:manage"
+  | "ehr:read"
+  | "ehr:write"
+  | "deployment:manage"
+  | "audit:view";
+
+const ROLE_PERMISSIONS: Record<AuthRole, Permission[]> = {
+  // admin has "*" — meaning all permissions, including ones added in future
+  admin:     ["*"],
+
+  physician: [
+    "clinical:run", "clinical:override", "clinical:view",
+    "view:analytics", "view:dashboard",
+    "ehr:read", "ehr:write",
+    "audit:view",
+  ],
+
+  // reviewer replaces the old "viewer" — read-only clinical + analytics
+  reviewer:  ["clinical:view", "view:analytics", "view:dashboard", "audit:view"],
+
+  // staff handles billing + basic dashboard only
+  staff:     ["billing:view", "billing:manage", "view:dashboard", "audit:view"],
+};
+
+export class RBACService {
+  /**
+   * Returns true if the role has the given permission.
+   * "*" grants all permissions except itself as a literal string —
+   * it is a sentinel value meaning "unrestricted", not a real permission name.
+   */
+  can(role: AuthRole, action: Permission): boolean {
+    const perms = ROLE_PERMISSIONS[role];
+    if (!perms) return false;
+
+    // "*" means the role is unrestricted — passes all permission checks
+    if (perms.includes("*")) return true;
+
+    return perms.includes(action);
+  }
+
+  getPermissions(role: AuthRole): Permission[] {
+    return ROLE_PERMISSIONS[role] ?? [];
+  }
+
+  /**
+   * Returns true if the role has ALL of the listed permissions.
+   * Useful for multi-permission gate checks on sensitive endpoints.
+   */
+  canAll(role: AuthRole, actions: Permission[]): boolean {
+    return actions.every(a => this.can(role, a));
+  }
+}
+
+export const rbacService = new RBACService();
+And a hardened unifiedAuth.ts that removes the dangerous dev-secret fallback:
+typescript// server/auth/unifiedAuth.ts
+import jwt from "jsonwebtoken";
+import { ENV } from "../config/env";
+
+export type AuthRole = "admin" | "physician" | "reviewer" | "staff";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: AuthRole;
+  clinicId?: string;
+}
+
+export interface AuthTokenPayload extends AuthUser {
+  iat?: number;
+  exp?: number;
+}
+
+function getJwtSecret(): string {
+  const secret = ENV.JWT_SECRET;
+
+  // No fallback. Ever.
+  // If JWT_SECRET is missing in any environment, fail loudly at startup —
+  // never silently use a known dev secret that could reach production.
+  if (!secret) {
+    throw new Error(
+      "JWT_SECRET is not configured. Set it in your environment before starting the server."
+    );
+  }
+
+  // Warn loudly if the secret is suspiciously short (< 32 chars)
+  if (secret.length < 32) {
+    console.warn(
+      "[Auth] WARNING: JWT_SECRET is shorter than 32 characters. " +
+      "Use a cryptographically random secret of at least 256 bits."
+    );
+  }
+
+  return secret;
+}
+
+/**
+ * Issues a signed access token.
+ * Shape: { id, email, role, clinicId?, iat, exp }
+ * This is the ONLY place tokens are signed.
+ */
+export function signAccessToken(user: AuthUser): string {
+  return jwt.sign(user as object, getJwtSecret(), { expiresIn: "12h" });
+}
+
+/**
+ * Verifies and decodes an access token.
+ * This is the ONLY place tokens are verified.
+ * Throws TokenExpiredError or JsonWebTokenError on failure — callers decide how to handle.
+ */
+export function verifyAccessToken(token: string): AuthTokenPayload {
+  return jwt.verify(token, getJwtSecret()) as AuthTokenPayload;
+}
+
+D) Test Cases
+typescript// --- Setup ---
+process.env.JWT_SECRET = "test-secret-at-least-32-chars-long!!";
+const validPhysician = signAccessToken({ id: "u1", email: "doc@clinic.com", role: "physician" });
+const validAdmin     = signAccessToken({ id: "u2", email: "admin@clinic.com", role: "admin" });
+const validStaff     = signAccessToken({ id: "u3", email: "staff@clinic.com", role: "staff" });
+
+// Test 1: Valid physician token — should pass
+// Expect: 200, req.user.role === "physician"
+GET /clinical/run   Authorization: Bearer <validPhysician>
+→ next() called, req.user = { id: "u1", email: "doc@clinic.com", role: "physician" }
+
+// Test 2: Valid admin token — should pass (was broken in original)
+// Expect: 200, req.user.role === "admin"
+GET /clinical/run   Authorization: Bearer <validAdmin>
+→ next() called, req.user = { id: "u2", email: "admin@clinic.com", role: "admin" }
+
+// Test 3: Expired token — should return 401 "Token expired", not generic error
+const expiredToken = jwt.sign(
+  { id: "u1", email: "doc@clinic.com", role: "physician" },
+  process.env.JWT_SECRET,
+  { expiresIn: -1 }   // already expired
+);
+GET /clinical/run   Authorization: Bearer <expiredToken>
+→ 401 { error: "Token expired" }
+
+// Test 4: Wrong role (staff) — should return 403
+GET /clinical/run   Authorization: Bearer <validStaff>
+→ 403 { error: "Physician access required" }
+
+// Test 5: Missing token — should return 401
+GET /clinical/run   (no Authorization header)
+→ 401 { error: "Missing bearer token" }
+
+// Test 6: Forged token (wrong secret) — should return 401 "Invalid token"
+const forgedToken = jwt.sign(
+  { id: "u1", email: "hacker@bad.com", role: "physician" },
+  "wrong-secret"
+);
+GET /clinical/run   Authorization: Bearer <forgedToken>
+→ 401 { error: "Invalid token" }
+
+// Test 7: RBAC unit — admin can() everything
+assert(rbacService.can("admin", "clinical:run")     === true);
+assert(rbacService.can("admin", "deployment:manage") === true);
+assert(rbacService.can("admin", "billing:manage")    === true);
+
+// Test 8: RBAC unit — staff cannot access clinical routes
+assert(rbacService.can("staff", "clinical:run")      === false);
+assert(rbacService.can("staff", "clinical:override") === false);
+assert(rbacService.can("staff", "billing:view")      === true);
+
+// Test 9: canAll — physician has all required clinical permissions
+assert(rbacService.canAll("physician", ["clinical:run", "ehr:read", "ehr:write"]) === true);
+assert(rbacService.canAll("staff",     ["clinical:run", "ehr:read"])              === false);
+The most urgent fix for MedScribe specifically is the admin lockout bug — any admin-level user trying to access clinical decision endpoints was silently getting a 403, which means your override capture system (the highest-signal regulatory defense mechanism you've been building) could be blocked for admin accounts doing QA review. That would be a gap in your audit trail right where it matters most.
