@@ -1,0 +1,202 @@
+This frontend slice is a real upgrade. It fixes the biggest architectural mess in the original by moving mutations and result fetching under TanStack Query, making KB edits cache-aware, turning the result filter into URL state, and consolidating the three nearly identical KB editors into one generic component. That is a much healthier UI spine for an iterative lab tool.
+
+The strongest improvements are:
+
+no more raw fetch() mutations that leave the query cache stale
+result loading is now query-driven instead of a useEffect race
+filter state survives refresh/back-forward navigation
+KB editor logic is centralized instead of triplicated
+optimistic add/delete flows are much cleaner for day-to-day editing
+
+I still would not call it final-hardening yet.
+
+1. Scenario 1 in the packet still fails in the current code
+
+The packet says that when a sim completes with total: 0, the UI should show “No cases ran.” and avoid weird output. But this render block still does:
+
+Pass rate: {((jobStatus.passed / jobStatus.total) * 100).toFixed(1)}%
+
+If total === 0, that becomes 0 / 0, which is NaN, so the UI will show Pass rate: NaN%. That is a tiny crack with a very visible face.
+
+2. Scenario 2 in the packet also does not match the actual code
+
+The expected behavior says: if a new sim errors mid-run, previous results remain visible. But in the rewritten page, activeJobId is replaced with the new job id immediately, and results comes from:
+
+queryKey: ["/api/ci/sim/results", activeJobId]
+
+So once the new job starts, the component stops reading the previous completed job’s results. If the new job errors before completion, results is undefined, and the previous results are not shown. The spec in the comments and the implementation have drifted apart like two shopping carts with one bad wheel.
+
+3. Query unmount safety is improved, but the “automatic cancellation” claim is too strong
+
+The packet says TanStack Query cancels in-flight queries on unmount automatically, so no AbortController is needed. That is only fully true if the query function actually respects the AbortSignal. In this rewrite, the query functions call apiRequest(...) directly and do not pass or consume a signal. That means:
+
+React unmount warnings are improved because you are no longer calling setState manually
+but the network request itself may still continue unless apiRequest is already wired internally for cancellation
+
+So the race is improved, not completely slain.
+
+4. activeJobId should probably not be purely local state
+
+The rewrite correctly moves complaint and filter into URL params, but activeJobId stays local. That means a refresh during a running sim loses the user’s current job tracking entirely. For a lab page where people kick off runs, refresh, compare, and revisit, the active or last completed job is meaningful navigation state too.
+
+At minimum, I would consider persisting either:
+
+activeJobId in the URL, or
+lastCompletedJobId in the URL/local storage
+5. count and difficulty may be more important than the rewrite assumes
+
+The code comments say these are “not worth persisting in URL.” I partly disagree. In a workbench tool, count and difficulty are not just cosmetic controls, they are experiment parameters. If someone refreshes, shares a link, or wants to compare results, losing them is annoying and a little misleading.
+
+I would not call this a bug, but I would call it a missed usability win.
+
+6. Search param updates mutate the existing object in place
+
+These setters:
+
+setSearchParams(p => { p.set("complaint", v); return p; });
+setSearchParams(p => { p.set("filter", v); return p; });
+
+work in many cases, but mutating and returning the same URLSearchParams object is a bit slippery. It is safer to clone, modify, and return a fresh object. Also, when complaint is “All,” you probably want to delete the param, not set it to an empty string. Right now the URL can end up with a ghostly ?complaint=.
+
+7. The optimistic add flow still has an “optimistic delete” edge case
+
+KbEditor does a nice optimistic add with a fake id like optimistic-${Date.now()}. But if a user immediately clicks delete on that optimistic row before the server responds, the delete mutation will attempt to call:
+
+DELETE ${apiPath}/${id}
+
+with the optimistic id, which the server will not recognize. That is a small but real edge case. You can fix it by marking optimistic rows as pending and disabling delete on them until the server round-trip completes.
+
+8. Validation is good client-side, but server authority still matters
+
+The generic editor adds client validation for empty, short, and duplicate values, which is useful. But because the component relies on the current cached list for duplicate detection, two tabs or two users can still race. The client check is a nice doorman; the server still needs to be the bouncer. The packet hints at server-side validation errors, which is good, but I would treat client duplication checks as convenience only.
+
+9. Polling could use a timeout / stale-job strategy
+
+The status query smartly stops polling on "complete" or "error", but it will keep polling forever if a job gets stuck in "running" due to backend drift or a lost worker heartbeat. For a CI/sim workbench, I would add:
+
+max polling duration
+stale-job detection
+a “resume polling” or “mark stale” path
+visible last-updated timestamp
+
+Right now the page can get trapped in a polite infinite wait.
+
+The next patch I would make first
+
+I would fix four things immediately:
+
+zero-case pass-rate handling
+preserve previous results across failed new runs
+make query cancellation real by passing signal
+persist activeJobId or lastCompletedJobId
+
+Here is the shape.
+
+1. Preserve previous completed results
+const [lastCompletedJobId, setLastCompletedJobId] = useState<string | null>(null);
+
+const { data: jobStatus } = useQuery<SimJob>({
+  queryKey: ["/api/ci/sim/status", activeJobId],
+  queryFn: ({ signal }) => apiRequest("GET", `/api/ci/sim/status/${activeJobId}`, undefined, signal),
+  enabled: !!activeJobId,
+  refetchInterval: (query) => {
+    const status = query.state.data?.status;
+    return status === "complete" || status === "error" ? false : 1500;
+  },
+});
+
+useEffect(() => {
+  if (jobStatus?.status === "complete" && activeJobId) {
+    setLastCompletedJobId(activeJobId);
+  }
+}, [jobStatus?.status, activeJobId]);
+
+const resultsJobId = jobStatus?.status === "complete"
+  ? activeJobId
+  : lastCompletedJobId;
+
+const { data: results } = useQuery<SimResult[]>({
+  queryKey: ["/api/ci/sim/results", resultsJobId],
+  queryFn: ({ signal }) => apiRequest("GET", `/api/ci/sim/results/${resultsJobId}`, undefined, signal),
+  enabled: !!resultsJobId,
+  staleTime: Infinity,
+});
+
+That makes Scenario 2 actually true instead of aspirational wallpaper.
+
+2. Fix zero-case pass rate
+const passRate =
+  jobStatus && jobStatus.total > 0
+    ? ((jobStatus.passed / jobStatus.total) * 100).toFixed(1)
+    : null;
+
+Then render:
+
+{jobComplete && results && (
+  <div className="text-sm space-y-1">
+    <p>✅ {jobStatus.passed} passed &nbsp; ❌ {jobStatus.failed} failed</p>
+    {passRate !== null ? (
+      <p className="text-muted-foreground">Pass rate: {passRate}%</p>
+    ) : (
+      <p className="text-muted-foreground">No cases ran.</p>
+    )}
+  </div>
+)}
+3. Stop mutating URLSearchParams in place
+function setComplaint(v: string) {
+  setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    if (v) next.set("complaint", v);
+    else next.delete("complaint");
+    return next;
+  });
+}
+
+function setFilter(v: FilterMode) {
+  setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    next.set("filter", v);
+    return next;
+  });
+}
+4. Make optimistic rows undeletable until confirmed
+interface KbItem {
+  id: string;
+  [key: string]: string | boolean;
+  _optimistic?: boolean;
+}
+
+onMutate: async (value: string) => {
+  await queryClient.cancelQueries({ queryKey });
+  const previous = queryClient.getQueryData<KbItem[]>(queryKey);
+  queryClient.setQueryData<KbItem[]>(queryKey, old => [
+    ...(old ?? []),
+    { id: `optimistic-${Date.now()}`, [fieldKey]: value, _optimistic: true },
+  ]);
+  return { previous };
+},
+
+And in render:
+
+<Button
+  size="sm"
+  variant="ghost"
+  onClick={() => deleteItem.mutate(item.id)}
+  disabled={deleteItem.isPending || Boolean(item._optimistic)}
+  className="h-6 px-2 text-destructive hover:text-destructive"
+>
+  ×
+</Button>
+Bottom line
+
+This rewrite is worth keeping. It fixes the biggest architectural problems from the original slice and puts the page on a much saner footing for iterative edit-run-review workflows. The most important win really is the cache-aware KB editing model, because stale KB and fresh UI are a terrible combination in a lab page.
+
+The next hardening wave is:
+
+make implementation match the packet’s own result-preservation scenarios
+fix zero-case NaN%
+make cancellation real, not just query-shaped
+preserve job identity across refresh
+close the optimistic-delete edge case
+
+That would turn this from “solid frontend cleanup” into a much stronger production workbench slice.

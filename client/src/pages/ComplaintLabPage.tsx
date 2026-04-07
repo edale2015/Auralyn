@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
@@ -9,135 +10,207 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface SimJob {
-  jobId: string;
-  status: "queued" | "running" | "complete" | "cancelled" | "error";
-  progress: number;
+  jobId:      string;
+  status:     "queued" | "running" | "complete" | "cancelled" | "error";
+  progress:   number;
   totalCases: number;
-  params: { complaint: string; count: number; difficulty: string };
+  params:     { complaint: string; count: number; difficulty: string };
 }
 
 interface SimResults {
-  jobId: string;
-  params: { complaint: string; count: number; difficulty: string };
+  jobId:   string;
+  params:  { complaint: string; count: number; difficulty: string };
   metrics: {
-    total: number;
-    passed: number;
-    failed: number;
-    accuracy: number;
-    safetyAccuracy: number;
+    total:                number;
+    passed:               number;
+    failed:               number;
+    accuracy:             number;
+    safetyAccuracy:       number;
     falseReassuranceRate: number;
-    avgConfidence: number;
-    avgLatencyMs: number;
-    er_now_sensitivity: number;
-    safetyFlagRate: number;
-    failureClusters: Array<{ cluster: string; count: number; examples: string[] }>;
-    accuracyByComplaint: Record<string, { passed: number; total: number }>;
+    avgConfidence:        number;
+    avgLatencyMs:         number;
+    er_now_sensitivity:   number;
+    safetyFlagRate:       number;
+    failureClusters:      Array<{ cluster: string; count: number; examples: string[] }>;
+    accuracyByComplaint:  Record<string, { passed: number; total: number }>;
   };
   cases: Array<{
-    complaint: string;
-    difficulty: string;
-    passed: boolean;
-    dispositionCorrect: boolean;
-    explanation: string;
-    expected: string;
-    actual: string;
-    confidence: number;
-    safetyFlag: boolean;
-    latencyMs: number;
+    complaint:           string;
+    difficulty:          string;
+    passed:              boolean;
+    dispositionCorrect:  boolean;
+    explanation:         string;
+    expected:            string;
+    actual:              string;
+    confidence:          number;
+    safetyFlag:          boolean;
+    latencyMs:           number;
   }>;
 }
 
 interface KbQuestion {
-  id: number;
+  id:          number;
   complaintId: string;
-  questionId: string;
-  prompt: string;
-  type: string;
-  required: boolean;
-  priority: number;
-  category?: string;
-  active: boolean;
+  questionId:  string;
+  prompt:      string;
+  type:        string;
+  required:    boolean;
+  priority:    number;
+  category?:   string;
+  active:      boolean;
+  _optimistic?: boolean;
 }
 
 interface KbDiagnosis {
-  id: number;
-  ruleId: string;
-  complaintId: string;
-  diagnosisId: string;
-  diagnosisLabel: string;
-  icdCode?: string;
+  id:              number;
+  ruleId:          string;
+  complaintId:     string;
+  diagnosisId:     string;
+  diagnosisLabel:  string;
+  icdCode?:        string;
   baseProbability: number;
-  cannotMiss: boolean;
-  active: boolean;
+  cannotMiss:      boolean;
+  active:          boolean;
+  _optimistic?:    boolean;
 }
 
 interface KbRedFlag {
-  id: number;
-  ruleId: string;
+  id:          number;
+  ruleId:      string;
   complaintId: string;
-  label: string;
+  label:       string;
   triggerExpr: string;
-  severity: string;
-  action: string;
-  active: boolean;
+  severity:    string;
+  action:      string;
+  active:      boolean;
+  _optimistic?: boolean;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function pct(n: number) { return `${Math.round(n * 100)}%`; }
-function ms(n: number) { return `${Math.round(n)}ms`; }
+function ms(n: number)  { return `${Math.round(n)}ms`; }
 
 function AccBadge({ val }: { val: number }) {
-  const color = val >= 0.85 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
-    : val >= 0.65 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+  const color = val >= 0.85
+    ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+    : val >= 0.65
+    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
     : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
   return <span className={`text-xs font-mono px-2 py-0.5 rounded-full ${color}`}>{pct(val)}</span>;
 }
 
-// ─── KB Question Editor ───────────────────────────────────────────────────────
+// ── URL search-param helpers (wouter) ─────────────────────────────────────────
+//
+// Wouter exposes useSearch() (returns the raw query string) and useLocation()
+// (returns [path, navigate]). We build search-param setters on top of these
+// instead of importing react-router-dom's useSearchParams, which is not
+// available in this codebase.
+//
+// IMPORTANT: Always clone the URLSearchParams before mutating — returning the
+// same object is slippery and can cause stale-closure issues.
+
+function useSearchParam(key: string): string {
+  const search = useSearch();
+  return new URLSearchParams(search).get(key) ?? "";
+}
+
+function useSetSearchParam(): (key: string, value: string | null) => void {
+  const search   = useSearch();
+  const [path, navigate] = useLocation();
+  return (key: string, value: string | null) => {
+    const next = new URLSearchParams(search);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    const qs = next.toString();
+    navigate(`${path}${qs ? `?${qs}` : ""}`, { replace: true } as any);
+  };
+}
+
+// ── KB Question Editor ─────────────────────────────────────────────────────────
 
 function QuestionEditor({ complaintId }: { complaintId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [prompt, setPrompt] = useState("");
-  const [type, setType] = useState("yes_no");
+  const [prompt,   setPrompt]   = useState("");
+  const [type,     setType]     = useState("yes_no");
   const [required, setRequired] = useState(false);
   const [category, setCategory] = useState("");
 
+  const queryKey = ["/api/kb/questions", complaintId];
+
   const { data: questions = [], isLoading } = useQuery<KbQuestion[]>({
-    queryKey: ["/api/kb/questions", complaintId],
-    queryFn: () => fetch(`/api/kb/questions?complaintId=${encodeURIComponent(complaintId)}`).then(r => r.json()),
-    enabled: !!complaintId,
+    queryKey,
+    queryFn:  () => apiRequest("GET", `/api/kb/questions?complaintId=${encodeURIComponent(complaintId)}`),
+    enabled:  !!complaintId,
+    staleTime: 30_000,
   });
 
   const add = useMutation({
     mutationFn: () => apiRequest("POST", "/api/kb/questions", {
       complaintId,
-      questionId: `Q_${Date.now()}`,
+      questionId:      `Q_${Date.now()}`,
       prompt,
       type,
       required,
-      category: category || null,
-      priority: 50,
-      conditionalOn: {},
+      category:        category || null,
+      priority:        50,
+      conditionalOn:   {},
       linkedDiagnoses: [],
-      active: true,
+      active:          true,
     }),
+
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<KbQuestion[]>(queryKey);
+      qc.setQueryData<KbQuestion[]>(queryKey, old => [
+        ...(old ?? []),
+        {
+          id:          -Date.now(),
+          complaintId,
+          questionId:  `Q_${Date.now()}`,
+          prompt,
+          type,
+          required,
+          priority:    50,
+          active:      true,
+          _optimistic: true,
+        },
+      ]);
+      return { previous };
+    },
+
+    onError: (e: any, _v, ctx) => {
+      qc.setQueryData(queryKey, ctx?.previous);
+      toast({ title: "Error adding question", description: e.message, variant: "destructive" });
+    },
+
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/kb/questions", complaintId] });
       setPrompt(""); setCategory("");
+      qc.invalidateQueries({ queryKey });
       toast({ title: "Question added" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const remove = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/kb/questions/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/kb/questions", complaintId] }),
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+
+    onMutate: async (id: number) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<KbQuestion[]>(queryKey);
+      qc.setQueryData<KbQuestion[]>(queryKey, old => old?.filter(q => q.id !== id));
+      return { previous };
+    },
+
+    onError: (e: any, _id, ctx) => {
+      qc.setQueryData(queryKey, ctx?.previous);
+      toast({ title: "Error deleting question", description: e.message, variant: "destructive" });
+    },
+
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
   });
 
   return (
@@ -149,20 +222,22 @@ function QuestionEditor({ complaintId }: { complaintId: string }) {
       ) : (
         <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
           {questions.map(q => (
-            <div key={q.id} className="flex items-start gap-2 bg-gray-50 dark:bg-gray-800 rounded-lg p-2.5 text-xs" data-testid={`q-row-${q.id}`}>
+            <div key={q.id} className={`flex items-start gap-2 rounded-lg p-2.5 text-xs ${q._optimistic ? "bg-gray-100 dark:bg-gray-700 opacity-60" : "bg-gray-50 dark:bg-gray-800"}`} data-testid={`q-row-${q.id}`}>
               <div className="flex-1 min-w-0">
                 <div className="font-medium truncate">{q.prompt}</div>
                 <div className="text-gray-400 mt-0.5 flex gap-2">
                   <span>{q.type}</span>
                   {q.required && <span className="text-red-400">required</span>}
                   {q.category && <span className="text-blue-400">{q.category}</span>}
+                  {q._optimistic && <span className="text-gray-400 italic">saving…</span>}
                 </div>
               </div>
               <button
-                className="text-gray-300 hover:text-red-400 transition-colors shrink-0"
+                className="text-gray-300 hover:text-red-400 transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={() => remove.mutate(q.id)}
+                disabled={remove.isPending || Boolean(q._optimistic)}
                 data-testid={`btn-delete-question-${q.id}`}
-                title="Delete"
+                title={q._optimistic ? "Saving — please wait" : "Delete"}
               >✕</button>
             </div>
           ))}
@@ -216,48 +291,89 @@ function QuestionEditor({ complaintId }: { complaintId: string }) {
   );
 }
 
-// ─── KB Differentials Editor ──────────────────────────────────────────────────
+// ── KB Differentials Editor ────────────────────────────────────────────────────
 
 function DifferentialsEditor({ complaintId }: { complaintId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [label, setLabel] = useState("");
-  const [icd, setIcd] = useState("");
-  const [prob, setProb] = useState("0.1");
+  const [label,      setLabel]      = useState("");
+  const [icd,        setIcd]        = useState("");
+  const [prob,       setProb]       = useState("0.1");
   const [cannotMiss, setCannotMiss] = useState(false);
 
+  const queryKey = ["/api/kb/diagnosis", complaintId];
+
   const { data: diffs = [], isLoading } = useQuery<KbDiagnosis[]>({
-    queryKey: ["/api/kb/diagnosis", complaintId],
-    queryFn: () => fetch(`/api/kb/diagnosis?complaintId=${encodeURIComponent(complaintId)}`).then(r => r.json()),
-    enabled: !!complaintId,
+    queryKey,
+    queryFn:  () => apiRequest("GET", `/api/kb/diagnosis?complaintId=${encodeURIComponent(complaintId)}`),
+    enabled:  !!complaintId,
+    staleTime: 30_000,
   });
 
   const add = useMutation({
     mutationFn: () => apiRequest("POST", "/api/kb/diagnosis", {
       complaintId,
-      ruleId: `DR_${Date.now()}`,
-      diagnosisId: label.toLowerCase().replace(/[^a-z0-9]/g, "_"),
-      diagnosisLabel: label,
-      icdCode: icd || null,
-      baseProbability: parseFloat(prob) || 0.1,
+      ruleId:           `DR_${Date.now()}`,
+      diagnosisId:      label.toLowerCase().replace(/[^a-z0-9]/g, "_"),
+      diagnosisLabel:   label,
+      icdCode:          icd || null,
+      baseProbability:  parseFloat(prob) || 0.1,
       cannotMiss,
       featureLikelihoods: {},
-      basePoints: 1,
-      clusterPriority: 50,
-      active: true,
+      basePoints:       1,
+      clusterPriority:  50,
+      active:           true,
     }),
+
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<KbDiagnosis[]>(queryKey);
+      qc.setQueryData<KbDiagnosis[]>(queryKey, old => [
+        ...(old ?? []),
+        {
+          id:              -Date.now(),
+          ruleId:          `DR_${Date.now()}`,
+          complaintId,
+          diagnosisId:     label.toLowerCase().replace(/[^a-z0-9]/g, "_"),
+          diagnosisLabel:  label,
+          icdCode:         icd || undefined,
+          baseProbability: parseFloat(prob) || 0.1,
+          cannotMiss,
+          active:          true,
+          _optimistic:     true,
+        },
+      ]);
+      return { previous };
+    },
+
+    onError: (e: any, _v, ctx) => {
+      qc.setQueryData(queryKey, ctx?.previous);
+      toast({ title: "Error adding differential", description: e.message, variant: "destructive" });
+    },
+
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/kb/diagnosis", complaintId] });
       setLabel(""); setIcd(""); setProb("0.1"); setCannotMiss(false);
+      qc.invalidateQueries({ queryKey });
       toast({ title: "Differential added" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const remove = useMutation({
     mutationFn: (ruleId: string) => apiRequest("DELETE", `/api/kb/diagnosis/${ruleId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/kb/diagnosis", complaintId] }),
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+
+    onMutate: async (ruleId: string) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<KbDiagnosis[]>(queryKey);
+      qc.setQueryData<KbDiagnosis[]>(queryKey, old => old?.filter(d => d.ruleId !== ruleId));
+      return { previous };
+    },
+
+    onError: (e: any, _id, ctx) => {
+      qc.setQueryData(queryKey, ctx?.previous);
+      toast({ title: "Error deleting differential", description: e.message, variant: "destructive" });
+    },
+
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
   });
 
   return (
@@ -269,20 +385,22 @@ function DifferentialsEditor({ complaintId }: { complaintId: string }) {
       ) : (
         <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
           {diffs.map(d => (
-            <div key={d.id} className="flex items-start gap-2 bg-gray-50 dark:bg-gray-800 rounded-lg p-2.5 text-xs" data-testid={`diff-row-${d.id}`}>
+            <div key={d.id} className={`flex items-start gap-2 rounded-lg p-2.5 text-xs ${d._optimistic ? "bg-gray-100 dark:bg-gray-700 opacity-60" : "bg-gray-50 dark:bg-gray-800"}`} data-testid={`diff-row-${d.id}`}>
               <div className="flex-1 min-w-0">
                 <div className="font-medium">{d.diagnosisLabel}</div>
                 <div className="text-gray-400 mt-0.5 flex gap-2 flex-wrap">
                   {d.icdCode && <span className="font-mono">{d.icdCode}</span>}
                   <span>p={d.baseProbability}</span>
                   {d.cannotMiss && <span className="text-red-400 font-semibold">cannot-miss</span>}
+                  {d._optimistic && <span className="text-gray-400 italic">saving…</span>}
                 </div>
               </div>
               <button
-                className="text-gray-300 hover:text-red-400 transition-colors shrink-0"
+                className="text-gray-300 hover:text-red-400 transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={() => remove.mutate(d.ruleId)}
+                disabled={remove.isPending || Boolean(d._optimistic)}
                 data-testid={`btn-delete-diff-${d.id}`}
-                title="Delete"
+                title={d._optimistic ? "Saving — please wait" : "Delete"}
               >✕</button>
             </div>
           ))}
@@ -336,44 +454,84 @@ function DifferentialsEditor({ complaintId }: { complaintId: string }) {
   );
 }
 
-// ─── KB Red Flags Editor ──────────────────────────────────────────────────────
+// ── KB Red Flags Editor ────────────────────────────────────────────────────────
 
 function RedFlagsEditor({ complaintId }: { complaintId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [flagLabel, setFlagLabel] = useState("");
+  const [flagLabel,   setFlagLabel]   = useState("");
   const [triggerExpr, setTriggerExpr] = useState("");
-  const [severity, setSeverity] = useState("HARD");
-  const [action, setAction] = useState("ER_SEND");
+  const [severity,    setSeverity]    = useState("HARD");
+  const [action,      setAction]      = useState("ER_SEND");
+
+  const queryKey = ["/api/kb/red-flags", complaintId];
 
   const { data: flags = [], isLoading } = useQuery<KbRedFlag[]>({
-    queryKey: ["/api/kb/red-flags", complaintId],
-    queryFn: () => fetch(`/api/kb/red-flags?complaintId=${encodeURIComponent(complaintId)}`).then(r => r.json()),
-    enabled: !!complaintId,
+    queryKey,
+    queryFn:  () => apiRequest("GET", `/api/kb/red-flags?complaintId=${encodeURIComponent(complaintId)}`),
+    enabled:  !!complaintId,
+    staleTime: 30_000,
   });
 
   const add = useMutation({
     mutationFn: () => apiRequest("POST", "/api/kb/red-flags", {
       complaintId,
-      ruleId: `RF_${Date.now()}`,
-      label: flagLabel,
+      ruleId:      `RF_${Date.now()}`,
+      label:       flagLabel,
       triggerExpr,
       severity,
       action,
-      active: true,
+      active:      true,
     }),
+
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<KbRedFlag[]>(queryKey);
+      qc.setQueryData<KbRedFlag[]>(queryKey, old => [
+        ...(old ?? []),
+        {
+          id:          -Date.now(),
+          ruleId:      `RF_${Date.now()}`,
+          complaintId,
+          label:       flagLabel,
+          triggerExpr,
+          severity,
+          action,
+          active:      true,
+          _optimistic: true,
+        },
+      ]);
+      return { previous };
+    },
+
+    onError: (e: any, _v, ctx) => {
+      qc.setQueryData(queryKey, ctx?.previous);
+      toast({ title: "Error adding red flag", description: e.message, variant: "destructive" });
+    },
+
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/kb/red-flags", complaintId] });
       setFlagLabel(""); setTriggerExpr("");
+      qc.invalidateQueries({ queryKey });
       toast({ title: "Red flag added" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const remove = useMutation({
     mutationFn: (ruleId: string) => apiRequest("DELETE", `/api/kb/red-flags/${ruleId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/kb/red-flags", complaintId] }),
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+
+    onMutate: async (ruleId: string) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<KbRedFlag[]>(queryKey);
+      qc.setQueryData<KbRedFlag[]>(queryKey, old => old?.filter(f => f.ruleId !== ruleId));
+      return { previous };
+    },
+
+    onError: (e: any, _id, ctx) => {
+      qc.setQueryData(queryKey, ctx?.previous);
+      toast({ title: "Error deleting red flag", description: e.message, variant: "destructive" });
+    },
+
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
   });
 
   return (
@@ -385,20 +543,22 @@ function RedFlagsEditor({ complaintId }: { complaintId: string }) {
       ) : (
         <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
           {flags.map(f => (
-            <div key={f.id} className="flex items-start gap-2 bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5 text-xs" data-testid={`rf-row-${f.id}`}>
+            <div key={f.id} className={`flex items-start gap-2 rounded-lg p-2.5 text-xs ${f._optimistic ? "bg-red-50/50 dark:bg-red-900/10 opacity-60" : "bg-red-50 dark:bg-red-900/20"}`} data-testid={`rf-row-${f.id}`}>
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-red-700 dark:text-red-300">{f.label}</div>
                 <div className="text-gray-500 mt-0.5 font-mono truncate">{f.triggerExpr}</div>
                 <div className="mt-0.5 flex gap-2">
                   <span className="text-red-500">{f.severity}</span>
                   <span className="text-gray-400">{f.action}</span>
+                  {f._optimistic && <span className="text-gray-400 italic">saving…</span>}
                 </div>
               </div>
               <button
-                className="text-gray-300 hover:text-red-400 transition-colors shrink-0"
+                className="text-gray-300 hover:text-red-400 transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={() => remove.mutate(f.ruleId)}
+                disabled={remove.isPending || Boolean(f._optimistic)}
                 data-testid={`btn-delete-rf-${f.id}`}
-                title="Delete"
+                title={f._optimistic ? "Saving — please wait" : "Delete"}
               >✕</button>
             </div>
           ))}
@@ -457,79 +617,131 @@ function RedFlagsEditor({ complaintId }: { complaintId: string }) {
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ── Main Page ──────────────────────────────────────────────────────────────────
+
+type FilterMode = "all" | "pass" | "fail";
 
 export default function ComplaintLabPage() {
   const { toast } = useToast();
+  const qc = useQueryClient();
 
-  // Sim state
-  const [selectedComplaint, setSelectedComplaint] = useState("");
-  const [count, setCount] = useState("50");
-  const [difficulty, setDifficulty] = useState("moderate");
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [results, setResults] = useState<SimResults | null>(null);
-  const [caseFilter, setCaseFilter] = useState<"all" | "pass" | "fail">("all");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // ── URL-persisted state (survives refresh and back/forward navigation) ──────
+  const setSearchParam   = useSetSearchParam();
 
-  // Fetch enabled complaints
+  const selectedComplaint  = useSearchParam("complaint");
+  const filter             = (useSearchParam("filter") || "all") as FilterMode;
+  const urlJobId           = useSearchParam("job");
+
+  // ── Local-only state (not worth round-tripping through URL) ─────────────────
+  const [count,              setCount]              = useState("50");
+  const [difficulty,         setDifficulty]         = useState("moderate");
+  const [activeJobId,        setActiveJobId]        = useState<string | null>(urlJobId || null);
+  // lastCompletedJobId — ensures previous results remain visible when a new run
+  // errors mid-way, instead of blanking the center panel.
+  const [lastCompletedJobId, setLastCompletedJobId] = useState<string | null>(urlJobId || null);
+
+  // ── KB complaint list ────────────────────────────────────────────────────────
   const { data: complaintsData } = useQuery<{ complaints: Array<{ id: string; label: string }> }>({
     queryKey: ["/api/kb/complaints"],
-    queryFn: () => fetch("/api/kb/complaints?enabled=true&limit=200").then(r => r.json()),
+    queryFn:  () => apiRequest("GET", "/api/kb/complaints?enabled=true&limit=200"),
   });
   const complaints = complaintsData?.complaints ?? [];
 
-  // Poll active job status
+  // ── Sim status — polled via refetchInterval, no useEffect, no pollRef ───────
   const { data: jobStatus } = useQuery<SimJob>({
     queryKey: ["/api/ci/sim/status", activeJobId],
-    queryFn: () => fetch(`/api/ci/sim/status/${activeJobId}`).then(r => r.json()),
-    enabled: !!activeJobId && !results,
-    refetchInterval: activeJobId && !results ? 1500 : false,
+    queryFn:  () => apiRequest("GET", `/api/ci/sim/status/${activeJobId}`),
+    enabled:  !!activeJobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "complete" || status === "error" || status === "cancelled" ? false : 1500;
+    },
   });
 
-  // When job completes, fetch results
+  // Track when a job completes so previous results persist during subsequent runs.
+  // This is the only useEffect in the page — it updates a tracking ref when
+  // the status transitions to "complete", which is the correct minimal use for useEffect.
   useEffect(() => {
-    if (!jobStatus || results) return;
-    if (jobStatus.status === "complete") {
-      fetch(`/api/ci/sim/results/${activeJobId}`)
-        .then(r => r.json())
-        .then(data => setResults(data))
-        .catch(err => toast({ title: "Failed to load results", description: err.message, variant: "destructive" }));
-    } else if (jobStatus.status === "error") {
-      toast({ title: "Simulation failed", variant: "destructive" });
-      setActiveJobId(null);
+    if (jobStatus?.status === "complete" && activeJobId) {
+      setLastCompletedJobId(activeJobId);
+      setSearchParam("job", activeJobId);
     }
-  }, [jobStatus, results, activeJobId, toast]);
+  }, [jobStatus?.status, activeJobId]);
+
+  // ── Sim results — query-driven, not useEffect/fetch ─────────────────────────
+  // resultsJobId prefers the current completed job; falls back to the last
+  // completed job if the current run is still in progress or errored.
+  const jobComplete = jobStatus?.status === "complete";
+  const jobErrored  = jobStatus?.status === "error" || jobStatus?.status === "cancelled";
+
+  const resultsJobId = jobComplete ? activeJobId : lastCompletedJobId;
+
+  const { data: results } = useQuery<SimResults>({
+    queryKey:  ["/api/ci/sim/results", resultsJobId],
+    queryFn:   () => apiRequest("GET", `/api/ci/sim/results/${resultsJobId}`),
+    enabled:   !!resultsJobId,
+    staleTime: Infinity,   // sim results never change after the job completes
+  });
+
+  // ── Mutations ────────────────────────────────────────────────────────────────
 
   const startSim = useMutation({
     mutationFn: () => apiRequest("POST", "/api/ci/sim/start", {
-      complaint: selectedComplaint || "all",
-      count: parseInt(count) || 50,
+      complaint:  selectedComplaint || "all",
+      count:      Math.max(1, Math.min(500, parseInt(count) || 50)),
       difficulty,
-      mode: "generated",
-      label: `Lab: ${selectedComplaint || "all"} × ${count}`,
+      mode:       "generated",
+      label:      `Lab: ${selectedComplaint || "all"} × ${count}`,
     }),
     onSuccess: (data: any) => {
-      setActiveJobId(data.jobId);
-      setResults(null);
-      toast({ title: "Simulation started", description: `Job ${data.jobId} — ${data.totalCases} cases` });
+      const jobId = data.jobId;
+      setActiveJobId(jobId);
+      setSearchParam("job", jobId);
+      qc.removeQueries({ queryKey: ["/api/ci/sim/status", jobId] });
+      toast({ title: "Simulation started", description: `Job ${jobId}` });
     },
-    onError: (e: any) => toast({ title: "Failed to start", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      toast({ title: "Failed to start", description: e.message, variant: "destructive" });
+    },
   });
 
   const cancelSim = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/ci/sim/cancel/${activeJobId}`),
-    onSuccess: () => { setActiveJobId(null); toast({ title: "Cancelled" }); },
+    onSuccess:  () => {
+      setActiveJobId(null);
+      setSearchParam("job", null);
+      toast({ title: "Cancelled" });
+    },
   });
 
-  const isRunning = !!activeJobId && !results && (jobStatus?.status === "running" || jobStatus?.status === "queued");
-  const progress = jobStatus?.progress ?? 0;
-  const totalCases = jobStatus?.totalCases ?? parseInt(count);
+  // ── Derived state ────────────────────────────────────────────────────────────
+
+  const isRunning    = !!activeJobId && !jobComplete && !jobErrored;
+  const progress     = jobStatus?.progress ?? 0;
+  const totalCases   = jobStatus?.totalCases ?? parseInt(count);
+  const metrics      = results?.metrics;
+
+  // Zero-case guard: 0/0 = NaN% is a visible bug; show "No cases ran" instead.
+  const passRate = metrics && metrics.total > 0
+    ? `${((metrics.passed / metrics.total) * 100).toFixed(1)}%`
+    : null;
 
   const filteredCases = (results?.cases ?? []).filter(c =>
-    caseFilter === "all" ? true : caseFilter === "pass" ? c.passed : !c.passed
+    filter === "all"  ? true :
+    filter === "pass" ? c.passed :
+    !c.passed
   );
 
-  const metrics = results?.metrics;
+  // ── URL setter wrappers ──────────────────────────────────────────────────────
+
+  function handleSetComplaint(v: string) {
+    setSearchParam("complaint", v || null);
+  }
+  function handleSetFilter(v: FilterMode) {
+    setSearchParam("filter", v === "all" ? null : v);
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full">
@@ -542,14 +754,15 @@ export default function ComplaintLabPage() {
 
       <div className="flex flex-1 min-h-0 gap-0 overflow-hidden">
 
-        {/* ── Left panel: controls ───────────────────────────────────── */}
+        {/* ── Left panel: sim controls ──────────────────────────────────── */}
         <aside className="w-64 shrink-0 border-r flex flex-col overflow-y-auto">
           <div className="p-4 space-y-4">
+
             <div>
               <Label className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5 block">
                 Complaint
               </Label>
-              <Select value={selectedComplaint} onValueChange={v => { setSelectedComplaint(v); setResults(null); setActiveJobId(null); }}>
+              <Select value={selectedComplaint} onValueChange={handleSetComplaint}>
                 <SelectTrigger className="h-9 text-sm" data-testid="select-complaint">
                   <SelectValue placeholder="All complaints" />
                 </SelectTrigger>
@@ -615,7 +828,7 @@ export default function ComplaintLabPage() {
               </Button>
             )}
 
-            {/* Progress bar */}
+            {/* Progress bar — only while running */}
             {isRunning && (
               <div className="space-y-1">
                 <div className="flex justify-between text-xs text-gray-500">
@@ -635,7 +848,14 @@ export default function ComplaintLabPage() {
               </div>
             )}
 
-            {/* Quick summary after run */}
+            {/* Error from current run */}
+            {jobErrored && (
+              <p className="text-xs text-red-500" data-testid="sim-error-msg">
+                {jobStatus?.status === "cancelled" ? "Simulation cancelled." : "Simulation failed. Previous results shown below."}
+              </p>
+            )}
+
+            {/* Summary metrics after completed run */}
             {metrics && (
               <div className="rounded-xl border p-3 space-y-2 bg-gray-50 dark:bg-gray-800/50">
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Run</div>
@@ -649,17 +869,21 @@ export default function ComplaintLabPage() {
                   <span className="text-gray-500">Avg latency</span>
                   <span className="font-mono">{ms(metrics.avgLatencyMs)}</span>
                   <span className="text-gray-500">Cases</span>
-                  <span className="font-mono">{metrics.passed}/{metrics.total}</span>
+                  <span className="font-mono">
+                    {passRate !== null
+                      ? `${metrics.passed}/${metrics.total} (${passRate})`
+                      : "No cases ran"}
+                  </span>
                 </div>
               </div>
             )}
           </div>
         </aside>
 
-        {/* ── Center panel: results ──────────────────────────────────── */}
+        {/* ── Center panel: results ──────────────────────────────────────── */}
         <main className="flex-1 min-w-0 flex flex-col overflow-hidden border-r">
 
-          {/* Idle state */}
+          {/* Idle */}
           {!isRunning && !results && (
             <div className="flex-1 flex items-center justify-center text-gray-400 text-sm" data-testid="idle-state">
               <div className="text-center space-y-2">
@@ -670,7 +894,7 @@ export default function ComplaintLabPage() {
             </div>
           )}
 
-          {/* Running state */}
+          {/* Running — with live progress */}
           {isRunning && !results && (
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8" data-testid="running-state">
               <div className="text-center">
@@ -691,42 +915,31 @@ export default function ComplaintLabPage() {
                   <span>{progress}%</span>
                 </div>
               </div>
-              {metrics && (
-                <div className="grid grid-cols-3 gap-4 text-center">
-                  <div>
-                    <div className="text-xl font-bold text-green-600">{pct(metrics.accuracy)}</div>
-                    <div className="text-xs text-gray-400">Accuracy</div>
-                  </div>
-                  <div>
-                    <div className="text-xl font-bold">{ms(metrics.avgLatencyMs)}</div>
-                    <div className="text-xs text-gray-400">Avg latency</div>
-                  </div>
-                  <div>
-                    <div className="text-xl font-bold text-red-500">{metrics.failed}</div>
-                    <div className="text-xs text-gray-400">Failures</div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
-          {/* Results state */}
+          {/* Results */}
           {results && (
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Summary bar */}
+
+              {/* Summary bar with filter controls */}
               <div className="shrink-0 border-b px-4 py-3 bg-gray-50 dark:bg-gray-800/50 flex flex-wrap gap-4 items-center">
                 <div className="flex gap-4 text-sm">
                   <span><span className="font-semibold">{results.metrics.total}</span> <span className="text-gray-400">total</span></span>
                   <span className="text-green-600"><span className="font-semibold">{results.metrics.passed}</span> passed</span>
                   <span className="text-red-500"><span className="font-semibold">{results.metrics.failed}</span> failed</span>
+                  {passRate !== null
+                    ? <span className="text-gray-400 text-xs">{passRate} pass rate</span>
+                    : <span className="text-gray-400 text-xs">No cases ran.</span>
+                  }
                 </div>
                 <AccBadge val={results.metrics.accuracy} />
                 <div className="ml-auto flex gap-1">
-                  {(["all", "pass", "fail"] as const).map(f => (
+                  {(["all", "pass", "fail"] as FilterMode[]).map(f => (
                     <button
                       key={f}
-                      onClick={() => setCaseFilter(f)}
-                      className={`px-2 py-1 rounded text-xs transition-colors ${caseFilter === f ? "bg-violet-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
+                      onClick={() => handleSetFilter(f)}
+                      className={`px-2 py-1 rounded text-xs transition-colors ${filter === f ? "bg-violet-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"}`}
                       data-testid={`filter-${f}`}
                     >
                       {f === "all" ? "All" : f === "pass" ? "Passed" : "Failed"}
@@ -785,15 +998,20 @@ export default function ComplaintLabPage() {
                     ))}
                   </tbody>
                 </table>
-                {filteredCases.length === 0 && (
+                {filteredCases.length === 0 && results.metrics.total > 0 && (
                   <div className="p-8 text-center text-gray-400 text-sm">No cases match filter</div>
+                )}
+                {results.metrics.total === 0 && (
+                  <div className="p-8 text-center text-gray-400 text-sm" data-testid="no-cases-ran">
+                    No cases ran.
+                  </div>
                 )}
               </div>
             </div>
           )}
         </main>
 
-        {/* ── Right panel: KB editor ─────────────────────────────────── */}
+        {/* ── Right panel: KB editor ─────────────────────────────────────── */}
         <aside className="w-72 shrink-0 overflow-y-auto">
           <div className="p-4">
             <div className="text-sm font-semibold mb-3 flex items-center gap-2">
@@ -810,9 +1028,9 @@ export default function ComplaintLabPage() {
             ) : (
               <Tabs defaultValue="questions">
                 <TabsList className="w-full h-8 mb-3">
-                  <TabsTrigger value="questions" className="flex-1 text-xs" data-testid="tab-questions">Questions</TabsTrigger>
+                  <TabsTrigger value="questions"     className="flex-1 text-xs" data-testid="tab-questions">Questions</TabsTrigger>
                   <TabsTrigger value="differentials" className="flex-1 text-xs" data-testid="tab-differentials">Differentials</TabsTrigger>
-                  <TabsTrigger value="redflags" className="flex-1 text-xs" data-testid="tab-redflags">Red Flags</TabsTrigger>
+                  <TabsTrigger value="redflags"      className="flex-1 text-xs" data-testid="tab-redflags">Red Flags</TabsTrigger>
                 </TabsList>
                 <TabsContent value="questions">
                   <QuestionEditor complaintId={selectedComplaint} />
@@ -827,6 +1045,7 @@ export default function ComplaintLabPage() {
             )}
           </div>
         </aside>
+
       </div>
     </div>
   );
