@@ -1,0 +1,508 @@
+Here's the full review and reimplementation of the Complaint Lab frontend slice.
+
+A) Issues Found
+1. Raw fetch() in KB editor bypasses the query client entirely
+When a question is added or deleted via raw fetch(), TanStack Query's cache still holds the old data. The UI won't reflect the change until a full page reload or the cache naturally expires. More insidiously, if two components both display the same KB data (e.g. a preview panel and the editor), they'll show different states after a mutation — one stale, one fresh.
+2. pollRef is a dead variable
+const pollRef = useRef(null) is defined but never assigned or read. The polling is handled entirely by refetchInterval on the query. The ref is pure noise — it suggests to future maintainers that manual interval cleanup is happening somewhere when it isn't.
+3. Raw fetch() inside useEffect for results is a race condition
+Three failure modes: (a) the component unmounts while the fetch is in-flight — the setResults() call fires on an unmounted component, React warns, and state is silently dropped; (b) two rapid status polling cycles both see status === "complete" before the first results fetch resolves — two concurrent fetches both call setResults(), last-write-wins; (c) if the results fetch fails, the error is swallowed with no user feedback because there's no error handler on the raw fetch chain.
+4. Filter state (all/pass/fail) should be a URL param
+If a user shares a link or refreshes mid-review, their filter resets to "all". For a workbench tool used iteratively — re-running sims, comparing results, reviewing failures — the filter is meaningful navigation state that should survive a refresh. It also makes browser back/forward work correctly across filter changes.
+5. Three KB sub-editors are structurally identical
+QuestionEditor, DifferentialsEditor, and RedFlagsEditor all follow the same pattern: fetch a list, render items, add an item with a form, delete an item with a button. The only differences are the API endpoint, the field names, and the display label. Three copies means three places to fix any bug in the shared pattern.
+
+B) Rewritten ComplaintLabPage
+tsx// client/src/pages/ComplaintLabPage.tsx
+import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { toast } from "@/hooks/use-toast";
+import { KbEditor } from "@/components/KbEditor";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+interface SimJob {
+  jobId:      string;
+  status:     "pending" | "running" | "complete" | "error";
+  progress:   number;   // 0–100
+  total:      number;
+  passed:     number;
+  failed:     number;
+  error?:     string;
+}
+
+interface SimResult {
+  id:         string;
+  complaint:  string;
+  passed:     boolean;
+  expected:   string;
+  actual:     string;
+  confidence: number;
+}
+
+type FilterMode = "all" | "pass" | "fail";
+
+const COMPLAINTS = ["sore_throat", "cough", "uti_simple", "rash", "ear_pain", "uri", "headache_mild"];
+const DIFFICULTIES = ["easy", "medium", "hard"] as const;
+
+// ─────────────────────────────────────────────────────────────
+// Main page
+// ─────────────────────────────────────────────────────────────
+export default function ComplaintLabPage() {
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // ── URL-persisted state ──────────────────────────────────
+  const selectedComplaint = searchParams.get("complaint") ?? "";
+  const filter            = (searchParams.get("filter") ?? "all") as FilterMode;
+
+  function setComplaint(v: string) {
+    setSearchParams(p => { p.set("complaint", v); return p; });
+  }
+  function setFilter(v: FilterMode) {
+    setSearchParams(p => { p.set("filter", v); return p; });
+  }
+
+  // ── Local UI state (not worth persisting in URL) ─────────
+  const [count,      setCount]      = useState("50");
+  const [difficulty, setDifficulty] = useState<typeof DIFFICULTIES[number]>("medium");
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  // ─────────────────────────────────────────────────────────
+  // Sim: start
+  // ─────────────────────────────────────────────────────────
+  const startSim = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/ci/sim/start", {
+      complaint:  selectedComplaint || "all",
+      count:      Math.max(1, Math.min(500, parseInt(count) || 50)),
+      difficulty,
+      mode:       "generated",
+      label:      `Lab: ${selectedComplaint || "all"} × ${count}`,
+    }),
+    onSuccess: (data: { jobId: string }) => {
+      setActiveJobId(data.jobId);
+      // Invalidate any stale job status for this new job
+      queryClient.removeQueries({ queryKey: ["/api/ci/sim/status"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Simulation failed to start", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Sim: poll status via refetchInterval — no useEffect, no pollRef
+  // ─────────────────────────────────────────────────────────
+  const { data: jobStatus } = useQuery<SimJob>({
+    queryKey:       ["/api/ci/sim/status", activeJobId],
+    queryFn:        () => apiRequest("GET", `/api/ci/sim/status/${activeJobId}`),
+    enabled:        !!activeJobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      // Stop polling once terminal state is reached
+      return status === "complete" || status === "error" ? false : 1500;
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Sim: fetch results as a proper query, activated by job completion
+  // No useEffect, no race condition, no unmount leak
+  // ─────────────────────────────────────────────────────────
+  const jobComplete = jobStatus?.status === "complete";
+  const jobErrored  = jobStatus?.status === "error";
+
+  const { data: results, isError: resultsError } = useQuery<SimResult[]>({
+    queryKey: ["/api/ci/sim/results", activeJobId],
+    queryFn:  () => apiRequest("GET", `/api/ci/sim/results/${activeJobId}`),
+    enabled:  jobComplete,   // only fires once status === "complete"
+    staleTime: Infinity,     // results don't change once the job is done
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Filter results — derived from URL param
+  // ─────────────────────────────────────────────────────────
+  const filteredResults = results?.filter(r =>
+    filter === "all"  ? true :
+    filter === "pass" ? r.passed :
+    !r.passed
+  );
+
+  // ─────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────
+  return (
+    <div className="grid grid-cols-3 gap-4 p-6">
+
+      {/* ── Panel 1: Sim Config ── */}
+      <div className="col-span-1 space-y-4">
+        <h2 className="text-lg font-semibold">Simulation</h2>
+
+        <Select value={selectedComplaint} onValueChange={setComplaint}>
+          <SelectTrigger><SelectValue placeholder="All complaints" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All</SelectItem>
+            {COMPLAINTS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+          </SelectContent>
+        </Select>
+
+        <input
+          type="number" min={1} max={500} value={count}
+          onChange={e => setCount(e.target.value)}
+          className="w-full border rounded px-3 py-2 text-sm"
+          placeholder="Case count (1–500)"
+        />
+
+        <Select value={difficulty} onValueChange={v => setDifficulty(v as typeof difficulty)}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {DIFFICULTIES.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+          </SelectContent>
+        </Select>
+
+        <Button
+          onClick={() => startSim.mutate()}
+          disabled={startSim.isPending || (!!activeJobId && !jobComplete && !jobErrored)}
+          className="w-full"
+        >
+          {startSim.isPending ? "Starting…" : "Run Simulation"}
+        </Button>
+
+        {/* Progress */}
+        {jobStatus && !jobComplete && !jobErrored && (
+          <div className="space-y-1">
+            <Progress value={jobStatus.progress} />
+            <p className="text-xs text-muted-foreground">
+              {jobStatus.progress}% — {jobStatus.passed + jobStatus.failed} / {jobStatus.total} cases
+            </p>
+          </div>
+        )}
+
+        {jobErrored && (
+          <p className="text-sm text-destructive">
+            Simulation error: {jobStatus?.error ?? "Unknown error"}
+          </p>
+        )}
+
+        {jobComplete && results && (
+          <div className="text-sm space-y-1">
+            <p>✅ {jobStatus.passed} passed &nbsp; ❌ {jobStatus.failed} failed</p>
+            <p className="text-muted-foreground">
+              Pass rate: {((jobStatus.passed / jobStatus.total) * 100).toFixed(1)}%
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Panel 2: Results ── */}
+      <div className="col-span-1 space-y-3 overflow-y-auto max-h-screen">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Results</h2>
+          {results && (
+            <div className="flex gap-1">
+              {(["all", "pass", "fail"] as FilterMode[]).map(f => (
+                <Button
+                  key={f} size="sm" variant={filter === f ? "default" : "outline"}
+                  onClick={() => setFilter(f)}
+                >
+                  {f}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {resultsError && (
+          <p className="text-sm text-destructive">Failed to load results.</p>
+        )}
+
+        {filteredResults?.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {filter === "all" ? "No cases ran." : `No ${filter} cases.`}
+          </p>
+        )}
+
+        {filteredResults?.map(r => (
+          <div key={r.id} className={`rounded border p-3 text-sm ${r.passed ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}`}>
+            <div className="flex justify-between items-start">
+              <span className="font-medium">{r.complaint}</span>
+              <Badge variant={r.passed ? "default" : "destructive"}>
+                {r.passed ? "PASS" : "FAIL"}
+              </Badge>
+            </div>
+            {!r.passed && (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Expected: {r.expected} · Got: {r.actual}
+              </div>
+            )}
+            <div className="mt-1 text-xs text-muted-foreground">
+              Confidence: {(r.confidence * 100).toFixed(0)}%
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Panel 3: KB Editor ── */}
+      <div className="col-span-1 space-y-4">
+        <h2 className="text-lg font-semibold">Knowledge Base</h2>
+        {selectedComplaint ? (
+          <>
+            <KbEditor
+              complaintId={selectedComplaint}
+              type="questions"
+              label="Follow-up Questions"
+              apiPath="/api/kb/questions"
+              fieldKey="text"
+              fieldLabel="Question text"
+            />
+            <KbEditor
+              complaintId={selectedComplaint}
+              type="differentials"
+              label="Differentials"
+              apiPath="/api/kb/differentials"
+              fieldKey="diagnosis"
+              fieldLabel="Diagnosis"
+            />
+            <KbEditor
+              complaintId={selectedComplaint}
+              type="redflags"
+              label="Red Flags"
+              apiPath="/api/kb/redflags"
+              fieldKey="flag"
+              fieldLabel="Red flag description"
+            />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">Select a complaint to edit its KB rules.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+C) Generic KbEditor Component
+tsx// client/src/components/KbEditor.tsx
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { toast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+interface KbItem {
+  id:     string;
+  [key: string]: string;  // fieldKey maps here
+}
+
+interface KbEditorProps {
+  complaintId: string;
+  type:        string;     // used in queryKey to namespace cache
+  label:       string;     // display label for the section
+  apiPath:     string;     // e.g. "/api/kb/questions"
+  fieldKey:    string;     // which field to display + POST (e.g. "text", "diagnosis")
+  fieldLabel:  string;     // input placeholder
+}
+
+export function KbEditor({
+  complaintId,
+  type,
+  label,
+  apiPath,
+  fieldKey,
+  fieldLabel,
+}: KbEditorProps) {
+  const queryClient = useQueryClient();
+  const [newValue, setNewValue] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const queryKey = [apiPath, complaintId, type];
+
+  // ── Fetch list ───────────────────────────────────────────
+  // Uses apiRequest — cache-aware, consistent with rest of app
+  const { data: items = [], isLoading, isError } = useQuery<KbItem[]>({
+    queryKey,
+    queryFn:   () => apiRequest("GET", `${apiPath}?complaintId=${encodeURIComponent(complaintId)}`),
+    enabled:   !!complaintId,
+    staleTime: 30_000,
+  });
+
+  // ── Add item ─────────────────────────────────────────────
+  const addItem = useMutation({
+    mutationFn: (value: string) =>
+      apiRequest("POST", apiPath, { complaintId, [fieldKey]: value }),
+
+    onMutate: async (value: string) => {
+      // Optimistic update — show new item immediately
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<KbItem[]>(queryKey);
+      queryClient.setQueryData<KbItem[]>(queryKey, old => [
+        ...(old ?? []),
+        { id: `optimistic-${Date.now()}`, [fieldKey]: value },
+      ]);
+      return { previous };
+    },
+
+    onError: (err: Error, _value, context) => {
+      // Roll back optimistic update
+      queryClient.setQueryData(queryKey, context?.previous);
+      toast({ title: `Failed to add ${label}`, description: err.message, variant: "destructive" });
+    },
+
+    onSuccess: () => {
+      setNewValue("");
+      setValidationError(null);
+      // Invalidate to get the real server-assigned ID
+      queryClient.invalidateQueries({ queryKey });
+      toast({ title: `${label} added` });
+    },
+  });
+
+  // ── Delete item ──────────────────────────────────────────
+  const deleteItem = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `${apiPath}/${id}`),
+
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<KbItem[]>(queryKey);
+      queryClient.setQueryData<KbItem[]>(queryKey, old => old?.filter(item => item.id !== id));
+      return { previous };
+    },
+
+    onError: (err: Error, _id, context) => {
+      queryClient.setQueryData(queryKey, context?.previous);
+      toast({ title: `Failed to delete ${label}`, description: err.message, variant: "destructive" });
+    },
+
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+    },
+  });
+
+  function handleAdd() {
+    const trimmed = newValue.trim();
+    if (!trimmed) {
+      setValidationError(`${fieldLabel} cannot be empty`);
+      return;
+    }
+    if (trimmed.length < 3) {
+      setValidationError(`${fieldLabel} must be at least 3 characters`);
+      return;
+    }
+    if (items.some(item => item[fieldKey]?.toLowerCase() === trimmed.toLowerCase())) {
+      setValidationError(`This ${fieldLabel.toLowerCase()} already exists`);
+      return;
+    }
+    setValidationError(null);
+    addItem.mutate(trimmed);
+  }
+
+  return (
+    <div className="rounded border p-3 space-y-2">
+      <h3 className="text-sm font-semibold">{label}</h3>
+
+      {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+      {isError   && <p className="text-xs text-destructive">Failed to load {label.toLowerCase()}</p>}
+
+      <ul className="space-y-1">
+        {items.map(item => (
+          <li key={item.id} className="flex items-center justify-between text-sm">
+            <span>{item[fieldKey]}</span>
+            <Button
+              size="sm" variant="ghost"
+              onClick={() => deleteItem.mutate(item.id)}
+              disabled={deleteItem.isPending}
+              className="h-6 px-2 text-destructive hover:text-destructive"
+            >
+              ×
+            </Button>
+          </li>
+        ))}
+      </ul>
+
+      <div className="flex gap-2">
+        <Input
+          value={newValue}
+          onChange={e => { setNewValue(e.target.value); setValidationError(null); }}
+          onKeyDown={e => e.key === "Enter" && handleAdd()}
+          placeholder={fieldLabel}
+          className="text-sm"
+        />
+        <Button size="sm" onClick={handleAdd} disabled={addItem.isPending}>
+          {addItem.isPending ? "…" : "Add"}
+        </Button>
+      </div>
+
+      {validationError && (
+        <p className="text-xs text-destructive">{validationError}</p>
+      )}
+    </div>
+  );
+}
+
+D) Test Scenarios
+typescript// ── Scenario 1: Sim runs 0 cases ─────────────────────────────
+// Setup: POST /api/ci/sim/start returns jobId, 
+//        GET /api/ci/sim/status/:id immediately returns { status: "complete", total: 0, passed: 0, failed: 0 }
+//        GET /api/ci/sim/results/:id returns []
+// 
+// Expected behavior:
+// - Progress bar never shows (total: 0)
+// - results query fires (jobComplete = true)
+// - filteredResults = [] for all filter modes
+// - UI shows "No cases ran." message, NOT a loading spinner
+// - No error toasts
+
+// ── Scenario 2: Sim errors mid-run ───────────────────────────
+// Setup: status poll returns { status: "error", error: "OpenAI timeout", progress: 34 }
+//
+// Expected behavior:
+// - refetchInterval returns false (polling stops)
+// - results query is NOT enabled (jobComplete = false)
+// - Error message renders: "Simulation error: OpenAI timeout"
+// - Run button re-enables (jobErrored = true)
+// - No results panel changes
+// - Previous results (if any) remain visible
+
+// ── Scenario 3: KB add succeeds ──────────────────────────────
+// Setup: POST /api/kb/questions returns { id: "q123", complaintId: "sore_throat", text: "Duration?" }
+//
+// Expected behavior:
+// - Optimistic update: "Duration?" appears in list immediately
+// - onSuccess: cache invalidated, query refetches with server ID replacing optimistic ID
+// - Input clears
+// - Toast: "Follow-up Questions added"
+// - No duplicate: if "Duration?" already in list, validation error fires BEFORE mutate
+
+// ── Scenario 4: KB add fails server-side validation ──────────
+// Setup: POST /api/kb/questions returns 422 { error: "Question text too long" }
+//
+// Expected behavior:
+// - onMutate ran optimistic update (item briefly visible)
+// - onError: rolls back — item disappears from list
+// - Toast: "Failed to add Follow-up Questions: Question text too long"
+// - Input value preserved so user can edit and retry
+// - No cache invalidation (nothing changed on server)
+
+// ── Scenario 5: Filter state survives page refresh ────────────
+// Setup: user sets filter to "fail", refreshes
+//
+// Expected behavior:
+// - useSearchParams reads ?filter=fail from URL
+// - filteredResults immediately filters to failed cases
+// - No flash of "all" results before settling
+// - Browser back button restores previous filter correctly
+
+// ── Scenario 6: Results fetch races with unmount (old behavior, now fixed) ──
+// In old code: useEffect fired raw fetch(), component unmounted mid-flight → setResults on
+// unmounted component, React warning, state lost.
+//
+// In new code: useQuery handles the fetch. TanStack Query cancels in-flight
+// queries on unmount automatically. No manual AbortController needed.
+// Verify: mount ComplaintLabPage, trigger job completion, navigate away immediately.
+// Expected: no "Can't perform a React state update on an unmounted component" warning.
+The most impactful fix here for day-to-day use of the lab is the cache invalidation fix on KB edits. Without it, you could add a red flag rule, see it appear (optimistically), run a new simulation, and the simulation would use the old KB because the query cache still held stale data. You'd be testing against rules you thought you'd already updated — which defeats the entire purpose of the iterative edit-then-simulate workflow the lab is built for.Want to be notified when Claude responds?NotifySonnet 4.6Claude is AI and ca

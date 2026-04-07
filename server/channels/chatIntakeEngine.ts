@@ -2,46 +2,14 @@ import { getOrCreateChatSession, saveChatSession } from "./chatSessionStore";
 import type { IncomingPatientMessage, ChatIntakeReply } from "./types";
 import { runPatientFlow } from "../patient/patientFlow";
 import { processInput } from "../multimodal/multimodalEngine";
+import { parseComplaint, ALL_COMPLAINT_CODES } from "../chat/parseComplaint";
 
-// ── Complaint parser ──────────────────────────────────────────────────────────
-// BUG FIXED: original used a chain of t.includes() checks executed top-to-bottom.
-// Problems:
-//   1. "sore" matches sore_throat — but "sore muscles" or "sore back" would also
-//      match even though those are MSK complaints, not ENT.
-//   2. "ear" matches "fear", "hear", "unclear" (substring false positives).
-//   3. Order determines priority — "I have a cough and sore throat" always maps
-//      to sore_throat because that branch comes first.
-//   4. "burning" alone (e.g. "burning eyes") maps to uti_simple.
-//
-// FIX: use ordered RegExp patterns with word boundaries and negative lookaheads.
-// Each complaint gets a priority (lower = tried first) and an explicit pattern.
-// First match wins. Still simple and fast — no ML required.
+// Re-export for callers that only import from this module
+export type { ParsedComplaint, ComplaintCode } from "../chat/parseComplaint";
 
-interface ComplaintMatcher {
-  complaint: string;
-  pattern: RegExp;
-}
-
-// Ordered: most specific / highest-acuity first to avoid false matches
-const COMPLAINT_MATCHERS: ComplaintMatcher[] = [
-  { complaint: "uti_simple",    pattern: /\buti\b|burn(ing)? (with )?urinat|urgency.*urinat|urinat.*burn|dysuria/i },
-  { complaint: "sore_throat",   pattern: /\b(sore|strep|painful)\b.{0,20}\bthroat\b|\bthroat\b.{0,20}\b(sore|pain|hurt)/i },
-  { complaint: "ear_pain",      pattern: /\bear\b.{0,20}\b(pain|ache|hurt|infect|pressure)|\b(ear ?ache|otitis|earache)\b/i },
-  { complaint: "headache_mild", pattern: /\bheadache\b|head\s+ache|\bmigraines?\b/i },
-  { complaint: "rash",          pattern: /\b(rash|hives|itchy skin|skin irritat|eczema|dermatitis|urticaria)\b/i },
-  { complaint: "cough",         pattern: /\bcough(ing)?\b/i },
-  { complaint: "uri",           pattern: /\b(cold|congestion|runny nose|stuffy nose|uri|upper respiratory|sinus(itis)?)\b/i },
-];
-
-const SUPPORTED_COMPLAINTS = COMPLAINT_MATCHERS.map(m => m.complaint);
-
-function parseComplaint(text?: string): string | undefined {
-  if (!text?.trim()) return undefined;
-  for (const { complaint, pattern } of COMPLAINT_MATCHERS) {
-    if (pattern.test(text)) return complaint;
-  }
-  return undefined;
-}
+// The set of complaint codes the current flow templates support.
+// Complaints outside this set are escalated to physician review.
+const SUPPORTED_COMPLAINTS = new Set(ALL_COMPLAINT_CODES);
 
 // ── Conversation content ──────────────────────────────────────────────────────
 
@@ -124,8 +92,9 @@ export async function handleChatIntake(msg: IncomingPatientMessage): Promise<Cha
   }
 
   if (session.state === "intake_ready") {
-    const complaint = parseComplaint(text);
-    if (!complaint || !SUPPORTED_COMPLAINTS.includes(complaint)) {
+    const parsed = parseComplaint(text);
+    const complaintCode = parsed?.primary;
+    if (!complaintCode || !SUPPORTED_COMPLAINTS.has(complaintCode)) {
       saveChatSession(session);
       return {
         text: "That concern requires direct physician review rather than self-service chat. A physician review request has been created.\n\nIf this is urgent or severe, seek immediate care." + safetyFooter(),
@@ -133,10 +102,17 @@ export async function handleChatIntake(msg: IncomingPatientMessage): Promise<Cha
         escalationReason: "out_of_scope_chat_complaint",
       };
     }
-    session.complaint = complaint;
+    session.complaint = complaintCode;
     session.state = "collecting";
+    // Surface secondary complaints and confidence in session for richer follow-up
+    if (parsed.secondary.length > 0) {
+      session.answers._secondaryComplaints = parsed.secondary.join(",");
+    }
+    if (parsed.confidence === "low") {
+      session.answers._parseConfidence = "low";
+    }
     saveChatSession(session);
-    return { text: firstQuestion(complaint) };
+    return { text: firstQuestion(complaintCode) };
   }
 
   if (session.state === "collecting") {

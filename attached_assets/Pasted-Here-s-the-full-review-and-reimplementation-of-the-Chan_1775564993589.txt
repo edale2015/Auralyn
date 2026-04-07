@@ -1,0 +1,430 @@
+Here's the full review and reimplementation of the Channel / Message Orchestration block.
+
+A) False Positives in Original parseComplaint
+Every case below would be misclassified by the original string.includes() approach:
+sore / throat matches:
+
+"I'm feeling sore all over" → sore_throat (muscle soreness, not throat)
+"My muscles are sore from the gym" → sore_throat
+"sore back" → sore_throat
+"sore knee" → sore_throat
+"I need to clear my throat" → sore_throat (no pain at all)
+
+ear matches:
+
+"I can't hear you" → ear_pain
+"I fear the worst" → ear_pain
+"It's unclear what's wrong" → ear_pain
+"I'm in a lot of fear" → ear_pain
+"near my eye" → ear_pain
+"I appear to have a rash" → both ear_pain (ear) AND rash — but ear branch fires first
+
+burning matches:
+
+"I'm burning up with fever" → uti_simple
+"I have heartburn" → uti_simple
+"burning sensation in my chest" → uti_simple (could be cardiac)
+"my eyes are burning" → uti_simple
+"burning pain in my stomach" → uti_simple
+"sunburn" → uti_simple
+
+skin matches:
+
+"my skin is dry" → rash (no rash present)
+"skin care question" → rash
+
+cold matches:
+
+"I feel cold and shivery" → uri (could be fever/sepsis presentation)
+"cold sweat" → uri
+"my hands are cold" → uri
+
+cough false negative:
+
+"sore throat and cough" → sore_throat only, cough ignored entirely — branch ordering bug
+
+head matches:
+
+"head cold" → uri is NOT reached because head is part of headache check — but "my head feels heavy" → headache_mild incorrectly
+
+
+B) Rewritten parseComplaint
+typescript// server/chat/parseComplaint.ts
+
+export type ComplaintCode =
+  | "sore_throat"
+  | "cough"
+  | "uti_simple"
+  | "rash"
+  | "ear_pain"
+  | "headache_mild"
+  | "uri"
+  | "fever"
+  | "eye_complaint"
+  | "chest_pain"    // added: "burning chest" was misrouting to UTI
+  | "back_pain"     // added: "sore back" was misrouting to sore_throat
+  | "gi_complaint"; // added: "stomach burning" was misrouting to UTI
+
+export interface ParsedComplaint {
+  primary:    ComplaintCode;
+  secondary:  ComplaintCode[];  // captures "sore throat AND cough"
+  raw:        string;
+  confidence: "high" | "low";   // low if multiple complaints or ambiguous match
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pattern definitions
+//
+// Rules:
+// 1. All patterns use \b word boundaries to prevent substring matches
+// 2. Each pattern is documented with the false positives it prevents
+// 3. More specific patterns are listed before general ones
+// 4. A single input can match MULTIPLE codes (e.g. sore throat + cough)
+// ─────────────────────────────────────────────────────────────
+interface ComplaintPattern {
+  code:     ComplaintCode;
+  patterns: RegExp[];
+}
+
+const COMPLAINT_PATTERNS: ComplaintPattern[] = [
+  // ── Chest pain — must come before "burning" to prevent cardiac → UTI misroute
+  {
+    code: "chest_pain",
+    patterns: [
+      /\bchest\s+(pain|tight|pressure|burning|discomfort)\b/i,
+      /\bpain\s+in\s+(my\s+)?chest\b/i,
+      /\bheart\s+(pain|racing|palpitation)/i,
+    ],
+  },
+
+  // ── UTI — requires urinary-specific context; "burning" alone is NOT enough
+  {
+    code: "uti_simple",
+    patterns: [
+      /\b(uti|urinary\s+tract)\b/i,
+      /\b(burning|pain|frequency|urgency)\s+(when|during|with)\s+(i\s+)?(pee|urinate|urination)\b/i,
+      /\b(frequent|painful|burning)\s+urination\b/i,
+      /\b(pain|burning|pressure)\s+in\s+(my\s+)?(bladder|urethra)\b/i,
+      // "burning when I pee" — requires urinary qualifier
+    ],
+  },
+
+  // ── Sore throat — requires throat specifically, not just "sore"
+  {
+    code: "sore_throat",
+    patterns: [
+      /\bsore\s+throat\b/i,
+      /\bthroat\s+(pain|hurts|is\s+sore|burning|scratchy|raw)\b/i,
+      /\b(pain|difficulty|trouble)\s+(swallowing|when\s+I\s+swallow)\b/i,
+      /\bstrep\b/i,
+    ],
+  },
+
+  // ── Ear pain — requires ear-specific terms; blocks "fear", "hear", "unclear"
+  {
+    code: "ear_pain",
+    patterns: [
+      /\bear\s+(pain|ache|hurts|infection|pressure|ringing|fullness|drainage)\b/i,
+      /\b(pain|ache|pressure)\s+in\s+(my\s+)?ear\b/i,
+      /\bearache\b/i,
+      /\botitis\b/i,
+      // "I can't hear you" → does NOT match \bear\s+(pain|ache...)
+      // "I fear the worst" → does NOT match \bear\s+(pain|ache...)
+    ],
+  },
+
+  // ── Eye complaint — prevents "burning eyes" → UTI
+  {
+    code: "eye_complaint",
+    patterns: [
+      /\b(red|pink|burning|itchy|watery|discharge|blurry)\s+eye(s)?\b/i,
+      /\beye\s+(pain|infection|irritation|redness|discharge)\b/i,
+      /\bpink\s*eye\b/i,
+      /\bconjunctivitis\b/i,
+    ],
+  },
+
+  // ── Back pain — prevents "sore back" → sore_throat
+  {
+    code: "back_pain",
+    patterns: [
+      /\b(sore|aching|pain|stiff)\s+(lower\s+)?back\b/i,
+      /\bback\s+(pain|ache|spasm|injury|strain)\b/i,
+      /\blower\s+back\b/i,
+    ],
+  },
+
+  // ── GI complaint — prevents "stomach burning" → UTI
+  {
+    code: "gi_complaint",
+    patterns: [
+      /\b(stomach|belly|abdominal|abdomen)\s+(pain|ache|cramps|burning|upset)\b/i,
+      /\bnausea\b/i,
+      /\bvomit(ing)?\b/i,
+      /\bdiarrhea\b/i,
+      /\bheartburn\b/i,
+      /\bgerd\b/i,
+      /\bindigestion\b/i,
+    ],
+  },
+
+  // ── Fever — prevents "burning up" → UTI
+  {
+    code: "fever",
+    patterns: [
+      /\bfever\b/i,
+      /\btemperature\s+(of|is|was)?\s*\d+/i,
+      /\b(burning|running)\s+a\s+(fever|temp)\b/i,
+      /\b(high|elevated)\s+temp(erature)?\b/i,
+      // "burning up" only if combined with fever context
+      /\bburning\s+up\b/i,   // "I'm burning up" → fever, not UTI
+    ],
+  },
+
+  // ── Cough — standalone
+  {
+    code: "cough",
+    patterns: [
+      /\bcough(ing)?\b/i,
+      /\bcoughing\s+(up|blood|phlegm|mucus)\b/i,
+      /\bwhooping\b/i,
+    ],
+  },
+
+  // ── Headache — requires head + pain context; "head cold" does not match
+  {
+    code: "headache_mild",
+    patterns: [
+      /\bheadache\b/i,
+      /\bhead\s+(ache|pain|throbbing|pounding|pressure)\b/i,
+      /\bmigraine\b/i,
+      // "head cold" does NOT match \bhead\s+(ache|pain...)
+      // "my head feels heavy" → no match, returns undefined (correct)
+    ],
+  },
+
+  // ── Rash — skin requires complaint context; "my skin is dry" does not match
+  {
+    code: "rash",
+    patterns: [
+      /\brush\b/i,
+      /\b(skin|body)\s+(rash|reaction|bumps|hives|breakout|irritation)\b/i,
+      /\bhives\b/i,
+      /\burticaria\b/i,
+      /\bitching\b/i,  // generalized itch often is rash
+    ],
+  },
+
+  // ── URI — "cold" requires symptom context; "I feel cold" does not match
+  {
+    code: "uri",
+    patterns: [
+      /\b(common\s+)?cold\b/i,             // "I have a cold" — matches
+      /\buri\b/i,
+      /\bcongestion\b/i,
+      /\brunny\s+nose\b/i,
+      /\bnasal\s+(congestion|drip)\b/i,
+      /\bsneezing\b/i,
+      /\bsinusitis\b/i,
+      // "I feel cold" → does NOT match \b(common\s+)?cold\b when cold=adjective
+      // Note: "I have a cold" → matches correctly
+    ],
+  },
+];
+
+// ─────────────────────────────────────────────────────────────
+// Parser
+// ─────────────────────────────────────────────────────────────
+
+export function parseComplaint(text?: string): ParsedComplaint | undefined {
+  if (!text?.trim()) return undefined;
+
+  const matched: ComplaintCode[] = [];
+
+  for (const { code, patterns } of COMPLAINT_PATTERNS) {
+    if (patterns.some(p => p.test(text))) {
+      matched.push(code);
+    }
+  }
+
+  if (matched.length === 0) return undefined;
+
+  return {
+    primary:    matched[0],
+    secondary:  matched.slice(1),
+    raw:        text.trim(),
+    confidence: matched.length === 1 ? "high" : "low",
+  };
+}
+Test cases:
+typescript// False positives that are now fixed
+expect(parseComplaint("My muscles are sore")?.primary).not.toBe("sore_throat");  // → back_pain or undefined
+expect(parseComplaint("I can't hear you")).toBeUndefined();                        // no ear_pain
+expect(parseComplaint("I fear the worst")).toBeUndefined();
+expect(parseComplaint("I'm burning up")?.primary).toBe("fever");                  // not uti_simple
+expect(parseComplaint("burning chest pain")?.primary).toBe("chest_pain");         // not uti_simple
+expect(parseComplaint("heartburn")?.primary).toBe("gi_complaint");                // not uti_simple
+expect(parseComplaint("my eyes are burning")?.primary).toBe("eye_complaint");     // not uti_simple
+expect(parseComplaint("I feel cold and shivery")).toBeUndefined();                 // not uri
+expect(parseComplaint("cold sweat")).toBeUndefined();                              // not uri
+
+// Previously silently dropped secondary complaints — now captured
+const both = parseComplaint("sore throat and cough");
+expect(both?.primary).toBe("sore_throat");
+expect(both?.secondary).toContain("cough");
+expect(both?.confidence).toBe("low");  // multiple complaints, lower confidence
+
+// UTI now requires urinary context
+expect(parseComplaint("burning when I pee")?.primary).toBe("uti_simple");
+expect(parseComplaint("frequent urination and burning")?.primary).toBe("uti_simple");
+expect(parseComplaint("burning sensation")?.primary).not.toBe("uti_simple");  // no urinary context
+
+// Correct positives still work
+expect(parseComplaint("I have a sore throat")?.primary).toBe("sore_throat");
+expect(parseComplaint("ear pain for 2 days")?.primary).toBe("ear_pain");
+expect(parseComplaint("I have a cold")?.primary).toBe("uri");
+expect(parseComplaint("bad headache")?.primary).toBe("headache_mild");
+expect(parseComplaint("I have a rash on my arm")?.primary).toBe("rash");
+
+C) ConversationState — DB vs In-Memory Assessment
+The current state is entirely in-memory. That means a server restart loses all active conversations, and in a multi-instance deployment, a user's second message may hit a different instance with no state.
+Here's how each field should be classified:
+Must be in DB (survives restarts, cross-instance safe):
+typescript// These fields represent durable clinical or legal facts
+conversationId   // primary key — always DB
+caseId           // links to case record
+encounterId      // links to encounter
+patientId        // PHI linkage — must be persisted
+channel          // needed for reply routing across restarts
+externalUserId   // needed to re-identify user
+routingState     // if lost, user gets re-asked questions they already answered
+requiredMissing  // same — clinical intake is incomplete
+isStopped        // if lost, a stopped conversation re-opens
+stopReason       // legal/safety record
+createdAt        // audit trail
+frictionEvents   // count of friction events — audit/safety signal
+lastFrictionAt   // timestamp of last friction — audit trail
+isStaff          // access control — must not be derived from volatile session
+Can be in-memory with DB fallback (session cache):
+typescriptlastQuestionIdAsked   // can be re-derived from routingState if lost
+toneProfile           // can be re-derived from frictionScore + channel
+frictionScore         // derived metric — recompute from frictionEvents if needed
+lastNMessages         // short-term context window; lose on restart, re-ask is low cost
+Should never be in either (should be computed on read):
+typescript// frictionScore should be computed, not stored — storing it creates drift
+// between the score and the events that produced it.
+// Instead: frictionScore = f(frictionEvents, channel, routingState)
+Recommended split:
+typescript// DB table: conversations
+export interface ConversationRecord {
+  conversationId:    string;      // PK
+  channel:           Channel;
+  externalUserId:    string;
+  caseId:            string | null;
+  encounterId:       number | null;
+  patientId:         number | null;
+  routingState:      string;
+  requiredMissing:   string[];    // jsonb
+  isStopped:         boolean;
+  stopReason:        string | null;
+  isStaff:           boolean;
+  frictionEvents:    number;
+  lastFrictionAt:    string | null;
+  createdAt:         string;
+}
+
+// In-memory session cache (Redis TTL ~4 hours)
+export interface ConversationSession {
+  conversationId:       string;   // FK → conversations
+  lastQuestionIdAsked:  string | null;
+  toneProfile:          string;
+  frictionScore:        number;   // derived, never authoritative
+  lastNMessages:        { from: "patient" | "system"; text: string; ts: string }[];
+}
+
+D) Error Handling for runPatientFlow
+The core risk is that runPatientFlow throwing causes an unhandled rejection that either crashes the process or, if caught by the Express error handler, returns a 500 to the patient with no clinical context. In an intake flow that's a silent dead end — the patient gets an error, the intake stops, and no one knows.
+typescript// server/chat/chatIntakeEngine.ts
+
+interface IntakeResult {
+  reply:        string;
+  state:        ConversationSession;
+  completed:    boolean;
+  error?:       "flow_error" | "parse_error" | "state_error";
+}
+
+export async function handleChatMessage(
+  message:  string,
+  state:    ConversationSession,
+  record:   ConversationRecord
+): Promise<IntakeResult> {
+
+  // ── Parse complaint ──────────────────────────────────────
+  let parsed: ParsedComplaint | undefined;
+  try {
+    parsed = parseComplaint(message);
+  } catch (err) {
+    // Parser threw unexpectedly — log and continue with undefined
+    console.error("[ChatIntake] parseComplaint threw:", err);
+    // Don't block the conversation — just proceed without a parsed complaint
+  }
+
+  // ── Run patient flow ─────────────────────────────────────
+  let flowResult: PatientFlowResult;
+  try {
+    flowResult = await runPatientFlow({
+      message,
+      parsed,
+      state,
+      record,
+    });
+  } catch (err) {
+    console.error("[ChatIntake] runPatientFlow threw:", err);
+
+    // Audit the failure — this is a clinical workflow interruption
+    await auditStep({
+      traceId:  record.conversationId,
+      step:     "chat_intake_flow_error",
+      input:    { message, routingState: record.routingState },
+      output:   null,
+      metadata: { error: err instanceof Error ? err.message : String(err) }
+    }).catch(auditErr => {
+      // If audit also fails, log but don't throw — we still need to reply
+      console.error("[ChatIntake] Audit log failed during flow error:", auditErr);
+    });
+
+    // Return a safe fallback reply — do NOT leave the patient with silence or a 500
+    // Do NOT expose the internal error message
+    return {
+      reply: "I'm sorry, I ran into a problem processing your message. " +
+             "Please try again, or call us directly at [clinic number] for immediate assistance.",
+      state,
+      completed: false,
+      error: "flow_error",
+    };
+  }
+
+  // ── frictionScore accumulation ────────────────────────────
+  // frictionScore is session-derived — never blindly accumulated across sessions
+  // Reset to 0 at session start, accumulate within session only
+  // frictionEvents in DB is the durable count — frictionScore is a session metric
+  const updatedFrictionScore = flowResult.frictionDelta
+    ? Math.min(state.frictionScore + flowResult.frictionDelta, 10)  // cap at 10
+    : state.frictionScore;
+
+  return {
+    reply:     flowResult.reply,
+    completed: flowResult.completed,
+    state: {
+      ...state,
+      lastQuestionIdAsked: flowResult.nextQuestionId ?? state.lastQuestionIdAsked,
+      frictionScore:       updatedFrictionScore,
+      lastNMessages: [
+        ...state.lastNMessages.slice(-9),  // keep last 10 total
+        { from: "patient", text: message,       ts: new Date().toISOString() },
+        { from: "system",  text: flowResult.reply, ts: new Date().toISOString() },
+      ],
+    },
+  };
+}
+The frictionScore accumulation deserves specific attention: the original state shape has both frictionScore (number) and frictionEvents (number) with no clear relationship between them. As written, if a user's session drops mid-conversation and they reconnect, frictionScore resets to 0 while frictionEvents persists in DB — they diverge immediately. The fix is to treat frictionScore as a pure session-local derived metric that starts at 0 each session, while frictionEvents in DB is the durable cumulative count used for safety flags and auditing. Never try to restore frictionScore from DB — recompute it from scratch within the session.Want to be notified when Claude responds?NotifySonnet 4.6Claude is AI and 

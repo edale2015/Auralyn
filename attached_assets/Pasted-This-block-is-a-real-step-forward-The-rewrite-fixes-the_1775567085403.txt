@@ -1,0 +1,348 @@
+This block is a real step forward. The rewrite fixes the original substring landmines by using word boundaries and context-specific regexes, preserves secondary complaints instead of silently dropping them, separates durable conversation facts from session cache, and wraps runPatientFlow so a thrown error becomes a patient-safe fallback instead of a dead-end 500. That is all good engineering and good bedside manners.
+
+I still would not call it final-hardening yet. The main remaining issues are in ranking, state durability, and idempotent message handling.
+
+1. parseComplaint is better, but it is still order-driven, not evidence-driven
+
+Right now the first matching complaint in COMPLAINT_PATTERNS becomes primary, and everything else becomes secondary. That is much better than the original includes() spaghetti, but it still means “primary” is chosen by pattern order, not by strength of evidence. A message like “bad cough, fever, and chest burning” will be steered by whichever bucket appears first, not by which complaint is most clinically urgent or most explicitly matched.
+
+The next upgrade is to turn this into a scored parser:
+
+each matched regex contributes points
+more specific phrases score higher than broad ones
+red-flag complaints get priority boosts
+negated complaints get score penalties or zeroed out
+highest score becomes primary
+
+That turns the parser from a first-hit trapdoor into a small referee.
+
+Here is the shape I would move to:
+
+// server/chat/parseComplaint.ts
+
+export type ComplaintCode =
+  | "sore_throat"
+  | "cough"
+  | "uti_simple"
+  | "rash"
+  | "ear_pain"
+  | "headache_mild"
+  | "uri"
+  | "fever"
+  | "eye_complaint"
+  | "chest_pain"
+  | "back_pain"
+  | "gi_complaint";
+
+export interface ParsedComplaint {
+  primary: ComplaintCode;
+  secondary: ComplaintCode[];
+  raw: string;
+  confidence: "high" | "low";
+  scores: Record<string, number>;
+}
+
+interface WeightedPattern {
+  regex: RegExp;
+  weight: number;
+}
+
+interface ComplaintRule {
+  code: ComplaintCode;
+  patterns: WeightedPattern[];
+  priorityBoost?: number;
+}
+
+const NEGATION_WINDOW = /\b(no|not|denies|without)\b/i;
+
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNegated(text: string, matchIndex: number): boolean {
+  const start = Math.max(0, matchIndex - 25);
+  const window = text.slice(start, matchIndex);
+  return NEGATION_WINDOW.test(window);
+}
+
+const RULES: ComplaintRule[] = [
+  {
+    code: "chest_pain",
+    priorityBoost: 3,
+    patterns: [
+      { regex: /\bchest\s+(pain|pressure|tightness|burning|discomfort)\b/i, weight: 5 },
+      { regex: /\bpain\s+in\s+(my\s+)?chest\b/i, weight: 5 },
+      { regex: /\bheart\s+(pain|racing|palpitation)s?\b/i, weight: 4 },
+    ],
+  },
+  {
+    code: "uti_simple",
+    patterns: [
+      { regex: /\b(uti|urinary\s+tract)\b/i, weight: 5 },
+      { regex: /\bburning\s+(when|during)\s+(i\s+)?(pee|urinate)\b/i, weight: 5 },
+      { regex: /\b(frequent|painful|burning)\s+urination\b/i, weight: 4 },
+    ],
+  },
+  {
+    code: "sore_throat",
+    patterns: [
+      { regex: /\bsore\s+throat\b/i, weight: 5 },
+      { regex: /\bthroat\s+(pain|hurts|is\s+sore|scratchy|raw)\b/i, weight: 4 },
+      { regex: /\bstrep\b/i, weight: 3 },
+    ],
+  },
+  {
+    code: "cough",
+    patterns: [
+      { regex: /\bcough(ing)?\b/i, weight: 4 },
+      { regex: /\bcoughing\s+(up|blood|phlegm|mucus)\b/i, weight: 5 },
+    ],
+  },
+  {
+    code: "fever",
+    patterns: [
+      { regex: /\bfever\b/i, weight: 4 },
+      { regex: /\bburning\s+up\b/i, weight: 3 },
+      { regex: /\btemp(erature)?\b/i, weight: 2 },
+    ],
+  },
+  // ...other rules...
+];
+
+export function parseComplaint(text?: string): ParsedComplaint | undefined {
+  if (!text?.trim()) return undefined;
+
+  const raw = text.trim();
+  const normalized = normalizeText(raw);
+  const scores: Partial<Record<ComplaintCode, number>> = {};
+
+  for (const rule of RULES) {
+    let score = 0;
+
+    for (const pattern of rule.patterns) {
+      const match = pattern.regex.exec(normalized);
+      if (!match) continue;
+      if (match.index !== undefined && isNegated(normalized, match.index)) continue;
+
+      score += pattern.weight;
+    }
+
+    if (score > 0) {
+      score += rule.priorityBoost ?? 0;
+      scores[rule.code] = score;
+    }
+  }
+
+  const ranked = Object.entries(scores)
+    .sort((a, b) => b[1]! - a[1]!)
+    .map(([code]) => code as ComplaintCode);
+
+  if (ranked.length === 0) return undefined;
+
+  const topScore = scores[ranked[0]] ?? 0;
+  const secondScore = ranked[1] ? (scores[ranked[1]] ?? 0) : 0;
+
+  return {
+    primary: ranked[0],
+    secondary: ranked.slice(1),
+    raw,
+    confidence: ranked.length === 1 || topScore >= secondScore + 2 ? "high" : "low",
+    scores: scores as Record<string, number>,
+  };
+}
+
+That solves the biggest remaining parser weakness: pattern order should not decide clinical priority.
+
+2. You still need negation and severity extraction
+
+The current rewrite is good at stopping substring false positives, but it still does not handle things like:
+
+“no cough”
+“denies fever”
+“mild sore throat but severe chest pressure”
+“ear pain resolved”
+
+Without negation, the parser can still confidently believe symptoms the patient is explicitly denying. Without severity extraction, it cannot distinguish trivia from red flags. The file fixes the what, but not yet the how much or still present? layer.
+
+3. Conversation state should include a durable message/event log
+
+The DB vs in-memory split in the file is mostly right. Durable identifiers, routing, stop state, and friction events belong in persistent storage; session-level convenience fields belong in cache. That part is solid.
+
+What is still missing is a durable transcript/event trail. lastNMessages is intentionally session-local in the rewrite, which is fine for fast context, but clinically and operationally you usually also want a persistent event table for:
+
+message transcript
+routing changes
+escalation/handoff
+stop/resume events
+friction events with timestamps and causes
+
+Otherwise, a restart preserves the conversation record but loses the conversational breadcrumbs that explain how the system got there.
+
+I would add:
+
+// shared/schema.ts
+export interface ConversationMessageRecord {
+  messageId: string;
+  conversationId: string;
+  from: "patient" | "system" | "staff";
+  text: string;
+  channel: string;
+  createdAt: string;
+  deliveryStatus?: "queued" | "sent" | "failed";
+  externalMessageId?: string | null;
+}
+
+export interface ConversationEventRecord {
+  eventId: string;
+  conversationId: string;
+  type:
+    | "routing_changed"
+    | "friction_incremented"
+    | "flow_error"
+    | "conversation_stopped"
+    | "handoff_requested"
+    | "handoff_completed";
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+That gives you both a fast session cache and a forensic trail.
+
+4. handleChatMessage needs idempotency, not just try/catch
+
+The file’s error handling for runPatientFlow is much better than before. Catch, audit, and reply safely is the right shape. But channels like SMS, WhatsApp, and webhooks love retries. If the same inbound message is delivered twice, the current handler can still:
+
+run flow twice
+increment friction twice
+append duplicate messages
+send duplicate replies
+create duplicate audit entries
+
+The missing ingredient is an inbound message idempotency key. The retry goblin will show up eventually.
+
+Here is the next patch I’d make:
+
+// server/chat/chatIntakeEngine.ts
+
+interface HandleChatInput {
+  inboundMessageId: string;
+  message: string;
+  state: ConversationSession;
+  record: ConversationRecord;
+}
+
+interface IntakeResult {
+  reply: string;
+  state: ConversationSession;
+  completed: boolean;
+  error?: "flow_error" | "parse_error" | "state_error";
+}
+
+export async function handleChatMessage({
+  inboundMessageId,
+  message,
+  state,
+  record,
+}: HandleChatInput): Promise<IntakeResult> {
+  const alreadyProcessed = await wasInboundMessageProcessed(inboundMessageId);
+  if (alreadyProcessed) {
+    const prior = await getPriorIntakeResult(inboundMessageId);
+    if (prior) return prior;
+  }
+
+  let parsed: ParsedComplaint | undefined;
+  try {
+    parsed = parseComplaint(message);
+  } catch (err) {
+    console.error("[ChatIntake] parseComplaint threw:", err);
+  }
+
+  let flowResult: PatientFlowResult;
+  try {
+    flowResult = await runPatientFlow({
+      message,
+      parsed,
+      state,
+      record,
+    });
+  } catch (err) {
+    await markInboundMessageProcessed(inboundMessageId, {
+      reply:
+        "I'm sorry, I ran into a problem processing your message. Please try again, or call us directly for immediate help.",
+      state,
+      completed: false,
+      error: "flow_error",
+    });
+
+    return {
+      reply:
+        "I'm sorry, I ran into a problem processing your message. Please try again, or call us directly for immediate help.",
+      state,
+      completed: false,
+      error: "flow_error",
+    };
+  }
+
+  const updatedState: ConversationSession = {
+    ...state,
+    lastQuestionIdAsked: flowResult.nextQuestionId ?? state.lastQuestionIdAsked,
+    frictionScore: flowResult.frictionDelta
+      ? Math.min(state.frictionScore + flowResult.frictionDelta, 10)
+      : state.frictionScore,
+    lastNMessages: [
+      ...state.lastNMessages.slice(-9),
+      { from: "patient", text: message, ts: new Date().toISOString() },
+      { from: "system", text: flowResult.reply, ts: new Date().toISOString() },
+    ],
+  };
+
+  const result: IntakeResult = {
+    reply: flowResult.reply,
+    completed: flowResult.completed,
+    state: updatedState,
+  };
+
+  await markInboundMessageProcessed(inboundMessageId, result);
+  return result;
+}
+
+That turns retries into replays instead of duplicates.
+
+5. Flow-error fallback should escalate if the parsed complaint looks risky
+
+The current fallback reply is safe and better than silence, but it is still generic. If parsing already detected something like chest pain, severe headache, or another higher-risk complaint, a pure “please try again or call the clinic” response is too bland. In that case I would also:
+
+create a manual review task
+alert staff
+send a stronger patient fallback message
+
+For example: “If you have chest pain, shortness of breath, severe headache, or worsening symptoms, seek urgent medical care now.” The file does not do that escalation yet.
+
+6. frictionScore handling is conceptually right, but event-sourcing is cleaner
+
+I agree with the file’s distinction: frictionEvents should be durable, and frictionScore should be session-derived so it does not drift across reconnects. That is the right idea.
+
+I would go one notch cleaner and make friction events the source of truth, with frictionEvents as either:
+
+a cached counter updated from events, or
+a derived count from the event table
+
+That prevents the usual “counter says 7, event log shows 6” little swamp monster.
+
+Bottom line
+
+This block is strong. The regex rewrite is vastly safer than the original substring matching, the DB/cache split is much more realistic for multi-instance deployment, and the runPatientFlow wrapper finally gives patients a safe fallback instead of an abrupt wall.
+
+The next hardening wave is:
+
+make complaint parsing score-based, not order-based
+add negation and severity handling
+persist a durable message/event log
+make message handling idempotent
+escalate flow errors differently when the complaint looks high-risk
+
+That would turn this from “good orchestration scaffolding” into something much closer to a production intake spine.

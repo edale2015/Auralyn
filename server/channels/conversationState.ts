@@ -1,6 +1,54 @@
 import type { Channel } from "./messageEvent";
 import { createHash } from "crypto";
 
+// ── Durable / in-memory split (Packet 7) ──────────────────────────────────────
+//
+// ConversationRecord — fields that MUST survive a server restart and are safe to
+// read from any instance. These live in the DB (or a Firestore-backed cache).
+// Losing these means the patient gets re-asked questions they already answered,
+// or a stopped conversation re-opens — both are clinical / legal problems.
+//
+// ConversationSession — fields that are session-local and can be recomputed or
+// safely lost on restart. These live in the in-memory / Redis TTL cache.
+//
+// frictionScore is intentionally SESSION-ONLY. Restoring it from DB causes drift
+// between the score and the friction events that produced it. On each new session
+// the score starts at 0 and accumulates within that session only. The durable
+// audit signal is frictionEvents (count) and lastFrictionAt (timestamp).
+
+export interface ConversationRecord {
+  conversationId:   string;
+  channel:          Channel;
+  externalUserId:   string;
+  caseId:           string | null;
+  encounterId:      number | null;
+  patientId:        number | null;
+  routingState:     string;
+  requiredMissing:  string[];
+  isStopped:        boolean;
+  stopReason:       string | null;
+  isStaff:          boolean;
+  frictionEvents:   number;       // durable cumulative count — source of truth
+  lastFrictionAt:   string | null;
+  createdAt:        string;
+}
+
+export interface ConversationSession {
+  conversationId:       string;  // FK → ConversationRecord
+  lastQuestionIdAsked:  string | null;
+  toneProfile:          string;
+  /**
+   * Session-derived friction score. Always starts at 0 when the session begins.
+   * Accumulated from frictionEvents within THIS session only.
+   * NEVER restore this from DB — it will drift from the event log.
+   * Use frictionEvents in ConversationRecord for durable safety flags and auditing.
+   * Capped at 10.
+   */
+  frictionScore:        number;
+  /** Last N messages kept for context window. Session-local; lose on restart is acceptable. */
+  lastNMessages:        { from: "patient" | "system"; text: string; ts: string }[];
+}
+
 export interface ConversationState {
   conversationId: string;
   channel: Channel;
