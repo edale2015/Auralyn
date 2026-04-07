@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real, doublePrecision, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1111,3 +1111,92 @@ export const insertSafetyConfigSchema = createInsertSchema(safetyConfigs).omit({
 });
 export type InsertSafetyConfig = z.infer<typeof insertSafetyConfigSchema>;
 export type SafetyConfig = typeof safetyConfigs.$inferSelect;
+
+// ── Self-Improvement Governance ──────────────────────────────────────────────
+
+export const ACTION_STATUSES = ["proposed", "pending_review", "approved", "applied", "rejected", "failed"] as const;
+export type ActionStatus = typeof ACTION_STATUSES[number];
+
+export const agentThresholdRecords = pgTable(
+  "agent_threshold_records",
+  {
+    id:           serial("id").primaryKey(),
+    agent:        text("agent").notNull(),
+    parameter:    text("parameter").notNull(),
+    currentValue: doublePrecision("current_value").notNull(),
+    updatedAt:    timestamp("updated_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedBy:    text("updated_by").notNull().default("system"),
+  },
+  (t) => [
+    uniqueIndex("agent_threshold_records_agent_param_uidx").on(t.agent, t.parameter),
+    index("agent_threshold_records_agent_idx").on(t.agent),
+  ]
+);
+export const insertAgentThresholdSchema = createInsertSchema(agentThresholdRecords).omit({ id: true, updatedAt: true });
+export type InsertAgentThreshold = z.infer<typeof insertAgentThresholdSchema>;
+export type AgentThresholdRecord = typeof agentThresholdRecords.$inferSelect;
+
+export const improvementActions = pgTable(
+  "improvement_actions",
+  {
+    id:            serial("id").primaryKey(),
+    agent:         text("agent").notNull(),
+    action:        text("action").notNull(),
+    parameter:     text("parameter").notNull(),
+    fromValue:     doublePrecision("from_value"),
+    toValue:       doublePrecision("to_value"),
+    reason:        text("reason").notNull(),
+    status:        text("status").notNull().default("proposed"),
+    proposedAt:    timestamp("proposed_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    decidedAt:     timestamp("decided_at", { withTimezone: true }),
+    decidedBy:     text("decided_by"),
+    metric:        jsonb("metric"),
+    errorMessage:  text("error_message"),
+  },
+  (t) => [
+    index("improvement_actions_status_idx").on(t.status),
+    index("improvement_actions_agent_idx").on(t.agent),
+    index("improvement_actions_proposed_at_idx").on(t.proposedAt),
+  ]
+);
+export const insertImprovementActionSchema = createInsertSchema(improvementActions).omit({ id: true, proposedAt: true });
+export type InsertImprovementAction = z.infer<typeof insertImprovementActionSchema>;
+export type ImprovementAction = typeof improvementActions.$inferSelect;
+
+export const improvementReviews = pgTable(
+  "improvement_reviews",
+  {
+    id:         serial("id").primaryKey(),
+    actionId:   integer("action_id").notNull().references(() => improvementActions.id),
+    reviewerId: text("reviewer_id").notNull(),
+    decision:   text("decision").notNull(),
+    note:       text("note"),
+    decidedAt:  timestamp("decided_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [
+    index("improvement_reviews_action_idx").on(t.actionId),
+    index("improvement_reviews_reviewer_idx").on(t.reviewerId),
+  ]
+);
+export const insertImprovementReviewSchema = createInsertSchema(improvementReviews).omit({ id: true, decidedAt: true });
+export type InsertImprovementReview = z.infer<typeof insertImprovementReviewSchema>;
+export type ImprovementReview = typeof improvementReviews.$inferSelect;
+
+export const improvementCycleLog = pgTable(
+  "improvement_cycle_log",
+  {
+    id:               serial("id").primaryKey(),
+    ranAt:            timestamp("ran_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    actionsProposed:  integer("actions_proposed").notNull().default(0),
+    actionsApplied:   integer("actions_applied").notNull().default(0),
+    actionsRejected:  integer("actions_rejected").notNull().default(0),
+    durationMs:       integer("duration_ms").notNull().default(0),
+    error:            text("error"),
+  },
+  (t) => [
+    index("improvement_cycle_log_ran_at_idx").on(t.ranAt),
+  ]
+);
+export const insertImprovementCycleLogSchema = createInsertSchema(improvementCycleLog).omit({ id: true, ranAt: true });
+export type InsertImprovementCycleLog = z.infer<typeof insertImprovementCycleLogSchema>;
+export type ImprovementCycleLog = typeof improvementCycleLog.$inferSelect;

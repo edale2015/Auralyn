@@ -1,0 +1,187 @@
+This is one of the strongest rewrites so far. It fixes the biggest governance hole by making autoApprove derive from category policy instead of letting the fix generator self-authorize, adds hard bounds for adjustable parameters, persists proposed actions, records applied actions in the audit chain, rate-limits auto-approved changes, and serializes cycles within a process. That is a real shift from “self-modifying loop” to “governed improvement system.”
+
+I still would not call it final-hardening yet.
+
+What is still missing
+
+1. Serialization is still single-process only
+cycleInProgress prevents overlap inside one Node process, but not across multiple app instances, workers, or containers. In production, two schedulers on two instances can still run the same cycle simultaneously, both read the same stats, both propose similar actions, and both consume rate-limit budget. This needs a distributed lock in Redis or Postgres, not just an in-memory promise guard.
+
+2. The “max agent entries” protection is declared but not enforced
+MAX_AGENT_THRESHOLD_ENTRIES = 100 exists, but persistThreshold() never checks it before inserting a new agent into agentThresholds. So the memory-leak/vector the file correctly identified is still alive in the rewritten code. The scarecrow is in the field, but it has not been given a job.
+
+3. applyImprovementAction() is not idempotent
+If the same action is retried after a partial failure, the threshold can be persisted again, the DB record can be updated again, and the audit step can be written again. There is no status check like “already applied” before mutating state. In any queue-driven or retried system, that is a future duplicate-application splinter.
+
+4. Apply-time state is not checked against proposal-time state
+The action carries fromValue and toValue, but applyImprovementAction() does not verify that the current threshold still equals fromValue. If something else changed the parameter after proposal creation, this action may apply against stale state and silently overwrite a newer human or system decision. This is a missing compare-and-swap / optimistic concurrency check.
+
+5. Proposal flooding is still possible
+The code writes every proposed action to improvementActions, but there is no suppression of duplicate pending proposals. If an agent stays underperforming for 20 cycles, you can end up with 20 nearly identical pending review items for the same parameter. That is review-queue barnacle growth. You need “only one open proposal per agent+parameter” or proposal supersession/versioning.
+
+6. The rate limit is not fully precise yet
+The orchestrator counts recent rows from improvementCycleLog, but it does not filter by appliedBy = "auto-approved" in the shown query. If that table later contains human-approved changes too, the auto-approval budget can be undercounted or overcounted depending on usage. The policy is “max auto-approved changes,” so the query should measure exactly that.
+
+7. The apply path is not transactional end-to-end
+Right now persistThreshold(), updating improvementActions, and auditStep() happen in sequence. If threshold persistence succeeds but DB update or audit logging fails, the system is left in a partially applied state. For a governed learning loop, that is not just annoying, it is forensic mud. The apply path should be wrapped in a transaction where possible, with a clear strategy for the audit side effect.
+
+8. There is no explicit status field on actions
+appliedAt, rejectedAt, and pending-review insertion help, but the core improvementActions record still wants a clean machine-readable lifecycle state like:
+proposed | pending_review | approved | applied | rejected | failed.
+Without that, status has to be inferred from nullable timestamps, which gets brittle fast.
+
+9. Some proposal/apply safety checks are still too trusting
+evaluateAndImprove() assumes getAgentStats() returns sane values. There is no validation that runs is finite/nonnegative or that successRate is finite and in [0,100]. A malformed stats payload could still create nonsense proposals. This block needs the same runtime-validation seatbelt that auth and safety needed.
+
+10. The human-review path is only half built
+notifyPhysicianReviewQueue() is the right idea, but in the shown code it references pendingReviews without defining/importing it, uses any, and does not include the approve/reject workflow that closes the loop. The governance skeleton is there, but the muscles are not fully attached yet.
+
+The next patch I would make first
+
+I would tackle four things immediately:
+
+distributed cycle lock
+idempotent apply with status field
+compare-and-swap on fromValue
+enforce one open proposal per agent+parameter
+
+Here is the shape I would move toward:
+
+// shared/schema.ts
+export type ImprovementActionStatus =
+  | "proposed"
+  | "pending_review"
+  | "approved"
+  | "applied"
+  | "rejected"
+  | "failed";
+
+export const improvementActions = pgTable("improvement_actions", {
+  id: text("id").primaryKey(),
+  agent: text("agent").notNull(),
+  parameter: text("parameter").notNull(),
+  action: text("action").notNull(),
+  category: text("category").notNull(),
+  fromValue: doublePrecision("from_value").notNull(),
+  toValue: doublePrecision("to_value").notNull(),
+  autoApprove: boolean("auto_approve").notNull(),
+  reason: text("reason").notNull(),
+  metricJson: jsonb("metric_json").notNull(),
+  status: text("status").notNull().default("proposed"),
+  proposedAt: timestamp("proposed_at", { withTimezone: true }).notNull().defaultNow(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  appliedBy: text("applied_by"),
+  rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+  rejectedBy: text("rejected_by"),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  failureReason: text("failure_reason"),
+});
+// server/agents/selfImprove.ts
+function validateAgentStat(agent: string, s: { runs: number; successRate: number }): void {
+  if (!Number.isFinite(s.runs) || s.runs < 0) {
+    throw new Error(`Invalid runs for ${agent}: ${s.runs}`);
+  }
+  if (!Number.isFinite(s.successRate) || s.successRate < 0 || s.successRate > 100) {
+    throw new Error(`Invalid successRate for ${agent}: ${s.successRate}`);
+  }
+}
+
+async function hasOpenProposal(agent: string, parameter: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: improvementActions.id })
+    .from(improvementActions)
+    .where(
+      and(
+        eq(improvementActions.agent, agent),
+        eq(improvementActions.parameter, parameter),
+        inArray(improvementActions.status, ["proposed", "pending_review", "approved"])
+      )
+    )
+    .limit(1);
+
+  return rows.length > 0;
+}
+// server/agents/selfImprovementOrchestrator.ts
+export async function runContinuousImprovement(): Promise<OrchestrationResult> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(88244019)`);
+    return _runCycleInsideTransaction(tx);
+  });
+}
+// server/agents/selfImprove.ts
+export async function applyImprovementAction(
+  actionId: string,
+  appliedBy: string
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!rows.length) {
+      throw new Error(`Unknown improvement action: ${actionId}`);
+    }
+
+    const action = rows[0];
+
+    if (action.status === "applied") {
+      return; // idempotent replay
+    }
+
+    if (action.status !== "approved" && !action.autoApprove) {
+      throw new Error(`Action ${actionId} is not approved for application`);
+    }
+
+    const current = getCurrentThreshold(action.agent, action.parameter);
+    if (current !== action.fromValue) {
+      throw new Error(
+        `Stale action ${actionId}: current value ${current} != proposed fromValue ${action.fromValue}`
+      );
+    }
+
+    await persistThreshold(action.agent, action.parameter, action.toValue);
+
+    await tx
+      .update(improvementActions)
+      .set({
+        status: "applied",
+        appliedAt: new Date().toISOString(),
+        appliedBy,
+      })
+      .where(eq(improvementActions.id, actionId));
+  });
+
+  await auditStep({
+    traceId: `selfimprove-${actionId}`,
+    step: "improvement_action_applied",
+    input: { actionId },
+    output: { appliedBy },
+    metadata: {},
+  });
+}
+
+And I would add one more small but important guard in persistThreshold():
+
+if (!agentThresholds.has(agent) && agentThresholds.size >= MAX_AGENT_THRESHOLD_ENTRIES) {
+  throw new Error(
+    `[SelfImprove] Refusing to create new threshold state for agent "${agent}" ` +
+    `because MAX_AGENT_THRESHOLD_ENTRIES=${MAX_AGENT_THRESHOLD_ENTRIES} has been reached`
+  );
+}
+Bottom line
+
+This rewrite is substantially better than the original, and it fixes the most dangerous governance flaw by making auto-approval derive from external category policy rather than self-generated fix metadata. That is the right spine.
+
+But before I’d call it production-grade, I would still add:
+
+distributed locking, not just in-process serialization
+idempotent apply behavior
+compare-and-swap on stale proposals
+explicit action lifecycle status
+duplicate proposal suppression
+validated stats inputs
+a full physician review approve/reject path
+
+That would turn this from “governed enough to trust in a demo and staging environment” into something much closer to a real regulated learning loop.

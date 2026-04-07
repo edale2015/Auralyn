@@ -356,3 +356,42 @@ All 12 critical fixes from Claude's architecture review are implemented:
 ### Route Registration
 - `ROUTES.PHYSICIAN_COMMAND_STRIP = "/physician-command-strip"` added to `client/src/routes/routeRegistry.ts`
 - Route added to `WorkbenchRouter` in `App.tsx` with `RoleGuard` (admin/physician/clinician)
+
+## Self-Improvement Governance Layer (Hardening Packet)
+
+### Overview
+`server/agents/selfImprove.ts` was a minimal in-memory prototype (no DB, no governance). It has been completely rewritten with 7 hardening items:
+
+1. **Distributed locking** — `runContinuousImprovement()` acquires a session-level Postgres advisory lock (`pg_advisory_lock(91424019)`) with explicit `pg_advisory_unlock` in `finally` to serialize cycles across all processes.
+2. **Idempotent apply** — `applyImprovementAction()` checks `status === "applied"` and returns `{ applied: false, reason: "already applied" }` immediately.
+3. **Compare-and-swap** — apply reads the current threshold from DB and verifies it matches `action.fromValue` before writing; mismatches fail with `"stale proposal"`.
+4. **Explicit lifecycle** — `proposed | pending_review | approved | applied | rejected | failed` persisted in Postgres; never in-memory.
+5. **Duplicate proposal suppression** — `hasOpenProposal(agent, parameter)` blocks creating a new proposal when one with `status IN ('proposed', 'pending_review', 'approved')` already exists for that agent+parameter pair.
+6. **Validated stats inputs** — `validateAgentStat()` rejects non-finite runs, runs < 1, successRate outside 0–100.
+7. **Physician review flow** — full CRUD: list pending, approve-and-apply, reject, per-action history, all routed through `requireRole(['physician', 'admin'])`.
+
+### New DB Tables (created via psql)
+- `agent_threshold_records` — replaces in-memory Map; stores `(agent, parameter)` → `current_value` with `UNIQUE` constraint for upsert.
+- `improvement_actions` — row per proposal with full lifecycle status + metric JSONB.
+- `improvement_reviews` — one row per physician decision (approve/reject) referencing `improvement_actions`.
+- `improvement_cycle_log` — one row per orchestrator cycle: proposed/applied/rejected counts + durationMs + error.
+
+### New / Rewritten Files
+- `server/agents/selfImprove.ts` — complete rewrite; exports `evaluateAndImprove` (now async), `applyImprovementAction`, `approveAndApplyAction`, `rejectImprovementAction`, `hasOpenProposal`, `validateAgentStat`, `listPendingReviews`, `getReviewHistory` + backward-compat `computeBusinessMetrics`, `getImprovementLog`, `getAgentThresholds`, `startSelfImproveLoop`, `stopSelfImproveLoop`.
+- `server/agents/selfImprovementOrchestrator.ts` — rewritten with advisory lock + 30s min-gap guard; writes `improvementCycleLog` on every run.
+- `server/agents/selfImprovementReviewService.ts` — thin re-export facade for routes to import from.
+- `server/routes/selfImprovementGovernance.ts` — 5 endpoints under `/api/self-improvement/`.
+
+### API Routes (`/api/self-improvement/`)
+- `GET  /reviews` — list pending/proposed/approved actions (physician+admin)
+- `POST /reviews/:id/approve` — physician approves and immediately applies
+- `POST /reviews/:id/reject` — physician rejects with optional note
+- `GET  /reviews/:id/history` — full review audit trail for one action
+- `GET  /log?limit=N` — recent improvement actions from DB
+
+### Tests
+- `tests/unit/selfImproveGovernance.test.ts` — 27 new tests covering all 7 hardening items (pure + DB-mocked). Total test suite: **353/353**.
+
+### Backward Compatibility
+- `payerIntelligenceRoutes.ts` routes calling `evaluateAndImprove()`, `getImprovementLog()`, `getAgentThresholds()` are updated to `await` the now-async functions.
+- `metaOrchestrator.ts` calling `computeBusinessMetrics()` is unchanged (that function remains sync/pure).

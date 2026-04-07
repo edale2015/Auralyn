@@ -1,0 +1,1089 @@
+Below is a drop-in patch for the seven self-improvement hardening items from the last block: distributed locking, idempotent apply behavior, compare-and-swap on stale proposals, explicit lifecycle status, duplicate proposal suppression, validated stats inputs, and a full physician review approve/reject flow.
+
+1) shared/schema.ts
+// shared/schema.ts
+import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  doublePrecision,
+  bigserial,
+  index,
+  uniqueIndex,
+  jsonb,
+} from "drizzle-orm/pg-core";
+
+export type ChangeCategory =
+  | "operational"
+  | "performance"
+  | "clinical"
+  | "security";
+
+export type ImprovementActionStatus =
+  | "proposed"
+  | "pending_review"
+  | "approved"
+  | "applied"
+  | "rejected"
+  | "failed";
+
+export type ImprovementReviewDecision = "approved" | "rejected";
+
+export const agentThresholdRecords = pgTable(
+  "agent_threshold_records",
+  {
+    agent: text("agent").notNull(),
+    parameter: text("parameter").notNull(),
+    value: doublePrecision("value").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    agentParameterUidx: uniqueIndex("agent_threshold_records_agent_parameter_uidx").on(
+      table.agent,
+      table.parameter
+    ),
+    agentIdx: index("agent_threshold_records_agent_idx").on(table.agent),
+  })
+);
+
+export const improvementActions = pgTable(
+  "improvement_actions",
+  {
+    id: text("id").primaryKey(),
+    agent: text("agent").notNull(),
+    action: text("action").notNull(),
+    parameter: text("parameter").notNull(),
+    category: text("category").$type<ChangeCategory>().notNull(),
+    autoApprove: boolean("auto_approve").notNull(),
+    fromValue: doublePrecision("from_value").notNull(),
+    toValue: doublePrecision("to_value").notNull(),
+    reason: text("reason").notNull(),
+    metricJson: jsonb("metric_json")
+      .$type<{ successRate: number; runs: number }>()
+      .notNull(),
+
+    status: text("status").$type<ImprovementActionStatus>().notNull().default("proposed"),
+
+    proposedAt: timestamp("proposed_at", { withTimezone: true }).notNull().defaultNow(),
+    queuedForReviewAt: timestamp("queued_for_review_at", { withTimezone: true }),
+
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    appliedBy: text("applied_by"),
+
+    rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+    rejectedBy: text("rejected_by"),
+
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    failureReason: text("failure_reason"),
+  },
+  (table) => ({
+    statusIdx: index("improvement_actions_status_idx").on(table.status),
+    agentParameterIdx: index("improvement_actions_agent_parameter_idx").on(
+      table.agent,
+      table.parameter
+    ),
+    proposedAtIdx: index("improvement_actions_proposed_at_idx").on(table.proposedAt),
+  })
+);
+
+export const improvementReviews = pgTable(
+  "improvement_reviews",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    actionId: text("action_id").notNull(),
+    reviewerId: text("reviewer_id").notNull(),
+    decision: text("decision").$type<ImprovementReviewDecision>().notNull(),
+    note: text("note"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    actionIdx: index("improvement_reviews_action_idx").on(table.actionId),
+    reviewerIdx: index("improvement_reviews_reviewer_idx").on(table.reviewerId),
+  })
+);
+
+export const improvementCycleLog = pgTable(
+  "improvement_cycle_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    cycleId: text("cycle_id").notNull(),
+    actionId: text("action_id").notNull(),
+    agent: text("agent").notNull(),
+    parameter: text("parameter").notNull(),
+    fromValue: doublePrecision("from_value").notNull(),
+    toValue: doublePrecision("to_value").notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+    appliedBy: text("applied_by").notNull(),
+  },
+  (table) => ({
+    cycleIdx: index("improvement_cycle_log_cycle_idx").on(table.cycleId),
+    appliedByIdx: index("improvement_cycle_log_applied_by_idx").on(table.appliedBy),
+    appliedAtIdx: index("improvement_cycle_log_applied_at_idx").on(table.appliedAt),
+    actionIdx: uniqueIndex("improvement_cycle_log_action_uidx").on(table.actionId),
+  })
+);
+2) server/agents/selfImprove.ts
+// server/agents/selfImprove.ts
+import crypto from "crypto";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { db } from "../db";
+import {
+  agentThresholdRecords,
+  improvementActions,
+  improvementReviews,
+  ChangeCategory,
+  ImprovementActionStatus,
+  ImprovementReviewDecision,
+} from "../../shared/schema";
+import { auditStep } from "../audit/auditLogger";
+import { publish } from "../events/pubsub";
+import { getAgentStats } from "./agentStats";
+
+// Replace `any` with your project’s Drizzle tx type if you already expose it.
+type DbExecutor = any;
+
+export const AUTO_APPROVE_PERMITTED: Record<ChangeCategory, boolean> = {
+  operational: true,
+  performance: false,
+  clinical: false,
+  security: false,
+};
+
+interface ThresholdBounds {
+  min: number;
+  max: number;
+  step: number;
+  category: ChangeCategory;
+}
+
+const THRESHOLD_BOUNDS: Record<string, ThresholdBounds> = {
+  conservatism: {
+    min: 0.0,
+    max: 0.9,
+    step: 0.1,
+    category: "performance",
+  },
+  retryLimit: {
+    min: 1,
+    max: 5,
+    step: 1,
+    category: "operational",
+  },
+  timeoutMs: {
+    min: 1000,
+    max: 30000,
+    step: 1000,
+    category: "operational",
+  },
+  riskThreshold: {
+    min: 0.3,
+    max: 0.9,
+    step: 0.05,
+    category: "clinical",
+  },
+};
+
+const MAX_AGENT_THRESHOLD_ENTRIES = 100;
+const ACTION_LOCK_PREFIX = "self-improve-action";
+
+export interface ImprovementMetric {
+  successRate: number;
+  runs: number;
+}
+
+export interface ImprovementAction {
+  id: string;
+  agent: string;
+  action: string;
+  parameter: string;
+  fromValue: number;
+  toValue: number;
+  category: ChangeCategory;
+  autoApprove: boolean;
+  status: ImprovementActionStatus;
+  reason: string;
+  metric: ImprovementMetric;
+  timestamp: string;
+  appliedAt?: string;
+  appliedBy?: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+  failedAt?: string;
+  failureReason?: string;
+}
+
+export interface ApplyActionResult {
+  applied: boolean;
+  alreadyApplied: boolean;
+  action: ImprovementAction;
+}
+
+const agentThresholds = new Map<string, Map<string, number>>();
+
+function toIsoNow(): string {
+  return new Date().toISOString();
+}
+
+function advisoryLockSql(key: string) {
+  return sql`select pg_advisory_xact_lock(hashtext(${key}))`;
+}
+
+function validateAgentStat(agent: string, value: unknown): asserts value is ImprovementMetric {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Invalid agent stats for ${agent}: not an object`);
+  }
+
+  const runs = (value as any).runs;
+  const successRate = (value as any).successRate;
+
+  if (!Number.isFinite(runs) || runs < 0) {
+    throw new Error(`Invalid runs for ${agent}: ${runs}`);
+  }
+
+  if (!Number.isFinite(successRate) || successRate < 0 || successRate > 100) {
+    throw new Error(`Invalid successRate for ${agent}: ${successRate}`);
+  }
+}
+
+function asImprovementAction(row: any): ImprovementAction {
+  return {
+    id: row.id,
+    agent: row.agent,
+    action: row.action,
+    parameter: row.parameter,
+    fromValue: row.fromValue,
+    toValue: row.toValue,
+    category: row.category,
+    autoApprove: row.autoApprove,
+    status: row.status,
+    reason: row.reason,
+    metric: row.metricJson,
+    timestamp: row.proposedAt instanceof Date ? row.proposedAt.toISOString() : row.proposedAt,
+    appliedAt: row.appliedAt ? (row.appliedAt instanceof Date ? row.appliedAt.toISOString() : row.appliedAt) : undefined,
+    appliedBy: row.appliedBy ?? undefined,
+    rejectedAt: row.rejectedAt ? (row.rejectedAt instanceof Date ? row.rejectedAt.toISOString() : row.rejectedAt) : undefined,
+    rejectedBy: row.rejectedBy ?? undefined,
+    failedAt: row.failedAt ? (row.failedAt instanceof Date ? row.failedAt.toISOString() : row.failedAt) : undefined,
+    failureReason: row.failureReason ?? undefined,
+  };
+}
+
+export async function seedThresholdsFromDb(): Promise<void> {
+  const rows = await db.select().from(agentThresholdRecords);
+
+  agentThresholds.clear();
+
+  for (const row of rows) {
+    if (!agentThresholds.has(row.agent)) {
+      agentThresholds.set(row.agent, new Map());
+    }
+    agentThresholds.get(row.agent)!.set(row.parameter, row.value);
+  }
+
+  console.log(`[SelfImprove] Seeded threshold cache for ${agentThresholds.size} agents`);
+}
+
+function getCachedThreshold(agent: string, parameter: string): number {
+  return agentThresholds.get(agent)?.get(parameter) ?? 0;
+}
+
+async function readCurrentThreshold(executor: DbExecutor, agent: string, parameter: string): Promise<number> {
+  const rows = await executor
+    .select({ value: agentThresholdRecords.value })
+    .from(agentThresholdRecords)
+    .where(
+      and(
+        eq(agentThresholdRecords.agent, agent),
+        eq(agentThresholdRecords.parameter, parameter)
+      )
+    )
+    .limit(1);
+
+  return rows.length ? rows[0].value : 0;
+}
+
+async function persistThresholdTx(
+  executor: DbExecutor,
+  agent: string,
+  parameter: string,
+  value: number
+): Promise<void> {
+  if (!agentThresholds.has(agent) && agentThresholds.size >= MAX_AGENT_THRESHOLD_ENTRIES) {
+    throw new Error(
+      `[SelfImprove] Refusing to add threshold state for "${agent}" because MAX_AGENT_THRESHOLD_ENTRIES=${MAX_AGENT_THRESHOLD_ENTRIES} has been reached`
+    );
+  }
+
+  await executor
+    .insert(agentThresholdRecords)
+    .values({
+      agent,
+      parameter,
+      value,
+      updatedAt: toIsoNow(),
+    })
+    .onConflictDoUpdate({
+      target: [agentThresholdRecords.agent, agentThresholdRecords.parameter],
+      set: {
+        value,
+        updatedAt: toIsoNow(),
+      },
+    });
+
+  if (!agentThresholds.has(agent)) {
+    agentThresholds.set(agent, new Map());
+  }
+  agentThresholds.get(agent)!.set(parameter, value);
+}
+
+async function hasOpenProposal(
+  executor: DbExecutor,
+  agent: string,
+  parameter: string
+): Promise<boolean> {
+  const rows = await executor
+    .select({ id: improvementActions.id })
+    .from(improvementActions)
+    .where(
+      and(
+        eq(improvementActions.agent, agent),
+        eq(improvementActions.parameter, parameter),
+        inArray(improvementActions.status, ["proposed", "pending_review", "approved"])
+      )
+    )
+    .limit(1);
+
+  return rows.length > 0;
+}
+
+export async function listPendingReviewActions(limit = 50): Promise<ImprovementAction[]> {
+  const rows = await db
+    .select()
+    .from(improvementActions)
+    .where(eq(improvementActions.status, "pending_review"))
+    .limit(limit);
+
+  return rows.map(asImprovementAction);
+}
+
+export async function listApprovedUnappliedActions(limit = 50): Promise<ImprovementAction[]> {
+  const rows = await db
+    .select()
+    .from(improvementActions)
+    .where(eq(improvementActions.status, "approved"))
+    .limit(limit);
+
+  return rows.map(asImprovementAction);
+}
+
+/**
+ * Generates proposals.
+ * Duplicate open proposals are suppressed here.
+ * Status is derived from category policy:
+ * - operational => approved
+ * - everything else => pending_review
+ */
+export async function evaluateAndImprove(executor: DbExecutor = db): Promise<ImprovementAction[]> {
+  const rawStats = getAgentStats();
+  const actions: ImprovementAction[] = [];
+
+  for (const [agent, statValue] of Object.entries(rawStats)) {
+    validateAgentStat(agent, statValue);
+    const stat = statValue as ImprovementMetric;
+
+    if (stat.runs < 5) continue;
+    if (stat.successRate >= 60) continue;
+
+    const parameter = "conservatism";
+    const bounds = THRESHOLD_BOUNDS[parameter];
+    const current = getCachedThreshold(agent, parameter);
+
+    // Duplicate proposal suppression
+    if (await hasOpenProposal(executor, agent, parameter)) {
+      console.warn(`[SelfImprove] Skipping duplicate open proposal for ${agent}.${parameter}`);
+      continue;
+    }
+
+    const proposed = Math.min(
+      Math.round((current + bounds.step) * 1000) / 1000,
+      bounds.max
+    );
+
+    if (proposed === current) {
+      console.warn(`[SelfImprove] ${agent}.${parameter} already at ceiling (${bounds.max})`);
+      continue;
+    }
+
+    const autoApprove = AUTO_APPROVE_PERMITTED[bounds.category];
+    const status: ImprovementActionStatus = autoApprove ? "approved" : "pending_review";
+    const timestamp = toIsoNow();
+
+    const action: ImprovementAction = {
+      id: crypto.randomUUID(),
+      agent,
+      action: "threshold_adjustment",
+      parameter,
+      fromValue: current,
+      toValue: proposed,
+      category: bounds.category,
+      autoApprove,
+      status,
+      reason: `Success rate ${stat.successRate}% below 60% threshold over ${stat.runs} runs`,
+      metric: { successRate: stat.successRate, runs: stat.runs },
+      timestamp,
+    };
+
+    await executor.insert(improvementActions).values({
+      id: action.id,
+      agent: action.agent,
+      action: action.action,
+      parameter: action.parameter,
+      category: action.category,
+      autoApprove: action.autoApprove,
+      fromValue: action.fromValue,
+      toValue: action.toValue,
+      reason: action.reason,
+      metricJson: action.metric,
+      status: action.status,
+      proposedAt: timestamp,
+      queuedForReviewAt: status === "pending_review" ? timestamp : null,
+    });
+
+    actions.push(action);
+
+    publish(
+      status === "pending_review"
+        ? "selfimprove:review_required"
+        : "selfimprove:adjustment_approved",
+      {
+        actionId: action.id,
+        agent: action.agent,
+        parameter: action.parameter,
+        fromValue: action.fromValue,
+        toValue: action.toValue,
+        category: action.category,
+        autoApprove: action.autoApprove,
+        status: action.status,
+      }
+    );
+  }
+
+  return actions;
+}
+
+/**
+ * Idempotent apply path.
+ * - distributed action lock
+ * - explicit status checks
+ * - compare-and-swap on fromValue
+ * - status written to "applied"
+ */
+export async function applyImprovementAction(
+  actionId: string,
+  appliedBy: string
+): Promise<ApplyActionResult> {
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(advisoryLockSql(`${ACTION_LOCK_PREFIX}:${actionId}`));
+
+    const rows = await tx
+      .select()
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!rows.length) {
+      throw new Error(`[SelfImprove] Unknown action ${actionId}`);
+    }
+
+    const row = rows[0];
+    const action = asImprovementAction(row);
+
+    if (action.status === "applied") {
+      return { applied: false, alreadyApplied: true, action };
+    }
+
+    if (action.status === "rejected") {
+      throw new Error(`[SelfImprove] Cannot apply rejected action ${actionId}`);
+    }
+
+    if (action.status !== "approved") {
+      throw new Error(
+        `[SelfImprove] Action ${actionId} must be in status "approved" before apply (current: ${action.status})`
+      );
+    }
+
+    const bounds = THRESHOLD_BOUNDS[action.parameter];
+    if (!bounds) {
+      throw new Error(`[SelfImprove] No bounds registered for parameter ${action.parameter}`);
+    }
+
+    if (action.toValue < bounds.min || action.toValue > bounds.max) {
+      throw new Error(
+        `[SelfImprove] Refused out-of-bounds apply: ${action.parameter}=${action.toValue} (${bounds.min}–${bounds.max})`
+      );
+    }
+
+    const currentValue = await readCurrentThreshold(tx, action.agent, action.parameter);
+    if (Math.abs(currentValue - action.fromValue) > 1e-9) {
+      throw new Error(
+        `[SelfImprove] Stale proposal for ${action.agent}.${action.parameter}: current=${currentValue}, expected=${action.fromValue}`
+      );
+    }
+
+    await persistThresholdTx(tx, action.agent, action.parameter, action.toValue);
+
+    await tx
+      .update(improvementActions)
+      .set({
+        status: "applied",
+        appliedAt: toIsoNow(),
+        appliedBy,
+        failureReason: null,
+        failedAt: null,
+      })
+      .where(eq(improvementActions.id, actionId));
+
+    const refreshed = {
+      ...action,
+      status: "applied" as ImprovementActionStatus,
+      appliedAt: toIsoNow(),
+      appliedBy,
+    };
+
+    return { applied: true, alreadyApplied: false, action: refreshed };
+  });
+
+  if (result.applied) {
+    await auditStep({
+      traceId: `selfimprove-${actionId}`,
+      step: "improvement_action_applied",
+      input: { actionId },
+      output: { appliedBy },
+      metadata: {
+        agent: result.action.agent,
+        parameter: result.action.parameter,
+        fromValue: result.action.fromValue,
+        toValue: result.action.toValue,
+        category: result.action.category,
+        autoApprove: result.action.autoApprove,
+        reason: result.action.reason,
+        metric: result.action.metric,
+      },
+    });
+
+    publish("selfimprove:adjustment_applied", {
+      actionId,
+      agent: result.action.agent,
+      parameter: result.action.parameter,
+      fromValue: result.action.fromValue,
+      toValue: result.action.toValue,
+      appliedBy,
+    });
+  }
+
+  return result;
+}
+
+export async function markActionFailed(actionId: string, reason: string): Promise<void> {
+  await db
+    .update(improvementActions)
+    .set({
+      status: "failed",
+      failedAt: toIsoNow(),
+      failureReason: reason,
+    })
+    .where(eq(improvementActions.id, actionId));
+
+  await auditStep({
+    traceId: `selfimprove-${actionId}`,
+    step: "improvement_action_failed",
+    input: { actionId },
+    output: null,
+    metadata: { reason },
+  });
+}
+
+export async function queueActionForReview(actionId: string): Promise<void> {
+  await db
+    .update(improvementActions)
+    .set({
+      status: "pending_review",
+      queuedForReviewAt: toIsoNow(),
+    })
+    .where(eq(improvementActions.id, actionId));
+}
+
+/**
+ * Physician approves and the action is applied immediately.
+ */
+export async function approveImprovementAction(
+  actionId: string,
+  reviewerId: string,
+  note?: string
+): Promise<ApplyActionResult> {
+  await db.transaction(async (tx) => {
+    await tx.execute(advisoryLockSql(`${ACTION_LOCK_PREFIX}:${actionId}`));
+
+    const rows = await tx
+      .select()
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!rows.length) {
+      throw new Error(`[SelfImprove] Unknown action ${actionId}`);
+    }
+
+    const current = asImprovementAction(rows[0]);
+
+    if (current.status === "applied") {
+      return;
+    }
+
+    if (current.status === "rejected") {
+      throw new Error(`[SelfImprove] Cannot approve rejected action ${actionId}`);
+    }
+
+    await tx.insert(improvementReviews).values({
+      actionId,
+      reviewerId,
+      decision: "approved" satisfies ImprovementReviewDecision,
+      note: note ?? null,
+      reviewedAt: toIsoNow(),
+    });
+
+    await tx
+      .update(improvementActions)
+      .set({
+        status: "approved",
+        failureReason: null,
+        failedAt: null,
+      })
+      .where(eq(improvementActions.id, actionId));
+  });
+
+  await auditStep({
+    traceId: `selfimprove-review-${actionId}`,
+    step: "improvement_action_approved",
+    input: { actionId },
+    output: { reviewerId },
+    metadata: { note: note ?? null },
+  });
+
+  return applyImprovementAction(actionId, reviewerId);
+}
+
+export async function rejectImprovementAction(
+  actionId: string,
+  reviewerId: string,
+  note?: string
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(advisoryLockSql(`${ACTION_LOCK_PREFIX}:${actionId}`));
+
+    const rows = await tx
+      .select()
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!rows.length) {
+      throw new Error(`[SelfImprove] Unknown action ${actionId}`);
+    }
+
+    const current = asImprovementAction(rows[0]);
+    if (current.status === "applied") {
+      throw new Error(`[SelfImprove] Cannot reject already applied action ${actionId}`);
+    }
+    if (current.status === "rejected") {
+      return;
+    }
+
+    await tx.insert(improvementReviews).values({
+      actionId,
+      reviewerId,
+      decision: "rejected" satisfies ImprovementReviewDecision,
+      note: note ?? null,
+      reviewedAt: toIsoNow(),
+    });
+
+    await tx
+      .update(improvementActions)
+      .set({
+        status: "rejected",
+        rejectedAt: toIsoNow(),
+        rejectedBy: reviewerId,
+        failureReason: null,
+        failedAt: null,
+      })
+      .where(eq(improvementActions.id, actionId));
+  });
+
+  await auditStep({
+    traceId: `selfimprove-review-${actionId}`,
+    step: "improvement_action_rejected",
+    input: { actionId },
+    output: { reviewerId },
+    metadata: { note: note ?? null },
+  });
+
+  publish("selfimprove:adjustment_rejected", {
+    actionId,
+    reviewerId,
+    note: note ?? null,
+  });
+}
+3) server/agents/selfImprovementOrchestrator.ts
+// server/agents/selfImprovementOrchestrator.ts
+import crypto from "crypto";
+import { and, eq, gte, sql } from "drizzle-orm";
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+import {
+  improvementCycleLog,
+} from "../../shared/schema";
+import {
+  AUTO_APPROVE_PERMITTED,
+  applyImprovementAction,
+  evaluateAndImprove,
+  ImprovementAction,
+  listApprovedUnappliedActions,
+  markActionFailed,
+} from "./selfImprove";
+
+const CYCLE_LOCK_KEY = "self-improvement-cycle";
+
+const AUTO_APPROVE_RATE_LIMIT = {
+  maxChanges: 5,
+  windowHours: 24,
+};
+
+export interface OrchestrationResult {
+  cycleId: string;
+  proposedCount: number;
+  appliedCount: number;
+  skippedCount: number;
+  rateLimited: number;
+  applied: { id: string; agent: string; parameter: string; toValue: number }[];
+  skipped: { id: string; agent: string; reason: string }[];
+  timestamp: string;
+}
+
+function toIsoNow(): string {
+  return new Date().toISOString();
+}
+
+export async function runContinuousImprovement(): Promise<OrchestrationResult> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${CYCLE_LOCK_KEY}))`);
+    return _runCycle(tx);
+  });
+}
+
+async function _runCycle(executor: any): Promise<OrchestrationResult> {
+  const cycleId = crypto.randomUUID();
+  const timestamp = toIsoNow();
+
+  await auditStep({
+    traceId: `selfimprove-cycle-${cycleId}`,
+    step: "improvement_cycle_started",
+    input: { cycleId },
+    output: null,
+    metadata: { timestamp },
+  });
+
+  const windowStart = new Date(
+    Date.now() - AUTO_APPROVE_RATE_LIMIT.windowHours * 3600_000
+  ).toISOString();
+
+  const recentRows = await executor
+    .select({ value: sql<number>`count(*)` })
+    .from(improvementCycleLog)
+    .where(
+      and(
+        eq(improvementCycleLog.appliedBy, "auto-approved"),
+        gte(improvementCycleLog.appliedAt, windowStart)
+      )
+    );
+
+  const recentAutoApplied = Number(recentRows[0]?.value ?? 0);
+  const remainingBudget = Math.max(
+    0,
+    AUTO_APPROVE_RATE_LIMIT.maxChanges - recentAutoApplied
+  );
+
+  let proposedActions: ImprovementAction[] = [];
+  try {
+    proposedActions = await evaluateAndImprove(executor);
+  } catch (err) {
+    await auditStep({
+      traceId: `selfimprove-cycle-${cycleId}`,
+      step: "improvement_cycle_evaluation_error",
+      input: { cycleId },
+      output: null,
+      metadata: { error: err instanceof Error ? err.message : String(err) },
+    });
+
+    return {
+      cycleId,
+      proposedCount: 0,
+      appliedCount: 0,
+      skippedCount: 0,
+      rateLimited: 0,
+      applied: [],
+      skipped: [],
+      timestamp,
+    };
+  }
+
+  const approvedUnapplied = await listApprovedUnappliedActions(100);
+
+  // Merge newly proposed + previously approved but not yet applied
+  const uniqueById = new Map<string, ImprovementAction>();
+  for (const action of [...proposedActions, ...approvedUnapplied]) {
+    uniqueById.set(action.id, action);
+  }
+
+  const candidates = Array.from(uniqueById.values());
+  const applied: OrchestrationResult["applied"] = [];
+  const skipped: OrchestrationResult["skipped"] = [];
+  let rateLimited = 0;
+  let autoAppliedThisCycle = 0;
+
+  for (const action of candidates) {
+    // Anything not auto-approvable stays in the review queue.
+    if (!AUTO_APPROVE_PERMITTED[action.category] || !action.autoApprove) {
+      skipped.push({
+        id: action.id,
+        agent: action.agent,
+        reason: `Category "${action.category}" requires physician review`,
+      });
+      continue;
+    }
+
+    if (autoAppliedThisCycle >= remainingBudget) {
+      rateLimited++;
+      skipped.push({
+        id: action.id,
+        agent: action.agent,
+        reason: `Rate limit reached: ${AUTO_APPROVE_RATE_LIMIT.maxChanges} auto-approvals per ${AUTO_APPROVE_RATE_LIMIT.windowHours}h`,
+      });
+      continue;
+    }
+
+    try {
+      const applyResult = await applyImprovementAction(action.id, "auto-approved");
+
+      if (applyResult.applied) {
+        await executor.insert(improvementCycleLog).values({
+          cycleId,
+          actionId: action.id,
+          agent: action.agent,
+          parameter: action.parameter,
+          fromValue: action.fromValue,
+          toValue: action.toValue,
+          appliedAt: toIsoNow(),
+          appliedBy: "auto-approved",
+        });
+
+        applied.push({
+          id: action.id,
+          agent: action.agent,
+          parameter: action.parameter,
+          toValue: action.toValue,
+        });
+
+        autoAppliedThisCycle++;
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await markActionFailed(action.id, reason);
+
+      skipped.push({
+        id: action.id,
+        agent: action.agent,
+        reason: `Application error: ${reason}`,
+      });
+    }
+  }
+
+  const result: OrchestrationResult = {
+    cycleId,
+    proposedCount: proposedActions.length,
+    appliedCount: applied.length,
+    skippedCount: skipped.length,
+    rateLimited,
+    applied,
+    skipped,
+    timestamp,
+  };
+
+  await auditStep({
+    traceId: `selfimprove-cycle-${cycleId}`,
+    step: "improvement_cycle_completed",
+    input: { cycleId, proposedCount: result.proposedCount },
+    output: {
+      appliedCount: result.appliedCount,
+      skippedCount: result.skippedCount,
+      rateLimited: result.rateLimited,
+    },
+    metadata: {
+      applied,
+      skipped,
+    },
+  });
+
+  return result;
+}
+4) server/agents/selfImprovementReviewService.ts
+// server/agents/selfImprovementReviewService.ts
+import {
+  approveImprovementAction,
+  rejectImprovementAction,
+  listPendingReviewActions,
+  ImprovementAction,
+} from "./selfImprove";
+
+export async function getPendingImprovementReviews(): Promise<ImprovementAction[]> {
+  return listPendingReviewActions(100);
+}
+
+export async function approveImprovementReview(
+  actionId: string,
+  reviewerId: string,
+  note?: string
+) {
+  return approveImprovementAction(actionId, reviewerId, note);
+}
+
+export async function rejectImprovementReview(
+  actionId: string,
+  reviewerId: string,
+  note?: string
+) {
+  return rejectImprovementAction(actionId, reviewerId, note);
+}
+5) server/routes/selfImprovement.ts
+// server/routes/selfImprovement.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { runContinuousImprovement } from "../agents/selfImprovementOrchestrator";
+import {
+  getPendingImprovementReviews,
+  approveImprovementReview,
+  rejectImprovementReview,
+} from "../agents/selfImprovementReviewService";
+
+const router = Router();
+
+// Kick off a cycle manually
+router.post(
+  "/run",
+  requireAuth,
+  requirePermission("deployment:manage"),
+  async (_req, res) => {
+    const result = await runContinuousImprovement();
+    res.json(result);
+  }
+);
+
+// Pending physician review queue
+router.get(
+  "/reviews/pending",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (_req, res) => {
+    const rows = await getPendingImprovementReviews();
+    res.json(rows);
+  }
+);
+
+// Approve + apply
+router.post(
+  "/reviews/:actionId/approve",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    const reviewerId = req.user?.sub;
+    if (!reviewerId) {
+      return res.status(401).json({ error: "Missing reviewer identity" });
+    }
+
+    const note =
+      typeof req.body?.note === "string" ? req.body.note.trim() : undefined;
+
+    const result = await approveImprovementReview(
+      req.params.actionId,
+      reviewerId,
+      note
+    );
+
+    res.json({
+      ok: true,
+      actionId: req.params.actionId,
+      applied: result.applied,
+      alreadyApplied: result.alreadyApplied,
+    });
+  }
+);
+
+// Reject
+router.post(
+  "/reviews/:actionId/reject",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    const reviewerId = req.user?.sub;
+    if (!reviewerId) {
+      return res.status(401).json({ error: "Missing reviewer identity" });
+    }
+
+    const note =
+      typeof req.body?.note === "string" ? req.body.note.trim() : undefined;
+
+    await rejectImprovementReview(req.params.actionId, reviewerId, note);
+
+    res.json({
+      ok: true,
+      actionId: req.params.actionId,
+      status: "rejected",
+    });
+  }
+);
+
+export default router;
+6) Minimal agentStats contract this expects
+// server/agents/agentStats.ts
+export interface AgentStat {
+  runs: number;
+  successRate: number; // 0..100
+}
+
+export function getAgentStats(): Record<string, AgentStat> {
+  // Replace with your real metrics source.
+  return {
+    triage_ai: { runs: 12, successRate: 52 },
+    email_agent: { runs: 20, successRate: 91 },
+  };
+}
+7) The key behaviors now covered
+
+This patch implements the seven items you asked for:
+
+Distributed locking
+runContinuousImprovement() uses a Postgres advisory lock, so overlapping cycles across instances serialize.
+Idempotent apply
+applyImprovementAction() returns early if status is already applied.
+Compare-and-swap on stale proposals
+Apply checks that current threshold still equals fromValue.
+Explicit lifecycle status
+proposed | pending_review | approved | applied | rejected | failed
+Duplicate proposal suppression
+hasOpenProposal() blocks new open proposals for the same agent + parameter.
+Validated stats inputs
+validateAgentStat() rejects malformed runs / successRate.
+Full physician review approve/reject flow
+Review queue listing, approve-and-apply, reject, review records, and audit trail.
+
+The biggest remaining thing after this would be adding a partial unique DB constraint for “only one open proposal per agent+parameter” at the database layer, so duplicate suppression is enforced even if two writers race. The current version does it in code, which is good, but the vault door gets thicker if the DB also says “absolutely not.”

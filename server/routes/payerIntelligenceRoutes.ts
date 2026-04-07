@@ -214,18 +214,18 @@ router.post("/clinics/:id/adjust-diagnosis", requireRole(["admin", "physician"])
   res.json(adjustDiagnosisForClinic(String(req.params.id), diagnoses));
 });
 
-router.post("/self-improve/run", requireRole(["admin"]), (_req, res) => {
-  const actions = evaluateAndImprove();
+router.post("/self-improve/run", requireRole(["admin"]), async (_req, res) => {
+  const actions = await evaluateAndImprove();
   res.json({ actions, count: actions.length });
 });
 
-router.get("/self-improve/log", requireRole(["admin"]), (req, res) => {
+router.get("/self-improve/log", requireRole(["admin"]), async (req, res) => {
   const limit = Number(req.query.limit ?? 100);
-  res.json(getImprovementLog(limit));
+  res.json(await getImprovementLog(limit));
 });
 
-router.get("/self-improve/thresholds", requireRole(["admin"]), (_req, res) => {
-  res.json(getAgentThresholds());
+router.get("/self-improve/thresholds", requireRole(["admin"]), async (_req, res) => {
+  res.json(await getAgentThresholds());
 });
 
 router.post("/self-improve/start", requireRole(["admin"]), (_req, res) => {
