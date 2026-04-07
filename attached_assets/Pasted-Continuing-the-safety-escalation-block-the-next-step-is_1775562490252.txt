@@ -1,0 +1,410 @@
+Continuing the safety/escalation block, the next step is to harden the plumbing around it, not just the gate itself. The uploaded rewrite already fixes two major defects: invalid riskScore values like NaN no longer slip through, and the escalation window is no longer trapped in single-process memory because it introduces an injectable store with a Redis path.
+
+Where I’d push next is here:
+
+1. Move thresholds out of code and into an approved config record
+
+The file correctly says hardcoded thresholds are a compliance and deployment problem, but the rewrite still keeps DEFAULT_CONFIG in source and only documents the desired process in comments. That is better than magic numbers with no explanation, but it is still not an auditable control plane.
+
+I would add a versioned safety-config table and a loader that always resolves the active config before the gate runs.
+
+// shared/schema.ts
+import {
+  pgTable,
+  bigserial,
+  boolean,
+  text,
+  timestamp,
+  numeric,
+  index,
+} from "drizzle-orm/pg-core";
+
+export const safetyConfigs = pgTable(
+  "safety_configs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    version: text("version").notNull().unique(),
+    isActive: boolean("is_active").notNull().default(false),
+
+    riskThreshold: numeric("risk_threshold", { precision: 6, scale: 4 }).notNull(),
+    hardStopThreshold: numeric("hard_stop_threshold", { precision: 6, scale: 4 }).notNull(),
+    uncertaintyThreshold: numeric("uncertainty_threshold", { precision: 6, scale: 4 }).notNull(),
+
+    approvedBy: text("approved_by").notNull(),
+    approvalNote: text("approval_note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+  },
+  (table) => ({
+    activeIdx: index("safety_configs_active_idx").on(table.isActive),
+  })
+);
+// server/clinical/safetyConfigService.ts
+import { db } from "../db";
+import { safetyConfigs } from "../../shared/schema";
+import { desc, eq } from "drizzle-orm";
+
+export interface PersistedSafetyGateConfig {
+  riskThreshold: number;
+  hardStopThreshold: number;
+  uncertaintyThreshold: number;
+  configVersion: string;
+}
+
+function toNumber(value: unknown): number {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) {
+    throw new Error(`Invalid numeric config value: ${value}`);
+  }
+  return n;
+}
+
+export async function getActiveSafetyConfig(): Promise<PersistedSafetyGateConfig> {
+  const rows = await db
+    .select()
+    .from(safetyConfigs)
+    .where(eq(safetyConfigs.isActive, true))
+    .orderBy(desc(safetyConfigs.createdAt))
+    .limit(1);
+
+  if (!rows.length) {
+    throw new Error("No active safety configuration found.");
+  }
+
+  const row = rows[0];
+
+  return {
+    riskThreshold: toNumber(row.riskThreshold),
+    hardStopThreshold: toNumber(row.hardStopThreshold),
+    uncertaintyThreshold: toNumber(row.uncertaintyThreshold),
+    configVersion: row.version,
+  };
+}
+
+That converts “please don’t edit this casually” into something more like a locked cabinet with a sign-in sheet. 🗄️
+
+2. Scope escalation counters by tenant, clinic, model, and complaint
+
+The uploaded Redis implementation uses global keys: escalation:total and escalation:er. In a multi-tenant clinical system, that means one clinic’s referral behavior can influence another clinic’s suppression recommendation. That is a cross-contamination bug waiting to wear a stethoscope.
+
+I would introduce a scope object and derive keys from it.
+
+// server/clinical/escalationScope.ts
+export interface EscalationScope {
+  tenantId: string;
+  clinicId?: string;
+  modelVersion?: string;
+  complaint?: string;
+}
+
+export function buildEscalationKey(scope: EscalationScope, metric: "total" | "er"): string {
+  const tenant = scope.tenantId;
+  const clinic = scope.clinicId ?? "all-clinics";
+  const model = scope.modelVersion ?? "all-models";
+  const complaint = scope.complaint ?? "all-complaints";
+
+  return `escalation:${tenant}:${clinic}:${model}:${complaint}:${metric}`;
+}
+// server/clinical/escalationGuard.ts
+import { buildEscalationKey, EscalationScope } from "./escalationScope";
+
+export class RedisEscalationStore {
+  private readonly windowSec: number;
+
+  constructor(
+    private redis: RedisClient,
+    private scope: EscalationScope,
+    windowMs = 60 * 60 * 1000
+  ) {
+    this.windowSec = Math.floor(windowMs / 1000);
+  }
+
+  private totalKey() {
+    return buildEscalationKey(this.scope, "total");
+  }
+
+  private erKey() {
+    return buildEscalationKey(this.scope, "er");
+  }
+
+  async incrementTotal(): Promise<number> {
+    const count = await this.redis.incr(this.totalKey());
+    if (count === 1) await this.redis.expire(this.totalKey(), this.windowSec);
+    return count;
+  }
+
+  async incrementEr(): Promise<number> {
+    const count = await this.redis.incr(this.erKey());
+    if (count === 1) await this.redis.expire(this.erKey(), this.windowSec);
+    return count;
+  }
+
+  async getCounts(): Promise<{ erCount: number; totalCount: number }> {
+    const [total, er] = await this.redis.mget(this.totalKey(), this.erKey());
+    return {
+      totalCount: total ? parseInt(total, 10) : 0,
+      erCount: er ? parseInt(er, 10) : 0,
+    };
+  }
+
+  async reset(): Promise<void> {
+    await this.redis.del(this.totalKey(), this.erKey());
+  }
+}
+3. Add a minimum sample size before rate suppression can trigger
+
+Right now, if the store has 1 total case and 1 ER case, the live rate is 100%, and the advisory control triggers immediately. The file’s logic computes rate directly from erCount / totalCount with no minimum denominator guard.
+
+That makes the system twitchy on tiny samples. I’d add minCasesPerWindow.
+
+// server/clinical/escalationGuard.ts
+export interface EscalationConfig {
+  erRateThreshold: number;
+  erHourlyCap: number;
+  minCasesPerWindow: number;
+  probabilityDelta: number;
+}
+
+const DEFAULT_ESCALATION_CONFIG: EscalationConfig = {
+  erRateThreshold: 0.40,
+  erHourlyCap: 120,
+  minCasesPerWindow: 50,
+  probabilityDelta: -0.20,
+};
+
+export interface EscalationAdjustment {
+  adjust: boolean;
+  probabilityDelta: number;
+  reason: string;
+  currentRate: number;
+  hourlyErCount: number;
+  totalCount: number;
+  recommendation: string;
+}
+
+export async function escalationControl(
+  store: EscalationStore,
+  config: EscalationConfig = DEFAULT_ESCALATION_CONFIG
+): Promise<EscalationAdjustment> {
+  let counts = { erCount: 0, totalCount: 0 };
+
+  try {
+    counts = (await store.getCounts()) ?? { erCount: 0, totalCount: 0 };
+  } catch (err) {
+    return {
+      adjust: false,
+      probabilityDelta: 0,
+      reason: "counts_unavailable",
+      currentRate: 0,
+      hourlyErCount: 0,
+      totalCount: 0,
+      recommendation: "Escalation counts unavailable. No advisory suppression applied.",
+    };
+  }
+
+  const { erCount, totalCount } = counts;
+  const liveRate = totalCount > 0 ? erCount / totalCount : 0;
+
+  const enoughData = totalCount >= config.minCasesPerWindow;
+  const rateExceeded = enoughData && liveRate > config.erRateThreshold;
+  const capExceeded = erCount > config.erHourlyCap;
+
+  if (rateExceeded || capExceeded) {
+    const reason =
+      rateExceeded && capExceeded
+        ? "rate_and_cap_exceeded"
+        : rateExceeded
+        ? "over_escalation_rate"
+        : "hourly_er_cap_exceeded";
+
+    return {
+      adjust: true,
+      probabilityDelta: config.probabilityDelta,
+      reason,
+      currentRate: +liveRate.toFixed(3),
+      hourlyErCount: erCount,
+      totalCount,
+      recommendation:
+        `Advisory adjustment active (${reason}). ` +
+        `Apply probability delta ${config.probabilityDelta} to ER referral probability after base scoring.`,
+    };
+  }
+
+  return {
+    adjust: false,
+    probabilityDelta: 0,
+    reason: enoughData ? "within_normal_range" : "insufficient_sample_size",
+    currentRate: +liveRate.toFixed(3),
+    hourlyErCount: erCount,
+    totalCount,
+    recommendation: enoughData
+      ? "No escalation adjustment needed."
+      : `Only ${totalCount} cases in current window. Not enough data for rate-based suppression.`,
+  };
+}
+
+Two deliberate changes there:
+
+adjustmentFactor becomes probabilityDelta, because that is what the code comment actually describes
+minCasesPerWindow prevents a one-case weather vane from steering the ship
+
+Both are direct cleanups of issues still latent in the uploaded rewrite.
+
+4. Make the caller enforce hard-stop semantics explicitly
+
+The file improves the gate result by returning requiredAction: "hard_stop" for extreme risk and requiredAction: "physician_review" or "confidence_boost" for other blocks. But that still depends on the caller behaving correctly. The real safety hinge is the orchestration path that consumes this result.
+
+I would make that caller path explicit and boring in the best way.
+
+// server/clinical/decisionOrchestrator.ts
+import { clinicalSafetyGate } from "./safetyGate";
+import { escalationControl, recordDisposition, EscalationStore } from "./escalationGuard";
+import { getActiveSafetyConfig } from "./safetyConfigService";
+
+export interface DecisionInput {
+  patientId: string;
+  actorId?: string;
+  action: string;
+  riskScore: number;
+  uncertainty?: number;
+  erReferralProbability: number;
+  proposedDisposition: string;
+}
+
+export interface DecisionOutput {
+  allowed: boolean;
+  finalDisposition?: string;
+  finalErReferralProbability?: number;
+  blockedReason?: string;
+  gateCode?: string;
+  gateConfigVersion?: string;
+  escalationReason?: string;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+export async function evaluateClinicalDecision(
+  input: DecisionInput,
+  store: EscalationStore
+): Promise<DecisionOutput> {
+  const config = await getActiveSafetyConfig();
+
+  const gate = await clinicalSafetyGate(
+    {
+      patientId: input.patientId,
+      actorId: input.actorId,
+      action: input.action,
+      riskScore: input.riskScore,
+      uncertainty: input.uncertainty,
+    },
+    config
+  );
+
+  if (!gate.allowed) {
+    return {
+      allowed: false,
+      blockedReason: gate.reason,
+      gateCode: gate.code,
+      gateConfigVersion: gate.configVersion,
+    };
+  }
+
+  const advisory = await escalationControl(store);
+
+  const adjustedProbability = advisory.adjust
+    ? clamp01(input.erReferralProbability + advisory.probabilityDelta)
+    : input.erReferralProbability;
+
+  const finalDisposition =
+    adjustedProbability >= 0.5 ? "ER_NOW" : input.proposedDisposition;
+
+  await recordDisposition(finalDisposition, store);
+
+  return {
+    allowed: true,
+    finalDisposition,
+    finalErReferralProbability: adjustedProbability,
+    gateCode: gate.code,
+    gateConfigVersion: gate.configVersion,
+    escalationReason: advisory.reason,
+  };
+}
+
+This is the kind of code that removes “I thought hard_stop was just a warning label” from the possible future misunderstandings.
+
+5. Make the gate async and audit-safe
+
+The uploaded rewrite wraps the gate in try/catch, but all auditLog(...) calls are still un-awaited, which only truly works as claimed if auditLog is synchronous. If auditLog is async and rejects later, the fail-closed promise becomes papier-mâché.
+
+So I would convert the gate to async and centralize audit calls through a helper:
+
+// server/clinical/safeAudit.ts
+export async function safeAudit<T>(
+  fn: () => Promise<T> | T,
+  onError: (err: unknown) => void
+): Promise<T> {
+  try {
+    return await Promise.resolve(fn());
+  } catch (err) {
+    onError(err);
+    throw err;
+  }
+}
+
+Then every audit write inside clinicalSafetyGate() becomes:
+
+await safeAudit(
+  () =>
+    auditLog({
+      actor,
+      action: "safety_gate_blocked",
+      patientId,
+      riskScore,
+      details: { reason: "Risk score exceeds threshold", action, configVersion: cv },
+    }),
+  (err) => {
+    console.error("[SafetyGate] audit failed", err);
+  }
+);
+
+That makes the fail-closed promise real instead of rhetorical wallpaper.
+
+6. The tests I’d add next
+
+The uploaded tests are good for boundary values, including the especially important NaN case and hourly cap behavior. The next tests I’d add are these:
+
+// 1. Scope isolation:
+// tenant A high ER rate does not affect tenant B
+
+// 2. Minimum denominator:
+// 1 ER / 1 total does NOT trigger adjustment when minCasesPerWindow = 50
+
+// 3. Config provenance:
+// active config version returned by gate matches the DB-loaded active record
+
+// 4. Async audit failure:
+// rejected auditLog promise causes clinicalSafetyGate to block, not pass
+
+// 5. Combined trigger reason:
+// both high rate and high cap return reason = "rate_and_cap_exceeded"
+Bottom line
+
+The uploaded rewrite fixed the two flaming hazards:
+
+invalid scores like NaN no longer slide through the safety gate
+escalation no longer depends purely on per-process memory because it can use Redis-backed shared counters
+
+The next hardening wave is about making those fixes governable and unambiguous:
+
+load thresholds from an approved persisted config
+scope counters by tenant/clinic/model/complaint
+require a minimum sample size before rate suppression
+rename adjustmentFactor to probabilityDelta
+make the caller path enforce hard-stop semantics explicitly
+make audit logging truly fail-closed if it is async
+
+That turns the system from “safer code” into “safer operations,” which is where the real dragons live. 🐉
+
+The next block I’d review after this is the actual route or engine that calls evaluateClinicalDecision(), because that is where advisory logic, hard stops, overrides, and audit traces finally meet the road.

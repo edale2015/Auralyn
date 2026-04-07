@@ -1,7 +1,7 @@
 import { isLocked } from "./driftControl";
 import { detectConfirmationBias } from "./confirmationBiasGuard";
 import { updateWeights, OutcomeType } from "./biasAwareRLHF";
-import { escalationControl, recordDisposition } from "../clinical/escalationGuard";
+import { recordDispositionSync, getEscalationStats } from "../clinical/escalationGuard";
 import { canLearn } from "../release/modelFreeze";
 import { logSecureEvent } from "../ops/secureAudit";
 
@@ -51,8 +51,8 @@ export function safeLearning(input: {
     return { status: "SKIPPED", reason: bias.reason, pipelineStage: "confirmation_bias_guard" };
   }
 
-  recordDisposition(input.disposition);
-  const escalation = escalationControl();
+  recordDispositionSync(input.disposition);
+  const escalation = getEscalationStats();
 
   const weightResult = updateWeights({
     ai: input.ai,

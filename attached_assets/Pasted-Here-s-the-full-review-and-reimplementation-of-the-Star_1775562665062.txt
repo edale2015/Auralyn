@@ -1,0 +1,531 @@
+Here's the full review and reimplementation of the Startup Assertions + Runtime Safety block.
+
+A) Missing Checks Found
+1. No database connectivity test
+DATABASE_URL being set proves nothing. A misconfigured connection string, a firewall rule, or a failed DB migration will only surface when the first patient request hits the DB — potentially mid-clinical decision. The server should refuse to start if it cannot reach the database.
+2. JWT_SECRET entropy check is absent
+Any non-empty string passes. A 4-character secret like "test" has ~19 bits of entropy — brute-forceable in seconds. NIST SP 800-132 recommends a minimum of 112 bits for symmetric keys; 256 bits (32 random bytes = 64 hex chars) is the practical standard. Length alone isn't sufficient either — "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 32 chars but has ~0 entropy — but length is a cheap proxy and better than nothing.
+3. DATABASE_URL not checked in assertProductionSafe
+A production deploy with a localhost or dev database URL (e.g. postgresql://localhost/dev) would pass all current checks and silently write PHI to the wrong database.
+4. No TLS enforcement check
+HIPAA §164.312(e)(2)(ii) requires encryption in transit. A production DATABASE_URL starting with postgresql:// (no SSL) rather than postgresql://...?sslmode=require should fail startup. Same applies to Redis connections.
+5. No check that DEMO_USERS or debug flags can't leak through non-obvious env vars
+The existing check catches DEMO_USERS=true but not equivalent flags like BYPASS_AUTH, SKIP_SAFETY_GATES, or DISABLE_AUDIT that may exist in development convenience code.
+6. assertQueueReady call chain is ambiguous
+Looking at the structure: if assertQueueReady throws, whether the server refuses to start depends entirely on whether its caller catches the exception. If it's called inside runStartupChecks (which returns a result array), the throw would propagate up and crash the process — but only if the caller doesn't wrap it. The current design mixes fatal assertions (throw) with non-fatal checks (result array) with no clear contract at the call site.
+7. No check for clock synchronization
+JWT expiry depends on system time. A server with a significantly drifted clock will either issue tokens that expire immediately or issue tokens that appear valid long after they should expire. NTP drift check (Date.now() vs a trusted time source) is practical for startup.
+8. No minimum Node.js version assertion
+Crypto behavior, TLS cipher suites, and timing-safe comparison semantics differ across Node versions. A deployment on Node 14 vs Node 20 is a silent risk.
+9. SESSION_SECRET minimum length is only 12 chars
+12 characters of ASCII (~72 bits) is below the recommended minimum for session secrets used with cryptographic MACs. Should be 32+ characters.
+
+B) Rewritten startupChecks.ts
+typescript// server/config/startupChecks.ts
+import { ENV } from "./env";
+
+export interface CheckResult {
+  name:     string;
+  ok:       boolean;
+  detail:   string;
+  fatal:    boolean;  // if true, server must not start
+}
+
+// ─────────────────────────────────────────────────────────────
+// Individual check implementations
+// ─────────────────────────────────────────────────────────────
+
+async function checkDatabaseReachable(): Promise<CheckResult> {
+  const name = "DATABASE_CONNECTIVITY";
+  try {
+    // Dynamic import so this module can be tested without a real DB
+    const { db } = await import("../db");
+    const { sql } = await import("drizzle-orm");
+
+    // Timeout after 5 seconds — don't hang startup indefinitely
+    const result = await Promise.race([
+      db.execute(sql`SELECT 1 AS ping`),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("DB ping timed out after 5s")), 5000)
+      ),
+    ]);
+
+    return { name, ok: true, fatal: true, detail: "Database reachable (SELECT 1 passed)" };
+  } catch (err) {
+    return {
+      name, ok: false, fatal: true,
+      detail: `Database unreachable: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+}
+
+async function checkRedisReachable(): Promise<CheckResult> {
+  const name = "REDIS_CONNECTIVITY";
+  if (!ENV.REDIS_URL) {
+    return { name, ok: false, fatal: false, detail: "REDIS_URL not set — escalation guard will use in-memory store (single instance only)" };
+  }
+  try {
+    const { createClient } = await import("redis");
+    const client = createClient({ url: ENV.REDIS_URL });
+    await Promise.race([
+      client.connect(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Redis ping timed out after 5s")), 5000)
+      ),
+    ]);
+    await client.ping();
+    await client.disconnect();
+    return { name, ok: true, fatal: false, detail: "Redis reachable" };
+  } catch (err) {
+    return {
+      name, ok: false, fatal: ENV.NODE_ENV === "production",
+      detail: `Redis unreachable: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+}
+
+function checkJwtSecret(): CheckResult {
+  const name = "JWT_SECRET";
+  const val  = ENV.JWT_SECRET;
+
+  if (!val || val.trim() === "") {
+    return { name, ok: false, fatal: true, detail: "JWT_SECRET is not set" };
+  }
+  if (val.length < 32) {
+    return {
+      name, ok: false,
+      fatal: ENV.NODE_ENV === "production",
+      detail: `JWT_SECRET is ${val.length} chars — minimum 32 required (256-bit entropy)`
+    };
+  }
+  // Detect low-entropy secrets: all same character, sequential runs
+  const uniqueChars = new Set(val).size;
+  if (uniqueChars < 8) {
+    return {
+      name, ok: false,
+      fatal: ENV.NODE_ENV === "production",
+      detail: `JWT_SECRET has only ${uniqueChars} unique characters — use a cryptographically random value`
+    };
+  }
+  return { name, ok: true, fatal: false, detail: `Set (${val.length} chars, ${uniqueChars} unique)` };
+}
+
+function checkSessionSecret(): CheckResult {
+  const name = "SESSION_SECRET";
+  const val  = ENV.SESSION_SECRET;
+
+  if (!val || val.trim() === "") {
+    return { name, ok: false, fatal: true, detail: "SESSION_SECRET is not set" };
+  }
+  if (val.length < 32) {
+    return {
+      name, ok: false,
+      fatal: ENV.NODE_ENV === "production",
+      detail: `SESSION_SECRET is ${val.length} chars — minimum 32 required`
+    };
+  }
+  return { name, ok: true, fatal: false, detail: `Set (${val.length} chars)` };
+}
+
+function checkDatabaseUrl(): CheckResult {
+  const name = "DATABASE_URL";
+  const val  = ENV.DATABASE_URL;
+
+  if (!val || val.trim() === "") {
+    return { name, ok: false, fatal: true, detail: "DATABASE_URL is not set" };
+  }
+
+  // Warn if pointing at localhost in production — likely misconfigured
+  if (ENV.NODE_ENV === "production" && /localhost|127\.0\.0\.1/.test(val)) {
+    return {
+      name, ok: false, fatal: true,
+      detail: "DATABASE_URL points to localhost in production — likely misconfigured"
+    };
+  }
+
+  // Enforce SSL in production
+  if (ENV.NODE_ENV === "production" && !val.includes("sslmode=require") && !val.includes("ssl=true")) {
+    return {
+      name, ok: false, fatal: true,
+      detail: "DATABASE_URL does not enforce SSL (sslmode=require) — required for HIPAA compliance"
+    };
+  }
+
+  return { name, ok: true, fatal: false, detail: "Set and SSL-enforced" };
+}
+
+function checkNodeVersion(): CheckResult {
+  const name    = "NODE_VERSION";
+  const version = process.versions.node;
+  const major   = parseInt(version.split(".")[0], 10);
+  const minimum = 18;
+
+  if (major < minimum) {
+    return {
+      name, ok: false, fatal: true,
+      detail: `Node.js ${version} is below minimum required v${minimum}.x — upgrade immediately`
+    };
+  }
+  return { name, ok: true, fatal: false, detail: `Node.js ${version}` };
+}
+
+function checkDangerousFlags(): CheckResult {
+  const name = "DANGEROUS_FLAGS";
+  const dangerous = [
+    "DEMO_USERS",
+    "BYPASS_AUTH",
+    "SKIP_SAFETY_GATES",
+    "DISABLE_AUDIT",
+    "DISABLE_RBAC",
+  ];
+
+  if (ENV.NODE_ENV !== "production") {
+    return { name, ok: true, fatal: false, detail: "Not production — skipped" };
+  }
+
+  const active = dangerous.filter(flag => process.env[flag] === "true");
+  if (active.length > 0) {
+    return {
+      name, ok: false, fatal: true,
+      detail: `Dangerous flags active in production: ${active.join(", ")}`
+    };
+  }
+  return { name, ok: true, fatal: false, detail: "No dangerous flags active" };
+}
+
+function checkExternalServices(): CheckResult[] {
+  return [
+    {
+      name:   "OPENAI_API_KEY",
+      ok:     !!ENV.OPENAI_API_KEY,
+      fatal:  false,
+      detail: ENV.OPENAI_API_KEY ? "Set" : "Missing — AI features disabled"
+    },
+    {
+      name:   "EHR_ENDPOINT",
+      ok:     !!ENV.EHR_ENDPOINT,
+      fatal:  false,
+      detail: ENV.EHR_ENDPOINT ? `Configured: ${ENV.EHR_ENDPOINT}` : "Not set — using mock adapter"
+    },
+    {
+      name:   "TWILIO_AUTH_TOKEN",
+      ok:     !!ENV.TWILIO_AUTH_TOKEN,
+      fatal:  false,
+      detail: ENV.TWILIO_AUTH_TOKEN ? "Set" : "Missing — WhatsApp disabled"
+    },
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main entry point
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Runs all startup checks. Returns results for logging.
+ *
+ * THROWS if any check marked fatal: true fails.
+ * Call this before app.listen() — the server must not accept
+ * traffic until all fatal checks pass.
+ */
+export async function runStartupChecks(): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+
+  // Synchronous checks first
+  results.push(checkNodeVersion());
+  results.push(checkJwtSecret());
+  results.push(checkSessionSecret());
+  results.push(checkDatabaseUrl());
+  results.push(checkDangerousFlags());
+  results.push(...checkExternalServices());
+
+  // Async connectivity checks
+  results.push(await checkDatabaseReachable());
+  results.push(await checkRedisReachable());
+
+  // Log all results
+  for (const r of results) {
+    const icon = r.ok ? "✅" : r.fatal ? "❌" : "⚠️";
+    console.log(`[Startup] ${icon} ${r.name}: ${r.detail}`);
+  }
+
+  // Throw on any fatal failure — server must not start
+  const fatals = results.filter(r => !r.ok && r.fatal);
+  if (fatals.length > 0) {
+    throw new Error(
+      `[STARTUP FATAL] ${fatals.length} critical check(s) failed:\n` +
+      fatals.map(f => `  • ${f.name}: ${f.detail}`).join("\n")
+    );
+  }
+
+  return results;
+}
+
+C) Rewritten assertProductionSafe.ts
+typescript// server/config/assertProductionSafe.ts
+import { ENV } from "./env";
+
+// ─────────────────────────────────────────────────────────────
+// Banned placeholder values — any secret matching these causes
+// an immediate fatal throw in production.
+// Add to this list whenever a new placeholder appears in docs,
+// READMEs, or example .env files.
+// ─────────────────────────────────────────────────────────────
+const BANNED_VALUES = new Set([
+  "dev-secret",
+  "dev-secret-change-in-prod",
+  "dev-jwt-secret",
+  "dev-jwt-secret-DO-NOT-USE-IN-PROD",
+  "changeme",
+  "password",
+  "physician123",
+  "admin123",
+  "demo-password",
+  "replace-with-a-long-random-secret",
+  "replace-with-a-different-long-random-secret",
+  "replace-with-a-strong-password",
+  "secret",
+  "supersecret",
+  "your-secret-here",
+  "jwt-secret",
+  "session-secret",
+]);
+
+function assertRequired(name: string, value: string | undefined): void {
+  if (!value || value.trim() === "") {
+    throw new Error(`❌ [STARTUP FATAL] Missing required production secret: ${name}`);
+  }
+}
+
+function assertNotBanned(name: string, value: string | undefined): void {
+  if (!value) return;
+  if (BANNED_VALUES.has(value.trim())) {
+    throw new Error(
+      `❌ [STARTUP FATAL] Unsafe placeholder value detected for: ${name}. ` +
+      `Replace with a cryptographically random value before deploying.`
+    );
+  }
+}
+
+function assertMinLength(name: string, value: string | undefined, minLength: number): void {
+  if (!value) return; // assertRequired handles the missing case
+  if (value.length < minLength) {
+    throw new Error(
+      `❌ [STARTUP FATAL] ${name} is too short (${value.length} chars). ` +
+      `Minimum is ${minLength} characters (${minLength * 8 / 2} bits). ` +
+      `Use: openssl rand -hex ${minLength / 2}`
+    );
+  }
+}
+
+function assertDatabaseUrlSafe(value: string | undefined): void {
+  if (!value || value.trim() === "") {
+    throw new Error("❌ [STARTUP FATAL] Missing required production config: DATABASE_URL");
+  }
+
+  if (/localhost|127\.0\.0\.1|::1/.test(value)) {
+    throw new Error(
+      "❌ [STARTUP FATAL] DATABASE_URL points to localhost in production. " +
+      "This likely means a dev database is being used in production — PHI would be written to the wrong store."
+    );
+  }
+
+  if (!value.includes("sslmode=require") && !value.includes("ssl=true")) {
+    throw new Error(
+      "❌ [STARTUP FATAL] DATABASE_URL does not enforce SSL. " +
+      "Add ?sslmode=require to satisfy HIPAA §164.312(e)(2)(ii) encryption-in-transit requirement."
+    );
+  }
+}
+
+function assertRedisUrlSafe(value: string | undefined): void {
+  // Redis is required in production for distributed escalation guard and session store
+  if (!value || value.trim() === "") {
+    throw new Error(
+      "❌ [STARTUP FATAL] REDIS_URL is not set in production. " +
+      "Required for distributed escalation monitoring and session management."
+    );
+  }
+
+  if (/localhost|127\.0\.0\.1/.test(value)) {
+    throw new Error(
+      "❌ [STARTUP FATAL] REDIS_URL points to localhost in production. " +
+      "Escalation counters will not be shared across instances."
+    );
+  }
+
+  // Enforce TLS for Redis in production (rediss:// protocol)
+  if (!value.startsWith("rediss://")) {
+    throw new Error(
+      "❌ [STARTUP FATAL] REDIS_URL does not use TLS (must start with rediss://). " +
+      "Required for HIPAA encryption-in-transit compliance."
+    );
+  }
+}
+
+/**
+ * Hard production safety assertions.
+ *
+ * Call this FIRST, before runStartupChecks(), before any DB connection,
+ * before anything else. These are the checks that prevent a misconfigured
+ * production deploy from ever accepting traffic.
+ *
+ * In non-production environments this is a no-op so dev workflows
+ * are not disrupted — but individual checks log warnings where appropriate.
+ */
+export function assertProductionSafe(): void {
+  if (ENV.NODE_ENV !== "production") {
+    // Still warn in staging/test if obviously bad values are present
+    if (ENV.JWT_SECRET && BANNED_VALUES.has(ENV.JWT_SECRET)) {
+      console.warn(
+        `⚠️ [Startup] JWT_SECRET uses a known placeholder value in ${ENV.NODE_ENV}. ` +
+        "This will throw in production."
+      );
+    }
+    return;
+  }
+
+  // ── Secrets: presence ────────────────────────────────────────
+  assertRequired("JWT_SECRET",          ENV.JWT_SECRET);
+  assertRequired("SESSION_SECRET",      ENV.SESSION_SECRET);
+  assertRequired("MD_PASSWORD",         ENV.MD_PASSWORD);
+  assertRequired("CLINICIAN_PASSWORD",  ENV.CLINICIAN_PASSWORD);
+
+  // ── Secrets: not placeholder values ─────────────────────────
+  assertNotBanned("JWT_SECRET",         ENV.JWT_SECRET);
+  assertNotBanned("SESSION_SECRET",     ENV.SESSION_SECRET);
+  assertNotBanned("MD_PASSWORD",        ENV.MD_PASSWORD);
+  assertNotBanned("CLINICIAN_PASSWORD", ENV.CLINICIAN_PASSWORD);
+
+  // ── Secrets: minimum entropy (length proxy) ──────────────────
+  // 32 chars = 256-bit key space for random hex/base64 secrets
+  assertMinLength("JWT_SECRET",     ENV.JWT_SECRET,     32);
+  assertMinLength("SESSION_SECRET", ENV.SESSION_SECRET, 32);
+  // Passwords need less — 16 chars is reasonable for human-set values
+  assertMinLength("MD_PASSWORD",         ENV.MD_PASSWORD,        16);
+  assertMinLength("CLINICIAN_PASSWORD",  ENV.CLINICIAN_PASSWORD, 16);
+
+  // ── Database ─────────────────────────────────────────────────
+  assertDatabaseUrlSafe(ENV.DATABASE_URL);
+
+  // ── Redis ────────────────────────────────────────────────────
+  assertRedisUrlSafe(ENV.REDIS_URL);
+
+  // ── Dangerous runtime flags ──────────────────────────────────
+  const dangerousFlags = [
+    "DEMO_USERS", "BYPASS_AUTH", "SKIP_SAFETY_GATES",
+    "DISABLE_AUDIT", "DISABLE_RBAC"
+  ];
+  for (const flag of dangerousFlags) {
+    if (process.env[flag] === "true") {
+      throw new Error(
+        `❌ [STARTUP FATAL] Dangerous flag ${flag}=true is set in production. ` +
+        "This flag must only be used in development."
+      );
+    }
+  }
+
+  console.log("✅ [Startup] assertProductionSafe: all production safety assertions passed");
+}
+And a clean startup sequence that makes the call chain unambiguous:
+typescript// server/index.ts (startup sequence — call order matters)
+import { assertProductionSafe } from "./config/assertProductionSafe";
+import { runStartupChecks }     from "./config/startupChecks";
+import { initChainFromDb }      from "./audit/auditLogger";
+import app                      from "./app";
+
+async function start() {
+  // 1. Hard assertions — no DB connection, no network, pure config
+  //    Throws immediately if production config is unsafe
+  assertProductionSafe();
+
+  // 2. Connectivity checks — DB ping, Redis ping, entropy checks
+  //    Throws if any fatal check fails (e.g. DB unreachable)
+  await runStartupChecks();
+
+  // 3. Seed audit chain from DB — must happen before first request
+  await initChainFromDb();
+
+  // 4. Only now accept traffic
+  const port = process.env.PORT ?? 3000;
+  app.listen(port, () => {
+    console.log(`✅ [Startup] Server listening on port ${port}`);
+  });
+}
+
+start().catch(err => {
+  console.error("❌ [Startup] Fatal error during startup — server will not start:", err.message);
+  process.exit(1);
+});
+
+D) Test Cases
+typescript// ── assertProductionSafe tests ────────────────────────────────
+
+// Non-production: should be a no-op regardless of config
+process.env.NODE_ENV = "development";
+expect(() => assertProductionSafe()).not.toThrow();
+
+// Missing JWT_SECRET in production
+process.env.NODE_ENV = "production";
+delete process.env.JWT_SECRET;
+expect(() => assertProductionSafe()).toThrow("Missing required production secret: JWT_SECRET");
+
+// Banned placeholder
+process.env.JWT_SECRET = "dev-jwt-secret-DO-NOT-USE-IN-PROD";
+expect(() => assertProductionSafe()).toThrow("Unsafe placeholder value detected for: JWT_SECRET");
+
+// Too short (4 chars, not banned)
+process.env.JWT_SECRET = "abcd";
+expect(() => assertProductionSafe()).toThrow("JWT_SECRET is too short");
+
+// Valid JWT_SECRET, but DATABASE_URL missing
+process.env.JWT_SECRET = "a".repeat(32); // 32 chars — passes length, but...
+// ...actually low entropy — the uniqueChars check in startupChecks will catch it
+// assertProductionSafe only checks length, startupChecks adds entropy check
+expect(() => assertProductionSafe()).toThrow("Missing required production config: DATABASE_URL");
+
+// DATABASE_URL pointing at localhost
+process.env.DATABASE_URL = "postgresql://user:pass@localhost/prod?sslmode=require";
+expect(() => assertProductionSafe()).toThrow("DATABASE_URL points to localhost in production");
+
+// DATABASE_URL without SSL
+process.env.DATABASE_URL = "postgresql://user:pass@db.prod.example.com/prod";
+expect(() => assertProductionSafe()).toThrow("does not enforce SSL");
+
+// Redis URL missing
+process.env.DATABASE_URL = "postgresql://user:pass@db.prod.example.com/prod?sslmode=require";
+delete process.env.REDIS_URL;
+expect(() => assertProductionSafe()).toThrow("REDIS_URL is not set");
+
+// Redis URL not TLS
+process.env.REDIS_URL = "redis://cache.prod.example.com:6379";
+expect(() => assertProductionSafe()).toThrow("does not use TLS");
+
+// BYPASS_AUTH=true in production
+process.env.REDIS_URL   = "rediss://cache.prod.example.com:6379";
+process.env.BYPASS_AUTH = "true";
+expect(() => assertProductionSafe()).toThrow("Dangerous flag BYPASS_AUTH=true");
+
+// ── runStartupChecks tests ────────────────────────────────────
+
+// DB unreachable — fatal result, throws
+jest.spyOn(db, "execute").mockRejectedValueOnce(new Error("connection refused"));
+await expect(runStartupChecks()).rejects.toThrow("DATABASE_CONNECTIVITY");
+
+// DB reachable, all secrets valid — passes and returns results array
+jest.spyOn(db, "execute").mockResolvedValueOnce([{ ping: 1 }]);
+const results = await runStartupChecks();
+expect(results.every(r => r.ok || !r.fatal)).toBe(true);
+
+// JWT_SECRET entropy check — 32 identical chars should warn/fail
+process.env.JWT_SECRET = "a".repeat(32);
+const results2 = await runStartupChecks();
+const jwtCheck  = results2.find(r => r.name === "JWT_SECRET");
+expect(jwtCheck?.ok).toBe(false); // low unique char count
+expect(jwtCheck?.fatal).toBe(true);
+
+// Node version too old
+const origVersion = process.versions.node;
+Object.defineProperty(process.versions, "node", { value: "16.0.0", configurable: true });
+await expect(runStartupChecks()).rejects.toThrow("NODE_VERSION");
+Object.defineProperty(process.versions, "node", { value: origVersion, configurable: true });
+The most operationally dangerous gap here, specific to MedScribe, is the missing DATABASE_URL localhost check. A common deployment mistake — especially in containerized environments where .env files get copied without modification — is shipping a dev database URL to production. PHI would be written to a dev database with no encryption, no backup policy, and no access controls. That's an immediate HIPAA breach. The startup check catches it before a single patient record is touched.

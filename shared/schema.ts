@@ -1069,3 +1069,45 @@ export const queueJobs = pgTable("queue_jobs", {
 export const insertQueueJobSchema = createInsertSchema(queueJobs).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertQueueJob = z.infer<typeof insertQueueJobSchema>;
 export type QueueJob = typeof queueJobs.$inferSelect;
+
+// ── Safety Gate Configuration ─────────────────────────────────────────────────
+//
+// Versioned, DB-persisted safety thresholds.
+//
+// FDA 21 CFR Part 11 requires that configuration changes to safety-critical
+// thresholds be versioned, auditable, and authorized. Magic numbers in source
+// code satisfy none of those requirements — this table is the alternative.
+//
+// Rules:
+//  - Only one row may have is_active = true at any time (enforced at app level)
+//  - Thresholds must satisfy: risk_threshold < hard_stop_threshold
+//  - Every row requires approved_by and approval_note before activation
+//  - Never DELETE rows — soft-replace only (deactivate old, insert new)
+
+export const safetyConfigs = pgTable(
+  "safety_configs",
+  {
+    id:                   serial("id").primaryKey(),
+    version:              text("version").notNull().unique(),
+    isActive:             boolean("is_active").notNull().default(false),
+
+    riskThreshold:        real("risk_threshold").notNull(),
+    hardStopThreshold:    real("hard_stop_threshold").notNull(),
+    uncertaintyThreshold: real("uncertainty_threshold").notNull(),
+
+    approvedBy:           text("approved_by").notNull(),
+    approvalNote:         text("approval_note"),
+    createdAt:            timestamp("created_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    activatedAt:          timestamp("activated_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("safety_configs_active_idx").on(table.isActive),
+  ]
+);
+
+export const insertSafetyConfigSchema = createInsertSchema(safetyConfigs).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSafetyConfig = z.infer<typeof insertSafetyConfigSchema>;
+export type SafetyConfig = typeof safetyConfigs.$inferSelect;

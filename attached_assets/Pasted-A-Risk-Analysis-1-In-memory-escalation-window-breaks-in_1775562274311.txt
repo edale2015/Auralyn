@@ -1,0 +1,507 @@
+A) Risk Analysis
+1. In-memory escalation window breaks in every real deployment scenario
+Each server instance maintains its own independent counter. With two instances, a 60% ER referral rate looks like 30% to each — the safety threshold is never triggered. A restart zeroes all counters silently. In an urgent care setting this is a patient safety failure: the guard that should catch an AI going into an over-referral spiral simply doesn't fire.
+2. Hardcoded thresholds are a deployment and safety risk
+0.6, 0.3, 0.95 are buried in source code. Changing them requires a redeploy. More dangerously, there's no record of what they were set to at any given time. Under FDA 21 CFR Part 11, configuration changes to safety-critical thresholds must be versioned, auditable, and authorized. Magic numbers in source code satisfy none of these requirements.
+3. No input validation on riskScore
+riskScore = -0.5 passes all three threshold checks (< 0.95, <= 0.6, no uncertainty block) and returns allowed: true. A score of 1.5 passes the hard-stop check (>= 0.95) and gets blocked correctly, but only by accident — the model could produce NaN or Infinity from a division error and the behavior is completely undefined. NaN >= 0.95 is false, NaN > 0.6 is false — so NaN silently passes the gate.
+4. An unhandled exception causes fail-open
+clinicalSafetyGate has no try/catch. If auditLog throws (DB down, network timeout), the exception propagates to the Express error handler, which likely returns a 500 — but the calling code may have already made a decision or the error may be caught upstream and the request retried without the gate. There is no guarantee the gate fails closed on exception. This is the most dangerous bug in the block. Safety gates must be fail-closed: if the gate cannot complete, the decision must be blocked, not passed or left ambiguous.
+5. The escalation factor of -0.2 is semantically undefined
+The return value says factor: -0.2 and adjust: true but nothing in this file actually applies it. Whatever consumes escalationControl() decides what -0.2 means — reduce a score? reduce a referral probability? reduce dosing? This is a latent semantic contract with no enforcement. If the consumer misreads the sign or the unit, the adjustment could make things worse. The guard should specify what it is adjusting, not just a raw number.
+
+B) Rewritten safetyGate.ts — Fail-Closed, Input Validated
+typescript// server/clinical/safetyGate.ts
+import { auditLog } from "../security/auditLogger";
+
+// ─────────────────────────────────────────────────────────────
+// Threshold configuration
+//
+// These values must never be changed without:
+//   1. A documented clinical review
+//   2. A config version bump (for audit trail)
+//   3. Redeployment with the change logged in the audit system
+//
+// Do NOT make these runtime-configurable without adding an
+// authorization gate and audit log for every change.
+// ─────────────────────────────────────────────────────────────
+export interface SafetyGateConfig {
+  /** Block and require physician review above this score. Default: 0.6 */
+  riskThreshold: number;
+  /** Hard stop — no override possible above this score. Default: 0.95 */
+  hardStopThreshold: number;
+  /** Block if model uncertainty exceeds this value. Default: 0.3 */
+  uncertaintyThreshold: number;
+  /** Version string for audit trail — bump when thresholds change. */
+  configVersion: string;
+}
+
+const DEFAULT_CONFIG: SafetyGateConfig = {
+  riskThreshold:       0.6,
+  hardStopThreshold:   0.95,
+  uncertaintyThreshold: 0.3,
+  configVersion:       "1.0.0",
+};
+
+export interface SafetyGateInput {
+  riskScore:   number;
+  uncertainty?: number;
+  action?:     string;
+  patientId?:  string;
+  actorId?:    string;
+}
+
+export interface SafetyGateResult {
+  allowed:         boolean;
+  reason:          string;
+  requiredAction?: "physician_review" | "confidence_boost" | "hard_stop" | "input_error";
+  configVersion:   string;
+}
+
+/**
+ * FAIL-CLOSED safety gate.
+ *
+ * Any exception, invalid input, or unrecognized state results in a block.
+ * Never returns allowed:true unless all checks explicitly pass.
+ *
+ * Callers must treat a thrown exception the same as allowed:false.
+ */
+export function clinicalSafetyGate(
+  decision: SafetyGateInput,
+  config: SafetyGateConfig = DEFAULT_CONFIG
+): SafetyGateResult {
+  // ── Wrap everything in fail-closed try/catch ──────────────────
+  try {
+    const { riskScore, uncertainty = 0, patientId, actorId, action } = decision;
+    const actor = actorId ?? "system";
+    const cv    = config.configVersion;
+
+    // ── Input validation ──────────────────────────────────────────
+    // NaN, Infinity, negative, >1 all block. Never pass an invalid score.
+    if (
+      typeof riskScore !== "number" ||
+      !isFinite(riskScore)          ||
+      riskScore < 0                 ||
+      riskScore > 1
+    ) {
+      auditLog({
+        actor, action: "safety_gate_input_error", patientId,
+        riskScore, details: { reason: "Invalid riskScore", action, configVersion: cv }
+      });
+      return {
+        allowed: false,
+        reason: `Invalid riskScore: ${riskScore}. Must be a finite number between 0 and 1.`,
+        requiredAction: "input_error",
+        configVersion: cv,
+      };
+    }
+
+    if (
+      typeof uncertainty !== "number" ||
+      !isFinite(uncertainty)          ||
+      uncertainty < 0                 ||
+      uncertainty > 1
+    ) {
+      auditLog({
+        actor, action: "safety_gate_input_error", patientId,
+        riskScore, details: { reason: "Invalid uncertainty", uncertainty, action, configVersion: cv }
+      });
+      return {
+        allowed: false,
+        reason: `Invalid uncertainty: ${uncertainty}. Must be a finite number between 0 and 1.`,
+        requiredAction: "input_error",
+        configVersion: cv,
+      };
+    }
+
+    // Validate threshold config itself — catch misconfiguration
+    if (config.riskThreshold >= config.hardStopThreshold) {
+      throw new Error(
+        `SafetyGate misconfiguration: riskThreshold (${config.riskThreshold}) ` +
+        `must be less than hardStopThreshold (${config.hardStopThreshold})`
+      );
+    }
+
+    // ── Hard stop — no physician override possible ────────────────
+    if (riskScore >= config.hardStopThreshold) {
+      auditLog({
+        actor, action: "safety_gate_hard_stop", patientId, riskScore,
+        details: { reason: "Extreme risk score", action, configVersion: cv }
+      });
+      return {
+        allowed: false,
+        reason:  "Extreme risk — hard stop. Immediate physician escalation required. No AI override permitted.",
+        requiredAction: "hard_stop",
+        configVersion: cv,
+      };
+    }
+
+    // ── Physician review required ─────────────────────────────────
+    if (riskScore > config.riskThreshold) {
+      auditLog({
+        actor, action: "safety_gate_blocked", patientId, riskScore,
+        details: { reason: "Risk score exceeds threshold", action, configVersion: cv }
+      });
+      return {
+        allowed: false,
+        reason:  `Risk score ${riskScore.toFixed(3)} exceeds threshold ${config.riskThreshold}. Physician review required.`,
+        requiredAction: "physician_review",
+        configVersion: cv,
+      };
+    }
+
+    // ── Uncertainty too high ──────────────────────────────────────
+    if (uncertainty > config.uncertaintyThreshold) {
+      auditLog({
+        actor, action: "safety_gate_blocked", patientId, riskScore,
+        details: { reason: "Model uncertainty too high", uncertainty, action, configVersion: cv }
+      });
+      return {
+        allowed: false,
+        reason:  `Model uncertainty ${uncertainty.toFixed(3)} exceeds threshold ${config.uncertaintyThreshold}. Additional data required.`,
+        requiredAction: "confidence_boost",
+        configVersion: cv,
+      };
+    }
+
+    // ── Passed all checks ─────────────────────────────────────────
+    auditLog({
+      actor, action: "safety_gate_passed", patientId, riskScore,
+      details: { uncertainty, action, configVersion: cv }
+    });
+    return {
+      allowed: true,
+      reason:  "All safety checks passed.",
+      configVersion: cv,
+    };
+
+  } catch (err) {
+    // ── Fail closed on any unhandled exception ────────────────────
+    // Log what we can, but always block. Never let an exception
+    // become an implicit pass.
+    try {
+      auditLog({
+        actor: decision.actorId ?? "system",
+        action: "safety_gate_exception",
+        patientId: decision.patientId,
+        riskScore: decision.riskScore,
+        details: { error: err instanceof Error ? err.message : String(err) }
+      });
+    } catch {
+      // If audit logging itself fails, we still block — never pass
+      console.error("[SafetyGate] CRITICAL: audit log failed during exception handler", err);
+    }
+
+    return {
+      allowed: false,
+      reason:  "Safety gate encountered an internal error. Decision blocked as a precaution.",
+      requiredAction: "physician_review",
+      configVersion: DEFAULT_CONFIG.configVersion,
+    };
+  }
+}
+
+C) Rewritten escalationGuard.ts — Injectable Store (Redis-Compatible)
+typescript// server/clinical/escalationGuard.ts
+import { logSecureEvent } from "../ops/secureAudit";
+
+// ─────────────────────────────────────────────────────────────
+// Store interface — injectable for Redis, in-memory, or test mocks.
+// In production: inject a RedisEscalationStore.
+// In tests: inject InMemoryEscalationStore.
+// ─────────────────────────────────────────────────────────────
+export interface EscalationStore {
+  /** Increment total decision count for the current window. Returns new total. */
+  incrementTotal(): Promise<number>;
+  /** Increment ER referral count for the current window. Returns new ER count. */
+  incrementEr(): Promise<number>;
+  /** Get current window counts. Returns null if window has expired (store handles TTL). */
+  getCounts(): Promise<{ erCount: number; totalCount: number } | null>;
+  /** Reset the window (for testing or manual intervention). */
+  reset(): Promise<void>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// In-memory store — single instance only, resets on restart.
+// Use ONLY for local dev or unit tests.
+// ─────────────────────────────────────────────────────────────
+export class InMemoryEscalationStore implements EscalationStore {
+  private erCount    = 0;
+  private totalCount = 0;
+  private lastReset  = Date.now();
+  private windowMs: number;
+
+  constructor(windowMs = 60 * 60 * 1000) {
+    this.windowMs = windowMs;
+  }
+
+  private maybeReset() {
+    if (Date.now() - this.lastReset > this.windowMs) {
+      this.erCount = 0;
+      this.totalCount = 0;
+      this.lastReset = Date.now();
+    }
+  }
+
+  async incrementTotal() { this.maybeReset(); return ++this.totalCount; }
+  async incrementEr()    { this.maybeReset(); return ++this.erCount; }
+  async getCounts()      { this.maybeReset(); return { erCount: this.erCount, totalCount: this.totalCount }; }
+  async reset()          { this.erCount = 0; this.totalCount = 0; this.lastReset = Date.now(); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Redis store — production implementation.
+// Uses INCR + EXPIRE for atomic, distributed, TTL-managed counters.
+// Requires a Redis client that implements this minimal interface.
+// ─────────────────────────────────────────────────────────────
+export interface RedisClient {
+  incr(key: string): Promise<number>;
+  expire(key: string, seconds: number): Promise<void>;
+  mget(...keys: string[]): Promise<(string | null)[]>;
+  del(...keys: string[]): Promise<void>;
+}
+
+export class RedisEscalationStore implements EscalationStore {
+  private readonly totalKey = "escalation:total";
+  private readonly erKey    = "escalation:er";
+  private readonly windowSec: number;
+
+  constructor(
+    private redis: RedisClient,
+    windowMs = 60 * 60 * 1000
+  ) {
+    this.windowSec = Math.floor(windowMs / 1000);
+  }
+
+  async incrementTotal(): Promise<number> {
+    const count = await this.redis.incr(this.totalKey);
+    // Set TTL only on first increment (count === 1) to avoid resetting the window
+    if (count === 1) await this.redis.expire(this.totalKey, this.windowSec);
+    return count;
+  }
+
+  async incrementEr(): Promise<number> {
+    const count = await this.redis.incr(this.erKey);
+    if (count === 1) await this.redis.expire(this.erKey, this.windowSec);
+    return count;
+  }
+
+  async getCounts(): Promise<{ erCount: number; totalCount: number }> {
+    const [total, er] = await this.redis.mget(this.totalKey, this.erKey);
+    return {
+      totalCount: total ? parseInt(total, 10) : 0,
+      erCount:    er    ? parseInt(er,    10) : 0,
+    };
+  }
+
+  async reset(): Promise<void> {
+    await this.redis.del(this.totalKey, this.erKey);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Thresholds — same auditability argument as safetyGate.ts.
+// Treat these as clinical configuration, not code constants.
+// ─────────────────────────────────────────────────────────────
+export interface EscalationConfig {
+  /** Flag if ER referral rate exceeds this fraction. Default: 0.40 */
+  erRateThreshold:  number;
+  /** Flag if raw ER count exceeds this per window. Default: 120 */
+  erHourlyCap:      number;
+  /**
+   * What "factor" means:
+   * A multiplier applied to the AI's raw ER-referral probability BEFORE
+   * the safety gate sees it. factor: -0.2 means reduce the raw probability
+   * by 20 percentage points (clamped to [0,1]).
+   *
+   * This is ADVISORY. The caller must apply it and log the adjustment.
+   * The safety gate still runs on the original score first.
+   */
+  adjustmentFactor: number;
+}
+
+const DEFAULT_ESCALATION_CONFIG: EscalationConfig = {
+  erRateThreshold:  0.40,
+  erHourlyCap:      120,
+  adjustmentFactor: -0.2,
+};
+
+export interface EscalationAdjustment {
+  adjust:        boolean;
+  /** Fractional adjustment to apply to ER referral probability. See config comment. */
+  factor:        number;
+  reason:        string;
+  currentRate:   number;
+  hourlyErCount: number;
+  recommendation: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Record that a clinical disposition was made.
+ * Call this for EVERY disposition, not just ER referrals.
+ * Both store calls are independent — a failure on one is logged but
+ * does not suppress the other.
+ */
+export async function recordDisposition(
+  disposition: string,
+  store: EscalationStore
+): Promise<void> {
+  try {
+    await store.incrementTotal();
+    if (disposition === "ER_NOW") {
+      await store.incrementEr();
+    }
+  } catch (err) {
+    // Log but do not throw — a counter failure must not block clinical flow.
+    // The escalation guard is a monitoring layer, not a gate.
+    console.error("[EscalationGuard] Failed to record disposition:", err);
+    logSecureEvent({
+      type:   "ESCALATION_COUNTER_ERROR",
+      action: "RECORD_FAILED",
+      error:  err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Check current escalation status and return adjustment recommendation.
+ *
+ * This is ADVISORY — it informs the caller that the AI may be over-referring.
+ * It does not block decisions by itself. The safety gate handles blocking.
+ *
+ * In a multi-instance deployment, counts come from Redis and reflect the
+ * true system-wide rate, not per-instance state.
+ */
+export async function escalationControl(
+  store: EscalationStore,
+  config: EscalationConfig = DEFAULT_ESCALATION_CONFIG
+): Promise<EscalationAdjustment> {
+  let counts = { erCount: 0, totalCount: 0 };
+
+  try {
+    counts = (await store.getCounts()) ?? { erCount: 0, totalCount: 0 };
+  } catch (err) {
+    console.error("[EscalationGuard] Failed to read counts:", err);
+    // Fail safe: if we can't read counts, assume normal — do not suppress
+    // referrals blindly. Log the failure.
+    logSecureEvent({ type: "ESCALATION_READ_ERROR", action: "GET_COUNTS_FAILED" });
+  }
+
+  const { erCount, totalCount } = counts;
+  const liveRate = totalCount > 0 ? erCount / totalCount : 0;
+
+  const rateExceeded = liveRate > config.erRateThreshold;
+  const capExceeded  = erCount  > config.erHourlyCap;
+
+  if (rateExceeded || capExceeded) {
+    const reason = rateExceeded ? "over-escalation-rate" : "hourly-er-cap-exceeded";
+    logSecureEvent({
+      type:         "ESCALATION_CONTROL",
+      action:       "REDUCE",
+      erRate:       liveRate,
+      hourlyErCount: erCount,
+      factor:       config.adjustmentFactor,
+      reason,
+    });
+    return {
+      adjust:        true,
+      factor:        config.adjustmentFactor,
+      reason,
+      currentRate:   +liveRate.toFixed(3),
+      hourlyErCount: erCount,
+      recommendation:
+        "Current ER referral rate exceeds safe threshold. Review triage parameters. " +
+        `Applying factor of ${config.adjustmentFactor} to raw referral probability.`,
+    };
+  }
+
+  return {
+    adjust:        false,
+    factor:        0,
+    reason:        "within-normal-range",
+    currentRate:   +liveRate.toFixed(3),
+    hourlyErCount: erCount,
+    recommendation: "No escalation adjustment needed.",
+  };
+}
+
+D) Boundary Tests
+typescript// ── safetyGate boundary tests ──────────────────────────────────
+
+// riskScore = 0 — lowest possible valid score, should pass
+assert.deepEqual(clinicalSafetyGate({ riskScore: 0 }), {
+  allowed: true, reason: "All safety checks passed.", configVersion: "1.0.0"
+});
+
+// riskScore = 0.6 — exactly at threshold (not above), should pass
+assert.deepEqual(clinicalSafetyGate({ riskScore: 0.6 }).allowed, true);
+
+// riskScore = 0.6001 — just above threshold, should block with physician_review
+const r6001 = clinicalSafetyGate({ riskScore: 0.6001 });
+assert.equal(r6001.allowed, false);
+assert.equal(r6001.requiredAction, "physician_review");
+
+// riskScore = 0.95 — exactly at hard stop, should hard stop
+const r95 = clinicalSafetyGate({ riskScore: 0.95 });
+assert.equal(r95.allowed, false);
+assert.equal(r95.requiredAction, "hard_stop");
+
+// riskScore = 1.0 — maximum valid score, hard stop
+const r10 = clinicalSafetyGate({ riskScore: 1.0 });
+assert.equal(r10.allowed, false);
+assert.equal(r10.requiredAction, "hard_stop");
+
+// riskScore = 1.5 — out of range, input_error block
+const r15 = clinicalSafetyGate({ riskScore: 1.5 });
+assert.equal(r15.allowed, false);
+assert.equal(r15.requiredAction, "input_error");
+
+// riskScore = -0.1 — out of range, input_error block (was silently passing in original)
+const rNeg = clinicalSafetyGate({ riskScore: -0.1 });
+assert.equal(rNeg.allowed, false);
+assert.equal(rNeg.requiredAction, "input_error");
+
+// riskScore = NaN — was silently passing in original, now blocks
+const rNaN = clinicalSafetyGate({ riskScore: NaN });
+assert.equal(rNaN.allowed, false);
+assert.equal(rNaN.requiredAction, "input_error");
+
+// riskScore = Infinity — blocks
+const rInf = clinicalSafetyGate({ riskScore: Infinity });
+assert.equal(rInf.allowed, false);
+assert.equal(rInf.requiredAction, "input_error");
+
+// Exception in auditLog — gate must still block (fail-closed)
+jest.spyOn(auditLogModule, "auditLog").mockImplementation(() => { throw new Error("DB down"); });
+const rEx = clinicalSafetyGate({ riskScore: 0.3 });
+assert.equal(rEx.allowed, false);  // must NOT pass just because audit threw
+assert.equal(rEx.requiredAction, "physician_review");
+
+// ── escalationGuard tests ──────────────────────────────────────
+
+// Multi-instance simulation using shared Redis mock
+const sharedStore = new InMemoryEscalationStore();
+
+// Instance A records 80 total, 40 ER (50% rate)
+for (let i = 0; i < 80; i++) await recordDisposition(i < 40 ? "ER_NOW" : "HOME", sharedStore);
+const adj = await escalationControl(sharedStore);
+assert.equal(adj.adjust, true);
+assert.equal(adj.reason, "over-escalation-rate");
+assert.equal(adj.currentRate, 0.5);
+
+// After reset, back to normal
+await sharedStore.reset();
+const adjAfter = await escalationControl(sharedStore);
+assert.equal(adjAfter.adjust, false);
+
+// Hourly cap test: 121 ER referrals, even if rate is low
+await sharedStore.reset();
+for (let i = 0; i < 500; i++) await recordDisposition(i < 121 ? "ER_NOW" : "HOME", sharedStore);
+const adjCap = await escalationControl(sharedStore);
+assert.equal(adjCap.adjust, true);
+assert.equal(adjCap.reason, "hourly-er-cap-exceeded");
+The most clinically dangerous bug here — by a significant margin — is the NaN silent pass. A model that returns NaN as a risk score (division by zero in a probability calculation, missing feature, upstream null) would have passed the original safety gate entirely and proceeded to make a clinical recommendation with no physician review. That's a patient safety gap that could occur in real urgent care cases where the AI encounters an incomplete chart or an unusual presentation outside its training distribution — exactly the cases where you most need the gate to fire.
