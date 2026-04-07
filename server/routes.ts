@@ -2015,6 +2015,20 @@ export async function registerRoutes(
   app.use("/api/agent-lab", agentLabRouter);
   console.log("[AgentLab] Agent & Skill Lab endpoints registered at /api/agent-lab/*");
 
+  // Distributed circuit breaker control panel
+  const { circuitBreakerRouter } = await import("./routes/circuitBreakerRoutes");
+  app.use("/api/circuit-breakers", circuitBreakerRouter);
+
+  // Agent health, self-healing metrics, and routing weights
+  const { agentHealthRouter } = await import("./routes/agentHealthRoutes");
+  app.use("/api/agents", agentHealthRouter);
+
+  // Case replay — re-execute any historical case from its traceId
+  const { replayRouter } = await import("./routes/replayRoutes");
+  app.use("/api/replay", replayRouter);
+
+  console.log("[Orchestration] Circuit breakers: /api/circuit-breakers | Agent health: /api/agents/health | Replay: /api/replay");
+
   // Domain-split routers (clinical fast-path, agent registry, evolution proposals, tenant config)
   app.use("/api/domain", buildDomainRouters());
   console.log("[DomainRouters] Mounted at /api/domain/* (fast-path, registry, evolution, tenant config)");

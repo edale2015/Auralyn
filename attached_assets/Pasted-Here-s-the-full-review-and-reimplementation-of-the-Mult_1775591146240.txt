@@ -1,0 +1,660 @@
+Here's the full review and reimplementation of the Multi-Agent Orchestration block.
+
+A) Concurrency and Scalability Issues
+1. O(n) task conflict detection on unbounded array
+this.tasks.find(...) scans every entry on every assign() call. At 10,000 active tasks with 100 concurrent agents calling assign() simultaneously, each call scans up to 10,000 entries. That's 1,000,000 comparisons per second at modest load. Worse: tasks are never evicted. A task that completed 6 hours ago is still in the array, still scanned, forever. Memory grows without bound and every conflict check gets slower over time.
+2. dependsOn is a dead field — never read by the orchestrator
+The orchestrator loop sorts agents by priority and runs them sequentially in that order. The dependsOn array is defined on the interface but no code reads it. This means two things: (a) a developer who adds dependsOn: ["triage_agent"] to an agent configuration will get no dependency enforcement and may not notice; (b) the sequential execution model accidentally works for simple linear chains but fails silently for any DAG where a lower-priority agent needs a result from a higher-priority agent that hasn't run yet.
+3. Circuit breaker state is per-instance — split-brain in multi-instance deployments
+With 3 instances behind a load balancer: agent A fails repeatedly on instance 1 and trips its circuit breaker. Instances 2 and 3 have healthy circuit breakers for agent A. Requests continue routing to instances 2 and 3 where they also start failing — each instance independently accumulates failures and trips independently. During this period, instance 1 (tripped) correctly rejects calls while instances 2 and 3 absorb all the load and fail. The circuit breaker's protective function is degraded proportionally to instance count. In a clinical context this means a failing agent keeps receiving patient requests until every instance has independently tripped.
+4. agent.run() hang — timeout may not fire if Promise never rejects
+Promise.race([agent.run(context, priorResults), timeoutPromise]) works correctly if agent.run() is well-behaved. But if agent.run() holds a resource lock, an open DB connection, or a streaming HTTP response that never terminates, the Promise never settles and the race resolves via timeout — but the original agent.run() Promise is still in-flight, still holding its resources. The timeout rejects the race but doesn't cancel the underlying operation. Over time, hung agents accumulate open connections and memory until the process runs out of handles.
+5. Heartbeat table grows forever
+If unifiedAgentRegistry.ts only INSERTs heartbeats without pruning stale rows, the table grows at (agents × heartbeat_interval) rows per second indefinitely. At 10 agents heartbeating every 30 seconds, that's 28,800 rows per day, ~10M rows per year. Queries that scan for active agents degrade. There's no concept of an agent being "dead" — a crashed agent's last heartbeat stays in the table looking alive until something explicitly removes it.
+
+B) Rewritten MultiAgentCoordinator — O(1) Map-Based
+typescript// server/agents/multiAgentCoordinator.ts
+import { db }        from "../db";
+import { agentTasks } from "../../shared/schema";
+import { eq, and, lt } from "drizzle-orm";
+import { auditStep } from "../audit/auditLogger";
+
+export interface AgentTask {
+  taskKey:    string;     // unique identifier for the work unit
+  agent:      string;
+  assignedAt: number;     // Date.now()
+  expiresAt:  number;     // hard TTL — task auto-releases after this
+  status:     "active" | "completed" | "failed" | "expired";
+}
+
+export interface AssignResult {
+  status:  "assigned" | "blocked" | "rejected";
+  reason?: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Configuration
+// ─────────────────────────────────────────────────────────────
+const MAX_ACTIVE_TASKS         = 10_000;   // hard cap — reject above this
+const DEFAULT_TASK_TTL_MS      = 5 * 60 * 1000;   // 5 minutes
+const STALE_TASK_EVICTION_MS   = 10 * 60 * 1000;  // evict expired tasks every 10 min
+
+/**
+ * Map-based coordinator with O(1) conflict detection.
+ *
+ * In-memory Map is the hot path (fast conflict check).
+ * DB is the persistence layer (survives restarts, shared across instances).
+ *
+ * On startup, call seedFromDb() to restore active tasks.
+ * For multi-instance deployments, replace the Map with a Redis SET
+ * and use SETNX for atomic conflict detection.
+ */
+export class MultiAgentCoordinator {
+  // Key: taskKey → AgentTask
+  // O(1) get/set/delete — no linear scans
+  private activeTasks = new Map<string, AgentTask>();
+  private evictionTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    // Periodic eviction of expired tasks
+    this.evictionTimer = setInterval(
+      () => this.evictExpiredTasks(),
+      STALE_TASK_EVICTION_MS
+    );
+  }
+
+  // ── Seed from DB on startup ───────────────────────────────
+  async seedFromDb(): Promise<void> {
+    const rows = await db
+      .select()
+      .from(agentTasks)
+      .where(eq(agentTasks.status, "active"));
+
+    const now = Date.now();
+    for (const row of rows) {
+      if (row.expiresAt > now) {
+        this.activeTasks.set(row.taskKey, {
+          taskKey:    row.taskKey,
+          agent:      row.agent,
+          assignedAt: row.assignedAt,
+          expiresAt:  row.expiresAt,
+          status:     "active",
+        });
+      }
+    }
+    console.log(`[Coordinator] Seeded ${this.activeTasks.size} active tasks from DB`);
+  }
+
+  // ── Assign ────────────────────────────────────────────────
+  async assign(
+    agent:     string,
+    taskKey:   string,
+    ttlMs:     number = DEFAULT_TASK_TTL_MS
+  ): Promise<AssignResult> {
+
+    // Size guard — reject before map grows unboundedly
+    if (this.activeTasks.size >= MAX_ACTIVE_TASKS) {
+      return {
+        status:  "rejected",
+        reason:  `Active task limit (${MAX_ACTIVE_TASKS}) reached — coordinator at capacity`,
+      };
+    }
+
+    // O(1) conflict check
+    const existing = this.activeTasks.get(taskKey);
+    if (existing) {
+      // Check if the existing assignment has expired
+      if (Date.now() < existing.expiresAt) {
+        return {
+          status: "blocked",
+          reason: `Task "${taskKey}" already assigned to ${existing.agent}`,
+        };
+      }
+      // Expired — fall through to reassign
+      this.activeTasks.delete(taskKey);
+    }
+
+    const now      = Date.now();
+    const task: AgentTask = {
+      taskKey,
+      agent,
+      assignedAt: now,
+      expiresAt:  now + ttlMs,
+      status:     "active",
+    };
+
+    // Write to DB first (persistence) then update in-memory cache
+    await db.insert(agentTasks)
+      .values(task)
+      .onConflictDoUpdate({
+        target: agentTasks.taskKey,
+        set:    { agent, assignedAt: now, expiresAt: now + ttlMs, status: "active" },
+      });
+
+    this.activeTasks.set(taskKey, task);
+
+    return { status: "assigned" };
+  }
+
+  // ── Complete / fail ────────────────────────────────────────
+  async complete(taskKey: string, status: "completed" | "failed"): Promise<void> {
+    this.activeTasks.delete(taskKey);
+    await db
+      .update(agentTasks)
+      .set({ status })
+      .where(eq(agentTasks.taskKey, taskKey));
+  }
+
+  // ── Evict expired tasks ────────────────────────────────────
+  private evictExpiredTasks(): void {
+    const now     = Date.now();
+    let   evicted = 0;
+
+    for (const [key, task] of this.activeTasks) {
+      if (task.expiresAt <= now) {
+        this.activeTasks.delete(key);
+        evicted++;
+      }
+    }
+
+    if (evicted > 0) {
+      console.log(`[Coordinator] Evicted ${evicted} expired tasks`);
+      // Also clean DB asynchronously — don't await in timer callback
+      db.update(agentTasks)
+        .set({ status: "expired" })
+        .where(
+          and(
+            eq(agentTasks.status, "active"),
+            lt(agentTasks.expiresAt, now)
+          )
+        )
+        .catch(err => console.error("[Coordinator] DB eviction error:", err));
+    }
+  }
+
+  // ── Metrics ───────────────────────────────────────────────
+  getActiveCount(): number { return this.activeTasks.size; }
+
+  // ── Cleanup ───────────────────────────────────────────────
+  destroy(): void {
+    if (this.evictionTimer) clearInterval(this.evictionTimer);
+  }
+}
+
+C) dependsOn — Implementation
+The field should be implemented, not removed. Removing it would silently break any agent configuration that has already specified dependencies. The sequential execution model needs to be replaced with a topological sort that respects the DAG, with cycle detection at registration time.
+typescript// server/agents/orchestrator.ts
+import { auditStep }   from "../audit/auditLogger";
+import { circuitBreaker } from "./circuitBreaker";
+
+export interface Agent {
+  name:       string;
+  priority:   number;
+  timeoutMs?: number;
+  dependsOn?: string[];   // now actually enforced
+  run: (context: AgentContext, priorResults: Record<string, AgentOutput>) => Promise<AgentOutput>;
+}
+
+export interface AgentOutput {
+  success: boolean;
+  data?:   unknown;
+  error?:  string;
+  skipped?: boolean;
+  skipReason?: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Topological sort with cycle detection
+// Called at agent registration time, not at runtime
+// ─────────────────────────────────────────────────────────────
+export function topologicalSort(agents: Agent[]): Agent[] {
+  const agentMap   = new Map(agents.map(a => [a.name, a]));
+  const visited    = new Set<string>();
+  const inProgress = new Set<string>();
+  const sorted:      Agent[] = [];
+
+  function visit(name: string, path: string[]): void {
+    if (visited.has(name))    return;
+    if (inProgress.has(name)) {
+      throw new Error(
+        `[Orchestrator] Circular dependency detected: ${[...path, name].join(" → ")}`
+      );
+    }
+
+    const agent = agentMap.get(name);
+    if (!agent) {
+      throw new Error(
+        `[Orchestrator] Agent "${name}" is listed as a dependency but is not registered`
+      );
+    }
+
+    inProgress.add(name);
+
+    for (const dep of agent.dependsOn ?? []) {
+      visit(dep, [...path, name]);
+    }
+
+    inProgress.delete(name);
+    visited.add(name);
+    sorted.push(agent);
+  }
+
+  // Sort by priority within each dependency tier before visiting
+  const byPriority = [...agents].sort((a, b) => a.priority - b.priority);
+  for (const agent of byPriority) {
+    visit(agent.name, []);
+  }
+
+  return sorted;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Orchestrator
+// ─────────────────────────────────────────────────────────────
+export class Orchestrator {
+  private agents:     Agent[] = [];
+  private sortedPlan: Agent[] | null = null;
+
+  register(agent: Agent): void {
+    this.agents.push(agent);
+    this.sortedPlan = null;  // invalidate cached plan
+  }
+
+  /**
+   * Returns the execution plan (topologically sorted).
+   * Validates and caches — throws at registration time if deps are wrong,
+   * not at patient-request time.
+   */
+  getExecutionPlan(): Agent[] {
+    if (!this.sortedPlan) {
+      this.sortedPlan = topologicalSort(this.agents);
+    }
+    return this.sortedPlan;
+  }
+
+  /**
+   * Runs all agents in dependency order with:
+   * - Per-agent timeouts (AbortController-based for resource cleanup)
+   * - Circuit breaker checks
+   * - Dependency output forwarding
+   * - Full audit trail
+   */
+  async run(context: AgentContext, traceId: string): Promise<Record<string, AgentOutput>> {
+    const plan         = this.getExecutionPlan();
+    const results:       Record<string, AgentOutput> = {};
+    const skippedDueToFailedDep = new Set<string>();
+
+    for (const agent of plan) {
+      // ── Check if any dependency failed or was skipped ────
+      const failedDep = (agent.dependsOn ?? []).find(dep =>
+        !results[dep]?.success || skippedDueToFailedDep.has(dep)
+      );
+
+      if (failedDep) {
+        const reason = `Dependency "${failedDep}" did not succeed`;
+        results[agent.name] = { success: false, skipped: true, skipReason: reason };
+        skippedDueToFailedDep.add(agent.name);
+
+        await auditStep({
+          traceId, step: `agent_skipped_${agent.name}`,
+          input:  { dependsOn: agent.dependsOn },
+          output: { skipReason: reason },
+          metadata: { agent: agent.name },
+        });
+        continue;
+      }
+
+      // ── Circuit breaker ──────────────────────────────────
+      const cb = circuitBreaker.getState(agent.name);
+      if (cb.state === "open") {
+        results[agent.name] = {
+          success:    false,
+          skipped:    true,
+          skipReason: `Circuit breaker open for agent "${agent.name}" — ${cb.failureCount} recent failures`,
+        };
+
+        await auditStep({
+          traceId, step: `agent_circuit_open_${agent.name}`,
+          input:  { circuitState: cb },
+          output: null,
+          metadata: { agent: agent.name },
+        });
+        continue;
+      }
+
+      // ── Run with timeout + AbortController ───────────────
+      const timeoutMs    = agent.timeoutMs ?? 10_000;
+      const abortController = new AbortController();
+      const timeoutHandle   = setTimeout(() => abortController.abort(), timeoutMs);
+
+      const startTime = Date.now();
+
+      try {
+        // Pass AbortSignal to agent — well-behaved agents can clean up on abort
+        const contextWithSignal = { ...context, signal: abortController.signal };
+
+        const result = await Promise.race([
+          agent.run(contextWithSignal, results),
+          new Promise<never>((_, reject) =>
+            abortController.signal.addEventListener("abort", () =>
+              reject(new Error(`Agent "${agent.name}" timed out after ${timeoutMs}ms`))
+            )
+          ),
+        ]);
+
+        clearTimeout(timeoutHandle);
+        results[agent.name] = result;
+        circuitBreaker.recordSuccess(agent.name);
+
+        await auditStep({
+          traceId, step: `agent_success_${agent.name}`,
+          input:  { durationMs: Date.now() - startTime },
+          output: { success: result.success },
+          metadata: { agent: agent.name },
+        });
+
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        abortController.abort();  // ensure cleanup even if timeout didn't fire
+
+        const isTimeout = err instanceof Error && err.message.includes("timed out");
+        circuitBreaker.recordFailure(agent.name);
+
+        results[agent.name] = {
+          success: false,
+          error:   err instanceof Error ? err.message : String(err),
+        };
+
+        await auditStep({
+          traceId, step: `agent_failure_${agent.name}`,
+          input:  { durationMs: Date.now() - startTime, isTimeout },
+          output: { error: results[agent.name].error },
+          metadata: { agent: agent.name },
+        });
+      }
+    }
+
+    return results;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Distributed circuit breaker interface
+//
+// In production: back this with Redis so all instances share state.
+// In dev/test: use the in-memory implementation below.
+// ─────────────────────────────────────────────────────────────
+interface CircuitBreakerState {
+  state:        "closed" | "open" | "half-open";
+  failureCount: number;
+  lastFailureAt: number;
+  openedAt?:    number;
+}
+
+const FAILURE_THRESHOLD  = 5;
+const RECOVERY_WINDOW_MS = 60_000;  // 1 minute half-open window
+
+export class InMemoryCircuitBreaker {
+  private states = new Map<string, CircuitBreakerState>();
+
+  getState(agent: string): CircuitBreakerState {
+    const state = this.states.get(agent);
+    if (!state) return { state: "closed", failureCount: 0, lastFailureAt: 0 };
+
+    // Auto-transition open → half-open after recovery window
+    if (state.state === "open" && Date.now() - (state.openedAt ?? 0) > RECOVERY_WINDOW_MS) {
+      const halfOpen = { ...state, state: "half-open" as const };
+      this.states.set(agent, halfOpen);
+      return halfOpen;
+    }
+
+    return state;
+  }
+
+  recordSuccess(agent: string): void {
+    const state = this.getState(agent);
+    if (state.state === "half-open") {
+      // Recovery succeeded — close the breaker
+      this.states.set(agent, { state: "closed", failureCount: 0, lastFailureAt: 0 });
+    }
+    // If already closed, reset failure count
+    if (state.state === "closed" && state.failureCount > 0) {
+      this.states.set(agent, { ...state, failureCount: 0 });
+    }
+  }
+
+  recordFailure(agent: string): void {
+    const state       = this.getState(agent);
+    const newCount    = state.failureCount + 1;
+    const shouldOpen  = newCount >= FAILURE_THRESHOLD;
+
+    this.states.set(agent, {
+      state:         shouldOpen ? "open" : state.state === "half-open" ? "open" : "closed",
+      failureCount:  newCount,
+      lastFailureAt: Date.now(),
+      openedAt:      shouldOpen ? Date.now() : state.openedAt,
+    });
+
+    if (shouldOpen) {
+      console.warn(
+        `[CircuitBreaker] Agent "${agent}" circuit opened after ${newCount} failures. ` +
+        `Will retry in ${RECOVERY_WINDOW_MS / 1000}s.`
+      );
+    }
+  }
+
+  // For testing
+  reset(agent: string): void {
+    this.states.delete(agent);
+  }
+}
+
+export const circuitBreaker = new InMemoryCircuitBreaker();
+And the heartbeat registry with stale agent cleanup:
+typescript// server/agents/unifiedAgentRegistry.ts
+import { db }          from "../db";
+import { agentHeartbeats } from "../../shared/schema";
+import { eq, lt, and } from "drizzle-orm";
+
+const HEARTBEAT_INTERVAL_MS  = 30_000;    // agents heartbeat every 30s
+const STALE_THRESHOLD_MS     = 90_000;    // agent is dead if no heartbeat for 90s
+const RETENTION_MS           = 24 * 3600_000;  // keep heartbeat history for 24h only
+
+export class UnifiedAgentRegistry {
+  private heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+  /**
+   * Register an agent and begin heartbeating.
+   * Upserts on each heartbeat — never accumulates duplicate rows per agent.
+   */
+  registerAgent(agentName: string): void {
+    // Upsert on heartbeat — one row per agent, updated in place
+    const beat = async () => {
+      try {
+        await db
+          .insert(agentHeartbeats)
+          .values({
+            agentName,
+            lastBeatAt:  new Date().toISOString(),
+            status:      "alive",
+          })
+          .onConflictDoUpdate({
+            target: agentHeartbeats.agentName,
+            set:    { lastBeatAt: new Date().toISOString(), status: "alive" },
+          });
+      } catch (err) {
+        console.error(`[Registry] Heartbeat failed for ${agentName}:`, err);
+      }
+    };
+
+    beat();  // immediate first beat
+    this.heartbeatTimers.set(
+      agentName,
+      setInterval(beat, HEARTBEAT_INTERVAL_MS)
+    );
+  }
+
+  /**
+   * Returns all agents that have heartbeated within the stale threshold.
+   * Dead agents (no recent heartbeat) are excluded and marked in DB.
+   */
+  async getAliveAgents(): Promise<string[]> {
+    const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS).toISOString();
+
+    // Mark stale agents as dead (don't delete — preserve for audit)
+    await db
+      .update(agentHeartbeats)
+      .set({ status: "dead" })
+      .where(
+        and(
+          eq(agentHeartbeats.status, "alive"),
+          lt(agentHeartbeats.lastBeatAt, cutoff)
+        )
+      );
+
+    const rows = await db
+      .select({ agentName: agentHeartbeats.agentName })
+      .from(agentHeartbeats)
+      .where(eq(agentHeartbeats.status, "alive"));
+
+    return rows.map(r => r.agentName);
+  }
+
+  /**
+   * Prune heartbeat history older than retention window.
+   * Call this on a daily schedule — keeps the table bounded.
+   */
+  async pruneOldHeartbeats(): Promise<number> {
+    const cutoff = new Date(Date.now() - RETENTION_MS).toISOString();
+    const result = await db
+      .delete(agentHeartbeats)
+      .where(lt(agentHeartbeats.lastBeatAt, cutoff));
+    return result.rowCount ?? 0;
+  }
+
+  deregisterAgent(agentName: string): void {
+    const timer = this.heartbeatTimers.get(agentName);
+    if (timer) {
+      clearInterval(timer);
+      this.heartbeatTimers.delete(agentName);
+    }
+    db.update(agentHeartbeats)
+      .set({ status: "dead" })
+      .where(eq(agentHeartbeats.agentName, agentName))
+      .catch(err => console.error(`[Registry] Deregister failed for ${agentName}:`, err));
+  }
+}
+
+D) Test Cases
+typescript// ── Duplicate task assignment ─────────────────────────────────
+const coordinator = new MultiAgentCoordinator();
+
+// First assignment succeeds
+const r1 = await coordinator.assign("agent_a", "task:patient:001");
+expect(r1.status).toBe("assigned");
+
+// Duplicate blocked — O(1) Map lookup
+const r2 = await coordinator.assign("agent_b", "task:patient:001");
+expect(r2.status).toBe("blocked");
+expect(r2.reason).toContain("agent_a");
+
+// After completion, same task can be reassigned
+await coordinator.complete("task:patient:001", "completed");
+const r3 = await coordinator.assign("agent_b", "task:patient:001");
+expect(r3.status).toBe("assigned");
+
+// Expired task auto-reassignable
+const r4 = await coordinator.assign("agent_a", "task:patient:002", 1);  // 1ms TTL
+await new Promise(r => setTimeout(r, 10));  // wait for expiry
+const r5 = await coordinator.assign("agent_b", "task:patient:002");
+expect(r5.status).toBe("assigned");  // not blocked — prior assignment expired
+
+// Size limit enforced
+const bigCoordinator = new MultiAgentCoordinator();
+// Fill to limit
+for (let i = 0; i < 10_000; i++) {
+  await bigCoordinator.assign("agent_x", `task:${i}`);
+}
+const overflow = await bigCoordinator.assign("agent_x", "task:overflow");
+expect(overflow.status).toBe("rejected");
+
+// ── Agent timeout ─────────────────────────────────────────────
+const orchestrator = new Orchestrator();
+orchestrator.register({
+  name:      "slow_agent",
+  priority:  1,
+  timeoutMs: 100,
+  run:       async () => new Promise(resolve => setTimeout(resolve, 5000)),  // hangs for 5s
+});
+
+const results = await orchestrator.run({ patientId: "P001" }, "trace-001");
+expect(results["slow_agent"].success).toBe(false);
+expect(results["slow_agent"].error).toContain("timed out");
+
+// Verify circuit breaker accumulates failures
+for (let i = 0; i < 4; i++) {
+  await orchestrator.run({ patientId: "P001" }, `trace-00${i + 2}`);
+}
+expect(circuitBreaker.getState("slow_agent").failureCount).toBe(5);
+expect(circuitBreaker.getState("slow_agent").state).toBe("open");
+
+// After circuit opens, agent is skipped entirely
+const afterOpen = await orchestrator.run({ patientId: "P001" }, "trace-006");
+expect(afterOpen["slow_agent"].skipped).toBe(true);
+expect(afterOpen["slow_agent"].skipReason).toContain("Circuit breaker open");
+
+// ── Dependency ordering ───────────────────────────────────────
+const depOrchestrator = new Orchestrator();
+const executionOrder: string[] = [];
+
+depOrchestrator.register({
+  name: "formatter", priority: 2, dependsOn: ["scorer"],
+  run: async () => { executionOrder.push("formatter"); return { success: true }; }
+});
+depOrchestrator.register({
+  name: "scorer", priority: 1,
+  run: async () => { executionOrder.push("scorer"); return { success: true }; }
+});
+
+await depOrchestrator.run({}, "trace-dep-001");
+expect(executionOrder[0]).toBe("scorer");    // dep runs first regardless of priority
+expect(executionOrder[1]).toBe("formatter");
+
+// Dependency failure cascades to dependent
+const failOrchestrator = new Orchestrator();
+failOrchestrator.register({
+  name: "scorer", priority: 1,
+  run: async () => { return { success: false, error: "model unavailable" }; }
+});
+failOrchestrator.register({
+  name: "formatter", priority: 2, dependsOn: ["scorer"],
+  run: async () => { return { success: true }; }
+});
+const depFail = await failOrchestrator.run({}, "trace-dep-002");
+expect(depFail["formatter"].skipped).toBe(true);
+expect(depFail["formatter"].skipReason).toContain("scorer");
+
+// Circular dependency detected at registration time, not patient-request time
+const cycleOrchestrator = new Orchestrator();
+cycleOrchestrator.register({ name: "A", priority: 1, dependsOn: ["B"], run: async () => ({ success: true }) });
+cycleOrchestrator.register({ name: "B", priority: 2, dependsOn: ["A"], run: async () => ({ success: true }) });
+expect(() => cycleOrchestrator.getExecutionPlan()).toThrow("Circular dependency detected");
+
+// ── Dead agent heartbeat cleanup ──────────────────────────────
+const registry = new UnifiedAgentRegistry();
+registry.registerAgent("triage_agent");
+
+// Simulate stale by directly updating DB to old timestamp
+await db.update(agentHeartbeats)
+  .set({ lastBeatAt: new Date(Date.now() - 120_000).toISOString() })  // 2min ago
+  .where(eq(agentHeartbeats.agentName, "triage_agent"));
+
+const alive = await registry.getAliveAgents();
+expect(alive).not.toContain("triage_agent");  // marked dead
+
+// Pruning keeps table bounded
+const pruned = await registry.pruneOldHeartbeats();
+expect(typeof pruned).toBe("number");
+
+registry.deregisterAgent("triage_agent");
+The most operationally dangerous issue here is the dead dependsOn field combined with the concurrent improvement loop from Packet 9. If the self-improvement system ever modifies agent priorities as an "operational" auto-approved change, the execution order shifts — but since dependsOn was never enforced, a downstream agent that needed upstream results silently runs against stale or missing data. The topological sort implementation makes that dependency contract explicit and verified at registration time, so a priority change that would violate a dependency is caught immediately rather than producing silent wrong outputs during a patient encounter.Want to be notified when Claude responds?NotifySonnet 4.6Claude is AI and can 

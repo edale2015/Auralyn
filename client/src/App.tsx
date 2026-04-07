@@ -58,6 +58,7 @@ import ProductionReadinessPage from "@/pages/ProductionReadinessPage";
 import BillingIntelligencePage from "@/pages/BillingIntelligencePage";
 import RevenueWarRoomPage from "@/pages/RevenueWarRoomPage";
 import SystemWarRoomPage from "@/pages/SystemWarRoomPage";
+import OrchestratorPanel from "@/pages/OrchestratorPanel";
 import ArchitecturalCompliancePage from "@/pages/ArchitecturalCompliancePage";
 import MoatIntelligencePage from "@/pages/MoatIntelligencePage";
 import ExecutiveCommandPage from "@/pages/ExecutiveCommandPage";
@@ -177,6 +178,7 @@ function WorkbenchRouter() {
         <Route path="/billing-intelligence" component={BillingIntelligencePage} />
         <Route path="/revenue-war-room">{() => <RoleGuard allowedRoles={["admin", "physician"]}><RevenueWarRoomPage /></RoleGuard>}</Route>
         <Route path="/system-war-room">{() => <RoleGuard allowedRoles={["admin"]}><SystemWarRoomPage /></RoleGuard>}</Route>
+        <Route path="/orchestrator">{() => <RoleGuard allowedRoles={["admin"]}><OrchestratorPanel /></RoleGuard>}</Route>
         <Route path="/architectural-compliance" component={ArchitecturalCompliancePage} />
         <Route path="/moat-intelligence" component={MoatIntelligencePage} />
         <Route path="/executive-command">{() => <RoleGuard allowedRoles={["admin"]}><ExecutiveCommandPage /></RoleGuard>}</Route>
