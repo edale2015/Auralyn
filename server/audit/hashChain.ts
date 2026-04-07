@@ -1,91 +1,98 @@
 import crypto from "crypto";
-import { db } from "../db";
-import { auditLogs } from "../../shared/schema";
-import { desc } from "drizzle-orm";
 
-// ── Chain head ────────────────────────────────────────────────────────────────
-// BUG FIXED: previously `let lastHash = "GENESIS"` — any server restart silently
-// reset to GENESIS, creating orphaned chain fragments that look valid individually
-// but are disconnected from all prior records. The DB-seed below fixes this.
+// ── Canonical serialization ───────────────────────────────────────────────────
+//
+// WHY NOT JSON.stringify:
+//   JSON.stringify key order is insertion-order dependent. Two logically
+//   identical objects built in different orders produce different strings and
+//   therefore different hashes. This silently breaks cross-restart verification.
+//
+// WHY NOT a partial fix (sort top-level keys only):
+//   Claude's version sorted top-level keys but fell back to JSON.stringify for
+//   arrays, which does NOT sort nested object keys. [{b:1,a:2}] still
+//   depends on insertion order inside the array.
+//
+// FIX (ChatGPT suggestion, adopted here):
+//   Fully recursive canonicalize() handles every type uniformly:
+//   - null                → "null"
+//   - undefined (in obj)  → key is skipped (consistent with JSON spec)
+//   - undefined (in arr)  → "null" (matches JSON.stringify behavior)
+//   - primitives          → JSON.stringify
+//   - arrays              → recurse each element
+//   - objects             → sort keys, recurse each value
 
-let lastHash = "GENESIS";
-let seeded = false;
+function canonicalize(value: unknown, inArray = false): string {
+  if (value === null) return "null";
 
-/**
- * Seed the in-memory chain head from the most recent DB record.
- * MUST be called once at server startup before any audit writes.
- * Safe to call multiple times — subsequent calls are no-ops.
- */
-export async function initChainFromDB(): Promise<void> {
-  if (seeded) return;
-  try {
-    const [latest] = await db
-      .select({ hash: auditLogs.hash })
-      .from(auditLogs)
-      .orderBy(desc(auditLogs.createdAt))
-      .limit(1);
-
-    if (latest?.hash) {
-      lastHash = latest.hash;
-      console.log(`[AUDIT-CHAIN] Resuming chain from hash ${lastHash.slice(0, 18)}…`);
-    } else {
-      console.log("[AUDIT-CHAIN] No prior records — starting from GENESIS");
-    }
-    seeded = true;
-  } catch (e) {
-    console.error("[AUDIT-CHAIN] Could not seed from DB — chain may be discontinuous:", e);
+  if (value === undefined) {
+    // In arrays undefined serialises as null (mirrors JSON.stringify)
+    // In objects undefined means skip — handled at the object branch
+    return inArray ? "null" : "";
   }
+
+  const t = typeof value;
+
+  if (t === "string" || t === "number" || t === "boolean") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return "[" + value.map(v => canonicalize(v, true)).join(",") + "]";
+  }
+
+  if (t === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj)
+      .filter(k => obj[k] !== undefined)
+      .sort();
+    return "{" + keys.map(k =>
+      JSON.stringify(k) + ":" + canonicalize(obj[k], false)
+    ).join(",") + "}";
+  }
+
+  // Fallback for functions, symbols, bigint — should never appear in audit data
+  return JSON.stringify(String(value));
 }
 
-// ── Deterministic serialisation ───────────────────────────────────────────────
-// BUG FIXED: JSON.stringify key order is engine/V8 insertion-order dependent.
-// Two logically identical objects with different insertion order produce different
-// hashes, breaking cross-process verification. Sorting keys fixes this.
-function stableStringify(obj: Record<string, unknown>): string {
-  const recurse = (v: unknown): unknown => {
-    if (v === null || typeof v !== "object") return v;
-    if (Array.isArray(v)) return v.map(recurse);
-    const sorted: Record<string, unknown> = {};
-    for (const k of Object.keys(v as object).sort()) {
-      sorted[k] = recurse((v as Record<string, unknown>)[k]);
-    }
-    return sorted;
-  };
-  return JSON.stringify(recurse(obj));
+export function stableStringify(value: unknown): string {
+  return canonicalize(value, false);
 }
 
-export function computeChainHash(prevHash: string, entry: Record<string, unknown>): string {
+// ── Hash computation ──────────────────────────────────────────────────────────
+//
+// Pure function — no side effects, no in-memory state.
+// The DB is the only source of truth for the chain head.
+
+export function computeChainHash(
+  prevHash: string,
+  entry: Record<string, unknown>,
+): string {
   const content = prevHash + stableStringify(entry);
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-export function advanceChain(entry: Record<string, unknown>): { hash: string; prevHash: string } {
-  const prevHash = lastHash;
-  const hash = computeChainHash(prevHash, entry);
-  lastHash = hash;
-  return { hash, prevHash };
-}
-
-export function getCurrentChainHead(): string {
-  return lastHash;
-}
-
-export function isChainSeeded(): boolean {
-  return seeded;
-}
+// ── Link verification ─────────────────────────────────────────────────────────
+//
+// Three layers of safety (Claude + ChatGPT both recommended these):
+//  1. Hex-format guard  — rejects malformed inputs before any buffer ops
+//  2. Length guard      — timingSafeEqual requires equal-length buffers
+//  3. Constant-time compare — prevents timing-based hash oracle attacks
 
 export function verifyChainLink(
   entry: Record<string, unknown>,
   prevHash: string,
   claimedHash: string,
 ): boolean {
-  const expected = computeChainHash(prevHash, entry);
   try {
-    // Both must be valid 64-char hex strings or timingSafeEqual throws
-    const a = Buffer.from(expected, "hex");
-    const b = Buffer.from(claimedHash, "hex");
-    if (a.length !== 32 || b.length !== 32) return false;
-    return crypto.timingSafeEqual(a, b);
+    // Must be a 64-char hex string (SHA-256 output is always 32 bytes = 64 hex chars)
+    if (!/^[a-f0-9]{64}$/i.test(claimedHash)) return false;
+
+    const expected   = computeChainHash(prevHash, entry);
+    const expectedBuf = Buffer.from(expected, "hex");
+    const claimedBuf  = Buffer.from(claimedHash, "hex");
+
+    if (expectedBuf.length !== claimedBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, claimedBuf);
   } catch {
     return false;
   }

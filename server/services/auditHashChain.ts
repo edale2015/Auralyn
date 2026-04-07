@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import { appendExternalAuditRecord } from "../audit/externalAuditStore";
+import { stableStringify } from "../audit/hashChain";
 
 export interface HashedAuditEntry {
   id?: number;
@@ -13,24 +14,60 @@ export interface HashedAuditEntry {
   prev_hash: string;
 }
 
+// ── In-memory chain head ──────────────────────────────────────────────────────
+// Seeded from DB at startup via initAuditHashChain().
+// Protected against concurrent writes by:
+//  1. enqueueExclusive (in-process serialisation)
+//  2. pg_advisory_xact_lock (cross-instance serialisation)
 let lastHash = "GENESIS";
 
-function computeHash(prevHash: string, eventType: string, eventData: unknown, timestamp: string): string {
-  const payload = JSON.stringify({ prevHash, eventType, eventData, timestamp });
-  return createHash("sha256").update(payload).digest("hex");
+// ── Failure-safe queue (mirrors auditLogger.ts pattern) ───────────────────────
+let chainQueue: Promise<unknown> = Promise.resolve();
+function enqueueExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const run = chainQueue.then(fn, fn);
+  chainQueue = run.then(() => undefined, () => undefined);
+  return run;
 }
 
+// Different lock ID from audit_logs path (91424017) — these are separate tables
+const AUDIT_CHAIN_LOCK = BigInt(91424018);
+
+// ── Hash computation ──────────────────────────────────────────────────────────
+// FIX: was JSON.stringify — key order is insertion-order dependent.
+// stableStringify sorts keys recursively so the same logical payload always
+// produces the same hash, even across restarts or differently constructed objects.
+function computeHash(
+  prevHash: string,
+  eventType: string,
+  eventData: unknown,
+  timestamp: string,
+): string {
+  const payload = stableStringify({ prevHash, eventType, eventData, timestamp });
+  return createHash("sha256").update(payload, "utf8").digest("hex");
+}
+
+// ── appendAuditEntry ──────────────────────────────────────────────────────────
+// FIX: original advanced lastHash in memory BEFORE the DB write. If the write
+// failed, lastHash was permanently out of sync — the next successful write would
+// chain off a hash that was never persisted, creating an unverifiable gap.
+// Now: hash is computed and memory is advanced ONLY after a successful DB write.
 export async function appendAuditEntry(
   eventType: string,
   eventData: Record<string, unknown>,
-  actor?: string
+  actor?: string,
 ): Promise<string> {
-  const timestamp = new Date().toISOString();
-  const hash = computeHash(lastHash, eventType, eventData, timestamp);
-  const prevHash = lastHash;
-  lastHash = hash;
+  return enqueueExclusive(async () => {
+    const timestamp = new Date().toISOString();
 
-  try {
+    await db.execute(sql`SELECT pg_advisory_xact_lock(${AUDIT_CHAIN_LOCK})`);
+
+    // Re-read the chain head inside the lock to handle multi-instance deployments
+    const headResult = await db.execute(sql`SELECT hash FROM audit_hash_chain ORDER BY id DESC LIMIT 1`);
+    const headRow = ((headResult.rows ?? headResult) as any[])[0];
+    const prevHash = headRow?.hash ?? "GENESIS";
+
+    const hash = computeHash(prevHash, eventType, eventData, timestamp);
+
     await db.execute(sql`
       INSERT INTO audit_hash_chain (event_type, event_data, actor, timestamp, hash, prev_hash)
       VALUES (
@@ -42,14 +79,22 @@ export async function appendAuditEntry(
         ${prevHash}
       )
     `);
-    await appendExternalAuditRecord({ eventType, eventData, actor: actor ?? "system", timestamp, hash, prevHash });
-  } catch (e: any) {
-    console.error("[AUDIT-CHAIN] Failed to persist audit entry:", e?.message);
-  }
 
-  return hash;
+    // Only update in-memory head after successful write
+    lastHash = hash;
+
+    // Non-fatal: external audit record failure should not break the chain write
+    try {
+      await appendExternalAuditRecord({ eventType, eventData, actor: actor ?? "system", timestamp, hash, prevHash });
+    } catch (e: any) {
+      console.error("[AUDIT-CHAIN] External audit record failed (non-fatal):", e?.message);
+    }
+
+    return hash;
+  });
 }
 
+// ── verifyAuditChain ──────────────────────────────────────────────────────────
 export async function verifyAuditChain(): Promise<{
   valid: boolean;
   totalEntries: number;
@@ -90,6 +135,8 @@ export async function verifyAuditChain(): Promise<{
   }
 }
 
+// ── initAuditHashChain ────────────────────────────────────────────────────────
+// Seeds the in-memory chain head from the DB. Called once at server startup.
 export async function initAuditHashChain(): Promise<void> {
   try {
     await db.execute(sql`
