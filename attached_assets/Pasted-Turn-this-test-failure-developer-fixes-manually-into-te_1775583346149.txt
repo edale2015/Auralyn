@@ -1,0 +1,350 @@
+Turn this:
+
+test failure → developer fixes manually
+
+into:
+
+test failure → structured signal → proposed fix → governed approval → apply → re-test → verify improvement
+
+Without ever allowing:
+❌ silent self-modification
+❌ unsafe clinical drift
+❌ untraceable changes
+
+🧩 Architecture
+Test Suite
+   ↓
+Failure Extractor
+   ↓
+Learning Signal Generator
+   ↓
+Fix Generator (rules / LLM / heuristics)
+   ↓
+Governance Gate (category + approval)
+   ↓
+Apply Fix (versioned + audited)
+   ↓
+Re-run tests
+   ↓
+Compare improvement
+A) Learning signal extraction
+
+Convert failures into structured signals:
+
+// server/learning/learningSignals.ts
+
+export interface LearningSignal {
+  caseId: string;
+  failureType:
+    | "wrong_disposition"
+    | "missed_diagnosis"
+    | "unsafe_pass"
+    | "over_escalation"
+    | "uncertainty_misclassification";
+
+  expected: any;
+  actual: any;
+
+  context: {
+    complaint: string;
+    symptoms: string[];
+    posterior?: any;
+    decision?: any;
+  };
+}
+
+export function extractLearningSignals(
+  test: SystemTestCase,
+  result: SystemRunResult,
+  validation: ValidationResult
+): LearningSignal[] {
+
+  const signals: LearningSignal[] = [];
+
+  for (const failure of validation.failures) {
+
+    if (failure.includes("disposition")) {
+      signals.push({
+        caseId: test.id,
+        failureType: "wrong_disposition",
+        expected: test.expected.disposition,
+        actual: result.decision?.finalDisposition,
+        context: {
+          complaint: result.resolvedComplaint!,
+          symptoms: result.parsed?.secondary ?? [],
+          posterior: result.posterior,
+          decision: result.decision,
+        },
+      });
+    }
+
+    if (failure.includes("diagnosis")) {
+      signals.push({
+        caseId: test.id,
+        failureType: "missed_diagnosis",
+        expected: test.expected.primaryDiagnosis,
+        actual: result.decision?.posterior.topDiagnosis,
+        context: {
+          complaint: result.resolvedComplaint!,
+          symptoms: result.parsed?.secondary ?? [],
+        },
+      });
+    }
+  }
+
+  return signals;
+}
+B) Fix generation (controlled, not free-form)
+
+⚠️ This is where most systems go wrong.
+
+You do NOT want:
+
+LLM → directly change clinical rules
+
+You want:
+👉 constrained fix proposals
+
+Fix types
+// server/learning/fixTypes.ts
+
+export type FixType =
+  | "adjust_prior"
+  | "add_feature_likelihood"
+  | "adjust_threshold"
+  | "add_red_flag"
+  | "adjust_parser_rule";
+
+export interface ProposedFix {
+  id: string;
+
+  type: FixType;
+
+  target: {
+    complaint: string;
+    diagnosis?: string;
+    parameter?: string;
+  };
+
+  change: {
+    from?: any;
+    to: any;
+  };
+
+  reason: string;
+
+  sourceSignalId: string;
+
+  category: "clinical" | "performance";
+
+  autoApprove: boolean;
+}
+Example fix generator
+// server/learning/fixGenerator.ts
+
+export function generateFixes(signals: LearningSignal[]): ProposedFix[] {
+
+  const fixes: ProposedFix[] = [];
+
+  for (const s of signals) {
+
+    // ── Missed diagnosis → adjust prior ─────────────
+    if (s.failureType === "missed_diagnosis") {
+
+      fixes.push({
+        id: crypto.randomUUID(),
+        type: "adjust_prior",
+        target: {
+          complaint: s.context.complaint,
+          diagnosis: s.expected,
+        },
+        change: {
+          to: "increase",
+        },
+        reason: `Missed expected diagnosis ${s.expected}`,
+        sourceSignalId: s.caseId,
+        category: "clinical",
+        autoApprove: false, // NEVER auto
+      });
+    }
+
+    // ── Over-escalation → adjust threshold ──────────
+    if (s.failureType === "over_escalation") {
+
+      fixes.push({
+        id: crypto.randomUUID(),
+        type: "adjust_threshold",
+        target: {
+          parameter: "riskThreshold",
+        },
+        change: {
+          to: "increase",
+        },
+        reason: "Too many ER escalations",
+        sourceSignalId: s.caseId,
+        category: "clinical",
+        autoApprove: false,
+      });
+    }
+  }
+
+  return fixes;
+}
+C) Governance layer (reuse your existing system)
+
+This plugs directly into your self-improvement engine:
+
+// server/learning/learningOrchestrator.ts
+
+export async function runLearningCycle() {
+
+  const testResults = await runTestSuite(TEST_CASES);
+
+  const allSignals: LearningSignal[] = [];
+
+  for (const r of testResults) {
+    if (!r.passed) {
+      const signals = extractLearningSignals(
+        TEST_CASES.find(t => t.id === r.id)!,
+        r.trace,
+        { passed: r.passed, failures: r.failures }
+      );
+      allSignals.push(...signals);
+    }
+  }
+
+  const fixes = generateFixes(allSignals);
+
+  // Send into your existing governance system
+  await submitImprovementActions(fixes);
+}
+D) Apply → re-test loop
+export async function runClosedLoopLearning() {
+
+  const before = await runTestSuite(TEST_CASES);
+
+  await runLearningCycle();
+
+  // apply approved fixes
+  await runContinuousImprovement();
+
+  const after = await runTestSuite(TEST_CASES);
+
+  return compareResults(before, after);
+}
+E) Improvement verification
+function compareResults(before, after) {
+
+  let improved = 0;
+  let worsened = 0;
+
+  for (let i = 0; i < before.length; i++) {
+    if (!before[i].passed && after[i].passed) improved++;
+    if (before[i].passed && !after[i].passed) worsened++;
+  }
+
+  return {
+    improved,
+    worsened,
+    net: improved - worsened,
+  };
+}
+F) Critical safety constraints
+NEVER allow:
+autoApprove: true for clinical fixes
+ALWAYS require:
+physician approval for:
+priors
+thresholds
+red flags
+routing
+G) Add audit linkage
+
+Every fix must link:
+
+{
+  fixId
+  sourceSignalId
+  testCaseId
+  appliedAt
+  reviewerId
+}
+
+This gives you:
+
+👉 full trace from:
+
+patient case → failure → fix → approval → system change
+🔥 Most important insight
+
+The learning loop must be:
+
+constrained, auditable, and reversible
+
+NOT:
+
+“AI updates itself”
+
+Final architecture (you now have full system)
+INPUT
+  ↓
+Parsing
+  ↓
+Complaint Mapping
+  ↓
+Node Runner
+  ↓
+Priors + Bayesian Engine
+  ↓
+Posterior Analysis
+  ↓
+Final Decision Engine
+  ↓
+Safety Gate
+  ↓
+Physician Checkpoint
+  ↓
+OUTPUT
+
++ TEST HARNESS
++ LEARNING LOOP
++ GOVERNANCE SYSTEM
++ AUDIT CHAIN
+🚀 Final verdict
+
+You now have:
+
+✅ full clinical pipeline
+✅ safety enforcement
+✅ governance
+✅ auditability
+✅ simulation/testing
+✅ controlled learning loop
+
+If you want the final final step
+
+The last thing to build is:
+
+👉 real-world deployment guardrails (production monitoring + alerting + rollback system)
+
+This is what turns it into something you could actually deploy safely.
+
+Say:
+
+👉 “build production guardrails”
+
+…and we’ll complete the system.
+
+gold case feedback integration? is included?
+
+Partially, but not fully yet.
+
+What I included already is the skeleton that makes golden-case integration easy:
+
+test case objects with expected outcomes
+full pipeline runner
+validator that compares expected vs actual
+learning signal extraction from failures
+fix generation
+governance / approval path
+re-test after changes

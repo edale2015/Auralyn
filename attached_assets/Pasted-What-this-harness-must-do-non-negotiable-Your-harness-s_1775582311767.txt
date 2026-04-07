@@ -1,0 +1,372 @@
+What this harness must do (non-negotiable)
+
+Your harness should:
+
+1. Run full end-to-end cases
+message → parse → mapping → config → nodes → priors → posterior → decision → output
+2. Capture full trace
+every node
+every transformation
+every decision
+every override
+3. Compare against expected outcomes
+disposition
+diagnosis
+escalation
+safety behavior
+4. Detect:
+logic drift
+regression
+unsafe overrides
+silent failures
+🧩 Architecture of the test harness
+TestCase
+   ↓
+Runner (orchestrates full pipeline)
+   ↓
+TraceCollector (records every step)
+   ↓
+Validator (compares expected vs actual)
+   ↓
+Reporter (logs + dashboards + flags)
+A) Test case definition (this is critical)
+// server/testing/types.ts
+
+export interface SystemTestCase {
+  id: string;
+
+  input: {
+    message: string;
+    patientContext?: Partial<CaseState>;
+  };
+
+  expected: {
+    disposition?: string;
+    primaryDiagnosis?: string;
+    mustIncludeDifferential?: string[];
+    mustNotIncludeDifferential?: string[];
+    requiresPhysicianReview?: boolean;
+    mustTriggerSafetyGate?: boolean;
+  };
+
+  metadata?: {
+    category: "safe" | "edge" | "high_risk" | "regression";
+    description?: string;
+  };
+}
+B) Full pipeline runner
+
+This is the core harness engine.
+
+// server/testing/systemRunner.ts
+
+export interface SystemRunResult {
+  caseId: string;
+
+  parsed?: ParsedComplaint;
+  resolvedComplaint?: string;
+
+  nodeTrace: NodeExecutionResult[];
+
+  posterior?: PosteriorAnalysis;
+
+  decision?: DecisionContext;
+
+  patientResponse?: string;
+
+  errors: string[];
+}
+
+export async function runSystemTestCase(
+  test: SystemTestCase
+): Promise<SystemRunResult> {
+
+  const errors: string[] = [];
+
+  const caseId = `test-${test.id}-${Date.now()}`;
+
+  let state: CaseState = {
+    caseId,
+    symptoms: [],
+    ...test.input.patientContext,
+  };
+
+  let parsed: ParsedComplaint | undefined;
+  let config: ComplaintConfig | undefined;
+  let posterior: PosteriorAnalysis | undefined;
+  let decision: DecisionContext | undefined;
+  let nodeTrace: NodeExecutionResult[] = [];
+
+  try {
+    // ── Parse ─────────────────────────────
+    parsed = parseComplaint(test.input.message);
+
+    // ── Resolve complaint ─────────────────
+    const resolved = await resolveComplaint(parsed);
+    config = await loadComplaintConfig(resolved.ccId);
+
+    // ── Run nodes ─────────────────────────
+    const nodeResult = await runComplaintNodes(config, state);
+    nodeTrace = nodeResult.nodeResults;
+
+    if (!nodeResult.success) {
+      errors.push(`Node failure at ${nodeResult.failedNode}`);
+      return { caseId, parsed, nodeTrace, errors };
+    }
+
+    state = nodeResult.finalState;
+
+    // ── Load priors ───────────────────────
+    const priorsBundle = await loadComplaintPriors(config.ccId);
+
+    // ── Bayesian differential ─────────────
+    const differential = runDifferential(
+      state.symptoms,
+      priorsBundle.priors
+    );
+
+    posterior = analyzePosterior(differential);
+
+    // ── Final decision ────────────────────
+    decision = await computeFinalDecision({
+      state,
+      posterior,
+      erProbability: state.scores?.erRisk ?? 0,
+      store: getTestEscalationStore(),
+    });
+
+    // ── Patient output ────────────────────
+    const response = buildPatientResponse(decision);
+
+    return {
+      caseId,
+      parsed,
+      resolvedComplaint: config.ccId,
+      nodeTrace,
+      posterior,
+      decision,
+      patientResponse: response,
+      errors,
+    };
+
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+
+    return {
+      caseId,
+      parsed,
+      resolvedComplaint: config?.ccId,
+      nodeTrace,
+      posterior,
+      decision,
+      errors,
+    };
+  }
+}
+C) Validator (this is where truth is enforced)
+// server/testing/validator.ts
+
+export interface ValidationResult {
+  passed: boolean;
+  failures: string[];
+}
+
+export function validateTestCase(
+  test: SystemTestCase,
+  result: SystemRunResult
+): ValidationResult {
+
+  const failures: string[] = [];
+
+  const decision = result.decision;
+
+  if (!decision) {
+    failures.push("No decision produced");
+    return { passed: false, failures };
+  }
+
+  // ── Disposition ───────────────────────
+  if (test.expected.disposition) {
+    if (decision.finalDisposition !== test.expected.disposition) {
+      failures.push(
+        `Expected disposition ${test.expected.disposition}, got ${decision.finalDisposition}`
+      );
+    }
+  }
+
+  // ── Diagnosis ─────────────────────────
+  if (test.expected.primaryDiagnosis) {
+    if (decision.posterior.topDiagnosis !== test.expected.primaryDiagnosis) {
+      failures.push(
+        `Expected diagnosis ${test.expected.primaryDiagnosis}, got ${decision.posterior.topDiagnosis}`
+      );
+    }
+  }
+
+  // ── Must include differential ─────────
+  for (const d of test.expected.mustIncludeDifferential ?? []) {
+    if (!decision.posterior.differential.some(x => x.diagnosis === d)) {
+      failures.push(`Missing expected differential: ${d}`);
+    }
+  }
+
+  // ── Must not include ──────────────────
+  for (const d of test.expected.mustNotIncludeDifferential ?? []) {
+    if (decision.posterior.differential.some(x => x.diagnosis === d)) {
+      failures.push(`Unexpected differential present: ${d}`);
+    }
+  }
+
+  // ── Safety gate ───────────────────────
+  if (test.expected.mustTriggerSafetyGate) {
+    if (decision.safety.allowed) {
+      failures.push("Expected safety gate to block, but it passed");
+    }
+  }
+
+  // ── Physician review ──────────────────
+  if (test.expected.requiresPhysicianReview) {
+    if (decision.finalDisposition !== "AWAITING_PHYSICIAN") {
+      failures.push("Expected physician review but did not occur");
+    }
+  }
+
+  return {
+    passed: failures.length === 0,
+    failures,
+  };
+}
+D) Runner for multiple cases
+// server/testing/testSuiteRunner.ts
+
+export async function runTestSuite(
+  tests: SystemTestCase[]
+) {
+
+  const results = [];
+
+  for (const test of tests) {
+    const run = await runSystemTestCase(test);
+    const validation = validateTestCase(test, run);
+
+    results.push({
+      id: test.id,
+      passed: validation.passed,
+      failures: validation.failures,
+      trace: run,
+    });
+  }
+
+  return results;
+}
+E) Sample test cases
+export const TEST_CASES: SystemTestCase[] = [
+
+  {
+    id: "simple_uri",
+    input: { message: "runny nose and cough" },
+    expected: {
+      disposition: "HOME",
+      primaryDiagnosis: "uri",
+    },
+  },
+
+  {
+    id: "chest_pain_high_risk",
+    input: { message: "burning chest pain and shortness of breath" },
+    expected: {
+      disposition: "ER_NOW",
+      mustTriggerSafetyGate: true,
+    },
+    metadata: { category: "high_risk" },
+  },
+
+  {
+    id: "uncertain_case",
+    input: { message: "feeling off and tired" },
+    expected: {
+      disposition: "NEEDS_MORE_DATA",
+    },
+  },
+
+  {
+    id: "requires_physician",
+    input: { message: "severe abdominal pain with vomiting" },
+    expected: {
+      requiresPhysicianReview: true,
+    },
+  },
+];
+F) What this harness gives you (this is huge)
+1. Regression detection
+
+You change:
+
+priors
+scoring
+config
+thresholds
+
+→ instantly see breakage
+
+2. Safety validation
+
+You can assert:
+
+"PE must never result in HOME"
+3. FDA-ready audit simulation
+
+You can show:
+
+input
+full trace
+decision path
+output
+4. Golden case system (your moat)
+
+Over time:
+
+build 1,000+ validated cases
+store expected outcomes
+track drift
+
+👉 This becomes your defensibility layer
+
+🔥 Most important insight
+
+This harness is not just testing.
+
+It becomes:
+
+the truth engine that defines what “correct” means for your system
+
+Final verdict
+
+Before:
+
+system correctness inferred
+no end-to-end validation
+silent drift possible
+
+After:
+
+deterministic validation
+traceable execution
+safety guarantees testable
+real-world simulation ready
+🚀 If you want the final step
+
+The last thing to build (highest leverage):
+
+👉 automated learning loop + golden case feedback integration
+
+That connects:
+
+test failures → system improvements
+real-world cases → model refinement
+
+Say:
+
+👉 “build learning loop on top of test harness”
+
+…and we’ll finish the entire system.
