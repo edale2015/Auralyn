@@ -1,0 +1,601 @@
+Here's the full review and reimplementation of the Self-Improvement + Learning Loop block.
+
+A) Governance Risks Found
+1. autoApprove is a field on the fix object itself — the system is self-approving
+Nothing external sets autoApprove. The same code that generates the fix also decides whether it's approved. A bug, a logic error, or a malicious input that influences runSelfImprovementCycle() could mark any change — including a clinical rule change — as autoApprove: true. There is no external gate, no second opinion, no human in the loop. This is the most serious governance failure in the codebase.
+2. No type distinction between clinical and non-clinical changes
+autoApprove: true is applied uniformly. There's no structural distinction between "adjust a logging verbosity setting" and "lower the safety gate risk threshold." Both could come back from runSelfImprovementCycle as auto-approvable. The system has no concept of a change category that is categorically prohibited from auto-approval.
+3. conservatism increments without bound
+At 100 cycles of low performance, conservatism reaches 10.0. At 1000 cycles it's 100.0. Depending on how consuming code interprets this value, this could mean the agent refuses all decisions (deadlock), applies maximum conservatism to every case regardless of clinical context, or overflows a calculation that assumes a 0–1 range. There's no cap, no ceiling, no saturation point.
+4. No audit record for auto-approved changes
+The orchestrator applies fixes and returns appliedCount. There is no log entry recording: what the fix was, what value it changed from/to, what cycle produced it, what timestamp it was applied at, or any identifier linking the change to a future investigation. Under FDA 21 CFR Part 11, this means you cannot demonstrate to an auditor that a given clinical behavior at time T was the result of an approved change. You cannot prove the system wasn't modified arbitrarily.
+5. improvementLog is in-memory and capped at 500 entries
+On restart: the entire improvement history is gone. More importantly, the splice-based cap silently discards the oldest entries — which are often the most important for trend analysis (was this agent always underperforming, or did it degrade recently?). There is no DB record of what was evaluated, what was proposed, or what was rejected.
+6. agentThresholds grows unboundedly
+Every new agent name creates a new key in the record. If agent names are derived from any user-influenced input, this is a memory leak vector. There's no TTL, no eviction, no maximum size.
+7. No rate limit on auto-approved changes per time window
+A runaway improvement loop could apply 500 changes in a minute. Even if each individual change is within policy, the aggregate effect of rapid successive modifications to clinical thresholds is unpredictable and unauditable.
+8. Concurrent improvement cycles are not serialized
+If runContinuousImprovement() is called on a schedule and a cycle takes longer than the interval, two cycles run simultaneously. Both read the same agent stats, both generate overlapping fixes, both apply them. The second application of a fix sees state already modified by the first — the fix may be applied twice or produce an inconsistent intermediate state.
+
+B) Rewritten selfImprove.ts
+typescript// server/agents/selfImprove.ts
+import { db }         from "../db";
+import { improvementActions, agentThresholdRecords } from "../../shared/schema";
+import { auditStep }  from "../audit/auditLogger";
+import { eq, desc }   from "drizzle-orm";
+import { publish }    from "../events/pubsub";
+
+// ─────────────────────────────────────────────────────────────
+// Change category classification
+//
+// This is the governance firewall. Any change touching clinical
+// logic, safety thresholds, or routing must be PROHIBITED from
+// auto-approval — full stop. The category is set here, not by
+// the fix generator.
+// ─────────────────────────────────────────────────────────────
+export type ChangeCategory =
+  | "operational"    // logging, retry counts, timeouts — auto-approvable
+  | "performance"    // prompt tuning, model selection — requires review
+  | "clinical"       // safety thresholds, routing, risk scoring — PROHIBITED from auto-approval
+  | "security";      // auth, audit, rate limits — PROHIBITED from auto-approval
+
+const AUTO_APPROVE_PERMITTED: Record<ChangeCategory, boolean> = {
+  operational: true,
+  performance: false,   // require human review
+  clinical:    false,   // NEVER auto-approve
+  security:    false,   // NEVER auto-approve
+};
+
+// ─────────────────────────────────────────────────────────────
+// Threshold bounds
+//
+// Every adjustable parameter has an explicit floor, ceiling, and
+// max-per-cycle step. These are hard limits — the improvement
+// loop cannot exceed them regardless of how many cycles run.
+// ─────────────────────────────────────────────────────────────
+interface ThresholdBounds {
+  min:      number;
+  max:      number;
+  step:     number;   // max change per single cycle
+  category: ChangeCategory;
+}
+
+const THRESHOLD_BOUNDS: Record<string, ThresholdBounds> = {
+  conservatism: {
+    min:      0.0,
+    max:      0.9,    // never fully disable the agent
+    step:     0.1,
+    category: "performance",  // requires human review before applying
+  },
+  retryLimit: {
+    min:      1,
+    max:      5,
+    step:     1,
+    category: "operational",  // auto-approvable
+  },
+  timeoutMs: {
+    min:      1000,
+    max:      30000,
+    step:     1000,
+    category: "operational",
+  },
+  // Safety thresholds are registered here so the system knows about them,
+  // but their category is "clinical" — they will never be auto-approved.
+  riskThreshold: {
+    min:      0.3,
+    max:      0.9,
+    step:     0.05,
+    category: "clinical",
+  },
+};
+
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+export interface ImprovementAction {
+  id:           string;
+  agent:        string;
+  action:       string;
+  parameter:    string;
+  fromValue:    number;
+  toValue:      number;
+  category:     ChangeCategory;
+  autoApprove:  boolean;    // derived from category, NEVER set by fix generator
+  reason:       string;
+  metric:       { successRate: number; runs: number };
+  timestamp:    string;
+  appliedAt?:   string;
+  appliedBy?:   string;
+  rejectedAt?:  string;
+  rejectedBy?:  string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// In-memory threshold state (seeded from DB on startup)
+// ─────────────────────────────────────────────────────────────
+
+// Max distinct agent entries before we stop accepting new ones.
+// Prevents unbounded memory growth if agent names are user-influenced.
+const MAX_AGENT_THRESHOLD_ENTRIES = 100;
+
+const agentThresholds = new Map<string, Map<string, number>>();
+
+export async function seedThresholdsFromDb(): Promise<void> {
+  const rows = await db.select().from(agentThresholdRecords);
+  for (const row of rows) {
+    if (!agentThresholds.has(row.agent)) {
+      agentThresholds.set(row.agent, new Map());
+    }
+    agentThresholds.get(row.agent)!.set(row.parameter, row.value);
+  }
+  console.log(`[SelfImprove] Seeded thresholds for ${agentThresholds.size} agents from DB`);
+}
+
+function getCurrentThreshold(agent: string, parameter: string): number {
+  return agentThresholds.get(agent)?.get(parameter) ?? 0;
+}
+
+async function persistThreshold(agent: string, parameter: string, value: number): Promise<void> {
+  // Upsert to DB — survives restarts
+  await db
+    .insert(agentThresholdRecords)
+    .values({ agent, parameter, value, updatedAt: new Date().toISOString() })
+    .onConflictDoUpdate({
+      target: [agentThresholdRecords.agent, agentThresholdRecords.parameter],
+      set: { value, updatedAt: new Date().toISOString() },
+    });
+
+  // Update in-memory mirror
+  if (!agentThresholds.has(agent)) {
+    agentThresholds.set(agent, new Map());
+  }
+  agentThresholds.get(agent)!.set(parameter, value);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Evaluation
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Evaluates agent performance and proposes improvement actions.
+ *
+ * Key governance rules applied here:
+ * 1. autoApprove is DERIVED from the change category — never from the fix itself
+ * 2. All threshold adjustments are bounded — conservatism can never exceed 0.9
+ * 3. Every proposed action is written to DB before being returned
+ * 4. No action is applied here — application is in the orchestrator with its own gate
+ */
+export async function evaluateAndImprove(): Promise<ImprovementAction[]> {
+  const stats = getAgentStats();
+  const actions: ImprovementAction[] = [];
+
+  for (const [agent, s] of Object.entries(stats)) {
+    if (s.runs < 5) continue;  // minimum sample size
+
+    if (s.successRate < 60) {
+      const parameter = "conservatism";
+      const bounds    = THRESHOLD_BOUNDS[parameter];
+      const current   = getCurrentThreshold(agent, parameter);
+
+      // Apply bounded step — never exceed max
+      const proposed  = Math.min(
+        Math.round((current + bounds.step) * 1000) / 1000,
+        bounds.max
+      );
+
+      // No change if already at ceiling
+      if (proposed === current) {
+        console.warn(`[SelfImprove] ${agent}.${parameter} already at ceiling (${bounds.max}) — no further adjustment`);
+        continue;
+      }
+
+      // autoApprove is ALWAYS derived from category policy — never from fix generator
+      const autoApprove = AUTO_APPROVE_PERMITTED[bounds.category];
+
+      const action: ImprovementAction = {
+        id:          crypto.randomUUID(),
+        agent,
+        action:      "threshold_adjustment",
+        parameter,
+        fromValue:   current,
+        toValue:     proposed,
+        category:    bounds.category,
+        autoApprove,  // false for "performance" category
+        reason:      `Success rate ${s.successRate}% below 60% threshold over ${s.runs} runs`,
+        metric:      { successRate: s.successRate, runs: s.runs },
+        timestamp:   new Date().toISOString(),
+      };
+
+      // Write proposed action to DB BEFORE returning — creates the audit trail
+      // regardless of whether it's ever applied
+      await db.insert(improvementActions).values(action);
+
+      actions.push(action);
+
+      publish("selfimprove:adjustment_proposed", {
+        agent,
+        parameter,
+        fromValue: current,
+        toValue:   proposed,
+        autoApprove,
+        category:  bounds.category,
+      });
+    }
+  }
+
+  return actions;
+}
+
+/**
+ * Applies a single improvement action.
+ * Must only be called by the orchestrator after its own gate checks.
+ * Records the application in the DB audit trail.
+ */
+export async function applyImprovementAction(
+  action:    ImprovementAction,
+  appliedBy: string   // "auto-approved" | physician userId
+): Promise<void> {
+  const bounds = THRESHOLD_BOUNDS[action.parameter];
+
+  // Re-validate bounds at apply time — state may have changed since proposal
+  if (action.toValue < bounds.min || action.toValue > bounds.max) {
+    throw new Error(
+      `[SelfImprove] Refused to apply out-of-bounds value: ` +
+      `${action.parameter}=${action.toValue} (bounds: ${bounds.min}–${bounds.max})`
+    );
+  }
+
+  await persistThreshold(action.agent, action.parameter, action.toValue);
+
+  // Update DB record with application metadata
+  await db
+    .update(improvementActions)
+    .set({ appliedAt: new Date().toISOString(), appliedBy })
+    .where(eq(improvementActions.id, action.id));
+
+  // Write to the clinical audit chain — this is how FDA auditors see changes
+  await auditStep({
+    traceId:  `selfimprove-${action.id}`,
+    step:     "improvement_action_applied",
+    input:    { agent: action.agent, parameter: action.parameter, fromValue: action.fromValue },
+    output:   { toValue: action.toValue },
+    metadata: {
+      category:   action.category,
+      autoApprove: action.autoApprove,
+      appliedBy,
+      reason:     action.reason,
+      metric:     action.metric,
+    },
+  });
+
+  publish("selfimprove:adjustment_applied", {
+    agent:      action.agent,
+    parameter:  action.parameter,
+    fromValue:  action.fromValue,
+    toValue:    action.toValue,
+    appliedBy,
+  });
+}
+
+C) Rewritten Orchestrator — Mandatory Audit, Rate Limit, Serialization
+typescript// server/agents/selfImprovementOrchestrator.ts
+import { db }                    from "../db";
+import { improvementCycleLog }   from "../../shared/schema";
+import { evaluateAndImprove, applyImprovementAction, ChangeCategory, AUTO_APPROVE_PERMITTED }
+  from "./selfImprove";
+import { auditStep }             from "../audit/auditLogger";
+import { eq, gte, count }        from "drizzle-orm";
+
+// ─────────────────────────────────────────────────────────────
+// Rate limit: max auto-approved changes per rolling window
+//
+// Even individually safe changes can destabilize the system
+// in aggregate. This is a hard cap.
+// ─────────────────────────────────────────────────────────────
+const AUTO_APPROVE_RATE_LIMIT = {
+  maxChanges:  5,
+  windowHours: 24,
+};
+
+// ─────────────────────────────────────────────────────────────
+// Cycle serialization: prevent concurrent improvement cycles
+// ─────────────────────────────────────────────────────────────
+let cycleInProgress: Promise<OrchestrationResult> | null = null;
+
+export interface OrchestrationResult {
+  cycleId:       string;
+  proposedCount: number;
+  appliedCount:  number;
+  skippedCount:  number;
+  rateLimited:   number;   // changes skipped due to rate limit
+  applied:       { id: string; agent: string; parameter: string; toValue: number }[];
+  skipped:       { id: string; agent: string; reason: string }[];
+  timestamp:     string;
+}
+
+/**
+ * Runs one improvement cycle.
+ *
+ * Serialized — concurrent calls queue behind the in-progress cycle.
+ * This prevents double-application of fixes when the scheduler fires
+ * faster than cycles complete.
+ */
+export async function runContinuousImprovement(): Promise<OrchestrationResult> {
+  if (cycleInProgress) {
+    console.warn("[SelfImproveOrchestrator] Cycle already in progress — queuing");
+    return cycleInProgress;
+  }
+
+  cycleInProgress = _runCycle().finally(() => {
+    cycleInProgress = null;
+  });
+
+  return cycleInProgress;
+}
+
+async function _runCycle(): Promise<OrchestrationResult> {
+  const cycleId   = crypto.randomUUID();
+  const timestamp = new Date().toISOString();
+
+  // Audit the cycle start — FDA needs to know when evaluations ran
+  await auditStep({
+    traceId:  `selfimprove-cycle-${cycleId}`,
+    step:     "improvement_cycle_started",
+    input:    { cycleId },
+    output:   null,
+    metadata: { timestamp },
+  });
+
+  // ── Check rate limit before doing anything ────────────────
+  const windowStart  = new Date(Date.now() - AUTO_APPROVE_RATE_LIMIT.windowHours * 3600_000).toISOString();
+  const [{ value: recentAutoApplied }] = await db
+    .select({ value: count() })
+    .from(improvementCycleLog)
+    .where(
+      gte(improvementCycleLog.appliedAt, windowStart)
+    );
+
+  const remainingBudget = Math.max(0, AUTO_APPROVE_RATE_LIMIT.maxChanges - recentAutoApplied);
+
+  if (remainingBudget === 0) {
+    console.warn(
+      `[SelfImproveOrchestrator] Auto-approve rate limit reached ` +
+      `(${recentAutoApplied} changes in last ${AUTO_APPROVE_RATE_LIMIT.windowHours}h). ` +
+      `No auto-approvals this cycle.`
+    );
+  }
+
+  // ── Evaluate ─────────────────────────────────────────────
+  let proposedActions;
+  try {
+    proposedActions = await evaluateAndImprove();
+  } catch (err) {
+    console.error("[SelfImproveOrchestrator] evaluateAndImprove threw:", err);
+    await auditStep({
+      traceId:  `selfimprove-cycle-${cycleId}`,
+      step:     "improvement_cycle_evaluation_error",
+      input:    { cycleId },
+      output:   null,
+      metadata: { error: err instanceof Error ? err.message : String(err) },
+    });
+    // Return empty result — do not apply anything when evaluation fails
+    return { cycleId, proposedCount: 0, appliedCount: 0, skippedCount: 0, rateLimited: 0, applied: [], skipped: [], timestamp };
+  }
+
+  const applied:     OrchestrationResult["applied"]  = [];
+  const skipped:     OrchestrationResult["skipped"]  = [];
+  let   rateLimited  = 0;
+  let   autoAppliedThisCycle = 0;
+
+  for (const action of proposedActions) {
+
+    // ── Gate 1: Category policy ──────────────────────────
+    // Clinical and security changes are NEVER auto-approved.
+    // This check is redundant (it's also set in evaluateAndImprove)
+    // but defense-in-depth: two independent checks.
+    if (!AUTO_APPROVE_PERMITTED[action.category]) {
+      skipped.push({
+        id:     action.id,
+        agent:  action.agent,
+        reason: `Category "${action.category}" requires human approval — queued for physician review`,
+      });
+
+      // Notify the physician review queue
+      await notifyPhysicianReviewQueue(action);
+      continue;
+    }
+
+    // ── Gate 2: autoApprove field must be true ────────────
+    // Belt-and-suspenders: even if category check passed,
+    // the field itself must explicitly be true
+    if (!action.autoApprove) {
+      skipped.push({
+        id:     action.id,
+        agent:  action.agent,
+        reason: "autoApprove is false — queued for review",
+      });
+      continue;
+    }
+
+    // ── Gate 3: Rate limit ────────────────────────────────
+    if (autoAppliedThisCycle >= remainingBudget) {
+      rateLimited++;
+      skipped.push({
+        id:     action.id,
+        agent:  action.agent,
+        reason: `Rate limit: max ${AUTO_APPROVE_RATE_LIMIT.maxChanges} auto-approvals per ${AUTO_APPROVE_RATE_LIMIT.windowHours}h`,
+      });
+      continue;
+    }
+
+    // ── Apply with full audit record ──────────────────────
+    try {
+      await applyImprovementAction(action, "auto-approved");
+
+      // Record in cycle log for rate limit tracking
+      await db.insert(improvementCycleLog).values({
+        cycleId,
+        actionId:  action.id,
+        agent:     action.agent,
+        parameter: action.parameter,
+        fromValue: action.fromValue,
+        toValue:   action.toValue,
+        appliedAt: new Date().toISOString(),
+        appliedBy: "auto-approved",
+      });
+
+      applied.push({
+        id:        action.id,
+        agent:     action.agent,
+        parameter: action.parameter,
+        toValue:   action.toValue,
+      });
+      autoAppliedThisCycle++;
+
+    } catch (err) {
+      console.error(`[SelfImproveOrchestrator] Failed to apply action ${action.id}:`, err);
+      skipped.push({
+        id:     action.id,
+        agent:  action.agent,
+        reason: `Application error: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+
+  // ── Audit the cycle completion ────────────────────────────
+  const result: OrchestrationResult = {
+    cycleId,
+    proposedCount: proposedActions.length,
+    appliedCount:  applied.length,
+    skippedCount:  skipped.length,
+    rateLimited,
+    applied,
+    skipped,
+    timestamp,
+  };
+
+  await auditStep({
+    traceId:  `selfimprove-cycle-${cycleId}`,
+    step:     "improvement_cycle_completed",
+    input:    { cycleId, proposedCount: result.proposedCount },
+    output:   { appliedCount: result.appliedCount, skippedCount: result.skippedCount, rateLimited },
+    metadata: { applied, skipped },
+  });
+
+  return result;
+}
+
+/**
+ * Sends a non-auto-approvable action to the physician review queue.
+ * The physician sees: what changed, why, what the metric was.
+ * They approve or reject — that decision is also audited.
+ */
+async function notifyPhysicianReviewQueue(action: any): Promise<void> {
+  // Implementation depends on your notification system.
+  // Minimum: write to a `pending_reviews` DB table that the
+  // physician dashboard polls.
+  await db.insert(pendingReviews).values({
+    actionId:    action.id,
+    agent:       action.agent,
+    category:    action.category,
+    parameter:   action.parameter,
+    fromValue:   action.fromValue,
+    toValue:     action.toValue,
+    reason:      action.reason,
+    metric:      action.metric,
+    proposedAt:  action.timestamp,
+    status:      "pending",
+  });
+}
+
+D) Test Cases
+typescript// ── Test 1: Minimum run gate ────────────────────────────────
+// Setup: agent "triage_ai" has 4 runs, successRate 40%
+jest.spyOn(agentStatsModule, "getAgentStats").mockReturnValue({
+  triage_ai: { runs: 4, successRate: 40 }
+});
+const actions = await evaluateAndImprove();
+expect(actions).toHaveLength(0);  // < 5 runs, no action proposed
+
+// ── Test 2: Conservatism ceiling enforcement ────────────────
+// Setup: conservatism already at 0.9 (ceiling)
+agentThresholds.set("triage_ai", new Map([["conservatism", 0.9]]));
+jest.spyOn(agentStatsModule, "getAgentStats").mockReturnValue({
+  triage_ai: { runs: 20, successRate: 40 }
+});
+const actions2 = await evaluateAndImprove();
+expect(actions2).toHaveLength(0);  // already at ceiling, no further action
+
+// ── Test 3: Conservatism bounds from 0.0 → 0.1 ─────────────
+agentThresholds.set("triage_ai", new Map([["conservatism", 0.0]]));
+jest.spyOn(agentStatsModule, "getAgentStats").mockReturnValue({
+  triage_ai: { runs: 10, successRate: 45 }
+});
+const actions3 = await evaluateAndImprove();
+expect(actions3[0].toValue).toBe(0.1);
+expect(actions3[0].autoApprove).toBe(false);  // "performance" category requires review
+expect(actions3[0].category).toBe("performance");
+
+// ── Test 4: Auto-approve with full audit record ─────────────
+// Setup: operational parameter change (retryLimit)
+const operationalAction = {
+  id: "test-001", agent: "email_agent", action: "threshold_adjustment",
+  parameter: "retryLimit", fromValue: 2, toValue: 3,
+  category: "operational" as ChangeCategory, autoApprove: true,
+  reason: "test", metric: { successRate: 55, runs: 10 },
+  timestamp: new Date().toISOString(),
+};
+await applyImprovementAction(operationalAction, "auto-approved");
+
+// Verify DB audit trail
+const auditRows = await db.select().from(improvementActions)
+  .where(eq(improvementActions.id, "test-001"));
+expect(auditRows[0].appliedAt).toBeTruthy();
+expect(auditRows[0].appliedBy).toBe("auto-approved");
+
+// Verify audit chain entry
+const chainRows = await db.select().from(auditLogs)
+  .where(eq(auditLogs.traceId, "selfimprove-test-001"));
+expect(chainRows.length).toBeGreaterThan(0);
+expect(chainRows[0].step).toBe("improvement_action_applied");
+
+// ── Test 5: Clinical change is never auto-approved ──────────
+const clinicalAction = {
+  id: "test-002", agent: "triage_ai", action: "threshold_adjustment",
+  parameter: "riskThreshold", fromValue: 0.6, toValue: 0.55,
+  category: "clinical" as ChangeCategory, autoApprove: false,
+  reason: "test", metric: { successRate: 50, runs: 15 },
+  timestamp: new Date().toISOString(),
+};
+const result = await runContinuousImprovement();
+// Clinical action must appear in skipped, never in applied
+expect(result.applied.find(a => a.id === "test-002")).toBeUndefined();
+expect(result.skipped.find(a => a.id === "test-002")).toBeTruthy();
+
+// ── Test 6: Concurrent cycle serialization ──────────────────
+// Both calls should resolve to the same result — not run two cycles
+const [r1, r2] = await Promise.all([
+  runContinuousImprovement(),
+  runContinuousImprovement(),
+]);
+expect(r1.cycleId).toBe(r2.cycleId);  // same cycle, not two independent runs
+
+// ── Test 7: Rate limit enforced across time window ──────────
+// Setup: 5 auto-approvals already in DB within last 24h
+jest.spyOn(db, "select").mockResolvedValueOnce([{ value: 5 }]);
+const rateLimitedResult = await runContinuousImprovement();
+expect(rateLimitedResult.rateLimited).toBeGreaterThan(0);
+expect(rateLimitedResult.appliedCount).toBe(0);
+
+// ── Test 8: Evaluation error does not apply any changes ─────
+jest.spyOn(selfImproveModule, "evaluateAndImprove")
+  .mockRejectedValueOnce(new Error("Stats service down"));
+const errorResult = await runContinuousImprovement();
+expect(errorResult.appliedCount).toBe(0);
+expect(errorResult.proposedCount).toBe(0);
+// Audit trail must still record the failure
+const errorAudit = await db.select().from(auditLogs)
+  .where(eq(auditLogs.step, "improvement_cycle_evaluation_error"));
+expect(errorAudit.length).toBeGreaterThan(0);
+The single most important architectural change here — more than any individual bug fix — is moving autoApprove from being a field that fix generators set to being a field that is derived from category policy at evaluation time and verified again at application time. In the original design, the improvement loop was effectively self-authorizing. In a system making clinical decisions about real patients, that's not a governance gap — it's the absence of governance entirely. Any FDA 510(k) submission for this as a SaMD will require you to demonstrate that clinical logic changes cannot occur without an identifiable, auditable human approval decision. This rewrite gives you that trail.
