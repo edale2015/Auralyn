@@ -1,0 +1,332 @@
+A) Node sequencing risks
+1. String union NodeId = “type safety illusion”
+export type NodeId = "RED_FLAGS" | "CORE_QUESTIONS" | ...
+
+This looks safe, but has a hidden failure mode:
+
+👉 Adding a new node requires 3 coordinated edits:
+
+add to NodeId
+add to runner switch/loop
+add engine implementation
+
+If you forget any one, TypeScript may still compile.
+
+Failure patterns:
+Node added to config but not runner → silently skipped
+Node added to runner but no engine → runtime error
+Node added to engine but not config → never used
+
+💥 Most dangerous case: silent skip
+No error, just missing logic (e.g., missing red flag escalation)
+
+2. Implicit sequencing = brittle control flow
+
+If the runner is something like:
+
+for (const node of config.nodes) {
+  runNode(node)
+}
+
+Then:
+
+Order is controlled by data (good)
+But no validation that required nodes exist
+
+Example failure:
+
+Config missing RED_FLAGS
+→ system proceeds directly to scoring
+→ 🚨 catastrophic safety gap
+3. No per-node failure isolation
+
+If one node throws:
+
+Entire complaint execution may fail
+OR worse: upstream catches → continues silently
+
+Either case is dangerous:
+
+crash = bad UX
+silent skip = unsafe medicine
+4. Scoring modules risk (very important)
+
+complaintEngines imports 10 scorers
+
+If routing is not strict:
+
+Wrong scorer runs → incorrect probabilities
+No scorer runs → default/zero scoring
+Multiple scorers run → conflicting outputs
+
+This is one of the highest-risk hidden bugs in the entire system
+
+5. Corruption guard = all-or-nothing failure
+
+If loadComplaintConfig throws → complaint unavailable
+
+That creates:
+
+sudden outages per complaint
+no degraded mode
+no fallback
+potential denial of care pathways
+6. CSV load at cold start = operational fragility
+blocks startup
+no refresh strategy
+no versioning awareness
+no rollback safety
+B) Rewritten node runner (with isolation + guarantees)
+
+This is the single most important improvement in this packet.
+
+Key upgrades:
+
+required node validation
+per-node isolation
+structured result
+audit trace per node
+fail-closed for critical nodes
+// server/clinical/complaintNodeRunner.ts
+
+import { auditStep } from "../audit/auditLogger";
+
+export type NodeId =
+  | "RED_FLAGS"
+  | "CORE_QUESTIONS"
+  | "SCORING"
+  | "DISPOSITION"
+  | "TEMPLATE"
+  | "EXAM_OVERRIDE"
+  | "DIFF_CONFIDENCE"
+  | "RED_FLAG_MASTER_JOIN"
+  | "SPOT_INTERVENTIONS"
+  | "SPECIALIST_COUNCIL";
+
+export interface NodeExecutionResult {
+  nodeId: NodeId;
+  success: boolean;
+  error?: string;
+}
+
+export interface RunnerResult {
+  success: boolean;
+  finalState: CaseState;
+  nodeResults: NodeExecutionResult[];
+  failedNode?: NodeId;
+}
+
+const REQUIRED_NODES: NodeId[] = [
+  "RED_FLAGS",
+  "CORE_QUESTIONS",
+  "SCORING",
+  "DISPOSITION",
+];
+
+export async function runComplaintNodes(
+  config: ComplaintConfig,
+  initialState: CaseState
+): Promise<RunnerResult> {
+
+  const state = { ...initialState };
+  const nodeResults: NodeExecutionResult[] = [];
+
+  // ── Validate required nodes exist ───────────────────────
+  for (const required of REQUIRED_NODES) {
+    if (!config.nodes.includes(required)) {
+      throw new Error(
+        `[NodeRunner] Missing required node: ${required} for complaint ${config.ccId}`
+      );
+    }
+  }
+
+  for (const nodeId of config.nodes) {
+    try {
+      const engine = getNodeEngine(nodeId);
+
+      if (!engine) {
+        throw new Error(`No engine registered for node ${nodeId}`);
+      }
+
+      const before = structuredClone(state);
+
+      const updated = await engine(state, config);
+
+      Object.assign(state, updated);
+
+      nodeResults.push({ nodeId, success: true });
+
+      await auditStep({
+        traceId: state.caseId,
+        step: `node_${nodeId}`,
+        input: before,
+        output: updated,
+      });
+
+    } catch (err) {
+      const errorMsg =
+        err instanceof Error ? err.message : String(err);
+
+      nodeResults.push({
+        nodeId,
+        success: false,
+        error: errorMsg,
+      });
+
+      // 🚨 Fail closed for critical nodes
+      if (REQUIRED_NODES.includes(nodeId)) {
+        return {
+          success: false,
+          finalState: state,
+          nodeResults,
+          failedNode: nodeId,
+        };
+      }
+
+      // Non-critical node → continue
+      console.warn(`[NodeRunner] Non-critical node failed: ${nodeId}`, errorMsg);
+    }
+  }
+
+  return {
+    success: true,
+    finalState: state,
+    nodeResults,
+  };
+}
+C) Config loading with cache + lazy load
+
+This is where we make config:
+
+fast
+safe
+refreshable
+non-blocking
+// server/clinical/complaintConfigLoader.ts
+
+const configCache = new Map<string, ComplaintConfig>();
+const configMeta = new Map<string, { version: number; loadedAt: number }>();
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function loadComplaintConfig(
+  ccId: string
+): Promise<ComplaintConfig> {
+
+  const cached = configCache.get(ccId);
+  const meta = configMeta.get(ccId);
+
+  const isFresh =
+    cached &&
+    meta &&
+    Date.now() - meta.loadedAt < CACHE_TTL_MS;
+
+  if (isFresh) {
+    return cached;
+  }
+
+  try {
+    const raw = await loadFromRegistry(ccId); // CSV / Sheets
+
+    validateConfig(raw); // corruption guard
+
+    configCache.set(ccId, raw);
+    configMeta.set(ccId, {
+      version: raw.version,
+      loadedAt: Date.now(),
+    });
+
+    return raw;
+
+  } catch (err) {
+    console.error(`[ConfigLoader] Failed to load ${ccId}`, err);
+
+    // 🧠 Fallback to last known good config
+    if (cached) {
+      console.warn(`[ConfigLoader] Using stale config for ${ccId}`);
+      return cached;
+    }
+
+    throw err; // no fallback available
+  }
+}
+Optional: background refresh
+setInterval(async () => {
+  for (const ccId of configCache.keys()) {
+    try {
+      await loadComplaintConfig(ccId);
+    } catch (e) {
+      console.warn("Background refresh failed", ccId);
+    }
+  }
+}, 60_000);
+D) Test cases (critical ones)
+1. Missing node (safety critical)
+expect(() =>
+  runComplaintNodes(
+    { nodes: ["SCORING", "DISPOSITION"] },
+    state
+  )
+).toThrow("Missing required node: RED_FLAGS");
+2. Corrupt config fallback
+// First load succeeds
+await loadComplaintConfig("cough");
+
+// Next load fails
+mockLoadFromRegistryThrow();
+
+const config = await loadComplaintConfig("cough");
+
+expect(config).toBeDefined(); // fallback works
+3. Unknown complaint
+await expect(loadComplaintConfig("unknown"))
+  .rejects.toThrow();
+4. Node failure isolation
+mockEngine("SPOT_INTERVENTIONS", () => {
+  throw new Error("boom");
+});
+
+const result = await runComplaintNodes(config, state);
+
+expect(result.success).toBe(true); // non-critical node
+5. Critical node failure
+mockEngine("RED_FLAGS", () => {
+  throw new Error("critical");
+});
+
+const result = await runComplaintNodes(config, state);
+
+expect(result.success).toBe(false);
+expect(result.failedNode).toBe("RED_FLAGS");
+Bottom line
+
+This packet is quietly one of the most important in the system.
+
+The original design risks:
+
+silent node skipping
+incorrect scoring module usage
+total complaint outage on config corruption
+no audit trace of node execution
+
+The rewrite moves it toward:
+
+✅ deterministic execution
+✅ explicit required-node enforcement
+✅ per-node isolation
+✅ audit traceability
+✅ safe config caching with fallback
+
+The next level (if you want to push this further)
+
+If you want this to become truly elite architecture, the next step would be:
+
+replace NodeId string union with registered node graph
+allow dynamic DAG execution instead of linear sequence
+attach validation rules per node
+introduce node-level versioning
+add feature flags per node
+My verdict
+This rewrite is solid and meaningful
+Not yet production-perfect
+But now structurally safe enough to build on

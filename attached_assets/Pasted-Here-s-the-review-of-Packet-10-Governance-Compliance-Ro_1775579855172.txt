@@ -1,0 +1,276 @@
+Here’s the review of Packet 10, Governance + Compliance Routes. Based on the packet, the biggest concrete flaw is the SQL helper layer: qRow/qRows use sql.raw() and regex/string substitution instead of true bound parameters, which leaves an injection surface even on internal/admin routes. The physician checkpoint excerpt shows tier-specific approval timeouts, but the packet does not include the actual expiry handler, so I can assess the risk and recommend the behavior, not confirm the current implementation. The packet also asks whether auth middleware protects the governance routes, but the mount path and router wiring are not included here, so that part cannot be verified from the excerpt alone.
+
+A) SQL injection surfaces identified
+
+1. qRows(q) is a direct raw-SQL execution sink
+This helper executes whatever string it is handed:
+
+await db.execute(sql.raw(q));
+
+If any part of q is influenced by request input, route params, query-string filters, sort fields, search terms, or even DB-stored text used later in query assembly, you have a direct injection surface. “Internal admin route” does not make this safe. Admin routes are often the most dangerous place to allow injection because they usually have broad data visibility, audit access, and operational control. A compromised staff account, leaked session, SSRF, or lateral movement from another service can still hit them.
+
+2. qRow(q, params) is not parameterization
+The helper claims to accept params, but it does this:
+
+q.replace(/\?/g, ...)
+
+and then feeds the resulting string into sql.raw(...). That is still string construction. It does not bind values the way a prepared/parameterized query does. It also appears buggy on its own terms because the callback signature shown for replace(/\?/g, (_, i) => ...) does not give you a true placeholder index in the way the code seems to assume. Even if that bug were fixed, regex replacement is still not a safe substitute for driver-level binding.
+
+3. Raw query text is still dangerous even if values are later bound
+There are two distinct problems:
+
+value injection
+query-text / identifier injection
+
+True parameterization fixes values. It does not safely parameterize table names, column names, ORDER BY, sort direction, or arbitrary SQL fragments. So if any governance route lets callers influence those parts, you still need a whitelist. That is especially relevant for admin/export/report routes, where it is tempting to let users request dynamic sort/order/filter behavior.
+
+4. Injection in governance routes has outsized blast radius
+Because these routes expose audit events, policy snapshots, validation results, and chain verification, a successful injection could do more than leak a patient row. It could:
+
+exfiltrate audit data
+tamper with evidence of system state
+alter compliance reports
+query unrelated operational tables
+erase trust in the governance surface itself
+
+That makes this a higher-severity flaw than the same bug in a low-privilege feature.
+
+B) Rewritten query helpers using proper Drizzle parameterization
+
+You asked for a fix without rewriting every query into full Drizzle ORM. The safest middle ground is:
+
+keep SQL text as static literals in code
+bind values using Drizzle template interpolation
+reject placeholder count mismatches
+never allow dynamic identifiers unless whitelisted separately
+
+This version does that.
+
+// server/governance/sqlHelpers.ts
+import { db } from "../db";
+import { sql, SQL } from "drizzle-orm";
+
+/**
+ * Converts a static SQL string with ? placeholders into a Drizzle SQL object
+ * with real bound parameters.
+ *
+ * IMPORTANT:
+ * - Safe for VALUES only.
+ * - Query text itself must be a trusted static string in source code.
+ * - Do NOT use this to inject dynamic table names, column names, ORDER BY fields,
+ *   or arbitrary SQL fragments. Whitelist those separately.
+ */
+function bindSql(query: string, params: unknown[] = []): SQL {
+  const parts = query.split("?");
+
+  if (parts.length - 1 !== params.length) {
+    throw new Error(
+      `[sqlHelpers] Placeholder mismatch: query expects ${parts.length - 1} params, got ${params.length}`
+    );
+  }
+
+  let statement: SQL = sql.raw(parts[0] ?? "");
+
+  for (let i = 0; i < params.length; i++) {
+    statement = sql`${statement}${params[i]}${sql.raw(parts[i + 1] ?? "")}`;
+  }
+
+  return statement;
+}
+
+function extractRows<T>(result: unknown): T[] {
+  const maybeRows = (result as any)?.rows;
+  if (Array.isArray(maybeRows)) return maybeRows as T[];
+  if (Array.isArray(result)) return result as T[];
+  return [];
+}
+
+export async function qRows<T = unknown>(
+  query: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  const statement = bindSql(query, params);
+  const result = await db.execute(statement);
+  return extractRows<T>(result);
+}
+
+export async function qRow<T = unknown>(
+  query: string,
+  params: unknown[] = []
+): Promise<T | undefined> {
+  const rows = await qRows<T>(query, params);
+  return rows[0];
+}
+Example usage
+// Safe value binding
+const auditRow = await qRow<{ id: string; step: string }>(
+  `
+  select id, step
+  from audit_logs
+  where trace_id = ?
+  order by created_at desc
+  limit 1
+  `,
+  [traceId]
+);
+
+const events = await qRows<{ id: string; step: string; created_at: string }>(
+  `
+  select id, step, created_at
+  from audit_logs
+  where step = ?
+    and created_at >= ?
+  order by created_at desc
+  limit ?
+  `,
+  [step, sinceIso, 100]
+);
+Safe handling for dynamic sort/order
+
+Do not pass sort columns into ? placeholders. Whitelist them:
+
+const ALLOWED_SORT_COLUMNS = {
+  createdAt: "created_at",
+  step: "step",
+  traceId: "trace_id",
+} as const;
+
+type SortKey = keyof typeof ALLOWED_SORT_COLUMNS;
+type SortDir = "asc" | "desc";
+
+function safeSortColumn(key: string | undefined): string {
+  if (!key) return ALLOWED_SORT_COLUMNS.createdAt;
+  return ALLOWED_SORT_COLUMNS[key as SortKey] ?? ALLOWED_SORT_COLUMNS.createdAt;
+}
+
+function safeSortDirection(dir: string | undefined): SortDir {
+  return dir === "asc" ? "asc" : "desc";
+}
+
+// Example
+const sortCol = safeSortColumn(req.query.sort as string | undefined);
+const sortDir = safeSortDirection(req.query.dir as string | undefined);
+
+const rows = await qRows(
+  `
+  select id, step, created_at
+  from audit_logs
+  order by ${sortCol} ${sortDir}
+  limit ?
+  `,
+  [100]
+);
+
+That last pattern is only safe because sortCol and sortDir are selected from strict whitelists, not passed through from the user.
+
+C) Timeout expiry behavior for physician checkpoint, explicit recommendation
+
+The packet shows that these tiers require approval:
+
+ER_NOW
+ER_URGENT
+URGENT_CARE
+
+with timeouts of 5, 10, and 20 minutes respectively. But the excerpt does not show what the system does when the timeout expires. That missing behavior is important because this is a safety-critical gate.
+
+What should not happen
+
+It should not:
+
+auto-approve after timeout
+silently drop the checkpoint
+leave the case stuck forever with no escalation path
+Recommended behavior by tier
+
+ER_NOW
+
+Never auto-approve
+On timeout, mark as expired_unreviewed
+Trigger:
+immediate escalation alert to physician/staff on-call
+incident/audit event
+patient-safe fallback messaging if applicable, such as instructing emergency evaluation if symptoms are severe/worsening
+System status should remain blocked from autonomous finalization
+
+ER_URGENT
+
+Same pattern as ER_NOW, but slightly lower urgency
+On timeout:
+escalate to urgent manual review queue
+alert designated clinician
+block autonomous finalize/send unless a human resolves it
+
+URGENT_CARE
+
+Still should not auto-approve
+On timeout:
+move to staff/physician review queue
+block completion until explicit acknowledgement
+optionally allow a safe holding response to the patient rather than silence
+The rule in one sentence
+
+For all approval-gated dispositions: timeout should mean fail-closed + escalate, never auto-approve.
+
+Here is the shape I would use:
+
+// server/governance/physicianCheckpointPolicy.ts
+export type CheckpointStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired_unreviewed"
+  | "escalated";
+
+export interface TimeoutResolution {
+  status: CheckpointStatus;
+  autoApproved: false;
+  blockDisposition: true;
+  escalateToHuman: true;
+  notifyOnCall: boolean;
+  reason: string;
+}
+
+export function resolveCheckpointTimeout(tier: "ER_NOW" | "ER_URGENT" | "URGENT_CARE"): TimeoutResolution {
+  switch (tier) {
+    case "ER_NOW":
+      return {
+        status: "expired_unreviewed",
+        autoApproved: false,
+        blockDisposition: true,
+        escalateToHuman: true,
+        notifyOnCall: true,
+        reason: "ER_NOW checkpoint expired without physician action",
+      };
+
+    case "ER_URGENT":
+      return {
+        status: "expired_unreviewed",
+        autoApproved: false,
+        blockDisposition: true,
+        escalateToHuman: true,
+        notifyOnCall: true,
+        reason: "ER_URGENT checkpoint expired without physician action",
+      };
+
+    case "URGENT_CARE":
+      return {
+        status: "expired_unreviewed",
+        autoApproved: false,
+        blockDisposition: true,
+        escalateToHuman: true,
+        notifyOnCall: false,
+        reason: "URGENT_CARE checkpoint expired without physician action",
+      };
+  }
+}
+D) Missing audit fields for Part 11 compliance
+
+The packet asks what is missing for FDA 21 CFR Part 11 electronic records. The short version is: this block needs more than “an audit event happened.” It needs enough metadata to prove who did what, when, why, and to which exact record/version, in a way that is hard to repudiate.
+
+The most important missing fields
+
+1. Electronic signature identity
+For any physician checkpoint approval/rejection or governance action:
+
+printed name / reviewer identity
+unique user

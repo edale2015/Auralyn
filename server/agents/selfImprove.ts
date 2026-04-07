@@ -1,4 +1,4 @@
-import { eq, and, inArray, desc } from "drizzle-orm";
+import { eq, and, inArray, desc, gte, count } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import {
@@ -16,17 +16,124 @@ import { auditStep } from "../audit/auditLogger";
 export const ACTION_STATUSES = ["proposed", "pending_review", "approved", "applied", "rejected", "failed"] as const;
 export type ActionStatus = typeof ACTION_STATUSES[number];
 
-// Per-action advisory lock base.  We xor the action id so each row gets a
+// Per-action advisory lock base.  We XOR the action id so each row gets a
 // unique lock slot without hard-coding values.
 const ACTION_LOCK_BASE = 91424030;
 
+// ── Category firewall ────────────────────────────────────────────────────────
+/**
+ * ChangeCategory governs whether a parameter adjustment is auto-approvable.
+ *
+ * clinical  — touches patient safety pathways (never auto-approve)
+ * security  — touches auth / audit controls (never auto-approve)
+ * performance — touches latency / accuracy knobs (never auto-approve — needs review)
+ * operational — retry limits, timeouts, alerting (may auto-approve per AUTO_APPROVE_PERMITTED)
+ */
+export type ChangeCategory = "clinical" | "security" | "performance" | "operational";
+
+export const AUTO_APPROVE_PERMITTED: Record<ChangeCategory, boolean> = {
+  operational:  true,
+  performance:  false,
+  clinical:     false,
+  security:     false,
+};
+
+interface ThresholdBounds {
+  min:      number;
+  max:      number;
+  step:     number;
+  category: ChangeCategory;
+}
+
+/**
+ * Per-parameter bounds and category classification.
+ *
+ * - `max` is a hard ceiling: proposals that would exceed it are silently skipped.
+ * - `step` is the increment applied each evaluation cycle.
+ * - `category` determines auto-approve eligibility via AUTO_APPROVE_PERMITTED.
+ *
+ * Add new parameters here — never compute bounds at runtime from untrusted inputs.
+ */
+export const THRESHOLD_BOUNDS: Record<string, ThresholdBounds> = {
+  conservatism:   { min: 0.0,  max: 0.9,    step: 0.1,    category: "performance" },
+  retryLimit:     { min: 1,    max: 5,       step: 1,      category: "operational" },
+  timeoutMs:      { min: 1000, max: 30_000,  step: 1_000,  category: "operational" },
+  riskThreshold:  { min: 0.3,  max: 0.9,    step: 0.05,   category: "clinical"    },
+};
+
+// ── GovernedAction: DB row extended with runtime governance metadata ──────────
+export interface GovernedAction extends DbImprovementAction {
+  category:    ChangeCategory;
+  autoApprove: boolean;
+}
+
 // ── Legacy compat type (used by payerIntelligenceRoutes / metaOrchestrator) ──
 export interface ImprovementAction {
-  agent: string;
-  action: string;
-  reason: string;
+  agent:     string;
+  action:    string;
+  reason:    string;
   timestamp: string;
-  metric: { successRate: number; runs: number };
+  metric:    { successRate: number; runs: number };
+}
+
+// ── In-memory threshold cache ────────────────────────────────────────────────
+// Bounded at MAX_AGENT_THRESHOLD_ENTRIES to prevent unbounded growth if new
+// agents are dynamically registered.  The DB is always the source of truth;
+// this cache is an optimisation and is refreshed on upsert.
+const MAX_AGENT_THRESHOLD_ENTRIES = 100;
+const _thresholdMap = new Map<string, Map<string, number>>();
+
+/**
+ * Seeds the in-memory threshold cache from DB at startup.
+ * Must be awaited before the first evaluateAndImprove() call if you want
+ * cache hits on the first cycle.
+ */
+export async function seedThresholdsFromDb(): Promise<void> {
+  const rows = await db.select().from(agentThresholdRecords);
+  for (const row of rows) {
+    if (_thresholdMap.size >= MAX_AGENT_THRESHOLD_ENTRIES) {
+      console.warn("[SelfImprove] threshold cache at capacity — skipping remaining rows");
+      break;
+    }
+    if (!_thresholdMap.has(row.agent)) _thresholdMap.set(row.agent, new Map());
+    _thresholdMap.get(row.agent)!.set(row.parameter, row.currentValue);
+  }
+}
+
+function _getCachedThreshold(agent: string, parameter: string): number | undefined {
+  return _thresholdMap.get(agent)?.get(parameter);
+}
+
+async function _getThresholdFromDb(agent: string, parameter: string): Promise<number> {
+  const rows = await db
+    .select({ currentValue: agentThresholdRecords.currentValue })
+    .from(agentThresholdRecords)
+    .where(and(eq(agentThresholdRecords.agent, agent), eq(agentThresholdRecords.parameter, parameter)))
+    .limit(1);
+  return rows[0]?.currentValue ?? 0;
+}
+
+async function _persistThreshold(
+  agent:     string,
+  parameter: string,
+  value:     number,
+  updatedBy: string,
+  tx?: Parameters<Parameters<typeof db.transaction>[0]>[0]
+): Promise<void> {
+  const orm = tx ?? db;
+  await (orm as typeof db)
+    .insert(agentThresholdRecords)
+    .values({ agent, parameter, currentValue: value, updatedBy })
+    .onConflictDoUpdate({
+      target: [agentThresholdRecords.agent, agentThresholdRecords.parameter],
+      set:    { currentValue: value, updatedAt: new Date(), updatedBy },
+    });
+
+  if (!_thresholdMap.has(agent)) {
+    if (_thresholdMap.size >= MAX_AGENT_THRESHOLD_ENTRIES) return;
+    _thresholdMap.set(agent, new Map());
+  }
+  _thresholdMap.get(agent)!.set(parameter, value);
 }
 
 // ── Input validation ─────────────────────────────────────────────────────────
@@ -57,9 +164,22 @@ export async function hasOpenProposal(agent: string, parameter: string): Promise
 }
 
 // ── Core evaluation ──────────────────────────────────────────────────────────
-export async function evaluateAndImprove(): Promise<DbImprovementAction[]> {
+/**
+ * Evaluates all agent stats and proposes threshold adjustments where needed.
+ *
+ * Returns GovernedAction[] — each row is a DB-persisted ImprovementAction
+ * extended with the derived `category` and `autoApprove` fields.
+ *
+ * Rules:
+ *   - Minimum 5 runs before any proposal.
+ *   - Proposals are suppressed when the parameter is already at its ceiling.
+ *   - Duplicate proposals (open row for same agent+parameter) are skipped.
+ *   - Only `operational` parameters can be auto-approved; all others go to
+ *     `pending_review` status and require physician sign-off.
+ */
+export async function evaluateAndImprove(): Promise<GovernedAction[]> {
   const stats = getAgentStats();
-  const created: DbImprovementAction[] = [];
+  const created: GovernedAction[] = [];
 
   for (const [agent, s] of Object.entries(stats)) {
     if (s.runs < 5) continue;
@@ -72,36 +192,47 @@ export async function evaluateAndImprove(): Promise<DbImprovementAction[]> {
 
     const metric = { successRate: s.successRate, runs: s.runs };
 
+    // ── conservatism: raised when success rate is low ─────────────────────
     if (s.successRate < 60) {
       const parameter = "conservatism";
+      const bounds    = THRESHOLD_BOUNDS[parameter];
+
+      const cached  = _getCachedThreshold(agent, parameter);
+      const current = cached !== undefined ? cached : await _getThresholdFromDb(agent, parameter);
+
+      // Ceiling enforcement — never propose beyond max
+      if (current >= bounds.max) {
+        console.warn(`[SelfImprove] ${agent}.${parameter} at ceiling (${bounds.max}) — skipping proposal`);
+        continue;
+      }
+
       if (await hasOpenProposal(agent, parameter)) continue;
 
-      const currentRow = await db
-        .select({ currentValue: agentThresholdRecords.currentValue })
-        .from(agentThresholdRecords)
-        .where(and(eq(agentThresholdRecords.agent, agent), eq(agentThresholdRecords.parameter, parameter)))
-        .limit(1);
-      const fromValue = currentRow[0]?.currentValue ?? 0;
-      const toValue = Math.min(1, fromValue + 0.1);
+      const toValue     = Math.min(Math.round((current + bounds.step) * 1000) / 1000, bounds.max);
+      const autoApprove = AUTO_APPROVE_PERMITTED[bounds.category];
+      const status      = autoApprove ? "proposed" : "pending_review";
 
       const [row] = await db
         .insert(improvementActions)
         .values({
           agent,
-          action: "threshold_adjustment",
+          action:    "threshold_adjustment",
           parameter,
-          fromValue,
+          fromValue: current,
           toValue,
-          reason: `Success rate ${s.successRate}% below 60% over ${s.runs} runs`,
-          status: "proposed",
+          reason:    `Success rate ${s.successRate}% below 60% over ${s.runs} runs`,
+          status,
           metric,
         } satisfies InsertImprovementAction)
         .returning();
 
-      created.push(row);
-      publish("selfimprove:adjustment", { agent, actionId: row.id });
+      created.push({ ...row, category: bounds.category, autoApprove });
+      publish("selfimprove:adjustment_proposed", {
+        agent, parameter, fromValue: current, toValue, autoApprove, category: bounds.category,
+      });
     }
 
+    // ── escalation: critical failure rate — always clinical/pending_review ─
     if (s.successRate < 40) {
       const parameter = "escalation";
       if (await hasOpenProposal(agent, parameter)) continue;
@@ -110,20 +241,21 @@ export async function evaluateAndImprove(): Promise<DbImprovementAction[]> {
         .insert(improvementActions)
         .values({
           agent,
-          action: "escalation_recommended",
+          action:    "escalation_recommended",
           parameter,
           fromValue: null,
-          toValue: null,
-          reason: `Critical: ${agent} rate ${s.successRate}% — physician-only fallback recommended`,
-          status: "pending_review",
+          toValue:   null,
+          reason:    `Critical: ${agent} rate ${s.successRate}% — physician-only fallback recommended`,
+          status:    "pending_review",
           metric,
         } satisfies InsertImprovementAction)
         .returning();
 
-      created.push(row);
+      created.push({ ...row, category: "clinical", autoApprove: false });
       publish("selfimprove:escalation", { agent, actionId: row.id });
     }
 
+    // ── latency_alert: high average response time — operational ───────────
     if (s.avgMs > 5000) {
       const parameter = "latency_alert";
       if (await hasOpenProposal(agent, parameter)) continue;
@@ -132,32 +264,40 @@ export async function evaluateAndImprove(): Promise<DbImprovementAction[]> {
         .insert(improvementActions)
         .values({
           agent,
-          action: "performance_warning",
+          action:    "performance_warning",
           parameter,
           fromValue: null,
-          toValue: null,
-          reason: `Agent ${agent} avg latency ${s.avgMs}ms exceeds 5 s`,
-          status: "proposed",
+          toValue:   null,
+          reason:    `Agent ${agent} avg latency ${s.avgMs}ms exceeds 5 s`,
+          status:    "proposed",
           metric,
         } satisfies InsertImprovementAction)
         .returning();
 
-      created.push(row);
+      created.push({ ...row, category: "operational", autoApprove: true });
     }
   }
 
-  // Keep legacy in-memory log slice for backward-compat callers
   _appendLegacyLog(created);
   return created;
 }
 
-// ── Apply an approved action (idempotent, compare-and-swap) ──────────────────
+// ── Apply an approved action (idempotent, bounds-validated, compare-and-swap) ─
+/**
+ * Applies a previously proposed or approved ImprovementAction.
+ *
+ * Guards (fail-closed):
+ *   1. Advisory per-action lock (prevents concurrent double-apply).
+ *   2. Idempotency check (already applied → no-op).
+ *   3. Status guard (only `proposed` or `approved` may be applied).
+ *   4. Bounds re-validation (toValue must be within THRESHOLD_BOUNDS at apply time).
+ *   5. Compare-and-swap (current DB value must match fromValue from proposal).
+ */
 export async function applyImprovementAction(
-  actionId: number,
+  actionId:  number,
   decidedBy: string
 ): Promise<{ applied: boolean; reason: string }> {
   return db.transaction(async (tx) => {
-    // Per-action advisory lock — serializes concurrent apply calls for the same row
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTION_LOCK_BASE + actionId})`);
 
     const [action] = await tx
@@ -172,8 +312,25 @@ export async function applyImprovementAction(
       return { applied: false, reason: `status '${action.status}' is not applicable` };
     }
 
-    // Compare-and-swap: verify the threshold hasn't drifted since proposal
     if (action.fromValue !== null && action.toValue !== null && action.parameter) {
+      // ── Bounds re-validation ────────────────────────────────────────────
+      const bounds = THRESHOLD_BOUNDS[action.parameter];
+      if (bounds) {
+        if (action.toValue < bounds.min || action.toValue > bounds.max) {
+          await tx
+            .update(improvementActions)
+            .set({
+              status:       "failed",
+              errorMessage: `Out-of-bounds: ${action.parameter}=${action.toValue} (limits: ${bounds.min}–${bounds.max})`,
+              decidedAt:    new Date(),
+              decidedBy,
+            })
+            .where(eq(improvementActions.id, actionId));
+          return { applied: false, reason: "value out of bounds — refused to apply" };
+        }
+      }
+
+      // ── Compare-and-swap ────────────────────────────────────────────────
       const [current] = await tx
         .select({ currentValue: agentThresholdRecords.currentValue })
         .from(agentThresholdRecords)
@@ -189,22 +346,20 @@ export async function applyImprovementAction(
       if (Math.abs(dbVal - (action.fromValue ?? 0)) > 1e-9) {
         await tx
           .update(improvementActions)
-          .set({ status: "failed", errorMessage: `CAS mismatch: expected ${action.fromValue}, found ${dbVal}`, decidedAt: new Date(), decidedBy })
+          .set({
+            status:       "failed",
+            errorMessage: `CAS mismatch: expected ${action.fromValue}, found ${dbVal}`,
+            decidedAt:    new Date(),
+            decidedBy,
+          })
           .where(eq(improvementActions.id, actionId));
         return { applied: false, reason: "compare-and-swap mismatch — stale proposal" };
       }
 
-      // Write the new threshold
-      await tx
-        .insert(agentThresholdRecords)
-        .values({ agent: action.agent, parameter: action.parameter, currentValue: action.toValue, updatedBy: decidedBy })
-        .onConflictDoUpdate({
-          target: [agentThresholdRecords.agent, agentThresholdRecords.parameter],
-          set: { currentValue: action.toValue, updatedAt: new Date(), updatedBy: decidedBy },
-        });
+      // ── Write threshold ─────────────────────────────────────────────────
+      await _persistThreshold(action.agent, action.parameter, action.toValue, decidedBy, tx as any);
     }
 
-    // Mark applied
     const now = new Date();
     await tx
       .update(improvementActions)
@@ -212,11 +367,24 @@ export async function applyImprovementAction(
       .where(eq(improvementActions.id, actionId));
 
     await auditStep({
-      traceId: `selfimprove-apply-${actionId}`,
-      step: "apply_improvement_action",
-      input: { actionId, decidedBy },
-      output: { agent: action.agent, parameter: action.parameter, toValue: action.toValue },
-      metadata: { actionId, agent: action.agent },
+      traceId:  `selfimprove-apply-${actionId}`,
+      step:     "improvement_action_applied",
+      input:    { actionId, decidedBy },
+      output:   { agent: action.agent, parameter: action.parameter, toValue: action.toValue },
+      metadata: {
+        actionId,
+        agent:    action.agent,
+        category: action.parameter ? (THRESHOLD_BOUNDS[action.parameter]?.category ?? "unknown") : "unknown",
+        decidedBy,
+      },
+    });
+
+    publish("selfimprove:adjustment_applied", {
+      agent:     action.agent,
+      parameter: action.parameter,
+      fromValue: action.fromValue,
+      toValue:   action.toValue,
+      appliedBy: decidedBy,
     });
 
     return { applied: true, reason: "ok" };
@@ -225,9 +393,9 @@ export async function applyImprovementAction(
 
 // ── Reject an action ─────────────────────────────────────────────────────────
 export async function rejectImprovementAction(
-  actionId: number,
+  actionId:   number,
   reviewerId: string,
-  note?: string
+  note?:      string
 ): Promise<void> {
   await db.transaction(async (tx) => {
     await tx
@@ -239,16 +407,16 @@ export async function rejectImprovementAction(
       actionId,
       reviewerId,
       decision: "rejected",
-      note: note ?? null,
+      note:     note ?? null,
     });
   });
 }
 
 // ── Approve + apply by a physician reviewer ───────────────────────────────────
 export async function approveAndApplyAction(
-  actionId: number,
+  actionId:   number,
   reviewerId: string,
-  note?: string
+  note?:      string
 ): Promise<{ applied: boolean; reason: string }> {
   await db
     .update(improvementActions)
@@ -259,7 +427,7 @@ export async function approveAndApplyAction(
     actionId,
     reviewerId,
     decision: "approved",
-    note: note ?? null,
+    note:     note ?? null,
   });
 
   return applyImprovementAction(actionId, reviewerId);
@@ -300,26 +468,47 @@ export async function getReviewHistory(actionId: number) {
     .orderBy(desc(improvementReviews.decidedAt));
 }
 
+// ── Count auto-approved actions in a rolling window (rate limit helper) ───────
+export async function countAppliedInWindow(windowMs: number): Promise<number> {
+  const windowStart = new Date(Date.now() - windowMs);
+  const [{ value }] = await db
+    .select({ value: count() })
+    .from(improvementActions)
+    .where(
+      and(
+        eq(improvementActions.status, "applied"),
+        gte(improvementActions.decidedAt, windowStart)
+      )
+    );
+  return value ?? 0;
+}
+
 // ── computeBusinessMetrics (unchanged — used by metaOrchestrator) ─────────────
 export function computeBusinessMetrics(claimData: Array<{ revenue: number; paid: boolean }>): {
-  revenue: number;
-  cost: number;
-  profit: number;
-  margin: number;
+  revenue:  number;
+  cost:     number;
+  profit:   number;
+  margin:   number;
   strategy: string;
 } {
   const revenue = claimData.reduce((sum, c) => sum + (c.paid ? c.revenue : 0), 0);
-  const cost = claimData.length * 0.02;
-  const profit = revenue - cost;
-  const margin = revenue > 0 ? Math.round(((revenue - cost) / revenue) * 100) / 100 : 0;
+  const cost    = claimData.length * 0.02;
+  const profit  = revenue - cost;
+  const margin  = revenue > 0 ? Math.round(((revenue - cost) / revenue) * 100) / 100 : 0;
 
   let strategy: string;
-  if (margin < 0.5) strategy = "Reduce compute cost or renegotiate payer contracts — margin critically low";
-  else if (margin < 0.7) strategy = "Optimize coding accuracy to reduce denials and improve revenue per claim";
+  if (margin < 0.5)         strategy = "Reduce compute cost or renegotiate payer contracts — margin critically low";
+  else if (margin < 0.7)    strategy = "Optimize coding accuracy to reduce denials and improve revenue per claim";
   else if (revenue > 50000) strategy = "Scale marketing and clinic partnerships — strong unit economics";
-  else strategy = "Focus on growth — add clinics, expand payer network, increase case volume";
+  else                      strategy = "Focus on growth — add clinics, expand payer network, increase case volume";
 
-  return { revenue: Math.round(revenue), cost: Math.round(cost * 100) / 100, profit: Math.round(profit * 100) / 100, margin, strategy };
+  return {
+    revenue:  Math.round(revenue),
+    cost:     Math.round(cost * 100) / 100,
+    profit:   Math.round(profit * 100) / 100,
+    margin,
+    strategy,
+  };
 }
 
 // ── Loop management ──────────────────────────────────────────────────────────
@@ -347,11 +536,11 @@ const _legacyLog: ImprovementAction[] = [];
 function _appendLegacyLog(rows: DbImprovementAction[]): void {
   for (const r of rows) {
     _legacyLog.push({
-      agent: r.agent,
-      action: r.action,
-      reason: r.reason,
+      agent:     r.agent,
+      action:    r.action,
+      reason:    r.reason,
       timestamp: r.proposedAt?.toISOString() ?? new Date().toISOString(),
-      metric: (r.metric as { successRate: number; runs: number }) ?? { successRate: 0, runs: 0 },
+      metric:    (r.metric as { successRate: number; runs: number }) ?? { successRate: 0, runs: 0 },
     });
   }
   if (_legacyLog.length > 500) _legacyLog.splice(0, _legacyLog.length - 500);

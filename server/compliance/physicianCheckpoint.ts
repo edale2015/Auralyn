@@ -250,6 +250,89 @@ async function handleApprovalTimeout(approvalId: string): Promise<void> {
   });
 }
 
+/**
+ * Resolves expired physician-review checkpoints.
+ *
+ * POLICY — fail-closed:
+ *   - NEVER auto-approve a timed-out review.  An expired review means the
+ *     physician did not affirm the proposed disposition in time.
+ *   - Expired reviews are ESCALATED one level up (ER_NOW → higher alert,
+ *     URGENT_CARE → ER_URGENT, etc.) and the record is marked TIMED_OUT.
+ *   - The escalation decision is written to the audit trail so FDA auditors
+ *     can see exactly what happened and why.
+ *
+ * Call this on a short polling interval (e.g. every 30 s) so that expired
+ * reviews are caught quickly rather than silently lingering as PENDING.
+ *
+ * Returns the list of approval IDs that were escalated.
+ */
+export async function resolveCheckpointTimeout(): Promise<string[]> {
+  const now       = new Date();
+  const escalated: string[] = [];
+
+  for (const [approvalId, record] of pendingApprovals.entries()) {
+    if (record.status !== "PENDING") continue;
+
+    const timedOut = new Date(record.timeoutAt) <= now;
+    if (!timedOut) continue;
+
+    // Mark TIMED_OUT before any async work — prevents double-processing
+    // if the function is called concurrently.
+    record.status = "TIMED_OUT";
+
+    let escalatedTo: string;
+    try {
+      escalatedTo = escalateOneLevel(record.proposedDisposition);
+    } catch {
+      // escalateOneLevel throws when already at the highest tier.
+      // Keep the existing disposition and flag as critical.
+      escalatedTo = record.proposedDisposition;
+    }
+
+    // Fail-closed audit record — must succeed even if downstream steps fail
+    await auditStep({
+      traceId:  record.traceId,
+      step:     "PHYSICIAN_CHECKPOINT_TIMEOUT_ESCALATED",
+      input:    { approvalId, originalDisposition: record.proposedDisposition, timeoutAt: record.timeoutAt },
+      output:   { escalatedTo, action: "escalated_fail_closed", autoApproved: false },
+      metadata: {
+        caseId:        record.caseId,
+        timeoutMinutes: record.timeoutMinutes,
+        modelVersion:  record.modelVersion,
+      },
+    }).catch((err) =>
+      logger.error("audit_write_failed_on_checkpoint_timeout", { approvalId, err })
+    );
+
+    emitEvent({
+      type: "ALERT",
+      payload: {
+        message:  `CHECKPOINT TIMEOUT — case ${record.caseId} was NOT auto-approved. ` +
+                  `Escalated from ${record.proposedDisposition} to ${escalatedTo}. ` +
+                  `Physician review required immediately.`,
+        severity:  "CRITICAL",
+        approvalId,
+        escalatedTo,
+        autoApproved: false,
+      },
+      timestamp: Date.now(),
+    });
+
+    logger.error("physician_checkpoint_timeout_escalated", {
+      approvalId,
+      caseId:              record.caseId,
+      originalDisposition: record.proposedDisposition,
+      escalatedTo,
+      timeoutMinutes:      record.timeoutMinutes,
+      autoApproved:        false,
+    });
+
+    escalated.push(approvalId);
+  }
+
+  return escalated;
+}
+
 export function getPendingApprovals(): PhysicianApprovalRecord[] {
   return Array.from(pendingApprovals.values()).filter(r => r.status === "PENDING");
 }

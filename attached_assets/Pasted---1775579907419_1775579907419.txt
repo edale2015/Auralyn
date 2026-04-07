@@ -1,0 +1,48 @@
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# PACKET 11 â€” Complaint Node Execution Layer  [MEDIUM GRANULARITY]
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+**Block name:** Complaint Node Runner + Config Loader
+
+**What this block does:**
+`complaintConfigLoader.ts` loads complaint config from a registry (CSV-backed), validates it via corruption guard, and assembles the full `ComplaintConfig` object. `complaintNodeRunner.ts` sequences clinical nodes (red flags â†’ questions â†’ scoring â†’ disposition â†’ template) for a single complaint. `complaintEngines.ts` implements each node as a pure function operating on `CaseState`.
+
+**Runtime context:** TypeScript / Express / PostgreSQL / CSV registry / Google Sheets cache
+
+**Known issues:**
+- `complaintConfigLoader.ts` reads CSV files synchronously at cold start â€” no lazy loading or caching strategy visible
+- Node sequencing in `complaintNodeRunner.ts` is controlled by a string-literal `NodeId` type â€” adding a new node requires touching the type, the runner, and the engine separately
+- If a corruption guard assertion throws mid-load, the entire complaint is unavailable with no partial fallback
+
+**Original types:**
+```typescript
+export type NodeId =
+  | "RED_FLAGS" | "CORE_QUESTIONS" | "SCORING" | "DISPOSITION"
+  | "TEMPLATE" | "EXAM_OVERRIDE" | "DIFF_CONFIDENCE"
+  | "RED_FLAG_MASTER_JOIN" | "SPOT_INTERVENTIONS" | "SPECIALIST_COUNCIL";
+
+export interface ComplaintRegistryEntry {
+  ccId: string; system: string; label: string; version: number;
+  defaultCluster: string; scoringModule: string; graphId: string; enabled: boolean;
+}
+```
+
+**Claude prompt:**
+```
+Review this complaint node execution block.
+
+Specific questions:
+1. The NodeId type is a union of string literals â€” what happens when a new node is added? Is there a risk of a node being skipped silently?
+2. If loadComplaintConfig throws (e.g. corrupt CSV), what does the caller receive? Is there a graceful fallback?
+3. complaintEngines.ts imports 10 different scoring modules â€” are these called unconditionally or routed by complaint? What happens for a complaint with no matching scorer?
+4. Is the config loaded fresh on every request or cached? How is cache invalidation handled when the CSV changes?
+5. The corruption guard runs assertions â€” are these assertions the same as the ones in corruptionGuard.ts that were recently fixed?
+
+Output:
+A) Node sequencing risks
+B) Rewritten node runner with explicit error isolation per node
+C) Config loading with cache + lazy load pattern
+D) Test cases: missing node, corrupt config, unknown complaint
+```
+
+---

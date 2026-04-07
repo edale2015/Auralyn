@@ -6,21 +6,10 @@ import { saveSnapshot, listSnapshots } from "../governance/versionStore";
 import { getSystemSnapshot } from "../data/dataAccessLayer";
 import { runGoldenValidation } from "../validation/runGoldenValidation";
 import { verifyAuditChain } from "../services/auditHashChain";
+// Safe parameterized SQL helpers — never use sql.raw() with user-controlled values
+import { qRow, qRows, qExec } from "../governance/sqlHelpers";
 
 const router = Router();
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-async function qRow<T = any>(q: string, params: any[] = []): Promise<T | undefined> {
-  const r = await db.execute(sql.raw(q.replace(/\?/g, (_, i) => `$${i + 1}`)));
-  return ((r as any).rows ?? r)[0] as T | undefined;
-}
-async function qRows<T = any>(q: string): Promise<T[]> {
-  const r = await db.execute(sql.raw(q));
-  return ((r as any).rows ?? r) as T[];
-}
-async function qExec(q: string) {
-  return db.execute(sql.raw(q));
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUDIT TRAIL
@@ -77,9 +66,7 @@ router.post("/audit-report", async (_req, res) => {
   };
 
   try {
-    await qExec(`
-      INSERT INTO audit_reports (report) VALUES (CAST('${JSON.stringify(report).replace(/'/g, "''")}' AS jsonb))
-    `);
+    await db.execute(sql`INSERT INTO audit_reports (report) VALUES (${JSON.stringify(report)}::jsonb)`);
   } catch (_e) {}
 
   res.json({ ok: true, report });
@@ -131,7 +118,7 @@ router.post("/policy/optimize", async (req, res) => {
     const { policyName } = req.body as { policyName?: string };
     const name = policyName ?? "triage";
 
-    const row = await qRow<any>(`SELECT * FROM policy_state WHERE policy_name = '${name}'`);
+    const row = await qRow<any>("SELECT * FROM policy_state WHERE policy_name = ?", [name]);
     if (!row) return res.status(404).json({ ok: false, error: "Policy not found" });
 
     const perf = row.performance as any;
@@ -170,17 +157,17 @@ router.post("/policy/optimize", async (req, res) => {
       await saveSnapshot(`pre-optimize:${name}`, { policyName: name, params, perf });
     }
 
-    await qExec(`
+    const changeStatus = safeToApply ? "pending" : "requires_approval";
+    await db.execute(sql`
       INSERT INTO policy_updates (policy_name, change, impact, status)
-      VALUES ('${name}', CAST('${JSON.stringify({ before: params, after: updated }).replace(/'/g, "''")}' AS jsonb),
-              CAST('${JSON.stringify(impact).replace(/'/g, "''")}' AS jsonb),
-              '${safeToApply ? "pending" : "requires_approval"}')
+      VALUES (${name}, ${JSON.stringify({ before: params, after: updated })}::jsonb,
+              ${JSON.stringify(impact)}::jsonb, ${changeStatus})
     `);
 
     if (safeToApply) {
-      await qExec(`
-        UPDATE policy_state SET parameters = CAST('${JSON.stringify(updated).replace(/'/g, "''")}' AS jsonb),
-        updated_at = now() WHERE policy_name = '${name}'
+      await db.execute(sql`
+        UPDATE policy_state SET parameters = ${JSON.stringify(updated)}::jsonb,
+        updated_at = now() WHERE policy_name = ${name}
       `);
     }
 
@@ -201,8 +188,9 @@ router.post("/policy/optimize", async (req, res) => {
 router.post("/policy/approve", async (req, res) => {
   try {
     const { updateId, approvedBy } = req.body as { updateId: number; approvedBy: string };
-    await qExec(`
-      UPDATE policy_updates SET status = 'approved', approved_by = '${approvedBy || "admin"}'
+    const safeApprovedBy = approvedBy || "admin";
+    await db.execute(sql`
+      UPDATE policy_updates SET status = 'approved', approved_by = ${safeApprovedBy}
       WHERE id = ${updateId}
     `);
     // Save approval snapshot for rollback trail
@@ -287,13 +275,13 @@ router.get("/fda-package", async (_req, res) => {
     };
 
     try {
-      await qExec(`
+      await db.execute(sql`
         INSERT INTO fda_submissions (version, intended_use, system_description, validation_metrics, risk_analysis, audit_summary, status)
-        VALUES ('${pkg.version}', '${pkg.intended_use}',
-          CAST('${JSON.stringify(pkg.system_description).replace(/'/g, "''")}' AS jsonb),
-          CAST('${JSON.stringify(pkg.validation_metrics).replace(/'/g, "''")}' AS jsonb),
-          CAST('${JSON.stringify(pkg.risk_analysis).replace(/'/g, "''")}' AS jsonb),
-          CAST('${JSON.stringify(pkg.audit_summary).replace(/'/g, "''")}' AS jsonb),
+        VALUES (${pkg.version}, ${pkg.intended_use},
+          ${JSON.stringify(pkg.system_description)}::jsonb,
+          ${JSON.stringify(pkg.validation_metrics)}::jsonb,
+          ${JSON.stringify(pkg.risk_analysis)}::jsonb,
+          ${JSON.stringify(pkg.audit_summary)}::jsonb,
           'draft')
       `);
     } catch (_e) {}
@@ -390,9 +378,9 @@ router.get("/quality-report", async (_req, res) => {
     };
 
     try {
-      await qExec(`
+      await db.execute(sql`
         INSERT INTO hedis_snapshots (period, metrics, overall_score)
-        VALUES ('rolling_30_days', CAST('${JSON.stringify(metrics).replace(/'/g, "''")}' AS jsonb), ${overallScore})
+        VALUES ('rolling_30_days', ${JSON.stringify(metrics)}::jsonb, ${overallScore})
       `);
     } catch (_e) {}
 
@@ -469,14 +457,15 @@ router.post("/malpractice/score", async (req, res) => {
     score = Math.min(1, score);
     const riskLevel = score > 0.7 ? "high" : score > 0.4 ? "medium" : "low";
 
-    await qExec(`
+    const safeCaseId     = caseId     ?? `MANUAL-${Date.now()}`;
+    const safePatientId  = patientId  ?? "unknown";
+    const safeClinicianId = clinicianId ?? "unknown";
+    await db.execute(sql`
       INSERT INTO malpractice_risk_scores (case_id, patient_id, clinician_id, risk_score, risk_level, drivers, red_flag_missed, uncertainty, override_used)
       VALUES (
-        '${caseId ?? "MANUAL-" + Date.now()}',
-        '${patientId ?? "unknown"}',
-        '${clinicianId ?? "unknown"}',
-        ${score}, '${riskLevel}',
-        CAST('${JSON.stringify(drivers).replace(/'/g, "''")}' AS jsonb),
+        ${safeCaseId}, ${safePatientId}, ${safeClinicianId},
+        ${score}, ${riskLevel},
+        ${JSON.stringify(drivers)}::jsonb,
         ${redFlagMissed ?? false}, ${uncertainty ?? 0}, ${overrideUsed ?? false}
       )
     `);

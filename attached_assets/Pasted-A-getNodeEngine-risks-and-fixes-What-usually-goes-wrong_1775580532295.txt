@@ -1,0 +1,270 @@
+A) getNodeEngine() — risks and fixes
+What usually goes wrong
+1. String → function lookup without enforcement
+
+Typical pattern:
+
+const engines = {
+  RED_FLAGS: redFlagEngine,
+  SCORING: scoringEngine,
+  ...
+};
+
+function getNodeEngine(nodeId: NodeId) {
+  return engines[nodeId];
+}
+Risks:
+Missing key → returns undefined
+No compile-time guarantee mapping is complete
+Runtime failure instead of compile failure
+
+👉 This is a silent omission risk, not just a bug.
+
+Fix: enforce completeness at compile-time
+const NODE_ENGINE_MAP: Record<NodeId, NodeEngine> = {
+  RED_FLAGS: redFlagEngine,
+  CORE_QUESTIONS: coreQuestionsEngine,
+  SCORING: scoringEngine,
+  DISPOSITION: dispositionEngine,
+  TEMPLATE: templateEngine,
+  EXAM_OVERRIDE: examOverrideEngine,
+  DIFF_CONFIDENCE: diffConfidenceEngine,
+  RED_FLAG_MASTER_JOIN: redFlagJoinEngine,
+  SPOT_INTERVENTIONS: spotInterventionsEngine,
+  SPECIALIST_COUNCIL: specialistCouncilEngine,
+};
+
+Now TypeScript forces:
+
+every NodeId has an engine
+no missing node slips through
+Add runtime guard (defense-in-depth)
+export function getNodeEngine(nodeId: NodeId): NodeEngine {
+  const engine = NODE_ENGINE_MAP[nodeId];
+
+  if (!engine) {
+    throw new Error(`[NodeEngine] No engine registered for ${nodeId}`);
+  }
+
+  return engine;
+}
+B) Scoring module selection — critical hidden risk
+
+This is one of the most dangerous subtle bugs in your whole system.
+
+Common current pattern
+import * as scorers from "./scorers";
+
+function scoringEngine(state, config) {
+  return scorers[config.scoringModule](state);
+}
+Risks
+1. Missing scorer → undefined call
+
+→ runtime crash OR silent skip
+
+2. Wrong scorer selected
+
+→ incorrect diagnosis probabilities
+
+3. Multiple scorers accidentally run
+
+→ conflicting outputs
+
+4. Default fallback silently used
+
+→ hides config errors
+
+Fix: strict scorer registry
+type ScoringModuleId =
+  | "bayesian"
+  | "centor"
+  | "curb65"
+  | "ottawa"
+  | "custom";
+
+const SCORER_MAP: Record<ScoringModuleId, ScoringFunction> = {
+  bayesian: bayesianScorer,
+  centor: centorScorer,
+  curb65: curb65Scorer,
+  ottawa: ottawaScorer,
+  custom: customScorer,
+};
+Hardened scoring engine
+export function scoringEngine(
+  state: CaseState,
+  config: ComplaintConfig
+): Partial<CaseState> {
+
+  const moduleId = config.scoringModule as ScoringModuleId;
+
+  const scorer = SCORER_MAP[moduleId];
+
+  if (!scorer) {
+    throw new Error(
+      `[Scoring] No scorer found for module "${config.scoringModule}" in ${config.ccId}`
+    );
+  }
+
+  const result = scorer(state);
+
+  if (!result || typeof result !== "object") {
+    throw new Error(`[Scoring] Invalid scorer output for ${moduleId}`);
+  }
+
+  return {
+    scores: result.scores,
+    differential: result.differential,
+  };
+}
+🔴 Critical upgrade: enforce single scorer
+if (Array.isArray(config.scoringModule)) {
+  throw new Error(`[Scoring] Multiple scoring modules not allowed`);
+}
+C) CaseState mutation — biggest long-term risk
+
+This is where most systems slowly rot.
+
+Common pattern
+Object.assign(state, updated);
+Problems
+1. Uncontrolled mutation
+Any node can overwrite anything
+No ownership boundaries
+2. Hidden coupling
+Node A modifies field X
+Node B assumes it exists
+Node C overwrites it
+3. No schema validation
+malformed data propagates downstream
+Fix: typed, scoped state updates
+Define strict state contract
+export interface CaseState {
+  caseId: string;
+
+  symptoms: string[];
+
+  redFlags?: string[];
+
+  questionsAsked?: string[];
+
+  scores?: Record<string, number>;
+
+  differential?: {
+    diagnosis: string;
+    probability: number;
+  }[];
+
+  disposition?: string;
+
+  template?: string;
+}
+Enforce partial updates only
+type NodeUpdate = Partial<CaseState>;
+Safe merge helper
+function mergeState(
+  current: CaseState,
+  update: NodeUpdate,
+  nodeId: NodeId
+): CaseState {
+
+  const next = { ...current };
+
+  for (const key of Object.keys(update)) {
+    if (!(key in current)) {
+      throw new Error(
+        `[State] Node ${nodeId} attempted to write unknown field "${key}"`
+      );
+    }
+
+    next[key as keyof CaseState] = update[key as keyof CaseState]!;
+  }
+
+  return next;
+}
+Use it in runner
+const update = await engine(state, config);
+
+state = mergeState(state, update, nodeId);
+🔴 Optional but powerful: field ownership enforcement
+const NODE_FIELD_OWNERSHIP: Record<NodeId, (keyof CaseState)[]> = {
+  RED_FLAGS: ["redFlags"],
+  CORE_QUESTIONS: ["questionsAsked"],
+  SCORING: ["scores", "differential"],
+  DISPOSITION: ["disposition"],
+  TEMPLATE: ["template"],
+  ...
+};
+
+Then:
+
+if (!NODE_FIELD_OWNERSHIP[nodeId].includes(key)) {
+  throw new Error(`[State] ${nodeId} cannot modify ${key}`);
+}
+
+This prevents:
+👉 one node corrupting another node’s output
+
+D) Combined hardened execution flow
+
+Putting it all together:
+
+export async function runComplaintNodes(
+  config: ComplaintConfig,
+  initialState: CaseState
+): Promise<RunnerResult> {
+
+  let state = { ...initialState };
+
+  for (const nodeId of config.nodes) {
+    try {
+      const engine = getNodeEngine(nodeId);
+
+      const update = await engine(state, config);
+
+      state = mergeState(state, update, nodeId);
+
+    } catch (err) {
+      if (REQUIRED_NODES.includes(nodeId)) {
+        return { success: false, finalState: state };
+      }
+    }
+  }
+
+  return { success: true, finalState: state };
+}
+E) What this fixes (important)
+Before:
+nodes silently skipped
+wrong scorer runs
+state mutated unpredictably
+bugs propagate invisibly
+After:
+node coverage enforced
+scorer correctness enforced
+state mutation controlled
+errors localized
+audit trace becomes meaningful
+🔥 The most important insight
+
+Across these three pieces, the biggest hidden risk was:
+
+implicit contracts
+
+“this node will run”
+“this scorer will exist”
+“this field will be set correctly”
+
+The rewrite turns those into:
+
+explicit, enforced contracts
+
+Final verdict
+
+This layer goes from:
+
+⚠️ “structured but fragile”
+
+to
+
+🛡️ “deterministic, enforceable, and auditable”

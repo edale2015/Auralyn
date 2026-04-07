@@ -1,0 +1,260 @@
+A) Where complaint mapping typically breaks
+
+Let’s trace the chain:
+
+raw text
+  ↓
+parseComplaint()
+  ↓
+ComplaintCode (string)
+  ↓
+ComplaintRegistryEntry (CSV/DB)
+  ↓
+ComplaintConfig
+  ↓
+Node Runner
+1. String-based mapping (fragile glue)
+
+You likely have:
+
+const parsed = parseComplaint(text);
+const config = loadComplaintConfig(parsed.primary);
+Risks:
+typo mismatch (sore_throat vs soreThroat)
+config exists but disabled
+config missing → crash or silent fallback
+aliasing not handled (“UTI” vs “urinary infection”)
+
+👉 No canonical mapping layer
+
+2. Registry is passive, not enforced
+ComplaintRegistryEntry {
+  ccId: string;
+  scoringModule: string;
+  enabled: boolean;
+}
+Risks:
+enabled = false but still used
+missing entry → fallback or crash
+wrong scoringModule string → runtime error later
+
+👉 Registry is data, not a gatekeeper
+
+3. No validation between parser ↔ registry
+
+Parser produces:
+
+"sore_throat"
+
+But registry may contain:
+
+"soreThroat"
+
+→ mismatch → config not found
+
+👉 No contract enforcement
+
+4. No fallback strategy
+
+If mapping fails:
+
+return undefined → flow breaks
+default complaint → unsafe misrouting
+throw → bad UX
+
+👉 Needs explicit fallback policy
+
+5. No versioning awareness
+
+If registry updates:
+
+parser unchanged
+mapping breaks silently
+B) What a production-safe mapping layer should do
+
+You want a single authoritative resolver:
+
+ParsedComplaint → ComplaintResolution
+
+With guarantees:
+
+canonical ID
+validated existence
+enabled check
+scorer exists
+config load succeeds
+fallback defined
+C) Hardened complaint mapping implementation
+1. Canonical complaint registry (strict contract)
+export interface ComplaintRegistryEntry {
+  ccId: string;
+  aliases: string[];
+  enabled: boolean;
+  scoringModule: string;
+  version: number;
+}
+2. Resolver layer (THIS is the missing piece)
+// server/clinical/complaintResolver.ts
+
+export interface ComplaintResolution {
+  ccId: string;
+  source: "primary" | "alias" | "fallback";
+  confidence: "high" | "low";
+}
+
+export async function resolveComplaint(
+  parsed: ParsedComplaint | undefined
+): Promise<ComplaintResolution> {
+
+  if (!parsed) {
+    return fallbackComplaint("no_parse");
+  }
+
+  const registry = await getComplaintRegistry(); // DB or cached
+
+  // ── Exact match ─────────────────────────────
+  const direct = registry.find(r => r.ccId === parsed.primary);
+
+  if (direct && direct.enabled) {
+    return {
+      ccId: direct.ccId,
+      source: "primary",
+      confidence: parsed.confidence,
+    };
+  }
+
+  // ── Alias match ─────────────────────────────
+  for (const entry of registry) {
+    if (entry.aliases.includes(parsed.primary) && entry.enabled) {
+      return {
+        ccId: entry.ccId,
+        source: "alias",
+        confidence: "low",
+      };
+    }
+  }
+
+  // ── Fallback ────────────────────────────────
+  return fallbackComplaint(parsed.primary);
+}
+
+function fallbackComplaint(reason: string): ComplaintResolution {
+  return {
+    ccId: "general_symptom",
+    source: "fallback",
+    confidence: "low",
+  };
+}
+3. Enforce registry integrity at load time
+function validateRegistry(registry: ComplaintRegistryEntry[]) {
+  const ids = new Set();
+
+  for (const entry of registry) {
+    if (!entry.ccId) {
+      throw new Error("Missing ccId in registry");
+    }
+
+    if (ids.has(entry.ccId)) {
+      throw new Error(`Duplicate complaint id: ${entry.ccId}`);
+    }
+
+    ids.add(entry.ccId);
+
+    if (!entry.scoringModule) {
+      throw new Error(`Missing scoringModule for ${entry.ccId}`);
+    }
+  }
+}
+4. Safe config loading integration
+export async function getResolvedComplaintConfig(
+  parsed: ParsedComplaint | undefined
+): Promise<ComplaintConfig> {
+
+  const resolution = await resolveComplaint(parsed);
+
+  try {
+    return await loadComplaintConfig(resolution.ccId);
+  } catch (err) {
+    console.error("[ComplaintMapping] Config load failed:", err);
+
+    // fallback to safe default
+    return await loadComplaintConfig("general_symptom");
+  }
+}
+5. Hard fail for unsafe mapping (optional for high-risk complaints)
+if (parsed?.primary === "chest_pain" && resolution.source === "fallback") {
+  throw new Error("Critical complaint failed to map — blocking execution");
+}
+D) Add scoring module validation at mapping stage
+
+Instead of letting scoring fail later:
+
+const scorer = SCORER_MAP[entry.scoringModule];
+
+if (!scorer) {
+  throw new Error(
+    `[ComplaintMapping] Invalid scoring module "${entry.scoringModule}" for ${entry.ccId}`
+  );
+}
+E) End-to-end safe flow
+const parsed = parseComplaint(message);
+
+const config = await getResolvedComplaintConfig(parsed);
+
+const result = await runComplaintNodes(config, state);
+F) Critical test cases
+1. Unknown complaint
+const parsed = { primary: "alien_disease" };
+
+const res = await resolveComplaint(parsed);
+
+expect(res.ccId).toBe("general_symptom");
+2. Disabled complaint
+registry = [{ ccId: "cough", enabled: false }];
+
+const parsed = { primary: "cough" };
+
+const res = await resolveComplaint(parsed);
+
+expect(res.ccId).toBe("general_symptom");
+3. Alias mapping
+registry = [{ ccId: "uti_simple", aliases: ["urinary infection"], enabled: true }];
+
+const parsed = { primary: "urinary infection" };
+
+const res = await resolveComplaint(parsed);
+
+expect(res.ccId).toBe("uti_simple");
+4. Invalid scoring module
+registry = [{ ccId: "cough", scoringModule: "unknown" }];
+
+expect(() => validateRegistry(registry)).toThrow();
+5. Critical complaint fallback block
+const parsed = { primary: "chest_pain" };
+
+mockRegistryEmpty();
+
+await expect(getResolvedComplaintConfig(parsed)).rejects.toThrow();
+🔥 Most important insight
+
+This layer is where semantic correctness enters the system.
+
+Everything before this is:
+
+parsing text
+pattern matching
+
+Everything after this is:
+
+clinical reasoning
+risk scoring
+disposition decisions
+
+👉 If this mapping is wrong, the entire system is consistently wrong in the wrong direction
+
+Final verdict
+
+Before:
+⚠️ loose coupling, string matching, silent failures
+
+After:

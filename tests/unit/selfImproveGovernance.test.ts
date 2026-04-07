@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ── Pure-function imports (no DB) ────────────────────────────────────────────
-import { validateAgentStat, computeBusinessMetrics, ACTION_STATUSES } from "../../server/agents/selfImprove";
+import {
+  validateAgentStat, computeBusinessMetrics, ACTION_STATUSES,
+  AUTO_APPROVE_PERMITTED, THRESHOLD_BOUNDS, type ChangeCategory,
+} from "../../server/agents/selfImprove";
 
 // ── DB-dependent imports — mock the DB before importing ──────────────────────
 vi.mock("../../server/db", () => ({
@@ -351,5 +354,215 @@ describe("ACTION_STATUSES", () => {
     expect(ACTION_STATUSES).toContain("applied");
     expect(ACTION_STATUSES).toContain("rejected");
     expect(ACTION_STATUSES).toContain("failed");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 7. ChangeCategory firewall — pure constants, no DB
+// ═══════════════════════════════════════════════════════════════════════════════
+describe("AUTO_APPROVE_PERMITTED", () => {
+  it("permits auto-approve only for operational category", () => {
+    expect(AUTO_APPROVE_PERMITTED.operational).toBe(true);
+  });
+
+  it("blocks auto-approve for clinical category", () => {
+    expect(AUTO_APPROVE_PERMITTED.clinical).toBe(false);
+  });
+
+  it("blocks auto-approve for security category", () => {
+    expect(AUTO_APPROVE_PERMITTED.security).toBe(false);
+  });
+
+  it("blocks auto-approve for performance category", () => {
+    expect(AUTO_APPROVE_PERMITTED.performance).toBe(false);
+  });
+
+  it("contains exactly the four required categories", () => {
+    const keys = Object.keys(AUTO_APPROVE_PERMITTED).sort();
+    expect(keys).toEqual(["clinical", "operational", "performance", "security"]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 8. THRESHOLD_BOUNDS — pure constants, no DB
+// ═══════════════════════════════════════════════════════════════════════════════
+describe("THRESHOLD_BOUNDS", () => {
+  it("conservatism has max = 0.9 (ceiling enforcement)", () => {
+    expect(THRESHOLD_BOUNDS.conservatism.max).toBe(0.9);
+    expect(THRESHOLD_BOUNDS.conservatism.min).toBe(0.0);
+    expect(THRESHOLD_BOUNDS.conservatism.category).toBe("performance");
+  });
+
+  it("riskThreshold is classified as clinical", () => {
+    expect(THRESHOLD_BOUNDS.riskThreshold.category).toBe("clinical");
+    expect(AUTO_APPROVE_PERMITTED["clinical"]).toBe(false);
+  });
+
+  it("retryLimit and timeoutMs are operational (auto-approvable)", () => {
+    expect(THRESHOLD_BOUNDS.retryLimit.category).toBe("operational");
+    expect(THRESHOLD_BOUNDS.timeoutMs.category).toBe("operational");
+    expect(AUTO_APPROVE_PERMITTED["operational"]).toBe(true);
+  });
+
+  it("all bounds have min < max", () => {
+    for (const [param, bounds] of Object.entries(THRESHOLD_BOUNDS)) {
+      expect(bounds.min).toBeLessThan(bounds.max, `${param}: min must be < max`);
+    }
+  });
+
+  it("all bounds have step > 0", () => {
+    for (const [param, bounds] of Object.entries(THRESHOLD_BOUNDS)) {
+      expect(bounds.step).toBeGreaterThan(0, `${param}: step must be > 0`);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 9. evaluateAndImprove — ceiling enforcement and category tagging
+// ═══════════════════════════════════════════════════════════════════════════════
+describe("evaluateAndImprove — ceiling and category", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("skips proposal when conservatism is already at ceiling (0.9)", async () => {
+    vi.mocked(getAgentStats).mockReturnValue({
+      triage_ai: { runs: 20, successRate: 40, successes: 8, failures: 12, avgMs: 200 },
+    } as any);
+
+    // Execution order: _getThresholdFromDb runs FIRST (before hasOpenProposal)
+    // When ceiling is hit we continue immediately — hasOpenProposal never called
+    vi.mocked(db.select)
+      .mockReturnValueOnce(makeSelectChain([{ currentValue: 0.9 }]) as any); // _getThresholdFromDb → at ceiling
+
+    const actions = await evaluateAndImprove();
+    const conservatismActions = actions.filter(a => a.parameter === "conservatism");
+    expect(conservatismActions).toHaveLength(0);
+  });
+
+  it("proposes conservatism adjustment when below ceiling", async () => {
+    vi.mocked(getAgentStats).mockReturnValue({
+      triage_ai: { runs: 10, successRate: 45, successes: 4, failures: 6, avgMs: 100 },
+    } as any);
+
+    const mockRow = {
+      id: 11, agent: "triage_ai", action: "threshold_adjustment",
+      parameter: "conservatism", fromValue: 0.0, toValue: 0.1,
+      reason: "rate 45%", status: "pending_review",
+      proposedAt: new Date(), decidedAt: null, decidedBy: null, metric: null, errorMessage: null,
+    };
+
+    // NOTE: execution order is: _getThresholdFromDb first, then hasOpenProposal
+    vi.mocked(db.select)
+      .mockReturnValueOnce(makeSelectChain([{ currentValue: 0.0 }]) as any) // _getThresholdFromDb
+      .mockReturnValueOnce(makeSelectChain([]) as any);                      // hasOpenProposal
+    vi.mocked(db.insert).mockReturnValue(makeInsertChain([mockRow]) as any);
+
+    const actions = await evaluateAndImprove();
+    const conservatism = actions.find(a => a.parameter === "conservatism");
+    expect(conservatism).toBeDefined();
+    expect(conservatism!.category).toBe("performance");
+    expect(conservatism!.autoApprove).toBe(false);
+    // performance is not auto-approvable → status must be pending_review
+    expect(conservatism!.status).toBe("pending_review");
+  });
+
+  it("toValue is capped at bounds.max even if current + step would exceed it", async () => {
+    vi.mocked(getAgentStats).mockReturnValue({
+      triage_ai: { runs: 15, successRate: 50, successes: 7, failures: 8, avgMs: 100 },
+    } as any);
+
+    const mockRow = {
+      id: 12, agent: "triage_ai", action: "threshold_adjustment",
+      parameter: "conservatism", fromValue: 0.85, toValue: 0.9,
+      reason: "rate 50%", status: "pending_review",
+      proposedAt: new Date(), decidedAt: null, decidedBy: null, metric: null, errorMessage: null,
+    };
+
+    // NOTE: execution order is: _getThresholdFromDb first, then hasOpenProposal
+    vi.mocked(db.select)
+      .mockReturnValueOnce(makeSelectChain([{ currentValue: 0.85 }]) as any) // _getThresholdFromDb
+      .mockReturnValueOnce(makeSelectChain([]) as any);                       // hasOpenProposal
+    vi.mocked(db.insert).mockReturnValue(makeInsertChain([mockRow]) as any);
+
+    const actions = await evaluateAndImprove();
+    const conservatism = actions.find(a => a.parameter === "conservatism");
+    expect(conservatism).toBeDefined();
+    // 0.85 + 0.1 = 0.95 → capped at 0.9
+    expect(conservatism!.toValue).toBeLessThanOrEqual(0.9);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 10. applyImprovementAction — bounds re-validation
+// ═══════════════════════════════════════════════════════════════════════════════
+describe("applyImprovementAction — bounds re-validation", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function mockTx(selectResults: unknown[], _updateResult: unknown[] = []) {
+    const tx: any = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      select:  vi.fn().mockReturnValue(makeSelectChain(selectResults)),
+      update:  vi.fn().mockReturnValue(makeUpdateChain()),
+      insert:  vi.fn().mockReturnValue(makeInsertChain([])),
+    };
+    vi.mocked(db.transaction).mockImplementation(async (fn: any) => fn(tx));
+    return tx;
+  }
+
+  it("refuses to apply when toValue exceeds THRESHOLD_BOUNDS.max", async () => {
+    // conservatism.max = 0.9; toValue = 0.95 is out of bounds
+    const action = {
+      id: 20, status: "proposed", agent: "triage", parameter: "conservatism",
+      fromValue: 0.8, toValue: 0.95, action: "threshold_adjustment",
+    };
+    const tx = mockTx([action]);
+    tx.select.mockReturnValueOnce(makeSelectChain([action]));
+
+    const result = await applyImprovementAction(20, "physician-1");
+    expect(result.applied).toBe(false);
+    expect(result.reason).toMatch(/out.of.bounds/i);
+    // Must mark action as failed in DB
+    expect(tx.update).toHaveBeenCalled();
+  });
+
+  it("refuses to apply when toValue is below THRESHOLD_BOUNDS.min", async () => {
+    // riskThreshold.min = 0.3; toValue = 0.1 is below minimum
+    const action = {
+      id: 21, status: "proposed", agent: "triage", parameter: "riskThreshold",
+      fromValue: 0.4, toValue: 0.1, action: "threshold_adjustment",
+    };
+    const tx = mockTx([action]);
+    tx.select.mockReturnValueOnce(makeSelectChain([action]));
+
+    const result = await applyImprovementAction(21, "physician-1");
+    expect(result.applied).toBe(false);
+    expect(result.reason).toMatch(/out.of.bounds/i);
+  });
+
+  it("allows apply when toValue is exactly at the boundary", async () => {
+    // conservatism.max = 0.9; toValue = 0.9 is exactly at max (valid)
+    const action = {
+      id: 22, status: "proposed", agent: "triage", parameter: "conservatism",
+      fromValue: 0.8, toValue: 0.9, action: "threshold_adjustment",
+    };
+    const tx = mockTx([action]);
+    tx.select
+      .mockReturnValueOnce(makeSelectChain([action]))
+      .mockReturnValueOnce(makeSelectChain([{ currentValue: 0.8 }]));
+
+    const result = await applyImprovementAction(22, "physician-1");
+    expect(result.applied).toBe(true);
+  });
+
+  it("skips bounds check for unknown parameters (no bounds config)", async () => {
+    // latency_alert has no entry in THRESHOLD_BOUNDS → null from/to → skip bounds
+    const action = {
+      id: 23, status: "proposed", agent: "triage", parameter: "latency_alert",
+      fromValue: null, toValue: null, action: "performance_warning",
+    };
+    const tx = mockTx([action]);
+    tx.select.mockReturnValueOnce(makeSelectChain([action]));
+
+    const result = await applyImprovementAction(23, "physician-1");
+    expect(result.applied).toBe(true);
   });
 });
