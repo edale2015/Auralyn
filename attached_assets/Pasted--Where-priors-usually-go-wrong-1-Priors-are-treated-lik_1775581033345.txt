@@ -1,0 +1,447 @@
+) Where priors usually go wrong
+1. Priors are treated like “just config”
+
+A DiagnosisPrior object looks innocent:
+
+{
+  diagnosis: "flu",
+  baseProbability: 0.2,
+  featureLikelihoods: {
+    fever: 0.9,
+    chills: 0.8
+  }
+}
+
+But these numbers are not ordinary settings. They are probabilistic assumptions. If they are malformed, stale, contradictory, or copied carelessly, the engine still outputs crisp posteriors with fake confidence.
+
+2. baseProbability is often unvalidated
+
+Typical failure modes:
+
+0
+negative
+> 1
+NaN
+all diagnoses with tiny arbitrary values
+wildly inconsistent values across complaints
+
+If a prior is 0, log(0) detonates.
+If all priors are invalid, your posterior layer becomes a probability graveyard.
+
+👉 Priors must be treated like validated numeric model data, not freeform JSON.
+
+3. featureLikelihoods often mix semantics
+
+This is one of the biggest hidden problems.
+
+What does:
+
+featureLikelihoods["fever"] = 0.8
+
+actually mean?
+
+Possible interpretations:
+
+probability of fever given diagnosis
+frequency estimate from chart data
+expert confidence
+normalized weight
+pseudo-likelihood made by hand
+
+If the source semantics are mixed, then the engine is multiplying apples, oranges, and an occasional stapler.
+
+👉 Every likelihood table needs a declared meaning.
+
+4. Missing-feature handling can hide data quality problems
+
+From the earlier Bayesian review, the engine uses a floor likelihood for missing features. That is okay as a runtime fallback, but if a diagnosis is missing 80 percent of its feature table, the engine may still “work” while actually being mostly driven by smoothing.
+
+That means:
+
+garbage-in is quietly softened
+incomplete diagnosis models remain in production
+missing data masquerades as low evidence
+5. No complaint-specific validation boundary
+
+A diagnosis prior for cough may accidentally leak into sore_throat if loading is loose or keyed incorrectly. This can happen through:
+
+bad CSV row joins
+wrong ccId
+reused differential tables
+stale cache after complaint edits
+
+That kind of cross-complaint contamination is a stealth bug. The numbers are valid, just valid for the wrong complaint.
+
+6. No provenance/version linkage
+
+If the engine uses priors from CSV / Sheets / DB, you need to know:
+
+which version loaded
+when it loaded
+where it came from
+who approved it
+whether it was partially stale
+
+Otherwise, if a posterior looks weird next week, you cannot answer the question:
+
+“Which exact prior table produced that decision?”
+
+That is bad science and bad governance.
+
+B) What a production-safe prior system should guarantee
+
+A prior set should never reach the Bayesian engine unless it passes these checks:
+
+Per diagnosis
+diagnosis non-empty
+baseProbability finite and in (0,1]
+featureLikelihoods object present
+every likelihood finite and in (0,1]
+Per complaint
+at least one diagnosis
+no duplicate diagnosis names
+enough modeled features to be meaningful
+optional expected-feature coverage threshold
+version/provenance metadata present
+Per engine load
+complaint ID matches requested complaint
+no mixed complaint rows
+source version known
+cache freshness known
+C) Hardened prior loader + validator
+
+Here’s the shape I would move to.
+
+1. Stronger types
+export interface DiagnosisPrior {
+  diagnosis: string;
+  baseProbability: number;
+  featureLikelihoods: Record<string, number>;
+  ruleId?: string;
+  version?: number;
+  tableName?: string;
+}
+
+export interface PriorBundle {
+  ccId: string;
+  version: number;
+  loadedAt: string;
+  source: "KB_DB" | "CSV" | "GOOGLE_SHEETS_CACHE" | "FALLBACK_HARDCODED";
+  priors: DiagnosisPrior[];
+}
+2. Validation helpers
+function isFiniteProbability(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1;
+}
+
+function normalizeFeatureName(name: string): string {
+  return name.trim().toLowerCase();
+}
+3. Validate a single diagnosis prior
+function validateDiagnosisPrior(prior: DiagnosisPrior, ccId: string): void {
+  if (!prior.diagnosis?.trim()) {
+    throw new Error(`[Priors] ${ccId}: missing diagnosis name`);
+  }
+
+  if (!isFiniteProbability(prior.baseProbability)) {
+    throw new Error(
+      `[Priors] ${ccId}:${prior.diagnosis} invalid baseProbability=${prior.baseProbability}`
+    );
+  }
+
+  if (!prior.featureLikelihoods || typeof prior.featureLikelihoods !== "object") {
+    throw new Error(`[Priors] ${ccId}:${prior.diagnosis} missing featureLikelihoods`);
+  }
+
+  const featureNames = Object.keys(prior.featureLikelihoods);
+
+  if (featureNames.length === 0) {
+    throw new Error(`[Priors] ${ccId}:${prior.diagnosis} has no modeled features`);
+  }
+
+  for (const feature of featureNames) {
+    const value = prior.featureLikelihoods[feature];
+
+    if (!normalizeFeatureName(feature)) {
+      throw new Error(`[Priors] ${ccId}:${prior.diagnosis} contains blank feature name`);
+    }
+
+    if (!isFiniteProbability(value)) {
+      throw new Error(
+        `[Priors] ${ccId}:${prior.diagnosis} invalid likelihood ${feature}=${value}`
+      );
+    }
+  }
+}
+4. Validate the whole bundle
+function validatePriorBundle(bundle: PriorBundle): void {
+  if (!bundle.ccId?.trim()) {
+    throw new Error("[Priors] Missing ccId");
+  }
+
+  if (!Number.isFinite(bundle.version) || bundle.version <= 0) {
+    throw new Error(`[Priors] ${bundle.ccId}: invalid version ${bundle.version}`);
+  }
+
+  if (!bundle.loadedAt?.trim()) {
+    throw new Error(`[Priors] ${bundle.ccId}: missing loadedAt`);
+  }
+
+  if (!Array.isArray(bundle.priors) || bundle.priors.length === 0) {
+    throw new Error(`[Priors] ${bundle.ccId}: no priors loaded`);
+  }
+
+  const seenDiagnoses = new Set<string>();
+
+  for (const prior of bundle.priors) {
+    validateDiagnosisPrior(prior, bundle.ccId);
+
+    const key = prior.diagnosis.trim().toLowerCase();
+    if (seenDiagnoses.has(key)) {
+      throw new Error(`[Priors] ${bundle.ccId}: duplicate diagnosis "${prior.diagnosis}"`);
+    }
+    seenDiagnoses.add(key);
+  }
+
+  // Optional coverage warning, not hard failure
+  const allFeatures = new Set<string>();
+  for (const prior of bundle.priors) {
+    Object.keys(prior.featureLikelihoods).forEach(f => allFeatures.add(normalizeFeatureName(f)));
+  }
+
+  if (allFeatures.size < 3) {
+    console.warn(`[Priors] ${bundle.ccId}: very low feature coverage (${allFeatures.size} total features)`);
+  }
+}
+5. Load with cache + last-known-good fallback
+const priorCache = new Map<string, PriorBundle>();
+const PRIOR_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function loadComplaintPriors(ccId: string): Promise<PriorBundle> {
+  const cached = priorCache.get(ccId);
+
+  const cacheFresh =
+    cached &&
+    Date.now() - new Date(cached.loadedAt).getTime() < PRIOR_CACHE_TTL_MS;
+
+  if (cacheFresh) {
+    return cached;
+  }
+
+  try {
+    const raw = await loadPriorsFromRegistry(ccId); // DB / CSV / Sheets cache
+    validatePriorBundle(raw);
+    priorCache.set(ccId, raw);
+    return raw;
+  } catch (err) {
+    console.error(`[Priors] Failed to load priors for ${ccId}`, err);
+
+    if (cached) {
+      console.warn(`[Priors] Using last-known-good priors for ${ccId}`);
+      return cached;
+    }
+
+    throw err;
+  }
+}
+D) Add complaint-boundary enforcement
+
+This is important.
+
+If priors are loaded from a big table, every row must prove it belongs to the requested complaint.
+
+interface RawPriorRow {
+  ccId: string;
+  diagnosis: string;
+  baseProbability: number;
+  feature: string;
+  likelihood: number;
+  version: number;
+}
+
+function assemblePriorBundle(ccId: string, rows: RawPriorRow[]): PriorBundle {
+  const wrongComplaint = rows.find(r => r.ccId !== ccId);
+  if (wrongComplaint) {
+    throw new Error(
+      `[Priors] Complaint contamination: expected ${ccId}, found row for ${wrongComplaint.ccId}`
+    );
+  }
+
+  const byDiagnosis = new Map<string, DiagnosisPrior>();
+
+  for (const row of rows) {
+    if (!byDiagnosis.has(row.diagnosis)) {
+      byDiagnosis.set(row.diagnosis, {
+        diagnosis: row.diagnosis,
+        baseProbability: row.baseProbability,
+        featureLikelihoods: {},
+        version: row.version,
+        tableName: "diagnosis_priors",
+      });
+    }
+
+    byDiagnosis.get(row.diagnosis)!.featureLikelihoods[row.feature] = row.likelihood;
+  }
+
+  const bundle: PriorBundle = {
+    ccId,
+    version: rows[0]?.version ?? 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: Array.from(byDiagnosis.values()),
+  };
+
+  validatePriorBundle(bundle);
+  return bundle;
+}
+
+That prevents the quiet horror of “correct math on the wrong complaint.”
+
+E) Distinguish hard failure vs degraded mode
+
+Not every prior problem should be handled the same way.
+
+Hard fail
+
+Block the complaint entirely if:
+
+no priors
+invalid base probabilities
+duplicate diagnosis rows
+complaint contamination
+scorer/prior mismatch
+Degraded mode
+
+Warn but continue if:
+
+low feature coverage
+few total diagnoses
+stale but previously valid cached priors
+some diagnoses sparse but still valid
+
+That gives you a much more honest runtime posture.
+
+F) Match priors to scorer contract
+
+This is another subtle risk.
+
+A Bayesian scorer expects:
+
+diagnosis priors
+symptom likelihoods
+
+A rule-based scorer may expect:
+
+score thresholds
+feature weights
+question answers
+
+If complaint config says scoringModule = "bayesian" but the loaded config only contains rule thresholds, the engine should fail early.
+
+export function validateScorerCompatibility(
+  scoringModule: string,
+  priors: PriorBundle
+): void {
+  if (scoringModule === "bayesian" && priors.priors.length === 0) {
+    throw new Error("[Priors] Bayesian scorer requires at least one diagnosis prior");
+  }
+
+  if (scoringModule !== "bayesian" && priors.priors.length > 0) {
+    console.warn(
+      `[Priors] Complaint has diagnosis priors loaded, but scoringModule=${scoringModule}`
+    );
+  }
+}
+G) Critical test cases
+1. Invalid base probability
+expect(() =>
+  validatePriorBundle({
+    ccId: "cough",
+    version: 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: [
+      {
+        diagnosis: "flu",
+        baseProbability: 0,
+        featureLikelihoods: { fever: 0.8 },
+      },
+    ],
+  })
+).toThrow("invalid baseProbability");
+2. Duplicate diagnosis
+expect(() =>
+  validatePriorBundle({
+    ccId: "cough",
+    version: 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: [
+      { diagnosis: "flu", baseProbability: 0.2, featureLikelihoods: { fever: 0.8 } },
+      { diagnosis: "flu", baseProbability: 0.3, featureLikelihoods: { cough: 0.7 } },
+    ],
+  })
+).toThrow("duplicate diagnosis");
+3. Complaint contamination
+expect(() =>
+  assemblePriorBundle("cough", [
+    {
+      ccId: "sore_throat",
+      diagnosis: "strep",
+      baseProbability: 0.4,
+      feature: "fever",
+      likelihood: 0.6,
+      version: 1,
+    },
+  ])
+).toThrow("Complaint contamination");
+4. Last-known-good fallback
+priorCache.set("cough", goodBundle);
+mockLoadPriorsThrow();
+
+const result = await loadComplaintPriors("cough");
+
+expect(result).toBe(goodBundle);
+5. Sparse priors warning but not failure
+const sparseBundle = {
+  ccId: "cough",
+  version: 1,
+  loadedAt: new Date().toISOString(),
+  source: "KB_DB" as const,
+  priors: [
+    {
+      diagnosis: "flu",
+      baseProbability: 0.4,
+      featureLikelihoods: { fever: 0.8 },
+    },
+  ],
+};
+
+expect(() => validatePriorBundle(sparseBundle)).not.toThrow();
+The most important insight here
+
+The Bayesian engine itself is not the main risk.
+
+The main risk is:
+
+unvalidated probabilistic inputs creating plausible-looking but unjustified outputs
+
+That is more dangerous than a crash, because:
+
+crashes get noticed
+fake certainty often does not
+Final verdict
+
+Before:
+
+priors are “data”
+loader trusts them too much
+complaint boundary is loose
+fallback behavior unclear
+
+After:
+
+priors become governed model inputs
+complaint boundary is enforced
+bad bundles fail early
+stale-good bundles can keep the system alive safely

@@ -12,6 +12,39 @@ import { computeTesticularPainScore } from "../agent/scoring/testicularPainScore
 import { computePelvicPainScore } from "../agent/scoring/pelvicPainScore";
 import { computeHeadacheScore } from "../agent/scoring/headacheScore";
 
+export type ScoringModuleId =
+  | "CENTOR"
+  | "EARACHE_SCORE"
+  | "COUGH_SCORE"
+  | "CHEST_PAIN_SCORE"
+  | "DIZZINESS_SCORE"
+  | "ABD_PAIN_SCORE"
+  | "UTI_SCORE"
+  | "TESTICULAR_PAIN_SCORE"
+  | "PELVIC_PAIN_SCORE"
+  | "HEADACHE_SCORE";
+
+const KNOWN_SCORER_MODULES = new Set<string>([
+  "CENTOR",
+  "EARACHE_SCORE",
+  "COUGH_SCORE",
+  "CHEST_PAIN_SCORE",
+  "DIZZINESS_SCORE",
+  "ABD_PAIN_SCORE",
+  "UTI_SCORE",
+  "TESTICULAR_PAIN_SCORE",
+  "PELVIC_PAIN_SCORE",
+  "HEADACHE_SCORE",
+]);
+
+export function assertScorerKnown(module: string, ccId: string): void {
+  if (!KNOWN_SCORER_MODULES.has(module)) {
+    throw new Error(
+      `[Scoring] Unknown scoring module "${module}" for complaint "${ccId}" — execution blocked to prevent silent misdiagnosis`
+    );
+  }
+}
+
 export interface QuestionResult {
   nextQuestion: CoreQuestion | null;
   allAnswered: boolean;
@@ -332,6 +365,8 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
           missingInputs.push(input);
         }
       }
+    } else {
+      assertScorerKnown(def.module, config.registry.ccId);
     }
   }
 

@@ -33,6 +33,20 @@ export type NodeId =
   | "OUTPUT_COMPOSE"
   | "DONE";
 
+export const REQUIRED_GRAPH_NODES: NodeId[] = [
+  "CORE_QUESTIONS",
+  "RED_FLAG_GATE",
+  "SCORING",
+  "DISPOSITION_RULES",
+];
+
+export interface NodeExecutionResult {
+  nodeId: NodeId;
+  success: boolean;
+  error?: string;
+  durationMs: number;
+}
+
 export interface NodeTrace {
   nodeId: NodeId;
   inputsUsed: string[];
@@ -337,7 +351,25 @@ export async function runComplaintGraph(
   let updated = { ...state };
   const events: TraceEvent[] = [];
   const nodeTraces: NodeTrace[] = [];
+  const nodeResults: NodeExecutionResult[] = [];
   let iterations = 0;
+
+  // ── Pre-flight: required-node validation ─────────────────────────────────
+  const graph = GRAPH_REGISTRY[graphId];
+  if (graph) {
+    for (const required of REQUIRED_GRAPH_NODES) {
+      if (!graph.nodes.includes(required)) {
+        const msg = `[NodeRunner] Required node "${required}" missing from graph "${graphId}" for complaint "${ccId}"`;
+        return {
+          state,
+          events: [{ type: "COMPLAINT_GRAPH_ERROR", severity: "error", message: msg }],
+          nodeTraces: [],
+          currentNode: "INIT_CASE",
+          done: false,
+        };
+      }
+    }
+  }
 
   let currentNode = determineCurrentNode(updated);
 
@@ -352,7 +384,9 @@ export async function runComplaintGraph(
       llmCalls: 0,
       durationMs: 0,
     };
+    const isRequired = REQUIRED_GRAPH_NODES.includes(currentNode);
 
+    try {
     switch (currentNode) {
       case "INIT_CASE": {
         updated.system = config.registry.system;
@@ -681,7 +715,31 @@ export async function runComplaintGraph(
         break;
       }
     }
+    // ── Per-node isolation catch ────────────────────────────────────────────
+    } catch (nodeErr: any) {
+      const errorMsg = nodeErr instanceof Error ? nodeErr.message : String(nodeErr);
+      nodeResults.push({ nodeId: currentNode, success: false, error: errorMsg, durationMs: Date.now() - nodeStart });
 
+      if (isRequired) {
+        events.push({ type: "COMPLAINT_GRAPH_ERROR", severity: "error", message: `[NodeRunner] Required node "${currentNode}" failed: ${errorMsg}` });
+        return {
+          state: updated,
+          events,
+          nodeTraces,
+          currentNode,
+          done: false,
+        };
+      }
+
+      console.warn(`[NodeRunner] Non-critical node "${currentNode}" failed — continuing:`, errorMsg);
+      events.push({ type: "COMPLAINT_GRAPH_NODE", severity: "warn", message: `[NodeRunner] Non-critical node "${currentNode}" failed, skipped: ${errorMsg}` });
+      trace.durationMs = Date.now() - nodeStart;
+      nodeTraces.push(trace);
+      currentNode = getNextNode(graphId, currentNode);
+      continue;
+    }
+
+    nodeResults.push({ nodeId: currentNode, success: true, durationMs: Date.now() - nodeStart });
     trace.durationMs = Date.now() - nodeStart;
     nodeTraces.push(trace);
     currentNode = getNextNode(graphId, currentNode);

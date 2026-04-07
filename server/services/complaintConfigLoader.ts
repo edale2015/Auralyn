@@ -439,6 +439,7 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
 
   const cached = CONFIG_CACHE.get(key);
   if (cached && cached.expiresAt > now) return cached.config;
+  // stale entry kept below as last-known-good fallback
 
   const registryRows = await getTable("COMPLAINT_REGISTRY");
   const allEntries = registryRows.map(rowToRegistry).filter((e): e is NonNullable<typeof e> => e !== null && e.enabled);
@@ -450,20 +451,34 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
   if (!regEntry) return null;
   const canonicalKey = regEntry.ccId;
 
-  const [qRows, rfRows, sRows, dRows, tRows, csrRows] = await Promise.all([
-    getTable("CORE_QUESTIONS"),
-    getTable("RED_FLAG_RULES"),
-    getTable("SCORING_DEFS"),
-    getTable("DISPOSITION_RULES"),
-    getTable("OUTPUT_TEMPLATES"),
-    getTable("CLUSTER_SCORING_RULES"),
-  ]);
+  let qRows: SheetRow[], rfRows: SheetRow[], sRows: SheetRow[],
+      dRows: SheetRow[], tRows: SheetRow[], csrRows: SheetRow[];
 
-  assertCoreQuestionsNotCorrupt(qRows);
-  assertRedFlagRulesNotCorrupt(rfRows);
-  assertDispositionRulesNotCorrupt(dRows);
-  assertOutputTemplatesNotCorrupt(tRows);
-  assertClusterScoringRulesNotCorrupt(csrRows);
+  try {
+    [qRows, rfRows, sRows, dRows, tRows, csrRows] = await Promise.all([
+      getTable("CORE_QUESTIONS"),
+      getTable("RED_FLAG_RULES"),
+      getTable("SCORING_DEFS"),
+      getTable("DISPOSITION_RULES"),
+      getTable("OUTPUT_TEMPLATES"),
+      getTable("CLUSTER_SCORING_RULES"),
+    ]);
+
+    assertCoreQuestionsNotCorrupt(qRows);
+    assertRedFlagRulesNotCorrupt(rfRows);
+    assertDispositionRulesNotCorrupt(dRows);
+    assertOutputTemplatesNotCorrupt(tRows);
+    assertClusterScoringRulesNotCorrupt(csrRows);
+  } catch (loadErr) {
+    if (cached) {
+      console.warn(
+        `[ComplaintConfig] Load/corruption-guard failed for "${key}" — using last-known-good stale config`,
+        loadErr
+      );
+      return cached.config;
+    }
+    throw loadErr;
+  }
 
   const version = regEntry.version;
 
