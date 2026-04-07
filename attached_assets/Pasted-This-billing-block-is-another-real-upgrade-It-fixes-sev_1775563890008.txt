@@ -1,0 +1,301 @@
+This billing block is another real upgrade. It fixes several messy rejection magnets: strict ICD-10/CPT shape checks, strict YYYY-MM-DD DOS parsing, a three-state scrub outcome instead of a mushy boolean, capped differential-risk contribution, and separation of configured pricing from baked-in code. That is a much cleaner claim hygiene layer than the original.
+
+The strongest improvements are:
+
+malformed ICD-10/CPT strings get caught before submission
+fake dates like "2024" or "2024-02-30" no longer sneak through
+warnings are separated from hard failures instead of being flattened into approved: true/false
+denial risk is bounded and more interpretable
+pricing is abstracted behind a store instead of living entirely as stale literals in source
+
+I still would not call it final-hardening yet.
+
+What still needs work
+1. Format validation is not code-set validation
+
+The new scrubber validates ICD-10 and CPT shape, but not whether the code is actually valid for the date of service, active in the current code set, billable, or payer-allowed. A regex catches "ABC"; it does not catch a retired code, truncated specificity, or a code that exists but is invalid for that encounter year.
+
+2. Prior auth, modifier, and documentation rules are still too hardcoded
+
+The rewrite improves the rule surface, but PRIOR_AUTH_REQUIRED_CPTS, DOCUMENTATION_REQUIRED_CPTS, and MODIFIER_REQUIRED are still static lists in source. Billing rules are usually payer-, contract-, POS-, and sometimes specialty-specific. Hardcoding them is safer than nothing, but it still ages like milk on a radiator.
+
+3. Defaulting denial pricing to an in-memory store is risky
+
+predictDenial() still defaults to new InMemoryCptPricingStore(). That is convenient for dev, but in production it creates a trapdoor: if the caller forgets to inject a real pricing store, the system quietly uses approximate rates. That makes the estimate look authoritative when it is really cardboard dressed as oak.
+
+4. $75 fallback revenue is too confident
+
+Returning a numeric fallback rate for unknown CPTs makes downstream revenue-impact math look precise when it is not. For operational dashboards, an explicit null or unknown is often safer than a made-up dollar amount with a warning in the console.
+
+5. Documentation presence is not documentation sufficiency
+
+The denial engine checks whether HPI, assessment, and plan are non-empty strings. That is better than nothing, but it does not answer the real billing question: does the note actually support the level of service, time requirement, modifier use, and medical necessity? A three-word HPI still passes the current shape test.
+
+6. The scrubber still misses claim-level edits that matter
+
+This rewrite improves diagnosis/procedure/date validation, but it still does not check a bunch of common denial triggers:
+
+provider/NPI format and presence beyond a generic string
+diagnosis pointer consistency between CPT and ICDs
+modifier format and incompatible modifier combinations
+place of service, units, rendering/billing provider consistency
+age/sex edits
+NCCI bundling/unbundling conflicts
+payer/member/subscriber identifiers
+duplicate claim risk or timely-filing limits by payer
+
+So the front gate is cleaner, but the rest of the castle still has open windows.
+
+7. Denial risk is still a heuristic, not a calibrated model
+
+The new weights are better bounded, but they are still hand-tuned rules. That is fine as a first pass, but a production “riskScore” starts to sound very quantitative very quickly. Without calibration against real denial outcomes by payer, CPT family, clinic, and time period, the number is more compass than GPS.
+
+8. Results need machine-readable issue codes, not only strings
+
+Right now issues and warnings are plain strings. Great for humans, awkward for workflows. To drive UI badges, queues, analytics, auto-holds, and audit reports, you want structured codes like INVALID_ICD10_FORMAT, MISSING_PRIOR_AUTH, DOS_IN_FUTURE, UNKNOWN_CPT_RATE.
+
+The next patch I would make first
+
+I would add three things immediately:
+
+code-set lookup services
+payer-policy lookup services
+structured issue codes
+1. Structured scrub issues
+// server/billing/types.ts
+export type ScrubIssueCode =
+  | "MISSING_PATIENT_ID"
+  | "MISSING_PROVIDER_ID"
+  | "INVALID_ICD10_FORMAT"
+  | "UNKNOWN_ICD10_CODE"
+  | "INVALID_CPT_FORMAT"
+  | "UNKNOWN_CPT_CODE"
+  | "MISSING_DOCUMENTATION"
+  | "MISSING_PRIOR_AUTH"
+  | "MISSING_REQUIRED_MODIFIER"
+  | "INVALID_DOS"
+  | "FUTURE_DOS"
+  | "TIMELY_FILING_RISK"
+  | "NPI_INVALID"
+  | "CLAIM_POLICY_CONFLICT";
+
+export type ScrubSeverity = "issue" | "warning";
+
+export interface ScrubIssue {
+  code: ScrubIssueCode;
+  severity: ScrubSeverity;
+  message: string;
+  field?: string;
+}
+2. Code-set and payer-policy stores
+// server/billing/policyStores.ts
+export interface CodeSetStore {
+  icd10Exists(code: string, dos: string): Promise<boolean>;
+  cptExists(code: string, dos: string): Promise<boolean>;
+  npiExists(npi: string): Promise<boolean>;
+}
+
+export interface PayerClaimPolicy {
+  payerId: string;
+  timelyFilingDays: number;
+  priorAuthRequiredCpts: Set<string>;
+  documentationRequiredCpts: Set<string>;
+  requiredModifiersByCpt: Record<string, string[]>;
+}
+
+export interface PayerPolicyStore {
+  getPolicy(payerId?: string): Promise<PayerClaimPolicy | null>;
+}
+3. Scrubber wired to real lookups
+// server/billing/claimScrubber.ts
+import type { CodeSetStore, PayerPolicyStore } from "./policyStores";
+import type { ScrubIssue } from "./types";
+
+export interface ClaimInput {
+  icd10?: string;
+  cpt?: string;
+  documentation?: string;
+  modifiers?: string[];
+  priorAuthRef?: string;
+  dateOfService?: string;
+  payerId?: string;
+  patientId?: string;
+  provider?: string; // ideally NPI
+}
+
+export interface ScrubResult {
+  status: "clean" | "warnings_only" | "invalid";
+  valid: boolean;
+  issues: ScrubIssue[];
+}
+
+export async function scrubClaim(
+  claim: ClaimInput,
+  codeSetStore: CodeSetStore,
+  payerPolicyStore: PayerPolicyStore
+): Promise<ScrubResult> {
+  const findings: ScrubIssue[] = [];
+
+  if (!claim.patientId?.trim()) {
+    findings.push({
+      code: "MISSING_PATIENT_ID",
+      severity: "issue",
+      field: "patientId",
+      message: "Missing patient ID",
+    });
+  }
+
+  if (!claim.provider?.trim()) {
+    findings.push({
+      code: "MISSING_PROVIDER_ID",
+      severity: "issue",
+      field: "provider",
+      message: "Missing provider identifier",
+    });
+  } else {
+    const npiOk = await codeSetStore.npiExists(claim.provider.trim());
+    if (!npiOk) {
+      findings.push({
+        code: "NPI_INVALID",
+        severity: "issue",
+        field: "provider",
+        message: `Provider identifier "${claim.provider}" is not a valid active NPI`,
+      });
+    }
+  }
+
+  const dos = claim.dateOfService?.trim() ?? "";
+  const policy = await payerPolicyStore.getPolicy(claim.payerId);
+
+  if (claim.icd10?.trim()) {
+    const normalized = claim.icd10.trim().toUpperCase();
+    if (!/^[A-Z][0-9]{2}(\.[A-Z0-9]{1,4})?$/.test(normalized)) {
+      findings.push({
+        code: "INVALID_ICD10_FORMAT",
+        severity: "issue",
+        field: "icd10",
+        message: `Invalid ICD-10 format: ${claim.icd10}`,
+      });
+    } else if (dos && !(await codeSetStore.icd10Exists(normalized, dos))) {
+      findings.push({
+        code: "UNKNOWN_ICD10_CODE",
+        severity: "issue",
+        field: "icd10",
+        message: `ICD-10 code ${normalized} is not active/recognized for DOS ${dos}`,
+      });
+    }
+  }
+
+  if (claim.cpt?.trim()) {
+    const cpt = claim.cpt.trim();
+    if (!/^[0-9]{5}$/.test(cpt)) {
+      findings.push({
+        code: "INVALID_CPT_FORMAT",
+        severity: "issue",
+        field: "cpt",
+        message: `Invalid CPT format: ${claim.cpt}`,
+      });
+    } else if (dos && !(await codeSetStore.cptExists(cpt, dos))) {
+      findings.push({
+        code: "UNKNOWN_CPT_CODE",
+        severity: "issue",
+        field: "cpt",
+        message: `CPT ${cpt} is not recognized/active for DOS ${dos}`,
+      });
+    } else if (policy) {
+      if (policy.documentationRequiredCpts.has(cpt) && !claim.documentation?.trim()) {
+        findings.push({
+          code: "MISSING_DOCUMENTATION",
+          severity: "issue",
+          field: "documentation",
+          message: `CPT ${cpt} requires supporting documentation`,
+        });
+      }
+
+      if (policy.priorAuthRequiredCpts.has(cpt) && !claim.priorAuthRef?.trim()) {
+        findings.push({
+          code: "MISSING_PRIOR_AUTH",
+          severity: "warning",
+          field: "priorAuthRef",
+          message: `CPT ${cpt} likely requires prior authorization for payer ${policy.payerId}`,
+        });
+      }
+
+      const requiredModifiers = policy.requiredModifiersByCpt[cpt] ?? [];
+      for (const modifier of requiredModifiers) {
+        if (!(claim.modifiers ?? []).includes(modifier)) {
+          findings.push({
+            code: "MISSING_REQUIRED_MODIFIER",
+            severity: "warning",
+            field: "modifiers",
+            message: `CPT ${cpt} may require modifier ${modifier} for payer ${policy.payerId}`,
+          });
+        }
+      }
+    }
+  }
+
+  const issueCount = findings.filter((f) => f.severity === "issue").length;
+  const warningCount = findings.filter((f) => f.severity === "warning").length;
+
+  return {
+    status:
+      issueCount > 0 ? "invalid" :
+      warningCount > 0 ? "warnings_only" :
+      "clean",
+    valid: issueCount === 0,
+    issues: findings,
+  };
+}
+The denial engine patch I’d make next
+
+The biggest change there is simple: do not silently default to fake pricing in production.
+
+// server/billing/denialPredictionEngine.ts
+export interface DenialPrediction {
+  riskScore: number;
+  riskLevel: "low" | "medium" | "high";
+  reasons: string[];
+  recommendations: string[];
+  estimatedRevenue: number | null;
+  estimatedRevenueImpact: number | null;
+  pricingSource: "configured" | "unavailable";
+}
+
+export async function predictDenial(
+  bundle: DenialPredictInput,
+  pricingStore: CptPricingStore
+): Promise<DenialPrediction> {
+  // ... existing risk logic ...
+
+  const configuredRate = await pricingStore.getRate(cptCode, bundle.payerId);
+  const estimatedRevenue = configuredRate;
+  const estimatedRevenueImpact =
+    configuredRate === null ? null : Math.round(configuredRate * riskScore * 100) / 100;
+
+  return {
+    riskScore,
+    riskLevel,
+    reasons,
+    recommendations,
+    estimatedRevenue,
+    estimatedRevenueImpact,
+    pricingSource: configuredRate === null ? "unavailable" : "configured",
+  };
+}
+
+That way a missing pricing feed shows up as unknown, not as a neat-looking number that quietly poisons dashboard decisions.
+
+Bottom line
+
+This billing rewrite is solid and worth keeping. It takes the original from “claim scrubber-shaped object” to something that can actually catch basic denial fuel before submission. The biggest win is the stricter ICD-10/CPT/date validation plus the better outcome model for warnings versus hard failures.
+
+The next hardening wave is:
+
+validate against real code sets, not just regexes
+move payer rules out of source code
+return structured issue codes
+make pricing explicitly configured or explicitly unknown
+expand from field-level scrubbing to true claim-edit logic
+
+Send the next block.

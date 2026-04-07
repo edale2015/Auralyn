@@ -146,6 +146,8 @@ import sl8Routes from "./routes/sl8Routes";
 import stateRoutes from "./routes/stateRoutes";
 import stateAdminRouter from "./routes/stateAdmin";
 import { assertProductionSafe } from "./config/assertProductionSafe";
+import { runStartupChecks } from "./config/startupChecks";
+import { persistStartupAttestation } from "./config/startupAttestation";
 import { assertRuntimeModes } from "./config/assertRuntimeModes";
 import { assertQueueReady } from "./config/assertQueueReady";
 import { validateConfig } from "./config/validateConfig";
@@ -1004,6 +1006,16 @@ app.use((req, res, next) => {
   validateConfig();
   await startTelemetry("med-scribe-api");
   assertProductionSafe();
+
+  // Connectivity + readiness checks — throws if any fatal check fails.
+  // Runs after assertProductionSafe() (pure config) and before registerRoutes()
+  // so the server never accepts traffic on a broken configuration.
+  const startupCheckResults = await runStartupChecks();
+  // Persist an immutable audit breadcrumb — non-fatal if the write fails.
+  await persistStartupAttestation(startupCheckResults).catch((err: any) =>
+    console.warn("[Startup] Attestation recording failed (non-fatal):", err?.message)
+  );
+
   assertRuntimeModes();
   try {
     await runMigrations();

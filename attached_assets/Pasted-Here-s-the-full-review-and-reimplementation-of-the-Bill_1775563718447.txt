@@ -1,0 +1,513 @@
+Here's the full review and reimplementation of the Billing Denial + Claim Scrubbing block.
+
+A) Bugs Found
+1. ICD-10 format is completely unvalidated
+Any string passes — "ABC", "1", "HEART ATTACK", empty string after trim. A valid ICD-10 code follows the pattern [A-Z][0-9]{2}(\.[A-Z0-9]{1,4})?. Submitting a malformed code guarantees a clearinghouse rejection that won't be caught until after submission.
+2. new Date(string) accepts inputs that are wrong but not NaN
+Several inputs pass isNaN(dos.getTime()) but are not valid clinical dates:
+
+"2024" → parses as Jan 1 2024 00:00 UTC — valid date, but clearly not a DOS
+"Feb 30 2024" → browser behavior varies; Node parses this as Mar 1 in V8
+"0001-01-01" → valid date, clearly not a real DOS
+"99999-01-01" → may parse as a far-future date and pass the future-date check incorrectly
+"2024-13-01" → month 13, parses as Jan 1 2025 in some environments
+
+The fix is to require an explicit ISO 8601 format (YYYY-MM-DD) and validate the parsed values match what was input.
+3. Pre-clamp risk score can reach 0.75+ before Math.min
+Working through the maximum: unmapped primary (+0.35) + 5 unmapped differentials (+0.25) + high CPT with low confidence (+0.25) = 0.85. The Math.min(risk, 1) clamp prevents overflow past 1.0, but the issue is that two separate risk factors can each be legitimate concerns that together produce a score of 1.0 (maximum possible denial certainty) when the actual combined risk should still be meaningfully distinguishable — a 0.85 claim is much more salvageable than a 0.60 claim, but both clamp to the same visual band once you're near 1.0. More importantly, there's no ceiling on how many differential codes can be unmapped, so a claim with 15 unmapped differentials adds 0.75 from that factor alone, masking the relative weight of other risk factors.
+4. CPT pricing is hardcoded and stale
+Medicare rates change annually. Commercial payer rates vary by contract. The hardcoded table will silently produce wrong revenue impact estimates. An unknown CPT falls back to $75 — which may be an order of magnitude off for surgical codes. Revenue impact estimates fed into business decisions should never come from hardcoded source code.
+5. approved: boolean is semantically ambiguous in preSubmission
+A claim with only warnings (no hard issues) returns approved: true — but a claim that "usually requires prior authorization" and has no prior auth reference is not something that should be submitted without human review. The binary approved/rejected model doesn't capture the warnings-only state, which in billing is a distinct outcome: technically submittable but high-risk.
+6. Documentation requirement only enforced for CPT 99285
+The original has a single hardcoded documentation check for 99285. CPT 99284 (also high-acuity ED), 99291 (critical care), and any surgical CPTs also require specific documentation. The enforcement is incomplete.
+
+B) Rewritten claimScrubber.ts
+typescript// server/billing/claimScrubber.ts
+
+export interface ClaimInput {
+  icd10?:        string;
+  cpt?:          string;
+  documentation?: string;
+  modifiers?:    string[];
+  priorAuthRef?: string;
+  dateOfService?: string;   // Required format: YYYY-MM-DD
+  payerId?:      string;
+  patientId?:    string;
+  provider?:     string;
+}
+
+export type ScrubStatus = "clean" | "warnings_only" | "invalid";
+
+export interface ScrubResult {
+  status:   ScrubStatus;
+  valid:    boolean;        // true only if no hard issues (warnings OK)
+  issues:   string[];       // hard failures — claim must not be submitted
+  warnings: string[];       // soft flags — submittable but human review recommended
+}
+
+// ─────────────────────────────────────────────────────────────
+// Validation constants
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * ICD-10-CM format: one letter, two digits, optional dot and 1-4 alphanumeric chars.
+ * Valid examples: A01, A01.1, Z23, M54.51, S72.001A
+ * Invalid: ABC, 123, A1, A012345
+ */
+const ICD10_REGEX = /^[A-Z][0-9]{2}(\.[A-Z0-9]{1,4})?$/;
+
+/**
+ * CPT codes are 5-digit numeric strings.
+ * HCPCS Level II codes start with a letter — exclude those for now.
+ */
+const CPT_REGEX = /^[0-9]{5}$/;
+
+/**
+ * Strict ISO 8601 date: YYYY-MM-DD only.
+ * We do not accept "Feb 30 2024" or "2024" or any locale format.
+ */
+const ISO_DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+const PRIOR_AUTH_REQUIRED_CPTS = new Set([
+  "99285", "99283", "99291",  // high-acuity ED / critical care
+  "27447", "27130", "22612",  // surgical
+]);
+
+const DOCUMENTATION_REQUIRED_CPTS = new Set([
+  "99284", "99285",  // high-acuity ED
+  "99291",           // critical care
+]);
+
+const MODIFIER_REQUIRED: Record<string, string> = {
+  "99291": "GC",   // critical care: supervising physician
+};
+
+// ─────────────────────────────────────────────────────────────
+// Safe date parsing
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Parses a date string strictly.
+ * Returns a Date only if the string is YYYY-MM-DD AND the
+ * parsed date components round-trip back to the same values
+ * (catches "2024-02-30" which V8 silently shifts to Mar 1).
+ */
+function parseStrictDate(dateStr: string): Date | null {
+  if (!ISO_DATE_REGEX.test(dateStr)) return null;
+
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  // Round-trip check: if the date shifted (e.g. Feb 30 → Mar 1), reject it
+  if (
+    parsed.getUTCFullYear()  !== year  ||
+    parsed.getUTCMonth() + 1 !== month ||
+    parsed.getUTCDate()      !== day
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main scrubber
+// ─────────────────────────────────────────────────────────────
+
+export function scrubClaim(claim: ClaimInput): ScrubResult {
+  const issues:   string[] = [];
+  const warnings: string[] = [];
+
+  // ── Required fields ───────────────────────────────────────
+  if (!claim.patientId?.trim()) {
+    issues.push("Missing patient ID — claim cannot be submitted without a patient identifier");
+  }
+  if (!claim.provider?.trim()) {
+    issues.push("Missing provider — billing NPI or provider ID is required");
+  }
+
+  // ── ICD-10 validation ─────────────────────────────────────
+  if (!claim.icd10?.trim()) {
+    issues.push("Missing diagnosis code (ICD-10)");
+  } else {
+    const normalized = claim.icd10.trim().toUpperCase();
+    if (!ICD10_REGEX.test(normalized)) {
+      issues.push(
+        `Invalid ICD-10 format: "${claim.icd10}". ` +
+        `Expected format: letter + 2 digits + optional .1-4 chars (e.g. A01.1, M54.51)`
+      );
+    }
+  }
+
+  // ── CPT validation ────────────────────────────────────────
+  if (!claim.cpt?.trim()) {
+    issues.push("Missing procedure code (CPT)");
+  } else {
+    if (!CPT_REGEX.test(claim.cpt.trim())) {
+      issues.push(`Invalid CPT format: "${claim.cpt}". Expected 5-digit numeric code.`);
+    } else {
+      const cpt = claim.cpt.trim();
+
+      // Documentation requirement
+      if (DOCUMENTATION_REQUIRED_CPTS.has(cpt) && !claim.documentation?.trim()) {
+        issues.push(
+          `CPT ${cpt} requires supporting documentation. ` +
+          `Attach clinical notes before submission.`
+        );
+      }
+
+      // Modifier requirement
+      if (MODIFIER_REQUIRED[cpt]) {
+        const required = MODIFIER_REQUIRED[cpt];
+        if (!(claim.modifiers ?? []).includes(required)) {
+          warnings.push(`CPT ${cpt} typically requires modifier ${required} — verify before submitting`);
+        }
+      }
+
+      // Prior auth
+      if (PRIOR_AUTH_REQUIRED_CPTS.has(cpt) && !claim.priorAuthRef?.trim()) {
+        warnings.push(
+          `CPT ${cpt} usually requires prior authorization. ` +
+          `Missing priorAuthRef — high denial risk without it.`
+        );
+      }
+    }
+  }
+
+  // ── Date of service ───────────────────────────────────────
+  if (!claim.dateOfService?.trim()) {
+    issues.push("Missing dateOfService");
+  } else {
+    const parsed = parseStrictDate(claim.dateOfService.trim());
+    if (!parsed) {
+      issues.push(
+        `Invalid dateOfService: "${claim.dateOfService}". ` +
+        `Required format: YYYY-MM-DD (e.g. 2024-03-15). ` +
+        `Non-existent dates (e.g. Feb 30) are rejected.`
+      );
+    } else {
+      const today = new Date();
+      today.setUTCHours(23, 59, 59, 999); // allow same-day submission
+      if (parsed > today) {
+        issues.push(`dateOfService is in the future: "${claim.dateOfService}"`);
+      }
+      // Warn on suspiciously old dates (> 1 year) — timely filing limits
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      if (parsed < oneYearAgo) {
+        warnings.push(
+          `dateOfService "${claim.dateOfService}" is more than 1 year ago. ` +
+          `Most payers have timely filing limits of 90-365 days — verify eligibility.`
+        );
+      }
+    }
+  }
+
+  const status: ScrubStatus =
+    issues.length > 0   ? "invalid" :
+    warnings.length > 0 ? "warnings_only" :
+    "clean";
+
+  return {
+    status,
+    valid:    issues.length === 0,
+    issues,
+    warnings,
+  };
+}
+
+C) Rewritten predictDenial — Configurable Pricing, Bounded Risk
+typescript// server/billing/denialPredictionEngine.ts
+
+import type { AutoCodeResult, RiskClassification } from "../types/clinical";
+
+// ─────────────────────────────────────────────────────────────
+// Pricing configuration
+//
+// CPT pricing must NOT live in source code. It changes annually
+// with Medicare fee schedule updates and varies by payer contract.
+//
+// In production: load from DB table `cpt_pricing` keyed by
+// (cpt_code, payer_id, effective_date).
+//
+// This interface lets us inject either a DB-backed or test store.
+// ─────────────────────────────────────────────────────────────
+export interface CptPricingStore {
+  getRate(cptCode: string, payerId?: string): Promise<number | null>;
+}
+
+/** Fallback used ONLY when no pricing data is available — logs a warning. */
+const UNKNOWN_CPT_FALLBACK_RATE = 75;
+
+/**
+ * In-memory store for development and testing.
+ * These are approximate 2024 Medicare allowable rates — not for production use.
+ */
+export class InMemoryCptPricingStore implements CptPricingStore {
+  private readonly rates: Record<string, number> = {
+    "99213": 75,   "99203": 90,
+    "99214": 110,  "99215": 150,
+    "99284": 250,  "99285": 400,
+    "99441": 40,   "99443": 85,
+    "99291": 550,  // critical care, first hour
+  };
+
+  async getRate(cptCode: string): Promise<number | null> {
+    return this.rates[cptCode] ?? null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Risk factor weights
+//
+// Each factor has a defined maximum contribution so pre-clamp
+// totals are bounded and interpretable.
+// ─────────────────────────────────────────────────────────────
+const RISK_WEIGHTS = {
+  unmappedPrimary:      0.35,   // single factor, binary
+  unmappedDifferential: 0.05,   // per differential, capped
+  maxDifferentialRisk:  0.20,   // cap: max 4 differentials count (4 × 0.05)
+  highCptLowConfidence: 0.25,   // single factor, binary
+  missingDocumentation: 0.15,   // single factor, binary
+} as const;
+
+// Maximum possible pre-clamp score:
+// 0.35 + 0.20 + 0.25 + 0.15 = 0.95 — bounded, interpretable, never needs Math.min
+const MAX_THEORETICAL_RISK = 0.95;
+
+export interface DenialPrediction {
+  riskScore:              number;             // 0.000 – 1.000
+  riskLevel:              "low" | "medium" | "high";
+  reasons:                string[];
+  recommendations:        string[];
+  estimatedRevenue:       number;             // payer-specific rate (or fallback)
+  estimatedRevenueImpact: number;             // revenue × riskScore
+  pricingSource:          "configured" | "fallback";
+}
+
+export interface DenialPredictInput {
+  coding:             AutoCodeResult;
+  riskClassification: RiskClassification;
+  encounter: {
+    complaint:   string;
+    diagnosis:   string;
+    triage:      string;
+    confidence?: number;
+  };
+  clinicalNote: {
+    hpi:        string;
+    assessment: string;
+    plan:       string;
+  };
+  payerId?: string;
+}
+
+export async function predictDenial(
+  bundle:       DenialPredictInput,
+  pricingStore: CptPricingStore = new InMemoryCptPricingStore()
+): Promise<DenialPrediction> {
+  let risk = 0;
+  const reasons:          string[] = [];
+  const recommendations:  string[] = [];
+
+  // ── Factor 1: Unmapped primary ICD-10 ────────────────────
+  if (!bundle.coding.primary.mapped) {
+    risk += RISK_WEIGHTS.unmappedPrimary;
+    reasons.push("Primary ICD-10 unmapped (coded as R69 — unspecified)");
+    recommendations.push("Map to the most specific ICD-10 code available for the encounter");
+  }
+
+  // ── Factor 2: Unmapped differentials (capped) ─────────────
+  const unmappedDiffs = bundle.coding.differentials.filter(d => !d.mapped);
+  if (unmappedDiffs.length > 0) {
+    // Cap at maxDifferentialRisk so 20 unmapped differentials don't dominate
+    const differentialRisk = Math.min(
+      unmappedDiffs.length * RISK_WEIGHTS.unmappedDifferential,
+      RISK_WEIGHTS.maxDifferentialRisk
+    );
+    risk += differentialRisk;
+    reasons.push(
+      `${unmappedDiffs.length} differential diagnosis code(s) unmapped` +
+      (unmappedDiffs.length > 4 ? ` (risk contribution capped at ${RISK_WEIGHTS.maxDifferentialRisk})` : "")
+    );
+    recommendations.push("Map differential diagnoses to reduce specificity-related denial risk");
+  }
+
+  // ── Factor 3: High-complexity CPT with low model confidence ──
+  const cptCode = bundle.coding.cpt.code;
+  const HIGH_COMPLEXITY_CPTS = new Set(["99215", "99285", "99284", "99291"]);
+  const confidence = bundle.encounter.confidence ?? 1;
+
+  if (HIGH_COMPLEXITY_CPTS.has(cptCode) && confidence < 0.7) {
+    risk += RISK_WEIGHTS.highCptLowConfidence;
+    reasons.push(
+      `High-complexity CPT ${cptCode} assigned with low model confidence (${(confidence * 100).toFixed(0)}%). ` +
+      `Payer audit algorithms flag high-complexity codes with insufficient documentation.`
+    );
+    recommendations.push(
+      `Document time-based criteria or medical decision complexity explicitly in the note. ` +
+      `Consider downcoding if documentation does not support ${cptCode}.`
+    );
+  }
+
+  // ── Factor 4: Missing documentation for auditable CPTs ───
+  const AUDITABLE_CPTS = new Set(["99285", "99284", "99291", "99215"]);
+  if (AUDITABLE_CPTS.has(cptCode)) {
+    const hasNote = bundle.clinicalNote.hpi?.trim() &&
+                    bundle.clinicalNote.assessment?.trim() &&
+                    bundle.clinicalNote.plan?.trim();
+    if (!hasNote) {
+      risk += RISK_WEIGHTS.missingDocumentation;
+      reasons.push(`CPT ${cptCode} requires complete HPI/Assessment/Plan — one or more sections are missing`);
+      recommendations.push("Complete all clinical note sections before claim submission");
+    }
+  }
+
+  // ── Final score: already bounded by factor caps ───────────
+  // No Math.min needed — max theoretical = MAX_THEORETICAL_RISK
+  // Defensive clamp in case future factors are added without updating cap
+  const riskScore = Math.round(Math.min(risk, 1) * 1000) / 1000;
+
+  const riskLevel: "low" | "medium" | "high" =
+    riskScore <= 0.20 ? "low"  :
+    riskScore <= 0.50 ? "medium" :
+    "high";
+
+  // ── Revenue impact ─────────────────────────────────────────
+  const configuredRate  = await pricingStore.getRate(cptCode, bundle.payerId);
+  const pricingSource   = configuredRate !== null ? "configured" : "fallback";
+  const estimatedRevenue = configuredRate ?? UNKNOWN_CPT_FALLBACK_RATE;
+
+  if (pricingSource === "fallback") {
+    console.warn(
+      `[DenialPrediction] No pricing data for CPT ${cptCode}` +
+      (bundle.payerId ? ` / payer ${bundle.payerId}` : "") +
+      `. Using fallback rate $${UNKNOWN_CPT_FALLBACK_RATE} — revenue impact estimate may be inaccurate.`
+    );
+  }
+
+  return {
+    riskScore,
+    riskLevel,
+    reasons,
+    recommendations,
+    estimatedRevenue,
+    estimatedRevenueImpact: Math.round(estimatedRevenue * riskScore * 100) / 100,
+    pricingSource,
+  };
+}
+And a clarified preSubmission return type that eliminates the binary ambiguity:
+typescript// server/billing/preSubmission.ts (return type fix)
+
+export type PreSubmissionStatus =
+  | "approved"          // no issues, no warnings — submit
+  | "approved_with_warnings"  // no hard issues, but human review recommended
+  | "rejected";         // hard issues present — do not submit
+
+export interface PreSubmissionResult {
+  status:       PreSubmissionStatus;
+  submittable:  boolean;           // true for approved + approved_with_warnings
+  scrub:        ScrubResult;
+  denial:       DenialPrediction;
+  requiresHumanReview: boolean;    // true whenever status !== "approved"
+}
+
+D) Test Cases
+typescript// ── claimScrubber tests ───────────────────────────────────────
+
+// Missing ICD-10 — hard issue
+const r1 = scrubClaim({ cpt: "99213", patientId: "P001", provider: "NPI001", dateOfService: "2024-03-15" });
+expect(r1.valid).toBe(false);
+expect(r1.issues).toContain("Missing diagnosis code (ICD-10)");
+expect(r1.status).toBe("invalid");
+
+// Invalid ICD-10 format — hard issue
+const r2 = scrubClaim({ icd10: "ABC", cpt: "99213", patientId: "P001", provider: "NPI001", dateOfService: "2024-03-15" });
+expect(r2.valid).toBe(false);
+expect(r2.issues.some(i => i.includes("Invalid ICD-10 format"))).toBe(true);
+
+// Future date — hard issue
+const tomorrow = new Date();
+tomorrow.setDate(tomorrow.getDate() + 1);
+const r3 = scrubClaim({ icd10: "J06.9", cpt: "99213", patientId: "P001", provider: "NPI001",
+  dateOfService: tomorrow.toISOString().split("T")[0] });
+expect(r3.valid).toBe(false);
+expect(r3.issues.some(i => i.includes("future"))).toBe(true);
+
+// Invalid date string that passes naive isNaN — now caught
+const r4 = scrubClaim({ icd10: "J06.9", cpt: "99213", patientId: "P001", provider: "NPI001",
+  dateOfService: "2024-02-30" });  // Feb 30 doesn't exist
+expect(r4.valid).toBe(false);
+expect(r4.issues.some(i => i.includes("Invalid dateOfService"))).toBe(true);
+
+// "2024" alone — previously parsed as Jan 1 2024, now rejected (not YYYY-MM-DD)
+const r5 = scrubClaim({ icd10: "J06.9", cpt: "99213", patientId: "P001", provider: "NPI001",
+  dateOfService: "2024" });
+expect(r5.valid).toBe(false);
+expect(r5.issues.some(i => i.includes("Invalid dateOfService"))).toBe(true);
+
+// Warnings only — prior auth missing for 99285 (no documentation either)
+const r6 = scrubClaim({ icd10: "J06.9", cpt: "99285", patientId: "P001", provider: "NPI001",
+  dateOfService: "2024-03-15" });
+expect(r6.valid).toBe(false);  // missing documentation is a hard issue for 99285
+expect(r6.issues.some(i => i.includes("documentation"))).toBe(true);
+
+// All-clear claim
+const r7 = scrubClaim({
+  icd10: "J06.9", cpt: "99213", patientId: "P001", provider: "NPI001",
+  dateOfService: "2024-03-15", documentation: "See attached note"
+});
+expect(r7.valid).toBe(true);
+expect(r7.status).toBe("clean");
+expect(r7.issues.length).toBe(0);
+expect(r7.warnings.length).toBe(0);
+
+// ── predictDenial tests ───────────────────────────────────────
+const store = new InMemoryCptPricingStore();
+
+// High CPT with low confidence — risk factor applied
+const highRisk = await predictDenial({
+  coding: { primary: { mapped: false }, differentials: [], cpt: { code: "99285" } },
+  riskClassification: {} as any,
+  encounter: { complaint: "chest pain", diagnosis: "R07.9", triage: "high", confidence: 0.5 },
+  clinicalNote: { hpi: "hpi text", assessment: "assessment", plan: "plan" },
+}, store);
+expect(highRisk.riskScore).toBeGreaterThan(0.5);
+expect(highRisk.riskLevel).toBe("high");
+expect(highRisk.pricingSource).toBe("configured");
+
+// Unknown CPT — uses fallback, logs warning
+const unknown = await predictDenial({
+  coding: { primary: { mapped: true }, differentials: [], cpt: { code: "99999" } },
+  riskClassification: {} as any,
+  encounter: { complaint: "follow-up", diagnosis: "Z09", triage: "low", confidence: 0.95 },
+  clinicalNote: { hpi: "h", assessment: "a", plan: "p" },
+}, store);
+expect(unknown.estimatedRevenue).toBe(75);   // fallback rate
+expect(unknown.pricingSource).toBe("fallback");
+
+// All-clear claim — minimal risk
+const clean = await predictDenial({
+  coding: { primary: { mapped: true }, differentials: [{ mapped: true }], cpt: { code: "99213" } },
+  riskClassification: {} as any,
+  encounter: { complaint: "URI", diagnosis: "J06.9", triage: "low", confidence: 0.95 },
+  clinicalNote: { hpi: "3-day URI", assessment: "Viral URI", plan: "Supportive care" },
+}, store);
+expect(clean.riskScore).toBe(0);
+expect(clean.riskLevel).toBe("low");
+expect(clean.reasons.length).toBe(0);
+
+// Differential cap: 20 unmapped differentials should not exceed maxDifferentialRisk (0.20)
+const manyDiffs = await predictDenial({
+  coding: {
+    primary: { mapped: true },
+    differentials: Array(20).fill({ mapped: false }),
+    cpt: { code: "99213" }
+  },
+  riskClassification: {} as any,
+  encounter: { complaint: "pain", diagnosis: "M54.5", triage: "low", confidence: 0.95 },
+  clinicalNote: { hpi: "h", assessment: "a", plan: "p" },
+}, store);
+expect(manyDiffs.riskScore).toBeLessThanOrEqual(0.20);  // capped — not 20 × 0.05 = 1.0
+The most practically impactful fix here for your urgent care practice is the ICD-10 format validation. Clearinghouses reject malformed codes at the 837P transaction level before any human ever sees them, and the rejection reason is often just "Loop 2300 HI segment invalid" with no reference to which code was wrong. Adding format validation at scrub time catches these before submission and keeps your clean claim rate — which directly affects your payer contracts and timely payment — from being degraded by upstream coding errors.
