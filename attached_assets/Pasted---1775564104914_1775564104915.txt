@@ -1,0 +1,84 @@
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# PACKET 6 â€” Bayesian Differential Engine
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+**Block name:** Bayesian Differential Diagnosis Engine
+
+**What this block does:**
+Naive Bayes classifier for differential diagnosis. Given a set of observed patient symptoms, it updates prior probabilities P(diagnosis) using per-symptom likelihoods P(symptom|diagnosis) and returns a ranked differential list with confidence bands.
+
+**Runtime context:** TypeScript / no external dependencies / pure function
+
+**Known issues:**
+- Naive Bayes assumes symptom independence â€” in medicine symptoms are correlated (fever + chills always co-occur in flu). This causes over-confidence on co-occurring symptoms.
+- No normalization guard: if all posteriors are 0 (no matching priors), the division would be 0/0 â€” this is handled but silently returns empty
+- No cap on the posterior: floating point rounding edge cases when all features are absent
+
+**Relevant types:**
+```typescript
+export interface DiagnosisPrior {
+  diagnosis: string;
+  baseProbability: number;           // P(D) â€” unconditional prevalence
+  featureLikelihoods: Record<string, number>;  // P(symptom | D)
+  ruleId?: string; version?: number; tableName?: string;
+}
+export interface DifferentialResult {
+  diagnosis: string; posterior: number; confidence: "high" | "moderate" | "low";
+  matchedFeatures: string[]; source?: "KB_DB" | "FALLBACK_HARDCODED";
+}
+```
+
+**Original algorithm (core Bayes update):**
+```typescript
+export function runDifferential(symptoms: string[], priors: DiagnosisPrior[]): DifferentialResult[] {
+  if (!symptoms.length || !priors.length) return [];
+
+  const scored = priors.map(prior => {
+    let logScore = Math.log(prior.baseProbability);
+    const matchedFeatures: string[] = [];
+
+    for (const symptom of symptoms) {
+      const likelihood = prior.featureLikelihoods[symptom];
+      if (likelihood !== undefined) {
+        logScore += Math.log(Math.max(likelihood, 0.001));
+        matchedFeatures.push(symptom);
+      } else {
+        // Symptom absent from likelihood table â€” Laplace smoothing
+        logScore += Math.log(0.01);
+      }
+    }
+    return { diagnosis: prior.diagnosis, logScore, matchedFeatures, prior };
+  });
+
+  const maxLog = Math.max(...scored.map(s => s.logScore));
+  const expScores = scored.map(s => ({ ...s, expScore: Math.exp(s.logScore - maxLog) }));
+  const total = expScores.reduce((sum, s) => sum + s.expScore, 0);
+
+  return expScores
+    .map(s => ({
+      diagnosis: s.diagnosis,
+      posterior: total > 0 ? s.expScore / total : 0,
+      confidence: s.expScore / total > 0.5 ? "high" : s.expScore / total > 0.2 ? "moderate" : "low" as any,
+      matchedFeatures: s.matchedFeatures,
+    }))
+    .sort((a, b) => b.posterior - a.posterior);
+}
+```
+
+**Claude prompt:**
+```
+Review and reimplement this Bayesian differential diagnosis engine.
+
+Specific questions:
+1. Naive Bayes assumes feature independence. In medicine, fever + chills are correlated. How does this cause over-confidence, and what's the simplest mitigation that doesn't require retraining?
+2. What happens when a symptom appears in zero prior likelihood tables? The current code uses log(0.01) â€” is this appropriate? What does it imply clinically?
+3. The log-sum-exp trick (subtracting maxLog before exp) prevents underflow â€” is it implemented correctly?
+4. Confidence thresholds (>0.5 = high, >0.2 = moderate) are hardcoded. Are these medically appropriate?
+5. What does posterior=0 for all results mean and when does it happen?
+
+Output:
+A) Statistical weaknesses found
+B) Rewritten runDifferential with fixes and comments explaining each change
+C) Suggested correlation dampening approach
+D) Test cases: all symptoms match one prior, no symptoms match any prior, single symptom, 20 symptoms
+```

@@ -82,7 +82,7 @@ export interface EncounterBundle {
 
 let bundleCounter = 0;
 
-export function buildEncounterBundle(input: EncounterBundleInput): EncounterBundle {
+export async function buildEncounterBundle(input: EncounterBundleInput): Promise<EncounterBundle> {
   bundleCounter++;
   const now = new Date().toISOString();
   const bundleId = `ENC-${Date.now()}-${bundleCounter.toString().padStart(4, "0")}`;
@@ -177,7 +177,7 @@ export function buildEncounterBundle(input: EncounterBundleInput): EncounterBund
     generatedAt: now,
   };
 
-  const denialResult = predictDenial({
+  const denialResult = await predictDenial({
     coding,
     riskClassification: risk,
     encounter: {

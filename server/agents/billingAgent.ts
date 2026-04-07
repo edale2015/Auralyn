@@ -35,7 +35,7 @@ export const billingAgent: Agent = {
       reason: "Default",
     };
 
-    const denial = predictDenial({
+    const denial = await predictDenial({
       coding,
       riskClassification,
       encounter: {
