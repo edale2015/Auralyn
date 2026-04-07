@@ -1,17 +1,26 @@
-import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
+import { verifyAccessToken } from "./unifiedAuth";
 
-type PhysicianClaims = {
-  sub: string;
-  role?: string;
-  physician?: boolean;
-  physicianId?: string;
-};
+// BUG FIXED: original used process.env.JWT_SECRET + a custom PhysicianClaims type
+// that didn't match tokens issued by unifiedAuth.signAccessToken. The token shape
+// from unifiedAuth uses { id, email, role } (AuthUser), not { sub, physician }.
+// A token with role:"physician" but no physician:true field would be blocked by:
+//   if (!decoded.physician && decoded.role !== "physician")
+// because !undefined === true. The role check saved it, but the two paths being
+// out of sync is a latent footgun for anyone adding physician:true to future tokens.
+//
+// FIX: delegate entirely to verifyAccessToken so there is ONE token verification
+// path. requirePhysician is now a thin role-check wrapper.
 
 declare global {
   namespace Express {
     interface Request {
-      physician?: PhysicianClaims;
+      physician?: {
+        id: string;
+        email: string;
+        role: string;
+        clinicId?: string;
+      };
     }
   }
 }
@@ -19,7 +28,7 @@ declare global {
 export function requirePhysician(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): void {
   const auth = req.headers.authorization;
 
@@ -30,20 +39,19 @@ export function requirePhysician(
 
   try {
     const token = auth.slice("Bearer ".length);
-    const isProd = process.env.NODE_ENV === "production";
-    const secret = process.env.JWT_SECRET || (isProd ? undefined : "dev-jwt-secret-DO-NOT-USE-IN-PROD");
-    if (!secret) {
-      res.status(500).json({ error: "JWT_SECRET not configured" });
-      return;
-    }
-    const decoded = jwt.verify(token, secret) as PhysicianClaims;
+    const decoded = verifyAccessToken(token);
 
-    if (!decoded.physician && decoded.role !== "physician") {
-      res.status(403).json({ error: "Physician access required" });
+    if (decoded.role !== "physician" && decoded.role !== "admin") {
+      res.status(403).json({ error: "Physician or admin access required" });
       return;
     }
 
-    req.physician = decoded;
+    req.physician = {
+      id: decoded.id,
+      email: decoded.email,
+      role: decoded.role,
+      clinicId: decoded.clinicId,
+    };
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });

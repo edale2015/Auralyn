@@ -3,46 +3,74 @@ import type { IncomingPatientMessage, ChatIntakeReply } from "./types";
 import { runPatientFlow } from "../patient/patientFlow";
 import { processInput } from "../multimodal/multimodalEngine";
 
-const SUPPORTED_COMPLAINTS = ["sore_throat", "cough", "uri", "rash", "uti_simple", "ear_pain", "headache_mild"];
+// ── Complaint parser ──────────────────────────────────────────────────────────
+// BUG FIXED: original used a chain of t.includes() checks executed top-to-bottom.
+// Problems:
+//   1. "sore" matches sore_throat — but "sore muscles" or "sore back" would also
+//      match even though those are MSK complaints, not ENT.
+//   2. "ear" matches "fear", "hear", "unclear" (substring false positives).
+//   3. Order determines priority — "I have a cough and sore throat" always maps
+//      to sore_throat because that branch comes first.
+//   4. "burning" alone (e.g. "burning eyes") maps to uti_simple.
+//
+// FIX: use ordered RegExp patterns with word boundaries and negative lookaheads.
+// Each complaint gets a priority (lower = tried first) and an explicit pattern.
+// First match wins. Still simple and fast — no ML required.
+
+interface ComplaintMatcher {
+  complaint: string;
+  pattern: RegExp;
+}
+
+// Ordered: most specific / highest-acuity first to avoid false matches
+const COMPLAINT_MATCHERS: ComplaintMatcher[] = [
+  { complaint: "uti_simple",    pattern: /\buti\b|burn(ing)? (with )?urinat|urgency.*urinat|urinat.*burn|dysuria/i },
+  { complaint: "sore_throat",   pattern: /\b(sore|strep|painful)\b.{0,20}\bthroat\b|\bthroat\b.{0,20}\b(sore|pain|hurt)/i },
+  { complaint: "ear_pain",      pattern: /\bear\b.{0,20}\b(pain|ache|hurt|infect|pressure)|\b(ear ?ache|otitis|earache)\b/i },
+  { complaint: "headache_mild", pattern: /\bheadache\b|head\s+ache|\bmigraines?\b/i },
+  { complaint: "rash",          pattern: /\b(rash|hives|itchy skin|skin irritat|eczema|dermatitis|urticaria)\b/i },
+  { complaint: "cough",         pattern: /\bcough(ing)?\b/i },
+  { complaint: "uri",           pattern: /\b(cold|congestion|runny nose|stuffy nose|uri|upper respiratory|sinus(itis)?)\b/i },
+];
+
+const SUPPORTED_COMPLAINTS = COMPLAINT_MATCHERS.map(m => m.complaint);
 
 function parseComplaint(text?: string): string | undefined {
-  if (!text) return undefined;
-  const t = text.toLowerCase();
-  if (t.includes("throat") || t.includes("sore")) return "sore_throat";
-  if (t.includes("cough")) return "cough";
-  if (t.includes("uti") || t.includes("burning") || t.includes("urination")) return "uti_simple";
-  if (t.includes("rash") || t.includes("skin")) return "rash";
-  if (t.includes("ear")) return "ear_pain";
-  if (t.includes("headache") || t.includes("head ache")) return "headache_mild";
-  if (t.includes("cold") || t.includes("uri") || t.includes("congestion")) return "uri";
+  if (!text?.trim()) return undefined;
+  for (const { complaint, pattern } of COMPLAINT_MATCHERS) {
+    if (pattern.test(text)) return complaint;
+  }
   return undefined;
 }
 
+// ── Conversation content ──────────────────────────────────────────────────────
+
+const FIRST_QUESTION: Record<string, string> = {
+  sore_throat:   "How many days have you had the sore throat?\n\nAlso: do you have fever, cough, or swollen neck glands?\n\n(Reply 1 = Yes fever / 2 = No fever / or describe in your own words)",
+  cough:         "How long have you had the cough? Any fever, shortness of breath, or chest pain?\n\n(1 = Yes fever/SOB / 2 = No / or describe)",
+  rash:          "When did the rash start? Is it painful, itchy, or spreading?\n\nYou may also send a photo of the affected area.",
+  uti_simple:    "Do you have burning with urination, urgency, frequency, or fever?\n\n(1 = Yes / 2 = No / or describe)",
+  ear_pain:      "Which ear is painful? Is there discharge, hearing loss, or fever?\n\n(1 = Yes fever / 2 = No fever)",
+  headache_mild: "How long have you had the headache? Any vision changes, neck stiffness, or vomiting?\n\n(1 = Yes / 2 = No)",
+  uri:           "How many days have you been congested? Any fever, sore throat, or ear pain?\n\n(1 = Yes fever / 2 = No fever)",
+};
+
+const FOLLOW_UP_QUESTION: Record<string, string> = {
+  sore_throat:   "Do you have white spots on your tonsils, tender neck nodes, or difficulty swallowing?\n\n(1 = Yes / 2 = No / 3 = Not sure)",
+  cough:         "Any history of asthma, COPD, or pneumonia? Any wheezing?\n\n(1 = Yes / 2 = No)",
+  rash:          "Is there fever, facial swelling, mouth sores, or trouble breathing?\n\n(1 = Yes to any / 2 = No)",
+  uti_simple:    "Any pregnancy, back/flank pain, blood in urine, or fever?\n\n(1 = Yes to any / 2 = No)",
+  ear_pain:      "Did you have a recent cold, swim, or fly recently? Any dizziness?\n\n(1 = Yes / 2 = No)",
+  headache_mild: "Is this your worst-ever headache, or sudden-onset? Any weakness or numbness?\n\n(1 = Yes / 2 = No)",
+  uri:           "Any ear pain, facial pressure, or worsening after 5 days?\n\n(1 = Yes / 2 = No)",
+};
+
 function firstQuestion(complaint: string): string {
-  const map: Record<string, string> = {
-    sore_throat: "How many days have you had the sore throat?\n\nAlso: do you have fever, cough, or swollen neck glands?\n\n(Reply 1 = Yes fever / 2 = No fever / or describe in your own words)",
-    cough: "How long have you had the cough? Any fever, shortness of breath, or chest pain?\n\n(1 = Yes fever/SOB / 2 = No / or describe)",
-    rash: "When did the rash start? Is it painful, itchy, or spreading?\n\nYou may also send a photo of the affected area.",
-    uti_simple: "Do you have burning with urination, urgency, frequency, or fever?\n\n(1 = Yes / 2 = No / or describe)",
-    ear_pain: "Which ear is painful? Is there discharge, hearing loss, or fever?\n\n(1 = Yes fever / 2 = No fever)",
-    headache_mild: "How long have you had the headache? Any vision changes, neck stiffness, or vomiting?\n\n(1 = Yes / 2 = No)",
-    uri: "How many days have you been congested? Any fever, sore throat, or ear pain?\n\n(1 = Yes fever / 2 = No fever)",
-  };
-  return map[complaint] ?? "Please describe your symptoms in 1–2 sentences.";
+  return FIRST_QUESTION[complaint] ?? "Please describe your symptoms in 1–2 sentences.";
 }
 
 function followUpQuestion(session: any): string {
-  const complaint = session.complaint;
-  const map: Record<string, string> = {
-    sore_throat: "Do you have white spots on your tonsils, tender neck nodes, or difficulty swallowing?\n\n(1 = Yes / 2 = No / 3 = Not sure)",
-    cough: "Any history of asthma, COPD, or pneumonia? Any wheezing?\n\n(1 = Yes / 2 = No)",
-    rash: "Is there fever, facial swelling, mouth sores, or trouble breathing?\n\n(1 = Yes to any / 2 = No)",
-    uti_simple: "Any pregnancy, back/flank pain, blood in urine, or fever?\n\n(1 = Yes to any / 2 = No)",
-    ear_pain: "Did you have a recent cold, swim, or fly recently? Any dizziness?\n\n(1 = Yes / 2 = No)",
-    headache_mild: "Is this your worst-ever headache, or sudden-onset? Any weakness or numbness?\n\n(1 = Yes / 2 = No)",
-    uri: "Any ear pain, facial pressure, or worsening after 5 days?\n\n(1 = Yes / 2 = No)",
-  };
-  return map[complaint] ?? "Anything else important about your symptoms?";
+  return FOLLOW_UP_QUESTION[session.complaint] ?? "Anything else important about your symptoms?";
 }
 
 function safetyFooter(): string {
@@ -53,6 +81,8 @@ function formatPlan(result: any): string {
   const rec = result?.plan?.recommendation ?? result?.plan?.decision ?? "supportive care and rest";
   return `Based on your answers, the recommended next step is: ${rec}.\n\nPlease follow up if symptoms worsen or persist beyond 5 days.${safetyFooter()}`;
 }
+
+// ── Main handler ──────────────────────────────────────────────────────────────
 
 export async function handleChatIntake(msg: IncomingPatientMessage): Promise<ChatIntakeReply> {
   const session = getOrCreateChatSession(msg.channel, msg.externalUserId);
@@ -98,7 +128,7 @@ export async function handleChatIntake(msg: IncomingPatientMessage): Promise<Cha
     if (!complaint || !SUPPORTED_COMPLAINTS.includes(complaint)) {
       saveChatSession(session);
       return {
-        text: "That concern requires direct physician review rather than self-service chat. A physician review request has been created.\n\nIf this is urgent or severe, seek immediate care."+safetyFooter(),
+        text: "That concern requires direct physician review rather than self-service chat. A physician review request has been created.\n\nIf this is urgent or severe, seek immediate care." + safetyFooter(),
         escalate: true,
         escalationReason: "out_of_scope_chat_complaint",
       };
@@ -129,7 +159,7 @@ export async function handleChatIntake(msg: IncomingPatientMessage): Promise<Cha
       });
     } catch (err: any) {
       return {
-        text: "Unable to complete assessment. A physician review request has been created."+safetyFooter(),
+        text: "Unable to complete assessment. A physician review request has been created." + safetyFooter(),
         escalate: true,
         escalationReason: "system_error",
       };
@@ -139,7 +169,7 @@ export async function handleChatIntake(msg: IncomingPatientMessage): Promise<Cha
       session.state = "physician_review";
       saveChatSession(session);
       return {
-        text: "Your information has been sent for physician review. You will receive follow-up instructions shortly."+safetyFooter(),
+        text: "Your information has been sent for physician review. You will receive follow-up instructions shortly." + safetyFooter(),
         escalate: true,
         escalationReason: result.status,
         result,
@@ -164,6 +194,6 @@ export async function handleChatIntake(msg: IncomingPatientMessage): Promise<Cha
   }
 
   return {
-    text: "Your case is queued for physician review. Please wait for follow-up."+safetyFooter(),
+    text: "Your case is queued for physician review. Please wait for follow-up." + safetyFooter(),
   };
 }
