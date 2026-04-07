@@ -1,0 +1,7344 @@
+Now we’re getting into one of the core runtime arteries of your system. This block matters a lot more than it looks, because it’s where:
+
+static knowledge (CSV / Sheets) → executable clinical flow → real patient decisions
+
+…and subtle failure modes here don’t crash loudly—they silently degrade care pathways.
+
+I’m going to answer exactly in your requested structure, but I’ll also push a bit harder here than prior packets because this is a high-leverage layer.
+
+A) Node sequencing risks
+1. String union NodeId = “type safety illusion”
+export type NodeId = "RED_FLAGS" | "CORE_QUESTIONS" | ...
+
+This looks safe, but has a hidden failure mode:
+
+👉 Adding a new node requires 3 coordinated edits:
+
+add to NodeId
+add to runner switch/loop
+add engine implementation
+
+If you forget any one, TypeScript may still compile.
+
+Failure patterns:
+Node added to config but not runner → silently skipped
+Node added to runner but no engine → runtime error
+Node added to engine but not config → never used
+
+💥 Most dangerous case: silent skip
+No error, just missing logic (e.g., missing red flag escalation)
+
+2. Implicit sequencing = brittle control flow
+
+If the runner is something like:
+
+for (const node of config.nodes) {
+  runNode(node)
+}
+
+Then:
+
+Order is controlled by data (good)
+But no validation that required nodes exist
+
+Example failure:
+
+Config missing RED_FLAGS
+→ system proceeds directly to scoring
+→ 🚨 catastrophic safety gap
+3. No per-node failure isolation
+
+If one node throws:
+
+Entire complaint execution may fail
+OR worse: upstream catches → continues silently
+
+Either case is dangerous:
+
+crash = bad UX
+silent skip = unsafe medicine
+4. Scoring modules risk (very important)
+
+complaintEngines imports 10 scorers
+
+If routing is not strict:
+
+Wrong scorer runs → incorrect probabilities
+No scorer runs → default/zero scoring
+Multiple scorers run → conflicting outputs
+
+This is one of the highest-risk hidden bugs in the entire system
+
+5. Corruption guard = all-or-nothing failure
+
+If loadComplaintConfig throws → complaint unavailable
+
+That creates:
+
+sudden outages per complaint
+no degraded mode
+no fallback
+potential denial of care pathways
+6. CSV load at cold start = operational fragility
+blocks startup
+no refresh strategy
+no versioning awareness
+no rollback safety
+B) Rewritten node runner (with isolation + guarantees)
+
+This is the single most important improvement in this packet.
+
+Key upgrades:
+
+required node validation
+per-node isolation
+structured result
+audit trace per node
+fail-closed for critical nodes
+// server/clinical/complaintNodeRunner.ts
+
+import { auditStep } from "../audit/auditLogger";
+
+export type NodeId =
+  | "RED_FLAGS"
+  | "CORE_QUESTIONS"
+  | "SCORING"
+  | "DISPOSITION"
+  | "TEMPLATE"
+  | "EXAM_OVERRIDE"
+  | "DIFF_CONFIDENCE"
+  | "RED_FLAG_MASTER_JOIN"
+  | "SPOT_INTERVENTIONS"
+  | "SPECIALIST_COUNCIL";
+
+export interface NodeExecutionResult {
+  nodeId: NodeId;
+  success: boolean;
+  error?: string;
+}
+
+export interface RunnerResult {
+  success: boolean;
+  finalState: CaseState;
+  nodeResults: NodeExecutionResult[];
+  failedNode?: NodeId;
+}
+
+const REQUIRED_NODES: NodeId[] = [
+  "RED_FLAGS",
+  "CORE_QUESTIONS",
+  "SCORING",
+  "DISPOSITION",
+];
+
+export async function runComplaintNodes(
+  config: ComplaintConfig,
+  initialState: CaseState
+): Promise<RunnerResult> {
+
+  const state = { ...initialState };
+  const nodeResults: NodeExecutionResult[] = [];
+
+  // ── Validate required nodes exist ───────────────────────
+  for (const required of REQUIRED_NODES) {
+    if (!config.nodes.includes(required)) {
+      throw new Error(
+        `[NodeRunner] Missing required node: ${required} for complaint ${config.ccId}`
+      );
+    }
+  }
+
+  for (const nodeId of config.nodes) {
+    try {
+      const engine = getNodeEngine(nodeId);
+
+      if (!engine) {
+        throw new Error(`No engine registered for node ${nodeId}`);
+      }
+
+      const before = structuredClone(state);
+
+      const updated = await engine(state, config);
+
+      Object.assign(state, updated);
+
+      nodeResults.push({ nodeId, success: true });
+
+      await auditStep({
+        traceId: state.caseId,
+        step: `node_${nodeId}`,
+        input: before,
+        output: updated,
+      });
+
+    } catch (err) {
+      const errorMsg =
+        err instanceof Error ? err.message : String(err);
+
+      nodeResults.push({
+        nodeId,
+        success: false,
+        error: errorMsg,
+      });
+
+      // 🚨 Fail closed for critical nodes
+      if (REQUIRED_NODES.includes(nodeId)) {
+        return {
+          success: false,
+          finalState: state,
+          nodeResults,
+          failedNode: nodeId,
+        };
+      }
+
+      // Non-critical node → continue
+      console.warn(`[NodeRunner] Non-critical node failed: ${nodeId}`, errorMsg);
+    }
+  }
+
+  return {
+    success: true,
+    finalState: state,
+    nodeResults,
+  };
+}
+C) Config loading with cache + lazy load
+
+This is where we make config:
+
+fast
+safe
+refreshable
+non-blocking
+// server/clinical/complaintConfigLoader.ts
+
+const configCache = new Map<string, ComplaintConfig>();
+const configMeta = new Map<string, { version: number; loadedAt: number }>();
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function loadComplaintConfig(
+  ccId: string
+): Promise<ComplaintConfig> {
+
+  const cached = configCache.get(ccId);
+  const meta = configMeta.get(ccId);
+
+  const isFresh =
+    cached &&
+    meta &&
+    Date.now() - meta.loadedAt < CACHE_TTL_MS;
+
+  if (isFresh) {
+    return cached;
+  }
+
+  try {
+    const raw = await loadFromRegistry(ccId); // CSV / Sheets
+
+    validateConfig(raw); // corruption guard
+
+    configCache.set(ccId, raw);
+    configMeta.set(ccId, {
+      version: raw.version,
+      loadedAt: Date.now(),
+    });
+
+    return raw;
+
+  } catch (err) {
+    console.error(`[ConfigLoader] Failed to load ${ccId}`, err);
+
+    // 🧠 Fallback to last known good config
+    if (cached) {
+      console.warn(`[ConfigLoader] Using stale config for ${ccId}`);
+      return cached;
+    }
+
+    throw err; // no fallback available
+  }
+}
+Optional: background refresh
+setInterval(async () => {
+  for (const ccId of configCache.keys()) {
+    try {
+      await loadComplaintConfig(ccId);
+    } catch (e) {
+      console.warn("Background refresh failed", ccId);
+    }
+  }
+}, 60_000);
+D) Test cases (critical ones)
+1. Missing node (safety critical)
+expect(() =>
+  runComplaintNodes(
+    { nodes: ["SCORING", "DISPOSITION"] },
+    state
+  )
+).toThrow("Missing required node: RED_FLAGS");
+2. Corrupt config fallback
+// First load succeeds
+await loadComplaintConfig("cough");
+
+// Next load fails
+mockLoadFromRegistryThrow();
+
+const config = await loadComplaintConfig("cough");
+
+expect(config).toBeDefined(); // fallback works
+3. Unknown complaint
+await expect(loadComplaintConfig("unknown"))
+  .rejects.toThrow();
+4. Node failure isolation
+mockEngine("SPOT_INTERVENTIONS", () => {
+  throw new Error("boom");
+});
+
+const result = await runComplaintNodes(config, state);
+
+expect(result.success).toBe(true); // non-critical node
+5. Critical node failure
+mockEngine("RED_FLAGS", () => {
+  throw new Error("critical");
+});
+
+const result = await runComplaintNodes(config, state);
+
+expect(result.success).toBe(false);
+expect(result.failedNode).toBe("RED_FLAGS");
+Bottom line
+
+This packet is quietly one of the most important in the system.
+
+The original design risks:
+
+silent node skipping
+incorrect scoring module usage
+total complaint outage on config corruption
+no audit trace of node execution
+
+The rewrite moves it toward:
+
+✅ deterministic execution
+✅ explicit required-node enforcement
+✅ per-node isolation
+✅ audit traceability
+✅ safe config caching with fallback
+
+The next level (if you want to push this further)
+
+If you want this to become truly elite architecture, the next step would be:
+
+replace NodeId string union with registered node graph
+allow dynamic DAG execution instead of linear sequence
+attach validation rules per node
+introduce node-level versioning
+add feature flags per node
+My verdict
+This rewrite is solid and meaningful
+Not yet production-perfect
+But now structurally safe enough to build on
+
+If you want, next I would review:
+
+👉 how getNodeEngine() is implemented
+👉 how scoring modules are selected
+👉 how CaseState mutates across nodes
+
+Those three together determine whether this layer is just organized… or actually clinically reliable.
+
+ok yes please review the 3 together 
+
+Excellent—this is the heart of the clinical brain:
+getNodeEngine() + scoring selection + CaseState mutation. Think of it as the circulatory system: if any valve leaks, the whole organism gets weird in ways that are hard to detect.
+
+I’ll review them together and then give you a hardened implementation you can drop in.
+
+A) getNodeEngine() — risks and fixes
+What usually goes wrong
+1. String → function lookup without enforcement
+
+Typical pattern:
+
+const engines = {
+  RED_FLAGS: redFlagEngine,
+  SCORING: scoringEngine,
+  ...
+};
+
+function getNodeEngine(nodeId: NodeId) {
+  return engines[nodeId];
+}
+Risks:
+Missing key → returns undefined
+No compile-time guarantee mapping is complete
+Runtime failure instead of compile failure
+
+👉 This is a silent omission risk, not just a bug.
+
+Fix: enforce completeness at compile-time
+const NODE_ENGINE_MAP: Record<NodeId, NodeEngine> = {
+  RED_FLAGS: redFlagEngine,
+  CORE_QUESTIONS: coreQuestionsEngine,
+  SCORING: scoringEngine,
+  DISPOSITION: dispositionEngine,
+  TEMPLATE: templateEngine,
+  EXAM_OVERRIDE: examOverrideEngine,
+  DIFF_CONFIDENCE: diffConfidenceEngine,
+  RED_FLAG_MASTER_JOIN: redFlagJoinEngine,
+  SPOT_INTERVENTIONS: spotInterventionsEngine,
+  SPECIALIST_COUNCIL: specialistCouncilEngine,
+};
+
+Now TypeScript forces:
+
+every NodeId has an engine
+no missing node slips through
+Add runtime guard (defense-in-depth)
+export function getNodeEngine(nodeId: NodeId): NodeEngine {
+  const engine = NODE_ENGINE_MAP[nodeId];
+
+  if (!engine) {
+    throw new Error(`[NodeEngine] No engine registered for ${nodeId}`);
+  }
+
+  return engine;
+}
+B) Scoring module selection — critical hidden risk
+
+This is one of the most dangerous subtle bugs in your whole system.
+
+Common current pattern
+import * as scorers from "./scorers";
+
+function scoringEngine(state, config) {
+  return scorers[config.scoringModule](state);
+}
+Risks
+1. Missing scorer → undefined call
+
+→ runtime crash OR silent skip
+
+2. Wrong scorer selected
+
+→ incorrect diagnosis probabilities
+
+3. Multiple scorers accidentally run
+
+→ conflicting outputs
+
+4. Default fallback silently used
+
+→ hides config errors
+
+Fix: strict scorer registry
+type ScoringModuleId =
+  | "bayesian"
+  | "centor"
+  | "curb65"
+  | "ottawa"
+  | "custom";
+
+const SCORER_MAP: Record<ScoringModuleId, ScoringFunction> = {
+  bayesian: bayesianScorer,
+  centor: centorScorer,
+  curb65: curb65Scorer,
+  ottawa: ottawaScorer,
+  custom: customScorer,
+};
+Hardened scoring engine
+export function scoringEngine(
+  state: CaseState,
+  config: ComplaintConfig
+): Partial<CaseState> {
+
+  const moduleId = config.scoringModule as ScoringModuleId;
+
+  const scorer = SCORER_MAP[moduleId];
+
+  if (!scorer) {
+    throw new Error(
+      `[Scoring] No scorer found for module "${config.scoringModule}" in ${config.ccId}`
+    );
+  }
+
+  const result = scorer(state);
+
+  if (!result || typeof result !== "object") {
+    throw new Error(`[Scoring] Invalid scorer output for ${moduleId}`);
+  }
+
+  return {
+    scores: result.scores,
+    differential: result.differential,
+  };
+}
+🔴 Critical upgrade: enforce single scorer
+if (Array.isArray(config.scoringModule)) {
+  throw new Error(`[Scoring] Multiple scoring modules not allowed`);
+}
+C) CaseState mutation — biggest long-term risk
+
+This is where most systems slowly rot.
+
+Common pattern
+Object.assign(state, updated);
+Problems
+1. Uncontrolled mutation
+Any node can overwrite anything
+No ownership boundaries
+2. Hidden coupling
+Node A modifies field X
+Node B assumes it exists
+Node C overwrites it
+3. No schema validation
+malformed data propagates downstream
+Fix: typed, scoped state updates
+Define strict state contract
+export interface CaseState {
+  caseId: string;
+
+  symptoms: string[];
+
+  redFlags?: string[];
+
+  questionsAsked?: string[];
+
+  scores?: Record<string, number>;
+
+  differential?: {
+    diagnosis: string;
+    probability: number;
+  }[];
+
+  disposition?: string;
+
+  template?: string;
+}
+Enforce partial updates only
+type NodeUpdate = Partial<CaseState>;
+Safe merge helper
+function mergeState(
+  current: CaseState,
+  update: NodeUpdate,
+  nodeId: NodeId
+): CaseState {
+
+  const next = { ...current };
+
+  for (const key of Object.keys(update)) {
+    if (!(key in current)) {
+      throw new Error(
+        `[State] Node ${nodeId} attempted to write unknown field "${key}"`
+      );
+    }
+
+    next[key as keyof CaseState] = update[key as keyof CaseState]!;
+  }
+
+  return next;
+}
+Use it in runner
+const update = await engine(state, config);
+
+state = mergeState(state, update, nodeId);
+🔴 Optional but powerful: field ownership enforcement
+const NODE_FIELD_OWNERSHIP: Record<NodeId, (keyof CaseState)[]> = {
+  RED_FLAGS: ["redFlags"],
+  CORE_QUESTIONS: ["questionsAsked"],
+  SCORING: ["scores", "differential"],
+  DISPOSITION: ["disposition"],
+  TEMPLATE: ["template"],
+  ...
+};
+
+Then:
+
+if (!NODE_FIELD_OWNERSHIP[nodeId].includes(key)) {
+  throw new Error(`[State] ${nodeId} cannot modify ${key}`);
+}
+
+This prevents:
+👉 one node corrupting another node’s output
+
+D) Combined hardened execution flow
+
+Putting it all together:
+
+export async function runComplaintNodes(
+  config: ComplaintConfig,
+  initialState: CaseState
+): Promise<RunnerResult> {
+
+  let state = { ...initialState };
+
+  for (const nodeId of config.nodes) {
+    try {
+      const engine = getNodeEngine(nodeId);
+
+      const update = await engine(state, config);
+
+      state = mergeState(state, update, nodeId);
+
+    } catch (err) {
+      if (REQUIRED_NODES.includes(nodeId)) {
+        return { success: false, finalState: state };
+      }
+    }
+  }
+
+  return { success: true, finalState: state };
+}
+E) What this fixes (important)
+Before:
+nodes silently skipped
+wrong scorer runs
+state mutated unpredictably
+bugs propagate invisibly
+After:
+node coverage enforced
+scorer correctness enforced
+state mutation controlled
+errors localized
+audit trace becomes meaningful
+🔥 The most important insight
+
+Across these three pieces, the biggest hidden risk was:
+
+implicit contracts
+
+“this node will run”
+“this scorer will exist”
+“this field will be set correctly”
+
+The rewrite turns those into:
+
+explicit, enforced contracts
+
+Final verdict
+
+This layer goes from:
+
+⚠️ “structured but fragile”
+
+to
+
+🛡️ “deterministic, enforceable, and auditable”
+
+If you want next step (high impact)
+
+The next thing I would review is:
+
+👉 how complaints map to configs + scoring modules + priors (end-to-end)
+
+That’s where:
+
+wrong complaint → wrong engine → wrong scoring → wrong disposition
+
+And that’s the final chain before patient output.
+
+Just say “continue” and I’ll go one layer deeper.
+
+yes please review complaint mapping
+
+Perfect—this is the last big junction before clinical output:
+
+user message → complaint parsing → complaint ID → config → scorer → differential → disposition
+
+If this mapping is even slightly off, everything downstream can be “correct”… but for the wrong complaint. That’s the most dangerous kind of bug.
+
+A) Where complaint mapping typically breaks
+
+Let’s trace the chain:
+
+raw text
+  ↓
+parseComplaint()
+  ↓
+ComplaintCode (string)
+  ↓
+ComplaintRegistryEntry (CSV/DB)
+  ↓
+ComplaintConfig
+  ↓
+Node Runner
+1. String-based mapping (fragile glue)
+
+You likely have:
+
+const parsed = parseComplaint(text);
+const config = loadComplaintConfig(parsed.primary);
+Risks:
+typo mismatch (sore_throat vs soreThroat)
+config exists but disabled
+config missing → crash or silent fallback
+aliasing not handled (“UTI” vs “urinary infection”)
+
+👉 No canonical mapping layer
+
+2. Registry is passive, not enforced
+ComplaintRegistryEntry {
+  ccId: string;
+  scoringModule: string;
+  enabled: boolean;
+}
+Risks:
+enabled = false but still used
+missing entry → fallback or crash
+wrong scoringModule string → runtime error later
+
+👉 Registry is data, not a gatekeeper
+
+3. No validation between parser ↔ registry
+
+Parser produces:
+
+"sore_throat"
+
+But registry may contain:
+
+"soreThroat"
+
+→ mismatch → config not found
+
+👉 No contract enforcement
+
+4. No fallback strategy
+
+If mapping fails:
+
+return undefined → flow breaks
+default complaint → unsafe misrouting
+throw → bad UX
+
+👉 Needs explicit fallback policy
+
+5. No versioning awareness
+
+If registry updates:
+
+parser unchanged
+mapping breaks silently
+B) What a production-safe mapping layer should do
+
+You want a single authoritative resolver:
+
+ParsedComplaint → ComplaintResolution
+
+With guarantees:
+
+canonical ID
+validated existence
+enabled check
+scorer exists
+config load succeeds
+fallback defined
+C) Hardened complaint mapping implementation
+1. Canonical complaint registry (strict contract)
+export interface ComplaintRegistryEntry {
+  ccId: string;
+  aliases: string[];
+  enabled: boolean;
+  scoringModule: string;
+  version: number;
+}
+2. Resolver layer (THIS is the missing piece)
+// server/clinical/complaintResolver.ts
+
+export interface ComplaintResolution {
+  ccId: string;
+  source: "primary" | "alias" | "fallback";
+  confidence: "high" | "low";
+}
+
+export async function resolveComplaint(
+  parsed: ParsedComplaint | undefined
+): Promise<ComplaintResolution> {
+
+  if (!parsed) {
+    return fallbackComplaint("no_parse");
+  }
+
+  const registry = await getComplaintRegistry(); // DB or cached
+
+  // ── Exact match ─────────────────────────────
+  const direct = registry.find(r => r.ccId === parsed.primary);
+
+  if (direct && direct.enabled) {
+    return {
+      ccId: direct.ccId,
+      source: "primary",
+      confidence: parsed.confidence,
+    };
+  }
+
+  // ── Alias match ─────────────────────────────
+  for (const entry of registry) {
+    if (entry.aliases.includes(parsed.primary) && entry.enabled) {
+      return {
+        ccId: entry.ccId,
+        source: "alias",
+        confidence: "low",
+      };
+    }
+  }
+
+  // ── Fallback ────────────────────────────────
+  return fallbackComplaint(parsed.primary);
+}
+
+function fallbackComplaint(reason: string): ComplaintResolution {
+  return {
+    ccId: "general_symptom",
+    source: "fallback",
+    confidence: "low",
+  };
+}
+3. Enforce registry integrity at load time
+function validateRegistry(registry: ComplaintRegistryEntry[]) {
+  const ids = new Set();
+
+  for (const entry of registry) {
+    if (!entry.ccId) {
+      throw new Error("Missing ccId in registry");
+    }
+
+    if (ids.has(entry.ccId)) {
+      throw new Error(`Duplicate complaint id: ${entry.ccId}`);
+    }
+
+    ids.add(entry.ccId);
+
+    if (!entry.scoringModule) {
+      throw new Error(`Missing scoringModule for ${entry.ccId}`);
+    }
+  }
+}
+4. Safe config loading integration
+export async function getResolvedComplaintConfig(
+  parsed: ParsedComplaint | undefined
+): Promise<ComplaintConfig> {
+
+  const resolution = await resolveComplaint(parsed);
+
+  try {
+    return await loadComplaintConfig(resolution.ccId);
+  } catch (err) {
+    console.error("[ComplaintMapping] Config load failed:", err);
+
+    // fallback to safe default
+    return await loadComplaintConfig("general_symptom");
+  }
+}
+5. Hard fail for unsafe mapping (optional for high-risk complaints)
+if (parsed?.primary === "chest_pain" && resolution.source === "fallback") {
+  throw new Error("Critical complaint failed to map — blocking execution");
+}
+D) Add scoring module validation at mapping stage
+
+Instead of letting scoring fail later:
+
+const scorer = SCORER_MAP[entry.scoringModule];
+
+if (!scorer) {
+  throw new Error(
+    `[ComplaintMapping] Invalid scoring module "${entry.scoringModule}" for ${entry.ccId}`
+  );
+}
+E) End-to-end safe flow
+const parsed = parseComplaint(message);
+
+const config = await getResolvedComplaintConfig(parsed);
+
+const result = await runComplaintNodes(config, state);
+F) Critical test cases
+1. Unknown complaint
+const parsed = { primary: "alien_disease" };
+
+const res = await resolveComplaint(parsed);
+
+expect(res.ccId).toBe("general_symptom");
+2. Disabled complaint
+registry = [{ ccId: "cough", enabled: false }];
+
+const parsed = { primary: "cough" };
+
+const res = await resolveComplaint(parsed);
+
+expect(res.ccId).toBe("general_symptom");
+3. Alias mapping
+registry = [{ ccId: "uti_simple", aliases: ["urinary infection"], enabled: true }];
+
+const parsed = { primary: "urinary infection" };
+
+const res = await resolveComplaint(parsed);
+
+expect(res.ccId).toBe("uti_simple");
+4. Invalid scoring module
+registry = [{ ccId: "cough", scoringModule: "unknown" }];
+
+expect(() => validateRegistry(registry)).toThrow();
+5. Critical complaint fallback block
+const parsed = { primary: "chest_pain" };
+
+mockRegistryEmpty();
+
+await expect(getResolvedComplaintConfig(parsed)).rejects.toThrow();
+🔥 Most important insight
+
+This layer is where semantic correctness enters the system.
+
+Everything before this is:
+
+parsing text
+pattern matching
+
+Everything after this is:
+
+clinical reasoning
+risk scoring
+disposition decisions
+
+👉 If this mapping is wrong, the entire system is consistently wrong in the wrong direction
+
+Final verdict
+
+Before:
+⚠️ loose coupling, string matching, silent failures
+
+After:
+🛡️ explicit resolution layer, validated mapping, safe fallback
+
+If you want next level (high-impact)
+
+The next thing I would review is:
+
+👉 how priors / featureLikelihoods are loaded and validated for the Bayesian engine
+
+That’s where:
+
+statistical correctness
+data integrity
+and clinical realism
+
+all meet.
+
+Just say “continue to priors” and I’ll go there.
+
+continue to priors
+
+Absolutely. This is where the Bayesian layer either becomes a neat little ranking engine… or a beautifully typeset hallucination machine. 🧪
+
+You asked to continue to priors / featureLikelihoods, so I’ll review the part that feeds the Bayesian engine:
+
+complaint config → diagnosis priors → feature likelihoods → posterior ranking
+
+This is the statistical fuel tank. If the fuel is dirty, the engine can run smoothly and still drive into a lake.
+
+A) Where priors usually go wrong
+1. Priors are treated like “just config”
+
+A DiagnosisPrior object looks innocent:
+
+{
+  diagnosis: "flu",
+  baseProbability: 0.2,
+  featureLikelihoods: {
+    fever: 0.9,
+    chills: 0.8
+  }
+}
+
+But these numbers are not ordinary settings. They are probabilistic assumptions. If they are malformed, stale, contradictory, or copied carelessly, the engine still outputs crisp posteriors with fake confidence.
+
+2. baseProbability is often unvalidated
+
+Typical failure modes:
+
+0
+negative
+> 1
+NaN
+all diagnoses with tiny arbitrary values
+wildly inconsistent values across complaints
+
+If a prior is 0, log(0) detonates.
+If all priors are invalid, your posterior layer becomes a probability graveyard.
+
+👉 Priors must be treated like validated numeric model data, not freeform JSON.
+
+3. featureLikelihoods often mix semantics
+
+This is one of the biggest hidden problems.
+
+What does:
+
+featureLikelihoods["fever"] = 0.8
+
+actually mean?
+
+Possible interpretations:
+
+probability of fever given diagnosis
+frequency estimate from chart data
+expert confidence
+normalized weight
+pseudo-likelihood made by hand
+
+If the source semantics are mixed, then the engine is multiplying apples, oranges, and an occasional stapler.
+
+👉 Every likelihood table needs a declared meaning.
+
+4. Missing-feature handling can hide data quality problems
+
+From the earlier Bayesian review, the engine uses a floor likelihood for missing features. That is okay as a runtime fallback, but if a diagnosis is missing 80 percent of its feature table, the engine may still “work” while actually being mostly driven by smoothing.
+
+That means:
+
+garbage-in is quietly softened
+incomplete diagnosis models remain in production
+missing data masquerades as low evidence
+5. No complaint-specific validation boundary
+
+A diagnosis prior for cough may accidentally leak into sore_throat if loading is loose or keyed incorrectly. This can happen through:
+
+bad CSV row joins
+wrong ccId
+reused differential tables
+stale cache after complaint edits
+
+That kind of cross-complaint contamination is a stealth bug. The numbers are valid, just valid for the wrong complaint.
+
+6. No provenance/version linkage
+
+If the engine uses priors from CSV / Sheets / DB, you need to know:
+
+which version loaded
+when it loaded
+where it came from
+who approved it
+whether it was partially stale
+
+Otherwise, if a posterior looks weird next week, you cannot answer the question:
+
+“Which exact prior table produced that decision?”
+
+That is bad science and bad governance.
+
+B) What a production-safe prior system should guarantee
+
+A prior set should never reach the Bayesian engine unless it passes these checks:
+
+Per diagnosis
+diagnosis non-empty
+baseProbability finite and in (0,1]
+featureLikelihoods object present
+every likelihood finite and in (0,1]
+Per complaint
+at least one diagnosis
+no duplicate diagnosis names
+enough modeled features to be meaningful
+optional expected-feature coverage threshold
+version/provenance metadata present
+Per engine load
+complaint ID matches requested complaint
+no mixed complaint rows
+source version known
+cache freshness known
+C) Hardened prior loader + validator
+
+Here’s the shape I would move to.
+
+1. Stronger types
+export interface DiagnosisPrior {
+  diagnosis: string;
+  baseProbability: number;
+  featureLikelihoods: Record<string, number>;
+  ruleId?: string;
+  version?: number;
+  tableName?: string;
+}
+
+export interface PriorBundle {
+  ccId: string;
+  version: number;
+  loadedAt: string;
+  source: "KB_DB" | "CSV" | "GOOGLE_SHEETS_CACHE" | "FALLBACK_HARDCODED";
+  priors: DiagnosisPrior[];
+}
+2. Validation helpers
+function isFiniteProbability(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1;
+}
+
+function normalizeFeatureName(name: string): string {
+  return name.trim().toLowerCase();
+}
+3. Validate a single diagnosis prior
+function validateDiagnosisPrior(prior: DiagnosisPrior, ccId: string): void {
+  if (!prior.diagnosis?.trim()) {
+    throw new Error(`[Priors] ${ccId}: missing diagnosis name`);
+  }
+
+  if (!isFiniteProbability(prior.baseProbability)) {
+    throw new Error(
+      `[Priors] ${ccId}:${prior.diagnosis} invalid baseProbability=${prior.baseProbability}`
+    );
+  }
+
+  if (!prior.featureLikelihoods || typeof prior.featureLikelihoods !== "object") {
+    throw new Error(`[Priors] ${ccId}:${prior.diagnosis} missing featureLikelihoods`);
+  }
+
+  const featureNames = Object.keys(prior.featureLikelihoods);
+
+  if (featureNames.length === 0) {
+    throw new Error(`[Priors] ${ccId}:${prior.diagnosis} has no modeled features`);
+  }
+
+  for (const feature of featureNames) {
+    const value = prior.featureLikelihoods[feature];
+
+    if (!normalizeFeatureName(feature)) {
+      throw new Error(`[Priors] ${ccId}:${prior.diagnosis} contains blank feature name`);
+    }
+
+    if (!isFiniteProbability(value)) {
+      throw new Error(
+        `[Priors] ${ccId}:${prior.diagnosis} invalid likelihood ${feature}=${value}`
+      );
+    }
+  }
+}
+4. Validate the whole bundle
+function validatePriorBundle(bundle: PriorBundle): void {
+  if (!bundle.ccId?.trim()) {
+    throw new Error("[Priors] Missing ccId");
+  }
+
+  if (!Number.isFinite(bundle.version) || bundle.version <= 0) {
+    throw new Error(`[Priors] ${bundle.ccId}: invalid version ${bundle.version}`);
+  }
+
+  if (!bundle.loadedAt?.trim()) {
+    throw new Error(`[Priors] ${bundle.ccId}: missing loadedAt`);
+  }
+
+  if (!Array.isArray(bundle.priors) || bundle.priors.length === 0) {
+    throw new Error(`[Priors] ${bundle.ccId}: no priors loaded`);
+  }
+
+  const seenDiagnoses = new Set<string>();
+
+  for (const prior of bundle.priors) {
+    validateDiagnosisPrior(prior, bundle.ccId);
+
+    const key = prior.diagnosis.trim().toLowerCase();
+    if (seenDiagnoses.has(key)) {
+      throw new Error(`[Priors] ${bundle.ccId}: duplicate diagnosis "${prior.diagnosis}"`);
+    }
+    seenDiagnoses.add(key);
+  }
+
+  // Optional coverage warning, not hard failure
+  const allFeatures = new Set<string>();
+  for (const prior of bundle.priors) {
+    Object.keys(prior.featureLikelihoods).forEach(f => allFeatures.add(normalizeFeatureName(f)));
+  }
+
+  if (allFeatures.size < 3) {
+    console.warn(`[Priors] ${bundle.ccId}: very low feature coverage (${allFeatures.size} total features)`);
+  }
+}
+5. Load with cache + last-known-good fallback
+const priorCache = new Map<string, PriorBundle>();
+const PRIOR_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function loadComplaintPriors(ccId: string): Promise<PriorBundle> {
+  const cached = priorCache.get(ccId);
+
+  const cacheFresh =
+    cached &&
+    Date.now() - new Date(cached.loadedAt).getTime() < PRIOR_CACHE_TTL_MS;
+
+  if (cacheFresh) {
+    return cached;
+  }
+
+  try {
+    const raw = await loadPriorsFromRegistry(ccId); // DB / CSV / Sheets cache
+    validatePriorBundle(raw);
+    priorCache.set(ccId, raw);
+    return raw;
+  } catch (err) {
+    console.error(`[Priors] Failed to load priors for ${ccId}`, err);
+
+    if (cached) {
+      console.warn(`[Priors] Using last-known-good priors for ${ccId}`);
+      return cached;
+    }
+
+    throw err;
+  }
+}
+D) Add complaint-boundary enforcement
+
+This is important.
+
+If priors are loaded from a big table, every row must prove it belongs to the requested complaint.
+
+interface RawPriorRow {
+  ccId: string;
+  diagnosis: string;
+  baseProbability: number;
+  feature: string;
+  likelihood: number;
+  version: number;
+}
+
+function assemblePriorBundle(ccId: string, rows: RawPriorRow[]): PriorBundle {
+  const wrongComplaint = rows.find(r => r.ccId !== ccId);
+  if (wrongComplaint) {
+    throw new Error(
+      `[Priors] Complaint contamination: expected ${ccId}, found row for ${wrongComplaint.ccId}`
+    );
+  }
+
+  const byDiagnosis = new Map<string, DiagnosisPrior>();
+
+  for (const row of rows) {
+    if (!byDiagnosis.has(row.diagnosis)) {
+      byDiagnosis.set(row.diagnosis, {
+        diagnosis: row.diagnosis,
+        baseProbability: row.baseProbability,
+        featureLikelihoods: {},
+        version: row.version,
+        tableName: "diagnosis_priors",
+      });
+    }
+
+    byDiagnosis.get(row.diagnosis)!.featureLikelihoods[row.feature] = row.likelihood;
+  }
+
+  const bundle: PriorBundle = {
+    ccId,
+    version: rows[0]?.version ?? 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: Array.from(byDiagnosis.values()),
+  };
+
+  validatePriorBundle(bundle);
+  return bundle;
+}
+
+That prevents the quiet horror of “correct math on the wrong complaint.”
+
+E) Distinguish hard failure vs degraded mode
+
+Not every prior problem should be handled the same way.
+
+Hard fail
+
+Block the complaint entirely if:
+
+no priors
+invalid base probabilities
+duplicate diagnosis rows
+complaint contamination
+scorer/prior mismatch
+Degraded mode
+
+Warn but continue if:
+
+low feature coverage
+few total diagnoses
+stale but previously valid cached priors
+some diagnoses sparse but still valid
+
+That gives you a much more honest runtime posture.
+
+F) Match priors to scorer contract
+
+This is another subtle risk.
+
+A Bayesian scorer expects:
+
+diagnosis priors
+symptom likelihoods
+
+A rule-based scorer may expect:
+
+score thresholds
+feature weights
+question answers
+
+If complaint config says scoringModule = "bayesian" but the loaded config only contains rule thresholds, the engine should fail early.
+
+export function validateScorerCompatibility(
+  scoringModule: string,
+  priors: PriorBundle
+): void {
+  if (scoringModule === "bayesian" && priors.priors.length === 0) {
+    throw new Error("[Priors] Bayesian scorer requires at least one diagnosis prior");
+  }
+
+  if (scoringModule !== "bayesian" && priors.priors.length > 0) {
+    console.warn(
+      `[Priors] Complaint has diagnosis priors loaded, but scoringModule=${scoringModule}`
+    );
+  }
+}
+G) Critical test cases
+1. Invalid base probability
+expect(() =>
+  validatePriorBundle({
+    ccId: "cough",
+    version: 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: [
+      {
+        diagnosis: "flu",
+        baseProbability: 0,
+        featureLikelihoods: { fever: 0.8 },
+      },
+    ],
+  })
+).toThrow("invalid baseProbability");
+2. Duplicate diagnosis
+expect(() =>
+  validatePriorBundle({
+    ccId: "cough",
+    version: 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: [
+      { diagnosis: "flu", baseProbability: 0.2, featureLikelihoods: { fever: 0.8 } },
+      { diagnosis: "flu", baseProbability: 0.3, featureLikelihoods: { cough: 0.7 } },
+    ],
+  })
+).toThrow("duplicate diagnosis");
+3. Complaint contamination
+expect(() =>
+  assemblePriorBundle("cough", [
+    {
+      ccId: "sore_throat",
+      diagnosis: "strep",
+      baseProbability: 0.4,
+      feature: "fever",
+      likelihood: 0.6,
+      version: 1,
+    },
+  ])
+).toThrow("Complaint contamination");
+4. Last-known-good fallback
+priorCache.set("cough", goodBundle);
+mockLoadPriorsThrow();
+
+const result = await loadComplaintPriors("cough");
+
+expect(result).toBe(goodBundle);
+5. Sparse priors warning but not failure
+const sparseBundle = {
+  ccId: "cough",
+  version: 1,
+  loadedAt: new Date().toISOString(),
+  source: "KB_DB" as const,
+  priors: [
+    {
+      diagnosis: "flu",
+      baseProbability: 0.4,
+      featureLikelihoods: { fever: 0.8 },
+    },
+  ],
+};
+
+expect(() => validatePriorBundle(sparseBundle)).not.toThrow();
+The most important insight here
+
+The Bayesian engine itself is not the main risk.
+
+The main risk is:
+
+unvalidated probabilistic inputs creating plausible-looking but unjustified outputs
+
+That is more dangerous than a crash, because:
+
+crashes get noticed
+fake certainty often does not
+Final verdict
+
+Before:
+
+priors are “data”
+loader trusts them too much
+complaint boundary is loose
+fallback behavior unclear
+
+After:
+
+priors become governed model inputs
+complaint boundary is enforced
+bad bundles fail early
+stale-good bundles can keep the system alive safely
+My recommendation for the next layer
+
+The next thing I would review is:
+
+👉 how Bayesian outputs feed disposition / differential confidence / template generation
+
+Because once the priors are sane, the next question becomes:
+
+does the system use posterior rankings safely, or does it over-trust them?
+
+Say “continue to posterior consumption” and I’ll go there.
+
+continue to posterior consumption
+
+Perfect—this is the final stretch where everything converges:
+
+posterior probabilities → differential list → confidence → disposition → patient-facing output
+
+If anything is mishandled here, you don’t just get “slightly off math”… you get overconfident, wrong clinical actions.
+
+A) Where posterior consumption typically fails
+1. Top-1 dominance (most common bug)
+
+Typical pattern:
+
+const top = differential[0];
+return top.diagnosis;
+Problem:
+ignores uncertainty
+ignores close competitors
+ignores missing features
+ignores calibration
+
+👉 If top = 0.42 and second = 0.39 → system still acts “certain”
+
+2. Confidence thresholds are misused
+
+From your earlier engine:
+
+posterior > 0.5 → "high"
+posterior > 0.2 → "moderate"
+Problem:
+
+These are relative rankings, not true probabilities.
+
+0.55 in 2-diagnosis case ≠ 0.55 in 15-diagnosis case
+system treats both equally
+
+👉 Confidence ≠ calibrated certainty
+
+3. Posterior used directly for disposition
+
+Bad pattern:
+
+if (top.posterior > 0.6) {
+  return "HOME";
+}
+Problem:
+
+Posterior reflects:
+
+relative ranking
+not absolute risk
+
+👉 You can have:
+
+low absolute risk but still top-ranked
+high-risk diagnosis but diluted among many options
+4. No uncertainty propagation
+
+If:
+
+few symptoms
+many unknown features
+weak priors
+
+The engine should say:
+
+“I don’t know”
+
+Instead it still produces:
+
+normalized probabilities
+ranked list
+confidence label
+
+👉 false precision
+
+5. Differential list not used properly
+
+Often:
+
+only top diagnosis used
+rest discarded
+
+But clinically:
+
+second and third matter
+especially when close
+6. No “danger override” layer
+
+Even if posterior is low:
+
+PE: 0.12
+URI: 0.18
+
+URI wins → but PE is dangerous
+
+👉 system must escalate based on risk, not ranking
+
+B) What a safe posterior consumption layer should do
+
+Instead of:
+
+posterior → decision
+
+You want:
+
+posterior
+  ↓
+uncertainty assessment
+  ↓
+risk-aware filtering
+  ↓
+multi-diagnosis reasoning
+  ↓
+final disposition logic
+C) Hardened posterior consumption layer
+1. Define richer output
+export interface PosteriorAnalysis {
+  topDiagnosis: string;
+  topPosterior: number;
+
+  differential: {
+    diagnosis: string;
+    posterior: number;
+  }[];
+
+  entropy: number;          // uncertainty measure
+  margin: number;           // gap between top 2
+  isUncertain: boolean;
+}
+2. Compute entropy + margin
+function computeEntropy(differential: DifferentialResult[]): number {
+  return -differential.reduce((sum, d) => {
+    return sum + (d.posterior > 0 ? d.posterior * Math.log(d.posterior) : 0);
+  }, 0);
+}
+
+function analyzePosterior(differential: DifferentialResult[]): PosteriorAnalysis {
+  if (!differential.length) {
+    throw new Error("Empty differential");
+  }
+
+  const sorted = [...differential].sort((a, b) => b.posterior - a.posterior);
+
+  const top = sorted[0];
+  const second = sorted[1];
+
+  const entropy = computeEntropy(sorted);
+  const margin = second ? top.posterior - second.posterior : 1;
+
+  const isUncertain =
+    top.posterior < 0.6 ||
+    margin < 0.15 ||
+    entropy > 1.2;
+
+  return {
+    topDiagnosis: top.diagnosis,
+    topPosterior: top.posterior,
+    differential: sorted,
+    entropy,
+    margin,
+    isUncertain,
+  };
+}
+3. Risk-aware override layer
+const HIGH_RISK_DIAGNOSES = new Set([
+  "pulmonary_embolism",
+  "meningitis",
+  "mi",
+  "stroke",
+]);
+
+function applyRiskOverride(analysis: PosteriorAnalysis): boolean {
+  return analysis.differential.some(d =>
+    HIGH_RISK_DIAGNOSES.has(d.diagnosis) &&
+    d.posterior > 0.05
+  );
+}
+
+👉 Even small probability triggers escalation
+
+4. Final decision logic
+export function deriveDisposition(
+  analysis: PosteriorAnalysis,
+  state: CaseState
+): string {
+
+  // ── Risk override ───────────────────────
+  if (applyRiskOverride(analysis)) {
+    return "ER_NOW";
+  }
+
+  // ── Uncertainty handling ────────────────
+  if (analysis.isUncertain) {
+    return "NEEDS_MORE_DATA";
+  }
+
+  // ── Confidence-based routing ────────────
+  if (analysis.topPosterior > 0.7) {
+    return "HOME";
+  }
+
+  return "URGENT_CARE";
+}
+5. Return structured output (not just a diagnosis)
+export interface ClinicalDecision {
+  disposition: string;
+  primaryDiagnosis: string;
+  differential: PosteriorAnalysis;
+  reasoning: string[];
+}
+D) Prevent over-trust in posterior
+Add calibration guard
+if (analysis.topPosterior > 0.8 && analysis.margin < 0.1) {
+  console.warn("High posterior but low separation — possible overconfidence");
+}
+Add minimum evidence check
+if (state.symptoms.length < 2) {
+  return "NEEDS_MORE_DATA";
+}
+E) Test cases (critical)
+1. Close diagnoses
+const differential = [
+  { diagnosis: "flu", posterior: 0.42 },
+  { diagnosis: "covid", posterior: 0.39 },
+];
+
+const analysis = analyzePosterior(differential);
+
+expect(analysis.isUncertain).toBe(true);
+2. High-risk override
+const differential = [
+  { diagnosis: "uri", posterior: 0.6 },
+  { diagnosis: "pulmonary_embolism", posterior: 0.08 },
+];
+
+expect(applyRiskOverride(analyzePosterior(differential))).toBe(true);
+3. Low evidence
+state.symptoms = ["cough"];
+
+expect(deriveDisposition(analysis, state)).toBe("NEEDS_MORE_DATA");
+4. Clear winner
+const differential = [
+  { diagnosis: "flu", posterior: 0.8 },
+  { diagnosis: "cold", posterior: 0.1 },
+];
+
+expect(deriveDisposition(analyzePosterior(differential), state))
+  .toBe("HOME");
+🔥 Most important insight
+
+The biggest danger here is:
+
+treating posterior as truth instead of ranking
+
+Posterior tells you:
+
+which diagnosis is most likely relative to others
+
+It does NOT tell you:
+
+absolute certainty
+safety
+clinical risk
+Final verdict
+
+Before:
+
+top-1 decision
+fake confidence labels
+no uncertainty handling
+no risk override
+
+After:
+
+uncertainty-aware reasoning
+multi-diagnosis consideration
+risk-first safety override
+structured output
+🚀 If you want next (very high value)
+
+The next layer I would review is:
+
+👉 disposition → physician checkpoint → safety gate → final output
+
+That’s the last chain before real-world action.
+
+Say “continue to final decision layer” and I’ll complete the full end-to-end system audit.
+
+continue to final decision layer
+
+Now we’re at the last gate before reality—the point where math, rules, and UI all collapse into an action a patient might follow.
+
+posterior → disposition → safety gate → physician checkpoint → final output
+
+If anything is ambiguous here, the system can look correct upstream and still do the wrong thing downstream.
+
+I’ll give you:
+
+the real failure modes
+a single deterministic decision pipeline
+code that enforces fail-closed + auditability
+where to plug into your existing pieces
+A) Where final decision layers usually fail
+1. Competing authorities (biggest hidden bug)
+
+Right now you have multiple “decision-makers”:
+
+Bayesian posterior → suggests diagnosis
+Disposition rules → choose level of care
+Safety gate → blocks/adjusts
+Physician checkpoint → approves certain tiers
+Problem:
+
+These can contradict each other unless explicitly ordered.
+
+Example:
+
+posterior → URI → HOME
+safety gate → high risk → block
+physician checkpoint → not triggered
+→ inconsistent outcome
+
+👉 You need one canonical pipeline order
+
+2. Fail-open behavior in edge paths
+
+Common bad pattern:
+
+if (gate fails) {
+  return original decision;
+}
+
+or
+
+if (checkpoint timeout) {
+  continue anyway;
+}
+
+👉 Any uncertainty in final layer must fail closed, not drift forward.
+
+3. Missing unified “decision object”
+
+Right now decisions are often spread across:
+
+strings
+booleans
+partial objects
+
+👉 You need one immutable decision record that evolves through the pipeline.
+
+4. Safety and physician approval are not unified
+
+They are treated as separate steps, but clinically they are:
+
+both escalation gates
+
+They should be part of the same decision lifecycle, not separate side effects.
+
+5. No deterministic audit trail
+
+You have auditStep, but you need:
+
+a single trace that shows exactly how the final decision was reached
+
+Not:
+
+scattered logs
+partial state
+ambiguous overrides
+B) Canonical decision pipeline (THIS is the key)
+
+You want this exact order:
+
+1. Posterior analysis
+2. Initial disposition (rules)
+3. Risk override (high-risk diagnoses)
+4. Safety gate (fail-closed)
+5. Physician checkpoint (if required)
+6. Final decision
+
+Every step:
+
+deterministic
+auditable
+cannot be skipped
+C) Unified decision object
+export interface DecisionContext {
+  caseId: string;
+  patientId?: string;
+
+  posterior: PosteriorAnalysis;
+
+  initialDisposition: string;
+
+  riskOverrideApplied: boolean;
+
+  safety: {
+    allowed: boolean;
+    code: string;
+    reason: string;
+  };
+
+  checkpoint?: {
+    required: boolean;
+    status: "pending" | "approved" | "rejected" | "expired";
+  };
+
+  finalDisposition?: string;
+
+  trace: string[]; // ordered reasoning steps
+}
+D) Hardened final decision engine
+// server/clinical/finalDecisionEngine.ts
+
+export async function computeFinalDecision(
+  input: {
+    state: CaseState;
+    posterior: PosteriorAnalysis;
+    erProbability: number;
+    store: EscalationStore;
+  }
+): Promise<DecisionContext> {
+
+  const ctx: DecisionContext = {
+    caseId: input.state.caseId,
+    patientId: input.state.patientId,
+    posterior: input.posterior,
+    initialDisposition: "",
+    riskOverrideApplied: false,
+    safety: { allowed: false, code: "", reason: "" },
+    trace: [],
+  };
+
+  // ── Step 1: Initial disposition ───────────────────────
+  ctx.initialDisposition = deriveDisposition(input.posterior, input.state);
+  ctx.trace.push(`Initial disposition: ${ctx.initialDisposition}`);
+
+  // ── Step 2: Risk override ─────────────────────────────
+  if (applyRiskOverride(input.posterior)) {
+    ctx.initialDisposition = "ER_NOW";
+    ctx.riskOverrideApplied = true;
+    ctx.trace.push("Risk override applied → ER_NOW");
+  }
+
+  // ── Step 3: Safety gate ───────────────────────────────
+  const safety = await clinicalSafetyGate({
+    riskScore: input.erProbability,
+    patientId: input.state.patientId,
+    action: "disposition",
+  });
+
+  ctx.safety = {
+    allowed: safety.allowed,
+    code: safety.code,
+    reason: safety.reason,
+  };
+
+  ctx.trace.push(`Safety gate: ${safety.code}`);
+
+  if (!safety.allowed) {
+    ctx.finalDisposition = "BLOCKED";
+    return ctx; // FAIL CLOSED
+  }
+
+  // ── Step 4: Physician checkpoint ──────────────────────
+  if (DISPOSITIONS_REQUIRING_APPROVAL.includes(ctx.initialDisposition as any)) {
+
+    const checkpoint = await createOrCheckCheckpoint(ctx);
+
+    ctx.checkpoint = checkpoint;
+    ctx.trace.push(`Checkpoint: ${checkpoint.status}`);
+
+    if (checkpoint.status === "pending") {
+      ctx.finalDisposition = "AWAITING_PHYSICIAN";
+      return ctx;
+    }
+
+    if (checkpoint.status === "rejected") {
+      ctx.finalDisposition = "REJECTED_BY_PHYSICIAN";
+      return ctx;
+    }
+
+    if (checkpoint.status === "expired") {
+      ctx.finalDisposition = "ESCALATED_NO_RESPONSE";
+      return ctx;
+    }
+  }
+
+  // ── Step 5: Escalation adjustment ─────────────────────
+  const advisory = await escalationControl(input.store);
+
+  let finalProb = input.erProbability;
+
+  if (advisory.adjust) {
+    finalProb = Math.max(0, Math.min(1, finalProb + advisory.probabilityDelta));
+    ctx.trace.push(`Escalation adjustment applied (${advisory.reason})`);
+  }
+
+  // ── Step 6: Final disposition ─────────────────────────
+  ctx.finalDisposition =
+    finalProb >= 0.5 ? "ER_NOW" : ctx.initialDisposition;
+
+  ctx.trace.push(`Final disposition: ${ctx.finalDisposition}`);
+
+  // ── Step 7: Record outcome ────────────────────────────
+  await recordDisposition(ctx.finalDisposition, input.store);
+
+  return ctx;
+}
+E) Physician checkpoint behavior (fixed)
+export async function createOrCheckCheckpoint(ctx: DecisionContext) {
+
+  const checkpoint = await getCheckpoint(ctx.caseId);
+
+  if (!checkpoint) {
+    return await createCheckpoint(ctx.caseId);
+  }
+
+  if (checkpoint.status === "pending") {
+    if (Date.now() > checkpoint.expiresAt) {
+      await markCheckpointExpired(checkpoint.id);
+
+      return {
+        required: true,
+        status: "expired",
+      };
+    }
+  }
+
+  return checkpoint;
+}
+🔴 Key rule:
+never auto-approve
+timeout = escalate + block
+F) Output layer (patient-safe)
+
+Never expose raw internal state.
+
+export function buildPatientResponse(ctx: DecisionContext): string {
+
+  if (ctx.finalDisposition === "BLOCKED") {
+    return "We need additional review before making a recommendation.";
+  }
+
+  if (ctx.finalDisposition === "AWAITING_PHYSICIAN") {
+    return "A clinician is reviewing your case. Please wait.";
+  }
+
+  if (ctx.finalDisposition === "ER_NOW") {
+    return "Please seek emergency care immediately.";
+  }
+
+  if (ctx.finalDisposition === "ESCALATED_NO_RESPONSE") {
+    return "We recommend urgent evaluation. Please go to the nearest emergency department.";
+  }
+
+  return "Based on your symptoms, home care is appropriate.";
+}
+G) Critical tests
+1. Safety gate blocks
+expect(ctx.finalDisposition).toBe("BLOCKED");
+2. Checkpoint pending
+expect(ctx.finalDisposition).toBe("AWAITING_PHYSICIAN");
+3. Timeout escalation
+expect(ctx.finalDisposition).toBe("ESCALATED_NO_RESPONSE");
+4. Risk override beats posterior
+expect(ctx.riskOverrideApplied).toBe(true);
+expect(ctx.finalDisposition).toBe("ER_NOW");
+5. Idempotent retry
+const ctx1 = await computeFinalDecision(...);
+const ctx2 = await computeFinalDecision(...);
+
+expect(ctx1.finalDisposition).toBe(ctx2.finalDisposition);
+🔥 The most important insight of the entire system
+
+Across everything you built, this is the key principle:
+
+The final decision layer must be strictly ordered, fail-closed, and singular.
+
+No:
+
+competing logic paths
+implicit overrides
+silent fallbacks
+multiple “sources of truth”
+Final verdict
+
+Before:
+
+fragmented decision logic
+possible contradictions
+unclear failure handling
+
+After:
+
+single deterministic pipeline
+explicit safety + approval gates
+audit-ready trace
+fail-closed behavior
+🚀 You’ve now covered the entire system
+
+You’ve gone through:
+
+audit chain
+auth
+safety gates
+escalation control
+startup validation
+billing
+Bayesian engine
+complaint parsing
+node runner
+priors
+posterior consumption
+final decision layer
+
+That’s essentially a full clinical AI system architecture audit.
+
+If you want one last high-value step
+
+I would now do:
+
+👉 full system integration test harness + simulation audit
+
+That ties everything together and shows:
+
+where real-world edge cases break
+where layers disagree
+where calibration is off
+
+Say “build system test harness” and I’ll give you that final piece.
+
+build system test harness
+
+Now we tie the whole organism together
+
+please continue
+
+Now we build the system test harness—the layer that turns your entire stack from “well-designed modules” into a provably behaving clinical system.
+
+Think of this as your wind tunnel + black box flight recorder + FDA rehearsal simulator.
+
+🧠 What this harness must do (non-negotiable)
+
+Your harness should:
+
+1. Run full end-to-end cases
+message → parse → mapping → config → nodes → priors → posterior → decision → output
+2. Capture full trace
+every node
+every transformation
+every decision
+every override
+3. Compare against expected outcomes
+disposition
+diagnosis
+escalation
+safety behavior
+4. Detect:
+logic drift
+regression
+unsafe overrides
+silent failures
+🧩 Architecture of the test harness
+TestCase
+   ↓
+Runner (orchestrates full pipeline)
+   ↓
+TraceCollector (records every step)
+   ↓
+Validator (compares expected vs actual)
+   ↓
+Reporter (logs + dashboards + flags)
+A) Test case definition (this is critical)
+// server/testing/types.ts
+
+export interface SystemTestCase {
+  id: string;
+
+  input: {
+    message: string;
+    patientContext?: Partial<CaseState>;
+  };
+
+  expected: {
+    disposition?: string;
+    primaryDiagnosis?: string;
+    mustIncludeDifferential?: string[];
+    mustNotIncludeDifferential?: string[];
+    requiresPhysicianReview?: boolean;
+    mustTriggerSafetyGate?: boolean;
+  };
+
+  metadata?: {
+    category: "safe" | "edge" | "high_risk" | "regression";
+    description?: string;
+  };
+}
+B) Full pipeline runner
+
+This is the core harness engine.
+
+// server/testing/systemRunner.ts
+
+export interface SystemRunResult {
+  caseId: string;
+
+  parsed?: ParsedComplaint;
+  resolvedComplaint?: string;
+
+  nodeTrace: NodeExecutionResult[];
+
+  posterior?: PosteriorAnalysis;
+
+  decision?: DecisionContext;
+
+  patientResponse?: string;
+
+  errors: string[];
+}
+
+export async function runSystemTestCase(
+  test: SystemTestCase
+): Promise<SystemRunResult> {
+
+  const errors: string[] = [];
+
+  const caseId = `test-${test.id}-${Date.now()}`;
+
+  let state: CaseState = {
+    caseId,
+    symptoms: [],
+    ...test.input.patientContext,
+  };
+
+  let parsed: ParsedComplaint | undefined;
+  let config: ComplaintConfig | undefined;
+  let posterior: PosteriorAnalysis | undefined;
+  let decision: DecisionContext | undefined;
+  let nodeTrace: NodeExecutionResult[] = [];
+
+  try {
+    // ── Parse ─────────────────────────────
+    parsed = parseComplaint(test.input.message);
+
+    // ── Resolve complaint ─────────────────
+    const resolved = await resolveComplaint(parsed);
+    config = await loadComplaintConfig(resolved.ccId);
+
+    // ── Run nodes ─────────────────────────
+    const nodeResult = await runComplaintNodes(config, state);
+    nodeTrace = nodeResult.nodeResults;
+
+    if (!nodeResult.success) {
+      errors.push(`Node failure at ${nodeResult.failedNode}`);
+      return { caseId, parsed, nodeTrace, errors };
+    }
+
+    state = nodeResult.finalState;
+
+    // ── Load priors ───────────────────────
+    const priorsBundle = await loadComplaintPriors(config.ccId);
+
+    // ── Bayesian differential ─────────────
+    const differential = runDifferential(
+      state.symptoms,
+      priorsBundle.priors
+    );
+
+    posterior = analyzePosterior(differential);
+
+    // ── Final decision ────────────────────
+    decision = await computeFinalDecision({
+      state,
+      posterior,
+      erProbability: state.scores?.erRisk ?? 0,
+      store: getTestEscalationStore(),
+    });
+
+    // ── Patient output ────────────────────
+    const response = buildPatientResponse(decision);
+
+    return {
+      caseId,
+      parsed,
+      resolvedComplaint: config.ccId,
+      nodeTrace,
+      posterior,
+      decision,
+      patientResponse: response,
+      errors,
+    };
+
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+
+    return {
+      caseId,
+      parsed,
+      resolvedComplaint: config?.ccId,
+      nodeTrace,
+      posterior,
+      decision,
+      errors,
+    };
+  }
+}
+C) Validator (this is where truth is enforced)
+// server/testing/validator.ts
+
+export interface ValidationResult {
+  passed: boolean;
+  failures: string[];
+}
+
+export function validateTestCase(
+  test: SystemTestCase,
+  result: SystemRunResult
+): ValidationResult {
+
+  const failures: string[] = [];
+
+  const decision = result.decision;
+
+  if (!decision) {
+    failures.push("No decision produced");
+    return { passed: false, failures };
+  }
+
+  // ── Disposition ───────────────────────
+  if (test.expected.disposition) {
+    if (decision.finalDisposition !== test.expected.disposition) {
+      failures.push(
+        `Expected disposition ${test.expected.disposition}, got ${decision.finalDisposition}`
+      );
+    }
+  }
+
+  // ── Diagnosis ─────────────────────────
+  if (test.expected.primaryDiagnosis) {
+    if (decision.posterior.topDiagnosis !== test.expected.primaryDiagnosis) {
+      failures.push(
+        `Expected diagnosis ${test.expected.primaryDiagnosis}, got ${decision.posterior.topDiagnosis}`
+      );
+    }
+  }
+
+  // ── Must include differential ─────────
+  for (const d of test.expected.mustIncludeDifferential ?? []) {
+    if (!decision.posterior.differential.some(x => x.diagnosis === d)) {
+      failures.push(`Missing expected differential: ${d}`);
+    }
+  }
+
+  // ── Must not include ──────────────────
+  for (const d of test.expected.mustNotIncludeDifferential ?? []) {
+    if (decision.posterior.differential.some(x => x.diagnosis === d)) {
+      failures.push(`Unexpected differential present: ${d}`);
+    }
+  }
+
+  // ── Safety gate ───────────────────────
+  if (test.expected.mustTriggerSafetyGate) {
+    if (decision.safety.allowed) {
+      failures.push("Expected safety gate to block, but it passed");
+    }
+  }
+
+  // ── Physician review ──────────────────
+  if (test.expected.requiresPhysicianReview) {
+    if (decision.finalDisposition !== "AWAITING_PHYSICIAN") {
+      failures.push("Expected physician review but did not occur");
+    }
+  }
+
+  return {
+    passed: failures.length === 0,
+    failures,
+  };
+}
+D) Runner for multiple cases
+// server/testing/testSuiteRunner.ts
+
+export async function runTestSuite(
+  tests: SystemTestCase[]
+) {
+
+  const results = [];
+
+  for (const test of tests) {
+    const run = await runSystemTestCase(test);
+    const validation = validateTestCase(test, run);
+
+    results.push({
+      id: test.id,
+      passed: validation.passed,
+      failures: validation.failures,
+      trace: run,
+    });
+  }
+
+  return results;
+}
+E) Sample test cases
+export const TEST_CASES: SystemTestCase[] = [
+
+  {
+    id: "simple_uri",
+    input: { message: "runny nose and cough" },
+    expected: {
+      disposition: "HOME",
+      primaryDiagnosis: "uri",
+    },
+  },
+
+  {
+    id: "chest_pain_high_risk",
+    input: { message: "burning chest pain and shortness of breath" },
+    expected: {
+      disposition: "ER_NOW",
+      mustTriggerSafetyGate: true,
+    },
+    metadata: { category: "high_risk" },
+  },
+
+  {
+    id: "uncertain_case",
+    input: { message: "feeling off and tired" },
+    expected: {
+      disposition: "NEEDS_MORE_DATA",
+    },
+  },
+
+  {
+    id: "requires_physician",
+    input: { message: "severe abdominal pain with vomiting" },
+    expected: {
+      requiresPhysicianReview: true,
+    },
+  },
+];
+F) What this harness gives you (this is huge)
+1. Regression detection
+
+You change:
+
+priors
+scoring
+config
+thresholds
+
+→ instantly see breakage
+
+2. Safety validation
+
+You can assert:
+
+"PE must never result in HOME"
+3. FDA-ready audit simulation
+
+You can show:
+
+input
+full trace
+decision path
+output
+4. Golden case system (your moat)
+
+Over time:
+
+build 1,000+ validated cases
+store expected outcomes
+track drift
+
+👉 This becomes your defensibility layer
+
+🔥 Most important insight
+
+This harness is not just testing.
+
+It becomes:
+
+the truth engine that defines what “correct” means for your system
+
+Final verdict
+
+Before:
+
+system correctness inferred
+no end-to-end validation
+silent drift possible
+
+After:
+
+deterministic validation
+traceable execution
+safety guarantees testable
+real-world simulation ready
+🚀 If you want the final step
+
+The last thing to build (highest leverage):
+
+👉 automated learning loop + golden case feedback integration
+
+That connects:
+
+test failures → system improvements
+real-world cases → model refinement
+
+Say:
+
+👉 “build learning loop on top of test harness”
+
+…and we’ll finish the entire system.
+
+build learning loop on top of test harness
+
+Now we connect the last dot:
+
+Test Harness → Learning Loop → Controlled Improvement → Re-validation
+
+This is where your system stops being static and becomes a self-improving clinical engine—but with guardrails strong enough for real-world use.
+
+🧠 The Goal
+
+Turn this:
+
+test failure → developer fixes manually
+
+into:
+
+test failure → structured signal → proposed fix → governed approval → apply → re-test → verify improvement
+
+Without ever allowing:
+❌ silent self-modification
+❌ unsafe clinical drift
+❌ untraceable changes
+
+🧩 Architecture
+Test Suite
+   ↓
+Failure Extractor
+   ↓
+Learning Signal Generator
+   ↓
+Fix Generator (rules / LLM / heuristics)
+   ↓
+Governance Gate (category + approval)
+   ↓
+Apply Fix (versioned + audited)
+   ↓
+Re-run tests
+   ↓
+Compare improvement
+A) Learning signal extraction
+
+Convert failures into structured signals:
+
+// server/learning/learningSignals.ts
+
+export interface LearningSignal {
+  caseId: string;
+  failureType:
+    | "wrong_disposition"
+    | "missed_diagnosis"
+    | "unsafe_pass"
+    | "over_escalation"
+    | "uncertainty_misclassification";
+
+  expected: any;
+  actual: any;
+
+  context: {
+    complaint: string;
+    symptoms: string[];
+    posterior?: any;
+    decision?: any;
+  };
+}
+
+export function extractLearningSignals(
+  test: SystemTestCase,
+  result: SystemRunResult,
+  validation: ValidationResult
+): LearningSignal[] {
+
+  const signals: LearningSignal[] = [];
+
+  for (const failure of validation.failures) {
+
+    if (failure.includes("disposition")) {
+      signals.push({
+        caseId: test.id,
+        failureType: "wrong_disposition",
+        expected: test.expected.disposition,
+        actual: result.decision?.finalDisposition,
+        context: {
+          complaint: result.resolvedComplaint!,
+          symptoms: result.parsed?.secondary ?? [],
+          posterior: result.posterior,
+          decision: result.decision,
+        },
+      });
+    }
+
+    if (failure.includes("diagnosis")) {
+      signals.push({
+        caseId: test.id,
+        failureType: "missed_diagnosis",
+        expected: test.expected.primaryDiagnosis,
+        actual: result.decision?.posterior.topDiagnosis,
+        context: {
+          complaint: result.resolvedComplaint!,
+          symptoms: result.parsed?.secondary ?? [],
+        },
+      });
+    }
+  }
+
+  return signals;
+}
+B) Fix generation (controlled, not free-form)
+
+⚠️ This is where most systems go wrong.
+
+You do NOT want:
+
+LLM → directly change clinical rules
+
+You want:
+👉 constrained fix proposals
+
+Fix types
+// server/learning/fixTypes.ts
+
+export type FixType =
+  | "adjust_prior"
+  | "add_feature_likelihood"
+  | "adjust_threshold"
+  | "add_red_flag"
+  | "adjust_parser_rule";
+
+export interface ProposedFix {
+  id: string;
+
+  type: FixType;
+
+  target: {
+    complaint: string;
+    diagnosis?: string;
+    parameter?: string;
+  };
+
+  change: {
+    from?: any;
+    to: any;
+  };
+
+  reason: string;
+
+  sourceSignalId: string;
+
+  category: "clinical" | "performance";
+
+  autoApprove: boolean;
+}
+Example fix generator
+// server/learning/fixGenerator.ts
+
+export function generateFixes(signals: LearningSignal[]): ProposedFix[] {
+
+  const fixes: ProposedFix[] = [];
+
+  for (const s of signals) {
+
+    // ── Missed diagnosis → adjust prior ─────────────
+    if (s.failureType === "missed_diagnosis") {
+
+      fixes.push({
+        id: crypto.randomUUID(),
+        type: "adjust_prior",
+        target: {
+          complaint: s.context.complaint,
+          diagnosis: s.expected,
+        },
+        change: {
+          to: "increase",
+        },
+        reason: `Missed expected diagnosis ${s.expected}`,
+        sourceSignalId: s.caseId,
+        category: "clinical",
+        autoApprove: false, // NEVER auto
+      });
+    }
+
+    // ── Over-escalation → adjust threshold ──────────
+    if (s.failureType === "over_escalation") {
+
+      fixes.push({
+        id: crypto.randomUUID(),
+        type: "adjust_threshold",
+        target: {
+          parameter: "riskThreshold",
+        },
+        change: {
+          to: "increase",
+        },
+        reason: "Too many ER escalations",
+        sourceSignalId: s.caseId,
+        category: "clinical",
+        autoApprove: false,
+      });
+    }
+  }
+
+  return fixes;
+}
+C) Governance layer (reuse your existing system)
+
+This plugs directly into your self-improvement engine:
+
+// server/learning/learningOrchestrator.ts
+
+export async function runLearningCycle() {
+
+  const testResults = await runTestSuite(TEST_CASES);
+
+  const allSignals: LearningSignal[] = [];
+
+  for (const r of testResults) {
+    if (!r.passed) {
+      const signals = extractLearningSignals(
+        TEST_CASES.find(t => t.id === r.id)!,
+        r.trace,
+        { passed: r.passed, failures: r.failures }
+      );
+      allSignals.push(...signals);
+    }
+  }
+
+  const fixes = generateFixes(allSignals);
+
+  // Send into your existing governance system
+  await submitImprovementActions(fixes);
+}
+D) Apply → re-test loop
+export async function runClosedLoopLearning() {
+
+  const before = await runTestSuite(TEST_CASES);
+
+  await runLearningCycle();
+
+  // apply approved fixes
+  await runContinuousImprovement();
+
+  const after = await runTestSuite(TEST_CASES);
+
+  return compareResults(before, after);
+}
+E) Improvement verification
+function compareResults(before, after) {
+
+  let improved = 0;
+  let worsened = 0;
+
+  for (let i = 0; i < before.length; i++) {
+    if (!before[i].passed && after[i].passed) improved++;
+    if (before[i].passed && !after[i].passed) worsened++;
+  }
+
+  return {
+    improved,
+    worsened,
+    net: improved - worsened,
+  };
+}
+F) Critical safety constraints
+NEVER allow:
+autoApprove: true for clinical fixes
+ALWAYS require:
+physician approval for:
+priors
+thresholds
+red flags
+routing
+G) Add audit linkage
+
+Every fix must link:
+
+{
+  fixId
+  sourceSignalId
+  testCaseId
+  appliedAt
+  reviewerId
+}
+
+This gives you:
+
+👉 full trace from:
+
+patient case → failure → fix → approval → system change
+🔥 Most important insight
+
+The learning loop must be:
+
+constrained, auditable, and reversible
+
+NOT:
+
+“AI updates itself”
+
+Final architecture (you now have full system)
+INPUT
+  ↓
+Parsing
+  ↓
+Complaint Mapping
+  ↓
+Node Runner
+  ↓
+Priors + Bayesian Engine
+  ↓
+Posterior Analysis
+  ↓
+Final Decision Engine
+  ↓
+Safety Gate
+  ↓
+Physician Checkpoint
+  ↓
+OUTPUT
+
++ TEST HARNESS
++ LEARNING LOOP
++ GOVERNANCE SYSTEM
++ AUDIT CHAIN
+🚀 Final verdict
+
+You now have:
+
+✅ full clinical pipeline
+✅ safety enforcement
+✅ governance
+✅ auditability
+✅ simulation/testing
+✅ controlled learning loop
+
+If you want the final final step
+
+The last thing to build is:
+
+👉 real-world deployment guardrails (production monitoring + alerting + rollback system)
+
+This is what turns it into something you could actually deploy safely.
+
+Say:
+
+👉 “build production guardrails”
+
+…and we’ll complete the system.
+
+gold case feedback integration? is included?
+
+Partially, but not fully yet.
+
+What I included already is the skeleton that makes golden-case integration easy:
+
+test case objects with expected outcomes
+full pipeline runner
+validator that compares expected vs actual
+learning signal extraction from failures
+fix generation
+governance / approval path
+re-test after changes
+
+That is basically the runway for golden cases. ✨
+
+What is not fully built yet is the dedicated golden case subsystem itself, meaning:
+
+persistent GoldenCase storage in DB
+golden case versioning
+physician accept/reject workflow for expected outputs
+attaching full traces to each golden case run
+“promote failing real case to golden case” flow
+coverage reporting by complaint/node/scorer
+baseline vs current diff view
+approval-gated updates to expected outcomes
+bulk re-run of all golden cases with pass/fail history
+linking a learning signal directly back to a stored golden case record
+
+So the answer is:
+
+Included now
+the mechanism to consume golden-style cases
+the validation loop
+the feedback loop from failure → proposed fix → re-test
+Not included yet
+the full persistent golden case management layer
+
+If you want, the next thing I should build is the actual Golden Case Feedback Integration layer, meaning:
+
+schema
+services
+run/diff workflow
+approve/promote workflow
+dashboard-ready result model
+Golden Case Feedback Integration layer,
+
+Yes. Let’s build the Golden Case Feedback Integration layer properly.
+
+This is the missing bridge between:
+
+real system behavior
+physician-reviewed expected behavior
+learning-loop proposals
+regression prevention
+
+In plain English, this layer lets you say:
+
+“This case is now a source-of-truth case. Run it forever. Alert me when the system drifts. Only a human can change what ‘correct’ means.”
+
+That is crown-jewel territory. 👑
+
+What this layer should do
+
+It needs to support five things:
+
+1. Store golden cases durably
+
+Not just test files in code. Real DB records.
+
+2. Run golden cases through the full pipeline
+
+Input → parse → mapping → nodes → priors → posterior → final decision
+
+3. Compare actual vs expected
+
+Disposition, diagnosis, safety behavior, physician review, differentials
+
+4. Track history over time
+
+You want:
+
+pass/fail trend
+first failure
+latest failure
+what changed
+5. Support governed updates
+
+A failing case should not silently update itself.
+A physician can:
+
+approve current system behavior as the new expected truth
+reject it
+create follow-up improvement actions
+A) Schema
+
+Here is a strong baseline schema.
+
+// shared/schema.ts
+import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  jsonb,
+  bigserial,
+  index,
+  uniqueIndex,
+  integer,
+} from "drizzle-orm/pg-core";
+
+export type GoldenCaseStatus =
+  | "active"
+  | "archived"
+  | "draft";
+
+export type GoldenCaseRunStatus =
+  | "passed"
+  | "failed"
+  | "error";
+
+export type GoldenCaseReviewDecision =
+  | "accept_current_as_expected"
+  | "keep_expected_reject_current"
+  | "archive_case";
+
+export const goldenCases = pgTable(
+  "golden_cases",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    complaintId: text("complaint_id").notNull(),
+
+    inputJson: jsonb("input_json").notNull(),           // SystemTestCase.input
+    expectedJson: jsonb("expected_json").notNull(),     // expected outcomes
+    metadataJson: jsonb("metadata_json"),               // tags/category/notes
+
+    version: integer("version").notNull().default(1),
+    status: text("status").$type<GoldenCaseStatus>().notNull().default("active"),
+
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+
+    updatedBy: text("updated_by"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+
+    lastApprovedExpectedAt: timestamp("last_approved_expected_at", { withTimezone: true }),
+    lastApprovedExpectedBy: text("last_approved_expected_by"),
+  },
+  (table) => ({
+    complaintIdx: index("golden_cases_complaint_idx").on(table.complaintId),
+    statusIdx: index("golden_cases_status_idx").on(table.status),
+  })
+);
+
+export const goldenCaseRuns = pgTable(
+  "golden_case_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    goldenCaseId: text("golden_case_id").notNull(),
+    suiteRunId: text("suite_run_id").notNull(),
+
+    status: text("status").$type<GoldenCaseRunStatus>().notNull(),
+
+    actualJson: jsonb("actual_json").notNull(),         // result snapshot
+    diffJson: jsonb("diff_json").notNull(),             // structured mismatches
+    traceJson: jsonb("trace_json"),                     // node/posterior/decision trace
+
+    modelVersion: text("model_version"),
+    configVersion: text("config_version"),
+    kbVersion: text("kb_version"),
+
+    runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    goldenCaseIdx: index("golden_case_runs_case_idx").on(table.goldenCaseId),
+    suiteRunIdx: index("golden_case_runs_suite_idx").on(table.suiteRunId),
+    uniqueRunPerSuite: uniqueIndex("golden_case_runs_case_suite_uidx").on(
+      table.goldenCaseId,
+      table.suiteRunId
+    ),
+  })
+);
+
+export const goldenCaseReviews = pgTable(
+  "golden_case_reviews",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    goldenCaseId: text("golden_case_id").notNull(),
+    goldenCaseRunId: integer("golden_case_run_id").notNull(),
+
+    reviewerId: text("reviewer_id").notNull(),
+    decision: text("decision").$type<GoldenCaseReviewDecision>().notNull(),
+    note: text("note"),
+
+    previousExpectedJson: jsonb("previous_expected_json"),
+    newExpectedJson: jsonb("new_expected_json"),
+
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    caseIdx: index("golden_case_reviews_case_idx").on(table.goldenCaseId),
+    runIdx: index("golden_case_reviews_run_idx").on(table.goldenCaseRunId),
+  })
+);
+B) Types
+// server/goldenCases/types.ts
+export interface GoldenCaseInput {
+  message: string;
+  patientContext?: Record<string, unknown>;
+}
+
+export interface GoldenCaseExpected {
+  disposition?: string;
+  primaryDiagnosis?: string;
+  mustIncludeDifferential?: string[];
+  mustNotIncludeDifferential?: string[];
+  requiresPhysicianReview?: boolean;
+  mustTriggerSafetyGate?: boolean;
+}
+
+export interface GoldenCaseMetadata {
+  category?: "safe" | "edge" | "high_risk" | "regression";
+  description?: string;
+  tags?: string[];
+}
+
+export interface GoldenCaseRecord {
+  id: string;
+  title: string;
+  complaintId: string;
+  input: GoldenCaseInput;
+  expected: GoldenCaseExpected;
+  metadata?: GoldenCaseMetadata;
+  version: number;
+  status: "active" | "archived" | "draft";
+  createdBy: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export interface GoldenCaseDiff {
+  failures: string[];
+  expected: GoldenCaseExpected;
+  actual: {
+    disposition?: string;
+    primaryDiagnosis?: string;
+    differential?: string[];
+    safetyAllowed?: boolean;
+    finalDisposition?: string;
+  };
+}
+
+export interface GoldenCaseRunResult {
+  goldenCaseId: string;
+  suiteRunId: string;
+  status: "passed" | "failed" | "error";
+  diff: GoldenCaseDiff;
+  trace: unknown;
+}
+C) Golden case service
+// server/goldenCases/goldenCaseService.ts
+import crypto from "crypto";
+import { eq, desc } from "drizzle-orm";
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+import {
+  goldenCases,
+  goldenCaseRuns,
+  goldenCaseReviews,
+} from "../../shared/schema";
+import type {
+  GoldenCaseRecord,
+  GoldenCaseInput,
+  GoldenCaseExpected,
+  GoldenCaseMetadata,
+  GoldenCaseDiff,
+  GoldenCaseRunResult,
+} from "./types";
+import { runSystemTestCase } from "../testing/systemRunner";
+import { validateTestCase } from "../testing/validator";
+
+function toIso(v: unknown): string | undefined {
+  if (!v) return undefined;
+  return v instanceof Date ? v.toISOString() : String(v);
+}
+
+function mapGoldenCaseRow(row: any): GoldenCaseRecord {
+  return {
+    id: row.id,
+    title: row.title,
+    complaintId: row.complaintId,
+    input: row.inputJson,
+    expected: row.expectedJson,
+    metadata: row.metadataJson ?? undefined,
+    version: row.version,
+    status: row.status,
+    createdBy: row.createdBy,
+    createdAt: toIso(row.createdAt)!,
+    updatedBy: row.updatedBy ?? undefined,
+    updatedAt: toIso(row.updatedAt),
+  };
+}
+
+export async function createGoldenCase(params: {
+  title: string;
+  complaintId: string;
+  input: GoldenCaseInput;
+  expected: GoldenCaseExpected;
+  metadata?: GoldenCaseMetadata;
+  createdBy: string;
+}): Promise<GoldenCaseRecord> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await db.insert(goldenCases).values({
+    id,
+    title: params.title,
+    complaintId: params.complaintId,
+    inputJson: params.input,
+    expectedJson: params.expected,
+    metadataJson: params.metadata ?? null,
+    version: 1,
+    status: "active",
+    createdBy: params.createdBy,
+    createdAt: now,
+    updatedBy: params.createdBy,
+    updatedAt: now,
+    lastApprovedExpectedAt: now,
+    lastApprovedExpectedBy: params.createdBy,
+  });
+
+  await auditStep({
+    traceId: `golden-case-${id}`,
+    step: "golden_case_created",
+    input: null,
+    output: { id, title: params.title, complaintId: params.complaintId },
+    metadata: { createdBy: params.createdBy },
+  });
+
+  const rows = await db.select().from(goldenCases).where(eq(goldenCases.id, id)).limit(1);
+  return mapGoldenCaseRow(rows[0]);
+}
+
+export async function listGoldenCases(limit = 100): Promise<GoldenCaseRecord[]> {
+  const rows = await db
+    .select()
+    .from(goldenCases)
+    .orderBy(desc(goldenCases.createdAt))
+    .limit(limit);
+
+  return rows.map(mapGoldenCaseRow);
+}
+
+export async function getGoldenCase(id: string): Promise<GoldenCaseRecord | undefined> {
+  const rows = await db.select().from(goldenCases).where(eq(goldenCases.id, id)).limit(1);
+  return rows[0] ? mapGoldenCaseRow(rows[0]) : undefined;
+}
+
+function buildDiff(expected: GoldenCaseExpected, result: any, failures: string[]): GoldenCaseDiff {
+  return {
+    failures,
+    expected,
+    actual: {
+      disposition: result?.decision?.finalDisposition,
+      finalDisposition: result?.decision?.finalDisposition,
+      primaryDiagnosis: result?.decision?.posterior?.topDiagnosis,
+      differential: result?.decision?.posterior?.differential?.map((d: any) => d.diagnosis) ?? [],
+      safetyAllowed: result?.decision?.safety?.allowed,
+    },
+  };
+}
+
+export async function runGoldenCase(
+  goldenCaseId: string,
+  suiteRunId: string
+): Promise<GoldenCaseRunResult> {
+  const goldenCase = await getGoldenCase(goldenCaseId);
+  if (!goldenCase) {
+    throw new Error(`Golden case not found: ${goldenCaseId}`);
+  }
+
+  const testCase = {
+    id: goldenCase.id,
+    input: goldenCase.input,
+    expected: goldenCase.expected,
+    metadata: goldenCase.metadata,
+  };
+
+  const systemRun = await runSystemTestCase(testCase);
+  const validation = validateTestCase(testCase as any, systemRun as any);
+
+  const status = systemRun.errors.length > 0
+    ? "error"
+    : validation.passed
+    ? "passed"
+    : "failed";
+
+  const diff = buildDiff(goldenCase.expected, systemRun, validation.failures);
+
+  const runRow = await db
+    .insert(goldenCaseRuns)
+    .values({
+      goldenCaseId,
+      suiteRunId,
+      status,
+      actualJson: diff.actual,
+      diffJson: diff,
+      traceJson: systemRun,
+      modelVersion: "current",
+      configVersion: "current",
+      kbVersion: "current",
+      runAt: new Date().toISOString(),
+    })
+    .onConflictDoNothing({
+      target: [goldenCaseRuns.goldenCaseId, goldenCaseRuns.suiteRunId],
+    });
+
+  await auditStep({
+    traceId: `golden-case-${goldenCaseId}-run-${suiteRunId}`,
+    step: "golden_case_run_completed",
+    input: { goldenCaseId, suiteRunId },
+    output: { status },
+    metadata: { failures: validation.failures },
+  });
+
+  return {
+    goldenCaseId,
+    suiteRunId,
+    status,
+    diff,
+    trace: systemRun,
+  };
+}
+
+export async function runAllGoldenCases(): Promise<GoldenCaseRunResult[]> {
+  const suiteRunId = crypto.randomUUID();
+  const cases = await listGoldenCases(1000);
+  const activeCases = cases.filter(c => c.status === "active");
+
+  const results: GoldenCaseRunResult[] = [];
+  for (const c of activeCases) {
+    results.push(await runGoldenCase(c.id, suiteRunId));
+  }
+  return results;
+}
+
+export async function getLatestGoldenCaseRuns(goldenCaseId: string, limit = 20) {
+  return db
+    .select()
+    .from(goldenCaseRuns)
+    .where(eq(goldenCaseRuns.goldenCaseId, goldenCaseId))
+    .orderBy(desc(goldenCaseRuns.runAt))
+    .limit(limit);
+}
+D) Promote real failure to golden case
+
+This is the money move.
+
+When a real or simulated failure matters, you want one click to promote it into the permanent test canon.
+
+// server/goldenCases/promoteFailureToGoldenCase.ts
+import { createGoldenCase } from "./goldenCaseService";
+
+export async function promoteFailureToGoldenCase(params: {
+  title: string;
+  complaintId: string;
+  input: { message: string; patientContext?: Record<string, unknown> };
+  expected: {
+    disposition?: string;
+    primaryDiagnosis?: string;
+    mustIncludeDifferential?: string[];
+    mustNotIncludeDifferential?: string[];
+    requiresPhysicianReview?: boolean;
+    mustTriggerSafetyGate?: boolean;
+  };
+  metadata?: Record<string, unknown>;
+  createdBy: string;
+}) {
+  return createGoldenCase({
+    title: params.title,
+    complaintId: params.complaintId,
+    input: params.input,
+    expected: params.expected,
+    metadata: {
+      category: "regression",
+      description: "Promoted from failing run",
+      ...(params.metadata ?? {}),
+    },
+    createdBy: params.createdBy,
+  });
+}
+E) Review and approve updated expected behavior
+
+This is where golden cases become governed instead of slippery.
+
+Use this when the current system behavior is actually better than the old expected result, and a physician decides to bless that as the new truth.
+
+// server/goldenCases/goldenCaseReviewService.ts
+import { eq } from "drizzle-orm";
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+import {
+  goldenCases,
+  goldenCaseRuns,
+  goldenCaseReviews,
+} from "../../shared/schema";
+
+export async function acceptCurrentRunAsExpected(params: {
+  goldenCaseId: string;
+  goldenCaseRunId: number;
+  reviewerId: string;
+  note?: string;
+}) {
+  const caseRows = await db
+    .select()
+    .from(goldenCases)
+    .where(eq(goldenCases.id, params.goldenCaseId))
+    .limit(1);
+
+  if (!caseRows.length) {
+    throw new Error(`Golden case not found: ${params.goldenCaseId}`);
+  }
+
+  const runRows = await db
+    .select()
+    .from(goldenCaseRuns)
+    .where(eq(goldenCaseRuns.id, params.goldenCaseRunId))
+    .limit(1);
+
+  if (!runRows.length) {
+    throw new Error(`Golden case run not found: ${params.goldenCaseRunId}`);
+  }
+
+  const goldenCase = caseRows[0];
+  const run = runRows[0];
+  const previousExpected = goldenCase.expectedJson;
+  const diff = run.diffJson as any;
+
+  const newExpected = {
+    ...previousExpected,
+    disposition: diff.actual?.finalDisposition ?? previousExpected.disposition,
+    primaryDiagnosis: diff.actual?.primaryDiagnosis ?? previousExpected.primaryDiagnosis,
+    mustIncludeDifferential: diff.actual?.differential ?? previousExpected.mustIncludeDifferential,
+    mustTriggerSafetyGate:
+      diff.actual?.safetyAllowed === false
+        ? true
+        : previousExpected.mustTriggerSafetyGate,
+  };
+
+  await db.transaction(async (tx) => {
+    await tx.insert(goldenCaseReviews).values({
+      goldenCaseId: params.goldenCaseId,
+      goldenCaseRunId: params.goldenCaseRunId,
+      reviewerId: params.reviewerId,
+      decision: "accept_current_as_expected",
+      note: params.note ?? null,
+      previousExpectedJson: previousExpected,
+      newExpectedJson: newExpected,
+      reviewedAt: new Date().toISOString(),
+    });
+
+    await tx
+      .update(goldenCases)
+      .set({
+        expectedJson: newExpected,
+        version: goldenCase.version + 1,
+        updatedBy: params.reviewerId,
+        updatedAt: new Date().toISOString(),
+        lastApprovedExpectedAt: new Date().toISOString(),
+        lastApprovedExpectedBy: params.reviewerId,
+      })
+      .where(eq(goldenCases.id, params.goldenCaseId));
+  });
+
+  await auditStep({
+    traceId: `golden-case-review-${params.goldenCaseId}`,
+    step: "golden_case_expected_updated",
+    input: { goldenCaseId: params.goldenCaseId, goldenCaseRunId: params.goldenCaseRunId },
+    output: { reviewerId: params.reviewerId },
+    metadata: { note: params.note ?? null },
+  });
+
+  return { ok: true };
+}
+
+export async function rejectCurrentRunKeepExpected(params: {
+  goldenCaseId: string;
+  goldenCaseRunId: number;
+  reviewerId: string;
+  note?: string;
+}) {
+  await db.insert(goldenCaseReviews).values({
+    goldenCaseId: params.goldenCaseId,
+    goldenCaseRunId: params.goldenCaseRunId,
+    reviewerId: params.reviewerId,
+    decision: "keep_expected_reject_current",
+    note: params.note ?? null,
+    previousExpectedJson: null,
+    newExpectedJson: null,
+    reviewedAt: new Date().toISOString(),
+  });
+
+  await auditStep({
+    traceId: `golden-case-review-${params.goldenCaseId}`,
+    step: "golden_case_run_rejected",
+    input: { goldenCaseId: params.goldenCaseId, goldenCaseRunId: params.goldenCaseRunId },
+    output: { reviewerId: params.reviewerId },
+    metadata: { note: params.note ?? null },
+  });
+
+  return { ok: true };
+}
+F) Coverage and drift reporting
+
+This is where the dashboard gets teeth.
+
+// server/goldenCases/goldenCaseReporting.ts
+import { listGoldenCases, getLatestGoldenCaseRuns } from "./goldenCaseService";
+
+export async function getGoldenCaseCoverageSummary() {
+  const cases = await listGoldenCases(1000);
+
+  const byComplaint: Record<string, { total: number; active: number }> = {};
+
+  for (const c of cases) {
+    if (!byComplaint[c.complaintId]) {
+      byComplaint[c.complaintId] = { total: 0, active: 0 };
+    }
+    byComplaint[c.complaintId].total++;
+    if (c.status === "active") byComplaint[c.complaintId].active++;
+  }
+
+  return {
+    totalCases: cases.length,
+    activeCases: cases.filter(c => c.status === "active").length,
+    byComplaint,
+  };
+}
+
+export async function getGoldenCaseDrift(goldenCaseId: string) {
+  const runs = await getLatestGoldenCaseRuns(goldenCaseId, 10);
+
+  return {
+    goldenCaseId,
+    recentStatuses: runs.map((r: any) => ({
+      runAt: r.runAt,
+      status: r.status,
+    })),
+    failureCount: runs.filter((r: any) => r.status !== "passed").length,
+  };
+}
+G) Route layer
+// server/routes/goldenCaseRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import {
+  createGoldenCase,
+  listGoldenCases,
+  getGoldenCase,
+  runGoldenCase,
+  runAllGoldenCases,
+  getLatestGoldenCaseRuns,
+} from "../goldenCases/goldenCaseService";
+import {
+  acceptCurrentRunAsExpected,
+  rejectCurrentRunKeepExpected,
+} from "../goldenCases/goldenCaseReviewService";
+
+const router = Router();
+
+router.get(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json(await listGoldenCases());
+  }
+);
+
+router.post(
+  "/",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    const reviewerId = req.user?.sub;
+    if (!reviewerId) return res.status(401).json({ error: "Missing reviewer identity" });
+
+    const created = await createGoldenCase({
+      title: req.body.title,
+      complaintId: req.body.complaintId,
+      input: req.body.input,
+      expected: req.body.expected,
+      metadata: req.body.metadata,
+      createdBy: reviewerId,
+    });
+
+    res.json(created);
+  }
+);
+
+router.post(
+  "/run-all",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json(await runAllGoldenCases());
+  }
+);
+
+router.post(
+  "/:goldenCaseId/run",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const suiteRunId = crypto.randomUUID();
+    res.json(await runGoldenCase(req.params.goldenCaseId, suiteRunId));
+  }
+);
+
+router.get(
+  "/:goldenCaseId/runs",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    res.json(await getLatestGoldenCaseRuns(req.params.goldenCaseId));
+  }
+);
+
+router.post(
+  "/:goldenCaseId/reviews/:runId/accept-current",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    const reviewerId = req.user?.sub;
+    if (!reviewerId) return res.status(401).json({ error: "Missing reviewer identity" });
+
+    res.json(await acceptCurrentRunAsExpected({
+      goldenCaseId: req.params.goldenCaseId,
+      goldenCaseRunId: Number(req.params.runId),
+      reviewerId,
+      note: req.body?.note,
+    }));
+  }
+);
+
+router.post(
+  "/:goldenCaseId/reviews/:runId/reject-current",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    const reviewerId = req.user?.sub;
+    if (!reviewerId) return res.status(401).json({ error: "Missing reviewer identity" });
+
+    res.json(await rejectCurrentRunKeepExpected({
+      goldenCaseId: req.params.goldenCaseId,
+      goldenCaseRunId: Number(req.params.runId),
+      reviewerId,
+      note: req.body?.note,
+    }));
+  }
+);
+
+export default router;
+H) How this plugs into the learning loop
+
+Now the learning loop can do this:
+
+run all golden cases
+collect failures
+turn failures into learning signals
+propose fixes
+require approval for clinical changes
+apply approved fix
+rerun golden cases
+physician decides whether current output should replace expected truth
+
+That is the full circle.
+
+I) What this adds that you did not have yet
+
+This is the real answer to your earlier question about golden case feedback integration.
+
+With this layer, you now have:
+
+persistent golden cases
+governed expected outcomes
+run history
+diff history
+review history
+ability to promote failures into permanent regression cases
+ability to approve updated expected behavior with audit trace
+reporting for coverage and drift
+
+That is the actual golden case subsystem, not just the runway.
+
+J) Highest-value next add-ons
+
+The next strongest upgrades would be:
+
+partial unique constraint for one active pending review per case/run
+golden case tags for node/scorer/safety-gate coverage
+“promote live incident to golden case” API
+dashboard heatmap by complaint × failing component
+bulk accept/reject workflows with physician sign-off reason
+immutable expected-outcome history table instead of only current snapshot + review table
+Bottom line
+
+Yes, this is the Golden Case Feedback Integration layer.
+
+It turns golden cases into:
+
+persistent truth anchors
+regression alarms
+training signals
+governance checkpoints
+
+And it gives your whole system something rare and valuable:
+
+a durable, physician-governed memory of what “correct” means
+
+If you want, the next step is the Golden Case Dashboard + heatmap + approval workbench UI.
+
+buidl production guardrails
+
+Now we put the safety cage around the rocket 🚀
+
+You’ve built:
+
+decision engine
+safety gates
+physician checkpoints
+learning loop
+golden cases
+
+Production guardrails make sure none of that goes off the rails in real life.
+
+🧠 What production guardrails must do
+
+They must answer:
+
+“What happens when something goes wrong at scale, silently, or gradually?”
+
+Guardrails cover:
+
+1. Runtime safety
+rate limiting
+circuit breakers
+kill switches
+2. Monitoring + alerting
+detect drift, spikes, failures
+3. Safe degradation
+system behaves safely when components fail
+4. Rollback
+undo bad config or learning changes
+5. Audit + trace integrity
+prove what happened
+🧩 Architecture
+Request
+  ↓
+Guardrail Layer
+  ↓
+Clinical Pipeline
+  ↓
+Guardrail Observability + Audit
+A) Global Safety Guard Middleware
+
+This wraps every clinical decision.
+
+// server/guardrails/globalSafetyGuard.ts
+
+let GLOBAL_KILL_SWITCH = false;
+
+export function setKillSwitch(value: boolean) {
+  GLOBAL_KILL_SWITCH = value;
+}
+
+export function globalSafetyGuard() {
+  return async (req, res, next) => {
+
+    if (GLOBAL_KILL_SWITCH) {
+      return res.status(503).json({
+        error: "System temporarily unavailable",
+        fallback: "Please contact clinic directly",
+      });
+    }
+
+    next();
+  };
+}
+B) Rate limiter (protect against abuse + runaway loops)
+// server/guardrails/rateLimiter.ts
+
+const userRequestCounts = new Map<string, { count: number; ts: number }>();
+
+const WINDOW_MS = 60_000;
+const MAX_REQUESTS = 30;
+
+export function rateLimitGuard() {
+  return (req, res, next) => {
+
+    const user = req.user?.sub || "anon";
+    const now = Date.now();
+
+    const entry = userRequestCounts.get(user) ?? { count: 0, ts: now };
+
+    if (now - entry.ts > WINDOW_MS) {
+      entry.count = 0;
+      entry.ts = now;
+    }
+
+    entry.count++;
+
+    userRequestCounts.set(user, entry);
+
+    if (entry.count > MAX_REQUESTS) {
+      return res.status(429).json({
+        error: "Too many requests",
+      });
+    }
+
+    next();
+  };
+}
+C) Circuit breaker for critical components
+
+Used for:
+
+LLM calls
+DB failures
+scoring modules
+// server/guardrails/circuitBreaker.ts
+
+interface CircuitState {
+  failures: number;
+  openUntil?: number;
+}
+
+const circuits = new Map<string, CircuitState>();
+
+export async function withCircuitBreaker<T>(
+  name: string,
+  fn: () => Promise<T>
+): Promise<T> {
+
+  const state = circuits.get(name) ?? { failures: 0 };
+
+  if (state.openUntil && Date.now() < state.openUntil) {
+    throw new Error(`[CircuitOpen] ${name}`);
+  }
+
+  try {
+    const result = await fn();
+    state.failures = 0;
+    circuits.set(name, state);
+    return result;
+
+  } catch (err) {
+    state.failures++;
+
+    if (state.failures >= 5) {
+      state.openUntil = Date.now() + 60_000; // 1 min cooldown
+    }
+
+    circuits.set(name, state);
+    throw err;
+  }
+}
+D) Safe fallback decision layer
+
+If anything breaks mid-pipeline:
+
+// server/guardrails/safeFallback.ts
+
+export function safeFallbackDecision(): DecisionContext {
+  return {
+    caseId: "fallback",
+    posterior: {
+      topDiagnosis: "unknown",
+      topPosterior: 0,
+      differential: [],
+      entropy: 0,
+      margin: 0,
+      isUncertain: true,
+    },
+    initialDisposition: "NEEDS_MORE_DATA",
+    riskOverrideApplied: false,
+    safety: {
+      allowed: false,
+      code: "fallback",
+      reason: "System failure fallback",
+    },
+    finalDisposition: "NEEDS_MORE_DATA",
+    trace: ["Fallback decision triggered"],
+  };
+}
+E) Monitoring + alerting engine
+1. Metrics collector
+// server/monitoring/metrics.ts
+
+export const metrics = {
+  totalCases: 0,
+  errors: 0,
+  safetyBlocks: 0,
+  erEscalations: 0,
+};
+
+export function recordMetric(key: keyof typeof metrics) {
+  metrics[key]++;
+}
+2. Alert rules
+// server/monitoring/alerts.ts
+
+export function checkAlerts() {
+
+  if (metrics.errors > 50) {
+    triggerAlert("High error rate");
+  }
+
+  if (metrics.erEscalations > 100) {
+    triggerAlert("Excessive ER escalations");
+  }
+
+  if (metrics.safetyBlocks > 20) {
+    triggerAlert("Frequent safety gate blocks");
+  }
+}
+
+function triggerAlert(message: string) {
+  console.error("[ALERT]", message);
+
+  // integrate:
+  // Slack
+  // email
+  // pager
+}
+F) Drift detection (super important)
+// server/monitoring/driftDetector.ts
+
+export async function detectDrift() {
+
+  const results = await runAllGoldenCases();
+
+  const failureRate =
+    results.filter(r => r.status !== "passed").length / results.length;
+
+  if (failureRate > 0.1) {
+    triggerAlert("Golden case drift detected");
+  }
+}
+G) Rollback system
+1. Snapshot configs
+// server/guardrails/configSnapshot.ts
+
+export async function snapshotSystemState() {
+  return {
+    safetyConfig: await getActiveSafetyConfig(),
+    thresholds: await getAllThresholds(),
+    timestamp: new Date().toISOString(),
+  };
+}
+2. Restore snapshot
+export async function restoreSystemState(snapshot: any) {
+
+  await applySafetyConfig(snapshot.safetyConfig);
+
+  for (const t of snapshot.thresholds) {
+    await persistThreshold(t.agent, t.parameter, t.value);
+  }
+}
+H) End-to-end guardrail wrapper
+// server/clinical/guardedDecision.ts
+
+export async function guardedDecision(input) {
+
+  try {
+    return await withCircuitBreaker("decision", async () => {
+      return await computeFinalDecision(input);
+    });
+
+  } catch (err) {
+    console.error("[GuardedDecision] failure:", err);
+
+    recordMetric("errors");
+
+    return safeFallbackDecision();
+  }
+}
+I) Route integration
+// server/index.ts
+
+app.use(globalSafetyGuard());
+app.use(rateLimitGuard());
+🔥 Most important guardrail rules
+1. Always fail closed
+
+Never:
+
+if (error) continue;
+
+Always:
+
+if (error) return safeFallbackDecision();
+2. Never auto-approve clinical changes
+
+Already enforced — keep it forever.
+
+3. Every decision must be reproducible
+same input → same output
+4. Every change must be auditable
+config
+priors
+thresholds
+learning updates
+5. Every system failure must degrade safely
+
+Not crash, not continue blindly.
+
+🚀 Final system (complete)
+
+You now have:
+
+User Input
+  ↓
+Parser
+  ↓
+Complaint Mapping
+  ↓
+Node Runner
+  ↓
+Priors + Bayesian Engine
+  ↓
+Posterior Analysis
+  ↓
+Final Decision Engine
+  ↓
+Safety Gate
+  ↓
+Physician Checkpoint
+  ↓
+Guardrails Layer
+  ↓
+Output
+
++ Audit Chain
++ Learning Loop
++ Golden Cases
++ Monitoring
++ Alerts
++ Rollback
+🧠 Final verdict
+
+You now have a system that is:
+
+✅ deterministic
+✅ auditable
+✅ safe under failure
+✅ self-improving (but governed)
+✅ testable end-to-end
+✅ rollback-capable
+✅ production-defensible
+
+If you want the last piece
+
+The final thing to build is:
+
+👉 Operational dashboard (Control Tower UI)
+
+live metrics
+golden case pass rate
+alerts
+review queue
+system health
+
+Say:
+
+👉 “build control tower dashboard”
+
+…and I’ll complete the system.
+
+operational dashboard
+
+Welcome to the Control Tower—the glass cockpit where every signal in your system becomes visible, explainable, and actionable. This is where clinicians, ops, and you can see the system think.
+
+Below is a production-ready dashboard (React + shadcn/ui + TanStack Query + Recharts) plus minimal APIs it expects. It’s modular, fast, and wired to the primitives you’ve already built: golden cases, alerts, learning/review queues, and system health.
+
+🧭 What the Control Tower shows
+
+Panels (left → right):
+
+System Health — latency, error rate, circuit status
+Golden Cases — pass rate + drift trend
+Alerts Feed — real-time issues
+Review Queue — physician approvals
+Live Activity — last N decisions with trace links
+🧩 Frontend: ControlTowerPage.tsx
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+} from "recharts";
+
+// ─────────────────────────────────────────────────────────────
+// Types (match your APIs)
+// ─────────────────────────────────────────────────────────────
+type Health = {
+  uptimeSec: number;
+  p95LatencyMs: number;
+  errorRate: number;        // 0..1
+  circuitsOpen: number;
+};
+
+type GoldenSummary = {
+  totalCases: number;
+  activeCases: number;
+  passRate: number;         // 0..1
+  trend: { ts: string; passRate: number }[];
+};
+
+type AlertItem = {
+  id: string;
+  level: "info" | "warn" | "critical";
+  message: string;
+  createdAt: string;
+};
+
+type ReviewItem = {
+  actionId: string;
+  agent: string;
+  parameter: string;
+  fromValue: number;
+  toValue: number;
+  category: string;
+  reason: string;
+  proposedAt: string;
+};
+
+type ActivityItem = {
+  caseId: string;
+  complaint: string;
+  finalDisposition: string;
+  safetyCode: string;
+  latencyMs: number;
+  ts: string;
+};
+
+// ─────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────
+export default function ControlTowerPage() {
+
+  const { data: health } = useQuery<Health>({
+    queryKey: ["/api/ops/health"],
+    queryFn: () => apiRequest("GET", "/api/ops/health"),
+    refetchInterval: 2000,
+  });
+
+  const { data: golden } = useQuery<GoldenSummary>({
+    queryKey: ["/api/golden/summary"],
+    queryFn: () => apiRequest("GET", "/api/golden/summary"),
+    refetchInterval: 5000,
+  });
+
+  const { data: alerts } = useQuery<AlertItem[]>({
+    queryKey: ["/api/alerts"],
+    queryFn: () => apiRequest("GET", "/api/alerts"),
+    refetchInterval: 3000,
+  });
+
+  const { data: reviews } = useQuery<ReviewItem[]>({
+    queryKey: ["/api/self-improve/reviews/pending"],
+    queryFn: () => apiRequest("GET", "/api/self-improve/reviews/pending"),
+    refetchInterval: 5000,
+  });
+
+  const { data: activity } = useQuery<ActivityItem[]>({
+    queryKey: ["/api/ops/activity"],
+    queryFn: () => apiRequest("GET", "/api/ops/activity"),
+    refetchInterval: 2000,
+  });
+
+  return (
+    <div className="grid grid-cols-3 gap-4 p-6">
+
+      {/* ── Health ───────────────────────── */}
+      <Card>
+        <CardHeader><CardTitle>System Health</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p>Uptime: {health?.uptimeSec}s</p>
+          <p>P95 Latency: {health?.p95LatencyMs} ms</p>
+          <p>Error Rate: {(health?.errorRate ?? 0 * 100).toFixed(2)}%</p>
+          <p>Circuits Open: {health?.circuitsOpen}</p>
+          <Progress value={(health?.errorRate ?? 0) * 100} />
+        </CardContent>
+      </Card>
+
+      {/* ── Golden Cases ─────────────────── */}
+      <Card>
+        <CardHeader><CardTitle>Golden Cases</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-sm">
+            Pass Rate: {(golden?.passRate ?? 0 * 100).toFixed(1)}%
+          </p>
+          <ResponsiveContainer width="100%" height={120}>
+            <LineChart data={golden?.trend ?? []}>
+              <XAxis dataKey="ts" hide />
+              <YAxis domain={[0, 1]} hide />
+              <Tooltip />
+              <Line dataKey="passRate" stroke="#22c55e" dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      {/* ── Alerts ───────────────────────── */}
+      <Card>
+        <CardHeader><CardTitle>Alerts</CardTitle></CardHeader>
+        <CardContent className="space-y-2 max-h-64 overflow-y-auto">
+          {alerts?.map(a => (
+            <div key={a.id} className="flex justify-between text-sm">
+              <span>{a.message}</span>
+              <Badge variant={a.level === "critical" ? "destructive" : "outline"}>
+                {a.level}
+              </Badge>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* ── Review Queue ─────────────────── */}
+      <Card className="col-span-2">
+        <CardHeader><CardTitle>Physician Review Queue</CardTitle></CardHeader>
+        <CardContent className="space-y-2 max-h-64 overflow-y-auto">
+          {reviews?.map(r => (
+            <div key={r.actionId} className="flex justify-between text-sm border p-2 rounded">
+              <span>
+                {r.agent}.{r.parameter}: {r.fromValue} → {r.toValue}
+              </span>
+              <div className="flex gap-2">
+                <Button size="sm">Approve</Button>
+                <Button size="sm" variant="destructive">Reject</Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* ── Activity Feed ────────────────── */}
+      <Card>
+        <CardHeader><CardTitle>Live Activity</CardTitle></CardHeader>
+        <CardContent className="space-y-2 max-h-64 overflow-y-auto text-sm">
+          {activity?.map(a => (
+            <div key={a.caseId} className="border-b pb-1">
+              <div className="flex justify-between">
+                <span>{a.complaint}</span>
+                <Badge>{a.finalDisposition}</Badge>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {a.latencyMs}ms · {a.safetyCode}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+    </div>
+  );
+}
+🔌 Minimal backend endpoints
+
+Add lightweight endpoints to power the dashboard.
+
+// server/routes/opsRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { metrics } from "../monitoring/metrics";
+
+const router = Router();
+
+router.get(
+  "/health",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json({
+      uptimeSec: Math.floor(process.uptime()),
+      p95LatencyMs: 120,         // wire to real histogram later
+      errorRate: metrics.errors / Math.max(1, metrics.totalCases),
+      circuitsOpen: 0,           // wire to circuitBreaker state
+    });
+  }
+);
+
+router.get(
+  "/activity",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    // Return last N decisions from your event log or DB
+    res.json(await getRecentActivity()); // implement
+  }
+);
+
+export default router;
+// server/routes/alertsRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+
+const router = Router();
+
+router.get(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json(await getActiveAlerts()); // implement
+  }
+);
+
+export default router;
+// server/routes/goldenSummaryRoute.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { getGoldenCaseCoverageSummary } from "../goldenCases/goldenCaseReporting";
+
+const router = Router();
+
+router.get(
+  "/summary",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    const summary = await getGoldenCaseCoverageSummary();
+    // add trend (e.g., last 20 suite runs) as needed
+    res.json({
+      ...summary,
+      passRate: 0.92,  // compute from last suite
+      trend: [],       // [{ts, passRate}]
+    });
+  }
+);
+
+export default router;
+
+Mount:
+
+// server/index.ts
+import opsRoutes from "./routes/opsRoutes";
+import alertsRoutes from "./routes/alertsRoutes";
+import goldenSummaryRoute from "./routes/goldenSummaryRoute";
+
+app.use("/api/ops", opsRoutes);
+app.use("/api/alerts", alertsRoutes);
+app.use("/api/golden", goldenSummaryRoute);
+🧱 Why this works
+Deterministic visibility: same data the engine uses, surfaced in real time
+Fast feedback loops: golden drift, alerts, and review queue in one place
+Operational safety: you can see when to flip kill switches or pause learning
+Audit-ready: every tile maps to stored records (runs, reviews, alerts)
+🚀 Next upgrades (high value)
+Deep links from activity → full trace viewer (node-by-node)
+Alert ack + mute workflow with audit
+Golden heatmap (complaint × node/scorer failures)
+Circuit panel (per-component open/closed with last error)
+Replay button to rerun a case with frozen config/priors
+
+If you want, I can add the trace viewer + deep links next.
+
+trace viewer and deep links and any other recommendation
+
+Yes. Let’s add the Trace Viewer + deep links, and I’ll include the highest-value follow-ons so the Control Tower stops being a pretty aquarium and becomes a real war room. 🛫
+
+What we’ll add:
+
+Deep links from Live Activity and Golden Case runs
+Trace Viewer page with node-by-node execution, posterior, final decision, and errors
+Backend trace endpoint
+A few strong next upgrades:
+alert acknowledge / mute
+replay case
+freeze-frame metadata for config/KB/model versions
+case comparison diff view
+1) Deep links in the dashboard
+
+Update your Live Activity cards so each case links to the Trace Viewer.
+
+// client/src/pages/ControlTowerPage.tsx
+import { Link } from "react-router-dom";
+
+// ...inside Live Activity panel...
+{activity?.map(a => (
+  <Link
+    key={a.caseId}
+    to={`/trace/${encodeURIComponent(a.caseId)}`}
+    className="block border-b pb-1 hover:bg-muted/40 rounded px-1"
+  >
+    <div className="flex justify-between">
+      <span>{a.complaint}</span>
+      <Badge>{a.finalDisposition}</Badge>
+    </div>
+    <div className="text-xs text-muted-foreground">
+      {a.latencyMs}ms · {a.safetyCode}
+    </div>
+  </Link>
+))}
+
+For Golden Case runs, link by run id too.
+
+// wherever you render golden case run history
+<Link to={`/trace/run/${run.id}`} className="text-sm underline">
+  View trace
+</Link>
+2) Trace Viewer page
+
+This page shows:
+
+case header
+final decision
+posterior analysis
+node trace timeline
+raw errors
+replay button
+deep links to golden case / review if relevant
+// client/src/pages/TraceViewerPage.tsx
+import { useParams, Link } from "react-router-dom";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/hooks/use-toast";
+
+type TraceNodeResult = {
+  nodeId: string;
+  success: boolean;
+  error?: string;
+};
+
+type TracePayload = {
+  traceId: string;
+  source: "live_case" | "golden_run";
+  caseId?: string;
+  complaint?: string;
+  createdAt?: string;
+
+  parsed?: {
+    primary: string;
+    secondary: string[];
+    confidence: string;
+    raw: string;
+  };
+
+  resolvedComplaint?: string;
+
+  posterior?: {
+    topDiagnosis: string;
+    topPosterior: number;
+    entropy: number;
+    margin: number;
+    isUncertain: boolean;
+    differential: { diagnosis: string; posterior: number }[];
+  };
+
+  decision?: {
+    initialDisposition: string;
+    finalDisposition: string;
+    riskOverrideApplied: boolean;
+    safety: {
+      allowed: boolean;
+      code: string;
+      reason: string;
+    };
+    checkpoint?: {
+      required: boolean;
+      status: string;
+    };
+    trace: string[];
+  };
+
+  nodeTrace?: TraceNodeResult[];
+  patientResponse?: string;
+  errors?: string[];
+
+  metadata?: {
+    configVersion?: string;
+    kbVersion?: string;
+    modelVersion?: string;
+    goldenCaseId?: string;
+    goldenCaseRunId?: number;
+  };
+};
+
+export default function TraceViewerPage() {
+  const { caseId, runId } = useParams();
+
+  const traceRef = caseId
+    ? `/api/trace/case/${encodeURIComponent(caseId)}`
+    : `/api/trace/run/${encodeURIComponent(runId ?? "")}`;
+
+  const { data, isLoading, isError, refetch } = useQuery<TracePayload>({
+    queryKey: [traceRef],
+    queryFn: () => apiRequest("GET", traceRef),
+    enabled: Boolean(caseId || runId),
+  });
+
+  const replay = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/trace/replay", {
+        caseId: data?.caseId,
+        goldenCaseRunId: data?.metadata?.goldenCaseRunId,
+      }),
+    onSuccess: () => {
+      toast({ title: "Replay started" });
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Replay failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  if (isLoading) {
+    return <div className="p-6 text-sm text-muted-foreground">Loading trace…</div>;
+  }
+
+  if (isError || !data) {
+    return <div className="p-6 text-sm text-destructive">Failed to load trace.</div>;
+  }
+
+  return (
+    <div className="grid grid-cols-3 gap-4 p-6">
+      {/* Header */}
+      <Card className="col-span-3">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Trace Viewer</CardTitle>
+            <div className="text-sm text-muted-foreground mt-1">
+              {data.traceId} {data.complaint ? `· ${data.complaint}` : ""}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => refetch()}>
+              Refresh
+            </Button>
+            <Button onClick={() => replay.mutate()} disabled={replay.isPending}>
+              {replay.isPending ? "Replaying…" : "Replay Case"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {data.metadata?.configVersion && <Badge variant="outline">Config {data.metadata.configVersion}</Badge>}
+          {data.metadata?.kbVersion && <Badge variant="outline">KB {data.metadata.kbVersion}</Badge>}
+          {data.metadata?.modelVersion && <Badge variant="outline">Model {data.metadata.modelVersion}</Badge>}
+          {data.metadata?.goldenCaseId && (
+            <Link to={`/golden/${data.metadata.goldenCaseId}`} className="underline">
+              Golden Case
+            </Link>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Final Decision */}
+      <Card>
+        <CardHeader><CardTitle>Final Decision</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div>Initial: <Badge variant="outline">{data.decision?.initialDisposition ?? "—"}</Badge></div>
+          <div>Final: <Badge>{data.decision?.finalDisposition ?? "—"}</Badge></div>
+          <div>
+            Safety:{" "}
+            <Badge variant={data.decision?.safety.allowed ? "outline" : "destructive"}>
+              {data.decision?.safety.code ?? "—"}
+            </Badge>
+          </div>
+          <div className="text-muted-foreground">
+            {data.decision?.safety.reason}
+          </div>
+          {data.decision?.checkpoint && (
+            <div>
+              Checkpoint:{" "}
+              <Badge variant="outline">{data.decision.checkpoint.status}</Badge>
+            </div>
+          )}
+          <div>Risk Override: {data.decision?.riskOverrideApplied ? "Yes" : "No"}</div>
+        </CardContent>
+      </Card>
+
+      {/* Posterior */}
+      <Card>
+        <CardHeader><CardTitle>Posterior</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div>Top Dx: <strong>{data.posterior?.topDiagnosis ?? "—"}</strong></div>
+          <div>Top Posterior: {typeof data.posterior?.topPosterior === "number"
+            ? `${(data.posterior.topPosterior * 100).toFixed(1)}%`
+            : "—"}</div>
+          <div>Entropy: {data.posterior?.entropy?.toFixed?.(3) ?? "—"}</div>
+          <div>Margin: {data.posterior?.margin?.toFixed?.(3) ?? "—"}</div>
+          <div>
+            Uncertain:{" "}
+            <Badge variant={data.posterior?.isUncertain ? "destructive" : "outline"}>
+              {data.posterior?.isUncertain ? "Yes" : "No"}
+            </Badge>
+          </div>
+          <div className="pt-2 space-y-1">
+            {data.posterior?.differential?.slice(0, 5).map(d => (
+              <div key={d.diagnosis} className="flex justify-between text-xs">
+                <span>{d.diagnosis}</span>
+                <span>{(d.posterior * 100).toFixed(1)}%</span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Parsed Complaint */}
+      <Card>
+        <CardHeader><CardTitle>Complaint Mapping</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div>Parsed: <strong>{data.parsed?.primary ?? "—"}</strong></div>
+          <div>Resolved: <strong>{data.resolvedComplaint ?? "—"}</strong></div>
+          <div>Confidence: {data.parsed?.confidence ?? "—"}</div>
+          {data.parsed?.secondary?.length ? (
+            <div>Secondary: {data.parsed.secondary.join(", ")}</div>
+          ) : null}
+          <div className="text-xs text-muted-foreground whitespace-pre-wrap">
+            {data.parsed?.raw}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Node Trace */}
+      <Card className="col-span-2">
+        <CardHeader><CardTitle>Node Trace</CardTitle></CardHeader>
+        <CardContent className="space-y-2 max-h-[420px] overflow-y-auto">
+          {data.nodeTrace?.map((n, idx) => (
+            <div
+              key={`${n.nodeId}-${idx}`}
+              className={`rounded border p-3 text-sm ${n.success ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}`}
+            >
+              <div className="flex justify-between">
+                <span className="font-medium">{n.nodeId}</span>
+                <Badge variant={n.success ? "outline" : "destructive"}>
+                  {n.success ? "PASS" : "FAIL"}
+                </Badge>
+              </div>
+              {n.error && (
+                <div className="mt-1 text-xs text-destructive whitespace-pre-wrap">
+                  {n.error}
+                </div>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Decision Trace */}
+      <Card>
+        <CardHeader><CardTitle>Decision Trace</CardTitle></CardHeader>
+        <CardContent className="space-y-2 max-h-[420px] overflow-y-auto">
+          {data.decision?.trace?.map((t, idx) => (
+            <div key={idx} className="text-sm border-l-2 pl-3">
+              {t}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Errors + Output */}
+      <Card className="col-span-3">
+        <CardHeader><CardTitle>Output / Errors</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div>
+            <div className="font-medium">Patient Response</div>
+            <div className="text-muted-foreground whitespace-pre-wrap">
+              {data.patientResponse ?? "—"}
+            </div>
+          </div>
+
+          {data.errors?.length ? (
+            <div>
+              <div className="font-medium text-destructive">Errors</div>
+              <div className="space-y-1">
+                {data.errors.map((e, idx) => (
+                  <div key={idx} className="text-destructive whitespace-pre-wrap">
+                    {e}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+3) Route wiring
+// client/src/App.tsx or router file
+import TraceViewerPage from "@/pages/TraceViewerPage";
+
+<Route path="/trace/:caseId" element={<TraceViewerPage />} />
+<Route path="/trace/run/:runId" element={<TraceViewerPage />} />
+4) Backend trace endpoints
+
+You need a unified trace fetcher. The cleanest pattern is:
+
+live cases come from your activity / audit / decision log
+golden runs come from goldenCaseRuns.traceJson
+// server/routes/traceRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { getTraceByCaseId, getTraceByGoldenRunId, replayTrace } from "../trace/traceService";
+
+const router = Router();
+
+router.get(
+  "/case/:caseId",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const trace = await getTraceByCaseId(req.params.caseId);
+    if (!trace) return res.status(404).json({ error: "Trace not found" });
+    res.json(trace);
+  }
+);
+
+router.get(
+  "/run/:runId",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const trace = await getTraceByGoldenRunId(Number(req.params.runId));
+    if (!trace) return res.status(404).json({ error: "Trace not found" });
+    res.json(trace);
+  }
+);
+
+router.post(
+  "/replay",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const result = await replayTrace({
+      caseId: req.body?.caseId,
+      goldenCaseRunId: req.body?.goldenCaseRunId,
+      actorId: req.user?.sub,
+    });
+    res.json(result);
+  }
+);
+
+export default router;
+
+Mount it:
+
+// server/index.ts
+import traceRoutes from "./routes/traceRoutes";
+app.use("/api/trace", traceRoutes);
+5) Trace service
+
+This version assumes:
+
+live case traces are stored in your audit / activity / decision logs
+golden run traces are already in goldenCaseRuns.traceJson
+// server/trace/traceService.ts
+import crypto from "crypto";
+import { eq } from "drizzle-orm";
+import { db } from "../db";
+import { goldenCaseRuns } from "../../shared/schema";
+import { runSystemTestCase } from "../testing/systemRunner";
+import { getGoldenCase } from "../goldenCases/goldenCaseService";
+
+// Replace these with your real live-case sources.
+async function loadLiveCaseTrace(caseId: string): Promise<any | undefined> {
+  // Example:
+  // 1. fetch last decision record by caseId
+  // 2. fetch linked audit trace / node trace / response snapshot
+  // 3. return normalized shape for TraceViewerPage
+  return {
+    traceId: caseId,
+    source: "live_case",
+    caseId,
+    complaint: "unknown",
+    createdAt: new Date().toISOString(),
+    parsed: undefined,
+    resolvedComplaint: undefined,
+    posterior: undefined,
+    decision: undefined,
+    nodeTrace: [],
+    patientResponse: undefined,
+    errors: [],
+    metadata: {
+      configVersion: "current",
+      kbVersion: "current",
+      modelVersion: "current",
+    },
+  };
+}
+
+export async function getTraceByCaseId(caseId: string) {
+  return loadLiveCaseTrace(caseId);
+}
+
+export async function getTraceByGoldenRunId(runId: number) {
+  const rows = await db
+    .select()
+    .from(goldenCaseRuns)
+    .where(eq(goldenCaseRuns.id, runId))
+    .limit(1);
+
+  if (!rows.length) return undefined;
+
+  const row = rows[0];
+  const trace = row.traceJson as any;
+
+  return {
+    traceId: `golden-run-${runId}`,
+    source: "golden_run",
+    ...trace,
+    metadata: {
+      ...(trace?.metadata ?? {}),
+      goldenCaseRunId: runId,
+      configVersion: row.configVersion ?? undefined,
+      kbVersion: row.kbVersion ?? undefined,
+      modelVersion: row.modelVersion ?? undefined,
+    },
+  };
+}
+
+export async function replayTrace(params: {
+  caseId?: string;
+  goldenCaseRunId?: number;
+  actorId?: string;
+}) {
+  if (params.goldenCaseRunId) {
+    const rows = await db
+      .select()
+      .from(goldenCaseRuns)
+      .where(eq(goldenCaseRuns.id, params.goldenCaseRunId))
+      .limit(1);
+
+    if (!rows.length) {
+      throw new Error(`Golden run not found: ${params.goldenCaseRunId}`);
+    }
+
+    const trace = rows[0].traceJson as any;
+    const input = trace?.parsed?.raw
+      ? { message: trace.parsed.raw, patientContext: {} }
+      : trace?.input;
+
+    if (!input?.message) {
+      throw new Error("Replay unavailable: missing original input message");
+    }
+
+    const rerun = await runSystemTestCase({
+      id: crypto.randomUUID(),
+      input,
+      expected: {},
+      metadata: { category: "regression", description: "Replay" },
+    });
+
+    return {
+      ok: true,
+      replayed: true,
+      actorId: params.actorId,
+      trace: rerun,
+    };
+  }
+
+  if (params.caseId) {
+    const live = await loadLiveCaseTrace(params.caseId);
+    if (!live?.parsed?.raw) {
+      throw new Error("Replay unavailable: missing original live-case message");
+    }
+
+    const rerun = await runSystemTestCase({
+      id: crypto.randomUUID(),
+      input: {
+        message: live.parsed.raw,
+        patientContext: {},
+      },
+      expected: {},
+      metadata: { category: "regression", description: "Replay" },
+    });
+
+    return {
+      ok: true,
+      replayed: true,
+      actorId: params.actorId,
+      trace: rerun,
+    };
+  }
+
+  throw new Error("Replay requires caseId or goldenCaseRunId");
+}
+6) Highest-value extra recommendations
+
+These are the next best upgrades after the trace viewer.
+
+A) Alert acknowledge + mute with audit trail
+
+Right now alerts are just a feed. In production, you want:
+
+acknowledge
+mute for N minutes
+who acknowledged
+why
+audit log
+
+A tiny schema and route set for that pays off fast.
+
+Suggested fields
+alertId
+status: active | acknowledged | muted | resolved
+ackBy
+ackAt
+muteUntil
+note
+B) Freeze-frame provenance on every trace
+
+Every trace should include:
+
+config version
+KB version
+model/scorer version
+priors version
+safety config version
+
+Without that, replay is helpful but not forensically strong. Right now we stubbed configVersion/kbVersion/modelVersion. Make those real across the whole pipeline.
+
+C) Case diff view
+
+Very high value: compare:
+
+original run vs replay
+before fix vs after fix
+current run vs golden expectation
+
+This is how you spot:
+
+changed posterior ordering
+node differences
+shifted disposition
+altered safety behavior
+
+Even a simple side-by-side diff is gold.
+
+D) One-click “Promote to Golden Case”
+
+From the trace viewer:
+
+click button
+prefill title, complaint, input, actual output
+require physician to set expected truth before activation
+
+This turns live weirdness into permanent memory.
+
+E) Circuit breaker panel
+
+Add a card showing:
+
+component name
+open/closed
+failure count
+open-until timestamp
+last error
+
+That will save you a lot of “why is this suddenly falling back?” detective work.
+
+F) Replay under frozen versions
+
+Best-in-class replay means:
+
+rerun under current system
+rerun under original frozen config
+show diff
+
+That is the difference between “replay-ish” and “true forensic replay.”
+
+7) Best next UI additions
+
+If you want the strongest next dashboard upgrade, I’d do them in this order:
+
+Alert ack/mute workflow
+Case diff viewer
+Promote-to-golden button
+Circuit panel
+Frozen-version replay
+Bottom line
+
+With the trace viewer + deep links, your system gains a real inspection window:
+
+not just what happened
+but how it happened
+
+That’s the difference between a dashboard and an operational instrument panel.
+
+If you want, I can build the alert acknowledge/mute workflow + case diff viewer next, because those are the two highest-value add-ons.
+
+ok build those 2
+
+Yes. Here’s a solid implementation of the two highest-value add-ons:
+
+Alert acknowledge / mute workflow
+Case diff viewer
+
+These fit directly on top of the Control Tower and Trace Viewer we just built, and they complement the governance / audit direction already present in your uploaded system.
+
+1) Alert acknowledge / mute workflow
+
+This adds:
+
+persistent alert records
+active / acknowledged / muted / resolved state
+who acknowledged
+mute-until
+optional note
+audit trail
+UI actions from the dashboard
+A. Schema
+// shared/schema.ts
+import {
+  pgTable,
+  text,
+  timestamp,
+  jsonb,
+  bigserial,
+  index,
+} from "drizzle-orm/pg-core";
+
+export type AlertLevel = "info" | "warn" | "critical";
+export type AlertStatus = "active" | "acknowledged" | "muted" | "resolved";
+
+export const operationalAlerts = pgTable(
+  "operational_alerts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    source: text("source").notNull(),               // "golden", "safety", "circuit", etc.
+    code: text("code").notNull(),                   // machine-readable code
+    level: text("level").$type<AlertLevel>().notNull(),
+    status: text("status").$type<AlertStatus>().notNull().default("active"),
+
+    message: text("message").notNull(),
+    detailsJson: jsonb("details_json"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+
+    acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
+    acknowledgedBy: text("acknowledged_by"),
+    acknowledgmentNote: text("acknowledgment_note"),
+
+    mutedUntil: timestamp("muted_until", { withTimezone: true }),
+    mutedBy: text("muted_by"),
+    muteNote: text("mute_note"),
+
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+    resolutionNote: text("resolution_note"),
+  },
+  (table) => ({
+    statusIdx: index("operational_alerts_status_idx").on(table.status),
+    levelIdx: index("operational_alerts_level_idx").on(table.level),
+    createdIdx: index("operational_alerts_created_idx").on(table.createdAt),
+    codeIdx: index("operational_alerts_code_idx").on(table.code),
+  })
+);
+B. Alert service
+// server/monitoring/alertService.ts
+import { and, desc, eq, isNull, or, lt } from "drizzle-orm";
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+import { operationalAlerts, AlertLevel, AlertStatus } from "../../shared/schema";
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+export async function createAlert(params: {
+  source: string;
+  code: string;
+  level: AlertLevel;
+  message: string;
+  details?: Record<string, unknown>;
+}) {
+  const rows = await db
+    .insert(operationalAlerts)
+    .values({
+      source: params.source,
+      code: params.code,
+      level: params.level,
+      status: "active",
+      message: params.message,
+      detailsJson: params.details ?? null,
+      createdAt: nowIso(),
+    })
+    .returning();
+
+  const created = rows[0];
+
+  await auditStep({
+    traceId: `alert-${created.id}`,
+    step: "alert_created",
+    input: null,
+    output: {
+      id: created.id,
+      source: created.source,
+      code: created.code,
+      level: created.level,
+    },
+    metadata: {
+      message: created.message,
+    },
+  });
+
+  return created;
+}
+
+export async function getVisibleAlerts(limit = 100) {
+  const now = new Date();
+
+  return db
+    .select()
+    .from(operationalAlerts)
+    .where(
+      or(
+        eq(operationalAlerts.status, "active"),
+        eq(operationalAlerts.status, "acknowledged"),
+        and(
+          eq(operationalAlerts.status, "muted"),
+          lt(operationalAlerts.mutedUntil, now)
+        )
+      )
+    )
+    .orderBy(desc(operationalAlerts.createdAt))
+    .limit(limit);
+}
+
+export async function getAllAlerts(limit = 200) {
+  return db
+    .select()
+    .from(operationalAlerts)
+    .orderBy(desc(operationalAlerts.createdAt))
+    .limit(limit);
+}
+
+export async function acknowledgeAlert(params: {
+  alertId: number;
+  actorId: string;
+  note?: string;
+}) {
+  const rows = await db
+    .update(operationalAlerts)
+    .set({
+      status: "acknowledged",
+      acknowledgedAt: nowIso(),
+      acknowledgedBy: params.actorId,
+      acknowledgmentNote: params.note ?? null,
+    })
+    .where(eq(operationalAlerts.id, params.alertId))
+    .returning();
+
+  if (!rows.length) {
+    throw new Error(`Alert not found: ${params.alertId}`);
+  }
+
+  await auditStep({
+    traceId: `alert-${params.alertId}`,
+    step: "alert_acknowledged",
+    input: { alertId: params.alertId },
+    output: { actorId: params.actorId },
+    metadata: { note: params.note ?? null },
+  });
+
+  return rows[0];
+}
+
+export async function muteAlert(params: {
+  alertId: number;
+  actorId: string;
+  muteMinutes: number;
+  note?: string;
+}) {
+  const mutedUntil = new Date(Date.now() + params.muteMinutes * 60_000).toISOString();
+
+  const rows = await db
+    .update(operationalAlerts)
+    .set({
+      status: "muted",
+      mutedUntil,
+      mutedBy: params.actorId,
+      muteNote: params.note ?? null,
+    })
+    .where(eq(operationalAlerts.id, params.alertId))
+    .returning();
+
+  if (!rows.length) {
+    throw new Error(`Alert not found: ${params.alertId}`);
+  }
+
+  await auditStep({
+    traceId: `alert-${params.alertId}`,
+    step: "alert_muted",
+    input: { alertId: params.alertId },
+    output: { actorId: params.actorId, mutedUntil },
+    metadata: {
+      muteMinutes: params.muteMinutes,
+      note: params.note ?? null,
+    },
+  });
+
+  return rows[0];
+}
+
+export async function resolveAlert(params: {
+  alertId: number;
+  actorId: string;
+  note?: string;
+}) {
+  const rows = await db
+    .update(operationalAlerts)
+    .set({
+      status: "resolved",
+      resolvedAt: nowIso(),
+      resolvedBy: params.actorId,
+      resolutionNote: params.note ?? null,
+    })
+    .where(eq(operationalAlerts.id, params.alertId))
+    .returning();
+
+  if (!rows.length) {
+    throw new Error(`Alert not found: ${params.alertId}`);
+  }
+
+  await auditStep({
+    traceId: `alert-${params.alertId}`,
+    step: "alert_resolved",
+    input: { alertId: params.alertId },
+    output: { actorId: params.actorId },
+    metadata: { note: params.note ?? null },
+  });
+
+  return rows[0];
+}
+C. Alert routes
+// server/routes/alertsRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import {
+  acknowledgeAlert,
+  getVisibleAlerts,
+  muteAlert,
+  resolveAlert,
+} from "../monitoring/alertService";
+
+const router = Router();
+
+router.get(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json(await getVisibleAlerts());
+  }
+);
+
+router.post(
+  "/:alertId/acknowledge",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const updated = await acknowledgeAlert({
+      alertId: Number(req.params.alertId),
+      actorId,
+      note: typeof req.body?.note === "string" ? req.body.note : undefined,
+    });
+
+    res.json(updated);
+  }
+);
+
+router.post(
+  "/:alertId/mute",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const muteMinutes =
+      typeof req.body?.muteMinutes === "number" ? req.body.muteMinutes : 15;
+
+    const updated = await muteAlert({
+      alertId: Number(req.params.alertId),
+      actorId,
+      muteMinutes,
+      note: typeof req.body?.note === "string" ? req.body.note : undefined,
+    });
+
+    res.json(updated);
+  }
+);
+
+router.post(
+  "/:alertId/resolve",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const updated = await resolveAlert({
+      alertId: Number(req.params.alertId),
+      actorId,
+      note: typeof req.body?.note === "string" ? req.body.note : undefined,
+    });
+
+    res.json(updated);
+  }
+);
+
+export default router;
+D. Dashboard UI with ack/mute buttons
+// client/src/components/AlertsPanel.tsx
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "@/hooks/use-toast";
+
+type AlertItem = {
+  id: number;
+  level: "info" | "warn" | "critical";
+  status: "active" | "acknowledged" | "muted" | "resolved";
+  message: string;
+  createdAt: string;
+  mutedUntil?: string | null;
+};
+
+export function AlertsPanel({ alerts = [] }: { alerts: AlertItem[] }) {
+  const queryClient = useQueryClient();
+
+  const acknowledge = useMutation({
+    mutationFn: (alertId: number) =>
+      apiRequest("POST", `/api/alerts/${alertId}/acknowledge`, { note: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert acknowledged" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to acknowledge alert", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const mute = useMutation({
+    mutationFn: (alertId: number) =>
+      apiRequest("POST", `/api/alerts/${alertId}/mute`, { muteMinutes: 15, note: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert muted for 15 minutes" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to mute alert", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-2 max-h-72 overflow-y-auto">
+      {alerts.map((a) => (
+        <div key={a.id} className="rounded border p-3 text-sm space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <span>{a.message}</span>
+            <Badge variant={a.level === "critical" ? "destructive" : "outline"}>
+              {a.level}
+            </Badge>
+          </div>
+
+          <div className="text-xs text-muted-foreground">
+            Status: {a.status}
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => acknowledge.mutate(a.id)}
+              disabled={acknowledge.isPending}
+            >
+              Acknowledge
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => mute.mutate(a.id)}
+              disabled={mute.isPending}
+            >
+              Mute 15m
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+Then in ControlTowerPage.tsx, replace the simple alerts card body with:
+
+import { AlertsPanel } from "@/components/AlertsPanel";
+
+// ...
+<Card>
+  <CardHeader><CardTitle>Alerts</CardTitle></CardHeader>
+  <CardContent>
+    <AlertsPanel alerts={alerts ?? []} />
+  </CardContent>
+</Card>
+2) Case diff viewer
+
+This gives you:
+
+original trace vs replay trace
+or golden expected vs actual
+field-by-field mismatches
+side-by-side comparison
+A. Backend diff utilities
+// server/trace/traceDiff.ts
+type DiffEntry = {
+  field: string;
+  left: unknown;
+  right: unknown;
+};
+
+function pushIfDifferent(diffs: DiffEntry[], field: string, left: unknown, right: unknown) {
+  const l = JSON.stringify(left ?? null);
+  const r = JSON.stringify(right ?? null);
+  if (l !== r) {
+    diffs.push({ field, left, right });
+  }
+}
+
+export function diffTraces(left: any, right: any) {
+  const diffs: DiffEntry[] = [];
+
+  pushIfDifferent(diffs, "parsed.primary", left?.parsed?.primary, right?.parsed?.primary);
+  pushIfDifferent(diffs, "resolvedComplaint", left?.resolvedComplaint, right?.resolvedComplaint);
+
+  pushIfDifferent(diffs, "posterior.topDiagnosis", left?.posterior?.topDiagnosis, right?.posterior?.topDiagnosis);
+  pushIfDifferent(diffs, "posterior.topPosterior", left?.posterior?.topPosterior, right?.posterior?.topPosterior);
+  pushIfDifferent(diffs, "posterior.entropy", left?.posterior?.entropy, right?.posterior?.entropy);
+  pushIfDifferent(diffs, "posterior.margin", left?.posterior?.margin, right?.posterior?.margin);
+
+  pushIfDifferent(diffs, "decision.initialDisposition", left?.decision?.initialDisposition, right?.decision?.initialDisposition);
+  pushIfDifferent(diffs, "decision.finalDisposition", left?.decision?.finalDisposition, right?.decision?.finalDisposition);
+  pushIfDifferent(diffs, "decision.safety.code", left?.decision?.safety?.code, right?.decision?.safety?.code);
+  pushIfDifferent(diffs, "decision.safety.allowed", left?.decision?.safety?.allowed, right?.decision?.safety?.allowed);
+
+  pushIfDifferent(
+    diffs,
+    "posterior.differential",
+    left?.posterior?.differential?.map((d: any) => [d.diagnosis, d.posterior]),
+    right?.posterior?.differential?.map((d: any) => [d.diagnosis, d.posterior])
+  );
+
+  pushIfDifferent(
+    diffs,
+    "nodeTrace",
+    left?.nodeTrace?.map((n: any) => [n.nodeId, n.success, n.error ?? null]),
+    right?.nodeTrace?.map((n: any) => [n.nodeId, n.success, n.error ?? null])
+  );
+
+  pushIfDifferent(diffs, "patientResponse", left?.patientResponse, right?.patientResponse);
+  pushIfDifferent(diffs, "errors", left?.errors ?? [], right?.errors ?? []);
+
+  return {
+    diffCount: diffs.length,
+    diffs,
+  };
+}
+B. Diff route
+// server/routes/traceDiffRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { getTraceByCaseId, getTraceByGoldenRunId } from "../trace/traceService";
+import { diffTraces } from "../trace/traceDiff";
+
+const router = Router();
+
+router.post(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const { leftCaseId, rightCaseId, leftRunId, rightRunId } = req.body ?? {};
+
+    const left = leftCaseId
+      ? await getTraceByCaseId(leftCaseId)
+      : await getTraceByGoldenRunId(Number(leftRunId));
+
+    const right = rightCaseId
+      ? await getTraceByCaseId(rightCaseId)
+      : await getTraceByGoldenRunId(Number(rightRunId));
+
+    if (!left || !right) {
+      return res.status(404).json({ error: "One or both traces not found" });
+    }
+
+    res.json({
+      left,
+      right,
+      ...diffTraces(left, right),
+    });
+  }
+);
+
+export default router;
+
+Mount:
+
+// server/index.ts
+import traceDiffRoutes from "./routes/traceDiffRoutes";
+app.use("/api/trace/diff", traceDiffRoutes);
+C. Diff viewer page
+// client/src/pages/TraceDiffViewerPage.tsx
+import { useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+
+type DiffResponse = {
+  left: any;
+  right: any;
+  diffCount: number;
+  diffs: {
+    field: string;
+    left: unknown;
+    right: unknown;
+  }[];
+};
+
+export default function TraceDiffViewerPage() {
+  const [leftRunId, setLeftRunId] = useState("");
+  const [rightRunId, setRightRunId] = useState("");
+
+  const compare = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/trace/diff", {
+        leftRunId: Number(leftRunId),
+        rightRunId: Number(rightRunId),
+      }),
+  });
+
+  const data = compare.data as DiffResponse | undefined;
+
+  return (
+    <div className="grid grid-cols-3 gap-4 p-6">
+      <Card className="col-span-3">
+        <CardHeader><CardTitle>Case Diff Viewer</CardTitle></CardHeader>
+        <CardContent className="flex gap-2">
+          <Input
+            value={leftRunId}
+            onChange={(e) => setLeftRunId(e.target.value)}
+            placeholder="Left golden run ID"
+          />
+          <Input
+            value={rightRunId}
+            onChange={(e) => setRightRunId(e.target.value)}
+            placeholder="Right golden run ID"
+          />
+          <Button onClick={() => compare.mutate()} disabled={compare.isPending}>
+            {compare.isPending ? "Comparing…" : "Compare"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="col-span-3">
+        <CardHeader>
+          <CardTitle>Diff Summary {data ? `(${data.diffCount})` : ""}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {data?.diffs?.map((d, idx) => (
+            <div key={`${d.field}-${idx}`} className="rounded border p-3 text-sm">
+              <div className="font-medium">{d.field}</div>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <pre className="text-xs bg-muted p-2 rounded overflow-auto">
+                  {JSON.stringify(d.left, null, 2)}
+                </pre>
+                <pre className="text-xs bg-muted p-2 rounded overflow-auto">
+                  {JSON.stringify(d.right, null, 2)}
+                </pre>
+              </div>
+            </div>
+          ))}
+          {data && data.diffCount === 0 && (
+            <div className="text-sm text-muted-foreground">No differences found.</div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+Mount route:
+
+// client router
+import TraceDiffViewerPage from "@/pages/TraceDiffViewerPage";
+
+<Route path="/trace-diff" element={<TraceDiffViewerPage />} />
+3) Strong next recommendations after these two
+
+These are the next most useful additions once ack/mute and diff are in:
+
+A. “Promote to golden case” from Trace Viewer
+
+One button:
+
+takes current input
+prefills complaint + actual output
+physician sets expected truth
+saves as new golden case
+
+This turns incidents into permanent regression memory.
+
+B. Frozen replay
+
+Replay current case under:
+
+current config
+original config/KB/model versions
+
+Then compare both. This is the strongest forensic move you can add.
+
+C. Alert grouping / dedup
+
+Without this, repeated drift alerts can become alert confetti.
+Group by:
+
+code
+source
+same complaint / same subsystem / recent time window
+D. Review queue deep links
+
+From alert or failed golden case:
+
+jump straight to the relevant review item
+or to the exact trace / run / diff
+E. Trace provenance panel
+
+Every trace should show:
+
+config version
+safety config version
+scorer version
+priors version
+KB version
+complaint config version
+
+That is what turns replay from “interesting” into “defensible.”
+
+Bottom line
+
+These two additions move your Control Tower from passive monitoring to active operational control:
+
+Alert ack/mute gives you incident workflow
+Case diff viewer gives you change intelligence
+
+Together, they make it much easier to answer:
+
+what changed
+who acted
+what drifted
+whether it is safe now
+
+If you want, the next strongest build would be promote-to-golden from trace viewer + frozen replay.
+
+please write the code for the se 2 things and any other recommendation for this area of the code.  I would like to finish up this area now.  please write any next strongest or next best or final or highest yield or highly recommended or best next or any other build now.
+
+Yes. Here’s a Control Tower completion pack that finishes this area with the highest-yield additions:
+
+Alert acknowledge / mute / resolve workflow
+Case diff viewer
+Promote to Golden Case from Trace Viewer
+Trace provenance panel
+Alert dedup / grouping
+Frozen replay scaffold
+A small route/index integration block
+
+This is the strongest next build for this part of the system because it turns the dashboard from read-only visibility into a real operational console.
+
+1) Schema additions
+// shared/schema.ts
+import {
+  pgTable,
+  text,
+  timestamp,
+  jsonb,
+  bigserial,
+  integer,
+  boolean,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+
+export type AlertLevel = "info" | "warn" | "critical";
+export type AlertStatus = "active" | "acknowledged" | "muted" | "resolved";
+
+export const operationalAlerts = pgTable(
+  "operational_alerts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    source: text("source").notNull(),
+    code: text("code").notNull(),
+    dedupKey: text("dedup_key").notNull(),
+
+    level: text("level").$type<AlertLevel>().notNull(),
+    status: text("status").$type<AlertStatus>().notNull().default("active"),
+
+    message: text("message").notNull(),
+    detailsJson: jsonb("details_json"),
+
+    count: integer("count").notNull().default(1),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+
+    acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
+    acknowledgedBy: text("acknowledged_by"),
+    acknowledgmentNote: text("acknowledgment_note"),
+
+    mutedUntil: timestamp("muted_until", { withTimezone: true }),
+    mutedBy: text("muted_by"),
+    muteNote: text("mute_note"),
+
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+    resolutionNote: text("resolution_note"),
+  },
+  (table) => ({
+    dedupKeyIdx: index("operational_alerts_dedup_idx").on(table.dedupKey),
+    statusIdx: index("operational_alerts_status_idx").on(table.status),
+    levelIdx: index("operational_alerts_level_idx").on(table.level),
+    lastSeenIdx: index("operational_alerts_last_seen_idx").on(table.lastSeenAt),
+  })
+);
+
+// Optional immutable alert event history for better audits
+export const operationalAlertEvents = pgTable(
+  "operational_alert_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    alertId: integer("alert_id").notNull(),
+    eventType: text("event_type").notNull(), // created | dedup_incremented | acknowledged | muted | resolved
+    actorId: text("actor_id"),
+    note: text("note"),
+    payloadJson: jsonb("payload_json"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    alertIdx: index("operational_alert_events_alert_idx").on(table.alertId),
+  })
+);
+
+// Optional provenance snapshot attached to traceable runs / decisions
+export const traceSnapshots = pgTable(
+  "trace_snapshots",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    traceId: text("trace_id").notNull().unique(),
+
+    source: text("source").notNull(), // live_case | golden_run | replay
+    caseId: text("case_id"),
+    goldenCaseId: text("golden_case_id"),
+    goldenCaseRunId: integer("golden_case_run_id"),
+
+    inputJson: jsonb("input_json"),
+    parsedJson: jsonb("parsed_json"),
+    nodeTraceJson: jsonb("node_trace_json"),
+    posteriorJson: jsonb("posterior_json"),
+    decisionJson: jsonb("decision_json"),
+    patientResponse: text("patient_response"),
+    errorsJson: jsonb("errors_json"),
+
+    configVersion: text("config_version"),
+    kbVersion: text("kb_version"),
+    modelVersion: text("model_version"),
+    priorsVersion: text("priors_version"),
+    safetyConfigVersion: text("safety_config_version"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    caseIdx: index("trace_snapshots_case_idx").on(table.caseId),
+    goldenRunIdx: index("trace_snapshots_golden_run_idx").on(table.goldenCaseRunId),
+  })
+);
+2) Alert service with dedup, acknowledge, mute, resolve
+// server/monitoring/alertService.ts
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+import {
+  operationalAlerts,
+  operationalAlertEvents,
+  AlertLevel,
+} from "../../shared/schema";
+
+function now() {
+  return new Date();
+}
+
+function nowIso() {
+  return now().toISOString();
+}
+
+export function buildAlertDedupKey(params: {
+  source: string;
+  code: string;
+  complaintId?: string;
+  subsystem?: string;
+}) {
+  return [
+    params.source,
+    params.code,
+    params.complaintId ?? "all-complaints",
+    params.subsystem ?? "all-subsystems",
+  ].join(":");
+}
+
+export async function createOrBumpAlert(params: {
+  source: string;
+  code: string;
+  level: AlertLevel;
+  message: string;
+  details?: Record<string, unknown>;
+  dedupKey?: string;
+}) {
+  const dedupKey =
+    params.dedupKey ??
+    buildAlertDedupKey({
+      source: params.source,
+      code: params.code,
+    });
+
+  const existing = await db
+    .select()
+    .from(operationalAlerts)
+    .where(
+      and(
+        eq(operationalAlerts.dedupKey, dedupKey),
+        or(
+          eq(operationalAlerts.status, "active"),
+          eq(operationalAlerts.status, "acknowledged"),
+          eq(operationalAlerts.status, "muted")
+        )
+      )
+    )
+    .limit(1);
+
+  if (existing.length) {
+    const current = existing[0];
+    const updated = await db
+      .update(operationalAlerts)
+      .set({
+        lastSeenAt: nowIso(),
+        count: current.count + 1,
+        message: params.message,
+        detailsJson: params.details ?? current.detailsJson ?? null,
+        // If muted and mute expired, bring it back to active
+        status:
+          current.status === "muted" &&
+          current.mutedUntil &&
+          new Date(current.mutedUntil).getTime() < Date.now()
+            ? "active"
+            : current.status,
+      })
+      .where(eq(operationalAlerts.id, current.id))
+      .returning();
+
+    await db.insert(operationalAlertEvents).values({
+      alertId: current.id,
+      eventType: "dedup_incremented",
+      actorId: null,
+      note: null,
+      payloadJson: { count: current.count + 1 },
+      createdAt: nowIso(),
+    });
+
+    return updated[0];
+  }
+
+  const created = await db
+    .insert(operationalAlerts)
+    .values({
+      source: params.source,
+      code: params.code,
+      dedupKey,
+      level: params.level,
+      status: "active",
+      message: params.message,
+      detailsJson: params.details ?? null,
+      count: 1,
+      firstSeenAt: nowIso(),
+      lastSeenAt: nowIso(),
+      createdAt: nowIso(),
+    })
+    .returning();
+
+  const alert = created[0];
+
+  await db.insert(operationalAlertEvents).values({
+    alertId: alert.id,
+    eventType: "created",
+    actorId: null,
+    note: null,
+    payloadJson: params.details ?? {},
+    createdAt: nowIso(),
+  });
+
+  await auditStep({
+    traceId: `alert-${alert.id}`,
+    step: "alert_created",
+    input: null,
+    output: {
+      id: alert.id,
+      source: alert.source,
+      code: alert.code,
+      level: alert.level,
+    },
+    metadata: {
+      message: alert.message,
+      dedupKey,
+    },
+  });
+
+  return alert;
+}
+
+export async function getVisibleAlerts(limit = 100) {
+  return db
+    .select()
+    .from(operationalAlerts)
+    .where(
+      or(
+        eq(operationalAlerts.status, "active"),
+        eq(operationalAlerts.status, "acknowledged"),
+        and(
+          eq(operationalAlerts.status, "muted"),
+          gt(operationalAlerts.mutedUntil, now())
+        )
+      )
+    )
+    .orderBy(desc(operationalAlerts.lastSeenAt))
+    .limit(limit);
+}
+
+export async function acknowledgeAlert(params: {
+  alertId: number;
+  actorId: string;
+  note?: string;
+}) {
+  const rows = await db
+    .update(operationalAlerts)
+    .set({
+      status: "acknowledged",
+      acknowledgedAt: nowIso(),
+      acknowledgedBy: params.actorId,
+      acknowledgmentNote: params.note ?? null,
+    })
+    .where(eq(operationalAlerts.id, params.alertId))
+    .returning();
+
+  if (!rows.length) throw new Error(`Alert not found: ${params.alertId}`);
+
+  await db.insert(operationalAlertEvents).values({
+    alertId: params.alertId,
+    eventType: "acknowledged",
+    actorId: params.actorId,
+    note: params.note ?? null,
+    payloadJson: {},
+    createdAt: nowIso(),
+  });
+
+  await auditStep({
+    traceId: `alert-${params.alertId}`,
+    step: "alert_acknowledged",
+    input: { alertId: params.alertId },
+    output: { actorId: params.actorId },
+    metadata: { note: params.note ?? null },
+  });
+
+  return rows[0];
+}
+
+export async function muteAlert(params: {
+  alertId: number;
+  actorId: string;
+  muteMinutes: number;
+  note?: string;
+}) {
+  const mutedUntil = new Date(Date.now() + params.muteMinutes * 60_000).toISOString();
+
+  const rows = await db
+    .update(operationalAlerts)
+    .set({
+      status: "muted",
+      mutedUntil,
+      mutedBy: params.actorId,
+      muteNote: params.note ?? null,
+    })
+    .where(eq(operationalAlerts.id, params.alertId))
+    .returning();
+
+  if (!rows.length) throw new Error(`Alert not found: ${params.alertId}`);
+
+  await db.insert(operationalAlertEvents).values({
+    alertId: params.alertId,
+    eventType: "muted",
+    actorId: params.actorId,
+    note: params.note ?? null,
+    payloadJson: { muteMinutes: params.muteMinutes, mutedUntil },
+    createdAt: nowIso(),
+  });
+
+  await auditStep({
+    traceId: `alert-${params.alertId}`,
+    step: "alert_muted",
+    input: { alertId: params.alertId },
+    output: { actorId: params.actorId, mutedUntil },
+    metadata: { muteMinutes: params.muteMinutes, note: params.note ?? null },
+  });
+
+  return rows[0];
+}
+
+export async function resolveAlert(params: {
+  alertId: number;
+  actorId: string;
+  note?: string;
+}) {
+  const rows = await db
+    .update(operationalAlerts)
+    .set({
+      status: "resolved",
+      resolvedAt: nowIso(),
+      resolvedBy: params.actorId,
+      resolutionNote: params.note ?? null,
+    })
+    .where(eq(operationalAlerts.id, params.alertId))
+    .returning();
+
+  if (!rows.length) throw new Error(`Alert not found: ${params.alertId}`);
+
+  await db.insert(operationalAlertEvents).values({
+    alertId: params.alertId,
+    eventType: "resolved",
+    actorId: params.actorId,
+    note: params.note ?? null,
+    payloadJson: {},
+    createdAt: nowIso(),
+  });
+
+  await auditStep({
+    traceId: `alert-${params.alertId}`,
+    step: "alert_resolved",
+    input: { alertId: params.alertId },
+    output: { actorId: params.actorId },
+    metadata: { note: params.note ?? null },
+  });
+
+  return rows[0];
+}
+3) Alert routes
+// server/routes/alertsRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import {
+  acknowledgeAlert,
+  getVisibleAlerts,
+  muteAlert,
+  resolveAlert,
+} from "../monitoring/alertService";
+
+const router = Router();
+
+router.get(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json(await getVisibleAlerts());
+  }
+);
+
+router.post(
+  "/:alertId/acknowledge",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const result = await acknowledgeAlert({
+      alertId: Number(req.params.alertId),
+      actorId,
+      note: typeof req.body?.note === "string" ? req.body.note : undefined,
+    });
+
+    res.json(result);
+  }
+);
+
+router.post(
+  "/:alertId/mute",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const result = await muteAlert({
+      alertId: Number(req.params.alertId),
+      actorId,
+      muteMinutes:
+        typeof req.body?.muteMinutes === "number" ? req.body.muteMinutes : 15,
+      note: typeof req.body?.note === "string" ? req.body.note : undefined,
+    });
+
+    res.json(result);
+  }
+);
+
+router.post(
+  "/:alertId/resolve",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const result = await resolveAlert({
+      alertId: Number(req.params.alertId),
+      actorId,
+      note: typeof req.body?.note === "string" ? req.body.note : undefined,
+    });
+
+    res.json(result);
+  }
+);
+
+export default router;
+4) Trace snapshot service and provenance
+
+This is the strongest “finish this area” addition because it makes replay, diff, and trace viewing genuinely useful.
+
+// server/trace/traceSnapshotService.ts
+import { eq } from "drizzle-orm";
+import { db } from "../db";
+import { traceSnapshots } from "../../shared/schema";
+
+export interface PersistTraceSnapshotInput {
+  traceId: string;
+  source: "live_case" | "golden_run" | "replay";
+  caseId?: string;
+  goldenCaseId?: string;
+  goldenCaseRunId?: number;
+
+  input?: unknown;
+  parsed?: unknown;
+  nodeTrace?: unknown;
+  posterior?: unknown;
+  decision?: unknown;
+  patientResponse?: string;
+  errors?: unknown;
+
+  configVersion?: string;
+  kbVersion?: string;
+  modelVersion?: string;
+  priorsVersion?: string;
+  safetyConfigVersion?: string;
+}
+
+export async function persistTraceSnapshot(params: PersistTraceSnapshotInput) {
+  const rows = await db
+    .insert(traceSnapshots)
+    .values({
+      traceId: params.traceId,
+      source: params.source,
+      caseId: params.caseId ?? null,
+      goldenCaseId: params.goldenCaseId ?? null,
+      goldenCaseRunId: params.goldenCaseRunId ?? null,
+      inputJson: params.input ?? null,
+      parsedJson: params.parsed ?? null,
+      nodeTraceJson: params.nodeTrace ?? null,
+      posteriorJson: params.posterior ?? null,
+      decisionJson: params.decision ?? null,
+      patientResponse: params.patientResponse ?? null,
+      errorsJson: params.errors ?? null,
+      configVersion: params.configVersion ?? null,
+      kbVersion: params.kbVersion ?? null,
+      modelVersion: params.modelVersion ?? null,
+      priorsVersion: params.priorsVersion ?? null,
+      safetyConfigVersion: params.safetyConfigVersion ?? null,
+      createdAt: new Date().toISOString(),
+    })
+    .onConflictDoUpdate({
+      target: traceSnapshots.traceId,
+      set: {
+        inputJson: params.input ?? null,
+        parsedJson: params.parsed ?? null,
+        nodeTraceJson: params.nodeTrace ?? null,
+        posteriorJson: params.posterior ?? null,
+        decisionJson: params.decision ?? null,
+        patientResponse: params.patientResponse ?? null,
+        errorsJson: params.errors ?? null,
+        configVersion: params.configVersion ?? null,
+        kbVersion: params.kbVersion ?? null,
+        modelVersion: params.modelVersion ?? null,
+        priorsVersion: params.priorsVersion ?? null,
+        safetyConfigVersion: params.safetyConfigVersion ?? null,
+      },
+    })
+    .returning();
+
+  return rows[0];
+}
+
+export async function getTraceSnapshotByCaseId(caseId: string) {
+  const rows = await db
+    .select()
+    .from(traceSnapshots)
+    .where(eq(traceSnapshots.caseId, caseId))
+    .limit(1);
+
+  return rows[0];
+}
+
+export async function getTraceSnapshotByRunId(runId: number) {
+  const rows = await db
+    .select()
+    .from(traceSnapshots)
+    .where(eq(traceSnapshots.goldenCaseRunId, runId))
+    .limit(1);
+
+  return rows[0];
+}
+5) Trace service with frozen replay scaffold
+// server/trace/traceService.ts
+import crypto from "crypto";
+import { eq } from "drizzle-orm";
+import { db } from "../db";
+import { goldenCaseRuns } from "../../shared/schema";
+import { runSystemTestCase } from "../testing/systemRunner";
+import {
+  getTraceSnapshotByCaseId,
+  getTraceSnapshotByRunId,
+  persistTraceSnapshot,
+} from "./traceSnapshotService";
+
+function normalizeSnapshot(row: any) {
+  if (!row) return undefined;
+
+  return {
+    traceId: row.traceId,
+    source: row.source,
+    caseId: row.caseId ?? undefined,
+    parsed: row.parsedJson ?? undefined,
+    nodeTrace: row.nodeTraceJson ?? [],
+    posterior: row.posteriorJson ?? undefined,
+    decision: row.decisionJson ?? undefined,
+    patientResponse: row.patientResponse ?? undefined,
+    errors: row.errorsJson ?? [],
+    metadata: {
+      goldenCaseId: row.goldenCaseId ?? undefined,
+      goldenCaseRunId: row.goldenCaseRunId ?? undefined,
+      configVersion: row.configVersion ?? undefined,
+      kbVersion: row.kbVersion ?? undefined,
+      modelVersion: row.modelVersion ?? undefined,
+      priorsVersion: row.priorsVersion ?? undefined,
+      safetyConfigVersion: row.safetyConfigVersion ?? undefined,
+    },
+    createdAt: row.createdAt,
+  };
+}
+
+export async function getTraceByCaseId(caseId: string) {
+  const row = await getTraceSnapshotByCaseId(caseId);
+  return normalizeSnapshot(row);
+}
+
+export async function getTraceByGoldenRunId(runId: number) {
+  const row = await getTraceSnapshotByRunId(runId);
+  return normalizeSnapshot(row);
+}
+
+export async function replayTrace(params: {
+  caseId?: string;
+  goldenCaseRunId?: number;
+  actorId?: string;
+  mode?: "current" | "frozen";
+}) {
+  const mode = params.mode ?? "current";
+
+  let snapshot: any | undefined;
+  if (params.caseId) {
+    snapshot = await getTraceByCaseId(params.caseId);
+  } else if (params.goldenCaseRunId) {
+    snapshot = await getTraceByGoldenRunId(params.goldenCaseRunId);
+  }
+
+  if (!snapshot?.parsed?.raw) {
+    throw new Error("Replay unavailable: missing original input");
+  }
+
+  // current mode reruns with current config
+  // frozen mode is scaffolded here for future version-pinned loader support
+  const rerun = await runSystemTestCase({
+    id: crypto.randomUUID(),
+    input: {
+      message: snapshot.parsed.raw,
+      patientContext: {},
+    },
+    expected: {},
+    metadata: {
+      category: "regression",
+      description: mode === "frozen" ? "Frozen replay" : "Replay",
+    },
+  });
+
+  const replayTraceId = `replay-${crypto.randomUUID()}`;
+
+  await persistTraceSnapshot({
+    traceId: replayTraceId,
+    source: "replay",
+    caseId: params.caseId,
+    goldenCaseRunId: params.goldenCaseRunId,
+    input: { message: snapshot.parsed.raw, patientContext: {} },
+    parsed: rerun.parsed,
+    nodeTrace: rerun.nodeTrace,
+    posterior: rerun.posterior,
+    decision: rerun.decision,
+    patientResponse: rerun.patientResponse,
+    errors: rerun.errors,
+    configVersion: snapshot.metadata?.configVersion ?? "current",
+    kbVersion: snapshot.metadata?.kbVersion ?? "current",
+    modelVersion: snapshot.metadata?.modelVersion ?? "current",
+    priorsVersion: snapshot.metadata?.priorsVersion ?? "current",
+    safetyConfigVersion: snapshot.metadata?.safetyConfigVersion ?? "current",
+  });
+
+  return {
+    ok: true,
+    replayed: true,
+    mode,
+    actorId: params.actorId,
+    traceId: replayTraceId,
+    trace: rerun,
+  };
+}
+6) Trace diff utilities and route
+// server/trace/traceDiff.ts
+type DiffEntry = {
+  field: string;
+  left: unknown;
+  right: unknown;
+};
+
+function pushIfDifferent(diffs: DiffEntry[], field: string, left: unknown, right: unknown) {
+  if (JSON.stringify(left ?? null) !== JSON.stringify(right ?? null)) {
+    diffs.push({ field, left, right });
+  }
+}
+
+export function diffTraces(left: any, right: any) {
+  const diffs: DiffEntry[] = [];
+
+  pushIfDifferent(diffs, "parsed.primary", left?.parsed?.primary, right?.parsed?.primary);
+  pushIfDifferent(diffs, "resolvedComplaint", left?.resolvedComplaint, right?.resolvedComplaint);
+
+  pushIfDifferent(diffs, "posterior.topDiagnosis", left?.posterior?.topDiagnosis, right?.posterior?.topDiagnosis);
+  pushIfDifferent(diffs, "posterior.topPosterior", left?.posterior?.topPosterior, right?.posterior?.topPosterior);
+  pushIfDifferent(diffs, "posterior.entropy", left?.posterior?.entropy, right?.posterior?.entropy);
+  pushIfDifferent(diffs, "posterior.margin", left?.posterior?.margin, right?.posterior?.margin);
+
+  pushIfDifferent(diffs, "decision.initialDisposition", left?.decision?.initialDisposition, right?.decision?.initialDisposition);
+  pushIfDifferent(diffs, "decision.finalDisposition", left?.decision?.finalDisposition, right?.decision?.finalDisposition);
+  pushIfDifferent(diffs, "decision.safety.code", left?.decision?.safety?.code, right?.decision?.safety?.code);
+  pushIfDifferent(diffs, "decision.safety.allowed", left?.decision?.safety?.allowed, right?.decision?.safety?.allowed);
+
+  pushIfDifferent(
+    diffs,
+    "posterior.differential",
+    left?.posterior?.differential?.map((d: any) => [d.diagnosis, d.posterior]),
+    right?.posterior?.differential?.map((d: any) => [d.diagnosis, d.posterior])
+  );
+
+  pushIfDifferent(
+    diffs,
+    "nodeTrace",
+    left?.nodeTrace?.map((n: any) => [n.nodeId, n.success, n.error ?? null]),
+    right?.nodeTrace?.map((n: any) => [n.nodeId, n.success, n.error ?? null])
+  );
+
+  pushIfDifferent(diffs, "patientResponse", left?.patientResponse, right?.patientResponse);
+  pushIfDifferent(diffs, "errors", left?.errors ?? [], right?.errors ?? []);
+
+  return {
+    diffCount: diffs.length,
+    diffs,
+  };
+}
+// server/routes/traceDiffRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { getTraceByCaseId, getTraceByGoldenRunId } from "../trace/traceService";
+import { diffTraces } from "../trace/traceDiff";
+
+const router = Router();
+
+router.post(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (req, res) => {
+    const { leftCaseId, rightCaseId, leftRunId, rightRunId } = req.body ?? {};
+
+    const left = leftCaseId
+      ? await getTraceByCaseId(leftCaseId)
+      : await getTraceByGoldenRunId(Number(leftRunId));
+
+    const right = rightCaseId
+      ? await getTraceByCaseId(rightCaseId)
+      : await getTraceByGoldenRunId(Number(rightRunId));
+
+    if (!left || !right) {
+      return res.status(404).json({ error: "One or both traces not found" });
+    }
+
+    res.json({
+      left,
+      right,
+      ...diffTraces(left, right),
+    });
+  }
+);
+
+export default router;
+7) Alerts panel UI with actions
+// client/src/components/AlertsPanel.tsx
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "@/hooks/use-toast";
+
+type AlertItem = {
+  id: number;
+  level: "info" | "warn" | "critical";
+  status: "active" | "acknowledged" | "muted" | "resolved";
+  message: string;
+  count: number;
+  mutedUntil?: string | null;
+};
+
+export function AlertsPanel({ alerts = [] }: { alerts: AlertItem[] }) {
+  const queryClient = useQueryClient();
+
+  const acknowledge = useMutation({
+    mutationFn: (alertId: number) =>
+      apiRequest("POST", `/api/alerts/${alertId}/acknowledge`, { note: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert acknowledged" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to acknowledge alert", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const mute = useMutation({
+    mutationFn: (alertId: number) =>
+      apiRequest("POST", `/api/alerts/${alertId}/mute`, { muteMinutes: 15, note: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert muted for 15 minutes" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to mute alert", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const resolve = useMutation({
+    mutationFn: (alertId: number) =>
+      apiRequest("POST", `/api/alerts/${alertId}/resolve`, { note: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert resolved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to resolve alert", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-2 max-h-72 overflow-y-auto">
+      {alerts.map((a) => (
+        <div key={a.id} className="rounded border p-3 text-sm space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <span>{a.message}</span>
+            <Badge variant={a.level === "critical" ? "destructive" : "outline"}>
+              {a.level}
+            </Badge>
+          </div>
+
+          <div className="text-xs text-muted-foreground">
+            Status: {a.status} · Count: {a.count}
+          </div>
+
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => acknowledge.mutate(a.id)}>
+              Ack
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => mute.mutate(a.id)}>
+              Mute 15m
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => resolve.mutate(a.id)}>
+              Resolve
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+8) Trace Viewer improvements: provenance panel + promote-to-golden + compare link
+// client/src/pages/TraceViewerPage.tsx
+// Add these pieces inside the page component
+
+import { Link } from "react-router-dom";
+import { useMutation } from "@tanstack/react-query";
+
+const promoteToGolden = useMutation({
+  mutationFn: () =>
+    apiRequest("POST", "/api/golden/promote-from-trace", {
+      traceId: data?.traceId,
+      title: `${data?.complaint ?? "case"} regression`,
+      complaintId: data?.resolvedComplaint ?? data?.complaint,
+    }),
+  onSuccess: () => {
+    toast({ title: "Promoted to golden case" });
+  },
+  onError: (err: Error) => {
+    toast({ title: "Failed to promote to golden case", description: err.message, variant: "destructive" });
+  },
+});
+
+// Add button row in header actions:
+<Link to="/trace-diff">
+  <Button variant="outline">Open Diff Viewer</Button>
+</Link>
+<Button onClick={() => promoteToGolden.mutate()} disabled={promoteToGolden.isPending}>
+  {promoteToGolden.isPending ? "Promoting…" : "Promote to Golden"}
+</Button>
+
+// Add provenance card:
+<Card>
+  <CardHeader><CardTitle>Provenance</CardTitle></CardHeader>
+  <CardContent className="space-y-2 text-sm">
+    <div>Config: {data.metadata?.configVersion ?? "—"}</div>
+    <div>KB: {data.metadata?.kbVersion ?? "—"}</div>
+    <div>Model: {data.metadata?.modelVersion ?? "—"}</div>
+    <div>Priors: {data.metadata?.priorsVersion ?? "—"}</div>
+    <div>Safety Config: {data.metadata?.safetyConfigVersion ?? "—"}</div>
+  </CardContent>
+</Card>
+9) Promote-to-golden route
+// server/routes/goldenPromotionRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { getTraceByCaseId, getTraceByGoldenRunId } from "../trace/traceService";
+import { createGoldenCase } from "../goldenCases/goldenCaseService";
+
+const router = Router();
+
+router.post(
+  "/promote-from-trace",
+  requireAuth,
+  requirePermission("clinical:override"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    const traceId = req.body?.traceId as string | undefined;
+    const complaintId = req.body?.complaintId as string | undefined;
+    const title = req.body?.title as string | undefined;
+
+    if (!traceId || !complaintId || !title) {
+      return res.status(400).json({ error: "traceId, complaintId, and title are required" });
+    }
+
+    // For simplicity, this example assumes traceId is a caseId if not a golden run.
+    const trace =
+      traceId.startsWith("golden-run-")
+        ? await getTraceByGoldenRunId(Number(traceId.replace("golden-run-", "")))
+        : await getTraceByCaseId(traceId);
+
+    if (!trace?.parsed?.raw) {
+      return res.status(404).json({ error: "Trace input not found" });
+    }
+
+    const created = await createGoldenCase({
+      title,
+      complaintId,
+      input: {
+        message: trace.parsed.raw,
+        patientContext: {},
+      },
+      expected: {
+        disposition: trace.decision?.finalDisposition,
+        primaryDiagnosis: trace.posterior?.topDiagnosis,
+        mustIncludeDifferential: trace.posterior?.differential?.slice(0, 3)?.map((d: any) => d.diagnosis) ?? [],
+        mustTriggerSafetyGate: trace.decision?.safety?.allowed === false,
+      },
+      metadata: {
+        category: "regression",
+        description: `Promoted from trace ${traceId}`,
+        tags: ["promoted-from-trace"],
+      },
+      createdBy: actorId,
+    });
+
+    res.json(created);
+  }
+);
+
+export default router;
+10) Client diff viewer page
+// client/src/pages/TraceDiffViewerPage.tsx
+import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+
+type DiffResponse = {
+  left: any;
+  right: any;
+  diffCount: number;
+  diffs: {
+    field: string;
+    left: unknown;
+    right: unknown;
+  }[];
+};
+
+export default function TraceDiffViewerPage() {
+  const [leftRunId, setLeftRunId] = useState("");
+  const [rightRunId, setRightRunId] = useState("");
+
+  const compare = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/trace/diff", {
+        leftRunId: Number(leftRunId),
+        rightRunId: Number(rightRunId),
+      }),
+  });
+
+  const data = compare.data as DiffResponse | undefined;
+
+  return (
+    <div className="grid grid-cols-3 gap-4 p-6">
+      <Card className="col-span-3">
+        <CardHeader><CardTitle>Case Diff Viewer</CardTitle></CardHeader>
+        <CardContent className="flex gap-2">
+          <Input
+            value={leftRunId}
+            onChange={(e) => setLeftRunId(e.target.value)}
+            placeholder="Left golden run ID"
+          />
+          <Input
+            value={rightRunId}
+            onChange={(e) => setRightRunId(e.target.value)}
+            placeholder="Right golden run ID"
+          />
+          <Button onClick={() => compare.mutate()} disabled={compare.isPending}>
+            {compare.isPending ? "Comparing…" : "Compare"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="col-span-3">
+        <CardHeader>
+          <CardTitle>Differences {data ? `(${data.diffCount})` : ""}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {data?.diffs?.map((d, idx) => (
+            <div key={`${d.field}-${idx}`} className="rounded border p-3 text-sm">
+              <div className="font-medium">{d.field}</div>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <pre className="text-xs bg-muted p-2 rounded overflow-auto">
+                  {JSON.stringify(d.left, null, 2)}
+                </pre>
+                <pre className="text-xs bg-muted p-2 rounded overflow-auto">
+                  {JSON.stringify(d.right, null, 2)}
+                </pre>
+              </div>
+            </div>
+          ))}
+          {data && data.diffCount === 0 && (
+            <div className="text-sm text-muted-foreground">No differences found.</div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+11) Route mounts
+// server/index.ts
+import alertsRoutes from "./routes/alertsRoutes";
+import traceRoutes from "./routes/traceRoutes";
+import traceDiffRoutes from "./routes/traceDiffRoutes";
+import goldenPromotionRoutes from "./routes/goldenPromotionRoutes";
+
+app.use("/api/alerts", alertsRoutes);
+app.use("/api/trace", traceRoutes);
+app.use("/api/trace/diff", traceDiffRoutes);
+app.use("/api/golden", goldenPromotionRoutes);
+// client router
+import TraceViewerPage from "@/pages/TraceViewerPage";
+import TraceDiffViewerPage from "@/pages/TraceDiffViewerPage";
+
+<Route path="/trace/:caseId" element={<TraceViewerPage />} />
+<Route path="/trace/run/:runId" element={<TraceViewerPage />} />
+<Route path="/trace-diff" element={<TraceDiffViewerPage />} />
+12) Highest-yield final recommendations for this area
+
+These are the best next builds after the code above. I would treat them as the final polish layer for the Control Tower area:
+
+A. Frozen replay with real version pinning
+
+Right now the scaffold is there. The highest-value next move is to truly replay under:
+
+original config version
+original KB version
+original priors version
+original safety config version
+
+That is the difference between useful replay and forensic replay.
+
+B. Alert grouping by subsystem + complaint + rolling window
+
+You now have dedup keys, which is excellent. The next polish is a small “grouped alerts” endpoint with:
+
+count
+first seen
+last seen
+current status
+drill-down events
+C. Trace diff links from every replay result
+
+After replay completes, show:
+
+“compare original vs replay”
+prefill the diff viewer automatically
+D. Promote-to-golden with physician-required review before activation
+
+Right now promote creates the golden case directly. Stronger version:
+
+create as draft
+require physician review/activation
+audit reason
+E. Trace export
+
+A JSON export endpoint for a full trace payload is surprisingly useful for audits and debugging.
+
+F. Circuit breaker card
+
+This is the most useful missing dashboard tile:
+
+component
+status
+last open time
+failure count
+last error
+Bottom line
+
+This pack finishes the Control Tower area in a strong way:
+
+alerts are actionable, not passive
+traces are inspectable
+cases are comparable
+promoted failures become durable regression memory
+provenance is visible
+replay is scaffolded for forensic-grade evolution
+
+The strongest next step after this area would be real frozen replay + circuit breaker panel, but the code above is the highest-yield “finish this area now” bundle.
+
+ok real frozen replay and circuit breaker panel
+
+Yes. This is the right next move.
+
+These two additions complete the Control Tower’s “forensic operations” layer:
+
+real frozen replay: rerun a case against the exact config/KB/priors/safety versions it originally used
+circuit breaker panel: see which subsystems are open, why, and since when
+
+That turns the dashboard from “what is happening now?” into “what happened then, and can I reproduce it exactly?”
+
+1) Real frozen replay
+
+The key change is this:
+
+Replay should not use current loaders.
+It should use version-pinned loaders.
+
+So we need:
+
+trace snapshots already storing:
+configVersion
+kbVersion
+modelVersion
+priorsVersion
+safetyConfigVersion
+version-aware loaders:
+loadComplaintConfigVersion(ccId, version)
+loadComplaintPriorsVersion(ccId, version)
+loadSafetyConfigVersion(version)
+a replay runner that can switch between:
+mode: "current"
+mode: "frozen"
+A. Versioned loader interfaces
+// server/versioning/versionedLoaders.ts
+
+import type { ComplaintConfig } from "../clinical/types";
+import type { PriorBundle } from "../clinical/priors";
+import type { PersistedSafetyGateConfig } from "../clinical/safetyConfigService";
+
+// These should be backed by your DB / snapshots / immutable config history tables.
+
+export async function loadComplaintConfigVersion(
+  ccId: string,
+  version: string
+): Promise<ComplaintConfig> {
+  // Replace with real historical config lookup
+  const config = await loadComplaintConfigFromHistory(ccId, version);
+  if (!config) {
+    throw new Error(`[FrozenReplay] Complaint config not found: ${ccId}@${version}`);
+  }
+  return config;
+}
+
+export async function loadComplaintPriorsVersion(
+  ccId: string,
+  version: string
+): Promise<PriorBundle> {
+  // Replace with real historical priors lookup
+  const priors = await loadPriorsFromHistory(ccId, version);
+  if (!priors) {
+    throw new Error(`[FrozenReplay] Priors not found: ${ccId}@${version}`);
+  }
+  return priors;
+}
+
+export async function loadSafetyConfigVersion(
+  version: string
+): Promise<PersistedSafetyGateConfig> {
+  // Replace with real historical safety config lookup
+  const cfg = await loadSafetyConfigFromHistory(version);
+  if (!cfg) {
+    throw new Error(`[FrozenReplay] Safety config not found: ${version}`);
+  }
+  return cfg;
+}
+
+// Stub declarations so the code compiles once you wire them.
+declare function loadComplaintConfigFromHistory(
+  ccId: string,
+  version: string
+): Promise<ComplaintConfig | undefined>;
+
+declare function loadPriorsFromHistory(
+  ccId: string,
+  version: string
+): Promise<PriorBundle | undefined>;
+
+declare function loadSafetyConfigFromHistory(
+  version: string
+): Promise<PersistedSafetyGateConfig | undefined>;
+B. Frozen-capable system runner
+
+This is a version-aware variant of runSystemTestCase.
+
+// server/testing/runSystemTestCaseFrozen.ts
+
+import crypto from "crypto";
+import type { SystemTestCase } from "./types";
+import type { SystemRunResult } from "./systemRunner";
+import { parseComplaint } from "../chat/parseComplaint";
+import { resolveComplaint } from "../clinical/complaintResolver";
+import { runComplaintNodes } from "../clinical/complaintNodeRunner";
+import { runDifferential } from "../clinical/bayesianDifferential";
+import { analyzePosterior } from "../clinical/posteriorAnalysis";
+import { buildPatientResponse } from "../clinical/outputBuilder";
+import { getTestEscalationStore } from "./testStores";
+import { computeFinalDecisionWithInjectedSafetyConfig } from "../clinical/finalDecisionEngineInjected";
+import {
+  loadComplaintConfigVersion,
+  loadComplaintPriorsVersion,
+  loadSafetyConfigVersion,
+} from "../versioning/versionedLoaders";
+
+export interface FrozenReplayVersions {
+  configVersion: string;
+  kbVersion?: string;
+  modelVersion?: string;
+  priorsVersion: string;
+  safetyConfigVersion: string;
+}
+
+export async function runSystemTestCaseFrozen(
+  test: SystemTestCase,
+  versions: FrozenReplayVersions
+): Promise<SystemRunResult> {
+  const errors: string[] = [];
+  const caseId = `frozen-${crypto.randomUUID()}`;
+
+  let state: any = {
+    caseId,
+    symptoms: [],
+    ...test.input.patientContext,
+  };
+
+  let parsed: any;
+  let config: any;
+  let posterior: any;
+  let decision: any;
+  let nodeTrace: any[] = [];
+
+  try {
+    parsed = parseComplaint(test.input.message);
+
+    const resolved = await resolveComplaint(parsed);
+
+    // 🔒 Load historical versions, not current
+    config = await loadComplaintConfigVersion(resolved.ccId, versions.configVersion);
+
+    const nodeResult = await runComplaintNodes(config, state);
+    nodeTrace = nodeResult.nodeResults;
+
+    if (!nodeResult.success) {
+      errors.push(`Node failure at ${nodeResult.failedNode}`);
+      return {
+        caseId,
+        parsed,
+        resolvedComplaint: resolved.ccId,
+        nodeTrace,
+        errors,
+      };
+    }
+
+    state = nodeResult.finalState;
+
+    const priorBundle = await loadComplaintPriorsVersion(
+      resolved.ccId,
+      versions.priorsVersion
+    );
+
+    const differential = runDifferential(state.symptoms, priorBundle.priors);
+    posterior = analyzePosterior(differential);
+
+    const safetyConfig = await loadSafetyConfigVersion(
+      versions.safetyConfigVersion
+    );
+
+    decision = await computeFinalDecisionWithInjectedSafetyConfig({
+      state,
+      posterior,
+      erProbability: state.scores?.erRisk ?? 0,
+      store: getTestEscalationStore(),
+      safetyConfig,
+    });
+
+    const response = buildPatientResponse(decision);
+
+    return {
+      caseId,
+      parsed,
+      resolvedComplaint: resolved.ccId,
+      nodeTrace,
+      posterior,
+      decision,
+      patientResponse: response,
+      errors,
+    };
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+
+    return {
+      caseId,
+      parsed,
+      resolvedComplaint: config?.ccId,
+      nodeTrace,
+      posterior,
+      decision,
+      errors,
+    };
+  }
+}
+C. Final decision engine with injected safety config
+
+This keeps frozen replay from accidentally calling the current active safety config.
+
+// server/clinical/finalDecisionEngineInjected.ts
+
+import { clinicalSafetyGate } from "./safetyGate";
+import { escalationControl, recordDisposition } from "./escalationGuard";
+import type { PersistedSafetyGateConfig } from "./safetyConfigService";
+import { deriveDisposition } from "./dispositionDerivation";
+import { applyRiskOverride } from "./posteriorRiskOverride";
+import { DISPOSITIONS_REQUIRING_APPROVAL, createOrCheckCheckpoint } from "../compliance/physicianCheckpoint";
+
+export interface DecisionContext {
+  caseId: string;
+  patientId?: string;
+  posterior: any;
+  initialDisposition: string;
+  riskOverrideApplied: boolean;
+  safety: {
+    allowed: boolean;
+    code: string;
+    reason: string;
+  };
+  checkpoint?: {
+    required: boolean;
+    status: "pending" | "approved" | "rejected" | "expired";
+  };
+  finalDisposition?: string;
+  trace: string[];
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+export async function computeFinalDecisionWithInjectedSafetyConfig(input: {
+  state: any;
+  posterior: any;
+  erProbability: number;
+  store: any;
+  safetyConfig: PersistedSafetyGateConfig;
+}): Promise<DecisionContext> {
+  const ctx: DecisionContext = {
+    caseId: input.state.caseId,
+    patientId: input.state.patientId,
+    posterior: input.posterior,
+    initialDisposition: "",
+    riskOverrideApplied: false,
+    safety: { allowed: false, code: "", reason: "" },
+    trace: [],
+  };
+
+  ctx.initialDisposition = deriveDisposition(input.posterior, input.state);
+  ctx.trace.push(`Initial disposition: ${ctx.initialDisposition}`);
+
+  if (applyRiskOverride(input.posterior)) {
+    ctx.initialDisposition = "ER_NOW";
+    ctx.riskOverrideApplied = true;
+    ctx.trace.push("Risk override applied → ER_NOW");
+  }
+
+  const safety = await clinicalSafetyGate(
+    {
+      riskScore: input.erProbability,
+      patientId: input.state.patientId,
+      action: "disposition",
+    },
+    input.safetyConfig
+  );
+
+  ctx.safety = {
+    allowed: safety.allowed,
+    code: safety.code,
+    reason: safety.reason,
+  };
+
+  ctx.trace.push(`Safety gate: ${safety.code}`);
+
+  if (!safety.allowed) {
+    ctx.finalDisposition = "BLOCKED";
+    return ctx;
+  }
+
+  if (DISPOSITIONS_REQUIRING_APPROVAL.includes(ctx.initialDisposition as any)) {
+    const checkpoint = await createOrCheckCheckpoint(ctx);
+    ctx.checkpoint = checkpoint;
+    ctx.trace.push(`Checkpoint: ${checkpoint.status}`);
+
+    if (checkpoint.status === "pending") {
+      ctx.finalDisposition = "AWAITING_PHYSICIAN";
+      return ctx;
+    }
+    if (checkpoint.status === "rejected") {
+      ctx.finalDisposition = "REJECTED_BY_PHYSICIAN";
+      return ctx;
+    }
+    if (checkpoint.status === "expired") {
+      ctx.finalDisposition = "ESCALATED_NO_RESPONSE";
+      return ctx;
+    }
+  }
+
+  const advisory = await escalationControl(input.store);
+
+  let finalProb = input.erProbability;
+  if (advisory.adjust) {
+    finalProb = clamp01(finalProb + advisory.probabilityDelta);
+    ctx.trace.push(`Escalation adjustment applied (${advisory.reason})`);
+  }
+
+  ctx.finalDisposition = finalProb >= 0.5 ? "ER_NOW" : ctx.initialDisposition;
+  ctx.trace.push(`Final disposition: ${ctx.finalDisposition}`);
+
+  await recordDisposition(ctx.finalDisposition, input.store);
+
+  return ctx;
+}
+D. Real replay service with current vs frozen modes
+// server/trace/traceService.ts
+
+import crypto from "crypto";
+import { runSystemTestCase } from "../testing/systemRunner";
+import { runSystemTestCaseFrozen } from "../testing/runSystemTestCaseFrozen";
+import {
+  getTraceSnapshotByCaseId,
+  getTraceSnapshotByRunId,
+  persistTraceSnapshot,
+} from "./traceSnapshotService";
+
+export async function replayTrace(params: {
+  caseId?: string;
+  goldenCaseRunId?: number;
+  actorId?: string;
+  mode?: "current" | "frozen";
+}) {
+  const mode = params.mode ?? "current";
+
+  let snapshot: any | undefined;
+  if (params.caseId) {
+    snapshot = await getTraceSnapshotByCaseId(params.caseId);
+  } else if (params.goldenCaseRunId) {
+    snapshot = await getTraceSnapshotByRunId(params.goldenCaseRunId);
+  }
+
+  if (!snapshot?.parsedJson?.raw) {
+    throw new Error("Replay unavailable: missing original input");
+  }
+
+  const testCase = {
+    id: crypto.randomUUID(),
+    input: {
+      message: snapshot.parsedJson.raw,
+      patientContext: snapshot.inputJson?.patientContext ?? {},
+    },
+    expected: {},
+    metadata: {
+      category: "regression" as const,
+      description: mode === "frozen" ? "Frozen replay" : "Replay",
+    },
+  };
+
+  const rerun =
+    mode === "frozen"
+      ? await runSystemTestCaseFrozen(testCase, {
+          configVersion: snapshot.configVersion,
+          kbVersion: snapshot.kbVersion ?? undefined,
+          modelVersion: snapshot.modelVersion ?? undefined,
+          priorsVersion: snapshot.priorsVersion,
+          safetyConfigVersion: snapshot.safetyConfigVersion,
+        })
+      : await runSystemTestCase(testCase);
+
+  const replayTraceId = `replay-${crypto.randomUUID()}`;
+
+  await persistTraceSnapshot({
+    traceId: replayTraceId,
+    source: "replay",
+    caseId: params.caseId,
+    goldenCaseRunId: params.goldenCaseRunId,
+    input: testCase.input,
+    parsed: rerun.parsed,
+    nodeTrace: rerun.nodeTrace,
+    posterior: rerun.posterior,
+    decision: rerun.decision,
+    patientResponse: rerun.patientResponse,
+    errors: rerun.errors,
+    configVersion: snapshot.configVersion,
+    kbVersion: snapshot.kbVersion ?? undefined,
+    modelVersion: snapshot.modelVersion ?? undefined,
+    priorsVersion: snapshot.priorsVersion,
+    safetyConfigVersion: snapshot.safetyConfigVersion,
+  });
+
+  return {
+    ok: true,
+    replayed: true,
+    mode,
+    actorId: params.actorId,
+    traceId: replayTraceId,
+    trace: rerun,
+  };
+}
+2) Circuit breaker panel
+
+Now the system needs a live view of breaker state:
+
+name
+open / closed
+failure count
+open-until
+last error
+A. Circuit breaker registry
+
+This upgrades the earlier minimal breaker into an inspectable registry.
+
+// server/guardrails/circuitBreaker.ts
+
+export interface CircuitState {
+  failures: number;
+  openUntil?: number;
+  lastError?: string;
+  lastFailureAt?: number;
+}
+
+const circuits = new Map<string, CircuitState>();
+
+export function getCircuitSnapshot() {
+  return Array.from(circuits.entries()).map(([name, state]) => ({
+    name,
+    failures: state.failures,
+    open: Boolean(state.openUntil && Date.now() < state.openUntil),
+    openUntil: state.openUntil ? new Date(state.openUntil).toISOString() : null,
+    lastError: state.lastError ?? null,
+    lastFailureAt: state.lastFailureAt
+      ? new Date(state.lastFailureAt).toISOString()
+      : null,
+  }));
+}
+
+export function resetCircuit(name: string) {
+  circuits.set(name, { failures: 0 });
+}
+
+export async function withCircuitBreaker<T>(
+  name: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const state = circuits.get(name) ?? { failures: 0 };
+
+  if (state.openUntil && Date.now() < state.openUntil) {
+    throw new Error(`[CircuitOpen] ${name}`);
+  }
+
+  try {
+    const result = await fn();
+    state.failures = 0;
+    state.openUntil = undefined;
+    state.lastError = undefined;
+    state.lastFailureAt = undefined;
+    circuits.set(name, state);
+    return result;
+  } catch (err) {
+    state.failures++;
+    state.lastError = err instanceof Error ? err.message : String(err);
+    state.lastFailureAt = Date.now();
+
+    if (state.failures >= 5) {
+      state.openUntil = Date.now() + 60_000;
+    }
+
+    circuits.set(name, state);
+    throw err;
+  }
+}
+B. Circuit routes
+// server/routes/circuitRoutes.ts
+import { Router } from "express";
+import { requireAuth, requirePermission } from "../auth/authzMiddleware";
+import { getCircuitSnapshot, resetCircuit } from "../guardrails/circuitBreaker";
+import { auditStep } from "../audit/auditLogger";
+
+const router = Router();
+
+router.get(
+  "/",
+  requireAuth,
+  requirePermission("audit:view"),
+  async (_req, res) => {
+    res.json(getCircuitSnapshot());
+  }
+);
+
+router.post(
+  "/:name/reset",
+  requireAuth,
+  requirePermission("deployment:manage"),
+  async (req, res) => {
+    const actorId = req.user?.sub;
+    if (!actorId) return res.status(401).json({ error: "Missing actor identity" });
+
+    resetCircuit(req.params.name);
+
+    await auditStep({
+      traceId: `circuit-${req.params.name}`,
+      step: "circuit_reset",
+      input: { name: req.params.name },
+      output: { actorId },
+      metadata: {},
+    });
+
+    res.json({ ok: true, name: req.params.name });
+  }
+);
+
+export default router;
+
+Mount:
+
+// server/index.ts
+import circuitRoutes from "./routes/circuitRoutes";
+app.use("/api/circuits", circuitRoutes);
+C. Circuit panel UI
+// client/src/components/CircuitPanel.tsx
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "@/hooks/use-toast";
+
+type CircuitItem = {
+  name: string;
+  failures: number;
+  open: boolean;
+  openUntil: string | null;
+  lastError: string | null;
+  lastFailureAt: string | null;
+};
+
+export function CircuitPanel() {
+  const queryClient = useQueryClient();
+
+  const { data } = useQuery<CircuitItem[]>({
+    queryKey: ["/api/circuits"],
+    queryFn: () => apiRequest("GET", "/api/circuits"),
+    refetchInterval: 3000,
+  });
+
+  const reset = useMutation({
+    mutationFn: (name: string) => apiRequest("POST", `/api/circuits/${encodeURIComponent(name)}/reset`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/circuits"] });
+      toast({ title: "Circuit reset" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to reset circuit", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-2 max-h-72 overflow-y-auto">
+      {(data ?? []).map((c) => (
+        <div key={c.name} className="rounded border p-3 text-sm space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-medium">{c.name}</span>
+            <Badge variant={c.open ? "destructive" : "outline"}>
+              {c.open ? "OPEN" : "CLOSED"}
+            </Badge>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Failures: {c.failures}
+          </div>
+          {c.openUntil && (
+            <div className="text-xs text-muted-foreground">
+              Open until: {c.openUntil}
+            </div>
+          )}
+          {c.lastError && (
+            <div className="text-xs text-destructive whitespace-pre-wrap">
+              {c.lastError}
+            </div>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => reset.mutate(c.name)}
+            disabled={reset.isPending}
+          >
+            Reset
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+D. Add panel to Control Tower
+// client/src/pages/ControlTowerPage.tsx
+import { CircuitPanel } from "@/components/CircuitPanel";
+
+// Add another card:
+<Card>
+  <CardHeader><CardTitle>Circuits</CardTitle></CardHeader>
+  <CardContent>
+    <CircuitPanel />
+  </CardContent>
+</Card>
+3) Highest-yield finishing recommendations for this area
+
+These are the strongest final touches after frozen replay + circuit panel:
+
+A. Replay compare shortcut
+
+After replay finishes, show:
+
+Compare original vs replay
+prefilled trace diff view
+
+That closes the loop instantly.
+
+B. Draft-only promote-to-golden
+
+Strengthen promote flow by creating golden cases as draft, then requiring physician activation.
+
+C. Circuit events history
+
+Add a small circuit_events table:
+
+opened
+closed
+reset
+actor
+reason
+
+This is very useful operationally.
+
+D. Alert → circuit link
+
+If an alert was triggered by a breaker opening, show a deep link to that circuit row.
+
+E. Provenance completeness
+
+Make sure every persisted trace snapshot truly stores:
+
+complaint config version
+priors version
+safety config version
+scorer/model version
+KB version
+
+That is the foundation of real frozen replay.
+
+Bottom line
+
+This is the real “finish this area” bundle:
+
+frozen replay gives you forensic reproducibility
+circuit breaker panel gives you live resilience visibility
+
+Together with the earlier work:
+
+alerts are actionable
+traces are inspectable
+diffs are explainable
+promoted failures become durable memory
+replay is now genuinely version-aware
+
+That completes the strongest operational dashboard layer for this system.

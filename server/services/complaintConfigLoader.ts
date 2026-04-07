@@ -556,3 +556,35 @@ export async function listAvailableComplaints(): Promise<ComplaintRegistryEntry[
   const rows = await getTable("COMPLAINT_REGISTRY");
   return rows.map(rowToRegistry).filter((e): e is ComplaintRegistryEntry => e !== null && e.enabled);
 }
+
+// ── Background config refresh ─────────────────────────────────────────────────
+//
+// Proactively re-loads configs that are in-cache before they expire.
+// Runs every 60 seconds; failures are logged but never thrown — the runner
+// continues with stale data rather than crashing the process.
+// Timer is unref'd so it does not block test process exit.
+
+const BACKGROUND_REFRESH_INTERVAL_MS = 60_000;
+
+let _backgroundRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startComplaintConfigBackgroundRefresh(): void {
+  if (_backgroundRefreshTimer) return; // idempotent
+  _backgroundRefreshTimer = setInterval(async () => {
+    const keys = Array.from(CONFIG_CACHE.keys());
+    for (const key of keys) {
+      try {
+        await loadComplaintConfig(key);
+      } catch (err) {
+        console.warn(`[ComplaintConfig] Background refresh failed for "${key}":`, err);
+      }
+    }
+  }, BACKGROUND_REFRESH_INTERVAL_MS).unref();
+}
+
+export function stopComplaintConfigBackgroundRefresh(): void {
+  if (_backgroundRefreshTimer) {
+    clearInterval(_backgroundRefreshTimer);
+    _backgroundRefreshTimer = null;
+  }
+}

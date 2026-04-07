@@ -45,6 +45,49 @@ export function assertScorerKnown(module: string, ccId: string): void {
   }
 }
 
+// ── SCORER_MAP_COVERAGE — compile-time completeness proof ────────────────────
+// TypeScript will refuse to compile if ScoringModuleId gains a member that
+// is not represented here. This is the counterpart to NODE_ENGINE_COVERAGE.
+type _AssertAllScorersCovered = Record<ScoringModuleId, true>;
+const SCORER_MAP_COVERAGE: _AssertAllScorersCovered = {
+  CENTOR:               true,
+  EARACHE_SCORE:        true,
+  COUGH_SCORE:          true,
+  CHEST_PAIN_SCORE:     true,
+  DIZZINESS_SCORE:      true,
+  ABD_PAIN_SCORE:       true,
+  UTI_SCORE:            true,
+  TESTICULAR_PAIN_SCORE: true,
+  PELVIC_PAIN_SCORE:    true,
+  HEADACHE_SCORE:       true,
+};
+// Prevent tree-shaking of the coverage proof without exposing it
+export const _SCORER_COVERAGE_CHECK = SCORER_MAP_COVERAGE;
+
+// ── assertSingleScorerModule ─────────────────────────────────────────────────
+// Multiple scoring modules per complaint create conflicting probability
+// outputs. The rule is: exactly one module per ScoringDef entry.
+export function assertSingleScorerModule(module: unknown, ccId: string): void {
+  if (Array.isArray(module)) {
+    throw new Error(
+      `[Scoring] Multiple scoring modules are not allowed for complaint "${ccId}". ` +
+      `Found array: [${(module as any[]).join(", ")}]`
+    );
+  }
+}
+
+// ── assertScorerOutputValid ──────────────────────────────────────────────────
+// A scorer that returns null/undefined/non-object silently produces
+// zero scores — which is worse than throwing because the pipeline continues
+// with fake confidence. Hard-fail here instead.
+export function assertScorerOutputValid(output: unknown, module: string, ccId: string): void {
+  if (!output || typeof output !== "object") {
+    throw new Error(
+      `[Scoring] Scorer "${module}" for complaint "${ccId}" returned invalid output: ${JSON.stringify(output)}`
+    );
+  }
+}
+
 export interface QuestionResult {
   nextQuestion: CoreQuestion | null;
   allAnswered: boolean;
@@ -148,8 +191,13 @@ export function runScoring(state: CaseState, config: ComplaintConfig): ScoringRe
   const missingInputs: string[] = [];
 
   for (const def of config.scoringDefs) {
+    // ── Single-scorer guard — no arrays allowed ─────────────────────────
+    assertSingleScorerModule(def.module, config.registry.ccId);
+    // ── Known-scorer guard — asserted in loop body and else clause ───────
+
     if (def.module === "CENTOR") {
       const result = computeCentor(state);
+      assertScorerOutputValid(result, def.module, config.registry.ccId);
       scores[def.scoreId.toLowerCase()] = result.centor;
       components[def.scoreId] = {
         score: result.centor,
