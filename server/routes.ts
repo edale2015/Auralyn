@@ -2027,7 +2027,15 @@ export async function registerRoutes(
   const { replayRouter } = await import("./routes/replayRoutes");
   app.use("/api/replay", replayRouter);
 
-  console.log("[Orchestration] Circuit breakers: /api/circuit-breakers | Agent health: /api/agents/health | Replay: /api/replay");
+  // Clinical Brain Intelligence — engine telemetry, bandit, meta-learning, oversight
+  const { default: controlTowerIntelRouter } = await import("./routes/clinicalBrainIntelRoutes");
+  app.use("/api/brain-intel", controlTowerIntelRouter);
+
+  // Multi-agent council — base council + hierarchical specialist councils
+  const { default: councilRouter } = await import("./routes/councilRoutes");
+  app.use("/api/council", councilRouter);
+
+  console.log("[Orchestration] Circuit breakers: /api/circuit-breakers | Agent health: /api/agents/health | Replay: /api/replay | Brain intel: /api/brain-intel | Council: /api/council");
 
   // Domain-split routers (clinical fast-path, agent registry, evolution proposals, tenant config)
   app.use("/api/domain", buildDomainRouters());

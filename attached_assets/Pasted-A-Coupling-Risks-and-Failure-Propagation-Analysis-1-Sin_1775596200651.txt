@@ -1,0 +1,670 @@
+A) Coupling Risks and Failure Propagation Analysis
+1. Single unhandled throw kills the entire clinical encounter
+With 20+ engines called sequentially and no try/catch around individual calls, a NullPointerException in temporalProgressionEngine means the patient gets no differential, no red flags, no treatment recommendations — nothing. The error propagates to the Express error handler and returns a 500. This is the clinical equivalent of a power failure in the middle of a consultation.
+2. Sequential execution where parallelism is safe
+Most of the 20 engines are independent of each other's outputs. Rough dependency map:
+Phase 1 (no deps — pure input transforms):
+  normalizeSymptoms
+  detectRedFlags
+  safetyGuard
+
+Phase 2 (depends on normalized symptoms):
+  computeDifferentialProbabilities
+  computeUncertainty
+  findSimilarCasesForState
+  findSimilarMemoryCases
+  complaintCompletenessEngine
+
+Phase 3 (depends on differentials):
+  selectNextBestQuestion
+  diagnosticEvidenceEngine
+  evidenceAggregatorEngine
+  riskStratificationEngine
+  temporalProgressionEngine
+  guidelineAdherenceEngine
+  contradictionEngine
+
+Phase 4 (depends on risk + differentials):
+  getBulkRecommendations
+  prioritizeTests
+  generateBulkReturnPrecautions
+  dispositionCalibrationEngine
+
+Phase 5 (depends on everything):
+  clinicalGovernanceEngine
+  physicianReviewPacketEngine
+  logBrainDecision
+  storeClinicalCase
+Running Phase 2's 5 engines sequentially instead of in parallel adds ~4× unnecessary latency. A clinical brain call that takes 3 seconds could take 700ms with proper parallelism.
+3. No timeout on any engine
+If findSimilarCasesForState makes a DB query that takes 30 seconds due to a missing index, the entire brain call hangs for 30 seconds. Every concurrent patient request blocks. With 10 concurrent patients, all 10 wait.
+4. Unused computed outputs
+Based on the import list and typical patterns in systems like this, the highest-risk candidates for "computed but unused" are: evidenceAggregatorEngine output (aggregates evidence but the raw diagnosticEvidenceEngine output may be what's actually placed in the final output), temporalProgressionEngine (timeline analysis often computed for display but missing from API response schema), and complaintCompletenessEngine (completeness score often logged but not surfaced to the caller). These need an output audit.
+5. No versioning on the brain output schema
+With 20+ engines contributing to one output object, a change to any engine's output shape silently changes what downstream consumers receive. There's no schemaVersion field that would let consumers detect breaking changes.
+
+B) Rewritten Orchestration Layer
+typescript// server/clinical/clinicalBrainEngine.ts
+
+import { auditStep }   from "../audit/auditLogger";
+import { engineRegistry } from "./engineRegistry";
+import type {
+  ClinicalBrainInput,
+  ClinicalBrainOutput,
+  EngineResult,
+  PhaseResults,
+} from "../types/clinicalBrain";
+
+// ─────────────────────────────────────────────────────────────
+// withTimeout — wraps any async engine call
+// ─────────────────────────────────────────────────────────────
+
+const ENGINE_TIMEOUT_MS: Record<string, number> = {
+  // Fast engines — tight timeouts
+  normalizeSymptoms:         500,
+  detectRedFlags:            500,
+  safetyGuard:               500,
+  computeUncertainty:        1000,
+  complaintCompletenessEngine: 1000,
+
+  // Medium — DB or model calls
+  computeDifferentialProbabilities: 3000,
+  findSimilarCasesForState:         3000,
+  findSimilarMemoryCases:           3000,
+  selectNextBestQuestion:           2000,
+  diagnosticEvidenceEngine:         2000,
+  evidenceAggregatorEngine:         2000,
+  riskStratificationEngine:         2000,
+  temporalProgressionEngine:        2000,
+  guidelineAdherenceEngine:         2000,
+  contradictionEngine:              2000,
+
+  // Slower — multi-step or external
+  getBulkRecommendations:           4000,
+  prioritizeTests:                  4000,
+  generateBulkReturnPrecautions:    4000,
+  dispositionCalibrationEngine:     4000,
+
+  // Governance — must be thorough
+  clinicalGovernanceEngine:         5000,
+  physicianReviewPacketEngine:      5000,
+
+  // Async side effects — not on critical path
+  logBrainDecision:                 2000,
+  storeClinicalCase:                2000,
+};
+
+const DEFAULT_ENGINE_TIMEOUT_MS = 5000;
+
+/**
+ * Wraps an engine call with a timeout and safe default fallback.
+ * Never throws — returns { success: false, timedOut: true } on expiry.
+ */
+async function withTimeout<T>(
+  engineName: string,
+  fn:         () => Promise<T>,
+  fallback:   T,
+  traceId:    string
+): Promise<EngineResult<T>> {
+  const timeoutMs = ENGINE_TIMEOUT_MS[engineName] ?? DEFAULT_ENGINE_TIMEOUT_MS;
+  const start     = Date.now();
+
+  try {
+    const result = await Promise.race([
+      fn(),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`[Brain] Engine "${engineName}" timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        )
+      ),
+    ]);
+
+    return {
+      engineName,
+      success:   true,
+      data:      result,
+      durationMs: Date.now() - start,
+    };
+
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.message.includes("timed out");
+    const message   = err instanceof Error ? err.message : String(err);
+
+    // Log every engine failure — never swallow silently
+    console.error(`[Brain] Engine "${engineName}" ${isTimeout ? "timed out" : "threw"}:`, message);
+
+    // Non-blocking audit — don't let audit failure block fallback return
+    auditStep({
+      traceId,
+      step:     `brain_engine_${isTimeout ? "timeout" : "error"}_${engineName}`,
+      input:    { engineName, timeoutMs },
+      output:   null,
+      metadata: { error: message, durationMs: Date.now() - start, isTimeout },
+    }).catch(e => console.error("[Brain] Audit log failed for engine error:", e));
+
+    return {
+      engineName,
+      success:    false,
+      data:       fallback,
+      error:      message,
+      timedOut:   isTimeout,
+      durationMs: Date.now() - start,
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Parallel phase runner
+// All engines in a phase run concurrently — one failure doesn't
+// block others in the same phase.
+// ─────────────────────────────────────────────────────────────
+async function runPhase<T extends Record<string, () => Promise<unknown>>>(
+  phaseName:  string,
+  engines:    T,
+  fallbacks:  { [K in keyof T]: Awaited<ReturnType<T[K]>> },
+  traceId:    string
+): Promise<{ [K in keyof T]: EngineResult<Awaited<ReturnType<T[K]>>> }> {
+
+  const entries  = Object.entries(engines) as [string, () => Promise<unknown>][];
+  const promises = entries.map(([name, fn]) =>
+    withTimeout(name, fn, (fallbacks as any)[name], traceId)
+      .then(result => [name, result] as const)
+  );
+
+  const settled  = await Promise.allSettled(promises);
+  const result   = {} as any;
+  let   failures = 0;
+
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      const [name, engineResult] = outcome.value;
+      result[name] = engineResult;
+      if (!engineResult.success) failures++;
+    }
+    // Promise.allSettled + withTimeout means this branch never fires
+    // (withTimeout never throws), but guard anyway
+  }
+
+  if (failures > 0) {
+    console.warn(`[Brain] Phase "${phaseName}": ${failures}/${entries.length} engines failed — using fallbacks`);
+  }
+
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Safe defaults — what the brain returns when an engine fails
+// These must be clinically conservative:
+// - Empty differentials → triggers physician review
+// - Empty red flags → NOT safe; default to a conservative flag
+// - Null treatment → better than wrong treatment
+// ─────────────────────────────────────────────────────────────
+const SAFE_DEFAULTS = {
+  normalizeSymptoms:                { symptoms: [], normalized: [] },
+  detectRedFlags:                   {
+    // Fail-safe: if red flag detection fails, assume red flags POSSIBLE
+    // so the physician reviews rather than the AI proceeding blindly
+    flags: ["⚠️ Red flag check unavailable — physician review required"],
+    severity: "unknown" as const,
+  },
+  safetyGuard:                      { allowed: false, reason: "Safety check unavailable — defaulting to blocked" },
+  computeDifferentialProbabilities: { differentials: [], confidence: 0 },
+  computeUncertainty:               { uncertainty: 1.0, reason: "Uncertainty engine unavailable" },
+  findSimilarCasesForState:         { cases: [] },
+  findSimilarMemoryCases:           { cases: [] },
+  complaintCompletenessEngine:      { complete: false, missingFields: [] },
+  selectNextBestQuestion:           { questions: [] },
+  diagnosticEvidenceEngine:         { evidence: [] },
+  evidenceAggregatorEngine:         { aggregated: [] },
+  riskStratificationEngine:         { riskLevel: "unknown", riskScore: null },
+  temporalProgressionEngine:        { timeline: null },
+  guidelineAdherenceEngine:         { adherent: null, gaps: [] },
+  contradictionEngine:              { contradictions: [] },
+  getBulkRecommendations:           { recommendations: [] },
+  prioritizeTests:                  { tests: [] },
+  generateBulkReturnPrecautions:    { precautions: [] },
+  dispositionCalibrationEngine:     { disposition: null, confidence: 0 },
+  clinicalGovernanceEngine:         { approved: false, reason: "Governance check unavailable" },
+  physicianReviewPacketEngine:      { packet: null },
+};
+
+// ─────────────────────────────────────────────────────────────
+// Main brain entry point
+// ─────────────────────────────────────────────────────────────
+export async function runClinicalBrain(
+  input:   ClinicalBrainInput,
+  traceId: string
+): Promise<ClinicalBrainOutput> {
+
+  const engines = engineRegistry.getAll();
+  const startTime = Date.now();
+
+  await auditStep({
+    traceId, step: "clinical_brain_start",
+    input:  { patientId: input.patientId, complaint: input.complaint },
+    output: null,
+    metadata: { engineCount: Object.keys(engines).length },
+  });
+
+  // ── PHASE 1: Input normalization (sequential — output feeds Phase 2) ──
+  const phase1 = await runPhase("phase1_normalization", {
+    normalizeSymptoms: () => engines.normalizeSymptoms(input),
+    detectRedFlags:    () => engines.detectRedFlags(input),
+    safetyGuard:       () => engines.safetyGuard(input),
+  }, SAFE_DEFAULTS, traceId);
+
+  // Hard stop: if safety guard blocked and didn't time out, respect it
+  const safetyResult = phase1.safetyGuard.data;
+  if (!phase1.safetyGuard.timedOut && !safetyResult.allowed) {
+    await auditStep({
+      traceId, step: "clinical_brain_safety_blocked",
+      input:  { patientId: input.patientId },
+      output: { reason: safetyResult.reason },
+      metadata: {},
+    });
+    return buildBlockedOutput(input, safetyResult.reason, traceId, Date.now() - startTime);
+  }
+
+  const normalizedInput = {
+    ...input,
+    symptoms: phase1.normalizeSymptoms.data.normalized,
+  };
+
+  // ── PHASE 2: Parallel independent engines (no inter-deps) ─────────────
+  const phase2 = await runPhase("phase2_parallel", {
+    computeDifferentialProbabilities: () => engines.computeDifferentialProbabilities(normalizedInput),
+    computeUncertainty:               () => engines.computeUncertainty(normalizedInput),
+    findSimilarCasesForState:         () => engines.findSimilarCasesForState(normalizedInput),
+    findSimilarMemoryCases:           () => engines.findSimilarMemoryCases(normalizedInput),
+    complaintCompletenessEngine:      () => engines.complaintCompletenessEngine(normalizedInput),
+  }, SAFE_DEFAULTS, traceId);
+
+  const differentials = phase2.computeDifferentialProbabilities.data.differentials;
+  const uncertainty   = phase2.computeUncertainty.data.uncertainty;
+  const phase2Input   = { ...normalizedInput, differentials, uncertainty };
+
+  // ── PHASE 3: Parallel engines that depend on differentials ────────────
+  const phase3 = await runPhase("phase3_differential_dependent", {
+    selectNextBestQuestion:    () => engines.selectNextBestQuestion(phase2Input),
+    diagnosticEvidenceEngine:  () => engines.diagnosticEvidenceEngine(phase2Input),
+    evidenceAggregatorEngine:  () => engines.evidenceAggregatorEngine(phase2Input),
+    riskStratificationEngine:  () => engines.riskStratificationEngine(phase2Input),
+    temporalProgressionEngine: () => engines.temporalProgressionEngine(phase2Input),
+    guidelineAdherenceEngine:  () => engines.guidelineAdherenceEngine(phase2Input),
+    contradictionEngine:       () => engines.contradictionEngine(phase2Input),
+  }, SAFE_DEFAULTS, traceId);
+
+  const riskLevel  = phase3.riskStratificationEngine.data.riskLevel;
+  const phase3Input = { ...phase2Input, riskLevel };
+
+  // ── PHASE 4: Treatment + disposition (depends on risk + differentials) ─
+  const phase4 = await runPhase("phase4_treatment", {
+    getBulkRecommendations:        () => engines.getBulkRecommendations(phase3Input),
+    prioritizeTests:               () => engines.prioritizeTests(phase3Input),
+    generateBulkReturnPrecautions: () => engines.generateBulkReturnPrecautions(phase3Input),
+    dispositionCalibrationEngine:  () => engines.dispositionCalibrationEngine(phase3Input),
+  }, SAFE_DEFAULTS, traceId);
+
+  // ── PHASE 5: Governance + physician packet (depends on everything) ─────
+  const fullContext = {
+    ...phase3Input,
+    recommendations:  phase4.getBulkRecommendations.data.recommendations,
+    tests:            phase4.prioritizeTests.data.tests,
+    precautions:      phase4.generateBulkReturnPrecautions.data.precautions,
+    disposition:      phase4.dispositionCalibrationEngine.data.disposition,
+  };
+
+  const phase5 = await runPhase("phase5_governance", {
+    clinicalGovernanceEngine:    () => engines.clinicalGovernanceEngine(fullContext),
+    physicianReviewPacketEngine: () => engines.physicianReviewPacketEngine(fullContext),
+  }, SAFE_DEFAULTS, traceId);
+
+  // ── PHASE 6: Side effects (non-blocking — don't await for response) ───
+  // Fire and forget — audit and storage don't affect the patient response
+  Promise.all([
+    withTimeout("logBrainDecision",  () => engines.logBrainDecision(fullContext, traceId),  undefined, traceId),
+    withTimeout("storeClinicalCase", () => engines.storeClinicalCase(fullContext, traceId), undefined, traceId),
+  ]).catch(err => console.error("[Brain] Side-effect phase error:", err));
+
+  // ── Assemble output ───────────────────────────────────────────────────
+  const durationMs = Date.now() - startTime;
+
+  // Collect which engines failed — surfaces in the output for monitoring
+  const allResults = { ...phase1, ...phase2, ...phase3, ...phase4, ...phase5 };
+  const engineFailures = Object.entries(allResults)
+    .filter(([, r]) => !(r as EngineResult<unknown>).success)
+    .map(([name, r]) => ({
+      engine:   name,
+      timedOut: (r as EngineResult<unknown>).timedOut ?? false,
+      error:    (r as EngineResult<unknown>).error,
+    }));
+
+  await auditStep({
+    traceId, step: "clinical_brain_complete",
+    input:  { patientId: input.patientId },
+    output: {
+      differentialCount: differentials.length,
+      riskLevel,
+      engineFailures:    engineFailures.length,
+      durationMs,
+    },
+    metadata: { engineFailures },
+  });
+
+  return {
+    schemaVersion:    "2.0",
+    traceId,
+    patientId:        input.patientId,
+    durationMs,
+
+    // Phase 1
+    redFlags:         phase1.detectRedFlags.data.flags,
+    redFlagSeverity:  phase1.detectRedFlags.data.severity,
+
+    // Phase 2
+    differential:     differentials,
+    uncertainty,
+    similarCases:     phase2.findSimilarCasesForState.data.cases,
+    completenessSummary: phase2.complaintCompletenessEngine.data,
+
+    // Phase 3
+    nextBestQuestions:    phase3.selectNextBestQuestion.data.questions,
+    evidence:             phase3.diagnosticEvidenceEngine.data.evidence,
+    // Note: evidenceAggregatorEngine.data is intentionally surfaced separately
+    // from diagnosticEvidenceEngine.data — aggregate vs raw evidence
+    aggregatedEvidence:   phase3.evidenceAggregatorEngine.data.aggregated,
+    riskLevel,
+    riskScore:            phase3.riskStratificationEngine.data.riskScore,
+    temporalProgression:  phase3.temporalProgressionEngine.data.timeline,
+    guidelineAdherence:   phase3.guidelineAdherenceEngine.data,
+    contradictions:       phase3.contradictionEngine.data.contradictions,
+
+    // Phase 4
+    recommendations:      phase4.getBulkRecommendations.data.recommendations,
+    recommendedTests:     phase4.prioritizeTests.data.tests,
+    returnPrecautions:    phase4.generateBulkReturnPrecautions.data.precautions,
+    disposition:          phase4.dispositionCalibrationEngine.data.disposition,
+
+    // Phase 5
+    governanceApproved:   phase5.clinicalGovernanceEngine.data.approved,
+    governanceReason:     phase5.clinicalGovernanceEngine.data.reason,
+    physicianReviewPacket: phase5.physicianReviewPacketEngine.data.packet,
+
+    // Meta
+    engineFailures,
+    degraded: engineFailures.length > 0,
+  };
+}
+
+function buildBlockedOutput(
+  input:     ClinicalBrainInput,
+  reason:    string,
+  traceId:   string,
+  durationMs: number
+): ClinicalBrainOutput {
+  return {
+    schemaVersion:     "2.0",
+    traceId,
+    patientId:         input.patientId,
+    durationMs,
+    redFlags:          ["Clinical decision blocked by safety gate"],
+    redFlagSeverity:   "high",
+    differential:      [],
+    uncertainty:       1.0,
+    similarCases:      [],
+    nextBestQuestions: [],
+    evidence:          [],
+    aggregatedEvidence: [],
+    riskLevel:         "high",
+    riskScore:         null,
+    recommendations:   [],
+    recommendedTests:  [],
+    returnPrecautions: ["Physician review required before proceeding"],
+    disposition:       "physician_required",
+    governanceApproved: false,
+    governanceReason:   reason,
+    physicianReviewPacket: null,
+    contradictions:    [],
+    guidelineAdherence: null,
+    temporalProgression: null,
+    completenessSummary: null,
+    engineFailures:    [],
+    degraded:          false,
+  };
+}
+
+C) Plugin Registration Pattern — Decouple Brain from Imports
+typescript// server/clinical/engineRegistry.ts
+
+import type { ClinicalBrainInput } from "../types/clinicalBrain";
+
+// ─────────────────────────────────────────────────────────────
+// Engine type definitions
+// Each engine is typed by its input and output.
+// Adding a new engine: implement the interface, register it.
+// No changes to clinicalBrainEngine.ts required.
+// ─────────────────────────────────────────────────────────────
+
+type AnyEngineFunction = (input: any, ...args: any[]) => Promise<any>;
+
+export interface EngineDescriptor {
+  name:      string;
+  phase:     1 | 2 | 3 | 4 | 5 | 6;
+  critical:  boolean;    // if true, failure triggers physician review
+  timeoutMs: number;
+  fn:        AnyEngineFunction;
+}
+
+class EngineRegistry {
+  private engines = new Map<string, EngineDescriptor>();
+  private frozen  = false;
+
+  /**
+   * Register a sub-engine.
+   * Throws if called after freeze() — engines must be registered at startup,
+   * not dynamically during patient requests.
+   */
+  register(descriptor: EngineDescriptor): void {
+    if (this.frozen) {
+      throw new Error(
+        `[EngineRegistry] Cannot register engine "${descriptor.name}" after registry is frozen. ` +
+        `All engines must be registered at startup.`
+      );
+    }
+    if (this.engines.has(descriptor.name)) {
+      throw new Error(`[EngineRegistry] Engine "${descriptor.name}" is already registered`);
+    }
+    this.engines.set(descriptor.name, descriptor);
+  }
+
+  /**
+   * Freeze the registry — no new engines after server starts.
+   * Prevents dynamic injection of engines at runtime.
+   */
+  freeze(): void {
+    this.frozen = true;
+    console.log(`[EngineRegistry] Frozen with ${this.engines.size} engines registered`);
+  }
+
+  getAll(): Record<string, AnyEngineFunction> {
+    const result: Record<string, AnyEngineFunction> = {};
+    for (const [name, desc] of this.engines) {
+      result[name] = desc.fn;
+    }
+    return result;
+  }
+
+  getDescriptors(): EngineDescriptor[] {
+    return [...this.engines.values()];
+  }
+
+  getByPhase(phase: number): EngineDescriptor[] {
+    return [...this.engines.values()].filter(e => e.phase === phase);
+  }
+
+  has(name: string): boolean {
+    return this.engines.has(name);
+  }
+}
+
+export const engineRegistry = new EngineRegistry();
+typescript// server/clinical/registerEngines.ts
+// Called ONCE at server startup — before any patient requests.
+// This is the ONLY file that imports all 20+ sub-engines.
+// clinicalBrainEngine.ts imports nothing from sub-engines directly.
+
+import { engineRegistry }                         from "./engineRegistry";
+import { normalizeSymptoms }                       from "./symptomNormalizationEngine";
+import { detectRedFlags }                          from "../agent/safety/redFlags";
+import { safetyGuard }                             from "./clinicalSafetyGuard";
+import { computeDifferentialProbabilities }        from "../services/diagnostic/differentialProbabilityEngine";
+import { computeUncertainty }                      from "./uncertaintyEngine";
+import { findSimilarCasesForState }                from "../similarity/caseSimilarityService";
+import { findSimilarMemoryCases }                  from "./clinicalMemoryEngine";
+import { complaintCompletenessEngine }             from "./complaintCompletenessEngine";
+import { selectNextBestQuestion }                  from "../services/diagnostic/nextBestQuestionEngine";
+import { diagnosticEvidenceEngine }                from "./diagnosticEvidenceEngine";
+import { evidenceAggregatorEngine }                from "./evidenceAggregatorEngine";
+import { riskStratificationEngine }                from "./riskStratificationEngine";
+import { temporalProgressionEngine }               from "./temporalProgressionEngine";
+import { guidelineAdherenceEngine }                from "./guidelineAdherenceEngine";
+import { contradictionEngine }                     from "./contradictionEngine";
+import { getBulkRecommendations }                  from "./treatmentEngine";
+import { prioritizeTests }                         from "./testRecommendationEngine";
+import { generateBulkReturnPrecautions }           from "./returnPrecautionEngine";
+import { dispositionCalibrationEngine }            from "./dispositionCalibrationEngine";
+import { clinicalGovernanceEngine }                from "./clinicalGovernanceEngine";
+import { physicianReviewPacketEngine }             from "./physicianReviewPacketEngine";
+import { logBrainDecision, storeClinicalCase }     from "./clinicalMemoryEngine";
+
+export function registerAllEngines(): void {
+  // Phase 1 — input normalization
+  engineRegistry.register({ name: "normalizeSymptoms",    phase: 1, critical: true,  timeoutMs: 500,  fn: normalizeSymptoms });
+  engineRegistry.register({ name: "detectRedFlags",       phase: 1, critical: true,  timeoutMs: 500,  fn: detectRedFlags });
+  engineRegistry.register({ name: "safetyGuard",          phase: 1, critical: true,  timeoutMs: 500,  fn: safetyGuard });
+
+  // Phase 2 — independent parallel
+  engineRegistry.register({ name: "computeDifferentialProbabilities", phase: 2, critical: true,  timeoutMs: 3000, fn: computeDifferentialProbabilities });
+  engineRegistry.register({ name: "computeUncertainty",               phase: 2, critical: false, timeoutMs: 1000, fn: computeUncertainty });
+  engineRegistry.register({ name: "findSimilarCasesForState",         phase: 2, critical: false, timeoutMs: 3000, fn: findSimilarCasesForState });
+  engineRegistry.register({ name: "findSimilarMemoryCases",           phase: 2, critical: false, timeoutMs: 3000, fn: findSimilarMemoryCases });
+  engineRegistry.register({ name: "complaintCompletenessEngine",      phase: 2, critical: false, timeoutMs: 1000, fn: complaintCompletenessEngine });
+
+  // Phase 3 — differential-dependent
+  engineRegistry.register({ name: "selectNextBestQuestion",    phase: 3, critical: true,  timeoutMs: 2000, fn: selectNextBestQuestion });
+  engineRegistry.register({ name: "diagnosticEvidenceEngine",  phase: 3, critical: false, timeoutMs: 2000, fn: diagnosticEvidenceEngine });
+  engineRegistry.register({ name: "evidenceAggregatorEngine",  phase: 3, critical: false, timeoutMs: 2000, fn: evidenceAggregatorEngine });
+  engineRegistry.register({ name: "riskStratificationEngine",  phase: 3, critical: true,  timeoutMs: 2000, fn: riskStratificationEngine });
+  engineRegistry.register({ name: "temporalProgressionEngine", phase: 3, critical: false, timeoutMs: 2000, fn: temporalProgressionEngine });
+  engineRegistry.register({ name: "guidelineAdherenceEngine",  phase: 3, critical: false, timeoutMs: 2000, fn: guidelineAdherenceEngine });
+  engineRegistry.register({ name: "contradictionEngine",       phase: 3, critical: false, timeoutMs: 2000, fn: contradictionEngine });
+
+  // Phase 4 — treatment
+  engineRegistry.register({ name: "getBulkRecommendations",        phase: 4, critical: true,  timeoutMs: 4000, fn: getBulkRecommendations });
+  engineRegistry.register({ name: "prioritizeTests",               phase: 4, critical: false, timeoutMs: 4000, fn: prioritizeTests });
+  engineRegistry.register({ name: "generateBulkReturnPrecautions", phase: 4, critical: true,  timeoutMs: 4000, fn: generateBulkReturnPrecautions });
+  engineRegistry.register({ name: "dispositionCalibrationEngine",  phase: 4, critical: true,  timeoutMs: 4000, fn: dispositionCalibrationEngine });
+
+  // Phase 5 — governance
+  engineRegistry.register({ name: "clinicalGovernanceEngine",    phase: 5, critical: true,  timeoutMs: 5000, fn: clinicalGovernanceEngine });
+  engineRegistry.register({ name: "physicianReviewPacketEngine", phase: 5, critical: false, timeoutMs: 5000, fn: physicianReviewPacketEngine });
+
+  // Phase 6 — side effects (fire and forget)
+  engineRegistry.register({ name: "logBrainDecision",  phase: 6, critical: false, timeoutMs: 2000, fn: logBrainDecision });
+  engineRegistry.register({ name: "storeClinicalCase", phase: 6, critical: false, timeoutMs: 2000, fn: storeClinicalCase });
+
+  engineRegistry.freeze();
+  console.log("[Brain] All engines registered and registry frozen");
+}
+
+D) Test Cases
+typescript// ── Single engine failure doesn't block the response ──────────
+jest.spyOn(differentialModule, "computeDifferentialProbabilities")
+  .mockRejectedValueOnce(new Error("Model unavailable"));
+
+const result = await runClinicalBrain(mockInput, "trace-001");
+
+// Brain still returns — with fallback for the failed engine
+expect(result.differential).toEqual([]);          // safe default
+expect(result.degraded).toBe(true);
+expect(result.engineFailures).toHaveLength(1);
+expect(result.engineFailures[0].engine).toBe("computeDifferentialProbabilities");
+// Other engines still ran and returned real data
+expect(result.redFlags).toBeDefined();
+expect(result.recommendations).toBeDefined();
+
+// ── Engine timeout returns safe default, not hang ─────────────
+jest.spyOn(similarityModule, "findSimilarCasesForState")
+  .mockImplementation(() => new Promise(() => {}));  // never resolves
+
+const start = Date.now();
+const result2 = await runClinicalBrain(mockInput, "trace-002");
+const elapsed = Date.now() - start;
+
+expect(result2.similarCases).toEqual([]);           // safe default
+expect(elapsed).toBeLessThan(5000);                  // didn't hang
+expect(result2.engineFailures.find(f => f.engine === "findSimilarCasesForState")?.timedOut)
+  .toBe(true);
+
+// ── Safety gate blocked — returns safe blocked output ─────────
+jest.spyOn(safetyModule, "safetyGuard")
+  .mockResolvedValueOnce({ allowed: false, reason: "Risk score 0.97 — hard stop" });
+
+const blocked = await runClinicalBrain(mockInput, "trace-003");
+expect(blocked.governanceApproved).toBe(false);
+expect(blocked.differential).toEqual([]);
+expect(blocked.redFlags).toContain("Clinical decision blocked by safety gate");
+expect(blocked.disposition).toBe("physician_required");
+// Verify audit trail recorded the block
+const auditRows = await db.select().from(auditLogs)
+  .where(eq(auditLogs.step, "clinical_brain_safety_blocked"));
+expect(auditRows.length).toBeGreaterThan(0);
+
+// ── Phase parallelism — Phase 2 engines run concurrently ──────
+const callTimestamps: Record<string, number> = {};
+jest.spyOn(differentialModule, "computeDifferentialProbabilities")
+  .mockImplementation(async () => {
+    callTimestamps["differential"] = Date.now();
+    await new Promise(r => setTimeout(r, 200));
+    return { differentials: [], confidence: 0 };
+  });
+jest.spyOn(uncertaintyModule, "computeUncertainty")
+  .mockImplementation(async () => {
+    callTimestamps["uncertainty"] = Date.now();
+    await new Promise(r => setTimeout(r, 200));
+    return { uncertainty: 0.5, reason: "test" };
+  });
+
+const parallelStart = Date.now();
+await runClinicalBrain(mockInput, "trace-004");
+const parallelElapsed = Date.now() - parallelStart;
+
+// Both started at roughly the same time (within 50ms)
+expect(Math.abs(callTimestamps["differential"] - callTimestamps["uncertainty"]))
+  .toBeLessThan(50);
+// Total time is ~200ms (parallel), not ~400ms (sequential)
+expect(parallelElapsed).toBeLessThan(350);
+
+// ── New engine registration without touching brain file ────────
+// Can add a new engine at startup without modifying clinicalBrainEngine.ts
+const testRegistry = new EngineRegistry();
+testRegistry.register({
+  name: "newExperimentalEngine", phase: 3, critical: false,
+  timeoutMs: 1000,
+  fn: async () => ({ result: "experimental" }),
+});
+testRegistry.freeze();
+expect(testRegistry.has("newExperimentalEngine")).toBe(true);
+
+// Cannot register after freeze
+expect(() => testRegistry.register({
+  name: "tooLate", phase: 3, critical: false, timeoutMs: 1000,
+  fn: async () => ({}),
+})).toThrow("Cannot register engine");
+
+// ── Output schema version present ────────────────────────────
+const result5 = await runClinicalBrain(mockInput, "trace-005");
+expect(result5.schemaVersion).toBe("2.0");
+expect(result5.traceId).toBe("trace-005");
+The architectural change with the highest patient safety impact is the fail-open-to-degraded rather than fail-closed-to-crash model for non-critical engines. In the original architecture, a timeout in temporalProgressionEngine (which no patient-facing output directly depends on) crashes the entire brain call. In the rewritten version, the brain returns a complete response marked degraded: true with engineFailures populated. The physician sees a real differential, real red flags, and real treatment recommendations — just without the temporal progression timeline. That's a much better outcome than a 500 error that tells the physician nothing and requires them to start the intake over.Want to be notified when Claude responds?NotifySonnet 4.6Claude is AI a

@@ -50,6 +50,7 @@ const NAV_ITEMS = [
   { path: ROUTES.ROBOTICS, label: "Robotic Assist", icon: Cpu },
   { path: ROUTES.REPLAY_INSPECTOR, label: "Replay Inspector", icon: PlayCircle },
   { path: ROUTES.AUTONOMOUS_BRAIN, label: "Autonomous Brain", icon: Zap },
+  { path: ROUTES.CLINICAL_BRAIN_DASHBOARD, label: "Brain Control Tower", icon: Brain },
   { path: ROUTES.MEMORY_EXPLORER, label: "Memory Explorer", icon: BrainCircuit },
   { path: ROUTES.ROBOT_ADVANCED, label: "Robot Advanced", icon: Cpu },
   { path: ROUTES.ROBOT_CAMERA, label: "Robot Vision", icon: Eye },

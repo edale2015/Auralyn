@@ -14,6 +14,30 @@ The system employs a constrained agent architecture with a plan/act/observe loop
 ### UI/UX Decisions
 The frontend is built with React 18, TypeScript, `shadcn/ui`, and Tailwind CSS, offering intuitive interfaces for physicians, patients, and administrators. Key dashboards include the Clinical Simulation Lab, Clinical Control Tower, Executive Dashboard, Stress Test Dashboard, Patient Queue Dashboard, FDA Validation Dashboard, Decision Tree Explorer (ReactFlow visualization), Live Clinic Console (multi-tenant), and Production Readiness Console. The System Control Tower provides full system observability and control. The Clinical QA Dashboard offers a 3-column layout for quality assurance. The Clinical Improvement Lab features panels for Guideline Ingest, PubMed Auto-Ingestion, Gold Standard Gap Analysis, Evidence Scores, Evidence Ranking, Calibration, and Outcomes & FDA reporting. The Care Pathway Optimizer is an A/B pathway experimentation dashboard. The Skill Graph provides a visual representation of the knowledge base using React Flow. The Revenue War Room (`/revenue-war-room`) is a 5-tab financial intelligence dashboard covering Denial Prediction, Reimbursement Optimization, Physician Coaching (GPT-4o-mini), Contract Simulation, and Outcome-Weighted Revenue — backed by 4 new endpoints on the revenue pipeline routes. The Governance Command Center (`/governance-command-center`) is a 5-tab compliance and governance dashboard covering: Audit Trail (immutable event log with report generation), Policy Optimization (AI-driven policy tuning with auto-apply), FDA SaMD Package (Class II submission JSON generator with download), Quality & Payer (HEDIS metrics + 6-payer performance matrix), and Malpractice Risk (per-case scoring with driver analysis) — backed by 9 `/api/governance/` endpoints and 5 dedicated DB tables (policy_state, policy_updates, malpractice_risk_scores, hedis_snapshots, fda_submissions).
 
+### Clinical Brain Engine v3.0 (Phase-Parallel Rewrite — Packet 16)
+
+`server/core/clinicalBrainEngine.ts` fully rewritten (v2 sequential → v3 phase-parallel):
+- **6-phase parallel execution** with `runPhase()` parallel executor; per-engine `ENGINE_TIMEOUT_MS` map (500–5000ms)
+- **`withTimeout()`** wraps every engine, falls back to `SAFE_DEFAULTS` on failure, streams telemetry to Redis
+- **Importance-weighted failure tracking**: `engineFailures[]`, `degraded`, `degradedSeverity` in every output
+- **`schemaVersion: "3.0"`** — backward compatible; all v3 fields are additive
+- **Safety gate**: hard short-circuit to ER_NOW before any reasoning when `safetyGuard.disposition === "ER_NOW"`
+
+Core intelligence utilities (`server/clinical/`):
+- `importanceUtils.ts`, `brainBehavior.ts`, `cognitiveLoad.ts`, `adaptivePlanner.ts`, `requeryLoop.ts`
+- `chiefResidentReflection.ts` (7 consistency checks), `safetyEscalationGuard.ts` (hard override, final guardrail), `shadowEvaluator.ts`, `confidenceCalibrator.ts`
+
+Redis-backed intelligence (`server/controlTower/`, `server/oversight/`, `server/memory/`, `server/meta/`):
+- `engineTelemetry.ts`, `engineBandit.ts`, `metaLearningEngine.ts`, `oversightAgent.ts`, `cognitiveMemory.ts`, `memoryLearning.ts`
+
+Multi-agent council system (`server/agents/`):
+- `debateEngine.ts`, `consensusEngine.ts`, `multiAgentCouncil.ts`, `hierarchicalCouncil.ts`, `councilActivationBandit.ts`
+- Specialist sub-councils: `cardiologyCouncil.ts` (HEART score), `infectiousDiseaseCouncil.ts` (qSOFA/SIRS), `icuCouncil.ts` (SOFA proxy)
+
+API routes: `/api/brain-intel/*` (`clinicalBrainIntelRoutes.ts`), `/api/council/*` (`councilRoutes.ts`)
+UI dashboard: `client/src/pages/ClinicalBrainDashboard.tsx` → `/clinical-brain-dashboard`
+Tests: `tests/unit/clinicalBrainEngine.test.ts` (10), `tests/unit/councilSystem.test.ts` (28) — 590/590 total
+
 ### Technical Implementations
 The backend uses Express 5, Node.js, and TypeScript, providing REST API endpoints. It incorporates Centor score calculation, red flag detection, a supervisor gate, and robust LLM integrations. Features include a Clinical Brain Engine, Self-Developing Medical AI, Telemedicine Reasoning Assistant, and an Agent System for patient flow. Clinical capabilities include advanced triage logic, medication safety layers, FHIR-lite structured output, and a Clinical Knowledge Graph. The system includes 30+ Complaint Packs with a Visual Rule Builder, an Adaptive Control Loop, and a Case Memory Engine. A Unified Clinical Pipeline orchestrates triage, self-improvement, and simulation. The Autonomous Operator System provides intent-based task planning. The Engine Control Center chains validation, scoring, billing, outcome, learning, and auditing. The Auto-Debug Engine monitors system health, and an Agent Coordinator manages registered agents. An SMS/WhatsApp Service handles Twilio-based messaging. A Stress Test System allows load generation, and an RPA Browser Agent provides UI automation. An FDA Submission Package generates validation reports. A Live Patient Queue manages real-time sessions. System Monitoring includes a Predictive Failure Engine. The Autonomous Loop runs learning and failure prediction, with a Safety Gate for non-bypassable safety. An Immutable Audit Logger logs every clinical flow. Explainability is integrated into the orchestrator, with critical Safety Engines for drug interaction, pregnancy, and pediatric safety. The Autonomous Brain includes a Self-Learning Engine, Golden Case Validator, and Clinical Safety Guard. A Global Intelligence Layer utilizes federated learning for privacy-safe data export and aggregation, including a War Room panel for monitoring. A Multi-Agent Task Bus + Evolution Engine manages tasks with 7 agents and an autonomous evolution cycle. A System Monitor provides live engine and skill health monitoring.
 
