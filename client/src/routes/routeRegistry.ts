@@ -46,4 +46,5 @@ export const ROUTES = {
   AI_INTERACTION_MONITOR: "/ai-interaction-monitor",
   CLINICAL_BRAIN_DASHBOARD: "/clinical-brain-dashboard",
   HIERARCHICAL_COUNCIL: "/hierarchical-council",
+  BRAIN_COMMAND_CENTER: "/brain-command-center",
 };

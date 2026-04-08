@@ -2037,6 +2037,22 @@ export async function registerRoutes(
 
   console.log("[Orchestration] Circuit breakers: /api/circuit-breakers | Agent health: /api/agents/health | Replay: /api/replay | Brain intel: /api/brain-intel | Council: /api/council");
 
+  // Mission Control — cognitive bus, command grid, QA, outcome learning
+  const { default: missionControlRouter } = await import("./routes/missionControlRoutes");
+  app.use(missionControlRouter);
+  console.log("[MissionControl] Registered: /api/mission/snapshot | /api/mission/command-grid | /api/mission/cognitive-stream");
+
+  // Outcome ingest — record triage/disposition outcomes for RLHF-lite
+  app.post("/api/telemed/outcome", async (req, res) => {
+    try {
+      const { ingestOutcome } = await import("./integration/outcomeIngest");
+      const perf = await ingestOutcome(req.body);
+      res.json({ ok: true, agentPerformance: perf });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // Domain-split routers (clinical fast-path, agent registry, evolution proposals, tenant config)
   app.use("/api/domain", buildDomainRouters());
   console.log("[DomainRouters] Mounted at /api/domain/* (fast-path, registry, evolution, tenant config)");

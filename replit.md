@@ -419,3 +419,67 @@ All 12 critical fixes from Claude's architecture review are implemented:
 ### Backward Compatibility
 - `payerIntelligenceRoutes.ts` routes calling `evaluateAndImprove()`, `getImprovementLog()`, `getAgentThresholds()` are updated to `await` the now-async functions.
 - `metaOrchestrator.ts` calling `computeBusinessMetrics()` is unchanged (that function remains sync/pure).
+
+---
+
+## Telemedicine Multi-Agent Intelligence Upgrade (Phases 1–5)
+
+**590/590 tests passing.**
+
+### New Intelligence Engines (server-side)
+| File | Purpose |
+|------|---------|
+| `server/qa/qaAgent.ts` | Autonomous QA agent — flags safety_miss, undertriage, overtriage, contradiction, low_confidence |
+| `server/qa/qaLogService.ts` | QA event log with stats aggregation |
+| `server/reasoning/counterfactualEngine.ts` | Counterfactual reasoning — "what would change this decision?" |
+| `server/reasoning/trajectoryEngine.ts` | 24h trajectory prediction with risk score, trend, escalation probability |
+| `server/reasoning/bayesianEngine.ts` | Bayesian posterior updates from clinical evidence |
+| `server/simulation/digitalTwinEngine.ts` | 3-scenario digital twin (no-action / treatment / delay) |
+| `server/simulation/fullTwinEngine.ts` | Continuous 24-72h simulation timeline |
+| `server/assistant/telemedAgentAdapter.ts` | Maps telemedicine outputs → standardized agent opinions + debate runner |
+| `server/assistant/requeryPolicy.ts` | Re-query decision policy (uncertainty, consensus, sub-service failures) |
+| `server/assistant/nextBestQuestionEngine.ts` | Information-gain-ranked next-best-question selection |
+| `server/assistant/caseMemoryService.ts` | Per-case temporal memory log (iteration, triage, uncertainty, winner) |
+| `server/assistant/escalationService.ts` | Builds actionable escalation bundle for urgent/emergency cases |
+| `server/assistant/specialtyRouter.ts` | Routes complaints to specialty council (cardiology, pulmonary, ID, ENT, neuro, GI) |
+| `server/learning/outcomeLearningService.ts` | RLHF-lite outcome recording + per-agent performance scoring |
+| `server/learning/agentWeighting.ts` | Adaptive agent weighting from historical performance |
+| `server/learning/metaLearningEngine.ts` | Meta-learning for threshold adaptation (escalation, uncertainty, re-query, safety boost) |
+| `server/missionControl/cognitiveBus.ts` | WebSocket-capable cognitive event bus (pub/sub for mission control stream) |
+| `server/hospital/commandGrid.ts` | Multi-patient command grid (risk-ranked, real-time updated) |
+| `server/agents/interventionAgent.ts` | Autonomous intervention engine (ESCALATE/REQUERY/FOLLOW_UP/MONITOR/NONE) |
+| `server/integration/outcomeIngest.ts` | Outcome ingestion from EHR → RLHF-lite |
+
+### Upgraded Telemedicine Service
+`server/assistant/telemedicineAssistantService.ts` now runs all intelligence layers in sequence:
+- Base clinical pipeline (differential, safety, urgency, resources, questions)
+- Agent debate (5 agents: diagnostic, triage, safety, treatment + specialty)
+- Meta-learning threshold refresh
+- Re-query policy + Next-Best-Question selection
+- Trajectory prediction + Digital twin simulation
+- Counterfactual analysis + Bayesian updating
+- Specialty routing + Escalation bundle
+- QA audit + Intervention decision
+- Case memory logging + Command grid update
+- Population health logging + Cognitive bus broadcast
+
+Returns enriched `AssistantResult` with: `uncertainty`, `debate`, `requery`, `counterfactuals`, `trajectory`, `bayesian`, `simulation`, `qa`, `specialty`, `escalation`, `intervention`, `systemThresholds`, `iteration`.
+
+### New API Endpoints
+- `GET /api/mission/snapshot` — full mission control state (grid, QA, agents, thresholds, cognitive history)
+- `GET /api/mission/command-grid` — active patient command grid
+- `GET /api/mission/cognitive-stream` — last 50 cognitive bus events
+- `GET /api/learning/agents` — agent performance rankings
+- `GET /api/learning/outcomes` — outcome event log
+- `GET /api/learning/thresholds` — current system thresholds
+- `POST /api/learning/meta-learn` — trigger threshold adaptation
+- `POST /api/telemed/outcome` — ingest EHR outcome (correct/incorrect/overtriage/undertriage)
+
+### Brain Command Center Dashboard
+Route: `/brain-command-center` | Sidebar entry: "Brain Command Center"
+5 tabs:
+1. **Command Grid** — live risk-sorted patient grid with triage level, risk %, trajectory, escalation badges
+2. **Cognitive Stream** — real-time cognitive event log with topic, caseId, payload key-values
+3. **QA Audit** — per-case QA scores, flag distribution, flag detail cards
+4. **Agent Performance** — RLHF-lite rankings with correct/incorrect/overtriage/undertriage breakdown
+5. **Meta-Learning** — 4 adaptive threshold cards with visual progress bars + trigger button
