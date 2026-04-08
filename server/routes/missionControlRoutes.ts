@@ -7,6 +7,7 @@ import { getSystemThresholds } from "../learning/metaLearningEngine";
 import { getAgentPerformance as getLiveAgentPerformance, getRecentDriftEvents } from "../assistant/agentPerformanceTracker";
 import { getShapHistory, getShapForCase } from "../assistant/shapLogService";
 import { getCaseMemory, getAllActiveCases } from "../assistant/caseMemoryService";
+import { getEngineReliability, getEngineHealth } from "../assistant/telemedEngineReliability";
 
 const router = Router();
 
@@ -23,6 +24,8 @@ router.get("/api/mission/snapshot", (_req, res) => {
     systemThresholds: getSystemThresholds(),
     shapHistory: getShapHistory(10),
     activeCases: getAllActiveCases(),
+    engineReliability: getEngineReliability(),
+    engineHealth: getEngineHealth(),
     wsSubscribers: getCognitiveSubscriberCount(),
     ts: Date.now(),
   });
@@ -58,6 +61,14 @@ router.get("/api/mission/case-memory/:caseId", (req, res) => {
 router.get("/api/mission/active-cases", (_req, res) => {
   const cases = getAllActiveCases();
   res.json({ cases });
+});
+
+router.get("/api/mission/engine-reliability", (_req, res) => {
+  res.json({
+    engines: getEngineReliability(),
+    health: getEngineHealth(),
+    ts: Date.now(),
+  });
 });
 
 export default router;

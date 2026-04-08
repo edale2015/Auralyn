@@ -12,7 +12,7 @@ import {
   TrendingUp, TrendingDown, Minus, Users, Zap, RefreshCw,
   Shield, FlaskConical, GitBranch, Target, Radio, Siren,
   HelpCircle, Lightbulb, BarChart3, Clock, Trophy, TriangleAlert,
-  ArrowUpRight, ArrowDownRight, Gauge, Eye, Sparkles,
+  ArrowUpRight, ArrowDownRight, Gauge, Eye, Sparkles, Cpu, Timer, XCircle,
 } from "lucide-react";
 
 function RiskBadge({ level }: { level: string }) {
@@ -161,6 +161,8 @@ export default function BrainCommandCenter() {
   const thresholds = snap.systemThresholds ?? {};
   const shapHistory = snap.shapHistory ?? [];
   const activeCases = snap.activeCases ?? [];
+  const engineReliability: any[] = snap.engineReliability ?? [];
+  const engineHealth = snap.engineHealth ?? { healthy: 0, degraded: 0, critical: 0, total: 0 };
 
   const totalPatients = grid.length;
   const criticalCount = grid.filter((p: any) => p.triageLevel === "emergency" || p.triageLevel === "critical").length;
@@ -247,6 +249,18 @@ export default function BrainCommandCenter() {
             </div>
           </CardContent>
         </Card>
+        <Card data-testid="stat-engine-health">
+          <CardContent className="p-4 flex items-center gap-3">
+            <Cpu className={`h-8 w-8 ${engineHealth.critical > 0 ? "text-red-500" : engineHealth.degraded > 0 ? "text-orange-400" : "text-emerald-500"}`} />
+            <div>
+              <div className="flex items-center gap-1">
+                <span className="text-lg font-bold text-emerald-600">{engineHealth.healthy}</span>
+                <span className="text-xs text-gray-400">/ {engineHealth.total}</span>
+              </div>
+              <div className="text-xs text-gray-500">Engines Healthy</div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -268,6 +282,10 @@ export default function BrainCommandCenter() {
           <TabsTrigger value="agents" data-testid="tab-agents">
             <BarChart3 className="h-3.5 w-3.5 mr-1" />
             Agent Performance
+          </TabsTrigger>
+          <TabsTrigger value="engine-health" data-testid="tab-engine-health">
+            <Cpu className="h-3.5 w-3.5 mr-1" />
+            Engine Health
           </TabsTrigger>
           <TabsTrigger value="qa" data-testid="tab-qa">QA Audit</TabsTrigger>
           <TabsTrigger value="thresholds" data-testid="tab-thresholds">Meta-Learning</TabsTrigger>
@@ -800,6 +818,142 @@ export default function BrainCommandCenter() {
                     </div>
                   ))
                 )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="engine-health" className="mt-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                <Cpu className="h-4 w-4 text-indigo-500" />
+                Engine Reliability Scorecard
+              </h3>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Real-time latency (p50/p95), failure rate, and call volume for all telemedicine intelligence engines
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <Card data-testid="engine-stat-healthy" className="border-emerald-200 dark:border-emerald-800">
+              <CardContent className="p-4 text-center">
+                <CheckCircle2 className="h-7 w-7 text-emerald-500 mx-auto mb-1" />
+                <div className="text-3xl font-bold text-emerald-600">{engineHealth.healthy}</div>
+                <div className="text-xs text-gray-500">Healthy</div>
+              </CardContent>
+            </Card>
+            <Card data-testid="engine-stat-degraded" className={engineHealth.degraded > 0 ? "border-orange-300 dark:border-orange-700" : ""}>
+              <CardContent className="p-4 text-center">
+                <AlertTriangle className="h-7 w-7 text-orange-400 mx-auto mb-1" />
+                <div className="text-3xl font-bold text-orange-500">{engineHealth.degraded}</div>
+                <div className="text-xs text-gray-500">Degraded</div>
+              </CardContent>
+            </Card>
+            <Card data-testid="engine-stat-critical" className={engineHealth.critical > 0 ? "border-red-300 dark:border-red-700" : ""}>
+              <CardContent className="p-4 text-center">
+                <XCircle className="h-7 w-7 text-red-500 mx-auto mb-1" />
+                <div className="text-3xl font-bold text-red-600">{engineHealth.critical}</div>
+                <div className="text-xs text-gray-500">Critical</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {engineReliability.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-gray-400" data-testid="empty-engine-health">
+                No engine data yet. Process a case to begin tracking latency and reliability.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {engineReliability.map((eng: any) => {
+                const statusColor =
+                  eng.status === "healthy" ? "border-l-emerald-500" :
+                  eng.status === "degraded" ? "border-l-orange-400" :
+                  eng.status === "critical" ? "border-l-red-500" : "border-l-gray-300";
+                const statusBadgeClass =
+                  eng.status === "healthy" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400" :
+                  eng.status === "degraded" ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400" :
+                  eng.status === "critical" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400" :
+                  "bg-gray-100 text-gray-500";
+                return (
+                  <Card key={eng.engine} className={`border-l-4 ${statusColor}`} data-testid={`engine-row-${eng.engine}`}>
+                    <CardContent className="p-3">
+                      <div className="flex items-center gap-4">
+                        <div className="w-36 shrink-0">
+                          <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{eng.engine.replace(/_/g, " ")}</div>
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium mt-0.5 ${statusBadgeClass}`}>
+                            {eng.status}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-5 gap-3 flex-1 text-xs">
+                          <div className="text-center" data-testid={`engine-calls-${eng.engine}`}>
+                            <div className="font-bold text-gray-900 dark:text-gray-100">{eng.calls}</div>
+                            <div className="text-gray-400">calls</div>
+                          </div>
+                          <div className="text-center" data-testid={`engine-p50-${eng.engine}`}>
+                            <div className="font-bold text-blue-600">{eng.p50Ms}ms</div>
+                            <div className="text-gray-400">p50</div>
+                          </div>
+                          <div className="text-center" data-testid={`engine-p95-${eng.engine}`}>
+                            <div className={`font-bold ${eng.p95Ms > 200 ? "text-orange-500" : "text-gray-700 dark:text-gray-300"}`}>
+                              {eng.p95Ms}ms
+                            </div>
+                            <div className="text-gray-400">p95</div>
+                          </div>
+                          <div className="text-center" data-testid={`engine-failure-${eng.engine}`}>
+                            <div className={`font-bold ${eng.failureRate > 0.1 ? "text-red-500" : "text-gray-700 dark:text-gray-300"}`}>
+                              {(eng.failureRate * 100).toFixed(0)}%
+                            </div>
+                            <div className="text-gray-400">fail rate</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="font-bold text-gray-700 dark:text-gray-300">{eng.avgLatencyMs}ms</div>
+                            <div className="text-gray-400">avg</div>
+                          </div>
+                        </div>
+
+                        <div className="w-32 shrink-0">
+                          <div className="text-xs text-gray-400 mb-1 flex justify-between">
+                            <span>p95 target</span>
+                            <span className={eng.p95Ms > 500 ? "text-red-500" : eng.p95Ms > 200 ? "text-orange-400" : "text-emerald-600"}>
+                              {eng.p95Ms > 500 ? "slow" : eng.p95Ms > 200 ? "ok" : "fast"}
+                            </span>
+                          </div>
+                          <Progress
+                            value={Math.min(100, (eng.p95Ms / 500) * 100)}
+                            className="h-1.5"
+                          />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <Timer className="h-5 w-5 text-blue-500 mt-0.5 shrink-0" />
+                <div>
+                  <div className="text-sm font-semibold text-blue-800 dark:text-blue-200">Reliability Thresholds</div>
+                  <div className="grid grid-cols-3 gap-4 mt-2 text-xs text-blue-600 dark:text-blue-400">
+                    <div>
+                      <span className="font-bold text-emerald-600">Healthy:</span> failure rate &lt; 20%, p95 &lt; 500ms
+                    </div>
+                    <div>
+                      <span className="font-bold text-orange-500">Degraded:</span> failure rate 20–50%
+                    </div>
+                    <div>
+                      <span className="font-bold text-red-600">Critical:</span> failure rate ≥ 50%
+                    </div>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -32,6 +32,7 @@ import { logPopulationCase } from "../populationHealth/populationEngine"
 import { explainWinner } from "./shapExplainer"
 import { recordDebateRound, getAgentPerformance } from "./agentPerformanceTracker"
 import { logShap } from "./shapLogService"
+import { timeEngineSync, timeEngine, getEngineReliability } from "./telemedEngineReliability"
 
 export interface AssistantResult {
   caseId: string
@@ -178,13 +179,17 @@ export async function runTelemedicineAssistant(
   const lastMemory = getLastMemory(caseId)
   const iteration = (lastMemory?.iteration ?? 0) + 1
 
-  const safetyAlerts = checkSafetyAlerts(
-    incomingMessage ?? presentSymptoms.join(" "),
-    presentSymptoms
+  const safetyAlerts = timeEngineSync("safety_alerts", () =>
+    checkSafetyAlerts(
+      incomingMessage ?? presentSymptoms.join(" "),
+      presentSymptoms
+    )
   )
 
   const dxDifferential = complaint
-    ? getUpdatedDifferential(complaint, presentSymptoms, incomingMessage ?? "")
+    ? timeEngineSync("differential", () =>
+        getUpdatedDifferential(complaint, presentSymptoms, incomingMessage ?? "")
+      )
     : differential.map((d: any) => ({
         rank: 1,
         diagnosis: d.diagnosis,
@@ -198,9 +203,11 @@ export async function runTelemedicineAssistant(
   const topDx = dxDifferential[0]?.diagnosis ?? null
 
   const resourceList = topDx
-    ? getResourceRecommendations(
-        dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
-        5
+    ? timeEngineSync("resources", () =>
+        getResourceRecommendations(
+          dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
+          5
+        )
       )
     : []
 
@@ -213,7 +220,7 @@ export async function runTelemedicineAssistant(
     riskScore: dxDifferential[0]?.confidence ?? 0,
     createdAt: new Date().toISOString(),
   }
-  const urgencyScore = computeUrgencyScore(triageCase)
+  const urgencyScore = timeEngineSync("triage_urgency", () => computeUrgencyScore(triageCase))
 
   const triageLevel =
     urgencyScore >= 0.85
@@ -228,15 +235,17 @@ export async function runTelemedicineAssistant(
 
   const contradictionReport =
     topDx
-      ? computeContradictionReport({
-          topDiagnosis: topDx,
-          differential: dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
-          presentSymptoms,
-          answeredQuestions: (state.answeredQuestions ?? []).map((q: any) => ({
-            questionId: q.questionId ?? q.id ?? "",
-            answer: String(q.answer ?? ""),
-          })),
-        })
+      ? timeEngineSync("contradiction", () =>
+          computeContradictionReport({
+            topDiagnosis: topDx,
+            differential: dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
+            presentSymptoms,
+            answeredQuestions: (state.answeredQuestions ?? []).map((q: any) => ({
+              questionId: q.questionId ?? q.id ?? "",
+              answer: String(q.answer ?? ""),
+            })),
+          })
+        )
       : null
 
   let adaptiveQuestions: any[] = []
@@ -280,25 +289,29 @@ export async function runTelemedicineAssistant(
     ...(contradictionReport?.unruledDangers ?? []).map((u) => ({ diagnosis: u.diagnosis, conflict: u.rulingOutQuestion })),
   ]
 
-  const uncertaintyResult = computeUncertainty({
-    subServiceFailures: [],
-    differential: dxDifferential.slice(0, 5).map(d => ({ diagnosis: d.diagnosis, confidence: d.confidence })),
-    safetyAlerts,
-    contradictions: contradictionsForUncertainty,
-  })
+  const uncertaintyResult = timeEngineSync("uncertainty", () =>
+    computeUncertainty({
+      subServiceFailures: [],
+      differential: dxDifferential.slice(0, 5).map(d => ({ diagnosis: d.diagnosis, confidence: d.confidence })),
+      safetyAlerts,
+      contradictions: contradictionsForUncertainty,
+    })
+  )
   const uncertainty = uncertaintyResult.score
 
   const agentOpinions = mapTelemedToAgents({ ...baseResult, uncertainty })
-  const debate = runAgentDebate(agentOpinions)
+  const debate = timeEngineSync("agent_debate", () => runAgentDebate(agentOpinions))
 
-  const fusion = runClinicalFusion({
-    differential: dxDifferential.slice(0, 5).map(d => ({ diagnosis: d.diagnosis, confidence: d.confidence, urgency: d.urgency ?? "routine" })),
-    safetyAlerts,
-    urgency: { level: triageLevel, score: urgencyScore },
-    contradictions: contradictionsForUncertainty,
-    debateWinner: debate.winner,
-    uncertainty,
-  })
+  const fusion = timeEngineSync("clinical_fusion", () =>
+    runClinicalFusion({
+      differential: dxDifferential.slice(0, 5).map(d => ({ diagnosis: d.diagnosis, confidence: d.confidence, urgency: d.urgency ?? "routine" })),
+      safetyAlerts,
+      urgency: { level: triageLevel, score: urgencyScore },
+      contradictions: contradictionsForUncertainty,
+      debateWinner: debate.winner,
+      uncertainty,
+    })
+  )
 
   const systemThresholds = runMetaLearning()
 
@@ -325,16 +338,16 @@ export async function runTelemedicineAssistant(
 
   const enrichedResult = { ...baseResult, uncertainty, debate, requery: requeryDecision }
 
-  const trajectory = predictTrajectory(enrichedResult, memory)
-  const counterfactuals = computeCounterfactuals(enrichedResult)
+  const trajectory = timeEngineSync("trajectory", () => predictTrajectory(enrichedResult, memory))
+  const counterfactuals = timeEngineSync("counterfactuals", () => computeCounterfactuals(enrichedResult))
 
   const priors = dxDifferential.slice(0, 4).map(d => ({ diagnosis: d.diagnosis, prior: d.confidence }))
   const evidence = buildEvidenceFromResult(baseResult)
-  const bayesian = runBayesianUpdate({ priors, evidence })
+  const bayesian = timeEngineSync("bayesian", () => runBayesianUpdate({ priors, evidence }))
 
-  const simulation = runDigitalTwin({ result: { ...enrichedResult, trajectory } })
+  const simulation = timeEngineSync("digital_twin", () => runDigitalTwin({ result: { ...enrichedResult, trajectory } }))
 
-  const specialty = routeToSpecialtyCouncil(complaint ?? "", dxDifferential)
+  const specialty = timeEngineSync("specialty_router", () => routeToSpecialtyCouncil(complaint ?? "", dxDifferential))
 
   const preGovernorResult = {
     caseId,
@@ -394,7 +407,7 @@ export async function runTelemedicineAssistant(
     systemThresholds,
   }
 
-  const governed = applySafetyGovernor(preGovernorResult)
+  const governed = timeEngineSync("safety_governor", () => applySafetyGovernor(preGovernorResult))
 
   const debateWinnerId = governed.overrideApplied
     ? (agentOpinions.find(o => o.domain === "safety")?.agentId ?? "safety_engine")
@@ -404,14 +417,16 @@ export async function runTelemedicineAssistant(
     debateWinnerId
   )
 
-  const escalation = buildEscalationBundle({
-    result: governed.result,
-    requery: requeryDecision.shouldRequery ? { questionAsked: nbqResult.winner?.text } : undefined,
-  })
+  const escalation = timeEngineSync("escalation", () =>
+    buildEscalationBundle({
+      result: governed.result,
+      requery: requeryDecision.shouldRequery ? { questionAsked: nbqResult.winner?.text } : undefined,
+    })
+  )
 
-  const intervention = runIntervention(governed.result)
+  const intervention = timeEngineSync("intervention", () => runIntervention(governed.result))
 
-  const qa = runQA({ ...governed.result, escalation })
+  const qa = timeEngineSync("qa_agent", () => runQA({ ...governed.result, escalation }))
   logQA(qa)
 
   logCaseMemory({
