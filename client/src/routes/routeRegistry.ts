@@ -45,4 +45,5 @@ export const ROUTES = {
   MESSAGING_FLOW: "/messaging-flow",
   AI_INTERACTION_MONITOR: "/ai-interaction-monitor",
   CLINICAL_BRAIN_DASHBOARD: "/clinical-brain-dashboard",
+  HIERARCHICAL_COUNCIL: "/hierarchical-council",
 };

@@ -39,6 +39,7 @@ import RoboticsControlPage from "@/pages/RoboticsControlPage";
 import ReplayInspectorPage from "@/pages/ReplayInspectorPage";
 import AutonomousBrainDashboard from "@/pages/AutonomousBrainDashboard";
 import ClinicalBrainDashboard from "@/pages/ClinicalBrainDashboard";
+import HierarchicalCouncilDashboard from "@/pages/HierarchicalCouncilDashboard";
 import MemoryExplorer from "@/pages/MemoryExplorer";
 import RobotControlAdvanced from "@/pages/RobotControlAdvanced";
 import RobotCamera from "@/pages/RobotCamera";
@@ -124,6 +125,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.REPLAY_INSPECTOR} component={ReplayInspectorPage} />
         <Route path={ROUTES.AUTONOMOUS_BRAIN} component={AutonomousBrainDashboard} />
         <Route path={ROUTES.CLINICAL_BRAIN_DASHBOARD} component={ClinicalBrainDashboard} />
+        <Route path={ROUTES.HIERARCHICAL_COUNCIL} component={HierarchicalCouncilDashboard} />
         <Route path={ROUTES.MEMORY_EXPLORER} component={MemoryExplorer} />
         <Route path={ROUTES.ROBOT_ADVANCED} component={RobotControlAdvanced} />
         <Route path={ROUTES.ROBOT_CAMERA} component={RobotCamera} />
