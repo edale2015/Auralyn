@@ -1,0 +1,108 @@
+SE 3 — Frontend Cognitive Panel (React)
+📁 client/src/components/TelemedCognitivePanel.tsx
+import { useEffect, useState } from "react";
+
+export default function TelemedCognitivePanel() {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000/ws/telemed");
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === "telemed_cognition") {
+        setData(msg.data);
+      }
+    };
+
+    return () => ws.close();
+  }, []);
+
+  if (!data) return <div className="p-4">Waiting for cognitive stream...</div>;
+
+  return (
+    <div className="p-4 space-y-4">
+
+      {/* 🧠 AGENTS */}
+      <div>
+        <h2 className="text-xl font-bold">Agents</h2>
+        {data.agents.map((a: any) => (
+          <div key={a.agentId} className="border p-2 rounded">
+            <div><b>{a.agentId}</b> ({a.domain})</div>
+            <div>Conclusion: {a.conclusion}</div>
+            <div>Confidence: {(a.confidence * 100).toFixed(1)}%</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ⚖️ COUNCIL */}
+      <div>
+        <h2 className="text-xl font-bold">Council Decision</h2>
+        <div>Winner: {data.council?.winner?.agentId}</div>
+        <div>Confidence: {data.council?.winner?.confidence}</div>
+      </div>
+
+      {/* 🚨 FINAL */}
+      <div>
+        <h2 className="text-xl font-bold">Final Decision</h2>
+        <div>{JSON.stringify(data.finalDecision)}</div>
+      </div>
+
+    </div>
+  );
+}
+🌐 PHASE 4 — Add to Control Tower Page
+📁 ControlTower.tsx
+
+Add:
+
+import TelemedCognitivePanel from "@/components/TelemedCognitivePanel";
+🔥 Insert into layout:
+<div className="grid grid-cols-2 gap-4">
+  <TelemedCognitivePanel />
+</div>
+📊 PHASE 5 — OPTIONAL: Reasoning Graph Visualization
+📁 ReasoningGraph.tsx
+export function ReasoningGraph({ nodes }: { nodes: any[] }) {
+  return (
+    <div>
+      <h2 className="text-xl font-bold">Reasoning Graph</h2>
+      {nodes.map(n => (
+        <div key={n.id} className="border p-2">
+          {n.id} → weight: {n.weight.toFixed(2)}
+        </div>
+      ))}
+    </div>
+  );
+}
+🧠 WHAT YOU NOW SEE LIVE
+
+When a case runs, your Control Tower shows:
+
+🧩 Agents
+diagnostic_engine → pneumonia (0.62)
+triage_engine → medium (0.55)
+safety_engine → none
+⚖️ Debate
+Winner: triage_engine
+Consensus: 0.66
+Disagreement: 0.28
+🚨 Final Decision
+medium urgency
+no override
+🌐 Graph
+diagnostic → weight 0.62
+triage → weight 0.55
+🔥 THIS IS WHERE IT GETS INTERESTING
+
+Because now you can:
+
+👀 WATCH THINKING
+see conflicts between agents
+see safety override trigger live
+🧪 DEBUG CLINICAL LOGIC
+“why did triage beat diagnosis?”
+“why didn’t safety fire?”
+🧠 TRAIN THE SYSTEM
+compare debate vs outcomes
+adjust weights

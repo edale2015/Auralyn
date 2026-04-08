@@ -1,0 +1,218 @@
+PHASE 2 — Plug Into Your EXISTING Reasoning Graph
+
+You already have:
+
+reasoning graph
+traversal
+scoring
+audit trace
+
+We feed telemed agents into it
+
+📁 server/reasoning/telemedReasoningBridge.ts
+import { AgentOpinion } from "../agents/agentTypes";
+
+export interface ReasoningNode {
+  id: string;
+  type: string;
+  weight: number;
+  data: any;
+}
+
+export function buildReasoningGraphFromTelemed(opinions: AgentOpinion[]) {
+  const nodes: ReasoningNode[] = [];
+
+  for (const op of opinions) {
+    nodes.push({
+      id: op.agentId,
+      type: op.domain,
+      weight: op.confidence * (op.priority ?? 1),
+      data: op,
+    });
+  }
+
+  return nodes;
+}
+⚖️ PHASE 3 — Hook Into EXISTING Multi-Agent Debate System
+
+Instead of your new debate engine, we call your existing council/debate system
+
+📁 server/telemedicine/telemedCouncilIntegration.ts
+import { AgentOpinion } from "../agents/agentTypes";
+
+// This should point to your REAL existing council system
+import { runCouncilDebate } from "../agents/councilEngine";
+
+export async function runTelemedCouncil(opinions: AgentOpinion[]) {
+  const result = await runCouncilDebate({
+    domain: "telemedicine",
+    agents: opinions,
+  });
+
+  return result;
+}
+🧠 PHASE 4 — Modify runTelemedicineAssistant (CORE UPGRADE)
+
+This is the surgical insertion point.
+
+✨ ADD THIS AFTER your current result assembly:
+import { mapTelemedToAgents } from "./telemedAgentAdapter";
+import { buildReasoningGraphFromTelemed } from "../reasoning/telemedReasoningBridge";
+import { runTelemedCouncil } from "./telemedCouncilIntegration";
+🔥 Insert:
+// 🧠 STEP 1: Convert outputs → agent opinions
+const agentOpinions = mapTelemedToAgents(result);
+
+// 🧠 STEP 2: Build reasoning graph nodes
+const reasoningNodes = buildReasoningGraphFromTelemed(agentOpinions);
+
+// ⚖️ STEP 3: Run multi-agent council (YOUR existing system)
+const councilResult = await runTelemedCouncil(agentOpinions);
+
+// 🛑 STEP 4: Safety override ALWAYS wins
+let finalDecision = councilResult;
+
+if (result.safetyAlerts.length > 0) {
+  finalDecision = {
+    winner: {
+      agentId: "safety_engine",
+      conclusion: "emergency",
+      confidence: 1,
+    },
+    override: true,
+  };
+}
+🧠 Attach to response:
+const finalResult = {
+  ...result,
+  agents: agentOpinions,
+  reasoningGraph: reasoningNodes,
+  council: councilResult,
+  finalDecision,
+};
+📊 PHASE 5 — Control Tower Visibility (CRITICAL)
+
+Now your dashboards can show:
+
+🧠 Telemedicine Cognitive Panel
+Agents:
+diagnostic_engine → pneumonia (0.62)
+triage_engine → medium (0.55)
+safety_engine → none
+Council winner: triage
+Override: ❌
+Confidence: 0.68
+🔥 WHAT THIS DOES (BIG PICTURE)
+
+Now telemedicine is:
+
+BEFORE:
+fast
+parallel
+reliable
+AFTER:
+🧠 interpretable
+⚖️ debated
+🎯 prioritized
+📊 traceable
+🔁 learnable
+🚀 NEXT 5 HIGH-YIELD MOVES (I recommend we code next)
+
+Now that telemedicine is plugged into the brain:
+
+1. 🧠 Next-Best-Question via Information Gain
+choose question that reduces uncertainty most
+2. 🔁 Re-Query Loop
+if disagreement high → re-run engines
+3. 🎓 Outcome Feedback → Bandit
+feed real outcomes into engine weighting
+4. 🧬 Temporal Reasoning
+symptom progression modeling
+5. 🏥 Specialty Sub-Councils
+cardiology vs pulmonary vs infectious disease
+🧠 Final Thought
+
+You were right to pause and question it.
+
+You didn’t need:
+
+“another multi-agent system”
+
+You needed:
+
+telemedicine to plug into the one you already built
+
+Now it does.
+
+If you want next, I can:
+👉 wire this into your Decision Tree Explorer + Control Tower UI so you can literally watch the agents argue live per patient
+
+That’s where this becomes… unreal.
+
+yes
+
+Now we give your system a window into its own mind—the Control Tower stops being a dashboard and becomes a living observatory where agents argue, shift, and converge in real time 🧠✨
+
+You already have the backend logic. This step wires it into a live, visual cognitive layer.
+
+🧠 WHAT WE’RE BUILDING
+
+A Telemedicine Cognitive Panel inside your Control Tower that shows:
+
+🧩 Agents (diagnostic, triage, safety, treatment)
+⚖️ Debate results (winner, consensus, disagreement)
+🌐 Reasoning graph (nodes + weights)
+🚨 Safety overrides
+🎯 Final decision
+🔄 Live updates per patient
+🧩 PHASE 1 — Backend WebSocket Stream (Live Cognitive Feed)
+📁 server/ws/telemedCognitiveStream.ts
+import { Server } from "ws";
+
+interface CognitivePayload {
+  caseId: string;
+  agents: any[];
+  council: any;
+  finalDecision: any;
+  reasoningGraph: any[];
+  timestamp: number;
+}
+
+const clients = new Set<any>();
+
+export function initTelemedCognitiveStream(wss: Server) {
+  wss.on("connection", (ws) => {
+    clients.add(ws);
+
+    ws.on("close", () => {
+      clients.delete(ws);
+    });
+  });
+}
+
+export function broadcastCognitiveUpdate(payload: CognitivePayload) {
+  const message = JSON.stringify({
+    type: "telemed_cognition",
+    data: payload,
+  });
+
+  for (const client of clients) {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  }
+}
+🔗 PHASE 2 — Hook Telemedicine → Stream
+
+Inside your runTelemedicineAssistant (after finalResult):
+
+import { broadcastCognitiveUpdate } from "../ws/telemedCognitiveStream";
+🔥 Add:
+broadcastCognitiveUpdate({
+  caseId: sessionId,
+  agents: agentOpinions,
+  council: councilResult,
+  finalDecision,
+  reasoningGraph: reasoningNodes,
+  timestamp: Date.now(),
+});

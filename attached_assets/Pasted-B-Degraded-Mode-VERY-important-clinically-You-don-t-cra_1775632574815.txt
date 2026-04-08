@@ -1,0 +1,171 @@
+B. Degraded Mode (VERY important clinically)
+
+You don’t crash when a sub-service fails.
+
+Instead:
+
+You return safe defaults
+You expose:
+degraded: true
+subServiceFailures: []
+
+This is FDA-grade resilience behavior
+
+C. Route / Service Separation (Huge)
+
+You eliminated:
+
+dual session mutation paths ❌
+route-level orchestration ❌
+
+Now:
+
+Routes = HTTP + validation + session I/O
+Service = clinical reasoning engine
+
+That’s exactly how regulated systems must be structured.
+
+D. Rate Limiting by Tier (Excellent)
+
+You correctly separated:
+
+llm (expensive, sensitive)
+session
+read
+
+This prevents:
+
+cost explosions
+silent scraping
+abuse patterns in PHI endpoints
+⚠️ 2. Critical Gaps Remaining (These Are Important)
+
+Now let’s tighten the bolts. These are not cosmetic—they affect:
+
+safety
+auditability
+“brain-like” behavior
+❗ GAP 1 — No Clinical Priority Arbitration Layer
+
+Right now:
+
+All outputs are returned side-by-side
+No system decides:
+
+“Which signal actually matters most?”
+
+Example:
+
+mild differential
+BUT strong safety alert
+
+👉 You must prioritize safety over everything
+
+❗ GAP 2 — No Cross-Service Reasoning / Fusion
+
+Each service runs independently.
+
+But real clinical reasoning requires:
+
+contradictions between services
+reinforcement between signals
+weighted synthesis
+
+Right now:
+
+differential + safety + urgency = flat merge
+
+What you need:
+
+→ unified reasoning layer
+→ weighted fusion
+→ conflict resolution
+❗ GAP 3 — No Uncertainty Quantification
+
+You have:
+
+failures
+degraded flag
+
+But NOT:
+
+confidence of the final output
+
+This is critical for:
+
+escalation
+physician trust
+regulatory defensibility
+❗ GAP 4 — No Next-Best-Question Intelligence
+
+You return:
+
+nextQuestion = adaptive[0]
+
+But not:
+
+information gain
+uncertainty reduction
+decision impact
+❗ GAP 5 — No Global Safety Override
+
+You detect safety alerts…
+
+…but you don’t enforce:
+
+“This case MUST override everything else”
+
+🔥 3. Next-Level Upgrade (Fully Coded)
+
+We now upgrade your system into:
+
+Cognitive Fusion Engine + Safety Governor + Uncertainty Layer
+
+🧩 A. Add Clinical Fusion Engine
+➤ New File:
+
+server/telemedicine/clinicalFusionEngine.ts
+
+interface FusionInput {
+  differential: any[];
+  safetyAlerts: string[];
+  urgency: { level: string; score: number };
+  contradictionReport: any;
+}
+
+interface FusionOutput {
+  finalPriority: "routine" | "urgent" | "emergency";
+  dominantSignal: string;
+  reasoningSummary: string;
+}
+
+export function runClinicalFusion(input: FusionInput): FusionOutput {
+  const { safetyAlerts, urgency, differential } = input;
+
+  // 🚨 Safety dominates everything
+  if (safetyAlerts.length > 0) {
+    return {
+      finalPriority: "emergency",
+      dominantSignal: "safety_alert",
+      reasoningSummary: `Safety alerts present: ${safetyAlerts.join(", ")}`,
+    };
+  }
+
+  // Urgency next
+  if (urgency.level === "high" || urgency.level === "emergency") {
+    return {
+      finalPriority: "urgent",
+      dominantSignal: "urgency_score",
+      reasoningSummary: `High urgency score: ${urgency.score}`,
+    };
+  }
+
+  // Otherwise differential-driven
+  const topDx = differential[0]?.diagnosis ?? "unknown";
+
+  return {
+    finalPriority: "routine",
+    dominantSignal: "differential",
+    reasoningSummary: `Top differential: ${topDx}`,
+  };
+}

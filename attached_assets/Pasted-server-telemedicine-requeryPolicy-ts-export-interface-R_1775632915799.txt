@@ -1,0 +1,301 @@
+server/telemedicine/requeryPolicy.ts
+export interface RequeryPolicyInput {
+  uncertainty: number;
+  debate?: {
+    consensusScore?: number;
+    disagreement?: number;
+  };
+  subServiceFailures?: string[];
+  safetyAlerts?: string[];
+}
+
+export interface RequeryDecision {
+  shouldRequery: boolean;
+  reason: string;
+  priority: "low" | "medium" | "high";
+}
+
+export function shouldTriggerRequery(input: RequeryPolicyInput): RequeryDecision {
+  const uncertainty = input.uncertainty ?? 0;
+  const consensus = input.debate?.consensusScore ?? 1;
+  const disagreement = input.debate?.disagreement ?? 0;
+  const failures = input.subServiceFailures ?? [];
+  const safetyAlerts = input.safetyAlerts ?? [];
+
+  if (safetyAlerts.length > 0) {
+    return {
+      shouldRequery: false,
+      reason: "Safety alert present, escalate immediately instead of re-querying",
+      priority: "high",
+    };
+  }
+
+  if (uncertainty >= 0.55) {
+    return {
+      shouldRequery: true,
+      reason: `High uncertainty (${uncertainty.toFixed(2)})`,
+      priority: "high",
+    };
+  }
+
+  if (consensus <= 0.45) {
+    return {
+      shouldRequery: true,
+      reason: `Low consensus (${consensus.toFixed(2)})`,
+      priority: "high",
+    };
+  }
+
+  if (disagreement >= 0.25) {
+    return {
+      shouldRequery: true,
+      reason: `High disagreement (${disagreement.toFixed(2)})`,
+      priority: "medium",
+    };
+  }
+
+  if (failures.length >= 2) {
+    return {
+      shouldRequery: true,
+      reason: `Multiple sub-service failures: ${failures.join(", ")}`,
+      priority: "medium",
+    };
+  }
+
+  return {
+    shouldRequery: false,
+    reason: "No re-query criteria met",
+    priority: "low",
+  };
+}
+server/telemedicine/nextBestQuestionEngine.ts
+export interface CandidateQuestion {
+  id: string;
+  text: string;
+  target: "diagnosis" | "triage" | "safety" | "treatment";
+  infoGain: number;
+  blockingRisk?: boolean;
+}
+
+export interface NextBestQuestionResult {
+  winner: CandidateQuestion | null;
+  ranked: CandidateQuestion[];
+  reason: string;
+}
+
+export function chooseNextBestQuestion(params: {
+  adaptiveQuestions?: Array<{ id?: string; text?: string }>;
+  uncertainty: number;
+  debate?: { disagreement?: number; consensusScore?: number };
+  missingServices?: string[];
+}): NextBestQuestionResult {
+  const adaptive = params.adaptiveQuestions ?? [];
+  const disagreement = params.debate?.disagreement ?? 0;
+  const missing = params.missingServices ?? [];
+
+  const ranked: CandidateQuestion[] = adaptive
+    .filter(q => q?.text)
+    .map((q, idx) => {
+      let infoGain = 0.3;
+
+      if (missing.includes("adaptiveQuestions")) infoGain += 0.05;
+      if (missing.includes("differential")) infoGain += 0.1;
+      if (missing.includes("urgencyScore")) infoGain += 0.15;
+      if (disagreement > 0.2) infoGain += 0.15;
+      if (params.uncertainty > 0.5) infoGain += 0.2;
+
+      return {
+        id: q.id ?? `adaptive-${idx + 1}`,
+        text: q.text!,
+        target: disagreement > 0.2 ? "triage" : "diagnosis",
+        infoGain: Math.min(1, infoGain),
+      };
+    })
+    .sort((a, b) => b.infoGain - a.infoGain);
+
+  return {
+    winner: ranked[0] ?? null,
+    ranked,
+    reason: ranked[0]
+      ? `Selected highest-information question (${ranked[0].infoGain.toFixed(2)})`
+      : "No adaptive questions available",
+  };
+}
+server/telemedicine/selectiveRerunEngine.ts
+export interface SelectiveRerunPlan {
+  rerunDifferential: boolean;
+  rerunUrgency: boolean;
+  rerunSafety: boolean;
+  rerunTreatment: boolean;
+  reason: string;
+}
+
+export function buildSelectiveRerunPlan(params: {
+  uncertainty: number;
+  subServiceFailures?: string[];
+  debate?: { disagreement?: number };
+}): SelectiveRerunPlan {
+  const failures = params.subServiceFailures ?? [];
+  const disagreement = params.debate?.disagreement ?? 0;
+
+  return {
+    rerunDifferential: failures.includes("differential") || params.uncertainty > 0.45,
+    rerunUrgency: failures.includes("urgencyScore") || disagreement > 0.2,
+    rerunSafety: failures.includes("safetyAlerts"),
+    rerunTreatment: failures.includes("medicationSuggestions") && params.uncertainty < 0.8,
+    reason: `Plan based on uncertainty=${params.uncertainty.toFixed(2)}, disagreement=${disagreement.toFixed(2)}, failures=${failures.join(",") || "none"}`,
+  };
+}
+server/telemedicine/requeryRunner.ts
+import { chooseNextBestQuestion } from "./nextBestQuestionEngine";
+import { shouldTriggerRequery } from "./requeryPolicy";
+import { buildSelectiveRerunPlan } from "./selectiveRerunEngine";
+
+export interface RequeryExecutionResult {
+  triggered: boolean;
+  reason: string;
+  questionAsked: string | null;
+  rerunPlan: any | null;
+  comparison: {
+    pass1Urgency?: string;
+    pass2Urgency?: string;
+    changed: boolean;
+  };
+}
+
+export async function runRequeryLoop(params: {
+  pass1Result: any;
+  answerProvider?: (question: string) => Promise<string | null>;
+  rerunAssistant: (augmentedAnswers: Record<string, string>, rerunPlan: any) => Promise<any>;
+}): Promise<RequeryExecutionResult> {
+  const pass1 = params.pass1Result;
+
+  const policy = shouldTriggerRequery({
+    uncertainty: pass1.uncertainty ?? 0,
+    debate: pass1.debate,
+    subServiceFailures: pass1.subServiceFailures,
+    safetyAlerts: pass1.safetyAlerts,
+  });
+
+  if (!policy.shouldRequery) {
+    return {
+      triggered: false,
+      reason: policy.reason,
+      questionAsked: null,
+      rerunPlan: null,
+      comparison: { changed: false },
+    };
+  }
+
+  const nextQuestion = chooseNextBestQuestion({
+    adaptiveQuestions: pass1.adaptiveQuestions,
+    uncertainty: pass1.uncertainty ?? 0,
+    debate: pass1.debate,
+    missingServices: pass1.subServiceFailures,
+  });
+
+  if (!nextQuestion.winner) {
+    return {
+      triggered: false,
+      reason: `Re-query indicated but no question available: ${policy.reason}`,
+      questionAsked: null,
+      rerunPlan: null,
+      comparison: { changed: false },
+    };
+  }
+
+  const answer = params.answerProvider
+    ? await params.answerProvider(nextQuestion.winner.text)
+    : null;
+
+  if (!answer) {
+    return {
+      triggered: true,
+      reason: `${policy.reason}; awaiting user answer`,
+      questionAsked: nextQuestion.winner.text,
+      rerunPlan: null,
+      comparison: { changed: false },
+    };
+  }
+
+  const rerunPlan = buildSelectiveRerunPlan({
+    uncertainty: pass1.uncertainty ?? 0,
+    subServiceFailures: pass1.subServiceFailures,
+    debate: pass1.debate,
+  });
+
+  const pass2 = await params.rerunAssistant(
+    {
+      ...(pass1.answers ?? {}),
+      [nextQuestion.winner.id]: answer,
+    },
+    rerunPlan
+  );
+
+  return {
+    triggered: true,
+    reason: `Re-query completed: ${policy.reason}`,
+    questionAsked: nextQuestion.winner.text,
+    rerunPlan,
+    comparison: {
+      pass1Urgency: pass1.triage?.level,
+      pass2Urgency: pass2.triage?.level,
+      changed: pass1.triage?.level !== pass2.triage?.level,
+    },
+  };
+}
+Wire into runTelemedicineAssistant
+
+After you compute:
+
+debate
+uncertainty
+finalDecision
+
+add:
+
+import { runRequeryLoop } from "./requeryRunner";
+
+Then:
+
+const requery = await runRequeryLoop({
+  pass1Result: {
+    ...finalResult,
+    answers,
+  },
+  answerProvider: async (question: string) => {
+    // In synchronous API mode: no interactive answer yet
+    // return null so frontend can ask physician/patient
+    return null;
+  },
+  rerunAssistant: async (augmentedAnswers, rerunPlan) => {
+    // You can later swap this with a selective rerun function
+    // For now this calls your normal assistant path with enriched answers
+    return {
+      ...finalResult,
+      answers: augmentedAnswers,
+      rerunPlanUsed: rerunPlan,
+    };
+  },
+});
+
+const enrichedResult = {
+  ...finalResult,
+  requery,
+};
+
+Return enrichedResult.
+
+Broadcast to Control Tower
+
+In your cognitive stream payload:
+
+broadcastCognitiveUpdate({
+  caseId: sessionId,
+  agents: agentOpinions,
+  council: councilResult,
+  finalDecision,
+  reasoningGraph: reasoningNodes,
+  requery,
+  timestamp: Date.now(),
+});

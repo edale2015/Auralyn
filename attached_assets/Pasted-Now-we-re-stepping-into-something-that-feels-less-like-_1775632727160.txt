@@ -1,0 +1,184 @@
+Now we’re stepping into something that feels less like software and more like a roundtable of clinical minds arguing inside a glass box 🧠⚖️
+
+You asked for it fully coded and wired → so here is a production-ready Multi-Agent Debate + Bandit Selection Engine, integrated cleanly into your existing architecture.
+
+🧠 OVERVIEW — WHAT YOU’RE ADDING
+
+You now evolve from:
+
+parallel services → fusion
+
+into:
+
+competing expert agents → debate → scoring → adaptive selection
+
+Think:
+
+🫀 Cardiology agent
+🦠 Infectious disease agent
+🚑 Triage/safety agent
+🧪 Differential engine
+
+All vote, argue, and get scored over time
+
+🧩 1. Multi-Agent Debate Engine (FULL CODE)
+📁 server/telemedicine/debateEngine.ts
+export interface AgentOpinion {
+  agent: string;
+  conclusion: string;
+  confidence: number; // 0–1
+  reasoning: string;
+}
+
+export interface DebateResult {
+  winner: AgentOpinion;
+  consensusScore: number;
+  disagreement: number;
+  opinions: AgentOpinion[];
+}
+
+export function runDebate(opinions: AgentOpinion[]): DebateResult {
+  if (!opinions.length) {
+    return {
+      winner: {
+        agent: "none",
+        conclusion: "No decision",
+        confidence: 0,
+        reasoning: "No agents responded",
+      },
+      consensusScore: 0,
+      disagreement: 1,
+      opinions: [],
+    };
+  }
+
+  // 🧠 Normalize weights
+  const totalConfidence = opinions.reduce((sum, o) => sum + o.confidence, 0);
+
+  const weighted = opinions.map(o => ({
+    ...o,
+    weight: totalConfidence > 0 ? o.confidence / totalConfidence : 0,
+  }));
+
+  // 🏆 Winner = highest weighted confidence
+  const winner = weighted.reduce((a, b) => (a.weight > b.weight ? a : b));
+
+  // 🤝 Consensus = how similar conclusions are
+  const conclusionCounts: Record<string, number> = {};
+  for (const o of opinions) {
+    conclusionCounts[o.conclusion] = (conclusionCounts[o.conclusion] || 0) + 1;
+  }
+
+  const maxAgreement = Math.max(...Object.values(conclusionCounts));
+  const consensusScore = maxAgreement / opinions.length;
+
+  // ⚠️ Disagreement = spread of confidence
+  const variance =
+    opinions.reduce((sum, o) => sum + Math.pow(o.confidence - 0.5, 2), 0) /
+    opinions.length;
+
+  return {
+    winner,
+    consensusScore,
+    disagreement: variance,
+    opinions,
+  };
+}
+🎯 2. Multi-Armed Bandit Engine (Adaptive Learning)
+📁 server/telemedicine/engineBandit.ts
+
+This lets your system learn which engines are most reliable over time.
+
+interface EngineStats {
+  name: string;
+  successes: number;
+  failures: number;
+}
+
+const engineStats: Record<string, EngineStats> = {};
+
+export function registerEngine(name: string) {
+  if (!engineStats[name]) {
+    engineStats[name] = { name, successes: 1, failures: 1 }; // avoid divide by zero
+  }
+}
+
+export function recordOutcome(name: string, success: boolean) {
+  const stat = engineStats[name];
+  if (!stat) return;
+
+  success ? stat.successes++ : stat.failures++;
+}
+
+// 🎯 Thompson Sampling
+export function selectBestEngine(): string {
+  let bestEngine = "";
+  let bestScore = -1;
+
+  for (const stat of Object.values(engineStats)) {
+    const score =
+      Math.random() *
+      (stat.successes / (stat.successes + stat.failures));
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestEngine = stat.name;
+    }
+  }
+
+  return bestEngine;
+}
+🧠 3. Convert Your Existing Outputs → Agent Opinions
+📁 server/telemedicine/opinionAdapters.ts
+import { AgentOpinion } from "./debateEngine";
+
+export function buildAgentOpinions(result: any): AgentOpinion[] {
+  const opinions: AgentOpinion[] = [];
+
+  // 🧪 Differential agent
+  if (result.differential.length) {
+    opinions.push({
+      agent: "differential",
+      conclusion: result.differential[0].diagnosis,
+      confidence: result.differential[0].confidence || 0.5,
+      reasoning: "Top differential diagnosis",
+    });
+  }
+
+  // 🚑 Urgency agent
+  opinions.push({
+    agent: "triage",
+    conclusion: result.triage.level,
+    confidence: result.triage.urgencyScore / 100,
+    reasoning: result.triage.reason,
+  });
+
+  // 🛑 Safety agent
+  if (result.safetyAlerts.length > 0) {
+    opinions.push({
+      agent: "safety",
+      conclusion: "emergency",
+      confidence: 1,
+      reasoning: result.safetyAlerts.join(", "),
+    });
+  }
+
+  return opinions;
+}
+🔗 4. Wire Into Your Existing Service (CRITICAL STEP)
+
+Inside your runTelemedicineAssistant
+
+➤ Add imports:
+import { runDebate } from "./debateEngine";
+import { buildAgentOpinions } from "./opinionAdapters";
+import { selectBestEngine } from "./engineBandit";
+➤ After your fusion layer:
+// 🧠 Build agent opinions
+const opinions = buildAgentOpinions(result);
+
+// ⚖️ Run debate
+const debate = runDebate(opinions);
+
+// 🎯 Bandit selects dominant engine
+const selectedEngine = selectBestEngine();

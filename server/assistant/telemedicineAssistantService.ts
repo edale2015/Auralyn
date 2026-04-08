@@ -15,6 +15,9 @@ import { chooseNextBestQuestion } from "./nextBestQuestionEngine"
 import { logCaseMemory, getCaseMemory, getLastMemory } from "./caseMemoryService"
 import { buildEscalationBundle } from "./escalationService"
 import { routeToSpecialtyCouncil } from "./specialtyRouter"
+import { runClinicalFusion } from "./clinicalFusionEngine"
+import { computeUncertainty } from "./uncertaintyEngine"
+import { applySafetyGovernor } from "./safetyGovernor"
 import { computeCounterfactuals } from "../reasoning/counterfactualEngine"
 import { predictTrajectory } from "../reasoning/trajectoryEngine"
 import { runBayesianUpdate, buildEvidenceFromResult } from "../reasoning/bayesianEngine"
@@ -111,6 +114,18 @@ export interface AssistantResult {
     requeryThreshold: number
     safetyBoostFactor: number
   }
+  fusion: {
+    finalPriority: string
+    dominantSignal: string
+    reasoningSummary: string
+    conflictsDetected: string[]
+    reinforcingSignals: string[]
+    overrideApplied: boolean
+  }
+  uncertaintyLevel: string
+  uncertaintyDrivers: string[]
+  safetyGovernorOverride: boolean
+  safetyGovernorReason: string | null
 }
 
 export async function runTelemedicineAssistant(
@@ -227,17 +242,30 @@ export async function runTelemedicineAssistant(
     })),
   }
 
-  const confidences = dxDifferential.slice(0, 3).map(d => d.confidence)
-  const confMean = confidences.length ? confidences.reduce((s, c) => s + c, 0) / confidences.length : 0.5
-  const confVariance = confidences.length
-    ? confidences.reduce((s, c) => s + Math.pow(c - confMean, 2), 0) / confidences.length
-    : 0.25
-  let uncertainty = Math.sqrt(confVariance) + (1 - confMean) * 0.4
-  if (safetyAlerts.length > 0) uncertainty = Math.max(uncertainty, 0.72)
-  uncertainty = Math.min(1, Math.max(0, Math.round(uncertainty * 1000) / 1000))
+  const contradictionsForUncertainty = [
+    ...(contradictionReport?.contradictions ?? []).map((c) => ({ diagnosis: topDx ?? "", conflict: c.reason })),
+    ...(contradictionReport?.unruledDangers ?? []).map((u) => ({ diagnosis: u.diagnosis, conflict: u.rulingOutQuestion })),
+  ]
+
+  const uncertaintyResult = computeUncertainty({
+    subServiceFailures: [],
+    differential: dxDifferential.slice(0, 5).map(d => ({ diagnosis: d.diagnosis, confidence: d.confidence })),
+    safetyAlerts,
+    contradictions: contradictionsForUncertainty,
+  })
+  const uncertainty = uncertaintyResult.score
 
   const agentOpinions = mapTelemedToAgents({ ...baseResult, uncertainty })
   const debate = runAgentDebate(agentOpinions)
+
+  const fusion = runClinicalFusion({
+    differential: dxDifferential.slice(0, 5).map(d => ({ diagnosis: d.diagnosis, confidence: d.confidence, urgency: d.urgency ?? "routine" })),
+    safetyAlerts,
+    urgency: { level: triageLevel, score: urgencyScore },
+    contradictions: contradictionsForUncertainty,
+    debateWinner: debate.winner,
+    uncertainty,
+  })
 
   const systemThresholds = runMetaLearning()
 
@@ -275,93 +303,7 @@ export async function runTelemedicineAssistant(
 
   const specialty = routeToSpecialtyCouncil(complaint ?? "", dxDifferential)
 
-  const fullResult: any = {
-    ...enrichedResult,
-    trajectory,
-    counterfactuals,
-    bayesian,
-    simulation,
-    specialty,
-    iteration,
-  }
-
-  const qa = runQA(fullResult)
-  logQA(qa)
-
-  const escalation = buildEscalationBundle({
-    result: fullResult,
-    requery: requeryDecision.shouldRequery ? { questionAsked: nbqResult.winner?.text } : undefined,
-  })
-
-  const intervention = runIntervention(fullResult)
-
-  logCaseMemory({
-    caseId,
-    iteration,
-    triage: triageLevel,
-    urgencyScore,
-    uncertainty,
-    topDiagnosis: topDx ?? "unknown",
-    winnerAgent: debate.winner?.agentId ?? "none",
-    questionAsked: nbqResult.winner?.text,
-    changedFromPrior: lastMemory ? lastMemory.triage !== triageLevel : false,
-  })
-
-  updateCommandGridNode({
-    caseId,
-    complaint: complaint ?? "unknown",
-    triageLevel,
-    riskScore: trajectory.riskScore,
-    trajectory: trajectory.trend,
-    escalation: escalation?.priority ?? null,
-    iteration,
-  })
-
-  if (complaint) {
-    logPopulationCase({
-      caseId,
-      complaint,
-      diagnosis: topDx ?? "unknown",
-      severity:
-        triageLevel === "emergency" || triageLevel === "critical" ? "critical" :
-        triageLevel === "urgent" ? "high" :
-        triageLevel === "semi-urgent" ? "medium" : "low",
-      zip: (state as any).zip ?? undefined,
-      payer: (state as any).payer ?? undefined,
-      ageGroup: (state as any).ageGroup ?? undefined,
-    })
-  }
-
-  publishCognitive({
-    topic: "telemed_cognition",
-    caseId,
-    payload: {
-      iteration,
-      triage: triageLevel,
-      urgencyScore,
-      uncertainty,
-      trajectory: trajectory.trend,
-      riskScore: trajectory.riskScore,
-      escalationPriority: escalation?.priority ?? null,
-      interventionAction: intervention.action,
-      qaScore: qa.score,
-      qaFlags: qa.flags.length,
-      winnerAgent: debate.winner?.agentId,
-      consensusScore: debate.consensusScore,
-      specialty: specialty.primary,
-    },
-    ts: Date.now(),
-  })
-
-  if (escalation) {
-    publishCognitive({ topic: "escalation", caseId, payload: escalation, ts: Date.now() })
-  }
-
-  if (qa.flags.some(f => f.severity === "high")) {
-    publishCognitive({ topic: "qa_event", caseId, payload: qa, ts: Date.now() })
-  }
-
-  return {
+  const preGovernorResult = {
     caseId,
     complaint,
     iteration,
@@ -415,8 +357,94 @@ export async function runTelemedicineAssistant(
     trajectory,
     bayesian,
     simulation,
-    qa: { score: qa.score, flags: qa.flags },
     specialty,
+    systemThresholds,
+  }
+
+  const governed = applySafetyGovernor(preGovernorResult)
+
+  const escalation = buildEscalationBundle({
+    result: governed.result,
+    requery: requeryDecision.shouldRequery ? { questionAsked: nbqResult.winner?.text } : undefined,
+  })
+
+  const intervention = runIntervention(governed.result)
+
+  const qa = runQA({ ...governed.result, escalation })
+  logQA(qa)
+
+  logCaseMemory({
+    caseId,
+    iteration,
+    triage: governed.result.triage.level,
+    urgencyScore,
+    uncertainty,
+    topDiagnosis: topDx ?? "unknown",
+    winnerAgent: debate.winner?.agentId ?? "none",
+    questionAsked: nbqResult.winner?.text,
+    changedFromPrior: lastMemory ? lastMemory.triage !== governed.result.triage.level : false,
+  })
+
+  updateCommandGridNode({
+    caseId,
+    complaint: complaint ?? "unknown",
+    triageLevel: governed.result.triage.level,
+    riskScore: trajectory.riskScore,
+    trajectory: trajectory.trend,
+    escalation: escalation?.priority ?? null,
+    iteration,
+  })
+
+  if (complaint) {
+    const govLevel = governed.result.triage.level
+    logPopulationCase({
+      caseId,
+      complaint,
+      diagnosis: topDx ?? "unknown",
+      severity:
+        govLevel === "emergency" || govLevel === "critical" ? "critical" :
+        govLevel === "urgent" ? "high" :
+        govLevel === "semi-urgent" ? "medium" : "low",
+      zip: (state as any).zip ?? undefined,
+      payer: (state as any).payer ?? undefined,
+      ageGroup: (state as any).ageGroup ?? undefined,
+    })
+  }
+
+  publishCognitive({
+    topic: "telemed_cognition",
+    caseId,
+    payload: {
+      iteration,
+      triage: governed.result.triage.level,
+      urgencyScore: governed.result.triage.urgencyScore,
+      uncertainty,
+      trajectory: trajectory.trend,
+      riskScore: trajectory.riskScore,
+      escalationPriority: escalation?.priority ?? null,
+      interventionAction: intervention.action,
+      qaScore: qa.score,
+      qaFlags: qa.flags.length,
+      winnerAgent: debate.winner?.agentId,
+      consensusScore: debate.consensusScore,
+      specialty: specialty.primary,
+      safetyGovernorOverride: governed.overrideApplied,
+      fusionPriority: fusion.finalPriority,
+    },
+    ts: Date.now(),
+  })
+
+  if (escalation) {
+    publishCognitive({ topic: "escalation", caseId, payload: escalation, ts: Date.now() })
+  }
+
+  if (qa.flags.some((f: any) => f.severity === "high")) {
+    publishCognitive({ topic: "qa_event", caseId, payload: qa, ts: Date.now() })
+  }
+
+  return {
+    ...governed.result,
+    qa: { score: qa.score, flags: qa.flags },
     escalation: escalation ? {
       priority: escalation.priority,
       reason: escalation.reason,
@@ -424,6 +452,10 @@ export async function runTelemedicineAssistant(
       recommendedActions: escalation.recommendedActions,
     } : null,
     intervention,
-    systemThresholds,
+    fusion,
+    uncertaintyLevel: uncertaintyResult.level,
+    uncertaintyDrivers: uncertaintyResult.drivers,
+    safetyGovernorOverride: governed.overrideApplied,
+    safetyGovernorReason: governed.overrideReason,
   }
 }
