@@ -1,0 +1,183 @@
+. Five more recommendations I’d code next
+Recommendation 1: Case Memory Layer
+
+Each telemedicine session should preserve:
+
+prior agent winners
+prior disagreements
+prior questions asked
+prior triage shifts
+
+This gives you continuity of reasoning, not goldfish-brain medicine.
+
+Add:
+
+server/telemedicine/caseMemoryService.ts
+
+Store:
+
+caseId
+iteration
+winnerAgent
+uncertainty
+questionAsked
+triageLevel
+changedFromPrior
+
+Use it for:
+
+temporal comparisons
+physician audit review
+future learning loops
+Recommendation 2: Engine Reliability Scorecard
+
+Your current degraded-mode architecture already exposes failed services cleanly.
+Next, score each engine on:
+
+uptime
+average latency
+agreement with final decision
+post-outcome correctness
+
+That lets Control Tower display:
+
+“triage engine drifting”
+“differential engine high latency”
+“safety engine overfiring”
+Minimal shape:
+interface EngineReliabilitySnapshot {
+  engine: string;
+  p50Ms: number;
+  p95Ms: number;
+  failureRate: number;
+  agreementRate: number;
+}
+Recommendation 3: Hard Escalation Bundles
+
+When a case hits:
+
+safety override
+emergency triage
+very high uncertainty
+
+the system should create an escalation bundle with:
+
+summary
+supporting evidence
+contradiction flags
+top 3 questions not yet answered
+
+This becomes the payload to:
+
+physician mobile
+nurse queue
+urgent callback workflow
+
+It turns “AI output” into operational action.
+
+Recommendation 4: Specialty Sub-Councils
+
+For telemedicine, you should not always run one flat council.
+Instead route into mini-councils:
+
+chest pain → cardiology + PE + GERD + safety
+cough → pulm + infectious disease + CHF + safety
+sore throat → ENT + infectious disease + airway safety
+
+This is where your broader multi-agent architecture becomes clinically sharper instead of merely bigger.
+
+Recommendation 5: Counterfactual Panel
+
+For each telemedicine result, compute:
+
+what would have changed the triage?
+what answer would flip the winner?
+what missing datum matters most?
+
+Examples:
+
+“Chest pain + diaphoresis would raise urgency to emergency”
+“No fever and no SOB would lower pneumonia probability”
+“Recent travel would increase PE concern”
+
+This is extremely useful for:
+
+debugging
+physician trust
+training
+legal defensibility
+My strongest recommended order
+
+Here’s the ladder I’d actually climb:
+
+Auto re-query loop
+Case memory layer
+Hard escalation bundles
+Specialty sub-councils
+Engine reliability scorecard
+Counterfactual panel
+
+That sequence gives you the most brain-per-line-of-code.
+
+If you want, I’ll keep going and write the next batch fully:
+case memory layer + escalation bundle service + specialty sub-council router.
+
+yes write
+
+Excellent. Now we’re turning telemedicine from a “thinking engine” into a learning, escalating, memory-aware clinical organism 🧠⚡
+
+Below is fully wired, production-ready code for the next 3 highest-yield layers:
+
+🧠 Case Memory Layer
+🚨 Escalation Bundle System
+🏥 Specialty Sub-Council Router
+
+Everything is designed to plug directly into what you just built.
+
+🧠 1. CASE MEMORY LAYER
+📁 server/telemedicine/caseMemoryService.ts
+
+This gives your system temporal awareness.
+
+import { v4 as uuidv4 } from "uuid";
+
+interface CaseMemoryEntry {
+  id: string;
+  caseId: string;
+  iteration: number;
+  timestamp: number;
+
+  winnerAgent: string;
+  triageLevel: string;
+  uncertainty: number;
+
+  questionAsked?: string;
+  changedFromPrior: boolean;
+}
+
+const memoryStore: Record<string, CaseMemoryEntry[]> = {};
+
+export function logCaseMemory(entry: Omit<CaseMemoryEntry, "id" | "timestamp">) {
+  const fullEntry: CaseMemoryEntry = {
+    ...entry,
+    id: uuidv4(),
+    timestamp: Date.now(),
+  };
+
+  if (!memoryStore[entry.caseId]) {
+    memoryStore[entry.caseId] = [];
+  }
+
+  memoryStore[entry.caseId].push(fullEntry);
+
+  return fullEntry;
+}
+
+export function getCaseMemory(caseId: string): CaseMemoryEntry[] {
+  return memoryStore[caseId] || [];
+}
+
+export function getLastMemory(caseId: string): CaseMemoryEntry | null {
+  const arr = memoryStore[caseId];
+  return arr?.length ? arr[arr.length - 1] : null;
+}

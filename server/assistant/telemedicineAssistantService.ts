@@ -29,6 +29,9 @@ import { publishCognitive } from "../missionControl/cognitiveBus"
 import { updateCommandGridNode } from "../hospital/commandGrid"
 import { runIntervention } from "../agents/interventionAgent"
 import { logPopulationCase } from "../populationHealth/populationEngine"
+import { explainWinner } from "./shapExplainer"
+import { recordDebateRound, getAgentPerformance } from "./agentPerformanceTracker"
+import { logShap } from "./shapLogService"
 
 export interface AssistantResult {
   caseId: string
@@ -126,6 +129,36 @@ export interface AssistantResult {
   uncertaintyDrivers: string[]
   safetyGovernorOverride: boolean
   safetyGovernorReason: string | null
+  explanation: {
+    winner: string
+    winnerDomain: string
+    baseScore: number
+    finalScore: number
+    factors: Array<{
+      name: string
+      contribution: number
+      direction: "for" | "against" | "neutral"
+      description: string
+      weight: number
+    }>
+    narrative: string
+  }
+  nextBestQuestions: Array<{
+    id: string
+    text: string
+    infoGain: number
+    target: string
+  }>
+  temporalHistory: Array<{
+    iteration: number
+    triage: string
+    urgencyScore: number
+    uncertainty: number
+    topDiagnosis: string
+    winnerAgent: string
+    changedFromPrior: boolean
+    timestamp: number
+  }>
 }
 
 export async function runTelemedicineAssistant(
@@ -363,6 +396,14 @@ export async function runTelemedicineAssistant(
 
   const governed = applySafetyGovernor(preGovernorResult)
 
+  const debateWinnerId = governed.overrideApplied
+    ? (agentOpinions.find(o => o.domain === "safety")?.agentId ?? "safety_engine")
+    : (debate.winner?.agentId ?? "none")
+  recordDebateRound(
+    agentOpinions.map(o => ({ agentId: o.agentId, domain: o.domain })),
+    debateWinnerId
+  )
+
   const escalation = buildEscalationBundle({
     result: governed.result,
     requery: requeryDecision.shouldRequery ? { questionAsked: nbqResult.winner?.text } : undefined,
@@ -442,6 +483,53 @@ export async function runTelemedicineAssistant(
     publishCognitive({ topic: "qa_event", caseId, payload: qa, ts: Date.now() })
   }
 
+  const explanation = explainWinner({
+    debateWinner: debate.winner ? {
+      agentId: debate.winner.agentId,
+      conclusion: debate.winner.conclusion,
+      confidence: debate.winner.confidence,
+    } : null,
+    opinions: debate.opinions.map(o => ({
+      agentId: o.agentId,
+      domain: o.domain,
+      conclusion: o.conclusion,
+      confidence: o.confidence,
+      reasoning: o.reasoning,
+    })),
+    safetyAlerts,
+    uncertainty,
+    fusion,
+    escalation: escalation ? { priority: escalation.priority } : null,
+    safetyGovernorOverride: governed.overrideApplied,
+  })
+
+  logShap({
+    caseId,
+    iteration,
+    ts: Date.now(),
+    explanation,
+    triage: governed.result.triage.level,
+    safetyGovernorOverride: governed.overrideApplied,
+  })
+
+  const nextBestQuestions = nbqResult.ranked.slice(0, 3).map(q => ({
+    id: q.id,
+    text: q.text,
+    infoGain: q.infoGain,
+    target: q.target,
+  }))
+
+  const temporalHistory = getCaseMemory(caseId).map(m => ({
+    iteration: m.iteration,
+    triage: m.triage,
+    urgencyScore: m.urgencyScore,
+    uncertainty: m.uncertainty,
+    topDiagnosis: m.topDiagnosis,
+    winnerAgent: m.winnerAgent,
+    changedFromPrior: m.changedFromPrior,
+    timestamp: m.timestamp,
+  }))
+
   return {
     ...governed.result,
     qa: { score: qa.score, flags: qa.flags },
@@ -457,5 +545,8 @@ export async function runTelemedicineAssistant(
     uncertaintyDrivers: uncertaintyResult.drivers,
     safetyGovernorOverride: governed.overrideApplied,
     safetyGovernorReason: governed.overrideReason,
+    explanation,
+    nextBestQuestions,
+    temporalHistory,
   }
 }

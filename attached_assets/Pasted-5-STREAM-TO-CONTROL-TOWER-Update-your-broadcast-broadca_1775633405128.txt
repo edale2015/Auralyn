@@ -1,0 +1,149 @@
+5. STREAM TO CONTROL TOWER
+
+Update your broadcast:
+
+broadcastCognitiveUpdate({
+  caseId: sessionId,
+  agents: agentOpinions,
+  council: councilResult,
+  specialtyCouncil,
+  finalDecision,
+  reasoningGraph: reasoningNodes,
+  requery,
+  escalation,
+  memory: memoryEntry,
+  timestamp: Date.now(),
+});
+🧠 WHAT YOU JUST BUILT
+
+Now telemedicine is:
+
+BEFORE
+parallel execution
+debate
+reasoning graph
+AFTER
+🧠 remembers prior states
+🔁 learns across iterations
+🚨 escalates real-world actions
+🏥 routes by clinical domain
+⚖️ debates inside specialties
+🚀 WHAT THIS ENABLES (BIG LEAP)
+
+You now have:
+
+🧠 Temporal intelligence
+
+“Did this case worsen or improve?”
+
+🚨 Operational action
+
+“Send this to physician NOW”
+
+🏥 Domain-specific reasoning
+
+“Chest pain is NOT treated like cough”
+
+🔥 NEXT (if you want me to continue)
+
+The next tier would be:
+
+🧠 Outcome learning loop (RLHF-lite)
+📈 Engine reliability dashboard
+🎯 Next-best-question optimization via info gain math
+🔍 Counterfactual reasoning engine
+🧬 Time-series progression model
+
+If we keep going, this becomes:
+
+not just a clinical assistant
+but a self-improving clinical intelligence system
+
+Say the word and I’ll build the outcome-learning + reliability scoring layer next.
+
+yes please
+
+Now we give your system something every great clinician develops over years:
+
+judgment that improves from outcomes 🧠📈
+
+This layer turns your telemedicine engine into a self-correcting organism:
+
+it remembers what happened
+it measures which agents were right
+it adjusts future decisions automatically
+it exposes all of this in your Control Tower
+
+No fluff. Fully wired. Let’s go.
+
+🧠 PHASE 1 — Outcome Learning Engine (RLHF-lite)
+📁 server/learning/outcomeLearningService.ts
+type OutcomeLabel =
+  | "correct"
+  | "incorrect"
+  | "overtriage"
+  | "undertriage";
+
+interface OutcomeEvent {
+  caseId: string;
+  finalDecision: string;
+  triageLevel: string;
+
+  actualOutcome: string; // e.g. "admitted", "discharged", "ICU"
+  label: OutcomeLabel;
+
+  winningAgent: string;
+  timestamp: number;
+}
+
+interface AgentPerformance {
+  agentId: string;
+  total: number;
+  correct: number;
+  incorrect: number;
+  overtriage: number;
+  undertriage: number;
+  score: number;
+}
+
+const outcomeLog: OutcomeEvent[] = [];
+const agentPerformance: Record<string, AgentPerformance> = {};
+
+export function recordOutcome(event: OutcomeEvent) {
+  outcomeLog.push(event);
+
+  if (!agentPerformance[event.winningAgent]) {
+    agentPerformance[event.winningAgent] = {
+      agentId: event.winningAgent,
+      total: 0,
+      correct: 0,
+      incorrect: 0,
+      overtriage: 0,
+      undertriage: 0,
+      score: 0.5,
+    };
+  }
+
+  const stat = agentPerformance[event.winningAgent];
+
+  stat.total++;
+
+  if (event.label === "correct") stat.correct++;
+  if (event.label === "incorrect") stat.incorrect++;
+  if (event.label === "overtriage") stat.overtriage++;
+  if (event.label === "undertriage") stat.undertriage++;
+
+  // 🎯 scoring function (you can tune)
+  stat.score =
+    (stat.correct * 1.0 +
+      stat.overtriage * 0.3 -
+      stat.undertriage * 1.2 -
+      stat.incorrect * 1.0) /
+    stat.total;
+
+  return stat;
+}
+
+export function getAgentPerformance() {
+  return Object.values(agentPerformance);
+}

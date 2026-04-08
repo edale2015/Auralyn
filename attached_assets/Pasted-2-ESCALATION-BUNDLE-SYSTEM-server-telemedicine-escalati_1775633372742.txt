@@ -1,0 +1,171 @@
+2. ESCALATION BUNDLE SYSTEM
+📁 server/telemedicine/escalationService.ts
+
+Turns decisions into real-world action payloads
+
+export interface EscalationBundle {
+  caseId: string;
+  priority: "urgent" | "emergency";
+  reason: string;
+
+  summary: string;
+  triageLevel: string;
+
+  topConcerns: string[];
+  missingCriticalData: string[];
+
+  recommendedActions: string[];
+
+  createdAt: number;
+}
+
+export function buildEscalationBundle(params: {
+  result: any;
+  requery?: any;
+}): EscalationBundle | null {
+  const { result } = params;
+
+  const isEmergency =
+    result.triage?.level === "emergency" ||
+    (result.safetyAlerts?.length ?? 0) > 0;
+
+  const isUrgent =
+    result.triage?.level === "high" ||
+    (result.uncertainty ?? 0) > 0.6;
+
+  if (!isEmergency && !isUrgent) return null;
+
+  return {
+    caseId: result.caseId,
+    priority: isEmergency ? "emergency" : "urgent",
+    reason: isEmergency
+      ? "Safety or emergency triage triggered"
+      : "High uncertainty or high-risk triage",
+
+    summary: `Complaint: ${result.complaint}`,
+    triageLevel: result.triage?.level,
+
+    topConcerns: [
+      ...(result.safetyAlerts ?? []),
+      ...(result.differential?.slice(0, 2).map((d: any) => d.diagnosis) ?? []),
+    ],
+
+    missingCriticalData: result.requery?.questionAsked
+      ? [result.requery.questionAsked]
+      : [],
+
+    recommendedActions: isEmergency
+      ? ["Immediate physician review", "Consider ER referral"]
+      : ["Expedite telemedicine follow-up", "Collect missing data"],
+
+    createdAt: Date.now(),
+  };
+}
+🏥 3. SPECIALTY SUB-COUNCIL ROUTER
+📁 server/telemedicine/specialtyRouter.ts
+
+This is where your system becomes clinically intelligent instead of generic
+
+export type SpecialtyCouncil =
+  | "cardiology"
+  | "pulmonary"
+  | "infectious_disease"
+  | "ent"
+  | "general";
+
+export function routeToSpecialtyCouncil(complaint: string): SpecialtyCouncil {
+  const c = complaint.toLowerCase();
+
+  if (c.includes("chest pain") || c.includes("pressure")) {
+    return "cardiology";
+  }
+
+  if (c.includes("cough") || c.includes("sob")) {
+    return "pulmonary";
+  }
+
+  if (c.includes("fever") || c.includes("infection")) {
+    return "infectious_disease";
+  }
+
+  if (c.includes("sore throat") || c.includes("ear")) {
+    return "ent";
+  }
+
+  return "general";
+}
+📁 server/agents/specialtyCouncilEngine.ts
+import { AgentOpinion } from "./agentTypes";
+
+export async function runSpecialtyCouncil(params: {
+  specialty: string;
+  agents: AgentOpinion[];
+}) {
+  const { specialty, agents } = params;
+
+  // Filter relevant agents per specialty
+  const filtered = agents.filter(a => {
+    if (specialty === "cardiology") return a.domain !== "treatment";
+    if (specialty === "pulmonary") return true;
+    if (specialty === "infectious_disease") return true;
+    if (specialty === "ent") return true;
+    return true;
+  });
+
+  // Simple weighted winner (can plug into your existing council system)
+  const winner = filtered.reduce((a, b) =>
+    a.confidence > b.confidence ? a : b
+  );
+
+  return {
+    specialty,
+    winner,
+    consideredAgents: filtered.map(a => a.agentId),
+  };
+}
+🔗 4. WIRING EVERYTHING INTO runTelemedicineAssistant
+
+This is the critical integration.
+
+➤ Add imports:
+import { logCaseMemory, getLastMemory } from "./caseMemoryService";
+import { buildEscalationBundle } from "./escalationService";
+import { routeToSpecialtyCouncil } from "./specialtyRouter";
+import { runSpecialtyCouncil } from "../agents/specialtyCouncilEngine";
+➤ AFTER you compute:
+finalResult
+requery
+🧠 1. Specialty routing
+const specialty = routeToSpecialtyCouncil(result.complaint);
+
+const specialtyCouncil = await runSpecialtyCouncil({
+  specialty,
+  agents: agentOpinions,
+});
+🧠 2. Case memory logging
+const last = getLastMemory(sessionId);
+
+const memoryEntry = logCaseMemory({
+  caseId: sessionId,
+  iteration: (last?.iteration ?? 0) + 1,
+  winnerAgent: finalDecision?.winner?.agentId ?? "unknown",
+  triageLevel: finalResult.triage.level,
+  uncertainty: finalResult.uncertainty ?? 0,
+  questionAsked: requery?.questionAsked,
+  changedFromPrior:
+    last?.triageLevel !== finalResult.triage.level,
+});
+🚨 3. Escalation bundle
+const escalation = buildEscalationBundle({
+  result: finalResult,
+  requery,
+});
+🧠 4. Attach everything
+const enrichedResult = {
+  ...finalResult,
+  requery,
+  specialty,
+  specialtyCouncil,
+  memory: memoryEntry,
+  escalation,
+};

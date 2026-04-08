@@ -1,0 +1,130 @@
+PART 2 — TRAJECTORY / PROGRESSION MODEL
+What it does
+
+Predicts:
+
+likely worsening vs stable vs improving
+time-to-risk
+probability of escalation
+📁 server/reasoning/trajectoryEngine.ts
+export interface TrajectoryPrediction {
+  trend: "improving" | "stable" | "worsening";
+  riskScore: number; // 0–1
+  timeHorizon: string;
+  drivers: string[];
+}
+
+export function predictTrajectory(params: {
+  result: any;
+  memory?: any[];
+}): TrajectoryPrediction {
+  const { result, memory } = params;
+
+  let risk = 0.3;
+
+  // 🚨 Safety signals
+  if (result.safetyAlerts?.length) {
+    risk += 0.5;
+  }
+
+  // 🚑 High triage
+  if (result.triage?.level === "high") risk += 0.2;
+  if (result.triage?.level === "emergency") risk += 0.5;
+
+  // 🧠 Uncertainty increases instability
+  if (result.uncertainty > 0.5) risk += 0.2;
+
+  // 🧬 Trend from memory
+  if (memory?.length >= 2) {
+    const last = memory[memory.length - 1];
+    const prev = memory[memory.length - 2];
+
+    if (last.triageLevel !== prev.triageLevel) {
+      risk += 0.15;
+    }
+  }
+
+  const trend =
+    risk > 0.7 ? "worsening" :
+    risk > 0.4 ? "stable" :
+    "improving";
+
+  return {
+    trend,
+    riskScore: Math.min(1, risk),
+    timeHorizon: risk > 0.7 ? "hours" : "1-2 days",
+    drivers: [
+      result.triage?.level,
+      ...(result.safetyAlerts ?? []),
+    ],
+  };
+}
+🔗 PART 3 — WIRE INTO TELEMEDICINE FLOW
+➤ Add imports:
+import { computeCounterfactuals } from "../reasoning/counterfactualEngine";
+import { predictTrajectory } from "../reasoning/trajectoryEngine";
+import { getCaseMemory } from "./caseMemoryService";
+➤ AFTER your existing enriched result:
+const memory = getCaseMemory(sessionId);
+
+// 🔍 Counterfactual analysis
+const counterfactuals = computeCounterfactuals({
+  result: enrichedResult,
+});
+
+// 🧬 Trajectory prediction
+const trajectory = predictTrajectory({
+  result: enrichedResult,
+  memory,
+});
+➤ Final attach:
+const finalEnhancedResult = {
+  ...enrichedResult,
+  counterfactuals,
+  trajectory,
+};
+📡 PART 4 — CONTROL TOWER STREAM
+
+Update:
+
+broadcastCognitiveUpdate({
+  caseId: sessionId,
+  agents: agentOpinions,
+  council: councilResult,
+  specialtyCouncil,
+  finalDecision,
+  reasoningGraph: reasoningNodes,
+  requery,
+  escalation,
+  memory: memoryEntry,
+  counterfactuals,
+  trajectory,
+  timestamp: Date.now(),
+});
+🎨 PART 5 — UI PANELS
+Counterfactual Panel
+function CounterfactualPanel({ data }: any) {
+  return (
+    <div>
+      <h2 className="text-xl font-bold">What Would Change This?</h2>
+
+      {data.keyFactors.map((f: any) => (
+        <div key={f.variable} className="border p-2">
+          <b>{f.variable}</b> → {f.effect}
+        </div>
+      ))}
+    </div>
+  );
+}
+Trajectory Panel
+function TrajectoryPanel({ data }: any) {
+  return (
+    <div>
+      <h2 className="text-xl font-bold">Trajectory</h2>
+
+      <div>Trend: {data.trend}</div>
+      <div>Risk: {(data.riskScore * 100).toFixed(1)}%</div>
+      <div>Time Horizon: {data.timeHorizon}</div>
+    </div>
+  );
+}

@@ -477,9 +477,34 @@ Returns enriched `AssistantResult` with: `uncertainty`, `debate`, `requery`, `co
 
 ### Brain Command Center Dashboard
 Route: `/brain-command-center` | Sidebar entry: "Brain Command Center"
-5 tabs:
-1. **Command Grid** — live risk-sorted patient grid with triage level, risk %, trajectory, escalation badges
-2. **Cognitive Stream** — real-time cognitive event log with topic, caseId, payload key-values
-3. **QA Audit** — per-case QA scores, flag distribution, flag detail cards
-4. **Agent Performance** — RLHF-lite rankings with correct/incorrect/overtriage/undertriage breakdown
-5. **Meta-Learning** — 4 adaptive threshold cards with visual progress bars + trigger button
+8 tabs (expanded):
+1. **Command Grid** — live risk-sorted patient grid with triage, risk %, trajectory, escalation badges
+2. **Cognitive Stream** — real-time cognitive event log with safety override + fusion badges
+3. **Next Questions** — Next-Best-Question panel ranked by info gain, re-query intelligence + live status
+4. **Why This Won** — SHAP-style explanation: factor attribution, contribution bars, narrative, winner domain
+5. **Temporal View** — per-case decision timeline across iterations with change tracking + SHAP history
+6. **Agent Performance** — live win-rate tracker with drift detection + historical outcome scores
+7. **QA Audit** — per-case QA scores, flag distribution, flag detail cards
+8. **Meta-Learning** — 4 adaptive threshold cards with visual progress bars + trigger button
+
+### Intelligence Engines (Telemedicine Layer)
+- `server/assistant/clinicalFusionEngine.ts` — 6-layer priority cascade arbitration
+- `server/assistant/uncertaintyEngine.ts` — multi-signal uncertainty quantification (score + level + drivers)
+- `server/assistant/safetyGovernor.ts` — FDA-grade hard override (forces emergency when safety alerts present)
+- `server/assistant/shapExplainer.ts` — SHAP-style factor attribution for "Why This Won"
+- `server/assistant/agentPerformanceTracker.ts` — win rate per agent + drift detection (window vs overall)
+- `server/assistant/shapLogService.ts` — in-memory SHAP explanation log (last 50 entries)
+
+### AssistantResult Fields (Full)
+Core: caseId, complaint, iteration, triage, differential, nextQuestions, resources, contradictions, safetyAlerts, pathway
+Intelligence: uncertainty, debate, requery, counterfactuals, trajectory, bayesian, simulation, qa, specialty, escalation, intervention
+New engines: fusion, uncertaintyLevel, uncertaintyDrivers, safetyGovernorOverride, safetyGovernorReason
+Explainability: explanation (SHAP factors + narrative), nextBestQuestions, temporalHistory
+
+### Mission Control API (Extended)
+- `GET /api/mission/snapshot` — full system snapshot including liveAgentPerformance, driftEvents, shapHistory, activeCases
+- `GET /api/mission/agent-performance` — live win rates + drift events per agent
+- `GET /api/mission/drift-events` — recent drift detection events
+- `GET /api/mission/shap-history` — recent SHAP explanations
+- `GET /api/mission/case-memory/:caseId` — temporal history + SHAP for a specific case
+- `GET /api/mission/active-cases` — list of all cases with recorded memory

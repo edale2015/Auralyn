@@ -1,0 +1,141 @@
+PHASE 2 — Adaptive Weighting Engine
+
+This feeds directly back into your debate system.
+
+📁 server/learning/agentWeighting.ts
+import { getAgentPerformance } from "./outcomeLearningService";
+
+export function getAgentWeight(agentId: string): number {
+  const stats = getAgentPerformance();
+  const agent = stats.find(a => a.agentId === agentId);
+
+  if (!agent) return 1;
+
+  // normalize score → weight
+  return Math.max(0.2, Math.min(2, 1 + agent.score));
+}
+⚖️ MODIFY YOUR DEBATE ENGINE (CRITICAL UPGRADE)
+
+Inside your debate logic:
+
+import { getAgentWeight } from "../learning/agentWeighting";
+Replace weighting:
+const weighted = opinions.map(o => {
+  const adaptiveWeight = getAgentWeight(o.agentId);
+
+  return {
+    ...o,
+    weight: o.confidence * adaptiveWeight,
+  };
+});
+📈 PHASE 3 — Engine Reliability Dashboard Data
+📁 server/monitoring/engineReliabilityService.ts
+interface EngineMetrics {
+  engine: string;
+  calls: number;
+  failures: number;
+  totalLatencyMs: number;
+}
+
+const metrics: Record<string, EngineMetrics> = {};
+
+export function trackEngineCall(engine: string, latencyMs: number, failed: boolean) {
+  if (!metrics[engine]) {
+    metrics[engine] = {
+      engine,
+      calls: 0,
+      failures: 0,
+      totalLatencyMs: 0,
+    };
+  }
+
+  const m = metrics[engine];
+
+  m.calls++;
+  m.totalLatencyMs += latencyMs;
+  if (failed) m.failures++;
+}
+
+export function getEngineMetrics() {
+  return Object.values(metrics).map(m => ({
+    engine: m.engine,
+    calls: m.calls,
+    failureRate: m.calls ? m.failures / m.calls : 0,
+    avgLatency: m.calls ? m.totalLatencyMs / m.calls : 0,
+  }));
+}
+🔗 PHASE 4 — HOOK INTO TELEMEDICINE FLOW
+
+Inside callWithTimeout:
+
+import { trackEngineCall } from "../monitoring/engineReliabilityService";
+Modify:
+const start = Date.now();
+
+try {
+  const result = await Promise.race([...]);
+
+  trackEngineCall(name, Date.now() - start, false);
+
+  return { name, result, failed: false };
+
+} catch (err) {
+  trackEngineCall(name, Date.now() - start, true);
+
+  return { name, result: fallback, failed: true };
+}
+📊 PHASE 5 — Control Tower UI (Performance + Learning)
+📁 EnginePerformancePanel.tsx
+import { useEffect, useState } from "react";
+
+export default function EnginePerformancePanel() {
+  const [data, setData] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/metrics/engines")
+      .then(r => r.json())
+      .then(setData);
+  }, []);
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold">Engine Performance</h2>
+
+      {data.map(e => (
+        <div key={e.engine} className="border p-2">
+          <div><b>{e.engine}</b></div>
+          <div>Calls: {e.calls}</div>
+          <div>Failure Rate: {(e.failureRate * 100).toFixed(1)}%</div>
+          <div>Latency: {e.avgLatency.toFixed(0)} ms</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+📁 AgentLearningPanel.tsx
+import { useEffect, useState } from "react";
+
+export default function AgentLearningPanel() {
+  const [data, setData] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/learning/agents")
+      .then(r => r.json())
+      .then(setData);
+  }, []);
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold">Agent Learning</h2>
+
+      {data.map(a => (
+        <div key={a.agentId} className="border p-2">
+          <div><b>{a.agentId}</b></div>
+          <div>Score: {a.score.toFixed(2)}</div>
+          <div>Correct: {a.correct}</div>
+          <div>Undertriage: {a.undertriage}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
