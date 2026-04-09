@@ -1,0 +1,291 @@
+Integration Map (where Packet 20 lives)
+User / Bots / Agents
+        ↓
+Automation Layer (Packet 20)
+   ├── Recorder
+   ├── Selector Healing
+   ├── Validator Worker
+   ├── Template Store (versioned)
+        ↓
+Event Bus (Redis / BullMQ)
+        ↓
+Clinical Brain + Safety Pipeline
+        ↓
+Hospital → Regional → National → Global
+        ↓
+Oversight + Meta-Learning + Executive
+        ↓
+Control Towers / Dashboards
+🔌 1) Domain Wiring: Events + Types
+server/automation/events.ts
+export type AutomationEvent =
+  | { type: "TEMPLATE_RUN_REQUEST"; templateId: string; payload: any; traceId: string }
+  | { type: "TEMPLATE_RUN_RESULT"; templateId: string; ok: boolean; result?: any; error?: string; traceId: string }
+  | { type: "TEMPLATE_VALIDATION_RESULT"; templateId: string; ok: boolean; issues: any[]; traceId: string };
+
+export const TOPICS = {
+  RUN: "automation.run",
+  RESULT: "automation.result",
+  VALIDATION: "automation.validation",
+};
+⚙️ 2) Queue + Worker (BullMQ)
+server/automation/queue.ts
+import { Queue, Worker } from "bullmq";
+import IORedis from "ioredis";
+import { runTemplate } from "./templateRunner";
+
+const connection = new IORedis(process.env.REDIS_URL!);
+
+export const automationQueue = new Queue("automation", { connection });
+
+export function startAutomationWorker() {
+  new Worker(
+    "automation",
+    async (job) => {
+      const { templateId, payload, traceId } = job.data;
+      return runTemplate(templateId, payload, traceId);
+    },
+    { connection, concurrency: 5 }
+  );
+}
+▶️ 3) Template Runner (Playwright + Healing + Audit)
+server/automation/templateRunner.ts
+import { chromium } from "playwright";
+import { healSelector } from "./selectorHealing";
+import { getTemplateById } from "./templateStore";
+import { auditStep } from "../audit/auditLogger";
+
+export async function runTemplate(templateId: string, payload: any, traceId: string) {
+  const template = await getTemplateById(templateId);
+
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+
+  try {
+    await page.goto(template.url);
+
+    for (const step of template.steps) {
+      if (step.selector) {
+        let selector = step.selector;
+
+        const count = await page.locator(selector).count();
+        if (count === 0) {
+          const healed = await healSelector(page, selector);
+          if (!healed) throw new Error(`Selector failed: ${selector}`);
+          selector = healed;
+        }
+
+        if (step.type === "click") {
+          await page.click(selector);
+        }
+
+        if (step.type === "fill") {
+          await page.fill(selector, step.value);
+        }
+
+        if (step.type === "waitForVisible") {
+          await page.waitForSelector(selector);
+        }
+      }
+
+      if (step.type === "waitForNetworkIdle") {
+        await page.waitForLoadState("networkidle");
+      }
+    }
+
+    await auditStep({
+      traceId,
+      step: "automation_template_success",
+      input: { templateId },
+      output: { ok: true },
+      metadata: {}
+    });
+
+    return { ok: true };
+
+  } catch (err) {
+
+    await auditStep({
+      traceId,
+      step: "automation_template_failure",
+      input: { templateId },
+      output: null,
+      metadata: { error: String(err) }
+    });
+
+    return { ok: false, error: String(err) };
+
+  } finally {
+    await browser.close();
+  }
+}
+🧠 4) Hook into Clinical Pipeline
+
+You already have a strong runFinalPipeline with safety guarantees .
+We attach automation after safety and before FHIR or as a side-channel.
+
+Add inside finalPipeline.ts
+import { automationQueue } from "../automation/queue";
+
+...
+
+// After safety and before optional stages or after output generation
+await automationQueue.add("run-template", {
+  templateId: "insurance_check",
+  payload: { patientId: input.patientId },
+  traceId
+});
+Why here?
+Safety decisions already made (no interference)
+Automation enriches downstream workflows (billing, intake, etc.)
+Failures won’t affect patient safety path
+🧠 5) Oversight Agent Integration
+
+Automation becomes observable.
+
+server/oversight/automationMonitor.ts
+export function analyzeAutomationMetrics(runs: any[]) {
+
+  const failures = runs.filter(r => !r.ok).length;
+  const rate = failures / runs.length;
+
+  return {
+    failureRate: rate,
+    alert: rate > 0.1 ? "Automation instability detected" : null
+  };
+}
+
+Integrate into your Oversight Agent:
+
+if (automation.failureRate > 0.1) {
+  alerts.push("Template system unstable");
+  actions.push("Trigger validation worker");
+}
+🔁 6) Meta-Learning Hook
+
+Automation failures → system learning.
+
+if (templateFailure.selector) {
+  insights.push({
+    type: "selector_drift",
+    target: templateId,
+    recommendation: "update selector or retrain template"
+  });
+}
+🧪 7) Validation Worker (Scheduled)
+import { runValidationWorker } from "./templateValidationWorker";
+import { getAllTemplates } from "./templateStore";
+
+setInterval(async () => {
+  const templates = await getAllTemplates();
+  await runValidationWorker(templates);
+}, 1000 * 60 * 60 * 6); // every 6 hours
+🖥️ 8) Control Tower Panel
+AutomationPanel.tsx
+export default function AutomationPanel({ data }: any) {
+  return (
+    <div className="bg-gray-900 p-4 rounded-xl text-white">
+      <h2>⚙️ Automation System</h2>
+
+      <p>Templates: {data.total}</p>
+      <p>Failures: {data.failures}</p>
+
+      {data.alert && (
+        <div className="text-red-400">{data.alert}</div>
+      )}
+    </div>
+  );
+}
+🔐 9) Safety Guardrails (CRITICAL)
+
+Never let automation override clinical logic.
+
+if (safetyResult.finalDisposition === "ER_NOW") {
+  // 🚨 NEVER run automation that delays care
+  skipAutomation = true;
+}
+📊 10) Metrics (Prometheus-ready)
+
+Track:
+
+automation_runs_total
+automation_failures_total
+automation_selector_heal_count
+automation_template_latency_ms
+🧠 WHAT THIS ACHIEVES
+
+Automation is now:
+
+🔗 Connected
+triggered by pipeline
+feeds oversight + learning
+🛡️ Safe
+cannot interfere with safety layer
+fully audited
+🔁 Self-healing
+selector healing
+validation worker
+meta-learning feedback
+📊 Observable
+dashboards
+alerts
+drift detection
+⚡ System After Integration
+Clinical Brain
+   ↓
+Safety Pipeline (hard stop)
+   ↓
+Automation Layer (Packet 20)
+   ↓
+FHIR / Billing / Intake / External systems
+   ↓
+Oversight + Meta Learning
+   ↓
+Regional / National / Global Intelligence
+🚀 5 Next-Level Enhancements (HIGH VALUE)
+1. 🤖 LLM Template Generator
+
+“Go to site X and fill form Y” → auto-generate template
+
+2. 🔁 Autonomous Repair Agent
+
+Broken template → re-record → validate → submit
+
+3. 🧠 Selector Confidence Scoring
+
+Track success rate per selector over time
+
+4. 🌐 Distributed Playwright Workers
+
+Run automation at scale across regions
+
+5. 📹 Visual Replay + Debug UI
+
+See exactly what automation did (like Chrome DevTools recording)
+
+🧠 Final Thought
+
+Your system now has:
+
+perception (NLP)
+reasoning (clinical engine)
+safety (hard gate)
+action (automation)
+memory (meta-learning)
+awareness (oversight)
+coordination (regional/global)
+
+That’s not a feature set.
+
+That’s a digital organism.
+
+If you want next step
+
+We can now:
+
+👉 build visual automation editor (drag + record UI)
+👉 add LLM-driven template creation + repair
+👉 deploy distributed Playwright cluster across AWS/Fly
+👉 create full system ZIP bundle ready for Replit
+
+Just tell me 👍

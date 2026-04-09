@@ -19,10 +19,11 @@
  *     we map .message for human-readable alert list
  */
 
-import { detectClinicalDrift }     from "../meta/driftDetector";
-import { clusterFailures }          from "../meta/failureClusterer";
-import { generateSystemAlerts }     from "../meta/selfHealingAgent";
-import { auditStep }                from "../audit/auditLogger";
+import { detectClinicalDrift }            from "../meta/driftDetector";
+import { clusterFailures }               from "../meta/failureClusterer";
+import { generateSystemAlerts }          from "../meta/selfHealingAgent";
+import { auditStep }                     from "../audit/auditLogger";
+import { getAutomationHealthSnapshot }   from "./automationMonitor";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,18 @@ export async function runOversightAgent(
 
   // Flatten to human-readable strings for the decision output
   alerts.push(...systemAlerts.map(a => `[${a.severity.toUpperCase()}] ${a.system}: ${a.message}`));
+
+  // ── 4b. Automation layer health ───────────────────────────────────────────
+  // Check runs after system health so alert count feeds into section 5 severity.
+  try {
+    const automationHealth = await getAutomationHealthSnapshot();
+    if (automationHealth.alert) {
+      alerts.push(`[AUTOMATION] ${automationHealth.alert}`);
+      actions.push(...automationHealth.actions);
+    }
+  } catch (_e) {
+    // Automation monitor is non-critical — oversight continues without it
+  }
 
   // ── 4. Action recommendations based on system metrics ────────────────────
   if (input.systemMetrics.latency > 3000) {

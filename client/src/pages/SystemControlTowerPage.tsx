@@ -10,9 +10,10 @@ import { useMutation } from "@tanstack/react-query";
 import {
   Cpu, Activity, Plug, Layers, Database,
   Terminal, Mic, Bot, AlertTriangle, Zap, Radio,
-  ExternalLink, RefreshCw
+  ExternalLink, RefreshCw, PlayCircle
 } from "lucide-react";
 
+import AutomationPanel from "@/components/tower/AutomationPanel";
 import AgentsPanel from "@/components/tower/AgentsPanel";
 import EnginesPanel from "@/components/tower/EnginesPanel";
 import IntegrationsPanel from "@/components/tower/IntegrationsPanel";
@@ -45,6 +46,7 @@ const SECTION_TABS = [
   { value: "alerts",       label: "Alerts",        icon: AlertTriangle },
   { value: "voice",        label: "Voice Intake",  icon: Mic },
   { value: "logs",         label: "System Logs",   icon: Terminal },
+  { value: "automation",   label: "Automation",    icon: PlayCircle },
 ];
 
 export default function SystemControlTowerPage() {
@@ -214,6 +216,11 @@ export default function SystemControlTowerPage() {
               {activeTab === "voice" && (
                 <PanelWrapper title="Voice Intake" description="Submit voice transcript for multimodal intake processing.">
                   <VoiceIntakePanel />
+                </PanelWrapper>
+              )}
+              {activeTab === "automation" && (
+                <PanelWrapper title="Automation" description="Live metrics for the template automation layer — runs, failures, selector healing, queue state.">
+                  <AutomationPanel />
                 </PanelWrapper>
               )}
             </div>

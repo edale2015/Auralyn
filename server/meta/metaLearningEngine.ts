@@ -159,7 +159,7 @@ export interface OutcomeRecord {
 }
 
 export interface LearningInsight {
-  type:           "threshold_adjustment" | "prior_shift" | "question_ordering";
+  type:           "threshold_adjustment" | "prior_shift" | "question_ordering" | "selector_drift";
   target:         string;
   recommendation: Record<string, unknown>;
   confidence:     number;

@@ -121,6 +121,23 @@ router.post("/repair/apply", async (req, res) => {
   }
 });
 
+// ── Metrics — Prometheus-ready counters + queue state ────────────────────────
+
+router.get("/metrics", async (_req, res) => {
+  try {
+    const { getMetrics }    = await import("./metricsTracker");
+    const { getQueueState } = await import("./queue");
+    const { toPrometheusText } = await import("./metricsTracker");
+    res.json({
+      metrics:    getMetrics(),
+      queue:      getQueueState(),
+      prometheus: toPrometheusText(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
+});
+
 // ── Dashboard summaries ──────────────────────────────────────────────────────
 
 router.get("/summaries", async (_req, res) => {

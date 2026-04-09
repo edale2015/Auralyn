@@ -540,3 +540,22 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /api/mission/shap-history` — recent SHAP explanations
 - `GET /api/mission/case-memory/:caseId` — temporal history + SHAP for a specific case
 - `GET /api/mission/active-cases` — list of all cases with recorded memory
+
+### Packet 20 — Automation Template Studio (Phase 3: Integration Map)
+
+**New files:**
+- `server/automation/events.ts` — Domain event types (`AutomationEvent` union) and `TOPICS` constants (run, result, validation, selector_drift)
+- `server/automation/metricsTracker.ts` — Prometheus-ready in-memory counters: `runsTotal`, `failuresTotal`, `selectorHealCount`, p95/max latency, per-template breakdown, `toPrometheusText()`
+- `server/automation/queue.ts` — Lightweight in-process async job queue: `registerJobHandler`, `enqueueJob`, `fireAndForget`, `onJobResult`, `getQueueState`; concurrency-controlled (5 workers); no BullMQ dependency
+- `server/automation/templateRunner.ts` — Playwright runner wired to `replayWithHealing` + `auditStep`; registers as queue job handler via `startTemplateRunner()`; 6-hour validation scheduler via `startValidationScheduler()`
+- `server/oversight/automationMonitor.ts` — Rolling failure-rate window (last 50 jobs); `analyzeAutomationMetrics()` for batch analysis; `getAutomationHealthSnapshot()` for live oversight; `FAILURE_RATE_THRESHOLD = 0.1`
+- `client/src/components/tower/AutomationPanel.tsx` — Control Tower panel: live metrics cards (runs, failures, heals, p95), queue state badge, per-template table, instability alert banner, link to Template Health Dashboard
+
+**Modified files:**
+- `server/core/masterClinicalPipeline.ts` — Automation side-channel: `fireAndForget("insurance_check")` after safety clears; **skipped when `disposition === "escalate"` (ER safety guardrail)**
+- `server/oversight/autonomousOversightAgent.ts` — Step 4b: calls `getAutomationHealthSnapshot()` and merges automation alerts into oversight decision (non-blocking try/catch)
+- `server/meta/metaLearningEngine.ts` — `LearningInsight.type` extended with `"selector_drift"` union member
+- `client/src/pages/SystemControlTowerPage.tsx` — Added "Automation" tab (PlayCircle icon) + `AutomationPanel` rendering block
+- `server/automation/healthRoutes.ts` — Added `GET /api/automation/metrics` endpoint returning `{ metrics, queue, prometheus }`
+
+**Test count:** 907/907 passing across 33 files (+23 new integration tests in `tests/unit/automationIntegration.test.ts`)

@@ -7,6 +7,7 @@ import { trackEvent } from "../growth/funnelEngine";
 import { logCFR11Entry } from "../fda/cfr11AuditLogger";
 import { storeCaseMemory } from "../memory/caseMemoryStore";
 import { evaluateAcuityFastPath } from "../intake/acuityFastPath";
+import { fireAndForget } from "../automation/queue";
 
 export interface PipelineInput {
   caseId: string;
@@ -255,6 +256,20 @@ export async function runFullPipeline(
       systemRisk: riskPayload.systemRisk,
     },
   });
+
+  // ── Automation side-channel ────────────────────────────────────────────────
+  // Fire automation ONLY when the patient is NOT being escalated to ER.
+  // Automation enriches downstream workflows (billing, intake, insurance_check)
+  // but MUST NEVER interfere with or delay safety-critical decisions.
+  if (disposition !== "escalate") {
+    fireAndForget({
+      templateKey: "insurance_check",
+      payload:     { patientId: input.patientId, complaint: input.complaint, disposition },
+      traceId:     `pipeline-${input.caseId}-${Date.now()}`,
+      patientId:   input.patientId,
+      clinicId:    input.zip,
+    });
+  }
 
   return {
     caseId: input.caseId,
