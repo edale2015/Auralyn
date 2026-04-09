@@ -1,0 +1,278 @@
+CORE: META-LEARNING ENGINE (Outcome → Insight → Controlled Change)
+
+This sits above everything:
+
+observes results
+aggregates patterns
+proposes improvements
+routes through your Golden Case Gate
+🔧 server/meta/metaLearningEngine.ts
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+import { validateChangeWithGoldenCases } from "../clinical/changeApprovalGate";
+
+export interface OutcomeRecord {
+  caseId: string;
+  complaint: string;
+  predictedDisposition: string;
+  actualOutcome: string;
+  timeToEvent?: number;
+  features: Record<string, any>;
+}
+
+export interface LearningInsight {
+  type: "threshold_adjustment" | "prior_shift" | "question_ordering";
+  target: string;
+  recommendation: any;
+  confidence: number;
+}
+
+export async function runMetaLearningCycle(
+  outcomes: OutcomeRecord[],
+  goldenCases: any[],
+  traceId: string
+) {
+
+  const insights: LearningInsight[] = [];
+
+  // ─────────────────────────────────────────────
+  // 1. Detect disposition errors
+  // ─────────────────────────────────────────────
+  const errors = outcomes.filter(
+    o => o.predictedDisposition !== o.actualOutcome
+  );
+
+  const errorRate = errors.length / outcomes.length;
+
+  // Example: too many missed ER cases
+  const missedER = errors.filter(
+    e => e.actualOutcome === "ER_NOW" && e.predictedDisposition !== "ER_NOW"
+  );
+
+  if (missedER.length > 0) {
+    insights.push({
+      type: "threshold_adjustment",
+      target: "safety_pipeline",
+      recommendation: { increaseSensitivity: true },
+      confidence: Math.min(1, missedER.length / outcomes.length)
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // 2. Prior drift detection
+  // ─────────────────────────────────────────────
+  const complaintGroups = groupBy(outcomes, o => o.complaint);
+
+  for (const [complaint, group] of Object.entries(complaintGroups)) {
+    const erRate =
+      group.filter(g => g.actualOutcome === "ER_NOW").length / group.length;
+
+    if (erRate > 0.3) {
+      insights.push({
+        type: "prior_shift",
+        target: complaint,
+        recommendation: { increaseHighRiskPrior: true },
+        confidence: erRate
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // 3. Validate via Golden Cases
+  // ─────────────────────────────────────────────
+  const approvedChanges = [];
+
+  for (const insight of insights) {
+    try {
+      const validation = await validateChangeWithGoldenCases(
+        insight,
+        goldenCases,
+        traceId
+      );
+
+      approvedChanges.push({
+        insight,
+        validation
+      });
+
+    } catch (err) {
+      await auditStep({
+        traceId,
+        step: "meta_learning_rejected",
+        input: insight,
+        output: null,
+        metadata: { error: String(err) }
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // 4. Persist approved insights (NOT auto-applied)
+  // ─────────────────────────────────────────────
+  for (const change of approvedChanges) {
+    await db.insert("meta_learning_queue").values({
+      insight: JSON.stringify(change.insight),
+      status: "pending_review",
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  return {
+    insightsGenerated: insights.length,
+    approvedChanges: approvedChanges.length
+  };
+}
+
+// helper
+function groupBy(arr: any[], fn: (x: any) => string) {
+  return arr.reduce((acc, item) => {
+    const key = fn(item);
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {} as Record<string, any[]>);
+}
+🧠 WHAT THIS DOES
+
+Your system now:
+
+Watches real outcomes
+Detects patterns
+Proposes changes
+Runs simulation
+Queues for approval (NOT auto-applies)
+
+👉 This is safe self-improvement
+
+🚀 5 HIGH-IMPACT ADDITIONS (NEXT LEVEL)
+
+These are the highest yield upgrades to turn this into a dominant system.
+
+🥇 1. CLINICAL DRIFT DETECTOR
+
+Detect when your system is slowly becoming wrong.
+
+🔧 server/meta/driftDetector.ts
+export function detectClinicalDrift(outcomes: any[]) {
+
+  const baselineER = 0.12; // historical
+  const currentER =
+    outcomes.filter(o => o.actualOutcome === "ER_NOW").length / outcomes.length;
+
+  const drift = currentER - baselineER;
+
+  return {
+    driftDetected: Math.abs(drift) > 0.05,
+    driftMagnitude: drift,
+    recommendation: drift > 0
+      ? "increase sensitivity"
+      : "decrease false positives"
+  };
+}
+
+👉 Alerts you BEFORE performance collapses.
+
+🥈 2. AUTOMATIC FAILURE CLUSTERING
+
+Find patterns in your mistakes.
+
+🔧 server/meta/failureClusterer.ts
+export function clusterFailures(outcomes: any[]) {
+
+  const failures = outcomes.filter(
+    o => o.predictedDisposition !== o.actualOutcome
+  );
+
+  const clusters: Record<string, number> = {};
+
+  for (const f of failures) {
+    const key = `${f.complaint}_${f.features.ageGroup || "unknown"}`;
+    clusters[key] = (clusters[key] || 0) + 1;
+  }
+
+  return Object.entries(clusters)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+}
+
+👉 Shows:
+
+“We are failing on chest pain in older women”
+
+🥉 3. SAFETY REGRESSION WATCHDOG
+
+Never allow silent degradation.
+
+🔧 server/meta/safetyWatchdog.ts
+export function safetyRegressionCheck(prev: any, current: any) {
+
+  if (current.safetyMismatches > prev.safetyMismatches) {
+    throw new Error(
+      "CRITICAL: Safety regression detected — deployment blocked"
+    );
+  }
+
+  return true;
+}
+🧠 4. ENGINE WEIGHT ADAPTATION (CONTROLLED)
+
+Adjust Bayesian vs similarity vs rules.
+
+🔧 server/meta/engineWeightAdapter.ts
+export function adjustEngineWeights(metrics: any) {
+
+  let weights = {
+    bayesian: 0.5,
+    similarity: 0.3,
+    rules: 0.2
+  };
+
+  if (metrics.similaritySuccess > metrics.bayesianSuccess) {
+    weights.similarity += 0.1;
+    weights.bayesian -= 0.1;
+  }
+
+  return weights;
+}
+
+👉 Pair this with Golden Case validation before applying.
+
+🧠 5. SELF-HEALING ALERT AGENT
+
+System notices issues and suggests fixes.
+
+🔧 server/meta/selfHealingAgent.ts
+export function generateSystemAlerts(metrics: any) {
+
+  const alerts = [];
+
+  if (metrics.errorRate > 0.1) {
+    alerts.push("High error rate — review NLP intake");
+  }
+
+  if (metrics.fhirFailures > 0.05) {
+    alerts.push("FHIR sync instability detected");
+  }
+
+  if (metrics.latency > 3000) {
+    alerts.push("Pipeline latency high — check stage timings");
+  }
+
+  return alerts;
+}
+🧠 ARCHITECTURE AFTER THIS LAYER
+
+You now have:
+
+🔁 Learning Loop
+Patient → Pipeline → Outcome → Meta Learning → Simulation → Approval → Update
+🧠 Intelligence Stack
+Deterministic rules
+Bayesian reasoning
+Similarity engine
+Safety pipeline
+Debate layer
+Meta-learning layer
+⚡ WHAT YOU JUST BUILT
+
+This is no longer:

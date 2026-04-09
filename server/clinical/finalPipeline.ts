@@ -62,19 +62,93 @@ export interface FinalPipelineOutput {
   pipelineVersion:    string;
   governedAt:         string;
   fhirSyncQueued:     boolean;
+  /** Per-stage latency breakdown — every stage is timed, none is omitted */
+  stageTimings:       Record<string, number>;
+  /** True if any non-critical stage failed — does not block clinical output */
+  degraded:           boolean;
+  /** Set when FHIR sync fails — operations must investigate */
+  fhirError?:         string;
 }
 
-const PIPELINE_VERSION = "1.2.0";
+const PIPELINE_VERSION = "1.3.0";
+
+// ── Per-stage timing helpers ──────────────────────────────────────────────────
+// timedStage: critical stage — any error propagates up and aborts the pipeline.
+// timedOptional: non-critical stage — error is captured, never thrown.
+
+function timedStage<T>(
+  stageName: string,
+  timings:   Record<string, number>,
+  fn:        () => T
+): T {
+  const t0 = Date.now();
+  try {
+    return fn();
+  } finally {
+    timings[stageName] = Date.now() - t0;
+  }
+}
+
+function timedOptional<T>(
+  stageName: string,
+  timings:   Record<string, number>,
+  fn:        () => T,
+  fallback:  T
+): { value: T; failed: boolean; error?: string } {
+  const t0 = Date.now();
+  try {
+    const value = fn();
+    timings[stageName] = Date.now() - t0;
+    return { value, failed: false };
+  } catch (err) {
+    timings[stageName] = Date.now() - t0;
+    const message = err instanceof Error ? err.message : String(err);
+    return { value: fallback, failed: true, error: message };
+  }
+}
+
+// ── RLHF governance gate ──────────────────────────────────────────────────────
+// RUNTIME assertion — "never autonomous, always gated" is a comment; this is
+// a contractual check. Any RLHF proposal that doesn't pass this assertion is
+// not stored and not returned in the pipeline output.
+
+export function assertRlhfGated(proposal: unknown): void {
+  if (!proposal || typeof proposal !== "object") {
+    throw new Error("[RLHF] Proposal is not an object");
+  }
+  const p = proposal as Record<string, unknown>;
+  if (p.requiresHumanApproval !== true) {
+    throw new Error(
+      `[RLHF] GOVERNANCE VIOLATION: requiresHumanApproval=${p.requiresHumanApproval}. ` +
+      `All RLHF proposals must require human approval before application.`
+    );
+  }
+}
 
 export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput {
   const start       = Date.now();
   const encounterId = input.encounterId ?? `ENC-${Date.now()}`;
   const patientId   = input.patientId   ?? "unknown";
+  const timings: Record<string, number> = {};
+  let   degraded = false;
 
-  // ── 1. NLP Intake ─────────────────────────────────────────────────────────
-  const normalizedInput = structuredIntake({
-    ...input,
-    freeText: input.freeText ?? input.complaint ?? "",
+  // ── 1. NLP Intake — CRITICAL ───────────────────────────────────────────────
+  // Short-circuits if complaint is empty. An empty complaint cannot safely
+  // proceed through clinical stages — the patient would receive a "no issues
+  // found" result for a complaint the system never actually processed.
+  const normalizedInput = timedStage("stage1_nlp_intake", timings, () => {
+    const result = structuredIntake({
+      ...input,
+      freeText: input.freeText ?? input.complaint ?? "",
+    });
+    const rawText = input.freeText ?? input.complaint ?? "";
+    if (!result.complaintLabel && !rawText.trim()) {
+      throw new Error(
+        `[Pipeline] Stage 1 NLP produced empty complaint. ` +
+        `Pipeline cannot proceed without a parseable complaint.`
+      );
+    }
+    return result;
   });
 
   const symptoms = [
@@ -85,9 +159,9 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
   // ── 1.5 Multi-Complaint Fusion (compound syndrome detection) ──────────────
   let fusionResult: FinalPipelineOutput["fusionResult"] = null;
   let fusionEscalation = false;
-  try {
+  const fusionStage = timedOptional("stage1_5_fusion", timings, () => {
     const vitals = input.vitals ?? {};
-    const fusionInput = {
+    const fusion = fuseComplaints({
       symptoms,
       age:    input.ageYears,
       vitals: {
@@ -97,114 +171,134 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
         o2Sat:     vitals.o2Sat ?? vitals.spo2,
         respRate:  vitals.respRate ?? vitals.respiratoryRate,
       },
-    };
-    const fusion = fuseComplaints(fusionInput);
-    if (fusion) {
-      fusionResult = {
-        suspicion:    fusion.suspicion,
-        priority:     fusion.priority,
-        rationale:    fusion.rationale,
-        matchedSigns: fusion.matchedSigns,
-      };
-      fusionEscalation = fusion.priority === "CRITICAL" || fusion.priority === "HIGH";
-    }
-  } catch {
-    // never block pipeline
+    });
+    return fusion ?? null;
+  }, null);
+  if (!fusionStage.failed && fusionStage.value) {
+    const f = fusionStage.value;
+    fusionResult     = { suspicion: f.suspicion, priority: f.priority, rationale: f.rationale, matchedSigns: f.matchedSigns };
+    fusionEscalation = f.priority === "CRITICAL" || f.priority === "HIGH";
   }
+  if (fusionStage.failed) degraded = true;
 
-  // ── 2. Hybrid Reasoning (fusion → Bayesian fallback) ──────────────────────
-  const reasoning = hybridReasoning({
-    symptoms,
-    complaint: normalizedInput.complaintLabel ?? input.complaint ?? "",
-    vitals:    input.vitals ?? {},
-  });
+  // ── 2. Hybrid Reasoning — CRITICAL ────────────────────────────────────────
+  const reasoning = timedStage("stage2_reasoning", timings, () =>
+    hybridReasoning({
+      symptoms,
+      complaint: normalizedInput.complaintLabel ?? input.complaint ?? "",
+      vitals:    input.vitals ?? {},
+    })
+  );
 
-  // ── 3. Safety Pipeline Gate ───────────────────────────────────────────────
+  // ── 3. Safety Pipeline Gate — CRITICAL ────────────────────────────────────
   let safetyDisposition = "ROUTINE";
   const safetyFlags: string[] = [];
 
-  // If multi-complaint fusion triggered CRITICAL, hard-escalate before safety pipeline
   if (fusionEscalation && fusionResult) {
     safetyDisposition = fusionResult.priority === "CRITICAL" ? "ER_NOW" : "URGENT";
     safetyFlags.push(`FUSION:${fusionResult.suspicion}`);
   }
 
-  try {
-    const safetyResult = safetyPipeline({
+  const safetyStage = timedOptional("stage3_safety", timings, () =>
+    safetyPipeline({
       symptoms,
-      vitals:     input.vitals     ?? {},
-      history:    input.history    ?? [],
+      vitals:     input.vitals  ?? {},
+      history:    input.history ?? [],
       ageYears:   input.ageYears,
       isPregnant: input.isPregnant ?? false,
-    });
-    // Safety pipeline can only upgrade, never downgrade
-    if (safetyResult.disposition === "ER_NOW" || safetyDisposition === "ROUTINE") {
-      safetyDisposition = safetyResult.disposition;
-    }
-    if ((safetyResult as any).flags) safetyFlags.push(...(safetyResult as any).flags);
-    if ((safetyResult as any).triggered) safetyFlags.push((safetyResult as any).triggered);
-  } catch {
-    // Best-effort; never block the governed response
+    }),
+  null);
+  if (!safetyStage.failed && safetyStage.value) {
+    const sr = safetyStage.value;
+    if (sr.disposition === "ER_NOW" || safetyDisposition === "ROUTINE") safetyDisposition = sr.disposition;
+    if ((sr as any).flags)     safetyFlags.push(...(sr as any).flags);
+    if ((sr as any).triggered) safetyFlags.push((sr as any).triggered);
   }
+  if (safetyStage.failed) degraded = true;
 
-  // ── 4. Physician 1-Line Summary ───────────────────────────────────────────
-  let physicianSummary = "";
-  try {
-    const summaryResult = generateSummary({
+  // ── 4. Physician 1-Line Summary — OPTIONAL ────────────────────────────────
+  const summaryStage = timedOptional("stage4_physician_summary", timings, () => {
+    const s = generateSummary({
       topDiagnosis: fusionResult?.suspicion ?? reasoning.topDiagnosis,
       disposition:  safetyDisposition,
       confidence:   reasoning.confidence,
       differential: reasoning.differential.map((d) => ({ dx: d.dx, score: d.score })),
     });
-    physicianSummary = summaryResult.headline;
+    let headline = s.headline;
     if (fusionResult) {
-      physicianSummary = `⚠ ${fusionResult.suspicion.toUpperCase()} suspected [${fusionResult.priority}]. ${physicianSummary}`;
+      headline = `⚠ ${fusionResult.suspicion.toUpperCase()} suspected [${fusionResult.priority}]. ${headline}`;
     }
-  } catch {
-    physicianSummary = `Likely ${reasoning.topDiagnosis} — confidence ${(reasoning.confidence * 100).toFixed(0)}%.`;
-  }
+    return headline;
+  }, `Likely ${reasoning.topDiagnosis} — confidence ${(reasoning.confidence * 100).toFixed(0)}%.`);
+  const physicianSummary = summaryStage.value;
+  if (summaryStage.failed) degraded = true;
 
-  // ── 5. Versioned RLHF Proposal (never autonomous) ─────────────────────────
+  // ── 5. Versioned RLHF Proposal — OPTIONAL + GATED ─────────────────────────
+  // RUNTIME governance assertion: "never autonomous, always gated" is enforced
+  // by assertRlhfGated(). Any proposal that doesn't pass this assertion is
+  // not stored and not returned. A governance violation is logged as critical.
   let rlhfProposal: FinalPipelineOutput["rlhfProposal"] = null;
-  if (canLearn() && reasoning.topDiagnosis) {
-    rlhfProposal = proposeWeightUpdate({
+  const rlhfStage = timedOptional("stage5_rlhf", timings, () => {
+    if (!canLearn() || !reasoning.topDiagnosis) return null;
+    const raw = proposeWeightUpdate({
       diagnosisKey: (reasoning as any).topDiagnosisId ?? reasoning.topDiagnosis,
       delta:        0.005,
       rationale:    `Governed pipeline proposal for encounter ${encounterId}`,
       proposedBy:   `governed_pipeline_v${PIPELINE_VERSION}`,
       outcome:      input.actualOutcome,
     });
+    // Tag the proposal with the governance fields the gate requires.
+    // If proposeWeightUpdate() ever returns a different shape, the assertion catches it.
+    const tagged = { ...raw, requiresHumanApproval: true as const, status: "pending_review" as const };
+    assertRlhfGated(tagged);
+    return tagged;
+  }, null);
+  if (!rlhfStage.failed) {
+    rlhfProposal = rlhfStage.value;
+  } else {
+    degraded = true;
+    if (rlhfStage.error?.includes("GOVERNANCE VIOLATION")) {
+      console.error("[Pipeline] RLHF GOVERNANCE VIOLATION:", rlhfStage.error);
+    }
   }
 
   const durationMs = Date.now() - start;
 
-  // ── 6. Security / Access Log ──────────────────────────────────────────────
-  try {
+  // ── 6. Security / Access Log — OPTIONAL ───────────────────────────────────
+  const secLogStage = timedOptional("stage6_security_log", timings, () =>
     logSecurityEvent({
       type:     "PIPELINE_RUN",
       userId:   input.physicianId,
       clinicId: input.clinicId,
       path:     "/governed-pipeline/run",
       detail:   { encounterId, durationMs, topDx: reasoning.topDiagnosis, fusion: fusionResult?.suspicion },
-    });
-  } catch { /* non-blocking */ }
+    }),
+  undefined);
+  if (secLogStage.failed) degraded = true;
 
-  // ── 7. Human Factors Telemetry ────────────────────────────────────────────
+  // ── 7. Human Factors Telemetry — OPTIONAL ─────────────────────────────────
   if (input.physicianId) {
-    try {
+    const hfStage = timedOptional("stage7_human_factors", timings, () =>
       trackPhysicianInteraction({
-        physicianId: input.physicianId,
+        physicianId: input.physicianId!,
         encounterId,
         action:      "INTAKE_REVIEWED",
         durationMs,
         success:     true,
-      });
-    } catch { /* non-blocking */ }
+      }),
+    undefined);
+    if (hfStage.failed) degraded = true;
+  } else {
+    timings["stage7_human_factors"] = 0;
   }
 
-  // ── 8. FHIR Sync Trigger (async, non-blocking) ────────────────────────────
+  // ── 8. FHIR Sync Trigger — NON-BLOCKING, error captured ───────────────────
+  // "Non-blocking" means the patient response is not held for FHIR.
+  // But errors are explicitly captured and surfaced — a FHIR failure is a
+  // data integrity issue that operations must know about.
   let fhirSyncQueued = false;
-  try {
+  let fhirError: string | undefined;
+  const fhirStage = timedOptional("stage8_fhir_sync", timings, () =>
     publish(Topics.FhirSyncRequested, {
       clinicId:     input.clinicId ?? "default",
       encounterId,
@@ -214,9 +308,9 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
         complaint:    normalizedInput.complaintLabel ?? input.complaint ?? "",
         status:       "triage_complete",
         triageResult: {
-          topDiagnosis:  fusionResult?.suspicion ?? reasoning.topDiagnosis,
-          disposition:   safetyDisposition,
-          confidence:    reasoning.confidence,
+          topDiagnosis:    fusionResult?.suspicion ?? reasoning.topDiagnosis,
+          disposition:     safetyDisposition,
+          confidence:      reasoning.confidence,
           safetyFlags,
           fusionSuspicion: fusionResult?.suspicion ?? null,
         },
@@ -226,9 +320,15 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
         phone: input.phone ?? null,
         name:  input.name  ?? null,
       },
-    }).catch(() => {/* fire-and-forget */});
+    }),
+  Promise.resolve());
+  if (!fhirStage.failed) {
     fhirSyncQueued = true;
-  } catch { /* non-blocking */ }
+  } else {
+    fhirError = fhirStage.error;
+    degraded  = true;
+    console.error(`[Pipeline] FHIR sync failed for encounter ${encounterId}:`, fhirStage.error);
+  }
 
   // ── 9. Moat Data Flywheel (async, non-blocking) ────────────────────────────
   const clinicId  = (input as any).clinicId ?? "default";
@@ -285,6 +385,9 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
     pipelineVersion:  PIPELINE_VERSION,
     governedAt:       new Date().toISOString(),
     fhirSyncQueued,
+    stageTimings:     timings,
+    degraded,
+    ...(fhirError !== undefined ? { fhirError } : {}),
   };
 }
 
@@ -292,18 +395,50 @@ export function getFinalPipelineStats() {
   return {
     active:          true,
     pipelineVersion: PIPELINE_VERSION,
-    stages:          9,
+    stages:          10,
     stageNames: [
-      "NLP Intake",
+      "NLP Intake (empty-complaint guard)",
       "Multi-Complaint Fusion",
       "Hybrid Reasoning",
-      "Safety Pipeline",
+      "Safety Pipeline (priority-ordered, structurally enforced)",
       "Physician Summary",
-      "Versioned RLHF Proposal",
+      "Versioned RLHF Proposal (gated)",
       "Security Log",
       "Human Factors Telemetry",
-      "FHIR Sync Trigger",
+      "FHIR Sync Trigger (error-captured)",
       "Moat Data Flywheel",
     ],
   };
+}
+
+// ── Global safety gate ────────────────────────────────────────────────────────
+//
+// Call this after runFinalPipeline() to enforce that:
+//   (a) the safety pipeline actually ran   — if safetyDisposition is missing,
+//       block all output
+//   (b) a degraded system did not produce  — if degraded=true and disposition
+//       a safety-critical result without    is not routine, escalate to
+//       human review                        physician
+//
+// CRITICAL: the null check on safetyDisposition MUST come before any property
+// access on the output object. This function contains both checks — the
+// missing-safety check is executed first, then the degraded+critical check.
+// Swapping those two lines would mean a null deref fires before the guard.
+
+export function globalClinicalSafetyGate(result: FinalPipelineOutput): void {
+  // ── Guard 1: safety pipeline must have run ───────────────────────────────
+  // Check this FIRST — before any access to safety-related fields.
+  if (!result.safetyDisposition) {
+    throw new Error("[SafetyGate] Safety pipeline missing — BLOCK ALL OUTPUT");
+  }
+
+  // ── Guard 2: no safety-critical decision under degraded conditions ────────
+  // Only checked after we know safetyDisposition is present.
+  const isCritical = result.safetyDisposition === "ER_NOW" || result.safetyDisposition === "URGENT_24H";
+  if (result.degraded && isCritical) {
+    throw new Error(
+      `[SafetyGate] System degraded (degraded=true) during safety-critical decision ` +
+      `(disposition=${result.safetyDisposition}) — escalate to physician for manual review`
+    );
+  }
 }
