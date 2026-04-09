@@ -304,6 +304,12 @@ export function computeAdaptiveQuestions(
 
   scoredQuestions.sort((a, b) => b.expectedInfoGain - a.expectedInfoGain);
 
+  // Packet 12 fix: filter out zero-gain questions before returning.
+  // A question with expectedInfoGain = 0 provides no clinical information —
+  // asking it wastes a turn and frustrates the patient. We keep only those
+  // that strictly reduce uncertainty (> 0 after the Math.max(0,…) floor).
+  const usefulQuestions = scoredQuestions.filter(q => q.expectedInfoGain > 0);
+
   const topIdx = currentProbs.indexOf(Math.max(...currentProbs));
 
   return {
@@ -311,7 +317,7 @@ export function computeAdaptiveQuestions(
     currentEntropy: Math.round(currentEntropy * 1000) / 1000,
     topDiagnosis: spec.diagnoses[topIdx],
     topProbability: Math.round(currentProbs[topIdx] * 1000) / 1000,
-    questions: scoredQuestions.slice(0, 5),
+    questions: usefulQuestions.slice(0, 5),
     differential: spec.diagnoses.map((dx, i) => ({
       diagnosis: dx,
       probability: Math.round(currentProbs[i] * 1000) / 1000,

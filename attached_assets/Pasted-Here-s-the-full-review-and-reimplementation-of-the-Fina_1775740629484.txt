@@ -1,0 +1,740 @@
+Here's the full review and reimplementation of the Final Clinical Pipeline block.
+
+A) Ordering Enforcement Gaps
+1. Safety check order is enforced only by developer discipline
+The comment says "Priority order: hard-coded, non-negotiable" but the code is a sequence of if statements or function calls that any developer can reorder in a refactor, a merge conflict resolution, or an IDE-assisted sort. There is no structural barrier. If sepsis detection moves below the conflict resolver during a refactor, a patient presenting with qSOFA ≥ 2 goes through conflict resolution before being flagged for immediate ER — potentially receiving a lower-urgency recommendation before the hard stop fires. A linter won't catch this. A code review might not catch this. A test suite without an explicit ordering test won't catch this.
+2. RLHF autonomy is a comment, not a constraint
+"Never autonomous, always gated" as a comment means: whoever wrote it intended gating. It does not mean the function enforces gating. If proposeRlhfUpdate() is called and its return value is applied without a gate check, the comment is aspirational, not contractual. There needs to be a runtime assertion that the RLHF output is marked requiresHumanApproval: true before any downstream application.
+3. Stage 1 empty complaint — pipeline likely proceeds with null
+If NLP intake returns { complaint: null, symptoms: [] } and the pipeline doesn't short-circuit, stages 2–8 run against empty input. Stage 2 (multi-complaint fusion) fuses nothing. Stage 3 (hybrid reasoning) produces a low-confidence differential on empty symptoms. Stage 4 (safety pipeline) checks an empty patient state and finds no flags. The patient receives a "no issues found" result for a complaint the system never actually processed. This is worse than an error — it's a silent clinical miss.
+4. No per-stage timing
+Without per-stage timing, a pipeline that takes 4 seconds in production has no diagnostic signal. You know the pipeline is slow; you don't know whether it's the OpenAI NLP call, the FHIR sync, or the safety pipeline. Every production incident requires adding timing instrumentation after the fact, under pressure.
+5. FHIR sync error handling is ambiguous
+"Non-blocking" as a description can mean three different things in practice: (a) fire-and-forget with no await, (b) awaited but errors are caught and swallowed, (c) awaited with errors logged but not propagated. Each has different failure behavior. Without seeing the code, and given the known issue description, the most likely implementation is (b) — which means FHIR failures are silent, the EHR never gets the encounter, and there's no alert.
+
+B) Rewritten safetyPipeline — Structurally Enforced Priority
+typescript// server/clinical/safetyPipeline.ts
+import { auditStep } from "../audit/auditLogger";
+
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+export type SafetyDisposition =
+  | "ER_NOW"        // hard stop — immediate emergency referral
+  | "URGENT"        // see physician within 1–2 hours
+  | "ROUTINE"       // normal clinical flow
+  | "CONTINUE";     // no safety flag — proceed
+
+export interface SafetyContext {
+  patientId:       string;
+  ageYears?:       number;
+  isPregnant?:     boolean;
+  gestationalWeek?: number;
+  symptoms:        string[];
+  vitalSigns?:     Record<string, number>;
+  mentalHealthFlags?: string[];
+  answers:         Record<string, string>;
+}
+
+export interface SafetyCheckResult {
+  checkName:    string;
+  priority:     number;          // 1 = highest — set by registration, not the check itself
+  triggered:    boolean;
+  disposition:  SafetyDisposition;
+  reason:       string;
+  score?:       number;
+  scoreLabel?:  string;         // e.g. "qSOFA = 2", "PEWS = 6"
+  immediateActions?: string[];
+}
+
+export interface SafetyPipelineResult {
+  finalDisposition:   SafetyDisposition;
+  triggeredChecks:    SafetyCheckResult[];
+  allResults:         SafetyCheckResult[];
+  shortCircuited:     boolean;   // true if ER_NOW found and pipeline stopped early
+  durationMs:         number;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Safety check handler type
+// ─────────────────────────────────────────────────────────────
+type SafetyCheckHandler = (ctx: SafetyContext) => Promise<SafetyCheckResult>;
+
+interface RegisteredCheck {
+  priority:    number;
+  name:        string;
+  handler:     SafetyCheckHandler;
+  shortCircuit: boolean;   // if true and triggered, stop pipeline and return ER_NOW immediately
+}
+
+// ─────────────────────────────────────────────────────────────
+// Priority-ordered check registry
+//
+// ORDER IS STRUCTURALLY ENFORCED:
+// Checks are registered with explicit priority numbers.
+// The pipeline sorts by priority before execution.
+// Re-ordering the registration lines does NOT change execution order.
+// Adding a new check requires assigning a priority — there is no
+// implicit position.
+//
+// Priority gaps are intentional — leave room for future insertions
+// without renumbering everything.
+// ─────────────────────────────────────────────────────────────
+const SAFETY_CHECKS: RegisteredCheck[] = [
+  {
+    priority:     10,
+    name:         "sepsis_qsofa",
+    shortCircuit: true,   // ER_NOW = stop immediately, don't run lower-priority checks
+    handler: async (ctx): Promise<SafetyCheckResult> => {
+      const score = computeQsofa(ctx);
+      const triggered = score >= 2;
+      return {
+        checkName:    "sepsis_qsofa",
+        priority:     10,
+        triggered,
+        disposition:  triggered ? "ER_NOW" : "CONTINUE",
+        reason:       triggered
+          ? `qSOFA score ${score} ≥ 2 — sepsis screening positive. Immediate emergency evaluation required.`
+          : `qSOFA score ${score} — sepsis screen negative`,
+        score,
+        scoreLabel:   `qSOFA = ${score}`,
+        immediateActions: triggered
+          ? ["Call 911 or activate emergency response", "IV access", "Blood cultures × 2", "Lactate level"]
+          : undefined,
+      };
+    },
+  },
+
+  {
+    priority:     20,
+    name:         "pediatric_pews",
+    shortCircuit: true,
+    handler: async (ctx): Promise<SafetyCheckResult> => {
+      if (!ctx.ageYears || ctx.ageYears >= 18) {
+        return { checkName: "pediatric_pews", priority: 20, triggered: false, disposition: "CONTINUE", reason: "Not applicable — adult patient" };
+      }
+      const score = computePews(ctx);
+      const triggered = score >= 4;
+      const disposition: SafetyDisposition = score >= 6 ? "ER_NOW" : score >= 4 ? "URGENT" : "CONTINUE";
+      return {
+        checkName:    "pediatric_pews",
+        priority:     20,
+        triggered,
+        disposition,
+        reason:       triggered
+          ? `PEWS score ${score} — ${disposition === "ER_NOW" ? "pediatric deterioration, immediate emergency care" : "urgent pediatric evaluation needed"}`
+          : `PEWS score ${score} — within normal range`,
+        score,
+        scoreLabel:   `PEWS = ${score}`,
+        immediateActions: disposition === "ER_NOW"
+          ? ["Immediate pediatric emergency evaluation", "Continuous monitoring"]
+          : undefined,
+      };
+    },
+  },
+
+  {
+    priority:     30,
+    name:         "obstetric_emergency",
+    shortCircuit: true,
+    handler: async (ctx): Promise<SafetyCheckResult> => {
+      if (!ctx.isPregnant) {
+        return { checkName: "obstetric_emergency", priority: 30, triggered: false, disposition: "CONTINUE", reason: "Not applicable — patient not pregnant" };
+      }
+      const criticalOb = detectCriticalObFindings(ctx);
+      return {
+        checkName:    "obstetric_emergency",
+        priority:     30,
+        triggered:    criticalOb.found,
+        disposition:  criticalOb.found ? "ER_NOW" : "CONTINUE",
+        reason:       criticalOb.found
+          ? `Critical OB finding: ${criticalOb.finding}. Immediate obstetric emergency evaluation required.`
+          : "No critical OB findings",
+        immediateActions: criticalOb.found
+          ? ["Activate OB emergency", "Fetal monitoring", "IV access"]
+          : undefined,
+      };
+    },
+  },
+
+  {
+    priority:     40,
+    name:         "mental_health_suicide_risk",
+    shortCircuit: true,
+    handler: async (ctx): Promise<SafetyCheckResult> => {
+      const risk = assessMentalHealthRisk(ctx);
+      const triggered = risk.level === "high" || risk.level === "imminent";
+      return {
+        checkName:    "mental_health_suicide_risk",
+        priority:     40,
+        triggered,
+        disposition:  triggered ? "ER_NOW" : "CONTINUE",
+        reason:       triggered
+          ? `${risk.level === "imminent" ? "Imminent" : "High"} suicide/self-harm risk identified. Immediate psychiatric evaluation required.`
+          : `Mental health risk: ${risk.level}`,
+        immediateActions: triggered
+          ? ["Do not leave patient alone", "Remove access to means", "Psychiatric emergency consultation"]
+          : undefined,
+      };
+    },
+  },
+
+  {
+    priority:     50,
+    name:         "hybrid_conflict_resolver",
+    shortCircuit: false,   // conflict resolution never produces ER_NOW on its own
+    handler: async (ctx): Promise<SafetyCheckResult> => {
+      const conflict = detectHybridConflict(ctx);
+      return {
+        checkName:   "hybrid_conflict_resolver",
+        priority:    50,
+        triggered:   conflict.hasConflict,
+        disposition: conflict.hasConflict ? "ROUTINE" : "CONTINUE",
+        reason:      conflict.hasConflict
+          ? `Conflict between deterministic and probabilistic outputs: ${conflict.description}. Defaulting to conservative recommendation.`
+          : "No conflict between reasoning engines",
+      };
+    },
+  },
+];
+
+// Validate at module load time: no duplicate priorities, sorted correctly
+const priorities = SAFETY_CHECKS.map(c => c.priority);
+const uniquePriorities = new Set(priorities);
+if (uniquePriorities.size !== priorities.length) {
+  throw new Error(
+    `[SafetyPipeline] Duplicate priority values detected: ${
+      priorities.filter((p, i) => priorities.indexOf(p) !== i)
+    }. Each check must have a unique priority.`
+  );
+}
+
+// Sort once at module load — execution order is the sorted order, always
+const ORDERED_CHECKS = [...SAFETY_CHECKS].sort((a, b) => a.priority - b.priority);
+
+// ─────────────────────────────────────────────────────────────
+// Pipeline runner
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Runs safety checks in strict priority order.
+ *
+ * Priority enforcement is structural:
+ * - ORDERED_CHECKS is sorted by priority at module load time
+ * - Execution iterates ORDERED_CHECKS sequentially
+ * - Re-ordering the registration array above has no effect on execution
+ * - A check with shortCircuit:true stops the pipeline on ER_NOW
+ *
+ * All checks run unless short-circuited.
+ * The highest-severity triggered result determines final disposition.
+ */
+export async function runSafetyPipeline(
+  ctx:     SafetyContext,
+  traceId: string
+): Promise<SafetyPipelineResult> {
+  const startTime  = Date.now();
+  const allResults: SafetyCheckResult[] = [];
+  let   shortCircuited = false;
+
+  for (const check of ORDERED_CHECKS) {
+    let result: SafetyCheckResult;
+
+    try {
+      result = await check.handler(ctx);
+    } catch (err) {
+      // A failing safety check is never silently skipped —
+      // it produces a conservative result that triggers physician review
+      console.error(`[SafetyPipeline] Check "${check.name}" threw:`, err);
+      result = {
+        checkName:    check.name,
+        priority:     check.priority,
+        triggered:    true,   // fail-safe: assume triggered on error
+        disposition:  "URGENT",
+        reason:       `Safety check "${check.name}" encountered an error — conservative escalation applied`,
+      };
+      await auditStep({
+        traceId, step: `safety_check_error_${check.name}`,
+        input:  { checkName: check.name },
+        output: null,
+        metadata: { error: err instanceof Error ? err.message : String(err) },
+      });
+    }
+
+    allResults.push(result);
+
+    await auditStep({
+      traceId, step: `safety_check_${check.name}`,
+      input:  { priority: check.priority, patientId: ctx.patientId },
+      output: { triggered: result.triggered, disposition: result.disposition, score: result.score },
+      metadata: { checkName: check.name, shortCircuit: check.shortCircuit },
+    });
+
+    // Short-circuit: if this check triggered ER_NOW and is marked shortCircuit,
+    // stop immediately — don't run lower-priority checks
+    if (result.triggered && result.disposition === "ER_NOW" && check.shortCircuit) {
+      shortCircuited = true;
+      break;
+    }
+  }
+
+  // Final disposition: highest severity among all triggered results
+  const DISPOSITION_PRIORITY: Record<SafetyDisposition, number> = {
+    ER_NOW:   4,
+    URGENT:   3,
+    ROUTINE:  2,
+    CONTINUE: 1,
+  };
+
+  const triggeredChecks = allResults.filter(r => r.triggered);
+  const finalDisposition = triggeredChecks.reduce<SafetyDisposition>(
+    (highest, result) =>
+      DISPOSITION_PRIORITY[result.disposition] > DISPOSITION_PRIORITY[highest]
+        ? result.disposition
+        : highest,
+    "CONTINUE"
+  );
+
+  return {
+    finalDisposition,
+    triggeredChecks,
+    allResults,
+    shortCircuited,
+    durationMs: Date.now() - startTime,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Scoring stubs — implementations use validated clinical scales
+// ─────────────────────────────────────────────────────────────
+function computeQsofa(ctx: SafetyContext): number {
+  let score = 0;
+  const vitals = ctx.vitalSigns ?? {};
+  if ((vitals.respiratoryRate ?? 0) >= 22) score++;
+  if ((vitals.gcs ?? 15) < 15)             score++;
+  if ((vitals.systolicBp ?? 120) <= 100)   score++;
+  return score;
+}
+
+function computePews(ctx: SafetyContext): number {
+  // Pediatric Early Warning Score — simplified; real implementation uses age-adjusted ranges
+  let score = 0;
+  const vitals = ctx.vitalSigns ?? {};
+  if ((vitals.heartRate ?? 0) > 130)         score += 2;
+  if ((vitals.respiratoryRate ?? 0) > 30)    score += 2;
+  if ((vitals.oxygenSaturation ?? 100) < 92) score += 3;
+  return score;
+}
+
+function detectCriticalObFindings(ctx: SafetyContext): { found: boolean; finding?: string } {
+  const critical = ["severe_headache_with_visual_changes", "heavy_bleeding", "decreased_fetal_movement", "severe_abdominal_pain"];
+  const found = ctx.symptoms.find(s => critical.includes(s));
+  return found ? { found: true, finding: found } : { found: false };
+}
+
+function assessMentalHealthRisk(ctx: SafetyContext): { level: "low" | "moderate" | "high" | "imminent" } {
+  const flags = ctx.mentalHealthFlags ?? [];
+  if (flags.includes("active_plan") || flags.includes("means_access")) return { level: "imminent" };
+  if (flags.includes("ideation_with_intent"))                           return { level: "high" };
+  if (flags.includes("passive_ideation"))                               return { level: "moderate" };
+  return { level: "low" };
+}
+
+function detectHybridConflict(ctx: SafetyContext): { hasConflict: boolean; description?: string } {
+  return { hasConflict: false };  // real implementation compares engine outputs
+}
+
+C) Rewritten finalPipeline.ts — Error Isolation + RLHF Gate
+typescript// server/clinical/finalPipeline.ts
+import { runSafetyPipeline }  from "./safetyPipeline";
+import { auditStep }          from "../audit/auditLogger";
+import { getKbCache }         from "../kb/kbRuntime";
+
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+export interface PipelineInput {
+  patientId:   string;
+  rawText:     string;
+  answers:     Record<string, string>;
+  sessionId:   string;
+  actorId:     string;
+  ageYears?:   number;
+  isPregnant?: boolean;
+  vitalSigns?: Record<string, number>;
+}
+
+export interface PipelineOutput {
+  patientId:       string;
+  traceId:         string;
+  safetyResult:    import("./safetyPipeline").SafetyPipelineResult;
+  differential:    Array<{ diagnosis: string; probability: number }>;
+  reasoning:       string;
+  explainability:  Record<string, unknown> | null;
+  rlhfProposal:    RlhfProposal | null;
+  fhirSynced:      boolean;
+  fhirError?:      string;
+  degraded:        boolean;
+  stageTimings:    Record<string, number>;
+  totalDurationMs: number;
+}
+
+export interface RlhfProposal {
+  proposalId:          string;
+  proposedUpdate:      unknown;
+  requiresHumanApproval: true;   // STRUCTURAL: literal true type — cannot be false
+  status:              "pending_review";
+  createdAt:           string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Per-stage timing wrapper
+// ─────────────────────────────────────────────────────────────
+async function timedStage<T>(
+  stageName:  string,
+  timings:    Record<string, number>,
+  fn:         () => Promise<T>
+): Promise<T> {
+  const start  = Date.now();
+  try {
+    return await fn();
+  } finally {
+    timings[stageName] = Date.now() - start;
+  }
+}
+
+// Non-critical stage: times + error-isolates — never throws
+async function timedOptionalStage<T>(
+  stageName:  string,
+  timings:    Record<string, number>,
+  fn:         () => Promise<T>,
+  fallback:   T,
+  onError?:   (err: Error) => void
+): Promise<{ result: T; failed: boolean; error?: string }> {
+  const start = Date.now();
+  try {
+    const result = await fn();
+    timings[stageName] = Date.now() - start;
+    return { result, failed: false };
+  } catch (err) {
+    timings[stageName] = Date.now() - start;
+    const message = err instanceof Error ? err.message : String(err);
+    onError?.(err instanceof Error ? err : new Error(message));
+    console.error(`[FinalPipeline] Optional stage "${stageName}" failed:`, message);
+    return { result: fallback, failed: true, error: message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RLHF gate assertion — structural enforcement
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Validates that an RLHF proposal has the required gating fields.
+ * This is a RUNTIME assertion, not a comment.
+ *
+ * A proposal that doesn't pass this check is never stored or applied.
+ * The TypeScript type RlhfProposal uses `requiresHumanApproval: true`
+ * (literal type) — this function is the runtime equivalent.
+ */
+function assertRlhfGated(proposal: unknown): asserts proposal is RlhfProposal {
+  if (!proposal || typeof proposal !== "object") {
+    throw new Error("[RLHF] Proposal is not an object");
+  }
+  const p = proposal as Record<string, unknown>;
+
+  if (p.requiresHumanApproval !== true) {
+    throw new Error(
+      `[RLHF] GOVERNANCE VIOLATION: Proposal has requiresHumanApproval=${p.requiresHumanApproval}. ` +
+      `All RLHF proposals must require human approval. This proposal will not be stored.`
+    );
+  }
+  if (p.status !== "pending_review") {
+    throw new Error(
+      `[RLHF] GOVERNANCE VIOLATION: Proposal status is "${p.status}" — must be "pending_review". ` +
+      `No proposal may be applied without explicit human approval.`
+    );
+  }
+  if (!p.proposalId || typeof p.proposalId !== "string") {
+    throw new Error("[RLHF] Proposal missing proposalId — cannot be traced or audited");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main pipeline
+// ─────────────────────────────────────────────────────────────
+
+export async function runFinalPipeline(
+  input:   PipelineInput,
+  traceId: string
+): Promise<PipelineOutput> {
+  const pipelineStart = Date.now();
+  const timings: Record<string, number> = {};
+  let   degraded = false;
+
+  await auditStep({
+    traceId, step: "final_pipeline_start",
+    input:  { patientId: input.patientId, sessionId: input.sessionId },
+    output: null, metadata: {},
+  });
+
+  // ── Stage 1: NLP intake — CRITICAL ────────────────────────
+  // Short-circuits if complaint is empty
+  const nlpResult = await timedStage("stage1_nlp_intake", timings, async () => {
+    const result = await runNlpIntake(input.rawText);
+    if (!result.complaint || result.symptoms.length === 0) {
+      throw new Error(
+        `[Pipeline] Stage 1 NLP produced empty complaint from input: "${input.rawText.slice(0, 100)}". ` +
+        `Pipeline cannot proceed without a parseable complaint.`
+      );
+    }
+    return result;
+  });
+  // If stage 1 throws, the entire pipeline fails — this is intentional.
+  // An empty complaint cannot safely proceed through clinical stages.
+
+  // ── Stage 2: Multi-complaint fusion — CRITICAL ─────────────
+  const fusedComplaints = await timedStage("stage2_fusion", timings,
+    () => runMultiComplaintFusion(nlpResult, input.answers)
+  );
+
+  // ── Stage 3: Hybrid reasoning — CRITICAL ──────────────────
+  const reasoningResult = await timedStage("stage3_reasoning", timings,
+    () => runHybridReasoning(fusedComplaints, input)
+  );
+
+  // ── Stage 4: Safety pipeline — CRITICAL ───────────────────
+  // Safety pipeline has its own error isolation internally (per-check try/catch)
+  // but the stage itself is critical — if it completely fails, block the request
+  const safetyResult = await timedStage("stage4_safety", timings, () =>
+    runSafetyPipeline({
+      patientId:   input.patientId,
+      ageYears:    input.ageYears,
+      isPregnant:  input.isPregnant,
+      symptoms:    nlpResult.symptoms,
+      vitalSigns:  input.vitalSigns,
+      answers:     input.answers,
+      mentalHealthFlags: reasoningResult.mentalHealthFlags,
+    }, traceId)
+  );
+
+  // Hard stop: if safety pipeline says ER_NOW, return immediately
+  // Don't run explainability, RLHF, or FHIR — just get help
+  if (safetyResult.finalDisposition === "ER_NOW") {
+    await auditStep({
+      traceId, step: "final_pipeline_safety_hard_stop",
+      input:  { patientId: input.patientId },
+      output: { disposition: "ER_NOW", triggeredChecks: safetyResult.triggeredChecks.map(c => c.checkName) },
+      metadata: {},
+    });
+
+    return buildEmergencyOutput(input, safetyResult, traceId, timings, Date.now() - pipelineStart);
+  }
+
+  // ── Stage 5: Explainability — OPTIONAL ────────────────────
+  const explainResult = await timedOptionalStage(
+    "stage5_explainability", timings,
+    () => runExplainability(reasoningResult, safetyResult),
+    null,
+    err => { degraded = true; console.warn("[Pipeline] Explainability unavailable:", err.message); }
+  );
+
+  // ── Stage 6: RLHF proposal — OPTIONAL + GATED ─────────────
+  let rlhfProposal: RlhfProposal | null = null;
+  const rlhfStage = await timedOptionalStage(
+    "stage6_rlhf", timings,
+    async () => {
+      const raw = await proposeRlhfUpdate(reasoningResult, safetyResult, input);
+      // RUNTIME governance assertion — not just a comment
+      assertRlhfGated(raw);
+      // Audit the proposal — creates the paper trail before any human review
+      await auditStep({
+        traceId, step: "rlhf_proposal_created",
+        input:  { patientId: input.patientId },
+        output: { proposalId: raw.proposalId, status: raw.status },
+        metadata: { requiresHumanApproval: true },
+      });
+      return raw;
+    },
+    null,
+    err => {
+      degraded = true;
+      // Governance violation in RLHF is a hard alert, not just a degraded flag
+      if (err.message.includes("GOVERNANCE VIOLATION")) {
+        console.error("[Pipeline] RLHF GOVERNANCE VIOLATION:", err.message);
+      }
+    }
+  );
+  rlhfProposal = rlhfStage.result;
+
+  // ── Stage 7: Security log — OPTIONAL ──────────────────────
+  await timedOptionalStage(
+    "stage7_security_log", timings,
+    () => logSecurityEvent({ traceId, patientId: input.patientId, actorId: input.actorId }),
+    undefined,
+    () => { degraded = true; }
+  );
+
+  // ── Stage 8: FHIR sync — NON-BLOCKING, error captured ─────
+  // "Non-blocking" means: the patient response is not held waiting for FHIR.
+  // But: errors are explicitly captured and surfaced in the output + audit.
+  // A failed FHIR sync is a data integrity issue that operations must know about.
+  let fhirSynced = false;
+  let fhirError: string | undefined;
+
+  const fhirStage = await timedOptionalStage(
+    "stage8_fhir_sync", timings,
+    () => syncToFhir(reasoningResult, safetyResult, input, traceId),
+    false,
+    async (err) => {
+      fhirError = err.message;
+      degraded  = true;
+      // FHIR failure is not silent — alert operations
+      await auditStep({
+        traceId, step: "fhir_sync_failed",
+        input:  { patientId: input.patientId },
+        output: null,
+        metadata: { error: err.message, alert: "FHIR sync failure — EHR may be out of sync" },
+      }).catch(() => {});
+      console.error(`[Pipeline] FHIR sync failed for patient ${input.patientId}:`, err.message);
+    }
+  );
+  fhirSynced = fhirStage.result as boolean;
+
+  const totalDurationMs = Date.now() - pipelineStart;
+
+  await auditStep({
+    traceId, step: "final_pipeline_complete",
+    input:  { patientId: input.patientId },
+    output: { disposition: safetyResult.finalDisposition, degraded, totalDurationMs },
+    metadata: { stageTimings: timings },
+  });
+
+  return {
+    patientId:       input.patientId,
+    traceId,
+    safetyResult,
+    differential:    reasoningResult.differential,
+    reasoning:       reasoningResult.summary,
+    explainability:  explainResult.result,
+    rlhfProposal,
+    fhirSynced,
+    fhirError,
+    degraded,
+    stageTimings:    timings,
+    totalDurationMs,
+  };
+}
+
+function buildEmergencyOutput(
+  input:       PipelineInput,
+  safety:      import("./safetyPipeline").SafetyPipelineResult,
+  traceId:     string,
+  timings:     Record<string, number>,
+  durationMs:  number
+): PipelineOutput {
+  return {
+    patientId:       input.patientId,
+    traceId,
+    safetyResult:    safety,
+    differential:    [],
+    reasoning:       "Pipeline stopped at safety gate — immediate emergency care required",
+    explainability:  null,
+    rlhfProposal:    null,
+    fhirSynced:      false,
+    degraded:        false,
+    stageTimings:    timings,
+    totalDurationMs: durationMs,
+  };
+}
+
+D) Test Cases
+typescript// ── Safety check ordering: structurally enforced ──────────────
+// Re-order the registration array — execution order must not change
+const executionOrder: string[] = [];
+ORDERED_CHECKS.forEach(c => executionOrder.push(c.name));
+expect(executionOrder[0]).toBe("sepsis_qsofa");        // priority 10 always first
+expect(executionOrder[1]).toBe("pediatric_pews");      // priority 20 always second
+expect(executionOrder[2]).toBe("obstetric_emergency"); // priority 30 always third
+expect(executionOrder[3]).toBe("mental_health_suicide_risk"); // priority 40
+expect(executionOrder[4]).toBe("hybrid_conflict_resolver");  // priority 50
+
+// Duplicate priority registration throws at module load
+expect(() => {
+  const checks = [
+    { priority: 10, name: "check_a", shortCircuit: false, handler: async () => ({} as any) },
+    { priority: 10, name: "check_b", shortCircuit: false, handler: async () => ({} as any) },
+  ];
+  const priorities = checks.map(c => c.priority);
+  if (new Set(priorities).size !== priorities.length) throw new Error("Duplicate priority");
+}).toThrow("Duplicate priority");
+
+// ── Sepsis short-circuits: lower checks don't run ─────────────
+const sepsisCtx: SafetyContext = {
+  patientId: "P001",
+  ageYears: 45,
+  symptoms: ["altered_mental_status"],
+  vitalSigns: { respiratoryRate: 24, gcs: 13, systolicBp: 95 },  // qSOFA = 3
+  answers: {},
+};
+const sepsisResult = await runSafetyPipeline(sepsisCtx, "trace-001");
+expect(sepsisResult.finalDisposition).toBe("ER_NOW");
+expect(sepsisResult.shortCircuited).toBe(true);
+// Only the sepsis check ran — pipeline stopped
+expect(sepsisResult.allResults).toHaveLength(1);
+expect(sepsisResult.allResults[0].checkName).toBe("sepsis_qsofa");
+
+// ── Safety check error → conservative escalation, not skip ───
+jest.spyOn(safetyModule, "computeQsofa").mockImplementation(() => { throw new Error("Scoring error"); });
+const errorCtx: SafetyContext = { patientId: "P002", symptoms: [], answers: {} };
+const errorResult = await runSafetyPipeline(errorCtx, "trace-002");
+const sepsisCheck = errorResult.allResults.find(r => r.checkName === "sepsis_qsofa");
+expect(sepsisCheck?.triggered).toBe(true);     // fail-safe: error = triggered
+expect(sepsisCheck?.disposition).toBe("URGENT"); // conservative escalation, not CONTINUE
+
+// ── RLHF governance: requiresHumanApproval=false throws ───────
+expect(() => assertRlhfGated({
+  proposalId: "p-001",
+  requiresHumanApproval: false,   // VIOLATION
+  status: "pending_review",
+  proposedUpdate: {},
+  createdAt: new Date().toISOString(),
+})).toThrow("GOVERNANCE VIOLATION");
+
+// Valid proposal passes
+expect(() => assertRlhfGated({
+  proposalId: "p-002",
+  requiresHumanApproval: true,
+  status: "pending_review",
+  proposedUpdate: {},
+  createdAt: new Date().toISOString(),
+})).not.toThrow();
+
+// ── Stage 1 empty complaint → pipeline short-circuits ─────────
+jest.spyOn(nlpModule, "runNlpIntake").mockResolvedValueOnce({ complaint: null, symptoms: [] });
+await expect(runFinalPipeline(mockInput, "trace-003")).rejects.toThrow("empty complaint");
+
+// ── FHIR failure → captured in output, not thrown ─────────────
+jest.spyOn(fhirModule, "syncToFhir").mockRejectedValueOnce(new Error("FHIR endpoint unreachable"));
+const fhirFailResult = await runFinalPipeline(mockInput, "trace-004");
+expect(fhirFailResult.fhirSynced).toBe(false);
+expect(fhirFailResult.fhirError).toContain("unreachable");
+expect(fhirFailResult.degraded).toBe(true);
+// Pipeline still returned a complete result
+expect(fhirFailResult.differential).toBeDefined();
+expect(fhirFailResult.safetyResult).toBeDefined();
+
+// ── Per-stage timings present for every stage ─────────────────
+const timedResult = await runFinalPipeline(mockInput, "trace-005");
+const expectedStages = [
+  "stage1_nlp_intake", "stage2_fusion", "stage3_reasoning",
+  "stage4_safety", "stage5_explainability", "stage6_rlhf",
+  "stage7_security_log", "stage8_fhir_sync",
+];
+for (const stage of expectedStages) {
+  expect(typeof timedResult.stageTimings[stage]).toBe("number");
+  expect(timedResult.stageTimings[stage]).toBeGreaterThanOrEqual(0);
+}
+// Sum of stages should approximately equal total
+const stageSum = Object.values(timedResult.stageTimings).reduce((a, b) => a + b, 0);
+expect(timedResult.totalDurationMs).toBeGreaterThanOrEqual(stageSum * 0.9);
+The most clinically dangerous gap is the safety check ordering being enforced only by comments. The scenario where this breaks in practice isn't a malicious developer — it's an IDE that auto-sorts an import block, a merge conflict that resolves incorrectly, or a well-intentioned refactor that groups "similar" checks together. The structural enforcement — sorting by numeric priority at module load time with a duplicate-detection assertion — means none of those scenarios can silently reorder the checks. The ordering is a property of the data, not the code layout.Want to be notified when Claude responds?NotifySonnet 4.6Claude is AI and can make mista

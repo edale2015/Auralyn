@@ -179,38 +179,40 @@ export async function runTelemedicineAssistant(
   const lastMemory = getLastMemory(caseId)
   const iteration = (lastMemory?.iteration ?? 0) + 1
 
-  const safetyAlerts = timeEngineSync("safety_alerts", () =>
-    checkSafetyAlerts(
-      incomingMessage ?? presentSymptoms.join(" "),
-      presentSymptoms
-    )
-  )
-
-  const dxDifferential = complaint
-    ? timeEngineSync("differential", () =>
-        getUpdatedDifferential(complaint, presentSymptoms, incomingMessage ?? "")
+  // ── Phase 1: Independent engines — run concurrently (Packet 15) ─────────────
+  // safety_alerts and differential do not depend on each other and can be
+  // started simultaneously. Promise.allSettled ensures one failure doesn't
+  // prevent the other result from being used.
+  const [safetySettled, diffSettled] = await Promise.allSettled([
+    timeEngine("safety_alerts", async () =>
+      checkSafetyAlerts(
+        incomingMessage ?? presentSymptoms.join(" "),
+        presentSymptoms
       )
-    : differential.map((d: any) => ({
-        rank: 1,
-        diagnosis: d.diagnosis,
-        confidence: d.score ?? 0.5,
-        keyFeatures: [],
-        rulingIn: [],
-        rulingOut: [],
-        urgency: "routine" as const,
-      }))
+    ),
+    complaint
+      ? timeEngine("differential", async () =>
+          getUpdatedDifferential(complaint, presentSymptoms, incomingMessage ?? "")
+        )
+      : Promise.resolve(
+          differential.map((d: any) => ({
+            rank: 1,
+            diagnosis: d.diagnosis,
+            confidence: d.score ?? 0.5,
+            keyFeatures: [],
+            rulingIn: [],
+            rulingOut: [],
+            urgency: "routine" as const,
+          }))
+        ),
+  ])
+
+  const safetyAlerts = safetySettled.status === "fulfilled" ? safetySettled.value : []
+  const dxDifferential = diffSettled.status === "fulfilled" ? diffSettled.value : []
 
   const topDx = dxDifferential[0]?.diagnosis ?? null
 
-  const resourceList = topDx
-    ? timeEngineSync("resources", () =>
-        getResourceRecommendations(
-          dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
-          5
-        )
-      )
-    : []
-
+  // triageCase is built from Phase 1 results and is needed by urgency engine
   const triageCase = {
     caseId,
     complaint: complaint ?? "unknown",
@@ -220,7 +222,50 @@ export async function runTelemedicineAssistant(
     riskScore: dxDifferential[0]?.confidence ?? 0,
     createdAt: new Date().toISOString(),
   }
-  const urgencyScore = timeEngineSync("triage_urgency", () => computeUrgencyScore(triageCase))
+
+  // ── Phase 2: All engines dependent only on Phase 1 — run concurrently ────────
+  // resources, urgency, contradiction, and adaptive questions are independent
+  // of each other. Running them in parallel removes their sequential wait.
+  const [resourceSettled, urgencySettled, contradictionSettled, adaptiveSettled] =
+    await Promise.allSettled([
+      topDx
+        ? timeEngine("resources", async () =>
+            getResourceRecommendations(
+              dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
+              5
+            )
+          )
+        : Promise.resolve([] as any[]),
+      timeEngine("triage_urgency", async () => computeUrgencyScore(triageCase)),
+      topDx
+        ? timeEngine("contradiction", async () =>
+            computeContradictionReport({
+              topDiagnosis: topDx,
+              differential: dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
+              presentSymptoms,
+              answeredQuestions: (state.answeredQuestions ?? []).map((q: any) => ({
+                questionId: q.questionId ?? q.id ?? "",
+                answer: String(q.answer ?? ""),
+              })),
+            })
+          )
+        : Promise.resolve(null),
+      complaint
+        ? getWeightedAdaptiveQuestions(
+            complaint,
+            presentSymptoms,
+            [],
+            dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence }))
+          ).catch(() => [] as any[])
+        : Promise.resolve([] as any[]),
+    ])
+
+  const resourceList       = resourceSettled.status       === "fulfilled" ? resourceSettled.value       : []
+  const urgencyScore       = urgencySettled.status         === "fulfilled" ? urgencySettled.value         : 0.5
+  const contradictionReport = contradictionSettled.status === "fulfilled" ? contradictionSettled.value   : null
+  const adaptiveQuestions  = (
+    adaptiveSettled.status === "fulfilled" ? (adaptiveSettled.value as any[]) : []
+  ).slice(0, 5)
 
   const triageLevel =
     urgencyScore >= 0.85
@@ -232,36 +277,6 @@ export async function runTelemedicineAssistant(
       : urgencyScore >= 0.40
       ? "semi-urgent"
       : "routine"
-
-  const contradictionReport =
-    topDx
-      ? timeEngineSync("contradiction", () =>
-          computeContradictionReport({
-            topDiagnosis: topDx,
-            differential: dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence })),
-            presentSymptoms,
-            answeredQuestions: (state.answeredQuestions ?? []).map((q: any) => ({
-              questionId: q.questionId ?? q.id ?? "",
-              answer: String(q.answer ?? ""),
-            })),
-          })
-        )
-      : null
-
-  let adaptiveQuestions: any[] = []
-  if (complaint) {
-    try {
-      const weighted = await getWeightedAdaptiveQuestions(
-        complaint,
-        presentSymptoms,
-        [],
-        dxDifferential.map((d) => ({ diagnosis: d.diagnosis, score: d.confidence }))
-      )
-      adaptiveQuestions = weighted.slice(0, 5)
-    } catch {
-      adaptiveQuestions = []
-    }
-  }
 
   const contradictions = (contradictionReport?.contradictions ?? []).map((c) => ({
     diagnosis: topDx ?? "",
