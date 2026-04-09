@@ -1,0 +1,265 @@
+LAYER: AUTONOMOUS OVERSIGHT AGENT
+
+Think of this as:
+
+“AI Chief Medical Officer + Site Reliability Engineer + QA Director”
+
+It does NOT replace clinicians.
+It protects them from system failure.
+
+🔧 server/oversight/autonomousOversightAgent.ts
+import { detectClinicalDrift } from "../meta/driftDetector";
+import { clusterFailures } from "../meta/failureClusterer";
+import { generateSystemAlerts } from "../meta/selfHealingAgent";
+import { auditStep } from "../audit/auditLogger";
+
+export interface OversightInput {
+  outcomes: any[];
+  systemMetrics: {
+    latency: number;
+    errorRate: number;
+    fhirFailures: number;
+    safetyMismatchRate: number;
+  };
+  kbVersion: string;
+  timestamp: number;
+}
+
+export interface OversightDecision {
+  alerts: string[];
+  actions: string[];
+  severity: "low" | "medium" | "high" | "critical";
+  summary: string;
+}
+
+export async function runOversightAgent(
+  input: OversightInput,
+  traceId: string
+): Promise<OversightDecision> {
+
+  const alerts: string[] = [];
+  const actions: string[] = [];
+
+  // ─────────────────────────────────────────────
+  // 1. Drift Detection
+  // ─────────────────────────────────────────────
+  const drift = detectClinicalDrift(input.outcomes);
+
+  if (drift.driftDetected) {
+    alerts.push(`Clinical drift detected: ${drift.driftMagnitude}`);
+    actions.push("Trigger meta-learning cycle");
+  }
+
+  // ─────────────────────────────────────────────
+  // 2. Failure Clustering
+  // ─────────────────────────────────────────────
+  const clusters = clusterFailures(input.outcomes);
+
+  if (clusters.length > 0) {
+    alerts.push(`Top failure cluster: ${clusters[0][0]}`);
+    actions.push("Review cluster-specific rules");
+  }
+
+  // ─────────────────────────────────────────────
+  // 3. System Alerts
+  // ─────────────────────────────────────────────
+  const systemAlerts = generateSystemAlerts(input.systemMetrics);
+  alerts.push(...systemAlerts);
+
+  if (input.systemMetrics.latency > 3000) {
+    actions.push("Reduce cognitive budget");
+  }
+
+  if (input.systemMetrics.fhirFailures > 0.1) {
+    actions.push("Switch FHIR to retry queue");
+  }
+
+  if (input.systemMetrics.safetyMismatchRate > 0) {
+    actions.push("BLOCK deployments immediately");
+  }
+
+  // ─────────────────────────────────────────────
+  // 4. Severity Scoring
+  // ─────────────────────────────────────────────
+  let severity: OversightDecision["severity"] = "low";
+
+  if (alerts.length > 3) severity = "medium";
+  if (input.systemMetrics.safetyMismatchRate > 0) severity = "high";
+  if (input.systemMetrics.safetyMismatchRate > 0.02) severity = "critical";
+
+  const decision: OversightDecision = {
+    alerts,
+    actions,
+    severity,
+    summary: `Oversight detected ${alerts.length} issues with severity ${severity}`
+  };
+
+  await auditStep({
+    traceId,
+    step: "oversight_decision",
+    input,
+    output: decision,
+    metadata: {}
+  });
+
+  return decision;
+}
+🧠 WHAT THIS AGENT DOES (IN PLAIN TERMS)
+
+It continuously asks:
+
+“Are we getting worse?”
+“Where are we failing?”
+“Is anything dangerous?”
+“Should we slow down or stop?”
+
+And then:
+
+👉 Suggests OR triggers actions
+
+🚀 CONTROL TOWER INTEGRATION
+
+Now we wire this into your dashboards so it becomes visible and actionable
+
+🔧 API Layer
+server/routes/oversightRoutes.ts
+import express from "express";
+import { runOversightAgent } from "../oversight/autonomousOversightAgent";
+
+const router = express.Router();
+
+router.post("/oversight/run", async (req, res) => {
+  const { input, traceId } = req.body;
+
+  try {
+    const decision = await runOversightAgent(input, traceId);
+    res.json(decision);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+export default router;
+🧠 CONTROL TOWER UI PANEL (React)
+
+This plugs directly into your Mission Control / System Control Tower
+
+🔧 client/components/OversightPanel.tsx
+import { useEffect, useState } from "react";
+
+export default function OversightPanel() {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/oversight/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        input: window.__SYSTEM_METRICS__,
+        traceId: "oversight-live"
+      })
+    })
+      .then(res => res.json())
+      .then(setData);
+  }, []);
+
+  if (!data) return <div>Loading Oversight...</div>;
+
+  return (
+    <div className="p-4 bg-black text-white rounded-2xl">
+      <h2 className="text-xl font-bold">🧠 Oversight Agent</h2>
+
+      <div className={`mt-2 text-${getColor(data.severity)}`}>
+        Severity: {data.severity}
+      </div>
+
+      <h3 className="mt-4 font-semibold">Alerts</h3>
+      <ul>
+        {data.alerts.map((a: string, i: number) => (
+          <li key={i}>⚠️ {a}</li>
+        ))}
+      </ul>
+
+      <h3 className="mt-4 font-semibold">Recommended Actions</h3>
+      <ul>
+        {data.actions.map((a: string, i: number) => (
+          <li key={i}>➡️ {a}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function getColor(severity: string) {
+  switch (severity) {
+    case "critical": return "red-500";
+    case "high": return "orange-400";
+    case "medium": return "yellow-300";
+    default: return "green-400";
+  }
+}
+🧠 CONTROL TOWER ENHANCEMENTS (HIGH VALUE)
+
+Add these panels:
+
+🔥 1. “SYSTEM HEALTH STRIP” (Top Banner)
+
+Displays:
+
+KB version
+drift status
+safety mismatch rate
+latency
+🟢 Healthy | KB v12a3 | Drift: 0.01 | Safety: OK | Latency: 820ms
+🔥 2. “FAILURE HEATMAP”
+X-axis: complaints
+Y-axis: error rate
+Color: severity
+🔥 3. “SAFETY INTERRUPT PANEL”
+
+Shows:
+
+ER_NOW triggers
+missed ER cases (CRITICAL)
+🔥 4. “LEARNING PIPELINE PANEL”
+
+Shows:
+
+pending RLHF proposals
+golden case pass/fail
+meta-learning suggestions
+🔥 5. “AGENT PERFORMANCE BOARD”
+
+Tracks:
+
+reasoning engine accuracy
+debate disagreement rate
+next-question effectiveness
+🧠 OPTIONAL: AUTO-ACTION MODE (VERY POWERFUL)
+
+You can allow the oversight agent to ACT:
+
+if (decision.severity === "critical") {
+  activateGlobalSafetyGate();
+  pauseDeployments();
+}
+⚡ WHAT YOU NOW HAVE
+
+This is no longer just:
+
+a system that works
+
+It is now:
+
+🧠 a system that watches itself think
+
+🧠 FINAL ARCHITECTURE
+Input → Pipeline → Safety → Reasoning
+        ↓
+   Oversight Agent
+        ↓
+Meta Learning → Simulation → Approval → Update
+        ↓
+ Control Tower (Human + AI Governance)

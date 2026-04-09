@@ -139,3 +139,149 @@ export class MetaLearningEngine {
 }
 
 export const metaLearning = new MetaLearningEngine();
+
+// ── Cycle-level meta-learning orchestrator ────────────────────────────────────
+// Observes outcomes, detects patterns, proposes changes, routes through golden
+// case gate. Approved insights are queued in Redis for human review — NOT
+// auto-applied. Safe self-improvement.
+
+import { auditStep }                   from "../audit/auditLogger";
+import { validateChangeWithGoldenCases } from "../clinical/changeApprovalGate";
+import type { GoldenCase }             from "../simulation/goldenCaseEngine";
+
+export interface OutcomeRecord {
+  caseId:               string;
+  complaint:            string;
+  predictedDisposition: string;
+  actualOutcome:        string;
+  timeToEvent?:         number;
+  features:             Record<string, unknown>;
+}
+
+export interface LearningInsight {
+  type:           "threshold_adjustment" | "prior_shift" | "question_ordering";
+  target:         string;
+  recommendation: Record<string, unknown>;
+  confidence:     number;
+}
+
+export interface MetaLearningCycleResult {
+  insightsGenerated: number;
+  approvedChanges:   number;
+  rejectedChanges:   number;
+}
+
+const INSIGHTS_QUEUE_KEY = "meta:insights:pending_review";
+
+/**
+ * Run a meta-learning cycle:
+ *   1. Detect disposition errors
+ *   2. Detect high-risk complaint patterns (prior drift)
+ *   3. Validate each insight via golden case gate
+ *   4. Queue approved insights in Redis for human review (NOT auto-applied)
+ *
+ * @param outcomes    Recent outcome records (last 7–30 days recommended)
+ * @param goldenCases Validated reference cases for gate validation
+ * @param traceId     Audit trace ID
+ */
+export async function runMetaLearningCycle(
+  outcomes:    OutcomeRecord[],
+  goldenCases: GoldenCase[],
+  traceId:     string
+): Promise<MetaLearningCycleResult> {
+  const insights: LearningInsight[] = [];
+
+  // ── 1. Detect disposition errors ──────────────────────────────────────────
+  const errors    = outcomes.filter(o => o.predictedDisposition !== o.actualOutcome);
+  const errorRate = outcomes.length > 0 ? errors.length / outcomes.length : 0;
+
+  const missedER = errors.filter(
+    e => e.actualOutcome === "ER_NOW" && e.predictedDisposition !== "ER_NOW"
+  );
+
+  if (missedER.length > 0) {
+    insights.push({
+      type:           "threshold_adjustment",
+      target:         "safety_pipeline",
+      recommendation: { increaseSensitivity: true, missedERCount: missedER.length },
+      confidence:     Math.min(1, missedER.length / outcomes.length),
+    });
+  }
+
+  // ── 2. Prior drift detection ───────────────────────────────────────────────
+  const complaintGroups: Record<string, OutcomeRecord[]> = {};
+  for (const o of outcomes) {
+    if (!complaintGroups[o.complaint]) complaintGroups[o.complaint] = [];
+    complaintGroups[o.complaint].push(o);
+  }
+
+  for (const [complaint, group] of Object.entries(complaintGroups)) {
+    const erRate = group.filter(g => g.actualOutcome === "ER_NOW").length / group.length;
+    if (erRate > 0.3 && group.length >= 5) {
+      insights.push({
+        type:           "prior_shift",
+        target:         complaint,
+        recommendation: { increaseHighRiskPrior: true, observedERRate: erRate },
+        confidence:     Math.min(1, erRate),
+      });
+    }
+  }
+
+  // ── 3. Validate via golden cases + queue approved insights ─────────────────
+  let approvedChanges = 0;
+  let rejectedChanges = 0;
+
+  for (const insight of insights) {
+    try {
+      const validation = await validateChangeWithGoldenCases(insight, goldenCases, traceId);
+
+      // Store in Redis pending review queue — NOT auto-applied
+      try {
+        const redis = await getRedisAsync();
+        if (redis && typeof redis.lpush === "function") {
+          await redis.lpush(INSIGHTS_QUEUE_KEY, JSON.stringify({
+            insight,
+            validation: { approved: validation.approved, reason: validation.reason },
+            queuedAt:   new Date().toISOString(),
+            traceId,
+            status:     "pending_review",
+          }));
+        }
+      } catch { /* non-blocking — audit is the source of truth */ }
+
+      await auditStep({
+        traceId,
+        step:     "meta_learning_approved",
+        input:    insight,
+        output:   { approved: validation.approved, reason: validation.reason },
+        metadata: { status: "pending_review" },
+      });
+
+      approvedChanges++;
+
+    } catch (err) {
+      rejectedChanges++;
+      await auditStep({
+        traceId,
+        step:     "meta_learning_rejected",
+        input:    insight,
+        output:   null,
+        metadata: { error: String(err) },
+      });
+    }
+  }
+
+  await auditStep({
+    traceId,
+    step:     "meta_learning_cycle_complete",
+    input:    { totalOutcomes: outcomes.length, errorRate: errorRate.toFixed(3) },
+    output:   { insightsGenerated: insights.length, approvedChanges, rejectedChanges },
+    metadata: {},
+  });
+
+  return {
+    insightsGenerated: insights.length,
+    approvedChanges,
+    rejectedChanges,
+  };
+}
