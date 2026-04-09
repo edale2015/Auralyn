@@ -14,8 +14,10 @@ import {
   HelpCircle, Lightbulb, BarChart3, Clock, Trophy, TriangleAlert,
   ArrowUpRight, ArrowDownRight, Gauge, Eye, Sparkles, Cpu, Timer, XCircle,
 } from "lucide-react";
-import HospitalBrainPanel   from "@/components/HospitalBrainPanel";
-import RegionalCommandGrid from "@/components/RegionalCommandGrid";
+import HospitalBrainPanel      from "@/components/HospitalBrainPanel";
+import RegionalCommandGrid   from "@/components/RegionalCommandGrid";
+import NationalCommandCenter from "@/components/NationalCommandCenter";
+import GlobalCommandCenter   from "@/components/GlobalCommandCenter";
 
 function RiskBadge({ level }: { level: string }) {
   const map: Record<string, string> = {
@@ -292,7 +294,9 @@ export default function BrainCommandCenter() {
           <TabsTrigger value="qa" data-testid="tab-qa">QA Audit</TabsTrigger>
           <TabsTrigger value="thresholds" data-testid="tab-thresholds">Meta-Learning</TabsTrigger>
           <TabsTrigger value="hospital-brain" data-testid="tab-hospital-brain">Hospital Brain</TabsTrigger>
-          <TabsTrigger value="regional" data-testid="tab-regional">Regional</TabsTrigger>
+          <TabsTrigger value="regional"  data-testid="tab-regional">Regional</TabsTrigger>
+          <TabsTrigger value="national" data-testid="tab-national">National</TabsTrigger>
+          <TabsTrigger value="global"   data-testid="tab-global">Global</TabsTrigger>
         </TabsList>
 
         <TabsContent value="command" className="mt-4">
@@ -1132,6 +1136,14 @@ export default function BrainCommandCenter() {
 
         <TabsContent value="regional" className="mt-4">
           <RegionalCommandGrid />
+        </TabsContent>
+
+        <TabsContent value="national" className="mt-4">
+          <NationalCommandCenter />
+        </TabsContent>
+
+        <TabsContent value="global" className="mt-4">
+          <GlobalCommandCenter />
         </TabsContent>
       </Tabs>
     </div>

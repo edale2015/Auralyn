@@ -2066,6 +2066,14 @@ export async function registerRoutes(
   app.use("/api", regionalRouter);
   console.log("[Regional] Orchestrator at /api/regional/orchestrate");
 
+  const { default: nationalRouter } = await import("./routes/nationalRoutes");
+  app.use("/api", nationalRouter);
+  console.log("[National] Orchestrator at /api/national/orchestrate");
+
+  const { default: globalRouter } = await import("./routes/globalRoutes");
+  app.use("/api", globalRouter);
+  console.log("[Global] Orchestrator at /api/global/orchestrate");
+
   const { default: oversightRoutes } = await import("./routes/oversightRoutes");
   app.use("/api", oversightRoutes);
   console.log("[Oversight] Autonomous oversight agent at /api/oversight/run");

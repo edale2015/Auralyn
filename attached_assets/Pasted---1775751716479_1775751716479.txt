@@ -1,0 +1,58 @@
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# PACKET 20 â€” Automation Template Studio  [SMALL GRANULARITY]
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+**Block name:** Browser Automation Template Backend
+
+**What this block does:**
+`templateStore.ts` persists recorded browser automation templates to PostgreSQL. `templateRecorder.ts` records Playwright actions into a replayable template. `selectorHealing.ts` tries alternative selectors when a recorded selector no longer exists on the page. `templateRegistry.ts` holds a static list of built-in templates.
+
+**Runtime context:** TypeScript / Express / Playwright / PostgreSQL
+
+**Known issues:**
+- `selectorHealing.ts` tries selectors sequentially with `page.locator().count()` calls â€” each is a round-trip to the browser, N candidates = N round trips
+- `normalizeKey()` in `templateRecorder.ts` produces camelCase from form labels â€” but two different labels that normalize to the same key collide silently
+- `templateRegistry.ts` is a static array â€” there's no validation that template selectors actually exist on their target URLs
+
+**Original selectorHealing.ts:**
+```typescript
+export async function healSelector(page: Page, selector: string): Promise<string | null> {
+  try {
+    const found = await page.locator(selector).count();
+    if (found > 0) return selector;
+  } catch {}
+
+  if (selector.startsWith("#")) {
+    const id = selector.slice(1);
+    const candidates = [
+      `[name="${id}"]`, `[aria-label="${id}"]`, `[placeholder*="${id}" i]`,
+      `label:has-text("${id}") + input`, `label:has-text("${id}") + select`,
+    ];
+    for (const candidate of candidates) {
+      try {
+        const found = await page.locator(candidate).count();
+        if (found > 0) return candidate;
+      } catch {}
+    }
+  }
+  return null;
+}
+```
+
+**Claude prompt:**
+```
+Review this browser automation template backend.
+
+Specific questions:
+1. selectorHealing.ts makes N sequential browser round-trips. How do you batch these into a single page.evaluate() call to check all candidates at once?
+2. normalizeKey() converts form labels to camelCase. What happens when "First Name" and "First name" both appear on the same form? Collision detection?
+3. templateRegistry.ts is a static array with no URL validation. How would you add a health-check that verifies each template's selectors work against their target URL?
+4. templateRecorder.ts records Playwright actions â€” does it handle dynamic content (e.g. a dropdown that loads options asynchronously)?
+5. templateStore.ts uses ON CONFLICT DO UPDATE â€” if an existing template is overwritten, is the old definition preserved anywhere for rollback?
+
+Output:
+A) Performance and correctness issues
+B) Rewritten healSelector using page.evaluate() for batch checking
+C) normalizeKey collision detection
+D) Template validation health-check design
+```

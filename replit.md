@@ -501,6 +501,38 @@ Intelligence: uncertainty, debate, requery, counterfactuals, trajectory, bayesia
 New engines: fusion, uncertaintyLevel, uncertaintyDrivers, safetyGovernorOverride, safetyGovernorReason
 Explainability: explanation (SHAP factors + narrative), nextBestQuestions, temporalHistory
 
+### National Intelligence Layer (Packet: National Network Layer)
+
+`server/national/` — 7 modules:
+- `federationEngine.ts` — aggregates all regional states; computes totalPatients, totalER, avgStrainScore, critical/surge/stable region tiers
+- `crossRegionLearning.ts` — merges population complaint signals across regions; surfaces top 10 national complaints, confidence scores, cross-regional spread alerts
+- `nationalLoadBalancer.ts` — balances demand across regions; recommends lowest-strain region, identifies overflow regions, generates cross-region transfer suggestions
+- `policyLayer.ts` — enforces US state-level telehealth regulations (NY supervision, TX/ILC compact, CA NP independence); international fallback
+- `scalingController.ts` — autonomous scaling actions triggered by patient volume, strain score, ER rate, critical regions, pattern alerts
+- `nationalPopulation.ts` — CDC-like national epidemiological surveillance; watch (20+ cases), alert (50+ across 3+ regions), pandemic_signal (200+ or 80% of regions)
+- `nationalOrchestrator.ts` — coordinates all 6 national modules; full national orchestration output
+
+API: `POST /api/national/orchestrate` — accepts regional state array; returns federation, learning, load balance, policy, scaling, population outputs
+
+UI: `NationalCommandCenter.tsx` — federation grid with strain bars, load balancing panel, scaling actions by priority, cross-region learning signals, population clusters, policy snapshot
+
+### Global Intelligence Layer (Packet: Global/WHO-Scale)
+
+`server/global/` — 3 modules:
+- `globalOrchestrator.ts` — groups regions by continent; computes continent signals (volume, trend, avgStrain); identifies underloaded redistribution targets + overloaded regions; drives all 3 sub-modules
+- `pandemicEngine.ts` — 3 sub-engines: detectPandemicSignals (respiratory cluster: cough>200 AND fever>200; GI cluster: vomiting>150 AND diarrhea>150), simulateSpread (SIR model: R0, population, initialInfected → next-day/week/month/peak/herd), earlyWarningSystem (severity: none/watch/warning/critical + action)
+- `globalPolicyLayer.ts` — country-specific policy (US HIPAA, UK NHS, India LGPD, Brazil CFM, EU GDPR, AU MBS); default-deny for unknown jurisdictions
+
+API: `POST /api/global/orchestrate` — accepts regions with continent/country; returns continentSignals, pandemic, simulation, earlyWarning, redistribution, policy outputs
+
+UI: `GlobalCommandCenter.tsx` — continent trend grid, pandemic detection status, SIR simulation cards, early warning banner, redistribution targets, global policy snapshot
+
+### Full Intelligence Pipeline (complete)
+Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → National Orchestrator → Global Orchestrator
+
+### Test Coverage
+- 801 tests passing across 30 test files (added 64 new tests: 37 national, 27 global)
+
 ### Mission Control API (Extended)
 - `GET /api/mission/snapshot` — full system snapshot including liveAgentPerformance, driftEvents, shapHistory, activeCases
 - `GET /api/mission/agent-performance` — live win rates + drift events per agent
