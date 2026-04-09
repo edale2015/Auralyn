@@ -20,6 +20,7 @@ import {
   FileText, Stethoscope, CheckSquare, Clock, User,
 } from "lucide-react";
 import ExecutiveOpsButton from "@/components/ExecutiveOpsButton";
+import OversightPanel from "@/components/OversightPanel";
 
 const STATUS_COLORS: Record<string, string> = {
   good: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
@@ -769,6 +770,7 @@ export default function ExecutiveDashboard() {
           <TabsTrigger value="warehouse" data-testid="tab-warehouse">Warehouse</TabsTrigger>
           <TabsTrigger value="email" data-testid="tab-email">Email Preview</TabsTrigger>
           <TabsTrigger value="export" data-testid="tab-export">Export</TabsTrigger>
+          <TabsTrigger value="oversight" data-testid="tab-oversight">Oversight</TabsTrigger>
         </TabsList>
 
         <TabsContent value="trends"><TrendsPanel /></TabsContent>
@@ -783,6 +785,7 @@ export default function ExecutiveDashboard() {
         <TabsContent value="warehouse"><WarehouseExportPanel /></TabsContent>
         <TabsContent value="email"><EmailPreviewPanel /></TabsContent>
         <TabsContent value="export"><ExportPanel /></TabsContent>
+        <TabsContent value="oversight"><OversightPanel /></TabsContent>
       </Tabs>
     </div>
   );

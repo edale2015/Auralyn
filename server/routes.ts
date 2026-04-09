@@ -2057,6 +2057,11 @@ export async function registerRoutes(
   app.use("/api/domain", buildDomainRouters());
   console.log("[DomainRouters] Mounted at /api/domain/* (fast-path, registry, evolution, tenant config)");
 
+  // Autonomous oversight agent (system-level drift + failure clustering + health alerts)
+  const { default: oversightRoutes } = await import("./routes/oversightRoutes");
+  app.use("/api", oversightRoutes);
+  console.log("[Oversight] Autonomous oversight agent at /api/oversight/run");
+
   return httpServer;
 }
 

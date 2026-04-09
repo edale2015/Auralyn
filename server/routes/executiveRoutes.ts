@@ -10,6 +10,8 @@ import { Router }             from "express";
 import { getMetrics }         from "../monitoring/metricsStore";
 import { getDriftState }      from "../learning/driftControl";
 import { getAgentSummary }    from "../governance/agentRegistry";
+import { generateExecutiveReport, type ExecutiveInput } from "../executive/aiChiefMedicalOfficer";
+import { randomUUID }         from "crypto";
 
 const router = Router();
 
@@ -30,6 +32,25 @@ router.get("/executive", (_req, res) => {
     driftLocked:  drift.locked,
     timestamp:    new Date().toISOString(),
   });
+});
+
+// AI CMO narrative report endpoint
+router.post("/executive/report", async (req, res) => {
+  const traceId = req.headers["x-trace-id"] as string || randomUUID();
+  const { input } = req.body as { input?: ExecutiveInput };
+
+  if (!input || typeof input.metrics !== "object") {
+    res.status(400).json({ error: "Missing or invalid input.metrics" });
+    return;
+  }
+
+  try {
+    const report = await generateExecutiveReport(input, traceId);
+    res.json(report);
+  } catch (err) {
+    console.error("[ExecutiveRoutes] Report error:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 export default router;
