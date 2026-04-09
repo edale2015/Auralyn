@@ -2062,6 +2062,10 @@ export async function registerRoutes(
   app.use("/api", hospitalBrainRouter);
   console.log("[HospitalBrain] Orchestrator at /api/hospital-brain/run");
 
+  const { default: regionalRouter } = await import("./routes/regionalRoutes");
+  app.use("/api", regionalRouter);
+  console.log("[Regional] Orchestrator at /api/regional/orchestrate");
+
   const { default: oversightRoutes } = await import("./routes/oversightRoutes");
   app.use("/api", oversightRoutes);
   console.log("[Oversight] Autonomous oversight agent at /api/oversight/run");

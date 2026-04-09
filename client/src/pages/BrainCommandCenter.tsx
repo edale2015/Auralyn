@@ -14,7 +14,8 @@ import {
   HelpCircle, Lightbulb, BarChart3, Clock, Trophy, TriangleAlert,
   ArrowUpRight, ArrowDownRight, Gauge, Eye, Sparkles, Cpu, Timer, XCircle,
 } from "lucide-react";
-import HospitalBrainPanel from "@/components/HospitalBrainPanel";
+import HospitalBrainPanel   from "@/components/HospitalBrainPanel";
+import RegionalCommandGrid from "@/components/RegionalCommandGrid";
 
 function RiskBadge({ level }: { level: string }) {
   const map: Record<string, string> = {
@@ -291,6 +292,7 @@ export default function BrainCommandCenter() {
           <TabsTrigger value="qa" data-testid="tab-qa">QA Audit</TabsTrigger>
           <TabsTrigger value="thresholds" data-testid="tab-thresholds">Meta-Learning</TabsTrigger>
           <TabsTrigger value="hospital-brain" data-testid="tab-hospital-brain">Hospital Brain</TabsTrigger>
+          <TabsTrigger value="regional" data-testid="tab-regional">Regional</TabsTrigger>
         </TabsList>
 
         <TabsContent value="command" className="mt-4">
@@ -1126,6 +1128,10 @@ export default function BrainCommandCenter() {
 
         <TabsContent value="hospital-brain" className="mt-4">
           <HospitalBrainPanel />
+        </TabsContent>
+
+        <TabsContent value="regional" className="mt-4">
+          <RegionalCommandGrid />
         </TabsContent>
       </Tabs>
     </div>
