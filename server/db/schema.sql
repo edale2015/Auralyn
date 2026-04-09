@@ -148,6 +148,16 @@ CREATE TABLE IF NOT EXISTS automation_templates (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS automation_template_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  definition JSONB NOT NULL,
+  archived_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  archived_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_template_history_key ON automation_template_history (template_key, archived_at DESC);
+
 CREATE TABLE IF NOT EXISTS automation_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clinic_id TEXT,
