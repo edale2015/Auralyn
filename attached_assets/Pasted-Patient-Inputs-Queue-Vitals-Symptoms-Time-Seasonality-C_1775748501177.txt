@@ -1,0 +1,636 @@
+Patient Inputs / Queue / Vitals / Symptoms / Time / Seasonality
+        ↓
+Clinical Brain + Safety Pipeline
+        ↓
+Hospital Brain
+   ├── Demand Predictor
+   ├── Deterioration Predictor
+   ├── Capacity Engine
+   ├── Routing Engine
+   ├── Surge Detector
+   ├── Population Intelligence Layer
+        ↓
+Command Grid / Executive Dashboard / Outreach / Alerts
+1. Hospital Brain Orchestrator
+server/hospital/hospitalBrain.ts
+import { predictDemandWindow } from "./predictiveDemandEngine";
+import { predictPatientDeterioration } from "./deteriorationPredictor";
+import { computeCapacityState } from "./capacityEngine";
+import { routePatientAcrossSystem } from "./routingEngine";
+import { detectOperationalSurge } from "./surgeDetector";
+import { buildPopulationSignals } from "./populationIntelligence";
+import { auditStep } from "../audit/auditLogger";
+
+export interface HospitalBrainInput {
+  traceId: string;
+  nowTs: number;
+  incomingPatients: Array<{
+    patientId: string;
+    ageYears?: number;
+    complaint: string;
+    symptoms: string[];
+    vitals?: Record<string, number>;
+    safetyDisposition?: "ER_NOW" | "URGENT" | "ROUTINE" | "CONTINUE";
+    predictedDifferential?: Array<{ diagnosis: string; probability: number }>;
+  }>;
+  historicalVolumes: Array<{
+    ts: number;
+    count: number;
+    erCount: number;
+    telemedCount: number;
+    clinicCount: number;
+  }>;
+  operationalState: {
+    telemedOpenSlots: number;
+    clinicOpenSlots: number;
+    physicianAvailable: number;
+    nurseAvailable: number;
+    currentQueueSize: number;
+    averageWaitMinutes: number;
+    ehrHealthy: boolean;
+    fhirHealthy: boolean;
+  };
+}
+
+export interface HospitalBrainOutput {
+  demandForecast: ReturnType<typeof predictDemandWindow>;
+  capacityState: ReturnType<typeof computeCapacityState>;
+  surgeState: ReturnType<typeof detectOperationalSurge>;
+  populationSignals: ReturnType<typeof buildPopulationSignals>;
+  patientPlans: Array<ReturnType<typeof routePatientAcrossSystem>>;
+  summary: {
+    totalPatients: number;
+    erSuggested: number;
+    clinicSuggested: number;
+    telemedSuggested: number;
+    homeSuggested: number;
+    highRiskPatients: number;
+  };
+}
+
+export async function runHospitalBrain(
+  input: HospitalBrainInput
+): Promise<HospitalBrainOutput> {
+  const demandForecast = predictDemandWindow({
+    historicalVolumes: input.historicalVolumes,
+    currentQueueSize: input.operationalState.currentQueueSize,
+    averageWaitMinutes: input.operationalState.averageWaitMinutes,
+    nowTs: input.nowTs,
+  });
+
+  const capacityState = computeCapacityState({
+    telemedOpenSlots: input.operationalState.telemedOpenSlots,
+    clinicOpenSlots: input.operationalState.clinicOpenSlots,
+    physicianAvailable: input.operationalState.physicianAvailable,
+    nurseAvailable: input.operationalState.nurseAvailable,
+    currentQueueSize: input.operationalState.currentQueueSize,
+    averageWaitMinutes: input.operationalState.averageWaitMinutes,
+  });
+
+  const surgeState = detectOperationalSurge({
+    demandForecast,
+    capacityState,
+    ehrHealthy: input.operationalState.ehrHealthy,
+    fhirHealthy: input.operationalState.fhirHealthy,
+  });
+
+  const patientPlans = input.incomingPatients.map((patient) => {
+    const deterioration = predictPatientDeterioration({
+      ageYears: patient.ageYears,
+      complaint: patient.complaint,
+      symptoms: patient.symptoms,
+      vitals: patient.vitals ?? {},
+      safetyDisposition: patient.safetyDisposition ?? "CONTINUE",
+      differential: patient.predictedDifferential ?? [],
+    });
+
+    return routePatientAcrossSystem({
+      patient,
+      deterioration,
+      capacityState,
+      surgeState,
+    });
+  });
+
+  const populationSignals = buildPopulationSignals({
+    patients: input.incomingPatients,
+    routes: patientPlans,
+    forecast: demandForecast,
+  });
+
+  const summary = {
+    totalPatients: patientPlans.length,
+    erSuggested: patientPlans.filter(p => p.route.destination === "ER").length,
+    clinicSuggested: patientPlans.filter(p => p.route.destination === "CLINIC").length,
+    telemedSuggested: patientPlans.filter(p => p.route.destination === "TELEMED").length,
+    homeSuggested: patientPlans.filter(p => p.route.destination === "HOME").length,
+    highRiskPatients: patientPlans.filter(p => p.deterioration.riskLevel === "high").length,
+  };
+
+  await auditStep({
+    traceId: input.traceId,
+    step: "hospital_brain_run",
+    input: {
+      patientCount: input.incomingPatients.length,
+      queueSize: input.operationalState.currentQueueSize,
+    },
+    output: {
+      forecast: demandForecast,
+      surge: surgeState,
+      summary,
+    },
+    metadata: {},
+  });
+
+  return {
+    demandForecast,
+    capacityState,
+    surgeState,
+    populationSignals,
+    patientPlans,
+    summary,
+  };
+}
+2. Predictive Demand Engine
+
+This is your “weather radar for patient flow.”
+
+server/hospital/predictiveDemandEngine.ts
+export interface DemandPredictorInput {
+  historicalVolumes: Array<{
+    ts: number;
+    count: number;
+    erCount: number;
+    telemedCount: number;
+    clinicCount: number;
+  }>;
+  currentQueueSize: number;
+  averageWaitMinutes: number;
+  nowTs: number;
+}
+
+export function predictDemandWindow(input: DemandPredictorInput) {
+  const recent = input.historicalVolumes.slice(-24);
+  const avgCount =
+    recent.length > 0
+      ? recent.reduce((s, r) => s + r.count, 0) / recent.length
+      : 0;
+
+  const avgEr =
+    recent.length > 0
+      ? recent.reduce((s, r) => s + r.erCount, 0) / recent.length
+      : 0;
+
+  const queuePressureBoost = input.currentQueueSize > 20 ? 1.2 : 1.0;
+  const waitPressureBoost = input.averageWaitMinutes > 30 ? 1.15 : 1.0;
+
+  const nextHourVolume = Math.round(avgCount * queuePressureBoost * waitPressureBoost);
+  const nextHourEr = Math.round(avgEr * queuePressureBoost);
+
+  const riskLevel =
+    nextHourVolume > 30 ? "high" :
+    nextHourVolume > 15 ? "medium" : "low";
+
+  return {
+    nextHourVolume,
+    nextHourEr,
+    next4HourVolume: nextHourVolume * 4,
+    queuePressureBoost,
+    waitPressureBoost,
+    riskLevel,
+  };
+}
+3. Deterioration Predictor
+
+This is the “don’t let the quiet patient quietly worsen” engine.
+
+server/hospital/deteriorationPredictor.ts
+export interface DeteriorationInput {
+  ageYears?: number;
+  complaint: string;
+  symptoms: string[];
+  vitals: Record<string, number>;
+  safetyDisposition: "ER_NOW" | "URGENT" | "ROUTINE" | "CONTINUE";
+  differential: Array<{ diagnosis: string; probability: number }>;
+}
+
+export function predictPatientDeterioration(input: DeteriorationInput) {
+  let score = 0;
+
+  if ((input.ageYears ?? 0) >= 65) score += 1;
+  if (input.safetyDisposition === "URGENT") score += 2;
+  if (input.safetyDisposition === "ER_NOW") score += 5;
+
+  const systolic = input.vitals.systolicBp ?? 120;
+  const spo2 = input.vitals.oxygenSaturation ?? 98;
+  const rr = input.vitals.respiratoryRate ?? 16;
+  const hr = input.vitals.heartRate ?? 80;
+
+  if (systolic <= 100) score += 2;
+  if (spo2 < 92) score += 3;
+  if (rr >= 22) score += 2;
+  if (hr >= 120) score += 2;
+
+  if (input.complaint === "chest_pain") score += 2;
+  if (input.complaint === "shortness_of_breath") score += 2;
+  if (input.complaint === "fever") score += 1;
+
+  if (input.symptoms.includes("confusion")) score += 2;
+  if (input.symptoms.includes("syncope")) score += 2;
+  if (input.symptoms.includes("heavy_bleeding")) score += 4;
+
+  const topDx = input.differential[0];
+  if (topDx && topDx.probability > 0.7) score += 1;
+
+  const riskLevel =
+    score >= 8 ? "high" :
+    score >= 4 ? "medium" : "low";
+
+  return {
+    score,
+    riskLevel,
+    predictedNeedForEscalation: riskLevel !== "low",
+    estimatedTimeToConcernMinutes:
+      riskLevel === "high" ? 15 :
+      riskLevel === "medium" ? 60 : 240,
+  };
+}
+4. Capacity Engine
+
+This is air traffic control for your clinicians.
+
+server/hospital/capacityEngine.ts
+export interface CapacityInput {
+  telemedOpenSlots: number;
+  clinicOpenSlots: number;
+  physicianAvailable: number;
+  nurseAvailable: number;
+  currentQueueSize: number;
+  averageWaitMinutes: number;
+}
+
+export function computeCapacityState(input: CapacityInput) {
+  const telemedUtilization = input.telemedOpenSlots <= 0 ? 1 : Math.min(1, input.currentQueueSize / Math.max(1, input.telemedOpenSlots));
+  const clinicUtilization = input.clinicOpenSlots <= 0 ? 1 : Math.min(1, input.currentQueueSize / Math.max(1, input.clinicOpenSlots));
+
+  const strainScore =
+    (telemedUtilization * 2) +
+    (clinicUtilization * 2) +
+    (input.averageWaitMinutes > 30 ? 2 : 0) +
+    (input.physicianAvailable < 2 ? 2 : 0) +
+    (input.nurseAvailable < 1 ? 1 : 0);
+
+  const systemState =
+    strainScore >= 6 ? "strained" :
+    strainScore >= 3 ? "busy" : "stable";
+
+  return {
+    telemedUtilization,
+    clinicUtilization,
+    strainScore,
+    systemState,
+    canAbsorbMoreTelemed: input.telemedOpenSlots > 0 && telemedUtilization < 0.85,
+    canAbsorbMoreClinic: input.clinicOpenSlots > 0 && clinicUtilization < 0.85,
+  };
+}
+5. Routing Engine
+
+This chooses the best destination, not just the clinically valid one.
+
+server/hospital/routingEngine.ts
+export interface RoutingInput {
+  patient: {
+    patientId: string;
+    complaint: string;
+    symptoms: string[];
+    safetyDisposition?: "ER_NOW" | "URGENT" | "ROUTINE" | "CONTINUE";
+  };
+  deterioration: {
+    score: number;
+    riskLevel: "low" | "medium" | "high";
+    predictedNeedForEscalation: boolean;
+  };
+  capacityState: {
+    canAbsorbMoreTelemed: boolean;
+    canAbsorbMoreClinic: boolean;
+    systemState: "stable" | "busy" | "strained";
+  };
+  surgeState: {
+    status: "normal" | "watch" | "surge" | "critical";
+  };
+}
+
+export function routePatientAcrossSystem(input: RoutingInput) {
+  const safety = input.patient.safetyDisposition ?? "CONTINUE";
+
+  if (safety === "ER_NOW") {
+    return {
+      patientId: input.patient.patientId,
+      deterioration: input.deterioration,
+      route: {
+        destination: "ER" as const,
+        urgency: "immediate",
+        reason: "Safety pipeline hard stop",
+      },
+    };
+  }
+
+  if (input.deterioration.riskLevel === "high") {
+    return {
+      patientId: input.patient.patientId,
+      deterioration: input.deterioration,
+      route: {
+        destination: "CLINIC" as const,
+        urgency: "urgent",
+        reason: "High deterioration risk",
+      },
+    };
+  }
+
+  if (safety === "URGENT") {
+    return {
+      patientId: input.patient.patientId,
+      deterioration: input.deterioration,
+      route: {
+        destination: input.capacityState.canAbsorbMoreClinic ? "CLINIC" as const : "ER" as const,
+        urgency: "urgent",
+        reason: "Urgent safety disposition with capacity-aware routing",
+      },
+    };
+  }
+
+  if (input.surgeState.status === "critical" && input.capacityState.canAbsorbMoreTelemed) {
+    return {
+      patientId: input.patient.patientId,
+      deterioration: input.deterioration,
+      route: {
+        destination: "TELEMED" as const,
+        urgency: "routine",
+        reason: "Critical surge diversion to telemed",
+      },
+    };
+  }
+
+  if (input.capacityState.canAbsorbMoreTelemed) {
+    return {
+      patientId: input.patient.patientId,
+      deterioration: input.deterioration,
+      route: {
+        destination: "TELEMED" as const,
+        urgency: "routine",
+        reason: "Appropriate low/medium-acuity telemed route",
+      },
+    };
+  }
+
+  if (input.capacityState.canAbsorbMoreClinic) {
+    return {
+      patientId: input.patient.patientId,
+      deterioration: input.deterioration,
+      route: {
+        destination: "CLINIC" as const,
+        urgency: "routine",
+        reason: "Telemed constrained, clinic available",
+      },
+    };
+  }
+
+  return {
+    patientId: input.patient.patientId,
+    deterioration: input.deterioration,
+    route: {
+      destination: "HOME" as const,
+      urgency: "routine",
+      reason: "Fallback: self-care with callback queue",
+    },
+  };
+}
+6. Surge Detector
+
+This is the thunder siren.
+
+server/hospital/surgeDetector.ts
+export interface SurgeInput {
+  demandForecast: {
+    nextHourVolume: number;
+    nextHourEr: number;
+    riskLevel: "low" | "medium" | "high";
+  };
+  capacityState: {
+    strainScore: number;
+    systemState: "stable" | "busy" | "strained";
+  };
+  ehrHealthy: boolean;
+  fhirHealthy: boolean;
+}
+
+export function detectOperationalSurge(input: SurgeInput) {
+  let score = 0;
+
+  if (input.demandForecast.nextHourVolume > 25) score += 2;
+  if (input.demandForecast.nextHourEr > 5) score += 2;
+  if (input.capacityState.systemState === "busy") score += 1;
+  if (input.capacityState.systemState === "strained") score += 3;
+  if (!input.ehrHealthy) score += 2;
+  if (!input.fhirHealthy) score += 1;
+
+  const status =
+    score >= 6 ? "critical" :
+    score >= 4 ? "surge" :
+    score >= 2 ? "watch" : "normal";
+
+  return {
+    score,
+    status,
+    recommendedActions: [
+      ...(status === "critical" ? ["pause nonessential learning jobs", "activate callback queue", "expand telemed diversion"] : []),
+      ...(status === "surge" ? ["increase physician review cadence", "watch wait times"] : []),
+    ],
+  };
+}
+7. Population Intelligence
+
+This turns individual cases into public-health style signals.
+
+server/hospital/populationIntelligence.ts
+export interface PopulationInput {
+  patients: Array<{
+    complaint: string;
+    symptoms: string[];
+  }>;
+  routes: Array<{
+    route: {
+      destination: "ER" | "CLINIC" | "TELEMED" | "HOME";
+    };
+  }>;
+  forecast: {
+    nextHourVolume: number;
+    nextHourEr: number;
+  };
+}
+
+export function buildPopulationSignals(input: PopulationInput) {
+  const complaintCounts: Record<string, number> = {};
+  for (const p of input.patients) {
+    complaintCounts[p.complaint] = (complaintCounts[p.complaint] || 0) + 1;
+  }
+
+  const topComplaints = Object.entries(complaintCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([complaint, count]) => ({ complaint, count }));
+
+  const erRate =
+    input.routes.length > 0
+      ? input.routes.filter(r => r.route.destination === "ER").length / input.routes.length
+      : 0;
+
+  return {
+    topComplaints,
+    erRate,
+    nextHourVolume: input.forecast.nextHourVolume,
+    nextHourEr: input.forecast.nextHourEr,
+    possibleSyndromicSignal:
+      topComplaints.length > 0 && topComplaints[0].count >= 5
+        ? `Cluster signal around ${topComplaints[0].complaint}`
+        : null,
+  };
+}
+8. API Route
+server/routes/hospitalBrainRoutes.ts
+import express from "express";
+import { runHospitalBrain } from "../hospital/hospitalBrain";
+
+const router = express.Router();
+
+router.post("/hospital-brain/run", async (req, res) => {
+  try {
+    const output = await runHospitalBrain(req.body);
+    res.json(output);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+export default router;
+9. Command Grid UI Panel
+client/components/HospitalBrainPanel.tsx
+import { useEffect, useState } from "react";
+
+export default function HospitalBrainPanel() {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/hospital-brain/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify((window as any).__HOSPITAL_BRAIN_INPUT__)
+    })
+      .then(res => res.json())
+      .then(setData)
+      .catch(err => setData({ error: String(err) }));
+  }, []);
+
+  if (!data) return <div className="p-4">Loading Hospital Brain...</div>;
+  if (data.error) return <div className="p-4 text-red-600">{data.error}</div>;
+
+  return (
+    <div className="p-4 rounded-2xl bg-slate-950 text-white space-y-4">
+      <div>
+        <h2 className="text-xl font-bold">🏥 Hospital Brain</h2>
+        <p>Forecast volume: {data.demandForecast.nextHourVolume}</p>
+        <p>Forecast ER: {data.demandForecast.nextHourEr}</p>
+        <p>Surge status: {data.surgeState.status}</p>
+      </div>
+
+      <div>
+        <h3 className="font-semibold">Summary</h3>
+        <p>Total patients: {data.summary.totalPatients}</p>
+        <p>ER suggested: {data.summary.erSuggested}</p>
+        <p>Clinic suggested: {data.summary.clinicSuggested}</p>
+        <p>Telemed suggested: {data.summary.telemedSuggested}</p>
+        <p>Home suggested: {data.summary.homeSuggested}</p>
+      </div>
+
+      <div>
+        <h3 className="font-semibold">Population Signals</h3>
+        {data.populationSignals.topComplaints.map((c: any) => (
+          <div key={c.complaint}>{c.complaint}: {c.count}</div>
+        ))}
+        {data.populationSignals.possibleSyndromicSignal && (
+          <div className="text-yellow-300">{data.populationSignals.possibleSyndromicSignal}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+5 highest-yield recommendations for this system
+1. Time-to-event model
+
+Right now deterioration is rule-weighted. Next, add a proper time-to-event model that predicts:
+
+ICU risk in 4 hours
+admission risk in 24 hours
+bounceback risk in 72 hours
+
+That becomes your crystal ball instead of a weather vane.
+
+2. Georouting and local hospital load map
+
+Add:
+
+nearest ERs
+estimated travel time
+local hospital saturation
+pediatric-capable routing
+stroke / cath / trauma destination awareness
+
+This turns routing into real-world routing, not just abstract routing.
+
+3. Callback queue and recheck automation
+
+For “HOME” or “TELEMED” routed patients:
+
+auto-recheck in 2h / 6h / 24h
+deterioration-triggered callback
+SMS symptom re-ping
+escalation if worse
+
+That closes the loop and catches patients who slide downhill after the first pass.
+
+4. Population outbreak detector
+
+Add complaint/symptom clustering across:
+
+fever
+sore throat
+vomiting
+cough
+shortness of breath
+rash
+
+Then trend by day/week/site to detect:
+
+influenza-like illness
+RSV-like clusters
+GI outbreaks
+medication adverse event patterns
+
+This becomes your early smoke detector.
+
+5. Capacity-aware learning throttler
+
+When the system is under surge:
+
+pause nonessential RLHF jobs
+reduce expensive reasoning depth
+keep safety layers fully active
+prioritize low-latency clinical decisions
+
+That gives you graceful degradation instead of a CPU bonfire.
+
+Best next modules after this

@@ -2058,6 +2058,10 @@ export async function registerRoutes(
   console.log("[DomainRouters] Mounted at /api/domain/* (fast-path, registry, evolution, tenant config)");
 
   // Autonomous oversight agent (system-level drift + failure clustering + health alerts)
+  const { default: hospitalBrainRouter } = await import("./routes/hospitalBrainRoutes");
+  app.use("/api", hospitalBrainRouter);
+  console.log("[HospitalBrain] Orchestrator at /api/hospital-brain/run");
+
   const { default: oversightRoutes } = await import("./routes/oversightRoutes");
   app.use("/api", oversightRoutes);
   console.log("[Oversight] Autonomous oversight agent at /api/oversight/run");
