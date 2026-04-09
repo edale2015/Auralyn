@@ -148,6 +148,16 @@ CREATE TABLE IF NOT EXISTS automation_templates (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS selector_scores (
+  template_key TEXT NOT NULL,
+  selector TEXT NOT NULL,
+  attempts INT NOT NULL DEFAULT 0,
+  successes INT NOT NULL DEFAULT 0,
+  last_attempt_at TIMESTAMP,
+  last_success_at TIMESTAMP,
+  PRIMARY KEY (template_key, selector)
+);
+
 CREATE TABLE IF NOT EXISTS automation_template_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   template_key TEXT NOT NULL,

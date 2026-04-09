@@ -8,8 +8,11 @@ import {
   rejectRunCheckpoint,
   listAutomationTemplates,
 } from "./automationService";
+import healthRouter from "./healthRoutes";
 
 const router = Router();
+
+router.use("/", healthRouter);
 
 router.get("/templates", async (_req, res) => {
   res.json(listAutomationTemplates());
