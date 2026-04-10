@@ -702,3 +702,30 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `startControlStream(httpServer)` started in `server/index.ts` alongside existing WS servers
 
 **Test count:** 1117/1117 passing across 40 files (+21 new tests in `tests/unit/batch6Control.test.ts`)
+
+## Batch 7 — AI Autopilot + Pilot Workflow + Production Mode + FDA Export (COMPLETE)
+
+**Modules added:**
+- `server/autopilot/autopilotAgent.ts` — `runAutopilot()`: reads live system state, decides scale/retraining/simulation actions, enforces safety gate, broadcasts to controlBus. Returns `{actions, mode, level, skippedCount, ts}`
+- `server/autopilot/pilotWorkflow.ts` — `pilotWorkflow()` (intake→triage→EMS→pilot case), `dispatchEMS()` (CODE_RED dispatch + 200-entry log), `recordPhysicianOverride()` (500-entry log), `getEMSLog()`, `getOverrideLog()`
+- `server/autopilot/productionMode.ts` — `setMode()/getMode()` (staging/canary/production), `enforceProductionSafety()` (throws at >1% mismatch), `isCanary(userId)`, `canaryRolloutFraction()`, `isProductionSafe()`
+- `server/autopilot/autopilotUtils.ts` — `autopilotLevel()` (auto/semi-auto/manual), `computeKPIs()` (erRate, avgLatencyMs, safetyScore), `interruptSystem()`, `selfHeal()` (auto-repairs template errors), `syncGlobalState()`
+- `server/exec/fdaExport.ts` — `buildFullFDAPackage()` (SaMD Class II, 10k golden cases, 0.95 accuracy), `writeFDAPackage()`, `exportEnterpriseBundle()` (readinessLevel: MVP/PILOT/PRODUCTION)
+- `server/autopilot/autopilotRoutes.ts` — Unified router at `/api/autopilot/`
+
+**Endpoints at `/api/autopilot/`:**
+- `POST /run` — execute autopilot cycle
+- `POST /pilot/workflow` — full intake→triage→EMS→pilot case flow
+- `POST /override` — physician disposition override
+- `GET /ems/log` — EMS dispatch log
+- `GET /overrides` — physician override log
+- `POST /mode` / `GET /mode` — deployment mode (staging/canary/production)
+- `GET /canary/:userId` — canary bucket check
+- `GET /safety/check` — live production safety gate status
+- `POST /interrupt` — global system interrupt
+- `GET /kpis` — live KPI snapshot
+- `POST /sync` — sync global region states
+- `POST /fda/export` — write `fda_package.json`
+- `GET /fda/bundle` — enterprise readiness bundle
+
+**Test count:** 1165/1165 passing across 41 files (+48 new tests in `tests/unit/batch7Autopilot.test.ts`)

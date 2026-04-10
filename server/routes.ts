@@ -2118,6 +2118,10 @@ export async function registerRoutes(
   app.use("/api/control", controlRoutes);
   console.log("[ControlTower] Unified control API at /api/control/state | /simulate | /stress | /epic | /scale | /export | /reset | /model | /alert | /report");
 
+  const { default: autopilotRoutes } = await import("./autopilot/autopilotRoutes");
+  app.use("/api/autopilot", autopilotRoutes);
+  console.log("[Autopilot] AI autopilot API at /api/autopilot/run | /pilot/workflow | /override | /mode | /safety/check | /interrupt | /kpis | /fda/export");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);
