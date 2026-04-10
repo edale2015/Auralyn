@@ -2146,6 +2146,10 @@ export async function registerRoutes(
   app.use("/api", batch13Routes);
   console.log("[Batch13] Branch workflows | clinic queue | high autonomy | followup utils | SMART callback — all wired at /api/*");
 
+  const { default: batch14Routes } = await import("./batch14Routes");
+  app.use("/api", batch14Routes);
+  console.log("[Batch14] Graph utils | alert rules engine | QA utils | golden runner | Telegram + multi-channel broadcast — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

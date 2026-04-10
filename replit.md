@@ -859,3 +859,19 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Route added:** `/smart-callback` registered in App.tsx
 
 **Test count:** 1469/1469 passing across 47 files (+39 new tests in `tests/unit/batch13.test.ts`)
+
+## Batch 14 — Graph Utils + Alert Rules Engine + QA Suite + Golden Runner + Telegram + Multi-Channel Broadcast (COMPLETE)
+
+**Backend modules (4 files + 1 update):**
+- `server/workflows/graphUtils.ts` — `edgesToGraph(nodes, edges)`: converts ReactFlow node/edge arrays into an adjacency list (WorkflowGraph). `graphToExecutionOrder(graph, startId)`: BFS traversal producing ordered execution sequence. Ignores edges with unknown sources. Exposed at `POST /api/workflows/graph`
+- `server/monitoring/alertRules.ts` — Dynamic rule engine: `addRule()` (assigns unique id + timestamp), `getAlertRules()`, `removeRule(id)`, `clearRules()`. `evalRules(metrics)`: evaluates all registered expressions using safe `Function()` constructor against live metrics, fires Slack/WhatsApp/both per target, skips invalid expressions without crashing. Exposed at `POST/GET/DELETE /api/alerts/rules` and `POST /api/alerts/rules/eval`
+- `server/clinical/qaUtils.ts` — `minimizeQuestions(qs)`: caps question list to top 3 to reduce patient friction. `debugFailure(err)`: pattern-matches error strings to actionable suggestions (FHIR→check token, selector→heal, network→retry, timeout→increase). `trend(data[])`: last-minus-first for dashboard sparkline direction. `captureTrace(traceId, step, data)`: JSON-structured trace logging for replay analysis. `runGoldenBatch(cases, runPipeline)`: async batch golden case runner with injected pipeline function, returns `{expected, actual, match}[]`. Exposed at `/api/qa/*`
+- `server/monitoring/alerts.ts` — Added `sendTelegramAlert(msg)` (graceful fallback when TG_TOKEN/TG_CHAT absent). Added `broadcastMultiChannel(msg)`: fires Slack + WhatsApp + Telegram in parallel with `Promise.all`. Exposed at `POST /api/monitoring/broadcast` and `/api/monitoring/telegram`
+
+**Frontend (2 new pages + 1 update):**
+- `client/src/pages/AlertRules.tsx` — Full alert rule management UI: expression editor (monospace input), target selector (Slack/WhatsApp/Both), save/remove/evaluate now. Live rule list with timestamps. Routes: `/alert-rules`
+- `client/src/pages/WorkflowCanvasFull.tsx` — Full canvas variant: ReactFlow with edge-to-graph export button. Sends current nodes+edges to `/api/workflows/graph` and renders the adjacency list inline as a JSON overlay. Routes: `/workflow-canvas-full`
+
+**Routes added:** `/workflow-canvas-full`, `/alert-rules` in App.tsx
+
+**Test count:** 1508/1508 passing across 48 files (+39 new tests in `tests/unit/batch14.test.ts`)

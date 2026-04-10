@@ -110,8 +110,10 @@ import MessagingFlowPage from "@/pages/MessagingFlowPage";
 import AIInteractionMonitorPage from "@/pages/AIInteractionMonitorPage";
 import WorkflowBuilder from "@/pages/WorkflowBuilder";
 import WorkflowCanvas from "@/pages/WorkflowCanvas";
+import WorkflowCanvasFull from "@/pages/WorkflowCanvasFull";
 import SmartLaunch from "@/pages/SmartLaunch";
 import SmartCallback from "@/pages/SmartCallback";
+import AlertRules from "@/pages/AlertRules";
 
 validateRoutes();
 
@@ -207,8 +209,10 @@ function WorkbenchRouter() {
         <Route path="/executive-command">{() => <RoleGuard allowedRoles={["admin"]}><ExecutiveCommandPage /></RoleGuard>}</Route>
         <Route path="/workflow-builder" component={WorkflowBuilder} />
         <Route path="/workflow-canvas" component={WorkflowCanvas} />
+        <Route path="/workflow-canvas-full" component={WorkflowCanvasFull} />
         <Route path="/smart-launch" component={SmartLaunch} />
         <Route path="/smart-callback" component={SmartCallback} />
+        <Route path="/alert-rules" component={AlertRules} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
