@@ -818,3 +818,28 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `POST /api/clinical/physician-summary` / `disposition-followup` — case speed panel
 
 **Test count:** 1363/1363 passing across 45 files (+51 new tests in `tests/unit/batch11.test.ts`)
+
+## Batch 12 — Fast Triage UX + Live Clinic + Payer Contracts + Workflow Engine + Multi-Region + Autonomy + Alerts + Connector Hub + Triage Utils (COMPLETE)
+
+**Backend modules (10 files):**
+- `server/patient/fastTriage.ts` — `fastTriageFlow()`: 3-path progressive engine (fast-track ROUTINE → progressive question → full pipeline). Sub-10s design with early exit for eligible patients
+- `server/pilot/liveClinic.ts` — `liveClinic()`: full real patient loop. Auto-dispatches EMS for ER_NOW, schedules 60-min follow-up, returns emsDispatched flag
+- `server/revenue/contracts.ts` — `payerContract()`: payer-specific multipliers (Aetna×1.0, BlueCross×0.95, Cigna×0.9, United×0.85, Medicare×0.8, Medicaid×0.6). Combines with CPT base rates
+- `server/workflows/registry.ts` — Step registry (registerStep, listSteps, getStep, clearSteps)
+- `server/workflows/runner.ts` — `runStepWorkflow(def, input)`: chains arbitrary registered steps, fails fast on missing steps
+- `server/infra/gateway.ts` — Multi-region gateway (us-east/us-west/eu): IP-based routing + failover. `desiredWorkers()` autoscale calculator (2–20 workers based on queue depth)
+- `server/autonomy/autonomyController.ts` — `autonomyLevel()`: 4-level safety-gated controller (manual/assist/semi/auto). `executeAutonomy()`: enforces safe-action allowlist in assist mode
+- `server/monitoring/alerts.ts` — `sendSlackAlert()`, `sendWhatsAppAlert()`, `evaluateAlerts()`: Prometheus threshold evaluation with graceful fallback when webhooks unconfigured
+- `server/integrations/connectorHub.ts` — Connector registry: registerConnector, listConnectors, callConnector, checkIntegrations (health-checks all registered connectors)
+- `server/clinical/triageUtils.ts` — Bundled utilities: requireModifiers, quickView, autoRepairTemplate, adaptiveQuestions, approveDisposition, autoEscalate, trackInteraction, integrationStatus
+
+**Frontend (5 files):**
+- `client/src/components/PhysicianCopilot.tsx` — AI Co-Pilot card: complaint, top Dx, risk (color-coded), disposition, override buttons (ER/Routine) with onOverride callback
+- `client/src/dashboard/PanelRegistry.ts` — Dynamic panel registry (registerPanel, unregisterPanel, listPanels) — add panels without editing main dashboard
+- `client/src/pages/WorkflowBuilder.tsx` — Visual workflow builder: add/remove/reorder steps, POST to /api/workflows/run, displays JSON result
+- `client/src/pages/WorkflowCanvas.tsx` — ReactFlow node-based canvas: drag/connect/save workflows to /api/workflows/save
+- `client/src/pages/SmartLaunch.tsx` — Epic SMART on FHIR launch page (routes to /api/smart/launch with ISS parameter)
+
+**Routes:** /workflow-builder, /workflow-canvas, /smart-launch registered in App.tsx
+
+**Test count:** 1430/1430 passing across 46 files (+67 new tests in `tests/unit/batch12.test.ts`)

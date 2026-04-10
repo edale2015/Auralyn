@@ -108,6 +108,9 @@ import GoldReviewWorkbench from "@/pages/GoldReviewWorkbench";
 import CompactIntakePage from "@/pages/CompactIntakePage";
 import MessagingFlowPage from "@/pages/MessagingFlowPage";
 import AIInteractionMonitorPage from "@/pages/AIInteractionMonitorPage";
+import WorkflowBuilder from "@/pages/WorkflowBuilder";
+import WorkflowCanvas from "@/pages/WorkflowCanvas";
+import SmartLaunch from "@/pages/SmartLaunch";
 
 validateRoutes();
 
@@ -201,6 +204,9 @@ function WorkbenchRouter() {
         <Route path="/architectural-compliance" component={ArchitecturalCompliancePage} />
         <Route path="/moat-intelligence" component={MoatIntelligencePage} />
         <Route path="/executive-command">{() => <RoleGuard allowedRoles={["admin"]}><ExecutiveCommandPage /></RoleGuard>}</Route>
+        <Route path="/workflow-builder" component={WorkflowBuilder} />
+        <Route path="/workflow-canvas" component={WorkflowCanvas} />
+        <Route path="/smart-launch" component={SmartLaunch} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
