@@ -1,4 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useMemo } from "react";
+import ConditionNode from "@/components/ConditionNode";
+import IfBlockEditor from "@/components/IfBlockEditor";
 import ReactFlow, {
   addEdge,
   useEdgesState,
@@ -19,7 +21,11 @@ const initialNodes = [
 export default function WorkflowCanvasFull() {
   const [nodes, , onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
-  const [graph, setGraph] = useState<Record<string, unknown> | null>(null);
+  const [graph, setGraph]       = useState<Record<string, unknown> | null>(null);
+  const [prompt, setPrompt]     = useState("Chest pain triage with safety checks");
+  const [aiLoading, setAiLoad]  = useState(false);
+  const [editNode, setEditNode] = useState<any | null>(null);
+  const nodeTypes = useMemo(() => ({ conditionNode: ConditionNode }), []);
   const { toast } = useToast();
 
   const onConnect = useCallback(
@@ -42,6 +48,25 @@ export default function WorkflowCanvasFull() {
     }
   }
 
+  async function autoBuild() {
+    if (!prompt.trim()) return;
+    setAiLoad(true);
+    try {
+      const res = await fetch("/api/workflows/auto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: prompt.trim() }),
+      });
+      const { nodes: n, edges: e } = await res.json();
+      setEdges(e ?? []);
+      toast({ title: "AI workflow generated", description: `${n?.length ?? 0} nodes from prompt` });
+    } catch {
+      toast({ title: "AI build failed", variant: "destructive" });
+    } finally {
+      setAiLoad(false);
+    }
+  }
+
   async function exportGraph() {
     const res = await fetch("/api/workflows/graph", {
       method: "POST",
@@ -55,8 +80,9 @@ export default function WorkflowCanvasFull() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-950">
-      <div className="flex items-center gap-3 px-6 py-3 bg-gray-900 border-b border-gray-800">
-        <h1 className="text-white font-bold text-lg mr-auto">🧩 Full Workflow Canvas</h1>
+      <div className="flex flex-col bg-gray-900 border-b border-gray-800">
+        <div className="flex items-center gap-3 px-6 py-2">
+          <h1 className="text-white font-bold text-lg mr-auto">🧩 Full Workflow Canvas</h1>
         <button
           onClick={exportGraph}
           data-testid="button-export-graph"
@@ -71,6 +97,26 @@ export default function WorkflowCanvasFull() {
         >
           💾 Save
         </button>
+        </div>
+        <div className="flex items-center gap-2 px-6 py-2 border-t border-gray-800">
+          <span className="text-xs text-gray-400 shrink-0">🤖 AI:</span>
+          <input
+            value={prompt}
+            onChange={e => setPrompt(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") autoBuild(); }}
+            data-testid="input-ai-prompt"
+            placeholder="Describe your clinical workflow…"
+            className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white text-xs focus:outline-none focus:border-indigo-500"
+          />
+          <button
+            onClick={autoBuild}
+            disabled={aiLoading}
+            data-testid="button-ai-build"
+            className="px-3 py-1.5 bg-green-800 hover:bg-green-700 disabled:opacity-50 text-white text-xs rounded font-medium"
+          >
+            {aiLoading ? "Building…" : "✨ Generate"}
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 relative">
@@ -80,12 +126,26 @@ export default function WorkflowCanvasFull() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          nodeTypes={nodeTypes}
+          onNodeClick={(_e, node) => { if (node.type === "conditionNode") setEditNode(node); }}
           fitView
         >
           <Background color="#374151" gap={16} />
           <Controls />
           <MiniMap nodeColor="#3b82f6" />
         </ReactFlow>
+
+        {editNode && (
+          <div className="absolute top-4 right-4 z-50" data-testid="if-block-editor-panel">
+            <IfBlockEditor
+              node={{ id: editNode.id, field: editNode.data?.condition?.field ?? "", value: editNode.data?.condition?.equals ?? "" }}
+              update={updated => {
+                setEditNode(null);
+              }}
+              onClose={() => setEditNode(null)}
+            />
+          </div>
+        )}
 
         {graph && (
           <div className="absolute bottom-4 left-4 right-4 max-h-40 overflow-auto bg-gray-900 border border-gray-700 rounded-lg p-3" data-testid="graph-export-preview">

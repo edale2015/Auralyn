@@ -117,6 +117,7 @@ import AlertRules from "@/pages/AlertRules";
 import EpicTest from "@/pages/EpicTest";
 import MultiTenantDashboard from "@/pages/MultiTenantDashboard";
 import PhysicianCopilot from "@/pages/PhysicianCopilot";
+import AdminPanel from "@/pages/AdminPanel";
 
 validateRoutes();
 
@@ -219,6 +220,7 @@ function WorkbenchRouter() {
         <Route path="/epic-test" component={EpicTest} />
         <Route path="/multi-tenant" component={MultiTenantDashboard} />
         <Route path="/physician-copilot" component={PhysicianCopilot} />
+        <Route path="/admin-panel" component={AdminPanel} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

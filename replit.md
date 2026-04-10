@@ -894,3 +894,26 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added:** `/epic-test`, `/multi-tenant`, `/physician-copilot` in App.tsx
 
 **Test count:** 1536/1536 passing across 49 files (+28 new tests in `tests/unit/batch15.test.ts`)
+
+## Batch 16 — AI Workflow Gen + EHR Unified + Full Revenue + SLO Burn + Question Graph + Retry Queue + RBAC + Patient Memory + Repair Loop + Integration Hub (COMPLETE)
+
+**Backend modules (10 new files):**
+- `server/workflows/autoBuilder.ts` — `generateWorkflow(prompt)`: lazy-init OpenAI, prompts GPT-4o-mini to return `{nodes, edges}` JSON for a clinical workflow; strips markdown code fences; falls back to a 3-node default graph on any parse/API error. Exposed at `POST /api/workflows/auto`
+- `server/integrations/ehrUnified.ts` — `writeEHRAll(data)`: fires Epic FHIR Observation + ECW encounter in `Promise.allSettled`, returns `{epic, ecw}` status strings. Graceful no-op when env vars absent. Exposed at `POST /api/pilot/live`
+- `server/revenue/fullRevenue.ts` — `processRevenue(patient, disposition)`: full pipeline — CPT assignment → claim scrub → denial prediction → CPT upgrade to 99284 on high-risk → payer contract reimbursement calc. Returns `{claim, denial, revenue}`. Exposed at `POST /api/revenue/full`
+- `server/clinical/observabilityUtils.ts` — `sloBurn(errors, total)`: returns `"burning"` or `"stable"` against 1% threshold. `evaluateSystem(state)`: scans latency + safety mismatch rate and returns alerts string[]. `routeOnCall(alerts)`: broadcasts each alert to Slack + WhatsApp in parallel. Exposed at `POST /api/slo/burn` + `POST /api/slo/evaluate`
+- `server/clinical/questionGraph.ts` — `dynamicQuestionGraph(ctx)`: returns context-aware follow-up questions per complaint (chest_pain, fever, SOB, abdominal pain, headache). `physicianMacro(action)`: maps ER/Urgent/Routine to pre-built action bundles (notify, dispatchEMS, scheduleFollowup). Exposed at `GET /api/questions/graph` + `POST /api/physician/macro`
+- `server/clinical/retryQueue.ts` — `enqueueRetry(job)`: adds job with priority + maxAttempts. `processRetry()`: sorts by priority descending, runs each job, removes on success/exhaustion, returns `{processed, failed}`. `getQueue()` + `clearQueue()`. Exposed at `GET/POST/DELETE /api/retry/*`
+- `server/tenancy/roles.ts` — `can(role, action)`: RBAC permission check. `auth(actionRequired)`: Express middleware that reads `x-role` header and returns 403 on failure. `listRoles()` + `listPermissions(role)`. Exposed at `GET /api/roles`, `POST /api/roles/check`, `GET /api/roles/:role/permissions`
+- `server/clinical/patientMemory.ts` — `updateMemory(id, visit)`: appends timestamped visit to in-memory patient history. `getMemory(id)`: returns full visit history. `clearMemory(id?)`: clears one patient or all. `memoryStats()`: returns totalPatients + totalVisits. Exposed at `POST/GET /api/patient/memory/:id`, `GET /api/patient/memory-stats`
+- `server/clinical/repairLoop.ts` — `repairLoop(errors[])`: pattern-matches errors → selector/timeout/FHIR repairs, returns `{repaired, skipped}`. `performanceScore(metrics)`: weighted composite — `(1-errorRate)×0.4 + speedScore×0.3 + (1-denialRate)×0.3`, clamped to [0,1]. Exposed at `POST /api/system/repair` + `POST /api/system/performance-score`
+- `server/integrations/integrationHub.ts` — `addIntegration(name, fn)`, `runIntegration(name, payload)`, `listIntegrations()`, `removeIntegration(name)`. `connectorHealth(connectors[])`: calls each connector's `ping()`, returns `{name: "ok"|"fail"}` map. Exposed at `GET /api/integrations`, `POST /api/connectors/health`
+
+**Frontend (3 new/updated):**
+- `client/src/components/IfBlockEditor.tsx` — Sidebar condition editor: controlled `field` + `equals` inputs, Save button fires `update()` callback, close button, live preview label "IF field == value". Renders as floating panel in WorkflowCanvasFull when a conditionNode is clicked
+- `client/src/pages/AdminPanel.tsx` — Multi-tenant RBAC admin console: role switcher (admin/physician/staff), permission badge display, action buttons gated by `can()`, broadcast alert button, tenant list from API. Routes: `/admin-panel`
+- `client/src/pages/WorkflowCanvasFull.tsx` (updated) — AI auto-build toolbar: prompt input + "✨ Generate" button → calls `/api/workflows/auto`, loads returned nodes/edges onto canvas. Click on any conditionNode → opens IfBlockEditor overlay panel. Both ConditionNode and IfBlockEditor registered
+
+**Routes added:** `/admin-panel` in App.tsx
+
+**Test count:** 1593/1593 passing across 50 files (+57 new tests in `tests/unit/batch16.test.ts`)
