@@ -2166,6 +2166,11 @@ export async function registerRoutes(
   app.use("/api", batch18Routes);
   console.log("[Batch18] Vision agent | ECW pilot hardening | revenue optimizer | central orchestrator | connector router | action cache — all wired at /api/*");
 
+  const { default: batch19Routes, initBatch19 } = await import("./batch19Routes");
+  app.use("/api", batch19Routes);
+  initBatch19(httpServer);
+  console.log("[Batch19] Unified system bus | modules state | live real system | live billing | region cluster | master control | WebSocket stream — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

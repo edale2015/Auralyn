@@ -120,6 +120,7 @@ import PhysicianCopilot from "@/pages/PhysicianCopilot";
 import AdminPanel from "@/pages/AdminPanel";
 import UIAutomationPanel from "@/pages/UIAutomationPanel";
 import ControlTower from "@/pages/ControlTower";
+import MasterControl from "@/pages/MasterControl";
 
 validateRoutes();
 
@@ -225,6 +226,7 @@ function WorkbenchRouter() {
         <Route path="/admin-panel" component={AdminPanel} />
         <Route path="/ui-automation" component={UIAutomationPanel} />
         <Route path="/control-tower" component={ControlTower} />
+        <Route path="/master-control" component={MasterControl} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

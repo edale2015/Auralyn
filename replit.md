@@ -951,3 +951,22 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added:** `/control-tower` in App.tsx
 
 **Test count:** 1667/1667 passing across 52 files (+44 new tests in `tests/unit/batch18.test.ts`)
+
+## Batch 19 — Unified System Bus + Module State Reporters + Live Real System + Live Billing + Region Cluster + Master Control Dashboard (COMPLETE)
+
+**Backend modules (6 new files):**
+- `server/control/systemBus.ts` — `systemBus` (alias of `controlBus`), `publish(event, data)`, `subscribe(event, handler)`, `unsubscribe(event, handler)`, `publishUpdate(data)` for broadcasting real-time state changes to all WebSocket subscribers
+- `server/control/modulesState.ts` — Per-module state reporters: `clinicalState()` (activeCases, safetyMismatch from live simulation snapshot), `automationState()` (templates, failures, lastRun), `revenueState()` (dailyRevenue, denialRate), `visionState()` (successRate, fallbackRate), `integrationState()` (epic/ecw/chatgpt/whatsapp checks via env vars). `getUnifiedState()` composes all four. Utilities: `healthScore(state)` composite `(1-safetyMismatch)×0.4 + (1-denialRate)×0.3 + successRate×0.3`. `smartSecondary(ctx)` question engine (duration → severity → null chain). `instantSummary(data)` physician format. `autoRecover(state)` ECW/Epic restart advisor. `runTask(type, data)` universal dispatcher (triage/revenue/automation). `nextStep(patient)` navigator. `globalTrend(data[])` complaint frequency map. `systemInsight(state)` latency/safety diagnostic
+- `server/control/regionCluster.ts` — `routeGlobal(body)`: tries REGION_EAST → REGION_WEST → REGION_EU env-configured URLs, returns first successful `{region, data}`, throws if all fail. `autoScale(queueDepth)`: returns 20/>200, 10/>100, 3/else. `getConfiguredRegions()`: lists which regions have env vars set
+- `server/pilot/liveRealSystem.ts` — `runLiveSystem(patient)`: full production pipeline — `runFinalPipeline` → parallel `writeEHRAll` → `processRevenue` → `publishUpdate` on system bus → returns `{disposition, revenue, ehr}`
+- `server/revenue/liveBilling.ts` — `submitLiveClaim(claim)`: POST to `PAYER_API` with Bearer auth; graceful `{status:"skipped"}` when unconfigured. `optimizeClaim(claim)`: Private+URGENT → 99285, Medicaid → 99284 (immutable)
+- `server/batch19Routes.ts` — 18 routes wired. `initBatch19(httpServer)` starts WebSocket `startControlStream` and logs confirmation
+
+**Frontend (1 new page):**
+- `client/src/pages/MasterControl.tsx` — Full unified command center: Clinical panel (activeCases + safety%), Automation panel (templates + failures), Revenue panel (dailyRevenue + denial rate), Vision Agent panel (success/fallback rates), Integrations grid (Epic/ECW/ChatGPT/WhatsApp status dots), Control Action buttons (Simulation/Stress/Repair/DeployRegion/PublishUpdate), Panel Navigation grid. All data auto-refreshes every 3s via `useQuery`. System health score badge in header. Routes: `/master-control`
+
+**Key routes added (18 new):** `/api/control/state/unified`, `/api/control/modules/{clinical,automation,revenue,vision,integration}`, `/api/control/action`, `/api/control/health-score`, `/api/control/insight`, `/api/control/recover`, `/api/task/run`, `/api/navigator/next-step`, `/api/trends/global`, `/api/clinical/smart-secondary`, `/api/clinical/instant-summary`, `/api/live/run`, `/api/revenue/billing/submit|optimize`, `/api/region/route|scale|configured`
+
+**Routes added:** `/master-control` in App.tsx
+
+**Test count:** 1711/1711 passing across 53 files (+44 new tests in `tests/unit/batch19.test.ts`)
