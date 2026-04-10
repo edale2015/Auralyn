@@ -776,3 +776,26 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /api/ops/maintenance-tasks` — maintenance task list
 
 **Test count:** 1260/1260 passing across 43 files (+47 new tests in `tests/unit/batch9.test.ts`)
+
+## Batch 10 — Pilot Orchestrator + Eligibility Engine + Chat-Triage Bridge + Deck Builder + System Monitor (COMPLETE)
+
+**Modules added:**
+- `server/pilot/pilotOrchestrator.ts` — `runPilot()`: full pipeline: triage → FHIR/Epic write → denial prediction → CPT fallback on high denial risk (99285→99284) → claim submission. Returns disposition, CPT, denialRisk, claimId, fhirPushed
+- `server/revenue/eligibility.ts` — `checkEligibility()` (PAYER_API call, degrades gracefully in sandbox), `scrubClaim()` (validates insurance/CPT/patientId, auto-corrects overcoding), `revenueKPIs()` (total, denialRate, estimatedRevenue, approvedCount)
+- `server/patient/chatTriageBridge.ts` — `patientChatTriage()` (GPT-4o-mini + live triage pipeline combined: returns LLM reply + clinical disposition), `scheduleFollowup()` (per-patient timeout map, replaces on re-schedule), `cancelFollowup()`, `getPendingFollowups()`
+- `server/exec/deckBuilder.ts` — `buildDeckMarkdown()` (rich Markdown deck: scale, safety, accuracy, revenue, moat, tech, next steps), `buildDeck()` (writes deck.md to disk)
+- `server/ops/systemMonitor.ts` — `saveConversation()`/`getConversation()`/`clearConversation()` (200-msg ring buffer per user), `heartbeat()` (uptime, heapUsedMb, heapTotalMb, rss), `maintenanceLoop()` (idempotent 1hr broadcast cycle), `triageBudget()` (vitals→acuity level 1-6), `optimalFacility()` (distance+load sort, non-mutating)
+
+**18 new endpoints:**
+- `POST /api/pilot/orchestrate` — full FHIR + billing + denial-guarded pilot run
+- `GET /api/revenue/eligibility/:patientId` — payer eligibility check
+- `POST /api/revenue/scrub` / `kpis` — claim scrubbing + revenue KPIs
+- `POST /api/patient/chat-triage` — GPT + clinical triage combined response
+- `POST /api/patient/followup/schedule` / `DELETE /:patientId` / `GET /pending` — follow-up scheduler
+- `POST /api/exec/deck` / `GET` — markdown deck generation
+- `GET /api/ops/heartbeat` — process health snapshot
+- `POST /api/ops/conversation` / `GET /:userId` / `DELETE /:userId` — conversation memory
+- `POST /api/ops/maintenance/start` / `stop` — maintenance loop control
+- `POST /api/ops/triage-budget` / `optimal-facility` — adaptive triage + routing
+
+**Test count:** 1312/1312 passing across 44 files (+52 new tests in `tests/unit/batch10.test.ts`)
