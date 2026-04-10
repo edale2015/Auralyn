@@ -114,6 +114,9 @@ import WorkflowCanvasFull from "@/pages/WorkflowCanvasFull";
 import SmartLaunch from "@/pages/SmartLaunch";
 import SmartCallback from "@/pages/SmartCallback";
 import AlertRules from "@/pages/AlertRules";
+import EpicTest from "@/pages/EpicTest";
+import MultiTenantDashboard from "@/pages/MultiTenantDashboard";
+import PhysicianCopilot from "@/pages/PhysicianCopilot";
 
 validateRoutes();
 
@@ -213,6 +216,9 @@ function WorkbenchRouter() {
         <Route path="/smart-launch" component={SmartLaunch} />
         <Route path="/smart-callback" component={SmartCallback} />
         <Route path="/alert-rules" component={AlertRules} />
+        <Route path="/epic-test" component={EpicTest} />
+        <Route path="/multi-tenant" component={MultiTenantDashboard} />
+        <Route path="/physician-copilot" component={PhysicianCopilot} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

@@ -875,3 +875,22 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added:** `/workflow-canvas-full`, `/alert-rules` in App.tsx
 
 **Test count:** 1508/1508 passing across 48 files (+39 new tests in `tests/unit/batch14.test.ts`)
+
+## Batch 15 — Visual IF/ELSE Node + Multi-Tenant + ECW + SLO/On-Call + Epic UI + Physician Copilot (COMPLETE)
+
+**Backend modules (4 new files):**
+- `server/tenancy/tenant.ts` — `getTenant(req)`: reads `x-tenant-id` header, falls back to `"default"`. `scopedQuery(tenant, table)`: generates SQL with tenant filter, strips dangerous chars from table name (no injection). `buildTenantMetrics(tenant, overrides)`: typed metric builder. `listTenants()`: returns known clinic roster. Routes: `GET /api/tenants`, `GET /api/tenants/stats?tenant=`
+- `server/integrations/ecwAdapter.ts` — `sendToECWEncounter(data)`: real REST POST to ECW_API with Bearer auth; graceful `{success:false}` when env vars absent. `safeEHR(fn, data)`: returns `"ok"` or `"queued"` — on failure queues a 1-second retry via setTimeout. `syncSystems(data)`: fires ECW encounter + Epic FHIR Observation in parallel, returns `{ecw, epic}` status pair. Routes: `POST /api/ecw/encounter`, `POST /api/ecw/sync`
+- `server/clinical/sloUtils.ts` — `computeSLO(metrics)`: `{availability: 0.999|0.99, latency: bool}`. `onCallAlert(msg)`: broadcasts Slack+WhatsApp simultaneously. `checkSLOAndAlert(metrics)`: computes SLO, fires `onCallAlert` for any violation. `anomalyCard(data)`: returns `"High ER spike"` when erRate > 0.3, else null. `rankQuestions(qs, weights)`: ML-weighted sort, immutable (doesn't mutate input). Routes: `POST /api/slo/compute`, `POST /api/slo/oncall`, `POST /api/monitoring/anomaly`
+- `server/batch15Routes.ts` — wires all tenant, ECW, SLO, anomaly, Epic test, and rank-questions endpoints
+
+**Frontend (4 new pages + 2 updated):**
+- `client/src/components/ConditionNode.tsx` — Fully interactive IF/ELSE ReactFlow node: editable "field" + "equals" inputs, dual source handles for THEN (left) and ELSE (right), amber-yellow styling, `memo` for perf. Fires `data.onChange` on every edit
+- `client/src/pages/WorkflowCanvas.tsx` (updated) — Registers `conditionNode` type via `nodeTypes` prop. "Add Condition" button now spawns a live `ConditionNode` instead of a static label node. onChange updates the node's data in-place in the node state
+- `client/src/pages/EpicTest.tsx` — Triggers `POST /api/epic/test` against the Epic sandbox, displays full JSON result. Routes: `/epic-test`
+- `client/src/pages/MultiTenantDashboard.tsx` — Tenant selector (clinicA/B/C/default), live stats cards (patient count, avg latency, ER rate, SLO availability). Anomaly banner fires when erRate > 0.3. Auto-refreshes every 30s. Routes: `/multi-tenant`
+- `client/src/pages/PhysicianCopilot.tsx` — 2-second decision mode: type chief complaint, press Enter or "Triage →", get instant `QuickDecision` display (color-coded: red=ER_NOW, orange=URGENT, green=ROUTINE, blue=MONITORING). Calls `/api/triage/fast`. Routes: `/physician-copilot`
+
+**Routes added:** `/epic-test`, `/multi-tenant`, `/physician-copilot` in App.tsx
+
+**Test count:** 1536/1536 passing across 49 files (+28 new tests in `tests/unit/batch15.test.ts`)

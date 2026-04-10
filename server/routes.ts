@@ -2150,6 +2150,10 @@ export async function registerRoutes(
   app.use("/api", batch14Routes);
   console.log("[Batch14] Graph utils | alert rules engine | QA utils | golden runner | Telegram + multi-channel broadcast — all wired at /api/*");
 
+  const { default: batch15Routes } = await import("./batch15Routes");
+  app.use("/api", batch15Routes);
+  console.log("[Batch15] Multi-tenant | ECW adapter | SLO+oncall | Epic test UI | Condition node | Physician copilot — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

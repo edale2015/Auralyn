@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import ReactFlow, {
   addEdge,
   useEdgesState,
@@ -12,6 +12,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { useToast } from "@/hooks/use-toast";
+import ConditionNode from "@/components/ConditionNode";
 
 const stepStyle  = { background: "#1e3a5f", color: "#fff", border: "1px solid #3b82f6", borderRadius: 8 };
 const condStyle  = { background: "#451a03", color: "#fff", border: "1px solid #f59e0b", borderRadius: 8 };
@@ -24,6 +25,8 @@ const initialNodes: Node[] = [
   { id: "3", position: { x: 510, y: 80 }, data: { label: "💰 Bill" },           style: billStyle },
   { id: "4", position: { x: 740, y: 80 }, data: { label: "🏥 Send Hospital" }, style: hospStyle },
 ];
+
+const nodeTypes = { conditionNode: ConditionNode };
 
 export default function WorkflowCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -41,12 +44,14 @@ export default function WorkflowCanvas() {
       ...prev,
       {
         id,
+        type: "conditionNode",
         position: { x: 200, y: 220 },
         data: {
-          label: "🔀 IF risk == high",
           condition: { field: "risk", equals: "high" },
+          onChange: (d: any) => {
+            setNodes(ns => ns.map(n => n.id === id ? { ...n, data: d } : n));
+          },
         },
-        style: condStyle,
       },
     ]);
   }
@@ -115,6 +120,7 @@ export default function WorkflowCanvas() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          nodeTypes={nodeTypes}
           fitView
         >
           <Background color="#374151" gap={16} />
