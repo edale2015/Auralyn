@@ -34,6 +34,7 @@ import AutomationDashboard from "@/pages/AutomationDashboard";
 import AutomationStudio from "@/pages/AutomationStudio";
 import LiveSimulationPage from "@/pages/LiveSimulationPage";
 import LiveCommandCenter from "@/pages/LiveCommandCenter";
+import PilotDashboardPage from "@/pages/PilotDashboardPage";
 import AutomationRunDetail from "@/pages/AutomationRunDetail";
 import AutomationRecorder from "@/pages/AutomationRecorder";
 import AutomationReplay from "@/pages/AutomationReplay";
@@ -126,6 +127,7 @@ function WorkbenchRouter() {
         <Route path="/automation/studio" component={AutomationStudio} />
         <Route path="/live-simulation" component={LiveSimulationPage} />
         <Route path="/command-center" component={LiveCommandCenter} />
+        <Route path="/pilot-dashboard" component={PilotDashboardPage} />
         <Route path="/automation/recorder" component={AutomationRecorder} />
         <Route path="/automation/replay/:runId" component={AutomationReplay} />
         <Route path="/automation/health" component={TemplateHealthDashboard} />

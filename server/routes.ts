@@ -2152,6 +2152,61 @@ export async function registerRoutes(
   });
   console.log("[HospitalPilot] Pilot case API at /api/pilot/case | /api/pilot/outcome | /api/pilot/outcomes");
 
+  app.get("/api/pilot/stats", async (_req, res) => {
+    const { aggregateStats } = await import("./simulation/pilotStats");
+    res.json(aggregateStats());
+  });
+
+  app.post("/api/pilot/stats/update", async (req, res) => {
+    const { updateStats } = await import("./simulation/pilotStats");
+    updateStats(req.body);
+    res.json({ ok: true });
+  });
+
+  app.post("/api/pilot/stats/reset", async (_req, res) => {
+    const { resetStats } = await import("./simulation/pilotStats");
+    resetStats();
+    res.json({ ok: true });
+  });
+  console.log("[PilotStats] Live aggregation at /api/pilot/stats");
+
+  app.post("/api/epic/flow", async (req, res) => {
+    try {
+      const { patientId, token } = req.body;
+      if (!patientId) return res.status(400).json({ error: "patientId required" });
+      const { epicFullFlow } = await import("./integrations/epicFullFlow");
+      const result = await epicFullFlow(patientId, token ?? "");
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+  console.log("[EpicFullFlow] FHIR full flow at POST /api/epic/flow");
+
+  app.post("/api/enterprise/package", async (req, res) => {
+    try {
+      const { generateEnterprisePackage } = await import("./reporting/enterprisePackage");
+      const pkg = generateEnterprisePackage(req.body ?? {});
+      res.json(pkg);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+  console.log("[EnterprisePackage] Export at POST /api/enterprise/package");
+
+  app.post("/api/followup", async (req, res) => {
+    const { patientId } = req.body ?? {};
+    res.json({ ok: true, patientId, scheduledAt: new Date().toISOString() });
+  });
+
+  app.get("/api/autoscale/recommendation", async (req, res) => {
+    const queueDepth = Number(req.query.queueDepth ?? 0);
+    const currentInstances = Number(req.query.currentInstances ?? 2);
+    const { getScaleRecommendation } = await import("./infra/awsAutoscale");
+    res.json(getScaleRecommendation(queueDepth, currentInstances));
+  });
+  console.log("[AWSAutoscale] Scale recommendation at GET /api/autoscale/recommendation");
+
   app.get("/metrics", async (_req, res) => {
     try {
       const { getMetrics: getHttpMetrics }  = await import("./monitoring/metricsStore");

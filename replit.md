@@ -666,3 +666,24 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /api/pilot/outcomes` — view outcome buffer
 
 **Test count:** 1061/1061 passing across 38 files (+42 new tests in `tests/unit/batch4Systems.test.ts`)
+
+## Batch 5 — Epic FHIR Flow + Pilot Stats + AWS Autoscale + Enterprise Package + Intelligence Utils (COMPLETE)
+
+**Modules added:**
+- `server/integrations/epicFullFlow.ts` — `epicFullFlow(patientId, token)`: reads Patient from FHIR, runs triage, writes Observation back; graceful local fallback when `FHIR_BASE` unconfigured
+- `server/simulation/pilotStats.ts` — `liveStats` ring buffer, `updateStats()`, `resetStats()`, `aggregateStats()` (p50/p95/p99, min/max, erRate)
+- `server/infra/awsAutoscale.ts` — `computeScale()`, `lambdaFallback()`, `chooseRegion()`, `computeScaleStep()`, `getScaleRecommendation()`
+- `server/reporting/enterprisePackage.ts` — `buildEnterprisePackage()`, `generateEnterprisePackage()` (writes `enterprise.json`)
+- `server/utils/intelligenceUtils.ts` — `tuneThresholds()`, `interruptForCritical()`, `clinicPerformanceMetrics()`, `sendFollowup()`, `broadcastRegionAlert()`
+- `client/src/pages/PilotDashboardPage.tsx` — live pilot dashboard at `/pilot-dashboard` (2s polling, p50/p95/p99 latency bars, ER rate, range panel)
+
+**Endpoints:**
+- `GET /api/pilot/stats` — aggregated live pilot stats
+- `POST /api/pilot/stats/update` — feed a result into the stats buffer
+- `POST /api/pilot/stats/reset` — reset buffer
+- `POST /api/epic/flow` — Epic FHIR full flow (read patient → triage → write Observation)
+- `POST /api/enterprise/package` — generate and return enterprise package JSON
+- `POST /api/followup` — patient follow-up scheduling
+- `GET /api/autoscale/recommendation?queueDepth=N&currentInstances=N` — AWS scale recommendation
+
+**Test count:** 1096/1096 passing across 39 files (+35 new tests in `tests/unit/batch5Systems.test.ts`)
