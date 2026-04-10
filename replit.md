@@ -729,3 +729,25 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /fda/bundle` — enterprise readiness bundle
 
 **Test count:** 1165/1165 passing across 41 files (+48 new tests in `tests/unit/batch7Autopilot.test.ts`)
+
+## Batch 8 — Live Pilot + Production Loop + CPT Revenue + National Rollout + Clinic Intelligence (COMPLETE)
+
+**Modules added:**
+- `server/pilot/livePilot.ts` — `runLivePilot()` (intake→triage→EMS→hospital, full flow), `ingestHospitalOutcome()` (feeds meta-learning + outcome buffer)
+- `server/runtime/productionLoop.ts` — `startProductionLoop()` (5s autopilot+watchdog cycle, no `process.exit`), `stopProductionLoop()`, `watchdog()` (broadcasts CRITICAL alert at >2% mismatch), `getLoopStatus()`, `isLoopRunning()`, `getCycleCount()`
+- `server/billing/cptRevenue.ts` — `assignCPT()` (disposition→CPT: 99285/84/83/82/13), `estimateRevenue()` (visit array→total $), `computePLV()` (patient lifetime value @$150/visit), `clinicScore()` (efficiency, erRate, avgRevenue)
+- `server/national/rolloutEngine.ts` — `findExpansionTargets()` (pop>500k, load<0.5, no telemed), `deployRegion()` (queues or calls DEPLOY_API), `runNationalExpansion()` (full sequential rollout with broadcast), 500-entry deployment log
+- `server/clinical/clinicIntelligence.ts` — `shedLoad()` (load>80→telemed redirect), `recoverSystem()` (logs + broadcasts), `broadcastNational()` (national alert with controlBus)
+- `server/batch8Routes.ts` — Unified router for all 5 systems at `/api/*`
+
+**19 new endpoints:**
+- `POST /api/pilot/live` — full live patient flow
+- `POST /api/pilot/outcome` — ingest hospital outcome feedback
+- `POST /api/production/loop/start` / `stop` / `GET status` — production loop control
+- `GET /api/production/watchdog` — live safety check
+- `POST /api/billing/cpt` / `revenue` / `plv` / `clinic-score` — billing intelligence
+- `POST /api/national/expansion/targets` / `run` — rollout targeting and execution
+- `POST /api/national/deploy` / `GET /api/national/deployment/log` — per-region deploy
+- `POST /api/intel/shed-load` / `recover` / `broadcast` — clinic intelligence
+
+**Test count:** 1213/1213 passing across 42 files (+48 new tests in `tests/unit/batch8.test.ts`)
