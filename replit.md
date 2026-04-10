@@ -934,3 +934,20 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added:** `/ui-automation` in App.tsx
 
 **Test count:** 1623/1623 passing across 51 files (+30 new tests in `tests/unit/batch17.test.ts`)
+
+## Batch 18 — Vision Agent + ECW Pilot Hardening + Revenue Optimizer + Central Orchestrator + Control Tower (COMPLETE)
+
+**Backend modules (6 new files):**
+- `server/automation/visionAgent.ts` — `findByVision(screenshot, goal)`: lazy GPT-4o-mini image analysis returning pixel coordinates; graceful null on failure. `clickAt(page, x, y)`: Playwright mouse click at coordinates. `smartClick(page, label)`: 4-strategy selector first → vision fallback → throws on total failure. `rememberSelector/recallSelector/clearSelectorMemory`: persistent selector learning memory. `rememberUI/recallUI`: screen-level mapping memory. `diagnoseUIError(err)`: categorizes timeout/selector/FHIR/network errors. `buildHeatmap(events[])`: filters + maps click coordinates. `fallbackChain(data)`: ECW → Epic → "failed" waterfall routing
+- `server/automation/visionLoop.ts` — `runVisionAgent(page, goal, maxAttempts=5)`: screenshot→findByVision→clickAt loop with 500ms wait between attempts, returns `{success, attempts}`. `actOnUI(page, goal)`: tries vision loop first, falls back to smartClick, returns `{method}` discriminant
+- `server/automation/ecwPilot.ts` — `safeECWAutomation(template)`: try/catch wrapper around runUIAutomation with Slack alert on failure. `dualWriteEHR(data)`: Promise.allSettled ECW API + UI write, returns `{api, ui}` status pair. `ecwPilot(patient, template)`: full ECW workflow — triage → safeECWAutomation → result object
+- `server/revenue/revenueOptimizer.ts` — `optimizeRevenue(claim)`: Private+URGENT → CPT 99285 upgrade (immutable). `analyzeRevenue(claims[])`: sum reducer. `enterpriseOptimize(claim)`: three-strategy chain (Private/medium/ER_NOW → best CPT). `learnFromDenials(claims[])`: denied CPT frequency map. `prioritizedWrites(tasks[])`: priority-sorted Promise.all for write batching
+- `server/clinical/orchestrator.ts` — `orchestrate(patient)`: full production pipeline (runFinalPipeline → processRevenue → writeEHRAll → safeExternalCall hospital alert). `systemScore(metrics)`: composite `(1-errorRate)×0.4 + (1-latency/3000)×0.3 + (1-denialRate)×0.3` clamped to [0,1]. `routeConnector(type, payload)`: universal dispatcher to slack/telegram/broadcast/ecw with noop fallback. `cacheAction/getCachedAction/clearActionCache`: in-process action cache for physician-speed replays
+- `server/batch18Routes.ts` — all 14 routes wired
+
+**Frontend (1 new page):**
+- `client/src/pages/ControlTower.tsx` — Unified command center: Live Clinic Loop stats (auto-refresh every 5s), System Health Score gauge with live metric inputs, Connector Router (select type + message → route), Central Orchestrator one-click demo run, navigation links to all system panels. Routes: `/control-tower`
+
+**Routes added:** `/control-tower` in App.tsx
+
+**Test count:** 1667/1667 passing across 52 files (+44 new tests in `tests/unit/batch18.test.ts`)

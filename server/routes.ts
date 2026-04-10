@@ -2162,6 +2162,10 @@ export async function registerRoutes(
   app.use("/api", batch17Routes);
   console.log("[Batch17] Real clinic loop | payer API | national rollout | marketplace | UI automation | EHR sync — all wired at /api/*");
 
+  const { default: batch18Routes } = await import("./batch18Routes");
+  app.use("/api", batch18Routes);
+  console.log("[Batch18] Vision agent | ECW pilot hardening | revenue optimizer | central orchestrator | connector router | action cache — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

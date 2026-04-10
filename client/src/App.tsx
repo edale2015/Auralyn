@@ -119,6 +119,7 @@ import MultiTenantDashboard from "@/pages/MultiTenantDashboard";
 import PhysicianCopilot from "@/pages/PhysicianCopilot";
 import AdminPanel from "@/pages/AdminPanel";
 import UIAutomationPanel from "@/pages/UIAutomationPanel";
+import ControlTower from "@/pages/ControlTower";
 
 validateRoutes();
 
@@ -223,6 +224,7 @@ function WorkbenchRouter() {
         <Route path="/physician-copilot" component={PhysicianCopilot} />
         <Route path="/admin-panel" component={AdminPanel} />
         <Route path="/ui-automation" component={UIAutomationPanel} />
+        <Route path="/control-tower" component={ControlTower} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">
