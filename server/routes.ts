@@ -2078,6 +2078,71 @@ export async function registerRoutes(
   app.use("/api", oversightRoutes);
   console.log("[Oversight] Autonomous oversight agent at /api/oversight/run");
 
+  const { default: mlRoutes } = await import("./ml/mlRoutes");
+  app.use("/api/ml", mlRoutes);
+  console.log("[ML] Admission model at /api/ml/predict | /api/ml/drift");
+
+  const { default: reportingRoutes } = await import("./reporting/reportingRoutes");
+  app.use("/api/reporting", reportingRoutes);
+  console.log("[Reporting] Exec brief + FDA pack at /api/reporting/exec-brief");
+
+  const { default: policyRoutes } = await import("./clinical/policyRoutes");
+  app.use("/api/policies", policyRoutes);
+  console.log("[Policies] Triage policy engine at /api/policies");
+
+  app.get("/metrics", async (_req, res) => {
+    try {
+      const { getMetrics: getHttpMetrics }  = await import("./monitoring/metricsStore");
+      const { toPrometheusText }            = await import("./automation/metricsTracker");
+      const { getQueueState }               = await import("./automation/queue");
+
+      const http  = getHttpMetrics();
+      const queue = getQueueState();
+      const ts    = Math.floor(Date.now() / 1000) * 1000;
+
+      const httpLines = [
+        "# HELP auralyn_http_requests_total Total HTTP requests processed",
+        "# TYPE auralyn_http_requests_total counter",
+        `auralyn_http_requests_total ${http.totalRequests} ${ts}`,
+        "",
+        "# HELP auralyn_http_errors_total Total HTTP errors",
+        "# TYPE auralyn_http_errors_total counter",
+        `auralyn_http_errors_total ${http.totalErrors} ${ts}`,
+        "",
+        "# HELP auralyn_http_error_rate HTTP error rate (0–1)",
+        "# TYPE auralyn_http_error_rate gauge",
+        `auralyn_http_error_rate ${http.errorRate} ${ts}`,
+        "",
+        "# HELP auralyn_http_avg_latency_ms Average HTTP latency in milliseconds",
+        "# TYPE auralyn_http_avg_latency_ms gauge",
+        `auralyn_http_avg_latency_ms ${http.avgLatency} ${ts}`,
+        "",
+        "# HELP auralyn_http_p95_latency_ms P95 HTTP latency in milliseconds",
+        "# TYPE auralyn_http_p95_latency_ms gauge",
+        `auralyn_http_p95_latency_ms ${http.p95Latency} ${ts}`,
+        "",
+        "# HELP auralyn_queue_running Active automation workers",
+        "# TYPE auralyn_queue_running gauge",
+        `auralyn_queue_running ${queue.running} ${ts}`,
+        "",
+        "# HELP auralyn_queue_pending Pending automation jobs",
+        "# TYPE auralyn_queue_pending gauge",
+        `auralyn_queue_pending ${queue.pending} ${ts}`,
+        "",
+        "# HELP auralyn_queue_failure_rate Automation queue failure rate (0–1)",
+        "# TYPE auralyn_queue_failure_rate gauge",
+        `auralyn_queue_failure_rate ${queue.failureRate} ${ts}`,
+      ].join("\n");
+
+      const body = httpLines + "\n\n" + toPrometheusText() + "\n";
+      res.set("Content-Type", "text/plain; version=0.0.4");
+      res.end(body);
+    } catch (err: any) {
+      res.status(500).send(`# Error generating metrics: ${err.message}\n`);
+    }
+  });
+  console.log("[Prometheus] /metrics endpoint active");
+
   return httpServer;
 }
 

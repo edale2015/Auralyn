@@ -581,3 +581,26 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `client/src/App.tsx` — Added `/automation/studio` route → `AutomationStudio`
 
 **Test count (Visual Editor):** 919/919 passing across 34 files (+12 new tests in `tests/unit/automationStudio.test.ts`)
+
+---
+
+### Multi-Packet — ML Pipeline, Scaling Infrastructure, SMART-on-FHIR, Observability
+
+**New files:**
+- `server/ml/featureStore.ts` — `buildFeatures(input)` → 15-field numeric feature vector (age, sbp, spo2, hr, rr, temp, chestPain, sob, diaphoresis, confusion, fever, immunocompromised, ageOver65, ageOver80, dbp); `normalizeFeatures()` for model input
+- `server/ml/admissionModel.ts` — Logistic regression admission risk model (15 weights + bias); `predictAdmission()` returns probability, risk level, top-5 contributing factors, modelVersion; `explainPrediction()` for interpretability; `dataDrift()` SPO2 mean-shift detector with configurable threshold; `trainModel()` offline training stub
+- `server/ml/mlRoutes.ts` — REST API: `POST /api/ml/predict`, `POST /api/ml/features`, `POST /api/ml/explain`, `POST /api/ml/drift`, `POST /api/ml/train`
+- `server/performance/latencyBudget.ts` — `enforceLatencyBudget(start, budgetMs)` → `{ degrade, elapsed, budget, reason }`; `retryWithJitter(fn, opts)` with exponential backoff + random jitter; `timeoutRace(promise, ms)` utility
+- `server/performance/canaryRouter.ts` — `shouldUseNewModel(patientId, pct)` stable-hash canary rollout; `assignExperiment(userId, name, pct)` deterministic A/B; `canaryDecide(id, opts)` higher-order decision helper
+- `server/clinical/policyEngine.ts` — Dynamic triage policy store: 7 seeded policies (NY region, MEDICARE/MEDICAID payer, global kill switch); `getPolicy()`, `setPolicy()`, `isPolicyEnabled()`, `getPoliciesForContext({ region, payer })`, `globalKillSwitch(mismatchRate)` with 2% hard threshold
+- `server/clinical/policyRoutes.ts` — REST API: `GET /api/policies`, `GET /api/policies/context?region=&payer=`, `GET /api/policies/:key`, `PUT /api/policies/:key`
+- `server/reporting/execBrief.ts` — `generateExecBrief(metrics)` → structured investor brief; `buildFdaPack(metrics, tests)` → Class II SaMD FDA validation pack with risk controls + auditability statements; `exportFdaPack(pack)` → writes `fda_validation_<ts>.json`; `buildPitchDeck(metrics)` → markdown pitch
+- `server/reporting/reportingRoutes.ts` — REST API: `POST /api/reporting/exec-brief`, `POST /api/reporting/fda-pack`, `POST /api/reporting/fda-pack/export`, `POST /api/reporting/pitch-deck`
+- `server/ingest/bulkIngest.ts` — `ingestNdjson(path)` sync NDJSON parser with error tracking; `ingestNdjsonStream(path, cb)` async streaming parser; `ingestCsv(path, delimiter)` CSV parser with header detection + column-count validation
+- `server/ehr/smartAuth.ts` — Complete SMART-on-FHIR layer wrapping existing low-level FHIR client: `buildSmartLaunchUrl()`, `exchangeCodeForToken()`, `getPatientFHIR()`, `createEncounterFHIR()`, `postObservationFHIR()`, `postVitalsFHIR()` (bulk vitals → parallel FHIR observations with LOINC codes)
+
+**Modified files:**
+- `server/routes.ts` — Added ML routes, reporting routes, policy routes, global `GET /metrics` Prometheus endpoint
+- `GET /metrics` — Prometheus text format: HTTP requests/errors/latency (P50/P95/avg) + queue depth/workers + full automation metrics via `toPrometheusText()`. Ready for Grafana scrape config: `targets: ["localhost:5000"]`
+
+**Test count:** 955/955 passing across 35 files (+36 new tests in `tests/unit/mlAndScaling.test.ts`)
