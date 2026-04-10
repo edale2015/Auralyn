@@ -751,3 +751,28 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `POST /api/intel/shed-load` / `recover` / `broadcast` — clinic intelligence
 
 **Test count:** 1213/1213 passing across 42 files (+48 new tests in `tests/unit/batch8.test.ts`)
+
+## Batch 9 — Denial Prediction + AI Patient Chat + Production Flow + IPO Report + System Ops (COMPLETE)
+
+**Modules added:**
+- `server/revenue/denialPredictor.ts` — `predictDenial()` (CPT/insurance risk scoring, reasons list), `routeByPayer()` (Medicaid→clinic, Private→telemed, default→self-pay), `batchPredictDenials()`
+- `server/patient/chatAgent.ts` — `patientChat()` (lazy OpenAI GPT-4o-mini, medical triage persona), `followupAgent()` (high→call, medium→SMS, low→24h check-in), `careNavigator()` (high→ER, medium→clinic, low→home+telemed)
+- `server/exec/ipoReport.ts` — `buildIPOReport()` (platform summary, 66-layer architecture, 5 moat items, FDA 510(k) pathway, $revenue, regions, agents)
+- `server/ops/systemOps.ts` — `systemHealth()` (green/yellow/red, issues list), `troubleshoot()` (FHIR/selector/Redis/timeout/ML/generic routing), `maintenanceTasks()` (6-item deterministic task list)
+- `server/revenue/productionFlow.ts` — `productionPatientFlow()` (triage→CPT assignment→denial prediction→claim submit→hospital send, full integrated flow)
+
+**Frontend:**
+- `client/src/pages/PatientAIChat.tsx` — AI triage chat page at `/patient-ai-chat` with: OpenAI-powered conversation, emergency keyword banner (chest pain / stroke / 911 etc.), real-time typing indicator, keyboard shortcut (Enter to send), disclaimer footer, full dark mode support
+
+**15 new endpoints:**
+- `POST /api/revenue/denial/predict` / `batch` — claim denial risk scoring
+- `POST /api/revenue/payer/route` — payer-aware patient routing
+- `POST /api/patient/chat` — AI triage chat (GPT-4o-mini)
+- `POST /api/patient/followup` / `navigate` — follow-up and care navigation
+- `POST /api/production/patient-flow` — full production pipeline
+- `POST /api/exec/ipo-report` / `GET` — IPO architecture summary
+- `GET /api/ops/health` — live system health (green/yellow/red)
+- `POST /api/ops/troubleshoot` — error→action mapping
+- `GET /api/ops/maintenance-tasks` — maintenance task list
+
+**Test count:** 1260/1260 passing across 43 files (+47 new tests in `tests/unit/batch9.test.ts`)

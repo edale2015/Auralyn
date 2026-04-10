@@ -2126,6 +2126,10 @@ export async function registerRoutes(
   app.use("/api", batch8Routes);
   console.log("[Batch8] Live pilot | production loop | CPT revenue | national rollout | clinic intelligence — all wired at /api/*");
 
+  const { default: batch9Routes } = await import("./batch9Routes");
+  app.use("/api", batch9Routes);
+  console.log("[Batch9] Denial prediction | AI patient chat | production flow | IPO report | system ops — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

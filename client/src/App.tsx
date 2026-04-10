@@ -18,6 +18,7 @@ import IntakeSummary from "@/pages/IntakeSummary";
 import StartVisit from "@/pages/StartVisit";
 import ProviderCaseView from "@/pages/ProviderCaseView";
 import PatientIntakeChat from "@/pages/PatientIntakeChat";
+import PatientAIChat from "@/pages/PatientAIChat";
 import HomePortal from "@/pages/HomePortal";
 import PortalRouter from "@/pages/PortalRouter";
 
@@ -231,6 +232,7 @@ function Router() {
       <Route path="/provider/case" component={ProviderCaseView} />
       <Route path="/provider/case/:caseId" component={ProviderCaseView} />
       <Route path="/chat-intake" component={PatientIntakeChat} />
+      <Route path="/patient-ai-chat" component={PatientAIChat} />
       <Route path="/portal" component={HomePortal} />
       <Route path="/portal/provider">
         {() => <PortalRouter role="provider" />}
