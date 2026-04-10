@@ -111,6 +111,7 @@ import AIInteractionMonitorPage from "@/pages/AIInteractionMonitorPage";
 import WorkflowBuilder from "@/pages/WorkflowBuilder";
 import WorkflowCanvas from "@/pages/WorkflowCanvas";
 import SmartLaunch from "@/pages/SmartLaunch";
+import SmartCallback from "@/pages/SmartCallback";
 
 validateRoutes();
 
@@ -207,6 +208,7 @@ function WorkbenchRouter() {
         <Route path="/workflow-builder" component={WorkflowBuilder} />
         <Route path="/workflow-canvas" component={WorkflowCanvas} />
         <Route path="/smart-launch" component={SmartLaunch} />
+        <Route path="/smart-callback" component={SmartCallback} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

@@ -2142,6 +2142,10 @@ export async function registerRoutes(
   app.use("/api", batch12Routes);
   console.log("[Batch12] Fast triage | live clinic | payer contracts | workflow builder | gateway | autonomy | alerts | connector hub | triage utils — all wired at /api/*");
 
+  const { default: batch13Routes } = await import("./batch13Routes");
+  app.use("/api", batch13Routes);
+  console.log("[Batch13] Branch workflows | clinic queue | high autonomy | followup utils | SMART callback — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

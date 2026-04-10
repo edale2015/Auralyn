@@ -843,3 +843,19 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes:** /workflow-builder, /workflow-canvas, /smart-launch registered in App.tsx
 
 **Test count:** 1430/1430 passing across 46 files (+67 new tests in `tests/unit/batch12.test.ts`)
+
+## Batch 13 — Branching Workflows + Clinic Queue + High Autonomy + Followup Utils + SMART Callback (COMPLETE)
+
+**Backend modules (4 files):**
+- `server/workflows/branchRunner.ts` — `runBranchWorkflow(nodes, startId, input)`: conditional workflow engine. Each node can declare `if: { field, equals, then, else }` — value match routes to `then` node, mismatch routes to `else`, missing else terminates cleanly. Chains straight-line via `next` field. Fully async step execution
+- `server/patient/clinicQueue.ts` — In-memory priority queue: `addPatient()` (auto-timestamps), `nextPatient()` (FIFO by ts, destructive), `peekQueue()` (non-destructive sorted view), `queueLength()`, `clearQueue()`
+- `server/autonomy/highAutonomy.ts` — `runHighAutonomy(state)`: policy-driven planner — ML drift → retrain, queue >50 → scale_workers, otherwise validate_templates. Respects `autonomyLevel()` safety gates (manual=execute nothing, assist=validate_templates only, semi/auto=all)
+- `server/clinical/followupUtils.ts` — `secondaryToModifiers()`: maps secondary question answers to clinical modifiers (e.g., smoker → riskFactors). `smartFollowup()`: content-aware follow-up (fever→6h temp check, chest_pain→call if worsening). `dashboardInsights()`: auto-generates insight alerts from latency/ER rate/mismatch/queue metrics. `safeExternalCall()`: wraps external calls with graceful fallback — on failure, enqueues to non-critical queue and returns `{queued:true}`. `enqueueNonCritical()` + `drainNonCriticalQueue()`
+
+**Frontend (2 files):**
+- `client/src/pages/SmartCallback.tsx` — SMART OAuth callback page: extracts `?code=` from URL, POSTs to `/api/smart/callback`, shows 3-state UI (connecting/success/error) with retry link
+- `client/src/pages/WorkflowCanvas.tsx` — Updated: added "+ Condition" button that injects a conditional `IF risk == high` node (amber-styled), plus "+ Fast Triage" and "+ Bill" step node buttons. All new nodes auto-position below existing graph
+
+**Route added:** `/smart-callback` registered in App.tsx
+
+**Test count:** 1469/1469 passing across 47 files (+39 new tests in `tests/unit/batch13.test.ts`)
