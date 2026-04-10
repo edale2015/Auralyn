@@ -637,3 +637,15 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /smart/launch`, `GET /smart/callback`, `GET /smart/status` — SMART-on-FHIR
 
 **Test count:** 989/989 passing across 36 files (+34 new tests in `tests/unit/newModules.test.ts`)
+
+## Batch 3 — Live Simulation Engine + Geo Router + Surge Forecast (COMPLETE)
+
+**Modules wired:**
+- `server/simulation/liveSimulator.ts` — 1 s tick EventEmitter with rush-hour load model; started on boot in `server/index.ts`
+- `server/ws/liveStream.ts` — WebSocket at `/ws/live-simulation` pushed on every tick; started on boot
+- `server/simulation/liveSimulatorRoutes.ts` — REST API at `/api/live-sim/status | /start | /stop | /forecast | /geo`
+- `server/simulation/surgeForecast.ts` — `forecastSurge`, `forecastWithTrend`, `detectCapacityPressure`, `adjustCapacity`, `scaleWorkers`, `syncLearning`, `buildForecastReport`
+- `server/infra/geoRouter.ts` — IP-prefix geo routing, multi-region failover URLs
+- `client/src/pages/LiveSimulationPage.tsx` — React dashboard with sparklines at `/live-simulation`
+
+**Test count:** 1019/1019 passing across 37 files (+30 new tests in `tests/unit/liveSimulator.test.ts`)

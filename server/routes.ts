@@ -2110,6 +2110,10 @@ export async function registerRoutes(
   app.use("/smart", smartRoutes);
   console.log("[SMART] Epic SMART launch + callback at /smart/launch | /smart/callback");
 
+  const { default: liveSimRoutes } = await import("./simulation/liveSimulatorRoutes");
+  app.use("/api/live-sim", liveSimRoutes);
+  console.log("[LiveSim] Live simulation API at /api/live-sim/status | /api/live-sim/forecast");
+
   app.get("/metrics", async (_req, res) => {
     try {
       const { getMetrics: getHttpMetrics }  = await import("./monitoring/metricsStore");

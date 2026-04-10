@@ -1107,6 +1107,8 @@ app.use((req, res, next) => {
         console.log("[Chaos] Chaos engineering DISABLED (production flag = false)");
       }
       startMonitorSocket(httpServer);
+      import("./ws/liveStream").then(({ startLiveStream }) => startLiveStream(httpServer)).catch(() => {});
+      import("./simulation/liveSimulator").then(({ startLiveSimulation }) => startLiveSimulation()).catch(() => {});
       startEventWorkers();
       startDeadLetterMonitor(60_000);
       initAuditHashChain().catch((e: any) => console.warn("[AUDIT-CHAIN] Init warning:", e?.message));
