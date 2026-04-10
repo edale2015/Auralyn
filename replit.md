@@ -604,3 +604,36 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /metrics` — Prometheus text format: HTTP requests/errors/latency (P50/P95/avg) + queue depth/workers + full automation metrics via `toPrometheusText()`. Ready for Grafana scrape config: `targets: ["localhost:5000"]`
 
 **Test count:** 955/955 passing across 35 files (+36 new tests in `tests/unit/mlAndScaling.test.ts`)
+
+---
+
+### Multi-Packet — Grafana Observability, SMART EHR, ML Operations, Simulation, Resilience
+
+**New server modules:**
+- `server/ml/modelRegistry.ts` — Model version store: `switchModel()`, `rollbackModel()`, `listVersions()`, immutable history with timestamps; REST via `POST /api/ml/registry/switch`, `POST /api/ml/registry/rollback`
+- `server/ml/featureLogger.ts` — Training data capture: `logFeatures(features, outcome, modelVersion)` → TRAIN_DATA JSON lines; `getFeatureLog(n)`, `exportFeatureLogNdjson()`, `getFeatureLogStats()`; REST via `GET /api/ml/features/log`, `GET /api/ml/features/export`
+- `server/ml/syntheticData.ts` — Clinically realistic synthetic generator: `generateSynthetic(n, seed)` — seeded LCG for determinism, rush-hour arrival patterns, high/low risk split; `generateLabeledDataset(n)` for training
+- `server/ml/externalMLClient.ts` — `predictML(input)` → calls `process.env.ML_URL/predict` with retry + jitter; falls back to in-process logistic model when ML_URL is unconfigured; `getMLServiceStatus()`
+- `server/ml/retrainScheduler.ts` — Accuracy watchdog: `retrainIfNeeded(metrics)` checks accuracy vs 90% threshold + minimum 100 samples; `scheduleRetrainCheck(getMetrics, intervalMs)` periodic timer; full stats via `getRetrainStats()`
+- `server/ml/mlAdminRoutes.ts` — REST API for ML admin: `/api/ml/registry/*`, `/api/ml/features/*`, `POST /api/ml/synthetic`, `GET /api/ml/external/status`, `/api/ml/retrain/*`
+- `server/analytics/riskHeatmap.ts` — `buildRiskHeatmap(patients)` → complaint-keyed aggregation with avg risk + high-risk count; `sortByPriority(patients)` → stable risk-score descending sort; `detectPatterns(data, minCount)` → high-frequency symptom extraction; `getTopRiskComplaint()`; REST via `/api/analytics/*`
+- `server/monitoring/alertBus.ts` — EventEmitter-based live alert bus: `emitAlert(msg, severity, source)` → `info|warn|critical`; `onAlert(cb)` / `onAlertBySeverity(severity, cb)` subscriptions; ring buffer (200); `getRecentAlerts(n)`, `getAlertStats()`; REST via `GET/POST /api/alerts`
+- `server/simulation/hospitalSimulator.ts` — Capacity load model: `simulateHospital(hours, opts)` → hourly arrivals with rush-hour multiplier, ER/telemed split, discharge model, overload detection, wait-time estimation; deterministic with seed; `GET /api/simulate/hospital`
+- `server/infra/resilientFetch.ts` — Multi-region HTTP failover: `resilientFetch(path, options)` → sequential region fallback with per-region health tracking; `startHealthCheckLoop(intervalMs)` → periodic health probes; `resetRegionHealth()`; configurable via `CLUSTER_*` env vars
+- `server/routes/smartRoutes.ts` — Epic SMART-on-FHIR Express router: `GET /smart/launch` → redirect to authorization URL; `GET /smart/callback` → token exchange; `GET /smart/status` → configuration check
+- `server/exec/deckGenerator.ts` — `generateDeckMarkdown(metrics)` → complete pitch deck markdown; `writeDeckFile(metrics)` → writes `deck.md`; `generateDeckJson(metrics)` → structured slide array for API responses
+
+**New config files:**
+- `grafana/provisioning/datasources/prometheus.yaml` — Prometheus datasource pointing at `http://prometheus:9090`
+- `grafana/provisioning/dashboards/dashboards.yaml` — Dashboard auto-provisioning from `/var/lib/grafana/dashboards`
+- `grafana/dashboards/auralyn.json` — 11-panel Grafana dashboard (uid: `auralyn-main`): P95/avg latency, error rate, automation runs/failures/success rate, queue depth/workers, selector heals — import via Grafana → Dashboards → Import
+
+**New API endpoints (all live):**
+- `GET /api/simulate/hospital?hours=48&seed=42` — hospital capacity simulation
+- `POST /api/analytics/heatmap` / `/priority` / `/patterns` — risk analytics
+- `GET /api/alerts`, `POST /api/alerts` — live alert bus
+- `GET /api/ml/registry`, `POST /api/ml/registry/switch|rollback` — model versioning
+- `POST /api/ml/synthetic` — synthetic data generation
+- `GET /smart/launch`, `GET /smart/callback`, `GET /smart/status` — SMART-on-FHIR
+
+**Test count:** 989/989 passing across 36 files (+34 new tests in `tests/unit/newModules.test.ts`)

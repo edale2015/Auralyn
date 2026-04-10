@@ -1,0 +1,109 @@
+{
+  "uid": "auralyn-main",
+  "title": "Auralyn Control Tower",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "HTTP P95 Latency (ms)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "auralyn_http_p95_latency_ms", "legendFormat": "P95 Latency" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "HTTP Avg Latency (ms)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "auralyn_http_avg_latency_ms", "legendFormat": "Avg Latency" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "HTTP Error Rate",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "auralyn_http_error_rate", "legendFormat": "Error Rate" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Automation Failures Total",
+      "gridPos": { "x": 8, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "automation_failures_total", "legendFormat": "Failures" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Automation Success Rate",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "automation_success_rate", "legendFormat": "Success Rate" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Queue Depth",
+      "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "auralyn_queue_pending", "legendFormat": "Pending Jobs" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Active Workers",
+      "gridPos": { "x": 6, "y": 16, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "auralyn_queue_running", "legendFormat": "Running Workers" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Total HTTP Requests",
+      "gridPos": { "x": 12, "y": 16, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "auralyn_http_requests_total", "legendFormat": "Total Requests" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Queue Failure Rate",
+      "gridPos": { "x": 18, "y": 16, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "auralyn_queue_failure_rate", "legendFormat": "Queue Failure Rate" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Automation Runs Total",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "automation_runs_total", "legendFormat": "Total Runs" }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Selector Heals Total",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "automation_selector_heals_total", "legendFormat": "Selector Heals" }
+      ]
+    }
+  ]
+}

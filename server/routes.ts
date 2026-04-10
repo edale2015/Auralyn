@@ -2082,6 +2082,10 @@ export async function registerRoutes(
   app.use("/api/ml", mlRoutes);
   console.log("[ML] Admission model at /api/ml/predict | /api/ml/drift");
 
+  const { default: mlAdminRoutes } = await import("./ml/mlAdminRoutes");
+  app.use("/api/ml", mlAdminRoutes);
+  console.log("[ML] Admin routes at /api/ml/registry | /api/ml/synthetic | /api/ml/features/log");
+
   const { default: reportingRoutes } = await import("./reporting/reportingRoutes");
   app.use("/api/reporting", reportingRoutes);
   console.log("[Reporting] Exec brief + FDA pack at /api/reporting/exec-brief");
@@ -2089,6 +2093,22 @@ export async function registerRoutes(
   const { default: policyRoutes } = await import("./clinical/policyRoutes");
   app.use("/api/policies", policyRoutes);
   console.log("[Policies] Triage policy engine at /api/policies");
+
+  const { default: analyticsRoutes } = await import("./analytics/analyticsRoutes");
+  app.use("/api/analytics", analyticsRoutes);
+  console.log("[Analytics] Risk heatmap + priority sort + patterns at /api/analytics");
+
+  const { default: simulatorRoutes } = await import("./simulation/simulatorRoutes");
+  app.use("/api/simulate", simulatorRoutes);
+  console.log("[Simulator] Hospital capacity simulator at /api/simulate/hospital");
+
+  const { default: alertRoutes } = await import("./monitoring/alertRoutes");
+  app.use("/api/alerts", alertRoutes);
+  console.log("[Alerts] Live alert bus at /api/alerts");
+
+  const { default: smartRoutes } = await import("./routes/smartRoutes");
+  app.use("/smart", smartRoutes);
+  console.log("[SMART] Epic SMART launch + callback at /smart/launch | /smart/callback");
 
   app.get("/metrics", async (_req, res) => {
     try {
