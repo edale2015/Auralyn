@@ -558,4 +558,26 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `client/src/pages/SystemControlTowerPage.tsx` — Added "Automation" tab (PlayCircle icon) + `AutomationPanel` rendering block
 - `server/automation/healthRoutes.ts` — Added `GET /api/automation/metrics` endpoint returning `{ metrics, queue, prometheus }`
 
-**Test count:** 907/907 passing across 33 files (+23 new integration tests in `tests/unit/automationIntegration.test.ts`)
+**Test count (Phase 3):** 907/907 passing across 33 files (+23 new integration tests in `tests/unit/automationIntegration.test.ts`)
+
+### Packet 20 — Automation Template Studio (Visual Editor + LLM Generator)
+
+**New files:**
+- `server/automation/llmTemplateGenerator.ts` — GPT-4o-mini powered full template generator: `generateTemplateFromPrompt(prompt)` → `AutomationTemplate` JSON; `repairTemplateStep()` for LLM-based selector repair fallback; strict output validation + coercion; lazy OpenAI init
+- `server/automation/routingStrategy.ts` — Global automation routing: `pickWorkerRegion()` (probes all regions in parallel), `pickWorkerRegionFromMap()` (synchronous from pre-measured latency), `buildJobUrl()`, 4 regions (dev / us-east / eu-west / asia-pacific) configurable via env vars
+- `client/src/pages/AutomationStudio.tsx` — 4-tab visual workspace at `/automation/studio`:
+  - **Build** — Visual step builder (click/fill/select/waitFor/screenshot); add/remove/reorder steps; selector + fallback selector fields; save to template store; test-run with replay link
+  - **Generate** — LLM prompt → full template; preview generated steps; one-click adopt to template store
+  - **DNA** — Template health view: selector confidence scores, healing history, run count, success rate (calls `GET /api/automation/dna/:key`)
+  - **Route** — Region probe + latency table; auto-pick fastest worker; submit job to selected region
+
+**New API endpoints:**
+- `POST /api/automation/generate` — LLM template generation; requires `{ prompt }` body; returns `{ template, rawContent, tokensUsed }`
+- `GET /api/automation/dna/:key` — Template DNA: selector scores + version history + metrics breakdown
+- `GET /api/automation/routing/probe` — Probe all worker regions; returns `{ latencies, recommended }` region
+
+**Modified files:**
+- `server/automation/routes.ts` — Added 3 new endpoints (generate, dna/:key, routing/probe)
+- `client/src/App.tsx` — Added `/automation/studio` route → `AutomationStudio`
+
+**Test count (Visual Editor):** 919/919 passing across 34 files (+12 new tests in `tests/unit/automationStudio.test.ts`)
