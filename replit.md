@@ -917,3 +917,20 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added:** `/admin-panel` in App.tsx
 
 **Test count:** 1593/1593 passing across 50 files (+57 new tests in `tests/unit/batch16.test.ts`)
+
+## Batch 17 — Live Clinic Loop + Payer API + National Rollout + Marketplace + UI Automation + EHR Sync (COMPLETE)
+
+**Backend modules (6 new files):**
+- `server/pilot/realClinicLoop.ts` — `startClinicLoop(intervalMs)`: setInterval-driven production loop pulling from patient queue every 2s, running `runLivePilot()` per patient, tracking processed/error counts. `stopClinicLoop()`: clean clearInterval. `enqueuePatient(patient)`: adds to FIFO queue. `getNextPatient()`: pops head. `getClinicLoopStatus()`: live `{running, queueLength, processed, errors}`. Exposed at `POST /api/clinic-loop/start|stop|enqueue`, `GET /api/clinic-loop/status`
+- `server/revenue/payerAPI.ts` — `submitRealClaim(claim)`: REST POST to REAL_PAYER_API with Bearer auth; returns `{status:"skipped"}` when unconfigured. `estimateReimbursement(cpt, insurance)`: CPT base rate × payer multiplier lookup (Aetna×1.0 → Medicaid×0.6) for pre-submission revenue forecasting. Exposed at `POST /api/revenue/payer/submit|estimate`
+- `server/national/expansionEngine.ts` — `nationalRollout(regions[])`: iterates regions, deploys when `load < 0.5 && population > 500_000` via existing `deployRegion()`, returns `{deployed[], skipped[]}`. `scoreExpansionTarget(region)`: capacity × 0.6 + size × 0.4 composite score for prioritization. Exposed at `POST /api/national/rollout|score`
+- `server/marketplace/matcher.ts` — `matchPatient(patient, providers[])`: filters by specialty + available, sorts by distance, returns closest match or null. `rankProviders(patient, providers[])`: weighted sort by distance (70%) + rating (30%). `filterByInsurance(providers[], insurance)`: insurance network filter. Exposed at `POST /api/marketplace/match|rank`
+- `server/automation/uiEngine.ts` — `findElement(page, label)`: 4-strategy multi-fallback element finder (text, placeholder, aria-label, label+input). `runUIAutomation(template)`: lazy Playwright launch (graceful `{ok:false}` when playwright unavailable). `runParallel(templates[])`: `Promise.all` parallel execution. `healAndRetry(template)`: re-runs after stripping empty steps on failure. `trackAutomation(result)`: `{success, time}` tracker. `detectForm(page)`: extracts all input name/placeholder pairs. `syncEHRs(data)`: parallel ECW + Epic write with status pair response. Exposed at `POST /api/ui/run|run-parallel|heal-retry|sync-ehrs`
+- `server/batch17Routes.ts` — all 12 routes wired
+
+**Frontend (1 new page):**
+- `client/src/pages/UIAutomationPanel.tsx` — Three-panel control tower: UI Automation (run/result display), Live Clinic Loop (start/stop/live stats grid), Cross-EHR Sync (trigger + ECW/Epic status). Routes: `/ui-automation`
+
+**Routes added:** `/ui-automation` in App.tsx
+
+**Test count:** 1623/1623 passing across 51 files (+30 new tests in `tests/unit/batch17.test.ts`)

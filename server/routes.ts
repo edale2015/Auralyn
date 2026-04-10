@@ -2158,6 +2158,10 @@ export async function registerRoutes(
   app.use("/api", batch16Routes);
   console.log("[Batch16] AI workflow gen | EHR unified | full revenue | SLO burn | question graph | retry queue | RBAC | patient memory | repair loop | integration hub — all wired at /api/*");
 
+  const { default: batch17Routes } = await import("./batch17Routes");
+  app.use("/api", batch17Routes);
+  console.log("[Batch17] Real clinic loop | payer API | national rollout | marketplace | UI automation | EHR sync — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);
