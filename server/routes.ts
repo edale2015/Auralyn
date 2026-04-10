@@ -2114,6 +2114,44 @@ export async function registerRoutes(
   app.use("/api/live-sim", liveSimRoutes);
   console.log("[LiveSim] Live simulation API at /api/live-sim/status | /api/live-sim/forecast");
 
+  app.get("/simulate/stress", async (req, res) => {
+    try {
+      const n = Math.min(Number(req.query.n ?? 1000), 50_000);
+      const { runStressTest } = await import("./simulation/stressTest");
+      const result = await runStressTest(n);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "stress test failed" });
+    }
+  });
+  console.log("[StressTest] 50k patient stress test at GET /simulate/stress?n=N");
+
+  app.post("/api/pilot/case", async (req, res) => {
+    try {
+      const { sendPilotCase } = await import("./integrations/hospitalPilot");
+      const result = await sendPilotCase(req.body);
+      res.json({ ok: true, result });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+
+  app.post("/api/pilot/outcome", async (req, res) => {
+    try {
+      const { receiveOutcome } = await import("./integrations/hospitalPilot");
+      await receiveOutcome(req.body);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+
+  app.get("/api/pilot/outcomes", async (_req, res) => {
+    const { getOutcomeBuffer } = await import("./integrations/hospitalPilot");
+    res.json(getOutcomeBuffer());
+  });
+  console.log("[HospitalPilot] Pilot case API at /api/pilot/case | /api/pilot/outcome | /api/pilot/outcomes");
+
   app.get("/metrics", async (_req, res) => {
     try {
       const { getMetrics: getHttpMetrics }  = await import("./monitoring/metricsStore");

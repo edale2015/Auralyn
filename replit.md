@@ -649,3 +649,20 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `client/src/pages/LiveSimulationPage.tsx` — React dashboard with sparklines at `/live-simulation`
 
 **Test count:** 1019/1019 passing across 37 files (+30 new tests in `tests/unit/liveSimulator.test.ts`)
+
+## Batch 4 — Stress Test + Hospital Pilot + AWS Multi-Region + Clinical Utils + Live Command Center (COMPLETE)
+
+**Modules added:**
+- `server/simulation/stressTest.ts` — `runStressTest(n)`: runs n patients (batched 200 at a time), returns `{total, erRate, errors, durationMs, throughputPerSec, p50Ms, p95Ms, p99Ms}`
+- `server/integrations/hospitalPilot.ts` — `sendPilotCase()` (POST to `HOSPITAL_PILOT_API`), `receiveOutcome()` (500-entry ring buffer with learning weight), `getOutcomeBuffer()`
+- `server/infra/awsRegions.ts` — `REGIONS`, `AURALYN_TASK_DEF` (ECS task def), `routeByLatency()`, `replicateEvent()`, `getRegionHealth()`
+- `server/utils/clinicalUtils.ts` — `adjustRiskThreshold()`, `weightOutcome()`, `fastPath()`, `runContinuousSimulation()`, `stopContinuousSimulation()`, `globalAlert()`, `classifyLoad()`
+- `client/src/pages/LiveCommandCenter.tsx` — real-time oversight dashboard at `/command-center` (2s poll, severity/alerts/actions, integrated stress test launcher)
+
+**Endpoints:**
+- `GET /simulate/stress?n=N` — run stress test for N patients (capped at 50,000)
+- `POST /api/pilot/case` — send patient case to hospital pilot API
+- `POST /api/pilot/outcome` — receive outcome for learning loop
+- `GET /api/pilot/outcomes` — view outcome buffer
+
+**Test count:** 1061/1061 passing across 38 files (+42 new tests in `tests/unit/batch4Systems.test.ts`)
