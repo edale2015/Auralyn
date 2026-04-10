@@ -799,3 +799,22 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `POST /api/ops/triage-budget` / `optimal-facility` — adaptive triage + routing
 
 **Test count:** 1312/1312 passing across 44 files (+52 new tests in `tests/unit/batch10.test.ts`)
+
+## Batch 11 — Epic Sandbox + Payer Contract + Slide Builder + Dynamic Intake + Case Speed Panel (COMPLETE)
+
+**Modules added:**
+- `server/integrations/epicSandbox.ts` — `epicTestPatientFlow(fhirToken)`: creates test FHIR patient → runs triage → posts Observation. Degrades gracefully when `FHIR_BASE` not configured (returns sandbox-prefixed patient ID + real triage result)
+- `server/revenue/payerContract.ts` — `simulatePayerContract(claim)`: base CPT rates + time modifier (+10% if >60min) + complexity modifier (+20% if high) + denial risk penalty (×0.6 if >0.5). `batchSimulateContracts()`, `sendPush()` (push notification stub)
+- `server/exec/slideBuilder.ts` — `buildSlides(metrics)`: 8-slide structured JSON deck (Vision, Scale, Safety, Accuracy, Revenue, Moat, Technology, Next Steps). `slidesToMarkdown()` renders with `---` separators
+- `server/clinical/intakeDynamic.ts` — `nextSecondaryQuestion(context)`: progressive question engine (age → fever → duration → null when complete). `collectModifiers()`: normalizes meds/allergies/PMH. `fastTrack()`: short-circuits to ROUTINE for minor complaints with normal vitals
+- `server/clinical/caseSpeedPanel.ts` — `buildPhysicianSummary(caseData)`: extracts complaint/topDx/risk/disposition in one call (reduces physician cognitive load). `dispositionFollowup()`: 5-tier follow-up schedule (immediate call → 2hr → 4hr → next-day → 24hr)
+
+**12 new endpoints:**
+- `POST /api/epic/sandbox/test-flow` — FHIR create patient + triage + observation write
+- `POST /api/revenue/payer-contract/simulate` / `batch` — payer reimbursement model
+- `POST /api/patient/push` — push notification dispatch
+- `POST /api/exec/slides` / `slides/markdown` — investor/FDA slide generation
+- `POST /api/intake/next-question` / `collect-modifiers` / `fast-track` — dynamic intake engine
+- `POST /api/clinical/physician-summary` / `disposition-followup` — case speed panel
+
+**Test count:** 1363/1363 passing across 45 files (+51 new tests in `tests/unit/batch11.test.ts`)
