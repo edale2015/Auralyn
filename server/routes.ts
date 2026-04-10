@@ -2114,6 +2114,10 @@ export async function registerRoutes(
   app.use("/api/live-sim", liveSimRoutes);
   console.log("[LiveSim] Live simulation API at /api/live-sim/status | /api/live-sim/forecast");
 
+  const { default: controlRoutes } = await import("./control/controlRoutes");
+  app.use("/api/control", controlRoutes);
+  console.log("[ControlTower] Unified control API at /api/control/state | /simulate | /stress | /epic | /scale | /export | /reset | /model | /alert | /report");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

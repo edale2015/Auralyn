@@ -687,3 +687,18 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 - `GET /api/autoscale/recommendation?queueDepth=N&currentInstances=N` — AWS scale recommendation
 
 **Test count:** 1096/1096 passing across 39 files (+35 new tests in `tests/unit/batch5Systems.test.ts`)
+
+## Batch 6 — Unified Control API + Global State + Control Bus + Control Stream + Master Control Tower (COMPLETE)
+
+**Modules added:**
+- `server/control/systemState.ts` — `getSystemState()` (live-merged from liveSimulator), `patchSystemState()`, `recordReset()`, `recordAlert()`, `setActiveModel()`
+- `server/control/controlBus.ts` — `controlBus` (EventEmitter, 100 listener cap), `broadcast(event, data)` — emits named event + universal `update` envelope with timestamp
+- `server/control/controlStream.ts` — `startControlStream(server)` — WebSocket server at `/ws/control`, relays all `update` events to connected clients
+- `server/control/controlRoutes.ts` — Unified REST router at `/api/control/`: `state`, `simulate`, `stress`, `epic`, `scale`, `export`, `reset`, `model`, `template/repair`, `alert`, `report`
+- `server/control/systemControls.ts` — `resetSystem()`, `switchActiveModel()`, `repairTemplate()`, `triggerGlobalAlert()`, `generateReport()` — all broadcast to controlBus
+- `client/src/pages/MasterControlTower.tsx` — full control dashboard at `/master-control`: 5 stat cards, action buttons, model switcher, template repair, global alert trigger, live `/ws/control` event stream panel, region status grid
+
+**Wired on boot:**
+- `startControlStream(httpServer)` started in `server/index.ts` alongside existing WS servers
+
+**Test count:** 1117/1117 passing across 40 files (+21 new tests in `tests/unit/batch6Control.test.ts`)

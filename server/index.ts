@@ -1109,6 +1109,7 @@ app.use((req, res, next) => {
       startMonitorSocket(httpServer);
       import("./ws/liveStream").then(({ startLiveStream }) => startLiveStream(httpServer)).catch(() => {});
       import("./simulation/liveSimulator").then(({ startLiveSimulation }) => startLiveSimulation()).catch(() => {});
+      import("./control/controlStream").then(({ startControlStream }) => startControlStream(httpServer)).catch(() => {});
       startEventWorkers();
       startDeadLetterMonitor(60_000);
       initAuditHashChain().catch((e: any) => console.warn("[AUDIT-CHAIN] Init warning:", e?.message));
