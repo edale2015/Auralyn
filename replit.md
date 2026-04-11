@@ -1053,3 +1053,110 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Startup fix:** `server/config/startupChecks.ts` — DATABASE_CONNECTIVITY and DATABASE_SCHEMA_READY downgraded from `fatal:true` to `fatal:false` so the app starts in degraded mode when DB is temporarily unreachable (warnings logged, traffic accepted)
 
 **Test count:** 1882/1882 passing across 56 files (+74 new tests in `tests/unit/batch22.test.ts`)
+
+## Batch 23 — Unified EHR Provider Model + Athena + SLO + Deployment (COMPLETE)
+
+**Three major pillars delivered:**
+
+### 1 — Unified EHR Adapter Interface (ECW / Athena / Epic)
+
+**`server/integrations/ehr/types.ts`** — Canonical `EhrAdapter` interface:
+- `EhrSystem` type: `"ecw" | "athena" | "epic"`
+- `EhrPatientContext` — unified patient record shape (firstName, lastName, dob, sex, medications, allergies, problems, vitals)
+- `EhrWritePayload` — unified write envelope (patientId, disposition, note, vitals, diagnosisCodes, cptCode, traceId)
+- `EhrAdapter` interface — `getPatientContext`, `writeEncounter`, `writeObservation?`, `ping`
+- `EhrWriteResults` / `EhrHealthStatus` types
+
+**`server/integrations/athenaAdapter.ts`** — NEW Athena Health adapter:
+- Authenticates via `ATHENA_API_BASE`, `ATHENA_PRACTICE_ID`, `ATHENA_TOKEN`
+- `getPatientContext`: fetches patient + 3 parallel calls for allergies, medications, problems (each wrapped in try/catch so partial failures don't abort)
+- `writeEncounter`: POST to `/chart/encounters` with departmentId, reasonforvisit, encounterdate, note
+- `writeObservation`: POST to `/chart/observations` with vitals array
+- `ping`: returns `false` rather than throwing when env vars missing
+
+**`server/integrations/epicAdapter.ts`** — NEW standalone Epic FHIR adapter (replaces inline code in epicFullFlow.ts):
+- Authenticates via `FHIR_BASE` + `EPIC_TOKEN`
+- `getPatientContext`: FHIR `Patient/{id}` GET → name[0].given/family, birthDate, gender
+- `writeEncounter`: FHIR `Encounter` POST with status "in-progress"
+- `writeObservation`: FHIR `Observation` POST with valueString
+- `postObservation` exported as standalone helper (backward-compatible)
+- `ping`: returns `false` rather than throwing when env vars missing
+
+**`server/integrations/ecwAdapter.ts`** — Updated: added `ecwAdapter` unified export at bottom:
+- `system: "ecw"`
+- `getPatientContext`, `writeEncounter` (throws on `success:false`), `writeObservation`, `ping` (returns false not throws)
+- All legacy exports preserved: `sendToECWEncounter`, `safeEHR`, `syncSystems`, `ECWPayload`
+
+**`server/integrations/ehrRouter.ts`** — NEW tri-EHR orchestration:
+- `EHR_ADAPTERS`: `{ecw, athena, epic}` registry
+- `PRIMARY_EHR = "ecw"`
+- `getAdapter(system)`: returns the correct adapter
+- `getPatientContextUnified(patientId, preferred?, token?)`: delegates to preferred adapter
+- `writePrimaryEHR(payload, token?)`: ECW-only write
+- `writeAllEHRs(payload, tokenMap?)`: `Promise.allSettled` across all 3 → `EhrWriteResults`
+- `pingAllEHRs(tokenMap?)`: parallel ping all 3, catches errors → booleans
+- `summarizeWriteResults(results)`: maps settled to `"ok"|"failed"` per system
+
+**`server/integrations/ehrConsistency.ts`** — NEW cross-EHR data validator:
+- `checkConsistencyMulti(epic?, ecw?, athena?)`: checks allergies (all 3 pairs), medications (ECW vs Epic, ECW vs Athena), DOB (Epic vs ECW) → `{issues, ok, checkedFields}`
+- `checkConsistencyDual(a, b, labelA?, labelB?)`: any two contexts with custom labels
+- Null-safe: missing contexts treated as empty arrays
+
+**`server/integrations/ehrRouting.ts`** — NEW patient-to-EHR routing:
+- `routeEHR(patient)`: maps `patient.system` → `EhrSystem | "all"` (case-insensitive)
+- `routeEHRForWrite(patient)`: returns array of target systems — single if preferred EHR known, all 3 if not
+- `isValidEhrSystem(s)`: type guard
+
+**`server/integrations/universalWrite.ts`** — NEW 5-tier fallback chain:
+```
+ECW → Athena → Epic → UI Automation → Vision Agent → failed
+```
+- Each tier caught independently; falls through on error or `success: false`
+- Returns `{success, tier, data?, error?}` — tier always indicates which level handled the write
+- UI/Vision tiers use dynamic `import()` so missing automation modules don't crash the chain
+
+**`server/integrations/ehrUnified.ts`** — Updated: now uses `writeAllEHRs` + `summarizeWriteResults`:
+- `writeEHRAll(data)` → `{epic, ecw, athena}` — all three concurrently, graceful failure per system
+- `writeEHRPrimary(data)` → `{ecw}` — ECW only with error swallow
+
+### 2 — EHR API Routes
+
+**`server/routes/ehrRoutes.ts`** — Added 6 new endpoints to existing FHIR route file:
+- `GET /api/ehr/unified/health` — pings all 3 systems, returns `{ok, systems:{ecw,athena,epic}}`
+- `GET /api/ehr/unified/patient/:patientId?system=` — fetch unified patient context from any EHR
+- `POST /api/ehr/unified/write` — write to all 3 EHRs simultaneously
+- `POST /api/ehr/universal-write` — 5-tier fallback write
+- `POST /api/ehr/consistency` — cross-system consistency check
+- `POST /api/ehr/route` — determine which EHR to use for a patient
+
+### 3 — System State — Athena Integration Status
+
+**`server/control/systemState.ts`** — Updated:
+- `EhrIntegrationStatus` interface: epic/ecw/athena as `"ok"|"down"|"unconfigured"` + chatgpt/whatsapp as `"ok"|"down"`
+- `integrations` field added to `SystemStateSnapshot` with safe defaults
+- `refreshEhrStatus()` — async: calls `pingAllEHRs`, maps to status strings (unconfigured when env vars absent, down when ping fails, ok when ping succeeds), persists to `_state.integrations`
+
+### 4 — Clinical Services
+
+**`server/services/completenessGate.ts`** — Pre-triage context validator:
+- `ensureCompleteness(ctx)` — checks required fields: age, meds, allergies → `{ok, missing, score}`
+- `ensureCompletenessStrict(ctx)` — also requires chiefComplaint, sex
+- Score 0–100 based on present fields; empty arrays treated as missing; null-safe
+
+**`server/services/sloMonitor.ts`** — SLO monitoring + SLA tracking:
+- `sloBurnRate(errors, total)` → `{rate, status:"ok"|"burning"|"critical", errorPct}` (>1% = burning, >5% = critical, divide-by-zero safe)
+- `updateSLA(provider, latencyMs)` → EWMA update `0.7×old + 0.3×new`, load +0.05 (capped 1.0), non-mutating
+- `resetSlaLoad(provider, decayFactor?)` → decays load by factor
+- `approveAndSend(caseData)` → audit log + `universalWrite`, returns `{ok, traceId, tier}`
+
+### 5 — One-Click Deployment
+
+**`fly.toml`** — Fly.io production config: app `auralyn-brain`, region `iad`, port 3000, HTTP+TLS, health check at `/api/health`, 500-patient concurrency hard limit, persistent volume mount
+
+**`scripts/up.sh`** — Docker bootstrap: copies `.env.example → .env`, validates docker/compose present, runs `docker compose up -d --build`, prints URLs for API (3000), Grafana (3001), Prometheus (9090)
+
+**`docker-compose.yml`** — Full local stack: app + redis:7 + postgres:15 + prometheus + grafana with named volumes, `unless-stopped` restart policy
+
+**`.env.example`** — Appended: `ATHENA_API_BASE`, `ATHENA_PRACTICE_ID`, `ATHENA_TOKEN`, `ATHENA_DEFAULT_DEPARTMENT_ID`, plus `FHIR_BASE`, `EPIC_TOKEN`, `ECW_API`, `ECW_TOKEN` sections
+
+**Test count:** 1979/1979 passing across 57 files (+97 new tests in `tests/unit/batch23.test.ts`)

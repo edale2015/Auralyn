@@ -1,0 +1,816 @@
+Yes. The sharpest move is to turn the app into a Clinical Consistency Engine: not “another agent,” but a variance-killer.
+
+The unique high-value problem it solves is this:
+
+Same phenotype in, same best-supported disposition out.
+
+Not 10 different plans depending on which agent, doctor, mood, or model happened to touch the chart. Not “treat everything just in case.” Not vague hand-waving. A disciplined engine that:
+
+normalizes the presentation,
+matches it to a canonical syndrome,
+selects the narrowest justified treatment,
+chooses the safest consistent disposition,
+blocks shotgun prescribing,
+logs every variance from the canonical standard.
+
+That fits the principle in the text you uploaded: solve one real problem, own the decisions, and build with craft instead of generic stack-chasing.
+
+Below is a focused implementation pack in your TypeScript/Express style.
+
+What this adds
+
+A new layer in your system:
+
+Intake → Evidence → Phenotype Normalization → Canonical Syndrome Match → Therapeutic Minimalism Gate → Disposition Engine → Variance Audit
+
+This creates a single “source of clinical truth” for common urgent-care workflows.
+
+1) Core domain types
+shared/clinicalConsistency.ts
+export type Disposition =
+  | "home_supportive_care"
+  | "home_with_rx"
+  | "follow_up_primary_care"
+  | "same_day_urgent_care"
+  | "er_now"
+  | "hospital_admission";
+
+export type ConfidenceBand = "low" | "moderate" | "high";
+
+export type TreatmentClass =
+  | "none"
+  | "supportive"
+  | "antibiotic"
+  | "antiviral"
+  | "steroid"
+  | "bronchodilator"
+  | "topical"
+  | "antifungal";
+
+export interface ClinicalFeatureMap {
+  [key: string]: boolean | number | string | null | undefined;
+}
+
+export interface SyndromeCandidate {
+  syndromeId: string;
+  label: string;
+  score: number;
+  rationale: string[];
+  requiredFeaturesMet: boolean;
+}
+
+export interface CanonicalTreatmentPlan {
+  class: TreatmentClass;
+  medicationKey?: string;
+  indication: string;
+  whyChosen: string[];
+  whyNotBroader: string[];
+  blockedAlternatives: string[];
+}
+
+export interface CanonicalDispositionPlan {
+  disposition: Disposition;
+  urgency: number; // 1 to 5
+  rationale: string[];
+  redFlagsTriggered: string[];
+  followUpWindow?: string;
+}
+
+export interface CanonicalDecision {
+  complaint: string;
+  phenotypeHash: string;
+  confidence: ConfidenceBand;
+  winningSyndrome: SyndromeCandidate | null;
+  alternatives: SyndromeCandidate[];
+  treatment: CanonicalTreatmentPlan;
+  disposition: CanonicalDispositionPlan;
+  notesForClinician: string[];
+  varianceWarnings: string[];
+}
+2) Canonical syndrome rules
+
+This is the heart. It converts messy presentations into a single stable clinical phenotype and stops the “maybe everything” chaos.
+
+server/services/canonicalSyndromeRules.ts
+import { ClinicalFeatureMap, SyndromeCandidate } from "../../shared/clinicalConsistency";
+
+export interface SyndromeRule {
+  syndromeId: string;
+  label: string;
+  complaint: string;
+  required: string[];
+  positiveWeights: Record<string, number>;
+  negativeWeights: Record<string, number>;
+  exclusions?: string[];
+}
+
+const RULES: SyndromeRule[] = [
+  {
+    syndromeId: "viral_pharyngitis",
+    label: "Viral pharyngitis / URI syndrome",
+    complaint: "sore_throat",
+    required: ["sore_throat"],
+    positiveWeights: {
+      cough: 2,
+      rhinorrhea: 2,
+      hoarseness: 2,
+      conjunctivitis: 1,
+      low_grade_fever: 1,
+    },
+    negativeWeights: {
+      tonsillar_exudate: 2,
+      tender_anterior_cervical_nodes: 2,
+      fever_over_38: 2,
+      no_cough: 1,
+    },
+  },
+  {
+    syndromeId: "gas_centor_compatible",
+    label: "Group A strep compatible syndrome",
+    complaint: "sore_throat",
+    required: ["sore_throat"],
+    positiveWeights: {
+      tonsillar_exudate: 3,
+      tender_anterior_cervical_nodes: 2,
+      fever_over_38: 2,
+      no_cough: 2,
+    },
+    negativeWeights: {
+      cough: 2,
+      rhinorrhea: 2,
+      hoarseness: 1,
+    },
+  },
+  {
+    syndromeId: "asymptomatic_bacteriuria",
+    label: "Asymptomatic bacteriuria",
+    complaint: "urine_result_review",
+    required: ["positive_urine_test", "no_urinary_symptoms"],
+    positiveWeights: {
+      positive_urine_test: 3,
+      no_urinary_symptoms: 3,
+    },
+    negativeWeights: {
+      dysuria: 3,
+      frequency: 2,
+      urgency: 2,
+      flank_pain: 3,
+      fever_over_38: 3,
+    },
+  },
+  {
+    syndromeId: "simple_cystitis",
+    label: "Acute uncomplicated cystitis",
+    complaint: "urinary_symptoms",
+    required: ["dysuria"],
+    positiveWeights: {
+      dysuria: 3,
+      frequency: 2,
+      urgency: 2,
+      no_vaginal_discharge: 1,
+    },
+    negativeWeights: {
+      flank_pain: 3,
+      fever_over_38: 3,
+      vomiting: 2,
+      pregnancy_high_risk: 2,
+    },
+  },
+  {
+    syndromeId: "bacterial_vaginosis_symptomatic",
+    label: "Symptomatic bacterial vaginosis",
+    complaint: "vaginal_discharge",
+    required: ["vaginal_discharge"],
+    positiveWeights: {
+      thin_gray_discharge: 2,
+      fishy_odor: 3,
+    },
+    negativeWeights: {
+      no_vaginal_symptoms: 4,
+      pelvic_pain: 2,
+      fever_over_38: 2,
+    },
+  },
+  {
+    syndromeId: "influenza_like_illness",
+    label: "Influenza-like illness",
+    complaint: "flu_like",
+    required: ["feverish_or_fever", "body_aches"],
+    positiveWeights: {
+      feverish_or_fever: 3,
+      body_aches: 2,
+      acute_onset: 2,
+      cough: 1,
+      sick_contacts: 1,
+    },
+    negativeWeights: {
+      dysuria: 2,
+      vaginal_discharge: 2,
+      isolated_sore_throat_only: 1,
+    },
+  },
+];
+
+function hasFeature(features: ClinicalFeatureMap, key: string): boolean {
+  return Boolean(features[key]);
+}
+
+export function scoreSyndromes(
+  complaint: string,
+  features: ClinicalFeatureMap
+): SyndromeCandidate[] {
+  const candidates = RULES.filter((r) => r.complaint === complaint);
+
+  return candidates.map((rule) => {
+    const requiredFeaturesMet = rule.required.every((req) => hasFeature(features, req));
+    let score = requiredFeaturesMet ? 5 : -999;
+    const rationale: string[] = [];
+
+    for (const [k, w] of Object.entries(rule.positiveWeights)) {
+      if (hasFeature(features, k)) {
+        score += w;
+        rationale.push(`+${w} ${k}`);
+      }
+    }
+
+    for (const [k, w] of Object.entries(rule.negativeWeights)) {
+      if (hasFeature(features, k)) {
+        score -= w;
+        rationale.push(`-${w} ${k}`);
+      }
+    }
+
+    if (rule.exclusions?.some((ex) => hasFeature(features, ex))) {
+      score -= 100;
+      rationale.push(`excluded by ${rule.exclusions.filter((ex) => hasFeature(features, ex)).join(", ")}`);
+    }
+
+    return {
+      syndromeId: rule.syndromeId,
+      label: rule.label,
+      score,
+      rationale,
+      requiredFeaturesMet,
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+3) Therapeutic minimalism gate
+
+This is the anti-shotgun cannon. It blocks “azithro + doxy + ceftriaxone + tamiflu + paxlovid because vibes.”
+
+server/services/therapeuticMinimalismEngine.ts
+import {
+  CanonicalTreatmentPlan,
+  SyndromeCandidate,
+  ClinicalFeatureMap,
+} from "../../shared/clinicalConsistency";
+
+function confirmedOrStronglySupported(
+  syndrome: SyndromeCandidate | null,
+  minScore = 8
+): boolean {
+  return !!syndrome && syndrome.requiredFeaturesMet && syndrome.score >= minScore;
+}
+
+export function buildCanonicalTreatmentPlan(
+  complaint: string,
+  winning: SyndromeCandidate | null,
+  features: ClinicalFeatureMap
+): CanonicalTreatmentPlan {
+  if (!winning) {
+    return {
+      class: "supportive",
+      indication: "No dominant syndrome established",
+      whyChosen: ["Default to safe supportive care when phenotype is not specific enough."],
+      whyNotBroader: ["Broader treatment is not justified without a dominant syndrome."],
+      blockedAlternatives: ["empiric_multi_drug_bundle"],
+    };
+  }
+
+  switch (winning.syndromeId) {
+    case "viral_pharyngitis":
+      return {
+        class: "supportive",
+        indication: "Symptoms fit viral pharyngitis syndrome",
+        whyChosen: [
+          "Phenotype is more consistent with viral upper respiratory disease than bacterial infection.",
+          "Antibiotics do not improve typical viral sore throat outcomes.",
+        ],
+        whyNotBroader: [
+          "Avoid antibiotic use without specific bacterial justification.",
+        ],
+        blockedAlternatives: [
+          "empiric_azithromycin",
+          "empiric_amoxicillin",
+          "empiric_ceftriaxone",
+        ],
+      };
+
+    case "gas_centor_compatible":
+      if (features["positive_strep_test"] === true || confirmedOrStronglySupported(winning, 10)) {
+        return {
+          class: "antibiotic",
+          medicationKey: "strep_narrow_first_line",
+          indication: "Strep-compatible syndrome with confirmatory or very strong support",
+          whyChosen: [
+            "Use narrow first-line therapy when strep is supported.",
+            "Do not widen coverage without evidence of alternative pathology.",
+          ],
+          whyNotBroader: [
+            "No role for multiple overlapping antibiotics.",
+            "No role for ceftriaxone in routine uncomplicated strep management.",
+          ],
+          blockedAlternatives: [
+            "ceftriaxone_plus_azithro_plus_doxy",
+            "broad_empiric_combo",
+          ],
+        };
+      }
+
+      return {
+        class: "supportive",
+        indication: "Strep-compatible but not sufficiently confirmed",
+        whyChosen: [
+          "Phenotype suggests possible strep but support is not strong enough for reflex treatment.",
+          "Testing or follow-up should sharpen the decision.",
+        ],
+        whyNotBroader: [
+          "Treating every sore throat as bacterial creates inconsistency and overtreatment.",
+        ],
+        blockedAlternatives: [
+          "empiric_broad_antibiotics",
+        ],
+      };
+
+    case "asymptomatic_bacteriuria":
+      return {
+        class: "none",
+        indication: "Positive urine result without urinary symptoms",
+        whyChosen: [
+          "No treatment is the canonical default for asymptomatic bacteriuria in most non-pregnant adults.",
+          "Lab positivity alone is not the disease.",
+        ],
+        whyNotBroader: [
+          "Antibiotics would create harm without clear benefit in the usual case.",
+        ],
+        blockedAlternatives: [
+          "empiric_uti_antibiotics",
+          "broad_spectrum_just_in_case",
+        ],
+      };
+
+    case "simple_cystitis":
+      return {
+        class: "antibiotic",
+        medicationKey: "narrow_uti_first_line",
+        indication: "Typical uncomplicated cystitis phenotype",
+        whyChosen: [
+          "Use narrow first-line UTI treatment only for a consistent symptomatic phenotype.",
+        ],
+        whyNotBroader: [
+          "No reason to cover pyelonephritis, STI, vaginitis, and URI simultaneously.",
+        ],
+        blockedAlternatives: [
+          "ceftriaxone_plus_doxy_plus_fluconazole",
+        ],
+      };
+
+    case "bacterial_vaginosis_symptomatic":
+      if (features["no_vaginal_symptoms"] === true) {
+        return {
+          class: "none",
+          indication: "Incidental BV pattern without symptoms",
+          whyChosen: [
+            "Do not convert incidental findings into automatic treatment.",
+          ],
+          whyNotBroader: [
+            "Finding is not enough by itself to justify medication.",
+          ],
+          blockedAlternatives: ["automatic_metronidazole"],
+        };
+      }
+
+      return {
+        class: "topical",
+        medicationKey: "bv_first_line",
+        indication: "Symptomatic bacterial vaginosis syndrome",
+        whyChosen: ["Treat only when the syndrome is present and symptomatic."],
+        whyNotBroader: ["Do not add unrelated antibiotic or antifungal coverage."],
+        blockedAlternatives: ["uti_plus_sti_plus_bv_combo"],
+      };
+
+    case "influenza_like_illness":
+      return {
+        class: "supportive",
+        medicationKey: features["high_risk_for_flu_complications"] ? "consider_targeted_antiviral" : undefined,
+        indication: "Influenza-like syndrome",
+        whyChosen: [
+          "Treatment should be syndrome-specific, not a respiratory shotgun bundle.",
+        ],
+        whyNotBroader: [
+          "No automatic azithromycin, doxycycline, ceftriaxone, or Paxlovid without matching syndrome and indication.",
+        ],
+        blockedAlternatives: [
+          "azithro_plus_doxy_plus_oseltamivir_plus_paxlovid",
+        ],
+      };
+
+    default:
+      return {
+        class: "supportive",
+        indication: "Fallback conservative treatment",
+        whyChosen: ["No explicit narrow protocol matched."],
+        whyNotBroader: ["Broader treatment is not justified."],
+        blockedAlternatives: ["empiric_multi_drug_bundle"],
+      };
+  }
+}
+4) Disposition consistency engine
+
+Treatment is only half the chessboard. Disposition is the queen.
+
+server/services/dispositionConsistencyEngine.ts
+import {
+  CanonicalDispositionPlan,
+  ClinicalFeatureMap,
+  SyndromeCandidate,
+} from "../../shared/clinicalConsistency";
+
+function redFlags(features: ClinicalFeatureMap): string[] {
+  const flags: string[] = [];
+
+  if (features["respiratory_distress"]) flags.push("respiratory_distress");
+  if (features["hypoxia"]) flags.push("hypoxia");
+  if (features["altered_mental_status"]) flags.push("altered_mental_status");
+  if (features["severe_dehydration"]) flags.push("severe_dehydration");
+  if (features["unable_to_swallow"]) flags.push("unable_to_swallow");
+  if (features["airway_concern"]) flags.push("airway_concern");
+  if (features["flank_pain"] && features["fever_over_38"]) flags.push("possible_pyelonephritis");
+  if (features["pelvic_pain"] && features["fever_over_38"]) flags.push("possible_pid_or_other_complication");
+
+  return flags;
+}
+
+export function buildCanonicalDisposition(
+  complaint: string,
+  winning: SyndromeCandidate | null,
+  features: ClinicalFeatureMap
+): CanonicalDispositionPlan {
+  const flags = redFlags(features);
+
+  if (flags.length > 0) {
+    return {
+      disposition: "er_now",
+      urgency: 5,
+      rationale: ["Disposition escalated due to red flags."],
+      redFlagsTriggered: flags,
+      followUpWindow: "Immediate",
+    };
+  }
+
+  if (!winning) {
+    return {
+      disposition: "follow_up_primary_care",
+      urgency: 2,
+      rationale: [
+        "No dominant syndrome identified.",
+        "Avoid overcalling severity and avoid reflex prescribing.",
+      ],
+      redFlagsTriggered: [],
+      followUpWindow: "24-72 hours depending on symptom progression",
+    };
+  }
+
+  switch (winning.syndromeId) {
+    case "viral_pharyngitis":
+    case "influenza_like_illness":
+      return {
+        disposition: "home_supportive_care",
+        urgency: 1,
+        rationale: ["Stable syndrome without high-risk features."],
+        redFlagsTriggered: [],
+        followUpWindow: "PRN worsening or 48-72 hours",
+      };
+
+    case "gas_centor_compatible":
+      return {
+        disposition: "home_with_rx",
+        urgency: 2,
+        rationale: ["Strep-compatible stable outpatient syndrome."],
+        redFlagsTriggered: [],
+        followUpWindow: "48 hours if not improving",
+      };
+
+    case "simple_cystitis":
+      return {
+        disposition: "home_with_rx",
+        urgency: 2,
+        rationale: ["Typical outpatient cystitis pattern without upper tract or systemic red flags."],
+        redFlagsTriggered: [],
+        followUpWindow: "48 hours if persistent symptoms",
+      };
+
+    case "asymptomatic_bacteriuria":
+      return {
+        disposition: "follow_up_primary_care",
+        urgency: 1,
+        rationale: ["No acute treatment needed; outpatient follow-up if clinically indicated."],
+        redFlagsTriggered: [],
+        followUpWindow: "Routine",
+      };
+
+    case "bacterial_vaginosis_symptomatic":
+      return {
+        disposition: "home_with_rx",
+        urgency: 1,
+        rationale: ["Symptomatic but stable outpatient syndrome."],
+        redFlagsTriggered: [],
+        followUpWindow: "1 week if persistent",
+      };
+
+    default:
+      return {
+        disposition: "follow_up_primary_care",
+        urgency: 2,
+        rationale: ["Conservative standardized outpatient pathway."],
+        redFlagsTriggered: [],
+        followUpWindow: "24-72 hours",
+      };
+  }
+}
+5) Phenotype hash and variance engine
+
+This lets you detect when the same phenotype gets different plans. That is where the rot hides.
+
+server/services/varianceAuditService.ts
+import crypto from "crypto";
+import { CanonicalDecision, ClinicalFeatureMap } from "../../shared/clinicalConsistency";
+
+export function buildPhenotypeHash(
+  complaint: string,
+  features: ClinicalFeatureMap
+): string {
+  const normalized = Object.keys(features)
+    .sort()
+    .map((k) => `${k}:${String(features[k])}`)
+    .join("|");
+
+  return crypto
+    .createHash("sha256")
+    .update(`${complaint}|${normalized}`)
+    .digest("hex")
+    .slice(0, 24);
+}
+
+export interface VarianceCheckInput {
+  canonical: CanonicalDecision;
+  clinicianSelectedDisposition?: string;
+  clinicianSelectedMedicationKey?: string;
+}
+
+export function detectVariance(input: VarianceCheckInput): string[] {
+  const warnings: string[] = [];
+
+  if (
+    input.clinicianSelectedDisposition &&
+    input.clinicianSelectedDisposition !== input.canonical.disposition.disposition
+  ) {
+    warnings.push(
+      `Disposition variance: canonical=${input.canonical.disposition.disposition}, selected=${input.clinicianSelectedDisposition}`
+    );
+  }
+
+  if (
+    input.canonical.treatment.medicationKey &&
+    input.clinicianSelectedMedicationKey &&
+    input.clinicianSelectedMedicationKey !== input.canonical.treatment.medicationKey
+  ) {
+    warnings.push(
+      `Medication variance: canonical=${input.canonical.treatment.medicationKey}, selected=${input.clinicianSelectedMedicationKey}`
+    );
+  }
+
+  return warnings;
+}
+6) Main orchestrator
+server/services/clinicalConsistencyEngine.ts
+import {
+  CanonicalDecision,
+  ClinicalFeatureMap,
+  ConfidenceBand,
+} from "../../shared/clinicalConsistency";
+import { scoreSyndromes } from "./canonicalSyndromeRules";
+import { buildCanonicalTreatmentPlan } from "./therapeuticMinimalismEngine";
+import { buildCanonicalDisposition } from "./dispositionConsistencyEngine";
+import { buildPhenotypeHash } from "./varianceAuditService";
+
+function confidenceFromTopScore(score: number): ConfidenceBand {
+  if (score >= 10) return "high";
+  if (score >= 6) return "moderate";
+  return "low";
+}
+
+export function runClinicalConsistencyEngine(
+  complaint: string,
+  features: ClinicalFeatureMap
+): CanonicalDecision {
+  const candidates = scoreSyndromes(complaint, features);
+  const winning = candidates.length > 0 && candidates[0].score > 0 ? candidates[0] : null;
+
+  const treatment = buildCanonicalTreatmentPlan(complaint, winning, features);
+  const disposition = buildCanonicalDisposition(complaint, winning, features);
+  const phenotypeHash = buildPhenotypeHash(complaint, features);
+
+  const varianceWarnings: string[] = [];
+  const notesForClinician: string[] = [];
+
+  if (!winning) {
+    notesForClinician.push("No dominant syndrome. Avoid reflex treatment. Sharpen phenotype first.");
+  } else {
+    notesForClinician.push(
+      `Dominant syndrome: ${winning.label}`,
+      `Canonical principle: narrowest justified treatment and consistent disposition.`
+    );
+  }
+
+  if (treatment.blockedAlternatives.length > 0) {
+    varianceWarnings.push(
+      `Shotgun protection active. Blocked alternatives: ${treatment.blockedAlternatives.join(", ")}`
+    );
+  }
+
+  return {
+    complaint,
+    phenotypeHash,
+    confidence: confidenceFromTopScore(winning?.score ?? 0),
+    winningSyndrome: winning,
+    alternatives: candidates.slice(1, 4),
+    treatment,
+    disposition,
+    notesForClinician,
+    varianceWarnings,
+  };
+}
+7) API route
+server/routes/clinicalConsistencyRoutes.ts
+import { Router } from "express";
+import { runClinicalConsistencyEngine } from "../services/clinicalConsistencyEngine";
+import { detectVariance } from "../services/varianceAuditService";
+
+const router = Router();
+
+router.post("/run", async (req, res) => {
+  try {
+    const {
+      complaint,
+      features,
+      clinicianSelectedDisposition,
+      clinicianSelectedMedicationKey,
+    } = req.body;
+
+    const canonical = runClinicalConsistencyEngine(complaint, features || {});
+    const variance = detectVariance({
+      canonical,
+      clinicianSelectedDisposition,
+      clinicianSelectedMedicationKey,
+    });
+
+    res.json({
+      ok: true,
+      canonical,
+      variance,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      error: error?.message || "Failed to run clinical consistency engine",
+    });
+  }
+});
+
+export default router;
+
+Register it:
+
+server/app.ts
+import clinicalConsistencyRoutes from "./routes/clinicalConsistencyRoutes";
+
+// existing app setup...
+app.use("/api/clinical-consistency", clinicalConsistencyRoutes);
+8) Guard against “treat everything” orders
+
+This is the bouncer at the velvet rope.
+
+server/services/medicationConsistencyGuard.ts
+interface MedicationOrder {
+  medicationKey: string;
+  class: string;
+}
+
+interface MedicationGuardResult {
+  allowed: boolean;
+  reasons: string[];
+}
+
+const INCOMPATIBLE_SHOTGUN_SETS = [
+  [
+    "empiric_azithromycin",
+    "empiric_doxycycline",
+    "empiric_ceftriaxone",
+    "consider_targeted_antiviral",
+    "paxlovid_like_order",
+  ],
+];
+
+export function validateMedicationBundle(
+  orders: MedicationOrder[]
+): MedicationGuardResult {
+  const keys = new Set(orders.map((o) => o.medicationKey));
+  const reasons: string[] = [];
+
+  for (const combo of INCOMPATIBLE_SHOTGUN_SETS) {
+    const count = combo.filter((k) => keys.has(k)).length;
+    if (count >= 3) {
+      reasons.push(
+        "Shotgun treatment pattern detected: multiple unrelated empiric therapies ordered for one presentation."
+      );
+    }
+  }
+
+  const antibioticCount = orders.filter((o) => o.class === "antibiotic").length;
+  if (antibioticCount >= 2) {
+    reasons.push("Multiple simultaneous antibiotics require explicit justification.");
+  }
+
+  return {
+    allowed: reasons.length === 0,
+    reasons,
+  };
+}
+
+Use it wherever medication plans are finalized.
+
+9) One tiny dashboard component
+client/src/components/ClinicalConsistencyCard.tsx
+import React from "react";
+
+type Props = {
+  result: any;
+};
+
+export default function ClinicalConsistencyCard({ result }: Props) {
+  if (!result?.canonical) return null;
+
+  const c = result.canonical;
+
+  return (
+    <div className="rounded-2xl border p-4 bg-white shadow-sm">
+      <div className="text-lg font-semibold">Clinical Consistency Engine</div>
+
+      <div className="mt-3 text-sm">
+        <div><strong>Complaint:</strong> {c.complaint}</div>
+        <div><strong>Phenotype:</strong> {c.phenotypeHash}</div>
+        <div><strong>Confidence:</strong> {c.confidence}</div>
+        <div><strong>Syndrome:</strong> {c.winningSyndrome?.label || "No dominant syndrome"}</div>
+        <div><strong>Disposition:</strong> {c.disposition?.disposition}</div>
+        <div><strong>Treatment class:</strong> {c.treatment?.class}</div>
+        <div><strong>Medication key:</strong> {c.treatment?.medicationKey || "None"}</div>
+      </div>
+
+      {c.notesForClinician?.length > 0 && (
+        <div className="mt-3">
+          <div className="font-medium">Why</div>
+          <ul className="list-disc pl-5 text-sm">
+            {c.notesForClinician.map((n: string, i: number) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {result.variance?.length > 0 && (
+        <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
+          <div className="font-medium text-amber-900">Variance warnings</div>
+          <ul className="list-disc pl-5 text-sm text-amber-900">
+            {result.variance.map((v: string, i: number) => (
+              <li key={i}>{v}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+10) Why this is different
+
+This does not make the app louder. It makes it more trustworthy.
+
+It turns the system from:
+
+“agent says stuff”
+into:
+“the system enforces a canonical standard of care path for a defined phenotype.”
+
+That is a real product.
+
+Not generic AI glitter. Not a gradient-wrapped fortune cookie. A machine for reducing practice variation and overtreatment while increasing consistency, safety, and scale. That is exactly the kind of “solve one real problem well” move your uploaded essay was arguing for.

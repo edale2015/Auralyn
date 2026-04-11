@@ -1,3 +1,5 @@
+import type { EhrAdapter, EhrPatientContext, EhrWritePayload } from "./ehr/types";
+
 async function postObservation(patientId: string, token: string, data: unknown): Promise<void> {
   const base = process.env.FHIR_BASE;
   if (!base || !token) { console.log(`[EPIC] postObservation skipped — no FHIR_BASE/token`); return; }
@@ -53,3 +55,69 @@ export async function syncSystems(data: ECWPayload): Promise<{ ecw: string; epic
     epic: epicToken ? "ok" : "skipped",
   };
 }
+
+export const ecwAdapter: EhrAdapter = {
+  system: "ecw",
+
+  async getPatientContext(patientId: string): Promise<EhrPatientContext> {
+    const url = process.env.ECW_API;
+    const token = process.env.ECW_TOKEN;
+    if (!url || !token) throw new Error("ECW not configured: ECW_API and ECW_TOKEN required");
+
+    const res = await fetch(`${url}/patient/${patientId}`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+    if (!res.ok) throw new Error(`ECW patient read failed: ${res.status}`);
+    const patient = await res.json();
+
+    return {
+      patientId,
+      firstName: patient?.firstName,
+      lastName: patient?.lastName,
+      dob: patient?.dob,
+      sex: patient?.sex,
+      allergies: patient?.allergies || [],
+      medications: patient?.medications || [],
+      problems: patient?.problems || [],
+      raw: patient,
+    };
+  },
+
+  async writeEncounter(payload: EhrWritePayload): Promise<unknown> {
+    const result = await sendToECWEncounter({
+      patientId: payload.patientId,
+      disposition: payload.disposition || payload.note || "Clinical encounter",
+      vitals: payload.vitals,
+      ...payload,
+    } as ECWPayload);
+    if (!result.success) throw new Error("ECW write failed: not configured or API error");
+    return result;
+  },
+
+  async writeObservation(payload: EhrWritePayload): Promise<unknown> {
+    const url = process.env.ECW_API;
+    const token = process.env.ECW_TOKEN;
+    if (!url || !token) throw new Error("ECW not configured");
+    const res = await fetch(`${url}/observation`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ patientId: payload.patientId, vitals: payload.vitals, note: payload.note }),
+    });
+    if (!res.ok) throw new Error(`ECW observation failed: ${res.status}`);
+    return res.json();
+  },
+
+  async ping(): Promise<boolean> {
+    const url = process.env.ECW_API;
+    const token = process.env.ECW_TOKEN;
+    if (!url || !token) return false;
+    try {
+      const res = await fetch(`${url}/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};

@@ -3,6 +3,11 @@ import { requireRole } from "../middleware/requireRole";
 import { fhirService } from "../integration/fhirService";
 import { rbacService } from "../auth/rbacService";
 import { orchestrationLayer } from "../layers/orchestration/orchestrationLayer";
+import { pingAllEHRs, writeAllEHRs, getPatientContextUnified, summarizeWriteResults } from "../integrations/ehrRouter";
+import { checkConsistencyMulti } from "../integrations/ehrConsistency";
+import { routeEHR, isValidEhrSystem } from "../integrations/ehrRouting";
+import { universalWrite } from "../integrations/universalWrite";
+import type { EhrSystem } from "../integrations/ehr/types";
 
 const router = Router();
 
@@ -63,6 +68,73 @@ router.get("/api/rbac/check", requireRole(["admin", "physician", "nurse", "staff
   const action = req.query.action as any;
   if (!role || !action) return res.status(400).json({ error: "role and action required" });
   res.json({ allowed: rbacService.can(role, action), role, action });
+});
+
+router.get("/api/ehr/unified/health", async (_req: Request, res: Response) => {
+  try {
+    const status = await pingAllEHRs({
+      epic: process.env.EPIC_TOKEN,
+      athena: process.env.ATHENA_TOKEN,
+    });
+    const anyUp = status.ecw || status.athena || status.epic;
+    res.json({ ok: anyUp, systems: status });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/api/ehr/unified/patient/:patientId", async (req: Request, res: Response) => {
+  const { patientId } = req.params;
+  const system = (req.query.system as string) || "ecw";
+  if (!isValidEhrSystem(system)) {
+    return res.status(400).json({ error: "Invalid system. Must be ecw|athena|epic" });
+  }
+  try {
+    const ctx = await getPatientContextUnified(patientId, system as EhrSystem);
+    res.json({ ok: true, system, context: ctx });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/api/ehr/unified/write", async (req: Request, res: Response) => {
+  const { patientId, disposition, note, vitals, traceId } = req.body;
+  if (!patientId) return res.status(400).json({ error: "patientId required" });
+  try {
+    const results = await writeAllEHRs(
+      { patientId, disposition, note, vitals, traceId },
+      { epic: process.env.EPIC_TOKEN, athena: process.env.ATHENA_TOKEN }
+    );
+    res.json({ ok: true, results: summarizeWriteResults(results) });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/api/ehr/universal-write", async (req: Request, res: Response) => {
+  const { patientId, disposition, note, vitals, traceId } = req.body;
+  if (!patientId) return res.status(400).json({ error: "patientId required" });
+  try {
+    const result = await universalWrite({ patientId, disposition, note, vitals, traceId });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post("/api/ehr/consistency", async (req: Request, res: Response) => {
+  const { epic, ecw, athena } = req.body;
+  try {
+    const report = checkConsistencyMulti(epic, ecw, athena);
+    res.json(report);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/ehr/route", (req: Request, res: Response) => {
+  const target = routeEHR(req.body);
+  res.json({ target });
 });
 
 export default router;

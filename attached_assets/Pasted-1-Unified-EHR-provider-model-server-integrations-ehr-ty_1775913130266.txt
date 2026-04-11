@@ -1,0 +1,654 @@
+1) Unified EHR provider model
+server/integrations/ehr/types.ts
+export type EhrSystem = "ecw" | "athena" | "epic";
+
+export interface EhrPatientContext {
+  patientId: string;
+  firstName?: string;
+  lastName?: string;
+  dob?: string;
+  sex?: string;
+  medications?: string[];
+  allergies?: string[];
+  problems?: string[];
+  vitals?: Record<string, unknown>;
+  raw?: unknown;
+}
+
+export interface EhrWritePayload {
+  patientId: string;
+  disposition?: string;
+  note?: string;
+  vitals?: Record<string, unknown>;
+  diagnosisCodes?: string[];
+  cptCode?: string;
+  traceId?: string;
+  raw?: unknown;
+}
+
+export interface EhrAdapter {
+  system: EhrSystem;
+  getPatientContext(patientId: string, token?: string): Promise<EhrPatientContext>;
+  writeEncounter(payload: EhrWritePayload, token?: string): Promise<unknown>;
+  writeObservation?(payload: EhrWritePayload, token?: string): Promise<unknown>;
+  ping(token?: string): Promise<boolean>;
+}
+2) Athena adapter
+
+This is the new piece you asked for.
+
+server/integrations/athenaAdapter.ts
+import type { EhrAdapter, EhrPatientContext, EhrWritePayload } from "./ehr/types";
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var: ${name}`);
+  return value;
+}
+
+async function athenaFetch(
+  path: string,
+  init: RequestInit = {},
+  token?: string
+): Promise<any> {
+  const base = requireEnv("ATHENA_API_BASE");
+  const practiceId = requireEnv("ATHENA_PRACTICE_ID");
+  const authToken = token || requireEnv("ATHENA_TOKEN");
+
+  const res = await fetch(`${base}/${practiceId}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Athena API error ${res.status}: ${text}`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export const athenaAdapter: EhrAdapter = {
+  system: "athena",
+
+  async getPatientContext(patientId: string, token?: string): Promise<EhrPatientContext> {
+    const patient = await athenaFetch(`/patients/${patientId}`, { method: "GET" }, token);
+
+    let allergies: string[] = [];
+    let medications: string[] = [];
+    let problems: string[] = [];
+
+    try {
+      const allergyRes = await athenaFetch(`/patients/${patientId}/allergies`, { method: "GET" }, token);
+      allergies = Array.isArray(allergyRes?.allergies)
+        ? allergyRes.allergies.map((a: any) => a?.allergen || a?.name).filter(Boolean)
+        : [];
+    } catch {}
+
+    try {
+      const medRes = await athenaFetch(`/patients/${patientId}/medications`, { method: "GET" }, token);
+      medications = Array.isArray(medRes?.medications)
+        ? medRes.medications.map((m: any) => m?.medication || m?.name).filter(Boolean)
+        : [];
+    } catch {}
+
+    try {
+      const probRes = await athenaFetch(`/patients/${patientId}/problems`, { method: "GET" }, token);
+      problems = Array.isArray(probRes?.problems)
+        ? probRes.problems.map((p: any) => p?.problem || p?.name).filter(Boolean)
+        : [];
+    } catch {}
+
+    return {
+      patientId,
+      firstName: patient?.firstname,
+      lastName: patient?.lastname,
+      dob: patient?.dob,
+      sex: patient?.sex,
+      allergies,
+      medications,
+      problems,
+      raw: patient,
+    };
+  },
+
+  async writeEncounter(payload: EhrWritePayload, token?: string): Promise<unknown> {
+    const body = {
+      patientid: payload.patientId,
+      departmentid: requireEnv("ATHENA_DEFAULT_DEPARTMENT_ID"),
+      reasonforvisit: payload.disposition || "Clinical triage encounter",
+      encounterdate: new Date().toISOString().slice(0, 10),
+      note: payload.note || payload.disposition || "",
+    };
+
+    return athenaFetch(`/chart/encounters`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token);
+  },
+
+  async writeObservation(payload: EhrWritePayload, token?: string): Promise<unknown> {
+    const body = {
+      patientid: payload.patientId,
+      observations: Object.entries(payload.vitals || {}).map(([name, value]) => ({
+        name,
+        value: String(value),
+      })),
+      note: payload.note || payload.disposition || "",
+    };
+
+    return athenaFetch(`/chart/observations`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token);
+  },
+
+  async ping(token?: string): Promise<boolean> {
+    try {
+      await athenaFetch(`/patients/1`, { method: "GET" }, token);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+3) Update ECW adapter to fit the same interface
+server/integrations/ecwAdapter.ts
+import type { EhrAdapter, EhrPatientContext, EhrWritePayload } from "./ehr/types";
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var: ${name}`);
+  return value;
+}
+
+async function ecwFetch(path: string, init: RequestInit = {}): Promise<any> {
+  const base = requireEnv("ECW_API");
+  const token = requireEnv("ECW_TOKEN");
+
+  const res = await fetch(`${base}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+
+  const text = await res.text();
+  if (!res.ok) throw new Error(`ECW error ${res.status}: ${text}`);
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export async function sendToECWEncounter(data: EhrWritePayload) {
+  return ecwAdapter.writeEncounter(data);
+}
+
+export const ecwAdapter: EhrAdapter = {
+  system: "ecw",
+
+  async getPatientContext(patientId: string): Promise<EhrPatientContext> {
+    const patient = await ecwFetch(`/patient/${patientId}`, { method: "GET" });
+
+    return {
+      patientId,
+      firstName: patient?.firstName,
+      lastName: patient?.lastName,
+      dob: patient?.dob,
+      sex: patient?.sex,
+      allergies: patient?.allergies || [],
+      medications: patient?.medications || [],
+      problems: patient?.problems || [],
+      raw: patient,
+    };
+  },
+
+  async writeEncounter(payload: EhrWritePayload): Promise<unknown> {
+    return ecwFetch(`/encounter`, {
+      method: "POST",
+      body: JSON.stringify({
+        patientId: payload.patientId,
+        note: payload.note || payload.disposition,
+        disposition: payload.disposition,
+        vitals: payload.vitals,
+      }),
+    });
+  },
+
+  async writeObservation(payload: EhrWritePayload): Promise<unknown> {
+    return ecwFetch(`/observation`, {
+      method: "POST",
+      body: JSON.stringify({
+        patientId: payload.patientId,
+        vitals: payload.vitals,
+        note: payload.note,
+      }),
+    });
+  },
+
+  async ping(): Promise<boolean> {
+    try {
+      await ecwFetch(`/health`, { method: "GET" });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+4) Update Epic adapter to the same interface
+server/integrations/epicAdapter.ts
+import type { EhrAdapter, EhrPatientContext, EhrWritePayload } from "./ehr/types";
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var: ${name}`);
+  return value;
+}
+
+export async function postObservation(patientId: string, token: string, data: any) {
+  const base = requireEnv("FHIR_BASE");
+
+  const body = {
+    resourceType: "Observation",
+    status: "final",
+    subject: { reference: `Patient/${patientId}` },
+    code: { text: data.code || "Observation" },
+    valueString: data.value ?? data.note ?? "",
+  };
+
+  const res = await fetch(`${base}/Observation`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/fhir+json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Epic Observation failed: ${await res.text()}`);
+  }
+
+  return res.json();
+}
+
+export const epicAdapter: EhrAdapter = {
+  system: "epic",
+
+  async getPatientContext(patientId: string, token?: string): Promise<EhrPatientContext> {
+    const authToken = token || requireEnv("EPIC_TOKEN");
+    const base = requireEnv("FHIR_BASE");
+
+    const patientRes = await fetch(`${base}/Patient/${patientId}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+
+    if (!patientRes.ok) {
+      throw new Error(`Epic patient read failed: ${await patientRes.text()}`);
+    }
+
+    const patient = await patientRes.json();
+
+    return {
+      patientId,
+      firstName: patient?.name?.[0]?.given?.[0],
+      lastName: patient?.name?.[0]?.family,
+      dob: patient?.birthDate,
+      sex: patient?.gender,
+      raw: patient,
+    };
+  },
+
+  async writeEncounter(payload: EhrWritePayload, token?: string): Promise<unknown> {
+    const authToken = token || requireEnv("EPIC_TOKEN");
+    const base = requireEnv("FHIR_BASE");
+
+    const body = {
+      resourceType: "Encounter",
+      status: "in-progress",
+      subject: { reference: `Patient/${payload.patientId}` },
+    };
+
+    const res = await fetch(`${base}/Encounter`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/fhir+json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Epic encounter write failed: ${await res.text()}`);
+    }
+
+    return res.json();
+  },
+
+  async writeObservation(payload: EhrWritePayload, token?: string): Promise<unknown> {
+    const authToken = token || requireEnv("EPIC_TOKEN");
+    return postObservation(payload.patientId, authToken, {
+      code: "Triage Result",
+      value: payload.disposition || payload.note || "",
+    });
+  },
+
+  async ping(token?: string): Promise<boolean> {
+    try {
+      const authToken = token || requireEnv("EPIC_TOKEN");
+      const base = requireEnv("FHIR_BASE");
+      const res = await fetch(`${base}/Patient/1`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};
+5) Unified EHR router with ECW as primary
+
+This is the most important piece.
+
+server/integrations/ehrRouter.ts
+import type { EhrAdapter, EhrSystem, EhrWritePayload } from "./ehr/types";
+import { ecwAdapter } from "./ecwAdapter";
+import { athenaAdapter } from "./athenaAdapter";
+import { epicAdapter } from "./epicAdapter";
+
+const adapters: Record<EhrSystem, EhrAdapter> = {
+  ecw: ecwAdapter,
+  athena: athenaAdapter,
+  epic: epicAdapter,
+};
+
+export const PRIMARY_EHR: EhrSystem = "ecw";
+
+export function getAdapter(system: EhrSystem): EhrAdapter {
+  return adapters[system];
+}
+
+export async function getPatientContextUnified(
+  patientId: string,
+  preferred: EhrSystem = PRIMARY_EHR,
+  token?: string
+) {
+  return getAdapter(preferred).getPatientContext(patientId, token);
+}
+
+export async function writePrimaryEHR(payload: EhrWritePayload, token?: string) {
+  return ecwAdapter.writeEncounter(payload, token);
+}
+
+export async function writeAllEHRs(payload: EhrWritePayload, tokenMap?: Partial<Record<EhrSystem, string>>) {
+  const results = await Promise.allSettled([
+    ecwAdapter.writeEncounter(payload, tokenMap?.ecw),
+    athenaAdapter.writeEncounter(payload, tokenMap?.athena),
+    epicAdapter.writeEncounter(payload, tokenMap?.epic),
+  ]);
+
+  return {
+    ecw: results[0],
+    athena: results[1],
+    epic: results[2],
+  };
+}
+
+export async function pingAllEHRs(tokenMap?: Partial<Record<EhrSystem, string>>) {
+  const [ecw, athena, epic] = await Promise.all([
+    ecwAdapter.ping(tokenMap?.ecw),
+    athenaAdapter.ping(tokenMap?.athena),
+    epicAdapter.ping(tokenMap?.epic),
+  ]);
+
+  return { ecw, athena, epic };
+}
+6) Update anywhere you previously used Epic or ECW-only code
+
+Replace old dual-write helpers with a tri-write helper.
+
+server/integrations/ehrUnified.ts
+import { writeAllEHRs } from "./ehrRouter";
+import type { EhrWritePayload } from "./ehr/types";
+
+export async function writeEHRAll(data: EhrWritePayload) {
+  return writeAllEHRs(data, {
+    epic: process.env.EPIC_TOKEN,
+    athena: process.env.ATHENA_TOKEN,
+  });
+}
+7) Update live system orchestration
+server/pilot/liveRealSystem.ts
+import { runFinalPipeline } from "../clinical/finalPipeline";
+import { writeEHRAll } from "../integrations/ehrUnified";
+import { processRevenue } from "../revenue/fullRevenue";
+
+export async function runLiveSystem(patient: any) {
+  const triage = await runFinalPipeline(patient, "live");
+  const disposition = triage.safetyResult.finalDisposition;
+
+  await writeEHRAll({
+    patientId: patient.patientId,
+    disposition,
+    note: `Triage disposition: ${disposition}`,
+    vitals: patient.vitals,
+    traceId: triage.traceId,
+  });
+
+  const revenue = processRevenue(patient, disposition);
+
+  return {
+    disposition,
+    revenue,
+    traceId: triage.traceId,
+  };
+}
+8) Add Athena to dashboard state and controls
+server/control/systemState.ts
+import { pingAllEHRs } from "../integrations/ehrRouter";
+
+export async function getSystemState() {
+  const ehr = await pingAllEHRs({
+    epic: process.env.EPIC_TOKEN,
+    athena: process.env.ATHENA_TOKEN,
+  });
+
+  return {
+    simulation: {
+      running: true,
+      lastRun: Date.now(),
+    },
+    ml: {
+      modelVersion: "v1",
+      drift: false,
+    },
+    automation: {
+      templates: 12,
+      failures: 1,
+    },
+    infrastructure: {
+      regions: ["us-east", "us-west", "eu"],
+      healthy: true,
+    },
+    safety: {
+      mismatchRate: 0.001,
+    },
+    integrations: {
+      epic: ehr.epic ? "ok" : "down",
+      ecw: ehr.ecw ? "ok" : "down",
+      athena: ehr.athena ? "ok" : "down",
+      chatgpt: "ok",
+      whatsapp: "ok",
+    },
+  };
+}
+client/pages/MasterControl.tsx
+import { useEffect, useState } from "react";
+
+export default function MasterControl() {
+  const [state, setState] = useState<any>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const res = await fetch("/api/control/state");
+      setState(await res.json());
+    };
+
+    load();
+    const i = setInterval(load, 2000);
+    return () => clearInterval(i);
+  }, []);
+
+  async function trigger(action: string) {
+    await fetch("/api/control/action", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (!state) return <div>Loading...</div>;
+
+  return (
+    <div className="bg-black text-white p-6">
+      <h1>🧠 Master Control Tower</h1>
+
+      <div>
+        <h2>Integrations</h2>
+        <p>Epic: {state.integrations.epic}</p>
+        <p>ECW: {state.integrations.ecw}</p>
+        <p>Athena: {state.integrations.athena}</p>
+        <p>ChatGPT: {state.integrations.chatgpt}</p>
+        <p>WhatsApp: {state.integrations.whatsapp}</p>
+      </div>
+
+      <div className="mt-4 space-x-2">
+        <button onClick={() => trigger("runSimulation")}>🧪 Sim</button>
+        <button onClick={() => trigger("stressTest")}>🔥 Stress</button>
+        <button onClick={() => trigger("runAutopilot")}>🤖 Autopilot</button>
+        <button onClick={() => trigger("repairAutomation")}>🔧 Repair</button>
+      </div>
+    </div>
+  );
+}
+9) Add Athena to patient context views
+client/components/PatientContext.tsx
+export function PatientContext({ epic, ecw, athena }: any) {
+  return (
+    <div>
+      <h3>👤 Patient Context</h3>
+      <pre>Epic: {JSON.stringify(epic, null, 2)}</pre>
+      <pre>ECW: {JSON.stringify(ecw, null, 2)}</pre>
+      <pre>Athena: {JSON.stringify(athena, null, 2)}</pre>
+    </div>
+  );
+}
+10) Add Athena to consistency checker and routing
+server/integrations/ehrConsistency.ts
+export function checkConsistencyMulti(epic: any, ecw: any, athena: any) {
+  const issues: string[] = [];
+
+  const epicAllergies = JSON.stringify(epic?.allergies || []);
+  const ecwAllergies = JSON.stringify(ecw?.allergies || []);
+  const athenaAllergies = JSON.stringify(athena?.allergies || []);
+
+  if (epicAllergies !== ecwAllergies) {
+    issues.push("Epic vs ECW allergy mismatch");
+  }
+  if (athenaAllergies !== ecwAllergies) {
+    issues.push("Athena vs ECW allergy mismatch");
+  }
+
+  return issues.length ? issues : ["OK"];
+}
+server/integrations/ehrRouting.ts
+import type { EhrSystem } from "./ehr/types";
+
+export function routeEHR(patient: any): EhrSystem | "all" {
+  if (patient.system === "ecw") return "ecw";
+  if (patient.system === "athena") return "athena";
+  if (patient.system === "epic") return "epic";
+  return "all";
+}
+11) Add Athena to fallback chain
+server/integrations/universalWrite.ts
+import { sendToECWEncounter } from "./ecwAdapter";
+import { athenaAdapter } from "./athenaAdapter";
+import { epicAdapter } from "./epicAdapter";
+import { runUIAutomation } from "../automation/uiEngine";
+import { runVisionAgent } from "../automation/visionLoop";
+
+export async function universalWrite(data: any) {
+  try {
+    return await sendToECWEncounter(data);
+  } catch {
+    try {
+      return await athenaAdapter.writeEncounter(data, process.env.ATHENA_TOKEN);
+    } catch {
+      try {
+        return await epicAdapter.writeEncounter(data, process.env.EPIC_TOKEN);
+      } catch {
+        try {
+          return await runUIAutomation(data.template);
+        } catch {
+          return runVisionAgent(data.page, "submit");
+        }
+      }
+    }
+  }
+}
+12) Env additions
+.env.example
+ATHENA_API_BASE=
+ATHENA_PRACTICE_ID=
+ATHENA_TOKEN=
+
+ECW_API=
+ECW_TOKEN=
+
+FHIR_BASE=
+EPIC_TOKEN=
+SMART_CLIENT_ID=
+SMART_REDIRECT=
+Final architecture after Athena addition
+Patient → AI Chat → Fast Triage
+        → Clinical Brain → Safety Gate
+        → Physician Copilot
+        → Revenue Engine
+        → Primary EHR: ECW
+        → Secondary EHRs: Athena + Epic
+        → Fallback: API → UI automation → Vision
+        ↓
+Dashboard (alerts, QA, replay, EHR health)
+        ↓
+Autonomy + Learning + Maintenance
+        ↓
+Marketplace + National Network
+
+The key change is this:
+
+ECW remains the main medical records system for your new platform
+Athena is now fully supported as your current live system
+Epic remains supported
+all EHR-facing code paths can now use ECW, Athena, Epic, or all three
+
+If you want, the next best step is for me to produce a single consolidated “EHR integration bundle” with:
+
+all files in one block
+all routes
+all dashboard panels
+all env vars
+a migration checklist from Athena → ECW primary

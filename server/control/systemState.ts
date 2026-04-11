@@ -1,4 +1,13 @@
 import { getLiveSnapshot } from "../simulation/liveSimulator";
+import { pingAllEHRs } from "../integrations/ehrRouter";
+
+export interface EhrIntegrationStatus {
+  epic: "ok" | "down" | "unconfigured";
+  ecw: "ok" | "down" | "unconfigured";
+  athena: "ok" | "down" | "unconfigured";
+  chatgpt: "ok" | "down";
+  whatsapp: "ok" | "down";
+}
 
 export interface SystemStateSnapshot {
   simulation: {
@@ -28,6 +37,7 @@ export interface SystemStateSnapshot {
     lastResetAt: string | null;
     lastAlertAt: string | null;
   };
+  integrations: EhrIntegrationStatus;
 }
 
 let _state: SystemStateSnapshot = {
@@ -37,6 +47,7 @@ let _state: SystemStateSnapshot = {
   infrastructure: { regions: ["us-east-1", "us-west-2", "eu-central-1"], healthy: true },
   safety: { mismatchRate: 0.001 },
   controls: { resetCount: 0, lastResetAt: null, lastAlertAt: null },
+  integrations: { epic: "unconfigured", ecw: "unconfigured", athena: "unconfigured", chatgpt: "ok", whatsapp: "ok" },
 };
 
 export function getSystemState(): SystemStateSnapshot {
@@ -66,4 +77,31 @@ export function recordAlert(): void {
 export function setActiveModel(version: string): void {
   _state.ml.activeModel = version;
   _state.ml.modelVersion = version;
+}
+
+export async function refreshEhrStatus(): Promise<EhrIntegrationStatus> {
+  try {
+    const health = await pingAllEHRs({
+      epic: process.env.EPIC_TOKEN,
+      athena: process.env.ATHENA_TOKEN,
+    });
+
+    const toStatus = (up: boolean, envVarPresent: boolean): "ok" | "down" | "unconfigured" => {
+      if (!envVarPresent) return "unconfigured";
+      return up ? "ok" : "down";
+    };
+
+    const integrations: EhrIntegrationStatus = {
+      epic: toStatus(health.epic, !!(process.env.FHIR_BASE && process.env.EPIC_TOKEN)),
+      ecw: toStatus(health.ecw, !!(process.env.ECW_API && process.env.ECW_TOKEN)),
+      athena: toStatus(health.athena, !!(process.env.ATHENA_API_BASE && process.env.ATHENA_TOKEN)),
+      chatgpt: "ok",
+      whatsapp: "ok",
+    };
+
+    _state.integrations = integrations;
+    return integrations;
+  } catch {
+    return _state.integrations;
+  }
 }
