@@ -121,6 +121,7 @@ import AdminPanel from "@/pages/AdminPanel";
 import UIAutomationPanel from "@/pages/UIAutomationPanel";
 import ControlTower from "@/pages/ControlTower";
 import MasterControl from "@/pages/MasterControl";
+import DeepAgentDashboard from "@/pages/DeepAgentDashboard";
 
 validateRoutes();
 
@@ -227,6 +228,7 @@ function WorkbenchRouter() {
         <Route path="/ui-automation" component={UIAutomationPanel} />
         <Route path="/control-tower" component={ControlTower} />
         <Route path="/master-control" component={MasterControl} />
+        <Route path="/deep-agent" component={DeepAgentDashboard} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  deep-agent-service:
+    build:
+      context: ./deep-agent-service
+    container_name: deep-agent-service
+    env_file:
+      - ./deep-agent-service/.env
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./deep-agent-service/data:/app/data

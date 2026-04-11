@@ -2175,6 +2175,10 @@ export async function registerRoutes(
   app.use("/api", batch20Routes);
   console.log("[Batch20] Live adapters | network controller | marketplace engine | workflow optimizer | advanced utils (retry/z-score/universalWrite) — all wired at /api/*");
 
+  const { default: deepAgentRoutes } = await import("./routes/deepAgentRoutes");
+  app.use("/api/deep-agent", deepAgentRoutes);
+  console.log("[DeepAgent] Python sidecar bridge wired at /api/deep-agent/* (health|run|article-compare|kb-audit|code-review|workflow-upgrade|upgrade-from-article|research)");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

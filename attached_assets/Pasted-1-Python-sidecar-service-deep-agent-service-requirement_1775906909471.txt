@@ -1,0 +1,716 @@
+1) Python sidecar service
+deep-agent-service/requirements.txt
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+pydantic==2.11.3
+python-dotenv==1.0.1
+deepagents
+langchain
+langgraph
+langchain-openai
+httpx==0.28.1
+deep-agent-service/.env.example
+OPENAI_API_KEY=your_key_here
+DEEP_AGENT_MODEL=openai:gpt-5.4
+DEEP_AGENT_MEMORY_DIR=/app/data/memory
+DEEP_AGENT_WORK_DIR=/app/data/work
+DEEP_AGENT_MAX_RESULTS=8
+deep-agent-service/app/models.py
+from __future__ import annotations
+
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field
+
+
+AgentTaskType = Literal[
+    "research",
+    "kb_audit",
+    "code_review",
+    "workflow_upgrade",
+    "article_compare",
+    "general",
+]
+
+
+class MessageIn(BaseModel):
+    role: Literal["user", "system", "assistant"]
+    content: str
+
+
+class DeepAgentRunRequest(BaseModel):
+    session_id: str = Field(..., description="Stable session/thread id")
+    task_type: AgentTaskType = "general"
+    user_prompt: str
+    messages: List[MessageIn] = Field(default_factory=list)
+    attachments: Dict[str, str] = Field(default_factory=dict, description="filename -> content")
+    context: Dict[str, Any] = Field(default_factory=dict)
+    write_artifacts: bool = True
+
+
+class DeepAgentRunResponse(BaseModel):
+    ok: bool
+    session_id: str
+    task_type: AgentTaskType
+    final_text: str
+    artifacts: List[str] = Field(default_factory=list)
+    structured_output: Dict[str, Any] = Field(default_factory=dict)
+    raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthResponse(BaseModel):
+    ok: bool
+    model: str
+    memory_dir: str
+    work_dir: str
+deep-agent-service/app/config.py
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
+MODEL = os.getenv("DEEP_AGENT_MODEL", "openai:gpt-5.4")
+MEMORY_DIR = Path(os.getenv("DEEP_AGENT_MEMORY_DIR", "./data/memory")).resolve()
+WORK_DIR = Path(os.getenv("DEEP_AGENT_WORK_DIR", "./data/work")).resolve()
+
+MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+WORK_DIR.mkdir(parents=True, exist_ok=True)
+deep-agent-service/app/tools.py
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+def write_json_artifact(path: str, payload: Dict[str, Any]) -> str:
+    """Write structured JSON artifact to the agent workspace and return the path."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return str(p)
+
+
+def summarize_system_context(context: Dict[str, Any]) -> str:
+    """Compact high-level system context to help the agent reason without flooding context."""
+    if not context:
+        return "No additional system context supplied."
+
+    lines: List[str] = []
+    for key, value in context.items():
+        if isinstance(value, (dict, list)):
+            rendered = json.dumps(value)[:3000]
+        else:
+            rendered = str(value)[:3000]
+        lines.append(f"{key}: {rendered}")
+    return "\n".join(lines)
+
+
+def emit_patch_manifest(changes: List[Dict[str, Any]], output_path: str) -> str:
+    """Persist a recommended patch manifest."""
+    return write_json_artifact(output_path, {"changes": changes})
+deep-agent-service/app/prompts.py
+from __future__ import annotations
+
+TASK_PROMPTS = {
+    "general": """
+You are Auralyn Deep Agent, an autonomous implementation and audit specialist.
+Work carefully, step by step, and produce practical outputs.
+Use planning, files, and subagents when useful.
+When recommending changes, prefer implementation-ready detail.
+""",
+    "research": """
+You are a clinical-grade research and engineering agent.
+Use planning first.
+Collect evidence, separate facts from inferences, and write structured findings.
+Persist large intermediate work to files.
+""",
+    "kb_audit": """
+You are a Knowledge Base audit agent for a medical triage platform.
+Your job:
+1. inspect supplied article/guideline/spec content
+2. compare it to current workflow/context
+3. identify exact KB rows, rules, engines, thresholds, questions, or dispositions affected
+4. produce implementation-ready recommendations
+5. emit machine-readable change proposals
+Be specific and operational.
+""",
+    "code_review": """
+You are a senior code reviewer and systems architect.
+Find correctness issues, safety gaps, reliability risks, observability gaps, and integration weaknesses.
+Return prioritized fixes and concrete code-level recommendations.
+""",
+    "workflow_upgrade": """
+You are an autonomous workflow upgrade agent for a regulated medical platform.
+Map proposed improvements into:
+- API changes
+- DB schema changes
+- orchestration changes
+- dashboards
+- audit trails
+- rollout/safety gates
+""",
+    "article_compare": """
+You are an article-to-system comparison agent.
+Compare the uploaded content to the existing application architecture and identify:
+- missing capabilities
+- where they belong
+- how to integrate them safely
+- exact code modules or services to add
+Return structured output plus implementation plan.
+""",
+}
+deep-agent-service/app/agent_factory.py
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List
+
+from deepagents import create_deep_agent, Subagent
+from deepagents.backends import CompositeBackend, LocalFilesystemBackend, StateBackend
+
+from .config import MEMORY_DIR, MODEL, WORK_DIR
+from .prompts import TASK_PROMPTS
+
+
+def build_backend(session_id: str):
+    """
+    Route /memories and /workspace to local persistent folders.
+    This uses filesystem-backed memory so the agent can persist useful state across runs.
+    """
+    session_root = WORK_DIR / session_id
+    session_root.mkdir(parents=True, exist_ok=True)
+
+    backend = CompositeBackend(
+        routes={
+            "/memories/": LocalFilesystemBackend(root=str(MEMORY_DIR)),
+            "/workspace/": LocalFilesystemBackend(root=str(session_root)),
+        },
+        default=StateBackend(),
+    )
+    return backend
+
+
+def build_subagents() -> List[Any]:
+    return [
+        Subagent(
+            name="kb-specialist",
+            system_prompt=(
+                "You are a specialist in KB rows, clinical rules, complaint flows, "
+                "red flags, scoring instruments, and disposition logic. "
+                "Return exact KB-oriented changes."
+            ),
+            tools=[],
+        ),
+        Subagent(
+            name="code-specialist",
+            system_prompt=(
+                "You are a specialist in implementation planning, code structure, "
+                "microservices, APIs, schemas, and rollout sequencing."
+            ),
+            tools=[],
+        ),
+        Subagent(
+            name="safety-specialist",
+            system_prompt=(
+                "You are a clinical and software safety reviewer. "
+                "Focus on auditability, approval gates, safe defaults, and failure modes."
+            ),
+            tools=[],
+        ),
+    ]
+
+
+def create_agent(task_type: str, session_id: str, extra_tools: List[Any] | None = None):
+    system_prompt = TASK_PROMPTS.get(task_type, TASK_PROMPTS["general"])
+    backend = build_backend(session_id)
+    tools = extra_tools or []
+
+    agent = create_deep_agent(
+        model=MODEL,
+        tools=tools,
+        subagents=build_subagents(),
+        system_prompt=system_prompt,
+        backend=backend,
+        memory=["/memories/AGENTS.md"],
+    )
+    return agent
+deep-agent-service/app/service.py
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List
+
+from .agent_factory import create_agent
+from .config import WORK_DIR
+from .models import DeepAgentRunRequest, DeepAgentRunResponse
+from .tools import summarize_system_context
+
+
+def _prepare_workspace(session_id: str, attachments: Dict[str, str], context: Dict[str, Any]) -> List[str]:
+    session_root = WORK_DIR / session_id
+    session_root.mkdir(parents=True, exist_ok=True)
+    created: List[str] = []
+
+    if attachments:
+        for filename, content in attachments.items():
+            file_path = session_root / filename
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+            created.append(str(file_path))
+
+    if context:
+        ctx_path = session_root / "system_context.json"
+        ctx_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+        created.append(str(ctx_path))
+
+        compact_path = session_root / "system_context_compact.txt"
+        compact_path.write_text(summarize_system_context(context), encoding="utf-8")
+        created.append(str(compact_path))
+
+    return created
+
+
+def run_deep_agent(req: DeepAgentRunRequest) -> DeepAgentRunResponse:
+    created_files = _prepare_workspace(req.session_id, req.attachments, req.context)
+    agent = create_agent(req.task_type, req.session_id)
+
+    workspace_hint = f"""
+Workspace files were prepared in /workspace/.
+Use those files when helpful.
+If you generate structured recommendations, save them under /workspace/output/.
+"""
+
+    messages = [{"role": "system", "content": workspace_hint}]
+    messages.extend([m.model_dump() for m in req.messages])
+    messages.append({"role": "user", "content": req.user_prompt})
+
+    result = agent.invoke({"messages": messages})
+
+    final_text = ""
+    if isinstance(result, dict):
+        messages_out = result.get("messages", [])
+        if messages_out:
+            last = messages_out[-1]
+            final_text = getattr(last, "content", "") or last.get("content", "")
+    else:
+        final_text = str(result)
+
+    output_root = WORK_DIR / req.session_id / "output"
+    artifacts: List[str] = []
+    structured: Dict[str, Any] = {}
+
+    if output_root.exists():
+        for p in output_root.rglob("*"):
+            if p.is_file():
+                artifacts.append(str(p))
+                if p.suffix.lower() == ".json" and not structured:
+                    try:
+                        structured = json.loads(p.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+
+    return DeepAgentRunResponse(
+        ok=True,
+        session_id=req.session_id,
+        task_type=req.task_type,
+        final_text=final_text,
+        artifacts=created_files + artifacts,
+        structured_output=structured,
+        raw=result if isinstance(result, dict) else {"result": str(result)},
+    )
+deep-agent-service/app/main.py
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .config import MEMORY_DIR, MODEL, WORK_DIR
+from .models import DeepAgentRunRequest, DeepAgentRunResponse, HealthResponse
+from .service import run_deep_agent
+
+app = FastAPI(title="Auralyn Deep Agent Service", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse(
+        ok=True,
+        model=MODEL,
+        memory_dir=str(MEMORY_DIR),
+        work_dir=str(WORK_DIR),
+    )
+
+
+@app.post("/run", response_model=DeepAgentRunResponse)
+def run(req: DeepAgentRunRequest) -> DeepAgentRunResponse:
+    return run_deep_agent(req)
+deep-agent-service/Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
+
+RUN mkdir -p /app/data/memory /app/data/work
+
+EXPOSE 8081
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8081"]
+2) TypeScript bridge into your existing backend
+server/services/deepAgentClient.ts
+import fetch from "node-fetch";
+
+export type DeepAgentTaskType =
+  | "research"
+  | "kb_audit"
+  | "code_review"
+  | "workflow_upgrade"
+  | "article_compare"
+  | "general";
+
+export interface DeepAgentMessage {
+  role: "user" | "system" | "assistant";
+  content: string;
+}
+
+export interface DeepAgentRunRequest {
+  session_id: string;
+  task_type: DeepAgentTaskType;
+  user_prompt: string;
+  messages?: DeepAgentMessage[];
+  attachments?: Record<string, string>;
+  context?: Record<string, unknown>;
+  write_artifacts?: boolean;
+}
+
+export interface DeepAgentRunResponse {
+  ok: boolean;
+  session_id: string;
+  task_type: DeepAgentTaskType;
+  final_text: string;
+  artifacts: string[];
+  structured_output: Record<string, unknown>;
+  raw: Record<string, unknown>;
+}
+
+const DEEP_AGENT_URL = process.env.DEEP_AGENT_URL || "http://deep-agent-service:8081";
+
+export async function runDeepAgent(
+  payload: DeepAgentRunRequest
+): Promise<DeepAgentRunResponse> {
+  const res = await fetch(`${DEEP_AGENT_URL}/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`DeepAgent request failed: ${res.status} ${text}`);
+  }
+
+  return (await res.json()) as DeepAgentRunResponse;
+}
+server/routes/deepAgentRoutes.ts
+import { Router } from "express";
+import { runDeepAgent } from "../services/deepAgentClient";
+
+const router = Router();
+
+router.get("/health", async (_req, res) => {
+  res.json({ ok: true });
+});
+
+router.post("/article-compare", async (req, res) => {
+  try {
+    const {
+      sessionId,
+      articleText,
+      currentSystemSummary,
+      currentModuleName,
+      additionalContext,
+    } = req.body;
+
+    const result = await runDeepAgent({
+      session_id: sessionId || `article-compare-${Date.now()}`,
+      task_type: "article_compare",
+      user_prompt: `
+Compare the uploaded article/notes against the current system and produce:
+1. architecture additions
+2. exact integration points
+3. proposed services/modules/routes
+4. safety considerations
+5. rollout steps
+6. machine-readable change proposals
+
+Current module: ${currentModuleName || "unspecified"}
+`,
+      attachments: {
+        "article_input.txt": articleText || "",
+      },
+      context: {
+        currentSystemSummary,
+        currentModuleName,
+        additionalContext,
+      },
+      write_artifacts: true,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || "Unknown error" });
+  }
+});
+
+router.post("/kb-audit", async (req, res) => {
+  try {
+    const {
+      sessionId,
+      sourceText,
+      kbSnapshot,
+      complaintFlows,
+      rulesContext,
+      moduleName,
+    } = req.body;
+
+    const result = await runDeepAgent({
+      session_id: sessionId || `kb-audit-${Date.now()}`,
+      task_type: "kb_audit",
+      user_prompt: `
+Audit the supplied source against our KB and workflows.
+
+Return:
+- impacted complaints
+- impacted KB tables
+- exact suggested rules/questions/dispositions
+- missing score thresholds
+- recommended engine changes
+- priority and risk level
+- JSON patch proposal
+`,
+      attachments: {
+        "source_material.txt": sourceText || "",
+        "kb_snapshot.json": JSON.stringify(kbSnapshot || {}, null, 2),
+        "complaint_flows.json": JSON.stringify(complaintFlows || {}, null, 2),
+      },
+      context: {
+        moduleName,
+        rulesContext,
+      },
+      write_artifacts: true,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || "Unknown error" });
+  }
+});
+
+router.post("/code-review", async (req, res) => {
+  try {
+    const { sessionId, files, moduleName, architectureContext } = req.body;
+
+    const attachments: Record<string, string> = {};
+    for (const file of files || []) {
+      attachments[file.path] = file.content;
+    }
+
+    const result = await runDeepAgent({
+      session_id: sessionId || `code-review-${Date.now()}`,
+      task_type: "code_review",
+      user_prompt: `
+Review the supplied code for:
+- correctness
+- reliability
+- safety
+- observability
+- maintainability
+- integration quality
+
+Return prioritized recommendations plus implementation plan.
+`,
+      attachments,
+      context: {
+        moduleName,
+        architectureContext,
+      },
+      write_artifacts: true,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message || "Unknown error" });
+  }
+});
+
+export default router;
+Register route in your Express app
+import deepAgentRoutes from "./routes/deepAgentRoutes";
+
+// ...
+app.use("/api/deep-agent", deepAgentRoutes);
+3) Dashboard integration hooks
+
+For your Control Tower / KB dashboard, this is the pattern I’d use:
+
+Example frontend call
+export async function runArticleCompare(payload: {
+  sessionId: string;
+  articleText: string;
+  currentSystemSummary: string;
+  currentModuleName: string;
+  additionalContext?: Record<string, unknown>;
+}) {
+  const res = await fetch("/api/deep-agent/article-compare", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  return await res.json();
+}
+Suggested dashboard cards
+Deep Agent Health
+Recent Runs
+Structured Recommendations
+Patch Manifest Preview
+Approve / Reject / Queue for Implementation
+Artifacts Generated
+Subagent Trace Summary
+4) Docker Compose addition
+docker-compose.deepagents.yml
+version: "3.9"
+
+services:
+  deep-agent-service:
+    build:
+      context: ./deep-agent-service
+    container_name: deep-agent-service
+    env_file:
+      - ./deep-agent-service/.env
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./deep-agent-service/data:/app/data
+
+If your Node app is also in Compose, point:
+
+DEEP_AGENT_URL=http://deep-agent-service:8081
+5) Recommended system-specific Deep Agent roles
+
+This is where it gets fun and sharp-edged in a useful way.
+
+Create specialist subagents for your system:
+
+kb-specialist
+complaint packs, red flags, core questions, dispositions
+clinical-safety-specialist
+escalation gates, uncertainty, dangerous omissions
+code-specialist
+file/module planning, patch manifests, route wiring
+observability-specialist
+metrics, traces, audit logs, drift checks
+ehr-automation-specialist
+screen automation, selector healing, fallback logic
+governance-specialist
+approval gates, audit chain, validation pack impact
+
+That matches Deep Agents’ intended subagent pattern, where subtasks are delegated to isolated contexts instead of bloating the main run.
+
+6) Best way to use this in your medical platform
+
+For your app, I would use Deep Agents only for non-blocking cognitive work, not the real-time clinical hot path.
+
+Good uses:
+
+article-to-KB upgrade analysis
+codebase/module review
+workflow migration planning
+golden-case failure root-cause analysis
+regulation / architecture / dashboard upgrade proposals
+converting uploaded PDF/article knowledge into proposed rule deltas
+
+Do not use it as the final real-time triage decision engine.
+Keep deterministic/safety-critical routing in your existing hardened stack.
+
+That is the right split because Deep Agents is strongest at long-horizon planning, delegation, memory, and context management, not at replacing your deterministic clinical guardrails.
+
+7) One concrete endpoint for “uploaded article → proposed KB changes”
+
+Here is a stronger version you can wire into your current “read uploaded article and recommend changes” workflow.
+
+server/services/deepAgentUpgradeOrchestrator.ts
+import { runDeepAgent } from "./deepAgentClient";
+
+interface UpgradeInput {
+  articleText: string;
+  moduleName: string;
+  currentKbSummary: Record<string, unknown>;
+  currentFlowSummary: Record<string, unknown>;
+  currentArchitectureSummary: Record<string, unknown>;
+}
+
+export async function runUploadedArticleUpgrade(input: UpgradeInput) {
+  return await runDeepAgent({
+    session_id: `upgrade-${Date.now()}`,
+    task_type: "kb_audit",
+    user_prompt: `
+You are reviewing uploaded source material for incorporation into our production medical platform.
+
+Tasks:
+1. extract the key capabilities or recommendations from the source
+2. compare them to our current KB/workflow/architecture
+3. identify gaps
+4. propose exact KB changes
+5. propose exact code/service/dashboard changes
+6. assign priority, risk, and rollout order
+7. save structured JSON outputs under /workspace/output/
+
+Required JSON sections:
+{
+  "summary": {},
+  "kb_changes": [],
+  "workflow_changes": [],
+  "api_changes": [],
+  "dashboard_changes": [],
+  "safety_notes": [],
+  "rollout_plan": []
+}
+`,
+    attachments: {
+      "uploaded_source.txt": input.articleText,
+      "kb_summary.json": JSON.stringify(input.currentKbSummary, null, 2),
+      "flow_summary.json": JSON.stringify(input.currentFlowSummary, null, 2),
+      "architecture_summary.json": JSON.stringify(input.currentArchitectureSummary, null, 2),
+    },
+    context: {
+      moduleName: input.moduleName,
+      platformType: "HIPAA/FDA-aware urgent care triage SaaS",
+    },
+    write_artifacts: true,
+  });
+}
+8) Why this design is the right fit
+
+Because the article you shared is really about agent harness infrastructure: planning, filesystem context offloading, subagents, summarization, and memory. Those features are most valuable when the task is sprawling and multi-step, not when you are making a single deterministic clinical routing decision. Official docs describe the same positioning: Deep Agents is a higher-level harness for complex, multi-step work with built-in planning, backends, memory, and subagents.
+
+So the architecture above gives you the horsepower without letting it drive the ambulance into a fountain.

@@ -984,3 +984,43 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added (14 new):** `/api/integrations/hospital|payer|safe-write|universal-write`, `/api/network/best|rebalance|health`, `/api/marketplace/engine/match|rank|book`, `/api/optimization/analyze|project`, `/api/clinical/next-best-question|one-glance`, `/api/analytics/z-anomaly`
 
 **Test count:** 1758/1758 passing across 54 files (+47 new tests in `tests/unit/batch20.test.ts`)
+
+## Batch 21 — Deep Agent Python Sidecar + TypeScript Bridge + Dashboard (COMPLETE)
+
+**Python sidecar service** (`deep-agent-service/`):
+- `requirements.txt` — fastapi 0.115.8, uvicorn, pydantic 2.11.3, deepagents, langchain, langgraph, langchain-openai, httpx
+- `app/models.py` — `DeepAgentRunRequest`, `DeepAgentRunResponse`, `HealthResponse`, `MessageIn`, `AgentTaskType` Pydantic models
+- `app/config.py` — `MODEL`, `MEMORY_DIR`, `WORK_DIR` from env with auto-mkdir
+- `app/tools.py` — `write_json_artifact`, `summarize_system_context` (3000-char per-key truncation), `emit_patch_manifest`
+- `app/prompts.py` — 6 specialized system prompts: `general`, `research`, `kb_audit`, `code_review`, `workflow_upgrade`, `article_compare`
+- `app/agent_factory.py` — `build_backend(session_id)` CompositeBackend with per-session `/workspace/` + shared `/memories/`. `build_subagents()` returns 6 subagents: kb-specialist, code-specialist, safety-specialist, observability-specialist, ehr-automation-specialist, governance-specialist. `create_agent(task_type, session_id)` factory
+- `app/service.py` — `run_deep_agent(req)`: writes attachments + context to session workspace, invokes agent, collects artifacts from `/workspace/output/`, parses first JSON artifact as `structured_output`
+- `app/main.py` — FastAPI with CORS, `GET /health`, `POST /run`
+- `Dockerfile` — python:3.11-slim, port 8081
+- `docker-compose.deepagents.yml` — service definition with volume mount
+
+**TypeScript bridge** (`server/services/`):
+- `deepAgentClient.ts` — `runDeepAgent(payload)`: typed fetch to `DEEP_AGENT_URL/run` with 120s timeout. `safeRunDeepAgent(payload)`: wraps `runDeepAgent` in try/catch returning `{ok:false,raw:{error}}` — never throws. `checkDeepAgentHealth()`: GET `/health` with 5s timeout
+- `deepAgentUpgradeOrchestrator.ts` — `runUploadedArticleUpgrade(input)`: full 7-task KB audit with 4 file attachments + HIPAA platform context. `runKbAuditFromSource(opts)`: targeted KB audit from raw source text. `parseUpgradeOutput(res)`: extracts `{summary,kb_changes,workflow_changes,api_changes,dashboard_changes,safety_notes,rollout_plan}` from `structured_output` with empty-array fallbacks
+
+**Express routes** (`server/routes/deepAgentRoutes.ts`) — 8 routes:
+- `GET /health` — proxies to Python sidecar health; returns `{ok:false,error}` when unreachable
+- `POST /run` — generic agent run with session_id + user_prompt validation
+- `POST /article-compare` — sessionId/articleText/currentModuleName body
+- `POST /kb-audit` — sourceText/kbSnapshot/complaintFlows/rulesContext
+- `POST /code-review` — files[]/moduleName/architectureContext
+- `POST /workflow-upgrade` — description/currentWorkflow/targetOutcome
+- `POST /upgrade-from-article` — full upgrade orchestrator; returns `result + parsed` sections
+- `POST /research` — topic/context/attachments
+
+**Frontend** (`client/src/pages/DeepAgentDashboard.tsx`) at `/deep-agent`:
+- Task selector: general / research / kb_audit / code_review / workflow_upgrade / article_compare
+- Session ID input (auto-generated when blank), module name
+- Conditional prompt vs article text area by task type
+- "Run Agent" + "Full Upgrade Analysis" (article modes) buttons
+- Live stats: Total Runs / Succeeded / Artifacts counters
+- Collapsible run cards: response text, structured output JSON, artifact badges, error display
+
+**Route registration:** `/api/deep-agent/*` mounted in `server/routes.ts`
+
+**Test count:** 1808/1808 passing across 55 files (+50 new tests in `tests/unit/batch21.test.ts`)
