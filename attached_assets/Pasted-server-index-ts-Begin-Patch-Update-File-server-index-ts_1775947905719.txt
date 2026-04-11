@@ -1,0 +1,751 @@
+server/index.ts
+*** Begin Patch
+*** Update File: server/index.ts
+@@
+ import express from "express";
++import clinicalConsistencyRoutes from "./routes/clinicalConsistencyRoutes";
++import clinicalConsistencyIntegrationRoutes from "./routes/clinicalConsistencyIntegrationRoutes";
++import { requireDispositionFirst } from "./middleware/requireDispositionFirst";
+@@
+ const app = express();
+@@
++app.use("/api/clinical-consistency", clinicalConsistencyRoutes);
++app.use("/api/clinical-consistency-integration", clinicalConsistencyIntegrationRoutes);
++
+@@
+-// existing finalize / approve routes here
++// Disposition-first enforcement on final clinical decision routes
++// Adjust paths to your exact finalization endpoints if needed.
++app.post("/api/encounters/:id/finalize", requireDispositionFirst, async (req, res, next) => {
++  next();
++});
++
++app.post("/api/triage/:id/approve", requireDispositionFirst, async (req, res, next) => {
++  next();
++});
+*** End Patch
+server/kb/routes/kbAdminRoutes.ts
+*** Begin Patch
+*** Update File: server/kb/routes/kbAdminRoutes.ts
+@@
+ import { Router } from "express";
++import { requireKbAdmin } from "../middleware/kbAuthMiddleware";
++import {
++  previewCanonicalPromotionHandler,
++  promoteCanonicalPathwayHandler,
++  retireCanonicalPathwayHandler,
++  generateCanonicalDraftFromCaseHandler,
++} from "../../services/kbAdminConsistencyIntegration";
+ 
+ const router = Router();
+@@
++router.post(
++  "/canonical-pathways/preview-promotion",
++  requireKbAdmin,
++  previewCanonicalPromotionHandler
++);
++
++router.post(
++  "/canonical-pathways/promote",
++  requireKbAdmin,
++  promoteCanonicalPathwayHandler
++);
++
++router.post(
++  "/canonical-pathways/retire",
++  requireKbAdmin,
++  retireCanonicalPathwayHandler
++);
++
++router.post(
++  "/canonical-pathways/generate-draft-from-case",
++  requireKbAdmin,
++  generateCanonicalDraftFromCaseHandler
++);
++
+ export default router;
+*** End Patch
+server/kb/schemas/kbValidationSchemas.ts
+*** Begin Patch
+*** Update File: server/kb/schemas/kbValidationSchemas.ts
+@@
+ import { z } from "zod";
+@@
++export const CanonicalPathwayPromotionSchema = z.object({
++  sourceType: z.enum(["complaint_pack", "golden_case", "manual"]),
++  complaintId: z.string().min(1),
++  syndromeId: z.string().min(1),
++  label: z.string().min(1).max(200),
++  requiredFeatures: z.array(z.string()).default([]),
++  positiveWeights: z.record(z.string(), z.number()).default({}),
++  negativeWeights: z.record(z.string(), z.number()).default({}),
++  exclusions: z.array(z.string()).default([]),
++  treatmentClass: z.enum([
++    "none",
++    "supportive",
++    "antibiotic",
++    "antiviral",
++    "steroid",
++    "bronchodilator",
++    "topical",
++    "antifungal",
++  ]),
++  medicationKey: z.string().optional(),
++  canonicalDisposition: z.enum([
++    "home_supportive_care",
++    "home_with_rx",
++    "follow_up_primary_care",
++    "same_day_urgent_care",
++    "er_now",
++    "hospital_admission",
++  ]),
++  rationale: z.array(z.string()).default([]),
++  actorId: z.string().min(1),
++  traceId: z.string().min(1),
++});
++
++export const CanonicalPathwayRetireSchema = z.object({
++  pathwayId: z.string().min(1),
++  actorId: z.string().min(1),
++  traceId: z.string().min(1),
++  reason: z.string().min(3),
++});
++
++export const CanonicalDraftFromCaseSchema = z.object({
++  complaint: z.string().min(1),
++  features: z.record(z.string(), z.any()),
++  expectedDisposition: z.string().optional(),
++  actorId: z.string().min(1),
++  traceId: z.string().min(1),
++});
+*** End Patch
+shared/schema.ts
+*** Begin Patch
+*** Update File: shared/schema.ts
+@@
+-import { pgTable, text, timestamp, boolean, integer } from "drizzle-orm/pg-core";
++import { pgTable, text, timestamp, boolean, integer, jsonb } from "drizzle-orm/pg-core";
+@@
++export const canonicalPathways = pgTable("canonical_pathways", {
++  pathwayId: text("pathway_id").primaryKey(),
++  sourceType: text("source_type").notNull(),
++  complaintId: text("complaint_id").notNull(),
++  syndromeId: text("syndrome_id").notNull(),
++  label: text("label").notNull(),
++  requiredFeatures: jsonb("required_features").$type<string[]>().notNull().default([]),
++  positiveWeights: jsonb("positive_weights").$type<Record<string, number>>().notNull().default({}),
++  negativeWeights: jsonb("negative_weights").$type<Record<string, number>>().notNull().default({}),
++  exclusions: jsonb("exclusions").$type<string[]>().notNull().default([]),
++  treatmentClass: text("treatment_class").notNull(),
++  medicationKey: text("medication_key"),
++  canonicalDisposition: text("canonical_disposition").notNull(),
++  rationale: jsonb("rationale").$type<string[]>().notNull().default([]),
++  active: boolean("active").notNull().default(true),
++  createdBy: text("created_by").notNull(),
++  updatedBy: text("updated_by").notNull(),
++  retiredBy: text("retired_by"),
++  retirementReason: text("retirement_reason"),
++  retiredAt: timestamp("retired_at"),
++  createdAt: timestamp("created_at").defaultNow().notNull(),
++  updatedAt: timestamp("updated_at").defaultNow().notNull(),
++});
++
++export const phenotypeRegistry = pgTable("phenotype_registry", {
++  phenotypeHash: text("phenotype_hash").primaryKey(),
++  complaintId: text("complaint_id").notNull(),
++  canonicalSyndromeId: text("canonical_syndrome_id"),
++  canonicalMedicationKey: text("canonical_medication_key"),
++  canonicalDisposition: text("canonical_disposition").notNull(),
++  confidence: text("confidence").notNull(),
++  seenCount: integer("seen_count").notNull().default(1),
++  firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
++  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
++});
++
++export const physicianOverrides = pgTable("physician_overrides", {
++  id: text("id").primaryKey(),
++  encounterId: text("encounter_id").notNull(),
++  physicianId: text("physician_id").notNull(),
++  category: text("category").notNull(),
++  reasonText: text("reason_text").notNull(),
++  complaint: text("complaint").notNull(),
++  phenotypeHash: text("phenotype_hash").notNull(),
++  canonicalDisposition: text("canonical_disposition").notNull(),
++  selectedDisposition: text("selected_disposition"),
++  canonicalMedicationKey: text("canonical_medication_key"),
++  selectedMedicationKey: text("selected_medication_key"),
++  reviewNeeded: boolean("review_needed").notNull().default(true),
++  createdAt: timestamp("created_at").defaultNow().notNull(),
++});
+*** End Patch
+server/kb/services/kbWriteService.ts
+*** Begin Patch
+*** Update File: server/kb/services/kbWriteService.ts
+@@
++import { canonicalPathways } from "../../../shared/schema";
++import { db } from "../../db";
++
++type CanonicalPathwayInsert = {
++  pathwayId: string;
++  sourceType: string;
++  complaintId: string;
++  syndromeId: string;
++  label: string;
++  requiredFeatures: string[];
++  positiveWeights: Record<string, number>;
++  negativeWeights: Record<string, number>;
++  exclusions: string[];
++  treatmentClass: string;
++  medicationKey?: string;
++  canonicalDisposition: string;
++  rationale: string[];
++  active?: boolean;
++};
++
++async function safeAudit(traceId: string, step: string, payload: unknown) {
++  try {
++    const anyGlobal = global as any;
++    if (typeof anyGlobal.auditStep === "function") {
++      await anyGlobal.auditStep({
++        traceId,
++        step,
++        input: payload,
++        output: { ok: true },
++      });
++    }
++  } catch {
++    // swallow audit failures here, do not block core write
++  }
++}
++
++async function safeReloadKbCache(traceId: string) {
++  try {
++    const anyGlobal = global as any;
++    if (typeof anyGlobal.reloadKbCache === "function") {
++      await anyGlobal.reloadKbCache(traceId);
++    }
++  } catch {
++    // swallow cache reload failures here
++  }
++}
++
++export async function createCanonicalPathway(
++  data: CanonicalPathwayInsert,
++  actorId: string,
++  traceId: string
++) {
++  await db.insert(canonicalPathways).values({
++    ...data,
++    active: true,
++    createdBy: actorId,
++    updatedBy: actorId,
++  });
++
++  await safeAudit(traceId, "kb_canonical_pathway_created", {
++    actorId,
++    pathwayId: data.pathwayId,
++    complaintId: data.complaintId,
++    syndromeId: data.syndromeId,
++  });
++
++  await safeReloadKbCache(traceId);
++  return { ok: true, pathwayId: data.pathwayId };
++}
++
++export async function retireCanonicalPathway(
++  pathwayId: string,
++  actorId: string,
++  traceId: string,
++  reason: string
++) {
++  await db
++    .update(canonicalPathways)
++    .set({
++      active: false,
++      retiredAt: new Date(),
++      retiredBy: actorId,
++      retirementReason: reason,
++      updatedBy: actorId,
++    })
++    .where((canonicalPathways as any).pathwayId.eq(pathwayId));
++
++  await safeAudit(traceId, "kb_canonical_pathway_retired", {
++    actorId,
++    pathwayId,
++    reason,
++  });
++
++  await safeReloadKbCache(traceId);
++  return { ok: true, pathwayId };
++}
+*** End Patch
+server/services/kbAdminConsistencyIntegration.ts
+*** Begin Patch
+*** Add File: server/services/kbAdminConsistencyIntegration.ts
++import { v4 as uuidv4 } from "uuid";
++import { Request, Response } from "express";
++import {
++  CanonicalDraftFromCaseSchema,
++  CanonicalPathwayPromotionSchema,
++  CanonicalPathwayRetireSchema,
++} from "../kb/schemas/kbValidationSchemas";
++import {
++  createCanonicalPathway,
++  retireCanonicalPathway,
++} from "../kb/services/kbWriteService";
++import { runClinicalConsistencyEngine } from "./clinicalConsistencyEngine";
++
++export async function previewCanonicalPromotionHandler(req: Request, res: Response) {
++  const parsed = CanonicalPathwayPromotionSchema.safeParse(req.body);
++  if (!parsed.success) {
++    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
++  }
++
++  const body = parsed.data;
++  return res.json({
++    ok: true,
++    preview: {
++      complaintId: body.complaintId,
++      syndromeId: body.syndromeId,
++      label: body.label,
++      canonicalDisposition: body.canonicalDisposition,
++      treatmentClass: body.treatmentClass,
++      requiredFeaturesCount: body.requiredFeatures.length,
++      positiveFeatureCount: Object.keys(body.positiveWeights).length,
++      negativeFeatureCount: Object.keys(body.negativeWeights).length,
++      wouldCreate: true,
++    },
++  });
++}
++
++export async function promoteCanonicalPathwayHandler(req: Request, res: Response) {
++  const parsed = CanonicalPathwayPromotionSchema.safeParse(req.body);
++  if (!parsed.success) {
++    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
++  }
++
++  const body = parsed.data;
++  const result = await createCanonicalPathway(
++    {
++      pathwayId: uuidv4(),
++      sourceType: body.sourceType,
++      complaintId: body.complaintId,
++      syndromeId: body.syndromeId,
++      label: body.label,
++      requiredFeatures: body.requiredFeatures,
++      positiveWeights: body.positiveWeights,
++      negativeWeights: body.negativeWeights,
++      exclusions: body.exclusions,
++      treatmentClass: body.treatmentClass,
++      medicationKey: body.medicationKey,
++      canonicalDisposition: body.canonicalDisposition,
++      rationale: body.rationale,
++    },
++    body.actorId,
++    body.traceId
++  );
++
++  return res.json({ ok: true, result });
++}
++
++export async function retireCanonicalPathwayHandler(req: Request, res: Response) {
++  const parsed = CanonicalPathwayRetireSchema.safeParse(req.body);
++  if (!parsed.success) {
++    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
++  }
++
++  const { pathwayId, actorId, traceId, reason } = parsed.data;
++  const result = await retireCanonicalPathway(pathwayId, actorId, traceId, reason);
++  return res.json({ ok: true, result });
++}
++
++export async function generateCanonicalDraftFromCaseHandler(req: Request, res: Response) {
++  const parsed = CanonicalDraftFromCaseSchema.safeParse(req.body);
++  if (!parsed.success) {
++    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
++  }
++
++  const body = parsed.data;
++  const canonical = runClinicalConsistencyEngine(body.complaint, body.features);
++
++  return res.json({
++    ok: true,
++    draft: {
++      sourceType: "golden_case",
++      complaintId: body.complaint,
++      syndromeId: canonical.winningSyndrome?.syndromeId ?? "undifferentiated",
++      label: canonical.winningSyndrome?.label ?? "Undifferentiated phenotype",
++      requiredFeatures: Object.entries(body.features)
++        .filter(([, v]) => v === true)
++        .map(([k]) => k),
++      positiveWeights: {},
++      negativeWeights: {},
++      exclusions: [],
++      treatmentClass: canonical.treatment.class,
++      medicationKey: canonical.treatment.medicationKey,
++      canonicalDisposition: canonical.disposition.disposition,
++      rationale: canonical.notesForClinician,
++      actorId: body.actorId,
++      traceId: body.traceId,
++    },
++    canonical,
++  });
++}
+*** End Patch
+server/services/goldenCaseConsistencyIntegration.ts
+*** Begin Patch
+*** Add File: server/services/goldenCaseConsistencyIntegration.ts
++import { Request, Response } from "express";
++import { runClinicalConsistencyEngine } from "./clinicalConsistencyEngine";
++
++function scoreGoldenMatch(args: {
++  expectedSyndromeId?: string;
++  expectedMedicationKey?: string;
++  expectedDisposition?: string;
++  actual: ReturnType<typeof runClinicalConsistencyEngine>;
++}) {
++  const reasons: string[] = [];
++  let matched = 0;
++  let total = 0;
++
++  if (args.expectedSyndromeId) {
++    total += 1;
++    if (args.actual.winningSyndrome?.syndromeId === args.expectedSyndromeId) matched += 1;
++    else reasons.push(`Expected syndrome ${args.expectedSyndromeId}, got ${args.actual.winningSyndrome?.syndromeId ?? "none"}`);
++  }
++
++  if (args.expectedMedicationKey) {
++    total += 1;
++    if (args.actual.treatment.medicationKey === args.expectedMedicationKey) matched += 1;
++    else reasons.push(`Expected medication ${args.expectedMedicationKey}, got ${args.actual.treatment.medicationKey ?? "none"}`);
++  }
++
++  if (args.expectedDisposition) {
++    total += 1;
++    if (args.actual.disposition.disposition === args.expectedDisposition) matched += 1;
++    else reasons.push(`Expected disposition ${args.expectedDisposition}, got ${args.actual.disposition.disposition}`);
++  }
++
++  return {
++    totalChecks: total,
++    matchedChecks: matched,
++    score: total === 0 ? 1 : matched / total,
++    reasons,
++  };
++}
++
++export async function evaluateGoldenCaseAgainstCanonicalHandler(req: Request, res: Response) {
++  const {
++    caseId,
++    complaint,
++    features,
++    expectedSyndromeId,
++    expectedMedicationKey,
++    expectedDisposition,
++  } = req.body;
++
++  const actual = runClinicalConsistencyEngine(complaint, features || {});
++  const comparison = scoreGoldenMatch({
++    expectedSyndromeId,
++    expectedMedicationKey,
++    expectedDisposition,
++    actual,
++  });
++
++  return res.json({
++    ok: true,
++    caseId,
++    canonical: actual,
++    comparison,
++  });
++}
++
++export async function evaluateGoldenCaseBatchAgainstCanonicalHandler(req: Request, res: Response) {
++  const cases = Array.isArray(req.body?.cases) ? req.body.cases : [];
++
++  const results = cases.map((c: any) => {
++    const actual = runClinicalConsistencyEngine(c.complaint, c.features || {});
++    const comparison = scoreGoldenMatch({
++      expectedSyndromeId: c.expectedSyndromeId,
++      expectedMedicationKey: c.expectedMedicationKey,
++      expectedDisposition: c.expectedDisposition,
++      actual,
++    });
++
++    return {
++      caseId: c.caseId,
++      complaint: c.complaint,
++      canonical: actual,
++      comparison,
++    };
++  });
++
++  const avgScore =
++    results.length === 0
++      ? 0
++      : results.reduce((sum, r) => sum + r.comparison.score, 0) / results.length;
++
++  return res.json({
++    ok: true,
++    batchCount: results.length,
++    avgScore,
++    results,
++  });
++}
+*** End Patch
+server/services/physicianOverrideIntegration.ts
+*** Begin Patch
+*** Add File: server/services/physicianOverrideIntegration.ts
++import { Request, Response } from "express";
++import { db } from "../db";
++import { physicianOverrides } from "../../shared/schema";
++import { runClinicalConsistencyEngine } from "./clinicalConsistencyEngine";
++
++const VALID_CATEGORIES = new Set([
++  "diagnosis_incorrect",
++  "diagnosis_incomplete",
++  "disposition_too_aggressive",
++  "disposition_insufficient",
++  "medication_inappropriate",
++  "documentation_error",
++  "patient_preference",
++  "clinical_context_not_captured",
++  "other",
++]);
++
++function reviewNeeded(category: string, reasonText: string) {
++  const autoSafe = new Set([
++    "patient_preference",
++    "clinical_context_not_captured",
++  ]);
++
++  if (autoSafe.has(category)) return false;
++  if (/allergy|contraindication|pregnan/i.test(reasonText)) return false;
++  return true;
++}
++
++export async function createPhysicianOverrideHandler(req: Request, res: Response) {
++  const {
++    encounterId,
++    physicianId,
++    complaint,
++    features,
++    clinicianSelectedDisposition,
++    clinicianSelectedMedicationKey,
++    category,
++    reasonText,
++  } = req.body;
++
++  if (!VALID_CATEGORIES.has(category)) {
++    return res.status(400).json({ ok: false, error: "Invalid override category" });
++  }
++
++  if (!reasonText || String(reasonText).trim().length < 5) {
++    return res.status(400).json({ ok: false, error: "Override rationale is required" });
++  }
++
++  const canonical = runClinicalConsistencyEngine(complaint, features || {});
++  const needsReview = reviewNeeded(category, reasonText);
++  const id = `ovr_${Date.now()}`;
++
++  await db.insert(physicianOverrides).values({
++    id,
++    encounterId,
++    physicianId,
++    category,
++    reasonText,
++    complaint,
++    phenotypeHash: canonical.phenotypeHash,
++    canonicalDisposition: canonical.disposition.disposition,
++    selectedDisposition: clinicianSelectedDisposition,
++    canonicalMedicationKey: canonical.treatment.medicationKey,
++    selectedMedicationKey: clinicianSelectedMedicationKey,
++    reviewNeeded: needsReview,
++  });
++
++  return res.json({
++    ok: true,
++    override: {
++      id,
++      encounterId,
++      physicianId,
++      category,
++      complaint,
++      phenotypeHash: canonical.phenotypeHash,
++      canonicalDisposition: canonical.disposition.disposition,
++      selectedDisposition: clinicianSelectedDisposition,
++      canonicalMedicationKey: canonical.treatment.medicationKey,
++      selectedMedicationKey: clinicianSelectedMedicationKey,
++      reviewNeeded: needsReview,
++    },
++    canonical,
++  });
++}
++
++export async function listPhysicianOverridesHandler(_req: Request, res: Response) {
++  const rows = await db.select().from(physicianOverrides);
++  return res.json({
++    ok: true,
++    overrides: rows.reverse(),
++  });
++}
+*** End Patch
+server/routes/clinicalConsistencyIntegrationRoutes.ts
+*** Begin Patch
+*** Add File: server/routes/clinicalConsistencyIntegrationRoutes.ts
++import { Router } from "express";
++import {
++  previewCanonicalPromotionHandler,
++  promoteCanonicalPathwayHandler,
++  retireCanonicalPathwayHandler,
++  generateCanonicalDraftFromCaseHandler,
++} from "../services/kbAdminConsistencyIntegration";
++import {
++  evaluateGoldenCaseAgainstCanonicalHandler,
++  evaluateGoldenCaseBatchAgainstCanonicalHandler,
++} from "../services/goldenCaseConsistencyIntegration";
++import {
++  createPhysicianOverrideHandler,
++  listPhysicianOverridesHandler,
++} from "../services/physicianOverrideIntegration";
++
++const router = Router();
++
++router.post("/kb-admin/preview-promotion", previewCanonicalPromotionHandler);
++router.post("/kb-admin/promote", promoteCanonicalPathwayHandler);
++router.post("/kb-admin/retire", retireCanonicalPathwayHandler);
++router.post("/kb-admin/generate-draft-from-case", generateCanonicalDraftFromCaseHandler);
++
++router.post("/golden-cases/evaluate", evaluateGoldenCaseAgainstCanonicalHandler);
++router.post("/golden-cases/evaluate-batch", evaluateGoldenCaseBatchAgainstCanonicalHandler);
++
++router.post("/physician-overrides", createPhysicianOverrideHandler);
++router.get("/physician-overrides", listPhysicianOverridesHandler);
++
++export default router;
+*** End Patch
+server/middleware/requireDispositionFirst.ts
+*** Begin Patch
+*** Add File: server/middleware/requireDispositionFirst.ts
++import { Request, Response, NextFunction } from "express";
++
++export function requireDispositionFirst(req: Request, res: Response, next: NextFunction) {
++  const {
++    finalDisposition,
++    finalMedicationOrders,
++    dispositionReviewedAt,
++  } = req.body || {};
++
++  if (finalMedicationOrders?.length && !finalDisposition) {
++    return res.status(400).json({
++      ok: false,
++      error: "Disposition must be selected before final medication orders.",
++    });
++  }
++
++  if (finalMedicationOrders?.length && !dispositionReviewedAt) {
++    return res.status(400).json({
++      ok: false,
++      error: "Disposition review timestamp required before medication finalization.",
++    });
++  }
++
++  next();
++}
+*** End Patch
+Patch for your encounter finalization handler
+
+Because I do not have the exact file path, apply this in the route/service that persists the final clinician decision.
+
+*** Begin Patch
+*** Update File: <YOUR_FINALIZATION_HANDLER_FILE>
+@@
++import { runClinicalConsistencyEngine } from "../services/clinicalConsistencyEngine";
++import fetch from "node-fetch";
+@@
+-  // existing final save logic
++  const canonical = runClinicalConsistencyEngine(complaint, features || {});
++
++  const dispositionChanged =
++    finalDisposition !== canonical.disposition.disposition;
++
++  const medicationChanged =
++    (finalMedicationKey || null) !== (canonical.treatment.medicationKey || null);
++
++  if (dispositionChanged || medicationChanged) {
++    if (!overrideCategory || !overrideReasonText) {
++      return res.status(400).json({
++        ok: false,
++        error: "Override category and rationale are required when deviating from canonical plan",
++      });
++    }
++
++    await fetch(
++      `${process.env.INTERNAL_BASE_URL || "http://localhost:3000"}/api/clinical-consistency-integration/physician-overrides`,
++      {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({
++          encounterId,
++          physicianId: req.user?.id || req.body.physicianId,
++          complaint,
++          features,
++          clinicianSelectedDisposition: finalDisposition,
++          clinicianSelectedMedicationKey: finalMedicationKey,
++          category: overrideCategory,
++          reasonText: overrideReasonText,
++        }),
++      }
++    );
++  }
++
++  // existing final save logic continues
+*** End Patch
+Patch for your golden-case runner
+
+Apply this in the job or route that already executes golden cases.
+
+*** Begin Patch
+*** Update File: <YOUR_GOLDEN_CASE_RUNNER_FILE>
+@@
++import fetch from "node-fetch";
+@@
+-  // existing golden case execution result
++  await fetch(
++    `${process.env.INTERNAL_BASE_URL || "http://localhost:3000"}/api/clinical-consistency-integration/golden-cases/evaluate`,
++    {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({
++        caseId: goldenCase.id,
++        complaint: goldenCase.complaint,
++        features: goldenCase.features,
++        expectedSyndromeId: goldenCase.expectedSyndromeId,
++        expectedMedicationKey: goldenCase.expectedMedicationKey,
++        expectedDisposition: goldenCase.expectedDisposition,
++      }),
++    }
++  );
+*** End Patch
+Three sanity checks after merge
+
+Run these right away:
+
+npm run typecheck
+npm run test
+npm run db:migrate
+
+Then hit:
+
+POST /api/clinical-consistency-integration/kb-admin/preview-promotion
+POST /api/clinical-consistency-integration/kb-admin/promote
+POST /api/clinical-consistency-integration/golden-cases/evaluate
+POST /api/clinical-consistency-integration/physician-overrides
+GET  /api/clinical-consistency-integration/physician-overrides
+Two places likely to need tiny hand edits
+
+First, your real auth middleware name may differ from requireKbAdmin.
+
+Second, your Drizzle where style may use eq(canonicalPathways.pathwayId, pathwayId) instead of .where((canonicalPathways as any).pathwayId.eq(pathwayId)). If so, swap it. That one is a paper cut, not a broken leg.
+
+If you want the next pass, I’ll turn this into a second patch pack for the frontend pages and dashboard wiring, in the same unified diff format.

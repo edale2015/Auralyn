@@ -2203,6 +2203,10 @@ export async function registerRoutes(
   const { default: monitoringRoutes } = await import("./routes/monitoringRoutes");
   app.use("/api/monitoring", monitoringRoutes);
 
+  const { default: clinicalConsistencyIntegrationRoutes } = await import("./routes/clinicalConsistencyIntegrationRoutes");
+  app.use("/api/clinical-consistency-integration", clinicalConsistencyIntegrationRoutes);
+  console.log("[ClinicalConsistencyIntegration] KB admin | golden cases | physician overrides | confidence | escalation wired at /api/clinical-consistency-integration/*");
+
   console.log("[LearningEngine] Patient memory | population learning | personalization wired at /api/learning-engine/*");
   console.log("[Simulation] 10k patient synthetic cohort engine wired at /api/sim-cohort/*");
   console.log("[Monitoring] Drift detection | risk governance wired at /api/monitoring/*");

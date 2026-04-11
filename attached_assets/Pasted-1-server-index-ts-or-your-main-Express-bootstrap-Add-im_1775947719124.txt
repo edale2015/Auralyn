@@ -1,0 +1,832 @@
+1) server/index.ts or your main Express bootstrap
+Add imports
+import clinicalConsistencyRoutes from "./routes/clinicalConsistencyRoutes";
+import clinicalConsistencyIntegrationRoutes from "./routes/clinicalConsistencyIntegrationRoutes";
+Mount routes near your other clinical / KB routes
+app.use("/api/clinical-consistency", clinicalConsistencyRoutes);
+app.use("/api/clinical-consistency-integration", clinicalConsistencyIntegrationRoutes);
+If you have a central middleware chain for encounter finalization
+
+Add this before final order-signing / final-disposition submit routes:
+
+import { requireDispositionFirst } from "./middleware/requireDispositionFirst";
+
+Then apply it to any route that finalizes medication/disposition:
+
+app.post("/api/encounters/:id/finalize", requireDispositionFirst, finalizeEncounterHandler);
+app.post("/api/triage/:id/approve", requireDispositionFirst, approveTriageHandler);
+
+Why here: your entrypoint is already large and eager-loads many route modules, so this is the correct seam for wiring new route families into the app shell.
+
+2) server/kb/routes/kbAdminRoutes.ts
+
+Your KB admin is already the natural place to add promotion actions. The visible repo guidance shows this file as the thin aggregator / status endpoint mount for KB admin concerns.
+
+Add imports
+import { Router } from "express";
+import { requireKbAdmin } from "../middleware/kbAuthMiddleware";
+import {
+  previewCanonicalPromotionHandler,
+  promoteCanonicalPathwayHandler,
+  retireCanonicalPathwayHandler,
+  generateCanonicalDraftFromCaseHandler,
+} from "../../services/kbAdminConsistencyIntegration";
+Add routes
+router.post(
+  "/canonical-pathways/preview-promotion",
+  requireKbAdmin,
+  previewCanonicalPromotionHandler
+);
+
+router.post(
+  "/canonical-pathways/promote",
+  requireKbAdmin,
+  promoteCanonicalPathwayHandler
+);
+
+router.post(
+  "/canonical-pathways/retire",
+  requireKbAdmin,
+  retireCanonicalPathwayHandler
+);
+
+router.post(
+  "/canonical-pathways/generate-draft-from-case",
+  requireKbAdmin,
+  generateCanonicalDraftFromCaseHandler
+);
+Why this file
+
+Because your KB write routes are already role-gated at the router level, with admin-only writes on rule objects and physician/admin writes on questions. Canonical pathway promotion belongs squarely in the admin write tier.
+
+3) server/kb/schemas/kbValidationSchemas.ts
+
+Add validation for canonical pathway promotion payloads.
+
+Append these schemas
+import { z } from "zod";
+
+export const CanonicalPathwayPromotionSchema = z.object({
+  sourceType: z.enum(["complaint_pack", "golden_case", "manual"]),
+  complaintId: z.string().min(1),
+  syndromeId: z.string().min(1),
+  label: z.string().min(1).max(200),
+  requiredFeatures: z.array(z.string()).default([]),
+  positiveWeights: z.record(z.string(), z.number()).default({}),
+  negativeWeights: z.record(z.string(), z.number()).default({}),
+  exclusions: z.array(z.string()).default([]),
+  treatmentClass: z.enum([
+    "none",
+    "supportive",
+    "antibiotic",
+    "antiviral",
+    "steroid",
+    "bronchodilator",
+    "topical",
+    "antifungal",
+  ]),
+  medicationKey: z.string().optional(),
+  canonicalDisposition: z.enum([
+    "home_supportive_care",
+    "home_with_rx",
+    "follow_up_primary_care",
+    "same_day_urgent_care",
+    "er_now",
+    "hospital_admission",
+  ]),
+  rationale: z.array(z.string()).default([]),
+  actorId: z.string().min(1),
+  traceId: z.string().min(1),
+});
+
+export const CanonicalPathwayRetireSchema = z.object({
+  pathwayId: z.string().min(1),
+  actorId: z.string().min(1),
+  traceId: z.string().min(1),
+  reason: z.string().min(3),
+});
+
+export const CanonicalDraftFromCaseSchema = z.object({
+  complaint: z.string().min(1),
+  features: z.record(z.string(), z.any()),
+  expectedDisposition: z.string().optional(),
+  actorId: z.string().min(1),
+  traceId: z.string().min(1),
+});
+
+This matches your pattern of central Zod validation reused by POST/PATCH flows.
+
+4) server/kb/services/kbWriteService.ts
+
+This file already looks like the right place for write-side DB mutations plus cache reload plus audit.
+
+Add new write functions
+import { db } from "../../db";
+import { auditStep } from "../../audit/auditLogger";
+import { reloadKbCache } from "../kbRuntime";
+import { publishKbInvalidation } from "../../events/kbInvalidation";
+// import your real table once added to shared/schema
+import { canonicalPathways } from "../../../shared/schema";
+
+export async function createCanonicalPathway(
+  data: {
+    pathwayId: string;
+    sourceType: string;
+    complaintId: string;
+    syndromeId: string;
+    label: string;
+    requiredFeatures: string[];
+    positiveWeights: Record<string, number>;
+    negativeWeights: Record<string, number>;
+    exclusions: string[];
+    treatmentClass: string;
+    medicationKey?: string;
+    canonicalDisposition: string;
+    rationale: string[];
+    active?: boolean;
+  },
+  actorId: string,
+  traceId: string
+) {
+  await db.insert(canonicalPathways).values({
+    ...data,
+    active: true,
+    createdBy: actorId,
+    updatedBy: actorId,
+  });
+
+  await auditStep({
+    traceId,
+    step: "kb_canonical_pathway_created",
+    input: { actorId, ...data },
+    output: { pathwayId: data.pathwayId },
+    metadata: { actorId },
+  });
+
+  await reloadKbCache(traceId);
+  await publishKbInvalidation({
+    table: "canonicalPathways",
+    ruleId: data.pathwayId,
+    action: "create",
+    traceId,
+  });
+
+  return { ok: true, pathwayId: data.pathwayId };
+}
+
+export async function retireCanonicalPathway(
+  pathwayId: string,
+  actorId: string,
+  traceId: string,
+  reason: string
+) {
+  await db
+    .update(canonicalPathways)
+    .set({
+      active: false,
+      retiredAt: new Date(),
+      retiredBy: actorId,
+      retirementReason: reason,
+      updatedBy: actorId,
+    })
+    .where((canonicalPathways as any).pathwayId.eq(pathwayId));
+
+  await auditStep({
+    traceId,
+    step: "kb_canonical_pathway_retired",
+    input: { pathwayId, actorId, reason },
+    output: { pathwayId, active: false },
+    metadata: { actorId },
+  });
+
+  await reloadKbCache(traceId);
+  await publishKbInvalidation({
+    table: "canonicalPathways",
+    ruleId: pathwayId,
+    action: "retire",
+    traceId,
+  });
+
+  return { ok: true, pathwayId };
+}
+5) server/services/kbAdminConsistencyIntegration.ts
+
+This is one of the files from the wired bundle. Plug it into your real services layer and make it call the real KB write service.
+
+Replace stub storage with your KB write service
+import { v4 as uuidv4 } from "uuid";
+import { Request, Response } from "express";
+import {
+  CanonicalDraftFromCaseSchema,
+  CanonicalPathwayPromotionSchema,
+  CanonicalPathwayRetireSchema,
+} from "../kb/schemas/kbValidationSchemas";
+import { createCanonicalPathway, retireCanonicalPathway } from "../kb/services/kbWriteService";
+import { runClinicalConsistencyEngine } from "./clinicalConsistencyEngine";
+
+export async function previewCanonicalPromotionHandler(req: Request, res: Response) {
+  const parsed = CanonicalPathwayPromotionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  }
+
+  const body = parsed.data;
+
+  return res.json({
+    ok: true,
+    preview: {
+      complaintId: body.complaintId,
+      syndromeId: body.syndromeId,
+      label: body.label,
+      canonicalDisposition: body.canonicalDisposition,
+      treatmentClass: body.treatmentClass,
+      requiredFeaturesCount: body.requiredFeatures.length,
+      positiveFeatureCount: Object.keys(body.positiveWeights).length,
+      negativeFeatureCount: Object.keys(body.negativeWeights).length,
+      wouldCreate: true,
+    },
+  });
+}
+
+export async function promoteCanonicalPathwayHandler(req: Request, res: Response) {
+  const parsed = CanonicalPathwayPromotionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  }
+
+  const body = parsed.data;
+
+  const result = await createCanonicalPathway(
+    {
+      pathwayId: uuidv4(),
+      sourceType: body.sourceType,
+      complaintId: body.complaintId,
+      syndromeId: body.syndromeId,
+      label: body.label,
+      requiredFeatures: body.requiredFeatures,
+      positiveWeights: body.positiveWeights,
+      negativeWeights: body.negativeWeights,
+      exclusions: body.exclusions,
+      treatmentClass: body.treatmentClass,
+      medicationKey: body.medicationKey,
+      canonicalDisposition: body.canonicalDisposition,
+      rationale: body.rationale,
+    },
+    body.actorId,
+    body.traceId
+  );
+
+  return res.json({ ok: true, result });
+}
+
+export async function retireCanonicalPathwayHandler(req: Request, res: Response) {
+  const parsed = CanonicalPathwayRetireSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  }
+
+  const { pathwayId, actorId, traceId, reason } = parsed.data;
+  const result = await retireCanonicalPathway(pathwayId, actorId, traceId, reason);
+  return res.json({ ok: true, result });
+}
+
+export async function generateCanonicalDraftFromCaseHandler(req: Request, res: Response) {
+  const parsed = CanonicalDraftFromCaseSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  }
+
+  const body = parsed.data;
+  const canonical = runClinicalConsistencyEngine(body.complaint, body.features);
+
+  return res.json({
+    ok: true,
+    draft: {
+      sourceType: "golden_case",
+      complaintId: body.complaint,
+      syndromeId: canonical.winningSyndrome?.syndromeId ?? "undifferentiated",
+      label: canonical.winningSyndrome?.label ?? "Undifferentiated phenotype",
+      requiredFeatures: Object.entries(body.features)
+        .filter(([, v]) => v === true)
+        .map(([k]) => k),
+      positiveWeights: {},
+      negativeWeights: {},
+      exclusions: [],
+      treatmentClass: canonical.treatment.class,
+      medicationKey: canonical.treatment.medicationKey,
+      canonicalDisposition: canonical.disposition.disposition,
+      rationale: canonical.notesForClinician,
+    },
+    canonical,
+  });
+}
+6) server/routes/clinicalConsistencyIntegrationRoutes.ts
+
+This becomes the dedicated seam for all three domains.
+
+Use this exact router
+import { Router } from "express";
+import {
+  previewCanonicalPromotionHandler,
+  promoteCanonicalPathwayHandler,
+  retireCanonicalPathwayHandler,
+  generateCanonicalDraftFromCaseHandler,
+} from "../services/kbAdminConsistencyIntegration";
+import {
+  evaluateGoldenCaseAgainstCanonicalHandler,
+  evaluateGoldenCaseBatchAgainstCanonicalHandler,
+} from "../services/goldenCaseConsistencyIntegration";
+import {
+  createPhysicianOverrideHandler,
+  listPhysicianOverridesHandler,
+} from "../services/physicianOverrideIntegration";
+
+const router = Router();
+
+// KB Admin
+router.post("/kb-admin/preview-promotion", previewCanonicalPromotionHandler);
+router.post("/kb-admin/promote", promoteCanonicalPathwayHandler);
+router.post("/kb-admin/retire", retireCanonicalPathwayHandler);
+router.post("/kb-admin/generate-draft-from-case", generateCanonicalDraftFromCaseHandler);
+
+// Golden cases
+router.post("/golden-cases/evaluate", evaluateGoldenCaseAgainstCanonicalHandler);
+router.post("/golden-cases/evaluate-batch", evaluateGoldenCaseBatchAgainstCanonicalHandler);
+
+// Physician overrides
+router.post("/physician-overrides", createPhysicianOverrideHandler);
+router.get("/physician-overrides", listPhysicianOverridesHandler);
+
+export default router;
+
+This matches the earlier seam described in the integration README.
+
+7) server/services/goldenCaseConsistencyIntegration.ts
+
+Your golden-case layer should call this after each run. The design goal is exactly what your repo notes recommend: every golden case should run in CI and production, and a changed disposition should be visible as a mismatch.
+
+Use this service
+import { Request, Response } from "express";
+import { runClinicalConsistencyEngine } from "./clinicalConsistencyEngine";
+
+function scoreGoldenMatch(args: {
+  expectedSyndromeId?: string;
+  expectedMedicationKey?: string;
+  expectedDisposition?: string;
+  actual: ReturnType<typeof runClinicalConsistencyEngine>;
+}) {
+  const reasons: string[] = [];
+  let matched = 0;
+  let total = 0;
+
+  if (args.expectedSyndromeId) {
+    total += 1;
+    if (args.actual.winningSyndrome?.syndromeId === args.expectedSyndromeId) matched += 1;
+    else reasons.push(`Expected syndrome ${args.expectedSyndromeId}, got ${args.actual.winningSyndrome?.syndromeId ?? "none"}`);
+  }
+
+  if (args.expectedMedicationKey) {
+    total += 1;
+    if (args.actual.treatment.medicationKey === args.expectedMedicationKey) matched += 1;
+    else reasons.push(`Expected medication ${args.expectedMedicationKey}, got ${args.actual.treatment.medicationKey ?? "none"}`);
+  }
+
+  if (args.expectedDisposition) {
+    total += 1;
+    if (args.actual.disposition.disposition === args.expectedDisposition) matched += 1;
+    else reasons.push(`Expected disposition ${args.expectedDisposition}, got ${args.actual.disposition.disposition}`);
+  }
+
+  return {
+    totalChecks: total,
+    matchedChecks: matched,
+    score: total === 0 ? 1 : matched / total,
+    reasons,
+  };
+}
+
+export async function evaluateGoldenCaseAgainstCanonicalHandler(req: Request, res: Response) {
+  const {
+    caseId,
+    complaint,
+    features,
+    expectedSyndromeId,
+    expectedMedicationKey,
+    expectedDisposition,
+  } = req.body;
+
+  const actual = runClinicalConsistencyEngine(complaint, features || {});
+  const comparison = scoreGoldenMatch({
+    expectedSyndromeId,
+    expectedMedicationKey,
+    expectedDisposition,
+    actual,
+  });
+
+  return res.json({
+    ok: true,
+    caseId,
+    canonical: actual,
+    comparison,
+  });
+}
+
+export async function evaluateGoldenCaseBatchAgainstCanonicalHandler(req: Request, res: Response) {
+  const cases = Array.isArray(req.body?.cases) ? req.body.cases : [];
+
+  const results = cases.map((c: any) => {
+    const actual = runClinicalConsistencyEngine(c.complaint, c.features || {});
+    const comparison = scoreGoldenMatch({
+      expectedSyndromeId: c.expectedSyndromeId,
+      expectedMedicationKey: c.expectedMedicationKey,
+      expectedDisposition: c.expectedDisposition,
+      actual,
+    });
+
+    return {
+      caseId: c.caseId,
+      complaint: c.complaint,
+      canonical: actual,
+      comparison,
+    };
+  });
+
+  const avgScore =
+    results.length === 0
+      ? 0
+      : results.reduce((sum, r) => sum + r.comparison.score, 0) / results.length;
+
+  return res.json({
+    ok: true,
+    batchCount: results.length,
+    avgScore,
+    results,
+  });
+}
+8) server/golden/goldenMonitor.ts or the place that runs your scheduled golden cases
+
+You already have a golden monitor firing cases, and you also have a second diagnostics suite. They should not live like estranged cousins forever.
+
+After each golden-case run, add canonical evaluation
+import fetch from "node-fetch";
+
+async function evaluateAgainstCanonical(casePayload: {
+  caseId: string;
+  complaint: string;
+  features: Record<string, unknown>;
+  expectedSyndromeId?: string;
+  expectedMedicationKey?: string;
+  expectedDisposition?: string;
+}) {
+  await fetch(`${process.env.INTERNAL_BASE_URL || "http://localhost:3000"}/api/clinical-consistency-integration/golden-cases/evaluate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(casePayload),
+  });
+}
+
+Then inside your loop:
+
+await evaluateAgainstCanonical({
+  caseId: goldenCase.id,
+  complaint: goldenCase.complaint,
+  features: goldenCase.features,
+  expectedSyndromeId: goldenCase.expectedSyndromeId,
+  expectedMedicationKey: goldenCase.expectedMedicationKey,
+  expectedDisposition: goldenCase.expectedDisposition,
+});
+9) server/services/physicianOverrideIntegration.ts
+
+Your repo notes already sketch the needed override categories and the learning signal to feed governance review.
+
+Use this implementation
+import { Request, Response } from "express";
+import { runClinicalConsistencyEngine } from "./clinicalConsistencyEngine";
+
+const VALID_CATEGORIES = new Set([
+  "diagnosis_incorrect",
+  "diagnosis_incomplete",
+  "disposition_too_aggressive",
+  "disposition_insufficient",
+  "medication_inappropriate",
+  "documentation_error",
+  "patient_preference",
+  "clinical_context_not_captured",
+  "other",
+]);
+
+const inMemoryOverrides: any[] = [];
+
+function reviewNeeded(category: string, reasonText: string) {
+  const autoSafe = new Set([
+    "patient_preference",
+    "clinical_context_not_captured",
+  ]);
+
+  if (autoSafe.has(category)) return false;
+  if (/allergy|contraindication|pregnan/i.test(reasonText)) return false;
+  return true;
+}
+
+export async function createPhysicianOverrideHandler(req: Request, res: Response) {
+  const {
+    encounterId,
+    physicianId,
+    complaint,
+    features,
+    clinicianSelectedDisposition,
+    clinicianSelectedMedicationKey,
+    category,
+    reasonText,
+  } = req.body;
+
+  if (!VALID_CATEGORIES.has(category)) {
+    return res.status(400).json({ ok: false, error: "Invalid override category" });
+  }
+
+  if (!reasonText || String(reasonText).trim().length < 5) {
+    return res.status(400).json({ ok: false, error: "Override rationale is required" });
+  }
+
+  const canonical = runClinicalConsistencyEngine(complaint, features || {});
+  const needsReview = reviewNeeded(category, reasonText);
+
+  const overrideRecord = {
+    id: `ovr_${Date.now()}`,
+    encounterId,
+    physicianId,
+    category,
+    reasonText,
+    complaint,
+    phenotypeHash: canonical.phenotypeHash,
+    canonicalDisposition: canonical.disposition.disposition,
+    selectedDisposition: clinicianSelectedDisposition,
+    canonicalMedicationKey: canonical.treatment.medicationKey,
+    selectedMedicationKey: clinicianSelectedMedicationKey,
+    reviewNeeded: needsReview,
+    createdAt: new Date().toISOString(),
+  };
+
+  inMemoryOverrides.push(overrideRecord);
+
+  return res.json({
+    ok: true,
+    override: overrideRecord,
+    canonical,
+  });
+}
+
+export async function listPhysicianOverridesHandler(_req: Request, res: Response) {
+  return res.json({
+    ok: true,
+    overrides: inMemoryOverrides.slice().reverse(),
+  });
+}
+10) Encounter finalization route
+
+Wherever you finalize a clinician’s chosen treatment/disposition, add the override hook.
+
+In your existing finalization handler
+import fetch from "node-fetch";
+import { runClinicalConsistencyEngine } from "../services/clinicalConsistencyEngine";
+Right before saving final clinician decision
+const canonical = runClinicalConsistencyEngine(complaint, features);
+
+const dispositionChanged =
+  finalDisposition !== canonical.disposition.disposition;
+
+const medicationChanged =
+  (finalMedicationKey || null) !== (canonical.treatment.medicationKey || null);
+
+if (dispositionChanged || medicationChanged) {
+  if (!overrideCategory || !overrideReasonText) {
+    return res.status(400).json({
+      ok: false,
+      error: "Override category and rationale are required when deviating from canonical plan",
+    });
+  }
+
+  await fetch(
+    `${process.env.INTERNAL_BASE_URL || "http://localhost:3000"}/api/clinical-consistency-integration/physician-overrides`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        encounterId,
+        physicianId: req.user.id,
+        complaint,
+        features,
+        clinicianSelectedDisposition: finalDisposition,
+        clinicianSelectedMedicationKey: finalMedicationKey,
+        category: overrideCategory,
+        reasonText: overrideReasonText,
+      }),
+    }
+  );
+}
+
+This is the hinge that turns “override” from a shrug into an auditable governance signal.
+
+11) server/middleware/requireDispositionFirst.ts
+
+This is one of the 5 upgrades and should be applied to finalization routes.
+
+Middleware
+import { Request, Response, NextFunction } from "express";
+
+export function requireDispositionFirst(req: Request, res: Response, next: NextFunction) {
+  const {
+    finalDisposition,
+    finalMedicationOrders,
+    dispositionReviewedAt,
+  } = req.body || {};
+
+  if (finalMedicationOrders?.length && !finalDisposition) {
+    return res.status(400).json({
+      ok: false,
+      error: "Disposition must be selected before final medication orders.",
+    });
+  }
+
+  if (finalMedicationOrders?.length && !dispositionReviewedAt) {
+    return res.status(400).json({
+      ok: false,
+      error: "Disposition review timestamp required before medication finalization.",
+    });
+  }
+
+  next();
+}
+12) shared/schema.ts
+
+You need real persistence tables for canonical pathways, phenotype registry, and overrides. Your repo is already moving important KB and governance state into PostgreSQL.
+
+Add tables like this
+export const canonicalPathways = pgTable("canonical_pathways", {
+  pathwayId: text("pathway_id").primaryKey(),
+  sourceType: text("source_type").notNull(),
+  complaintId: text("complaint_id").notNull(),
+  syndromeId: text("syndrome_id").notNull(),
+  label: text("label").notNull(),
+  requiredFeatures: jsonb("required_features").$type<string[]>().notNull().default([]),
+  positiveWeights: jsonb("positive_weights").$type<Record<string, number>>().notNull().default({}),
+  negativeWeights: jsonb("negative_weights").$type<Record<string, number>>().notNull().default({}),
+  exclusions: jsonb("exclusions").$type<string[]>().notNull().default([]),
+  treatmentClass: text("treatment_class").notNull(),
+  medicationKey: text("medication_key"),
+  canonicalDisposition: text("canonical_disposition").notNull(),
+  rationale: jsonb("rationale").$type<string[]>().notNull().default([]),
+  active: boolean("active").notNull().default(true),
+  createdBy: text("created_by").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  retiredBy: text("retired_by"),
+  retirementReason: text("retirement_reason"),
+  retiredAt: timestamp("retired_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const phenotypeRegistry = pgTable("phenotype_registry", {
+  phenotypeHash: text("phenotype_hash").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  canonicalSyndromeId: text("canonical_syndrome_id"),
+  canonicalMedicationKey: text("canonical_medication_key"),
+  canonicalDisposition: text("canonical_disposition").notNull(),
+  confidence: text("confidence").notNull(),
+  seenCount: integer("seen_count").notNull().default(1),
+  firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+});
+
+export const physicianOverrides = pgTable("physician_overrides", {
+  id: text("id").primaryKey(),
+  encounterId: text("encounter_id").notNull(),
+  physicianId: text("physician_id").notNull(),
+  category: text("category").notNull(),
+  reasonText: text("reason_text").notNull(),
+  complaint: text("complaint").notNull(),
+  phenotypeHash: text("phenotype_hash").notNull(),
+  canonicalDisposition: text("canonical_disposition").notNull(),
+  selectedDisposition: text("selected_disposition"),
+  canonicalMedicationKey: text("canonical_medication_key"),
+  selectedMedicationKey: text("selected_medication_key"),
+  reviewNeeded: boolean("review_needed").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+13) client/src/components/KBPromotionPreviewCard.tsx
+
+Put this inside your KB Admin screen where complaint-pack rows are edited.
+
+import React from "react";
+
+export function KBPromotionPreviewCard({
+  preview,
+  onPromote,
+}: {
+  preview: any;
+  onPromote: () => void;
+}) {
+  if (!preview) return null;
+
+  return (
+    <div className="rounded-2xl border p-4 bg-white shadow-sm">
+      <div className="text-lg font-semibold">Canonical Pathway Preview</div>
+      <div className="mt-2 text-sm">
+        <div><strong>Complaint:</strong> {preview.complaintId}</div>
+        <div><strong>Syndrome:</strong> {preview.syndromeId}</div>
+        <div><strong>Disposition:</strong> {preview.canonicalDisposition}</div>
+        <div><strong>Treatment class:</strong> {preview.treatmentClass}</div>
+        <div><strong>Required features:</strong> {preview.requiredFeaturesCount}</div>
+      </div>
+      <button
+        className="mt-4 rounded-xl border px-3 py-2"
+        onClick={onPromote}
+      >
+        Promote to Canonical Pathway
+      </button>
+    </div>
+  );
+}
+14) client/src/components/GoldenCaseConsistencyPanel.tsx
+
+Put this on the golden-case results page.
+
+import React from "react";
+
+export function GoldenCaseConsistencyPanel({ result }: { result: any }) {
+  if (!result) return null;
+
+  const cmp = result.comparison;
+
+  return (
+    <div className="rounded-2xl border p-4 bg-white shadow-sm">
+      <div className="text-lg font-semibold">Canonical Consistency Check</div>
+      <div className="mt-2 text-sm">
+        <div><strong>Score:</strong> {cmp?.score}</div>
+        <div><strong>Matched checks:</strong> {cmp?.matchedChecks} / {cmp?.totalChecks}</div>
+      </div>
+
+      {cmp?.reasons?.length > 0 && (
+        <ul className="mt-3 list-disc pl-5 text-sm">
+          {cmp.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+15) client/src/components/PhysicianOverrideQueue.tsx
+
+Put this on your physician review / governance page.
+
+import React from "react";
+
+export function PhysicianOverrideQueue({ overrides }: { overrides: any[] }) {
+  return (
+    <div className="rounded-2xl border p-4 bg-white shadow-sm">
+      <div className="text-lg font-semibold">Physician Override Queue</div>
+
+      <div className="mt-3 space-y-3">
+        {overrides.map((o) => (
+          <div key={o.id} className="rounded-xl border p-3">
+            <div className="text-sm">
+              <div><strong>Encounter:</strong> {o.encounterId}</div>
+              <div><strong>Category:</strong> {o.category}</div>
+              <div><strong>Complaint:</strong> {o.complaint}</div>
+              <div><strong>Canonical disposition:</strong> {o.canonicalDisposition}</div>
+              <div><strong>Selected disposition:</strong> {o.selectedDisposition || "unchanged"}</div>
+              <div><strong>Review needed:</strong> {o.reviewNeeded ? "Yes" : "No"}</div>
+            </div>
+            <div className="mt-2 text-sm">
+              <strong>Reason:</strong> {o.reasonText}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+16) Where this fits in your repo, bluntly
+KB Admin
+
+Add canonical pathway controls inside the same admin surface where you already manage red flags, treatments, priors, and questions. That matches your existing split-route / role-gated KB architecture.
+
+Golden cases
+
+After each golden-case execution, run canonical comparison too. That turns golden cases into a consistency microscope, not just a crash detector. Your own repo notes argue that golden cases should block regressions in CI and production.
+
+Physician overrides
+
+Every deviation from canonical treatment/disposition should require category + rationale and flow into governance review signals. That is already the override pattern recommended in your materials.
+
+17) The three most important merge edits
+
+If you only patch a few places first, make them these:
+
+server/index.ts
+mount the new route family and apply requireDispositionFirst.
+server/kb/routes/kbAdminRoutes.ts
+add promote / retire / draft-from-case actions.
+Encounter finalization handler
+require override rationale on canonical deviation and write to the override queue.
+
+That trio turns the idea from a concept into a living organ.
