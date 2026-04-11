@@ -2185,8 +2185,20 @@ export async function registerRoutes(
   const { default: antibioticRoutes } = await import("./routes/antibioticRoutes");
   app.use("/api/antibiotic", antibioticRoutes);
 
+  const { default: clinicalConsistencyRoutes } = await import("./routes/clinicalConsistencyRoutes");
+  app.use("/api/clinical-consistency", clinicalConsistencyRoutes);
+
+  const { default: communicationAdvancedRoutes } = await import("./routes/communicationAdvancedRoutes");
+  app.use("/api/communication-advanced", communicationAdvancedRoutes);
+
+  const { default: clinicalDecisionRoutes } = await import("./routes/clinicalDecisionRoutes");
+  app.use("/api/clinical-decision", clinicalDecisionRoutes);
+
   console.log("[Communication] Script engine | tone detector | script variants | outcome tracker wired at /api/communication/*");
   console.log("[Antibiotic] Demand detector | demand engine | delayed Rx | demand stats wired at /api/antibiotic/*");
+  console.log("[ClinicalConsistency] Syndrome scoring | treatment minimalism | disposition engine | variance audit wired at /api/clinical-consistency/*");
+  console.log("[CommunicationAdvanced] A/B testing | reasoning trace | learning engine wired at /api/communication-advanced/*");
+  console.log("[ClinicalDecision] Centor | Bayesian strep | debate engine | voice delivery wired at /api/clinical-decision/*");
 
   app.get("/simulate/stress", async (req, res) => {
     try {
