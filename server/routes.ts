@@ -2171,6 +2171,10 @@ export async function registerRoutes(
   initBatch19(httpServer);
   console.log("[Batch19] Unified system bus | modules state | live real system | live billing | region cluster | master control | WebSocket stream — all wired at /api/*");
 
+  const { default: batch20Routes } = await import("./batch20Routes");
+  app.use("/api", batch20Routes);
+  console.log("[Batch20] Live adapters | network controller | marketplace engine | workflow optimizer | advanced utils (retry/z-score/universalWrite) — all wired at /api/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);

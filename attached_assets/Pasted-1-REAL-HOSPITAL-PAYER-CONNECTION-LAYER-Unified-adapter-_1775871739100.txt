@@ -1,0 +1,212 @@
+1) REAL HOSPITAL + PAYER CONNECTION LAYER
+🔧 Unified adapter (hospital + payer)
+server/integrations/liveAdapters.ts
+type Result<T=any> = { ok: true; data: T } | { ok: false; error: string };
+
+async function safeFetch(url: string, init: RequestInit): Promise<Result> {
+  try {
+    const res = await fetch(url, init);
+    const txt = await res.text();
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    try { return { ok: true, data: JSON.parse(txt) }; }
+    catch { return { ok: true, data: txt }; }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "network_error" };
+  }
+}
+
+// 🏥 Hospital (API)
+export async function connectHospital(patient: any): Promise<Result> {
+  return safeFetch(process.env.HOSPITAL_API!, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.HOSPITAL_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(patient)
+  });
+}
+
+// 💰 Payer (claims)
+export async function connectPayer(claim: any): Promise<Result> {
+  return safeFetch(process.env.PAYER_API!, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.PAYER_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(claim)
+  });
+}
+🔧 Safety wrapper (never blocks care)
+export async function safeExternalWrite<T>(fn: ()=>Promise<Result<T>>, onFail: (err:string)=>void) {
+  const r = await fn();
+  if (!r.ok) onFail(r.error);
+  return r;
+}
+🇺🇸 2) NATIONAL NETWORK CONTROLLER
+🔧 Regional state + coordinator
+server/national/networkController.ts
+type RegionState = {
+  name: string;
+  load: number;        // 0..1
+  latencyMs: number;
+  healthy: boolean;
+};
+
+export function pickBestRegion(regions: RegionState[]) {
+  return regions
+    .filter(r => r.healthy)
+    .sort((a, b) => (a.load + a.latencyMs/1000) - (b.load + b.latencyMs/1000))[0];
+}
+
+export function rebalance(regions: RegionState[]) {
+  const hot = regions.filter(r => r.load > 0.8);
+  const cold = regions.filter(r => r.load < 0.5);
+
+  return hot.map(h => ({
+    from: h.name,
+    to: cold[0]?.name,
+    action: "shift_traffic"
+  }));
+}
+🔧 National endpoint
+router.get("/network/state", async (_, res) => {
+  const regions = await getRegionsLive(); // your existing probe
+  res.json({
+    best: pickBestRegion(regions),
+    rebalance: rebalance(regions)
+  });
+});
+🌍 3) MARKETPLACE (SLA + DISTANCE + LOAD)
+🔧 Provider model + matcher
+server/marketplace/engine.ts
+type Provider = {
+  id: string;
+  specialty: string;
+  distanceKm: number;
+  load: number;      // 0..1
+  slaMs: number;     // expected response time
+};
+
+export function matchProvider(patient: any, providers: Provider[]) {
+  const candidates = providers.filter(p => p.specialty === patient.complaint);
+
+  return candidates.sort((a, b) => {
+    const scoreA = a.distanceKm * 0.4 + a.load * 0.4 + (a.slaMs/1000) * 0.2;
+    const scoreB = b.distanceKm * 0.4 + b.load * 0.4 + (b.slaMs/1000) * 0.2;
+    return scoreA - scoreB;
+  })[0] || null;
+}
+🔧 Booking + SLA tracking
+export async function bookProvider(providerId: string, patientId: string) {
+  return fetch(process.env.BOOKING_API!, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ providerId, patientId })
+  });
+}
+💰 4) LARGE-SCALE WORKFLOW OPTIMIZER
+🔧 Cost + throughput optimizer
+server/optimization/optimizer.ts
+type Visit = { cost: number; revenue: number; latencyMs: number };
+
+export function optimizeWorkflow(visits: Visit[]) {
+  const totalRevenue = visits.reduce((s,v)=>s+v.revenue,0);
+  const totalCost = visits.reduce((s,v)=>s+v.cost,0);
+  const avgLatency = visits.reduce((s,v)=>s+v.latencyMs,0) / Math.max(1, visits.length);
+
+  return {
+    profit: totalRevenue - totalCost,
+    margin: totalRevenue ? (totalRevenue - totalCost)/totalRevenue : 0,
+    avgLatency
+  };
+}
+🔧 Decision loop (apply changes)
+export function applyOptimization(metrics: any) {
+  const actions: string[] = [];
+
+  if (metrics.margin < 0.2) actions.push("reduce_cost_path");
+  if (metrics.avgLatency > 1500) actions.push("enable_fast_path");
+
+  return actions;
+}
+🎛️ DASHBOARD: WIRE EVERYTHING
+
+Add panels for:
+
+Network (regions + best + rebalance)
+Marketplace (matches + SLA)
+Revenue (profit/margin)
+External writes (hospital/payer status)
+addPanel("Network", NetworkPanel);
+addPanel("Marketplace", MarketplacePanel);
+addPanel("Revenue", RevenuePanel);
+addPanel("Integrations", IntegrationsPanel);
+🔥 5 MORE HIGH-IMPACT UPGRADES (WITH CODE)
+(1) 🧠 Smart secondary questions (information gain)
+export function nextBestQuestion(dx: {name:string, p:number}[], qs: {id:string, weight:number}[]) {
+  let best = null, bestScore = -Infinity;
+  for (const q of qs) {
+    const score = dx.reduce((s,d)=>s + d.p * q.weight, 0);
+    if (score > bestScore) { bestScore = score; best = q.id; }
+  }
+  return best;
+}
+(2) ⚡ Physician speed “one-glance” card
+export function oneGlance(c: any) {
+  return `${c.complaint} | ${c.differential?.[0]?.diagnosis ?? "—"} | ${c.disposition}`;
+}
+(3) 🔁 Robust retry with jitter (for all externals)
+export async function retry<T>(fn: ()=>Promise<T>, tries=3) {
+  let err:any;
+  for (let i=0;i<tries;i++){
+    try { return await fn(); }
+    catch(e){ err=e; await new Promise(r=>setTimeout(r, 200*(2**i)+Math.random()*100)); }
+  }
+  throw err;
+}
+(4) 📊 Real-time anomaly (Z-score)
+export function zAnomaly(series: number[]) {
+  const n = series.length || 1;
+  const mean = series.reduce((a,b)=>a+b,0)/n;
+  const varr = series.reduce((a,b)=>a+(b-mean)**2,0)/n;
+  const sd = Math.sqrt(varr || 1);
+  const last = series[n-1] ?? 0;
+  return Math.abs((last - mean)/sd) > 3;
+}
+(5) 🌍 Universal connector router (API → UI → Vision)
+export async function universalWrite(data: any) {
+  try {
+    return await sendToECWEncounter(data);          // API
+  } catch {
+    try {
+      return await runUIAutomation(data.template);  // UI
+    } catch {
+      return runVisionAgent(data.page, "submit");   // Vision
+    }
+  }
+}
+🧠 FINAL SYSTEM SNAPSHOT
+Patient → Chat → Fast Triage (secondary Qs + modifiers)
+        → Clinical Brain → Safety Gate
+        → Physician Copilot (one-glance)
+        → Revenue (optimize + payer)
+        → EHR (ECW/Epic via API/UI/Vision)
+        ↓
+Marketplace (SLA-aware match + booking)
+        ↓
+National Network (route + rebalance)
+        ↓
+Optimization Loop (profit + latency)
+        ↓
+Control Tower (all panels + actions)
+🚀 Where you are now
+🏥 Live hospital + payer connections (safe wrappers)
+🇺🇸 National coordinator (route + rebalance)
+🌍 Marketplace with SLA-aware matching
+💰 Workflow optimizer (profit + latency)
+🎛️ Dashboard panels for all components
+🧠 Smarter questioning + faster physician UX
+🔁 Robust retries + anomaly detection
+🔌 Universal write path (API → UI → Vision)

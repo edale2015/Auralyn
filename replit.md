@@ -970,3 +970,17 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Routes added:** `/master-control` in App.tsx
 
 **Test count:** 1711/1711 passing across 53 files (+44 new tests in `tests/unit/batch19.test.ts`)
+
+## Batch 20 — Live Adapters + National Network Controller + Marketplace Engine + Workflow Optimizer + Advanced Utils (COMPLETE)
+
+**Backend modules (6 new files):**
+- `server/integrations/liveAdapters.ts` — `safeFetch<T>(url, init)`: generic typed fetch wrapper that catches network errors and JSON parse failures, returning `{ok:true,data}|{ok:false,error}`. `connectHospital(patient)`: POST to `HOSPITAL_API` with `HOSPITAL_TOKEN` auth; graceful `{ok:false}` when unconfigured. `connectPayer(claim)`: POST to `PAYER_API` with `PAYER_TOKEN`; falls back to `REAL_PAYER_API`. `safeExternalWrite(fn, onFail)`: wraps any write in a try/onFail callback pattern — never blocks care
+- `server/national/networkController.ts` — `pickBestRegion(regions[])`: filters healthy regions, sorts by composite `load + latencyMs/1000` score, returns lowest. `rebalance(regions[])`: identifies hot (load>0.8) and cold (load<0.5) regions, returns `{from,to,action:"shift_traffic"}[]` rebalance plan. `networkHealth(regions[])`: summary `{healthy, degraded, avgLoad}` across all regions
+- `server/marketplace/engine.ts` — `matchProvider(patient, providers[])`: SLA-aware matching with composite score `distanceKm×0.4 + load×0.4 + slaMs/1000×0.2`; returns best match or null. `bookProvider(providerId, patientId)`: POST to `BOOKING_API`; graceful skip when unconfigured. `rankProvidersSLA(patient, providers[])`: same composite sort, returns full sorted list
+- `server/optimization/optimizer.ts` — `optimizeWorkflow(visits[])`: computes `{profit, margin, avgLatency}` from visit cost/revenue/latency arrays. `applyOptimization(metrics)`: recommends `reduce_cost_path` (margin<0.2), `enable_fast_path` (latency>1500ms), `review_pricing` (profit<0). `projectRevenue(visits[], multiplier)`: revenue projection with multiplier
+- `server/utils/advancedUtils.ts` — `nextBestQuestion(dx[], qs[])`: information-gain question selection (argmax of sum p×weight across diagnoses). `oneGlance(c)`: physician one-glance card `complaint | differential | disposition`. `retry<T>(fn, tries=3)`: exponential backoff + random jitter (200×2^i + rand(100)ms). `zAnomaly(series[], threshold=3)`: Z-score outlier detection on last series value. `zScore(series[])`: raw Z-score computation. `universalWrite(data)`: 3-tier fallback chain — ECW API → UI automation → Playwright vision → "failed"
+- `server/batch20Routes.ts` — 14 routes wired
+
+**Routes added (14 new):** `/api/integrations/hospital|payer|safe-write|universal-write`, `/api/network/best|rebalance|health`, `/api/marketplace/engine/match|rank|book`, `/api/optimization/analyze|project`, `/api/clinical/next-best-question|one-glance`, `/api/analytics/z-anomaly`
+
+**Test count:** 1758/1758 passing across 54 files (+47 new tests in `tests/unit/batch20.test.ts`)
