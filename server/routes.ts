@@ -2194,6 +2194,18 @@ export async function registerRoutes(
   const { default: clinicalDecisionRoutes } = await import("./routes/clinicalDecisionRoutes");
   app.use("/api/clinical-decision", clinicalDecisionRoutes);
 
+  const { default: learningEngineRoutes } = await import("./routes/learningEngineRoutes");
+  app.use("/api/learning-engine", learningEngineRoutes);
+
+  const { default: simulationRoutes } = await import("./routes/simulationRoutes");
+  app.use("/api/sim-cohort", simulationRoutes);
+
+  const { default: monitoringRoutes } = await import("./routes/monitoringRoutes");
+  app.use("/api/monitoring", monitoringRoutes);
+
+  console.log("[LearningEngine] Patient memory | population learning | personalization wired at /api/learning-engine/*");
+  console.log("[Simulation] 10k patient synthetic cohort engine wired at /api/sim-cohort/*");
+  console.log("[Monitoring] Drift detection | risk governance wired at /api/monitoring/*");
   console.log("[Communication] Script engine | tone detector | script variants | outcome tracker wired at /api/communication/*");
   console.log("[Antibiotic] Demand detector | demand engine | delayed Rx | demand stats wired at /api/antibiotic/*");
   console.log("[ClinicalConsistency] Syndrome scoring | treatment minimalism | disposition engine | variance audit wired at /api/clinical-consistency/*");
