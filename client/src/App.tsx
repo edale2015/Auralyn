@@ -122,6 +122,7 @@ import UIAutomationPanel from "@/pages/UIAutomationPanel";
 import ControlTower from "@/pages/ControlTower";
 import MasterControl from "@/pages/MasterControl";
 import DeepAgentDashboard from "@/pages/DeepAgentDashboard";
+import CommunicationDashboard from "@/pages/CommunicationDashboard";
 
 validateRoutes();
 
@@ -229,6 +230,7 @@ function WorkbenchRouter() {
         <Route path="/control-tower" component={ControlTower} />
         <Route path="/master-control" component={MasterControl} />
         <Route path="/deep-agent" component={DeepAgentDashboard} />
+        <Route path="/communication" component={CommunicationDashboard} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

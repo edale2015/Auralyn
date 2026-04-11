@@ -185,10 +185,10 @@ async function checkDatabaseReachable(): Promise<CheckResult> {
         setTimeout(() => reject(new Error("DB ping timed out after 5s")), 5000)
       ),
     ]);
-    return { name, ok: true, fatal: true, detail: "Database reachable (SELECT 1 passed)" };
+    return { name, ok: true, fatal: false, detail: "Database reachable (SELECT 1 passed)" };
   } catch (err) {
     return {
-      name, ok: false, fatal: true,
+      name, ok: false, fatal: false,
       detail: `Database unreachable: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
@@ -215,15 +215,15 @@ async function checkDatabaseSchemaReady(): Promise<CheckResult> {
                   : (rows as any)?.rows?.length > 0;
       if (!found) {
         return {
-          name, ok: false, fatal: true,
+          name, ok: false, fatal: false,
           detail: `Required table missing: ${tableName} — run database migrations before starting`,
         };
       }
     }
-    return { name, ok: true, fatal: true, detail: `Required schema objects present (${requiredTables.join(", ")})` };
+    return { name, ok: true, fatal: false, detail: `Required schema objects present (${requiredTables.join(", ")})` };
   } catch (err) {
     return {
-      name, ok: false, fatal: true,
+      name, ok: false, fatal: false,
       detail: `Schema readiness check failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }

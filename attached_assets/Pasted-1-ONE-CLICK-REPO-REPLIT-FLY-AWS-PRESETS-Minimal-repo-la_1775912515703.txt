@@ -1,0 +1,243 @@
+1) ONE-CLICK REPO (REPLIT / FLY / AWS PRESETS)
+🗂️ Minimal repo layout
+auralyn/
+├── client/
+├── server/
+├── grafana/
+├── scripts/
+│   └── up.sh
+├── docker-compose.yml
+├── fly.toml
+├── .env.example
+└── README.md
+🔧 scripts/up.sh
+#!/usr/bin/env bash
+set -e
+
+echo "🔧 Bootstrapping Auralyn…"
+cp -n .env.example .env || true
+
+docker compose up -d --build
+
+echo "🌐 API: http://localhost:3000"
+echo "📊 Grafana: http://localhost:3001 (admin/admin)"
+echo "📈 Prometheus: http://localhost:9090"
+🐳 docker-compose.yml
+version: "3.9"
+services:
+  app:
+    build: .
+    ports: ["3000:3000"]
+    env_file: .env
+  redis:
+    image: redis:7
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: postgres
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports: ["3001:3000"]
+✈️ fly.toml
+app = "auralyn-brain"
+primary_region = "iad"
+
+[env]
+  NODE_ENV = "production"
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+🔐 .env.example
+PORT=3000
+REDIS_URL=redis://redis:6379
+DB=postgres://postgres:postgres@postgres:5432/app
+
+FHIR_BASE=
+SMART_CLIENT_ID=
+SMART_REDIRECT=
+EPIC_TOKEN=
+
+ECW_API=
+ECW_TOKEN=
+
+PAYER_API=
+PAYER_TOKEN=
+
+SLACK_WEBHOOK=
+TWILIO_URL=
+🚨 2) GRAFANA ALERT RULES UI (PERSISTED)
+🧠 DB schema
+CREATE TABLE alert_rules (
+  id SERIAL PRIMARY KEY,
+  expr TEXT NOT NULL,
+  target TEXT NOT NULL,
+  enabled BOOLEAN DEFAULT true
+);
+🔧 Backend
+import { query } from "../db";
+
+export async function addAlertRule(expr: string, target: string) {
+  await query(`INSERT INTO alert_rules (expr,target) VALUES ($1,$2)`, [expr, target]);
+}
+
+export async function getAlertRules() {
+  const r = await query(`SELECT * FROM alert_rules WHERE enabled=true`);
+  return r.rows;
+}
+
+export async function evalAlertRules(metrics: any) {
+  const rules = await getAlertRules();
+  for (const r of rules) {
+    if (eval(r.expr)) {
+      if (r.target === "slack") await sendSlackAlert(`Rule fired: ${r.expr}`);
+      if (r.target === "whatsapp") await sendWhatsAppAlert(`Rule fired: ${r.expr}`);
+    }
+  }
+}
+🖥️ UI
+export default function AlertRules() {
+  const [expr, setExpr] = useState("");
+  const [target, setTarget] = useState("slack");
+
+  async function save() {
+    await fetch("/api/alerts/rules", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ expr, target })
+    });
+    alert("Saved");
+  }
+
+  return (
+    <div>
+      <h3>🚨 Alert Rules</h3>
+      <input value={expr} onChange={e=>setExpr(e.target.value)} />
+      <select onChange={e=>setTarget(e.target.value)}>
+        <option value="slack">Slack</option>
+        <option value="whatsapp">WhatsApp</option>
+      </select>
+      <button onClick={save}>Save</button>
+    </div>
+  );
+}
+🔗 3) EPIC SMART END-TO-END DEMO (IN UI)
+🖥️ Launch + Callback pages
+export function EpicLaunch() {
+  return (
+    <button onClick={() => {
+      window.location.href = `/api/smart/launch?iss=${encodeURIComponent("https://fhir.epic.com/interconnect-fhir-oauth")}`;
+    }}>
+      Connect Epic
+    </button>
+  );
+}
+export function EpicCallback() {
+  useEffect(() => {
+    const code = new URL(window.location.href).searchParams.get("code");
+    fetch("/api/smart/callback?code="+code).then(()=>alert("Connected"));
+  }, []);
+  return <div>Connecting…</div>;
+}
+🔧 Test patient flow button
+export function EpicTestRun() {
+  return <button onClick={()=>fetch("/api/epic/test",{method:"POST"})}>
+    Run Epic Test Patient
+  </button>;
+}
+🏢 4) MULTI-TENANT ADMIN + RBAC + AUDIT EXPLORER
+🔧 RBAC
+const roles: Record<string, string[]> = {
+  admin: ["*"],
+  physician: ["view","override"],
+  staff: ["view"]
+};
+
+export function allow(role: string, action: string) {
+  return roles[role]?.includes("*") || roles[role]?.includes(action);
+}
+🔧 Middleware
+export function requirePerm(action: string) {
+  return (req:any,res:any,next:any)=>{
+    const role = req.headers["x-role"] || "staff";
+    if (!allow(role, action)) return res.status(403).send("Forbidden");
+    next();
+  };
+}
+🔧 Audit store + explorer
+export async function writeAudit(a: any) {
+  await query(`INSERT INTO audit (trace, step, data) VALUES ($1,$2,$3)`,
+    [a.traceId, a.step, JSON.stringify(a)]);
+}
+
+export async function listAudit(limit=100) {
+  const r = await query(`SELECT * FROM audit ORDER BY id DESC LIMIT $1`, [limit]);
+  return r.rows;
+}
+export function AuditExplorer({ rows }: any) {
+  return (
+    <div>
+      <h3>🧾 Audit</h3>
+      {rows.map((r:any)=><pre key={r.id}>{JSON.stringify(r.data,null,2)}</pre>)}
+    </div>
+  );
+}
+🔥 5 MORE HIGH-IMPACT UPGRADES (WITH CODE)
+(1) 🧠 Question/Modifier completeness gate (pre-triage)
+export function ensureCompleteness(ctx: any) {
+  const missing = [];
+  if (!ctx.age) missing.push("age");
+  if (!ctx.meds) missing.push("meds");
+  if (!ctx.allergies) missing.push("allergies");
+  return { ok: missing.length === 0, missing };
+}
+(2) ⚡ Physician “approve & send” macro (one click)
+export async function approveAndSend(caseData: any) {
+  await writeAudit({ traceId: caseData.traceId, step: "approve", data: caseData });
+  await universalWrite(caseData); // API→UI→Vision fallback
+}
+(3) 🔁 External call circuit + fallback queue
+import { Queue } from "bullmq";
+const extQ = new Queue("external");
+
+export async function externalSafe(fn: any, payload: any) {
+  try { return await fn(payload); }
+  catch {
+    await extQ.add("retry", { fn: fn.name, payload }, { attempts: 5 });
+    return { queued: true };
+  }
+}
+(4) 📊 SLO burn + alert hook (ties into rules UI)
+export function sloBurnRate(errors: number, total: number) {
+  const r = errors / Math.max(1,total);
+  return r > 0.01 ? "burning" : "ok";
+}
+(5) 🌍 Provider SLA tracker (feeds marketplace)
+export function updateSLA(provider: any, latencyMs: number) {
+  provider.slaMs = Math.round(0.7*provider.slaMs + 0.3*latencyMs);
+  provider.load = Math.min(1, provider.load + 0.05);
+  return provider;
+}
+🧠 FINAL SNAPSHOT
+One-click repo → up.sh → app + db + redis + prom + grafana
+      ↓
+Epic SMART UI → connect → test patient → EHR write (Epic + ECW)
+      ↓
+Control Tower → panels (Network, Marketplace, Revenue, Integrations)
+      ↓
+Alert Rules UI → persisted → Slack/WhatsApp
+      ↓
+Multi-tenant Admin → RBAC → Audit Explorer
+      ↓
+Autonomy + Optimizer → national routing + marketplace matching

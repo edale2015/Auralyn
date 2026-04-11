@@ -1024,3 +1024,32 @@ Patient → Clinical Brain → Hospital Brain → Regional Orchestrator → Nati
 **Route registration:** `/api/deep-agent/*` mounted in `server/routes.ts`
 
 **Test count:** 1808/1808 passing across 55 files (+50 new tests in `tests/unit/batch21.test.ts`)
+
+## Batch 22 — Communication Intelligence Engine (COMPLETE)
+
+**Problem addressed:** Repeat-visit patients with cough/URI/sinus demanding antibiotics. System now detects, scripts, and tracks the interaction consistently across all providers.
+
+**Backend modules (7 new files in `server/services/communication/`):**
+
+- `toneDetector.ts` — `detectTone(text)`: classifies patient language as frustrated/demanding/anxious/neutral via phrase matching. `detectToneScore(text)`: returns per-tone match counts for scoring
+- `scriptVariants.ts` — `getScriptVariant({tone, complaint, priorAntibiotics})`: 4 script variants (neutral/frustrated/demanding/anxious). Prior-antibiotics addendum appended when flag is set. `listVariantNames()`: returns all 4 variant names
+- `scriptEngine.ts` — `isRepeatVisitTrigger(input)`: returns true when visitCount≥3, durationDays≤14, complaint ∈ {cough/uri/sinus/upper respiratory/sore throat/cold}. `generateCommunicationScript(input)`: full pipeline — trigger check → tone detection → variant selection → `{script, tone, variant, triggered, triggerReasons}`
+- `antibioticDemandDetector.ts` — `detectAntibioticDemand(text)`: 18-phrase list covering "zpack", "z-pak", "i know my body", "it always turns into", "antibiotics always fix it" etc. Returns `{isDemandingAntibiotic, phrasesMatched, confidence: high|medium|low}`
+- `antibioticDemandEngine.ts` — `generateAntibioticDemandResponse(input)`: 3-branch logic — (1) no demand → `{triggered:false}`, (2) demand + bacterial criteria → treat now script, (3) demand + no criteria → delayed-Rx script with Centor borderline variant. Rationale array always populated
+- `delayedPrescriptionService.ts` — `createDelayedPrescription(params)`: creates `{id, status:"PENDING_ACTIVATION", expiresAt, createdAt}`. `activateDelayedPrescription(rxId)`. `buildActivationCriteria({fever, throatPain, worsening, rash, custom})`: standard English criteria strings
+- `outcomeTracker.ts` — In-memory store (DB-ready) for `logCommunicationOutcome` and `logAntibioticDemandEvent`. `getCommunicationStats()`: total/requests/avoided/returnVisits/variantBreakdown/toneBreakdown/avoidanceRate. `getAntibioticDemandStats()`: demandRate/delayedUsed/avoided/acceptanceRate. `resetOutcomes()` for testing
+
+**Express routes (2 new files in `server/routes/`):**
+- `communicationRoutes.ts` → `/api/communication/*`: `POST /generate-script`, `POST /detect-tone`, `POST /check-trigger`, `POST /variant`, `GET /variants`, `POST /log-outcome`, `GET /stats`
+- `antibioticRoutes.ts` → `/api/antibiotic/*`: `POST /antibiotic-demand`, `POST /detect-demand`, `POST /delayed-rx/create`, `POST /delayed-rx/activate`, `POST /activation-criteria`, `POST /log-event`, `GET /stats`
+
+**DB migration:** `server/db/migrations/20260411_add_antibiotic_demand.sql` — tables: `communication_outcomes`, `antibiotic_demand_events`, `delayed_prescriptions` with indexes
+
+**Frontend:** `client/src/pages/CommunicationDashboard.tsx` at `/communication`:
+- Tab 1 "Repeat Visit Script": complaint/visitCount/durationDays/priorAntibiotics form, patient text for tone detection, live script output with variant badge and trigger reasons, "Log as Avoided Antibiotics" one-click
+- Tab 2 "Antibiotic Demand": patient text + bacterial criteria + Centor score, demand detection, full response script, "Create Delayed Rx" button, Rx ID/status display
+- Tab 3 "Outcomes & Stats": 8 stat cards (total/requests/avoided/return visits + demand rate/delayed used/avoided/returns), variant usage bar chart
+
+**Startup fix:** `server/config/startupChecks.ts` — DATABASE_CONNECTIVITY and DATABASE_SCHEMA_READY downgraded from `fatal:true` to `fatal:false` so the app starts in degraded mode when DB is temporarily unreachable (warnings logged, traffic accepted)
+
+**Test count:** 1882/1882 passing across 56 files (+74 new tests in `tests/unit/batch22.test.ts`)

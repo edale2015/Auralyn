@@ -2179,6 +2179,15 @@ export async function registerRoutes(
   app.use("/api/deep-agent", deepAgentRoutes);
   console.log("[DeepAgent] Python sidecar bridge wired at /api/deep-agent/* (health|run|article-compare|kb-audit|code-review|workflow-upgrade|upgrade-from-article|research)");
 
+  const { default: communicationRoutes } = await import("./routes/communicationRoutes");
+  app.use("/api/communication", communicationRoutes);
+
+  const { default: antibioticRoutes } = await import("./routes/antibioticRoutes");
+  app.use("/api/antibiotic", antibioticRoutes);
+
+  console.log("[Communication] Script engine | tone detector | script variants | outcome tracker wired at /api/communication/*");
+  console.log("[Antibiotic] Demand detector | demand engine | delayed Rx | demand stats wired at /api/antibiotic/*");
+
   app.get("/simulate/stress", async (req, res) => {
     try {
       const n = Math.min(Number(req.query.n ?? 1000), 50_000);
