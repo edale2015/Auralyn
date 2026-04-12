@@ -2366,6 +2366,19 @@ export async function registerRoutes(
   });
   console.log("[Prometheus] /metrics endpoint active");
 
+  // ── Batch 28: Full Clinical Pipeline + Physician Dashboard ──
+  const { default: fullClinicalPipelineRouter } = await import("./routes/fullClinicalPipeline");
+  app.use("/api", fullClinicalPipelineRouter);
+  console.log("[FullClinicalPipeline] POST /api/full-pipeline active");
+
+  const { default: physicianRouter } = await import("./routes/physician");
+  app.use("/api", physicianRouter);
+  console.log("[PhysicianDashboard] /api/physician/* active");
+
+  // Initialise control tower event hooks (side-effectful — must be imported after bus is wired)
+  await import("./events/hooks");
+  console.log("[EventHooks] Control tower bus hooks active");
+
   return httpServer;
 }
 

@@ -1,0 +1,263 @@
+PART 1 — WIRE HARNESS INTO YOUR EXISTING SYSTEM
+
+We’re not replacing your engines.
+We’re wrapping them in a single governing loop + tool layer.
+
+🔌 1. UNIFIED ENGINE ENTRYPOINT (replaces fragmented flows)
+// server/routes/clinical.ts
+
+import { clinicalAgentLoop } from "../engine/clinicalAgentLoop";
+import { createSession } from "../session/sessionManager";
+
+app.post("/api/clinical/run", async (req, res) => {
+  const { patientId, complaint } = req.body;
+
+  const session = await createSession({
+    patientId,
+    complaint
+  });
+
+  const result = await clinicalAgentLoop(session);
+
+  res.json(result);
+});
+🧠 2. CONNECT TO YOUR EXISTING KB + BAYESIAN ENGINE
+// server/tools/dispatch.ts
+
+import { runBayesianEngine } from "../knowledge/bayesianEngine";
+import { getQuestions } from "../knowledge/questions";
+import { evaluateRedFlags } from "../knowledge/redFlags";
+
+export async function dispatchTools(toolCall) {
+  const { name, input } = toolCall;
+
+  switch (name) {
+    case "ask_question":
+      return getQuestions(input.question_id);
+
+    case "record_answer":
+      return await saveAnswer(input);
+
+    case "check_red_flags":
+      return evaluateRedFlags(input);
+
+    case "calculate_score":
+      return runBayesianEngine(input);
+
+    case "generate_disposition":
+      return generateDisposition(input);
+
+    default:
+      return "Unknown tool";
+  }
+}
+
+👉 Now your entire KB system becomes tools
+👉 Model can only act through structured pathways
+
+🧠 3. WIRE INTO CLINICAL CONTROL TOWER
+// server/events/hooks.ts
+
+import { bus } from "./eventBus";
+import { logToControlTower } from "../controllers/clinicalControlTower";
+
+bus.on("post_tool_use", ({ toolCall, output }) => {
+  logToControlTower({
+    tool: toolCall.name,
+    input: toolCall.input,
+    output
+  });
+});
+
+👉 You now get:
+
+Full trace
+Step-by-step reasoning
+Visual decision path
+🧠 4. WIRE INTO GOLDEN CASE SYSTEM
+// server/events/goldenCase.ts
+
+bus.on("session_end", async ({ sessionId }) => {
+  const result = await getSession(sessionId);
+
+  await compareToGoldenCases(result);
+});
+
+👉 Enables:
+
+Continuous validation
+RLHF-safe improvement
+Drift detection
+🧠 5. PHYSICIAN OVERRIDE LAYER
+// server/governance/override.ts
+
+export function physicianOverrideCheck(result) {
+  if (result.confidence < 0.85) {
+    return {
+      requireReview: true,
+      reason: "Low confidence diagnosis"
+    };
+  }
+
+  if (result.red_flags_present) {
+    return {
+      requireReview: true,
+      reason: "Red flag triggered"
+    };
+  }
+
+  return { requireReview: false };
+}
+🏥 PART 2 — FULL TELEMEDICINE RUNTIME
+
+This is the end-to-end system:
+
+👉 Patient → AI → Decision → Physician → EHR
+
+🧭 1. TELEMED ORCHESTRATOR
+// server/telemed/orchestrator.ts
+
+export async function runTelemedVisit(patientInput) {
+  const session = await createSession(patientInput);
+
+  const aiResult = await clinicalAgentLoop(session);
+
+  const override = physicianOverrideCheck(aiResult);
+
+  if (override.requireReview) {
+    return {
+      status: "physician_review",
+      aiResult
+    };
+  }
+
+  return finalizeVisit(aiResult);
+}
+🧑‍⚕️ 2. PHYSICIAN DASHBOARD HOOK
+// server/routes/physician.ts
+
+app.get("/api/physician/review", async (req, res) => {
+  const cases = await getPendingReviews();
+
+  res.json(cases);
+});
+
+app.post("/api/physician/approve", async (req, res) => {
+  const { caseId, decision } = req.body;
+
+  await finalizeVisit(decision);
+
+  res.json({ success: true });
+});
+🧾 3. FINAL VISIT OUTPUT (EHR READY)
+// server/telemed/finalize.ts
+
+export function finalizeVisit(result) {
+  return {
+    diagnosis: result.diagnosis,
+    disposition: result.disposition,
+    medications: result.medications,
+    instructions: result.instructions,
+    follow_up: result.follow_up,
+    audit_trace: result.trace
+  };
+}
+⚡ PART 3 — 5 NEXT HIGH-YIELD RECOMMENDATIONS (WITH CODE)
+🚀 1. NEXT-BEST-QUESTION ENGINE (CRITICAL)
+// server/engine/nextBestQuestion.ts
+
+export function getNextBestQuestion(state) {
+  const questions = getAllQuestions(state.complaint);
+
+  return questions.sort((a, b) =>
+    b.information_gain - a.information_gain
+  )[0];
+}
+
+👉 Ensures:
+
+Minimal questions
+Maximum diagnostic power
+🚀 2. UNCERTAINTY ENGINE
+// server/engine/uncertainty.ts
+
+export function calculateUncertainty(diagnoses) {
+  const top = diagnoses[0].probability;
+  const second = diagnoses[1]?.probability || 0;
+
+  return top - second;
+}
+
+👉 Drives:
+
+Escalation decisions
+Physician review
+🚀 3. DISPOSITION SAFETY FLOOR
+// server/governance/safetyFloor.ts
+
+export function enforceSafetyFloor(result) {
+  if (result.risk_score > 0.7) {
+    result.disposition = "ED";
+  }
+
+  return result;
+}
+
+👉 Prevents:
+
+Unsafe discharges
+Liability exposure
+🚀 4. MULTI-COMPLAINT FUSION ENGINE
+// server/engine/multiComplaint.ts
+
+export function fuseComplaints(results) {
+  return results.reduce((acc, r) => {
+    acc.risk += r.risk;
+    acc.red_flags = acc.red_flags || r.red_flags;
+    return acc;
+  }, { risk: 0, red_flags: false });
+}
+
+👉 Handles:
+
+Real-world patients (multiple issues)
+🚀 5. CLINICAL CONSISTENCY ENFORCER (VERY IMPORTANT)
+// server/governance/consistency.ts
+
+export function enforceConsistency(result) {
+  if (result.diagnosis === "viral_uri" &&
+      result.medications.includes("antibiotic")) {
+    result.medications = result.medications.filter(
+      m => m !== "antibiotic"
+    );
+  }
+
+  return result;
+}
+
+👉 Solves your biggest concern:
+
+“10 doctors → 10 treatments”
+
+🧠 FINAL SYSTEM ARCHITECTURE (WHAT YOU NOW HAVE)
+
+You now have:
+
+🧠 CORE
+Bayesian engine ✅
+KB-driven logic ✅
+⚙️ HARNESS (NEW)
+Master loop ✅
+Tool registry ✅
+Permission engine ✅
+Event bus ✅
+🏥 TELEMED
+Patient → AI → Physician → EHR ✅
+Override layer ✅
+🛡️ SAFETY
+Red flags ✅
+Safety floors ✅
+Consistency enforcement ✅
+⚡ PERFORMANCE
+Parallel tools ✅
+Background tasks ✅

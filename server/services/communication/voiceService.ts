@@ -52,6 +52,16 @@ export function buildPatientVoiceMessage(disposition: string, decision: string):
   return `Your visit today is complete. Disposition: ${disposition}. Please follow up as instructed by your care team.`;
 }
 
+export function generateVoiceMessage(decision: string): string {
+  if (decision === "ANTIBIOTIC" || decision === "ANTIBIOTIC_GIVEN") {
+    return "Your symptoms suggest a bacterial infection. Antibiotics are appropriate. Please take the full course as directed.";
+  }
+  if (decision === "TEST_OR_DELAYED" || decision === "TEST_OR_DELAYED_RX") {
+    return "Your symptoms are in a middle range. Testing or delayed treatment is appropriate. We will monitor you closely.";
+  }
+  return "Your symptoms suggest a viral process. Antibiotics are not likely to help. Focus on rest and hydration.";
+}
+
 export function isTwilioConfigured(): boolean {
   const sid  = process.env.TWILIO_SID || process.env.TWILIO_ACCOUNT_SID;
   const auth = process.env.TWILIO_AUTH || process.env.TWILIO_AUTH_TOKEN;
