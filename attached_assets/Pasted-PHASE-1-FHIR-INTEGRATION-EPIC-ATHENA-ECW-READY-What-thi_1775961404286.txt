@@ -1,0 +1,192 @@
+PHASE 1 — FHIR INTEGRATION (EPIC / ATHENA / ECW READY)
+🧩 What this enables
+Pull patient data (meds, allergies, vitals)
+Push diagnoses, notes, orders
+Become a SMART on FHIR app
+🔌 FHIR Client
+// server/integrations/fhirClient.ts
+
+import fetch from "node-fetch";
+
+const FHIR_BASE = process.env.FHIR_BASE_URL;
+const TOKEN = process.env.FHIR_TOKEN;
+
+export async function fhirRequest(endpoint: string, method = "GET", body?: any) {
+  const res = await fetch(`${FHIR_BASE}/${endpoint}`, {
+    method,
+    headers: {
+      "Authorization": `Bearer ${TOKEN}`,
+      "Content-Type": "application/fhir+json"
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  return res.json();
+}
+🧬 Pull Patient Data
+// server/integrations/getPatientContext.ts
+
+export async function getPatientContext(patientId: string) {
+  const [patient, meds, allergies] = await Promise.all([
+    fhirRequest(`Patient/${patientId}`),
+    fhirRequest(`MedicationRequest?patient=${patientId}`),
+    fhirRequest(`AllergyIntolerance?patient=${patientId}`)
+  ]);
+
+  return { patient, meds, allergies };
+}
+🧾 Push Encounter + Diagnosis
+// server/integrations/writeEncounter.ts
+
+export async function writeEncounter(patientId, result) {
+  return fhirRequest("Encounter", "POST", {
+    resourceType: "Encounter",
+    status: "finished",
+    subject: { reference: `Patient/${patientId}` },
+    diagnosis: [
+      {
+        condition: {
+          display: result.diagnosis
+        }
+      }
+    ]
+  });
+}
+💰 PHASE 2 — BILLING + PAYER ENGINE
+🧠 What this adds
+CPT coding
+ICD-10 mapping
+Revenue optimization
+Denial prevention
+🧾 CPT + ICD Mapper
+// server/billing/codingEngine.ts
+
+export function generateCodes(result: any) {
+  const icdMap = {
+    "viral_uri": "J06.9",
+    "chest_pain": "R07.9"
+  };
+
+  const cptMap = {
+    "HOME": "99213",
+    "URGENT_CARE": "99214",
+    "ED": "99285"
+  };
+
+  return {
+    icd10: icdMap[result.diagnosis] || "R69",
+    cpt: cptMap[result.disposition]
+  };
+}
+💰 Payer Optimization Layer
+// server/billing/payerEngine.ts
+
+export function optimizeBilling(codes, payerRules) {
+  if (payerRules.requireHighComplexity && codes.cpt === "99213") {
+    return { ...codes, cpt: "99214" };
+  }
+
+  return codes;
+}
+📡 Write Claim
+// server/billing/claimWriter.ts
+
+export async function createClaim(caseId, codes) {
+  await pool.query(
+    `
+    INSERT INTO claims (case_id, icd10, cpt)
+    VALUES ($1, $2, $3)
+    `,
+    [caseId, codes.icd10, codes.cpt]
+  );
+}
+📊 PHASE 3 — FDA VALIDATION DASHBOARD
+🧠 What this does
+Tracks accuracy
+Validates safety
+Generates SaMD evidence
+📈 Metrics Engine
+// server/fda/metricsEngine.ts
+
+export async function computeMetrics() {
+  const res = await pool.query(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN disposition = 'ED' THEN 1 ELSE 0 END) as escalations
+    FROM cases
+  `);
+
+  return res.rows[0];
+}
+🧪 Golden Case Validator
+// server/fda/goldenValidator.ts
+
+export async function validateGoldenCases(cases) {
+  let correct = 0;
+
+  for (const c of cases) {
+    const result = await runCognitiveBrain(c.input);
+
+    if (result.disposition === c.expectedDisposition) {
+      correct++;
+    }
+  }
+
+  return {
+    accuracy: correct / cases.length
+  };
+}
+🧾 Audit Hash Chain (FDA CRITICAL)
+// server/audit/hashChain.ts
+
+import crypto from "crypto";
+
+let lastHash = "";
+
+export function generateAuditHash(data: any) {
+  const hash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(data) + lastHash)
+    .digest("hex");
+
+  lastHash = hash;
+  return hash;
+}
+📊 Dashboard API
+// server/routes/fdaDashboard.ts
+
+app.get("/api/fda/metrics", async (req, res) => {
+  const metrics = await computeMetrics();
+  res.json(metrics);
+});
+🖥️ CONTROL TOWER UI ADDITIONS
+📊 FDA Panel
+// client/components/FDAPanel.tsx
+
+export default function FDAPanel({ metrics }) {
+  return (
+    <div>
+      <h2>📊 FDA Validation</h2>
+      <p>Total Cases: {metrics.total}</p>
+      <p>Escalations: {metrics.escalations}</p>
+    </div>
+  );
+}
+🔄 FULL PIPELINE (NOW LIVE)
+Patient Input
+   ↓
+FHIR Pull (history, meds, allergies)
+   ↓
+Cognitive Brain (monologue + debate)
+   ↓
+Disposition + Diagnosis
+   ↓
+Billing Engine → CPT/ICD
+   ↓
+FHIR Write (Encounter)
+   ↓
+Postgres (case + audit)
+   ↓
+Redis → Control Tower (live stream)
+   ↓
+FDA Dashboard (metrics + validation)

@@ -1369,3 +1369,59 @@ ECW → Athena → Epic → UI Automation → Vision Agent → failed
 - Debate: live multi-specialist debate form → opinions grid with confidence %, consensus, summary
 - Replay: execution trace list + step-by-step replay viewer (agent name, input→output, duration)
 - YAML Pipeline: pipeline name + JSON input → run → context dump with duration
+
+---
+
+## Batch 33 — Cognitive Medical Brain v2 (COMPLETE)
+
+**Test count: 2,572/2,572 passing across 67 files (+47 new tests in `tests/unit/batch33.test.ts`)**
+
+### `server/cognitive/` — New Directory (8 modules)
+
+**`monologueEngine.ts`** — `generateClinicalMonologue(ctx)`: async internal pre-decision reasoning trace. Calls GPT-4o-mini with clinical reasoning system prompt + JSON response format. Deterministic fallback: chest pain → ACS+PE dangerous misses; SpO2 < 92 → respiratory_failure; SBP < 90 → septic_shock; high temp + tachycardia → sepsis; missing vitals → confidence_gaps. Returns `{uncertainty_level, dangerous_misses[], bias_flags[], confidence_gaps[], recommended_strategy, reasoning_summary}`.
+
+**`debateCouncil.ts`** — `runSpecialistDebate(caseData, baseResult?)`: three-specialist debate (Cardiology via CardiologyLLMAgent, Pulmonary via PulmonaryLLMAgent, Infectious Disease via rule-based fallback). Integrates knowledge graph candidates. Returns `{final_diagnosis, disagreementScore, most_dangerous_miss, confidence, opinions[], graphCandidates[]}`.
+
+**`strategyEngine.ts`** — `selectStrategy(monologue, debate)`: uncertainty > 0.7 → rule_out; disagreementScore > 0.5 → escalate; dangerous_misses > 2 → rule_out; high confidence + low uncertainty → reassure; else uses monologue recommendation. Returns `ClinicalStrategy`.
+
+**`biasEngine.ts`** — `applyBiasGuards({plan, monologue})`: suppresses over-treatment (removes antibiotics pending culture), flags anchoring bias (broadens differential), flags premature closure (disagreement > 0.4), corrects availability bias (PE/ACS missed by debate but present in graph). Returns `{final_diagnosis, suppressedActions[], biasCorrections[]}`.
+
+**`dispositionEngine.ts`** — `computeDisposition({confidence, uncertainty, disagreement, redFlags})`: red flags → ED (urgencyScore 1.0); uncertainty > 0.6 OR disagreement > 0.5 → URGENT_CARE; confidence > 0.85 AND uncertainty < 0.3 → HOME; else FOLLOW_UP. Returns `{disposition, rationale, urgencyScore}`.
+
+**`communicationEngine.ts`** — `generatePatientMessage({disposition, strategy, diagnosis})`: generates structured `{headline, body, returnPrecautions[], urgency}` for each of the 4 dispositions. HOME → routine, URGENT_CARE/FOLLOW_UP → prompt, ED → immediate.
+
+**`memoryGraph.ts`** — In-memory symptom→diagnosis frequency map (lowercase keys). `writeToMemoryGraph()`, `readMemoryGraph()` (sorted by frequency), `queryMemory(symptom)`, `memorySize()`, `clearMemory()`. Handles both string[] and Record<string,boolean> symptom inputs.
+
+**`caseStore.ts`** — In-memory circular buffer (max 500 cognitive cases). `persistCognitiveCase()`, `listCognitiveCases(limit)`, `getCognitiveCase(id)`, `caseCount()`, `clearCases()`. Newest-first ordering.
+
+**`cognitiveOrchestrator.ts`** — `runCognitiveBrain(input)`: 8-step pipeline:
+1. Internal Monologue (generateClinicalMonologue)
+2. Bayesian Clinical Workflow (existing 8-step engine via runClinicalWorkflow)
+3. Multi-Specialist Debate (runSpecialistDebate — Cardiology + Pulmonary + ID)
+4. Strategy Selection (selectStrategy)
+5. Bias Suppression (applyBiasGuards)
+6. Disposition Computation (computeDisposition)
+7. Patient Communication (generatePatientMessage)
+8. Memory Write + Case Persistence
+
+Returns `{caseId, diagnosis, disposition, confidence, strategy, urgencyScore, patientMessage, reasoning{monologue,debate,safePlan}, durationMs}`.
+
+### Routes
+
+**`server/routes/cognitiveRoutes.ts`** — Express router mounted at `/api/cognitive`:
+- `GET /api/cognitive/cases?limit=20` — list recent cognitive runs
+- `GET /api/cognitive/cases/:id` — single case by ID
+- `GET /api/cognitive/memory` — full symptom→diagnosis memory graph
+- `GET /api/cognitive/memory/:symptom` — query memory for specific symptom
+
+**Top-level alias in `routes.ts`:**
+- `POST /api/cognitive-run` — main Cognitive Brain endpoint (the exact path from the user spec)
+
+### Frontend
+
+**`client/src/pages/CognitiveBrainPage.tsx`** — 3-tab UI at `/cognitive-brain`:
+- **Run**: symptom textarea + red flags toggle → full result with disposition badge, confidence bar, patient message (headline + body + return precautions), internal monologue panel (uncertainty gauge + dangerous misses + bias flags + confidence gaps), debate council panel (3 specialist opinions with confidence %, disagreement score, most dangerous miss), bias suppression panel (suppressed actions + corrections)
+- **Memory**: live auto-refreshing symptom→diagnosis frequency table (updates every 5 sec)
+- **History**: recent case list (diagnosis, disposition badge, strategy, confidence, duration, timestamp)
+
+Sidebar navigation entry: "Cognitive Brain v2" at `/cognitive-brain`.

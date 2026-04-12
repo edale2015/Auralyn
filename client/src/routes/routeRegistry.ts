@@ -51,4 +51,5 @@ export const ROUTES = {
   SYSTEM_VALIDATION:         "/system-validation",
   CLINICAL_OPS_CENTER:       "/clinical-ops-center",
   CLINICAL_BRAIN:            "/clinical-brain",
+  COGNITIVE_BRAIN:           "/cognitive-brain",
 };

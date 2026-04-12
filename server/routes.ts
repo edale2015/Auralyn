@@ -2429,6 +2429,22 @@ export async function registerRoutes(
   app.use("/api/brain", clinicalBrainRoutes);
   console.log("[Brain] /api/brain/* active");
 
+  // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
+  const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
+  app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
+
+  // Top-level alias the user specified: POST /api/cognitive-run
+  const { runCognitiveBrain } = await import("./cognitive/cognitiveOrchestrator");
+  app.post("/api/cognitive-run", async (req, res) => {
+    try {
+      const result = await runCognitiveBrain(req.body as any);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Cognitive brain failed" });
+    }
+  });
+  console.log("[Cognitive] /api/cognitive-run and /api/cognitive/* active");
+
   return httpServer;
 }
 
