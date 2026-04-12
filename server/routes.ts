@@ -2429,6 +2429,25 @@ export async function registerRoutes(
   app.use("/api/brain", clinicalBrainRoutes);
   console.log("[Brain] /api/brain/* active");
 
+  // ── Batch 36: Clinical Token System + Full Pipeline + Dashboard ──────────────
+  const { default: dashboardController } = await import("./dashboard/controller");
+  app.use("/api/dashboard", dashboardController);
+  console.log("[Dashboard] /api/dashboard/* active");
+
+  app.post("/api/triage", async (req, res) => {
+    try {
+      const { incrementCaseCount, incrementSafetyFlag } = await import("./dashboard/metrics");
+      const { runFullPipeline } = await import("./pipeline/fullPipeline");
+      const result = await runFullPipeline(req.body);
+      incrementCaseCount();
+      if (result.tokens.requiresPhysicianReview) incrementSafetyFlag();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Triage failed" });
+    }
+  });
+  console.log("[Triage] POST /api/triage active");
+
   // ── Batch 35: Phase 2/3 Evolution — Specialist Council, Drift, FDA, Sim, WebSocket ──
   const { initPatientStream }      = await import("./realtime/patientStream");
   initPatientStream(httpServer);   // attaches WS to existing HTTP server at /ws/patients

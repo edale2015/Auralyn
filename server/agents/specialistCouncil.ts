@@ -121,3 +121,63 @@ export class SpecialistCouncil {
 }
 
 export const specialistCouncil = new SpecialistCouncil();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token-based specialist council (used by fullPipeline.ts)
+// Each specialist filters the token's posterior against its domain diagnoses.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { ClinicalTokenSet } from "../core/clinicalTokens";
+
+interface TokenSpecialistVote {
+  specialist: string;
+  diagnoses:  string[];
+  confidence: number;
+  rationale:  string;
+}
+
+function filterDx(tokens: ClinicalTokenSet, allowed: string[]): string[] {
+  return Object.keys(tokens.posterior).filter((dx) => allowed.includes(dx));
+}
+
+async function cardiologyTokenAgent(tokens: ClinicalTokenSet): Promise<TokenSpecialistVote> {
+  const cardiac = ["acs", "mi", "arrhythmia", "chf", "pe", "pulmonary_embolism", "aortic_dissection"];
+  const matches = filterDx(tokens, cardiac);
+  const confidence = matches.length ? 0.85 : 0.60;
+  return { specialist: "cardiology", diagnoses: matches, confidence, rationale: matches.length ? `Cardiac dx in posterior: ${matches.join(",")}` : "No cardiac flags in posterior" };
+}
+
+async function infectiousDiseaseTokenAgent(tokens: ClinicalTokenSet): Promise<TokenSpecialistVote> {
+  const id = ["sepsis", "pneumonia", "viral_uri", "uti", "strep", "meningitis", "endocarditis"];
+  const matches = filterDx(tokens, id);
+  const confidence = matches.length ? 0.88 : 0.55;
+  return { specialist: "infectious_disease", diagnoses: matches, confidence, rationale: matches.length ? `ID dx in posterior: ${matches.join(",")}` : "No infectious flags" };
+}
+
+async function icuTokenAgent(tokens: ClinicalTokenSet): Promise<TokenSpecialistVote> {
+  const icu = ["shock", "respiratory_failure", "sepsis", "ards", "multi_organ_failure"];
+  const matches = filterDx(tokens, icu);
+  const confidence = tokens.riskLevel === "critical" ? 0.95 : 0.65;
+  return { specialist: "icu", diagnoses: matches, confidence, rationale: `Risk ${tokens.riskLevel}, red flags: ${tokens.redFlags.join(",") || "none"}` };
+}
+
+function aggregateTokenVotes(votes: TokenSpecialistVote[]): string[] {
+  const combined: Record<string, number> = {};
+  for (const v of votes) {
+    for (const dx of v.diagnoses) {
+      combined[dx] = (combined[dx] ?? 0) + v.confidence;
+    }
+  }
+  return Object.entries(combined)
+    .sort((a, b) => b[1] - a[1])
+    .map(([dx]) => dx);
+}
+
+export async function runSpecialistCouncil(tokens: ClinicalTokenSet): Promise<{ consensus: string[]; votes: TokenSpecialistVote[] }> {
+  const votes = await Promise.all([
+    cardiologyTokenAgent(tokens),
+    infectiousDiseaseTokenAgent(tokens),
+    icuTokenAgent(tokens),
+  ]);
+  return { consensus: aggregateTokenVotes(votes), votes };
+}
