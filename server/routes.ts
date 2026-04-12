@@ -2581,6 +2581,11 @@ export async function registerRoutes(
   });
   console.log("[Cognitive] /api/cognitive-run and /api/cognitive/* active");
 
+  // ── Batch 53: Agentic Engineering Quality Gates (cognitive debt, task spec, output gate) ──
+  const { default: agentQualityRoutes } = await import("./routes/agentQualityRoutes");
+  app.use("/api/quality", agentQualityRoutes);
+  console.log("[Quality] /api/quality/* active (cognitive-debt, specs, reviews)");
+
   // ── Batch 52: Agentic RAG Pipeline (router + collections + relevance + web-search fallback) ──
   const { default: agenticRAGRoutes } = await import("./routes/agenticRAGRoutes");
   app.use("/api/rag", agenticRAGRoutes);
