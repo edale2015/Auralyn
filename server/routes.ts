@@ -2560,6 +2560,11 @@ export async function registerRoutes(
   app.use("/api/tools", toolRoutes);
   console.log("[Tools] /api/tools/* active");
 
+  // ── Batch 48: Clinical Intelligence (Sequential Thinking, Precision Guidelines, Chart Scanner) ──
+  const { default: clinicalIntelRoutes } = await import("./routes/clinicalIntelRoutes");
+  app.use("/api/intel", clinicalIntelRoutes);
+  console.log("[Intel] /api/intel/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory

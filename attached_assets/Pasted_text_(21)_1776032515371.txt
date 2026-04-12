@@ -1,0 +1,504 @@
+What I Learnt Using Claude Code to Build Production-Ready Apps
+A practical guide covering the building blocks, hidden features, and tips that helped me build stable applications
+Farhad Malik
+Farhad Malik
+
+Follow
+18 min read
+·
+Mar 29, 2026
+574
+
+
+5
+
+
+
+
+
+Non-member members can click here to read the article.
+
+I started using Claude Code expecting a smarter autocomplete. What I got was something closer to a junior developer who gets more productive every time we teach them something new.
+
+The more we teach Claude Code about the stack and workflows, the more productive and accurate it becomes.
+
+Press enter or click to view image in full size
+
+Image by Author
+This article contains the building blocks, the gotchas, and the habits that made the biggest difference to how I use Claude Code.
+
+1. Introduction
+Claude Code is an AI-powered agentic coding tool. We can describe what we want in plain language. Claude Code then plans the approach, writes the code across multiple files, and verifies that it works.
+
+Claude can be used to automate the entire development workflow. We can use Claude Code to handle tedious tasks such as writing tests for untested code, fixing lint errors across a project, resolving merge conflicts, updating dependencies, writing release notes, building features, scheduling tasks and fixing bugs. It can also research topics and connect to external services such as Slack, GitHub, and databases.
+
+We can also schedule recurring tasks such as morning PR reviews, overnight CI failure analysis, weekly dependency audits, and doc syncing after merges.
+
+We can add instructions, workflows, rules, skills, plugins, commands and hooks to extend Claude Code. I will be explaining how Claude Code can be extended for your project in this article.
+
+2. Article Aim
+This article starts by walking us through the key Claude Core extension building blocks.
+
+Then it presents us through CLAUDE.md for persistent instructions, skills for reusable workflows, subagents for parallel work, hooks for automation, and plugins for sharing setups across teams.
+
+Finally, the article aims to present practical tips for getting the most out of it.
+
+3. What Can We Do With Claude Code
+Let’s briefly understand what we can use Claude Code for. Claude Code can be used for:
+
+Building AI agents tailored to our own workflows
+Automating documentation, deployment, code reviews, debugging live web applications, performing git actions (staging, commit messages, PRs), receiving events from Slack, Discord, and Telegram, connecting to external tools via MCP for reading Google Drive docs, updating Jira tickets, accessing our databases, APIs, and internal tooling.
+Running scheduled tasks locally or on Anthropic-managed infrastructure to automate recurring tasks.
+Claude Code can also analyse an existing codebase, generate tests that match the project’s patterns and conventions, and open a pull request when it’s done:
+
+Navigate to the project root directory
+Start Claude Code by typing claude
+Ask for a high-level overview, dive deeper into specific components such as data models and authentication, find relevant files, get context on how the components interact, understand the execution flow, and refactor the codebase.
+I have been using the VS Code extension. It provides inline diffs, @-mentions, plan review, and conversation history directly in your editor.
+
+We can also use Terminal, Desktop app, Web and a plugin for IntelliJ IDEA, PyCharm, WebStorm, and other JetBrains IDEs.
+
+4. Extending Claude Code
+Out of the box, Claude Code works generically. Extensions let us teach Claude how our team works, connect it to our actual tools and databases, and turn multi-step workflows into single commands anyone on the team can run.
+
+Press enter or click to view image in full size
+
+The result is a coding assistant that already knows the stack, conventions, and processes every single session.
+
+This section introduces us to the core Claude Code extensions:
+
+CLAUDE.md: This is where we can keep a persistent context that Claude sees every session. Rules are scoped versions of CLAUDE.md instructions. Instead of putting everything into one large CLAUDE.md file, we can organise instructions into separate files inside .claude/rules/ and target them at specific file types or subdirectories.
+Skills: Add reusable on-demand knowledge and invocable workflows here
+We can create custom commands to package repeatable workflows that the team can share, like /review-pr or /deploy-staging.
+MCP: Connects Claude to external services and tools
+Subagents: Offloading tasks to subagents. These agents run their own loops in an isolated context and return summaries
+Agent teams: Coordinate multiple independent sessions with shared tasks and peer-to-peer messaging
+Hooks: Run outside the loop entirely as deterministic scripts. Hooks run scripts automatically at specific points in Claude’s workflow. Key events: SessionStart, PreToolUse, PostToolUse, Notification, Stop, PermissionRequest
+Plugins: Package and distribute these features
+Folder structure showing where these extensions live in the project folder:
+
+your-project/
+├── CLAUDE.md                          # Persistent context Claude reads every session
+│
+└── .claude/
+    ├── settings.json                  # MCP servers, hooks, permissions, and allowlists
+    ├── rules/                         # Scoped instructions by file type or subdirectory
+    │   ├── code-style.md
+    │   ├── testing.md
+    │   └── security.md
+    ├── commands/                      # Custom slash commands e.g. /review-pr, /deploy-staging
+    │   ├── review-pr.md
+    │   └── deploy-staging.md
+    ├── skills/                        # Reusable on-demand knowledge and workflows
+    │   └── api-conventions/
+    │       └── SKILL.md
+    └── agents/                        # Project subagents and agent teams
+    |  └── security-reviewer.md
+    └── mcp-servers.json         ← MCP integrations
+
+# User-level — available across all your projects
+~/.claude/
+├── settings.json                      # Global MCP, hooks, and permissions
+├── skills/
+│   └── <skill-name>/
+│       └── SKILL.md
+└── agents/
+    └── <agent-name>.md
+
+# Plugin packaging
+.claude-plugin/
+└── plugin.json
+settings.json handles MCP connections, hooks, and permission allowlists all in one file
+Anything under .claude/ is project-scoped; anything under ~/.claude/ is personal and works across all projects
+We can use CLAUDE.md for project conventions, a skill for deployment workflow, MCP to connect to a database, and a hook to run linting after every edit.
+
+5. How Claude Code Works
+This section provides an overview of the agentic loop, context window and permissions.
+
+Agentic Loop
+When we give Claude a task, it works through three phases, known as its agentic loop:
+
+Gather context
+Take action
+Verify results
+Humans can interrupt at any point. This is usually required to steer Claude in a different direction, provide additional context, or ask it to try a different approach.
+
+The agentic loop is powered by two components:
+
+models that reason. Switch with /model during a session or start with claude --model <name>.
+tools that act. Claude uses tools for searching files to understand the code, editing to make changes, and running tests to check the results. Each tool use returns information that feeds back into the loop, informing Claude’s next decision.
+Context Window
+The context window is the most important resource to manage. It holds the conversation history, file contents, command outputs, CLAUDE.md, auto memory, loaded skills, and system instructions.
+
+LLM performance degrades as context fills. It adds noise, makes Claude less effective, and results in skills not triggering correctly. When the context window is getting full, Claude may start “forgetting” earlier instructions or making more mistakes.
+
+Claude Code manages context automatically as we approach the limit by clearing older tool outputs and summarising the conversation if needed.
+
+Checkpoints
+Before Claude edits any file, it takes a snapshot of the current contents. Checkpoints are local to your session. They only cover file changes, separate from git changes. Actions that affect remote systems (databases, APIs, deployments) can’t be checkpointed, which is why Claude asks before running commands with external side effects.
+
+Permission Modes
+There are 3 permission modes:
+
+Default: Claude asks before file edits and shell commands
+Auto-accept edits: Claude edits files without asking, but still asks for commands
+Plan mode: Claude uses read-only tools only, creating a plan you can approve before execution
+6. CLAUDE.md and Memory.md
+CLAUDE.md is a markdown file Claude reads at the start of every session. It is used to store coding standards, architecture decisions, security policies, preferred libraries, and team workflows. It can live at the project root, at the company level, or in subdirectories. We can run /init to generate one automatically from the codebase.
+MEMORY.md is written by Claude itself as it works, saving information like build commands, project patterns, and debugging insights across sessions automatically. The first 200 lines load at the start of each session. We can toggle auto memory on or off via /memory or by setting autoMemoryEnabled in your project settings.
+Claude Code also saves every conversation locally, snapshots affected files so we can revert changes, and lets us resume, rewind, or fork sessions at any point. Use claude --continue to pick up the most recent conversation, claude --resume to choose from a list, or claude --from-pr 123 to resume a session linked to a specific pull request. To explore a different approach without affecting the original session, use the --fork-session flag.
+
+7. Skills
+Skills give Claude new capabilities by loading knowledge, workflows, and instructions on demand. Claude sees skill descriptions at the start of every session but only loads the full content when a skill is actually needed, keeping your context lean.
+
+We can use skills to add conventions, style guides, domain knowledge, or step-by-step instructions for specific actions like deployments, commits, or code generation.
+
+Skills come in two types: reference skills that Claude draws on throughout a session (like an API style guide), and action skills that you trigger directly with a slash command like /deploy. Claude Code ships with built-in skills like /simplify, /batch, and /debug that work out of the box.
+
+Creating a skill
+
+Create the skill directory and a SKILL.md file inside it
+For all projects: ~/.claude/skills/<skill-name>/SKILL.md
+For a single project: .claude/skills/<skill-name>/SKILL.md
+2. Every SKILL.md needs two parts: a YAML frontmatter block (between --- markers) that tells Claude when to use the skill, and markdown content with the actual instructions. The skill name becomes the slash command and the description helps Claude decide when to load it automatically.
+
+---
+description: Review code for bugs, security, and performance
+disable-model-invocation: true
+---
+
+- Review the code for:
+- Potential bugs or edge cases
+- Security concerns
+- Performance issues
+- Readability improvements
+
+Be concise and actionable.
+A skill folder can also include templates, reference docs, example outputs, and scripts Claude can run:
+
+my-skill/
+├── SKILL.md           # Main instructions (required)
+├── template.md        # Template for Claude to fill in
+├── reference.md       # Detailed docs loaded when needed
+├── examples/
+│   └── sample.md      # Example output showing expected format
+└── scripts/
+    └── validate.sh    # Script Claude can execute
+Using skills
+
+We can invoke a skill directly with /skill-name or let Claude pick it up automatically when your request matches the description. Skills can run in the main conversation or inside a subagent.
+
+8. Plugins
+Plugins are the packaging layer to reuse the same setup across multiple repositories or distribute to others via a marketplace.
+
+A plugin bundles skills, hooks, subagents, and MCP servers into a single installable unit. Plugin skills are namespaced (like /my-plugin:review) so multiple plugins can coexist.
+
+There are essentially 6 steps to create a plugin:
+
+Create folder structures
+mkdir -p my-marketplace/.claude-plugin
+mkdir -p my-marketplace/plugins/quality-review-plugin/.claude-plugin
+mkdir -p my-marketplace/plugins/quality-review-plugin/skills/quality-review
+2. Create a SKILL.md file that defines what the /quality-review skill does.
+
+3. Create the plugin plugin.json file that describes the plugin in
+
+my-marketplace/plugins/quality-review-plugin/.claude-plugin/plugin.json
+
+{
+  "name": "quality-review-plugin",
+  "description": "Adds a /quality-review skill for quick code reviews",
+  "version": "1.0.0"
+}
+4. Create the marketplace catalogue that lists your plugin in
+
+my-marketplace/.claude-plugin/marketplace.json
+
+{
+  "name": "my-plugins",
+  "owner": {
+    "name": "Your Name"
+  },
+  "plugins": [
+    {
+      "name": "quality-review-plugin",
+      "source": "./plugins/quality-review-plugin",
+      "description": "Adds a /quality-review skill for quick code reviews"
+    }
+  ]
+}
+5. Add the marketplace and install the plugin
+
+/plugin marketplace add ./my-marketplace
+/plugin install quality-review-plugin@my-plugins
+
+6. Test the plugin
+
+/quality-review
+Run /plugin to browse the marketplace. Plugins add skills, tools, and integrations without configuration.
+
+9. Sub agents
+Subagents are specialised AI assistants that run in their own context window with their own system prompt, tool access, and permissions. When Claude encounters a task that matches a subagent’s description, it delegates the work to that subagent, which works independently and returns only a summary to your main conversation.
+
+Claude Code ships with built-in subagents for exploration, planning, and running terminal commands that it uses automatically when appropriate.
+
+Why use subagents
+
+Keep your context clean. Tasks like running tests, fetching docs, or processing log files produce a lot of output. Delegating these to a subagent keeps all that noise in the subagent’s context while only the relevant summary comes back to you.
+Enforce tool restrictions. We can limit which tools a subagent can access, giving you tighter control over what it can do.
+Control costs. Route simpler tasks to faster, cheaper models like Haiku instead of running everything through a more expensive model.
+Creating a subagent
+
+Run /agents in Claude Code and select Create new agent
+Choose Personal to save it to ~/.claude/agents/ and make it available across all projects, or Project to keep it in .claude/agents/ for the current codebase
+Give it a clear description, so Claude knows when to delegate to it automatically
+Using subagents
+
+Claude delegates to a subagent automatically when your task matches its description. You can also trigger one directly with an @mention. Subagents only report results back to the main agent and never communicate with each other.
+
+Example SubAgent: .claude/agents/security-reviewer.md
+
+---
+name: security-reviewer
+description: Reviews code for security vulnerabilities
+tools: Read, Grep, Glob, Bash
+model: opus
+---
+You are a senior security engineer. Review code for:
+- Injection vulnerabilities (SQL, XSS, command injection)
+- Authentication and authorization flaws
+- Secrets or credentials in code
+- Insecure data handling
+
+Provide specific line references and suggested fixes.
+Use Project subagents (.claude/agents/) for codebase-specific agents; check them into version control so the team benefits too
+Use User subagents (~/.claude/agents/) for personal agents available across all projects
+We can also create subagents manually as Markdown files, define them via CLI flags, or distribute them through plugins by using the /agents command.
+
+10. Agent Teams
+Agent teams let us run multiple Claude Code instances working together at the same time. One session acts as the team lead, coordinating work and synthesising results, while teammates work independently in their own context windows and communicate directly with each other.
+
+This is useful when you want to explore a problem from multiple angles at once. For example, one agent focused on UX, one on technical architecture, and one playing devil’s advocate.
+
+How agent teams differ from subagents
+
+Subagents work within a single session. Agent teams coordinate across separate sessions, with each teammate running its own full Claude Code instance.
+
+Before you use agent teams
+
+They are experimental and disabled by default. Enable them by adding CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS to your settings.json or environment
+They use significantly more tokens than a single session since every teammate runs its own context window
+They work best when teammates can operate independently. For sequential tasks, tasks that touch the same files, or work with many dependencies, a single session or subagents will serve you better
+There are known limitations around session resumption, task coordination, and shutdown behaviour
+11. Tips & Best Practices
+Here are the tips and best practices I have picked up from using Claude Code:
+
+Press enter or click to view image in full size
+
+Image by Author
+Use plan mode to review and refine the plan through conversation, then let Claude implement the plan
+Press Shift+Tab twice to enter plan mode. Plan mode is a read-only analysis.
+This is most useful when: a change spans multiple files, you’re unsure of the approach, or you’re unfamiliar with the codebase
+Skip the plan if you could describe the diff in one sentence
+Ask broad questions first, then narrow down
+Start by asking about coding conventions and patterns used in the project
+Request a glossary of project-specific terms
+Use @ to quickly include files or directories without waiting for Claude to read them
+Pipe data in directly: cat error.log | claude
+Use hooks for deterministic behaviour
+Hooks fire unconditionally. We can use them when we want something to always happen, rather than relying on Claude to decide. Hooks are deterministic and guarantee the action happens unlike Claude.md instructions. They let us run shell commands before or after Claude Code actions.
+Hooks are good for enforcing project rules, automating repetitive tasks, and preprocessing data (e.g. grep a 10,000-line log for ERROR lines before Claude ever sees it)
+For conditional logic, use prompt-based or agent-based hooks
+We can use Claude to write hooks for us. Try prompts like “Write a hook that runs eslint after every file edit” or “Write a hook that blocks writes to the migrations folder.” Edit .claude/settings.json directly to configure hooks by hand, and run /hooks to browse what’s configured.
+Add to .claude/settings.json:
+
+  {
+    "hooks": {
+      "PostToolUse": [
+        {
+          "matcher": "Edit|Write",
+          "hooks": [{ "type": "command", "command": "npx prettier --write $FILE" }]
+        }
+      ],
+      "Notification": [
+        {
+          "hooks": [{ "type": "command", "command": "notify-send 'Claude needs input'" }]
+        }
+      ]
+    }
+  }
+
+  
+Let Claude interview you for large features
+Start with a minimal prompt and ask Claude to interview you using the AskUserQuestion tool
+Once the spec is complete, open a fresh session to implement so it uses a clean context focused on execution
+It ends up with a written spec to reference throughout the build
+Tune effort and thinking levels
+There are three persistent levels: low, medium, high, plus max on Opus 4.6
+Medium is recommended for most coding tasks. Higher levels can cause Claude to overthink routine work
+Reserve high or max for hard debugging or complex architectural decisions
+Change with /effort low or reset with /effort auto
+Disable thinking in /config or set MAX_THINKING_TOKENS=8000 for simple tasks
+Enable sandboxing for agentic safety
+Run /sandbox to create defined boundaries where Claude can work freely with reduced risk
+Even if prompt injection manipulates Claude’s behaviour, the sandbox keeps your system secure
+Claude Code can only write to the folder where it was started, and its subfolders-reads outside the working directory are fine
+Use /fast mode for speed-critical work
+Toggle on with /fast for rapid iteration or live debugging. This makes Opus 4.6 ~2.5x faster
+Toggle off when cost matters more than latency
+Only available on Claude Opus 4.6
+Manage context aggressively
+Run /context to see what's consuming space
+MCP servers add tool definitions to every request. And as a consequence, a few servers can eat significant context before you start; run /mcp to check per-server costs and disable unused servers
+Control compaction
+Claude compacts automatically, but early instructions can get lost
+Add a Compact Instructions section to CLAUDE.md to control what's preserved
+Run /compact focus on the API changes to target what matters
+Use /clear and write a better initial prompt
+Repeatedly correcting Claude pollutes the context with failed approaches
+Run /clear to reset, then use /rename first so we can find the session later with /resume
+Add custom compaction instructions: /compact Focus on code samples and API usage
+Move specialised instructions into skills
+Skills load on-demand only when invoked, and they don’t bloat the base context
+Set disable-model-invocation: true on skills you invoke manually to keep descriptions out of context until needed
+Use fresh sessions for code review
+A fresh context improves code review. Claude won’t be biased toward the code it just wrote
+Use --fork-session when doing parallel work from the same starting point, so each terminal gets its own clean session
+Avoid resuming the same session in multiple terminals. Messages interleave and the conversation becomes jumbled
+Use /simplify for post-implementation review
+Run /simplify to review recently changed files for code reuse, quality, and efficiency
+Spawns three review agents in parallel, aggregates findings, and applies fixes
+Pass a focus: /simplify focus on memory efficiency
+Use checkpoints and rewind
+Press Escape to stop Claude immediately if it heads in the wrong direction
+Press Escape twice (or run /rewind) to restore conversation and code to a previous checkpoint
+Checkpoints let you undo file changes; permissions control what Claude can do without asking
+Tell SubAgents To Update Memory When Done
+Multiple subagents can be spawned to investigate different areas of a codebase simultaneously.
+
+Tell subagents: “check your memory before starting” and “update your memory when done” to build compounding knowledge over time
+Use @-mention to guarantee a subagent runs for a specific task
+It’s worth noting that subagents only report back to the main agent. They never communicate with each other. Subagents are one of the most effective tools for keeping the main context clean.
+
+Write effective CLAUDE.md files
+Target Claude.md to be under 200 lines per file. Longer files consume more context and reduce adherence
+Use specific, actionable rules: “Use 2-space indentation” not “Format code properly”
+Use markdown headers and bullets to group related instructions
+Block-level HTML comments (<!-- notes -->) are stripped before injection into context. Use them for maintainer notes without spending tokens
+Break CLAUDE.md into multiple files for large projects
+Claude reads CLAUDE.md files from your working directory up to the root, and discovers nested ones in subdirectories
+Use .claude/rules/ for topic-specific files scoped to file types or subdirectories
+.claude/rules/ supports symlinks — share a common ruleset across multiple projects
+Use claudeMdExcludes in monorepos to skip irrelevant CLAUDE.md files from other teams
+Import additional files using @path/to/import syntax
+Periodically audit your instructions
+If two rules contradict each other, Claude may pick one arbitrarily
+Review CLAUDE.md, nested files, and .claude/rules/ regularly to remove outdated or conflicting rules
+If Claude already does something correctly without an instruction, delete it or convert it to a hook
+The over-specified CLAUDE.md is a trap — ruthlessly prune
+Ask Claude To Keep A Correction Log
+We can add instructions inCLAUDE.md to keep a log of the corrections in docs/claude-corrections.md. This helps because Claude can read files. So these files act as its memory.
+Ensure Claude reads the corrections file at the start of each session by adding the instruction in Claude.md
+## On Session Start
+
+Before doing anything else, read `docs/mistakes.md`.
+## Correction Log
+
+When you make a mistake and are corrected, append an entry to `docs/claude-corrections.md` 
+in this format:
+
+### [Short description of mistake]
+- **Mistake:** What you did wrong
+- **Correction:** What the right approach is
+- **Rule:** The general rule to remember going forward
+
+Always read `docs/claude-corrections.md` at the start of each session before doing any work.
+Always give Claude a way to verify its own work
+Include test cases, paste screenshots of expected UI, or define exact output
+For visual work: paste a screenshot and ask Claude to compare its implementation against it
+Use the Claude in Chrome extension for UI verification — it opens tabs, tests the UI, and iterates
+Verification can be a test suite, linter, or a bash command that checks output
+Allowlist safe commands
+Add trusted commands to .claude/settings.json so Claude doesn't ask each time: e.g. npm test, git status, npm run lint
+Use Accept Edits mode to batch-accept multiple edits while maintaining prompts for commands with side effects
+Run /permissions to regularly audit your permission settings
+Track and reduce token costs
+Use /cost (API users) or /stats (subscribers) to monitor usage
+Prefer CLI tools (gh, aws, gcloud) over MCP servers. CLI tools are more context-efficient and don't add per-tool listings
+Delegate verbose operations (tests, logs, documentation fetching) to subagents as they only return summaries to the main context
+Export telemetry for org-wide cost tracking
+Enable with CLAUDE_CODE_ENABLE_TELEMETRY=1
+Default export intervals: 60s for metrics, 5s for logs
+User prompt content is not collected by default — set OTEL_LOG_USER_PROMPTS=1 to include it
+Use /btw for quick in-context questions
+/btw sees your full context but has no tool access. The answer is discarded and not added to history
+Use it for quick questions without spinning up a subagent
+Use /loop to run a prompt on an interval or /schedule to create recurring tasks that run automatically on a set schedule
+Syntax: /loop [interval] <prompt> — e.g. /loop 5m check if the deployment finished
+Can invoke skills: /loop 20m /review-pr 1234
+Tasks only fire while Claude Code is running and idle — closing the terminal cancels everything; no catch-up for missed fires
+Use /schedule in the CLI, the Desktop app, or the web to create tasks
+Use /loop to repeat a prompt within a CLI session for quick polling
+Use /debug for troubleshooting
+Enables debug logging for the current session
+Optionally describe the issue to focus the analysis: /debug memory leak in auth module
+Debug logging is off by default unless you started with claude --debug
+Use plugins to share skills across projects
+Plugins extend Claude Code with skills, agents, hooks, and MCP servers
+Start with standalone config in .claude/ for quick iteration, then convert to a plugin to share across teams
+Run /plugin → Discover tab to browse available plugins, or visit claude.com/plugins
+Install from the official marketplace: /plugin install <name>@claude-plugins-official
+Requires Claude Code version 1.0.33 or later
+Only install plugins from sources you trust — they can execute arbitrary code with your user privileges
+Get desktop notifications for long-running tasks
+Add a Notification hook in ~/.claude/settings.json that calls your platform's native notification command
+Fires when Claude is waiting for permission, idle and ready, or completing authentication
+Run claude doctor for installation checks
+Provides a detailed check of your installation and configuration
+Use /insights and /stats to analyse sessions
+/insights Generate a report analysing your Claude Code sessions, including project areas, interaction patterns, and friction points
+/statsVisualise daily usage, session history, streaks, and model preferences
+Work across devices
+Continue the same session from your phone, browser, desktop, or the Claude iOS app. Every surface shares the same CLAUDE.md files, settings, and MCP servers
+Kick off a long-running task on web or iOS, then pull it into your terminal with /teleport
+Hand off a terminal session to the Desktop app with /desktop for visual diff review
+Manage Agent Teams Tokens Cost-Effectively
+Token usage scales with the number of active teammates and how long each one runs.
+
+Use Sonnet for teammates. It balances capability and cost for coordination tasks.
+Keep teams small. Each teammate runs its own context window, so token usage is roughly proportional to team size.
+Keep spawn prompts focused. Teammates load CLAUDE.md, MCP servers, and skills automatically, but everything in the spawn prompt adds to their context from the start.
+Clean up teams when work is done. Active teammates continue consuming tokens even if idle.
+12. Summary
+Claude Code rewards the time you put into setting it up. The more you teach it about your stack, your conventions, and your workflows, the less you have to repeat yourself and the more it feels like a natural extension of how you already work. The compounding effect is worth it.
+
+Please feel free to share your experience and tips in the comments section.
+
+Claude Code
+Vibe Coding
+AI
+Fintech
+Programming
+574
+
+
+5
+
+
+
+
+Data Science Collective
+Published in Data Science Collective
+909K followers
+·
+Last published 1 day ago
+Advice, insights, and ideas from the Medium data science community
+
+
+Following
+Farhad Malik
+Written by Farhad Malik
+10.2K followers
+·
+4 following
+Written 250+ articles on AI and Fintech. Personal blog simplifying complex mathematical, financial, and technological concepts. FarhadMalik84@gmail.com

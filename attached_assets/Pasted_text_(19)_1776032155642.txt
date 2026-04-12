@@ -1,0 +1,1437 @@
+The Complete Guide to AI Automation Tools — n8n · CrewAI · AutoGen · LangGraph · LangChain · LangSmith
+Jyoti Dabass, Ph.D.
+Jyoti Dabass, Ph.D.
+
+Follow
+35 min read
+·
+Apr 3, 2026
+47
+
+
+
+
+
+
+The honest truth: AI is no longer just a chatbot you talk to. It’s a workforce you can orchestrate. These six tools are how the smartest builders are doing exactly that — connecting AI to the real world, making it take actions, work in teams, and get things done autonomously. This guide explains all of them, from “what is this?” to “how do I use it like a pro” — in the simplest words possible.
+
+Press enter or click to view image in full size
+
+AI automation tools
+Introduction — The New Age of AI Automation
+A few years ago, “using AI” meant asking ChatGPT a question and copying the answer. That era is over. Today, AI can browse the web, write and run code, read your emails, update your database, call APIs, make decisions, loop until a task is done, and hand work off to another AI agent when it’s finished. It can work for hours without you touching a keyboard.
+
+But this new power comes with new complexity. To build systems like this, you need tools — and there are a lot of them. The six tools in this guide form what many engineers and builders now call the modern AI automation stack:
+
+n8n — connects everything with a visual workflow builder
+LangChain — gives AI the ability to reason, retrieve, and use tools
+LangSmith — shows you what your AI is actually doing, step by step
+LangGraph — builds AI agents that can loop, branch, and persist state
+CrewAI — creates teams of AI agents that collaborate on complex tasks
+AutoGen — lets multiple AI agents converse and solve problems together
+Some of these overlap. All of them are genuinely useful. By the end of this guide you’ll know exactly what each one does, when to reach for it, and how to start using it — without wasting weeks on tutorials that assume you already know everything. Let’s go.
+
+1. n8n — Automate Everything Without Code
+What Is n8n?
+
+n8n (pronounced “n-eight-n”) is a workflow automation tool. It lets you connect apps, services, and APIs together visually — by drawing lines between boxes on a canvas — so that when something happens in one place, something else happens automatically somewhere else.
+
+Think of it like this: IFTTT and Zapier had a baby, and that baby went to engineering school. It’s much more powerful than Zapier, but still visual and approachable. Unlike Zapier, n8n is open source — you can run it on your own computer or server for free, keeping your data private. With n8n you can automate things like:
+
+“When a new row is added to Google Sheets, send a Slack message and create a Notion page”
+“Every morning at 8am, fetch the top 5 news headlines and email them to me”
+“When a customer submits a form, save it to a database, send a confirmation email, and create a CRM entry”
+“When a GitHub issue is labeled ‘bug’, create a Jira ticket and notify the team in Discord”
+But n8n goes further than most automation tools: it has built-in AI nodes. You can add an AI agent into any workflow, give it tools, and let it make decisions mid-flow. This is where n8n crosses from “automation tool” into “AI automation platform.”
+
+Who Uses n8n?
+
+Developers who want automation without building an entire backend
+Non-technical teams who need powerful automation without code
+Startups automating repetitive processes (lead routing, customer onboarding, reporting)
+Data teams moving data between systems
+AI builders connecting AI models to real business workflows
+Core Concepts (Plain English)
+Workflow: A series of connected steps that run automatically. Like a recipe — do Step 1, then Step 2, then Step 3. One workflow might have 3 steps; another might have 30.
+
+Node: One step in your workflow. Each node is a box on the canvas. There are nodes for hundreds of apps and services: Google Sheets, Slack, Gmail, PostgreSQL, HTTP requests, Stripe, Airtable, Notion, and hundreds more. There are also nodes for code (write custom JavaScript or Python), logic (if/else, loops, merge), and AI (ChatGPT, Claude, Gemini).
+
+Trigger Node: The first node in every workflow. It defines what starts the workflow. Types of triggers:
+
+Webhook — starts when an external service sends a request to n8n’s URL
+Schedule — starts at a set time (every hour, every Monday at 9am)
+App trigger — starts when something happens in a connected app (new Gmail email, new Stripe payment)
+Manual — you press a button to run it
+Connection: The arrow between two nodes. Data flows along connections from left to right. The output of one node becomes the input of the next.
+
+Item: n8n processes data as “items” — one item is one unit of data (one row, one email, one order). If your workflow receives 10 emails, it processes 10 items, one at a time (or in batches).
+
+Expression: A small piece of code you write inside a node’s field to make it dynamic. Example: instead of typing a fixed email subject, you write {{ $json.customerName }}'s order is ready — and n8n fills in the actual customer name from the data flowing through. Expressions use {{ }} syntax and can access any data from any previous node.
+
+AI Agent Node: n8n’s most powerful node. It connects to an LLM (like GPT-4 or Claude), gives it tools (like web search or database queries), and lets it work autonomously until it completes a task. The AI decides which tools to use and in what order — you just define the available tools and the goal.
+
+Memory Node: Works with the AI Agent node to give the AI memory across conversations or workflow runs. Without this, the AI starts fresh every time.
+
+Credential: A stored connection to an external service — your API key, username/password, or OAuth token. You set up credentials once and reuse them across all nodes of that type. Credentials are encrypted and stored securely.
+
+Sub-workflow: A workflow that gets called from inside another workflow. Lets you build reusable chunks of automation — like functions in programming.
+
+Getting Started: Step by Step
+Option A — Cloud (Easiest)
+
+Go to n8n.io → Sign up → Free trial gives you a hosted n8n instance. No setup.
+
+Option B — Self-Hosted with Docker (Free Forever)
+
+docker run -it --rm \
+  --name n8n \
+  -p 5678:5678 \
+  -v ~/.n8n:/home/node/.n8n \
+  docker.n8n.io/n8nio/n8n
+Open your browser at http://localhost:5678. That's it — n8n is running on your machine.
+
+Option C — npm
+
+npm install n8n -g
+n8n start
+Step 1 — Create Your First Workflow
+
+Click “New Workflow.” You see an empty canvas. In the center is a “+” button — click it to add your first node.
+
+Step 2 — Add a Trigger
+
+Search for “Schedule Trigger.” Set it to run every day at 8am. This workflow will run automatically on schedule.
+
+Step 3 — Add an HTTP Request Node
+
+Click the “+” on the right side of the Schedule node. Search for “HTTP Request.” This node can call any API. Set:
+
+Method: GET
+URL: https://hacker-news.firebaseio.com/v0/topstories.json
+This fetches the top story IDs from Hacker News.
+
+Step 4 — Add a Code Node
+
+Add a Code node after HTTP Request. Write:
+
+const ids = $input.first().json.slice(0, 5);
+return ids.map(id => ({ json: { id } }));
+This takes the first 5 story IDs and creates 5 items.
+
+Step 5 — Add Another HTTP Request
+
+This one fetches the details of each story:
+
+URL: https://hacker-news.firebaseio.com/v0/item/{{ $json.id }}.json
+The {{ $json.id }} is an expression — n8n fills in each story's ID automatically.
+
+Step 6 — Add a Gmail Node
+
+Add “Gmail → Send Email.” Set:
+
+To: your email address
+Subject: Top Hacker News Stories
+Body: {{ $json.title }} - {{ $json.url }}
+Step 7 — Test and Activate
+
+Click “Test Workflow” to run it manually. Check your email. If it works, click “Active” (top right toggle). The workflow now runs automatically every morning.
+
+Intermediate Skills
+Using the IF Node (Conditional Logic): Add an IF node to branch your workflow. “If the order total is over $500, send to the high-value customer flow. Otherwise, send to the standard flow.” Set conditions using expressions: {{ $json.orderTotal }} > 500.
+
+Looping with the Loop Over Items Node: If you have 100 items to process but want to handle them 10 at a time (to avoid rate limits), use the Loop node. Set batch size to 10 and n8n automatically chunks and loops.
+
+Error Handling: Right-click any node → “Add Error Output.” Connect the error output to a Slack node that notifies you when something fails. Never let a broken workflow silently fail.
+
+Using the Merge Node: When two branches of a workflow need to come back together before continuing, the Merge node combines their outputs. Three modes: Append (stack all items), Merge by Position (line them up 1-to-1), Merge by Key (match items by a shared field like id).
+
+Passing Data Between Nodes: Every node can see all data from all previous nodes using $('Node Name').all() syntax. Not just the immediately previous node — any node by name. This is powerful when you need data from step 2 while you're in step 7.
+
+Webhooks for Real-Time Triggers: Add a Webhook node as your trigger. n8n gives you a unique URL. Any service that supports webhooks (GitHub, Stripe, Typeform, Shopify) can hit that URL and start your workflow immediately, with the payload data available in all downstream nodes.
+
+Advanced Skills
+Building an AI Agent Workflow:
+
+[Chat Trigger] → [AI Agent] → [Memory] → [Tool: Google Search]
+                                        → [Tool: HTTP Request]
+                                        → [Tool: Code]
+Add a “Chat Trigger” node (gives the workflow a chat interface)
+Add an “AI Agent” node — connect it to OpenAI (GPT-4) or Anthropic (Claude)
+Under “Tools,” add:
+SerpAPI node (web search)
+HTTP Request node (call any API)
+Code node (run calculations)
+4. Add a “Window Buffer Memory” node to the Agent for conversation memory
+
+5. Activate the workflow. You now have an AI agent with real-world tools, accessible through a chat interface.
+
+Custom n8n Nodes: If a node for your service doesn’t exist, build one. n8n has a “Community Node” ecosystem — thousands of contributed nodes. Install them from Settings → Community Nodes. Or build your own with TypeScript using n8n’s node development CLI.
+
+n8n as an API Backend: Use Webhook triggers + Form nodes to build real API endpoints that run business logic. n8n handles the request, processes data through nodes, and returns a response. Many startups use n8n as a lightweight backend for features that don’t need a full server.
+
+Connecting to LangChain: n8n has a “LangChain” section of nodes that wrap LangChain concepts natively:
+
+LangChain nodes for chains, agents, retrievers, embeddings, vector stores
+Connect to Pinecone, Qdrant, Supabase vector stores
+Build RAG pipelines visually — no Python required
+Environment Variables and .env Files: For self-hosted n8n, sensitive configuration (API keys, database URLs) should live in environment variables, not hardcoded in workflows:
+
+export N8N_ENCRYPTION_KEY=your-key
+export DB_TYPE=postgresdb
+export DB_POSTGRESDB_HOST=localhost
+Scaling n8n with Queues: For production use with high volume, enable Queue Mode. This uses Redis as a message queue and lets you run multiple n8n worker processes in parallel:
+
+N8N_MODE=queue
+QUEUE_BULL_REDIS_HOST=localhost
+Common Mistakes and How to Avoid Them
+Mistake 1: Using Set nodes to pass data instead of expressions. Beginners add a Set node after every step to “save” a value. You don’t need to — use expressions {{ $('Step Name').first().json.field }} to access any previous data directly.
+
+Mistake 2: Not handling errors. A workflow that fails silently is worse than one that never ran. Add error outputs to critical nodes and connect them to a notification.
+
+Mistake 3: Storing credentials in node fields. Never paste API keys directly into node fields. Use n8n’s Credentials system — it encrypts them and lets you reuse them across nodes.
+
+Mistake 4: Running the whole workflow to test one node. Right-click any node → “Execute Node” to run just that one step with test data. You don’t need to trigger the whole workflow every time.
+
+Mistake 5: Ignoring the execution log. n8n saves a log of every run — go to “Executions” in the left sidebar to see what happened, what data flowed through each node, and where it failed.
+
+2. LangChain — The AI Plumbing Kit
+What Is LangChain?
+
+LangChain is an open-source Python and JavaScript library that helps developers build applications powered by large language models (LLMs). It doesn’t provide the AI — it provides the connective tissue between your app, your data, and the AI.
+
+Without LangChain: connecting an AI to your documents requires hundreds of lines of custom code. With LangChain: you snap together pre-built components in a few dozen lines.
+
+LangChain is the most widely used AI framework in the world. Its ecosystem includes:
+
+LangChain Core — the base library (prompts, models, chains)
+LangChain Community — integrations with 300+ services (vector stores, tools, loaders)
+LangGraph — advanced agent framework (covered separately below)
+LangSmith — observability and debugging (covered separately below)
+Core Concepts (Plain English)
+LLM / Chat Model: The brain. LangChain wraps AI models from OpenAI, Anthropic, Google, Mistral, Cohere, Ollama (local models), and dozens more. Switching providers is changing one line of code.
+
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+
+# OpenAI
+model = ChatOpenAI(model="gpt-4o")
+
+# Anthropic Claude
+model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
+Messages: LangChain uses a message format for all conversations:
+
+SystemMessage — instructions to the AI ("You are a helpful assistant")
+HumanMessage — the user's input
+AIMessage — the AI's response
+from langchain_core.messages import SystemMessage, HumanMessage
+
+messages = [
+    SystemMessage(content="You are a pirate. Always speak in pirate style."),
+    HumanMessage(content="What is the capital of France?")
+]
+
+response = model.invoke(messages)
+print(response.content)  # "Arr, 'tis Paris, matey!"
+Prompt Template: A reusable skeleton for prompts with placeholders.
+
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are an expert in {subject}. Answer concisely."),
+    ("human", "{question}")
+])
+
+chain = prompt | model
+result = chain.invoke({"subject": "astronomy", "question": "Why is Pluto not a planet?"})
+LCEL (LangChain Expression Language): The | pipe operator. Chain components together:
+
+chain = prompt | model | output_parser
+result = chain.invoke({"key": "value"})
+Left to right: prompt formats the text → model generates a response → parser structures the output. LCEL also enables streaming, batching, and parallel execution out of the box.
+
+Output Parser: Structures the AI’s response into a usable format.
+
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from pydantic import BaseModel
+
+# Simple string output
+chain = prompt | model | StrOutputParser()
+
+# Structured JSON output
+class Product(BaseModel):
+    name: str
+    price: float
+    category: str
+
+parser = JsonOutputParser(pydantic_object=Product)
+Document Loader: Reads content from different sources and standardizes it.
+
+from langchain_community.document_loaders import (
+    PyPDFLoader,          # PDFs
+    WebBaseLoader,        # Websites
+    CSVLoader,            # CSV files
+    NotionDBLoader,       # Notion databases
+    YoutubeLoader,        # YouTube transcripts
+    GitLoader,            # GitHub repos
+    UnstructuredEmailLoader  # Emails
+)
+
+loader = PyPDFLoader("company-handbook.pdf")
+docs = loader.load()  # Returns a list of Document objects
+Text Splitter: Breaks large documents into smaller chunks the AI can process.
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,      # Each chunk is ~500 characters
+    chunk_overlap=50,    # 50 characters overlap between chunks (preserves context at boundaries)
+    separators=["\n\n", "\n", ". ", " "]  # Split preferring paragraph breaks first
+)
+
+chunks = splitter.split_documents(docs)
+Embeddings: Converts text into a list of numbers that capture meaning. Similar text → similar numbers.
+
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+vector = embeddings.embed_query("What is the refund policy?")
+# Returns: [0.023, -0.145, 0.891, ...] — 1536 numbers
+Vector Store: A database that stores embeddings and finds similar ones fast.
+
+from langchain_community.vectorstores import Chroma, FAISS
+from langchain_pinecone import PineconeVectorStore
+
+# Local (development)
+vectorstore = FAISS.from_documents(chunks, embeddings)
+
+# Production (managed)
+vectorstore = PineconeVectorStore.from_documents(
+    chunks, embeddings, index_name="my-index"
+)
+
+# Search
+results = vectorstore.similarity_search("refund policy", k=3)
+Retriever: The interface that fetches relevant documents from a vector store.
+
+retriever = vectorstore.as_retriever(
+    search_type="similarity",
+    search_kwargs={"k": 4}  # Return top 4 most similar chunks
+)
+
+docs = retriever.invoke("What is the cancellation policy?")
+RAG (Retrieval Augmented Generation): The most important LangChain pattern. AI answers from your data, not its training.
+
+from langchain_core.runnables import RunnablePassthrough
+
+rag_chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | ChatPromptTemplate.from_template(
+        "Answer based on this context:\n{context}\n\nQuestion: {question}"
+    )
+    | model
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What is the refund policy?")
+Memory: Gives AI conversation history.
+
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+store = {}
+
+def get_session_history(session_id):
+    if session_id not in store:
+        store[session_id] = ChatMessageHistory()
+    return store[session_id]
+
+chain_with_memory = RunnableWithMessageHistory(chain, get_session_history)
+
+# Session "user123" will remember previous messages
+chain_with_memory.invoke(
+    {"question": "My name is Alex"},
+    config={"configurable": {"session_id": "user123"}}
+)
+chain_with_memory.invoke(
+    {"question": "What's my name?"},
+    config={"configurable": {"session_id": "user123"}}
+)
+# Output: "Your name is Alex."
+Tools: Functions the AI can call to interact with the world.
+
+from langchain.tools import tool
+
+@tool
+def get_stock_price(ticker: str) -> str:
+    """Get the current stock price for a given ticker symbol like AAPL or TSLA."""
+    # call a stock API here
+    return f"{ticker}: $182.50"
+
+@tool
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send an email to a recipient."""
+    # call email API here
+    return f"Email sent to {to}"
+Getting Started: Step by Step
+pip install langchain langchain-openai langchain-community python-dotenv
+Create .env:
+
+OPENAI_API_KEY=sk-...
+Minimal working example:
+
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+load_dotenv()
+
+model = ChatOpenAI(model="gpt-4o-mini")
+prompt = ChatPromptTemplate.from_template("Explain {topic} in 2 sentences.")
+chain = prompt | model | StrOutputParser()
+
+result = chain.invoke({"topic": "black holes"})
+print(result)
+Full RAG pipeline:
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# Load and process documents
+loader = PyPDFLoader("your-document.pdf")
+docs = loader.load()
+chunks = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50).split_documents(docs)
+
+# Store as embeddings
+vectorstore = FAISS.from_documents(chunks, OpenAIEmbeddings())
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# Build the RAG chain
+prompt = ChatPromptTemplate.from_template("""
+Answer the question based only on this context:
+{context}
+
+Question: {question}
+""")
+
+rag_chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt
+    | ChatOpenAI(model="gpt-4o-mini")
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What are the main topics covered?")
+print(answer)
+Advanced Skills
+Streaming:
+
+for chunk in chain.stream({"topic": "quantum computing"}):
+    print(chunk, end="", flush=True)
+Parallel Execution with RunnableParallel:
+
+from langchain_core.runnables import RunnableParallel
+
+parallel = RunnableParallel({
+    "summary": summary_chain,
+    "key_points": key_points_chain,
+    "sentiment": sentiment_chain
+})
+
+results = parallel.invoke({"text": long_article})
+# All three chains run simultaneously
+Fallbacks (Reliability):
+
+primary_model = ChatOpenAI(model="gpt-4o")
+fallback_model = ChatOpenAI(model="gpt-4o-mini")
+
+chain = (prompt | primary_model.with_fallbacks([fallback_model]) | StrOutputParser())
+# If GPT-4o fails or times out, automatically falls back to GPT-4o-mini
+Structured Output with Pydantic:
+
+from pydantic import BaseModel, Field
+from typing import List
+
+class NewsArticle(BaseModel):
+    headline: str = Field(description="The article headline")
+    summary: str = Field(description="A 2-sentence summary")
+    topics: List[str] = Field(description="List of main topics covered")
+    sentiment: str = Field(description="positive, negative, or neutral")
+
+structured_model = model.with_structured_output(NewsArticle)
+article = structured_model.invoke("Analyze this news article: ...")
+print(article.sentiment)  # "positive" — a typed string, not free text
+Advanced RAG — Multi-Query Retrieval:
+
+from langchain.retrievers.multi_query import MultiQueryRetriever
+
+# Generates 3 variations of the query, searches for all, combines results
+advanced_retriever = MultiQueryRetriever.from_llm(
+    retriever=base_retriever,
+    llm=model
+)
+Caching (Save Money and Speed):
+
+from langchain.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+# Same prompts = instant response from cache, no API cost
+Vector Store Comparison
+Press enter or click to view image in full size
+
+Comparison
+Common Mistakes
+Mistake 1: Using outdated APIs. LangChain deprecated many old classes (LLMChain, ConversationalRetrievalChain). Use LCEL. Always check docs at python.langchain.com.
+
+Mistake 2: One chunk size fits all. 500-character chunks work for articles. For legal documents, try 1500. For code, split by function, not character count. Tune chunk size for your content type.
+
+Mistake 3: Forgetting chunk overlap. Without overlap, a sentence split across two chunks loses context in both. Always set chunk_overlap to 10-20% of chunk size.
+
+Mistake 4: Not tracking costs. Use LangSmith (next section) to see exactly how many tokens each call uses and what it costs.
+
+Mistake 5: Using powerful models for simple tasks. GPT-4o for a yes/no classification? Use GPT-4o-mini — it’s 95% as good at 5% of the cost.
+
+3. LangSmith — See Inside Your AI
+What Is LangSmith?
+LangSmith is Anthropic’s observability and debugging platform for AI applications — specifically for LangChain and LangGraph apps. It records every single thing that happens inside your AI pipeline: what prompt went in, what the AI returned, which tools were called, how long each step took, and what it cost.
+
+Without LangSmith: building AI apps is like debugging a program with no print statements, no logs, and no error messages. Things go wrong and you have no idea why. With LangSmith: every run is recorded as a tree you can inspect. You see the full conversation, the exact prompt that was sent, the raw model response, every tool call, and every retrieval result. It turns AI debugging from guesswork into a science.
+
+LangSmith also adds:
+
+Datasets — store example inputs/outputs for testing
+Evaluations — automatically test your AI pipeline against datasets
+Monitoring — track latency, cost, error rates, and quality in production
+Annotations — let humans review and label AI outputs
+Playground — test prompts interactively without writing code
+Who Uses LangSmith?
+Developers debugging why their AI agent made a wrong decision
+Teams running automated tests on AI pipelines before deploying
+Engineers monitoring production AI apps for quality degradation
+Researchers experimenting with different prompts and models
+Core Concepts (Plain English)
+Trace: One complete recording of a workflow run. When you call your LangChain chain, LangSmith records a Trace. Inside the trace, you see every step — prompts, completions, tool calls, retrieval results — as a nested tree.
+
+Trace: "Answer customer question about refunds"
+  └── ChatPromptTemplate  [2ms]
+  └── ChatOpenAI         [1.2s]  — Cost: $0.003
+  └── StrOutputParser    [0ms]
+Span: One step inside a trace. Each LangChain component creates a span — you can see exactly how long it took, what went in, and what came out.
+
+Run: One execution of a single component. A trace is made of many runs — one per component.
+
+Project: A container for traces. You create separate projects for different apps or environments (development, staging, production).
+
+Dataset: A collection of example inputs and expected outputs. Used for automated testing.
+
+Example: 50 customer questions with the correct answers
+LangSmith runs your AI pipeline against all 50
+Compares AI answers to expected answers
+Reports which ones passed and failed
+Evaluator: A function (or another AI model) that judges whether a run’s output is correct, relevant, and high quality. Types:
+
+Exact match — is the output exactly this string?
+Semantic similarity — is the meaning close enough?
+LLM-as-judge — ask GPT-4 to rate whether the answer is correct
+Custom — write your own scoring function
+Feedback: A score attached to a run — thumbs up/down, 1–5 stars, or custom metrics. You can add feedback programmatically or let users submit it from your app.
+
+Monitoring Dashboard: Production metrics over time — P50/P95 latency, token usage, cost, error rate, feedback scores. Set up alerts when error rate spikes or latency degrades.
+
+Getting Started: Step by Step
+Step 1 — Create a LangSmith Account
+
+Go to smith.langchain.com. Sign up free. Create a project called “my-first-project.”
+
+Step 2 — Get Your API Key
+
+Go to Settings → API Keys → Create API Key. Copy it.
+
+Step 3 — Enable Tracing in Your Code
+
+Add these lines at the top of your Python file (or in your .env):
+
+import os
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_API_KEY"] = "your-langsmith-api-key"
+os.environ["LANGCHAIN_PROJECT"] = "my-first-project"
+Or in .env:
+
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=ls__...
+LANGCHAIN_PROJECT=my-first-project
+That’s it. No other code changes needed. Every LangChain call now automatically sends traces to LangSmith.
+
+Step 4 — Run Your Code
+
+Run any LangChain code. Go to smith.langchain.com → your project → you’ll see runs appearing in real time.
+
+Step 5 — Explore a Trace
+
+Click any run. You see a tree of every step. Click on the ChatOpenAI node and see:
+
+Input: The exact messages array that was sent
+Output: The exact raw response
+Latency: 1.23s
+Tokens: 450 input, 120 output
+Cost: $0.0023
+When something goes wrong, this is where you find out exactly why.
+
+Intermediate Skills
+Adding Custom Metadata:
+
+from langchain_core.callbacks import collect_runs
+
+with collect_runs() as cb:
+    result = chain.invoke({"question": "test"})
+    run_id = cb.traced_runs[0].id
+
+# Add feedback to this specific run
+from langsmith import Client
+client = Client()
+client.create_feedback(run_id, key="correctness", score=1.0, comment="Perfect answer")
+Tagging Runs:
+
+result = chain.invoke(
+    {"question": "test"},
+    config={"tags": ["production", "customer-id-123", "v2-prompt"]}
+)
+Tags let you filter and group runs in LangSmith — see all runs with tag “v2-prompt” and compare their quality to “v1-prompt.”
+
+Creating a Dataset for Testing:
+
+from langsmith import Client
+
+client = Client()
+dataset = client.create_dataset("customer-service-qa")
+
+# Add examples
+examples = [
+    ("What is your return policy?", "We offer 30-day returns on all items."),
+    ("How long does shipping take?", "Standard shipping takes 5-7 business days."),
+]
+
+for input_text, output_text in examples:
+    client.create_example(
+        inputs={"question": input_text},
+        outputs={"answer": output_text},
+        dataset_id=dataset.id
+    )
+Running an Evaluation:
+
+from langsmith.evaluation import evaluate, LangChainStringEvaluator
+
+def predict(inputs):
+    return {"answer": rag_chain.invoke(inputs["question"])}
+
+evaluator = LangChainStringEvaluator("qa", config={"llm": model})
+
+results = evaluate(
+    predict,
+    data="customer-service-qa",
+    evaluators=[evaluator],
+    experiment_prefix="rag-v1"
+)
+LangSmith runs your chain on every example in the dataset and scores each answer. Results appear in the UI with pass/fail per example and overall scores.
+
+Advanced Skills
+Prompt Hub: Store and version your prompts in LangSmith. Pull them by name instead of hardcoding:
+
+from langsmith import hub
+
+prompt = hub.pull("my-org/customer-service-prompt:v2")
+chain = prompt | model | StrOutputParser()
+Update the prompt in the LangSmith UI without redeploying your app. Pin specific versions for stability.
+
+Online Evaluation (Production Monitoring): Automatically evaluate a sample of real production runs:
+
+from langsmith.schemas import RunEvaluator
+
+# This evaluator runs on every 10th production trace automatically
+client.create_auto_evaluator(
+    evaluator=my_evaluator,
+    project_name="production",
+    sampling_rate=0.1  # Evaluate 10% of runs
+)
+A/B Testing Prompts: Run two versions of your prompt against the same dataset:
+
+# Experiment A: current prompt
+results_a = evaluate(predict_v1, data="test-dataset", experiment_prefix="prompt-v1")
+
+# Experiment B: new prompt
+results_b = evaluate(predict_v2, data="test-dataset", experiment_prefix="prompt-v2")
+Compare results side by side in the LangSmith UI. Deploy the better one.
+
+Press enter or click to view image in full size
+
+Automating tools
+4. LangGraph — AI That Thinks in Loops
+What Is LangGraph?
+
+LangGraph is a framework for building stateful, multi-step AI agents. It’s part of the LangChain ecosystem but is a completely separate library designed to solve a specific problem: regular LangChain chains run in a straight line — but real-world tasks rarely work that way.
+
+Real tasks need:
+
+Loops (“keep searching until you find a good answer”)
+Branches (“if the AI is unsure, ask a human; otherwise, continue”)
+Parallel work (“research three topics at the same time”)
+Memory across runs (“remember what happened last Tuesday”)
+Human-in-the-loop checkpoints (“pause and ask for approval before sending that email”)
+LangGraph solves all of this by letting you model your AI workflow as a graph — nodes (steps) connected by edges (what happens next). Edges can be conditional (“go to node A if this, node B if that”) and the graph can loop back to earlier nodes.
+
+It’s the tool serious AI engineers reach for when they need agents that are reliable, controllable, and production-ready.
+
+Who Uses LangGraph?
+
+Engineers building complex AI agents that need to loop and retry
+Teams building AI workflows with human approval steps
+Developers who tried simple agents and found them too unpredictable
+Production AI systems that need persistent state across sessions
+Core Concepts (Plain English)
+State: A dictionary that every node in the graph can read and write. This is the agent’s “working memory” — what it knows at any point in time. You define the State schema upfront.
+
+from typing import TypedDict, List
+from langchain_core.messages import BaseMessage
+
+class AgentState(TypedDict):
+    messages: List[BaseMessage]      # Conversation history
+    current_plan: str                # What the agent is working on
+    search_results: List[str]        # What it found
+    iteration_count: int             # How many loops it's done
+    is_complete: bool                # Whether it's done
+Node: A Python function that takes the current State, does something, and returns an updated State.
+
+def research_node(state: AgentState) -> AgentState:
+    # Read from state
+    query = state["messages"][-1].content
+    
+    # Do something (call an API, run the AI, search the web)
+    results = search_tool.run(query)
+    
+    # Return updated state — only the fields that changed
+    return {"search_results": [results]}
+Edge: The connection between nodes. Tells the graph what to do after a node finishes.
+
+Direct edge — always go to this next node: graph.add_edge("research", "write")
+Conditional edge — decide at runtime where to go next: graph.add_conditional_edges("check", decide_next_step)
+Conditional Edge Function: A Python function that looks at the current State and returns the name of the next node to run.
+
+def decide_next(state: AgentState) -> str:
+    if state["is_complete"]:
+        return END               # Stop the graph
+    elif state["iteration_count"] > 5:
+        return "give_up"         # Too many attempts, fallback
+    elif not state["search_results"]:
+        return "research"        # No results yet, search again
+    else:
+        return "write_answer"    # We have results, write the answer
+START and END: Special nodes. Every graph starts at START and runs until it reaches END.
+
+Checkpointer: Saves the State after every node runs. This enables:
+
+Resuming — if the agent crashes, restart from the last checkpoint
+Human-in-the-loop — pause at a node and wait for human input before continuing
+Long-running agents — an agent that runs for hours or days, persisting state between steps
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+checkpointer = SqliteSaver.from_conn_string("agent_state.db")
+graph = graph_builder.compile(checkpointer=checkpointer)
+Thread: Each separate “conversation” or “task” gets its own thread ID. The checkpointer saves state per thread, so many users can run the same graph simultaneously without interfering with each other.
+
+config = {"configurable": {"thread_id": "user-123-task-456"}}
+result = graph.invoke(initial_state, config=config)
+Human-in-the-Loop: You can make the graph pause at a specific node and wait for a human to provide input or approve an action.
+
+graph = graph_builder.compile(
+    checkpointer=checkpointer,
+    interrupt_before=["send_email"]  # Pause before this node runs
+)
+
+# Run until it pauses
+result = graph.invoke(state, config)
+# Graph is now paused. Human reviews.
+
+# Human approves — resume from where it stopped
+graph.invoke(None, config)  # Resumes from the checkpoint
+Building a Complete LangGraph Agent
+Here’s a full research agent that searches, evaluates results, and loops if needed:
+
+from typing import TypedDict, List, Annotated
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_openai import ChatOpenAI
+from langchain_community.tools import DuckDuckGoSearchRun
+from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode
+
+# 1. Define State
+class ResearchState(TypedDict):
+    messages: Annotated[List, "add_messages"]
+    research_done: bool
+
+# 2. Set up tools
+search = DuckDuckGoSearchRun()
+tools = [search]
+model = ChatOpenAI(model="gpt-4o").bind_tools(tools)
+
+# 3. Define nodes
+def research_agent(state: ResearchState):
+    response = model.invoke(state["messages"])
+    return {"messages": [response]}
+
+def should_continue(state: ResearchState) -> str:
+    last_message = state["messages"][-1]
+    # If AI used a tool, run the tool
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"
+    # Otherwise, we're done
+    return END
+
+# 4. Build the graph
+builder = StateGraph(ResearchState)
+builder.add_node("agent", research_agent)
+builder.add_node("tools", ToolNode(tools))
+
+builder.add_edge(START, "agent")
+builder.add_conditional_edges("agent", should_continue)
+builder.add_edge("tools", "agent")  # After tool runs, go back to agent
+
+graph = builder.compile()
+
+# 5. Run it
+result = graph.invoke({
+    "messages": [HumanMessage(content="What are the latest developments in fusion energy?")],
+    "research_done": False
+})
+The agent loops: calls the model → model decides to search → search runs → model reads results → model decides it has enough → returns final answer.
+
+Advanced Patterns
+
+Multi-Agent Graph: Multiple specialized agents as nodes in one graph.
+
+builder.add_node("researcher", researcher_agent)   # Searches and gathers info
+builder.add_node("analyst", analyst_agent)         # Analyzes and evaluates info
+builder.add_node("writer", writer_agent)           # Writes the final output
+builder.add_node("reviewer", reviewer_agent)       # Reviews and decides if good enough
+
+builder.add_edge("researcher", "analyst")
+builder.add_edge("analyst", "writer")
+builder.add_conditional_edges("reviewer", {
+    "revise": "writer",      # Not good enough — rewrite
+    "done": END              # Good — we're done
+})
+Parallel Subgraphs:
+
+from langgraph.graph import Send
+
+def fan_out(state):
+    # Process 3 topics simultaneously
+    return [
+        Send("research_node", {"topic": "climate change"}),
+        Send("research_node", {"topic": "AI safety"}),
+        Send("research_node", {"topic": "quantum computing"})
+    ]
+
+builder.add_conditional_edges("start", fan_out)
+# All three research_node calls run in parallel
+Persistent Memory Across Conversations:
+
+from langgraph.checkpoint.postgres import PostgresSaver
+
+# Connect to a real database for production persistence
+checkpointer = PostgresSaver.from_conn_string("postgresql://...")
+
+# Same thread_id = same memory, across days or weeks
+config = {"configurable": {"thread_id": "user-alex"}}
+graph.invoke(state, config)  # Monday conversation
+graph.invoke(new_state, config)  # Friday — agent remembers Monday
+LangGraph vs Plain LangChain: When to Use Which
+
+Comparison
+Common Mistakes
+Mistake 1: Using LangGraph for simple pipelines. If your workflow is linear (A → B → C, always), LCEL is simpler and faster. Use LangGraph when you genuinely need loops or conditional branching.
+
+Mistake 2: Not defining State schema clearly. The State is everything. If it’s ambiguous or missing fields, nodes will fail in confusing ways. Define every field upfront.
+
+Mistake 3: Forgetting to add a max iteration check. An agent that loops can loop forever. Always add a counter to your State and a condition that breaks the loop after N iterations.
+
+Mistake 4: Not using a checkpointer in production. Without checkpointing, a crash means the agent restarts from scratch. Use SqliteSaver for development, PostgresSaver for production.
+
+Mistake 5: Putting too much logic in edges. Edge functions should only decide where to go next — not compute results or call APIs. Keep computation in nodes, routing in edges.
+
+5. CrewAI — Build a Team of AI Agents
+What Is CrewAI?
+
+CrewAI is a framework for building teams of AI agents. Instead of one AI doing everything, you define multiple AI “crew members” — each with their own role, expertise, and tools — and they collaborate to complete complex tasks.
+
+Think of it like hiring a team: you have a researcher, a writer, an editor, and a fact-checker. Each one does their part, hands work to the next, and together they produce something better than any one of them could alone.
+
+CrewAI makes this multi-agent collaboration easy to build. You define agents, define tasks, assign tasks to agents, and CrewAI orchestrates the communication and handoffs automatically.
+
+Who Uses CrewAI?
+
+Builders who want multi-agent systems without deep framework knowledge
+Teams automating research, content creation, and data analysis pipelines
+Founders building AI products where agents take on specialized roles
+Developers who want a higher-level abstraction than raw LangGraph
+Core Concepts (Plain English)
+Agent: One AI crew member. Has a role, a goal, a backstory (context that shapes its behavior), and tools it can use.
+
+from crewai import Agent
+from crewai_tools import SerperDevTool, WebsiteSearchTool
+
+researcher = Agent(
+    role="Senior Research Analyst",
+    goal="Find accurate, up-to-date information on any topic assigned to you.",
+    backstory="""You are an experienced research analyst with a background in
+    investigative journalism. You are thorough, skeptical of unverified claims,
+    and always cite your sources.""",
+    tools=[SerperDevTool(), WebsiteSearchTool()],
+    llm="gpt-4o",
+    verbose=True  # Shows the agent's thinking process
+)
+
+writer = Agent(
+    role="Content Writer",
+    goal="Transform research into clear, engaging written content.",
+    backstory="""You are a skilled writer who can take complex research and turn
+    it into content that any reader can understand. You write clearly, directly,
+    and without jargon.""",
+    llm="gpt-4o",
+    verbose=True
+)
+Task: One unit of work assigned to an agent. Has a description, expected output, and which agent handles it.
+
+from crewai import Task
+
+research_task = Task(
+    description="""Research the current state of renewable energy adoption globally.
+    Focus on the top 5 countries by solar capacity, key trends in the last 2 years,
+    and major challenges the industry faces.""",
+    expected_output="""A detailed research report with:
+    - Top 5 countries by solar capacity with current numbers
+    - 3-5 major trends with supporting data
+    - Key challenges and how they're being addressed
+    - Sources for all major claims""",
+    agent=researcher
+)
+
+writing_task = Task(
+    description="""Using the research report provided, write a compelling 800-word
+    blog post about renewable energy trends. Make it accessible to a general audience.
+    Include a hook, clear sections, and a strong conclusion.""",
+    expected_output="An 800-word blog post formatted in Markdown.",
+    agent=writer,
+    context=[research_task]  # This task uses the output of research_task
+)
+Crew: The team. Combines agents and tasks, defines the process, and runs the workflow.
+
+from crewai import Crew, Process
+
+crew = Crew(
+    agents=[researcher, writer],
+    tasks=[research_task, writing_task],
+    process=Process.sequential,  # Tasks run one after another
+    verbose=True
+)
+
+result = crew.kickoff(inputs={"topic": "solar energy in Southeast Asia"})
+print(result.raw)
+Process: How the crew works:
+
+Process.sequential — tasks run in order, one after the other
+Process.hierarchical — a manager agent decides which agent does what and in what order (more autonomous)
+Manager Agent: Used with hierarchical process. An AI that acts as a project manager — reads the overall goal, breaks it down, assigns work to agents, reviews outputs, and decides when the task is complete.
+
+manager = Agent(
+    role="Project Manager",
+    goal="Coordinate the team to deliver excellent results efficiently.",
+    backstory="You are a seasoned project manager who knows how to delegate and QA work.",
+    llm="gpt-4o",
+    allow_delegation=True
+)
+
+crew = Crew(
+    agents=[researcher, writer, editor],
+    tasks=[complex_task],
+    process=Process.hierarchical,
+    manager_agent=manager
+)
+Tools: What agents can do beyond generating text. CrewAI has built-in tools and supports LangChain tools:
+
+from crewai_tools import (
+    SerperDevTool,          # Google search via Serper API
+    WebsiteSearchTool,      # Search within specific websites
+    FileReadTool,           # Read files from disk
+    CSVSearchTool,          # Search CSV files semantically
+    PDFSearchTool,          # Search PDFs semantically
+    GithubSearchTool,       # Search GitHub repos
+    YoutubeVideoSearchTool, # Search YouTube transcripts
+    CodeInterpreterTool     # Execute Python code
+)
+Callbacks and Output:
+
+from crewai import TaskOutput
+
+def on_task_complete(output: TaskOutput):
+    print(f"Task '{output.task.description[:50]}...' finished")
+    print(f"Output preview: {output.raw[:200]}...")
+
+writing_task = Task(
+    ...,
+    callback=on_task_complete
+)
+Getting Started: Step by Step
+pip install crewai crewai-tools
+Your first crew:
+
+import os
+from crewai import Agent, Task, Crew, Process
+
+os.environ["OPENAI_API_KEY"] = "your-key"
+
+# Create agents
+researcher = Agent(
+    role="Researcher",
+    goal="Find key facts about the given topic",
+    backstory="You are a thorough researcher who finds accurate information.",
+    verbose=True
+)
+
+summarizer = Agent(
+    role="Summarizer",
+    goal="Create a clear summary from research",
+    backstory="You turn complex research into simple, readable summaries.",
+    verbose=True
+)
+
+# Create tasks
+research = Task(
+    description="Research: What are the 5 most important uses of AI in healthcare in 2025?",
+    expected_output="A list of 5 AI healthcare uses with descriptions and examples.",
+    agent=researcher
+)
+
+summary = Task(
+    description="Summarize the research into a 150-word paragraph for a general audience.",
+    expected_output="A 150-word paragraph, no jargon.",
+    agent=summarizer,
+    context=[research]
+)
+
+# Run the crew
+crew = Crew(agents=[researcher, summarizer], tasks=[research, summary], process=Process.sequential)
+result = crew.kickoff()
+print(result.raw)
+Advanced Skills
+Dynamic Crew (Inputs at Runtime):
+
+result = crew.kickoff(inputs={
+    "company": "Tesla",
+    "quarter": "Q3 2025",
+    "analysis_type": "competitive"
+})
+# Use {company}, {quarter}, {analysis_type} as placeholders in task descriptions
+Flows (Orchestrating Multiple Crews): CrewAI Flows let you chain multiple Crews together with Python logic between them.
+
+from crewai.flow.flow import Flow, listen, start
+
+class ContentFlow(Flow):
+    @start()
+    def get_topic(self):
+        return {"topic": "AI in agriculture"}
+    
+    @listen(get_topic)
+    def research_phase(self, result):
+        research_crew = Crew(agents=[researcher], tasks=[research_task])
+        return research_crew.kickoff(inputs=result)
+    
+    @listen(research_phase)
+    def writing_phase(self, research):
+        writing_crew = Crew(agents=[writer, editor], tasks=[write_task, edit_task])
+        return writing_crew.kickoff(inputs={"research": research.raw})
+
+flow = ContentFlow()
+final_result = flow.kickoff()
+Memory: CrewAI has built-in memory types:
+
+Short-term memory — within a single crew run
+Long-term memory — persists across runs (stored in a local database)
+Entity memory — remembers facts about people, companies, and concepts
+Contextual memory — combines all three for smart retrieval
+crew = Crew(
+    agents=[...],
+    tasks=[...],
+    memory=True,          # Enable all memory types
+    embedder={
+        "provider": "openai",
+        "config": {"model": "text-embedding-3-small"}
+    }
+)
+Custom Tools:
+
+from crewai.tools import BaseTool
+from pydantic import BaseModel, Field
+
+class DatabaseQueryInput(BaseModel):
+    query: str = Field(description="SQL query to run")
+    database: str = Field(description="Database name")
+
+class DatabaseTool(BaseTool):
+    name: str = "Database Query Tool"
+    description: str = "Run SQL queries against company databases to get data."
+    args_schema: type[BaseModel] = DatabaseQueryInput
+
+    def _run(self, query: str, database: str) -> str:
+        # Your database query logic here
+        return f"Results from {database}: ..."
+
+db_tool = DatabaseTool()
+analyst.tools = [db_tool]
+Common Mistakes
+Mistake 1: Making agents too general. An agent with goal “do everything well” performs worse than one with goal “analyze financial data and identify anomalies.” Be specific with roles and goals.
+
+Mistake 2: Not writing backstories carefully. The backstory shapes the agent’s personality and approach. A backstory that says “you are meticulous and always double-check facts” produces more careful outputs than “you are an AI assistant.”
+
+Mistake 3: Skipping expected_output. Vague expected outputs produce vague results. If you want a numbered list of 5 items with specific fields, say exactly that in expected_output.
+
+Mistake 4: Not using context between tasks. Without context=[previous_task], tasks don't automatically share outputs. Always chain tasks that depend on each other using context.
+
+Mistake 5: Using hierarchical process when sequential is enough. Hierarchical adds a manager agent that costs extra tokens on every step. Use sequential unless you genuinely need dynamic task assignment.
+
+Press enter or click to view image in full size
+
+Automating tools
+6. AutoGen — AI Agents That Talk to Each Other
+What Is AutoGen?
+
+AutoGen is a framework from Microsoft Research for building multi-agent AI systems where agents converse with each other to solve problems. Instead of agents handing off output in a pipeline (like CrewAI), AutoGen agents actively talk — one agent proposes, another critiques, a third verifies — until they reach a solution together.
+
+If CrewAI is like a team where each person does their assigned job and passes it to the next, AutoGen is like a team in a meeting room, debating and discussing until they agree on the best answer. AutoGen’s real superpower is code execution. Agents can write Python code, a code executor agent runs it, reads the output, and decides if the result is correct — fixing and rerunning if not. This makes AutoGen exceptional for data analysis, math, scientific computing, and any task where the work can be verified by running code. AutoGen 0.4 (the latest version, also called AutoGen Studio) was a major rewrite with a cleaner API called AgentChat.
+
+Who Uses AutoGen?
+
+Researchers building complex reasoning systems
+Data scientists automating analysis pipelines with AI
+Engineers building coding assistants that write and verify their own code
+Teams exploring autonomous multi-agent research workflows
+Core Concepts (Plain English)
+Agent: A participant in a conversation. Has a name, a system message defining its role, and can be connected to an LLM.
+
+AssistantAgent: An agent backed by an LLM. Reads the conversation, thinks, and responds. Can write code, answer questions, give opinions.
+
+from autogen_agentchat.agents import AssistantAgent
+from autogen_ext.models import OpenAIChatCompletionClient
+
+model_client = OpenAIChatCompletionClient(model="gpt-4o")
+
+assistant = AssistantAgent(
+    name="researcher",
+    system_message="""You are a research assistant. When given a task:
+    1. Break it into steps
+    2. Write Python code to complete each step
+    3. Analyze the results
+    4. Summarize findings clearly""",
+    model_client=model_client
+)
+UserProxyAgent (or CodeExecutorAgent): An agent that represents the human OR executes code locally. When an AssistantAgent writes code, the CodeExecutorAgent runs it and reports back.
+
+from autogen_agentchat.agents import CodeExecutorAgent
+from autogen_ext.code_executors import LocalCommandLineCodeExecutor
+
+code_executor = CodeExecutorAgent(
+    name="code_runner",
+    code_executor=LocalCommandLineCodeExecutor(work_dir="./workspace")
+)
+Team: A group of agents that interact. AutoGen has several team types:
+
+RoundRobinGroupChat — agents take turns speaking in order
+SelectorGroupChat — an LLM decides which agent speaks next
+MagenticOneGroupChat — Microsoft’s powerful orchestration pattern for complex tasks
+Swarm — agents hand off to each other based on who is best suited next
+from autogen_agentchat.teams import RoundRobinGroupChat, SelectorGroupChat
+
+# Simple turn-taking
+team = RoundRobinGroupChat(participants=[assistant1, assistant2, code_runner])
+
+# Smart selection — an LLM picks who speaks next
+team = SelectorGroupChat(
+    participants=[researcher, coder, critic, code_runner],
+    model_client=model_client
+)
+Termination Condition: When to stop the conversation. Without this, agents can talk forever.
+
+from autogen_agentchat.conditions import (
+    TextMentionTermination,   # Stop when someone says "TERMINATE"
+    MaxMessageTermination,    # Stop after N messages
+    StopMessageTermination,   # Stop when a StopMessage is sent
+    TimeoutTermination        # Stop after N seconds
+)
+
+termination = TextMentionTermination("TASK_COMPLETE") | MaxMessageTermination(20)
+# Stop when someone writes "TASK_COMPLETE" OR after 20 messages, whichever comes first
+Messages: AutoGen uses typed messages:
+
+TextMessage — regular text
+ToolCallMessage — agent is calling a tool
+ToolCallResultMessage — result of a tool call
+StopMessage — signal to end the conversation
+HandoffMessage — pass control to another agent (Swarm pattern)
+Tool: A function an agent can call. Uses Python’s function calling.
+
+from autogen_core.tools import FunctionTool
+import yfinance as yf
+
+def get_stock_price(ticker: str) -> str:
+    """Get current stock price for a ticker symbol."""
+    stock = yf.Ticker(ticker)
+    price = stock.fast_info["last_price"]
+    return f"{ticker}: ${price:.2f}"
+
+stock_tool = FunctionTool(get_stock_price, description="Get real-time stock prices")
+agent = AssistantAgent("finance_analyst", tools=[stock_tool], model_client=model_client)
+Getting Started: Step by Step
+
+pip install autogen-agentchat autogen-ext[openai] python-dotenv
+Simple two-agent conversation:
+
+import asyncio
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.conditions import MaxMessageTermination
+from autogen_ext.models import OpenAIChatCompletionClient
+
+model_client = OpenAIChatCompletionClient(model="gpt-4o-mini")
+
+# Agent 1: comes up with ideas
+brainstormer = AssistantAgent(
+    name="brainstormer",
+    system_message="You generate creative business ideas. After sharing an idea, end with 'DONE'.",
+    model_client=model_client
+)
+
+# Agent 2: critiques ideas
+critic = AssistantAgent(
+    name="critic",
+    system_message="You critically evaluate business ideas. Find weaknesses and suggest improvements.",
+    model_client=model_client
+)
+
+team = RoundRobinGroupChat(
+    participants=[brainstormer, critic],
+    termination_condition=MaxMessageTermination(6)  # 3 rounds each
+)
+
+async def main():
+    result = await team.run(task="Generate and critique a business idea for AI in education.")
+    for message in result.messages:
+        print(f"\n[{message.source}]: {message.content}")
+
+asyncio.run(main())
+Code execution agent:
+
+import asyncio
+from autogen_agentchat.agents import AssistantAgent, CodeExecutorAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.conditions import TextMentionTermination
+from autogen_ext.code_executors import LocalCommandLineCodeExecutor
+from autogen_ext.models import OpenAIChatCompletionClient
+
+model_client = OpenAIChatCompletionClient(model="gpt-4o")
+
+coder = AssistantAgent(
+    name="coder",
+    system_message="""You solve problems by writing Python code.
+    Always write complete, runnable code in ```python blocks.
+    After the code executor runs your code, check the output.
+    If correct, say TASK_DONE. If not, fix the code.""",
+    model_client=model_client
+)
+
+executor = CodeExecutorAgent(
+    name="executor",
+    code_executor=LocalCommandLineCodeExecutor(work_dir="./output")
+)
+
+team = RoundRobinGroupChat(
+    participants=[coder, executor],
+    termination_condition=TextMentionTermination("TASK_DONE")
+)
+
+async def main():
+    result = await team.run(
+        task="Write Python code to fetch Bitcoin's price from the CoinGecko API and plot a bar chart of its price over the last 7 days."
+    )
+    print(result.messages[-1].content)
+
+asyncio.run(main())
+The coder writes the code. The executor runs it. If it fails, the coder reads the error and fixes it. They loop until it works.
+
+Advanced Skills
+Swarm Pattern (Dynamic Handoffs):
+
+from autogen_agentchat.teams import Swarm
+from autogen_agentchat.messages import HandoffMessage
+
+triage_agent = AssistantAgent(
+    name="triage",
+    system_message="""Classify incoming support requests.
+    For billing issues: handoff to billing_agent.
+    For technical issues: handoff to tech_agent.
+    For general questions: answer directly.""",
+    handoffs=["billing_agent", "tech_agent"],
+    model_client=model_client
+)
+
+billing_agent = AssistantAgent(name="billing_agent", ...)
+tech_agent = AssistantAgent(name="tech_agent", ...)
+
+swarm = Swarm(participants=[triage_agent, billing_agent, tech_agent])
+result = await swarm.run(task="My invoice shows the wrong amount.")
+# triage_agent reads the message → hands off to billing_agent → billing_agent resolves it
+MagenticOne (Microsoft’s Best Orchestrator):
+
+from autogen_ext.teams.magentic_one import MagenticOne
+
+# MagenticOne automatically creates: Orchestrator, WebSurfer, FileSurfer, Coder, ComputerTerminal
+magentic_one = MagenticOne(client=model_client)
+result = await magentic_one.run(task="Find the latest research on CRISPR gene editing, download 3 papers, and write a summary.")
+MagenticOne can browse the web, read files, write and run code, and use a computer — all automatically.
+
+Custom Team Selector:
+
+from autogen_agentchat.teams import SelectorGroupChat
+
+async def my_selector(messages, agents):
+    """Custom logic to pick the next agent."""
+    last_speaker = messages[-1].source
+    if "data" in messages[-1].content.lower():
+        return next(a for a in agents if a.name == "data_analyst")
+    elif "chart" in messages[-1].content.lower():
+        return next(a for a in agents if a.name == "visualizer")
+    return None  # Fall back to LLM selection
+
+team = SelectorGroupChat(participants=[...], selector_func=my_selector)
+AutoGen vs CrewAI: Key Differences
+Press enter or click to view image in full size
+
+Comparison
+Common Mistakes
+Mistake 1: Forgetting it’s async. AutoGen 0.4 is fully async. Use async def and await or asyncio.run(). Calling agents synchronously won't work.
+
+Mistake 2: Not setting termination conditions. Without a termination condition, agents will converse until they hit the model’s context limit or cost you a fortune. Always set MaxMessageTermination.
+
+Mistake 3: Running code without a sandbox. LocalCommandLineCodeExecutor runs code on your actual machine. For untrusted code, use DockerCommandLineCodeExecutor to run in an isolated container.
+
+Mistake 4: Using GPT-4 for every agent. Different agents have different needs. The code executor agent barely uses the model. Use GPT-4o-mini for simpler agents and save GPT-4o for the ones that need deep reasoning.
+
+Mistake 5: Ignoring AutoGen Studio. AutoGen Studio is a visual UI for building and testing multi-agent systems without code. Go to autogen-studio.com and test your agent team interactively before building the Python code.
+
+How All Six Work Together
+These aren’t competing tools — they’re complementary layers in a complete stack. Here’s how they fit:
+
+┌─────────────────────────────────────────────────────────────┐
+│                    WHAT YOU BUILD                           │
+│              (The product your users see)                   │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│                   ORCHESTRATION LAYER                       │
+│   n8n — connects everything, triggers workflows,            │
+│          adds AI into business automation                   │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+┌───────▼───────┐   ┌───────▼───────┐   ┌───────▼───────┐
+│  SIMPLE AI    │   │  TEAM AI      │   │  CONVERSING   │
+│  PIPELINES    │   │  WORKFLOWS    │   │  AGENTS       │
+│               │   │               │   │               │
+│  LangChain    │   │  CrewAI       │   │  AutoGen      │
+│  (RAG, chains │   │  (multi-agent │   │  (debate,     │
+│   tools)      │   │   pipelines)  │   │   code exec)  │
+└───────┬───────┘   └───────┬───────┘   └───────┬───────┘
+        │                   │                   │
+        └───────────────────┼───────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│                  ADVANCED CONTROL LAYER                     │
+│   LangGraph — when you need loops, branches,                │
+│               human-in-the-loop, and persistent state       │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│                  OBSERVABILITY LAYER                        │
+│   LangSmith — see everything, debug anything,               │
+│               test and monitor all AI pipelines             │
+└─────────────────────────────────────────────────────────────┘
+Press enter or click to view image in full size
+
+Automating tools
+A Real-World Example
+You’re building an AI-powered competitive intelligence tool for a SaaS company:
+
+Miro (not in this guide, but worth mentioning): Map out what the system should do.
+
+n8n: Trigger the whole workflow every Monday morning at 9am. Pull a list of competitors from Google Sheets. For each competitor, trigger the AI pipeline. At the end, email the report to the team and save it to Notion.
+
+CrewAI: A 3-agent crew handles each competitor:
+
+Researcher agent (with web search tools) gathers recent news, product updates, pricing changes
+Analyst agent evaluates the competitive threat and opportunities
+Writer agent produces a clean, structured report section
+LangChain: The Researcher agent uses LangChain’s RAG to search an internal knowledge base of past research reports, so it doesn’t repeat work and builds on previous findings.
+
+LangGraph: If the Researcher agent can’t find enough data (less than 5 sources), a LangGraph loop triggers additional search strategies — trying different search queries and sources — before passing to the Analyst.
+
+LangSmith: Every run is traced. You can see exactly what each agent found, what prompted each decision, and catch quality issues. When a report is surprisingly wrong, you open LangSmith and see in 30 seconds which step failed.
+
+Result: Every Monday morning, the team wakes up to a fully researched, AI-written competitive intelligence report — built by a system you designed, orchestrated, and can trust because you can see every step it took.
+
+Conclusion
+A year ago, “building with AI” meant calling the OpenAI API and printing a response. Today it means something entirely different — orchestrating teams of AI agents, giving them tools and memory, watching them research, reason, write code, loop until they’re right, and hand finished work to the next agent in the chain. These six tools are the enablers of that shift:
+
+n8n is where the real world meets your AI — connecting apps, APIs, and databases to your workflows with minimal code and maximum reliability.
+
+LangChain is the foundation — the standard library of AI development. If you’re building anything with AI in Python or JavaScript, you will encounter LangChain. Learn it well.
+
+LangSmith is the silent guardian of your AI systems. You can’t improve what you can’t see. Run it from your very first line of LangChain code and you’ll never go back to flying blind.
+
+LangGraph is where AI becomes truly powerful. When your agents need to think in loops, persist state, and handle the unexpected, LangGraph is what makes that controllable and production-ready.
+
+CrewAI is where collaboration happens. Complex tasks that would overwhelm one AI become manageable when split among a specialized crew — each agent doing what it does best, together achieving what none could alone.
+
+AutoGen is where AI becomes collaborative in a different sense — agents that argue, verify each other’s work, write and run code, and won’t stop until the answer is actually right.
+
+You don’t need to master all six at once. Here’s the honest order:
+
+Start with LangChain — understand prompts, chains, and RAG
+Add LangSmith — immediately, from day one of using LangChain
+Move to n8n — when you need to connect your AI to the real world
+Learn LangGraph — when your agent needs to loop or persist state
+Explore CrewAI — when you want multiple specialized agents working in a pipeline
+Try AutoGen — when your task benefits from agents that converse and execute code
+The gap between “I have an AI idea” and “I have a working AI system” has never been smaller. These tools are the reason. Start with one. The stack will follow.
+
+All tools update frequently — always check official documentation.
+
+Press enter or click to view image in full size
+
+Thanks for reading!!
+Cheers!! Happy reading!! Keep learning!!
+
+Please upvote, share & subscribe if you liked this!! Thanks!!
+
+You can connect with me on LinkedIn, YouTube, Kaggle, Medium, and GitHub for more related content. Thanks!!
+
+N8n
+Crew Ai
+Autogen
+AI Agent
+Pyt
