@@ -1,0 +1,479 @@
+
+Claude Code Subagents and Main-Agent Coordination: A Complete Guide to AI Agent Delegation Patterns
+Mastering AI Agent Coordination: Effective Delegation Patterns for Claude Code Subagents
+Rick Hightower
+Rick Hightower
+
+Follow
+20 min read
+·
+Mar 30, 2026
+198
+
+
+3
+
+
+
+
+
+🚀 Unlock the full potential of AI with Claude Code! Discover how to delegate tasks to specialized subagents for seamless coding assistance. Dive into the hub-and-spoke delegation patterns that keep your AI organized and effective. Ready to revolutionize your workflow? Read on! 🧠✨ #AI #Coding #Productivity
+
+Summary: Claude Code utilizes subagents to delegate tasks, enhancing efficiency by isolating work and maintaining context. Subagents operate independently, each with specific roles like exploring code or executing commands, while the main agent coordinates their activities in a hub-and-spoke model. This architecture promotes clarity, safety, and reusability, allowing teams to define custom agents with precise descriptions for effective delegation. Key strategies include the Explore-Plan-Execute pattern for complex tasks and maintaining strict permission hygiene to prevent unintended actions.
+
+Every time Claude Code spawns a subagent, it is making a deliberate architectural choice. Instead of doing everything in one context, it splits the work across isolated, specialized workers. If you have ever managed a software team, you already understand this instinctively: you do not ask your best backend engineer to simultaneously write the frontend, update the CI pipeline, and review the security audit. You delegate. Claude Code does the same thing.
+
+If you have ever watched Claude Code tackle a big refactor, you have probably noticed it spawning helper agents behind the scenes. One explores the codebase to find all relevant files. Another handles the actual code changes. A third might run the tests. Each of these is a subagent. And once you understand how they work, you can create your own specialized agents tailored to your team’s workflow. That is when things get really interesting.
+
+In this first part of a two-part series, we cover what subagents are, how the main agent coordinates them, how they communicate, and how to debug them when things go wrong. Part 2 builds on these fundamentals to construct a practical pipeline powered entirely by custom subagents.
+
+What Are Subagents?
+A subagent in Claude Code is a specialized agent spawned by the main agent to handle a specific task. Each subagent runs in its own context window with a custom system prompt, specific tool access, and independent permissions. When the main agent encounters a task whose description matches a subagent’s capabilities, it delegates the work automatically. The subagent runs independently and returns only its final results.
+
+Why bother with all this complexity? Three reasons.
+
+Context isolation. When Claude Code needs to explore a large codebase, the Explore subagent can read hundreds of files without polluting the main conversation. Only the summary comes back, keeping the parent context clean and focused. Think of it like sending a scout ahead rather than dragging your entire army through the forest. The scout reports back what matters; the army does not need to know about every tree along the way.
+
+Constraint enforcement. Each subagent can be restricted to specific tools. An Explore subagent gets Read, Grep, and Glob, but nothing that can modify files. This prevents accidental changes during reconnaissance and enforces the principle of least privilege. If a subagent does not need Write access, it should not have Write access. Period.
+
+Reusable configurations. Custom subagent definitions can be shared across projects. A team can define a CodeReviewer agent once, check it into the repository, and use it everywhere. New team members get the same agent capabilities without any additional setup. No onboarding doc required.
+
+Built-in Subagent Types
+Claude Code ships with four built-in subagent types, each optimized for a different class of work:
+
+Press enter or click to view image in full size
+
+Built-in Subagent Types — Claude Code Subagents
+Built-in Claude Code Subagents:
+Explore
+
+Model: Haiku (fast)
+Tools: Read, Grep, Glob
+Purpose: Code search and file exploration. Read-only. Supports thoroughness levels: quick, medium, very thorough.
+Plan
+
+Model: Inherits main
+Tools: Read-only
+Purpose: Codebase research during plan mode. Helps break down complex tasks into actionable steps.
+General-purpose
+
+Model: Inherits main
+Tools: All tools
+Purpose: Complex multi-step tasks requiring full capability access, including file modifications.
+Bash
+
+Model: Inherits main
+Tools: Bash tool
+Purpose: Terminal commands executed in a separate context, keeping shell output out of the main conversation.
+Claude Code can run multiple subagents simultaneously. That makes parallel exploration and execution a practical strategy for large tasks, not just a theoretical possibility.
+
+The Explore subagent deserves special attention. Because it uses Haiku (a faster, cheaper model), it is well-suited for tasks that require reading many files quickly without deep reasoning. The thoroughness levels let you control the trade-off between speed and depth: a “quick” exploration performs targeted lookups, while “very thorough” does a comprehensive sweep of the relevant code. I think of Explore as the “grep on steroids” subagent (think grep -r, but one that actually understands what it is reading).
+
+When to Use Each Type
+Choosing the right subagent type comes down to three questions: Does the task need to modify files? Does it need deep reasoning or just fast scanning? Does it need shell access?
+
+Use Explore when you need to understand what exists before making changes. Fast, cheap, safe.
+Use Plan when you are in plan mode and need the subagent to research the codebase to inform a strategy.
+Use General-purpose when the task requires file modifications, multi-step reasoning, or full tool access. This is the heavyweight option.
+Use Bash when you need to run terminal commands without cluttering the main context with shell output.
+The trade-off is straightforward: Explore is fast and cheap but read-only. General-purpose is capable but expensive and potentially dangerous with full tool access. Pick the lightest tool that gets the job done.
+
+How the Main Agent Delegates
+Delegation follows a five-step flow that keeps the main agent in control while giving subagents full autonomy over their subtasks. If you have ever built a microservices architecture, this will feel familiar: clear contracts, isolated execution, structured responses.
+
+Press enter or click to view image in full size
+
+How the main agent delegates — Claude Code Subagents — Task delegation flow: User sends request to Main Agent, which delegates subtasks to Subagents via the Agent tool, receives summaries back, and synthesizes the final response
+Step 1: Task Identification
+The user submits a request. The main agent analyzes it and identifies parts that would benefit from isolation. A request like “refactor the authentication module and update all tests” might trigger two separate subagents: one to explore the current auth code, another to handle the refactoring.
+
+The main agent considers several factors when deciding whether to delegate:
+
+Does the task require extensive file exploration that would clutter the main context?
+Would restricting tool access improve safety for this subtask?
+Can parts of the task run in parallel for faster completion?
+Does a custom agent’s description match the work being requested?
+Press enter or click to view image in full size
+
+Delegation decision flowchart: Main Agent analyzes each task through decision points for file exploration, plan-mode research, complexity, shell work, and custom agent matching to choose the right subagent type — Claude Code Subagents — Task Identification
+Step 2: Delegation via the Agent Tool
+The main agent invokes a subagent using the Agent tool (previously called the Task tool, renamed in version 2.1.63). It passes four pieces of information:
+
+The subtask description: what to accomplish
+The system prompt: behavior and constraints
+The allowed tools: what the subagent can do
+The model: the cost/capability trade-off
+Only the relevant subtask goes to the subagent. The main agent retains the full conversation context and does not share it. This is a critical detail: the subagent starts with a clean slate, knowing only what the main agent explicitly tells it.
+
+Step 3: Autonomous Execution
+The subagent runs independently within its own context window. It can perform extensive searches, make code modifications, or execute multi-step reasoning without affecting the main conversation. The subagent has no visibility into the main agent’s context, and the main agent has no visibility into the subagent’s intermediate steps.
+
+This isolation is the whole point. The subagent can do verbose, messy exploration work without any of that noise reaching the main conversation.
+
+Step 4: Return of Results
+When the subagent finishes, it returns a summary to the main agent. Only this final result enters the parent conversation. If the subagent read 200 files during exploration, the main agent sees a concise summary, not 200 file contents. This is the key mechanism that preserves context window space.
+
+The quality of this summary matters enormously. A subagent that does great exploration work but returns a vague summary undermines the entire delegation pattern. The main agent can only make decisions based on what it receives. Garbage summary in, garbage decisions out.
+
+Step 5: Resumption
+Claude receives the subagent’s agentId along with the summary. If further work is needed, the main agent can resume the subagent by sending a SendMessage with that agentId. The subagent picks up from its previous state, preserving all accumulated context.
+
+This resumption capability is particularly valuable for iterative workflows. Imagine a code review subagent that found some issues but needs to check additional files based on a follow-up question. Rather than starting a brand new review from scratch, the main agent resumes the existing subagent, which already has all its previous findings in context. This saves both time and tokens.
+
+The Communication Pattern
+Press enter or click to view image in full size
+
+Diagram of Claude Code hub-and-spoke delegation pattern showing the main agent coordinating specialized subagents for parallel task execution — Claude Code Subagents — Communication Pattern
+Subagents in Claude Code follow a hub-and-spoke model. The main agent sits at the center. Instructions flow outward from the main agent to subagents, and summaries flow back inward. Subagents never communicate directly with each other.
+
+Press enter or click to view image in full size
+
+Comparison of hub-and-spoke subagent pattern with one-way delegation versus full mesh Agent Teams pattern with bidirectional mailbox communication — Claude Code Subagents — Hub and Spoke vs. Full Mesh Agent Teams
+Why no direct communication between subagents? Because it would be a debugging nightmare. If Agent A talks to Agent B, which talks to Agent C, good luck tracing a problem back to its source. The hub-and-spoke pattern keeps things simple: every delegation decision and every result synthesis happens in one place. The main agent is the single source of truth.
+
+A single session can spawn multiple subagents in parallel. Here is what that looks like in practice:
+
+User: "Analyze the performance of our API endpoints and suggest optimizations"
+
+Main Agent spawns in parallel:
+  +-- Explore Agent A: "Find all API route handlers in src/routes/"
+  +-- Explore Agent B: "Find all database queries in src/models/"
+  +-- Bash Agent C: "Run the performance test suite and collect metrics"
+
+All three run simultaneously. Each returns a focused summary.
+Main Agent receives three summaries and synthesizes them
+into a unified performance analysis with specific recommendations.
+Three agents, running in parallel, each doing focused work. The main agent stitches their findings together into one cohesive answer. That is the power of the hub-and-spoke model.
+
+Subagents vs. Agent Teams
+Is hub-and-spoke always the right pattern? No. Claude Code also supports Agent Teams, which use a full mesh communication pattern where agents can talk to each other directly through a mailbox-based messaging system. Each agent in a team gets its own independent context window.
+
+Press enter or click to view image in full size
+
+Subagents vs. Agent Teams — Claude Code Subagents
+Subagents vs. Agent Team: Features:
+Communication
+
+Subagents: Hub-and-spoke (one-way)
+Agent Teams: Full mesh (peer-to-peer)
+Coordination
+
+Subagents: Main agent orchestrates
+Agent Teams: Agents coordinate directly
+Context sharing
+
+Subagents: Summary only returns to parent
+Agent Teams: Mailbox-based message passing
+Best for
+
+Subagents: Isolated delegation with clear boundaries
+Agent Teams: Collaborative workflows needing real-time coordination
+Debugging
+
+Subagents: Straightforward (single transcript per agent)
+Agent Teams: More complex (cross-agent message tracing)
+For most development tasks, subagents are the right tool. Agent Teams are better suited for complex, multi-agent workflows where agents need to share state and coordinate in real time. Start with subagents. Graduate to Agent Teams when you actually need the mesh.
+
+Transcripts and Logging
+Every subagent conversation is logged locally. When a subagent completes, Claude Code writes its transcript to:
+
+~/.claude/projects/{project}/{sessionId}/subagents/agent-{agentId}.jsonl
+The JSONL format (JSON Lines) stores one JSON object per line. If you have worked with structured logging before (think ELK stack or Datadog), this will feel familiar. You can use jq to query transcripts, pipe them through standard Unix tools, or write scripts to analyze patterns across multiple agent runs.
+
+Press enter or click to view image in full size
+
+JSONL transcript structure showing sequential log entries: thinking, tool_use, tool_result, and final text summary stored in agent-agentId.jsonl — Claude Code Subagents
+Each message type tells you something specific:
+Press enter or click to view image in full size
+
+Agent Messages Tell you Something Important and Descriptive — Claude Code Subagents
+Subagent message types:
+assistant/thinking
+
+What it tells you: The subagent’s reasoning process. Not exposed to users during normal operation, but invaluable for understanding why the subagent made specific decisions.
+assistant/tool_use
+
+What it tells you: Which tool was called and with what parameters. Check the input field to see exactly what the subagent requested.
+user/tool_result
+
+What it tells you: What the tool actually returned. Errors here often point directly to the root cause of problems.
+assistant/text
+
+What it tells you: The final summary sent back to the main agent. This is the only part the main agent sees, so its quality directly affects downstream decisions.
+Here is what a simplified transcript excerpt looks like:
+
+{"role": "assistant", "type": "thinking", "content": "I need to find all authentication-related files in the project..."}
+{"role": "assistant", "type": "tool_use", "name": "Grep", "input": {"pattern": "authenticate", "path": "src/"}}
+{"role": "user", "type": "tool_result", "content": "src/auth/login.ts:15\\nsrc/auth/middleware.ts:8\\nsrc/utils/session.ts:42"}
+{"role": "assistant", "type": "thinking", "content": "Found 3 files with authentication logic. Let me read the middleware to understand the auth flow..."}
+{"role": "assistant", "type": "tool_use", "name": "Read", "input": {"file_path": "src/auth/middleware.ts"}}
+{"role": "user", "type": "tool_result", "content": "// Authentication middleware\\nexport function authMiddleware(req, res, next) {\\n  const token = req.headers.authorization;\\n  if (!token) return res.status(401).json({ error: 'No token' });\\n  // ... validation logic\\n}"}
+{"role": "assistant", "type": "text", "content": "Found 3 authentication files. The main middleware is in src/auth/middleware.ts, which validates JWT tokens from the Authorization header. The login handler is in src/auth/login.ts, and session utilities are in src/utils/session.ts."}
+Transcripts persist independently of the main conversation and remain available across sessions. The default cleanup period is 30 days, controlled by the cleanupPeriodDays setting. You can adjust this if you need longer retention for audit purposes.
+
+Because the transcript includes the agentId, you can resume a subagent even after restarting Claude Code. Use SendMessage with the stored agentId to continue where the subagent left off.
+
+Debugging Subagents
+Press enter or click to view image in full size
+
+Developer examining JSONL transcript data from AI agent conversations for debugging — Claude Code Subagents
+When a subagent produces unexpected results, its transcript is your primary debugging tool. No guessing required. You can trace through every thought, tool call, and result to pinpoint the exact moment things went sideways.
+
+I have spent more time than I would like to admit debugging subagent issues. The good news is that transcripts make the process almost mechanical once you know what to look for.
+
+Press enter or click to view image in full size
+
+Debugging workflow: Find transcript, open JSONL file, check delegation accuracy, review tool usage, examine errors, and evaluate summary quality with fix paths for each issue
+Half the battle is knowing the subagent logs exist and that Claude Code can debug it. When something runs amuck. I usually just ask Claude Code what happen to my workflow using the /debug command. “/debug why didn’t that workflow run”. It will tell me some subagent failed. Then I ask it to check the subagent logs and see why it failed.
+
+Step-by-Step Debugging Walkthrough
+1. Find the transcript. Navigate to ~/.claude/projects/{project}/{sessionId}/subagents/ and locate the agent-{agentId}.jsonl file. Not sure which agent ID to look for? List the files in the subagents directory and check timestamps. The most recently modified file is usually the one you want.
+
+2. Read the message sequence. Open the file and trace through the messages in order. The thinking entries show reasoning, tool_use entries show actions, and tool_result entries show what actually happened. Pay attention to the gap between what the subagent planned to do and what actually occurred. That gap is where bugs live.
+
+3. Check delegation accuracy. Was the right subagent chosen for this task? If the Explore subagent was delegated a task that required file modifications, the problem is in the description matching, not in the subagent itself. Fix the description.
+
+4. Review tool usage. Did the subagent have access to the tools it needed? Check the tool_use entries for unexpected parameters or patterns suggesting the subagent was trying to work around a missing tool. That is a dead giveaway.
+
+5. Examine tool results. Did any tools return errors? A tool_result with an error message often points directly to the root cause. Common culprits: incorrect file paths, permission errors, and malformed inputs.
+
+6. Evaluate the summary. Was the final text message adequate? Here is the subtle one: the subagent did good work but returned a poor summary. The main agent then made bad decisions based on incomplete information. The subagent's internal work was correct; the summary just failed to capture what mattered.
+
+Common Issues and Fixes
+Press enter or click to view image in full size
+
+Common Issues and Fixes with Subagents — Claude Code Subagents
+Wrong subagent delegated
+
+Diagnosis: Description does not match the task type
+Fix: Update the agent description to be more specific and action-oriented
+Subagent lacks needed tools
+
+Diagnosis: Missing tool in the definition
+Fix: Add the required tool to the agent’s tool list
+Tool calls return errors
+
+Diagnosis: Bad parameters or missing permissions
+Fix: Check file paths, permissions, and input formats in the transcript
+Poor summary quality
+
+Diagnosis: System prompt lacks output guidance
+Fix: Improve the system prompt with clearer output format expectations
+Transcript is too large
+
+Diagnosis: Subagent explored too broadly
+Fix: Narrow the task scope or adjust compaction settings
+Pro tip: Always prefer resuming over restarting. If a subagent got partway through a task before encountering an issue, resuming it with SendMessage and the stored agentId preserves all the context it already gathered. Restarting from scratch wastes that accumulated knowledge and costs additional tokens. Do not throw away good work.
+
+Custom Subagent Definitions
+Here is where things get fun. Beyond the built-in types, you can define custom subagents as Markdown files with YAML frontmatter. This is where subagents become truly powerful for team workflows, letting you encode team conventions, quality standards, and specialized knowledge into reusable agent definitions.
+
+The Anatomy of a Custom Agent
+A custom agent file has two parts: YAML frontmatter defining the configuration, and a Markdown body providing the system prompt. If you have ever written a Jekyll blog post or a Hugo page, the format will feel familiar.
+
+---
+name: bash-expert
+description: >
+  Handles all shell scripting, debugging, and terminal troubleshooting.
+  Use for bash/zsh scripting issues, command pipeline construction,
+  and shell environment configuration.
+model: claude-sonnet-4-6
+tools: [Bash, Read, Grep, Glob]
+---
+You are a shell scripting specialist. You work exclusively with
+shell scripts and terminal commands.
+
+## Rules
+- Only work with shell scripts (.sh, .bash, .zsh)
+- Never modify Python, JavaScript, or other non-shell files
+- Always check for shellcheck compliance before finalizing
+- Explain any complex command pipelines step by step
+
+## Output Format
+- Start with a brief summary of what you found or did
+- Include the relevant commands or script snippets
+- End with any warnings or recommendations
+Why does this work well? The description is specific (shell scripting, debugging, terminal), the tools are restricted (no Write or Edit for non-shell files), and the system prompt includes explicit output format expectations. The main agent knows exactly when to delegate to this agent, and the agent knows exactly what to produce. No ambiguity.
+
+I typically prefer to use a skill or command that forks a subagent. But you can use it direct with the at command, or set up the skill to fork it. This let’s you set up the model and permissions for the work in the subagent markdown.
+
+The YAML frontmatter fields:
+
+Press enter or click to view image in full size
+
+Frontmatter for Subagents — Claude Code Subagents
+name
+
+Required: Yes
+Description: The agent’s identifier. Must use lowercase letters and hyphens only (e.g., code-reviewer).
+description
+
+Required: Yes
+Description: How Claude Code decides when to delegate. The most important field.
+model
+
+Required: No
+Description: Which model to use. Defaults to inheriting main model. Use Haiku for fast, cheap tasks.
+tools
+
+Required: No
+Description: Array of allowed tools. Defaults to inheriting all main agent tools. Restrict for safety.
+disallowedTools
+
+Required: No
+Description: Array of tools the agent cannot use, even if inherited.
+permissionMode
+
+Required: No
+Description: Permission mode for the agent (e.g., plan mode restrictions).
+maxTurns
+
+Required: No
+Description: Maximum number of agentic turns before the agent stops.
+Where to Place Custom Agents
+Custom agents can live in two locations:
+
+Project-specific: .claude/agents/ in the project root (highest priority)
+Global: ~/.claude/agents/ (available across all projects)
+Project-specific agents take precedence over global ones when names conflict. This lets you override a global agent with a project-tailored version. Your global CodeReviewer checks general best practices; your project-specific CodeReviewer adds checks for your team’s particular coding standards. Same name, different rules.
+
+Writing Effective Descriptions
+The description field is the single most important part of a custom agent definition. Get it wrong, and the agent either gets invoked for everything or never gets invoked at all. Neither is useful.
+
+Good descriptions share three qualities:
+
+Action-oriented: They start with a verb describing what the agent does
+Specific: They name the technologies, file types, or domains the agent handles
+Bounded: They clarify what the agent should NOT be used for
+Compare these:
+
+# Bad: too vague, matches almost anything
+description: Helps with code
+
+# Bad: too narrow, rarely matches
+description: Fixes line 42 of main.py
+
+# Good: specific, action-oriented, bounded
+description: >
+  Reviews Python code for security vulnerabilities, checking for
+  SQL injection, XSS, insecure deserialization, and hardcoded
+  credentials. Use for security audits of Python web applications.
+  Do not use for general code reviews or non-Python code.
+The good example starts with a verb (“Reviews”), names the technology (“Python”), lists specific capabilities, defines the use case, and sets a boundary. The main agent can make a confident delegation decision with this level of detail. Vague descriptions lead to vague delegation.
+
+A More Complete Example: CodeReviewer
+---
+name: code-reviewer
+description: >
+  Performs thorough code reviews focusing on correctness, performance,
+  and maintainability. Delegates to this agent when reviewing pull
+  requests, evaluating code changes, or auditing code quality.
+  Works with any programming language.
+model: claude-sonnet-4-6
+tools: [Read, Grep, Glob]
+---
+You are a senior code reviewer with expertise in multiple languages.
+Analyze code changes systematically and provide actionable feedback.
+
+## Review Criteria
+1. **Correctness**: Logic errors, edge cases, null/undefined handling
+2. **Performance**: Time/space complexity, unnecessary allocations, N+1 queries
+3. **Maintainability**: Naming conventions, code structure, duplication, test coverage
+4. **Security**: Input validation, authentication checks, data exposure risks
+
+## Output Format
+For each file reviewed, provide:
+- Summary of changes (2-3 sentences)
+- Issues found, categorized by severity: critical, warning, suggestion
+- Specific line references where applicable
+End with:
+- Overall assessment (approve / request changes)
+- Top 3 priorities if changes are requested
+Notice that this agent only has Read, Grep, and Glob in its tool list. It cannot modify files. This is intentional: a code reviewer should analyze and report, not make changes. If changes are needed, the main agent can delegate the fixes to a General-purpose subagent. Separation of concerns, applied to AI agents.
+
+Another Example: SecurityAuditor
+---
+name: security-auditor
+description: >
+  Audits code for security vulnerabilities including injection attacks,
+  authentication bypasses, data exposure, and insecure configurations.
+  Use for pre-deployment security checks on web applications and APIs.
+model: claude-sonnet-4-6
+tools: [Read, Grep, Glob]
+---
+You are a security specialist. Audit code for vulnerabilities using
+OWASP Top 10 as your framework.
+
+## Audit Checklist
+- SQL/NoSQL injection vectors
+- Cross-site scripting (XSS) opportunities
+- Insecure deserialization
+- Hardcoded credentials or API keys
+- Missing authentication/authorization checks
+- Sensitive data in logs or error messages
+- Insecure direct object references
+
+## Output Format
+Provide a security report with:
+- Severity rating for each finding (critical/high/medium/low)
+- Affected file and line number
+- Description of the vulnerability
+- Recommended fix with code example
+- Overall security posture assessment
+Notice the restricted tool list on this agent. It can only read code, not modify it. For agents that perform sensitive operations like security audits, the description field is your primary control mechanism. Write a highly specific description so the main agent only delegates when the task genuinely matches. For agents that should rarely run automatically, consider giving them a narrow description that only matches explicit security-related requests.
+
+Controlling Agent Behavior
+The description field is the most important lever for controlling when an agent gets invoked. The main agent reads the description to decide whether a task matches. A vague description means unpredictable delegation. A specific description means the agent only activates for the right tasks.
+
+For agents that perform destructive operations, make expensive API calls, or access sensitive systems, write descriptions that require explicit intent. A DeployAgent that pushes to production should have a description like “Deploy to production when explicitly requested” rather than “Handle deployment tasks.” You want the matching to be tight enough that routine development work never accidentally triggers it.
+
+Best Practices for Effective Delegation
+After working extensively with Claude Code subagents, several patterns have emerged as consistently effective. Here is what actually works in practice.
+
+Single-responsibility agents. Each agent should do one thing well. A “do everything” agent with all tools and a vague description defeats the purpose of delegation. If you find an agent handling unrelated tasks, split it into two focused agents. This is just the single-responsibility principle applied to AI agents.
+
+Permission hygiene. Give each agent the minimum set of tools it needs. An agent that only reads code should not have Write or Edit access. This prevents accidental modifications and makes debugging easier because you know exactly what tools were available when something went wrong.
+
+The Explore-Plan-Execute pattern. For complex tasks, chain three subagents in sequence:
+
+Explore agent maps the relevant code and produces a summary of what exists
+Plan agent takes that summary and designs the implementation approach
+General-purpose agent implements the plan with full tool access
+Each agent builds on the previous one’s summary, creating a pipeline of increasing specificity. I have found this pattern particularly effective for large refactoring tasks where understanding the codebase is a prerequisite for making changes. Do not skip the exploration step; you will regret it.
+
+Thoughtful parallelization. When subtasks are independent (exploring different directories, running different test suites), spawn them in parallel. When they depend on each other (explore first, then modify), chain them sequentially. Parallel subagents can cut total execution time significantly for tasks with independent components.
+
+Clear input/output contracts. Define what each agent receives and what it should return in the system prompt. Specify the output format explicitly. The clearer the contract, the better the main agent can synthesize results across multiple subagents. Vague output expectations produce vague outputs. Every time.
+
+Test your descriptions. After creating a custom agent, give Claude Code tasks that should and should not match the description. If the agent gets invoked for the wrong tasks, tighten the description. If it never gets invoked, broaden it. Description tuning is an iterative process, not a one-shot activity.
+
+You can combine Agent Skills and Subagents to work together. An agent skill can launch inside a subagent when you run it. Check out this article on agent skills 2.0 which covers combining agent skills with subagents.
+
+Q&A Review
+Q: Can subagents talk to each other directly? A: No. They follow a hub-and-spoke model. If you need agents to communicate directly, look at Agent Teams.
+
+Q: Where are subagent transcripts stored? A: ~/.claude/projects/{project}/{sessionId}/subagents/agent-{agentId}.jsonl
+
+Q: Can I resume a subagent after restarting Claude Code? A: Yes. Use SendMessage with the stored agentId.
+
+Q: How do I prevent an agent from being invoked automatically? A: Write a narrow, specific description that only matches explicit requests. The main agent uses the description to decide when to delegate, so a tightly scoped description is your primary control mechanism.
+
+Q: Where do I put custom agent files? A: Project-specific agents go in .claude/agents/. Global agents go in ~/.claude/agents/. Project-specific agents take precedence.
+
+Q: What is the Explore-Plan-Execute pattern? A: Chain three subagents: Explore maps the code, Plan designs the approach, General-purpose implements it. Each builds on the previous agent’s summary.
+
+What Comes Next
+This article covered the fundamentals of Claude Code’s subagent architecture: what subagents are, how the main agent delegates through the Agent tool, how they communicate through hub-and-spoke, how to debug them using JSONL transcripts, and how to define custom agents with YAML frontmatter.
+
+The key takeaways:
+
+Subagents isolate work to preserve the main agent’s context window
+Hub-and-spoke keeps coordination simple and debuggable
+JSONL transcripts give you full visibility into every subagent decision and action
+Custom agents with well-written descriptions unlock team-wide reuse and specialization
+The Explore-Plan-Execute pattern is your go-to strategy for complex tasks
+Permission hygiene and invocation control keep agents safe and predictable
+In Part 2, we put these concepts to work by building a practical article generation pipeline powered entirely by specialized subagents. You will see how to create a grammar checker, SEO optimizer, fact checker, and research assistant that work together through main-agent coordination, turning raw source material into a polished, publication-ready article.
+
+To get started now, try creating a simple custom agent in .claude/agents/ and see how Claude Code delegates to it. Start with something small, like a ReadmeChecker that only has Read and Glob access, and watch how it gets invoked when you ask Claude Code to review your project's documentation. The best way to understand subagent coordination is to watch it happen in your own projects.
+

@@ -2606,6 +2606,11 @@ export async function registerRoutes(
   app.use("/api/automation", automationRoutes);
   console.log("[Automation] /api/automation/* active (sub-workflow, inspector, conversation, crew)");
 
+  // ── Batch 54: Framework Suite (Article 26 — BMAD, SpecKit, GSD, Superpowers, Triad) ──
+  const { default: frameworkSuiteRoutes } = await import("./routes/frameworkSuiteRoutes");
+  app.use("/api/frameworks", frameworkSuiteRoutes);
+  console.log("[Frameworks] /api/frameworks/* active (bmad, speckit, gsd, superpowers, triad)");
+
   return httpServer;
 }
 

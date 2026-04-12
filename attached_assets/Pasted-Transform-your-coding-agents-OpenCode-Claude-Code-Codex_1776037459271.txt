@@ -1,0 +1,1050 @@
+Transform your coding agents OpenCode, Claude Code, Codex and more from a general-purpose AI into a domain expert through well-crafted Skills that package your expertise into discoverable, autonomous capabilities.
+
+Why Skills Matter
+Ever wished you could teach your coding agent your team’s specific workflows? Or give it instant expertise in your company’s tools and processes? That’s exactly what Claude Code Skills do.
+
+And, now it is not just Claude Code but also Codex, Github Copilot and OpenCode have all announced support for Agentic Skills. There is even a marketplace for agentic skills that support Gemini, Aidr, Qwen Code, Kimi K2 Code, Cursor (14+ and counting) and more with Agentic Skill Support via a universal installer. In this guide, I will use Claude and the term coding agent interchangeably a bit like one might say Xerox this paper for me vs. copy this paper. (I tend to prefer Claude Code, OpenCode and Gemini CLI in my workflows.)
+
+Think of Skills as onboarding documents for a brilliant new hire. They contain the procedural knowledge and organizational context that Claude needs to work like a veteran team member. The difference? Skills are modular, discoverable, and load only when needed, keeping Claude’s context window focused on what matters.
+
+This guide shows you how to write Skills that Claude can discover and use successfully. You’ll learn core principles through advanced patterns, all drawn from Anthropic’s official best practices.
+
+What You’ll Master
+By the end of this guide, you’ll know how to:
+
+Write concise, effective Skills that respect the context window
+Structure Skills using proven naming and organization patterns
+Apply progressive disclosure to manage complexity without overwhelming Claude
+Design workflows with feedback loops for quality-critical tasks
+Test and iterate using evaluation-driven development
+Package executable code that solves problems instead of creating them
+Ready to turn Claude into your team’s secret weapon? Let’s start with how Skills actually work.
+
+Understanding How Skills Work
+Before writing your first Skill, you need to understand Claude’s three-level loading system. This architecture is the secret to Skills’ power. It keeps your context window lean while giving Claude access to vast amounts of expertise.
+
+The Progressive Disclosure Architecture
+Skills don’t dump everything into Claude’s context at once. Instead, they use a clever three-phase loading system. This clever loading system allows Claude Code to use agentic search.
+
+Press enter or click to view image in full size
+
+Diagram showing the three layers of progressive disclosure: Metadata, Skill Instructions, and Reference Files
+Two Phases of Agentic Skill Loading
+The progressive disclosure architecture operates in two distinct phases:
+
+Phase 1: Discovery (Always Active)
+
+At startup, Claude loads only the metadata from all available Skills. This includes the name and description from the YAML frontmatter. This lightweight index (~50-100 tokens per Skill) allows Claude to quickly scan and identify relevant Skills without consuming significant context.
+
+Phase 2: Deep Loading (On-Demand)
+
+When a user request matches a Skill’s description, Claude loads the full SKILL.md content and any additional referenced files. This happens progressively—Claude only reads files when it needs them, keeping the context window focused on relevant information.
+
+This two-phase approach is what makes Skills scalable. You can have dozens of Skills available without bloating the context window, because only the relevant ones fully load when needed.
+
+Phase 1: Startup — Only metadata (names and descriptions) loads into the system prompt. This means you can have dozens of Skills available without consuming context tokens.
+
+Press enter or click to view image in full size
+
+Phase 2–3: On-Demand Loading — When a user request matches, deeper levels load progressively. Only Level 1 (metadata) is always loaded. Everything else? Zero tokens until Claude needs it.
+
+Press enter or click to view image in full size
+
+This means you can bundle massive amounts of expertise into a Skill, including API references, detailed examples, and entire scripts, without bloating Claude’s context. The system loads files on-demand as Claude explores your Skill’s structure.
+
+Key insight: The amount of context you can include is effectively unbounded. Files only cost tokens when Claude actually reads them.
+
+Three Types of Skills: Personal, Project, and Plugin
+Where you place a Skill determines its scope and sharing model:
+
+Press enter or click to view image in full size
+
+Personal Skills (~/.claude/skills/, ~/.codex/skills, ~/.config/opencode/skill) are your private toolkit. They work well for workflows unique to you or experimental Skills you're testing.
+
+Project Skills (.claude/skills/, .codex/skills, .opencode/skill, .github/copilot/skills) are checked into git and shared with your team. These capture organizational knowledge that everyone benefits from.
+
+Plugin Skills come bundled with MCP plugins, providing tool-specific expertise that activates when you enable the plugin.
+
+Claude Code and OpenAI Codex also support having project level skills so directories above your project directory. Codex offers a few more places to install skills for enterprise level usage as well.
+
+Regardless of type, all Skills follow the same core structure: a SKILL.md file with optional supporting materials. The loading architecture remains identical.
+
+The following is based on Anthropic’s best practices guide for creating Skills, which I highly recommend you review.
+
+I enjoyed the best pracitices guide from Anthropic so much that I created a skill that would grade and improve my skills.
+
+Just to show you what my grades were at first:
+
+
+Then after using the guide, and fixing up my skills:
+
+Press enter or click to view image in full size
+
+Let’s go over some of the key ideas in the guide.
+
+Core Principles
+1. Conciseness is King
+Here’s the uncomfortable truth: your Skill is fighting for space in your coding agents context window. Every token you add competes with the system prompt, the conversation history, other Skills’ metadata, project specific instructions and the user’s actual request.
+
+The golden rule: Assume your coding agent is already brilliant. Only add context your coding agent doesn’t have.
+
+Before writing a paragraph, ask yourself: Does my coding agent really need this explanation? Can I assume the coding agent knows this already? Does this paragraph justify its 50–100 token cost?
+
+Compare these examples:
+Good (50 tokens):
+
+## Extract PDF text
+Use pdfplumber for text extraction:
+
+import pdfplumber
+with pdfplumber.open("file.pdf") as pdf:
+    text = pdf.pages[0].extract_text()
+The concise version gets to the point. It assumes Claude knows what PDFs are, understands libraries, and can figure out installation. Trust Claude’s intelligence. Compare that to this version:
+
+Bad (150 tokens):
+
+Bad (150 tokens):
+
+## Extract PDF text
+PDF (Portable Document Format) files are a common file format that contains
+text, images, and other content. To extract text from a PDF, you'll need to
+use a library. There are many libraries available for PDF processing, but we
+recommend pdfplumber because it's easy to use and handles most cases well.
+First, you'll need to install it using pip. Then you can use the code below...
+The concise version gets to the point. It assumes your coding agent (Claude Code, OpenCode, GitHub Copilot, etc.) knows what PDFs are, understands libraries, and can figure out installation. Trust your coding agent’s intelligence.
+
+2. Set Appropriate Degrees of Freedom
+Not all tasks need the same level of prescription. The key question: How fragile is this operation?
+
+Match your instruction specificity to the task’s error tolerance:
+
+LOW FREEDOM — For fragile, error-prone operations that must follow exact sequences. Use specific scripts, few/no parameters, exact commands. Example: Database migrations.
+
+MEDIUM FREEDOM — For tasks with a preferred pattern but where some variation is acceptable. Use pseudocode or templates with configurable parameters. Example: Report generation.
+
+HIGH FREEDOM — For tasks where multiple valid approaches exist. Use text-based instructions and heuristics to guide the approach. Example: Code review.
+
+Think of it like crossing a bridge: A narrow bridge with cliffs on both sides needs specific guardrails (LOW freedom). A wide open field with no hazards allows many paths to success (HIGH freedom). Marked trail through woods: A preferred path exists, but detours won’t cause problems; this provides templates but allow customization (MEDIUM freedom).
+
+Database migrations? Lock it down with exact scripts. Code review? Give your coding agent room to think. Report generation? Offer a template but let your coding agent adapt to the data.
+
+3. Test with All Models You Plan to Use
+Skills that work beautifully with Opus or Gemini 3 Pro might confuse Haiku or Gemini Flash Light. Different models have different reasoning capabilities. Test across models to find the sweet spot. Your Skill should be concise enough for Opus users but detailed enough for Haiku users. If you target a higher thinking model like Opus or Gemini 3 Pro, just say so. If you plan to use the skill with Haiku, you should test it with Haiku.
+
+Skill Structure
+YAML Frontmatter: The Discovery Mechanism
+Every SKILL.md file starts with YAML frontmatter containing two required fields: name and description. This metadata is always loaded (Level 1 in the progressive disclosure system). It’s how your coding agents discovers which Skills are relevant to the user’s request.
+
+---
+name: your-skill-name
+description: Brief description of what this Skill does and when to use it
+---
+Field requirements:
+
+name: Max 64 chars, lowercase letters/numbers/hyphens only, no reserved words (like “anthropic” or “claude”)
+• description: Max 1024 chars, non-empty, describes what AND when
+Naming Conventions: Use Gerund Form
+Use the gerund form (verb + -ing) for clarity and consistency: processing-pdfs, analyzing-spreadsheets, managing-databases, testing-code, generating-reports. You will see a lot of older skills, including the original ones from Anthropic don’t use this form, but now they are starting to adopt it after Anthropic published a best practices guide. If you are serious about Skill development, you should read this guide. We are covering some of the best practices in this article as well.
+
+Avoid vague names like “helper” or “utils,” generic names like “documents” or “files,” and ambiguous names like just “pdf.”
+
+Use the gerund form (verb + -ing) for clarity and consistency:
+
+Recommended:
+
+processing-pdfs
+analyzing-spreadsheets
+managing-databases
+testing-code
+generating-reports
+Writing Descriptions That Enable Discovery
+The description is your Skill’s elevator pitch. Your coding agent reads it to decide if this Skill matches the user’s request.
+
+The magic formula: Describe what the Skill does AND when to use it. Always write in third person since the description is injected directly into the system prompt.
+
+Press enter or click to view image in full size
+
+Good example: “Extracts text and tables from PDF files, fills forms, merges documents. Use when working with PDF files or when the user mentions PDFs, forms, or document extraction.”
+
+Poor example: “Helps with documents”; this is too vague, no context for when to use it.
+
+Great examples:
+
+# PDF Processing
+description: >
+  Extracts text and tables from PDF files, fills forms, merges documents.
+  Use when working with PDF files or when the user mentions PDFs, forms,
+  or document extraction.
+
+# Excel Analysis
+description: >
+  Analyzes Excel spreadsheets, creates pivot tables, generates charts.
+  Use when analyzing Excel files, spreadsheets, tabular data, or .xlsx files.
+
+# Git Commit Helper
+description: >
+  Generates descriptive commit messages by analyzing git diffs.
+  Use when the user asks for help writing commit messages or reviewing 
+  staged changes.
+Poor examples:
+
+description: Helps with documents  # Too vague - what kind of help?
+description: Processes data        # No context for when to use
+description: Does stuff with files # Completely unhelpful
+Directory Structure: One Level Deep
+Skills scale through smart organization. The best Skills don’t dump everything into a single file. They create a navigation structure that lets your coding agent find exactly what’s needed, exactly when it’s needed.
+
+Think of your Skill as a reference library. The main SKILL.md file is the reception desk. It provides orientation and points to the right section. Supporting files are the specialized reading rooms where detailed information lives.
+
+The key principle: keep it one level deep. Claude should never need to follow more than one link from SKILL.md to reach actual content. This prevents navigation overhead and ensures fast, reliable access to information.
+
+Keep your Skill’s file structure flat and navigable:
+
+Press enter or click to view image in full size
+
+The golden rule: Keep references one level deep from SKILL.md.
+
+Why? Coding agents navigates Skills by following links. Deep nesting (SKILL.md to advanced.md to details.md to actual info) creates navigation overhead and can cause your coding agent to partially read files or miss content entirely.
+
+Good structure:
+
+my-skill/
+├── SKILL.md          # Main entry point
+├── reference/
+│   ├── api.md        # Detailed API docs (linked from SKILL.md)
+│   └── examples.md   # Usage examples (linked from SKILL.md)
+└── scripts/
+    ├── analyze.py    # Utility script
+    └── validate.py   # Validation script
+Bad structure:
+
+You’re right! The “Bad structure” example should better illustrate the anti-pattern of deeply nested references. Here’s an improved version that shows the problematic chain:
+
+my-skill/
+├── SKILL.md                    # Links to advanced.md
+└── reference/
+    └── advanced.md             # Links to details.md
+        └── deep/
+            └── details.md      # Links to actual-content.md
+                └── nested/
+                    └── actual-content.md  # Finally, the info!
+This clearly shows the multi-hop navigation problem: SKILL.md → advanced.md → details.md → actual-content.md, which is exactly the pattern the guide warns against.
+
+Progressive Disclosure Patterns
+Progressive disclosure is the art of revealing information only when needed. Your SKILL.md serves as a map that points Claude to detailed materials as the task requires.
+
+Pattern 1: High-Level Guide with References
+The most common pattern: provide a quick start in SKILL.md, then link to detailed references for advanced scenarios.
+
+---
+name: pdf-processing
+description: Extracts text and tables from PDF files, fills forms, merges documents. Use when working with PDF files.
+---
+
+# PDF Processing
+
+## Quick start
+
+Extract text with pdfplumber:
+```python 
+import pdfplumber 
+with pdfplumber.open("file.pdf") as pdf: 
+ text = pdf.pages[0].extract_text()
+```
+
+## Advanced features
+
+**Form filling**: See [FORMS.md](FORMS.md) for complete guide
+**API reference**: See [REFERENCE.md](REFERENCE.md) for all methods
+**Examples**: See [EXAMPLES.md](EXAMPLES.md) for common patterns
+Why this works: Your coding agent loads SKILL.md (200-500 tokens) immediately. If the user just needs basic text extraction, the quick start is enough. If they need form filling, the coding agent reads FORMS.md on-demand.
+
+Result: You save potentially thousands of tokens by not loading form-filling documentation for a simple text extraction task.
+
+Pattern 2: Domain-Specific Organization
+For Skills covering multiple domains, organize files by topic to avoid loading irrelevant context:
+
+bigquery-skill/
+├── SKILL.md              # Overview and navigation
+└── reference/
+    ├── finance.md        # Revenue, billing metrics
+    ├── sales.md          # Opportunities, pipeline
+    ├── product.md        # API usage, features
+    └── marketing.md      # Campaigns, attribution
+SKILL.md navigation section:
+
+## Domain guides
+
+**Finance metrics**: [finance.md](reference/finance.md) - 
+Revenue, billing, subscriptions
+**Sales data**: [sales.md](reference/sales.md) - 
+Opportunities, pipeline, forecasts
+**Product analytics**: [product.md](reference/product.md) - 
+Usage, features, adoption
+**Marketing campaigns**: [marketing.md](reference/marketing.md) - 
+Attribution, ROI
+When a user asks “Show me this quarter’s sales pipeline,” the coding agent loads only sales.md. The finance, product, and marketing documentation stays unloaded, saving tokens for the actual analysis.
+
+Pattern 3: Table of Contents for Long Files
+If a reference file exceeds 100 lines, add a table of contents to help Claude navigate:
+
+# API Reference
+
+## Contents
+- [Authentication and setup](#authentication-and-setup)
+- [Core methods](#core-methods) - create, read, update, delete
+- [Advanced features](#advanced-features) - batch operations, webhooks
+- [Error handling](#error-handling) - patterns and recovery
+- [Code examples](#code-examples)
+
+## Authentication and setup
+...
+
+## Core methods
+...
+Why this helps: Your coding agent can scan the TOC and jump directly to the relevant section, rather than reading the entire file linearly. This is the foundation of agentic search, which allows your coding agent to use tools like GLOB and GREP to quickly navigate files instead of reading their entire contents; thus saving valuable context window resources.
+
+Anti-Pattern: Deeply Nested References
+Avoid creating multi-level navigation chains:
+
+Bad:
+
+# SKILL.md
+See [advanced.md](advanced.md) for more...
+
+# advanced.md
+See [details.md](details.md) for specifics...
+# details.md
+Finally, the actual information!
+Problem: Claude may partially read files while following chains, consuming tokens without getting to the actual content. Worse, deep nesting can cause Claude to miss important information entirely.
+
+Good:
+
+# SKILL.md
+- **Basic usage**: [Quick examples below]
+- **Advanced features**: See [advanced.md](advanced.md)
+- **API reference**: See [reference.md](reference.md)
+- **Troubleshooting**: See [troubleshooting.md](troubleshooting.md)
+All important files are one hop from SKILL.md.
+
+Workflows and Feedback Loops
+Workflows: Breaking Complex Tasks into Steps
+Complex operations need structure. Use clear, sequential workflows with checklists to guide Claude through multi-step processes:
+
+## PDF form filling workflow
+
+Copy this checklist and check off items as you complete them:
+
+```markdown
+Task Progress:
+
+- [ ]  Step 1: Analyze the form (run analyze_form.py)
+- [ ]  Step 2: Create field mapping (edit fields.json)
+- [ ]  Step 3: Validate mapping (run validate_fields.py)
+- [ ]  Step 4: Fill the form (run fill_form.py)
+- [ ]  Step 5: Verify output (run verify_output.py)
+```
+
+**Step 1: Analyze the form**
+
+Run the analysis script:
+
+```bash 
+python scripts/analyze_form.py input.pdf
+```
+
+This extracts all form fields and their locations, outputting to `fields.json`.
+
+**Step 2: Create field mapping**
+
+Edit `fields.json` to add values for each field. Example:
+
+```json
+{
+  "customer_name": "John Doe",
+  "order_total": "1234.56"
+}
+```
+
+**Step 3: Validate mapping**
+
+Before filling, verify the mapping is correct:
+
+**Step 3: Validate mapping**
+
+Before filling, verify the mapping is correct:
+```bash
+python scripts/validate_fields.py fields.json
+```
+
+Fix any errors reported before proceeding.
+
+...
+Why checklists work: They create a shared state between the user and Claude. The user can see progress, Claude can track completion, and both can resume if interrupted.
+
+Feedback Loops: The Validate-Fix-Repeat Pattern
+For quality-critical operations, never proceed without validation. The validate-fix-repeat pattern dramatically improves output quality:
+
+Press enter or click to view image in full size
+
+This diagram illustrates the Feedback Loop Workflow, a critical pattern for quality-critical operations. The workflow shows how to validate work iteratively rather than waiting until the end:
+
+
+Feedback loops are more successful
+The Flow:
+
+Start Task → Begin the operation
+Step 1: Perform Action → Execute the initial work (e.g., edit XML, generate code, modify data)
+Step 2: VALIDATE → Immediately check the output for correctness
+Decision Point → Is the validation successful?
+If NO (❌) → Proceed to Step 3: Fix the issue, then return to validation
+If YES (✅) → Continue to the next step in the overall workflow
+Key Principle: The loop between Validate → Check → Fix → Validate continues until validation passes. This prevents moving forward with broken or incorrect work.
+
+Why This Pattern Works:
+
+Catches errors immediately when context is fresh and fixes are easier
+Prevents cascading failures by ensuring each step is correct before proceeding
+Reduces debugging time dramatically compared to “fix everything at the end” approaches
+Creates confidence that the final output will be correct
+The diagram uses color coding to distinguish between action steps (blue), validation steps (orange), decision points (gold), and fix steps (pink), making the workflow easy to follow at a glance.
+
+Example implementation:
+
+## Document editing process
+
+1. Make your edits to `word/document.xml`
+2. **Validate immediately**:
+   ```bash
+   python scripts/validate.py unpacked_dir/
+   ```
+3. **If validation fails**:
+   - Review the error message carefully
+   - Fix the issues in the XML
+   - Run validation again
+   - **Do not proceed until validation passes**
+4. Rebuild the document:
+   ```bash
+   python scripts/pack.py unpacked_dir/ output.docx
+   ```
+Why this works: Catching errors right after making changes is far easier than debugging a corrupt file at the end. Validation provides instant feedback, turning a fragile process into a reliable one.
+
+Real-world impact: Teams using feedback loops report 70–90% fewer broken outputs compared to “edit everything then check at the end” approaches.
+
+Common Patterns
+Template Pattern: Providing Output Structure
+When output format matters, provide templates that show the expected structure.
+
+For strict requirements (LOW freedom):
+
+## Document modification workflow
+
+### Step 1: Determine the modification type
+
+Ask yourself: Am I creating new content or editing existing content?
+
+**Creating new content?** Follow the Creation Workflow
+**Editing existing content?** Follow the Editing Workflow
+
+---
+
+### Creation Workflow
+
+When building documents from scratch:
+
+1. Use the `docx-js` library
+2. Build the document programmatically
+3. Add content in the correct order (styles first, then content)
+
+Example:
+```python
+from docx import Document
+doc = Document()
+doc.add_heading('Report Title', 0)
+doc.add_paragraph('First paragraph')
+doc.save('report.docx')
+```
+
+---
+
+### Editing Workflow
+
+When modifying existing documents:
+
+1. Unpack the existing document to a directory
+2. Modify the XML files directly
+3. **Validate after each change** using `validate.py`
+4. Repack only when validation passes
+
+```bash
+python scripts/unpack.py document.docx unpacked/
+# Make edits to unpacked/word/document.xml
+python scripts/validate.py unpacked/
+python scripts/pack.py unpacked/ modified.docx
+```
+The word “ALWAYS” signals this is mandatory, not optional
+For flexible guidance (HIGH freedom):
+
+## Report structure
+
+Here's a sensible default format, but adapt based on what you discover:
+
+```markdown
+# [Analysis Title]
+
+## Overview
+[Context and scope]
+
+## Analysis
+[Adapt sections based on findings]
+
+## Conclusions
+[Key takeaways]
+```
+
+Customize sections to fit the data naturally.
+The phrase “adapt based on” signals flexibility.
+
+Examples Pattern: Input/Output Pairs
+For tasks where quality matters, show concrete examples of correct output:
+
+## Commit message format
+
+**Example 1: New feature**
+
+Input: Added user authentication with JWT tokens
+Output:
+```
+feat(auth): implement JWT-based authentication
+
+Add login endpoint with token generation and validation middleware.
+Includes token refresh logic and secure storage.
+```
+
+**Example 2: Bug fix**
+
+Input: Fixed bug where dates displayed incorrectly
+Output:
+```
+fix(reports): correct date formatting in timezone conversion
+
+Use UTC timestamps consistently across report generation.
+Previously used local time which caused discrepancies for users in different timezones.
+```
+Why examples work: They show Claude the expected quality level and style without requiring prescriptive rules. Claude learns the pattern from examples.
+
+Conditional Workflow Pattern: Decision Points
+Guide Claude through decision trees when multiple paths exist:
+
+## Document modification workflow
+
+### Step 1: Determine the modification type
+
+Ask yourself: Am I creating new content or editing existing content?
+
+**Creating new content?** Follow the Creation Workflow
+**Editing existing content?** Follow the Editing Workflow
+
+---
+
+### Creation Workflow
+
+When building documents from scratch:
+
+1. Use the `docx-js` library
+2. Build the document programmatically
+3. Add content in the correct order (styles first, then content)
+
+Example:
+```python
+from docx import Document
+doc = Document()
+doc.add_heading('Report Title', 0)
+doc.add_paragraph('First paragraph')
+doc.save('report.docx')
+```
+
+---
+
+### Editing Workflow
+
+When modifying existing documents:
+
+1. Unpack the existing document to a directory
+2. Modify the XML files directly
+3. **Validate after each change** using `validate.py`
+4. Repack only when validation passes
+
+```bash
+python scripts/unpack.py document.docx unpacked/
+# Make edits to unpacked/word/document.xml
+python scripts/validate.py unpacked/
+python scripts/pack.py unpacked/ modified.docx
+```
+The clear decision point (“Am I creating or editing?”) helps Claude choose the right path.
+
+Evaluation and Iteration
+Start with Evaluations, Not Documentation
+Here’s a secret that will save you hours: Build evaluations before writing extensive documentation.
+
+Why? Because evaluations reveal exactly where Claude struggles, guiding you to write only the documentation that matters.
+
+Press enter or click to view image in full size
+
+The evaluation-driven workflow:
+
+Identify gaps: Run Claude on real tasks without a Skill. Note where it struggles, makes mistakes, or asks for guidance.
+Create evaluations: Build 3–5 test scenarios that capture those failure modes. Each scenario should test a specific capability.
+Write minimal Skill: Create a concise SKILL.md targeting the documented failures. Resist the urge to over-explain.
+Test and iterate: Run your evaluations. If they fail, refine the Skill. If they pass, you’re done.
+Evaluation structure example:
+
+{
+  "skills": ["pdf-processing"],
+  "query": "Extract all text from this PDF and save to output.txt",
+  "files": ["test-files/document.pdf"],
+  "expected_behavior": [
+    "Successfully reads the PDF file",
+    "Extracts text from all pages (not just the first page)",
+    "Saves to output.txt in readable UTF-8 format",
+    "Handles multi-column layouts correctly"
+  ]
+}
+Why this works: Evaluations give you objective pass/fail criteria. No more guessing whether your Skill is “good enough.” Either it passes the tests or it doesn’t.
+
+Develop Skills Iteratively with Claude Itself
+Want to know the fastest way to create a Skill? Work with Claude to build it.
+
+Here’s the process:
+
+Complete a task manually: Work through a task with Claude, providing all necessary context and guidance.
+Observe what you repeatedly explain: Take notes on information you find yourself providing multiple times across similar tasks.
+Ask Claude to create a Skill: “Create a Skill that captures the pattern we just used for [task]. Focus on [specific aspects].”
+Review for conciseness: Claude’s first draft will often over-explain. Cut ruthlessly, trusting Claude’s base knowledge.
+Test on a fresh instance: Open a new Claude conversation (to clear context) and test the Skill on a similar task.
+Iterate based on observation: Watch where Claude struggles or makes mistakes, then refine the Skill to address those specific issues.
+Real example: A developer building a BigQuery Skill worked through 5 financial queries with Claude, then said: “Create a Skill that captures our approach to financial metrics queries.” Claude generated an initial Skill, the developer trimmed it to 40% of the original length, tested on new queries, and had a production-ready Skill in under an hour.
+
+Observe How Claude Navigates Your Skill
+Once you have a Skill, watch Claude use it. You’ll spot improvement opportunities:
+
+Unexpected exploration paths: If Claude reads files in a surprising order, your navigation structure may not be intuitive. Add clearer signposting.
+
+Missed connections: If Claude doesn’t discover a relevant reference file, the link may not be obvious enough. Make connections more explicit.
+
+Over-reliance on certain sections: If Claude always reads one particular section, that content probably belongs in the main SKILL.md for faster access.
+
+Ignored content: If Claude never reads a reference file, it’s either unnecessary or poorly signaled. Either delete it or improve its description.
+
+Pattern recognition: After 5–10 uses, you’ll see patterns in how Claude navigates. Optimize your structure around those patterns.
+
+Advanced: Skills with Executable Code
+Handle Errors Explicitly in Scripts
+Scripts should solve problems, not punt them to Claude for handling.
+
+Good error handling:
+
+def process_file(path):
+    """Process a file, creating it with defaults if it doesn't exist."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"File {path} not found, creating with default content")
+        with open(path, 'w') as f:
+            f.write('# Default configuration\n')
+        return '# Default configuration\n'
+    except PermissionError:
+        print(f"Permission denied for {path}. Check file permissions.")
+        sys.exit(1)
+Bad error handling:
+
+def process_file(path):
+    # Just fail and let Claude figure it out
+    return open(path).read()  # Crashes with unhelpful error
+Why explicit handling matters: When a script fails with a clear, actionable error message, Claude can often fix the problem automatically. Generic errors force Claude to guess.
+
+Provide Utility Scripts to Save Tokens
+Pre-made scripts offer several advantages over having Claude generate code on-demand:
+
+More reliable: Tested and debugged in advance
+Save tokens: No code in context window
+Save time: No generation required
+Ensure consistency: Same approach every time
+## Utility scripts
+
+**analyze_form.py**: Extract all form fields from a PDF
+```bash
+python scripts/analyze_form.py input.pdf > fields.json
+```
+Output: JSON file with field names, types, and locations
+
+**validate_boxes.py**: Check for overlapping bounding boxes
+```bash
+python scripts/validate_boxes.py fields.json
+```
+Returns: "OK" or lists conflicts with suggestions for fixes
+Real-world impact: A team building a document processing Skill reduced token usage by 40% after replacing generated code snippets with utility scripts.
+
+Create Verifiable Intermediate Outputs
+For complex, multi-step tasks, use the plan-validate-execute pattern:
+
+Analyze to create plan file
+Validate plan to get specific feedback
+Execute plan to perform action
+Verify output to confirm success
+Example workflow:
+
+## Form filling with validation
+
+1. Analyze the form structure:
+   ```bash
+   python scripts/analyze_form.py input.pdf > plan.json
+   ```
+
+2. **Validate the plan before proceeding**:
+   ```bash
+   python scripts/validate_plan.py plan.json
+   ```
+
+   Fix any errors reported. Common issues:
+   - Missing required fields
+   - Overlapping bounding boxes
+   - Invalid field types
+
+3. Execute only when validation passes:
+   ```bash
+   python scripts/fill_form.py plan.json input.pdf output.pdf
+   ```
+Make validation verbose with specific, actionable error messages:
+
+Bad:  "Validation failed"
+Good: "Field 'signature_date' not found. Available fields: customer_name, order_total, delivery_address"
+Package Dependencies: List and Verify
+Always specify required packages explicitly:
+
+## Requirements
+
+This Skill requires the following packages:
+
+```bash
+pip install pypdf pdfplumber pillow
+```
+
+**Verify installation**:
+```bash
+python -c "import pdfplumber; print('pdfplumber:', pdfplumber.__version__)"
+```
+
+If you see version output, you're ready to go.
+```
+
+**Why verification matters:** Installation can fail silently, especially in virtual environments. A quick verification step catches issues before they cause cryptic errors mid-task.
+
+### MCP Tool References: Use Fully Qualified Names
+
+When referencing MCP tools, always use the fully qualified format: `Plugin:tool_name`
+
+```markdown
+Use the `BigQuery:bigquery_schema` tool to retrieve table schemas.
+Use the `GitHub:create_issue` tool to create issues.
+Use the `Notion:create_page` tool to create new pages.
+```
+Why verification matters: Installation can fail silently, especially in virtual environments. A quick verification step catches issues before they cause cryptic errors mid-task.
+
+MCP Tool References: Use Fully Qualified Names
+When referencing MCP tools, always use the fully qualified format: Plugin:tool_name
+
+Use the `BigQuery:bigquery_schema` tool to retrieve table schemas.
+Use the `GitHub:create_issue` tool to create issues.
+Use the `Notion:create_page` tool to create new pages.
+Why this matters: Generic names like “create_issue” could refer to multiple tools. Qualified names eliminate ambiguity.
+
+Content Guidelines
+Avoid Time-Sensitive Information
+Skills should be timeless. Avoid references to specific dates or “current” states that will become outdated.
+
+Bad:
+
+If you're doing this before August 2025, use the old API.
+After August 2025, use the new API.
+Good:
+
+## Current method
+
+Use the v2 API endpoint:
+```python
+response = requests.post("https://api.example.com/v2/messages")
+```
+
+
+## Legacy patterns
+
+<details>
+<summary>Legacy v1 API (deprecated August 2025)</summary>
+
+The v1 API used a different endpoint structure:
+```python
+response = requests.post("https://api.example.com/v1/messages")
+```
+Why this works: New users see the current method immediately. Users maintaining legacy code can expand the details section. No time-based logic required.
+
+Use Consistent Terminology Throughout
+Pick one term for each concept and stick with it:
+
+Consistent: Always “API endpoint” | Inconsistent (Confusing): Mix “API endpoint”, “URL”, “route”, “path”
+Consistent: Always “field” | Inconsistent (Confusing): Mix “field”, “box”, “element”, “control”
+Consistent: Always “extract” | Inconsistent (Confusing): Mix “extract”, “pull”, “get”, “retrieve”
+Consistent: Always “validate” | Inconsistent (Confusing): Mix “validate”, “check”, “verify”, “test”
+Why consistency matters: Each new term forces Claude (and users) to determine if it’s a synonym or a distinct concept. Consistent terminology reduces cognitive load.
+
+Avoid Offering Too Many Options
+Don’t overwhelm with choices. Recommend one approach, then mention alternatives only if genuinely needed.
+
+Bad:
+
+You can use pypdf, or pdfplumber, or PyMuPDF, or pdf2image, or tabula-py...
+Each has pros and cons. Pick whichever you prefer.
+Good:
+
+Use pdfplumber for text extraction. It handles most PDFs reliably:
+
+   ```python
+   import pdfplumber
+   with pdfplumber.open("file.pdf") as pdf:
+       text = pdf.pages[0].extract_text()
+   ```
+
+**For scanned PDFs** (images, not text), use pdf2image with pytesseract for OCR:
+```python
+from pdf2image import convert_from_path
+from pytesseract import image_to_string
+```
+Why a single recommendation works: It eliminates decision paralysis. Claude can focus on executing rather than evaluating trade-offs. If the recommended approach fails, Claude can explore alternatives. But most tasks succeed with the primary recommendation.
+
+Checklist for Effective Skills
+Use this checklist before deploying a Skill:
+
+Core Quality
+[ ] Description is specific and includes trigger keywords
+[ ] Description includes both WHAT the Skill does AND WHEN to use it
+[ ] SKILL.md body is under 500 lines
+[ ] Additional details are in separate reference files (not crammed into SKILL.md)
+[ ] No time-sensitive information (no “before 2025” logic)
+[ ] Consistent terminology throughout all files
+[ ] File references are one level deep (no nested chains)
+[ ] Progressive disclosure pattern used appropriately
+Code and Scripts
+[ ] Scripts handle errors explicitly with clear messages
+[ ] No “voodoo constants” (all hardcoded values have comments explaining why)
+[ ] Required packages listed with installation commands
+[ ] All file paths use forward slashes (cross-platform compatibility)
+[ ] Validation/verification steps for critical operations
+[ ] Scripts solve problems rather than punting to Claude
+Testing
+[ ] At least three evaluations created covering main use cases
+[ ] Tested with Haiku, Sonnet, and Opus models
+[ ] Tested on real-world scenarios (not just toy examples)
+[ ] Observed how Claude navigates the Skill
+[ ] Team feedback incorporated (for project Skills)
+Quick Reference: Creating Your First Skill
+Let’s create a simple skill for generating commit messages.
+
+Step 1: Create the Skill directory
+
+# Personal Skill (available everywhere, private to you)
+mkdir -p ~/.claude/skills/generating-commit-messages
+
+# Project Skill (this project only, shared via git)
+mkdir -p .claude/skills/generating-commit-messages
+For Codex:
+
+# Personal Skill (available everywhere, private to you)
+mkdir -p ~/.codex/skills/generating-commit-messages
+# Project Skill (this project only, shared via git)
+mkdir -p .codex/skills/generating-commit-messages
+For OpenCode
+
+# Personal Skill (available everywhere, private to you)
+mkdir -p ~/.config/opencode/skill/generating-commit-messages
+
+# Project Skill (this project only, shared via git)
+mkdir -p .opencode/skill/generating-commit-messages
+Step 2: Create minimal SKILL.md
+
+---
+name: generating-commit-messages
+description: Generates clear commit messages by analyzing git diffs. Use when writing commit messages or reviewing staged changes.
+---
+
+# Generating Commit Messages
+
+## Instructions
+
+1. Run `git diff --staged` to see changes
+2. Analyze the changes and suggest a commit message with:
+   - **Summary**: Under 50 characters, present tense
+   - **Description**: What changed and why
+   - **Affected components**: List modified areas
+
+## Format
+
+```
+<type>(<scope>): <summary>
+
+<description>
+```
+
+Types: feat, fix, docs, refactor, test, chore
+
+## Best practices
+- Use present tense ("add feature" not "added feature")
+- Explain WHAT and WHY, not HOW
+- Reference issue numbers when relevant
+Step 3: Test it
+
+Open a fresh Coding Agent conversation and try: “Help me write a commit message for my staged changes.”
+
+Step 4: Iterate
+
+Watch how your coding agent uses the Skill. Refine based on what works and what doesn’t.
+
+Conclusion
+Writing effective Agentic Code Skills is about balance:
+
+Balance conciseness with clarity: Every token competes for space, but Claude needs enough context to succeed.
+
+Balance prescription with freedom: Match instruction specificity to task fragility.
+
+Balance structure with flexibility: Organize for easy navigation, but don’t over-engineer.
+
+Balance testing with shipping: Iterate based on real usage, but don’t let perfect be the enemy of good.
+
+The best Skills feel like knowledge transfer from an expert. They capture the procedural wisdom and organizational context that transforms Claude from a general-purpose AI into a domain specialist in your domain.
+
+Start small:
+
+Build evaluations first (reveal where Claude struggles)
+Write minimal documentation (trust Claude’s intelligence)
+Test across models (Haiku, Sonnet, Opus)
+Iterate based on observation (watch how Claude navigates)
+Every iteration makes your Skill sharper. Every use case you cover makes Claude more capable. You’re not just writing documentation. You’re encoding expertise.
+
+What will you teach your coding agent first?
+
+Resources
+Claude Code Skills Documentation — Official documentation and examples
+Anthropic Engineering Blog: Agent Skills — Technical deep dive
+Skills Overview — Architecture and design philosophy
+Best Practices Guide to Writing Agentic Skills — The guide I based a lot of this article on as well as a skill I wrote to improve my own skills.
+Based on official Anthropic documentation and real-world best practices. Last updated: January 2026.
+
+About the Author
+Rick Hightower is a technology executive and data engineer with extensive experience at a Fortune 100 financial services organization, where he led the development of advanced Machine Learning and AI solutions to optimize customer experience metrics. His expertise spans both theoretical AI frameworks and practical enterprise implementation.
+
+Rick wrote the skilz universal skill installer that works with Gemini, Claude Code, Codex, OpenCode, Github Copilot CLI, Cursor, Aidr, Qwen Code, Kimi Code and about 14 other coding agents as well as the co-founder of the world’s largest agentic skill marketplace.
+
+Connect with Rick Hightower on LinkedIn or Medium for insights on enterprise AI implementation and strategy.
+
+Community Extensions & Resources
+The Claude Code community has developed powerful extensions that enhance its capabilities. Here are some valuable resources from Spillwave Solutions:
+
+Integration Skills
+Notion Uploader/Downloader: Seamlessly upload and download Markdown content and images to Notion for documentation workflows
+Confluence Skill: Upload and download Markdown content and images to Confluence for enterprise documentation
+JIRA Integration: Create and read JIRA tickets, including handling special required fields
+Recently, I wrote a desktop app called Skill Viewer to evaluate Agents skills for safety, usefulness, links and PDA.
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Press enter or click to view image in full size
+
+Advanced Development Agents
+Architect Agent: Puts Claude Code into Architect Mode to manage multiple projects and delegate to other Claude Code instances running as specialized code agents
+Project Memory: Store key decisions, recurring bugs, tickets, and critical facts to maintain vital context throughout software development
+Claude Agents Collection: A comprehensive collection of 15 specialized agents for various development tasks
+Visualization & Design Tools
+Design Doc Mermaid: Specialized skill for creating professional Mermaid diagrams for architecture documentation
+PlantUML Skill: Generate PlantUML diagrams from source code, extract diagrams from Markdown, and create image-linked documentation
+Image Generation: Uses Gemini Banana to generate images for documentation and design work
+SDD Skill: A comprehensive Claude Code skill for guiding users through GitHub’s Spec-Kit and the Spec-Driven Development methodology.
+PR Reviewer Skill: Comprehensive GitHub PR code review skill for Claude Code. Automates data collection via gh CLI, analyzes against industry-standard criteria (security, testing, maintainability), generates structured review files, and posts feedback with approval workflow. Includes inline comments, ticket tracking, and professional review templates.
+AI Model Integration
+Gemini Skill: Delegate specific tasks to Google’s Gemini AI for multi-model collaboration
+Image_gen: Image generation skill that uses Gemini Banana to generate images.
+Explore more at Spillwave Solutions — specialists in bespoke software development and AI-powered automation.
+
+AI Agent
+Openai Codex
+Claude Code
+Agentic Ai
+311
+
+
+2
+
+
+
+
+Spillwave Solutions
+Published in Spillwave Solutions
+248 followers
+·
+Last published Mar 26, 2026
+Perspectives from technology experience. Leadership thoughts for Cxx suite. Technology guidance for every level below that. Visit https://spillwave.com/ to learn more.
+
+
+Follow
+Rick Hightower
+Written by Rick Hightower
+2.6K followers
+·
+78 following
+2026 Agent Reliability Playbook – Free Download DM me 'PLAYBOOK' for the full version + personalized 15-minute audit of your current agent setup (no pitch).
+
+
+Follow
+Responses (2)
+Dale Thomas
+Dale Thomas
+﻿
+
+Cancel
+Respond
+Lorenz Vanthillo
+Lorenz Vanthillo
+
+Jan 23
+
+
+Great blog!
+"I created a skill that would grade and improve my skills."
+Is this one available somewhere?
+5
+
+
+1 reply
+
+Reply
+
+Gábor Mészáros
+Gábor Mészáros
+
+Mar 24
+
+
+Wow, nice!
