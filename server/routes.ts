@@ -2545,6 +2545,11 @@ export async function registerRoutes(
   app.use("/api/neuro", neuroRoutes);
   console.log("[Neuro] /api/neuro/* active");
 
+  // ── Batch 45: Harness Engineering (Task Board, FSM Protocol, Sessions, BG Queue, Prompt Cache) ──
+  const { default: harnessRoutes } = await import("./routes/harnessRoutes");
+  app.use("/api/harness", harnessRoutes);
+  console.log("[Harness] /api/harness/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
