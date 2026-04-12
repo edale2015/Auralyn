@@ -2471,6 +2471,11 @@ export async function registerRoutes(
   });
   console.log("[Vitals] POST /api/vitals/evaluate active");
 
+  // ── Batch 43: Multi-Patient Wall · Sepsis · Digital Twin · ICU · RL · EMS ────
+  const { default: hospitalOpsRoutes } = await import("./routes/hospitalOpsRoutes");
+  app.use("/api/hospital", hospitalOpsRoutes);
+  console.log("[HospitalOps] /api/hospital/* active (wall·sepsis·twin·icu·route·rl·ems·brain)");
+
   // ── Batch 42: Agent Scope Engine (ASE) + Scope-Aware Triage + Control Tower ──
   const { default: scopeRoutes } = await import("./routes/scopeRoutes");
   app.use("/api/scope", scopeRoutes);

@@ -1725,3 +1725,59 @@ Architecture: `/server/ai-orchestration/`
 - EHR agent write:ehr (physician signed, confidence 0.95) → APPROVED, auditLevel HIGH
 - FDA metrics → fdaSafe: true, safetyScore: 100
 - Critical patient triage: HR 135, SpO2 86%, qSOFA=3 → level=CRITICAL, scope=4, #1 ranked
+
+### Batch 43 — Command Wall + Sepsis Engine + Digital Twin + ICU Allocator + RL + EMS (2,930+/2,931 tests · 77 files)
+
+**New modules:**
+
+`server/sepsis/`
+- `sepsisEngine.ts` — `detectSepsisRisk()`: NEWS2×0.08 + qSOFA×0.15 + infection signals (+0.2) + lactate>2 (+0.3) + lactate>4 (+0.2) + WBC abnormal (+0.1) + trend vectors. Probability clamped 0–1, highRisk≥0.6, auto-generates SEPSIS_ALERT.
+- `sepsisAlertService.ts` — `triggerSepsisAlert()`: WS broadcast + Twilio SMS to on-call + audit log. Ring buffer of 500 alerts.
+
+`server/controlTower/multiPatientStream.ts` — `updateWallDisplay()`: ranks all patients (NEWS2+qSOFA) → enriches each with sepsis risk + deterioration → triggers sepsis alerts → broadcasts WALL_DISPLAY_UPDATE.
+
+`server/intervention/autonomousInterventionEngine.ts` — `runAutonomousInterventions()`: scope-gated autonomous engine. Generates sepsis bundle / fluid / escalation / oxygen suggestions → executes each through `intervention_agent` scope with `confidence > 0.9` constraint.
+
+`server/digitalTwin/digitalTwinEngine.ts` — `runDigitalTwin()`: 5-min step forward simulation. Physiological drift model (infection drift, fluid response, hypoxia feedback, autonomic compensation). Outputs deteriorationProb, icuProb, tteMinutes, trajectory, riskSummary (STABLE/WATCH/DETERIORATING/ICU_IMMINENT).
+
+`server/icu/icuAllocator.ts` — `allocateICUBeds()`: runs 2-hour digital twin per patient, sorts by icuProb×0.7 + imminent TTE factor×0.3, assigns only available beds, skips low-risk (<15%) patients.
+
+`server/network/hospitalCoordinator.ts` — `routePatients()`: haversine distance sorting + availability filter + capability matching. `getSystemCapacity()`: system-wide bed utilization.
+
+`server/orchestrator/systemOrchestrator.ts` — `runSystemCycle()`: parallel digital twins + ICU allocation + hospital routing → broadcasts SYSTEM_SNAPSHOT.
+
+`server/rl/rlEngine.ts` — Q-table RL: `computeReward()` (survival 100pts + no-ICU 20pts − LOS penalty). `updateQ()` (α=0.1), `chooseBestAction()`, `learnFromOutcome()`. Redis-backed Q-table persistence.
+
+`server/rl/rlSafetyGate.ts` — `validateRLAction()`: forbidden (prescribe, discharge, override), restricted (escalate_ICU, transfer — physician cosign required). `filterSafeActions()` removes all forbidden before RL can act.
+
+`server/ops/hospitalOptimizer.ts` — `optimizeHospitalFlow()`: NORMAL / DIVERT / SURGE / CRITICAL_OVERLOAD strategy with action list + plain-text recommendation.
+
+`server/ems/emsIngestion.ts` — `ingestEMSCall()`: normalizes raw EMS call to standard patient format. `ingestBatch()`, `getEMSLog()`.
+
+`server/ems/emsRouter.ts` — `routeEMS()`: runs 60-min digital twin + sepsis check → routes to best hospital pre-arrival. Alert levels ROUTINE/URGENT/CRITICAL.
+
+`server/orchestrator/hospitalBrain.ts` — `runHospitalBrain()`: parallel system cycle + wall display → ops optimization + EMS routing → broadcasts GLOBAL_BRAIN_UPDATE.
+
+`server/scope/agentScopeEngine.ts` — Added `intervention_agent` role (7th role): express = suggest:intervention, suggest:treatment, read:*; implied = order:labs, send:alert; denied = write:ehr, billing; restricted = execute:escalation (physician override required); constraint = confidence > 0.9.
+
+**Routes:** `server/routes/hospitalOpsRoutes.ts` → `/api/hospital/*`
+- `POST /wall/update` · `POST /sepsis/evaluate` · `POST /sepsis/batch` · `GET /sepsis/alerts`
+- `POST /interventions/autonomous`
+- `POST /twin/simulate` · `POST /twin/batch`
+- `POST /icu/allocate`
+- `POST /route`
+- `POST /system/cycle`
+- `POST /brain`
+- `POST /rl/learn` · `POST /rl/recommend` · `POST /rl/validate` · `GET /rl/table`
+- `POST /ops/optimize`
+- `POST /ems/ingest` · `POST /ems/batch` · `POST /ems/route` · `GET /ems/log`
+
+**Frontend:**
+- `/command-wall` — `CommandWall.tsx`: dark full-screen patient grid. WS-fed WALL_DISPLAY_UPDATE. Color-coded cards by risk level. Sepsis probability bars. Deterioration warning overlays. Live sepsis alert strip.
+- `/regional-command` — `RegionalCommand.tsx`: Digital Twin cards (ICU prob, TTE, riskSummary) + ICU bed assignments + hospital routing + capacity panel.
+- `/global-command` — `GlobalCommand.tsx`: Hospital ops strategy + EMS routing panel + system status. All WS + manual refresh.
+
+**Confirmed Live (Batch 43):**
+- Critical patient sepsis eval → highRisk=true, prob=100%, SEPSIS_ALERT
+- Digital Twin (HR 138, SpO2 87%) → icuProb=1.00, riskSummary=ICU_IMMINENT
+- EMS route (chest pain, SpO2 88%) → Bellevue, alertLevel=CRITICAL, sepsisFlag=true

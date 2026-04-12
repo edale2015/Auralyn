@@ -134,6 +134,9 @@ import MasterControl from "@/pages/MasterControl";
 import DeepAgentDashboard from "@/pages/DeepAgentDashboard";
 import CommunicationDashboard from "@/pages/CommunicationDashboard";
 import ScopeCommandCenter from "@/pages/ScopeCommandCenter";
+import CommandWall     from "@/pages/CommandWall";
+import RegionalCommand from "@/pages/RegionalCommand";
+import GlobalCommand   from "@/pages/GlobalCommand";
 
 validateRoutes();
 
@@ -193,7 +196,10 @@ function WorkbenchRouter() {
         <Route path="/clinical-improvement-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalImprovementLabPage /></RoleGuard>}</Route>
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
         <Route path="/governance-command-center">{() => <RoleGuard allowedRoles={["admin"]}><GovernanceCommandCenterPage /></RoleGuard>}</Route>
-        <Route path="/scope-command-center" component={ScopeCommandCenter} />
+        <Route path="/scope-command-center"  component={ScopeCommandCenter} />
+        <Route path="/command-wall"          component={CommandWall} />
+        <Route path="/regional-command"      component={RegionalCommand} />
+        <Route path="/global-command"        component={GlobalCommand} />
         <Route path="/skill-map" component={SkillMapPage} />
         <Route path="/skill-intelligence-lab" component={SkillIntelligenceLabPage} />
         <Route path="/skill-evolution-lab" component={SkillEvolutionLabPage} />

@@ -77,6 +77,15 @@ export const MEDICAL_SCOPE_RULES: ScopeRule[] = [
     constraints: { audit_level: "HIGH", requires: ["confidence > 0.9"] },
   },
   {
+    role:        "intervention_agent",
+    description: "Suggests and scope-gated executes clinical interventions — sepsis bundles, fluids, escalation",
+    express:     ["suggest:intervention", "suggest:treatment", "read:patient_data", "read:vitals", "read:risk_score"],
+    implied:     ["order:labs", "send:alert"],
+    denied:      ["write:ehr", "modify:billing", "delete:patient_data"],
+    restricted:  { "execute:escalation": "physician_override_required" },
+    constraints: { audit_level: "HIGH", requires: ["confidence > 0.9"] },
+  },
+  {
     role:        "billing_agent",
     description: "CPT coding and revenue — reads only, modifies billing with physician review",
     express:     ["read:cpt_codes", "suggest:billing", "read:diagnosis"],
