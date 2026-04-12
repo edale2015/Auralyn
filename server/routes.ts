@@ -2555,6 +2555,11 @@ export async function registerRoutes(
   app.use("/api/plugins", pluginRoutes);
   console.log("[Plugins] /api/plugins/* active");
 
+  // ── Batch 47: Tool Layer (Schema Registry, Envelope, 5-step Call Loop) ──
+  const { default: toolRoutes } = await import("./routes/toolRoutes");
+  app.use("/api/tools", toolRoutes);
+  console.log("[Tools] /api/tools/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
