@@ -14,6 +14,8 @@ import { rerunDecision, replayCaseEvents } from "../audit/deterministicReplay";
 import { runTrial }                from "../simulation/clinicalTrialSimulator";
 import { preDispositionHook }      from "../hooks/preDisposition";
 import { ehrWrite }                from "../ehr/ehrWriter";
+import { analyzeSymptomText }     from "../triage/symptomTextAnalyzer";
+import { routeIntake, batchRouteIntake } from "../triage/smartIntakeRouter";
 
 const router = express.Router();
 
@@ -119,6 +121,32 @@ router.post("/ehr/write", async (req, res) => {
     if (!patientId || !disposition) { res.status(400).json({ error: "patientId and disposition required" }); return; }
     const result = await ehrWrite({ patientId, disposition, notes: notes ?? "", system });
     res.json(result);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+// ── Smart Intake Router ───────────────────────────────────────────────────────
+// Analyze free-text symptoms and route to the correct care stage
+router.post("/intake/analyze", (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || typeof text !== "string") { res.status(400).json({ error: "text (string) required" }); return; }
+    res.json(analyzeSymptomText(text));
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+router.post("/intake/route", (req, res) => {
+  try {
+    const { patientId, symptoms } = req.body;
+    if (!patientId || !symptoms) { res.status(400).json({ error: "patientId and symptoms required" }); return; }
+    res.json(routeIntake(patientId, symptoms));
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+router.post("/intake/batch", (req, res) => {
+  try {
+    const { entries } = req.body;
+    if (!Array.isArray(entries) || entries.length === 0) { res.status(400).json({ error: "entries[] required" }); return; }
+    res.json(batchRouteIntake(entries));
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 

@@ -1,0 +1,179 @@
+1. ADD CLINICAL TRIAGE + RISK ENGINE
+services/triage_service.py
+# services/triage_service.py
+
+from typing import Dict, Any
+
+RED_FLAGS = {
+    "chest pain": ["shortness of breath", "radiating pain", "diaphoresis"],
+    "fever": ["confusion", "hypotension", "tachycardia"],
+    "cough": ["hemoptysis", "severe SOB"]
+}
+
+RISK_LEVELS = ["LOW", "MODERATE", "HIGH", "CRITICAL"]
+
+def evaluate_risk(symptoms: str) -> Dict[str, Any]:
+    symptoms_lower = symptoms.lower()
+
+    detected_flags = []
+    for condition, flags in RED_FLAGS.items():
+        if condition in symptoms_lower:
+            for f in flags:
+                if f in symptoms_lower:
+                    detected_flags.append(f)
+
+    # Risk logic
+    if len(detected_flags) >= 2:
+        risk = "CRITICAL"
+    elif len(detected_flags) == 1:
+        risk = "HIGH"
+    elif any(k in symptoms_lower for k in RED_FLAGS.keys()):
+        risk = "MODERATE"
+    else:
+        risk = "LOW"
+
+    return {
+        "risk_level": risk,
+        "red_flags": detected_flags
+    }
+🧭 2. UPGRADE AGENT → CLINICAL + BOOKING HYBRID
+Replace your BookingState with:
+class BookingState(TypedDict):
+    messages: List[dict]
+    stage: str
+
+    symptoms: Optional[str]
+    risk_level: Optional[str]
+    red_flags: List[str]
+
+    selected_speciality: Optional[str]
+    selected_doctor: Optional[dict]
+    selected_slot: Optional[str]
+
+    customer_name: Optional[str]
+    customer_phone: Optional[str]
+
+    booking_id: Optional[str]
+
+    disposition: Optional[str]  # NEW
+    available_options: List[str]
+⚡ 3. ADD SMART INTAKE NODE (KEY UPGRADE)
+# agents/nodes/intake_node.py
+
+from services.triage_service import evaluate_risk
+
+def intake_node(state: BookingState):
+    user_msg = state["messages"][-1]["content"]
+
+    triage = evaluate_risk(user_msg)
+
+    state["symptoms"] = user_msg
+    state["risk_level"] = triage["risk_level"]
+    state["red_flags"] = triage["red_flags"]
+
+    if triage["risk_level"] in ["CRITICAL", "HIGH"]:
+        state["stage"] = "escalation"
+        return {
+            **state,
+            "messages": state["messages"] + [{
+                "role": "assistant",
+                "content": f"⚠️ High-risk symptoms detected: {triage['red_flags']}. Immediate evaluation recommended.",
+                "options": ["Go to ER", "Call 911"]
+            }]
+        }
+
+    elif triage["risk_level"] == "MODERATE":
+        state["stage"] = "urgent_booking"
+        return {
+            **state,
+            "messages": state["messages"] + [{
+                "role": "assistant",
+                "content": "You may need urgent care. Let's book you quickly.",
+                "options": ["Book Appointment"]
+            }]
+        }
+
+    else:
+        state["stage"] = "routine_booking"
+        return {
+            **state,
+            "messages": state["messages"] + [{
+                "role": "assistant",
+                "content": "This seems low risk. Would you like to book a visit?",
+                "options": ["Yes", "No"]
+            }]
+        }
+🔀 4. ADD ROUTING ENGINE (NO MORE LLM GUESSING)
+# agents/router.py
+
+def clinical_router(state: BookingState):
+    if state["risk_level"] in ["CRITICAL", "HIGH"]:
+        return "escalation"
+    elif state["risk_level"] == "MODERATE":
+        return "select_speciality"
+    else:
+        return "select_speciality"
+🏥 5. ADD ESCALATION NODE (HOSPITAL-GRADE SAFETY)
+# agents/nodes/escalation_node.py
+
+def escalation_node(state: BookingState):
+    state["disposition"] = "EMERGENCY"
+
+    return {
+        **state,
+        "messages": state["messages"] + [{
+            "role": "assistant",
+            "content": "🚨 This may be serious. Please seek emergency care immediately.",
+        }]
+    }
+📡 6. ADD CONTROL TOWER STREAMING (REAL-TIME MONITORING)
+# services/stream_service.py
+
+import json
+import asyncio
+import websockets
+
+WS_URL = "ws://localhost:8000/ws/patient-stream"
+
+async def send_event(event: dict):
+    try:
+        async with websockets.connect(WS_URL) as ws:
+            await ws.send(json.dumps(event))
+    except Exception as e:
+        print("WebSocket error:", e)
+Hook into agent:
+import asyncio
+from services.stream_service import send_event
+
+asyncio.run(send_event({
+    "type": "PATIENT_UPDATE",
+    "risk": state["risk_level"],
+    "stage": state["stage"]
+}))
+🧾 7. ADD AUDIT LOG (FDA-READY FOUNDATION)
+# services/audit_service.py
+
+import hashlib
+import json
+from datetime import datetime
+
+def log_event(state: dict):
+    payload = json.dumps(state, sort_keys=True)
+    hash_val = hashlib.sha256(payload.encode()).hexdigest()
+
+    with open("audit.log", "a") as f:
+        f.write(f"{datetime.utcnow()} | {hash_val} | {payload}\n")
+🧬 8. MODIFY GRAPH (CORE ENGINE UPGRADE)
+workflow.add_node("intake", intake_node)
+workflow.add_node("escalation", escalation_node)
+
+workflow.set_entry_point("intake")
+
+workflow.add_conditional_edges(
+    "intake",
+    clinical_router,
+    {
+        "escalation": "escalation",
+        "select_speciality": "select_speciality"
+    }
+)
