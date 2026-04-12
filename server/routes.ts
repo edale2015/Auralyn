@@ -2581,6 +2581,11 @@ export async function registerRoutes(
   });
   console.log("[Cognitive] /api/cognitive-run and /api/cognitive/* active");
 
+  // ── Batch 52: Agentic RAG Pipeline (router + collections + relevance + web-search fallback) ──
+  const { default: agenticRAGRoutes } = await import("./routes/agenticRAGRoutes");
+  app.use("/api/rag", agenticRAGRoutes);
+  console.log("[AgenticRAG] /api/rag/* active (agentic query, simple query, compare, collections, web-search, relevance)");
+
   // ── Batch 51: SubagentRunner, HookMatcherConfig, ClinicalPluginBundler, AgentCorrectionLog ──
   const { default: batch51Routes } = await import("./routes/batch51Routes");
   app.use("/api/agents", batch51Routes);
