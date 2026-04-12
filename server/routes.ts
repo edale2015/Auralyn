@@ -2471,6 +2471,11 @@ export async function registerRoutes(
   });
   console.log("[Vitals] POST /api/vitals/evaluate active");
 
+  // ── Batch 40: AI Medical Orchestration Layer ─────────────────────────────────
+  const { default: orchestrationRoutes } = await import("./ai-orchestration/orchestrationRoutes");
+  app.use("/api/orchestration", orchestrationRoutes);
+  console.log("[Orchestration] /api/orchestration/* active (RAG + LangGraph + Council + LangSmith)");
+
   // ── Batch 39: Live Patient Engine + Interventions + AI Insights ──────────────
   const { startLivePatientEngine }              = await import("./realtime/livePatientEngine");
   const { default: livePatientRoutes }          = await import("./realtime/livePatientRoutes");

@@ -1610,3 +1610,39 @@ All spec code from the uploaded attachments (System Evolution Map Phase 2/3 + pr
 - `[LivePatientEngine] Streaming 5 patients every 2s via /ws/patients` ✓
 - `[LivePatients] /api/patients/* + 2s WS stream active` ✓
 - Tests: 2,801/2,801 (73 files)
+
+### Batch 40 — AI Medical Orchestration Layer (2,822/2,822 tests · 74 files)
+
+**From ZIP file scaffold** — all core concepts already existed in production-grade form:
+- `backend/ws/server.ts` → our `/ws/patients` WebSocket (batch 39)
+- `backend/engines/deteriorationEngine.ts` → our NEWS2 interventionEngine
+- `backend/engines/triageEngine.ts` → our full Bayesian triage pipeline
+- `backend/learning/rlhfEngine.ts` → our full RLHF system
+- `backend/llm/insightEngine.ts` → our GPT-4o-mini insightEngine with cache
+
+**AI Medical Orchestration Layer (new — from attachment):**
+
+Architecture: `/server/ai-orchestration/`
+- `orchestrator.ts` — master entry point: `runFullTriage()` chains all phases
+- `langchain/clinicalRAG.ts` — LangChain RAG (`@langchain/openai` + `@langchain/core`): retrieves KB rules → GPT-4o-mini chain → structured JSON diagnosis
+- `langchain/tools.ts` — LangChain tool definitions: `compute_news2`, `generate_interventions`
+- `langgraph/triageGraph.ts` — `@langchain/langgraph` StateGraph: ask→evaluate→conditional loop (up to 5 iterations) → disposition
+- `crew/specialistCouncil.ts` — TypeScript-native CrewAI equivalent: 3 parallel GPT-4o-mini specialists (Cardiologist, ID, ICU) → consensus + disposition
+- `events/workflowEngine.ts` — n8n-style composable Workflow class: `.add(step)`, `.run(input)`, `.onLog()`, step timing + audit
+- `observability/langsmith.ts` — LangSmith client (`langsmith` npm package) + local audit log fallback (FDA-ready)
+- `orchestrationRoutes.ts` — 7 REST endpoints at `/api/orchestration/*`
+
+**Routes:**
+- `POST /api/orchestration/triage` — full pipeline (workflow → RAG → graph → council → trace)
+- `POST /api/orchestration/rag` — RAG-only diagnosis
+- `POST /api/orchestration/triage-graph` — LangGraph loop only
+- `POST /api/orchestration/council` — specialist council only
+- `POST /api/orchestration/workflow` — workflow run with step audit
+- `GET  /api/orchestration/audit` — local FDA audit log
+- `POST /api/orchestration/log` — manual trace entry
+
+**Packages added:** `@langchain/openai`, `@langchain/core`, `@langchain/langgraph`, `langsmith`
+
+### Confirmed Live (Batch 40)
+- `POST /api/orchestration/triage` `{"symptoms":"chest pain shortness of breath","patientId":"test-001"}` → full pipeline response with ragDiagnosis, triage (LangGraph), council, disposition, auditTraceId
+- `[Orchestration] /api/orchestration/* active` ✓
