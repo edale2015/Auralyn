@@ -7,56 +7,127 @@
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);
   --opaque-button-border-intensity: -8;
-  --elevate-1: rgba(0,0,0, .03);
-  --elevate-2: rgba(0,0,0, .08);
-  --background: 0 0% 100%;
-  --foreground: 220 8% 12%;
-  --border: 220 6% 92%;
-  --card: 0 0% 98%;
-  --card-foreground: 220 8% 12%;
-  --card-border: 0 0% 95%;
-  --sidebar: 0 0% 96%;
-  --sidebar-foreground: 220 8% 15%;
-  --sidebar-border: 0 0% 92%;
+
+  /*
+   * Elevate overlays: brand-blue-tinted instead of pure black.
+   * The article: "Tint every interactive state. Hover, focus, active.
+   * Never a flat grey overlay."
+   */
+  --elevate-1: rgba(9, 115, 220, 0.04);
+  --elevate-2: rgba(9, 115, 220, 0.08);
+
+  /*
+   * TINTED BACKGROUNDS
+   * The article: "Every surface carries a trace of the brand hue."
+   * Brand hue is 210°. Pure 0° was disconnected from brand.
+   * 2-3% of brand blue embedded into every neutral.
+   */
+  --background: 215 40% 99%;        /* was: 0 0% 100% — pure white, zero hue */
+  --foreground: 220 12% 11%;        /* near-black, cool-leaning — good already, +slight saturation */
+
+  --border: 220 18% 91%;            /* was: 220 6% 92% — same hue, more saturated so it "leans" */
+  --input: 220 14% 74%;
+
+  --card: 215 25% 99%;              /* was: 0 0% 98% — pure grey. Now carries brand temperature */
+  --card-foreground: 220 12% 11%;
+  --card-border: 220 20% 93%;       /* was: 0 0% 95% — pure grey border */
+
+  --sidebar: 220 18% 97%;           /* was: 0 0% 96% — pure grey. Now blue-leaning */
+  --sidebar-foreground: 220 10% 14%;
+  --sidebar-border: 220 15% 91%;    /* was: 0 0% 92% */
   --sidebar-primary: 210 92% 45%;
   --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 210 12% 90%;
-  --sidebar-accent-foreground: 220 8% 15%;
+  --sidebar-accent: 210 18% 93%;    /* was: 210 12% 90% — more tinted */
+  --sidebar-accent-foreground: 220 10% 14%;
   --sidebar-ring: 210 92% 45%;
-  --popover: 0 0% 97%;
-  --popover-foreground: 220 8% 12%;
-  --popover-border: 0 0% 93%;
+
+  --popover: 215 25% 99%;           /* was: 0 0% 97% — pure grey */
+  --popover-foreground: 220 12% 11%;
+  --popover-border: 220 18% 92%;    /* was: 0 0% 93% */
+
   --primary: 210 92% 45%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 210 8% 93%;
-  --secondary-foreground: 220 8% 15%;
-  --muted: 210 10% 94%;
-  --muted-foreground: 220 8% 35%;
-  --accent: 210 15% 92%;
-  --accent-foreground: 220 8% 15%;
+  --secondary: 210 14% 94%;         /* was: 210 8% 93% — more saturated */
+  --secondary-foreground: 220 10% 14%;
+  --muted: 210 16% 95%;             /* was: 210 10% 94% — more saturated */
+  --muted-foreground: 220 10% 38%;  /* was: 220 8% 35% — cool-grey, warm enough for muted text */
+  --accent: 210 18% 93%;            /* was: 210 15% 92% */
+  --accent-foreground: 220 10% 14%;
   --destructive: 0 84% 42%;
   --destructive-foreground: 0 0% 98%;
-  --input: 220 8% 75%;
   --ring: 210 92% 45%;
+
+  /*
+   * BRAND SUBTLE — for badges, chips, subtle highlights.
+   * The article: "Not a generic light blue. A hue-accurate tint of the brand
+   * itself at very low saturation. That one token makes the badge feel like
+   * it belongs in the system."
+   */
+  --brand-subtle: 210 60% 95%;      /* NEW: light brand-blue tint for badges/chips */
+  --brand-subtle-foreground: 210 80% 38%;  /* brand-colored text on --brand-subtle */
+
   --chart-1: 210 92% 35%;
   --chart-2: 185 75% 32%;
   --chart-3: 165 65% 30%;
   --chart-4: 145 55% 28%;
   --chart-5: 125 50% 26%;
+
   --font-sans: Inter, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: JetBrains Mono, monospace;
   --radius: .5rem;
-  --shadow-2xs: 0px 2px 0px 0px hsl(210 92% 45% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(210 92% 45% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 1px 2px -1px hsl(210 92% 45% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 1px 2px -1px hsl(210 92% 45% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 2px 4px -1px hsl(210 92% 45% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 4px 6px -1px hsl(210 92% 45% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 8px 10px -1px hsl(210 92% 45% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(210 92% 45% / 0.00);
-  --tracking-normal: 0em;
   --spacing: 0.25rem;
+  --tracking-normal: 0em;
+
+  /*
+   * SHADOWS WITH TEMPERATURE
+   * The article: "box-shadow: 0 4px 12px rgba(0,0,0,0.1) is always wrong.
+   * A shadow is the absence of light. Its color is shaped by ambient light.
+   * On a cool surface, it leans blue-violet. Pure black reads as a Photoshop
+   * effect layered on top, not a physical property of the surface."
+   *
+   * Brand is cool blue: hsl(210, 92%, 45%) ≈ rgba(9, 115, 220).
+   * Every shadow carries a trace of that blue instead of flat black.
+   *
+   * "The 0 0 0 1px layer is the one most designers skip. It creates a hairline
+   * border through the shadow property. No border declaration, no layout shift,
+   * and it inherits the same temperature as the rest of the stack."
+   */
+  --shadow-2xs:
+    0 0 0 1px rgba(9, 115, 220, 0.04);
+
+  --shadow-xs:
+    0px 1px 2px rgba(9, 115, 220, 0.06),
+    0 0 0 1px rgba(9, 115, 220, 0.04);
+
+  --shadow-sm:
+    0px 1px 3px rgba(9, 115, 220, 0.08),
+    0px 1px 2px -1px rgba(9, 115, 220, 0.05),
+    0 0 0 1px rgba(9, 115, 220, 0.04);
+
+  --shadow:
+    0px 2px 4px rgba(9, 115, 220, 0.08),
+    0px 1px 2px -1px rgba(9, 115, 220, 0.05),
+    0 0 0 1px rgba(9, 115, 220, 0.04);
+
+  --shadow-md:
+    0px 4px 16px rgba(9, 115, 220, 0.10),
+    0px 2px 4px -1px rgba(9, 115, 220, 0.06),
+    0 0 0 1px rgba(9, 115, 220, 0.04);
+
+  --shadow-lg:
+    0px 12px 40px rgba(9, 115, 220, 0.12),
+    0px 4px 6px -1px rgba(9, 115, 220, 0.06),
+    0 0 0 1px rgba(9, 115, 220, 0.04);
+
+  --shadow-xl:
+    0px 20px 60px rgba(9, 115, 220, 0.14),
+    0px 8px 10px -1px rgba(9, 115, 220, 0.07),
+    0 0 0 1px rgba(9, 115, 220, 0.05);
+
+  --shadow-2xl:
+    0px 32px 80px rgba(9, 115, 220, 0.16),
+    0 0 0 1px rgba(9, 115, 220, 0.06);
 
 /* Fallback for older browsers */
   --sidebar-primary-border: hsl(var(--sidebar-primary));
@@ -91,50 +162,109 @@
   --button-outline: rgba(255,255,255, .10);
   --badge-outline: rgba(255,255,255, .05);
   --opaque-button-border-intensity: 9;
-  --elevate-1: rgba(255,255,255, .04);
-  --elevate-2: rgba(255,255,255, .09);
-  --background: 220 5% 8%;
-  --foreground: 0 0% 95%;
-  --border: 220 5% 18%;
-  --card: 220 5% 10%;
-  --card-foreground: 0 0% 95%;
-  --card-border: 220 5% 14%;
-  --sidebar: 220 5% 12%;
-  --sidebar-foreground: 0 0% 92%;
-  --sidebar-border: 220 5% 16%;
+
+  /*
+   * Dark mode elevate: brand-blue-tinted, not pure white.
+   * The article: "Never a flat grey overlay" — applies to dark too.
+   */
+  --elevate-1: rgba(100, 160, 255, 0.05);
+  --elevate-2: rgba(100, 160, 255, 0.10);
+
+  /*
+   * DARK MODE BACKGROUNDS
+   * The article: "Dark mode is not a black background. It is a dark tinted background.
+   * #18181B is zinc-900. No hue. No temperature. It is a default.
+   * #0F1117 leans into the blue-dark family. The surface at #161B27 is clearly
+   * in the same conversation as the brand."
+   *
+   * The existing dark mode already had 220° hue on some tokens — this is correct.
+   * We're reinforcing that and fixing the pure-white foreground.
+   */
+  --background: 220 18% 8%;         /* was: 220 5% 8% — same hue, more saturated. Blue-dark. */
+  --foreground: 215 20% 92%;        /* was: 0 0% 95% — pure white. Now cool-leaning off-white. */
+
+  --border: 220 14% 19%;            /* was: 220 5% 18% — more saturated */
+  --input: 220 12% 34%;             /* was: 220 8% 35% */
+
+  --card: 220 14% 11%;              /* was: 220 5% 10% — more tinted */
+  --card-foreground: 215 18% 92%;   /* was: 0 0% 95% — cool-leaning off-white */
+  --card-border: 220 14% 16%;       /* was: 220 5% 14% */
+
+  --sidebar: 220 14% 13%;           /* was: 220 5% 12% */
+  --sidebar-foreground: 215 14% 90%; /* was: 0 0% 92% — pure white-grey */
+  --sidebar-border: 220 14% 17%;    /* was: 220 5% 16% */
   --sidebar-primary: 210 92% 48%;
   --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 210 12% 16%;
-  --sidebar-accent-foreground: 0 0% 92%;
+  --sidebar-accent: 210 16% 17%;    /* was: 210 12% 16% */
+  --sidebar-accent-foreground: 215 14% 90%;
   --sidebar-ring: 210 92% 48%;
-  --popover: 220 5% 14%;
-  --popover-foreground: 0 0% 95%;
-  --popover-border: 220 5% 18%;
+
+  --popover: 220 14% 15%;           /* was: 220 5% 14% */
+  --popover-foreground: 215 18% 92%;/* was: 0 0% 95% */
+  --popover-border: 220 14% 19%;    /* was: 220 5% 18% */
+
   --primary: 210 92% 45%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 210 8% 18%;
-  --secondary-foreground: 0 0% 92%;
-  --muted: 210 10% 16%;
-  --muted-foreground: 220 5% 65%;
-  --accent: 210 12% 15%;
-  --accent-foreground: 0 0% 92%;
+  --secondary: 210 14% 19%;         /* was: 210 8% 18% */
+  --secondary-foreground: 215 14% 90%;
+  --muted: 210 14% 17%;             /* was: 210 10% 16% */
+  --muted-foreground: 220 10% 63%;  /* was: 220 5% 65% — more saturated cool grey */
+  --accent: 210 16% 16%;            /* was: 210 12% 15% */
+  --accent-foreground: 215 14% 90%;
   --destructive: 0 84% 42%;
   --destructive-foreground: 0 0% 98%;
-  --input: 220 8% 35%;
   --ring: 210 92% 48%;
+
+  --brand-subtle: 210 30% 18%;             /* dark-mode badge bg: dark blue tint */
+  --brand-subtle-foreground: 210 80% 70%;  /* bright-enough brand blue on dark bg */
+
   --chart-1: 210 92% 65%;
   --chart-2: 185 75% 68%;
   --chart-3: 165 65% 70%;
   --chart-4: 145 55% 72%;
   --chart-5: 125 50% 74%;
-  --shadow-2xs: 0px 2px 0px 0px hsl(210 92% 45% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(210 92% 45% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 1px 2px -1px hsl(210 92% 45% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 1px 2px -1px hsl(210 92% 45% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 2px 4px -1px hsl(210 92% 45% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 4px 6px -1px hsl(210 92% 45% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(210 92% 45% / 0.00), 0px 8px 10px -1px hsl(210 92% 45% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(210 92% 45% / 0.00);
+
+  /*
+   * DARK MODE SHADOWS — luminance borders + depth
+   * The article: "On dark backgrounds, shadows become glows.
+   * The 0 0 0 1px layer becomes a luminance border rather than a depth border.
+   * Same principle. Opposite direction."
+   */
+  --shadow-2xs:
+    0 0 0 1px rgba(100, 160, 255, 0.08);
+
+  --shadow-xs:
+    0px 1px 2px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(100, 160, 255, 0.06);
+
+  --shadow-sm:
+    0px 1px 3px rgba(0, 0, 0, 0.30),
+    0px 1px 2px -1px rgba(0, 0, 0, 0.20),
+    0 0 0 1px rgba(100, 160, 255, 0.07);
+
+  --shadow:
+    0px 2px 6px rgba(0, 0, 0, 0.35),
+    0px 1px 2px -1px rgba(0, 0, 0, 0.20),
+    0 0 0 1px rgba(100, 160, 255, 0.07);
+
+  --shadow-md:
+    0px 4px 20px rgba(0, 0, 0, 0.40),
+    0px 2px 4px -1px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(100, 160, 255, 0.08);
+
+  --shadow-lg:
+    0px 12px 40px rgba(0, 0, 0, 0.50),
+    0px 4px 6px -1px rgba(0, 0, 0, 0.30),
+    0 0 0 1px rgba(100, 160, 255, 0.09);
+
+  --shadow-xl:
+    0px 20px 60px rgba(0, 0, 0, 0.55),
+    0px 8px 10px -1px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(100, 160, 255, 0.10);
+
+  --shadow-2xl:
+    0px 32px 80px rgba(0, 0, 0, 0.60),
+    0 0 0 1px rgba(100, 160, 255, 0.10);
 
 /* Fallback for older browsers */
   --sidebar-primary-border: hsl(var(--sidebar-primary));
