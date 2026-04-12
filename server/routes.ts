@@ -2540,6 +2540,11 @@ export async function registerRoutes(
   app.use("/api/framework", frameworkRoutes);
   console.log("[Framework] /api/framework/* active");
 
+  // ── Batch 44g: NeuroCore-inspired (Skill Contracts, Jitter Backoff, Reasoning Chain) ──
+  const { default: neuroRoutes } = await import("./routes/neuroRoutes");
+  app.use("/api/neuro", neuroRoutes);
+  console.log("[Neuro] /api/neuro/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory

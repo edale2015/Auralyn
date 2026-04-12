@@ -1,0 +1,309 @@
+Every serious AI engineering team eventually faces the same reckoning with LangChain: the abstraction was supposed to save time, and it did — right up until it didn’t. The breaking API changes. The dependency graph that looks like a continental shelf. The moment you realize that a “chain” is a fine metaphor for simple pipelines but a terrible mental model for the thing you’re actually trying to build.
+
+We hit that moment about eight months into building AC1-LLM, an autonomous scientific research agent designed to discover open mathematical problems, scan literature, form novel proofs, subject them to adversarial review, verify them formally with Lean 4, and publish verified results to RavenNest.Science. This is not a chatbot. This is not a RAG pipeline. This is a perpetual, self-directed research engine — and LangChain’s architecture is not built for it.
+
+So we made a decision that felt risky at the time: we would own our entire stack. We would build the orchestration layer from scratch. We would build the knowledge memory layer from scratch. And we would make both open source, so others building serious agentic systems wouldn’t have to make the same hard choices alone.
+
+Those two projects are NeuroCore and NeuroWeave. Both shipped v0.2.1 this week. This article explains what they are, why they are better than the alternatives for domain-specific agentic AI, and exactly how we use them in AC1-LLM.
+
+The Problem With the Incumbent Frameworks
+Before getting into what we built, it’s worth being precise about what’s wrong with the tools we evaluated.
+
+LangChain: power at the cost of stability
+LangChain is genuinely impressive in breadth. Over a thousand integrations. An enormous community. LCEL lets you compose chains in Python with a pipe syntax that reads well for simple cases. But several things made it wrong for us.
+
+First, the breaking change history. LangChain has gone through major API restructurings across v0.1, v0.2, and v0.3. In a production research agent that runs continuously, an upstream breaking change is a catastrophic operational event — not a minor inconvenience. We don’t own the release schedule. We can’t control when the abstraction shifts beneath us.
+
+Second, LangChain tools have no data contracts. A LangChain Tool has a name, a description, and a callable — and that's the entire interface. Whether the tool produces a list[dict] or a str or a Pydantic model is invisible to the orchestrator. You discover mismatches at runtime. For a pipeline with thirteen concurrent research tools, "discover at runtime" means debugging failures in a 90-second pipeline that costs real API dollars per run.
+
+Third, chains are fundamentally sequential. LCEL added some concurrency primitives, but the mental model is still a chain — one thing feeds the next. Our literature discovery phase needs to fire arXiv, OpenAlex, Semantic Scholar, and Tavily simultaneously and merge results. That’s a DAG, not a chain.
+
+LangGraph: the right shape, wrong ownership
+LangGraph is conceptually much closer to what we needed. It models execution as a graph, supports cycles, handles state persistence properly, and the concurrent node execution is native. If we were building a general-purpose assistant, we would seriously consider LangGraph.
+
+But we’d still be dependent on LangChain Inc.’s release schedule for our core execution layer. And LangGraph’s nodes are Python functions — powerful, but not auditable. A research pipeline defined in Python code is a code review artifact. A research pipeline defined in YAML is something a domain expert — a mathematician, a journal editor — can read, version, and reason about without being an engineer.
+
+CrewAI and AutoGen: agent theater
+CrewAI’s “crew of agents” metaphor is intuitive for demos but breaks down at scale. The abstraction encourages you to think of your pipeline as a team of people, which is charming until you need precise control over which data keys pass between components, retry behavior on rate limits, and streaming progress events. AutoGen has similar conceptual elegance but similar architectural limits.
+
+The knowledge side: Mem0, Zep, LangMem
+On the memory/knowledge side, the options are either too thin or too generic.
+
+Mem0 is excellent for its use case — personal AI assistants that remember user preferences. Its hybrid vector + graph approach is well-engineered. But its entity model is flat. There is no concept of a THEOREM, a LEMMA, a PROOF, or a CITES relationship. When AC1-LLM proves a result and needs to know whether it has ever proven anything related before, a cosine similarity search on flat embeddings is an approximation. A graph traversal on a typed knowledge graph — "find all nodes within two hops of the Cayley graph node via PROVES or FOLLOWS_FROM edges" — is the right answer.
+
+Microsoft’s GraphRAG is serious and architecturally sound. It builds a genuine community graph and supports both local and global search. But it’s a batch indexing system, not a live accumulating memory. AC1-LLM’s knowledge graph must grow in real time as each research session runs. GraphRAG doesn’t offer that.
+
+LangMem is flat memory tied to LangChain’s dependency chain. Pass.
+
+Enter NeuroCore: Orchestration With Contracts
+NeuroCore is a pluggable, YAML-driven framework for building agentic AI applications. The central idea is the Skill — a typed, pip-installable, entry-point-registered component with explicit data contracts.
+
+class ArxivSkill(AsyncSkill):
+    skill_meta = SkillMeta(
+        name="arxiv",
+        version="0.1.1",
+        description="Search arXiv and download PDFs",
+        provides=["arxiv_papers"],    # keys this skill writes to context
+        consumes=["arxiv_query"],     # keys this skill reads from context
+        max_retries=3,
+        retry_delay_base=2.0,
+        retry_on=(RateLimitError, ServiceUnavailableError, httpx.TimeoutException),
+    )
+    async def process(self, context: FlowContext) -> FlowContext:
+        query = context.get("arxiv_query")
+        papers = await self._search(query)
+        context.set("arxiv_papers", papers)
+        return context
+Every skill declares what it produces and what it consumes. The orchestrator knows the data contract at load time. Before a single API call is made, NeuroCore can validate that the pipeline is internally consistent — that no skill reads a key that no upstream skill writes. LangChain discovers these failures when the chain runs. NeuroCore discovers them when it validates the blueprint.
+
+YAML blueprints that a mathematician can read
+The full AC1-LLM research pipeline is defined in a single YAML file:
+
+name: ac1-research-pipeline
+version: "1.0"
+components:
+  - name: arxiv-scan
+    type: arxiv
+    config:
+      max_results: 20
+      download_pdfs: true
+  - name: openalex-scan
+    type: openalex
+    config:
+      per_page: 25
+  - name: tavily-web-scan
+    type: tavily
+    config:
+      search_depth: advanced
+  - name: ac1-researcher
+    type: claude-researcher
+    config:
+      llm_provider: anthropic
+      llm_model: "claude-sonnet-4-6"
+  - name: reviewer-skeptic
+    type: claude-skeptic
+    config:
+      llm_provider: anthropic
+  - name: reviewer-auditor
+    type: gemini-auditor
+    config:
+      llm_provider: gemini
+      llm_model: "gemini-2.0-flash"
+  - name: lean4-verifier
+    type: lean4
+    config:
+      timeout_seconds: 300
+flow:
+  type: graph
+  nodes: [...]
+  edges:
+    # Literature scan: three sources run concurrently
+    - {source: frontier-scan, target: arxiv-scan}
+    - {source: frontier-scan, target: openalex-scan}
+    - {source: frontier-scan, target: tavily-web-scan}
+    # Adversarial review: three reviewers run concurrently
+    - {source: ac1-researcher, target: reviewer-skeptic}
+    - {source: ac1-researcher, target: reviewer-auditor}
+    - {source: ac1-researcher, target: reviewer-alt-theory}
+    # Verification only after review consensus
+    - {source: reviewer-skeptic,  target: lean4-verifier}
+    - {source: reviewer-auditor,  target: lean4-verifier}
+This is not pseudocode. This is the actual blueprint that drives AC1-LLM. It is versioned in git alongside the code. Any mathematician on the RavenNest editorial board can read it and understand exactly what the pipeline does — which sources it consults, which models it uses, in what order.
+
+Compare this to the equivalent LangGraph code: a Python file with node functions, graph construction calls, edge additions, conditional routing logic. It’s code review territory, not domain expert territory.
+
+Concurrent DAG execution with full jitter backoff
+When the blueprint specifies that arxiv-scan, openalex-scan, and tavily-web-scan all depend on frontier-scan and nothing else, NeuroCore executes all three concurrently in the same asyncio gather call. Three API calls that would take 9 seconds sequentially take 3 seconds in parallel.
+
+async def _execute_dag_concurrent(blueprint, instances, ...):
+    # Kahn's algorithm computes topological layers
+    layers = compute_layers(blueprint.flow.edges)
+    # Each layer executes concurrently
+    for layer in layers:
+        results = await asyncio.gather(
+            *[_run_skill_async(instances[node_id], context)
+              for node_id in layer]
+        )
+        # Merge results into shared context
+        for result_ctx in results:
+            context.update(result_ctx.data)
+When a skill fails — an API returns 429, a network times out — the AsyncSkill base class handles retry with truncated exponential backoff and full jitter automatically:
+
+# Full jitter prevents thundering herd after shared API outages
+raw_delay = base * (2 ** attempt)
+capped_delay = min(raw_delay, max_delay)
+jittered_delay = random.uniform(0, capped_delay)
+log.warning("skill.retry",
+    skill=skill.name, attempt=attempt + 1,
+    delay_seconds=round(jittered_delay, 2))
+await asyncio.sleep(jittered_delay)
+No skill-level retry code. No framework-level middleware to configure. The behavior is declared on the SkillMeta and executed automatically by the runtime for every skill in the pipeline.
+
+The LLM provider protocol: genuinely provider-agnostic
+AC1-LLM uses three different LLM providers in a single pipeline. Claude (Anthropic) is the master researcher and primary reviewer. GPT-4o is the alternative theory reviewer. Gemini 2.0 Flash is the reproducibility auditor. Using three genuinely different models prevents the adversarial review from failing to catch errors that all three models share from overlapping training data.
+
+NeuroCore’s LLMProvider protocol makes this trivial:
+
+@runtime_checkable
+class LLMProvider(Protocol):
+    @property
+    def provider_name(self) -> str: ...
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        system: str | None = None,
+        max_tokens: int = 8192,
+    ) -> LLMResponse: ...
+    async def stream(self, ...) -> AsyncIterator[str]: ...
+AnthropicProvider, OpenAIProvider, and GeminiProvider all implement this protocol. Skills that need LLM access declare requires_llm=True on their SkillMeta, and the executor injects the configured provider automatically at skill initialization. A skill is fully decoupled from which LLM it uses. Swapping the reviewer from GPT-4o to Claude is a one-line YAML change.
+
+Enter NeuroWeave: Memory That Thinks in Theorems
+NeuroWeave is a real-time knowledge graph memory library for agentic AI. The simplest way to understand it is through the question it’s designed to answer: what does this agent already know, and how does it relate to what it just learned?
+
+For a general-purpose assistant, “what does this agent know” means facts about the user — preferences, relationships, past conversations. Mem0 and Zep handle this well.
+
+For AC1-LLM, “what does this agent know” means the accumulated mathematical knowledge from every prior research session: every theorem it has encountered, every proof it has constructed, every paper it has read, every domain it has explored, and the precise logical relationships between all of them. This is a fundamentally different problem, and it requires a fundamentally different graph schema.
+
+A knowledge graph that speaks mathematics
+NeuroWeave v0.2.0 introduced twelve scientific node types and eighteen typed relation types specifically designed for mathematical knowledge:
+
+class NodeType(str, Enum):
+    THEOREM     = "theorem"
+    LEMMA       = "lemma"
+    CONJECTURE  = "conjecture"
+    PROOF       = "proof"
+    DEFINITION  = "definition"
+    PAPER       = "paper"
+    AUTHOR      = "author"
+    DOMAIN      = "domain"
+    MATH_OBJECT = "math_object"
+    OPEN_PROBLEM = "open_problem"
+    # ... and more
+class RelationType(str, Enum):
+    PROVES        = "proves"
+    FOLLOWS_FROM  = "follows_from"
+    USES          = "uses"
+    CONTRADICTS   = "contradicts"
+    CITES         = "cites"
+    BELONGS_TO    = "belongs_to"
+    VERIFIED_BY   = "verified_by"
+    # ... and more
+When AC1-LLM’s extraction pipeline processes a mathematical paper, it doesn’t produce generic entities like [entity: "Cayley graph", type: CONCEPT]. It produces typed nodes:
+
+[MATH_OBJECT: "Cayley graph"]
+    --BELONGS_TO--> [DOMAIN: "Group Theory"]
+    --BELONGS_TO--> [DOMAIN: "Algebraic Graph Theory"]
+[THEOREM: "Sabidussi's Theorem"]
+    --APPLIES_TO--> [MATH_OBJECT: "Cayley graph"]
+    --PROVEN_BY-->  [PROOF: "Sabidussi 1958 constructive"]
+    --CITES-->      [PAPER: "On the Minimum Degree..."]
+This structure means the agent can ask questions that are impossible in flat memory systems:
+
+# Which theorems has AC1-LLM proven that belong to Graph Theory?
+theorems = await query_by_type(
+    store, NodeType.THEOREM,
+    relations=["belongs_to"],
+)
+# What is the full logical dependency chain for this theorem?
+chain = await get_proof_chain(
+    store,
+    theorem_name="Chromatic Polynomial Bound",
+    max_hops=3,
+)
+# Returns: theorem → lemmas it uses → definitions those lemmas depend on
+No other open-source knowledge graph tool offers this. Mem0, Zep, LangMem, GraphRAG — none of them have a get_proof_chain() function, because none of them were designed for mathematical reasoning.
+
+Persistent across sessions with Neo4j, live visualization with Cytoscape
+The knowledge AC1-LLM accumulates doesn’t live in RAM. Every node and edge is persisted to Neo4j via NeuroWeave’s Neo4jGraphStore backend, which bootstraps the required schema on first startup:
+
+CREATE CONSTRAINT nwnode_id_unique IF NOT EXISTS
+  FOR (n:NWNode) REQUIRE n.id IS UNIQUE;
+CREATE INDEX nwnode_name_idx IF NOT EXISTS
+  FOR (n:NWNode) ON (n.name);
+CREATE INDEX nwnode_type_idx IF NOT EXISTS
+  FOR (n:NWNode) ON (n.node_type);
+When the agent restarts after a crash, after a deployment, after a month of downtime, the entire knowledge graph is exactly where it left off. Entity deduplication across sessions ensures that “Cayley graph” from session 1 and “Cayley graphs” from session 47 resolve to the same node, with properties merged.
+
+And as the graph grows — in real time, as each paper is processed — anyone with a browser can watch it happen. NeuroWeave’s built-in visualization server serves a Cytoscape.js graph at localhost:8787, updated via WebSocket with every node and edge addition. For a project that aims to publish transparently at RavenNest.Science, this live graph is eventually the "show your work" button — the provenance trail of every inference the agent made.
+
+Vector + graph: the complete picture
+Graph traversal and vector similarity search are complementary, not competing. When AC1-LLM asks “have we seen anything related to this new conjecture?”, the right answer comes from both:
+
+Graph traversal: find all theorems within three hops via PROVES, CITES, and FOLLOWS_FROM relations
+Vector similarity: find all papers with embeddings close to the new conjecture’s SPECTER2 embedding
+NeuroWeave’s QdrantBridge runs both queries concurrently and merges the results:
+
+result = await nw.get_context_with_vectors(
+    query="chromatic polynomial roots for planar graphs",
+    query_vector=specter2_embedding,
+    qdrant_client=qdrant,
+    top_k=10,
+    graph_hops=2,
+)
+# result.graph_context  — structurally related nodes
+# result.vector_matches — semantically similar papers
+# result.all_node_names() — deduplicated union
+No other tool in the knowledge graph space offers this combination out of the box.
+
+How NeuroCore and NeuroWeave Work Together in AC1-LLM
+The two frameworks have a clean division of responsibility. NeuroCore orchestrates what happens and in what order. NeuroWeave remembers what the agent has learned and how it connects.
+
+In the AC1-LLM pipeline, neurocore-skill-neuroweave is the bridge skill — a NeuroCore AsyncSkill that wraps NeuroWeave's async facade. After Grobid parses the full-text PDFs into structured TEI XML, the neuroweave skill ingests the extracted content into the knowledge graph:
+
+# In ac1-research.flow.yaml
+- name: neuroweave-ingest
+  type: neuroweave
+  config:
+    mode: context          # process new knowledge + query for relevant context
+    llm_provider: anthropic
+    llm_model: "claude-haiku-4-5-20251001"
+    extraction_mode: scientific  # use the mathematical extraction prompt
+The mode context means the skill does two things in a single step: it processes the incoming papers (extracting entities and relations into the graph), then queries the graph for everything relevant to the current research problem and injects that context into the FlowContext for the downstream ac1-researcher skill to read.
+
+The researcher skill gets, as input, not just the raw papers from this session, but the accumulated knowledge from every prior session that is relevant to the current problem. It knows which conjectures are still open. It knows which proof techniques have been tried. It knows which papers cite each other and which authors tend to work on related problems.
+
+This is the difference between an agent that starts fresh on every run and an agent that genuinely learns.
+
+Why Open Source, and What’s Next
+Both NeuroCore and NeuroWeave are Apache 2.0 licensed. We could have kept them internal, and for a while we did. The decision to open-source was pragmatic as much as philosophical.
+
+Pragmatic: the best way to find the bugs in a framework is to have people use it for problems we didn’t anticipate. The adversarial review panel in AC1-LLM uses Gemini for reproducibility auditing. We hadn’t originally planned for that. The need to add GeminiProvider in v0.2.1 made the LLMProvider protocol more battle-tested, not less.
+
+Philosophical: if we’re building toward artificial consciousness research — which is what the Laflamme-3T Conjecture and AC1-LLM are ultimately about — the last thing we want is the foundational infrastructure to be a proprietary black box. The work needs to be reproducible. The provenance needs to be transparent. The tools need to be inspectable.
+
+Current state of both frameworks:
+
+neurocore-ai at v0.2.1 ships with: AsyncSkill base class, concurrent DAG execution via topological layer scheduling, streaming execution events, a typed LLMProvider protocol covering Anthropic, OpenAI, and Gemini, exponential backoff with full jitter on all skills, and thirteen research skills covering arXiv, OpenAlex, Semantic Scholar, Tavily, Exa, CORE, Unpaywall, Qdrant, Grobid, Lean4, SageMath, SymPy, and OEIS.
+
+neuroweave-python at v0.2.1 ships with: a fully async AbstractGraphStore interface, in-memory and Neo4j backends, twelve scientific node types and eighteen relation types, a scientific LLM extraction prompt, bulk document ingestion with four chunking strategies, Qdrant vector bridge with concurrent graph + vector search, cross-session entity deduplication, and proof chain traversal queries.
+
+The Honest Trade-Offs
+We would not be doing you any favors by pretending these frameworks have no trade-offs.
+
+Ecosystem breadth. LangChain has over a thousand integrations built and debugged over three years. NeuroCore has thirteen research skills and growing. If your use case requires a quick integration with Salesforce, Notion, or a long-tail API that nobody has written a skill for yet, LangChain will save you time. Our answer to this is the entry-point plugin system — writing a new skill takes an afternoon — but that’s still more work than pip-installing an existing LangChain integration.
+
+Community and documentation. LangChain has hundreds of tutorials, a Discord with thousands of members, and a StackOverflow presence. NeuroCore and NeuroWeave have a GitHub repo, this article, and a small but growing group of early adopters. If you get stuck, you may have to read the source rather than search for an answer.
+
+Production hardening. LangChain and LangGraph have been run in production by thousands of teams. NeuroCore and NeuroWeave have been run in production by us. We’ve fixed the bugs we’ve found — the Neo4j async bridge failure in v0.2.1 is a good example — but we haven’t found all of them yet.
+
+These trade-offs are real. For a generic chatbot, a simple RAG pipeline, or a prototype that needs to be shipped this week, you should evaluate whether the trade-offs are worth it. For us — building a perpetual autonomous research agent with typed mathematical knowledge, concurrent scientific tool execution, and formal proof verification — they absolutely are.
+
+Getting Started
+If you’re building something that needs typed skill contracts, concurrent DAG execution, or a knowledge graph that understands mathematical structure, we’d love for you to try these frameworks.
+
+# NeuroCore — orchestration
+pip install neurocore-ai
+# With research skills
+pip install neurocore-skill-arxiv neurocore-skill-tavily neurocore-skill-lean4
+# NeuroWeave — knowledge graph memory
+pip install neuroweave-python
+# With persistent Neo4j backend
+pip install neuroweave-python[neo4j]
+# With Qdrant vector bridge
+pip install neuroweave-python[qdrant]
+The repos are at github.com/alexh-scrt/neurocore and github.com/alexh-scrt/neuroweave. Issues, PRs, and skill contributions are all welcome.
+
+The first AC1-LLM research results will be published at RavenNest.Science. We’re building something genuinely new. We think you might want to build with the same tools.
+
+AC1-LLM is the research agent implementation of the Laflamme-3T Conjecture — a theoretical framework defining consciousness as self-referential energy-information transduction producing measurable local entropy reduction. The RavenNest.Science portal publishes Lean4-verified mathematical results produced autonomously by AC1-LLM in the domains of combinatorics, graph theory, and number theory.
