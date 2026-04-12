@@ -103,6 +103,7 @@ import ClinicalBrainPage          from "@/pages/ClinicalBrainPage";
 import CognitiveBrainPage         from "@/pages/CognitiveBrainPage";
 import AgentSystemPage            from "@/pages/AgentSystemPage";
 import HospitalDashboard          from "@/pages/HospitalDashboard";
+import AuralynControlSystem       from "@/pages/AuralynControlSystem";
 import IntegrationHealthPage from "@/pages/IntegrationHealthPage";
 import EngineMaintenancePage from "@/pages/EngineMaintenancePage";
 import AgentLabPage from "@/pages/AgentLabPage";
@@ -200,6 +201,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.COGNITIVE_BRAIN}        component={CognitiveBrainPage} />
         <Route path={ROUTES.AGENT_SYSTEM}           component={AgentSystemPage} />
         <Route path={ROUTES.HOSPITAL}               component={HospitalDashboard} />
+        <Route path={ROUTES.AURALYN}                component={AuralynControlSystem} />
         <Route path={ROUTES.INTEGRATION_HEALTH}>{() => <RoleGuard allowedRoles={["admin"]}><IntegrationHealthPage /></RoleGuard>}</Route>
         <Route path={ROUTES.ENGINE_MAINTENANCE}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><EngineMaintenancePage /></RoleGuard>}</Route>
         <Route path={ROUTES.AGENT_LAB}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><AgentLabPage /></RoleGuard>}</Route>
