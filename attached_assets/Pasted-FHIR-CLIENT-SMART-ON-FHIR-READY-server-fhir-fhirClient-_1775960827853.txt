@@ -1,0 +1,106 @@
+FHIR CLIENT (SMART ON FHIR READY)
+// server/fhir/fhirClient.ts
+
+import fetch from "node-fetch"
+
+const FHIR_BASE = process.env.FHIR_BASE_URL
+
+export async function getPatient(patientId: string) {
+  const res = await fetch(`${FHIR_BASE}/Patient/${patientId}`, {
+    headers: {
+      Authorization: `Bearer ${process.env.FHIR_TOKEN}`
+    }
+  })
+
+  return res.json()
+}
+🧾 CREATE ENCOUNTER (BILLABLE VISIT)
+// server/fhir/createEncounter.ts
+
+export async function createEncounter(patientId: string) {
+  const encounter = {
+    resourceType: "Encounter",
+    status: "finished",
+    subject: {
+      reference: `Patient/${patientId}`
+    }
+  }
+
+  await fetch(`${FHIR_BASE}/Encounter`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.FHIR_TOKEN}`
+    },
+    body: JSON.stringify(encounter)
+  })
+}
+💰 CPT BILLING ENGINE
+// server/billing/cptEngine.ts
+
+export function generateCPT(ctx: any) {
+  if (ctx.complexity === "high") {
+    return ["99285"] // ER high complexity
+  }
+
+  if (ctx.complexity === "moderate") {
+    return ["99284"]
+  }
+
+  return ["99283"]
+}
+🔗 Hook into pipeline
+ctx.set("billingCodes", generateCPT(ctx))
+await createEncounter(ctx.patientId)
+⚖️ 2. FDA VALIDATION DASHBOARD LAYER
+
+This is what moves you toward:
+👉 SaMD (Software as Medical Device)
+
+🧠 VALIDATION ENGINE
+// server/fda/validationEngine.ts
+
+export function validateCase(result: any, expected: any) {
+  const correct = result.diagnosis === expected.diagnosis
+
+  return {
+    correct,
+    riskLevel: result.risk || "unknown"
+  }
+}
+📊 METRICS AGGREGATOR
+// server/fda/metrics.ts
+
+export function computeMetrics(cases: any[]) {
+  let correct = 0
+
+  cases.forEach(c => {
+    if (c.correct) correct++
+  })
+
+  return {
+    accuracy: correct / cases.length,
+    total: cases.length
+  }
+}
+📈 FDA DASHBOARD API
+// server/api/fda.ts
+
+import { computeMetrics } from "../fda/metrics"
+
+export function getFDAMetrics(req, res) {
+  const data = req.app.locals.validationCases
+  res.json(computeMetrics(data))
+}
+🎛️ FRONTEND DASHBOARD
+// client/components/FDADashboard.tsx
+
+export function FDADashboard({ metrics }) {
+  return (
+    <div className="p-4 border">
+      <h2>FDA Validation</h2>
+      <p>Accuracy: {(metrics.accuracy * 100).toFixed(2)}%</p>
+      <p>Total Cases: {metrics.total}</p>
+    </div>
+  )
+}

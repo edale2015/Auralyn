@@ -1,0 +1,254 @@
+SYSTEM ARCHITECTURE OVERVIEW
+                ┌──────────────────────────┐
+                │   Patient Input Layer    │
+                └──────────┬───────────────┘
+                           ↓
+        ┌─────────────────────────────────────────┐
+        │  Cognitive Core Orchestrator (NEW)      │
+        │                                         │
+        │  1. Clinical Monologue Engine           │
+        │  2. Multi-Agent Debate Council          │
+        │  3. Strategy Selector                   │
+        │  4. Bayesian Engine (existing)          │
+        │  5. Disposition Engine (upgraded)       │
+        │  6. Bias Suppression Layer              │
+        │  7. Memory Graph (NEW)                  │
+        └─────────────────────────────────────────┘
+                           ↓
+        ┌─────────────────────────────────────────┐
+        │ Output Layer                            │
+        │ - Diagnosis                             │
+        │ - Disposition                           │
+        │ - Patient Communication                 │
+        │ - Audit Trace                           │
+        └─────────────────────────────────────────┘
+🔥 CORE MODULES (FULL CODE)
+1. 🧠 Cognitive Orchestrator (THE BRAIN STEM)
+// server/cognitive/cognitiveOrchestrator.ts
+
+import { generateClinicalMonologue } from "./monologueEngine";
+import { runSpecialistDebate } from "./debateCouncil";
+import { runBayesianEngine } from "../bayesian/engine";
+import { selectStrategy } from "./strategyEngine";
+import { applyBiasGuards } from "./biasEngine";
+import { computeDisposition } from "./dispositionEngine";
+import { writeToMemoryGraph } from "./memoryGraph";
+
+export async function runCognitiveBrain(caseData: any) {
+  // 1. INTERNAL MONOLOGUE
+  const monologue = await generateClinicalMonologue(caseData);
+
+  // 2. BASE DIAGNOSIS (existing engine)
+  const bayesianResult = await runBayesianEngine(caseData);
+
+  // 3. MULTI-AGENT DEBATE
+  const debateResult = await runSpecialistDebate(caseData, bayesianResult);
+
+  // 4. STRATEGY SELECTION
+  const strategy = selectStrategy(monologue, debateResult);
+
+  // 5. BIAS SUPPRESSION
+  const safePlan = applyBiasGuards({
+    plan: debateResult,
+    monologue
+  });
+
+  // 6. FINAL DISPOSITION
+  const disposition = computeDisposition({
+    confidence: bayesianResult.confidence,
+    uncertainty: monologue.uncertainty_level,
+    disagreement: debateResult.disagreementScore,
+    redFlags: caseData.redFlags
+  });
+
+  // 7. MEMORY WRITE
+  await writeToMemoryGraph(caseData, {
+    monologue,
+    bayesianResult,
+    debateResult,
+    disposition
+  });
+
+  return {
+    diagnosis: safePlan.diagnosis,
+    disposition,
+    reasoning: {
+      monologue,
+      debate: debateResult
+    }
+  };
+}
+2. 🧠 Clinical Monologue Engine
+// server/cognitive/monologueEngine.ts
+
+export async function generateClinicalMonologue(context: any) {
+  return llm.generate({
+    system: `
+You are a clinical reasoning engine.
+
+Think BEFORE deciding.
+
+Analyze:
+- Diagnostic uncertainty
+- Dangerous misses
+- Patient expectation mismatch
+- Risk of overtreatment
+- Missing critical data
+
+Return JSON:
+{
+  "uncertainty_level": 0-1,
+  "dangerous_misses": [],
+  "bias_flags": [],
+  "confidence_gaps": [],
+  "recommended_strategy": "rule_out | reassure | escalate | observe"
+}
+`,
+    input: context
+  });
+}
+3. ⚖️ Multi-Agent Specialist Debate
+// server/cognitive/debateCouncil.ts
+
+const specialists = [
+  { name: "Cardiology", focus: "cardiac causes" },
+  { name: "InfectiousDisease", focus: "infection" },
+  { name: "Pulmonary", focus: "lung causes" }
+];
+
+export async function runSpecialistDebate(caseData: any, baseResult: any) {
+  const opinions = await Promise.all(
+    specialists.map(s =>
+      llm.generate({
+        system: `You are a ${s.name} specialist. Focus on ${s.focus}.`,
+        input: { caseData, baseResult }
+      })
+    )
+  );
+
+  const synthesis = await llm.generate({
+    system: `
+Resolve disagreement.
+
+Return:
+{
+  "final_diagnosis": "",
+  "disagreementScore": 0-1,
+  "most_dangerous_miss": "",
+  "confidence": 0-1
+}
+`,
+    input: opinions
+  });
+
+  return synthesis;
+}
+4. 🧠 Strategy Engine
+// server/cognitive/strategyEngine.ts
+
+export function selectStrategy(monologue: any, debate: any) {
+  if (monologue.uncertainty_level > 0.7) return "rule_out";
+  if (debate.disagreementScore > 0.5) return "escalate";
+  return monologue.recommended_strategy;
+}
+5. 🚨 Bias Suppression Engine
+// server/cognitive/biasEngine.ts
+
+export function applyBiasGuards({ plan, monologue }: any) {
+  if (monologue.bias_flags.includes("over-treatment")) {
+    return {
+      ...plan,
+      medications: plan.medications?.filter(m => m !== "antibiotic")
+    };
+  }
+
+  return plan;
+}
+6. 📉 Disposition Engine (Upgraded)
+// server/cognitive/dispositionEngine.ts
+
+export function computeDisposition({
+  confidence,
+  uncertainty,
+  disagreement,
+  redFlags
+}: any) {
+  if (redFlags) return "ED";
+
+  if (uncertainty > 0.6 || disagreement > 0.5)
+    return "URGENT_CARE";
+
+  if (confidence > 0.85) return "HOME";
+
+  return "FOLLOW_UP";
+}
+7. 🧬 Memory Graph (Neo4j-style logic)
+// server/cognitive/memoryGraph.ts
+
+const memory = [];
+
+export async function writeToMemoryGraph(caseData: any, result: any) {
+  memory.push({
+    timestamp: Date.now(),
+    symptoms: caseData.symptoms,
+    diagnosis: result.bayesianResult?.topDiagnosis,
+    disposition: result.disposition,
+    uncertainty: result.monologue.uncertainty_level
+  });
+}
+8. 🧪 Golden Case Cognitive Harness
+// server/tests/cognitiveHarness.ts
+
+import { runCognitiveBrain } from "../cognitive/cognitiveOrchestrator";
+
+export async function runGoldenCase(caseData, expected) {
+  const result = await runCognitiveBrain(caseData);
+
+  return {
+    correctDiagnosis: result.diagnosis === expected.diagnosis,
+    safeDisposition: result.disposition === expected.disposition,
+    reasoningValid: result.reasoning.monologue.uncertainty_level >= 0
+  };
+}
+9. 📊 Control Tower Dashboard Additions
+
+Add panels:
+
+🧠 Cognitive State
+Uncertainty gauge
+Bias flags
+Strategy mode
+⚖️ Debate Panel
+Specialist votes
+Disagreement score
+🧬 Memory Trends
+Repeat visits
+Outcome tracking
+10. 🧠 Patient Communication Generator
+// server/cognitive/communicationEngine.ts
+
+export function generatePatientMessage(result: any) {
+  if (result.disposition === "HOME") {
+    return "Your symptoms are most consistent with a viral illness...";
+  }
+
+  if (result.disposition === "URGENT_CARE") {
+    return "Given some uncertainty, it's safest to evaluate you in person...";
+  }
+
+  return "We recommend immediate evaluation in the ER...";
+}
+🚀 WHAT YOU NOW HAVE
+
+This system now:
+
+🧠 THINKS
+internal monologue shapes decisions
+⚖️ DEBATES
+specialists disagree and resolve
+📉 HANDLES UNCERTAINTY
+escalates safely
+🚨 PREVENTS BAD MEDICINE
+suppresses overtreatment
+🧬 LEARNS
+memory graph evolves

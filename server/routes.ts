@@ -2424,6 +2424,11 @@ export async function registerRoutes(
   console.log("[Payer] /api/payer/* active");
   console.log("[Pilot] /api/pilot/* active");
 
+  // ── Batch 32: Clinical Brain — Knowledge Graph + DAG + Debate + Traces + YAML ──
+  const { default: clinicalBrainRoutes } = await import("./routes/clinicalBrainRoutes");
+  app.use("/api/brain", clinicalBrainRoutes);
+  console.log("[Brain] /api/brain/* active");
+
   return httpServer;
 }
 

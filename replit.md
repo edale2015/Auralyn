@@ -1302,3 +1302,70 @@ ECW → Athena → Epic → UI Automation → Vision Agent → failed
 - Payer ROI: simulate ROI from trial results — avoided ED visits, total savings, annualized $
 - Contract Engine: volume-driven contract simulation + negotiation strategy with levers and uplift %
 - Pilot Encounter: live encounter form (patientId, complaint, vitals) → clinical result + CPT code + EHR submission status
+
+---
+
+## Batch 32 — Medical Knowledge Graph + DAG Visualizer + Debate Engine + YAML Pipelines + Trace Replay (COMPLETE)
+
+**Test count: 2,525/2,525 passing across 66 files (+46 new tests in `tests/unit/batch32.test.ts`)**
+
+### Knowledge Graph Layer (`server/graph/`)
+
+**`server/graph/schema.ts`** — `NodeType` enum (disease/symptom/sign/test/treatment/risk_factor/pattern) + `RelationType` enum (CAUSES/INDICATES/ASSOCIATED_WITH/TREATED_BY/CONTRAINDICATED_WITH/SUPPORTS/RULE_TRIGGER) + `GraphNode`/`GraphEdge` interfaces.
+
+**`server/graph/graphStore.ts`** — `MedicalGraphStore` singleton (`graphStore`): in-memory relational graph (no Neo4j dependency). `createNode()`, `createRelation()`, `getRelated()`, `getRelatedTo()`, `allNodes()`, `allEdges()`, `seed()`. Pre-seeded with 45 nodes and 40 edges covering diseases (ACS/PE/Sepsis/Pneumonia/CHF/COPD/COVID-19/Strep/UTI/Meningitis), symptoms, signs, tests, treatments, and risk factors.
+
+**`server/graph/queries.ts`** — `getRelatedDiseases(symptom[])`: weighted INDICATES traversal sorted by score. `getRecommendedTests(disease)`: SUPPORTS traversal. `getRecommendedTreatments(disease)`: TREATED_BY traversal. `getRiskFactors(disease)`: reverse CAUSES traversal. `getDiagnosticContext(symptoms[])`: full enriched candidate list with tests + treatments + risk factors.
+
+### Agent Infrastructure
+
+**`server/registry.ts`** — Central agent registry: `registerAgent(name, factory)`, `getAgent(name)` (throws descriptively on miss), `listAgentContracts()`, `listAgentNames()`. Pre-registers `redFlagAgent`.
+
+**`server/api/agentContracts.ts`** — `getAgentContracts()` reads registry contracts. `buildDAGFromContracts(contracts)`: produces a `{nodes[], edges[]}` DAG with both `agent` and `data` typed nodes and labelled input/output edges.
+
+**`server/api/dagApi.ts`** — `getDAG()`: builds DAG from registered agents. `getKnowledgeGraph()`: exports full graph + stats.
+
+### YAML Pipeline Engine (`server/yaml/`)
+
+**`server/yaml/loader.ts`** — `loadPipeline(filePath)` reads from disk. `parsePipeline(yamlText)` parses in-memory. `PipelineConfig` interface: `{name, agents[], flow: FlowStep[], meta?}`.
+
+**`server/yaml/executor.ts`** — `runYamlPipeline(config, input)`: executes parallel and sequential steps using registry + FlowContext. Returns `{pipelineName, steps, context, durationMs}`.
+
+**`pipelines/chestPain.yaml`** — Sample pipeline: `[parallel: [redFlag]]`.
+
+### LLM Specialist Agents
+
+**`server/agents/cardiologyLLMAgent.ts`** — `CardiologyLLMAgent.evaluate(ctx)`: calls GPT-4o-mini with cardiology system prompt + JSON response format. Falls back to rule-based logic (chest pain + HR > 100 → Possible ACS) when OpenAI unavailable.
+
+**`server/agents/pulmonaryLLMAgent.ts`** — `PulmonaryLLMAgent.evaluate(ctx)`: calls GPT-4o-mini with pulmonology system prompt. Falls back: SOB + SpO2 < 93 → acute respiratory compromise.
+
+### Debate Engine
+
+**`server/debate/debateEngine.ts`** — `runDebate(agents[], ctx)`: runs all agents in parallel, scores by confidence-weighted vote, picks consensus diagnosis. Returns `{opinions[], consensus{diagnosis, totalScore}, dissent[], summary}`.
+
+### Execution Trace Replay
+
+**`server/audit/traceStore.ts`** — In-memory circular buffer (max 200 traces). `saveTrace()`, `getTrace(id)`, `listTraces(limit)`, `traceCount()`, `clearTraces()`. Newest first; auto-prunes above 200.
+
+### New Routes — `GET|POST /api/brain/*`
+
+- `GET /api/brain/agents` — registered agent contracts
+- `GET /api/brain/dag` — agent pipeline DAG (nodes + edges)
+- `GET /api/brain/knowledge-graph` — full graph + stats
+- `GET /api/brain/knowledge-graph/query?symptoms=chest+pain,fever` — enriched diagnostic candidates
+- `GET /api/brain/traces?limit=20` — list execution traces
+- `GET /api/brain/traces/:id` — single trace replay
+- `DELETE /api/brain/traces` — clear all traces
+- `POST /api/brain/debate` — multi-specialist debate (Cardiology + Pulmonary)
+- `POST /api/brain/pipeline/run` — run a named YAML pipeline
+- `GET /api/brain/pipeline/list` — list available pipelines
+
+### New Frontend
+
+**`client/src/pages/ClinicalBrainPage.tsx`** — 6-tab Control Tower at `/clinical-brain`:
+- Agents: agent contract cards (consumes/provides badges per registered agent)
+- DAG: ReactFlow-powered agent dependency graph (agent nodes purple, data nodes blue)
+- Knowledge Graph: symptom query → scored disease candidates with tests, treatments; stats badge
+- Debate: live multi-specialist debate form → opinions grid with confidence %, consensus, summary
+- Replay: execution trace list + step-by-step replay viewer (agent name, input→output, duration)
+- YAML Pipeline: pipeline name + JSON input → run → context dump with duration
