@@ -2471,6 +2471,11 @@ export async function registerRoutes(
   });
   console.log("[Vitals] POST /api/vitals/evaluate active");
 
+  // ── Batch 38: Autonomous Hospital Layer ──────────────────────────────────────
+  const { default: hospitalRoutes } = await import("./hospital/hospitalRoutes");
+  app.use("/api/hospital", hospitalRoutes);
+  console.log("[Hospital] /api/hospital/* active");
+
   // ── Batch 35: Phase 2/3 Evolution — Specialist Council, Drift, FDA, Sim, WebSocket ──
   const { initPatientStream }      = await import("./realtime/patientStream");
   initPatientStream(httpServer);   // attaches WS to existing HTTP server at /ws/patients

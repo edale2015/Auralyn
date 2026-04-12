@@ -53,4 +53,5 @@ export const ROUTES = {
   CLINICAL_BRAIN:            "/clinical-brain",
   COGNITIVE_BRAIN:           "/cognitive-brain",
   AGENT_SYSTEM:              "/agent-system",
+  HOSPITAL:                  "/hospital",
 };

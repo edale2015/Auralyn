@@ -52,6 +52,7 @@ const NAV_ITEMS = [
   { path: ROUTES.AUTONOMOUS_BRAIN, label: "Autonomous Brain", icon: Zap },
   { path: ROUTES.COGNITIVE_BRAIN,          label: "Cognitive Brain v2",    icon: BrainCircuit },
   { path: ROUTES.AGENT_SYSTEM,             label: "Agent System",          icon: ShieldCheck  },
+  { path: ROUTES.HOSPITAL,                 label: "Hospital Layer",         icon: Hospital     },
   { path: ROUTES.CLINICAL_BRAIN_DASHBOARD, label: "Brain Control Tower", icon: Brain },
   { path: ROUTES.HIERARCHICAL_COUNCIL, label: "Council Dashboard", icon: Brain },
   { path: ROUTES.BRAIN_COMMAND_CENTER, label: "Brain Command Center", icon: BrainCircuit },

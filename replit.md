@@ -1539,3 +1539,52 @@ All spec code from the uploaded attachments (System Evolution Map Phase 2/3 + pr
 - `GET  /api/sim/patients` → 5-element array
 - `GET  /api/sim/heatmap/1` → 5-item posterior with ACS at 0.38 probability (top)
 - `GET  /api/advanced/stream/status` → `{connected:0, wsPath:"/ws/patients"}`
+
+### Batch 38 — Autonomous Hospital Layer (2,777/2,777 tests · 72 files)
+
+**5 new server modules** at `server/hospital/`:
+
+**`schedulingEngine.ts`** — Priority-queue appointment scheduling
+- `bookAppointment`, `cancelAppointment`, `updateStatus`, `listAppointments`, `estimateWaitTime`, `getScheduleSummary`
+- Priority 1–5 (1=critical), auto-sorted queue, wait-time projection by acuity
+
+**`staffingEngine.ts`** — Shift management & ratio monitoring
+- Safe nurse:patient ratios per unit (ICU 1:2, ED 1:4, MedSurg 1:5, etc.)
+- `checkStaffingRatios` → RATIO_BREACH / UNDERSTAFFED / COVERAGE_GAP / OVERTIME alerts
+- `computeShiftDemand` — per-unit deficit calculation; `getStaffingSummary`
+
+**`bedManagement.ts`** — Real-time bed occupancy & patient flow
+- 106-bed inventory across 6 units: ED, ICU, MedSurg, Urgent Care, OB, PEDS
+- Bed lifecycle: AVAILABLE → OCCUPIED → CLEANING → AVAILABLE
+- `admitPatient`, `dischargePatient`, `markBedAvailable`, `getOccupancyReport`, `getHospitalCapacity`
+
+**`populationHealth.ts`** — Cohort risk stratification & chronic disease tracking
+- 20-patient seeded population with readmission risk modeling
+- Risk tiers: LOW / MEDIUM / HIGH / VERY_HIGH (CHF+CKD pushes VERY_HIGH)
+- `analyzeConditionCohort` (cohort summary per chronic condition), `getReadmissionAlerts`, preventive care gap analysis
+
+**`hospitalAgent.ts`** — Autonomous hospital monitoring agent
+- Action types: ESCALATE / DISCHARGE_SUGGEST / STAFF_ALERT / CAPACITY_ALERT / READMISSION_RISK / DIVERT_RECOMMEND
+- Ring buffer action log (500 entries), `resolveAction`, `getAgentStats`, WS broadcast on critical actions
+- Per run: scans capacity, unit occupancy, critical patients (acuity 1), staffing ratios, shift deficits, readmission risk
+
+**`hospitalRoutes.ts`** — Mounted at `/api/hospital/*`
+- `GET  /api/hospital/status` — unified hospital status (capacity + staffing + scheduling + population + agent)
+- `GET  /api/hospital/beds`, `GET /api/hospital/beds/capacity`
+- `POST /api/hospital/beds/admit`, `POST /api/hospital/beds/:id/discharge`, `POST /api/hospital/beds/:id/available`
+- `GET/POST /api/hospital/schedule`, `DELETE /api/hospital/schedule/:id`, `PATCH /api/hospital/schedule/:id/status`
+- `GET  /api/hospital/staffing`, `GET/POST /api/hospital/staffing/staff`, `POST /api/hospital/staffing/patient-counts`
+- `GET  /api/hospital/population`, `GET /api/hospital/population/patients`, `GET /api/hospital/population/cohort/:condition`
+- `GET  /api/hospital/population/readmission-alerts`, `POST /api/hospital/population/patients`
+- `POST /api/hospital/agent/run`, `GET /api/hospital/agent/log`, `GET /api/hospital/agent/stats`, `POST /api/hospital/agent/resolve/:id`
+
+**Frontend**: `client/src/pages/HospitalDashboard.tsx` at `/hospital` — 5-tab dashboard (Overview, Beds, Staffing, Population, Agent)
+
+### Confirmed Live Responses (Batch 38)
+
+- `GET /api/hospital/status` → occupancy:0.519, activeStaff:8, appts:4 (seeded), highRisk:11
+- `POST /api/hospital/agent/run` → 39 actions (23 critical, 10 high, 6 medium), durationMs:2
+- `GET /api/hospital/beds/capacity` → 106 beds, 55 occupied (51.9%), 6 units
+- `GET /api/hospital/population` → 20 patients, 11 high-risk, avgReadmission:0.361, gapRate:0.9
+- `GET /api/hospital/staffing` → 8 staff, 13 alerts, 26 total nurse deficit
+- `POST /api/hospital/beds/admit {unit:ED}` → admitted to ED-006, status:OCCUPIED
