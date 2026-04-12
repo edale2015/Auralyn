@@ -1,6 +1,8 @@
 import type { ClinicalWorkflowInput, ClinicalWorkflowState } from "../types/clinical";
 import { auditTraceService } from "../services/auditTraceService";
 import { runToolWithTrace } from "../services/workflowRuntime";
+import { auditHashChain } from "../services/hashChain";
+import { driftDetectionService } from "../services/driftDetectionService";
 
 const WORKFLOW_STEPS = [
   { stepName: "collect-intake",          toolName: "intake.collect",       notes: ["Normalise incoming payload"] },
@@ -36,8 +38,27 @@ export async function runClinicalWorkflow(
       context,
       [...step.notes]
     );
+
+    // Record every step to the immutable hash chain
+    auditHashChain.add({
+      traceId,
+      step:    step.stepName,
+      riskLevel: state.riskLevel,
+      confidence: state.confidence,
+    });
   }
 
   state.traceSummary = auditTraceService.summarize(traceId);
+
+  // Record to drift detector after full run
+  driftDetectionService.record({
+    complaint:     state.complaint ?? input.complaint,
+    avgConfidence: state.confidence ?? 0,
+    avgRisk:       state.riskLevel === "critical" ? 1
+                 : state.riskLevel === "high"     ? 0.75
+                 : state.riskLevel === "moderate" ? 0.5
+                 : 0.1,
+  });
+
   return state;
 }

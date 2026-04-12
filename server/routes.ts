@@ -2392,6 +2392,16 @@ export async function registerRoutes(
   console.log("[GoldenCases] /api/golden-cases/* active");
   console.log("[RLHF] /api/rlhf/* active");
 
+  // ── Batch 30: FDA Validation Engine + Immutable Hash Chain + Drift Detection ──
+  const { default: fdaRoutes }   = await import("./routes/fdaRoutes");
+  const { default: driftRoutes } = await import("./routes/driftRoutes");
+
+  app.use("/api/fda",   fdaRoutes);
+  app.use("/api/drift", driftRoutes);
+
+  console.log("[FDA] /api/fda/* active");
+  console.log("[Drift] /api/drift/* active");
+
   return httpServer;
 }
 

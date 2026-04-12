@@ -1208,3 +1208,43 @@ ECW → Athena → Epic → UI Automation → Vision Agent → failed
 ### New Frontend
 
 **`client/src/pages/MissionControlPhase2.tsx`** — 4-tab dashboard at `/mission-control-phase2`: Clinical Workflow (8-step runner with trace summary), Monitoring (real-time deterioration form), Golden Cases (suite runner with pass/fail), RLHF (feedback submission + proposal management).
+
+---
+
+## Batch 30 — FDA Validation Engine + Immutable Hash Chain + Drift Detection (COMPLETE)
+
+**Test count: 2,425/2,425 passing across 64 files (+29 new tests in `tests/unit/batch30.test.ts`)**
+
+### New Services
+
+**`server/services/fdaValidationService.ts`** — `FDAValidationService.generateReport(runs)`: accuracy, high-risk failures (missed ED-now), readinessGrade (A/B/C/F), fdaReady flag, criticalMisses[], recommendations[]. Requires ≥80% accuracy AND 0 critical misses for FDA-ready.
+
+**`server/services/hashChain.ts`** — `HashChain` singleton (`auditHashChain`): `add(data)` SHA-256 chains each record to its predecessor (prevHash), `verify()` walks the full chain for tamper detection, `latest()`, `getChain()`, `length()`. First record has prevHash="GENESIS".
+
+**`server/services/driftDetectionService.ts`** — Per-complaint confidence drift detector (separate from existing rule-based engine). Rolling 10-sample window: older 5 vs recent 5. `detect(complaint?)` returns drift/difference/recentAvg/olderAvg/details. `record()`, `clear()`, `history_length()`. Threshold: 10% confidence delta.
+
+### Workflow Engine Upgrades
+
+**`server/workflows/clinicalWorkflowEngine.ts`** — Updated to hook `auditHashChain.add()` after each of the 8 steps, and `driftDetectionService.record()` after every full workflow run. Both hooks are non-blocking and preserve existing functionality.
+
+**`server/services/goldenCaseRunner.ts`** — Fixed `runAllGoldenCases()` to return only current run results (not all historical), enabling accurate FDA report generation per invocation.
+
+### New Routes
+
+**`server/routes/fdaRoutes.ts`** — 4 endpoints:
+- `GET /api/fda/report` — generate FDA report from all golden case runs
+- `POST /api/fda/run-and-report` — execute golden cases + generate report in one call
+- `GET /api/fda/audit-chain` — full immutable hash chain dump
+- `GET /api/fda/audit-chain/verify` — quick tamper-check (valid:boolean + length)
+
+**`server/routes/driftRoutes.ts`** — 3 endpoints:
+- `GET /api/drift` — global drift detection (all complaints)
+- `GET /api/drift/:complaint` — complaint-specific drift
+- `POST /api/drift/record` — manual drift metric recording
+
+### New Frontend
+
+**`client/src/pages/SystemValidationDashboard.tsx`** — 3-tab dashboard at `/system-validation`:
+- FDA Validation: run-and-report button, readiness grade badge (A/B/C/F), accuracy %, high-risk misses, recommendations
+- Audit Chain: verify integrity, view latest hash, full chain explorer (last 10 records)
+- Drift Detection: record metrics, check global + per-complaint drift with delta visualization

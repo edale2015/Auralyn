@@ -22,6 +22,6 @@ export async function runAllGoldenCases(): Promise<GoldenCaseSuiteResult> {
     total:   results.length,
     passed:  results.filter((r) => r.passed).length,
     failed:  results.filter((r) => !r.passed).length,
-    results: goldenCaseService.listRuns(),
+    results,
   };
 }
