@@ -2581,6 +2581,11 @@ export async function registerRoutes(
   });
   console.log("[Cognitive] /api/cognitive-run and /api/cognitive/* active");
 
+  // ── Batch 51: SubagentRunner, HookMatcherConfig, ClinicalPluginBundler, AgentCorrectionLog ──
+  const { default: batch51Routes } = await import("./routes/batch51Routes");
+  app.use("/api/agents", batch51Routes);
+  console.log("[Batch51] /api/agents/subagents, /api/agents/hooks/matchers, /api/agents/plugins/bundles, /api/agents/corrections active");
+
   // ── Batch 50: Agent Scope Claims + Creep Auditor + Hook Engine ──
   const { default: scopeClaimsRoutes } = await import("./routes/scopeClaimsRoutes");
   app.use("/api/scope", scopeClaimsRoutes);

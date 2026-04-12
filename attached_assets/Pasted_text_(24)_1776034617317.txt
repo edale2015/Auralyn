@@ -1,0 +1,777 @@
+Build Agentic RAG using LangGraph
+Alpha Iterations
+Alpha Iterations
+
+Follow
+30 min read
+·
+Oct 19, 2025
+636
+
+
+2
+
+
+
+
+
+Press enter or click to view image in full size
+
+Traditional RAG vs Agentic RAG (Image by Author)
+Non-Members : read here
+
+Analogy
+I remember a situation from my 7th-grade English exam. One question was out of the syllabus, and all the students panicked. After the exam, some students asked the teacher to give marks for that question, and he agreed. Everyone was happy to get marks “for free.”
+
+In the real world, this doesn’t happen. When building a RAG (Retrieval-Augmented Generation) system, users will inevitably ask questions that are “out of syllabus,” meaning they are not covered by the system’s knowledge base. You can’t ask users to not ask such questions.
+
+To handle this, you build an Agentic RAG system — one that can recognize when a question isn’t in the knowledge base and autonomously perform a web search or other actions to provide a reliable answer.
+
+Introduction
+Retrieval-Augmented Generation (RAG) has transformed the way we build AI applications by combining the strengths of information retrieval and large language models (LLMs).
+In a RAG system, instead of feeding an entire large dataset directly into an LLM, the model retrieves the most relevant pieces of information (context) from an external knowledge base or document store in response to a user query. These retrieved chunks are then provided to the LLM to generate a grounded and context-aware response.
+
+The effectiveness of a RAG system primarily depends on two key factors: speed and accuracy.
+Both are influenced by variables such as embedding dimensionality, indexing method, and the complexity of the system’s architecture.
+
+In this article, we will explore an emerging RAG architecture known as Agentic RAG, and compare it with traditional (or “vanilla”) RAG systems. We’ll also demonstrate the differences through practical code examples.
+
+Traditional RAG System vs Agentic RAG
+Traditional RAG (Retrieval-Augmented Generation) follows a fixed “retrieve then generate” flow — it just grabs info from a set source and answers.
+
+Agentic RAG uses autonomous AI agents that actively decide what to retrieve, how, when and from which sources (like web, vector-dbs). It plans multi-step searches, adapts queries on the fly and reaches to the better answer in an iterative manner.
+
+Press enter or click to view image in full size
+
+Traditional RAG vs Agentic RAG (Image by Author)
+Where does a traditional RAG fail?
+Traditional RAG fails areas which demand adaptability and deeper reasoning across multiple knowledge base sources. Below are the key limitations of traditional RAG systems:
+
+Single-Pass Retrieval: Performs one-time retrieval, missing multi-hop reasoning and deeper contextual links.
+Irrelevant Retrieval & Hallucination: Retrieves semantically similar but contextually wrong data, causing factual errors.
+Static & Non-Adaptive: Lacks dynamic retrieval or refinement based on user intent, feedback, or evolving context.
+Scalability Limits: Constrained by context windows, poor large-scale aggregation, and high computational overhead.
+Let’s now start implementing Agentic RAG using LangGraph and ChromaDB and SerperAPI (WebSearch).
+
+Problem Statement
+Problem: How can we design a retrieval-augmented generation system that dynamically selects the most appropriate knowledge source, validates retrieved information, and produces grounded, context-aware responses in high-stakes domains like healthcare and medical devices?
+
+Proposed Solution: Introduce an agentic RAG pipeline where a lightweight routing agent chooses among multiple retrieval sources (Q&A dataset, device manuals, or web search), checks relevance of retrieved context, and only then generates answers using an LLM. This approach aims to improve accuracy, flexibility, and reliability compared to traditional RAG systems.
+
+Refer to the end to end github notebook here.
+
+Techstack
+Python
+LangGraph
+LangChain
+Chroma DB
+SerperAPI (websearch)
+OpenAI API (LLM)
+Importing the required Modules
+import pandas as pd
+import numpy as np
+import json
+import re
+from typing import List, Dict, Any, Tuple
+import faiss
+from sentence_transformers import SentenceTransformer
+from openai import OpenAI
+import time
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import seaborn as sns
+from dotenv import load_dotenv
+import openai
+import os
+from langchain_community.utilities import GoogleSerperAPIWrapper
+# ✅ Load environment variables
+load_dotenv()
+openai_api_key = os.getenv("OPEN_AI_KEY")
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+Load the Data
+Two CSV datasets are used in the experiments (both sampled down to 500 rows for quick iteration):
+
+Medical Questions & Answer Dataset
+A comprehensive medical question-and-answer dataset. We sample 500 rows and combines each row into a single `combined_text` field like: `Question: … Answer: … Type: …`.
+
+Source: Kaggle
+
+## Data 1: reading the Comprehensive Medical Q&A Dataset
+df_qa = pd.read_csv("medical_q_n_a.csv")
+## Data has 16407 rows, hence we will sample 500 rows for experimentation
+df_qa = df_qa.sample(500, random_state=0).reset_index(drop=True)
+print(df_qa.shape)
+df_qa.head()
+
+# Preparing the Dataframe for Vector DB by combining the Text
+df_qa['combined_text'] = (
+    "Question: " + df_qa['Question'].astype(str) + ". " +
+    "Answer: " + df_qa['Answer'].astype(str) + ". " +
+    "Type: " + df_qa['qtype'].astype(str) + ". "
+)
+df_qa.head()
+Press enter or click to view image in full size
+
+First 5 rows of Medical Question & Answer Dataset
+Medical Device Manual Dataset
+This contains medical device manuals and metadata. We sample 500 rows and creates `combined_text` like: `Device Name: … Model: … Manufacturer: … Indications: … Contraindications: …`.
+
+Source: Kaggle
+
+## Data 2: reading the Medical Device Manuals Dataset
+df_medical_device = pd.read_csv("medical_device_manuals_dataset.csv")
+print(df_medical_device.shape)
+## Data has 2694 rows, hence we will sample 500 rows for experimentation
+df_medical_device = df_medical_device.sample(500, random_state=0).reset_index(drop=True)
+print(df_medical_device.shape)
+
+# Preparing the Dataframe for Vector DB by combining the Text
+df_medical_device['combined_text'] = (
+    "Device Name: " + df_medical_device['Device_Name'].astype(str) + ". " +
+    "Model: " + df_medical_device['Model_Number'].astype(str) + ". " +
+    "Manufacturer: " + df_medical_device['Manufacturer'].astype(str) + ". " +
+    "Indications: " + df_medical_device['Indications_for_Use'].astype(str) + ". " +
+    "Contraindications: " + df_medical_device['Contraindications'].fillna('None').astype(str)
+)
+df_medical_device.head()
+Press enter or click to view image in full size
+
+First 5 rows of the Medical Device Manual Dataset
+Setting Up Vector Store (Chroma DB)
+Creating ChromaDB Client
+We create ChromDB client using chromadb library.
+
+import chromadb
+# Setting up the Chromadb
+client = chromadb.PersistentClient(path="./chroma_db")
+Creating the Collections
+We will create two collections, one for device manual dataset and one for Q&A Dataset
+
+Think of collections like tables in the database. For each source we will create one table.
+
+(If you are new to ChromaDB, please refer to my other article here which explains about ChromaDB basics and implementation)
+
+Collection 1: For Medical Q&A Dataset
+
+We will create a new collection “medical_q_n_a” and add data to it.
+
+# Collection 1 for medical Q&A Dataset
+collection1 = client.get_or_create_collection(name="medical_q_n_a")
+
+# Add data to collection
+# here the chroma db will use default embeddings (sentence transformers)
+collection1.add(
+    documents=df_qa['combined_text'].tolist(),
+    metadatas=df_qa.to_dict(orient="records"),
+    ids=df_qa.index.astype(str).tolist(),
+)
+# quick check
+query = "What are the treatments for Kawasaki disease ?"
+results = collection1.query(query_texts=[query],
+    n_results=3
+)
+print(results)
+Output:
+
+{'ids': [['1', '393', '60']],
+ 'embeddings': None,
+ 'documents': [["Question: What are the treatments for Kawasaki disease ?. Answer: These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care. Type: treatment. ",
+   'Question: What are the treatments for Krabbe Disease ?. Answer: There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.. Type: treatment. ',
+   'Question: What are the treatments for Ehlers-Danlos syndrome, progeroid type ?. Answer: How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.. Type: treatment. ']],
+ 'uris': None,
+ 'included': ['metadatas', 'documents', 'distances'],
+ 'data': None,
+ 'metadatas': [[{'qtype': 'treatment',
+    'combined_text': "Question: What are the treatments for Kawasaki disease ?. Answer: These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care. Type: treatment. ",
+    'Answer': "These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care",
+    'Question': 'What are the treatments for Kawasaki disease ?'},
+   {'qtype': 'treatment',
+    'combined_text': 'Question: What are the treatments for Krabbe Disease ?. Answer: There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.. Type: treatment. ',
+    'Answer': 'There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.',
+    'Question': 'What are the treatments for Krabbe Disease ?'},
+   {'Question': 'What are the treatments for Ehlers-Danlos syndrome, progeroid type ?',
+    'qtype': 'treatment',
+    'Answer': 'How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.',
+    'combined_text': 'Question: What are the treatments for Ehlers-Danlos syndrome, progeroid type ?. Answer: How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.. Type: treatment. '}]],
+ 'distances': [[0.4760013818740845, 0.9692587852478027, 1.0237324237823486]]}
+Collection 2: For Medical Device Manual Dataset
+
+We create a new collection called “medical_device_manual” and then add data to it.
+
+collection2 = client.get_or_create_collection(name="medical_device_manual")
+# Add data to collection
+# here the chroma db will use default embeddings (sentence transformers)
+collection2.add(
+    documents=df_medical_device['combined_text'].tolist(),
+    metadatas=df_medical_device.to_dict(orient="records"),
+    ids=df_medical_device.index.astype(str).tolist(),
+)
+# quick check
+query = "Which devices are suitable for neonatal patients?"
+
+results = collection2.query(query_texts=[query],
+    n_results=5
+)
+print(results)
+Output
+
+{
+  "ids": [["218", "149", "235"]],
+  "embeddings": null,
+  "documents": [["Device Name: Pacemaker. Model: JOH663. Manufacturer: Johnson & Johnson. Indications: Designed for catheterization support in neonatal intensive care environments.. Contraindications: Avoid use in patients with cardiac devices or cochlear implants. Not suitable for chemical exposure areas.",
+                 "Device Name: Infusion Pump. Model: Model 7800. Manufacturer: Intuitive Surgical. Indications: Designed for joint replacement support in neonatal intensive care environments.. Contraindications: Not recommended for use in geriatric patients or those with hepatic dysfunction.",
+                 "Device Name: Anesthesia Machine. Model: STR623. Manufacturer: Stryker. Indications: Designed for tissue biopsy support in neonatal intensive care environments.. Contraindications: Do not use in combination with sedatives or oxygen therapy modalities."]],
+  "uris": null,
+  "included": ["metadatas", "documents", "distances"],
+  "data": null,
+  "metadatas": [[{"Manufacturer": "Johnson & Johnson", "Number_of_Cautions": 10, "Model_Number": "JOH663", "combined_text": "Device Name: Pacemaker. Model: JOH663. Manufacturer: Johnson & Johnson. Indications: Designed for catheterization support in neonatal intensive care environments.. Contraindications: Avoid use in patients with cardiac devices or cochlear implants. Not suitable for chemical exposure areas.", "Indications_for_Use": "Designed for catheterization support in neonatal intensive care environments.", "Device_Name": "Pacemaker", "Manual_Version": "2021-01-A", "Device_Class": "Class II", "Number_of_Warnings": 10, "Sterilization_Method": "Not Applicable", "Device_Weight_kg": 0.06, "Publication_Date": "2023-09-27", "Regulatory_Approval_ID": "H148086", "Patient_Population": "Adult (18-65)", "Contraindications": "Avoid use in patients with cardiac devices or cochlear implants. Not suitable for chemical exposure areas.", "Max_Operating_Temperature_C": 39.0},
+                     {"Device_Class": "Class IIb", "Indications_for_Use": "Designed for joint replacement support in neonatal intensive care environments.", "Device_Lifetime_Years": 12.0, "Device_Name": "Infusion Pump", "Max_Operating_Temperature_C": 31.0, "Manual_Version": "2020-05-S", "Model_Number": "Model 7800", "Number_of_Warnings": 8, "Manufacturer": "Intuitive Surgical", "Sterilization_Method": "Dry Heat", "Contraindications": "Not recommended for use in geriatric patients or those with hepatic dysfunction.", "Device_Weight_kg": 2.83, "Patient_Population": "Adult and Pediatric", "Number_of_Cautions": 18, "combined_text": "Device Name: Infusion Pump. Model: Model 7800. Manufacturer: Intuitive Surgical. Indications: Designed for joint replacement support in neonatal intensive care environments.. Contraindications: Not recommended for use in geriatric patients or those with hepatic dysfunction.", "Regulatory_Approval_ID": "PMDA-473669", "Publication_Date": "2024-01-21"},
+                     {"Max_Operating_Temperature_C": 31.0, "combined_text": "Device Name: Anesthesia Machine. Model: STR623. Manufacturer: Stryker. Indications: Designed for tissue biopsy support in neonatal intensive care environments.. Contraindications: Do not use in combination with sedatives or oxygen therapy modalities.", "Manual_Version": "Rev. 5.6", "Number_of_Cautions": 17, "Publication_Date": "2017-09-04", "Contraindications": "Do not use in combination with sedatives or oxygen therapy modalities.", "Regulatory_Approval_ID": "BLA811783", "Sterilization_Method": "Not Applicable", "Patient_Population": "Geriatric", "Number_of_Warnings": 16, "Device_Name": "Anesthesia Machine", "Device_Weight_kg": 51.65, "Device_Class": "Class I", "Indications_for_Use": "Designed for tissue biopsy support in neonatal intensive care environments.", "Manufacturer": "Stryker", "Model_Number": "STR623", "Device_Lifetime_Years": 14.0}]],
+  "distances": [[1.0503746271133423, 1.0830397605895996, 1.0891238451004028]]
+}
+Setting Up WebSearch API:
+We use serperAPI for webserach (Google Search). It’s free tier provides 2500 free websearch API. It gives google search results for a given query in 1–2 seconds.
+
+You can find more details about it and get your API key from here
+
+from langchain_community.utilities import GoogleSerperAPIWrapper
+from dotenv import load_dotenv
+load_dotenv()
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+
+search = GoogleSerperAPIWrapper()
+# testing the google search API
+search.run(query="What are the various vaccines of COVID-19")
+Output:
+
+"Different types of COVID-19 vaccines: How they work · mRNA vaccine · mRNA vaccine · Messenger RNA (mRNA) vaccine · Viral vector vaccine · Viral vector vaccine ... First introduced in December 2020, the original COVID mRNA vaccines from both Pfizer and Moderna protected against the original SARS-CoV-2 virus ... Currently, there are two types of COVID-19 vaccines for use in the United States: mRNA, and protein subunit vaccines. None of these vaccines can ... On this page, you will find infographics to explain how different types of vaccines work, including the Pfizer/BioNTech vaccine, the Moderna vaccine and the ... Types of COVID-19 vaccines. Two types of COVID-19 vaccines are recommended for use in the United States: mRNA vaccines. Moderna COVID-19 Vaccine ... List of COVID-19 vaccine authorizations · Contents · Overview maps · Oxford–AstraZeneca · Pfizer–BioNTech · Janssen · Moderna · Sinopharm BIBP · Sputnik V. WHO recommends a simplified single-dose regime for primary immunization for most COVID-19 vaccines which would improve acceptance and uptake and provide ... Find information and answers to your questions about the COVID-19 vaccine, including scheduling, kid's shots, boosters, additional doses, records and more. The California Department of Public Health is dedicated to optimizing the health and well-being of Californians. Find out how the COVID-19 vaccines work, how many doses are needed, possible side effects and who shouldn't get the vaccine."
+Setting Up OpenAI API client:
+We will use gpt-5-nano model from Open AI API for this experiment.
+
+I chose this model as my experiment is very small and less complex. My prompts are very simple. In real world scenario, you might want to use higher models (gpt-5-mini / gpt-5).
+
+Refer below code:
+
+from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()
+openai_api_key = os.getenv("OPEN_AI_KEY")
+def get_llm_response(prompt: str) -> str:
+    """Function to get response from LLM"""
+    from openai import OpenAI
+    client_llm = OpenAI(api_key=openai_api_key)
+    response = client_llm.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
+
+## testing the LLM response
+prompt = "Explain the theory of relativity in simple terms in 30 words"
+response = get_llm_response(prompt)
+print(response)
+Relativity says physics laws work for observers, with no preferred frame, and nothing travels faster than light. Time and space bend with motion and gravity, equating mass and energy fundamentally.
+The fielding is set now. Let’s go for our RAG implementation. First we will build a Traditional RAG using first source (medical Q&A) and then we will move to Agentic RAG.
+
+Simple RAG- Code Implementation
+In this simple RAG, the flow is as follows:
+
+Query → Retrieve → Prompt Building (Augment) → Generate
+
+The flow is implemented using LangGraph’s StateGraph with three nodes (steps):
+
+1. Retriever: run a similarity query against the `medical_q_n_a` collection and join the top documents into a single context string.
+
+2. PromptBuilder: create a simple RAG prompt that injects the retrieved context and the user question, with a length constraint.
+
+3. LLM: call `get_llm_response(prompt)` and save the model output in the workflow state.
+
+from typing import Literal
+from langgraph.graph import StateGraph,MessagesState, START, END
+from openai import OpenAI
+from typing_extensions import TypedDict
+from typing import List
+
+# === Define workflow node functions ===
+def retrieve_context(state):
+    """Retrieve top documents from ChromaDB based on query."""
+    print("---RETRIEVING CONTEXT---")
+    query = state["query"] # last user message
+    results = collection1.query(query_texts=[query], n_results=3)
+    context = "\n".join(results["documents"][0])
+    #state["query"] = query
+    state["context"] = context
+    print(context)
+    # Save context in the state for later nodes
+    return state
+def build_prompt(state):
+    """Construct the RAG-style prompt."""
+    print("---AUGMENT (BUILDING PROMPT)---")
+    query = state["query"]
+    context = state["context"]
+    prompt = f"""
+            Answer the following question using the context below.
+            Context:
+            {context}
+            Question: {query}
+            please limit your answer in 50 words.
+            """
+    
+    state["prompt"] = prompt
+    print(prompt)
+    return state
+def call_llm(state):
+    """Call your existing LLM function."""
+    print("---GENERATE (CALLING LLM)---")
+    prompt = state["prompt"]
+    answer = get_llm_response(prompt)
+    state["response"] = answer
+    return state
+# === Build the workflow ===
+## Define the state structure
+class GraphState(TypedDict):
+    query : str
+    prompt : str
+    context : List[str]
+    response : str
+    
+workflow = StateGraph(GraphState)
+# Add nodes
+workflow.add_node("Retriever", retrieve_context)
+workflow.add_node("Augment", build_prompt)
+workflow.add_node("Generate", call_llm)
+# Define edges
+workflow.add_edge(START, "Retriever")
+workflow.add_edge("Retriever", "Augment")
+workflow.add_edge("Augment", "Generate")
+workflow.add_edge("Generate", END)
+# Compile agent
+rag_agent = workflow.compile()
+# === Run it ===
+from IPython.display import Image, display
+display(Image(rag_agent.get_graph().draw_mermaid_png()))
+Press enter or click to view image in full size
+
+Simple RAG (Image by Author)
+Testing the Simple RAG:
+
+input_state = {"query": "What are the treatments for Kawasaki disease ?"}
+from pprint import pprint
+for step in rag_agent.stream(input_state):
+    for key, value in step.items():
+        pprint(f"Finished running: {key}:")
+pprint(value["response"])
+Output:
+
+---RETRIEVING CONTEXT---
+Question: What are the treatments for Kawasaki disease ?. Answer: These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care. Type: treatment. 
+Question: What are the treatments for Krabbe Disease ?. Answer: There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.. Type: treatment. 
+Question: What are the treatments for Ehlers-Danlos syndrome, progeroid type ?. Answer: How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.. Type: treatment. 
+'Finished running: Retriever:'
+---AUGMENT (BUILDING PROMPT)---
+Answer the following question using the context below.
+            Context:
+            Question: What are the treatments for Kawasaki disease ?. Answer: These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care. Type: treatment. 
+Question: What are the treatments for Krabbe Disease ?. Answer: There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.. Type: treatment. 
+Question: What are the treatments for Ehlers-Danlos syndrome, progeroid type ?. Answer: How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.. Type: treatment. 
+            Question: What are the treatments for Kawasaki disease ?
+            please limit your answer in 50 words.
+            
+'Finished running: Augment:'
+---GENERATE (CALLING LLM)---
+'Finished running: Generate:'
+('Kawasaki disease is treated mainly with intravenous immunoglobulin (IVIG) '
+ 'and high-dose aspirin to reduce inflammation and prevent coronary artery '
+ 'aneurysms. If fever recurs or IVIG resistance occurs, additional treatments '
+ '(repeat IVIG, steroids) may be considered; ongoing monitoring with '
+ 'echocardiograms is recommended.')
+Fair and Simple right. But what if someone asks out of syllabus question!!
+
+Yes, the system fails miserably.
+
+Don’t worry, we have a Agentic RAG as our saviour.
+
+Agentic RAG- Code Implementation
+The core idea: instead of always using the same retriever, use a small routing agent that decides among multiple retrieval options and then validates the retrieved context for relevance.
+
+The flow is as follows:
+
+query → Router (Source Selection) → Retrieval → Relevance Checker → if relevant: Generate, if not relevant: Go to WebSearch → End
+
+These are implemented using LangGraph’s StateGraph nodes. The conditions are implemented using “conditional_edge”.
+
+Below are the key nodes:
+
+1. Router node: constructs a short decision prompt and asks the LLM to return one of three labels: `Retrieve_QnA`, `Retrieve_Device`, or `Web_Search`.
+
+2. Retriever nodes: one for the Q&A Chroma collection, one for the device manuals Chroma collection, and one for the web search API. Each returns a context string and sets a `source` label.
+
+3. Relevance checker: asks the LLM whether the retrieved context is relevant (answer should be `Yes` or `No`).
+
+4. Conditional routing: if relevance is `Yes`, continue to prompt building and LLM. If `No`, fall back to `Web_Search` and re-run the relevance check; the flow limits iterations to a maximum of 3 attempts.
+
+The agentic flow composes these nodes into a StateGraph with conditional edges.
+
+from typing import Literal
+from langgraph.graph import StateGraph,MessagesState, START, END
+from openai import OpenAI
+from typing_extensions import TypedDict
+from typing import List
+
+# === Define workflow node functions ===
+def retrieve_context_q_n_a(state):
+    """Retrieve top documents from ChromaDB Collection 1 (Medical Q&A Data) based on query."""
+    print("---RETRIEVING CONTEXT---")
+    query = state["query"] # last user message
+    results = collection1.query(query_texts=[query], n_results=3)
+    context = "\n".join(results["documents"][0])
+    state["context"] = context
+    state["source"] = "Medical Q&A Collection"
+    print(context)
+    # Save context in the state for later nodes
+    return state
+# === Define workflow node functions ===
+def retrieve_context_medical_device(state):
+    """Retrieve top documents from ChromaDB Collection 2 (Medical Device Manuals Data) based on query."""
+    print("---RETRIEVING CONTEXT---")
+    query = state["query"] # last user message
+    results = collection2.query(query_texts=[query], n_results=3)
+    context = "\n".join(results["documents"][0])
+    state["context"] = context
+    state["source"] = "Medical Device Manual"
+    print(context)
+    # Save context in the state for later nodes
+    return state
+def web_search(state):
+    """Perform web search using Google Serper API."""
+    print("---PERFORMING WEB SEARCH---")
+    query = state["query"]
+    search_results = search.run(query=query)
+    state["context"] = search_results
+    state["source"] = "Web Search"
+    print(search_results)
+    return state
+def router(state: GraphState) -> Literal[
+    "Retrieve_QnA", "Retrieve_Device", "Web_Search"
+]:
+    """Agentic router: decides which retrieval method to use."""
+    query = state["query"]
+    # A lightweight decision LLM - you can replace this with GPT-4o-mini, etc.
+    decision_prompt = f"""
+    You are a routing agent. Based on the user query, decide where to look for information.
+    Options:
+    - Retrieve_QnA: if it's about general medical knowledge, symptoms, or treatment.
+    - Retrieve_Device: if it's about medical devices, manuals, or instructions.
+    - Web_Search: if it's about recent news, brand names, or external data.
+    Query: "{query}"
+    Respond ONLY with one of: Retrieve_QnA, Retrieve_Device, Web_Search
+    """
+    router_decision = get_llm_response(decision_prompt).strip()
+    print(f"---ROUTER DECISION: {router_decision}---")
+    print(router_decision)
+    state["source"] = router_decision
+    return state
+# Define the routing function for the conditional edge
+def route_decision(state: GraphState) -> str:
+    return state["source"]
+
+def build_prompt(state):
+    """Construct the RAG-style prompt."""
+    print("---AUGMENT (BUILDING GENERATIVE PROMPT)---")
+    query = state["query"]
+    context = state["context"]
+    prompt = f"""
+            Answer the following question using the context below.
+            Context:
+            {context}
+            Question: {query}
+            please limit your answer in 50 words.
+            """
+    
+    state["prompt"] = prompt
+    print(prompt)
+    return state
+
+def call_llm(state):
+    """Call your existing LLM function."""
+    print("---GENERATE (CALLING LLM)---")
+    prompt = state["prompt"]
+    answer = get_llm_response(prompt)
+    state["response"] = answer
+    return state
+
+def check_context_relevance(state):
+    """Determine whether to retrieved context is relevant or not."""
+    print("---CONTEXT RELEVANCE CHECKER---")
+    query = state["query"]
+    context = state["context"]
+    relevance_prompt = f"""
+            Check the below context if the context is relevent to the user query or.
+            ####
+            Context:
+            {context}
+            ####
+            User Query: {query}
+            Options:
+            - Yes: if the context is relevant.
+            - No: if the context is not relevant.
+            Please answer with only 'Yes' or 'No'.
+            """
+    relevance_decision_value = get_llm_response(relevance_prompt).strip()
+    print(f"---RELEVANCE DECISION: {relevance_decision_value}---")
+    state["is_relevant"] = relevance_decision_value
+    return state
+# Define the check_context_relevance function for the conditional edge
+def relevance_decision(state: GraphState) -> str:
+    iteration_count = state.get("iteration_count", 0)
+    iteration_count += 1
+    state["iteration_count"] = iteration_count
+    ## Limiting to max 3 iterations
+    if iteration_count >= 3:
+        print("---MAX ITERATIONS REACHED, FORCING 'Yes'---")
+        state["is_relevant"] = "Yes"
+    return state["is_relevant"]
+
+# === Build the workflow ===
+## Define the state structure
+class GraphState(TypedDict):
+    query: str
+    context: str
+    prompt: str
+    response: str
+    source: str  # Which retriever/tool was used
+    is_relevant: str
+    iteration_count: int
+    
+workflow = StateGraph(GraphState)
+# Add nodes
+workflow.add_node("Router", router)
+workflow.add_node("Retrieve_QnA", retrieve_context_q_n_a)
+workflow.add_node("Retrieve_Device", retrieve_context_medical_device)
+workflow.add_node("Web_Search", web_search)
+workflow.add_node("Relevance_Checker", check_context_relevance)
+workflow.add_node("Augment", build_prompt)
+workflow.add_node("Generate", call_llm)
+# Define edges
+workflow.add_edge(START, "Router")
+workflow.add_conditional_edges(
+    "Router",
+    route_decision,  # this function decides the path dynamically
+    {
+        "Retrieve_QnA": "Retrieve_QnA",
+        "Retrieve_Device": "Retrieve_Device",
+        "Web_Search": "Web_Search",
+    }
+)
+workflow.add_edge("Retrieve_QnA", "Relevance_Checker")
+workflow.add_edge("Retrieve_Device", "Relevance_Checker")
+workflow.add_edge("Web_Search", "Relevance_Checker")
+workflow.add_conditional_edges(
+    "Relevance_Checker",
+    relevance_decision,  # this function decides the path dynamically
+    {
+        "Yes": "Augment",
+        "No": "Web_Search",
+    }
+)
+workflow.add_edge("Augment", "Generate")
+workflow.add_edge("Generate", END)
+
+# Compile the dynamic RAG agent
+agentic_rag = workflow.compile()
+
+# ===================================
+# ===  Visualize Workflow (Optional) ===
+# ===================================
+
+# === Run it ===
+from IPython.display import Image, display
+display(Image(agentic_rag.get_graph().draw_mermaid_png()))
+Press enter or click to view image in full size
+
+Agentic RAG (Image by Author)
+Test 1: (Question related to Medical Q&A Dataset)
+
+input_state = {"query": "What are the treatments for Kawasaki disease ?"}
+from pprint import pprint
+for step in agentic_rag.stream(input_state):
+    for key, value in step.items():
+        pprint(f"Finished running: {key}:")
+pprint(value["response"])
+---ROUTER DECISION: Retrieve_QnA---
+Retrieve_QnA
+'Finished running: Router:'
+---RETRIEVING CONTEXT---
+Question: What are the treatments for Kawasaki disease ?. Answer: These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care. Type: treatment. 
+Question: What are the treatments for Krabbe Disease ?. Answer: There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.. Type: treatment. 
+Question: What are the treatments for Ehlers-Danlos syndrome, progeroid type ?. Answer: How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.. Type: treatment. 
+'Finished running: Retrieve_QnA:'
+---CONTEXT RELEVANCE CHECKER---
+---RELEVANCE DECISION: Yes---
+'Finished running: Relevance_Checker:'
+---AUGMENT (BUILDING GENERATIVE PROMPT)---
+Answer the following question using the context below.
+            Context:
+            Question: What are the treatments for Kawasaki disease ?. Answer: These resources address the diagnosis or management of Kawasaki disease:  - Cincinnati Children's Hospital Medical Center  - Genetic Testing Registry: Acute febrile mucocutaneous lymph node syndrome  - National Heart, Lung, and Blood Institute: How is Kawasaki Disease Treated?   These resources from MedlinePlus offer information about the diagnosis and management of various health conditions:  - Diagnostic Tests  - Drug Therapy  - Surgery and Rehabilitation  - Genetic Counseling   - Palliative Care. Type: treatment. 
+Question: What are the treatments for Krabbe Disease ?. Answer: There is no cure for Krabbe disease. Results of a very small clinical trial of children with infantile Krabbe disease found that children who received umbilical cord blood stem cells from unrelated donors prior to symptom onset developed with little neurological impairment. Bone marrow transplantation may help some people. Generally, treatment for the disorder is symptomatic and supportive. Physical therapy may help maintain or increase muscle tone and circulation.. Type: treatment. 
+Question: What are the treatments for Ehlers-Danlos syndrome, progeroid type ?. Answer: How might Ehlers-Danlos syndrome progeroid type be treated? Individuals with Ehlers-Danlos Syndrome progeroid type can benefit from a variety of treatments depending on their symptoms. Affected children with weak muscle tone and delayed development might benefit from physiotherapy to improve muscle strength and coordination. Affected individuals with joint pain might benefit from anti-inflammatory drugs. Lifestyle changes or precautions during exercise or intense physical activity may be advised to reduce the chance of accidents to the skin and bone. It is recommended that affected individuals discuss treatment options with their healthcare provider.. Type: treatment. 
+            Question: What are the treatments for Kawasaki disease ?
+            please limit your answer in 50 words.
+            
+'Finished running: Augment:'
+---GENERATE (CALLING LLM)---
+'Finished running: Generate:'
+('Primary treatment for Kawasaki disease is intravenous immunoglobulin (IVIG) '
+ 'given once, with high-dose aspirin during the acute phase to reduce '
+ 'inflammation and risk of coronary artery involvement. Afterward, continue '
+ 'low-dose aspirin for several weeks to months, with regular echocardiograms '
+ 'to monitor the heart; additional therapy if IVIG-resistant.')
+Test 2: (Question related to Medical Device Manual Dataset)
+
+input_state = {"query": "What are the usage of Dialysis Machine Device?"}
+from pprint import pprint
+for step in agentic_rag.stream(input_state):
+    for key, value in step.items():
+        pprint(f"Finished running: {key}:")
+pprint(value["response"])
+---ROUTER DECISION: Retrieve_Device---
+Retrieve_Device
+'Finished running: Router:'
+---RETRIEVING CONTEXT---
+Device Name: Dialysis Machine. Model: Model 1703. Manufacturer: Edwards Lifesciences. Indications: Used for intraoperative measurement monitoring during complex oncological surgeries.. Contraindications: Not recommended in presence of peripheral vascular disease or at open wounds locations.
+Device Name: Dialysis Machine. Model: Plus593. Manufacturer: Siemens Healthineers. Indications: Used for emergency tissue biopsy in acute diabetes situations requiring immediate care.. Contraindications: None
+Device Name: Dialysis Machine. Model: Max384. Manufacturer: BioMérieux. Indications: Designed for continuous monitoring assistance in geriatric care facilities for elderly patients.. Contraindications: Avoid use if patient has cardiomyopathy or is receiving radioactive materials.
+'Finished running: Retrieve_Device:'
+---CONTEXT RELEVANCE CHECKER---
+---RELEVANCE DECISION: Yes---
+'Finished running: Relevance_Checker:'
+---AUGMENT (BUILDING GENERATIVE PROMPT)---
+Answer the following question using the context below.
+            Context:
+            Device Name: Dialysis Machine. Model: Model 1703. Manufacturer: Edwards Lifesciences. Indications: Used for intraoperative measurement monitoring during complex oncological surgeries.. Contraindications: Not recommended in presence of peripheral vascular disease or at open wounds locations.
+Device Name: Dialysis Machine. Model: Plus593. Manufacturer: Siemens Healthineers. Indications: Used for emergency tissue biopsy in acute diabetes situations requiring immediate care.. Contraindications: None
+Device Name: Dialysis Machine. Model: Max384. Manufacturer: BioMérieux. Indications: Designed for continuous monitoring assistance in geriatric care facilities for elderly patients.. Contraindications: Avoid use if patient has cardiomyopathy or is receiving radioactive materials.
+            Question: What are the usage of Dialysis Machine Device?
+            please limit your answer in 50 words.
+            
+'Finished running: Augment:'
+---GENERATE (CALLING LLM)---
+'Finished running: Generate:'
+('Dialysis Machine devices have these uses:\n'
+ '- Model 1703 (Edwards Lifesciences): intraoperative measurement monitoring '
+ 'during complex oncological surgeries.\n'
+ '- Model Plus593 (Siemens Healthineers): emergency tissue biopsy in acute '
+ 'diabetes situations requiring immediate care.\n'
+ '- Model Max384 (BioMérieux): continuous monitoring assistance in geriatric '
+ 'care facilities for elderly patients.')
+Test 3: (Out of Syllabus Question for WebSearch)
+
+input_state = {"query": "What's the export duty on medical tablets on India by USA in 2025?"}
+from pprint import pprint
+for step in agentic_rag.stream(input_state):
+    for key, value in step.items():
+        pprint(f"Finished running: {key}:")
+pprint(value["response"])
+---ROUTER DECISION: Web_Search---
+Web_Search
+'Finished running: Router:'
+---PERFORMING WEB SEARCH---
+Here's a detailed analysis of what a 100% tariff on medicines exported from India to the U.S. might imply — both for the Indian pharma sector ... DGCI&S statistics reveal India's pharmaceutical formulation exports to the US reached $9.8 billion in FY2025, representing 39.8% of its total ... From August 27, 2025, the US tariff on India will increase up to 50 percent, among the steepest measures under the Trump administration. Trump has already slapped 50 per cent tariffs on Indian imports, which also includes a 25 per cent 'penalty' for continued purchase of ... The U.S. ended the $800 de minimis exemption on August 29, 2025. Learn how the new import rules affect prescription medicines, ... U.S President Donald Trump's move to impose 100% tariffs on patented, branded drugs are expected to have a limited impact on India's pharma ... This is estimated to Rs. 85,011 crore in FY 2025. India's 1/3rd of pharma exports revenue was by the United States in 2024 which stood at USD 30 ... A 100% import tax would make Indian drugs substantially less competitive potentially leading to lost market share falling sales and shrinking margins. President Donald Trump announced Thursday that brand-name or patented pharmaceutical products will be subject to a 100% tariff starting ... India exported $3.6 billion ( ₹31,626 crore) worth of pharmaceutical products to the US in 2024, and another $3.7 billion ( ₹32,505 crore) in ...
+'Finished running: Web_Search:'
+---CONTEXT RELEVANCE CHECKER---
+---RELEVANCE DECISION: Yes---
+'Finished running: Relevance_Checker:'
+---BUILDING PROMPT---
+Answer the following question using the context below.
+            Context:
+            Here's a detailed analysis of what a 100% tariff on medicines exported from India to the U.S. might imply - both for the Indian pharma sector ... DGCI&S statistics reveal India's pharmaceutical formulation exports to the US reached $9.8 billion in FY2025, representing 39.8% of its total ... From August 27, 2025, the US tariff on India will increase up to 50 percent, among the steepest measures under the Trump administration. Trump has already slapped 50 per cent tariffs on Indian imports, which also includes a 25 per cent 'penalty' for continued purchase of ... The U.S. ended the $800 de minimis exemption on August 29, 2025. Learn how the new import rules affect prescription medicines, ... U.S President Donald Trump's move to impose 100% tariffs on patented, branded drugs are expected to have a limited impact on India's pharma ... This is estimated to Rs. 85,011 crore in FY 2025. India's 1/3rd of pharma exports revenue was by the United States in 2024 which stood at USD 30 ... A 100% import tax would make Indian drugs substantially less competitive potentially leading to lost market share falling sales and shrinking margins. President Donald Trump announced Thursday that brand-name or patented pharmaceutical products will be subject to a 100% tariff starting ... India exported $3.6 billion ( ₹31,626 crore) worth of pharmaceutical products to the US in 2024, and another $3.7 billion ( ₹32,505 crore) in ...
+            Question: What's the export duty on medical tablets on India by USA in 2025?
+            please limit your answer in 50 words.
+            
+'Finished running: PromptBuilder:'
+---CALLING LLM---
+'Finished running: LLM:'
+('100% tariff. The context indicates that in 2025 the U.S. imposed a 100% '
+ 'tariff on Indian medicines, including patented/branded drugs.')
+Test 4: Trick Question (Question appearing to be related to Q&A dataset but not available in the Q&A dataset).
+
+Here the RAG Agent first thinks that the question is from Q&A dataset but then it determines the retrieved chunks are not relevant then it goes to websearch API.
+
+input_state = {"query": "What are medicines/treatment for COVID?"}
+from pprint import pprint
+for step in agentic_rag.stream(input_state):
+    for key, value in step.items():
+        pprint(f"Finished running: {key}:")
+pprint(value["response"])
+---ROUTER DECISION: Retrieve_QnA---
+Retrieve_QnA
+'Finished running: Router:'
+---RETRIEVING CONTEXT---
+Question: What are the treatments for Acanthamoeba - Granulomatous Amebic Encephalitis (GAE); Keratitis ?. Answer: Early diagnosis is essential for effective treatment of Acanthamoeba keratitis. Several prescription eye medications are available for treatment. However, the infection can be difficult to treat. The best treatment regimen for each patient should be determined by an eye doctor. If you suspect your eye may be infected with Acanthamoeba, see an eye doctor immediately.
+    
+Skin infections that are caused by Acanthamoeba but have not spread to the central nervous system can be successfully treated. Because this is a serious infection and the people affected typically have weakened immune systems, early diagnosis offers the best chance at cure.
+    
+Most cases of brain and spinal cord infection with Acanthamoeba (Granulomatous Amebic Encephalitis) are fatal.. Type: treatment. 
+Question: What are the treatments for Sarcoidosis ?. Answer: What treatment is available for sarcoidosis? The treatment of sarcoidosis depends on :  the symptoms present the severity of the symptoms whether any vital organs (e.g., your lungs, eyes, heart, or brain) are affected how the organ is affected. Some organs must be treated, regardless of your symptoms. Others may not need to be treated. Usually, if a patient doesn't have symptoms, he or she doesn't need treatment, and probably will recover in time. Currently, the drug that is most commonly used to treat sarcoidosis is prednisone.  When a patient's condition gets worse when taking prednisone or when the side effects of prednisone are severe in the patient, a doctor may prescribe other drugs. Most of these other drugs reduce inflammation by suppressing the immune system. These other drugs include: hydroxychloroquine (Plaquenil), methotrexate, azathioprine (Imuran), and cyclophosphamide (Cytoxan). Researchers continue to look for new and better treatments for sarcoidosis. Anti-tumor necrosis factor drugs and antibiotics are currently being studied. More detailed information about the treatment of sarcoidosis can be found at the following links: https://www.stopsarcoidosis.org/awareness/treatment-options/ http://emedicine.medscape.com/article/301914-treatment#showall. Type: treatment. 
+Question: What are the treatments for CADASIL ?. Answer: There is no treatment to halt this genetic disorder. Individuals are given supportive care. Migraine headaches may be treated by different drugs and a daily aspirin may reduce stroke and heart attack risk. Drug therapy for depression may be given. Affected individuals who smoke should quit as it can increase the risk of stroke in CADASIL. Other stroke risk factors such as hypertension, hyperlipidemia, diabetes, blood clotting disorders and obstructive sleep apnea also should be aggressively treated... Type: treatment. 
+'Finished running: Retrieve_QnA:'
+---CONTEXT RELEVANCE CHECKER---
+---RELEVANCE DECISION: No---
+'Finished running: Relevance_Checker:'
+---PERFORMING WEB SEARCH---
+FDA has authorized or approved several antiviral medications used to treat mild to moderate COVID-19 in people who are more likely to get very sick. These medicines keep mild illness from getting worse. They can include nirmatrelvir-ritonavir (Paxlovid), remdesivir (Veklury) or molnupiravir ... The treatments available for people at the highest risk of becoming seriously ill from COVID-19 are: Nirmatrelvir plus ritonavir, and molnupiravir are ... Take an over-the-counter medicine such as acetaminophen or ibuprofen. These can be used as a fever reducer or to treat headache, sore throat or body aches. Oral antiviral drugs authorized for treatment of COVID-19 · Paxlovid · Lagevrio (also called molnupiravir). These medications stop the virus ... by SS Jean · 2020 · Cited by 94 — Remdesivir, teicoplanin, hydroxychloroquine (not in combination with azithromycin), and ivermectin might be effective antiviral drugs and are deemed promising ... Oral antivirals are a pill taken by mouth for the treatment of COVID-19 in certain people. They are available by prescription only. The oral ... PAXLOVID is a prescription medicine used to treat mild-to-moderate coronavirus disease 2019 (COVID‑19) in adults who are at high risk for progression to severe ... For certain hospitalized adults with COVID-19, the FDA has also approved Olumiant (baricitinib) and Actemra (tocilizumab). Under certain ... PaxlovidQuizMolnupiravirRemdesivirHospital medicationsPreventative medicationsCurrently unavailablePipeline medications ...
+'Finished running: Web_Search:'
+---CONTEXT RELEVANCE CHECKER---
+---RELEVANCE DECISION: Yes---
+'Finished running: Relevance_Checker:'
+---BUILDING PROMPT---
+Answer the following question using the context below.
+            Context:
+            FDA has authorized or approved several antiviral medications used to treat mild to moderate COVID-19 in people who are more likely to get very sick. These medicines keep mild illness from getting worse. They can include nirmatrelvir-ritonavir (Paxlovid), remdesivir (Veklury) or molnupiravir ... The treatments available for people at the highest risk of becoming seriously ill from COVID-19 are: Nirmatrelvir plus ritonavir, and molnupiravir are ... Take an over-the-counter medicine such as acetaminophen or ibuprofen. These can be used as a fever reducer or to treat headache, sore throat or body aches. Oral antiviral drugs authorized for treatment of COVID-19 · Paxlovid · Lagevrio (also called molnupiravir). These medications stop the virus ... by SS Jean · 2020 · Cited by 94 - Remdesivir, teicoplanin, hydroxychloroquine (not in combination with azithromycin), and ivermectin might be effective antiviral drugs and are deemed promising ... Oral antivirals are a pill taken by mouth for the treatment of COVID-19 in certain people. They are available by prescription only. The oral ... PAXLOVID is a prescription medicine used to treat mild-to-moderate coronavirus disease 2019 (COVID‑19) in adults who are at high risk for progression to severe ... For certain hospitalized adults with COVID-19, the FDA has also approved Olumiant (baricitinib) and Actemra (tocilizumab). Under certain ... PaxlovidQuizMolnupiravirRemdesivirHospital medicationsPreventative medicationsCurrently unavailablePipeline medications ...
+            Question: What are medicines/treatment for COVID?
+            please limit your answer in 50 words.
+            
+'Finished running: PromptBuilder:'
+---CALLING LLM---
+'Finished running: LLM:'
+('Medicines include oral antivirals Paxlovid (nirmatrelvir–ritonavir) and '
+ 'Lagevrio (molnupiravir); the IV antiviral remdesivir; and, for some '
+ 'hospitalized patients, baricitinib (Olumiant) and tocilizumab (Actemra). '
+ 'Over-the-counter fever/pain relief like acetaminophen or ibuprofen can help '
+ 'with symptoms.')
+Closing Remarks
+This article is a practical, experiment-focused exploration of RAG and agentic RAG for medical content. It demonstrates how a tiny routing agent and conditional workflows can make RAG systems more flexible and context-aware while keeping iteration costs bounded.
+
+Agentic RAG represents an evolution of traditional RAG — adding a layer of reasoning and decision-making that makes retrieval workflows more adaptive and context-aware.
+Even with lightweight tools and small datasets, it’s possible to design a system that intelligently routes queries, validates its own results, and produces grounded, auditable answers — a crucial step toward reliable AI.
+
+Refer to the complete end to end notebook here
+
+References
+https://vectorize.io/blog/how-i-finally-got-agentic-rag-to-work-right
+https://weaviate.io/blog/what-is-agentic-rag
+https://www.kaggle.com/datasets/pratyushpuri/global-medical-device-manuals-dataset-2025
+https://www.kaggle.com/datasets/thedevastator/comprehensive-medical-q-a-dataset
+https://serper.dev/
+https://github.com/alphaiterations/agentic-rag
+https://medium.com/the-ai-forum/build-a-reliable-rag-agent-using-langgraph-2694d55995cd
+Other Articles You might Like:
+Practical Guide to Using ChromaDB for RAG and Semantic Search
+Reading Images with GPT-4o: The Future of Visual Understanding with AI
+Agentic AI: Build ReAct Agent using LangGraph
+Agentic AI Project: Build Multi-Agent Text2SQL Chatbot for Ecommerce Database
+Agentic AI Project: Build Mini Perplexity AI Chatbot : Step by Step Guide [Code Included]
+Agentic AI Project: Build a multi-agent system with LangGraph and OpenAI API
+Building an AI Agent with Model Context Protocol (MCP): A Complete Guide
+Building an Intelligent Resume Transformation Agent Powered by LangGraph and gpt-4o-mini
+Agentic AI Project: Build a Customer Service Chatbot for a Clinic
+Agentic AI: Build ReAct Agent using LangGraph
+Please follow me for more articles related to Generative AI, RAG Systems, Machine Learning, Data Science.
+
+A message from our Founder
+Hey, Sunil here. I wanted to take a moment to thank you for reading until the end and for being a part of this community.
+
+Did you know that our team run these publications as a volunteer effort to over 3.5m monthly readers? We don’t receive any funding, we do this to support the community. ❤️
+
+If you want to show some love, please take a moment to follow me on LinkedIn, TikTok, Instagram. You can also subscribe to our weekly newsletter.
+
+And before you go, don’t forget to clap and follow the writer️!
