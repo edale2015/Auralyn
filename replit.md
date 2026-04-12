@@ -1425,3 +1425,59 @@ Returns `{caseId, diagnosis, disposition, confidence, strategy, urgencyScore, pa
 - **History**: recent case list (diagnosis, disposition badge, strategy, confidence, duration, timestamp)
 
 Sidebar navigation entry: "Cognitive Brain v2" at `/cognitive-brain`.
+
+---
+
+## Batch 34 — Medical Plugin Architecture (COMPLETE)
+
+**Test count: 2,607/2,607 passing across 68 files (+35 new tests in `tests/unit/batch34.test.ts`)**
+
+### New Agents (`server/agents/`)
+
+**`systemContextEngine.ts`** — `scanProject()`: walks `server/`, `client/src/`, `shared/` and returns `{totalFiles, files[], dependencies{}, unusedFiles[], stats{agentFiles, routeFiles, serviceFiles, testFiles}}`. Skips node_modules/dist/.git. Reads import statements to build dependency map and surfaces potentially orphaned files.
+
+**`sequentialClinicalReasoner.ts`** — `SequentialClinicalReasoner.run(patientInput)`: 6-step traced reasoner:
+1. Normalize Input (symptoms array, vitals, patientId)
+2. Apply Modifiers (age > 65 → elevated risk)
+3. Red Flag Override (short-circuit → ED if red flags present)
+4. Cognitive Brain (full 8-step pipeline via `runCognitiveBrain`)
+5. Modifier Adjustment (PCP loop-back note for elevated-risk)
+6. Final Decision (diagnosis, disposition, confidence, caseId)
+
+Returns `{diagnosis, disposition, confidence, caseId, reasoning: ReasoningStep[], totalMs}`. Each step has `{step, status: "ok"|"override"|"skipped", data, durationMs}`.
+
+**`evidenceEngine.ts`** — `EvidenceEngine` class. `searchPubMed(query, maxResults)`: NCBI E-utilities esearch + esummary → `{source:"PubMed", query, count, items[{pmid,title,source,pubdate}], fetchedAt}`. `searchClinicalTrials(query, maxResults)`: ClinicalTrials.gov v2 API → `{source:"ClinicalTrials", query, count, items[{nctId,title,status,phase,condition}], fetchedAt}`. `searchGuidelines(query)`: both in parallel. Graceful error handling with timeout (8s, AbortSignal). Confirmed live: PubMed returns 105,662 results for "chest pain".
+
+**`ehrAutomationAgent.ts`** — `EHRAutomationAgent` stub: `loginAthena/loginEpic(username, password)` → session object. `enterClinicalNote(note, system)` → NoteResult with noteId. `pushDiagnosis(patientId, diagnosis, system)` → delegates to existing `universalWrite` adapter when available. `getConfiguredSystems()` → checks ATHENA_API_KEY/EPIC_CLIENT_ID/ECW_API_KEY/FHIR_BASE_URL env vars.
+
+**`deploymentDebugger.ts`** — `DeploymentDebugger`: `analyzeFailure(logs)` — matches 10 regex patterns (ECONNREFUSED, timeout, OOM, MODULE_NOT_FOUND, auth failure, rate limit, JSON parse, ENOENT, TLS/SSL, OpenAI key) → `{issue, severity, suggestion, pattern}[]`. `summarizeLogs(raw)` → error/warn/info counts + top 5 error lines. `getServiceHealth()` → checks redis/postgres/openai/fhir config.
+
+**`pluginRegistry.ts`** — In-memory plugin registry: 9 plugins (diagnosis, disposition, debate, monologue, orders, fhir, billing, evidence, audit). `listPlugins()`, `getPlugin(name)`, `togglePlugin(name, status)`, `recordPluginCall(name, latencyMs?)` — increments callCount, updates lastCalled, applies EWA to latency. FHIR status auto-detected from FHIR_BASE_URL env.
+
+### Routes — `GET|POST /api/agents/*`
+
+- `POST /api/agents/reason` — sequential step-by-step clinical reasoning (6 traced steps)
+- `GET  /api/agents/context` — project context (file stats + unused files)
+- `GET  /api/agents/context/full` — full dependency map (internal tooling)
+- `GET  /api/agents/evidence?q=...` — PubMed + ClinicalTrials search in parallel
+- `GET  /api/agents/evidence/pubmed?q=...&n=5` — PubMed only
+- `GET  /api/agents/evidence/trials?q=...&n=5` — ClinicalTrials only
+- `GET  /api/agents/health` — service health (redis, postgres, openai, fhir)
+- `POST /api/agents/debug` — analyse log blob for failure patterns
+- `GET  /api/agents/plugins` — plugin registry list
+- `POST /api/agents/plugins/toggle` — enable/disable plugin by name
+- `GET  /api/agents/ehr/systems` — configured EHR integrations
+- `POST /api/agents/ehr/login` — EHR session init (Athena/Epic stub)
+- `POST /api/agents/ehr/note` — push clinical note or diagnosis to EHR
+
+### Frontend
+
+**`client/src/pages/AgentSystemPage.tsx`** — 6-tab dashboard at `/agent-system`:
+- **Reasoner**: symptom input + optional red flags → full step-by-step reasoning trace with color-coded override/skipped steps, disposition badge, raw JSON per step
+- **Plugins**: plugin registry table (name, description, status badge, latency, call count, enable/disable toggle)
+- **Evidence**: PubMed + ClinicalTrials dual search with live article/trial cards
+- **EHR**: session init (Athena/Epic) + clinical note push with real-time response
+- **Health**: service health grid (redis, postgres, openai, fhir) with auto-refresh every 30s
+- **Context**: project stats (agent/route/service/test file counts) + unused file list
+
+Sidebar nav entry: "Agent System" at `/agent-system`.

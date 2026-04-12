@@ -1,0 +1,226 @@
+Pasted-PROJECT-STRUCTURE-DROP-INTO-REPLIT-auralyn-medical-brai_1775961751595.txt
+PROJECT STRUCTURE (DROP INTO REPLIT)
+auralyn-medical-brain/
+│
+├── backend/
+│   ├── main.py
+│   ├── config.py
+│   ├── websocket.py
+│   ├── audit.py
+│
+├── plugins/
+│   ├── clinical/
+│   │   ├── server.py
+│   │   ├── bayesian_engine.py
+│   │
+│   ├── fhir/
+│   │   ├── fhir_client.py
+│   │
+│   ├── ehr/
+│   │   ├── ehr_adapter.py
+│   │
+│   ├── billing/
+│   │   ├── billing_engine.py
+│
+├── agent/
+│   ├── agent.py
+│   ├── tools.py
+│
+├── control_tower/
+│   ├── server.ts
+│
+├── requirements.txt
+├── package.json
+├── README.md
+⚙️ 1. BACKEND CORE (FastAPI)
+/backend/main.py
+from fastapi import FastAPI
+from backend.websocket import manager
+from backend.audit import log_event
+
+app = FastAPI(title="Auralyn Medical Brain")
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+@app.post("/event")
+def event(data: dict):
+    log_event(data)
+    return {"ok": True}
+/backend/websocket.py
+from fastapi import WebSocket
+
+class ConnectionManager:
+    def __init__(self):
+        self.connections = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.connections.append(ws)
+
+    async def broadcast(self, message: str):
+        for conn in self.connections:
+            await conn.send_text(message)
+
+manager = ConnectionManager()
+/backend/audit.py
+import time
+
+def log_event(data):
+    print(f"[AUDIT {time.time()}] {data}")
+🧠 2. CLINICAL PLUGIN (CORE MEDICAL ENGINE)
+/plugins/clinical/server.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+import random
+
+app = FastAPI(title="Clinical Plugin")
+
+class DiagnosisRequest(BaseModel):
+    symptoms: list[str]
+
+@app.post("/diagnosis")
+def diagnose(req: DiagnosisRequest):
+    return {
+        "top": "viral_uri",
+        "confidence": round(random.uniform(0.7, 0.9), 2),
+        "diff": ["sinusitis", "allergic_rhinitis"]
+    }
+/plugins/clinical/bayesian_engine.py
+def calculate_probability(symptoms):
+    # Placeholder for your real KB-driven Bayesian engine
+    return {
+        "viral_uri": 0.82,
+        "sinusitis": 0.55
+    }
+🧬 3. FHIR INTEGRATION
+/plugins/fhir/fhir_client.py
+import requests
+
+FHIR_BASE = "https://api.epic.com/interconnect-fhir-oauth/api/FHIR/R4"
+
+def get_patient(patient_id, token):
+    headers = {"Authorization": f"Bearer {token}"}
+    r = requests.get(f"{FHIR_BASE}/Patient/{patient_id}", headers=headers)
+    return r.json()
+
+def create_observation(data, token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    return requests.post(f"{FHIR_BASE}/Observation", json=data, headers=headers).json()
+🏥 4. EHR ADAPTER (EPIC / ECW / ATHENA)
+/plugins/ehr/ehr_adapter.py
+def push_note_to_ehr(note, system="athena"):
+    if system == "athena":
+        return {"status": "sent", "system": "Athena"}
+    elif system == "epic":
+        return {"status": "sent", "system": "Epic"}
+    elif system == "ecw":
+        return {"status": "sent", "system": "ECW"}
+💰 5. BILLING ENGINE
+/plugins/billing/billing_engine.py
+def generate_cpt(diagnosis, complexity):
+    if complexity > 0.8:
+        return "99285"
+    elif complexity > 0.5:
+        return "99284"
+    return "99283"
+
+def estimate_revenue(code):
+    table = {
+        "99285": 300,
+        "99284": 200,
+        "99283": 120
+    }
+    return table.get(code, 100)
+🤖 6. AGENT LAYER (TOOL ORCHESTRATION)
+/agent/tools.py
+import requests
+
+BASE = "http://localhost:8000"
+
+def get_diagnosis(symptoms):
+    return requests.post(
+        f"{BASE}/diagnosis",
+        json={"symptoms": symptoms}
+    ).json()
+/agent/agent.py
+from agent.tools import get_diagnosis
+
+def run_agent(symptoms):
+    dx = get_diagnosis(symptoms)
+
+    return {
+        "plan": "supportive care",
+        "diagnosis": dx
+    }
+🧭 7. CONTROL TOWER (NODE DASHBOARD API)
+/control_tower/server.ts
+import express from "express";
+
+const app = express();
+app.use(express.json());
+
+let systemState = {
+  plugins: [
+    { name: "clinical", status: "healthy" },
+    { name: "fhir", status: "healthy" },
+    { name: "billing", status: "healthy" }
+  ]
+};
+
+app.get("/status", (_, res) => {
+  res.json(systemState);
+});
+
+app.post("/toggle", (req, res) => {
+  const { name } = req.body;
+
+  systemState.plugins = systemState.plugins.map(p =>
+    p.name === name ? { ...p, status: "disabled" } : p
+  );
+
+  res.json({ ok: true });
+});
+
+app.listen(3000, () => {
+  console.log("Control Tower running on port 3000");
+});
+📦 8. REQUIREMENTS
+requirements.txt
+fastapi
+uvicorn
+requests
+pydantic
+package.json
+{
+  "name": "control-tower",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+🚀 RUN IN REPLIT
+Python backend:
+pip install -r requirements.txt
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+Node Control Tower:
+npm install
+node control_tower/server.ts
+🧠 MCP COMPATIBILITY (READY)
+
+To convert plugins → MCP:
+
+Add:
+
+# MCP tool schema example
+tool = {
+  "name": "diagnosis",
+  "description": "Clinical diagnosis tool",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "symptoms": {"...

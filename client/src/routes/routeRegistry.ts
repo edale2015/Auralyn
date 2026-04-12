@@ -52,4 +52,5 @@ export const ROUTES = {
   CLINICAL_OPS_CENTER:       "/clinical-ops-center",
   CLINICAL_BRAIN:            "/clinical-brain",
   COGNITIVE_BRAIN:           "/cognitive-brain",
+  AGENT_SYSTEM:              "/agent-system",
 };

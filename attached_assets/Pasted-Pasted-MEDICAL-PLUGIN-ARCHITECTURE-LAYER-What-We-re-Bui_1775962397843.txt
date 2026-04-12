@@ -1,0 +1,191 @@
+Pasted--MEDICAL-PLUGIN-ARCHITECTURE-LAYER-What-We-re-Building-_1775961698522.txt
+“MEDICAL PLUGIN ARCHITECTURE LAYER”
+🔥 What We’re Building
+
+A Production Medical Plugin System with:
+
+Strict tool schemas
+Externalized clinical execution layer
+Full audit + governance hooks
+Safe read vs write separation
+Control Tower integration
+🏗️ 1. MEDICAL PLUGIN SERVICE (CORE EXECUTION LAYER)
+
+👉 This becomes your clinical “muscle” layer (deterministic, safe, auditable)
+
+/plugins/clinical_decision/server.py
+from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel, Field
+from typing import Optional
+import os
+import logging
+import uuid
+import time
+
+app = FastAPI(title="Clinical Decision Plugin")
+
+SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "dev-token")
+logger = logging.getLogger("clinical_plugin")
+
+# =========================
+# REQUEST SCHEMAS
+# =========================
+
+class DiagnosisRequest(BaseModel):
+    symptoms: list[str]
+    vitals: dict
+    history: dict
+    modifiers: dict
+
+class DispositionRequest(BaseModel):
+    diagnosis: str
+    risk_score: float
+    red_flags: list[str]
+
+class OrderRequest(BaseModel):
+    test: str
+    indication: str
+    priority: str = Field(default="routine")
+
+# =========================
+# SECURITY
+# =========================
+
+def verify_token(auth: Optional[str]):
+    if auth != f"Bearer {SERVICE_TOKEN}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+# =========================
+# ENDPOINTS
+# =========================
+
+@app.post("/diagnosis")
+def generate_diagnosis(req: DiagnosisRequest, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+
+    # 🔥 CALL YOUR BAYESIAN ENGINE HERE
+    result = {
+        "top_diagnosis": "viral_uri",
+        "confidence": 0.82,
+        "differential": ["sinusitis", "allergic_rhinitis"]
+    }
+
+    return {"ok": True, "data": result}
+
+
+@app.post("/disposition")
+def determine_disposition(req: DispositionRequest, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+
+    if req.risk_score > 0.8 or req.red_flags:
+        dispo = "ER"
+    elif req.risk_score > 0.5:
+        dispo = "UrgentCare"
+    else:
+        dispo = "Home"
+
+    return {"ok": True, "disposition": dispo}
+
+
+@app.post("/order")
+def place_order(req: OrderRequest, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+
+    order_id = str(uuid.uuid4())
+
+    logger.info("order_created", extra={
+        "order_id": order_id,
+        "test": req.test,
+        "priority": req.priority
+    })
+
+    return {"ok": True, "order_id": order_id}
+🧰 2. LANGCHAIN / AGENT TOOL WRAPPERS
+
+👉 This becomes your “hands” the model can use—but not control
+
+/agent/tools/clinical_tools.py
+import httpx
+import os
+from langchain_core.tools import tool
+
+BASE_URL = os.getenv("PLUGIN_URL", "http://localhost:8000")
+TOKEN = os.getenv("SERVICE_TOKEN")
+
+def _headers():
+    return {"Authorization": f"Bearer {TOKEN}"}
+
+@tool
+def get_diagnosis(symptoms: list, vitals: dict, history: dict, modifiers: dict) -> dict:
+    """Get structured diagnosis from clinical engine"""
+    with httpx.Client(timeout=10.0) as client:
+        res = client.post(
+            f"{BASE_URL}/diagnosis",
+            json={
+                "symptoms": symptoms,
+                "vitals": vitals,
+                "history": history,
+                "modifiers": modifiers
+            },
+            headers=_headers()
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+@tool
+def get_disposition(diagnosis: str, risk_score: float, red_flags: list) -> dict:
+    """Determine patient disposition safely"""
+    with httpx.Client(timeout=10.0) as client:
+        res = client.post(
+            f"{BASE_URL}/disposition",
+            json={
+                "diagnosis": diagnosis,
+                "risk_score": risk_score,
+                "red_flags": red_flags
+            },
+            headers=_headers()
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+@tool
+def order_test(test: str, indication: str, priority: str = "routine") -> dict:
+    """Place clinical order (guarded)"""
+    with httpx.Client(timeout=10.0) as client:
+        res = client.post(
+            f"{BASE_URL}/order",
+            json={
+                "test": test,
+                "indication": indication,
+                "priority": priority
+            },
+            headers=_headers()
+        )
+        res.raise_for_status()
+        return res.json()
+🧠 3. AGENT ORCHESTRATOR (MODEL = PLANNER ONLY)
+
+👉 Model is now a clinical strategist, not executor
+
+/agent/clinical_agent.py
+from langchain_openai import ChatOpenAI
+from langchain.agents import create_agent
+
+from tools.clinical_tools import get_diagnosis, get_disposition, order_test
+
+def build_clinical_agent():
+    model = ChatOpenAI(
+        model="gpt-5",
+        temperature=0,
+        timeout=20,
+    )
+
+    return create_agent(
+        model=model,
+        tools=[get_diagnosis, get_disposition, order_test],
+        system_prompt="""
+        You are a clinical triage orchestrator.
+
+        R...

@@ -2429,6 +2429,11 @@ export async function registerRoutes(
   app.use("/api/brain", clinicalBrainRoutes);
   console.log("[Brain] /api/brain/* active");
 
+  // ── Batch 34: Agent System (Context Engine, Reasoner, Evidence, EHR, Plugins) ──
+  const { default: agentSystemRoutes } = await import("./routes/agentSystemRoutes");
+  app.use("/api/agents", agentSystemRoutes);
+  console.log("[AgentSystem] /api/agents/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
