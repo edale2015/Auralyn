@@ -2581,6 +2581,11 @@ export async function registerRoutes(
   });
   console.log("[Cognitive] /api/cognitive-run and /api/cognitive/* active");
 
+  // ── Batch 49: AI Automation (Sub-Workflow, Execution Inspector, Agent Conversation, Clinical Crew) ──
+  const { default: automationRoutes } = await import("./routes/automationRoutes");
+  app.use("/api/automation", automationRoutes);
+  console.log("[Automation] /api/automation/* active (sub-workflow, inspector, conversation, crew)");
+
   return httpServer;
 }
 
