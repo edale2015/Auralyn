@@ -2471,6 +2471,11 @@ export async function registerRoutes(
   });
   console.log("[Vitals] POST /api/vitals/evaluate active");
 
+  // ── Batch 42: Agent Scope Engine (ASE) + Scope-Aware Triage + Control Tower ──
+  const { default: scopeRoutes } = await import("./routes/scopeRoutes");
+  app.use("/api/scope", scopeRoutes);
+  console.log("[ASE] /api/scope/* active (evaluate·roles·delegate·drift·simulate·triage·fda·overrides)");
+
   // ── Batch 41: Autonomous Intervention + Command Center ───────────────────────
   const { default: commandCenterRoutes } = await import("./routes/commandCenterRoutes");
   app.use("/api/command-center", commandCenterRoutes);

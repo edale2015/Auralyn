@@ -133,6 +133,7 @@ import ControlTower from "@/pages/ControlTower";
 import MasterControl from "@/pages/MasterControl";
 import DeepAgentDashboard from "@/pages/DeepAgentDashboard";
 import CommunicationDashboard from "@/pages/CommunicationDashboard";
+import ScopeCommandCenter from "@/pages/ScopeCommandCenter";
 
 validateRoutes();
 
@@ -192,6 +193,7 @@ function WorkbenchRouter() {
         <Route path="/clinical-improvement-lab">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalImprovementLabPage /></RoleGuard>}</Route>
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
         <Route path="/governance-command-center">{() => <RoleGuard allowedRoles={["admin"]}><GovernanceCommandCenterPage /></RoleGuard>}</Route>
+        <Route path="/scope-command-center" component={ScopeCommandCenter} />
         <Route path="/skill-map" component={SkillMapPage} />
         <Route path="/skill-intelligence-lab" component={SkillIntelligenceLabPage} />
         <Route path="/skill-evolution-lab" component={SkillEvolutionLabPage} />

@@ -1,0 +1,252 @@
+PART 1: MULTI-PATIENT WALL DISPLAY (COMMAND CENTER)
+🎯 What this does
+Shows ALL patients ranked by risk
+Live deterioration signals
+Sepsis probability
+Action recommendations
+Scope status (allowed / blocked / override)
+🔥 Backend Feed
+/server/controlTower/multiPatientStream.ts
+import { rankPatients } from "../triage/scopeAwareTriageEngine";
+import { detectSepsisRisk } from "../sepsis/sepsisEngine";
+import { detectDeterioration } from "../deterioration/deteriorationEngine";
+import { broadcast } from "../ws/broadcast";
+
+export async function updateWallDisplay(patients: any[]) {
+  const ranked = rankPatients(patients);
+
+  const enriched = ranked.map(p => {
+    const patient = patients.find(x => x.id === p.patientId);
+
+    const sepsis = detectSepsisRisk(patient);
+    const deterioration = detectDeterioration(patient.history || []);
+
+    return {
+      ...p,
+      sepsisRisk: sepsis,
+      deterioration
+    };
+  });
+
+  broadcast("WALL_DISPLAY_UPDATE", enriched);
+
+  return enriched;
+}
+🖥️ Frontend Wall UI
+/frontend/src/pages/CommandWall.tsx
+import { useEffect, useState } from "react";
+
+export default function CommandWall() {
+  const [patients, setPatients] = useState<any[]>([]);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000/ws");
+
+    ws.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+      if (data.type === "WALL_DISPLAY_UPDATE") {
+        setPatients(data.payload);
+      }
+    };
+
+    return () => ws.close();
+  }, []);
+
+  return (
+    <div className="grid grid-cols-4 gap-4 p-4 bg-black text-white h-screen">
+      {patients.map(p => (
+        <div key={p.patientId} className={`p-3 rounded 
+          ${p.level === "CRITICAL" ? "bg-red-700" :
+            p.level === "HIGH" ? "bg-orange-600" :
+            "bg-green-700"}`}>
+
+          <div className="text-lg font-bold">Patient {p.patientId}</div>
+
+          <div>Risk: {p.level}</div>
+          <div>Score: {p.riskScore.toFixed(2)}</div>
+
+          <div>Sepsis: {p.sepsisRisk.probability}</div>
+
+          <div>
+            {p.deterioration?.deteriorating && "⚠️ Deteriorating"}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+🧪 PART 2: PREDICTIVE SEPSIS ENGINE
+🎯 Goal
+
+Detect sepsis BEFORE overt instability
+
+Uses:
+
+qSOFA
+NEWS2
+Trend detection
+Infection signals
+🔥 /server/sepsis/sepsisEngine.ts
+import { calculateNEWS2 } from "../deterioration/news2";
+import { calculateQSOFA } from "../deterioration/qsofa";
+
+export function detectSepsisRisk(patient: any) {
+  const news2 = calculateNEWS2(patient.vitals);
+  const qsofa = calculateQSOFA(patient.vitals);
+
+  const infectionSignals =
+    patient.symptoms.includes("fever") ||
+    patient.symptoms.includes("chills");
+
+  let probability = 0;
+
+  probability += news2 * 0.08;
+  probability += qsofa * 0.15;
+
+  if (infectionSignals) probability += 0.2;
+
+  if (patient.labs?.lactate > 2) probability += 0.3;
+
+  const highRisk = probability > 0.6;
+
+  return {
+    probability: Math.min(probability, 1),
+    highRisk,
+    trigger: highRisk ? "SEPSIS_ALERT" : null
+  };
+}
+🚨 PART 3: SEPSIS ALERT TRIGGER
+/server/sepsis/sepsisAlertService.ts
+import { broadcast } from "../ws/broadcast";
+
+export function triggerSepsisAlert(patient: any, sepsis: any) {
+  if (!sepsis.highRisk) return;
+
+  const alert = {
+    type: "SEPSIS_ALERT",
+    patientId: patient.id,
+    probability: sepsis.probability,
+    priority: "CRITICAL"
+  };
+
+  broadcast("ALERT", alert);
+
+  return alert;
+}
+🤖 PART 4: AUTONOMOUS INTERVENTION ENGINE
+🎯 Philosophy
+Suggest actions ALWAYS
+Execute ONLY if:
+within scope
+meets confidence threshold
+OR physician approved
+🔥 /server/intervention/autonomousInterventionEngine.ts
+import { executeWithScope } from "../execution/executeWithScope";
+
+export async function runInterventions(patient: any) {
+  const interventions = [];
+
+  // 🧪 Sepsis bundle suggestion
+  if (patient.sepsisRisk?.highRisk) {
+    interventions.push({
+      action: "order:sepsis_bundle",
+      payload: {
+        labs: ["lactate", "blood cultures"],
+        fluids: "30ml/kg",
+        antibiotics: "broad-spectrum"
+      }
+    });
+  }
+
+  // 🫀 Hypotension
+  if (patient.vitals.sbp < 90) {
+    interventions.push({
+      action: "order:fluids",
+      payload: { type: "NS", amount: "1L" }
+    });
+  }
+
+  // 🚑 Escalation
+  if (patient.level === "CRITICAL") {
+    interventions.push({
+      action: "execute:escalation",
+      payload: { destination: "ICU" }
+    });
+  }
+
+  // ⚡ Execute with scope enforcement
+  const results = [];
+
+  for (const i of interventions) {
+    const result = await executeWithScope(
+      {
+        agentRole: "intervention_agent",
+        action: i.action,
+        context: {
+          confidence: 0.92,
+          physicianSigned: false
+        }
+      },
+      async () => i.payload
+    );
+
+    results.push({ ...i, result });
+  }
+
+  return results;
+}
+🔐 PART 5: SCOPE-GATED AUTONOMY
+🔥 Add to scope rules
+{
+  role: "intervention_agent",
+  express: ["suggest:intervention"],
+  implied: ["order:labs"],
+  constraints: {
+    requires: ["confidence > 0.9"],
+  },
+  restricted: {
+    "execute:escalation": "physician_override_required"
+  }
+}
+📡 PART 6: LIVE ALERT OVERLAY (UI)
+/frontend/src/components/AlertsOverlay.tsx
+import { useEffect, useState } from "react";
+
+export default function AlertsOverlay() {
+  const [alerts, setAlerts] = useState<any[]>([]);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000/ws");
+
+    ws.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+
+      if (data.type === "ALERT") {
+        setAlerts(prev => [data.payload, ...prev]);
+      }
+    };
+  }, []);
+
+  return (
+    <div className="fixed top-0 right-0 p-4">
+      {alerts.map((a, i) => (
+        <div key={i} className="bg-red-600 text-white p-3 mb-2 rounded shadow">
+          🚨 {a.type} - Patient {a.patientId}
+        </div>
+      ))}
+    </div>
+  );
+}
+🧠 WHAT YOU NOW HAVE (THIS IS BIG)
+🧭 Wall Display
+Full hospital visibility
+Real-time prioritization
+🧪 Sepsis Engine
+Early detection BEFORE crash
+Trend-based risk
+🤖 Intervention Engine
+Suggests + executes safely
+Scope-gated autonomy
+🛡️ Safety
+No unsafe actions
+Physician override preserved

@@ -1,0 +1,260 @@
+PART 1: Scope-Aware Triage Ranking Engine
+🎯 Goal
+
+Rank patients by:
+
+clinical risk (NEWS2 / qSOFA / vitals trends)
+AND dynamically adjust what actions agents are allowed to take
+
+👉 High-risk patient = more permissions (with safeguards)
+👉 Low-risk patient = tighter restrictions
+
+🔥 /server/triage/scopeAwareTriageEngine.ts
+import { calculateNEWS2 } from "../deterioration/news2";
+import { calculateQSOFA } from "../deterioration/qsofa";
+
+export type Patient = {
+  id: string;
+  vitals: any;
+  symptoms: string[];
+  age: number;
+};
+
+export type TriageResult = {
+  patientId: string;
+  riskScore: number;
+  level: "LOW" | "MODERATE" | "HIGH" | "CRITICAL";
+  allowedScopeLevel: number;
+};
+
+export function evaluatePatientRisk(patient: Patient): TriageResult {
+  const news2 = calculateNEWS2(patient.vitals);
+  const qsofa = calculateQSOFA(patient.vitals);
+
+  const riskScore = news2 * 0.7 + qsofa * 0.3;
+
+  let level: TriageResult["level"] = "LOW";
+  let scopeLevel = 1;
+
+  if (riskScore > 3) {
+    level = "MODERATE";
+    scopeLevel = 2;
+  }
+
+  if (riskScore > 6) {
+    level = "HIGH";
+    scopeLevel = 3;
+  }
+
+  if (riskScore > 8) {
+    level = "CRITICAL";
+    scopeLevel = 4;
+  }
+
+  return {
+    patientId: patient.id,
+    riskScore,
+    level,
+    allowedScopeLevel: scopeLevel
+  };
+}
+
+export function rankPatients(patients: Patient[]) {
+  return patients
+    .map(evaluatePatientRisk)
+    .sort((a, b) => b.riskScore - a.riskScore);
+}
+⚡ PART 2: Deterioration Engine (REAL-TIME)
+🔥 /server/deterioration/deteriorationEngine.ts
+import { evaluatePatientRisk } from "../triage/scopeAwareTriageEngine";
+
+export function detectDeterioration(patientHistory: any[]) {
+  if (patientHistory.length < 2) return null;
+
+  const last = patientHistory[patientHistory.length - 1];
+  const prev = patientHistory[patientHistory.length - 2];
+
+  const deltaHR = last.vitals.hr - prev.vitals.hr;
+  const deltaBP = prev.vitals.sbp - last.vitals.sbp;
+
+  if (deltaHR > 15 || deltaBP > 20) {
+    return {
+      deteriorating: true,
+      reason: "Vitals worsening",
+      severity: "HIGH"
+    };
+  }
+
+  return { deteriorating: false };
+}
+🛡️ PART 3: Risk-Based Scope Permissions
+🔥 /server/scope/riskBasedScope.ts
+export function getScopeByRisk(level: string) {
+  switch (level) {
+    case "LOW":
+      return ["read:patient_data"];
+
+    case "MODERATE":
+      return ["read:patient_data", "suggest:treatment"];
+
+    case "HIGH":
+      return [
+        "read:patient_data",
+        "suggest:treatment",
+        "order:labs"
+      ];
+
+    case "CRITICAL":
+      return [
+        "read:patient_data",
+        "suggest:treatment",
+        "order:labs",
+        "execute:escalation"
+      ];
+
+    default:
+      return [];
+  }
+}
+🔌 Inject into Scope Engine
+/server/scope/agentScopeDynamic.ts
+import { getScopeByRisk } from "./riskBasedScope";
+
+export function augmentScopeWithRisk(baseScope: any, triageLevel: string) {
+  const dynamicPermissions = getScopeByRisk(triageLevel);
+
+  return {
+    ...baseScope,
+    express: [...new Set([...baseScope.express, ...dynamicPermissions])]
+  };
+}
+🏥 ICU ESCALATION LOGIC
+🔥 /server/escalation/escalationEngine.ts
+export function escalateToICU(patient: any) {
+  return {
+    action: "ICU_ALERT",
+    patientId: patient.id,
+    message: "Critical deterioration detected",
+    priority: "IMMEDIATE"
+  };
+}
+🧪 PART 4: Scope Simulation Engine (FDA GOLD)
+🔥 /server/simulation/scopeSimulationEngine.ts
+import { scopeEngine } from "../execution/actionGuard";
+
+export function simulateScope(actions: any[]) {
+  return actions.map(action => {
+    const result = scopeEngine.evaluate(action);
+
+    return {
+      action: action.action,
+      allowed: result.allowed,
+      reason: result.reason
+    };
+  });
+}
+📊 PART 5: FDA VALIDATION PANEL
+🔥 /server/fda/fdaValidationEngine.ts
+export function generateFDAMetrics(logs: any[]) {
+  const total = logs.length;
+
+  const allowed = logs.filter(l => l.allowed).length;
+  const blocked = logs.filter(l => !l.allowed).length;
+
+  const override = logs.filter(l => l.requiresOverride).length;
+
+  return {
+    total,
+    allowedRate: allowed / total,
+    blockedRate: blocked / total,
+    overrideRate: override / total,
+    fdaSafe: blocked === 0 && override < total * 0.2
+  };
+}
+🖥️ FRONTEND: FDA VALIDATION PANEL
+/frontend/src/pages/FDAValidationPanel.tsx
+import { useEffect, useState } from "react";
+
+export default function FDAValidationPanel() {
+  const [metrics, setMetrics] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/fda/metrics")
+      .then(res => res.json())
+      .then(setMetrics);
+  }, []);
+
+  if (!metrics) return <div>Loading...</div>;
+
+  return (
+    <div className="p-4">
+      <h1>📊 FDA Validation Dashboard</h1>
+
+      <div>Allowed Rate: {metrics.allowedRate}</div>
+      <div>Blocked Rate: {metrics.blockedRate}</div>
+      <div>Override Rate: {metrics.overrideRate}</div>
+
+      <div>
+        Status: {metrics.fdaSafe ? "✅ SAFE" : "⚠️ REVIEW REQUIRED"}
+      </div>
+    </div>
+  );
+}
+📦 PART 6: FULL DEPLOYABLE ZIP STRUCTURE
+📁 PROJECT STRUCTURE
+medical-ai-system/
+├── server/
+│   ├── triage/
+│   ├── scope/
+│   ├── deterioration/
+│   ├── escalation/
+│   ├── ehr/
+│   ├── simulation/
+│   ├── fda/
+│   ├── ws/
+│   └── controlTower/
+│
+├── frontend/
+│   ├── src/pages/
+│   ├── components/
+│   └── api/
+│
+├── docker/
+├── scripts/
+├── .env
+├── docker-compose.yml
+├── package.json
+└── README.md
+⚙️ DEPLOYMENT CONFIG
+🐳 /docker-compose.yml
+version: "3.8"
+
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+
+  redis:
+    image: redis:7
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: password
+☁️ AWS + FLY.IO DEPLOY
+/scripts/deploy.sh
+#!/bin/bash
+
+echo "🚀 Deploying to Fly.io..."
+fly deploy
+
+echo "🚀 Deploying to AWS ECS..."
+terraform apply -auto-approve
+📦 HOW TO EXPORT ZIP
+
+Run:
+
+zip -r medical-ai-system.zip .

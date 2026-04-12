@@ -1675,3 +1675,53 @@ Architecture: `/server/ai-orchestration/`
 ### Confirmed Live (Batch 41)
 - `POST /api/command-center/rank` with 3 patients → sick patient (HR 138, SpO2 87%) ranked #1 with priorityScore:37, urgency:"immediate"
 - `[CommandCenter] /api/command-center/* active` ✓
+
+### Batch 42 — Agent Scope Engine (ASE) + Scope-Aware Triage + Control Tower (2,887/2,887 tests · 76 files)
+
+**New modules:**
+
+`server/scope/`
+- `agentScopeEngine.ts` — `AgentScopeEngine` class: evaluates express/implied/denied/restricted authority per agent role. Singleton `scopeEngine` with 6 pre-configured medical roles. Evaluation log (2000 entries), stats, role management.
+- `delegation.ts` — `delegateScope()`: time-bound authority transfer (default 5-min TTL). `isDelegated()`, `revokeDelegate()`, `getActiveDelegations()`.
+- `riskBasedScope.ts` — `getScopeByRisk()`: permission sets expand with patient acuity (LOW→CRITICAL). `augmentScopeWithRisk()` for dynamic scope injection.
+
+`server/execution/`
+- `actionGuard.ts` — `guardAction()`: checks scope engine + delegation chain + logs to audit hash chain + broadcasts to Control Tower WS. Returns APPROVED/BLOCKED/PENDING_OVERRIDE.
+- `executeWithScope.ts` — `executeWithScope()`: wraps any handler behind scope gate. `executeStrict()` throws on block/override.
+
+`server/controlTower/scopeController.ts` — `evaluateAndExecuteAction()`: scope eval + audit log + WS broadcast in one call.
+
+`server/ehr/ehrExecutor.ts` — `writeToEHR()`, `submitOrder()`: all EHR writes scope-gated through `ehr_agent` role (requires physician_signed + confidence ≥ 0.9).
+
+`server/override/overrideController.ts` — `requestOverride()`, `approveOverride()`, `denyOverride()`: FDA-traceable physician approval with WS broadcast and audit log.
+
+`server/monitoring/scopeDrift.ts` — `detectScopeDrift()`: violations/expansions/risk level/top violators/recommendation. `generateScopeHeatmap()`: per-agent usage heat.
+
+`server/triage/scopeAwareTriageEngine.ts` — `evaluatePatientRisk()`: NEWS2 (0.7) + qSOFA (0.3) → risk score → triage level → scope level 1–4 → augmented permissions. `rankPatients()`. `calculateQSOFA()` (AMS + RR ≥ 22 + SBP ≤ 100).
+
+`server/simulation/scopeSimulationEngine.ts` — `simulateScope()`: "what-if" agent permission testing without side effects. `runScenario()`: named scenario reports. `recommendScopeMinimization()`: auto-minimize unused permissions.
+
+`server/fda/fdaValidationEngine.ts` — `generateFDAMetrics()`: allowed/blocked/override rates, safety score 0–100, FDA safe flag, scope drift level, recommendation string.
+
+**Routes:** `server/routes/scopeRoutes.ts` → `/api/scope/*`
+- `GET /roles` · `POST /evaluate` · `GET /log` · `GET /stats`
+- `POST /delegate` · `DELETE /delegate/:id` · `GET /delegations`
+- `POST /simulate` · `POST /scenario`
+- `GET /drift` · `GET /heatmap`
+- `GET /fda`
+- `POST /triage`
+- `GET /overrides` · `POST /overrides/:id/approve` · `POST /overrides/:id/deny`
+
+**Frontend:** `client/src/pages/ScopeCommandCenter.tsx` → `/scope-command-center`
+- Live WebSocket scope event feed (200 entries, color-coded allowed/blocked/override)
+- Physician override approval panel (approve/deny buttons)
+- FDA metrics card (allowed rate, blocked rate, override rate, safety score)
+- Agent role contract cards (express/denied/audit level per role)
+- Stats bar: total actions, allowed, blocked, overrides, FDA safe, drift risk, role count
+- Alert banners for pending overrides and high drift
+
+**Confirmed Live (Batch 42):**
+- 6 roles: triage_agent, treatment_agent, ehr_agent, escalation_agent, learning_agent, billing_agent
+- EHR agent write:ehr (physician signed, confidence 0.95) → APPROVED, auditLevel HIGH
+- FDA metrics → fdaSafe: true, safetyScore: 100
+- Critical patient triage: HR 135, SpO2 86%, qSOFA=3 → level=CRITICAL, scope=4, #1 ranked

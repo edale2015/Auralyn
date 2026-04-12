@@ -1,0 +1,290 @@
+PART 1: DIGITAL TWIN SIMULATION ENGINE
+🎯 What it does
+
+For each patient, create a forward simulation (e.g., next 2–6 hours) using:
+
+current vitals
+trends (last N observations)
+interventions (fluids, abx)
+stochastic noise (to avoid brittle determinism)
+
+Outputs:
+
+probability of deterioration
+probability of ICU need
+expected time-to-event (TTE)
+🔥 /server/digitalTwin/digitalTwinEngine.ts
+type TwinState = {
+  hr: number;
+  sbp: number;
+  rr: number;
+  spo2: number;
+  temp: number;
+};
+
+type TwinResult = {
+  patientId: string;
+  steps: number;
+  deteriorationProb: number;
+  icuProb: number;
+  tteMinutes: number;
+};
+
+function stepDynamics(state: TwinState, inputs: any): TwinState {
+  // Simple physiology-inspired drift + intervention effects
+  const noise = (n: number) => n + (Math.random() - 0.5) * 2;
+
+  let hr = state.hr;
+  let sbp = state.sbp;
+  let rr = state.rr;
+  let spo2 = state.spo2;
+  let temp = state.temp;
+
+  // Infection drift
+  if (inputs.infection) {
+    hr += 2;
+    rr += 1;
+    temp += 0.1;
+  }
+
+  // Fluids improve BP, slightly HR
+  if (inputs.fluids) {
+    sbp += 3;
+    hr -= 1;
+  }
+
+  // Hypoxia drift
+  if (spo2 < 92) {
+    rr += 1;
+  }
+
+  return {
+    hr: noise(hr),
+    sbp: noise(sbp),
+    rr: noise(rr),
+    spo2: noise(spo2),
+    temp: noise(temp)
+  };
+}
+
+function isDeteriorating(s: TwinState) {
+  return s.sbp < 90 || s.spo2 < 90 || s.rr > 28;
+}
+
+function isICUNeed(s: TwinState) {
+  return s.sbp < 85 || s.spo2 < 88 || s.rr > 32;
+}
+
+export function runDigitalTwin(patient: any, horizonMinutes = 180): TwinResult {
+  let state: TwinState = {
+    hr: patient.vitals.hr,
+    sbp: patient.vitals.sbp,
+    rr: patient.vitals.rr,
+    spo2: patient.vitals.spo2,
+    temp: patient.vitals.temp
+  };
+
+  const steps = Math.floor(horizonMinutes / 5); // 5-min steps
+
+  let detCount = 0;
+  let icuCount = 0;
+  let firstICUStep = -1;
+
+  for (let i = 0; i < steps; i++) {
+    state = stepDynamics(state, {
+      infection: patient.symptoms.includes("fever"),
+      fluids: patient.interventions?.includes("fluids")
+    });
+
+    if (isDeteriorating(state)) detCount++;
+    if (isICUNeed(state)) {
+      icuCount++;
+      if (firstICUStep === -1) firstICUStep = i;
+    }
+  }
+
+  const deteriorationProb = detCount / steps;
+  const icuProb = icuCount / steps;
+
+  return {
+    patientId: patient.id,
+    steps,
+    deteriorationProb,
+    icuProb,
+    tteMinutes: firstICUStep === -1 ? -1 : firstICUStep * 5
+  };
+}
+🛏️ PART 2: PREDICTIVE ICU BED ALLOCATION
+🎯 Idea
+
+Use future ICU probability + time-to-event to prioritize beds before crisis.
+
+🔥 /server/icu/icuAllocator.ts
+import { runDigitalTwin } from "../digitalTwin/digitalTwinEngine";
+
+type Bed = {
+  id: string;
+  hospitalId: string;
+  available: boolean;
+};
+
+export function allocateICUBeds(patients: any[], beds: Bed[]) {
+  const projections = patients.map(p => {
+    const twin = runDigitalTwin(p);
+
+    return {
+      patientId: p.id,
+      icuProb: twin.icuProb,
+      tte: twin.tteMinutes
+    };
+  });
+
+  // Priority: high probability + soonest deterioration
+  projections.sort((a, b) => {
+    if (b.icuProb !== a.icuProb) return b.icuProb - a.icuProb;
+    return (a.tte === -1 ? Infinity : a.tte) - (b.tte === -1 ? Infinity : b.tte);
+  });
+
+  const availableBeds = beds.filter(b => b.available);
+
+  const assignments = [];
+
+  for (let i = 0; i < projections.length; i++) {
+    if (!availableBeds[i]) break;
+
+    assignments.push({
+      patientId: projections[i].patientId,
+      bedId: availableBeds[i].id,
+      priorityScore: projections[i].icuProb
+    });
+  }
+
+  return assignments;
+}
+🌐 PART 3: MULTI-HOSPITAL COORDINATION
+🎯 Goal
+
+Route patients to:
+
+hospitals with available ICU beds
+shortest ETA
+appropriate capability
+🔥 /server/network/hospitalCoordinator.ts
+type Hospital = {
+  id: string;
+  name: string;
+  icuBeds: number;
+  availableBeds: number;
+  location: { lat: number; lng: number };
+};
+
+function distance(a: any, b: any) {
+  return Math.sqrt(
+    Math.pow(a.lat - b.lat, 2) + Math.pow(a.lng - b.lng, 2)
+  );
+}
+
+export function routePatients(patients: any[], hospitals: Hospital[]) {
+  return patients.map(p => {
+    const sorted = hospitals
+      .filter(h => h.availableBeds > 0)
+      .sort((a, b) =>
+        distance(p.location, a.location) - distance(p.location, b.location)
+      );
+
+    return {
+      patientId: p.id,
+      assignedHospital: sorted[0]?.id || null
+    };
+  });
+}
+🔗 PART 4: UNIFIED ORCHESTRATOR
+🔥 /server/orchestrator/systemOrchestrator.ts
+import { runDigitalTwin } from "../digitalTwin/digitalTwinEngine";
+import { allocateICUBeds } from "../icu/icuAllocator";
+import { routePatients } from "../network/hospitalCoordinator";
+import { broadcast } from "../ws/broadcast";
+
+export async function runSystemCycle(patients: any[], beds: any[], hospitals: any[]) {
+  const twins = patients.map(runDigitalTwin);
+
+  const icuAssignments = allocateICUBeds(patients, beds);
+
+  const routing = routePatients(patients, hospitals);
+
+  const snapshot = {
+    timestamp: Date.now(),
+    twins,
+    icuAssignments,
+    routing
+  };
+
+  broadcast("SYSTEM_SNAPSHOT", snapshot);
+
+  return snapshot;
+}
+🖥️ FRONTEND: REGIONAL COMMAND DASHBOARD
+/frontend/src/pages/RegionalCommand.tsx
+import { useEffect, useState } from "react";
+
+export default function RegionalCommand() {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000/ws");
+
+    ws.onmessage = (msg) => {
+      const parsed = JSON.parse(msg.data);
+      if (parsed.type === "SYSTEM_SNAPSHOT") {
+        setData(parsed.payload);
+      }
+    };
+  }, []);
+
+  if (!data) return <div>Loading...</div>;
+
+  return (
+    <div className="p-4 grid grid-cols-3 gap-4">
+      <div>
+        <h2>🧬 Digital Twin</h2>
+        {data.twins.map((t: any) => (
+          <div key={t.patientId}>
+            {t.patientId} ICU Risk: {t.icuProb.toFixed(2)}
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <h2>🛏️ ICU Allocation</h2>
+        {data.icuAssignments.map((a: any) => (
+          <div key={a.patientId}>
+            Patient {a.patientId} → Bed {a.bedId}
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <h2>🌐 Routing</h2>
+        {data.routing.map((r: any) => (
+          <div key={r.patientId}>
+            Patient {r.patientId} → Hospital {r.assignedHospital}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+🧠 WHAT YOU NOW BUILT
+
+This is no longer just a triage system.
+
+It is:
+
+🧬 Predictive
+Simulates future patient states
+🛏️ Resource-aware
+Allocates ICU beds before collapse
+🌐 Network-level
+Routes across hospitals intelligently
+🤖 Coordinated
+One brain across many facilities
