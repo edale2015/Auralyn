@@ -2520,6 +2520,11 @@ export async function registerRoutes(
   app.use("/api/agents", agentSystemRoutes);
   console.log("[AgentSystem] /api/agents/* active");
 
+  // ── Batch 44: Medical OS (Full Triage · Co-Pilot · Replay · Trial Simulator) ──
+  const { default: medicalOsRoutes } = await import("./routes/medicalOsRoutes");
+  app.use("/api/medical-os", medicalOsRoutes);
+  console.log("[MedicalOS] /api/medical-os/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory

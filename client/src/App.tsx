@@ -137,6 +137,8 @@ import ScopeCommandCenter from "@/pages/ScopeCommandCenter";
 import CommandWall     from "@/pages/CommandWall";
 import RegionalCommand from "@/pages/RegionalCommand";
 import GlobalCommand   from "@/pages/GlobalCommand";
+import AuditReplay     from "@/pages/AuditReplay";
+import ClinicalTrials  from "@/pages/ClinicalTrials";
 
 validateRoutes();
 
@@ -200,6 +202,8 @@ function WorkbenchRouter() {
         <Route path="/command-wall"          component={CommandWall} />
         <Route path="/regional-command"      component={RegionalCommand} />
         <Route path="/global-command"        component={GlobalCommand} />
+        <Route path="/audit-replay"          component={AuditReplay} />
+        <Route path="/clinical-trials"       component={ClinicalTrials} />
         <Route path="/skill-map" component={SkillMapPage} />
         <Route path="/skill-intelligence-lab" component={SkillIntelligenceLabPage} />
         <Route path="/skill-evolution-lab" component={SkillEvolutionLabPage} />
