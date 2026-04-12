@@ -2535,6 +2535,11 @@ export async function registerRoutes(
   app.use("/api/pipeline", hybridPipelineRoutes);
   console.log("[Pipeline] /api/pipeline/* active");
 
+  // ── Batch 44e: Framework Modules (Dependency Wave, Goal Verifier, Acuity, Delta) ──
+  const { default: frameworkRoutes } = await import("./routes/frameworkRoutes");
+  app.use("/api/framework", frameworkRoutes);
+  console.log("[Framework] /api/framework/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
