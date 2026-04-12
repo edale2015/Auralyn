@@ -2448,6 +2448,29 @@ export async function registerRoutes(
   });
   console.log("[Triage] POST /api/triage active");
 
+  app.post("/api/triage/full", async (req, res) => {
+    try {
+      const { runFinalPipeline } = await import("./pipeline/finalPipeline");
+      const result = await runFinalPipeline(req.body);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Final pipeline failed" });
+    }
+  });
+  console.log("[Triage] POST /api/triage/full active");
+
+  app.post("/api/vitals/evaluate", async (req, res) => {
+    try {
+      const { evaluateAndBroadcast } = await import("./monitoring/vitalsMonitor");
+      const { patientId = "anonymous", vitals = {} } = req.body;
+      const alerts = evaluateAndBroadcast(patientId, vitals);
+      res.json({ patientId, alerts, alertCount: alerts.length });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+  console.log("[Vitals] POST /api/vitals/evaluate active");
+
   // ── Batch 35: Phase 2/3 Evolution — Specialist Council, Drift, FDA, Sim, WebSocket ──
   const { initPatientStream }      = await import("./realtime/patientStream");
   initPatientStream(httpServer);   // attaches WS to existing HTTP server at /ws/patients
