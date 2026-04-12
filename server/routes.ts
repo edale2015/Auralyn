@@ -2530,6 +2530,11 @@ export async function registerRoutes(
   app.use("/api/cde", cdeRoutes);
   console.log("[CDE] /api/cde/* active");
 
+  // ── Batch 44d: Hybrid Pipeline (Wave + Gates + Spec + Trace) ─────────────────
+  const { default: hybridPipelineRoutes } = await import("./routes/hybridPipelineRoutes");
+  app.use("/api/pipeline", hybridPipelineRoutes);
+  console.log("[Pipeline] /api/pipeline/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
