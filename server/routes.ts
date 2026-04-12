@@ -2402,6 +2402,28 @@ export async function registerRoutes(
   console.log("[FDA] /api/fda/* active");
   console.log("[Drift] /api/drift/* active");
 
+  // ── Batch 31: SaMD Dossier + Trial Simulator + ROI + CPT + Payer + Pilot + DAG ──
+  const { default: samdRoutes }   = await import("./routes/samdRoutes");
+  const { default: trialRoutes }  = await import("./routes/trialRoutes");
+  const { default: roiRoutes }    = await import("./routes/roiRoutes");
+  const { default: cptRoutes }    = await import("./routes/cptRoutes");
+  const { default: payerRoutes }  = await import("./routes/payerRoutes");
+  const { default: pilotRoutes }  = await import("./routes/pilotRoutes");
+
+  app.use("/api/samd",    samdRoutes);
+  app.use("/api/trial",   trialRoutes);
+  app.use("/api/roi",     roiRoutes);
+  app.use("/api/cpt",     cptRoutes);
+  app.use("/api/payer",   payerRoutes);
+  app.use("/api/pilot",   pilotRoutes);
+
+  console.log("[SaMD] /api/samd/* active");
+  console.log("[Trial] /api/trial/* active");
+  console.log("[ROI] /api/roi/* active");
+  console.log("[CPT] /api/cpt/* active");
+  console.log("[Payer] /api/payer/* active");
+  console.log("[Pilot] /api/pilot/* active");
+
   return httpServer;
 }
 

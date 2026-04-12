@@ -1,0 +1,226 @@
+PROJECT STRUCTURE (ZIP LAYOUT)
+clinical-brain/
+│
+├── server/
+│   ├── index.ts
+│   ├── orchestrators/
+│   ├── yaml/
+│   ├── agents/
+│   ├── debate/
+│   ├── graph/
+│   ├── diagnosis/
+│   ├── audit/
+│   ├── api/
+│
+├── client/
+│   ├── src/
+│   │   ├── pages/
+│   │   ├── components/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│
+├── pipelines/
+│   └── chestPain.yaml
+│
+├── .env.example
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+⚙️ STEP 1 — BACKEND ENTRYPOINT
+// server/index.ts
+
+import express from "express"
+import cors from "cors"
+import { runFullSystem } from "./orchestrators/fullSystem"
+import { getAgentContracts } from "./api/agentContracts"
+import { getDAG } from "./api/dag"
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+
+app.post("/run", async (req, res) => {
+  const result = await runFullSystem(req.body)
+  res.json(result)
+})
+
+app.get("/agents", (_, res) => {
+  res.json(getAgentContracts())
+})
+
+app.get("/dag", (_, res) => {
+  res.json(getDAG())
+})
+
+app.listen(3001, () => {
+  console.log("Server running on 3001")
+})
+🤖 STEP 2 — REAL LLM SPECIALIST AGENTS
+🧠 LLM Wrapper
+// server/llm/openai.ts
+
+import OpenAI from "openai"
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+})
+
+export async function callLLM(system: string, user: string) {
+  const res = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user }
+    ]
+  })
+
+  return res.choices[0].message.content
+}
+🫀 Cardiology LLM Agent
+// server/agents/cardiologyLLM.ts
+
+import { callLLM } from "../llm/openai"
+
+export class CardiologyLLM {
+  async evaluate(ctx: any) {
+    const prompt = `
+You are a cardiologist.
+Patient data:
+${JSON.stringify(ctx)}
+
+Return JSON:
+{ diagnosis, confidence, reasoning }
+`
+
+    const response = await callLLM(
+      "Expert cardiologist",
+      prompt
+    )
+
+    return JSON.parse(response!)
+  }
+}
+🫁 Pulmonary LLM Agent
+// server/agents/pulmonaryLLM.ts
+
+import { callLLM } from "../llm/openai"
+
+export class PulmonaryLLM {
+  async evaluate(ctx: any) {
+    const prompt = `
+You are a pulmonary specialist.
+Analyze:
+${JSON.stringify(ctx)}
+`
+
+    const response = await callLLM(
+      "Pulmonary specialist",
+      prompt
+    )
+
+    return JSON.parse(response!)
+  }
+}
+🧠 STEP 3 — FULL SYSTEM ORCHESTRATOR
+// server/orchestrators/fullSystem.ts
+
+import { runYamlPipeline } from "../yaml/executor"
+import { computeDiagnosis } from "../diagnosis/graphBayesianEngine"
+import { runDebate } from "../debate/debateEngine"
+import { CardiologyLLM } from "../agents/cardiologyLLM"
+import { PulmonaryLLM } from "../agents/pulmonaryLLM"
+
+export async function runFullSystem(input: any) {
+  const pipeline = await runYamlPipeline(
+    require("../../pipelines/chestPain.yaml"),
+    input
+  )
+
+  const diagnosis = await computeDiagnosis(pipeline)
+
+  const debate = await runDebate(
+    [new CardiologyLLM(), new PulmonaryLLM()],
+    pipeline
+  )
+
+  return {
+    pipeline,
+    diagnosis,
+    debate
+  }
+}
+🎛️ STEP 4 — CONTROL TOWER FRONTEND
+App Entry
+// client/src/App.tsx
+
+import { useEffect, useState } from "react"
+import { AgentContractsPanel } from "./components/AgentContractsPanel"
+import { DAGViewer } from "./components/DAGViewer"
+import { DebatePanel } from "./components/DebatePanel"
+
+export default function App() {
+  const [agents, setAgents] = useState([])
+  const [dag, setDag] = useState(null)
+  const [result, setResult] = useState(null)
+
+  useEffect(() => {
+    fetch("http://localhost:3001/agents")
+      .then(r => r.json())
+      .then(setAgents)
+
+    fetch("http://localhost:3001/dag")
+      .then(r => r.json())
+      .then(setDag)
+  }, [])
+
+  const runCase = async () => {
+    const res = await fetch("http://localhost:3001/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symptoms: ["chest pain"],
+        vitals: { hr: 110 }
+      })
+    })
+
+    setResult(await res.json())
+  }
+
+  return (
+    <div>
+      <button onClick={runCase}>Run Case</button>
+
+      <AgentContractsPanel contracts={agents} />
+      {dag && <DAGViewer dag={dag} />}
+      {result && <DebatePanel debate={result.debate} />}
+    </div>
+  )
+}
+⚙️ STEP 5 — PACKAGE.JSON
+{
+  "name": "clinical-brain",
+  "scripts": {
+    "dev": "concurrently \"ts-node server/index.ts\" \"vite\""
+  },
+  "dependencies": {
+    "express": "^4",
+    "cors": "^2",
+    "openai": "^4",
+    "react": "^18",
+    "reactflow": "^11",
+    "js-yaml": "^4",
+    "neo4j-driver": "^5"
+  }
+}
+🔐 STEP 6 — ENV FILE
+OPENAI_API_KEY=your_key
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
+🚀 HOW TO DEPLOY IN REPLIT
+1. Create new Replit → Node.js
+2. Upload all files
+3. Add secrets (ENV)
+4. Run:
+npm install
+npm run dev

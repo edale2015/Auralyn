@@ -1248,3 +1248,57 @@ ECW → Athena → Epic → UI Automation → Vision Agent → failed
 - FDA Validation: run-and-report button, readiness grade badge (A/B/C/F), accuracy %, high-risk misses, recommendations
 - Audit Chain: verify integrity, view latest hash, full chain explorer (last 10 records)
 - Drift Detection: record metrics, check global + per-complaint drift with delta visualization
+
+---
+
+## Batch 31 — SaMD Dossier + Trial Simulator + ROI Engine + DAG Executor + Pilot Workflow (COMPLETE)
+
+**Test count: 2,479/2,479 passing across 65 files (+54 new tests in `tests/unit/batch31.test.ts`)**
+
+### New Services
+
+**`server/services/samdDossierService.ts`** — `samdDossierService.generate()`: assembles a complete SaMD Class II FDA submission dossier object from live system state (hash chain, FDA validation report, drift state, golden case corpus, risk mitigations, all architecture flags). No file I/O — pure structured output.
+
+**`server/services/trialSimulator.ts`** — `trialSimulator.runTrial(n)`: generates N synthetic patients (fever/cough/chest-pain rotation with randomised vitals), runs each through the clinical workflow engine, and returns `{total, edRate, avgConfidence, edCount, homeCount, byComplaint, results[]}`. Cap at 500.
+
+**`server/services/payerROIService.ts`** — `payerROIService.calculate(cases[])`: takes raw trial results, computes avoided-ED count, total savings ($2,500 ED − $250 UC per avoided visit), avg savings per patient, and `annualizedSavings500` (500 pt/day × 250 days/yr).
+
+**`server/services/payerContractService.ts`** — `simulateContract(volume)`: base $100/visit + $10 bonus (>500), $20 bonus (>1000), $50k diversion bonus (>1000). `suggestNegotiation(data)`: returns strategy + negotiation levers + estimated uplift % based on ED diversion metrics and clinical accuracy.
+
+### New Core Architecture
+
+**`server/core/FlowContext.ts`** — type-safe key-value context store for agent pipelines: `get<T>()` (throws on missing), `tryGet<T>()`, `set()`, `has()`, `merge(FlowContext)`, `mergeRecord(Record)`, `dump()`, `clone()`.
+
+**`server/core/MedicalAgent.ts`** — abstract base class with `AgentMeta { name, consumes[], provides[] }` + abstract `run(ctx): Promise<FlowContext>`.
+
+**`server/core/DAGExecutor.ts`** — `validate(availableKeys?)` checks every `consumes` key is satisfied by a provider or initial context (throws descriptively). `run(ctx)` executes agents sequentially. `runParallel(layers, ctx)` executes agent layers with `Promise.all` within each layer.
+
+**`server/agents/redFlagAgent.ts`** — `RedFlagAgent` (consumes: vitals; provides: redFlags): detects `possible_PE_or_ACS`, `critical_hypoxia`, `shock_risk`, `respiratory_failure`, `possible_sepsis`, `cardiopulmonary_compromise`. Does not mutate input context (clones before writing).
+
+**`server/orchestrators/clinicalOrchestrator.ts`** — `runClinicalPipeline(input)`: wraps FlowContext + DAGExecutor + RedFlagAgent. Safe defaults for missing `vitals`/`symptoms` keys.
+
+### Billing & Workflow
+
+**`server/billing/cptEngine.ts`** — `generateCPT({riskLevel, diagnosis, disposition})`: risk-level-driven E&M coding — low→99213, moderate/high→99214, critical→99285. Separate from the richer `codingEngine.ts`.
+
+**`server/ehr/ehrOrchestrator.ts`** — `submitEncounter(data)`: routes to Athena/Epic/ECW EHR adapter. Stub mode in dev/test (no Playwright browser launch) — returns `{success:true, stub:true, system}`.
+
+**`server/workflows/pilotWorkflow.ts`** — `runPilotEncounter(input)`: 4-step real-world clinic encounter: (1) clinical workflow, (2) physician documentation gate, (3) CPT billing, (4) EHR submission. Returns `{status, clinical, billing?, ehr?}`.
+
+### New Routes
+
+**`server/routes/samdRoutes.ts`** — `GET /api/samd/generate`
+**`server/routes/trialRoutes.ts`** — `GET /api/trial/run?n=50`
+**`server/routes/roiRoutes.ts`** — `GET /api/roi/simulate?n=100`
+**`server/routes/cptRoutes.ts`** — `POST /api/cpt/generate`
+**`server/routes/payerRoutes.ts`** — `GET /api/payer/simulate?volume=1000`, `POST /api/payer/negotiate`
+**`server/routes/pilotRoutes.ts`** — `POST /api/pilot/encounter`
+
+### New Frontend
+
+**`client/src/pages/ClinicalOperationsCenter.tsx`** — 5-tab dashboard at `/clinical-ops-center`:
+- FDA Dossier: one-click SaMD dossier generation with architecture flags, risk mitigations, FDA readiness badge, hash chain validity
+- Trial Simulator: configurable N patients, edRate/homeRate/avgConfidence cards, breakdown-by-complaint grid
+- Payer ROI: simulate ROI from trial results — avoided ED visits, total savings, annualized $
+- Contract Engine: volume-driven contract simulation + negotiation strategy with levers and uplift %
+- Pilot Encounter: live encounter form (patientId, complaint, vitals) → clinical result + CPT code + EHR submission status

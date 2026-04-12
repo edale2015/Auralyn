@@ -1,0 +1,266 @@
+1. MEDICAL KNOWLEDGE GRAPH LAYER
+🎯 Purpose
+
+Move from:
+
+flat KB tables ❌
+
+To:
+
+relational reasoning graph ✅
+📦 Graph Schema (Production-Ready)
+// server/graph/schema.ts
+
+export enum NodeType {
+  DISEASE = "disease",
+  SYMPTOM = "symptom",
+  SIGN = "sign",
+  TEST = "test",
+  TREATMENT = "treatment",
+  RISK_FACTOR = "risk_factor",
+  PATTERN = "pattern"
+}
+
+export enum RelationType {
+  CAUSES = "causes",
+  INDICATES = "indicates",
+  ASSOCIATED_WITH = "associated_with",
+  TREATED_BY = "treated_by",
+  CONTRAINDICATED_WITH = "contraindicated_with",
+  SUPPORTS = "supports",
+  RULE_TRIGGER = "rule_trigger"
+}
+🧠 Graph Engine (Neo4j-Compatible)
+// server/graph/graphStore.ts
+
+import neo4j from "neo4j-driver"
+
+const driver = neo4j.driver(
+  process.env.NEO4J_URI!,
+  neo4j.auth.basic(
+    process.env.NEO4J_USER!,
+    process.env.NEO4J_PASSWORD!
+  )
+)
+
+export async function createNode(type: string, name: string) {
+  const session = driver.session()
+  await session.run(
+    `MERGE (n:${type} {name: $name}) RETURN n`,
+    { name }
+  )
+  await session.close()
+}
+
+export async function createRelation(
+  from: string,
+  to: string,
+  relation: string
+) {
+  const session = driver.session()
+  await session.run(
+    `
+    MATCH (a {name: $from}), (b {name: $to})
+    MERGE (a)-[:${relation}]->(b)
+    `,
+    { from, to }
+  )
+  await session.close()
+}
+🔍 Query Example (Clinical Reasoning)
+// server/graph/queries.ts
+
+export async function getRelatedDiseases(symptom: string) {
+  const session = driver.session()
+
+  const result = await session.run(
+    `
+    MATCH (s:symptom {name: $symptom})-[:INDICATES]->(d:disease)
+    RETURN d.name as disease
+    `,
+    { symptom }
+  )
+
+  return result.records.map(r => r.get("disease"))
+}
+🔥 Hook Into Your Pipeline
+ctx.set("graphInsights", await getRelatedDiseases("chest pain"))
+🧾 2. AGENT CONTRACT UI (CONTROL TOWER)
+🎯 Purpose
+
+Make this visible:
+
+👉 What each agent:
+
+consumes
+produces
+status
+🧠 Backend API
+// server/api/agentContracts.ts
+
+import { agents } from "../registry"
+
+export function getAgentContracts() {
+  return agents.map(a => ({
+    name: a.meta.name,
+    consumes: a.meta.consumes,
+    provides: a.meta.provides
+  }))
+}
+🎨 Frontend (React)
+// client/components/AgentContractsPanel.tsx
+
+export function AgentContractsPanel({ contracts }) {
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      {contracts.map(agent => (
+        <div key={agent.name} className="p-4 border rounded">
+          <h3 className="font-bold">{agent.name}</h3>
+
+          <div>
+            <strong>Consumes:</strong>
+            <ul>
+              {agent.consumes.map(c => <li key={c}>{c}</li>)}
+            </ul>
+          </div>
+
+          <div>
+            <strong>Provides:</strong>
+            <ul>
+              {agent.provides.map(p => <li key={p}>{p}</li>)}
+            </ul>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+🔺 3. DAG VISUALIZER
+🎯 Purpose
+
+Turn your system into:
+👉 a visible brain
+
+🧠 Backend DAG Export
+// server/api/dag.ts
+
+export function getDAG() {
+  return {
+    nodes: agents.map(a => ({
+      id: a.meta.name
+    })),
+    edges: agents.flatMap(a =>
+      a.meta.consumes.map(c => ({
+        from: c,
+        to: a.meta.name
+      }))
+    )
+  }
+}
+🎨 Frontend (React Flow)
+// client/components/DAGViewer.tsx
+
+import ReactFlow from "reactflow"
+
+export function DAGViewer({ dag }) {
+  const nodes = dag.nodes.map(n => ({
+    id: n.id,
+    data: { label: n.id },
+    position: { x: Math.random()*400, y: Math.random()*400 }
+  }))
+
+  const edges = dag.edges.map((e, i) => ({
+    id: String(i),
+    source: e.from,
+    target: e.to
+  }))
+
+  return <ReactFlow nodes={nodes} edges={edges} />
+}
+🔁 4. FAILURE REPLAY SYSTEM
+🎯 Purpose
+
+Replay ANY case:
+👉 like reviewing ICU footage
+
+🧠 Store Execution Trace
+// server/audit/traceStore.ts
+
+import { db } from "../db"
+
+export async function saveTrace(trace: any) {
+  await db.insert("execution_traces").values({
+    id: crypto.randomUUID(),
+    data: JSON.stringify(trace),
+    created_at: new Date()
+  })
+}
+🧠 Capture Every Step
+// inside DAGExecutor
+
+trace.push({
+  agent: agent.meta.name,
+  input: ctx.dump(),
+  output: result.dump(),
+  timestamp: Date.now()
+})
+🎥 Replay API
+export async function getTrace(id: string) {
+  return db.select().from("execution_traces").where({ id })
+}
+🎨 Replay UI
+// client/components/ReplayViewer.tsx
+
+export function ReplayViewer({ trace }) {
+  return (
+    <div>
+      {trace.map((step, i) => (
+        <div key={i} className="border p-3 mb-2">
+          <h4>{step.agent}</h4>
+          <pre>{JSON.stringify(step.input, null, 2)}</pre>
+          <pre>{JSON.stringify(step.output, null, 2)}</pre>
+        </div>
+      ))}
+    </div>
+  )
+}
+🔗 FULL CONTROL TOWER INTEGRATION
+
+Add tabs:
+
+// client/pages/controlTower.tsx
+
+<Tabs>
+  <Tab label="Agents">
+    <AgentContractsPanel />
+  </Tab>
+
+  <Tab label="DAG">
+    <DAGViewer />
+  </Tab>
+
+  <Tab label="Replay">
+    <ReplayViewer />
+  </Tab>
+
+  <Tab label="Knowledge Graph">
+    <GraphViewer />
+  </Tab>
+</Tabs>
+🧠 WHAT YOU JUST BUILT
+
+This is no longer a triage app.
+
+It is now:
+
+🧬 A learning clinical system
+remembers relationships
+evolves over time
+🔍 Fully explainable
+every decision traceable
+⚡ Parallel + scalable
+DAG execution
+🛡️ Safe
+contract validation
+🎥 Auditable
+replay ANY case

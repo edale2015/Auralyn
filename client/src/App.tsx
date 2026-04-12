@@ -97,7 +97,8 @@ import SkillIntelligenceLabPage from "@/pages/SkillIntelligenceLabPage";
 import SkillEvolutionLabPage from "@/pages/SkillEvolutionLabPage";
 import MissionControlPage         from "@/pages/MissionControlPage";
 import MissionControlPhase2       from "@/pages/MissionControlPhase2";
-import SystemValidationDashboard  from "@/pages/SystemValidationDashboard";
+import SystemValidationDashboard   from "@/pages/SystemValidationDashboard";
+import ClinicalOperationsCenter   from "@/pages/ClinicalOperationsCenter";
 import IntegrationHealthPage from "@/pages/IntegrationHealthPage";
 import EngineMaintenancePage from "@/pages/EngineMaintenancePage";
 import AgentLabPage from "@/pages/AgentLabPage";
@@ -190,6 +191,7 @@ function WorkbenchRouter() {
         <Route path={ROUTES.MISSION_CONTROL}        component={MissionControlPage} />
         <Route path={ROUTES.MISSION_CONTROL_PHASE2} component={MissionControlPhase2} />
         <Route path={ROUTES.SYSTEM_VALIDATION}      component={SystemValidationDashboard} />
+        <Route path={ROUTES.CLINICAL_OPS_CENTER}    component={ClinicalOperationsCenter} />
         <Route path={ROUTES.INTEGRATION_HEALTH}>{() => <RoleGuard allowedRoles={["admin"]}><IntegrationHealthPage /></RoleGuard>}</Route>
         <Route path={ROUTES.ENGINE_MAINTENANCE}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><EngineMaintenancePage /></RoleGuard>}</Route>
         <Route path={ROUTES.AGENT_LAB}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><AgentLabPage /></RoleGuard>}</Route>
