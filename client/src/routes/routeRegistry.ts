@@ -47,4 +47,5 @@ export const ROUTES = {
   CLINICAL_BRAIN_DASHBOARD: "/clinical-brain-dashboard",
   HIERARCHICAL_COUNCIL: "/hierarchical-council",
   BRAIN_COMMAND_CENTER: "/brain-command-center",
+  MISSION_CONTROL_PHASE2: "/mission-control-phase2",
 };

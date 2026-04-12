@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { detectDrift, resetBaseline, getBaseline } from "../services/monitoring/driftDetectionEngine";
 import { evaluateRisk } from "../services/monitoring/riskGovernanceEngine";
+import { assessMonitoring } from "../services/patientMonitoringService";
 
 const router = Router();
 
@@ -45,6 +46,20 @@ router.post("/reset-baseline", (req, res) => {
 
 router.get("/baseline", (_req, res) => {
   res.json(getBaseline());
+});
+
+/**
+ * POST /api/monitoring/assess
+ * Real-time deterioration risk assessment from patient vitals.
+ * Accepts either { vitals: {...} } or flat vitals object.
+ */
+router.post("/assess", (req, res) => {
+  try {
+    const monitoring = assessMonitoring(req.body);
+    res.json(monitoring);
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? "Monitoring assessment failed" });
+  }
 });
 
 export default router;

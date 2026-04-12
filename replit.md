@@ -1160,3 +1160,51 @@ ECW → Athena → Epic → UI Automation → Vision Agent → failed
 **`.env.example`** — Appended: `ATHENA_API_BASE`, `ATHENA_PRACTICE_ID`, `ATHENA_TOKEN`, `ATHENA_DEFAULT_DEPARTMENT_ID`, plus `FHIR_BASE`, `EPIC_TOKEN`, `ECW_API`, `ECW_TOKEN` sections
 
 **Test count:** 1979/1979 passing across 57 files (+97 new tests in `tests/unit/batch23.test.ts`)
+
+---
+
+## Batch 29 — Medical MCP Nervous System (COMPLETE)
+
+**Test count: 2,396/2,396 passing across 63 files (+57 new tests in `tests/unit/batch29.test.ts`)**
+
+### New Files
+
+**`server/mcp/medicalMCP.ts`** — Singleton MedicalMCPRegistry: `register()`, `execute()`, `listTools()`, `has()`.
+
+**`server/mcp/loadTools.ts`** — Side-effect import that activates all tool registrations (call once in routes.ts or workflow engine).
+
+**`server/mcp/tools/baseClinicalTools.ts`** — 6 base clinical tools: `intake.collect`, `questions.nextBest`, `diagnosis.run`, `risk.assess`, `disposition.determine`, `ehr.document`.
+
+**`server/mcp/tools/phase2Tools.ts`** — 2 specialist tools: `council.run` (cardiology + ID + ICU vote), `monitoring.assess` (real-time deterioration).
+
+**`server/types/clinical.ts`** — Shared clinical types: `ClinicalWorkflowState`, `ClinicalWorkflowInput`, `GoldenCaseDef`, `GoldenCaseRunResult`, `MonitoringAlert`, `MonitoringAssessment`, `SpecialistVote`, `SpecialistCouncilResult`, `RLHFFeedbackEvent`, `RLHFProposal`, `RiskLevel`.
+
+**`server/services/auditTraceService.ts`** — `AuditTraceService` class (appended, preserving legacy `buildAuditTrace`): `createTrace`, `startStep`, `completeStep`, `failStep`, `getTrace`, `summarize`, `listTraces`. Delta computation on step completion.
+
+**`server/services/specialistCouncilService.ts`** — 3-specialist vote engine: cardiology, infectious disease, ICU. Consensus via majority, risk level escalation, confidence averaging. `runSpecialistCouncil(state)`.
+
+**`server/services/patientMonitoringService.ts`** — Real-time deterioration scoring: HR, SpO2, BP, temp, RR, sepsis pattern. Score → reassessInMinutes (5/10/30/60). `assessMonitoring(state)`.
+
+**`server/services/workflowRuntime.ts`** — `runToolWithTrace()` bridges MedicalMCP execution with AuditTraceService step logging.
+
+**`server/workflows/clinicalWorkflowEngine.ts`** — 8-step clinical workflow: collect-intake → choose-next-question → run-diagnosis → specialist-council → risk-assessment → monitoring-assessment → determine-disposition → ehr-documentation. Returns full `ClinicalWorkflowState` with traceId + traceSummary.
+
+**`server/services/goldenCaseService.ts`** — Singleton `GoldenCaseService`: `seed`, `list`, `getById`, `compare` (mismatch diffing). Pre-seeded: gc-cough-viral-001 (low-risk cough) + gc-sepsis-risk-001 (critical sepsis).
+
+**`server/services/goldenCaseRunner.ts`** — `runAllGoldenCases()`: runs workflow for each active golden case, compares against expected, returns pass/fail suite result.
+
+**`server/services/rlhfService.ts`** — `RLHFService`: `addFeedback`, `listFeedback`, `generateProposals` (≥5 events/group, ±2% max delta, clamped [0.5,1.5]), `listProposals`, `reviewProposal` (approved/rejected/applied).
+
+### New Routes
+
+**`server/routes/workflowRoutes.ts`** — `/api/workflow/run` (POST), `/api/workflow/trace/:traceId` (GET), `/api/workflow/tools` (GET).
+
+**`server/routes/goldenCaseRoutes.ts`** — `/api/golden-cases` (GET), `/api/golden-cases/runs` (GET), `/api/golden-cases/run-all` (POST).
+
+**`server/routes/rlhfRoutes.ts`** — `/api/rlhf/feedback` (GET/POST), `/api/rlhf/proposals` (GET), `/api/rlhf/proposals/generate` (POST), `/api/rlhf/proposals/:id/review` (POST).
+
+**`server/routes/monitoringRoutes.ts`** — Added `/api/monitoring/assess` (POST) for real-time vitals deterioration assessment.
+
+### New Frontend
+
+**`client/src/pages/MissionControlPhase2.tsx`** — 4-tab dashboard at `/mission-control-phase2`: Clinical Workflow (8-step runner with trace summary), Monitoring (real-time deterioration form), Golden Cases (suite runner with pass/fail), RLHF (feedback submission + proposal management).

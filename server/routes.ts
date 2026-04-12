@@ -2379,6 +2379,19 @@ export async function registerRoutes(
   await import("./events/hooks");
   console.log("[EventHooks] Control tower bus hooks active");
 
+  // ── Batch 29: Medical MCP Layer + Clinical Workflow + Golden Cases + RLHF ──
+  const { default: workflowRoutes }    = await import("./routes/workflowRoutes");
+  const { default: goldenCaseRoutes }  = await import("./routes/goldenCaseRoutes");
+  const { default: rlhfRoutes }        = await import("./routes/rlhfRoutes");
+
+  app.use("/api/workflow",      workflowRoutes);
+  app.use("/api/golden-cases",  goldenCaseRoutes);
+  app.use("/api/rlhf",          rlhfRoutes);
+
+  console.log("[MedicalMCP] /api/workflow/* active");
+  console.log("[GoldenCases] /api/golden-cases/* active");
+  console.log("[RLHF] /api/rlhf/* active");
+
   return httpServer;
 }
 
