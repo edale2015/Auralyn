@@ -2581,6 +2581,11 @@ export async function registerRoutes(
   });
   console.log("[Cognitive] /api/cognitive-run and /api/cognitive/* active");
 
+  // ── Batch 50: Agent Scope Claims + Creep Auditor + Hook Engine ──
+  const { default: scopeClaimsRoutes } = await import("./routes/scopeClaimsRoutes");
+  app.use("/api/scope", scopeClaimsRoutes);
+  console.log("[Scope] /api/scope/* active (claims, creep-auditor, hooks, permission-requests)");
+
   // ── Batch 49: AI Automation (Sub-Workflow, Execution Inspector, Agent Conversation, Clinical Crew) ──
   const { default: automationRoutes } = await import("./routes/automationRoutes");
   app.use("/api/automation", automationRoutes);
