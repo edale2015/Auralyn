@@ -54,6 +54,8 @@ const NAV_ITEMS = [
   { path: ROUTES.AGENT_SYSTEM,             label: "Agent System",          icon: ShieldCheck  },
   { path: ROUTES.HOSPITAL,                 label: "Hospital Layer",         icon: Hospital     },
   { path: ROUTES.AURALYN,                  label: "Auralyn Control System", icon: Brain        },
+  { path: ROUTES.LIVE_MONITOR,             label: "Live Patient Monitor",   icon: Activity     },
+  { path: ROUTES.COMMAND_CENTER,           label: "Command Center",         icon: MonitorDot   },
   { path: ROUTES.CLINICAL_BRAIN_DASHBOARD, label: "Brain Control Tower", icon: Brain },
   { path: ROUTES.HIERARCHICAL_COUNCIL, label: "Council Dashboard", icon: Brain },
   { path: ROUTES.BRAIN_COMMAND_CENTER, label: "Brain Command Center", icon: BrainCircuit },

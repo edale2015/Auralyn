@@ -55,4 +55,6 @@ export const ROUTES = {
   AGENT_SYSTEM:              "/agent-system",
   HOSPITAL:                  "/hospital",
   AURALYN:                   "/auralyn",
+  LIVE_MONITOR:              "/live-monitor",
+  COMMAND_CENTER:            "/command-center",
 };

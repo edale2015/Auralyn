@@ -1588,3 +1588,25 @@ All spec code from the uploaded attachments (System Evolution Map Phase 2/3 + pr
 - `GET /api/hospital/population` → 20 patients, 11 high-risk, avgReadmission:0.361, gapRate:0.9
 - `GET /api/hospital/staffing` → 8 staff, 13 alerts, 26 total nurse deficit
 - `POST /api/hospital/beds/admit {unit:ED}` → admitted to ED-006, status:OCCUPIED
+
+### Batch 39 — Real-Time Clinical Engine (2,801/2,801 tests · 73 files)
+
+**New files:**
+- `server/engines/interventionEngine.ts` — NEWS2 scoring, sepsis bundle, hypoxia/O₂, tachycardia, hypotension, fever interventions
+- `server/llm/insightEngine.ts` — GPT-4o-mini per-patient AI insights with 30s vitals-fingerprint cache + rule-based fallback
+- `server/realtime/livePatientEngine.ts` — 5 seeded patients (Rivera, Lee, Cohen, Kim, Torres), vitals drift ±random walk every 2s, WS broadcast
+- `server/realtime/livePatientRoutes.ts` — `/api/patients/live`, `/api/patients/insights`, `/api/patients/interventions`
+- `client/src/hooks/usePatientStream.ts` — auto-reconnect WebSocket hook consuming `/ws/patients`
+- `client/src/pages/LivePatientMonitor.tsx` — ICU-grid patient monitor at `/live-monitor`
+- `client/src/pages/HospitalCommandCenter.tsx` — 3-panel command surface at `/command-center`
+
+**Routes registered:** `/api/patients/*` (livePatientRoutes), `startLivePatientEngine()` on server boot.
+
+**Nav entries:** "Live Patient Monitor" (`/live-monitor`) + "Command Center" (`/command-center`).
+
+**CSS:** `animate-pulse-alert` keyframes for critical cards in `client/src/index.css`.
+
+### Confirmed Live (Batch 39)
+- `[LivePatientEngine] Streaming 5 patients every 2s via /ws/patients` ✓
+- `[LivePatients] /api/patients/* + 2s WS stream active` ✓
+- Tests: 2,801/2,801 (73 files)

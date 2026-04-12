@@ -2471,6 +2471,13 @@ export async function registerRoutes(
   });
   console.log("[Vitals] POST /api/vitals/evaluate active");
 
+  // ── Batch 39: Live Patient Engine + Interventions + AI Insights ──────────────
+  const { startLivePatientEngine }              = await import("./realtime/livePatientEngine");
+  const { default: livePatientRoutes }          = await import("./realtime/livePatientRoutes");
+  app.use("/api/patients", livePatientRoutes);
+  startLivePatientEngine();                 // begin broadcasting 5 patients every 2s
+  console.log("[LivePatients] /api/patients/* + 2s WS stream active");
+
   // ── Batch 38: Autonomous Hospital Layer ──────────────────────────────────────
   const { default: hospitalRoutes } = await import("./hospital/hospitalRoutes");
   app.use("/api/hospital", hospitalRoutes);
