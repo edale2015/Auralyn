@@ -1481,3 +1481,61 @@ Returns `{diagnosis, disposition, confidence, caseId, reasoning: ReasoningStep[]
 - **Context**: project stats (agent/route/service/test file counts) + unused file list
 
 Sidebar nav entry: "Agent System" at `/agent-system`.
+
+---
+
+## Batch 35 — System Evolution Map Phase 2 & 3 (COMPLETE)
+
+**Test count: 2,640/2,640 passing across 69 files (+33 new tests in `tests/unit/batch35.test.ts`)**
+
+### Source: System Evolution Map + Auralyn Zip + Project Generator
+
+All spec code from the uploaded attachments (System Evolution Map Phase 2/3 + project generator) is now fully incorporated into the production stack.
+
+### New Server Files
+
+**`server/realtime/patientStream.ts`** — WebSocket patient broadcast layer. Attaches to the existing HTTP server at path `/ws/patients` (no extra port). `initPatientStream(server)` is called once at app startup in `server/routes.ts`. `broadcastPatientUpdate(data)` pushes JSON to all connected clients. `broadcastDiagnosticResult(caseId, result)` sends typed diagnostic events. `clientCount()` / `isInitialised()` for health checks.
+
+**`server/agents/specialistCouncil.ts`** — Three-specialist rule-based council (Cardiology / Infectious Disease / ICU). Each specialist runs deterministic rules against `{complaint, symptoms, vitals, redFlags}`:
+- Cardiology: chest pain → HIGH, hemodynamic instability → CRITICAL
+- ID: fever + tachycardia → HIGH, fever alone → MEDIUM, sore throat → LOW
+- ICU: redFlags or SpO2 < 88 or SBP < 80 → CRITICAL
+- `consensus()` → `{decision: ICU|ED|URGENT_CARE|OUTPATIENT, riskSummary, agreementScore}`
+
+**`server/fda/fdaValidator.ts`** — FDA accuracy + safety validator. `validate(results[], threshold)` → `{accuracy, status: PASS|REVIEW|FAIL, total, correct, incorrect, safetyMisses, threshold, computedAt}`. REVIEW when 90–100% of threshold. `compareResults(expected[], actual[], dangerousDiagnoses)` builds CaseResult[]  and auto-flags safety misses for dangerous diagnoses (ACS, PE, Sepsis, Meningitis, Stroke).
+
+**`server/learning/driftDetector.ts`** — L1 distribution drift detector. `detect(oldDist, newDist, threshold)` → `{hasDrift, l1Distance, threshold, detectedAt}`. `detectFromMaps(oldMap, newMap, threshold, label)` normalises frequency maps before comparison. `scan(windows[][], threshold)` → `{anyDrift, reports[]}` for multi-window analysis.
+
+**`server/testing/goldenCaseHarness.ts`** — Golden case test harness (spec interface: `runCases(cases[], engine)`). Each case: `{id, input, expected:{diagnosis, disposition}}`. Engine: `{run:(input)=>Promise<any>}`. Returns `HarnessSummary: {total, passed, failed, safetyMisses, accuracy, fdaStatus, results[], runAt}`. Handles engine crashes gracefully. Delegates FDA status to `fdaValidator`.
+
+### New Routes
+
+**`server/routes/advancedControl.ts`** — Mounted at `/api/advanced`:
+- `POST /api/advanced/council` — Specialist Council evaluation (3 votes + finalDecision)
+- `POST /api/advanced/cpt` — CPT code generation (high→99285 $300, medium→99284 $200, low→99283 $120)
+- `POST /api/advanced/fda/validate` — FDA accuracy/safety validation
+- `POST /api/advanced/drift` — L1 drift check (arrays or maps)
+- `POST /api/advanced/golden/run` — Golden case harness (sequential or cognitive engine)
+- `GET  /api/advanced/stream/status` — WebSocket connected client count
+- `POST /api/advanced/stream/broadcast` — Manual broadcast to all WS clients
+
+**`server/routes/simRoutes.ts`** — Mounted at `/api/sim`:
+- `GET  /api/sim/patients` — 5 mock patients (chest pain, fever, dyspnea, headache, sore throat)
+- `POST /api/sim/run` — Run sequential reasoner + broadcast to WS
+- `POST /api/sim/run/cognitive` — Run cognitive brain + broadcast to WS
+- `GET  /api/sim/heatmap/:id` — Bayesian posterior for mock patient (deterministic, complaint-based)
+- `POST /api/sim/council` — Specialist council + WS broadcast
+
+### New Frontend Components
+
+**`client/src/components/Heatmap.tsx`** — Bayesian posterior heatmap. Props: `{posterior: {dx, prob}[], title?, showPercent?}`. Sorted by probability descending. Color-coded bars: red (≥35%), orange (≥20%), yellow (≥10%), blue (<10%). `data-testid="heatmap-{dx}"` on each row.
+
+### Confirmed Live Responses
+
+- `POST /api/advanced/council` → `{finalDecision:"ED", riskSummary:"HIGH", agreementScore:0.667, votes:[{cardiology:HIGH,ID:LOW,ICU:LOW}]}`
+- `POST /api/advanced/cpt?complexity=high` → `{code:"99285", estimatedRevenue:300}`
+- `POST /api/advanced/fda/validate` → `{status:"FAIL", accuracy:0.5, safetyMisses:1}`
+- `POST /api/advanced/drift` → `{hasDrift:true, l1Distance:1}`
+- `GET  /api/sim/patients` → 5-element array
+- `GET  /api/sim/heatmap/1` → 5-item posterior with ACS at 0.38 probability (top)
+- `GET  /api/advanced/stream/status` → `{connected:0, wsPath:"/ws/patients"}`

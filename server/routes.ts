@@ -2429,6 +2429,18 @@ export async function registerRoutes(
   app.use("/api/brain", clinicalBrainRoutes);
   console.log("[Brain] /api/brain/* active");
 
+  // ── Batch 35: Phase 2/3 Evolution — Specialist Council, Drift, FDA, Sim, WebSocket ──
+  const { initPatientStream }      = await import("./realtime/patientStream");
+  initPatientStream(httpServer);   // attaches WS to existing HTTP server at /ws/patients
+
+  const { default: advancedControlRoutes } = await import("./routes/advancedControl");
+  app.use("/api/advanced", advancedControlRoutes);
+  console.log("[Advanced] /api/advanced/* active");
+
+  const { default: simRoutes } = await import("./routes/simRoutes");
+  app.use("/api/sim", simRoutes);
+  console.log("[Sim] /api/sim/* active");
+
   // ── Batch 34: Agent System (Context Engine, Reasoner, Evidence, EHR, Plugins) ──
   const { default: agentSystemRoutes } = await import("./routes/agentSystemRoutes");
   app.use("/api/agents", agentSystemRoutes);

@@ -1,0 +1,241 @@
+1. CLINICAL TOKEN SYSTEM (CORE FOUNDATION)
+
+👉 Replace scattered logic with centralized decision tokens
+
+/server/core/clinicalTokens.ts
+export interface ClinicalTokenSet {
+  complaint: string;
+
+  // Core reasoning
+  posterior: Record<string, number>;
+  redFlags: string[];
+  modifiers: Record<string, any>;
+
+  // Safety
+  riskLevel: "low" | "moderate" | "high" | "critical";
+  requiresPhysicianReview: boolean;
+
+  // Output control
+  allowedDiagnoses: string[];
+  blockedDiagnoses: string[];
+
+  // Audit
+  traceId: string;
+}
+
+export function createClinicalTokenSet(input: Partial<ClinicalTokenSet>): ClinicalTokenSet {
+  return {
+    complaint: input.complaint || "unknown",
+    posterior: input.posterior || {},
+    redFlags: input.redFlags || [],
+    modifiers: input.modifiers || {},
+    riskLevel: input.riskLevel || "low",
+    requiresPhysicianReview: input.requiresPhysicianReview ?? false,
+    allowedDiagnoses: [],
+    blockedDiagnoses: [],
+    traceId: generateTraceId(),
+  };
+}
+
+function generateTraceId(): string {
+  return "TRACE_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+}
+⚙️ 2. DECISION TEMPERATURE ENGINE
+
+(🔥 THIS IS THE MOST IMPORTANT PART)
+
+👉 Inspired by “color temperature”
+
+We introduce:
+
+Cold decisions = strict, deterministic (high risk)
+Warm decisions = flexible, probabilistic (low risk)
+/server/engine/decisionTemperature.ts
+import { ClinicalTokenSet } from "../core/clinicalTokens";
+
+export function applyDecisionTemperature(tokens: ClinicalTokenSet) {
+  const maxProb = Math.max(...Object.values(tokens.posterior));
+
+  if (tokens.redFlags.length > 0) {
+    tokens.riskLevel = "critical";
+  } else if (maxProb > 0.8) {
+    tokens.riskLevel = "high";
+  } else if (maxProb > 0.5) {
+    tokens.riskLevel = "moderate";
+  } else {
+    tokens.riskLevel = "low";
+  }
+
+  // 🔥 Temperature rules
+  switch (tokens.riskLevel) {
+    case "critical":
+      tokens.requiresPhysicianReview = true;
+      tokens.allowedDiagnoses = topDiagnoses(tokens, 1);
+      break;
+
+    case "high":
+      tokens.allowedDiagnoses = topDiagnoses(tokens, 2);
+      break;
+
+    case "moderate":
+      tokens.allowedDiagnoses = topDiagnoses(tokens, 3);
+      break;
+
+    case "low":
+      tokens.allowedDiagnoses = Object.keys(tokens.posterior);
+      break;
+  }
+
+  return tokens;
+}
+
+function topDiagnoses(tokens: ClinicalTokenSet, n: number): string[] {
+  return Object.entries(tokens.posterior)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([dx]) => dx);
+}
+⚙️ 3. SHADOW LOGIC ENGINE (INVISIBLE SAFETY LAYER)
+
+👉 Like shadows in the article:
+
+“Not visible, but changes perception”
+
+This = safety overrides + malpractice protection
+
+/server/safety/shadowEngine.ts
+import { ClinicalTokenSet } from "../core/clinicalTokens";
+
+export function applyShadowSafety(tokens: ClinicalTokenSet) {
+  // 🔥 Sepsis example
+  if (
+    tokens.posterior["sepsis"] > 0.2 ||
+    tokens.modifiers["fever"] &&
+    tokens.modifiers["tachycardia"]
+  ) {
+    tokens.redFlags.push("possible_sepsis");
+    tokens.riskLevel = "critical";
+    tokens.requiresPhysicianReview = true;
+  }
+
+  // 🔥 PE override
+  if (tokens.posterior["pulmonary_embolism"] > 0.15) {
+    tokens.allowedDiagnoses = ["pulmonary_embolism"];
+  }
+
+  return tokens;
+}
+⚙️ 4. TRACE INHERITANCE ENGINE
+
+(💀 Kills inconsistency across your system)
+
+/server/audit/traceEngine.ts
+import crypto from "crypto";
+import { ClinicalTokenSet } from "../core/clinicalTokens";
+
+export function buildTrace(tokens: ClinicalTokenSet) {
+  const trace = {
+    id: tokens.traceId,
+    timestamp: new Date().toISOString(),
+    complaint: tokens.complaint,
+    posterior: tokens.posterior,
+    redFlags: tokens.redFlags,
+    riskLevel: tokens.riskLevel,
+    allowedDiagnoses: tokens.allowedDiagnoses,
+  };
+
+  const hash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(trace))
+    .digest("hex");
+
+  return {
+    ...trace,
+    hash,
+  };
+}
+⚙️ 5. CONSISTENT OUTPUT ENGINE
+
+(🚨 This solves your biggest frustration)
+
+👉 You said:
+
+“Same patient should not get 10 different treatments”
+
+This enforces:
+
+ONE diagnosis path
+ONE disposition
+NO over-treatment
+/server/output/clinicalOutput.ts
+import { ClinicalTokenSet } from "../core/clinicalTokens";
+
+export function generateClinicalOutput(tokens: ClinicalTokenSet) {
+  if (tokens.requiresPhysicianReview) {
+    return {
+      disposition: "physician_review_required",
+      diagnoses: tokens.allowedDiagnoses,
+      message: "Case flagged for physician review due to risk profile.",
+    };
+  }
+
+  return {
+    disposition: determineDisposition(tokens),
+    diagnoses: tokens.allowedDiagnoses,
+    message: generateMessage(tokens),
+  };
+}
+
+function determineDisposition(tokens: ClinicalTokenSet): string {
+  if (tokens.riskLevel === "critical") return "ER";
+  if (tokens.riskLevel === "high") return "urgent_care";
+  if (tokens.riskLevel === "moderate") return "follow_up";
+  return "home_care";
+}
+
+function generateMessage(tokens: ClinicalTokenSet): string {
+  return `Most likely diagnosis: ${tokens.allowedDiagnoses[0]}`;
+}
+🔗 FULL PIPELINE (THIS IS YOUR NEW “SYSTEM BRAIN”)
+/server/pipeline/runClinicalPipeline.ts
+import { createClinicalTokenSet } from "../core/clinicalTokens";
+import { applyDecisionTemperature } from "../engine/decisionTemperature";
+import { applyShadowSafety } from "../safety/shadowEngine";
+import { buildTrace } from "../audit/traceEngine";
+import { generateClinicalOutput } from "../output/clinicalOutput";
+
+export async function runClinicalPipeline(input: any) {
+  let tokens = createClinicalTokenSet(input);
+
+  tokens = applyDecisionTemperature(tokens);
+  tokens = applyShadowSafety(tokens);
+
+  const trace = buildTrace(tokens);
+  const output = generateClinicalOutput(tokens);
+
+  return {
+    trace,
+    output,
+  };
+}
+🧠 WHY THIS IS A BIG DEAL
+
+This just transformed your system from:
+
+❌ “collection of smart modules”
+
+into:
+
+✅ A single coherent clinical brain
+
+Just like the article said:
+
+“The brand does not sit on top… it runs through everything”
+
+Now:
+
+Bayesian engine ✔ drives everything
+RLHF ✔ constrained by safety
+Output ✔ consistent
+Audit ✔ immutable
+UI ✔ will reflect same logic
