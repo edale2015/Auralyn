@@ -2525,6 +2525,11 @@ export async function registerRoutes(
   app.use("/api/medical-os", medicalOsRoutes);
   console.log("[MedicalOS] /api/medical-os/* active");
 
+  // ── Batch 44c: Clinical Decision Engine (6-layer RAG pipeline) ──────────────
+  const { default: cdeRoutes } = await import("./routes/cdeRoutes");
+  app.use("/api/cde", cdeRoutes);
+  console.log("[CDE] /api/cde/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory
