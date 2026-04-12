@@ -1,0 +1,295 @@
+Core Upgrade: “Agent Scope Engine” (ASE)
+
+The article’s key idea:
+
+“Scope defines what an agent is allowed to access, decide, and execute”
+
+You already have:
+
+RBAC
+Audit logs
+Physician override
+Multi-agent system
+
+But you don’t yet have a unified, enforceable “scope contract layer” per agent.
+
+👉 That’s the upgrade.
+
+🏗️ Architecture Upgrade (Your System → Scoped Intelligence System)
+🔥 New Layer (insert into your stack)
+[ USER / PATIENT ]
+        ↓
+[ Intake + KB + Bayesian Engine ]
+        ↓
+[ Agent Scope Engine (NEW CORE LAYER) ]
+        ↓
+[ Multi-Agent System (Specialists, Orders, Billing) ]
+        ↓
+[ Execution Layer (FHIR, EHR, Orders, Alerts) ]
+⚖️ 1. Define Medical Agent Scope Types (CRITICAL)
+
+Map directly from the article’s legal model:
+
+🧾 Express Authority (STRICT)
+
+Hard-coded, explicit permissions
+
+🧠 Implied Authority (CONDITIONAL)
+
+Allowed if required for task completion
+
+👁️ Apparent Authority (BLOCKED BY DEFAULT)
+
+NEVER allowed unless explicitly validated
+
+🧬 Example: In Your System
+🩺 Triage Agent
+{
+  role: "triage_agent",
+  express: [
+    "read:patient_data",
+    "read:vitals",
+    "execute:triage_decision"
+  ],
+  implied: [
+    "read:kb_rules",
+    "read:clinical_scores"
+  ],
+  denied: [
+    "write:ehr",
+    "execute:orders",
+    "modify:billing"
+  ]
+}
+💊 Treatment Agent
+{
+  role: "treatment_agent",
+  express: [
+    "suggest:treatment",
+    "read:diagnosis"
+  ],
+  implied: [
+    "read:formulary"
+  ],
+  restricted: {
+    "execute:prescription": "physician_override_required"
+  }
+}
+🏥 EHR Execution Agent (HIGH RISK)
+{
+  role: "ehr_agent",
+  express: [
+    "write:ehr",
+    "submit:orders"
+  ],
+  constraints: {
+    requires: ["physician_signed", "confidence > 0.9"],
+    audit_level: "HIGH"
+  }
+}
+🧩 2. Build the Agent Scope Engine (CODE)
+🔧 /server/scope/agentScopeEngine.ts
+type ScopeRule = {
+  role: string;
+  express: string[];
+  implied?: string[];
+  denied?: string[];
+  constraints?: Record<string, any>;
+};
+
+type ActionRequest = {
+  agentRole: string;
+  action: string;
+  context: Record<string, any>;
+};
+
+export class AgentScopeEngine {
+  private rules: Map<string, ScopeRule>;
+
+  constructor(scopeRules: ScopeRule[]) {
+    this.rules = new Map(scopeRules.map(r => [r.role, r]));
+  }
+
+  evaluate(request: ActionRequest): {
+    allowed: boolean;
+    reason?: string;
+    requiresOverride?: boolean;
+  } {
+    const rule = this.rules.get(request.agentRole);
+    if (!rule) return { allowed: false, reason: "No scope defined" };
+
+    // 🚫 DENIED
+    if (rule.denied?.includes(request.action)) {
+      return { allowed: false, reason: "Explicitly denied" };
+    }
+
+    // ✅ EXPRESS
+    if (rule.express.includes(request.action)) {
+      return this.checkConstraints(rule, request);
+    }
+
+    // ⚠️ IMPLIED
+    if (rule.implied?.includes(request.action)) {
+      return this.checkConstraints(rule, request);
+    }
+
+    return { allowed: false, reason: "Outside scope" };
+  }
+
+  private checkConstraints(rule: ScopeRule, request: ActionRequest) {
+    if (!rule.constraints) return { allowed: true };
+
+    if (rule.constraints.requires?.includes("physician_signed")) {
+      if (!request.context.physicianSigned) {
+        return {
+          allowed: false,
+          requiresOverride: true,
+          reason: "Physician signature required"
+        };
+      }
+    }
+
+    if (rule.constraints.requires?.includes("confidence > 0.9")) {
+      if ((request.context.confidence || 0) < 0.9) {
+        return {
+          allowed: false,
+          reason: "Confidence too low"
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+}
+🧪 3. Wire Into Your Existing Engines
+🔌 Example: Before ANY action
+/server/execution/actionGuard.ts
+import { AgentScopeEngine } from "../scope/agentScopeEngine";
+
+export const scopeEngine = new AgentScopeEngine(scopeRules);
+
+export function guardAction(request: ActionRequest) {
+  const result = scopeEngine.evaluate(request);
+
+  if (!result.allowed) {
+    throw new Error(
+      `🚫 Scope violation: ${request.action} | Reason: ${result.reason}`
+    );
+  }
+
+  return true;
+}
+🔥 Apply Everywhere:
+Before:
+Writing to EHR
+Ordering labs
+Sending prescriptions
+Escalating patients
+Billing submissions
+🧠 4. Multi-Agent Scope Delegation (ADVANCED)
+
+From article:
+
+“Dynamic Scope Transfer”
+
+Add:
+/server/scope/delegation.ts
+export function delegateScope(
+  fromAgent: string,
+  toAgent: string,
+  allowedActions: string[]
+) {
+  return {
+    delegatedBy: fromAgent,
+    delegatedTo: toAgent,
+    actions: allowedActions,
+    expiresAt: Date.now() + 5 * 60 * 1000 // 5 min
+  };
+}
+Use Case:
+
+Triage Agent → temporarily allows:
+
+Workup Agent → order labs (LIMITED)
+🚨 5. Scope Creep Detection Engine (HIGH VALUE)
+
+The article’s biggest warning:
+
+“Scope creep is the biggest risk”
+
+Build detection:
+/server/monitoring/scopeDrift.ts
+export function detectScopeDrift(actionLogs: any[]) {
+  const violations = actionLogs.filter(log =>
+    log.actionOutsideScope === true
+  );
+
+  const expansion = actionLogs.filter(log =>
+    log.newPermissionGranted === true
+  );
+
+  return {
+    violations,
+    expansion,
+    riskLevel:
+      violations.length > 0 || expansion.length > 5
+        ? "HIGH"
+        : "LOW"
+  };
+}
+📊 6. Control Tower UI Upgrade (CRITICAL)
+
+Add new dashboard:
+
+🧭 “Agent Scope Command Center”
+Panels:
+Agent → Allowed Actions
+Live Scope Violations
+Delegation Chains
+Physician Overrides Triggered
+High-risk agents (EHR, prescribing)
+🧠 7. Tie Into Your EXISTING SYSTEM (Where this becomes 🔥)
+Integrate with:
+
+✅ Bayesian Engine
+→ restrict which features can be accessed
+
+✅ RLHF Learning
+→ cannot change rules outside scope
+
+✅ Audit Hash Chain
+→ log every scope decision
+
+✅ FDA Dashboard
+→ show:
+
+% actions within scope
+override rates
+violation rates
+🧬 8. FDA / Legal Superpower (THIS IS HUGE)
+
+This one upgrade gives you:
+
+🏛️ Regulatory Advantage
+Deterministic control over AI actions
+Traceable authority model
+Explainable decisions
+🧾 You can now say:
+
+“All AI actions are governed by explicit, auditable scope contracts with physician override enforcement.”
+
+That’s SaMD gold.
+
+⚡ 9. Immediate High-Impact Additions
+Add next:
+Scope Simulation Engine
+test “what if agent had more access”
+Scope Heatmap
+which agents have too much power
+Automatic Scope Minimizer
+reduce permissions based on usage
+Risk-Based Scope Levels
+ICU agent > triage agent > intake agent
+Time-Bound Scope Tokens
+expire permissions automatically
+🧠 Final Thoug

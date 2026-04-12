@@ -2471,6 +2471,11 @@ export async function registerRoutes(
   });
   console.log("[Vitals] POST /api/vitals/evaluate active");
 
+  // ── Batch 41: Autonomous Intervention + Command Center ───────────────────────
+  const { default: commandCenterRoutes } = await import("./routes/commandCenterRoutes");
+  app.use("/api/command-center", commandCenterRoutes);
+  console.log("[CommandCenter] /api/command-center/* active (rank·deterioration·brain·RLHF·alerts·escalations·orders)");
+
   // ── Batch 40: AI Medical Orchestration Layer ─────────────────────────────────
   const { default: orchestrationRoutes } = await import("./ai-orchestration/orchestrationRoutes");
   app.use("/api/orchestration", orchestrationRoutes);

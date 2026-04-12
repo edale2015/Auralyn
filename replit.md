@@ -1646,3 +1646,32 @@ Architecture: `/server/ai-orchestration/`
 ### Confirmed Live (Batch 40)
 - `POST /api/orchestration/triage` `{"symptoms":"chest pain shortness of breath","patientId":"test-001"}` → full pipeline response with ragDiagnosis, triage (LangGraph), council, disposition, auditTraceId
 - `[Orchestration] /api/orchestration/* active` ✓
+
+### Batch 41 — Autonomous Intervention + Command Center (2,849/2,849 tests · 75 files)
+
+**New modules:**
+
+`server/intervention/`
+- `orderExecutor.ts` — EHR order placement (Epic adapter + mock fallback); batch execution; audit log ring buffer
+- `alertEngine.ts` — WebSocket broadcast to all dashboards (`broadcastPatientUpdate`) + Twilio SMS for critical-level via existing `sendSMS` + alert ring buffer
+- `escalationEngine.ts` — routes patients to ER / ICU / RRT / UrgentCare / Telemedicine based on riskScore + flags; fires critical alert automatically
+- `actionOrchestrator.ts` — `runInterventions()`: generates interventions via NEWS2 engine → parallel lab/med orders → alerts → escalation
+
+`server/command-center/`
+- `commandCenterAI.ts` — `computePriorityScore()`: riskScore × 2 + vital instability + trend vectors (spo2Trend, hrTrend, bpTrend); `rankPatientsAI()`: sorts all patients sickest-first; urgency: routine/soon/urgent/immediate
+
+`server/prediction/`
+- `deteriorationEngine.ts` — early sepsis/shock/respiratory failure detection; SIRS criteria, shock criteria, rapid-trend early warning; auto-fires alert + escalation on critical/high risk
+
+`server/learning/`
+- `rlhfClinicalEngine.ts` — `evaluateCase()` reward function (disposition accuracy + outcome labels); `updateClinicalWeights()` FDA-safe ±2% cap; Redis-persisted weights; `runLearningLoop()` full cycle; `getLearningStats()`
+
+`server/orchestrator/`
+- `fullClinicalBrain.ts` — `runClinicalBrain()`: rank → parallel (deterioration + intervention) per patient → summary stats (critical/escalated/orders)
+
+**Routes:** `server/routes/commandCenterRoutes.ts` → `/api/command-center/*`
+- `POST /rank` · `POST /deterioration` · `POST /interventions` · `POST /brain` · `POST /learn` · `GET /learn/stats` · `GET /learn/weights` · `GET /alerts` · `GET /escalations` · `GET /orders`
+
+### Confirmed Live (Batch 41)
+- `POST /api/command-center/rank` with 3 patients → sick patient (HR 138, SpO2 87%) ranked #1 with priorityScore:37, urgency:"immediate"
+- `[CommandCenter] /api/command-center/* active` ✓
