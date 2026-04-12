@@ -2550,6 +2550,11 @@ export async function registerRoutes(
   app.use("/api/harness", harnessRoutes);
   console.log("[Harness] /api/harness/* active");
 
+  // ── Batch 46: Plugin System (Preference Memory, Hook Registry, Command Registry) ──
+  const { default: pluginRoutes } = await import("./routes/pluginRoutes");
+  app.use("/api/plugins", pluginRoutes);
+  console.log("[Plugins] /api/plugins/* active");
+
   // ── Batch 33: Cognitive Brain Orchestrator ────────────────────────────────
   const { default: cognitiveRoutes } = await import("./routes/cognitiveRoutes");
   app.use("/api/cognitive", cognitiveRoutes);   // /api/cognitive/cases, /api/cognitive/memory

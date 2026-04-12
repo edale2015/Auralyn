@@ -1,0 +1,326 @@
+The 10 Claude Plugins You Actually Need in 2026 (And What They Are)
+How to transform Claude from a chatbot into an AI that can code, browse, access your data, and automate your entire workflow
+Rohan Mistry
+Rohan Mistry
+
+Follow
+6 min read
+·
+Mar 17, 2026
+1.2K
+
+
+15
+
+
+
+
+
+Claude just got superpowers.
+
+And most people still think it’s just a chatbot.
+
+On February 24, 2026, Anthropic announced private plugin marketplaces for enterprise users. Two weeks earlier, the community published over 1,000 MCP servers that extend Claude’s capabilities beyond text generation.
+
+The result? Claude can now:
+
+Write and execute code autonomously
+Browse the web in real-time
+Access your Gmail, Drive, Slack, and databases
+Control your browser with Playwright
+Query live documentation for any library
+Remember context across sessions
+This isn’t ChatGPT with plugins bolted on. This is a fundamentally different architecture built on the Model Context Protocol (MCP) — and it changes everything.
+
+Non-Member’s Link!
+
+Here’s what Claude plugins actually are, and the 10 you should install today.
+
+Press enter or click to view image in full size
+
+What Are Claude Plugins (And Why They Matter)
+Think of Claude plugins as “arms and legs for your AI’s brain.”
+
+Without plugins, Claude is trapped in a text box. It can think, but it can’t act.
+
+With plugins, Claude becomes an autonomous agent that can:
+
+✅ Pull code from GitHub and create PRs
+✅ Query your PostgreSQL database
+✅ Search the live web
+✅ Read and write files
+✅ Control a browser
+✅ Access Google Workspace
+The Technical Breakthrough: MCP
+Claude plugins are built on the Model Context Protocol (MCP) — an open standard Anthropic released in December 2025.
+
+MCP standardizes how AI models connect to external data and tools, eliminating custom integrations for every new service.
+
+According to Anthropic’s documentation:
+
+“MCP enables AI assistants to discover and use local and remote resources without needing a custom integration for each one.”
+
+Translation: One protocol. Thousands of tools. Zero friction.
+
+Four Types of Plugins
+1. MCP Servers — Connect Claude to external services (GitHub, Slack, databases)
+2. Skills — Features Claude automatically activates when needed
+3. Commands — Custom shortcuts (like /code-review)
+4. Hooks — Automation triggered on events (like enforcing code standards)
+
+Now let’s look at the 10 plugins with the biggest impact.
+
+The Top 10 Claude Plugins for 2026
+1. Feature-Dev (89,000+ Installs)
+What it does: Turns feature requests into production code through a 7-phase workflow
+
+Why it matters:
+
+Most AI tools just generate code. Feature-Dev runs a senior engineer’s process:
+
+Requirements gathering
+Codebase exploration (parallel agents study your architecture)
+Architecture design
+Implementation
+Testing
+Code review
+Documentation
+Invoke with /feature-dev and describe what you want. Claude handles the rest.
+
+Best for: Building complete features, not just code snippets
+
+Install:
+
+npx skills add anthropic/feature-dev
+2. Frontend-Design (277,000+ Installs)
+What it does: Gives Claude professional design instincts before writing any CSS
+
+Why it matters:
+
+Without this, Claude generates forgettable designs — the visual signature users recognize as “AI-generated.”
+
+With frontend-design, Claude considers:
+
+Purpose and tone
+Intentional constraints
+Visual differentiation
+Unexpected typography choices
+Asymmetric layouts
+Scroll-triggered animations
+One developer on Medium wrote:
+
+“People asked me who my designer was. There is no designer. It’s Claude with frontend-design installed.”
+
+Best for: Escaping the AI aesthetic
+
+Install:
+
+npx skills add anthropic/frontend-design
+3. Context7 (Upstash)
+What it does: Gives Claude access to live, version-specific library documentation
+
+The problem it solves:
+
+Claude’s training data might be months old. When you’re using Next.js 15, React 19, or Tailwind 4, outdated docs lead to hallucinated APIs.
+
+Context7 queries the actual current documentation for the exact version you’re using.
+
+How it works:
+
+Two core tools:
+
+resolve-library-id — Looks up a library
+query-docs — Fetches specific documentation
+Claude can now say “according to the Next.js 15 docs…” instead of guessing based on training data.
+
+Best for: Fast-moving frameworks where versions matter
+
+Install: Via MCP in Claude Desktop config
+
+4. GitHub MCP Server
+What it does: Lets Claude search repos, read code, open issues, and create pull requests
+
+Why it matters:
+
+Instead of manually copying code snippets, you can ask:
+
+“Analyze the src/ directory and suggest a fix for issue #42”
+
+Claude will:
+
+Search the repository
+Read relevant files
+Propose a fix
+Create a PR with the changes
+Best for: Software developers working with GitHub
+
+Install: Available in official Anthropic marketplace
+
+5. PostgreSQL MCP
+What it does: Direct read-only access to your PostgreSQL databases
+
+Why it matters:
+
+Ask natural language questions like:
+
+“Show me the top 5 users by spend last month”
+
+Claude will:
+
+Inspect your database schema automatically
+Generate the SQL query
+Execute it
+Return real data
+No copying table names. No SQL syntax debugging. Just results.
+
+Best for: Data analysts and engineers
+
+Security note: Read-only access prevents accidental data modifications
+
+6. Playwright MCP
+What it does: Claude controls a live Chrome browser to test your web apps
+
+Why it matters:
+
+Instead of writing Playwright test scripts, you say:
+
+“Test the checkout flow: browse products, add to cart, fill in test card, pay, verify confirmation”
+
+Claude opens a visible browser window and executes the test while you watch.
+
+The game-changer: For authenticated features, log in manually, then Claude takes over from there.
+
+Best for: Frontend developers testing web apps
+
+Warning: Can be resource-intensive
+
+7. Brave Search MCP
+What it does: Connects Claude to the live internet
+
+Why it matters:
+
+Claude’s training data has a cutoff (January 2025). Brave Search lets it:
+
+Research current events
+Check stock prices
+Find the latest library documentation
+Verify facts in real-time
+Ask: “What are the latest AI releases this week?”
+
+Claude searches the web and synthesizes current information.
+
+Best for: Research, fact-checking, current events
+
+8. Google Workspace via gws CLI (4,900 Stars in 3 Days)
+What it does: Unified CLI for all Google Workspace APIs with built-in MCP
+
+The breakthrough:
+
+Before gws, connecting Claude to Google required separate OAuth setups for Drive, Gmail, Calendar, Sheets.
+
+Google shipped gws and changed everything.
+
+Install:
+
+npm install -g @googleworkspace/cli
+gws mcp -s drive,gmail,calendar,sheets
+Now Claude has direct access to your entire Google Workspace.
+
+Example workflow:
+
+“Read my unread emails, draft responses to anything urgent, update my quarterly metrics spreadsheet, create calendar events for upcoming deadlines, generate a summary doc.”
+
+One prompt. Zero copy-pasting.
+
+Best for: Knowledge workers living in Google Workspace
+
+9. Slack MCP Server
+What it does: Reads channel history, summarizes threads, posts messages
+
+Why it matters:
+
+The January 2026 update added interactive drafting — you can now:
+
+Draft a Slack message
+Preview it in Claude
+Review and edit
+Approve before posting
+The overlooked use case:
+
+“Summarize the #engineering channel from the last 2 days before I respond”
+
+Get full context without reading 500 messages.
+
+Best for: Anyone working across multiple Slack workspaces
+
+10. Memory Bank / Claude-Mem
+What it does: Gives Claude persistent memory across sessions
+
+The problem it solves:
+
+LLMs forget context between conversations. Memory Bank creates a .memory folder that stores:
+
+User preferences
+Project details
+Past decisions
+Coding standards
+The result:
+
+Claude remembers your authentication patterns, error handling conventions, and testing requirements permanently.
+
+You explain once. Claude remembers forever.
+
+Best for: Long-term projects where context matters
+
+How to Install Plugins (3 Methods)
+Method 1: Claude Desktop Config (MCP Servers)
+Edit claude_desktop_config.json:
+
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+    }
+  }
+}
+Restart Claude Desktop.
+
+Method 2: Skills via npm
+npx skills add anthropic/frontend-design
+npx skills add anthropic/feature-dev
+Method 3: Claude Code Plugin System
+/plugin install feature-dev@claude-plugins-official
+Which Plugins Should You Install First?
+If you’re a developer:
+
+Feature-Dev
+GitHub MCP
+Context7
+Playwright MCP
+PostgreSQL MCP (if using databases)
+If you’re a knowledge worker:
+
+Google Workspace (gws)
+Slack MCP
+Brave Search
+Memory Bank
+Frontend-Design (if building any UI)
+If you’re a founder/product person:
+
+Feature-Dev
+Frontend-Design
+Brave Search
+Slack MCP
+Memory Bank
+The Ecosystem Numbers (March 2026)
+1,000+ MCP servers available
+351,000+ agent skills across marketplaces
+8M+ total plugin installs tracked
+18 AI agents support MCP protocol
+50+ official Anthropic connectors
+According to TurboDocx’s analysis:
+
+“Developers using 15+ plugins ship features 3–4x faster than those using raw Claude.”
+
+Plugins aren’t optional. They’re the difference between a chatbot and a team member.
