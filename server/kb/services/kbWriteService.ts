@@ -1,13 +1,28 @@
-import { query } from "../../db";
+import { eq } from "drizzle-orm";
+import { db } from "../../db";
+import { canonicalPathways } from "../../../shared/schema";
 import { auditStep } from "../../audit/auditLogger";
-import { v4 as uuidv4 } from "uuid";
+import { query } from "../../db";
 
 async function safeReloadKbCache(traceId: string): Promise<void> {
   try {
     const { reloadAndRewireKbCache } = await import("../kbRuntime");
     await reloadAndRewireKbCache(traceId);
   } catch {
-    // KB cache reload failed — non-fatal; pathway is already written
+    // Non-fatal — pathway is already written
+  }
+}
+
+async function safeAuditStep(
+  traceId: string,
+  step: string,
+  input: unknown,
+  output: unknown
+): Promise<void> {
+  try {
+    await auditStep({ traceId, step, input, output, metadata: {} });
+  } catch {
+    // Audit failure is non-fatal in dev
   }
 }
 
@@ -33,43 +48,31 @@ export async function createCanonicalPathway(
   actorId: string,
   traceId: string
 ): Promise<{ ok: boolean; pathwayId: string }> {
-  await query(
-    `INSERT INTO canonical_pathways
-       (pathway_id, source_type, complaint_id, syndrome_id, label,
-        required_features, positive_weights, negative_weights, exclusions,
-        treatment_class, medication_key, canonical_disposition, rationale,
-        active, created_by, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
-    [
-      data.pathwayId,
-      data.sourceType,
-      data.complaintId,
-      data.syndromeId,
-      data.label,
-      JSON.stringify(data.requiredFeatures),
-      JSON.stringify(data.positiveWeights),
-      JSON.stringify(data.negativeWeights),
-      JSON.stringify(data.exclusions),
-      data.treatmentClass,
-      data.medicationKey ?? null,
-      data.canonicalDisposition,
-      JSON.stringify(data.rationale),
-      true,
-      actorId,
-    ]
-  );
+  await db.insert(canonicalPathways).values({
+    pathwayId:           data.pathwayId,
+    sourceType:          data.sourceType,
+    complaintId:         data.complaintId,
+    syndromeId:          data.syndromeId,
+    label:               data.label,
+    requiredFeatures:    data.requiredFeatures,
+    positiveWeights:     data.positiveWeights,
+    negativeWeights:     data.negativeWeights,
+    exclusions:          data.exclusions,
+    treatmentClass:      data.treatmentClass,
+    medicationKey:       data.medicationKey ?? null,
+    canonicalDisposition: data.canonicalDisposition,
+    rationale:           data.rationale,
+    active:              true,
+    createdBy:           actorId,
+    updatedBy:           actorId,
+  });
 
-  try {
-    await auditStep({
-      traceId,
-      step: "kb_canonical_pathway_created",
-      input: { actorId, ...data },
-      output: { pathwayId: data.pathwayId },
-      metadata: { actorId },
-    });
-  } catch {
-    // Audit failure is non-fatal in dev
-  }
+  await safeAuditStep(
+    traceId,
+    "kb_canonical_pathway_created",
+    { actorId, ...data },
+    { pathwayId: data.pathwayId }
+  );
 
   await safeReloadKbCache(traceId);
   return { ok: true, pathwayId: data.pathwayId };
@@ -81,25 +84,23 @@ export async function retireCanonicalPathway(
   traceId: string,
   reason: string
 ): Promise<{ ok: boolean; pathwayId: string }> {
-  await query(
-    `UPDATE canonical_pathways
-     SET active = FALSE, retired_at = NOW(), retired_by = $2,
-         retirement_reason = $3, updated_by = $2
-     WHERE pathway_id = $1`,
-    [pathwayId, actorId, reason]
-  );
+  await db
+    .update(canonicalPathways)
+    .set({
+      active:           false,
+      retiredAt:        new Date(),
+      retiredBy:        actorId,
+      retirementReason: reason,
+      updatedBy:        actorId,
+    })
+    .where(eq(canonicalPathways.pathwayId, pathwayId));
 
-  try {
-    await auditStep({
-      traceId,
-      step: "kb_canonical_pathway_retired",
-      input: { pathwayId, actorId, reason },
-      output: { pathwayId, active: false },
-      metadata: { actorId },
-    });
-  } catch {
-    // Audit failure non-fatal
-  }
+  await safeAuditStep(
+    traceId,
+    "kb_canonical_pathway_retired",
+    { pathwayId, actorId, reason },
+    { pathwayId, active: false }
+  );
 
   await safeReloadKbCache(traceId);
   return { ok: true, pathwayId };
@@ -133,5 +134,36 @@ export async function getCanonicalPathway(pathwayId: string): Promise<any | null
     return result.rows[0] ?? null;
   } catch {
     return null;
+  }
+}
+
+export async function upsertPhenotypeRegistry(entry: {
+  phenotypeHash: string;
+  complaintId: string;
+  canonicalSyndromeId?: string;
+  canonicalMedicationKey?: string;
+  canonicalDisposition: string;
+  confidence: string;
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO phenotype_registry
+         (phenotype_hash, complaint_id, canonical_syndrome_id, canonical_medication_key,
+          canonical_disposition, confidence, seen_count, first_seen_at, last_seen_at)
+       VALUES ($1,$2,$3,$4,$5,$6,1,NOW(),NOW())
+       ON CONFLICT (phenotype_hash) DO UPDATE
+         SET seen_count = phenotype_registry.seen_count + 1,
+             last_seen_at = NOW()`,
+      [
+        entry.phenotypeHash,
+        entry.complaintId,
+        entry.canonicalSyndromeId ?? null,
+        entry.canonicalMedicationKey ?? null,
+        entry.canonicalDisposition,
+        entry.confidence,
+      ]
+    );
+  } catch {
+    // Non-fatal
   }
 }

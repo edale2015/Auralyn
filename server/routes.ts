@@ -2207,6 +2207,10 @@ export async function registerRoutes(
   app.use("/api/clinical-consistency-integration", clinicalConsistencyIntegrationRoutes);
   console.log("[ClinicalConsistencyIntegration] KB admin | golden cases | physician overrides | confidence | escalation wired at /api/clinical-consistency-integration/*");
 
+  const { default: controlTowerRoutes } = await import("./routes/controlTower");
+  app.use("/api/control-tower", controlTowerRoutes);
+  console.log("[ControlTower] Consensus engine | disposition guardrail | next-best-question | interrupt | MCP | parallel dispatch wired at /api/control-tower/*");
+
   console.log("[LearningEngine] Patient memory | population learning | personalization wired at /api/learning-engine/*");
   console.log("[Simulation] 10k patient synthetic cohort engine wired at /api/sim-cohort/*");
   console.log("[Monitoring] Drift detection | risk governance wired at /api/monitoring/*");

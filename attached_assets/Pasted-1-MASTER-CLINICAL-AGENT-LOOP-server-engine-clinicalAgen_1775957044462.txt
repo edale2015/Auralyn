@@ -1,0 +1,238 @@
+1. MASTER CLINICAL AGENT LOOP
+// server/engine/clinicalAgentLoop.ts
+
+import { dispatchTools } from "./toolDispatch";
+import { checkPermission } from "../governance/permissionEngine";
+import { compressContext } from "../context/compression";
+import { bus } from "../events/eventBus";
+
+export async function clinicalAgentLoop(session) {
+  bus.emit("session_start", { sessionId: session.id });
+
+  while (true) {
+    // 1. Compress context if needed
+    session.messages = compressContext(session.messages);
+
+    // 2. Call model
+    const response = await callLLM({
+      messages: session.messages,
+      tools: TOOL_REGISTRY
+    });
+
+    session.messages.push(response);
+
+    if (response.stop_reason !== "tool_use") break;
+
+    const results = [];
+
+    for (const toolCall of response.tool_calls) {
+      bus.emit("pre_tool_use", toolCall);
+
+      const permission = checkPermission(toolCall);
+
+      if (!permission.allowed) {
+        results.push({
+          tool_use_id: toolCall.id,
+          content: `Blocked: ${permission.reason}`
+        });
+        continue;
+      }
+
+      const output = await dispatchTools(toolCall);
+
+      bus.emit("post_tool_use", { toolCall, output });
+
+      results.push({
+        tool_use_id: toolCall.id,
+        content: output
+      });
+    }
+
+    session.messages.push({ role: "tool", content: results });
+  }
+
+  bus.emit("session_end", { sessionId: session.id });
+
+  return session;
+}
+🧰 2. CLINICAL TOOL REGISTRY (STRICT)
+// server/tools/registry.ts
+
+export const TOOL_REGISTRY = [
+  {
+    name: "ask_question",
+    description: "Ask structured clinical question",
+    input_schema: {
+      type: "object",
+      properties: {
+        question_id: { type: "string" }
+      },
+      required: ["question_id"]
+    }
+  },
+  {
+    name: "record_answer",
+    description: "Store patient answer",
+    input_schema: {
+      type: "object",
+      properties: {
+        question_id: { type: "string" },
+        answer: { type: "string" }
+      },
+      required: ["question_id", "answer"]
+    }
+  },
+  {
+    name: "check_red_flags",
+    description: "Evaluate red flag conditions",
+    input_schema: { type: "object", properties: {} }
+  },
+  {
+    name: "calculate_score",
+    description: "Run clinical scoring system",
+    input_schema: {
+      type: "object",
+      properties: {
+        score_type: { type: "string" }
+      }
+    }
+  },
+  {
+    name: "generate_disposition",
+    description: "Determine final disposition",
+    input_schema: { type: "object", properties: {} }
+  }
+];
+🛑 3. PERMISSION GOVERNANCE ENGINE
+// server/governance/permissionEngine.ts
+
+export function checkPermission(toolCall) {
+  const { name, input } = toolCall;
+
+  if (name === "generate_disposition") {
+    if (input.red_flags_present) {
+      return {
+        allowed: false,
+        reason: "Cannot discharge with red flags"
+      };
+    }
+  }
+
+  if (name === "prescribe_antibiotic") {
+    if (!input.bacterial_criteria_met) {
+      return {
+        allowed: false,
+        reason: "No bacterial indication"
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+🧠 4. CLINICAL CONTEXT COMPRESSION
+// server/context/compression.ts
+
+export function compressContext(messages) {
+  if (messages.length < 20) return messages;
+
+  const summary = {
+    chief_complaint: extract(messages, "chief_complaint"),
+    positives: extract(messages, "positives"),
+    negatives: extract(messages, "negatives"),
+    red_flags: extract(messages, "red_flags"),
+    timeline: extract(messages, "timeline")
+  };
+
+  return [
+    {
+      role: "system",
+      content: `CLINICAL SUMMARY:\n${JSON.stringify(summary)}`
+    },
+    ...messages.slice(-6)
+  ];
+}
+📡 5. EVENT BUS (HOOKABLE)
+// server/events/eventBus.ts
+
+class EventBus {
+  constructor() {
+    this.handlers = {};
+  }
+
+  on(event, handler) {
+    if (!this.handlers[event]) this.handlers[event] = [];
+    this.handlers[event].push(handler);
+  }
+
+  emit(event, payload) {
+    (this.handlers[event] || []).forEach(h => h(payload));
+  }
+}
+
+export const bus = new EventBus();
+⚡ 6. BACKGROUND TASK SYSTEM
+// server/async/background.ts
+
+const queue = [];
+
+export function runBackground(name, fn) {
+  setTimeout(async () => {
+    const result = await fn();
+
+    bus.emit("background_complete", {
+      task: name,
+      result
+    });
+  }, 0);
+}
+🧠 7. SUBAGENT SYSTEM (SPECIALISTS)
+// server/agents/subagent.ts
+
+export async function runSpecialistAgent(role, task) {
+  return await clinicalAgentLoop({
+    messages: [{ role: "system", content: role }, { role: "user", content: task }],
+    isolated: true
+  });
+}
+🔁 8. PARALLEL TOOL EXECUTION
+// server/engine/parallelDispatch.ts
+
+export async function dispatchParallel(toolCalls) {
+  return await Promise.all(
+    toolCalls.map(call => dispatchTools(call))
+  );
+}
+🚨 WHAT THIS CHANGES FOR YOUR SYSTEM
+
+After this harness layer:
+
+BEFORE
+Smart
+Complex
+Variable
+Hard to control
+AFTER
+Deterministic
+Auditable
+Consistent
+Scalable
+FDA defensible
+🧠 FINAL TRUTH (Important)
+
+You already built:
+
+👉 The brain
+
+This harness is:
+
+👉 The nervous system
+
+Without it:
+
+Signals are inconsistent
+Actions vary
+Safety depends on luck
+
+With it:
+
+Every patient → same logic → same outcome

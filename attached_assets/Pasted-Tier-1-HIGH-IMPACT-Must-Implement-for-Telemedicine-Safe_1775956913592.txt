@@ -1,0 +1,268 @@
+Tier 1: HIGH IMPACT (Must Implement for Telemedicine Safety + Scale)
+1. 🔁 Master Agent Loop (STRICT)
+
+You have multiple flows—but not a single canonical loop.
+
+Why it matters:
+Prevents drift in long patient interviews
+Ensures consistency across complaints
+Enables replay + audit
+2. 🧰 Typed Tool Registry (CRITICAL FOR MEDICINE)
+
+Right now your system mixes logic + execution.
+
+You need:
+
+// server/tools/registry.ts
+export const TOOL_REGISTRY = {
+  ask_question: {
+    description: "Ask patient a structured clinical question",
+    input_schema: {
+      type: "object",
+      properties: {
+        question_id: { type: "string" }
+      },
+      required: ["question_id"]
+    }
+  },
+
+  record_answer: {
+    description: "Record structured patient response",
+    input_schema: {
+      type: "object",
+      properties: {
+        question_id: { type: "string" },
+        answer: { type: "string" }
+      },
+      required: ["question_id", "answer"]
+    }
+  },
+
+  trigger_red_flag_check: {...},
+  calculate_score: {...},
+  generate_disposition: {...}
+}
+
+👉 This ensures:
+
+No hallucinated actions
+All clinical steps are auditable
+3. 🛑 Permission Governance (HUGE FOR MEDICOLEGAL)
+
+You must gate:
+
+Antibiotic prescribing
+Imaging decisions
+Controlled meds
+Disposition overrides
+// server/governance/permissionEngine.ts
+export function checkClinicalPermission(action: string, context: any) {
+  if (action === "prescribe_antibiotic") {
+    if (!context.confirmed_bacterial_features) {
+      return { allowed: false, reason: "No bacterial criteria met" };
+    }
+  }
+
+  if (action === "discharge_patient") {
+    if (context.red_flags_present) {
+      return { allowed: false, reason: "Red flags require escalation" };
+    }
+  }
+
+  return { allowed: true };
+}
+
+👉 This directly solves:
+
+“Z-pack for viral illness” problem
+Over-treatment variability
+Liability exposure
+4. 🧠 Context Compression (CRITICAL FOR LONG VISITS)
+
+Telemedicine visits can get long.
+
+You need:
+
+// server/context/compression.ts
+export function compressClinicalContext(messages: any[]) {
+  const summary = {
+    chief_complaint: extractChiefComplaint(messages),
+    key_symptoms: extractKeySymptoms(messages),
+    red_flags: extractRedFlags(messages),
+    negatives: extractImportantNegatives(messages),
+    timeline: extractTimeline(messages)
+  };
+
+  return {
+    role: "system",
+    content: `[CLINICAL SUMMARY]\n${JSON.stringify(summary)}`
+  };
+}
+
+👉 Prevents:
+
+Losing important negatives
+Model drift mid-visit
+Inconsistent diagnoses
+5. 📋 Todo / Plan System (VERY IMPORTANT)
+
+For each patient:
+
+// server/clinical/plan.ts
+export function createClinicalPlan(complaint: string) {
+  return [
+    "Collect modifiers (age, PMH, meds)",
+    "Ask core complaint questions",
+    "Check red flags",
+    "Apply scoring system",
+    "Determine disposition"
+  ];
+}
+
+👉 Forces:
+
+Consistency across clinicians
+No skipped steps
+Reproducible care
+🧠 Tier 2: HIGH VALUE (You partially have but should upgrade)
+6. 🧑‍⚕️ Subagents (Specialists)
+
+You already have multi-agent—BUT not clean isolation.
+
+Upgrade to:
+
+async function spawnClinicalSubagent(task: string) {
+  const subContext = []; // isolated
+
+  const result = await runAgentLoop({
+    system: "You are an infectious disease specialist",
+    messages: [{ role: "user", content: task }],
+    isolated: true
+  });
+
+  return result.summary;
+}
+
+👉 Use for:
+
+Differential diagnosis expansion
+Workup optimization
+Medication selection
+7. ⚡ Background Tasks (Game Changer)
+
+Example:
+
+// run labs or guideline check in parallel
+runBackground("guideline_check", async () => {
+  return await fetchUpToDateGuideline(dx);
+});
+
+👉 While:
+
+Patient answering questions
+System calculating risk scores
+8. 📡 Event Bus (You NEED this for dashboards)
+bus.emit("clinical_step", {
+  step: "red_flag_check",
+  result: "negative",
+  patient_id
+});
+
+👉 Enables:
+
+Real-time Control Tower updates
+Audit logs
+FDA traceability
+9. 💾 Session Persistence
+
+You already log—but not as resumable sessions
+
+// server/session/save.ts
+export function saveClinicalSession(session) {
+  db.insert("sessions", session);
+}
+
+👉 Critical for:
+
+Telemedicine drop-offs
+Legal audit trails
+Physician review later
+10. 🔄 Interrupt Handling (VERY HIGH VALUE)
+
+Patient changes complaint mid-visit?
+
+if (interruptDetected) {
+  return {
+    summary: currentProgress,
+    next: "Re-route to new complaint pathway"
+  };
+}
+
+👉 Prevents:
+
+Broken flows
+Incomplete logic
+Patient frustration
+🚀 Tier 3: ADVANCED (You should implement next)
+11. 🧪 Task Graph (for complex care)
+
+Useful for:
+
+Multi-problem patients
+Chronic + acute overlap
+12. 🧵 Parallel Tool Execution
+
+Speed boost:
+
+await Promise.all([
+  calculateCentor(),
+  checkRedFlags(),
+  fetchGuidelines()
+]);
+13. 🧠 Skill System (VERY POWERFUL)
+
+Inject protocols:
+
+loadSkill("strep_pharyngitis_protocol")
+
+👉 Instead of bloating prompts
+
+14. 🧬 Multi-agent teams (specialists)
+ID
+Cardiology
+Pediatrics
+15. 🔐 MCP / External tools
+
+You can plug:
+
+Epic / Athena screen automation
+Lab APIs
+Imaging systems
+🧬 Tier 4: Enterprise (You’re already heading here)
+Redis pub/sub (you already use Redis)
+Worktree isolation (for code, not clinical)
+Async runtime (partially there)
+Prompt caching (huge cost savings)
+⚙️ THE MOST IMPORTANT GAP IN YOUR SYSTEM
+
+If I had to summarize everything:
+
+👉 You built a brilliant clinical brain
+👉 But you need a disciplined execution harness
+
+Right now:
+
+Decisions = strong ✅
+Execution consistency = still variable ⚠️
+🧠 What This Unlocks Clinically
+
+If you implement this fully:
+
+You achieve:
+
+✔ Same patient → same outcome every time
+✔ No “doctor variability”
+✔ No overtreatment
+✔ Full audit trail
+✔ FDA-ready system
+✔ Scalable telemedicine brain

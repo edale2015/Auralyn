@@ -1200,3 +1200,65 @@ export const improvementCycleLog = pgTable(
 export const insertImprovementCycleLogSchema = createInsertSchema(improvementCycleLog).omit({ id: true, ranAt: true });
 export type InsertImprovementCycleLog = z.infer<typeof insertImprovementCycleLogSchema>;
 export type ImprovementCycleLog = typeof improvementCycleLog.$inferSelect;
+
+// ─── Canonical Pathways (KB admin — batch 26/27) ──────────────────────────────
+export const canonicalPathways = pgTable("canonical_pathways", {
+  pathwayId:            text("pathway_id").primaryKey(),
+  sourceType:           text("source_type").notNull(),
+  complaintId:          text("complaint_id").notNull(),
+  syndromeId:           text("syndrome_id").notNull(),
+  label:                text("label").notNull(),
+  requiredFeatures:     jsonb("required_features").$type<string[]>().notNull().default([]),
+  positiveWeights:      jsonb("positive_weights").$type<Record<string, number>>().notNull().default({}),
+  negativeWeights:      jsonb("negative_weights").$type<Record<string, number>>().notNull().default({}),
+  exclusions:           jsonb("exclusions").$type<string[]>().notNull().default([]),
+  treatmentClass:       text("treatment_class").notNull(),
+  medicationKey:        text("medication_key"),
+  canonicalDisposition: text("canonical_disposition").notNull(),
+  rationale:            jsonb("rationale").$type<string[]>().notNull().default([]),
+  active:               boolean("active").notNull().default(true),
+  createdBy:            text("created_by").notNull(),
+  updatedBy:            text("updated_by").notNull(),
+  retiredBy:            text("retired_by"),
+  retirementReason:     text("retirement_reason"),
+  retiredAt:            timestamp("retired_at"),
+  createdAt:            timestamp("created_at").defaultNow().notNull(),
+  updatedAt:            timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCanonicalPathwaySchema = createInsertSchema(canonicalPathways).omit({ createdAt: true, updatedAt: true });
+export type InsertCanonicalPathway = z.infer<typeof insertCanonicalPathwaySchema>;
+export type CanonicalPathway = typeof canonicalPathways.$inferSelect;
+
+// ─── Phenotype Registry (batch 27) ───────────────────────────────────────────
+export const phenotypeRegistry = pgTable("phenotype_registry", {
+  phenotypeHash:           text("phenotype_hash").primaryKey(),
+  complaintId:             text("complaint_id").notNull(),
+  canonicalSyndromeId:     text("canonical_syndrome_id"),
+  canonicalMedicationKey:  text("canonical_medication_key"),
+  canonicalDisposition:    text("canonical_disposition").notNull(),
+  confidence:              text("confidence").notNull(),
+  seenCount:               integer("seen_count").notNull().default(1),
+  firstSeenAt:             timestamp("first_seen_at").defaultNow().notNull(),
+  lastSeenAt:              timestamp("last_seen_at").defaultNow().notNull(),
+});
+export const insertPhenotypeRegistrySchema = createInsertSchema(phenotypeRegistry).omit({ firstSeenAt: true, lastSeenAt: true });
+export type InsertPhenotypeRegistry = z.infer<typeof insertPhenotypeRegistrySchema>;
+export type PhenotypeRegistryEntry = typeof phenotypeRegistry.$inferSelect;
+
+// ─── KB Physician Overrides (batch 26 — kb_physician_overrides) ──────────────
+export const kbPhysicianOverrides = pgTable("kb_physician_overrides", {
+  id:                serial("id").primaryKey(),
+  overrideId:        text("override_id").notNull().unique(),
+  patientId:         text("patient_id").notNull(),
+  complaint:         text("complaint").notNull(),
+  systemDecision:    text("system_decision").notNull(),
+  physicianDecision: text("physician_decision").notNull(),
+  reason:            text("reason").notNull(),
+  discrepancy:       boolean("discrepancy").notNull().default(false),
+  actorId:           text("actor_id").notNull(),
+  traceId:           text("trace_id").notNull(),
+  createdAt:         timestamp("created_at").defaultNow(),
+});
+export const insertKbPhysicianOverrideSchema = createInsertSchema(kbPhysicianOverrides).omit({ id: true, createdAt: true });
+export type InsertKbPhysicianOverride = z.infer<typeof insertKbPhysicianOverrideSchema>;
+export type KbPhysicianOverride = typeof kbPhysicianOverrides.$inferSelect;
