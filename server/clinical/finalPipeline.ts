@@ -190,7 +190,12 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
     })
   );
 
-  // ── 3. Safety Pipeline Gate — CRITICAL ────────────────────────────────────
+  // ── 3. Safety Pipeline Gate — FAIL-CLOSED CRITICAL ────────────────────────
+  // FIXED: Previously used timedOptional which let the pipeline continue without
+  // a valid safety disposition. If safetyPipeline() threw, safetyDisposition
+  // remained "ROUTINE" and degraded was set to true — meaning a patient with
+  // sepsis or obstetric emergency could receive a routine disposition.
+  // Now uses timedStage (hard fail) so any safety pipeline error aborts the pipeline.
   let safetyDisposition = "ROUTINE";
   const safetyFlags: string[] = [];
 
@@ -199,22 +204,21 @@ export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput
     safetyFlags.push(`FUSION:${fusionResult.suspicion}`);
   }
 
-  const safetyStage = timedOptional("stage3_safety", timings, () =>
+  const safetyResult = timedStage("stage3_safety", timings, () =>
     safetyPipeline({
       symptoms,
       vitals:     input.vitals  ?? {},
       history:    input.history ?? [],
       ageYears:   input.ageYears,
       isPregnant: input.isPregnant ?? false,
-    }),
-  null);
-  if (!safetyStage.failed && safetyStage.value) {
-    const sr = safetyStage.value;
+    })
+  );
+  if (safetyResult) {
+    const sr = safetyResult;
     if (sr.disposition === "ER_NOW" || safetyDisposition === "ROUTINE") safetyDisposition = sr.disposition;
     if ((sr as any).flags)     safetyFlags.push(...(sr as any).flags);
     if ((sr as any).triggered) safetyFlags.push((sr as any).triggered);
   }
-  if (safetyStage.failed) degraded = true;
 
   // ── 4. Physician 1-Line Summary — OPTIONAL ────────────────────────────────
   const summaryStage = timedOptional("stage4_physician_summary", timings, () => {

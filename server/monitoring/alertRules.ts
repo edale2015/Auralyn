@@ -1,3 +1,19 @@
+/**
+ * server/monitoring/alertRules.ts — Alert rule evaluation engine
+ *
+ * FIX (Independent Review — Code Injection):
+ *   Previously used `new Function(...keys, expr)` to evaluate alert rule expressions.
+ *   Rule expressions come from a mutable in-memory store writeable via the API.
+ *   An admin with API access could inject arbitrary code that runs with full server
+ *   privileges (access to process, require, Buffer, network, etc.).
+ *
+ *   Fixed: replaced new Function with vm.runInNewContext() behind a vm.Script
+ *   compilation step. The sandbox only exposes numeric metric values — no access
+ *   to process, global, require, or any Node.js built-in. Execution is bounded
+ *   by a 50ms timeout.
+ */
+
+import vm from "vm";
 import { sendSlackAlert, sendWhatsAppAlert } from "./alerts";
 
 export interface AlertRule {
@@ -34,14 +50,29 @@ export function removeRule(id: string): boolean {
   return true;
 }
 
+/**
+ * Safely evaluate an alert rule expression against a metric snapshot.
+ * Uses a vm sandbox — no access to process, require, or Node.js globals.
+ */
+function evalExprSafe(expr: string, metrics: Record<string, number>): boolean {
+  try {
+    const sandbox = Object.create(null);
+    // Only expose numeric metric values — no globals, no prototype chain
+    for (const [k, v] of Object.entries(metrics)) {
+      if (/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(k)) sandbox[k] = v;
+    }
+    const script = new vm.Script(`!!(${expr})`, { filename: "alert-rule" });
+    return script.runInNewContext(sandbox, { timeout: 50 });
+  } catch {
+    return false;
+  }
+}
+
 export async function evalRules(metrics: Record<string, number>): Promise<string[]> {
   const fired: string[] = [];
   for (const rule of rules) {
     try {
-      const keys = Object.keys(metrics);
-      const vals = Object.values(metrics);
-      const fn = new Function(...keys, `return !!(${rule.expr});`);
-      if (fn(...vals)) {
+      if (evalExprSafe(rule.expr, metrics)) {
         if (rule.target === "slack" || rule.target === "both") {
           await sendSlackAlert(`Alert rule fired: ${rule.expr}`);
         }

@@ -27,11 +27,14 @@ import {
   setCachedTriage,
   buildTriageCacheKey,
 } from "../cache/triageCache";
+import { getKbVersion } from "../kb/kbRuntime";
 import { queueAsyncWork } from "../queue/asyncWorker";
 import { isChaosActive, maybeDelay } from "../chaos/chaosEngine";
 
 export interface ClinicalInput {
   patientId?: string;
+  /** clinicId scopes the triage cache per tenant — prevents cross-tenant cache pollution */
+  clinicId?: string;
   complaint: string;
   answers: Record<string, any>;
   channel?: "web" | "whatsapp" | "telegram" | "voice";
@@ -139,7 +142,14 @@ export async function runFullClinicalFlow(input: ClinicalInput): Promise<Clinica
     setLoadAwareThreshold(queueStats.queueDepth ?? 0, metrics.errorRate ?? 0);
 
     // ── LRU cache check — return immediately on hit ────────────────────────
-    const cacheKey = buildTriageCacheKey(validated.complaint, validated.answers);
+    // FIXED: pass clinicId + kbVersion so cache is scoped per tenant and invalidated on KB updates.
+    // Previously called with 2 args (complaint, answers) — ignoring the required clinicId/kbVersion params.
+    const cacheKey = buildTriageCacheKey(
+      validated.complaint,
+      validated.answers,
+      input.clinicId ?? "global",
+      getKbVersion(),
+    );
     const cached = getCachedTriage(cacheKey);
     if (cached && !input.patientId) {
       const cachedResult = {

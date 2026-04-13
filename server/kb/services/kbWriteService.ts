@@ -4,12 +4,22 @@ import { canonicalPathways } from "../../../shared/schema";
 import { auditStep } from "../../audit/auditLogger";
 import { query } from "../../db";
 
+// FIXED: safeReloadKbCache and safeAuditStep previously swallowed all errors silently.
+// A cache invalidation failure means the next patient triage uses stale data;
+// an audit failure means the change has no trail. Both now log with console.error
+// so ops dashboards and log monitors will catch them.
+
 async function safeReloadKbCache(traceId: string): Promise<void> {
   try {
     const { reloadAndRewireKbCache } = await import("../kbRuntime");
-    await reloadAndRewireKbCache(traceId);
-  } catch {
-    // Non-fatal — pathway is already written
+    await reloadAndRewireKbCache();
+  } catch (err: any) {
+    console.error(
+      "[KbWriteService] CACHE RELOAD FAILED after KB write (traceId=%s): %s — " +
+      "next triage request will use stale KB data until cache TTL expires.",
+      traceId,
+      err?.message ?? String(err)
+    );
   }
 }
 
@@ -21,8 +31,14 @@ async function safeAuditStep(
 ): Promise<void> {
   try {
     await auditStep({ traceId, step, input, output, metadata: {} });
-  } catch {
-    // Audit failure is non-fatal in dev
+  } catch (err: any) {
+    console.error(
+      "[KbWriteService] AUDIT WRITE FAILED for step=%s (traceId=%s): %s — " +
+      "this KB change has no audit record and MUST be investigated.",
+      step,
+      traceId,
+      err?.message ?? String(err)
+    );
   }
 }
 
@@ -163,7 +179,7 @@ export async function upsertPhenotypeRegistry(entry: {
         entry.confidence,
       ]
     );
-  } catch {
-    // Non-fatal
+  } catch (err: any) {
+    console.warn("[KbWriteService] upsertPhenotypeRegistry failed:", err?.message);
   }
 }

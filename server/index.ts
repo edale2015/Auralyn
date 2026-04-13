@@ -375,6 +375,9 @@ import governanceCommandRoutes from "./routes/governanceCommandRoutes";
 import skillGraphRoutes from "./routes/skillGraphRoutes";
 import skillIntelligenceRoutes from "./routes/skillIntelligenceRoutes";
 import skillEvolutionRoutes from "./routes/skillEvolutionRoutes";
+import icuRoutes from "./routes/icuRoutes";
+import validationRoutes from "./routes/validationRoutes";
+import networkRoutes from "./routes/networkRoutes";
 import { startPatientStreamSocket } from "./ws/patientStream";
 import { hydrateFromRedis } from "./learning/versionedRLHF";
 import engineControlRoutes from "./routes/engineControlRoutes";
@@ -878,6 +881,9 @@ app.use("/api/governance", governanceCommandRoutes);
 app.use("/api", skillGraphRoutes);
 app.use("/api/qa", skillIntelligenceRoutes);
 app.use("/api/skill-evolution", skillEvolutionRoutes);
+app.use("/api/icu", icuRoutes);
+app.use("/api/validation", validationRoutes);
+app.use("/api/network", networkRoutes);
 console.log("[StressTest] Load generator, metrics analyzer, run history at /api/stress/*");
 console.log("[RPA] Browser automation templates, run engine, custom tasks at /api/rpa/*");
 console.log("[Vision] GPT-4o screenshot analysis + smart form fill at /api/vision/*");
@@ -1085,6 +1091,42 @@ app.use((req, res, next) => {
       // Warm KB runtime cache — loads diagnosis priors, red flag rules, and treatment rules
       // from Postgres into memory so all pipeline entry-points read from the KB.
       import("./kb/kbRuntime").then(({ warmKbCache }) => warmKbCache()).catch(() => {});
+      // Register the DB-backed per-complaint prior loader so loadComplaintPriors() works.
+      // Without this, any call to loadComplaintPriors() throws "No registry adapter registered".
+      import("./clinical/diagnosisPriorLoader").then(({ registerPriorLoader }) => {
+        import("./db").then(({ db }) => {
+          import("drizzle-orm").then(({ sql }) => {
+            registerPriorLoader(async (ccId: string) => {
+              try {
+                const result = await (db as any).execute(sql`
+                  SELECT
+                    r.complaint_id AS "ccId",
+                    r.diagnosis_label AS diagnosis,
+                    r.base_probability AS "baseProbability",
+                    f.feature_key AS feature,
+                    f.likelihood AS likelihood,
+                    1 AS version
+                  FROM kb_diagnosis_rules r
+                  JOIN kb_feature_likelihoods f ON f.rule_id = r.rule_id AND f.active = true
+                  WHERE r.active = true AND (r.complaint_id = ${ccId} OR r.complaint_id = 'bayesian_global')
+                  ORDER BY r.base_probability DESC
+                `);
+                const rows = Array.isArray(result) ? result : (result?.rows ?? []);
+                return rows.map((r: any) => ({
+                  ccId: r.ccId ?? ccId,
+                  diagnosis: String(r.diagnosis ?? ""),
+                  baseProbability: Number(r.baseProbability ?? 0),
+                  feature: String(r.feature ?? ""),
+                  likelihood: Number(r.likelihood ?? 0),
+                  version: 1,
+                }));
+              } catch {
+                return [];
+              }
+            });
+          }).catch(() => {});
+        }).catch(() => {});
+      }).catch(() => {});
       runFailoverLoop(60_000);
       startRecoveryLoop(10_000);
       initControlTowerSocket(httpServer);

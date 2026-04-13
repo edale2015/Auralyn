@@ -1,3 +1,11 @@
+/**
+ * FIX (Independent Review — Code Injection):
+ *   evaluateCondition() previously used `new Function(...keys, condition)` to evaluate
+ *   step conditions. Fixed: replaced with vm.runInNewContext() sandbox — no access
+ *   to process, require, or global. Conditions currently come from a static workflow
+ *   file but this hardens the path for future dynamic workflow loading.
+ */
+import vm from "vm";
 import { ProcedureStep } from "./workflows/strep";
 import { logMetric } from "../monitoring/metrics";
 import { auditLog } from "../security/auditLogger";
@@ -31,8 +39,15 @@ async function runLabTest(testName: string): Promise<{ result: string; confidenc
 function evaluateCondition(condition: string | undefined, context: Record<string, any>): boolean {
   if (!condition) return true;
   try {
-    const fn = new Function(...Object.keys(context), `return (${condition})`);
-    return fn(...Object.values(context));
+    // Sandbox: only expose plain value keys — no prototype chain, no globals
+    const sandbox = Object.create(null);
+    for (const [k, v] of Object.entries(context)) {
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) {
+        sandbox[k] = v;
+      }
+    }
+    const script = new vm.Script(`!!(${condition})`, { filename: "step-condition" });
+    return script.runInNewContext(sandbox, { timeout: 50 });
   } catch {
     return true;
   }

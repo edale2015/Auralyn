@@ -1,0 +1,4063 @@
+You are performing a rigorous code review of a production-oriented medical triage and urgent care software platform (Auralyn — HIPAA/FDA multi-tenant SaaS, NYC urgent care).
+
+Your job is not to praise the architecture or restate what the system intends to do. Your job is to identify concrete weaknesses, defects, unsafe assumptions, misleading scaffolding, incomplete integrations, hidden production risks, and mismatches between UI, backend, and actual runtime behavior.
+
+Review the code as if this system may eventually support real clinical workflows, physician oversight, auditability, regulated deployment, and multi-tenant production use.
+
+Do not be gentle. Be precise.
+
+Return your findings in this structure:
+
+TOP 10 FINDINGS
+1.
+Issue Title:
+Severity:
+Files:
+One-sentence risk:
+
+FULL FINDINGS
+Issue Title:
+Severity: Critical / High / Medium / Low
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type: Real defect / Architectural risk / Incomplete scaffolding / Misleading implementation
+
+SUMMARY TABLE
+Critical:
+High:
+Medium:
+Low:
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+Likely theater/scaffolding:
+Highest ROI fixes:
+Needs cross-file review confirmation:
+
+BATCH-SPECIFIC FOCUS:
+Review these files for source-of-truth integrity, stale logic risk, migration safety, cache incoherence, hardcoded fallbacks, and places where KB-driven behavior is undermined.
+
+======================================================================
+CODE BELOW — BEGIN REVIEW
+======================================================================
+
+=== AURALYN CODE REVIEW — BATCH 3: KB, Postgres, Cache, Migrations ===
+Files: KB CRUD, schema, cache layer, feature model loading, fallback logic
+Review focus: source-of-truth integrity, stale logic risk, migration safety, cache incoherence, hardcoded fallbacks, KB-driven behavior
+
+=================================================================================
+FILE: shared/schema.ts
+=================================================================================
+import { sql } from "drizzle-orm";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, jsonb, real, doublePrecision, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
+
+// Physicians (users who can approve cases)
+export const physicians = pgTable("physicians", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  password: text("password").notNull(),
+  name: text("name").notNull(),
+  specialty: text("specialty"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertPhysicianSchema = createInsertSchema(physicians).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPhysician = z.infer<typeof insertPhysicianSchema>;
+export type Physician = typeof physicians.$inferSelect;
+
+// Patients (from WhatsApp)
+export const patients = pgTable("patients", {
+  id: serial("id").primaryKey(),
+  phoneNumber: text("phone_number").notNull().unique(),
+  name: text("name"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertPatientSchema = createInsertSchema(patients).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPatient = z.infer<typeof insertPatientSchema>;
+export type Patient = typeof patients.$inferSelect;
+
+// Encounters (medical cases)
+export const encounters = pgTable("encounters", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").notNull().references(() => patients.id),
+  chiefComplaint: text("chief_complaint"),
+  conversationHistory: text("conversation_history"), // JSON string of WhatsApp messages
+  aiDiagnosis: text("ai_diagnosis"),
+  aiDisposition: text("ai_disposition"),
+  aiConfidence: integer("ai_confidence"), // 0-100
+  status: text("status").notNull().default("gathering_info"), // gathering_info, in_progress, pending_review, approved, rejected
+  urgencyLevel: text("urgency_level").default("routine"), // routine, urgent, emergent
+  physicianId: integer("physician_id").references(() => physicians.id),
+  physicianDiagnosis: text("physician_diagnosis"),
+  physicianDisposition: text("physician_disposition"),
+  physicianNotes: text("physician_notes"),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  // ENT Flu Flow fields
+  system: text("system"), // e.g., "ENT"
+  complaint: text("complaint"), // e.g., "FLU_LIKE_URI"
+  specialty: text("specialty"), // e.g., "ENT"
+  flowId: text("flow_id"), // e.g., "ENT_FLU_LIKE_V1"
+  flowIndex: integer("flow_index").default(0), // current question index
+  answers: text("answers"), // JSON string of collected answers
+  proposal: text("proposal"), // JSON string of computed proposal
+  physicianSummary: text("physician_summary"), // JSON string of summary for physician
+  // Intake case linking
+  intakeCaseId: text("intake_case_id"), // links to intake case from portal workflow
+  intakeLinkEvents: text("intake_link_events"), // JSON array of link/unlink audit events
+  intakeLinkedAt: timestamp("intake_linked_at"), // when the intake case was last linked
+  intakeToken: text("intake_token"), // token for patient intake link
+  intakeCode: text("intake_code"), // 6-digit verification code for intake
+  intakeExpiresAt: text("intake_expires_at"), // expiration timestamp for intake link
+});
+
+export const insertEncounterSchema = createInsertSchema(encounters).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  approvedAt: true,
+});
+
+export type InsertEncounter = z.infer<typeof insertEncounterSchema>;
+export type Encounter = typeof encounters.$inferSelect;
+
+// Orders (prescriptions, referrals, labs, etc.)
+export const orders = pgTable("orders", {
+  id: serial("id").primaryKey(),
+  encounterId: integer("encounter_id").notNull().references(() => encounters.id),
+  orderType: text("order_type").notNull(), // prescription, lab, imaging, referral
+  description: text("description").notNull(),
+  status: text("status").notNull().default("pending"), // pending, approved, rejected
+  aiGenerated: boolean("ai_generated").default(true),
+  physicianApproved: boolean("physician_approved").default(false),
+  physicianId: integer("physician_id").references(() => physicians.id),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertOrderSchema = createInsertSchema(orders).omit({
+  id: true,
+  createdAt: true,
+  approvedAt: true,
+});
+
+export type InsertOrder = z.infer<typeof insertOrderSchema>;
+export type Order = typeof orders.$inferSelect;
+
+// WhatsApp Messages Log
+export const whatsappMessages = pgTable("whatsapp_messages", {
+  id: serial("id").primaryKey(),
+  encounterId: integer("encounter_id").references(() => encounters.id),
+  patientId: integer("patient_id").notNull().references(() => patients.id),
+  direction: text("direction").notNull(), // inbound, outbound
+  messageBody: text("message_body").notNull(),
+  messageSid: text("message_sid"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertWhatsappMessage = z.infer<typeof insertWhatsappMessageSchema>;
+export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
+
+// Legacy users table for compatibility
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  username: text("username").notNull().unique(),
+  password: text("password").notNull(),
+});
+
+export const insertUserSchema = createInsertSchema(users).pick({
+  username: true,
+  password: true,
+});
+
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
+
+// Outcome learning records
+export const outcomes = pgTable("outcomes", {
+  id: serial("id").primaryKey(),
+  input: jsonb("input"),
+  predicted: text("predicted"),
+  actual: text("actual"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertOutcomeSchema = createInsertSchema(outcomes).omit({ id: true, createdAt: true });
+export type InsertOutcome = z.infer<typeof insertOutcomeSchema>;
+export type Outcome = typeof outcomes.$inferSelect;
+
+// Diagnosis weights (learning system)
+export const weights = pgTable("weights", {
+  id: serial("id").primaryKey(),
+  diagnosis: text("diagnosis").notNull().unique(),
+  value: real("value").default(1.0),
+});
+export const insertWeightSchema = createInsertSchema(weights).omit({ id: true });
+export type InsertWeight = z.infer<typeof insertWeightSchema>;
+export type Weight = typeof weights.$inferSelect;
+
+// Engine execution logs (monitoring)
+export const engineLogs = pgTable("engine_logs", {
+  id: serial("id").primaryKey(),
+  engine: text("engine").notNull(),
+  status: text("status").notNull(),
+  latencyMs: integer("latency_ms"),
+  error: text("error"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (t) => ({
+  createdAtIdx: index("idx_engine_logs_created_at").on(t.createdAt),
+  engineIdx: index("idx_engine_logs_engine").on(t.engine),
+}));
+export const insertEngineLogSchema = createInsertSchema(engineLogs).omit({ id: true, createdAt: true });
+export type InsertEngineLog = z.infer<typeof insertEngineLogSchema>;
+export type EngineLog = typeof engineLogs.$inferSelect;
+
+// Digital twin simulation runs
+export const simulations = pgTable("simulations", {
+  id: serial("id").primaryKey(),
+  input: jsonb("input"),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertSimulationSchema = createInsertSchema(simulations).omit({ id: true, createdAt: true });
+export type InsertSimulation = z.infer<typeof insertSimulationSchema>;
+export type Simulation = typeof simulations.$inferSelect;
+
+// Immutable audit trace logs (with SHA-256 hash chain)
+export const auditLogs = pgTable("audit_logs", {
+  id: serial("id").primaryKey(),
+  traceId: text("trace_id").notNull(),
+  step: text("step").notNull(),
+  input: jsonb("input"),
+  output: jsonb("output"),
+  metadata: jsonb("metadata"),
+  hash: text("hash"),
+  prevHash: text("prev_hash"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (t) => ({
+  traceIdIdx: index("idx_audit_logs_trace_id").on(t.traceId),
+  createdAtIdx: index("idx_audit_logs_created_at").on(t.createdAt),
+}));
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
+
+// Model versioning — snapshot of diagnosis weights after each learning cycle
+export const modelVersions = pgTable("model_versions", {
+  id: serial("id").primaryKey(),
+  weights: jsonb("weights").notNull(),
+  cycleCount: integer("cycle_count"),
+  triggeredBy: text("triggered_by"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertModelVersionSchema = createInsertSchema(modelVersions).omit({ id: true, createdAt: true });
+export type InsertModelVersion = z.infer<typeof insertModelVersionSchema>;
+export type ModelVersion = typeof modelVersions.$inferSelect;
+
+// Patient sessions (persistent queue — replaces in-memory store)
+export const patientSessions = pgTable("patient_sessions", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull(),
+  riskLevel: text("risk_level"),
+  safetyFlags: jsonb("safety_flags").default([]),
+  disposition: jsonb("disposition"),
+  approvedBy: text("approved_by"),
+  overrideData: jsonb("override_data"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (t) => ({
+  statusIdx: index("idx_patient_sessions_status").on(t.status),
+  createdAtIdx: index("idx_patient_sessions_created_at").on(t.createdAt),
+}));
+export type PatientSessionRow = typeof patientSessions.$inferSelect;
+
+// Alert log (high-risk SMS alerts sent to on-call physician)
+export const alertLogs = pgTable("alert_logs", {
+  id: serial("id").primaryKey(),
+  patientId: text("patient_id").notNull(),
+  riskLevel: text("risk_level").notNull(),
+  reasons: jsonb("reasons").notNull(),
+  channel: text("channel").notNull(),
+  traceId: text("trace_id"),
+  sentAt: timestamp("sent_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export type AlertLog = typeof alertLogs.$inferSelect;
+
+// Full system snapshots — replayable decision state
+export const systemSnapshots = pgTable("system_snapshots", {
+  id: serial("id").primaryKey(),
+  traceId: text("trace_id"),
+  patientId: text("patient_id"),
+  state: jsonb("state").notNull(),
+  complaint: text("complaint"),
+  autonomyMode: text("autonomy_mode"),
+  safetyLevel: text("safety_level"),
+  confidence: real("confidence"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertSystemSnapshotSchema = createInsertSchema(systemSnapshots).omit({ id: true, createdAt: true });
+export type InsertSystemSnapshot = z.infer<typeof insertSystemSnapshotSchema>;
+export type SystemSnapshot = typeof systemSnapshots.$inferSelect;
+
+// Autonomy performance tracking — FDA evidence, trust metric, tuning engine
+export const autonomyMetrics = pgTable("autonomy_metrics", {
+  id: serial("id").primaryKey(),
+  traceId: text("trace_id"),
+  complaint: text("complaint"),
+  mode: text("mode").notNull(),
+  dispositionGiven: text("disposition_given"),
+  confidence: real("confidence"),
+  wasOverridden: boolean("was_overridden").default(false).notNull(),
+  safetyTriggered: boolean("safety_triggered").default(false).notNull(),
+  guardrailsTriggered: text("guardrails_triggered").array().default([]),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertAutonomyMetricSchema = createInsertSchema(autonomyMetrics).omit({ id: true, createdAt: true });
+export type InsertAutonomyMetric = z.infer<typeof insertAutonomyMetricSchema>;
+export type AutonomyMetric = typeof autonomyMetrics.$inferSelect;
+
+// Idempotency keys — prevent duplicate POSTs from retries or ALB replays
+export const idempotencyKeys = pgTable("idempotency_keys", {
+  key: text("key").primaryKey(),
+  response: jsonb("response").notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+// FDA experiment log — reproducibility + submission tracking
+export const fdaExperiments = pgTable("fda_experiments", {
+  id: serial("id").primaryKey(),
+  config: jsonb("config").notNull(),
+  metrics: jsonb("metrics").notNull(),
+  pass: boolean("pass").default(false).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertFdaExperimentSchema = createInsertSchema(fdaExperiments).omit({ id: true, createdAt: true });
+export type InsertFdaExperiment = z.infer<typeof insertFdaExperimentSchema>;
+export type FdaExperiment = typeof fdaExperiments.$inferSelect;
+
+// Re-export chat models for OpenAI integration
+export * from "./models/chat";
+
+// ─── Production Clinic Layer (multi-tenant, FHIR-ready) ────────────────────
+
+export const clinicSites = pgTable("clinic_sites", {
+  id: serial("id").primaryKey(),
+  externalId: text("external_id").unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  ehrVendor: varchar("ehr_vendor", { length: 100 }),
+  fhirTenantKey: varchar("fhir_tenant_key", { length: 255 }),
+  plan: varchar("plan", { length: 50 }).default("basic").notNull(),
+  status: varchar("status", { length: 50 }).default("active").notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicSiteSchema = createInsertSchema(clinicSites).omit({ id: true, createdAt: true });
+export type InsertClinicSite = z.infer<typeof insertClinicSiteSchema>;
+export type ClinicSite = typeof clinicSites.$inferSelect;
+
+export const clinicPatients = pgTable("clinic_patients", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id").notNull(),
+  firstName: varchar("first_name", { length: 255 }).notNull(),
+  lastName: varchar("last_name", { length: 255 }).notNull(),
+  dob: varchar("dob", { length: 25 }),
+  sex: varchar("sex", { length: 50 }),
+  phone: varchar("phone", { length: 50 }),
+  email: varchar("email", { length: 255 }),
+  externalPatientId: varchar("external_patient_id", { length: 255 }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicPatientSchema = createInsertSchema(clinicPatients).omit({ id: true, createdAt: true });
+export type InsertClinicPatient = z.infer<typeof insertClinicPatientSchema>;
+export type ClinicPatient = typeof clinicPatients.$inferSelect;
+
+export const clinicEncounters = pgTable("clinic_encounters", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id").notNull(),
+  patientId: integer("patient_id").notNull().references(() => clinicPatients.id),
+  complaint: varchar("complaint", { length: 120 }).notNull(),
+  encounterStatus: varchar("encounter_status", { length: 50 }).default("created").notNull(),
+  intakePayload: jsonb("intake_payload").$type<Record<string, unknown>>().default({}).notNull(),
+  triageResult: jsonb("triage_result").$type<Record<string, unknown>>(),
+  reviewed: boolean("reviewed").default(false).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicEncounterSchema = createInsertSchema(clinicEncounters).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertClinicEncounter = z.infer<typeof insertClinicEncounterSchema>;
+export type ClinicEncounter = typeof clinicEncounters.$inferSelect;
+
+export const clinicIntakeSessions = pgTable("clinic_intake_sessions", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id").notNull(),
+  patientId: integer("patient_id").references(() => clinicPatients.id),
+  channel: varchar("channel", { length: 50 }).notNull(),
+  consented: boolean("consented").default(false).notNull(),
+  sessionState: varchar("session_state", { length: 50 }).default("awaiting_consent").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertClinicIntakeSessionSchema = createInsertSchema(clinicIntakeSessions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertClinicIntakeSession = z.infer<typeof insertClinicIntakeSessionSchema>;
+export type ClinicIntakeSession = typeof clinicIntakeSessions.$inferSelect;
+
+export const labeledOutcomeStats = pgTable("labeled_outcome_stats", {
+  id: serial("id").primaryKey(),
+  clinicExternalId: text("clinic_external_id"),
+  totalLabeledEncounters: integer("total_labeled_encounters").default(0).notNull(),
+  totalGoldenCases: integer("total_golden_cases").default(0).notNull(),
+  lastComputedAt: timestamp("last_computed_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertLabeledOutcomeStatsSchema = createInsertSchema(labeledOutcomeStats).omit({ id: true });
+export type InsertLabeledOutcomeStats = z.infer<typeof insertLabeledOutcomeStatsSchema>;
+
+// ─── Knowledge Base Admin Tables ─────────────────────────────────────────────
+
+export const kbComplaints = pgTable("kb_complaints", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull().unique(),
+  system: text("system").notNull().default("GENERAL"),
+  label: text("label").notNull(),
+  aliases: text("aliases").array().default([]).notNull(),
+  defaultCluster: text("default_cluster"),
+  scoringModule: text("scoring_module"),
+  graphId: text("graph_id"),
+  engineType: text("engine_type").default("STANDARD"),
+  enabled: boolean("enabled").default(true).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbComplaintSchema = createInsertSchema(kbComplaints).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbComplaint = z.infer<typeof insertKbComplaintSchema>;
+export type KbComplaint = typeof kbComplaints.$inferSelect;
+
+export const kbQuestions = pgTable("kb_questions", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  questionId: text("question_id").notNull(),
+  prompt: text("prompt").notNull(),
+  type: text("type").notNull().default("yes_no"),
+  required: boolean("required").default(false).notNull(),
+  priority: integer("priority").default(50).notNull(),
+  category: text("category"),
+  askIf: text("ask_if"),
+  conditionalOn: jsonb("conditional_on").$type<Record<string, unknown>>().default({}).notNull(),
+  linkedDiagnoses: text("linked_diagnoses").array().default([]).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbQuestionSchema = createInsertSchema(kbQuestions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbQuestion = z.infer<typeof insertKbQuestionSchema>;
+export type KbQuestion = typeof kbQuestions.$inferSelect;
+
+export const kbModifiers = pgTable("kb_modifiers", {
+  id: serial("id").primaryKey(),
+  modifierId: text("modifier_id").notNull().unique(),
+  label: text("label").notNull(),
+  description: text("description"),
+  appliesTo: text("applies_to").array().default([]).notNull(),
+  addDiagnoses: text("add_diagnoses").array().default([]).notNull(),
+  removeDiagnoses: text("remove_diagnoses").array().default([]).notNull(),
+  workupChanges: jsonb("workup_changes").$type<Record<string, unknown>>().default({}).notNull(),
+  medChanges: jsonb("med_changes").$type<Record<string, unknown>>().default({}).notNull(),
+  dispositionThresholdShift: real("disposition_threshold_shift").default(0),
+  active: boolean("active").default(true).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbModifierSchema = createInsertSchema(kbModifiers).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbModifier = z.infer<typeof insertKbModifierSchema>;
+export type KbModifier = typeof kbModifiers.$inferSelect;
+
+export const kbRedFlagRules = pgTable("kb_red_flag_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  label: text("label").notNull(),
+  triggerExpr: text("trigger_expr").notNull(),
+  severity: text("severity").notNull().default("HARD"),
+  action: text("action").notNull().default("ER_SEND"),
+  immediateActions: text("immediate_actions"),
+  rationale: text("rationale"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbRedFlagRuleSchema = createInsertSchema(kbRedFlagRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbRedFlagRule = z.infer<typeof insertKbRedFlagRuleSchema>;
+export type KbRedFlagRule = typeof kbRedFlagRules.$inferSelect;
+
+export const kbWorkupRules = pgTable("kb_workup_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  testName: text("test_name").notNull(),
+  testType: text("test_type").notNull().default("labs"),
+  triggerExpr: text("trigger_expr"),
+  modifierOverrides: jsonb("modifier_overrides").$type<Record<string, unknown>>().default({}).notNull(),
+  priority: integer("priority").default(50).notNull(),
+  rationale: text("rationale"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbWorkupRuleSchema = createInsertSchema(kbWorkupRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbWorkupRule = z.infer<typeof insertKbWorkupRuleSchema>;
+export type KbWorkupRule = typeof kbWorkupRules.$inferSelect;
+
+export const kbDiagnosisRules = pgTable("kb_diagnosis_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  diagnosisId: text("diagnosis_id").notNull(),
+  diagnosisLabel: text("diagnosis_label").notNull(),
+  icdCode: text("icd_code"),
+  baseProbability: real("base_probability").default(0.1).notNull(),
+  featureLikelihoods: jsonb("feature_likelihoods").$type<Record<string, number>>().default({}).notNull(),
+  cannotMiss: boolean("cannot_miss").default(false).notNull(),
+  basePoints: integer("base_points").default(1),
+  clusterPriority: integer("cluster_priority").default(50),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisRuleSchema = createInsertSchema(kbDiagnosisRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbDiagnosisRule = z.infer<typeof insertKbDiagnosisRuleSchema>;
+export type KbDiagnosisRule = typeof kbDiagnosisRules.$inferSelect;
+
+export const kbTreatmentRules = pgTable("kb_treatment_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id"),
+  diagnosisId: text("diagnosis_id"),
+  medicationName: text("medication_name").notNull(),
+  medicationGroup: text("medication_group"),
+  isFirstLine: boolean("is_first_line").default(true).notNull(),
+  adultDose: text("adult_dose"),
+  adultMaxDose: text("adult_max_dose"),
+  pediatricDose: text("pediatric_dose"),
+  route: text("route"),
+  renalAdjust: text("renal_adjust"),
+  hepaticAdjust: text("hepatic_adjust"),
+  pregnancyCategory: text("pregnancy_category"),
+  contraindications: text("contraindications"),
+  allergyCrossReacts: text("allergy_cross_reacts").array().default([]).notNull(),
+  keyInteractions: text("key_interactions"),
+  commonSideEffects: text("common_side_effects"),
+  notes: text("notes"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbTreatmentRuleSchema = createInsertSchema(kbTreatmentRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbTreatmentRule = z.infer<typeof insertKbTreatmentRuleSchema>;
+export type KbTreatmentRule = typeof kbTreatmentRules.$inferSelect;
+
+export const kbDispositionRules = pgTable("kb_disposition_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(),
+  complaintId: text("complaint_id").notNull(),
+  priority: integer("priority").default(50).notNull(),
+  whenExpr: text("when_expr").notNull(),
+  dispositionLevel: text("disposition_level").notNull(),
+  rationaleTemplateId: text("rationale_template_id"),
+  confidenceHint: text("confidence_hint").default("MODERATE"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDispositionRuleSchema = createInsertSchema(kbDispositionRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbDispositionRule = z.infer<typeof insertKbDispositionRuleSchema>;
+export type KbDispositionRule = typeof kbDispositionRules.$inferSelect;
+
+export const kbPlanTemplates = pgTable("kb_plan_templates", {
+  id: serial("id").primaryKey(),
+  templateKey: text("template_key").notNull().unique(),
+  complaintId: text("complaint_id"),
+  diagnosisLabel: text("diagnosis_label").notNull(),
+  defaultDisposition: text("default_disposition").notNull(),
+  summary: text("summary"),
+  homeCare: text("home_care").array().default([]).notNull(),
+  followUp: text("follow_up").array().default([]).notNull(),
+  returnPrecautions: text("return_precautions").array().default([]).notNull(),
+  patientMessage: text("patient_message"),
+  dischargeText: text("discharge_text"),
+  erPrecautions: text("er_precautions"),
+  medicationInstructions: text("medication_instructions"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbPlanTemplateSchema = createInsertSchema(kbPlanTemplates).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbPlanTemplate = z.infer<typeof insertKbPlanTemplateSchema>;
+export type KbPlanTemplate = typeof kbPlanTemplates.$inferSelect;
+
+export const kbGoldenCases = pgTable("kb_golden_cases", {
+  id: serial("id").primaryKey(),
+  caseId: text("case_id").notNull().unique(),
+  complaint: text("complaint").notNull(),
+  title: text("title").notNull(),
+  structuredInputs: jsonb("structured_inputs").$type<Record<string, unknown>>().default({}).notNull(),
+  modifiers: text("modifiers").array().default([]).notNull(),
+  clinicalFindings: jsonb("clinical_findings").$type<Record<string, unknown>>().default({}).notNull(),
+  workupResults: jsonb("workup_results").$type<Record<string, unknown>>().default({}).notNull(),
+  expectedDiagnosis: text("expected_diagnosis").notNull(),
+  expectedDifferential: jsonb("expected_differential").$type<string[]>().default([]).notNull(),
+  expectedDisposition: text("expected_disposition").notNull(),
+  expectedWorkup: text("expected_workup").array().default([]).notNull(),
+  expectedTreatment: jsonb("expected_treatment").$type<Record<string, unknown>>().default({}).notNull(),
+  expectedRedFlags: text("expected_red_flags").array().default([]).notNull(),
+  explanation: text("explanation"),
+  version: integer("version").default(1).notNull(),
+  author: text("author").default("system"),
+  status: text("status").notNull().default("draft"),
+  tags: text("tags").array().default([]).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbGoldenCaseSchema = createInsertSchema(kbGoldenCases).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbGoldenCase = z.infer<typeof insertKbGoldenCaseSchema>;
+export type KbGoldenCase = typeof kbGoldenCases.$inferSelect;
+
+// ── Phase 3: Normalized feature likelihoods (replaces JSONB blob in kb_diagnosis_rules) ─────────
+export const kbFeatureLikelihoods = pgTable("kb_feature_likelihoods", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),                     // FK to kb_diagnosis_rules.rule_id
+  featureKey: text("feature_key").notNull(),             // e.g. "painful arc", "fever"
+  featureValue: text("feature_value").default("yes"),    // "yes" | "no" | "severe" etc.
+  likelihood: real("likelihood").notNull(),              // P(feature | diagnosis) 0..1
+  weight: real("weight").default(1.0).notNull(),         // optional scaling
+  source: text("source").default("ui_edit").notNull(),   // hardcoded_prior | jsonb_migration | ui_edit
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbFeatureLikelihoodSchema = createInsertSchema(kbFeatureLikelihoods).omit({ id: true, createdAt: true });
+export type InsertKbFeatureLikelihood = z.infer<typeof insertKbFeatureLikelihoodSchema>;
+export type KbFeatureLikelihood = typeof kbFeatureLikelihoods.$inferSelect;
+
+// ── Phase 3: Clinical weights (replaces in-memory weight store) ────────────────────────────────
+export const kbClinicalWeights = pgTable("kb_clinical_weights", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),                   // e.g. "prior_weight", "symptom_weight"
+  value: real("value").notNull(),
+  description: text("description"),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbClinicalWeightSchema = createInsertSchema(kbClinicalWeights).omit({ id: true, updatedAt: true });
+export type InsertKbClinicalWeight = z.infer<typeof insertKbClinicalWeightSchema>;
+export type KbClinicalWeight = typeof kbClinicalWeights.$inferSelect;
+
+// ── Phase 3: Complaint modules (replaces SCORING_MODULE_DISPATCH) ───────────────────────────────
+export const kbComplaintModules = pgTable("kb_complaint_modules", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  moduleType: text("module_type").notNull(),             // scoring | workup | diagnosis | triage
+  moduleConfig: jsonb("module_config").$type<Record<string, unknown>>().default({}).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbComplaintModuleSchema = createInsertSchema(kbComplaintModules).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbComplaintModule = z.infer<typeof insertKbComplaintModuleSchema>;
+export type KbComplaintModule = typeof kbComplaintModules.$inferSelect;
+
+// ── Phase 3: Complaint packs (replaces COMPLAINT_PACK_REGISTRY) ─────────────────────────────────
+export const kbComplaintPacks = pgTable("kb_complaint_packs", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  questions: jsonb("questions").$type<unknown[]>().default([]).notNull(),
+  findings: jsonb("findings").$type<unknown[]>().default([]).notNull(),
+  modifiers: jsonb("modifiers").$type<unknown[]>().default([]).notNull(),
+  version: integer("version").default(1).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbComplaintPackSchema = createInsertSchema(kbComplaintPacks).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbComplaintPack = z.infer<typeof insertKbComplaintPackSchema>;
+export type KbComplaintPack = typeof kbComplaintPacks.$inferSelect;
+
+// ── Phase 3+: Full probabilistic feature model (replaces kb_feature_likelihoods) ──────────────
+export const kbFeatureModels = pgTable("kb_feature_models", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  featureType: text("feature_type").notNull().default("boolean"), // boolean | categorical | numeric | range
+  pPresent: real("p_present"),          // P(feature present | Dx)
+  pAbsent: real("p_absent"),            // P(feature absent | Dx)
+  categoricalMap: jsonb("categorical_map").$type<Record<string, number>>(), // {"mild":0.3,"severe":0.9}
+  mean: real("mean"),
+  stdDev: real("std_dev"),
+  minValue: real("min_value"),
+  maxValue: real("max_value"),
+  weight: real("weight").default(1.0).notNull(),
+  isRequired: boolean("is_required").default(false).notNull(),
+  source: text("source").default("manual").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbFeatureModelSchema = createInsertSchema(kbFeatureModels).omit({ id: true, createdAt: true });
+export type InsertKbFeatureModel = z.infer<typeof insertKbFeatureModelSchema>;
+export type KbFeatureModel = typeof kbFeatureModels.$inferSelect;
+
+// ── Phase 3+: Engine routing (replaces SCORING_MODULE_DISPATCH) ─────────────────────────────
+export const kbEngineRouting = pgTable("kb_engine_routing", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id").notNull(),
+  engineType: text("engine_type").notNull().default("bayesian"), // bayesian | rule | hybrid | legacy
+  config: jsonb("config").$type<Record<string, unknown>>().default({}).notNull(),
+  priority: integer("priority").default(50).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbEngineRoutingSchema = createInsertSchema(kbEngineRouting).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbEngineRouting = z.infer<typeof insertKbEngineRoutingSchema>;
+export type KbEngineRouting = typeof kbEngineRouting.$inferSelect;
+
+// ── Advanced Reasoning: Co-morbidity interactions ─────────────────────────────
+export const kbDiagnosisInteractions = pgTable("kb_diagnosis_interactions", {
+  id: serial("id").primaryKey(),
+  dxA: text("dx_a").notNull(),
+  dxB: text("dx_b").notNull(),
+  interactionType: text("interaction_type").notNull().default("synergy"),
+  strength: real("strength").notNull().default(0),
+  conditions: jsonb("conditions").$type<Record<string, unknown>>(),
+  notes: text("notes"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisInteractionSchema = createInsertSchema(kbDiagnosisInteractions).omit({ id: true, createdAt: true });
+export type InsertKbDiagnosisInteraction = z.infer<typeof insertKbDiagnosisInteractionSchema>;
+export type KbDiagnosisInteraction = typeof kbDiagnosisInteractions.$inferSelect;
+
+export const kbDiagnosisClusters = pgTable("kb_diagnosis_clusters", {
+  id: serial("id").primaryKey(),
+  clusterId: text("cluster_id").notNull().unique(),
+  diagnoses: text("diagnoses").array().notNull().default([]),
+  boost: real("boost").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisClusterSchema = createInsertSchema(kbDiagnosisClusters).omit({ id: true, createdAt: true });
+export type InsertKbDiagnosisCluster = z.infer<typeof insertKbDiagnosisClusterSchema>;
+export type KbDiagnosisCluster = typeof kbDiagnosisClusters.$inferSelect;
+
+// ── Advanced Reasoning: Temporal patterns ─────────────────────────────────────
+export const kbTemporalPatterns = pgTable("kb_temporal_patterns", {
+  id: serial("id").primaryKey(),
+  diagnosis: text("diagnosis").notNull(),
+  featureKey: text("feature_key").notNull(),
+  patternType: text("pattern_type").notNull(),
+  durationHours: integer("duration_hours"),
+  likelihood: real("likelihood").notNull().default(1.0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbTemporalPatternSchema = createInsertSchema(kbTemporalPatterns).omit({ id: true, createdAt: true });
+export type InsertKbTemporalPattern = z.infer<typeof insertKbTemporalPatternSchema>;
+export type KbTemporalPattern = typeof kbTemporalPatterns.$inferSelect;
+
+export const patientTimeSeries = pgTable("patient_time_series", {
+  id: serial("id").primaryKey(),
+  caseId: text("case_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  t: timestamp("t").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  value: real("value").notNull(),
+  unit: text("unit"),
+});
+export const insertPatientTimeSeriesSchema = createInsertSchema(patientTimeSeries).omit({ id: true });
+export type InsertPatientTimeSeries = z.infer<typeof insertPatientTimeSeriesSchema>;
+export type PatientTimeSeries = typeof patientTimeSeries.$inferSelect;
+
+// ── Outcome Learning System ───────────────────────────────────────────────────
+export const kbOutcomes = pgTable("kb_outcomes", {
+  id: serial("id").primaryKey(),
+  caseId: text("case_id").notNull(),
+  predictedDx: text("predicted_dx"),
+  actualDx: text("actual_dx"),
+  predictedDisposition: text("predicted_disposition"),
+  actualDisposition: text("actual_disposition"),
+  correct: boolean("correct"),
+  clinicianOverride: boolean("clinician_override").notNull().default(false),
+  outcomeSeverity: text("outcome_severity"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbOutcomeSchema = createInsertSchema(kbOutcomes).omit({ id: true, createdAt: true });
+export type InsertKbOutcome = z.infer<typeof insertKbOutcomeSchema>;
+export type KbOutcome = typeof kbOutcomes.$inferSelect;
+
+export const kbLearningEvents = pgTable("kb_learning_events", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),
+  featureKey: text("feature_key").notNull().default("__base__"),
+  delta: real("delta").notNull(),
+  confidence: real("confidence").notNull().default(0.5),
+  source: text("source").notNull().default("simulation"),
+  status: text("status").notNull().default("pending"),
+  rationale: text("rationale"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  deployedAt: timestamp("deployed_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbLearningEventSchema = createInsertSchema(kbLearningEvents).omit({ id: true, createdAt: true });
+export type InsertKbLearningEvent = z.infer<typeof insertKbLearningEventSchema>;
+export type KbLearningEvent = typeof kbLearningEvents.$inferSelect;
+
+export const kbKnowledgeChanges = pgTable("kb_knowledge_changes", {
+  id: serial("id").primaryKey(),
+  changeId: text("change_id").notNull().unique(),
+  domain: text("domain").notNull(),
+  recordId: text("record_id").notNull(),
+  action: text("action").notNull(),
+  changedBy: text("changed_by").default("system"),
+  oldValue: jsonb("old_value").$type<Record<string, unknown>>(),
+  newValue: jsonb("new_value").$type<Record<string, unknown>>(),
+  rationale: text("rationale"),
+  status: text("status").notNull().default("draft"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  deployedAt: timestamp("deployed_at"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbKnowledgeChangeSchema = createInsertSchema(kbKnowledgeChanges).omit({ id: true, createdAt: true });
+export type InsertKbKnowledgeChange = z.infer<typeof insertKbKnowledgeChangeSchema>;
+export type KbKnowledgeChange = typeof kbKnowledgeChanges.$inferSelect;
+export type LabeledOutcomeStats = typeof labeledOutcomeStats.$inferSelect;
+
+// ── Clinical Control Tower Tables ─────────────────────────────────────────────
+
+export const kbConfidenceRules = pgTable("kb_confidence_rules", {
+  id: serial("id").primaryKey(),
+  complaintId: text("complaint_id"),
+  minConfidence: real("min_confidence").notNull(),
+  action: text("action").notNull(),
+  description: text("description"),
+  priority: integer("priority").default(1).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbConfidenceRuleSchema = createInsertSchema(kbConfidenceRules).omit({ id: true, createdAt: true });
+export type KbConfidenceRule = typeof kbConfidenceRules.$inferSelect;
+
+export const kbDiagnosisRisk = pgTable("kb_diagnosis_risk", {
+  id: serial("id").primaryKey(),
+  diagnosis: text("diagnosis").notNull().unique(),
+  minDisposition: text("min_disposition").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbDiagnosisRiskSchema = createInsertSchema(kbDiagnosisRisk).omit({ id: true, createdAt: true });
+export type KbDiagnosisRisk = typeof kbDiagnosisRisk.$inferSelect;
+
+export const kbWorkupCosts = pgTable("kb_workup_costs", {
+  id: serial("id").primaryKey(),
+  testName: text("test_name").notNull().unique(),
+  cost: real("cost").notNull().default(0),
+  sensitivity: real("sensitivity"),
+  specificity: real("specificity"),
+  turnaroundMinutes: integer("turnaround_minutes"),
+  riskScore: real("risk_score").default(0),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbWorkupCostSchema = createInsertSchema(kbWorkupCosts).omit({ id: true, createdAt: true });
+export type KbWorkupCost = typeof kbWorkupCosts.$inferSelect;
+
+export const kbTestUtility = pgTable("kb_test_utility", {
+  id: serial("id").primaryKey(),
+  testName: text("test_name").notNull(),
+  diagnosis: text("diagnosis").notNull(),
+  infoGain: real("info_gain").notNull().default(0),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbTestUtilitySchema = createInsertSchema(kbTestUtility).omit({ id: true, createdAt: true });
+export type KbTestUtility = typeof kbTestUtility.$inferSelect;
+
+export const kbQuestionUtility = pgTable("kb_question_utility", {
+  id: serial("id").primaryKey(),
+  questionKey: text("question_key").notNull(),
+  diagnosis: text("diagnosis").notNull(),
+  infoGain: real("info_gain").notNull().default(0),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+export const insertKbQuestionUtilitySchema = createInsertSchema(kbQuestionUtility).omit({ id: true, createdAt: true });
+export type KbQuestionUtility = typeof kbQuestionUtility.$inferSelect;
+
+// ── Robotic Exam & Patient Stream Tables ─────────────────────────────────────
+
+export const robotDevices = pgTable("robot_devices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  deviceId: text("device_id").notNull().unique(),
+  type: text("type").notNull(),
+  status: text("status").notNull().default("offline"),
+  lastSeen: timestamp("last_seen").default(sql`CURRENT_TIMESTAMP`),
+});
+export type RobotDevice = typeof robotDevices.$inferSelect;
+
+export const robotCommands = pgTable("robot_commands", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  deviceId: text("device_id").notNull(),
+  command: text("command").notNull(),
+  payload: jsonb("payload"),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export type RobotCommand = typeof robotCommands.$inferSelect;
+
+export const robotResults = pgTable("robot_results", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  deviceId: text("device_id").notNull(),
+  resultType: text("result_type").notNull(),
+  data: jsonb("data"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export type RobotResult = typeof robotResults.$inferSelect;
+
+export const patientLiveStream = pgTable("patient_live_stream", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: text("patient_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  value: real("value").notNull(),
+  timestamp: timestamp("timestamp").default(sql`CURRENT_TIMESTAMP`),
+});
+export type PatientLiveStream = typeof patientLiveStream.$inferSelect;
+
+export const patientState = pgTable("patient_state", {
+  patientId: text("patient_id").primaryKey(),
+  currentDx: text("current_dx"),
+  currentDisposition: text("current_disposition"),
+  riskScore: real("risk_score").default(0),
+  lastUpdated: timestamp("last_updated").default(sql`CURRENT_TIMESTAMP`),
+});
+export type PatientState = typeof patientState.$inferSelect;
+
+export const patientMultimodalInputs = pgTable("patient_multimodal_inputs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: text("patient_id").notNull(),
+  type: text("type").notNull(),
+  content: text("content"),
+  processed: jsonb("processed"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export type PatientMultimodalInput = typeof patientMultimodalInputs.$inferSelect;
+
+export const kbDeteriorationRules = pgTable("kb_deterioration_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  featureKey: text("feature_key").notNull(),
+  threshold: real("threshold").notNull(),
+  trend: text("trend").notNull(),
+  action: text("action").notNull(),
+  riskWeight: real("risk_weight").notNull().default(1.0),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+export const insertKbDeteriorationRuleSchema = createInsertSchema(kbDeteriorationRules).omit({ id: true, createdAt: true });
+export type KbDeteriorationRule = typeof kbDeteriorationRules.$inferSelect;
+
+// ── Clinical Rules — Versioned KB Tier-1 Foundation ───────────────────────────
+// Each row is one immutable version of a clinical decision rule.
+// Active rule = isActive=true + no expiryDate (or expiryDate in future).
+// Superseded rules are expired (expiryDate set) but never deleted for audit trail.
+export const clinicalRules = pgTable("clinical_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ruleKey: text("rule_key").notNull(),
+  version: integer("version").notNull().default(1),
+  complaintCluster: text("complaint_cluster").notNull(),
+  ruleType: text("rule_type").notNull(),
+  snomedCode: text("snomed_code"),
+  evidenceSource: text("evidence_source"),
+  ruleBody: jsonb("rule_body").notNull(),
+  authoredBy: text("authored_by").notNull().default("system"),
+  approvedBy: text("approved_by"),
+  effectiveDate: timestamp("effective_date").notNull().default(sql`CURRENT_TIMESTAMP`),
+  expiryDate: timestamp("expiry_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  tenantId: text("tenant_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertClinicalRuleSchema = createInsertSchema(clinicalRules).omit({ id: true, createdAt: true });
+export type InsertClinicalRule = z.infer<typeof insertClinicalRuleSchema>;
+export type ClinicalRule = typeof clinicalRules.$inferSelect;
+
+// ── Meta-KB Entity Store (Production Upgrade Patch) ──────────────────────────
+// A versioned, generic entity store sitting on top of the domain-specific KB tables.
+// kbSources tracks provenance; kbEntityStore holds the current version of any KB entity;
+// kbEntityVersions provides an immutable audit trail of all changes.
+
+export const kbSources = pgTable("kb_sources", {
+  id: serial("id").primaryKey(),
+  sourceKey: text("source_key").notNull(),
+  sourceType: text("source_type").notNull(),  // "csv" | "json" | "manual" | "llm"
+  name: text("name").notNull(),
+  description: text("description"),
+  isAuthoritative: boolean("is_authoritative").notNull().default(false),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_kb_sources_key").on(t.sourceKey)]);
+
+export const insertKbSourceSchema = createInsertSchema(kbSources).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbSource = z.infer<typeof insertKbSourceSchema>;
+export type KbSource = typeof kbSources.$inferSelect;
+
+export const kbEntityStore = pgTable("kb_entity_store", {
+  id: serial("id").primaryKey(),
+  entityType: text("entity_type").notNull(),  // "complaint" | "red_flag_rule" | "workup_rule" etc.
+  entityKey: text("entity_key").notNull(),     // domain-unique key, e.g. "sore_throat"
+  title: text("title").notNull(),
+  status: text("status").notNull().default("draft"),  // "draft" | "active" | "deprecated"
+  version: integer("version").notNull().default(1),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  currentContent: jsonb("current_content").$type<Record<string, unknown>>().notNull().default({}),
+  sourceId: integer("source_id").references(() => kbSources.id),
+  createdBy: text("created_by").default("system"),
+  updatedBy: text("updated_by").default("system"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_kb_entity_type_key").on(t.entityType, t.entityKey)]);
+
+export const insertKbEntityStoreSchema = createInsertSchema(kbEntityStore).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbEntityStore = z.infer<typeof insertKbEntityStoreSchema>;
+export type KbEntityStore = typeof kbEntityStore.$inferSelect;
+
+export const kbEntityVersions = pgTable("kb_entity_versions", {
+  id: serial("id").primaryKey(),
+  entityId: integer("entity_id").notNull().references(() => kbEntityStore.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  title: text("title").notNull(),
+  content: jsonb("content").$type<Record<string, unknown>>().notNull(),
+  changeSummary: text("change_summary"),
+  changedBy: text("changed_by").default("system"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertKbEntityVersionSchema = createInsertSchema(kbEntityVersions).omit({ id: true, createdAt: true });
+export type InsertKbEntityVersion = z.infer<typeof insertKbEntityVersionSchema>;
+export type KbEntityVersion = typeof kbEntityVersions.$inferSelect;
+
+// ── Golden Case Run Persistence (Production Upgrade Patch) ────────────────────
+// Separate from kbGoldenCases (which stores the case definitions), these tables
+// record the history of every monitor run and the aggregate coverage matrix.
+
+export const goldenCaseRuns = pgTable("golden_case_runs", {
+  id: serial("id").primaryKey(),
+  goldenCaseId: integer("golden_case_id").notNull().references(() => kbGoldenCases.id, { onDelete: "cascade" }),
+  runBatch: text("run_batch").notNull(),          // ISO timestamp string identifying the batch
+  systemVersion: text("system_version").notNull().default("1.0.0"),
+  engineVersion: text("engine_version").notNull().default("1.0.0"),
+  result: jsonb("result").$type<Record<string, unknown>>().notNull().default({}),
+  score: real("score").notNull().default(0),
+  passed: boolean("passed").notNull().default(false),
+  failReason: text("fail_reason"),
+  runAt: timestamp("run_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertGoldenCaseRunSchema = createInsertSchema(goldenCaseRuns).omit({ id: true, runAt: true });
+export type InsertGoldenCaseRun = z.infer<typeof insertGoldenCaseRunSchema>;
+export type GoldenCaseRun = typeof goldenCaseRuns.$inferSelect;
+
+export const goldenCaseCoverage = pgTable("golden_case_coverage", {
+  id: serial("id").primaryKey(),
+  complaint: text("complaint").notNull(),
+  riskBand: text("risk_band").notNull(),    // "low" | "medium" | "high" | "critical"
+  ageBand: text("age_band").notNull(),      // "pediatric" | "adult" | "elderly"
+  count: integer("count").notNull().default(0),
+  targetCount: integer("target_count").notNull().default(3),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_golden_coverage").on(t.complaint, t.riskBand, t.ageBand)]);
+
+export const insertGoldenCaseCoverageSchema = createInsertSchema(goldenCaseCoverage).omit({ id: true, updatedAt: true });
+export type InsertGoldenCaseCoverage = z.infer<typeof insertGoldenCaseCoverageSchema>;
+export type GoldenCaseCoverage = typeof goldenCaseCoverage.$inferSelect;
+
+// ── BullMQ Job Tracking via Drizzle (Production Upgrade Patch) ────────────────
+// Drizzle-backed job record store; the existing raw-SQL `jobs` table via jobRepo.ts
+// remains untouched for backward compat. This table is written to by the new
+// queues/bullmq/jobTracker.ts and exposed via /api/queues routes.
+
+export const queueJobs = pgTable("queue_jobs", {
+  id: serial("id").primaryKey(),
+  queueName: text("queue_name").notNull(),
+  jobId: text("job_id").notNull(),
+  jobName: text("job_name").notNull(),
+  status: text("status").notNull().default("queued"),  // "queued" | "processing" | "completed" | "failed"
+  attemptsMade: integer("attempts_made").notNull().default(0),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  error: text("error"),
+  clinicId: text("clinic_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_queue_jobs_job_id").on(t.queueName, t.jobId)]);
+
+export const insertQueueJobSchema = createInsertSchema(queueJobs).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertQueueJob = z.infer<typeof insertQueueJobSchema>;
+export type QueueJob = typeof queueJobs.$inferSelect;
+
+// ── Safety Gate Configuration ─────────────────────────────────────────────────
+//
+// Versioned, DB-persisted safety thresholds.
+//
+// FDA 21 CFR Part 11 requires that configuration changes to safety-critical
+// thresholds be versioned, auditable, and authorized. Magic numbers in source
+// code satisfy none of those requirements — this table is the alternative.
+//
+// Rules:
+//  - Only one row may have is_active = true at any time (enforced at app level)
+//  - Thresholds must satisfy: risk_threshold < hard_stop_threshold
+//  - Every row requires approved_by and approval_note before activation
+//  - Never DELETE rows — soft-replace only (deactivate old, insert new)
+
+export const safetyConfigs = pgTable(
+  "safety_configs",
+  {
+    id:                   serial("id").primaryKey(),
+    version:              text("version").notNull().unique(),
+    isActive:             boolean("is_active").notNull().default(false),
+
+    riskThreshold:        real("risk_threshold").notNull(),
+    hardStopThreshold:    real("hard_stop_threshold").notNull(),
+    uncertaintyThreshold: real("uncertainty_threshold").notNull(),
+
+    approvedBy:           text("approved_by").notNull(),
+    approvalNote:         text("approval_note"),
+    createdAt:            timestamp("created_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    activatedAt:          timestamp("activated_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("safety_configs_active_idx").on(table.isActive),
+  ]
+);
+
+export const insertSafetyConfigSchema = createInsertSchema(safetyConfigs).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSafetyConfig = z.infer<typeof insertSafetyConfigSchema>;
+export type SafetyConfig = typeof safetyConfigs.$inferSelect;
+
+// ── Self-Improvement Governance ──────────────────────────────────────────────
+
+export const ACTION_STATUSES = ["proposed", "pending_review", "approved", "applied", "rejected", "failed"] as const;
+export type ActionStatus = typeof ACTION_STATUSES[number];
+
+export const agentThresholdRecords = pgTable(
+  "agent_threshold_records",
+  {
+    id:           serial("id").primaryKey(),
+    agent:        text("agent").notNull(),
+    parameter:    text("parameter").notNull(),
+    currentValue: doublePrecision("current_value").notNull(),
+    updatedAt:    timestamp("updated_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedBy:    text("updated_by").notNull().default("system"),
+  },
+  (t) => [
+    uniqueIndex("agent_threshold_records_agent_param_uidx").on(t.agent, t.parameter),
+    index("agent_threshold_records_agent_idx").on(t.agent),
+  ]
+);
+export const insertAgentThresholdSchema = createInsertSchema(agentThresholdRecords).omit({ id: true, updatedAt: true });
+export type InsertAgentThreshold = z.infer<typeof insertAgentThresholdSchema>;
+export type AgentThresholdRecord = typeof agentThresholdRecords.$inferSelect;
+
+export const improvementActions = pgTable(
+  "improvement_actions",
+  {
+    id:            serial("id").primaryKey(),
+    agent:         text("agent").notNull(),
+    action:        text("action").notNull(),
+    parameter:     text("parameter").notNull(),
+    fromValue:     doublePrecision("from_value"),
+    toValue:       doublePrecision("to_value"),
+    reason:        text("reason").notNull(),
+    status:        text("status").notNull().default("proposed"),
+    proposedAt:    timestamp("proposed_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    decidedAt:     timestamp("decided_at", { withTimezone: true }),
+    decidedBy:     text("decided_by"),
+    metric:        jsonb("metric"),
+    errorMessage:  text("error_message"),
+  },
+  (t) => [
+    index("improvement_actions_status_idx").on(t.status),
+    index("improvement_actions_agent_idx").on(t.agent),
+    index("improvement_actions_proposed_at_idx").on(t.proposedAt),
+  ]
+);
+export const insertImprovementActionSchema = createInsertSchema(improvementActions).omit({ id: true, proposedAt: true });
+export type InsertImprovementAction = z.infer<typeof insertImprovementActionSchema>;
+export type ImprovementAction = typeof improvementActions.$inferSelect;
+
+export const improvementReviews = pgTable(
+  "improvement_reviews",
+  {
+    id:         serial("id").primaryKey(),
+    actionId:   integer("action_id").notNull().references(() => improvementActions.id),
+    reviewerId: text("reviewer_id").notNull(),
+    decision:   text("decision").notNull(),
+    note:       text("note"),
+    decidedAt:  timestamp("decided_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [
+    index("improvement_reviews_action_idx").on(t.actionId),
+    index("improvement_reviews_reviewer_idx").on(t.reviewerId),
+  ]
+);
+export const insertImprovementReviewSchema = createInsertSchema(improvementReviews).omit({ id: true, decidedAt: true });
+export type InsertImprovementReview = z.infer<typeof insertImprovementReviewSchema>;
+export type ImprovementReview = typeof improvementReviews.$inferSelect;
+
+export const improvementCycleLog = pgTable(
+  "improvement_cycle_log",
+  {
+    id:               serial("id").primaryKey(),
+    ranAt:            timestamp("ran_at", { withTimezone: true }).notNull().default(sql`CURRENT_TIMESTAMP`),
+    actionsProposed:  integer("actions_proposed").notNull().default(0),
+    actionsApplied:   integer("actions_applied").notNull().default(0),
+    actionsRejected:  integer("actions_rejected").notNull().default(0),
+    durationMs:       integer("duration_ms").notNull().default(0),
+    error:            text("error"),
+  },
+  (t) => [
+    index("improvement_cycle_log_ran_at_idx").on(t.ranAt),
+  ]
+);
+export const insertImprovementCycleLogSchema = createInsertSchema(improvementCycleLog).omit({ id: true, ranAt: true });
+export type InsertImprovementCycleLog = z.infer<typeof insertImprovementCycleLogSchema>;
+export type ImprovementCycleLog = typeof improvementCycleLog.$inferSelect;
+
+// ─── Canonical Pathways (KB admin — batch 26/27) ──────────────────────────────
+export const canonicalPathways = pgTable("canonical_pathways", {
+  pathwayId:            text("pathway_id").primaryKey(),
+  sourceType:           text("source_type").notNull(),
+  complaintId:          text("complaint_id").notNull(),
+  syndromeId:           text("syndrome_id").notNull(),
+  label:                text("label").notNull(),
+  requiredFeatures:     jsonb("required_features").$type<string[]>().notNull().default([]),
+  positiveWeights:      jsonb("positive_weights").$type<Record<string, number>>().notNull().default({}),
+  negativeWeights:      jsonb("negative_weights").$type<Record<string, number>>().notNull().default({}),
+  exclusions:           jsonb("exclusions").$type<string[]>().notNull().default([]),
+  treatmentClass:       text("treatment_class").notNull(),
+  medicationKey:        text("medication_key"),
+  canonicalDisposition: text("canonical_disposition").notNull(),
+  rationale:            jsonb("rationale").$type<string[]>().notNull().default([]),
+  active:               boolean("active").notNull().default(true),
+  createdBy:            text("created_by").notNull(),
+  updatedBy:            text("updated_by").notNull(),
+  retiredBy:            text("retired_by"),
+  retirementReason:     text("retirement_reason"),
+  retiredAt:            timestamp("retired_at"),
+  createdAt:            timestamp("created_at").defaultNow().notNull(),
+  updatedAt:            timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCanonicalPathwaySchema = createInsertSchema(canonicalPathways).omit({ createdAt: true, updatedAt: true });
+export type InsertCanonicalPathway = z.infer<typeof insertCanonicalPathwaySchema>;
+export type CanonicalPathway = typeof canonicalPathways.$inferSelect;
+
+// ─── Phenotype Registry (batch 27) ───────────────────────────────────────────
+export const phenotypeRegistry = pgTable("phenotype_registry", {
+  phenotypeHash:           text("phenotype_hash").primaryKey(),
+  complaintId:             text("complaint_id").notNull(),
+  canonicalSyndromeId:     text("canonical_syndrome_id"),
+  canonicalMedicationKey:  text("canonical_medication_key"),
+  canonicalDisposition:    text("canonical_disposition").notNull(),
+  confidence:              text("confidence").notNull(),
+  seenCount:               integer("seen_count").notNull().default(1),
+  firstSeenAt:             timestamp("first_seen_at").defaultNow().notNull(),
+  lastSeenAt:              timestamp("last_seen_at").defaultNow().notNull(),
+});
+export const insertPhenotypeRegistrySchema = createInsertSchema(phenotypeRegistry).omit({ firstSeenAt: true, lastSeenAt: true });
+export type InsertPhenotypeRegistry = z.infer<typeof insertPhenotypeRegistrySchema>;
+export type PhenotypeRegistryEntry = typeof phenotypeRegistry.$inferSelect;
+
+// ─── KB Physician Overrides (batch 26 — kb_physician_overrides) ──────────────
+export const kbPhysicianOverrides = pgTable("kb_physician_overrides", {
+  id:                serial("id").primaryKey(),
+  overrideId:        text("override_id").notNull().unique(),
+  patientId:         text("patient_id").notNull(),
+  complaint:         text("complaint").notNull(),
+  systemDecision:    text("system_decision").notNull(),
+  physicianDecision: text("physician_decision").notNull(),
+  reason:            text("reason").notNull(),
+  discrepancy:       boolean("discrepancy").notNull().default(false),
+  actorId:           text("actor_id").notNull(),
+  traceId:           text("trace_id").notNull(),
+  createdAt:         timestamp("created_at").defaultNow(),
+});
+export const insertKbPhysicianOverrideSchema = createInsertSchema(kbPhysicianOverrides).omit({ id: true, createdAt: true });
+export type InsertKbPhysicianOverride = z.infer<typeof insertKbPhysicianOverrideSchema>;
+export type KbPhysicianOverride = typeof kbPhysicianOverrides.$inferSelect;
+
+// ─── Guideline Documents — existing table (matches DB: id serial, source text, etc.) ──
+export const guidelineDocuments = pgTable("guideline_documents", {
+  id:        serial("id").primaryKey(),
+  source:    text("source").notNull().default("manual"),
+  title:     text("title"),
+  content:   text("content").notNull(),
+  parsed:    jsonb("parsed"),
+  status:    text("status").notNull().default("processed"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export type GuidelineDocument = typeof guidelineDocuments.$inferSelect;
+
+// ─── Batch 57 — PageIndex Clinical Reasoning (Article 30) ────────────────────
+
+// clinical_doc_nodes — hierarchical tree nodes from PageIndexBuilder
+export const clinicalDocNodes = pgTable("clinical_doc_nodes", {
+  id:           serial("id").primaryKey(),
+  documentId:   integer("document_id").notNull(),
+  nodeId:       text("node_id").notNull(),
+  title:        text("title").notNull(),
+  startPage:    integer("start_page").notNull().default(0),
+  endPage:      integer("end_page").notNull().default(0),
+  summary:      text("summary").default(""),
+  content:      text("content").default(""),
+  parentNodeId: text("parent_node_id"),
+  depth:        integer("depth").notNull().default(0),
+  createdAt:    timestamp("created_at").defaultNow(),
+});
+export const insertClinicalDocNodeSchema = createInsertSchema(clinicalDocNodes).omit({ id: true, createdAt: true });
+export type InsertClinicalDocNode = z.infer<typeof insertClinicalDocNodeSchema>;
+export type ClinicalDocNode = typeof clinicalDocNodes.$inferSelect;
+
+// clinical_reasoning_queries — query log with node selection and answer
+export const clinicalReasoningQueries = pgTable("clinical_reasoning_queries", {
+  id:            serial("id").primaryKey(),
+  documentId:    integer("document_id").notNull(),
+  question:      text("question").notNull(),
+  selectedNode:  text("selected_node"),
+  answer:        text("answer"),
+  confidence:    real("confidence"),
+  retrievalMode: text("retrieval_mode").notNull().default("keyword"),
+  createdAt:     timestamp("created_at").defaultNow(),
+});
+export const insertClinicalReasoningQuerySchema = createInsertSchema(clinicalReasoningQueries).omit({ id: true, createdAt: true });
+export type InsertClinicalReasoningQuery = z.infer<typeof insertClinicalReasoningQuerySchema>;
+export type ClinicalReasoningQuery = typeof clinicalReasoningQueries.$inferSelect;
+
+// clinical_cross_ref_logs — cross-reference resolution audit trail
+export const clinicalCrossRefLogs = pgTable("clinical_cross_ref_logs", {
+  id:           serial("id").primaryKey(),
+  queryId:      integer("query_id").notNull(),
+  reference:    text("reference").notNull(),
+  resolvedNode: text("resolved_node"),
+  resolved:     boolean("resolved").notNull().default(false),
+  createdAt:    timestamp("created_at").defaultNow(),
+});
+export const insertClinicalCrossRefLogSchema = createInsertSchema(clinicalCrossRefLogs).omit({ id: true, createdAt: true });
+export type InsertClinicalCrossRefLog = z.infer<typeof insertClinicalCrossRefLogSchema>;
+export type ClinicalCrossRefLog = typeof clinicalCrossRefLogs.$inferSelect;
+
+// knowledge_documents — hybrid retrieval knowledge store (BM25 + vector + RRF)
+export const knowledgeDocuments = pgTable("knowledge_documents", {
+  id:        serial("id").primaryKey(),
+  docId:     text("doc_id").notNull().unique(),
+  title:     text("title"),
+  content:   text("content").notNull(),
+  embedding: real("embedding").array(),
+  source:    text("source").notNull().default("manual"),
+  metadata:  jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertKnowledgeDocumentSchema = createInsertSchema(knowledgeDocuments).omit({ id: true, createdAt: true });
+export type InsertKnowledgeDocument = z.infer<typeof insertKnowledgeDocumentSchema>;
+export type KnowledgeDocument = typeof knowledgeDocuments.$inferSelect;
+
+// rag_evaluations — RAGAS-style evaluation results for CI regression tracking
+export const ragEvaluations = pgTable("rag_evaluations", {
+  id:               serial("id").primaryKey(),
+  question:         text("question").notNull(),
+  answer:           text("answer").notNull(),
+  faithfulness:     real("faithfulness"),
+  answerRelevancy:  real("answer_relevancy"),
+  contextPrecision: real("context_precision"),
+  overallScore:     real("overall_score"),
+  pass:             boolean("pass").notNull().default(false),
+  groundTruth:      text("ground_truth"),
+  retrievalCount:   integer("retrieval_count").notNull().default(0),
+  cacheHit:         boolean("cache_hit").notNull().default(false),
+  createdAt:        timestamp("created_at").defaultNow(),
+});
+export const insertRagEvaluationSchema = createInsertSchema(ragEvaluations).omit({ id: true, createdAt: true });
+export type InsertRagEvaluation = z.infer<typeof insertRagEvaluationSchema>;
+export type RagEvaluation = typeof ragEvaluations.$inferSelect;
+
+// agent_artifacts — typed structured outputs from agent fleet / best-of-N (Batch 59)
+export const agentArtifacts = pgTable("agent_artifacts", {
+  id:        text("id").primaryKey(),            // UUID string (set by app)
+  type:      text("type").notNull(),             // fleet_result | best_of_n_result | ...
+  content:   text("content").notNull(),          // JSON-serialized artifact
+  agentId:   text("agent_id").notNull(),
+  patientId: text("patient_id"),
+  metadata:  jsonb("metadata"),
+  status:    text("status").notNull().default("pending_review"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertAgentArtifactSchema = createInsertSchema(agentArtifacts).omit({ createdAt: true });
+export type InsertAgentArtifact = z.infer<typeof insertAgentArtifactSchema>;
+export type AgentArtifact = typeof agentArtifacts.$inferSelect;
+
+// agent_memory_log — persistent agent memory across runs (Batch 59)
+export const agentMemoryLog = pgTable("agent_memory_log", {
+  id:         serial("id").primaryKey(),
+  agentId:    text("agent_id").notNull(),
+  memoryType: text("memory_type").notNull(),     // clinical_decision | outcome | physician_override | ...
+  content:    text("content").notNull(),
+  importance: real("importance").notNull().default(0.5),
+  context:    jsonb("context"),
+  createdAt:  timestamp("created_at").defaultNow(),
+});
+export const insertAgentMemorySchema = createInsertSchema(agentMemoryLog).omit({ id: true, createdAt: true });
+export type InsertAgentMemory = z.infer<typeof insertAgentMemorySchema>;
+export type AgentMemory = typeof agentMemoryLog.$inferSelect;
+
+
+=================================================================================
+FILE: server/kb/kbTypes.ts
+=================================================================================
+export type KbEntityType =
+  | "complaint"
+  | "question"
+  | "modifier"
+  | "red_flag_rule"
+  | "workup_rule"
+  | "diagnosis_rule"
+  | "treatment_rule"
+  | "disposition_rule"
+  | "plan_template"
+  | "feature_model"
+  | "engine_routing"
+  | "clinical_rule";
+
+export type KbEntityStatus = "draft" | "active" | "deprecated";
+export type KbSourceType = "csv" | "json" | "manual" | "llm" | "system";
+
+export interface KbEntityInput {
+  entityType: KbEntityType;
+  entityKey: string;
+  title: string;
+  content: Record<string, unknown>;
+  tags?: string[];
+  sourceKey?: string;
+  changedBy?: string;
+  changeSummary?: string;
+}
+
+export interface KbResolvedEntity {
+  id: number;
+  entityType: KbEntityType;
+  entityKey: string;
+  title: string;
+  status: KbEntityStatus;
+  version: number;
+  content: Record<string, unknown>;
+  tags: string[];
+  sourceKey?: string;
+}
+
+
+=================================================================================
+FILE: server/kb/kbResolver.ts
+=================================================================================
+/**
+ * server/kb/kbResolver.ts — KB complaint pack resolution
+ *
+ * FIX (Code Review Issue #18):
+ *   All rule table queries were missing active/status filters. Inactive, draft, and
+ *   deprecated rules were included in every resolution result, meaning deprecated
+ *   clinical logic could affect live patient care. Fixed: every rule table query
+ *   now includes `WHERE active = true` (or equivalent status filter where the
+ *   column is named differently). resolveEntityPackByType already filtered by
+ *   status: "active" — that path was correct and is preserved.
+ */
+
+import { db } from "../db";
+import {
+  kbComplaints,
+  kbRedFlagRules,
+  kbWorkupRules,
+  kbDiagnosisRules,
+  kbTreatmentRules,
+  kbDispositionRules,
+} from "@shared/schema";
+import { and, eq } from "drizzle-orm";
+import { getKbEntity, listKbEntities } from "./kbRepository";
+import { logger } from "../utils/logger";
+
+export interface ResolvedComplaintPack {
+  complaint:           string;
+  complaintRow?:       Record<string, unknown>;
+  entityStoreVersion?: Record<string, unknown>;
+  redFlags:            unknown[];
+  workups:             unknown[];
+  diagnoses:           unknown[];
+  treatments:          unknown[];
+  dispositions:        unknown[];
+  resolvedFromDb:      boolean;
+}
+
+export async function resolveComplaintPack(complaint: string): Promise<ResolvedComplaintPack> {
+  const normalizedComplaint = complaint.trim().toLowerCase().replace(/\s+/g, "_");
+
+  const entityStoreRow = await getKbEntity("complaint", normalizedComplaint);
+
+  const complaintRows = await db
+    .select()
+    .from(kbComplaints)
+    .where(eq(kbComplaints.complaintId, normalizedComplaint))
+    .limit(1);
+
+  // Issue #18 FIX: all rule queries now include active = true filter.
+  // Previously none of these had an active filter — inactive/draft rows were included.
+  const [redFlags, workups, diagnoses, treatments, dispositions] = await Promise.all([
+    db.select().from(kbRedFlagRules)
+      .where(
+        and(
+          eq(kbRedFlagRules.complaintId, normalizedComplaint),
+          eq(kbRedFlagRules.active, true),
+        )
+      ),
+
+    db.select().from(kbWorkupRules)
+      .where(
+        and(
+          eq(kbWorkupRules.complaintId, normalizedComplaint),
+          eq(kbWorkupRules.active, true),
+        )
+      ),
+
+    db.select().from(kbDiagnosisRules)
+      .where(
+        and(
+          eq(kbDiagnosisRules.complaintId, normalizedComplaint),
+          eq(kbDiagnosisRules.active, true),
+        )
+      ),
+
+    db.select().from(kbTreatmentRules)
+      .where(
+        and(
+          eq(kbTreatmentRules.complaintId, normalizedComplaint),
+          eq(kbTreatmentRules.active, true),
+        )
+      ),
+
+    db.select().from(kbDispositionRules)
+      .where(
+        and(
+          eq(kbDispositionRules.complaintId, normalizedComplaint),
+          eq(kbDispositionRules.active, true),
+        )
+      ),
+  ]);
+
+  return {
+    complaint,
+    complaintRow:       complaintRows[0] as unknown as Record<string, unknown> | undefined,
+    entityStoreVersion: entityStoreRow?.currentContent as Record<string, unknown> | undefined,
+    redFlags,
+    workups,
+    diagnoses,
+    treatments,
+    dispositions,
+    resolvedFromDb: Boolean(complaintRows[0]),
+  };
+}
+
+export async function resolveEntityPackByType(entityType: string): Promise<Record<string, unknown>[]> {
+  // Already filtered by status: "active" — preserved as-is
+  const entities = await listKbEntities({ entityType: entityType as any, status: "active" });
+  return entities.map((e) => ({
+    id:      e.id,
+    key:     e.entityKey,
+    title:   e.title,
+    version: e.version,
+    content: e.currentContent,
+    tags:    e.tags,
+  }));
+}
+
+
+=================================================================================
+FILE: server/kb/specEngine.ts
+=================================================================================
+/**
+ * server/kb/specEngine.ts — Spec-driven KB rule engine
+ *
+ * FIXES (Code Review Issues #5, #17, #20):
+ *
+ *   Issue #5  — `new Function` code injection:
+ *     The original evalCondition() used `new Function("input", ...)` to execute
+ *     whenExpr strings from the database. A compromised KB write path = arbitrary
+ *     code execution with full server privileges. Fixed: vm.runInNewContext() with
+ *     an Object.create(null) sandbox that exposes ONLY the `input` object.
+ *     No access to process, require, global, Buffer, fetch, or any Node.js built-in.
+ *     Expression execution budget enforced via script compilation + timeout.
+ *
+ *   Issue #17 — complaintId filter ignored in loadDispositionRules():
+ *     The original code created two parallel query objects but the complaintId branch
+ *     was missing `eq(kbDispositionRules.complaintId, complaintId)` — all rules were
+ *     returned regardless of complaint. Fixed: single query builder that conditionally
+ *     chains .where(eq(... complaintId ...)) when a complaintId is provided.
+ *
+ *   Issue #20 — silent DB failure returns [] causing uncertain disposition:
+ *     The original catch silently returned [], making triage fall back to "uncertain"
+ *     with no escalation. DB outages were invisible to operators. Fixed: re-throw a
+ *     typed KBLoadError that callers catch and surface as an escalation trigger, not
+ *     as a silent uncertain disposition. loadDispositionRules now returns a discriminated
+ *     union so callers know whether an empty result means "no rules" vs "DB error".
+ */
+
+import vm                         from "vm";
+import { db }                     from "../db";
+import { kbDispositionRules }     from "@shared/schema";
+import { eq, and, asc }           from "drizzle-orm";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface SpecRule {
+  ruleId:           string;
+  complaintId:      string;
+  priority:         number;
+  whenExpr:         string;
+  dispositionLevel: string;
+  confidenceHint:   string;
+}
+
+export interface RuleMatch {
+  ruleId:           string;
+  dispositionLevel: string;
+  confidenceHint:   string;
+  priority:         number;
+}
+
+export interface ApplyRulesResult {
+  disposition:    string;
+  confidence:     string;
+  matchedRule:    RuleMatch | null;
+  rulesEvaluated: number;
+  fallback:       boolean;
+  dbError?:       boolean;   // true when rules couldn't load due to DB failure
+}
+
+// ── Typed error for DB load failures ─────────────────────────────────────────
+
+export class KBLoadError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "KBLoadError";
+  }
+}
+
+export type LoadRulesOutcome =
+  | { ok: true;  rules: SpecRule[] }
+  | { ok: false; error: KBLoadError };
+
+// ── Rule loading (Issue #17 + #20) ───────────────────────────────────────────
+//
+// Returns a discriminated union so callers can distinguish "no rules found"
+// from "DB error". Never silently swallows failures.
+
+export async function loadDispositionRules(complaintId?: string): Promise<LoadRulesOutcome> {
+  try {
+    // Build conditions — active=true is always required
+    const conditions = [eq(kbDispositionRules.active, true)];
+
+    // Issue #17 FIX: only add complaint filter when complaintId is actually provided
+    if (complaintId) {
+      conditions.push(eq(kbDispositionRules.complaintId, complaintId));
+    }
+
+    const rows = await db
+      .select()
+      .from(kbDispositionRules)
+      .where(and(...conditions))           // single query — no duplicate branch bug
+      .orderBy(asc(kbDispositionRules.priority));
+
+    return {
+      ok: true,
+      rules: rows.map((r) => ({
+        ruleId:           r.ruleId,
+        complaintId:      r.complaintId,
+        priority:         r.priority,
+        whenExpr:         r.whenExpr,
+        dispositionLevel: r.dispositionLevel,
+        confidenceHint:   r.confidenceHint ?? "MODERATE",
+      })),
+    };
+  } catch (err) {
+    // Issue #20 FIX: re-throw typed error — do NOT return [] silently
+    return {
+      ok:    false,
+      error: new KBLoadError("KB disposition rules unavailable — DB error", err),
+    };
+  }
+}
+
+// ── Sandboxed expression evaluation (Issue #5) ───────────────────────────────
+//
+// Uses vm.runInNewContext() with an Object.create(null) context.
+// The sandbox exposes ONLY the `input` object — no Node.js globals,
+// no require, no process, no Buffer, no fetch, nothing.
+//
+// Script is compiled once and executed with a 50ms CPU timeout to prevent
+// infinite loops in malformed expressions.
+
+const EXPR_TIMEOUT_MS = 50;
+
+function evalCondition(whenExpr: string, input: Record<string, any>): boolean {
+  try {
+    // Build a null-prototype sandbox — prevents prototype chain escapes
+    const sandbox = Object.create(null) as Record<string, unknown>;
+    sandbox["input"] = input;
+
+    // vm.Script compiles once; runInNewContext executes in the sealed context
+    const script = new vm.Script(`!!(${whenExpr})`, { filename: "kb-rule" });
+    const result = script.runInNewContext(sandbox, { timeout: EXPR_TIMEOUT_MS });
+
+    return Boolean(result);
+  } catch {
+    // Malformed expression or timeout — skip the rule (do not crash the pipeline)
+    return false;
+  }
+}
+
+// ── Rule application ──────────────────────────────────────────────────────────
+
+export function applyRules(
+  input:    Record<string, any>,
+  rules:    SpecRule[],
+  fallback= "uncertain",
+): ApplyRulesResult {
+  let matchedRule: RuleMatch | null = null;
+
+  for (const rule of rules) {
+    if (evalCondition(rule.whenExpr, input)) {
+      matchedRule = {
+        ruleId:           rule.ruleId,
+        dispositionLevel: rule.dispositionLevel,
+        confidenceHint:   rule.confidenceHint,
+        priority:         rule.priority,
+      };
+      break;   // first match wins — rules ordered by priority ascending
+    }
+  }
+
+  return {
+    disposition:    matchedRule?.dispositionLevel ?? fallback,
+    confidence:     matchedRule?.confidenceHint   ?? "LOW",
+    matchedRule,
+    rulesEvaluated: rules.length,
+    fallback:       matchedRule === null,
+  };
+}
+
+/**
+ * applyRulesWithLoad — convenience wrapper that loads + applies rules.
+ * Returns dbError: true and escalation disposition when the DB is unavailable.
+ * Callers should treat dbError: true as a trigger for escalation, NOT as
+ * a benign "uncertain" result.
+ */
+export async function applyRulesWithLoad(
+  input:       Record<string, any>,
+  complaintId?: string,
+  fallback  =  "uncertain",
+): Promise<ApplyRulesResult> {
+  const outcome = await loadDispositionRules(complaintId);
+
+  if (!outcome.ok) {
+    // Issue #20 FIX: DB failure → explicit escalation disposition, not silent uncertain
+    console.error("[SpecEngine] KB load error — escalating to physician review:", outcome.error.message);
+    return {
+      disposition:    "ESCALATE_PHYSICIAN",   // not "uncertain" — forces escalation path
+      confidence:     "UNAVAILABLE",
+      matchedRule:    null,
+      rulesEvaluated: 0,
+      fallback:       true,
+      dbError:        true,
+    };
+  }
+
+  const rules = outcome.rules.length > 0 ? outcome.rules : SEED_RULES;
+  return applyRules(input, rules, fallback);
+}
+
+// ── Inline seed rules (fallback when DB is empty, not when DB is unavailable) ─
+
+export const SEED_RULES: SpecRule[] = [
+  {
+    ruleId:           "R001",
+    complaintId:      "*",
+    priority:         10,
+    whenExpr:         "input.scores && input.scores.NEWS2 >= 7 || input.icuProb > 0.80",
+    dispositionLevel: "ICU",
+    confidenceHint:   "HIGH",
+  },
+  {
+    ruleId:           "R002",
+    complaintId:      "*",
+    priority:         20,
+    whenExpr:         "input.scores && input.scores.NEWS2 >= 5 || (input.sepsisRisk && input.sepsisRisk.highRisk === true)",
+    dispositionLevel: "ED",
+    confidenceHint:   "HIGH",
+  },
+  {
+    ruleId:           "R003",
+    complaintId:      "*",
+    priority:         30,
+    whenExpr:         "input.scores && input.scores.NEWS2 >= 3 || (input.vitals && input.vitals.systolicBP < 100)",
+    dispositionLevel: "URGENT_CARE",
+    confidenceHint:   "MODERATE",
+  },
+  {
+    ruleId:           "R004",
+    complaintId:      "*",
+    priority:         90,
+    whenExpr:         "input.scores && input.scores.NEWS2 < 3",
+    dispositionLevel: "HOME",
+    confidenceHint:   "MODERATE",
+  },
+];
+
+
+=================================================================================
+FILE: server/kb/kbRepository.ts
+=================================================================================
+/**
+ * server/kb/kbRepository.ts — KB entity persistence layer
+ *
+ * FIX (Code Review Issue #19):
+ *   upsertKbEntity previously performed two sequential DB statements on the
+ *   update path: db.insert(kbEntityVersions) then db.update(kbEntityStore).
+ *   If the insert succeeded but the update failed (or vice versa due to a
+ *   connection drop, transaction abort, or application crash), the version
+ *   chain was left permanently corrupted — a version row existed without a
+ *   corresponding current_content update, or the store was updated without
+ *   a version snapshot being written.
+ *
+ *   Fixed: both operations on the update path are wrapped in a db.transaction().
+ *   Either both succeed and are committed, or both are rolled back — no partial
+ *   state is possible. The insert path also wraps both operations for consistency.
+ */
+
+import { eq, and, desc } from "drizzle-orm";
+import { db } from "../db";
+import {
+  kbSources, kbEntityStore, kbEntityVersions,
+  type KbSource, type KbEntityStore, type KbEntityVersion,
+  type InsertKbSource, type InsertKbEntityStore, type InsertKbEntityVersion,
+} from "@shared/schema";
+import { type KbEntityInput, type KbEntityType, type KbEntityStatus } from "./kbTypes";
+import { logger } from "../utils/logger";
+
+// ── Sources ───────────────────────────────────────────────────────────────────
+
+export async function upsertKbSource(input: {
+  sourceKey:       string;
+  sourceType:      string;
+  name:            string;
+  description?:    string;
+  isAuthoritative?: boolean;
+  metadata?:       Record<string, unknown>;
+}): Promise<KbSource> {
+  const existing = await db
+    .select()
+    .from(kbSources)
+    .where(eq(kbSources.sourceKey, input.sourceKey))
+    .limit(1);
+
+  if (existing[0]) {
+    const [updated] = await db
+      .update(kbSources)
+      .set({ ...input, updatedAt: new Date() })
+      .where(eq(kbSources.sourceKey, input.sourceKey))
+      .returning();
+    return updated;
+  }
+
+  const [inserted] = await db
+    .insert(kbSources)
+    .values({
+      sourceKey:       input.sourceKey,
+      sourceType:      input.sourceType,
+      name:            input.name,
+      description:     input.description ?? null,
+      isAuthoritative: input.isAuthoritative ?? false,
+      metadata:        input.metadata ?? {},
+    } satisfies InsertKbSource)
+    .returning();
+  return inserted;
+}
+
+export async function getSourceByKey(sourceKey: string): Promise<KbSource | undefined> {
+  const rows = await db
+    .select()
+    .from(kbSources)
+    .where(eq(kbSources.sourceKey, sourceKey))
+    .limit(1);
+  return rows[0];
+}
+
+// ── Entity Store ──────────────────────────────────────────────────────────────
+
+export async function upsertKbEntity(input: KbEntityInput): Promise<KbEntityStore> {
+  let sourceId: number | undefined;
+  if (input.sourceKey) {
+    const src = await getSourceByKey(input.sourceKey);
+    if (src) sourceId = src.id;
+  }
+
+  const existing = await db
+    .select()
+    .from(kbEntityStore)
+    .where(
+      and(
+        eq(kbEntityStore.entityType, input.entityType),
+        eq(kbEntityStore.entityKey, input.entityKey)
+      )
+    )
+    .limit(1);
+
+  if (existing[0]) {
+    // ── UPDATE PATH: wrapped in transaction (Issue #19 FIX) ─────────────────
+    // Version insert and store update must both succeed or both roll back.
+    // A crash between the two statements previously left the version chain
+    // in a permanently corrupted state.
+    const updated = await db.transaction(async (tx) => {
+      const next = existing[0].version + 1;
+
+      await tx.insert(kbEntityVersions).values({
+        entityId:      existing[0].id,
+        version:       next,
+        title:         input.title,
+        content:       input.content,
+        changeSummary: input.changeSummary,
+        changedBy:     input.changedBy ?? "system",
+      } satisfies InsertKbEntityVersion);
+
+      const [updated] = await tx
+        .update(kbEntityStore)
+        .set({
+          title:          input.title,
+          currentContent: input.content,
+          tags:           input.tags ?? existing[0].tags,
+          version:        next,
+          sourceId:       sourceId ?? existing[0].sourceId,
+          updatedBy:      input.changedBy ?? "system",
+          updatedAt:      new Date(),
+        })
+        .where(eq(kbEntityStore.id, existing[0].id))
+        .returning();
+
+      return updated;
+    });
+
+    return updated;
+  }
+
+  // ── INSERT PATH: wrapped in transaction (Issue #19 FIX) ───────────────────
+  // Store insert and initial version insert must both succeed atomically.
+  const inserted = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(kbEntityStore)
+      .values({
+        entityType:     input.entityType,
+        entityKey:      input.entityKey,
+        title:          input.title,
+        status:         "active",
+        version:        1,
+        tags:           input.tags ?? [],
+        currentContent: input.content,
+        sourceId:       sourceId ?? null,
+        createdBy:      input.changedBy ?? "system",
+        updatedBy:      input.changedBy ?? "system",
+      } satisfies InsertKbEntityStore)
+      .returning();
+
+    await tx.insert(kbEntityVersions).values({
+      entityId:      inserted.id,
+      version:       1,
+      title:         input.title,
+      content:       input.content,
+      changeSummary: input.changeSummary ?? "Initial version",
+      changedBy:     input.changedBy ?? "system",
+    } satisfies InsertKbEntityVersion);
+
+    return inserted;
+  });
+
+  return inserted;
+}
+
+export async function getKbEntity(
+  entityType: KbEntityType,
+  entityKey: string
+): Promise<KbEntityStore | undefined> {
+  const rows = await db
+    .select()
+    .from(kbEntityStore)
+    .where(
+      and(
+        eq(kbEntityStore.entityType, entityType),
+        eq(kbEntityStore.entityKey, entityKey)
+      )
+    )
+    .limit(1);
+  return rows[0];
+}
+
+export async function listKbEntities(opts: {
+  entityType?: KbEntityType;
+  status?:     KbEntityStatus;
+  limit?:      number;
+  offset?:     number;
+}): Promise<KbEntityStore[]> {
+  let q = db.select().from(kbEntityStore);
+  const filters = [];
+  if (opts.entityType) filters.push(eq(kbEntityStore.entityType, opts.entityType));
+  if (opts.status)     filters.push(eq(kbEntityStore.status, opts.status));
+  if (filters.length) {
+    const [first, ...rest] = filters;
+    q = q.where(rest.length ? and(first, ...rest) : first) as any;
+  }
+  return await (q as any)
+    .orderBy(desc(kbEntityStore.updatedAt))
+    .limit(opts.limit ?? 100)
+    .offset(opts.offset ?? 0);
+}
+
+export async function setKbEntityStatus(
+  id: number,
+  status: KbEntityStatus
+): Promise<void> {
+  await db
+    .update(kbEntityStore)
+    .set({ status, updatedAt: new Date() })
+    .where(eq(kbEntityStore.id, id));
+}
+
+export async function getEntityVersionHistory(entityId: number): Promise<KbEntityVersion[]> {
+  return db
+    .select()
+    .from(kbEntityVersions)
+    .where(eq(kbEntityVersions.entityId, entityId))
+    .orderBy(desc(kbEntityVersions.version));
+}
+
+export async function countKbEntities(entityType?: KbEntityType): Promise<number> {
+  const rows = await db
+    .select()
+    .from(kbEntityStore)
+    .where(entityType ? eq(kbEntityStore.entityType, entityType) : undefined);
+  return rows.length;
+}
+
+
+=================================================================================
+FILE: server/kb/kbRuntime.ts
+=================================================================================
+/**
+ * KB Runtime Cache
+ *
+ * Loads clinical knowledge from the Postgres KB tables at startup
+ * and caches it in memory with a configurable TTL. All pipeline
+ * entry-points (Bayesian engine, red-flag evaluator, treatment
+ * plan generator) read from this cache — not from hardcoded TS.
+ *
+ * The cache is automatically invalidated by KB write routes so
+ * any UI edit takes effect on the next triage request.
+ */
+
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+import type { DiagnosisPrior } from "../clinical/bayesianEngine";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface KbRedFlagRule {
+  ruleId: string;
+  complaintId: string;
+  label: string;
+  triggerExpr: string;    // evaluated by ruleParser or simple question-id check
+  severity: "HARD" | "SOFT";
+  action: string;         // ER_SEND | ESCALATE | URGENT | CALL_911
+  immediateActions?: string | null;
+  active: boolean;
+}
+
+export interface KbTreatmentRule {
+  ruleId: string;
+  medicationName: string;
+  medicationGroup?: string | null;
+  complaintId?: string | null;
+  diagnosisId?: string | null;
+  isFirstLine: boolean;
+  adultDose?: string | null;
+  adultMaxDose?: string | null;
+  pediatricDose?: string | null;
+  route?: string | null;
+  renalAdjust?: string | null;
+  hepaticAdjust?: string | null;
+  pregnancyCategory?: string | null;
+  contraindications?: string | null;
+  keyInteractions?: string | null;
+  commonSideEffects?: string | null;
+  notes?: string | null;
+  active: boolean;
+}
+
+// ── In-memory cache store ─────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface CacheEntry<T> {
+  data: T;
+  loadedAt: number;
+  count: number;
+}
+
+let _priors: CacheEntry<DiagnosisPrior[]> | null = null;
+let _redFlags: CacheEntry<KbRedFlagRule[]> | null = null;
+let _treatments: CacheEntry<KbTreatmentRule[]> | null = null;
+
+function isStale(entry: CacheEntry<any> | null): boolean {
+  if (!entry) return true;
+  return Date.now() - entry.loadedAt > CACHE_TTL_MS;
+}
+
+// ── Loaders ───────────────────────────────────────────────────────────────────
+
+// Helper: db.execute() returns { rows: [...] } in drizzle-orm/node-postgres
+function extractRows(result: any): any[] {
+  if (Array.isArray(result)) return result;
+  if (result && Array.isArray(result.rows)) return result.rows;
+  return [];
+}
+
+async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
+  try {
+    // Phase 3: Prefer normalized kb_feature_likelihoods JOIN (authoritative source)
+    // Falls back to JSONB blob in kb_diagnosis_rules for rules not yet migrated.
+    const result = await db.execute(sql`
+      SELECT
+        r.rule_id,
+        r.diagnosis_label,
+        r.base_probability,
+        jsonb_object_agg(f.feature_key, f.likelihood * f.weight) AS feature_likelihoods,
+        count(f.id)::int AS feature_count
+      FROM kb_diagnosis_rules r
+      JOIN kb_feature_likelihoods f
+        ON f.rule_id = r.rule_id AND f.active = true
+      WHERE r.active = true
+      GROUP BY r.rule_id, r.diagnosis_label, r.base_probability, r.cluster_priority
+      HAVING count(f.id) > 0
+      ORDER BY r.cluster_priority ASC, r.base_probability DESC
+    `);
+
+    const normalized = extractRows(result).map((r: any) => ({
+      diagnosis: String(r.diagnosis_label ?? ""),
+      baseProbability: Number(r.base_probability ?? 0),
+      featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? ""),
+      version: 1,
+      tableName: "kb_feature_likelihoods",  // Phase 3: source is the normalized table
+    }));
+
+    if (normalized.length > 0) {
+      console.info(`[KbRuntime] Loaded ${normalized.length} priors from kb_feature_likelihoods (Phase 3 normalized table)`);
+      return normalized;
+    }
+
+    // Legacy fallback: kb_diagnosis_rules.featureLikelihoods JSONB (pre-Phase-3 rules only)
+    console.warn("[KbRuntime] kb_feature_likelihoods empty — falling back to JSONB blob (run POST /api/kb/migrate-to-feature-table)");
+    const legacyResult = await db.execute(sql`
+      SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods
+      FROM kb_diagnosis_rules
+      WHERE active = true
+        AND feature_likelihoods IS NOT NULL
+        AND feature_likelihoods::text != '{}'
+      ORDER BY cluster_priority ASC, base_probability DESC
+    `);
+    return extractRows(legacyResult).map((r: any) => ({
+      diagnosis: String(r.diagnosis_label ?? ""),
+      baseProbability: Number(r.base_probability ?? 0),
+      featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? ""),
+      version: 1,
+      tableName: "kb_diagnosis_rules",
+    }));
+  } catch (err) {
+    console.warn("[KbRuntime] Failed to load diagnosis priors from DB:", err);
+    return [];
+  }
+}
+
+async function loadRedFlagsFromDb(): Promise<KbRedFlagRule[]> {
+  try {
+    const result = await db.execute(
+      sql`SELECT rule_id, complaint_id, label, trigger_expr, severity, action,
+                 immediate_actions, active
+          FROM kb_red_flag_rules
+          WHERE active = true`
+    );
+    return extractRows(result).map((r: any) => ({
+      ruleId: String(r.rule_id ?? r.ruleId ?? ""),
+      complaintId: String(r.complaint_id ?? r.complaintId ?? ""),
+      label: String(r.label ?? ""),
+      triggerExpr: String(r.trigger_expr ?? r.triggerExpr ?? ""),
+      severity: (r.severity ?? "SOFT") as "HARD" | "SOFT",
+      action: String(r.action ?? "ESCALATE"),
+      immediateActions: (r.immediate_actions ?? r.immediateActions ?? null) as string | null,
+      active: Boolean(r.active),
+    }));
+  } catch (err) {
+    console.warn("[KbRuntime] Failed to load red flag rules from DB:", err);
+    return [];
+  }
+}
+
+async function loadTreatmentsFromDb(): Promise<KbTreatmentRule[]> {
+  try {
+    const result = await db.execute(
+      sql`SELECT rule_id, medication_name, medication_group, complaint_id,
+                 diagnosis_id, is_first_line, adult_dose, adult_max_dose,
+                 pediatric_dose, route, renal_adjust, hepatic_adjust,
+                 pregnancy_category, contraindications, key_interactions,
+                 common_side_effects, notes, active
+          FROM kb_treatment_rules
+          WHERE active = true`
+    );
+    return extractRows(result).map((r: any) => ({
+      ruleId: String(r.rule_id ?? r.ruleId ?? ""),
+      medicationName: String(r.medication_name ?? r.medicationName ?? ""),
+      medicationGroup: (r.medication_group ?? r.medicationGroup ?? null) as string | null,
+      complaintId: (r.complaint_id ?? r.complaintId ?? null) as string | null,
+      diagnosisId: (r.diagnosis_id ?? r.diagnosisId ?? null) as string | null,
+      isFirstLine: Boolean(r.is_first_line ?? r.isFirstLine),
+      adultDose: (r.adult_dose ?? r.adultDose ?? null) as string | null,
+      adultMaxDose: (r.adult_max_dose ?? r.adultMaxDose ?? null) as string | null,
+      pediatricDose: (r.pediatric_dose ?? r.pediatricDose ?? null) as string | null,
+      route: (r.route ?? null) as string | null,
+      renalAdjust: (r.renal_adjust ?? r.renalAdjust ?? null) as string | null,
+      hepaticAdjust: (r.hepatic_adjust ?? r.hepaticAdjust ?? null) as string | null,
+      pregnancyCategory: (r.pregnancy_category ?? r.pregnancyCategory ?? null) as string | null,
+      contraindications: (r.contraindications ?? null) as string | null,
+      keyInteractions: (r.key_interactions ?? r.keyInteractions ?? null) as string | null,
+      commonSideEffects: (r.common_side_effects ?? r.commonSideEffects ?? null) as string | null,
+      notes: (r.notes ?? null) as string | null,
+      active: Boolean(r.active),
+    }));
+  } catch (err) {
+    console.warn("[KbRuntime] Failed to load treatment rules from DB:", err);
+    return [];
+  }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/** Get active diagnosis priors from KB (async, cached). Returns [] if KB is empty. */
+export async function getKbPriors(): Promise<DiagnosisPrior[]> {
+  if (!isStale(_priors)) return _priors!.data;
+  const data = await loadPriorsFromDb();
+  _priors = { data, loadedAt: Date.now(), count: data.length };
+  if (data.length > 0) {
+    console.info(`[KbRuntime] Loaded ${data.length} diagnosis priors from KB`);
+  }
+  return data;
+}
+
+/** Get active red flag rules from KB for a specific complaint (async, cached). */
+export async function getKbRedFlags(complaintId: string): Promise<KbRedFlagRule[]> {
+  if (!isStale(_redFlags)) {
+    return _redFlags!.data.filter(r => r.complaintId === complaintId);
+  }
+  const data = await loadRedFlagsFromDb();
+  _redFlags = { data, loadedAt: Date.now(), count: data.length };
+  if (data.length > 0) {
+    console.info(`[KbRuntime] Loaded ${data.length} red flag rules from KB`);
+  }
+  return data.filter(r => r.complaintId === complaintId);
+}
+
+/** Get treatment rules from KB, optionally filtered by complaintId or diagnosisId. */
+export async function getKbTreatments(opts?: {
+  complaintId?: string;
+  diagnosisId?: string;
+  firstLineOnly?: boolean;
+}): Promise<KbTreatmentRule[]> {
+  if (!isStale(_treatments)) {
+    return filterTreatments(_treatments!.data, opts);
+  }
+  const data = await loadTreatmentsFromDb();
+  _treatments = { data, loadedAt: Date.now(), count: data.length };
+  if (data.length > 0) {
+    console.info(`[KbRuntime] Loaded ${data.length} treatment rules from KB`);
+  }
+  return filterTreatments(data, opts);
+}
+
+function filterTreatments(
+  all: KbTreatmentRule[],
+  opts?: { complaintId?: string; diagnosisId?: string; firstLineOnly?: boolean }
+): KbTreatmentRule[] {
+  let out = all;
+  if (opts?.complaintId) out = out.filter(t => !t.complaintId || t.complaintId === opts.complaintId);
+  if (opts?.diagnosisId) out = out.filter(t => !t.diagnosisId || t.diagnosisId === opts.diagnosisId);
+  if (opts?.firstLineOnly) out = out.filter(t => t.isFirstLine);
+  return out;
+}
+
+/** Synchronous check — returns cached priors without async. Null if not yet loaded. */
+export function getKbPriorsSync(): DiagnosisPrior[] | null {
+  if (!_priors || isStale(_priors)) return null;
+  return _priors.data;
+}
+
+/** Synchronous check — returns cached red flags without async. Empty array if not loaded. */
+export function getKbRedFlagsSync(complaintId?: string): KbRedFlagRule[] {
+  if (!_redFlags || isStale(_redFlags)) return [];
+  if (complaintId) return _redFlags.data.filter(r => r.complaintId === complaintId);
+  return _redFlags.data;
+}
+
+/** Synchronous check — returns cached treatments without async. Empty array if not loaded. */
+export function getKbTreatmentsSync(opts?: {
+  complaintId?: string;
+  diagnosisId?: string;
+  firstLineOnly?: boolean;
+}): KbTreatmentRule[] {
+  if (!_treatments || isStale(_treatments)) return [];
+  return filterTreatments(_treatments.data, opts);
+}
+
+/** Force-invalidate all caches (called after KB writes). */
+export function invalidateKbCache(): void {
+  _priors = null;
+  _redFlags = null;
+  _treatments = null;
+  console.info("[KbRuntime] Cache invalidated — next request will reload from DB");
+}
+
+/** Warm up the cache at server startup. Non-blocking. */
+export function warmKbCache(): void {
+  Promise.all([
+    loadPriorsFromDb(),
+    loadRedFlagsFromDb(),
+    loadTreatmentsFromDb(),
+  ]).then(([priors, redFlags, treatments]) => {
+    _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
+    _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
+    _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
+
+    // Wire KB priors into the Bayesian differential engine
+    if (priors.length > 0) {
+      // Lazy import to avoid circular dependency at module-load time
+      import("../clinical/bayesianEngine").then(({ setRuntimePriors }) => {
+        setRuntimePriors(priors);
+        console.info(`[KbRuntime] Wired ${priors.length} KB diagnosis priors into Bayesian engine`);
+      }).catch(() => {});
+    }
+
+    console.info(
+      `[KbRuntime] Cache warmed — priors:${priors.length}, redFlags:${redFlags.length}, treatments:${treatments.length}`
+    );
+  }).catch(err => {
+    console.warn("[KbRuntime] Warm-up failed (non-fatal):", err);
+  });
+}
+
+/** Reload cache from DB and re-wire all pipeline hooks. Call after any KB write. */
+export async function reloadAndRewireKbCache(): Promise<void> {
+  invalidateKbCache();
+  const [priors, redFlags, treatments] = await Promise.all([
+    loadPriorsFromDb(),
+    loadRedFlagsFromDb(),
+    loadTreatmentsFromDb(),
+  ]);
+  _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
+  _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
+  _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
+
+  if (priors.length > 0) {
+    const { setRuntimePriors } = await import("../clinical/bayesianEngine");
+    setRuntimePriors(priors);
+  }
+  console.info(
+    `[KbRuntime] Reloaded & rewired — priors:${priors.length}, redFlags:${redFlags.length}, treatments:${treatments.length}`
+  );
+}
+
+/** Return cache status for ops dashboard */
+export function getKbCacheStatus() {
+  return {
+    priors: _priors ? { count: _priors.count, ageMs: Date.now() - _priors.loadedAt } : null,
+    redFlags: _redFlags ? { count: _redFlags.count, ageMs: Date.now() - _redFlags.loadedAt } : null,
+    treatments: _treatments ? { count: _treatments.count, ageMs: Date.now() - _treatments.loadedAt } : null,
+    ttlMs: CACHE_TTL_MS,
+  };
+}
+
+
+=================================================================================
+FILE: server/kb/kbSeeder.ts
+=================================================================================
+import { db } from "../db";
+import {
+  kbComplaints, kbQuestions, kbModifiers, kbRedFlagRules,
+  kbWorkupRules, kbDiagnosisRules, kbTreatmentRules,
+  kbDispositionRules, kbPlanTemplates, kbGoldenCases,
+} from "../../shared/schema";
+import { sql } from "drizzle-orm";
+import fs from "fs";
+import path from "path";
+
+function parseCsv(filePath: string): Record<string, string>[] {
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    const lines = text.split("\n").filter(l => l.trim());
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    return lines.slice(1).map(line => {
+      const vals: string[] = [];
+      let cur = "", inQ = false;
+      for (const ch of line) {
+        if (ch === '"') { inQ = !inQ; }
+        else if (ch === "," && !inQ) { vals.push(cur.trim()); cur = ""; }
+        else cur += ch;
+      }
+      vals.push(cur.trim());
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => { obj[h] = (vals[i] ?? "").replace(/^"|"$/g, ""); });
+      return obj;
+    }).filter(r => Object.values(r).some(v => v));
+  } catch { return []; }
+}
+
+const CSV = path.join(process.cwd(), "server/data/csv");
+
+export async function upsertBayesianPriors(): Promise<void> {
+  const BAYESIAN_PRIORS = [
+    { ruleId: "DX_BAY_INFLUENZA_A",        complaintId: "bayesian_global", diagnosisId: "influenza_a",              diagnosisLabel: "Influenza A",            baseProbability: 0.18, featureLikelihoods: { fever: 0.92, "body aches": 0.85, headache: 0.75, cough: 0.80, fatigue: 0.88, "sore throat": 0.50, "runny nose": 0.55, chills: 0.78 } },
+    { ruleId: "DX_BAY_COVID19",            complaintId: "bayesian_global", diagnosisId: "covid19",                  diagnosisLabel: "COVID-19",               baseProbability: 0.14, featureLikelihoods: { fever: 0.88, cough: 0.75, "loss of smell": 0.65, "loss of taste": 0.60, fatigue: 0.82, "shortness of breath": 0.45, headache: 0.60, "sore throat": 0.52 } },
+    { ruleId: "DX_BAY_STREP_PHARYNGITIS",  complaintId: "bayesian_global", diagnosisId: "strep_pharyngitis",        diagnosisLabel: "Strep Pharyngitis",      baseProbability: 0.12, featureLikelihoods: { "sore throat": 0.96, fever: 0.78, "tonsillar exudate": 0.70, lymphadenopathy: 0.75, headache: 0.45, "absence of cough": 0.80 } },
+    { ruleId: "DX_BAY_VIRAL_URI",          complaintId: "bayesian_global", diagnosisId: "viral_uri",                diagnosisLabel: "Viral URI",              baseProbability: 0.25, featureLikelihoods: { "runny nose": 0.90, congestion: 0.88, "sore throat": 0.70, cough: 0.65, "mild fever": 0.35, sneezing: 0.80 } },
+    { ruleId: "DX_BAY_SINUSITIS",          complaintId: "bayesian_global", diagnosisId: "sinusitis",                diagnosisLabel: "Sinusitis",              baseProbability: 0.10, featureLikelihoods: { "sinus pressure": 0.88, "facial pain": 0.75, congestion: 0.82, headache: 0.65, "purulent discharge": 0.70, fever: 0.30, "post-nasal drip": 0.72 } },
+    { ruleId: "DX_BAY_OTITIS_MEDIA",       complaintId: "bayesian_global", diagnosisId: "otitis_media",             diagnosisLabel: "Otitis Media",           baseProbability: 0.08, featureLikelihoods: { "ear pain": 0.95, fever: 0.65, "hearing loss": 0.55, "ear fullness": 0.72, discharge: 0.35 } },
+    { ruleId: "DX_BAY_PNEUMONIA",          complaintId: "bayesian_global", diagnosisId: "pneumonia",                diagnosisLabel: "Pneumonia",              baseProbability: 0.06, featureLikelihoods: { fever: 0.88, "productive cough": 0.82, "shortness of breath": 0.72, "chest pain": 0.55, fatigue: 0.78, rigors: 0.60 } },
+    { ruleId: "DX_BAY_ALLERGIC_RHINITIS",  complaintId: "bayesian_global", diagnosisId: "allergic_rhinitis",        diagnosisLabel: "Allergic Rhinitis",      baseProbability: 0.07, featureLikelihoods: { sneezing: 0.88, "runny nose": 0.85, "itchy eyes": 0.80, congestion: 0.78, "no fever": 0.90, "seasonal pattern": 0.70 } },
+    { ruleId: "DX_BAY_ROTATOR_CUFF",       complaintId: "bayesian_global", diagnosisId: "rotator_cuff_injury",      diagnosisLabel: "Rotator Cuff Injury",    baseProbability: 0.30, featureLikelihoods: { "shoulder pain": 0.95, "painful arc": 0.82, weakness: 0.75, "lateral pain": 0.78, "no trauma": 0.60, "gradual onset": 0.70, "night pain": 0.68, "overhead activity pain": 0.80, "age over 40": 0.72, "loss of external rotation": 0.55 } },
+    { ruleId: "DX_BAY_SHOULDER_DISLOC",   complaintId: "bayesian_global", diagnosisId: "shoulder_dislocation",     diagnosisLabel: "Shoulder Dislocation",   baseProbability: 0.08, featureLikelihoods: { trauma: 0.92, deformity: 0.85, "arm held at side": 0.80, "severe pain": 0.90, "loss of external rotation": 0.75, "young male": 0.55, "shoulder pain": 0.95, "inability to move arm": 0.88 } },
+    { ruleId: "DX_BAY_AC_JOINT",           complaintId: "bayesian_global", diagnosisId: "ac_joint_injury",          diagnosisLabel: "AC Joint Injury",        baseProbability: 0.12, featureLikelihoods: { trauma: 0.88, "top of shoulder tender": 0.92, "step deformity": 0.70, "direct fall onto shoulder": 0.80, "shoulder pain": 0.95, "arm adduction pain": 0.72, "cross-body pain": 0.68 } },
+    { ruleId: "DX_BAY_CERVICAL_RADICULOP", complaintId: "bayesian_global", diagnosisId: "cervical_radiculopathy",   diagnosisLabel: "Cervical Radiculopathy", baseProbability: 0.15, featureLikelihoods: { "neck pain": 0.85, "arm pain": 0.82, tingling: 0.78, "numbness fingers": 0.75, "shoulder pain": 0.70, "weakness arm": 0.65, "radiation to hand": 0.72, "no trauma": 0.60 } },
+  ];
+  for (const bp of BAYESIAN_PRIORS) {
+    await db.insert(kbDiagnosisRules).values({
+      ruleId: bp.ruleId, complaintId: bp.complaintId, diagnosisId: bp.diagnosisId,
+      diagnosisLabel: bp.diagnosisLabel, icdCode: null, baseProbability: bp.baseProbability,
+      featureLikelihoods: bp.featureLikelihoods as any, cannotMiss: false,
+      basePoints: 50, clusterPriority: 10, active: true,
+    }).onConflictDoUpdate({
+      target: kbDiagnosisRules.ruleId,
+      set: { baseProbability: bp.baseProbability, featureLikelihoods: bp.featureLikelihoods as any, active: true },
+    });
+  }
+  console.log(`[KB Seeder] Upserted ${BAYESIAN_PRIORS.length} Bayesian core priors into kb_diagnosis_rules`);
+}
+
+export async function seedKnowledgeBase(): Promise<void> {
+  // Always upsert Bayesian priors (even on re-seed, to apply any code-level updates)
+  await upsertBayesianPriors();
+
+  const existing = await db.execute(sql`SELECT COUNT(*) as n FROM kb_complaints`);
+  const count = Number((existing.rows[0] as any)?.n ?? 0);
+  if (count > 0) {
+    console.log(`[KB Seeder] Already seeded (${count} complaints). Skipping CSV import.`);
+    return;
+  }
+
+  console.log("[KB Seeder] Seeding knowledge base from existing data...");
+
+  // ── Complaints from COMPLAINT_REGISTRY.csv ──────────────────────────────
+  const compRows = parseCsv(path.join(CSV, "COMPLAINT_REGISTRY.csv"));
+  const complaints = compRows.filter(r => r.CC_ID).map(r => ({
+    complaintId: r.CC_ID,
+    system: r.SYSTEM || "GENERAL",
+    label: r.LABEL || r.CC_ID,
+    aliases: r.ALIASES ? r.ALIASES.split(";").map((a: string) => a.trim()).filter(Boolean) : [],
+    defaultCluster: r.DEFAULT_CLUSTER || null,
+    scoringModule: r.SCORING_MODULE || null,
+    graphId: r.GRAPH_ID || null,
+    engineType: r.ENGINE_TYPE || "LEGACY",
+    enabled: r.ENABLED?.toUpperCase() !== "FALSE",
+    metadata: {},
+  }));
+
+  if (complaints.length > 0) {
+    await db.insert(kbComplaints).values(complaints).onConflictDoNothing();
+    console.log(`[KB Seeder] Inserted ${complaints.length} complaints`);
+  }
+
+  // ── Core Questions from CORE_QUESTIONS.csv ──────────────────────────────
+  const qRows = parseCsv(path.join(CSV, "CORE_QUESTIONS.csv"));
+  const questions = qRows.filter(r => r.Q_ID && r.CC_ID).map((r, i) => ({
+    complaintId: r.CC_ID,
+    questionId: r.Q_ID,
+    prompt: r.QUESTION_TEXT || r.Q_ID,
+    type: mapAnswerType(r.ANSWER_TYPE),
+    required: r.REQUIRED?.toUpperCase() === "TRUE",
+    priority: parseInt(r.ASK_ORDER || String((i + 1) * 10)) || (i + 1) * 10,
+    category: r.CATEGORY || null,
+    askIf: r.ASK_IF || null,
+    conditionalOn: {},
+    linkedDiagnoses: [],
+    active: true,
+  }));
+
+  if (questions.length > 0) {
+    for (let i = 0; i < questions.length; i += 100) {
+      await db.insert(kbQuestions).values(questions.slice(i, i + 100)).onConflictDoNothing();
+    }
+    console.log(`[KB Seeder] Inserted ${questions.length} questions`);
+  }
+
+  // ── Modifiers (canonical clinical modifiers) ─────────────────────────────
+  const MODIFIERS = [
+    { modifierId: "pregnancy", label: "Pregnancy", description: "Patient is pregnant or may be pregnant", appliesTo: [], addDiagnoses: ["ectopic_pregnancy", "preeclampsia"], removeDiagnoses: [], workupChanges: { imaging: "prefer_ultrasound_over_ct", avoid_xray: true }, medChanges: { avoid: ["NSAIDs", "tetracyclines", "fluoroquinolones"], prefer: "category_B_antibiotics" }, dispositionThresholdShift: -0.1 },
+    { modifierId: "infant_pediatric", label: "Infant / Pediatric", description: "Patient age < 2 years or pediatric thresholds apply", appliesTo: [], addDiagnoses: [], removeDiagnoses: [], workupChanges: { lower_fever_threshold: 38.0, use_pews_score: true }, medChanges: { use_weight_based_dosing: true }, dispositionThresholdShift: -0.15 },
+    { modifierId: "elderly", label: "Elderly (≥65)", description: "Patient is 65 or older — atypical presentations, polypharmacy risk", appliesTo: [], addDiagnoses: [], removeDiagnoses: [], workupChanges: { lower_threshold_for_labs: true }, medChanges: { avoid: ["high_dose_NSAIDs", "benzodiazepines"], renal_adjust: true }, dispositionThresholdShift: -0.1 },
+    { modifierId: "chf", label: "CHF / Heart Failure", description: "History of congestive heart failure", appliesTo: [], addDiagnoses: ["acute_decompensated_heart_failure", "pulmonary_edema"], removeDiagnoses: [], workupChanges: { add: ["BNP", "chest_xray", "echo"] }, medChanges: { avoid: ["NSAIDs", "high_sodium_IV"], prefer: ["furosemide", "ACE_inhibitors"] }, dispositionThresholdShift: -0.2 },
+    { modifierId: "ckd", label: "CKD / Renal Disease", description: "Chronic kidney disease — dosing and contrast adjustments required", appliesTo: [], addDiagnoses: [], removeDiagnoses: [], workupChanges: { avoid: ["IV_contrast_CT"] }, medChanges: { renal_dose_adjust: true, avoid: ["NSAIDs", "nephrotoxic_antibiotics"] }, dispositionThresholdShift: -0.1 },
+    { modifierId: "copd", label: "COPD", description: "Chronic obstructive pulmonary disease", appliesTo: [], addDiagnoses: ["COPD_exacerbation"], removeDiagnoses: [], workupChanges: { add: ["spirometry", "ABG", "chest_xray"] }, medChanges: { avoid: ["high_flow_O2_without_monitoring"], prefer: ["bronchodilators", "steroids"] }, dispositionThresholdShift: -0.15 },
+    { modifierId: "penicillin_allergy", label: "Penicillin Allergy", description: "Known or suspected penicillin or beta-lactam allergy", appliesTo: [], addDiagnoses: [], removeDiagnoses: [], workupChanges: {}, medChanges: { avoid: ["amoxicillin", "penicillin", "ampicillin", "cephalosporins_if_cross_react"], substitute: { "amoxicillin": "azithromycin", "penicillin": "clindamycin", "augmentin": "clindamycin" } }, dispositionThresholdShift: 0 },
+    { modifierId: "immunocompromised", label: "Immunocompromised", description: "HIV, chemotherapy, transplant, or other immunosuppression", appliesTo: [], addDiagnoses: ["opportunistic_infection", "sepsis"], removeDiagnoses: [], workupChanges: { add: ["CBC", "cultures", "CXR"], lower_threshold: true }, medChanges: { prefer_broad_spectrum: true }, dispositionThresholdShift: -0.25 },
+    { modifierId: "anticoagulated", label: "Anticoagulated", description: "On warfarin, heparin, DOAC, or antiplatelet therapy", appliesTo: [], addDiagnoses: [], removeDiagnoses: [], workupChanges: { add: ["INR", "PT_PTT"] }, medChanges: { avoid: ["NSAIDs", "aspirin_high_dose"], caution: "bleeding_risk" }, dispositionThresholdShift: -0.1 },
+    { modifierId: "diabetes", label: "Diabetes", description: "Type 1 or Type 2 diabetes mellitus", appliesTo: [], addDiagnoses: ["DKA", "HHS", "diabetic_foot_infection"], removeDiagnoses: [], workupChanges: { add: ["glucose", "HbA1c", "ketones"] }, medChanges: { monitor: "glucose", avoid: ["high_dose_steroids_without_monitoring"] }, dispositionThresholdShift: -0.1 },
+  ];
+
+  await db.insert(kbModifiers).values(MODIFIERS.map(m => ({
+    ...m,
+    workupChanges: m.workupChanges as any,
+    medChanges: m.medChanges as any,
+    metadata: {},
+  }))).onConflictDoNothing();
+  console.log(`[KB Seeder] Inserted ${MODIFIERS.length} modifiers`);
+
+  // ── Red Flag Rules from RED_FLAG_RULES.csv ───────────────────────────────
+  const rfRows = parseCsv(path.join(CSV, "RED_FLAG_RULES.csv"));
+  const redFlags = rfRows.filter(r => r.RF_ID && r.CC_ID).map(r => ({
+    ruleId: r.RF_ID,
+    complaintId: r.CC_ID,
+    label: r.LABEL || r.RF_ID,
+    triggerExpr: r.TRIGGER_EXPR || "true",
+    severity: r.SEVERITY || "HARD",
+    action: r.ACTION || "ER_SEND",
+    immediateActions: r.IMMEDIATE_ACTIONS || null,
+    rationale: r.RATIONALE || null,
+    active: true,
+  }));
+
+  if (redFlags.length > 0) {
+    for (let i = 0; i < redFlags.length; i += 100) {
+      await db.insert(kbRedFlagRules).values(redFlags.slice(i, i + 100)).onConflictDoNothing();
+    }
+    console.log(`[KB Seeder] Inserted ${redFlags.length} red flag rules`);
+  }
+
+  // ── Workup Rules (synthesized from complaint + clinical patterns) ─────────
+  const WORKUP_SEEDS = [
+    { ruleId: "WU_ST_STREP_RAPID", complaintId: "sore_throat", testName: "Rapid Strep Test", testType: "bedside", triggerExpr: "scores.centor >= 2", priority: 10, rationale: "Centor score ≥2 warrants strep testing", modifierOverrides: {} },
+    { ruleId: "WU_ST_MONO_SPOT", complaintId: "sore_throat", testName: "Monospot / EBV Heterophile", testType: "labs", triggerExpr: "age < 30 && answers.exudates === 'yes'", priority: 20, rationale: "Atypical lymphocytes or young age with exudate — rule out mono", modifierOverrides: {} },
+    { ruleId: "WU_CP_EKG", complaintId: "chest_pain", testName: "12-lead EKG", testType: "EKG", triggerExpr: "true", priority: 1, rationale: "All chest pain requires immediate EKG", modifierOverrides: {} },
+    { ruleId: "WU_CP_TROPONIN", complaintId: "chest_pain", testName: "Troponin I/T", testType: "labs", triggerExpr: "true", priority: 2, rationale: "Rule out ACS in all chest pain presentations", modifierOverrides: {} },
+    { ruleId: "WU_CP_CXR", complaintId: "chest_pain", testName: "Chest X-Ray", testType: "imaging", triggerExpr: "true", priority: 5, rationale: "Rule out pneumothorax, effusion, pulmonary edema", modifierOverrides: { chf: "mandatory" } },
+    { ruleId: "WU_ABD_BASIC_LABS", complaintId: "abdominal_pain", testName: "BMP + CBC + LFTs + Lipase", testType: "labs", triggerExpr: "answers.severity >= 5 || flags.any_red_flag", priority: 5, rationale: "Metabolic workup for moderate-severe abdominal pain", modifierOverrides: {} },
+    { ruleId: "WU_ABD_PELVIC_US", complaintId: "abdominal_pain", testName: "Pelvic Ultrasound", testType: "imaging", triggerExpr: "modifiers.includes('pregnancy') || answers.location === 'pelvic'", priority: 10, rationale: "Rule out ectopic pregnancy in reproductive-age women", modifierOverrides: { pregnancy: "mandatory" } },
+    { ruleId: "WU_FEVER_CBC", complaintId: "fever", testName: "CBC with differential", testType: "labs", triggerExpr: "answers.temp >= 103 || modifiers.includes('immunocompromised')", priority: 10, rationale: "Evaluate for bacterial infection or neutropenia", modifierOverrides: {} },
+    { ruleId: "WU_UTI_UA", complaintId: "urinary_burning", testName: "Urinalysis + Culture", testType: "labs", triggerExpr: "true", priority: 1, rationale: "Confirm UTI and identify pathogen for targeted therapy", modifierOverrides: {} },
+  ];
+
+  await db.insert(kbWorkupRules).values(WORKUP_SEEDS.map(r => ({ ...r, modifierOverrides: r.modifierOverrides as any }))).onConflictDoNothing();
+  console.log(`[KB Seeder] Inserted ${WORKUP_SEEDS.length} workup rules`);
+
+  // ── Diagnosis Rules from DX_CANDIDATES.csv ──────────────────────────────
+  const dxRows = parseCsv(path.join(CSV, "DX_CANDIDATES.csv"));
+  const dxRules = dxRows.filter(r => r.DX_ID && r.CC_ID).map((r, i) => ({
+    ruleId: `DX_${r.CC_ID.toUpperCase()}_${i + 1}`.replace(/[^A-Z0-9_]/g, "_"),
+    complaintId: r.CC_ID,
+    diagnosisId: r.DX_ID,
+    diagnosisLabel: r.DX_LABEL || r.DX_ID,
+    icdCode: null,
+    baseProbability: parseFloat(r.BASE_SCORE || "0.1") || 0.1,
+    featureLikelihoods: {},
+    cannotMiss: false,
+    basePoints: parseInt(r.BASE_POINTS || "1") || 1,
+    clusterPriority: parseInt(r.CLUSTER_PRIORITY || "50") || 50,
+    active: true,
+  }));
+
+  if (dxRules.length > 0) {
+    const dedupedDx: typeof dxRules = [];
+    const seen = new Set<string>();
+    for (const d of dxRules) {
+      if (!seen.has(d.ruleId)) { seen.add(d.ruleId); dedupedDx.push(d); }
+    }
+    for (let i = 0; i < dedupedDx.length; i += 100) {
+      await db.insert(kbDiagnosisRules).values(dedupedDx.slice(i, i + 100).map(r => ({ ...r, featureLikelihoods: r.featureLikelihoods as any }))).onConflictDoNothing();
+    }
+    console.log(`[KB Seeder] Inserted ${dedupedDx.length} diagnosis rules`);
+  }
+
+  // ── Treatment Rules (canonical starters) ─────────────────────────────────
+  const TREATMENTS = [
+    { ruleId: "TX_STREP_AMOX", complaintId: "sore_throat", diagnosisId: "streptococcal_pharyngitis", medicationName: "Amoxicillin", medicationGroup: "Penicillin", isFirstLine: true, adultDose: "500mg PO BID x 10 days", pediatricDose: "50mg/kg/day divided BID x 10 days", pregnancyCategory: "B", contraindications: "Penicillin allergy", allergyCrossReacts: ["penicillin", "ampicillin"], route: "Oral", renalAdjust: null, keyInteractions: "Oral contraceptives (may reduce efficacy)", active: true },
+    { ruleId: "TX_STREP_AZITHRO", complaintId: "sore_throat", diagnosisId: "streptococcal_pharyngitis", medicationName: "Azithromycin", medicationGroup: "Macrolide", isFirstLine: false, adultDose: "500mg PO day 1, then 250mg days 2-5", pediatricDose: "12mg/kg/day x 5 days", pregnancyCategory: "B", contraindications: "QT prolongation risk, macrolide allergy", allergyCrossReacts: ["erythromycin"], route: "Oral", renalAdjust: null, keyInteractions: "QT-prolonging drugs, antacids", notes: "Use if penicillin allergy", active: true },
+    { ruleId: "TX_UTI_NITRO", complaintId: "urinary_burning", diagnosisId: "uncomplicated_uti", medicationName: "Nitrofurantoin", medicationGroup: "Urinary antiseptic", isFirstLine: true, adultDose: "100mg ER PO BID x 5 days", pediatricDose: "5-7mg/kg/day divided QID x 7 days", pregnancyCategory: "B (avoid at term)", contraindications: "CrCl < 30, term pregnancy", allergyCrossReacts: [], route: "Oral", renalAdjust: "Avoid if CrCl <30", active: true },
+    { ruleId: "TX_UTI_TMP_SMX", complaintId: "urinary_burning", diagnosisId: "uncomplicated_uti", medicationName: "TMP-SMX (Bactrim)", medicationGroup: "Sulfonamide", isFirstLine: false, adultDose: "160/800mg PO BID x 3 days", pediatricDose: "8mg/kg TMP per day divided BID", pregnancyCategory: "C (avoid at term)", contraindications: "Sulfa allergy, G6PD deficiency", allergyCrossReacts: ["sulfonamides"], route: "Oral", renalAdjust: "Dose adjust if CrCl <30", active: true },
+    { ruleId: "TX_OTITIS_AMOX", complaintId: "earache", diagnosisId: "acute_otitis_media", medicationName: "Amoxicillin", medicationGroup: "Penicillin", isFirstLine: true, adultDose: "500mg PO TID x 7-10 days", pediatricDose: "90mg/kg/day divided BID x 10 days (high dose)", pregnancyCategory: "B", contraindications: "Penicillin allergy", allergyCrossReacts: ["penicillin"], route: "Oral", active: true },
+    { ruleId: "TX_COPD_AZITHRO", complaintId: "persistent_cough", diagnosisId: "COPD_exacerbation", medicationName: "Azithromycin", medicationGroup: "Macrolide", isFirstLine: true, adultDose: "500mg PO x 3 days or 250mg x 5 days", pediatricDose: null, pregnancyCategory: "B", contraindications: "Hepatic impairment, QT prolongation", allergyCrossReacts: ["erythromycin"], route: "Oral", active: true },
+  ];
+
+  await db.insert(kbTreatmentRules).values(TREATMENTS.map(t => ({
+    ...t,
+    medicationGroup: t.medicationGroup ?? null,
+    adultDose: t.adultDose ?? null,
+    adultMaxDose: null,
+    pediatricDose: t.pediatricDose ?? null,
+    route: t.route ?? null,
+    renalAdjust: t.renalAdjust ?? null,
+    hepaticAdjust: null,
+    pregnancyCategory: t.pregnancyCategory ?? null,
+    contraindications: t.contraindications ?? null,
+    allergyCrossReacts: t.allergyCrossReacts ?? [],
+    keyInteractions: t.keyInteractions ?? null,
+    commonSideEffects: null,
+    notes: (t as any).notes ?? null,
+    diagnosisId: t.diagnosisId ?? null,
+    complaintId: t.complaintId ?? null,
+  }))).onConflictDoNothing();
+  console.log(`[KB Seeder] Inserted ${TREATMENTS.length} treatment rules`);
+
+  // ── Disposition Rules from DISPOSITION_RULES.csv ─────────────────────────
+  const dispRows = parseCsv(path.join(CSV, "DISPOSITION_RULES.csv"));
+  const dispRules = dispRows.filter(r => r.DISP_RULE_ID && r.CC_ID).map(r => ({
+    ruleId: r.DISP_RULE_ID,
+    complaintId: r.CC_ID,
+    priority: parseInt(r.PRIORITY || "50") || 50,
+    whenExpr: r.WHEN_EXPR || "true",
+    dispositionLevel: r.DISPOSITION_LEVEL || "self_care",
+    rationaleTemplateId: r.RATIONALE_TEMPLATE_ID || null,
+    confidenceHint: r.CONFIDENCE_HINT || "MODERATE",
+    active: true,
+  }));
+
+  if (dispRules.length > 0) {
+    for (let i = 0; i < dispRules.length; i += 100) {
+      await db.insert(kbDispositionRules).values(dispRules.slice(i, i + 100)).onConflictDoNothing();
+    }
+    console.log(`[KB Seeder] Inserted ${dispRules.length} disposition rules`);
+  }
+
+  // ── Plan Templates from OUTPUT_TEMPLATES.csv ─────────────────────────────
+  const tplRows = parseCsv(path.join(CSV, "OUTPUT_TEMPLATES.csv"));
+  const templates = tplRows.filter(r => r.TEMPLATE_KEY && r.DIAGNOSIS_LABEL).map(r => ({
+    templateKey: r.TEMPLATE_KEY,
+    complaintId: r.CC_ID || null,
+    diagnosisLabel: r.DIAGNOSIS_LABEL,
+    defaultDisposition: r.DEFAULT_DISPOSITION || "self_care",
+    summary: r.SUMMARY || null,
+    homeCare: r.HOME_CARE ? r.HOME_CARE.split(";").map((s: string) => s.trim()).filter(Boolean) : [],
+    followUp: r.FOLLOW_UP ? r.FOLLOW_UP.split(";").map((s: string) => s.trim()).filter(Boolean) : [],
+    returnPrecautions: r.RETURN_PRECAUTIONS ? r.RETURN_PRECAUTIONS.split(";").map((s: string) => s.trim()).filter(Boolean) : [],
+    patientMessage: r.PATIENT_MESSAGE || null,
+    dischargeText: null,
+    erPrecautions: null,
+    medicationInstructions: null,
+    active: true,
+  }));
+
+  if (templates.length > 0) {
+    for (let i = 0; i < templates.length; i += 100) {
+      await db.insert(kbPlanTemplates).values(templates.slice(i, i + 100)).onConflictDoNothing();
+    }
+    console.log(`[KB Seeder] Inserted ${templates.length} plan templates`);
+  }
+
+  // ── Golden Cases from JSONL files ────────────────────────────────────────
+  const goldenFiles = ["CROSS_COMPLAINT_GOLDENS.jsonl", "CONSISTENCY_GOLDENS.jsonl"];
+  let goldenCount = 0;
+  for (const fname of goldenFiles) {
+    try {
+      const fpath = path.join(CSV, fname);
+      const lines = fs.readFileSync(fpath, "utf8").split("\n").filter(l => l.trim());
+      for (const line of lines) {
+        const g: any = JSON.parse(line);
+        const caseId = g.id || `GC_${Date.now()}_${goldenCount}`;
+        await db.insert(kbGoldenCases).values({
+          caseId,
+          complaint: g.complaintSlug || g.complaint || "unknown",
+          title: g.title || `Golden Case ${caseId}`,
+          structuredInputs: g.anyAnswers || g.inputs || {},
+          modifiers: g.modifiers || [],
+          clinicalFindings: g.findings || {},
+          workupResults: g.workupResults || {},
+          expectedDiagnosis: g.expect?.targetDx || g.expectedDiagnosis || "unknown",
+          expectedDifferential: g.expect?.differential || [],
+          expectedDisposition: g.expect?.disposition || g.expectedDisposition || "self_care",
+          expectedWorkup: g.expect?.workup || [],
+          expectedTreatment: g.expect?.treatment || {},
+          expectedRedFlags: g.expect?.redFlags || [],
+          explanation: g.rationale || g.explanation || null,
+          version: 1,
+          author: "system",
+          status: "approved",
+          tags: [g.complaintSlug || "general"],
+          active: true,
+        }).onConflictDoNothing();
+        goldenCount++;
+      }
+    } catch { /* file not found */ }
+  }
+
+  // Add canonical golden cases
+  const CANONICAL_GOLDENS = [
+    { caseId: "GC_STREP_CLASSIC", complaint: "sore_throat", title: "Classic Strep Throat — High Centor", structuredInputs: { fever: "yes", cough: "no", exudate: "yes", lymphadenopathy: "yes" }, modifiers: [], clinicalFindings: { tonsillarExudate: true, anteriorCervicalLAD: true }, workupResults: { rapidStrep: "positive" }, expectedDiagnosis: "streptococcal_pharyngitis", expectedDifferential: ["streptococcal_pharyngitis", "mono_EBV"], expectedDisposition: "urgent_care", expectedWorkup: ["Rapid Strep Test"], expectedTreatment: { medication: "Amoxicillin", dose: "500mg BID x 10 days" }, expectedRedFlags: [], explanation: "Centor score 4: fever + exudate + LAD + no cough — high probability strep, treat empirically", tags: ["strep", "sore_throat", "centor4"] },
+    { caseId: "GC_STREP_PENICILLIN_ALLERGY", complaint: "sore_throat", title: "Strep Throat — Penicillin Allergy", structuredInputs: { fever: "yes", cough: "no", exudate: "yes", lymphadenopathy: "yes" }, modifiers: ["penicillin_allergy"], clinicalFindings: { tonsillarExudate: true }, workupResults: { rapidStrep: "positive" }, expectedDiagnosis: "streptococcal_pharyngitis", expectedDifferential: ["streptococcal_pharyngitis"], expectedDisposition: "urgent_care", expectedWorkup: ["Rapid Strep Test"], expectedTreatment: { medication: "Azithromycin", dose: "500mg day 1, 250mg days 2-5" }, expectedRedFlags: [], explanation: "Penicillin allergy modifier must substitute amoxicillin with azithromycin", tags: ["strep", "penicillin_allergy", "modifier_test"] },
+    { caseId: "GC_UTI_UNCOMPLICATED", complaint: "urinary_burning", title: "Uncomplicated UTI — Young Adult Female", structuredInputs: { burning: "yes", frequency: "yes", urgency: "yes", fever: "no", flank_pain: "no" }, modifiers: [], clinicalFindings: {}, workupResults: { ua: "positive_nitrites_leukocytes" }, expectedDiagnosis: "uncomplicated_uti", expectedDifferential: ["uncomplicated_uti", "STI_urethritis"], expectedDisposition: "office_followup", expectedWorkup: ["Urinalysis", "Urine Culture"], expectedTreatment: { medication: "Nitrofurantoin", dose: "100mg ER BID x 5 days" }, expectedRedFlags: [], explanation: "Classic uncomplicated cystitis — no fever, no flank pain, no systemic signs", tags: ["uti", "uncomplicated", "female"] },
+    { caseId: "GC_UTI_PREGNANCY", complaint: "urinary_burning", title: "UTI in Pregnancy — Medication Safety", structuredInputs: { burning: "yes", frequency: "yes", fever: "no" }, modifiers: ["pregnancy"], clinicalFindings: {}, workupResults: { ua: "positive" }, expectedDiagnosis: "uncomplicated_uti", expectedDifferential: ["uncomplicated_uti"], expectedDisposition: "office_followup", expectedWorkup: ["Urinalysis", "Urine Culture"], expectedTreatment: { medication: "Nitrofurantoin", dose: "100mg ER BID x 5-7 days (avoid at term)", note: "Avoid TMP-SMX and fluoroquinolones in pregnancy" }, expectedRedFlags: [], explanation: "Pregnancy modifier must avoid category X and high-risk antibiotics; nitrofurantoin safe in 1st/2nd trimester", tags: ["uti", "pregnancy", "modifier_test"] },
+    { caseId: "GC_CHEST_PAIN_ACS", complaint: "chest_pain", title: "ACS / STEMI Pattern — Emergency", structuredInputs: { pressure: "yes", radiation_arm: "yes", diaphoresis: "yes", nausea: "yes" }, modifiers: [], clinicalFindings: { diaphoresis: true, pallor: true }, workupResults: { ekg: "ST_elevation" }, expectedDiagnosis: "STEMI", expectedDifferential: ["STEMI", "NSTEMI", "unstable_angina"], expectedDisposition: "er_now", expectedWorkup: ["EKG", "Troponin I", "CXR"], expectedTreatment: { immediate: "Call 911", aspirin: "325mg chew", nitroglycerin: "per protocol" }, expectedRedFlags: ["ST_elevation", "diaphoresis_with_chest_pain"], explanation: "Pressure + radiation + diaphoresis + ST elevation = STEMI until proven otherwise — ER now", tags: ["chest_pain", "ACS", "emergency", "ER_now"] },
+  ];
+
+  for (const gc of CANONICAL_GOLDENS) {
+    await db.insert(kbGoldenCases).values({ ...gc, version: 1, author: "system", status: "approved", active: true }).onConflictDoNothing();
+  }
+  goldenCount += CANONICAL_GOLDENS.length;
+  console.log(`[KB Seeder] Inserted ${goldenCount} golden cases`);
+
+  console.log("[KB Seeder] Knowledge base seeding complete.");
+}
+
+function mapAnswerType(t: string): string {
+  const m: Record<string, string> = { tri: "yes_no_sometimes", bool: "yes_no", num: "number", text: "text", duration: "duration" };
+  return m[t?.toLowerCase?.()] || "yes_no";
+}
+
+
+=================================================================================
+FILE: server/kb/kbConsistencyAudit.ts
+=================================================================================
+import { pool } from "../db/pool";
+import { appendAuditEvent } from "../governance/audit";
+
+interface ConsistencyCheck {
+  name: string;
+  domainTable: string;
+  entityType: string;
+  idColumn?: string;
+}
+
+const CHECKS: ConsistencyCheck[] = [
+  { name: "complaint_packs", domainTable: "kb_complaint_packs", entityType: "complaint_pack" },
+  { name: "red_flags", domainTable: "kb_red_flag_rules", entityType: "red_flag" },
+  { name: "diagnoses", domainTable: "kb_diagnosis_rules", entityType: "diagnosis_rule" },
+  { name: "treatment_rules", domainTable: "kb_treatment_rules", entityType: "treatment_rule" },
+];
+
+export interface CheckResult {
+  name: string;
+  missingFromEntityStore: number;
+  orphanedInEntityStore: number;
+  missingSample: string[];
+  orphanedSample: string[];
+}
+
+export interface KbConsistencyReport {
+  severity: "ok" | "alert";
+  checks: CheckResult[];
+  runAt: string;
+}
+
+export async function runKbConsistencyAudit(): Promise<KbConsistencyReport> {
+  const results: CheckResult[] = [];
+  const runAt = new Date().toISOString();
+
+  for (const check of CHECKS) {
+    try {
+      const idCol = check.idColumn ?? "id";
+
+      const missing = await pool.query(
+        `SELECT d.${idCol}::text AS id
+         FROM ${check.domainTable} d
+         LEFT JOIN kb_entity_store k
+           ON k.entity_type = $1 AND k.entity_id = d.${idCol}::text
+         WHERE k.entity_id IS NULL
+         LIMIT 500`,
+        [check.entityType]
+      );
+
+      const orphaned = await pool.query(
+        `SELECT k.entity_id
+         FROM kb_entity_store k
+         LEFT JOIN ${check.domainTable} d
+           ON d.${idCol}::text = k.entity_id
+         WHERE k.entity_type = $1 AND d.${idCol} IS NULL
+         LIMIT 500`,
+        [check.entityType]
+      );
+
+      results.push({
+        name: check.name,
+        missingFromEntityStore: missing.rowCount ?? 0,
+        orphanedInEntityStore: orphaned.rowCount ?? 0,
+        missingSample: missing.rows.slice(0, 20).map((r: any) => r.id),
+        orphanedSample: orphaned.rows.slice(0, 20).map((r: any) => r.entity_id),
+      });
+    } catch (e: any) {
+      results.push({
+        name: check.name,
+        missingFromEntityStore: -1,
+        orphanedInEntityStore: -1,
+        missingSample: [],
+        orphanedSample: [`ERROR: ${e?.message}`],
+      });
+    }
+  }
+
+  const severity: "ok" | "alert" = results.some(
+    r => r.missingFromEntityStore > 0 || r.orphanedInEntityStore > 0 || r.missingFromEntityStore === -1
+  ) ? "alert" : "ok";
+
+  await appendAuditEvent({
+    tenantId: null,
+    actorId: "system",
+    action: "KB_CONSISTENCY_AUDIT_COMPLETED",
+    entityType: "kb_entity_store",
+    payload: { severity, runAt, checkCount: results.length, results },
+  });
+
+  if (severity === "alert") {
+    console.warn("[KbConsistencyAudit] Inconsistencies detected:", JSON.stringify(results, null, 2));
+  } else {
+    console.log("[KbConsistencyAudit] All checks passed — KB is consistent");
+  }
+
+  return { severity, checks: results, runAt };
+}
+
+
+=================================================================================
+FILE: server/kb/kbConsistencyMonitor.ts
+=================================================================================
+/**
+ * KB Cross-Instance Consistency Monitor
+ *
+ * In a multi-instance deployment, KB version drift is a silent risk: one
+ * instance serves patients with KB v1.4.2 while another uses v1.3.9, producing
+ * different dispositions for identical presentations.
+ *
+ * This monitor:
+ *   (a) Writes the current instance's KB version to Redis on every cache refresh
+ *   (b) Reads other instances' published versions and alerts on drift
+ *   (c) Uses polling (not pub/sub) — Upstash REST API does not support
+ *       SUBSCRIBE; ioredis connections are avoided for cost and reliability.
+ *
+ * Drift detection runs every 60 seconds by default. In production, drift
+ * events should trigger an alert to the ops team, as they mean clinically
+ * inconsistent responses are being served.
+ */
+
+import { getRedisAsync } from "../queue/redis";
+import { getKbCache }    from "./kbRuntime";
+
+const INSTANCE_ID   = process.env.INSTANCE_ID ?? `instance-${Math.random().toString(36).slice(2, 8)}`;
+const VERSION_KEY   = "kb:version:instances";   // Redis hash: instanceId → version:ts
+const VERSION_TTL   = 300;                       // 5 min — instance considered stale after this
+
+// ── Version broadcast ─────────────────────────────────────────────────────────
+
+/**
+ * Publish this instance's current KB version to Redis.
+ * Should be called after every KB cache refresh.
+ */
+export async function broadcastKbVersion(): Promise<void> {
+  try {
+    const redis = await getRedisAsync();
+    if (!redis || typeof redis.hset !== "function") return;
+
+    const kb      = getKbCache();
+    const version = (kb as any).version ?? "unknown";
+
+    // Write instanceId → JSON(version, ts, instanceId) into a hash
+    await redis.hset(VERSION_KEY, INSTANCE_ID, JSON.stringify({
+      instanceId: INSTANCE_ID,
+      version,
+      ts: Date.now(),
+    }));
+
+    // Expire the whole hash entry for this instance after TTL
+    // (individual field expiry requires Redis 7.4+; use EXPIRE on a per-key approach)
+    await redis.expire?.(VERSION_KEY, VERSION_TTL * 10);   // hash itself lives 50 min
+
+  } catch (err) {
+    console.warn("[KbConsistencyMonitor] broadcastKbVersion failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// ── Version listener (polling) ────────────────────────────────────────────────
+
+export interface KbVersionEntry {
+  instanceId: string;
+  version:    string;
+  ts:         number;
+  stale:      boolean;
+}
+
+export interface KbDriftReport {
+  localVersion:   string;
+  allInstances:   KbVersionEntry[];
+  driftDetected:  boolean;
+  driftInstances: string[];   // instance IDs that differ from local
+  staleInstances: string[];   // instance IDs with stale heartbeats
+}
+
+/**
+ * Poll Redis for all known instance versions and compare to local.
+ * Returns a drift report — caller decides what to alert on.
+ */
+export async function checkKbDrift(): Promise<KbDriftReport> {
+  const kb           = getKbCache();
+  const localVersion = (kb as any).version ?? "unknown";
+  const now          = Date.now();
+
+  const fallback: KbDriftReport = {
+    localVersion,
+    allInstances:   [],
+    driftDetected:  false,
+    driftInstances: [],
+    staleInstances: [],
+  };
+
+  try {
+    const redis = await getRedisAsync();
+    if (!redis || typeof redis.hgetall !== "function") return fallback;
+
+    const raw = await redis.hgetall(VERSION_KEY);
+    if (!raw) return fallback;
+
+    const allInstances: KbVersionEntry[] = Object.values(raw).map(v => {
+      try {
+        const parsed = JSON.parse(v as string);
+        return {
+          instanceId: parsed.instanceId,
+          version:    parsed.version,
+          ts:         parsed.ts,
+          stale:      now - parsed.ts > VERSION_TTL * 1000,
+        };
+      } catch {
+        return { instanceId: "unknown", version: "unknown", ts: 0, stale: true };
+      }
+    });
+
+    const driftInstances = allInstances
+      .filter(i => !i.stale && i.instanceId !== INSTANCE_ID && i.version !== localVersion)
+      .map(i => i.instanceId);
+
+    const staleInstances = allInstances
+      .filter(i => i.stale)
+      .map(i => i.instanceId);
+
+    const driftDetected = driftInstances.length > 0;
+
+    if (driftDetected) {
+      console.error(
+        `[KB DRIFT DETECTED] Local version: ${localVersion}. ` +
+        `Drifted instances: ${driftInstances.join(", ")}`
+      );
+    }
+
+    return { localVersion, allInstances, driftDetected, driftInstances, staleInstances };
+
+  } catch (err) {
+    console.warn("[KbConsistencyMonitor] checkKbDrift failed:", err instanceof Error ? err.message : String(err));
+    return fallback;
+  }
+}
+
+// ── Polling loop ──────────────────────────────────────────────────────────────
+
+let _pollInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start the KB consistency polling loop.
+ * Broadcasts this instance's version and checks for drift every intervalMs.
+ */
+export function startKbConsistencyMonitor(intervalMs = 60_000): void {
+  if (_pollInterval) return;   // already running
+
+  _pollInterval = setInterval(async () => {
+    await broadcastKbVersion();
+    const report = await checkKbDrift();
+    if (report.driftDetected) {
+      console.error(
+        `[KbConsistencyMonitor] ⚠ KB version drift — ${report.driftInstances.length} instance(s) differ. ` +
+        `Local: ${report.localVersion}`
+      );
+    }
+  }, intervalMs);
+
+  // Unref so the loop doesn't keep the process alive in test environments
+  _pollInterval.unref?.();
+
+  console.log(`[KbConsistencyMonitor] Started — polling every ${intervalMs / 1000}s (instance: ${INSTANCE_ID})`);
+}
+
+/** Stop the polling loop (useful in tests). */
+export function stopKbConsistencyMonitor(): void {
+  if (_pollInterval) {
+    clearInterval(_pollInterval);
+    _pollInterval = null;
+  }
+}
+
+
+=================================================================================
+FILE: server/kb/services/kbWriteService.ts
+=================================================================================
+import { eq } from "drizzle-orm";
+import { db } from "../../db";
+import { canonicalPathways } from "../../../shared/schema";
+import { auditStep } from "../../audit/auditLogger";
+import { query } from "../../db";
+
+async function safeReloadKbCache(traceId: string): Promise<void> {
+  try {
+    const { reloadAndRewireKbCache } = await import("../kbRuntime");
+    await reloadAndRewireKbCache(traceId);
+  } catch {
+    // Non-fatal — pathway is already written
+  }
+}
+
+async function safeAuditStep(
+  traceId: string,
+  step: string,
+  input: unknown,
+  output: unknown
+): Promise<void> {
+  try {
+    await auditStep({ traceId, step, input, output, metadata: {} });
+  } catch {
+    // Audit failure is non-fatal in dev
+  }
+}
+
+export interface CanonicalPathwayData {
+  pathwayId: string;
+  sourceType: string;
+  complaintId: string;
+  syndromeId: string;
+  label: string;
+  requiredFeatures: string[];
+  positiveWeights: Record<string, number>;
+  negativeWeights: Record<string, number>;
+  exclusions: string[];
+  treatmentClass: string;
+  medicationKey?: string;
+  canonicalDisposition: string;
+  rationale: string[];
+  active?: boolean;
+}
+
+export async function createCanonicalPathway(
+  data: CanonicalPathwayData,
+  actorId: string,
+  traceId: string
+): Promise<{ ok: boolean; pathwayId: string }> {
+  await db.insert(canonicalPathways).values({
+    pathwayId:           data.pathwayId,
+    sourceType:          data.sourceType,
+    complaintId:         data.complaintId,
+    syndromeId:          data.syndromeId,
+    label:               data.label,
+    requiredFeatures:    data.requiredFeatures,
+    positiveWeights:     data.positiveWeights,
+    negativeWeights:     data.negativeWeights,
+    exclusions:          data.exclusions,
+    treatmentClass:      data.treatmentClass,
+    medicationKey:       data.medicationKey ?? null,
+    canonicalDisposition: data.canonicalDisposition,
+    rationale:           data.rationale,
+    active:              true,
+    createdBy:           actorId,
+    updatedBy:           actorId,
+  });
+
+  await safeAuditStep(
+    traceId,
+    "kb_canonical_pathway_created",
+    { actorId, ...data },
+    { pathwayId: data.pathwayId }
+  );
+
+  await safeReloadKbCache(traceId);
+  return { ok: true, pathwayId: data.pathwayId };
+}
+
+export async function retireCanonicalPathway(
+  pathwayId: string,
+  actorId: string,
+  traceId: string,
+  reason: string
+): Promise<{ ok: boolean; pathwayId: string }> {
+  await db
+    .update(canonicalPathways)
+    .set({
+      active:           false,
+      retiredAt:        new Date(),
+      retiredBy:        actorId,
+      retirementReason: reason,
+      updatedBy:        actorId,
+    })
+    .where(eq(canonicalPathways.pathwayId, pathwayId));
+
+  await safeAuditStep(
+    traceId,
+    "kb_canonical_pathway_retired",
+    { pathwayId, actorId, reason },
+    { pathwayId, active: false }
+  );
+
+  await safeReloadKbCache(traceId);
+  return { ok: true, pathwayId };
+}
+
+export async function listCanonicalPathways(
+  complaintId?: string,
+  activeOnly = true
+): Promise<any[]> {
+  try {
+    const result = complaintId
+      ? await query(
+          `SELECT * FROM canonical_pathways WHERE complaint_id = $1 ${activeOnly ? "AND active = TRUE" : ""} ORDER BY created_at DESC`,
+          [complaintId]
+        )
+      : await query(
+          `SELECT * FROM canonical_pathways ${activeOnly ? "WHERE active = TRUE" : ""} ORDER BY created_at DESC`
+        );
+    return result.rows;
+  } catch {
+    return [];
+  }
+}
+
+export async function getCanonicalPathway(pathwayId: string): Promise<any | null> {
+  try {
+    const result = await query(
+      `SELECT * FROM canonical_pathways WHERE pathway_id = $1 LIMIT 1`,
+      [pathwayId]
+    );
+    return result.rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertPhenotypeRegistry(entry: {
+  phenotypeHash: string;
+  complaintId: string;
+  canonicalSyndromeId?: string;
+  canonicalMedicationKey?: string;
+  canonicalDisposition: string;
+  confidence: string;
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO phenotype_registry
+         (phenotype_hash, complaint_id, canonical_syndrome_id, canonical_medication_key,
+          canonical_disposition, confidence, seen_count, first_seen_at, last_seen_at)
+       VALUES ($1,$2,$3,$4,$5,$6,1,NOW(),NOW())
+       ON CONFLICT (phenotype_hash) DO UPDATE
+         SET seen_count = phenotype_registry.seen_count + 1,
+             last_seen_at = NOW()`,
+      [
+        entry.phenotypeHash,
+        entry.complaintId,
+        entry.canonicalSyndromeId ?? null,
+        entry.canonicalMedicationKey ?? null,
+        entry.canonicalDisposition,
+        entry.confidence,
+      ]
+    );
+  } catch {
+    // Non-fatal
+  }
+}
+
+
+=================================================================================
+FILE: server/kb/schemas/kbValidationSchemas.ts
+=================================================================================
+import { z } from "zod";
+
+export const CanonicalPathwayPromotionSchema = z.object({
+  sourceType: z.enum(["complaint_pack", "golden_case", "manual"]),
+  complaintId: z.string().min(1),
+  syndromeId: z.string().min(1),
+  label: z.string().min(1).max(200),
+  requiredFeatures: z.array(z.string()).default([]),
+  positiveWeights: z.record(z.string(), z.number()).default({}),
+  negativeWeights: z.record(z.string(), z.number()).default({}),
+  exclusions: z.array(z.string()).default([]),
+  treatmentClass: z.enum([
+    "none",
+    "supportive",
+    "antibiotic",
+    "antiviral",
+    "steroid",
+    "bronchodilator",
+    "topical",
+    "antifungal",
+  ]),
+  medicationKey: z.string().optional(),
+  canonicalDisposition: z.enum([
+    "home_supportive_care",
+    "home_with_rx",
+    "follow_up_primary_care",
+    "same_day_urgent_care",
+    "er_now",
+    "hospital_admission",
+  ]),
+  rationale: z.array(z.string()).default([]),
+  actorId: z.string().min(1),
+  traceId: z.string().min(1),
+});
+
+export const CanonicalPathwayRetireSchema = z.object({
+  pathwayId: z.string().min(1),
+  actorId: z.string().min(1),
+  traceId: z.string().min(1),
+  reason: z.string().min(3),
+});
+
+export const CanonicalDraftFromCaseSchema = z.object({
+  complaint: z.string().min(1),
+  features: z.record(z.string(), z.any()),
+  expectedDisposition: z.string().optional(),
+  actorId: z.string().min(1),
+  traceId: z.string().min(1),
+});
+
+export type CanonicalPathwayPromotionInput = z.infer<typeof CanonicalPathwayPromotionSchema>;
+export type CanonicalPathwayRetireInput   = z.infer<typeof CanonicalPathwayRetireSchema>;
+export type CanonicalDraftFromCaseInput   = z.infer<typeof CanonicalDraftFromCaseSchema>;
+
+
+=================================================================================
+FILE: server/kb/middleware/kbAuthMiddleware.ts
+=================================================================================
+import type { Request, Response, NextFunction } from "express";
+
+export function requireKbAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const role =
+    (req.headers["x-kb-role"] as string | undefined) ||
+    (req as any).user?.role ||
+    (req as any).actor?.role;
+
+  if (!role || !["kb_admin", "system_admin", "super_admin"].includes(role)) {
+    res.status(403).json({
+      ok: false,
+      code: "KB_ADMIN_REQUIRED",
+      message: "KB admin role required for canonical pathway writes.",
+    });
+    return;
+  }
+
+  next();
+}
+
+export function requireKbWrite(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const role =
+    (req.headers["x-kb-role"] as string | undefined) ||
+    (req as any).user?.role ||
+    (req as any).actor?.role;
+
+  const allowed = ["kb_admin", "system_admin", "super_admin", "physician", "clinician"];
+  if (!role || !allowed.includes(role)) {
+    res.status(403).json({
+      ok: false,
+      code: "KB_WRITE_REQUIRED",
+      message: "KB write role required.",
+    });
+    return;
+  }
+
+  next();
+}
+
+
+=================================================================================
+FILE: server/kb/routes/kbAdminRoutes.ts
+=================================================================================
+import { Router } from "express";
+import { requireKbAdmin } from "../middleware/kbAuthMiddleware";
+import {
+  previewCanonicalPromotionHandler,
+  promoteCanonicalPathwayHandler,
+  retireCanonicalPathwayHandler,
+  generateCanonicalDraftFromCaseHandler,
+} from "../../services/kbAdminConsistencyIntegration";
+import { listCanonicalPathways, getCanonicalPathway } from "../services/kbWriteService";
+
+const router = Router();
+
+router.post(
+  "/canonical-pathways/preview-promotion",
+  requireKbAdmin,
+  previewCanonicalPromotionHandler
+);
+
+router.post(
+  "/canonical-pathways/promote",
+  requireKbAdmin,
+  promoteCanonicalPathwayHandler
+);
+
+router.post(
+  "/canonical-pathways/retire",
+  requireKbAdmin,
+  retireCanonicalPathwayHandler
+);
+
+router.post(
+  "/canonical-pathways/generate-draft-from-case",
+  requireKbAdmin,
+  generateCanonicalDraftFromCaseHandler
+);
+
+router.get("/canonical-pathways", async (req, res) => {
+  const { complaintId } = req.query;
+  const pathways = await listCanonicalPathways(complaintId as string | undefined);
+  res.json({ ok: true, pathways });
+});
+
+router.get("/canonical-pathways/:pathwayId", async (req, res) => {
+  const pathway = await getCanonicalPathway(req.params.pathwayId);
+  if (!pathway) return res.status(404).json({ ok: false, error: "Not found" });
+  res.json({ ok: true, pathway });
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/cache/triageCache.ts
+=================================================================================
+/**
+ * server/cache/triageCache.ts — In-process LRU cache for triage decisions
+ *
+ * FIX (Code Review Issue #21):
+ *   Previously buildTriageCacheKey() produced a key from complaint + answers only.
+ *   This caused two critical problems:
+ *
+ *   1. Cross-tenant cache pollution: Two different clinics with the same complaint
+ *      and answer set received identical cache entries. A cached decision for
+ *      Clinic A's KB version was served to Clinic B without re-evaluation.
+ *
+ *   2. Stale KB decisions: After a KB rule update, the triage key was unchanged
+ *      because it didn't include the KB version. Patients triaged after a rule
+ *      update received the pre-update disposition until the TTL expired or the
+ *      cache was manually invalidated.
+ *
+ *   Fixed: buildTriageCacheKey() now requires clinicId and kbVersion. Both are
+ *   mandatory parameters (typed, not optional) so callers cannot accidentally
+ *   omit them. Existing callers that don't have a kbVersion should pass the
+ *   current KB migration timestamp or content hash.
+ *
+ *   invalidateTriageCacheForClinic() added: KB write hooks can call this to
+ *   immediately evict all entries for a clinic after a rule update, rather
+ *   than waiting for TTL expiry.
+ */
+
+import LRU from "lru-cache";
+
+const TTL_MS = 1000 * 60 * 5;   // 5-minute TTL
+
+const cache = new LRU<string, any>({
+  max:    2000,
+  maxAge: TTL_MS,
+});
+
+let hits   = 0;
+let misses = 0;
+
+// ── Cache access ──────────────────────────────────────────────────────────────
+
+export function getCachedTriage(key: string): any | undefined {
+  const entry = cache.get(key);
+  if (entry !== undefined) {
+    hits++;
+    return entry;
+  }
+  misses++;
+  return undefined;
+}
+
+export function setCachedTriage(key: string, result: any): void {
+  cache.set(key, result);
+}
+
+// ── Key construction (Issue #21 FIX) ─────────────────────────────────────────
+//
+// clinicId  — prevents cross-tenant cache sharing
+// kbVersion — prevents stale decisions after KB rule updates
+//
+// Both parameters are required (not optional) so the compiler catches omissions.
+
+export function buildTriageCacheKey(
+  complaint:  string,
+  answers:    Record<string, any>,
+  clinicId:   string,    // FIX: now required — isolates cache per tenant
+  kbVersion:  string,    // FIX: now required — invalidates on KB rule changes
+): string {
+  const normalized = {
+    clinic:   clinicId,                           // tenant isolation
+    kbv:      kbVersion,                          // KB version binding
+    c:        complaint.trim().toLowerCase(),
+    a: Object.fromEntries(
+      Object.entries(answers)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .filter(([, v]) => v !== undefined && v !== null)
+    ),
+  };
+  return JSON.stringify(normalized);
+}
+
+// ── Cache invalidation ────────────────────────────────────────────────────────
+
+/** Invalidate all cached triage decisions for a specific clinic (e.g. after KB update) */
+export function invalidateTriageCacheForClinic(clinicId: string): number {
+  const keysToDelete: string[] = [];
+  cache.forEach((_value, key) => {
+    try {
+      const parsed = JSON.parse(key);
+      if (parsed.clinic === clinicId) keysToDelete.push(key);
+    } catch {
+      // malformed key — skip
+    }
+  });
+  for (const key of keysToDelete) cache.del(key);
+  return keysToDelete.length;
+}
+
+/** Invalidate all cached decisions (full flush — use sparingly) */
+export function invalidateTriageCache(): void {
+  cache.reset();
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+export function getTriageCacheStats() {
+  return {
+    size:    cache.length,
+    maxSize: 2000,
+    ttlMs:   TTL_MS,
+    hits,
+    misses,
+    hitRate: hits + misses > 0 ? Number((hits / (hits + misses)).toFixed(4)) : 0,
+  };
+}
+
+
+=================================================================================
+FILE: server/cache/responseCache.ts
+=================================================================================
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+class ResponseCache {
+  private store = new Map<string, CacheEntry<any>>();
+  private maxSize: number;
+
+  constructor(maxSize = 500) {
+    this.maxSize = maxSize;
+    setInterval(() => this.evictExpired(), 60_000).unref();
+  }
+
+  get<T>(key: string): T | null {
+    const entry = this.store.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+    return entry.value as T;
+  }
+
+  set<T>(key: string, value: T, ttlMs = 300_000): void {
+    if (this.store.size >= this.maxSize) {
+      const firstKey = this.store.keys().next().value;
+      if (firstKey) this.store.delete(firstKey);
+    }
+    this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+  }
+
+  delete(key: string): void {
+    this.store.delete(key);
+  }
+
+  clear(): void {
+    this.store.clear();
+  }
+
+  size(): number {
+    return this.store.size;
+  }
+
+  private evictExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.store.entries()) {
+      if (now > entry.expiresAt) this.store.delete(key);
+    }
+  }
+
+  stats() {
+    return {
+      size: this.store.size,
+      maxSize: this.maxSize,
+      utilizationPct: Math.round((this.store.size / this.maxSize) * 100),
+    };
+  }
+}
+
+export const responseCache = new ResponseCache(500);
+
+
+=================================================================================
+FILE: server/cache/semanticCache.ts
+=================================================================================
+/**
+ * semanticCache.ts — Redis-backed semantic cache for RAG queries
+ *
+ * Article: "Before any of these hits the LLM, add a semantic cache. Identical
+ *  and near-identical queries get served from cache instead of burning tokens."
+ *
+ * How it works:
+ *   On query → embed the question → compare embedding against all cached embeddings
+ *   If cosine similarity ≥ 0.92 → return cached answer (cache hit)
+ *   If miss → run full pipeline → store embedding + answer in Redis
+ *
+ * Clinical benefit:
+ *   "What is the first-line antibiotic for CAP?" and "What antibiotic do I use
+ *   for community-acquired pneumonia?" have cosine similarity ~0.94. The second
+ *   query serves from cache in <1ms instead of re-running GPT-4o + retrieval.
+ *
+ * Graceful fallback: if Redis is unavailable, returns null (cache miss) and
+ *   skips storage — the system continues normally without caching.
+ *
+ * TTL: 3600 seconds (1 hour). Clinical guidelines rarely change intra-shift.
+ */
+
+import { cosineSimilarity } from "../retrieval/hybridRetriever";
+
+// ── Redis lazy initialization ─────────────────────────────────────────────────
+
+let _redis: import("ioredis").default | null = null;
+
+async function getRedis(): Promise<import("ioredis").default | null> {
+  if (_redis) return _redis;
+  const url = process.env.REDIS_URL;
+  if (!url) return null;
+  try {
+    const { default: Redis } = await import("ioredis");
+    const client = new Redis(url, {
+      lazyConnect:      true,
+      connectTimeout:   3000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue:   false,
+    });
+    await client.connect();
+    _redis = client;
+    return _redis;
+  } catch {
+    return null;
+  }
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface CacheEntry {
+  query:     string;
+  embedding: number[];
+  response:  string;
+  cachedAt:  number;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const CACHE_PREFIX   = "rag_cache:";
+const SIM_THRESHOLD  = 0.92;
+const TTL_SECONDS    = 3600;
+
+// ── checkCache ────────────────────────────────────────────────────────────────
+
+export async function checkCache(
+  query:     string,
+  embedding: number[],
+): Promise<string | null> {
+  const redis = await getRedis();
+  if (!redis) return null;
+
+  try {
+    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    if (keys.length === 0) return null;
+
+    for (const key of keys) {
+      const raw = await redis.get(key);
+      if (!raw) continue;
+
+      const entry: CacheEntry = JSON.parse(raw);
+      if (!entry.embedding || entry.embedding.length === 0) continue;
+
+      const sim = cosineSimilarity(embedding, entry.embedding);
+      if (sim >= SIM_THRESHOLD) {
+        return entry.response;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── storeCache ────────────────────────────────────────────────────────────────
+
+export async function storeCache(
+  query:     string,
+  embedding: number[],
+  response:  string,
+): Promise<void> {
+  const redis = await getRedis();
+  if (!redis) return;
+
+  try {
+    const entry: CacheEntry = {
+      query,
+      embedding,
+      response,
+      cachedAt: Date.now(),
+    };
+    const key = `${CACHE_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await redis.set(key, JSON.stringify(entry), "EX", TTL_SECONDS);
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
+// ── clearCache ────────────────────────────────────────────────────────────────
+
+export async function clearCache(): Promise<{ cleared: number }> {
+  const redis = await getRedis();
+  if (!redis) return { cleared: 0 };
+
+  try {
+    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    if (keys.length > 0) await redis.del(...keys);
+    return { cleared: keys.length };
+  } catch {
+    return { cleared: 0 };
+  }
+}
+
+// ── cacheStats ────────────────────────────────────────────────────────────────
+
+export async function cacheStats(): Promise<{
+  entries: number;
+  redisConnected: boolean;
+  threshold: number;
+  ttlSeconds: number;
+}> {
+  const redis = await getRedis();
+  if (!redis) return { entries: 0, redisConnected: false, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
+
+  try {
+    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    return { entries: keys.length, redisConnected: true, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
+  } catch {
+    return { entries: 0, redisConnected: false, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
+  }
+}
+
+
+=================================================================================
+FILE: server/clinical/diagnosisPriorLoader.ts
+=================================================================================
+export interface DiagnosisPrior {
+  diagnosis: string;
+  baseProbability: number;
+  featureLikelihoods: Record<string, number>;
+  ruleId?: string;
+  version?: number;
+  tableName?: string;
+}
+
+export type PriorSource = "KB_DB" | "CSV" | "GOOGLE_SHEETS_CACHE" | "FALLBACK_HARDCODED";
+
+export interface PriorBundle {
+  ccId: string;
+  version: number;
+  loadedAt: string;
+  source: PriorSource;
+  priors: DiagnosisPrior[];
+}
+
+export interface RawPriorRow {
+  ccId: string;
+  diagnosis: string;
+  baseProbability: number;
+  feature: string;
+  likelihood: number;
+  version: number;
+}
+
+// ── Validation helpers ────────────────────────────────────────────────────────
+
+function isFiniteProbability(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= 1
+  );
+}
+
+function normalizeFeatureName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+export function validateDiagnosisPrior(prior: DiagnosisPrior, ccId: string): void {
+  if (!prior.diagnosis?.trim()) {
+    throw new Error(`[Priors] ${ccId}: missing diagnosis name`);
+  }
+
+  if (!isFiniteProbability(prior.baseProbability)) {
+    throw new Error(
+      `[Priors] ${ccId}:${prior.diagnosis} invalid baseProbability=${prior.baseProbability} (must be finite and in (0,1])`
+    );
+  }
+
+  if (
+    !prior.featureLikelihoods ||
+    typeof prior.featureLikelihoods !== "object" ||
+    Array.isArray(prior.featureLikelihoods)
+  ) {
+    throw new Error(
+      `[Priors] ${ccId}:${prior.diagnosis} missing featureLikelihoods object`
+    );
+  }
+
+  const featureNames = Object.keys(prior.featureLikelihoods);
+
+  if (featureNames.length === 0) {
+    throw new Error(
+      `[Priors] ${ccId}:${prior.diagnosis} has no modeled features`
+    );
+  }
+
+  for (const feature of featureNames) {
+    if (!normalizeFeatureName(feature)) {
+      throw new Error(
+        `[Priors] ${ccId}:${prior.diagnosis} contains blank feature name`
+      );
+    }
+
+    const value = prior.featureLikelihoods[feature];
+    if (!isFiniteProbability(value)) {
+      throw new Error(
+        `[Priors] ${ccId}:${prior.diagnosis} invalid likelihood ${feature}=${value} (must be finite and in (0,1])`
+      );
+    }
+  }
+}
+
+export function validatePriorBundle(bundle: PriorBundle): void {
+  if (!bundle.ccId?.trim()) {
+    throw new Error("[Priors] Missing ccId in bundle");
+  }
+
+  if (!Number.isFinite(bundle.version) || bundle.version <= 0) {
+    throw new Error(
+      `[Priors] ${bundle.ccId}: invalid version=${bundle.version}`
+    );
+  }
+
+  if (!bundle.loadedAt?.trim()) {
+    throw new Error(`[Priors] ${bundle.ccId}: missing loadedAt`);
+  }
+
+  if (!Array.isArray(bundle.priors) || bundle.priors.length === 0) {
+    throw new Error(`[Priors] ${bundle.ccId}: no priors loaded`);
+  }
+
+  const seenDiagnoses = new Set<string>();
+
+  for (const prior of bundle.priors) {
+    validateDiagnosisPrior(prior, bundle.ccId);
+
+    const key = prior.diagnosis.trim().toLowerCase();
+    if (seenDiagnoses.has(key)) {
+      throw new Error(
+        `[Priors] ${bundle.ccId}: duplicate diagnosis "${prior.diagnosis}"`
+      );
+    }
+    seenDiagnoses.add(key);
+  }
+
+  const allFeatures = new Set<string>();
+  for (const prior of bundle.priors) {
+    Object.keys(prior.featureLikelihoods).forEach((f) =>
+      allFeatures.add(normalizeFeatureName(f))
+    );
+  }
+
+  if (allFeatures.size < 3) {
+    console.warn(
+      `[Priors] ${bundle.ccId}: very low feature coverage (${allFeatures.size} distinct features across all diagnoses)`
+    );
+  }
+}
+
+export function assemblePriorBundle(
+  ccId: string,
+  rows: RawPriorRow[]
+): PriorBundle {
+  const wrongComplaint = rows.find((r) => r.ccId !== ccId);
+  if (wrongComplaint) {
+    throw new Error(
+      `[Priors] Complaint contamination: expected ccId="${ccId}", found row for ccId="${wrongComplaint.ccId}"`
+    );
+  }
+
+  const byDiagnosis = new Map<string, DiagnosisPrior>();
+
+  for (const row of rows) {
+    if (!byDiagnosis.has(row.diagnosis)) {
+      byDiagnosis.set(row.diagnosis, {
+        diagnosis: row.diagnosis,
+        baseProbability: row.baseProbability,
+        featureLikelihoods: {},
+        version: row.version,
+        tableName: "diagnosis_priors",
+      });
+    }
+    byDiagnosis.get(row.diagnosis)!.featureLikelihoods[row.feature] =
+      row.likelihood;
+  }
+
+  const bundle: PriorBundle = {
+    ccId,
+    version: rows[0]?.version ?? 1,
+    loadedAt: new Date().toISOString(),
+    source: "KB_DB",
+    priors: Array.from(byDiagnosis.values()),
+  };
+
+  validatePriorBundle(bundle);
+  return bundle;
+}
+
+export function validateScorerCompatibility(
+  scoringModule: string,
+  priors: PriorBundle
+): void {
+  if (scoringModule === "bayesian" && priors.priors.length === 0) {
+    throw new Error(
+      "[Priors] Bayesian scorer requires at least one diagnosis prior"
+    );
+  }
+
+  if (scoringModule !== "bayesian" && priors.priors.length > 0) {
+    console.warn(
+      `[Priors] Bundle has ${priors.priors.length} diagnosis prior(s) but scoringModule="${scoringModule}" — verify this is intentional`
+    );
+  }
+}
+
+// ── Cache + lazy load ─────────────────────────────────────────────────────────
+
+const priorCache = new Map<string, PriorBundle>();
+const PRIOR_CACHE_TTL_MS = 5 * 60_000;
+
+async function loadPriorsFromRegistry(_ccId: string): Promise<PriorBundle> {
+  throw new Error(
+    `[Priors] No registry adapter registered — call registerPriorLoader() first`
+  );
+}
+
+type PriorLoader = (ccId: string) => Promise<RawPriorRow[]>;
+let _registeredLoader: PriorLoader | null = null;
+
+export function registerPriorLoader(loader: PriorLoader): void {
+  _registeredLoader = loader;
+}
+
+export async function loadComplaintPriors(ccId: string): Promise<PriorBundle> {
+  const cached = priorCache.get(ccId);
+  const cacheFresh =
+    cached &&
+    Date.now() - new Date(cached.loadedAt).getTime() < PRIOR_CACHE_TTL_MS;
+
+  if (cacheFresh) {
+    return cached!;
+  }
+
+  try {
+    if (!_registeredLoader) {
+      await loadPriorsFromRegistry(ccId);
+      throw new Error("unreachable");
+    }
+
+    const rows = await _registeredLoader(ccId);
+    const bundle = assemblePriorBundle(ccId, rows);
+    priorCache.set(ccId, bundle);
+    return bundle;
+  } catch (err) {
+    console.error(`[Priors] Failed to load priors for "${ccId}":`, err);
+
+    if (cached) {
+      console.warn(
+        `[Priors] Using last-known-good prior bundle for "${ccId}" (version=${cached.version})`
+      );
+      return cached;
+    }
+
+    throw err;
+  }
+}
+
+export function invalidatePriorCache(ccId?: string): void {
+  if (ccId) {
+    priorCache.delete(ccId);
+  } else {
+    priorCache.clear();
+  }
+}
+
+export function getPriorCacheSnapshot(): Map<string, PriorBundle> {
+  return new Map(priorCache);
+}
+
+export function _injectPriorCacheForTest(
+  ccId: string,
+  bundle: PriorBundle
+): void {
+  priorCache.set(ccId, bundle);
+}
+
+
+=================================================================================
+FILE: server/clinical/bayesianPriorService.ts
+=================================================================================
+import { pool } from "../db/pool";
+import { ClinicalPopulationFlags } from "../db/sharedTypes";
+
+type PriorShiftMap = Record<string, number>;
+
+const priorCache = new Map<string, { value: PriorShiftMap; expiresAt: number }>();
+const TTL_MS = 5 * 60_000;
+
+function flagsKey(flags: ClinicalPopulationFlags): string {
+  return (
+    Object.entries(flags)
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+      .sort()
+      .join("|") || "default"
+  );
+}
+
+export async function getPopulationPriorMultipliers(
+  flags: ClinicalPopulationFlags
+): Promise<PriorShiftMap> {
+  const key = flagsKey(flags);
+  const hit = priorCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+  const activeFlags = Object.entries(flags)
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+
+  if (!activeFlags.length) {
+    const empty: PriorShiftMap = {};
+    priorCache.set(key, { value: empty, expiresAt: Date.now() + TTL_MS });
+    return empty;
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT population_flag, diagnosis_key, multiplier
+       FROM kb_population_priors
+       WHERE population_flag = ANY($1::text[])
+         AND active = true`,
+      [activeFlags]
+    );
+
+    const map: PriorShiftMap = {};
+    for (const row of rows) {
+      const current = map[row.diagnosis_key] ?? 1;
+      map[row.diagnosis_key] = current * Number(row.multiplier);
+    }
+
+    priorCache.set(key, { value: map, expiresAt: Date.now() + TTL_MS });
+    return map;
+  } catch (e: any) {
+    console.error("[BayesianPriorService] Failed to load population priors:", e?.message);
+    return {};
+  }
+}
+
+export function invalidatePriorCache(): void {
+  priorCache.clear();
+  console.log("[BayesianPriorService] Prior cache invalidated");
+}
+
+export function getPriorCacheStats(): { size: number; keys: string[] } {
+  return { size: priorCache.size, keys: [...priorCache.keys()] };
+}

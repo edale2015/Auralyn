@@ -1,0 +1,195 @@
+TOP 10 FINDINGS
+1.
+Issue Title: kbConsistencyAudit.ts joins on entity_id which doesn't exist in kb_entity_store — audit is entirely broken
+Severity: Critical
+Files: server/kb/kbConsistencyAudit.ts
+One-sentence risk: The consistency audit SQL joins kb_entity_store.entity_id against domain table primary keys, but kb_entity_store has no entity_id column — the column is id (serial) and entity_key (text), so every audit run returns fabricated missing/orphaned counts and the audit is structurally invalid.
+2.
+Issue Title: kbAuthMiddleware.ts accepts x-kb-role header as role — trivially spoofable
+Severity: Critical
+Files: server/kb/middleware/kbAuthMiddleware.ts, server/kb/routes/kbAdminRoutes.ts
+One-sentence risk: Any HTTP client can set x-kb-role: kb_admin in a request header to gain full KB write access including promoting canonical pathways and retiring safety rules, with no JWT verification or session validation whatsoever.
+3.
+Issue Title: kbRuntime.ts cache failure returns [] silently — empty KB drives live triage
+Severity: Critical
+Files: server/kb/kbRuntime.ts
+One-sentence risk: All three loaders (loadPriorsFromDb, loadRedFlagsFromDb, loadTreatmentsFromDb) catch DB exceptions and return [], so a DB outage causes the live triage engine to run with zero priors, zero red flag rules, and zero treatment rules — producing clinical decisions from hardcoded fallbacks or empty outputs with no alert.
+4.
+Issue Title: semanticCache.ts iterates ALL Redis keys on every query — O(n) scan in production
+Severity: Critical
+Files: server/cache/semanticCache.ts
+One-sentence risk: checkCache() calls redis.keys("rag_cache:*") on every incoming RAG query, which is a full keyspace scan that blocks the Redis event loop — in production with thousands of entries this degrades to seconds per query and can cause Redis to become unresponsive for all other operations.
+5.
+Issue Title: kbSeeder.ts hardcodes Bayesian priors in source code that duplicate kb_diagnosis_rules — two sources of truth exist simultaneously
+Severity: Critical
+Files: server/kb/kbSeeder.ts, server/clinical/bayesianEngine.ts
+One-sentence risk: BAYESIAN_PRIORS in kbSeeder.ts and PRIORS in bayesianEngine.ts contain identical diagnosis data maintained independently — when a clinician updates priors in the DB via the admin UI, the seeder's hardcoded values overwrite them on every re-seed because onConflictDoUpdate always sets active: true and restores the code-level values.
+6.
+Issue Title: schema.ts has no DB-level foreign key from kbFeatureLikelihoods.ruleId to kbDiagnosisRules.ruleId — referential integrity is unenforced
+Severity: High
+Files: shared/schema.ts
+One-sentence risk: kb_feature_likelihoods.rule_id is defined as a plain text column with a comment saying it's a FK to kb_diagnosis_rules.rule_id, but there is no .references() constraint — orphaned likelihood rows for deleted or renamed rules accumulate silently and corrupt Bayesian priors.
+7.
+Issue Title: kbWriteService.ts safeReloadKbCache and safeAuditStep both silently swallow all errors — canonical pathway writes are neither audited nor cache-invalidated on failure
+Severity: High
+Files: server/kb/services/kbWriteService.ts
+One-sentence risk: Both safeReloadKbCache and safeAuditStep catch all exceptions and do nothing, so a canonical pathway promotion may succeed in the DB while the audit trail is never written and the cache is never invalidated — the next patient triage uses the pre-update cache with no record of the change.
+8.
+Issue Title: kbRuntime.ts reloadAndRewireKbCache is not atomic — partial reload leaves cache incoherent
+Severity: High
+Files: server/kb/kbRuntime.ts
+One-sentence risk: invalidateKbCache() sets all three caches to null before the new data is loaded; if any of the three loadFrom*Db() calls fails mid-reload, the other two caches are populated while the failed cache remains null, causing the Bayesian engine, red flag evaluator, and treatment engine to operate from different KB generations.
+9.
+Issue Title: diagnosisPriorLoader.ts loadPriorsFromRegistry always throws — the registered loader pattern has a dead code path
+Severity: High
+Files: server/clinical/diagnosisPriorLoader.ts
+One-sentence risk: loadPriorsFromRegistry() unconditionally throws "No registry adapter registered" and loadComplaintPriors() calls it only when _registeredLoader is null, meaning no complaint can ever be loaded without first calling registerPriorLoader() — but there is no startup call to registerPriorLoader() visible in this codebase, so all per-complaint prior loading silently fails.
+10.
+Issue Title: kbConsistencyMonitor.ts calls getKbCache() but kbRuntime.ts exports no function by that name
+Severity: High
+Files: server/kb/kbConsistencyMonitor.ts, server/kb/kbRuntime.ts
+One-sentence risk: kbConsistencyMonitor.ts imports and calls getKbCache() from kbRuntime, but kbRuntime.ts exports getKbCacheStatus() (not getKbCache()) — the monitor throws a runtime TypeError on every poll cycle, disabling all cross-instance KB drift detection.
+
+FULL FINDINGS
+
+Issue Title: kbConsistencyAudit.ts — SQL joins on non-existent entity_id column
+Severity: Critical
+Category: Real defect
+Files: server/kb/kbConsistencyAudit.ts
+What is wrong: Both queries join kb_entity_store on k.entity_id, but the kbEntityStore table in shared/schema.ts has no column named entity_id. The column is id (serial PK) and entity_key (text domain key). The audit SQL will either fail with a column-not-found error on every run, or (if some legacy column exists) join on the wrong field and return meaningless counts.
+Why it matters: The KB consistency audit is the mechanism by which operators verify that domain table records (red flags, diagnoses, treatments) are synchronized with the entity store. If it always errors or produces wrong counts, KB corruption goes undetected indefinitely.
+Evidence from code: LEFT JOIN kb_entity_store k ON k.entity_type = $1 AND k.entity_id = d.${idCol}::text — entity_id is not a column in kbEntityStore per shared/schema.ts.
+Recommended fix: Replace k.entity_id with k.entity_key in both queries. The join should be k.entity_key = d.${idCol}::text where idCol is the domain table's natural key (e.g. rule_id, not id). Update ConsistencyCheck.idColumn to reference the natural key column for each table.
+Type: Real defect
+
+Issue Title: kbAuthMiddleware.ts — x-kb-role header accepted as auth
+Severity: Critical
+Category: Real defect / Security
+Files: server/kb/middleware/kbAuthMiddleware.ts, server/kb/routes/kbAdminRoutes.ts
+What is wrong: Both requireKbAdmin and requireKbWrite resolve role from req.headers["x-kb-role"] as the first (highest-priority) check, before falling back to req.user?.role. Any client can set this header with no authentication.
+Why it matters: KB admin routes control canonical pathway promotion and retirement, which directly determines clinical dispositions. An unauthenticated attacker can promote a pathway that routes all chest pain patients to home care, with no valid session required.
+Evidence from code: const role = (req.headers["x-kb-role"] as string | undefined) || (req as any).user?.role. The x-kb-role header check has highest priority.
+Recommended fix: Remove the x-kb-role header check entirely. Role must be derived exclusively from a verified JWT or session cookie using requirePhysician / requireProviderSession from the auth layer. Never trust client-supplied role headers.
+Type: Real defect
+
+Issue Title: kbRuntime.ts — all loaders return [] on DB failure, silently driving live triage with empty KB
+Severity: Critical
+Category: Clinical safety / Real defect
+Files: server/kb/kbRuntime.ts
+What is wrong: loadPriorsFromDb, loadRedFlagsFromDb, and loadTreatmentsFromDb each have a catch block that logs a warning and returns []. When these empty arrays are cached and returned to the triage pipeline: red flag detection finds no rules (no flags triggered for any patient), treatment recommendations return empty, and the Bayesian engine gets no priors (falls back to hardcoded PRIORS table, which may be out of sync with clinical updates).
+Why it matters: A DB blip during a busy shift silently serves [] to setRuntimePriors(), which the Bayesian engine logs as a fallback to hardcoded values. An operator with no visibility into the fallback will not know that all patients are being triaged on stale hardcoded logic. A patient with a DB-defined red flag receives no safety escalation.
+Evidence from code: } catch (err) { console.warn("[KbRuntime] Failed to load diagnosis priors from DB:", err); return []; } — identical pattern in all three loaders.
+Recommended fix: On DB failure: (1) throw a typed KBLoadError rather than returning []; (2) in the cache warm/reload path, catch the error and emit an alert rather than caching the empty result; (3) if a prior cache exists, serve it as a last-known-good value and log a warning that the cache is stale.
+Type: Real defect
+
+Issue Title: semanticCache.ts — redis.keys() on every query is a blocking O(n) operation
+Severity: Critical
+Category: Architectural risk / Performance
+Files: server/cache/semanticCache.ts
+What is wrong: checkCache() calls redis.keys("rag_cache:*") on every incoming query, then fetches each matching key individually with redis.get(key) in a sequential loop. KEYS in Redis is an O(n) operation that blocks the single-threaded Redis event loop for the duration of the scan.
+Why it matters: With 1,000 cached entries, every RAG query triggers a full keyspace scan. In production with many concurrent users, this cascades: queries pile up waiting for Redis, latency spikes from <1ms to seconds, and Redis becomes a bottleneck for all other operations (including KB cache invalidation and escalation counters).
+Evidence from code: const keys = await redis.keys("${CACHE_PREFIX}*"); ... for (const key of keys) { const raw = await redis.get(key); ...
+Recommended fix: Use Redis HSCAN with a hash structure, or store embeddings in a Redis sorted set with TTL-managed members. For semantic similarity, use a purpose-built vector store (pgvector, Weaviate, Pinecone) rather than iterating all cache entries. At minimum, use SCAN (cursor-based, non-blocking) instead of KEYS.
+Type: Architectural risk
+
+Issue Title: kbSeeder.ts hardcoded BAYESIAN_PRIORS overwrites DB priors on every re-seed
+Severity: Critical
+Category: Source-of-truth integrity / Real defect
+Files: server/kb/kbSeeder.ts, server/clinical/bayesianEngine.ts
+What is wrong: upsertBayesianPriors() is called unconditionally on every seedKnowledgeBase() invocation. It uses onConflictDoUpdate with set: { baseProbability: bp.baseProbability, featureLikelihoods: bp.featureLikelihoods, active: true }. This means: a clinician who updates Influenza A's feature likelihoods via the KB admin UI will have their edits overwritten the next time the server re-seeds. Additionally, the identical prior values exist in bayesianEngine.ts PRIORS array, creating a third source of truth (hardcoded TS, DB seeded, DB UI-edited).
+Why it matters: The entire KB architecture is premised on the DB being the authoritative source and the UI being the editing interface. The seeder silently violates this every restart or re-seed, making clinical updates non-persistent without a deploy.
+Evidence from code: onConflictDoUpdate({ target: kbDiagnosisRules.ruleId, set: { baseProbability: bp.baseProbability, featureLikelihoods: bp.featureLikelihoods as any, active: true } }) — unconditionally overwrites any admin edits.
+Recommended fix: Replace onConflictDoUpdate with onConflictDoNothing for BAYESIAN_PRIORS. If update behavior is needed, require an explicit migration version bump and a separate admin-gated seeder route.
+Type: Real defect
+
+Issue Title: schema.ts — kb_feature_likelihoods.rule_id has no FK constraint
+Severity: High
+Category: Architectural risk / Data integrity
+Files: shared/schema.ts
+What is wrong: kbFeatureLikelihoods.ruleId is defined as text("rule_id").notNull() with only a comment saying it's a FK to kb_diagnosis_rules.rule_id. There is no .references(() => kbDiagnosisRules.ruleId) call. Similarly, kbFeatureModels.ruleId has the same missing FK.
+Why it matters: When a diagnosis rule is deactivated or its ruleId changes (e.g. renamed via admin), the corresponding likelihood rows are not cascade-deleted or flagged. loadPriorsFromDb JOINs these two tables — orphaned likelihood rows for non-existent rules are silently excluded by the JOIN but accumulate indefinitely. A rule_id typo in an admin edit creates a permanently invisible orphan.
+Evidence from code: ruleId: text("rule_id").notNull() — no .references(...) in kbFeatureLikelihoods or kbFeatureModels.
+Recommended fix: Add .references(() => kbDiagnosisRules.ruleId, { onDelete: "cascade" }) to kbFeatureLikelihoods.ruleId and kbFeatureModels.ruleId. Run a migration to add the FK constraint. Add a consistency check in kbConsistencyAudit.ts for orphaned feature likelihoods.
+Type: Architectural risk
+
+Issue Title: kbWriteService.ts — audit and cache reload silently fail on canonical pathway writes
+Severity: High
+Category: Real defect / Compliance
+Files: server/kb/services/kbWriteService.ts
+What is wrong: safeAuditStep and safeReloadKbCache both catch all exceptions and return without logging or re-throwing. A canonical pathway promotion that fails to audit or fails to reload the cache produces no observable error — the write succeeds, the audit is silently missing, and the cache continues serving pre-update data.
+Why it matters: Canonical pathway changes directly affect clinical dispositions. Under HIPAA and FDA 21 CFR Part 11, every KB change must have an auditable record. A silent audit failure means there is no evidence of who promoted a pathway, when, or why — the governance trail is broken at the most clinically significant moment.
+Evidence from code: } catch { // Non-fatal — pathway is already written } in safeReloadKbCache; } catch { // Audit failure is non-fatal in dev } in safeAuditStep.
+Recommended fix: safeAuditStep should always log audit failures as errors and emit an alert. In production, audit failure should be treated as a blocking error for KB writes — a write that cannot be audited should be rolled back. safeReloadKbCache failure should surface as a degraded status in the cache health endpoint.
+Type: Real defect
+
+Issue Title: kbRuntime.ts reloadAndRewireKbCache — non-atomic reload exposes partial state window
+Severity: High
+Category: Architectural risk
+Files: server/kb/kbRuntime.ts
+What is wrong: reloadAndRewireKbCache() calls invalidateKbCache() (sets all three to null) then await Promise.all([loadPriorsFromDb(), loadRedFlagsFromDb(), loadTreatmentsFromDb()]). During the await, any concurrent request calls getKbPriors(), finds _priors === null, calls loadPriorsFromDb() again (a second in-flight load), and the result of whichever load finishes last wins. If loadRedFlagsFromDb fails, _redFlags stays null while the other two are populated — inconsistent state.
+Why it matters: During a reload triggered by a KB admin edit, concurrent patient triage requests may see: valid new priors + stale (null) red flags, or valid new red flags + old priors. A patient triaged during this window may receive a disposition based on inconsistent rule versions.
+Evidence from code: invalidateKbCache() sets all three to null, then const [priors, redFlags, treatments] = await Promise.all(...) — no lock, no atomic swap.
+Recommended fix: Build new cache entries into local variables first, then atomically assign all three: _priors = ...; _redFlags = ...; _treatments = ... in a synchronous block after all three loads succeed. If any fails, restore previous values rather than leaving nulls.
+Type: Architectural risk
+
+Issue Title: diagnosisPriorLoader.ts — registerPriorLoader is never called at startup, silently failing all per-complaint prior loads
+Severity: High
+Category: Incomplete scaffolding / Real defect
+Files: server/clinical/diagnosisPriorLoader.ts
+What is wrong: loadComplaintPriors(ccId) checks if (!_registeredLoader) and calls loadPriorsFromRegistry(ccId), which unconditionally throws "No registry adapter registered". Without a startup call to registerPriorLoader(), every call to loadComplaintPriors() throws, falls through to the catch, finds no cached bundle, and re-throws — no per-complaint priors are ever loaded.
+Why it matters: This entire module is dead code unless registerPriorLoader is called somewhere. If any code path relies on per-complaint priors rather than the global cache in kbRuntime.ts, those complaints always fail to load priors.
+Evidence from code: async function loadPriorsFromRegistry(_ccId: string): Promise<PriorBundle> { throw new Error("No registry adapter registered — call registerPriorLoader() first"); } — no call to registerPriorLoader exists in the reviewed files.
+Recommended fix: Either wire registerPriorLoader to the DB loader at server startup (pointing to the kbRuntime loader), or remove diagnosisPriorLoader.ts and route all prior loading through kbRuntime.getKbPriors(). Document which of these modules is authoritative.
+Type: Incomplete scaffolding
+
+Issue Title: kbConsistencyMonitor.ts calls getKbCache() which does not exist in kbRuntime.ts
+Severity: High
+Category: Real defect
+Files: server/kb/kbConsistencyMonitor.ts, server/kb/kbRuntime.ts
+What is wrong: kbConsistencyMonitor.ts imports and calls getKbCache() from "./kbRuntime". The kbRuntime.ts file exports getKbCacheStatus() (returns a stats object) and getKbPriorsSync() / getKbRedFlagsSync() / getKbTreatmentsSync(), but nothing named getKbCache(). The import will resolve to undefined at runtime and every call in the polling loop will throw TypeError: getKbCache is not a function.
+Why it matters: The KB consistency monitor is the only mechanism for detecting version drift across multiple instances. With the monitor throwing on every poll cycle, multi-instance deployments silently serve different KB versions to patients with no alert.
+Evidence from code: const kb = getKbCache(); const version = (kb as any).version ?? "unknown"; — getKbCache is not exported from kbRuntime.ts.
+Recommended fix: Replace getKbCache() with getKbCacheStatus() and derive the version from its output. Add a version field to the cache status object that reflects the content hash of the currently loaded KB.
+Type: Real defect
+
+Issue Title: bayesianPriorService.ts queries kb_population_priors which has no definition in schema.ts
+Severity: Medium
+Category: Incomplete scaffolding
+Files: server/clinical/bayesianPriorService.ts, shared/schema.ts
+What is wrong: getPopulationPriorMultipliers() queries SELECT population_flag, diagnosis_key, multiplier FROM kb_population_priors — this table is not defined anywhere in shared/schema.ts. It will throw a DB error on every call, caught silently and returning {} (empty multiplier map).
+Why it matters: Population-specific prior adjustments (pediatric, elderly, immunocompromised) are clinical features that modify diagnosis probabilities. If kb_population_priors doesn't exist, all these adjustments silently return empty maps — the system behaves as if no population flags were registered, potentially under-weighting diagnoses for high-risk populations.
+Evidence from code: await pool.query("SELECT population_flag, diagnosis_key, multiplier FROM kb_population_priors WHERE ...") — no kb_population_priors table in shared/schema.ts.
+Recommended fix: Add kb_population_priors to shared/schema.ts and generate a migration. Add a seedKnowledgeBase step that populates canonical population multipliers (e.g. pediatric fever thresholds, elderly fall-risk boosts).
+Type: Incomplete scaffolding
+
+Issue Title: responseCache.ts eviction strategy is FIFO on the insertion-order Map — not LRU
+Severity: Medium
+Category: Architectural risk
+Files: server/cache/responseCache.ts
+What is wrong: When the cache is full, set() evicts the first key returned by this.store.keys().next().value — which is the oldest-inserted key, not the least-recently-used key. JavaScript Map preserves insertion order, not access order. Frequently accessed entries that were inserted early are evicted before rarely accessed entries inserted recently.
+Why it matters: For a clinical response cache serving repeated queries for common complaints (chest pain, UTI), the most-used entries are most likely to be evicted under load, defeating the cache's purpose and increasing latency for the most common case.
+Evidence from code: const firstKey = this.store.keys().next().value; if (firstKey) this.store.delete(firstKey); — this is FIFO, not LRU.
+Recommended fix: Either use the existing lru-cache library (already imported in triageCache.ts) consistently for all caches, or implement a proper LRU by tracking access order with a doubly-linked list. Do not use Map for LRU without access-order tracking.
+Type: Architectural risk
+
+SUMMARY TABLE
+SeverityCountCritical5High5Medium2Low0
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+The combination of Finding #2 (x-kb-role header bypass) + Finding #1 (broken consistency audit) + Finding #3 (silent empty KB on DB failure) is the most dangerous cluster. Together they mean: anyone can write to the KB without authentication, the system cannot detect the resulting inconsistency, and a DB hiccup after a malicious write causes the triage engine to silently fall back to hardcoded priors — with no alert, no audit record, and no detection mechanism.
+Likely theater/scaffolding:
+kbConsistencyAudit.ts — structurally broken SQL joins make every audit run meaningless. diagnosisPriorLoader.ts — the loader registry pattern is defined but never wired, making all per-complaint prior loading permanently broken. bayesianPriorService.ts — queries a table (kb_population_priors) that doesn't exist in the schema, so all population prior adjustments silently return empty. The GOOGLE_SHEETS_CACHE variant in PriorSource — referenced but no Google Sheets adapter exists in the reviewed code.
+Highest ROI fixes:
+
+Remove x-kb-role header check from kbAuthMiddleware — one-line deletion, eliminates complete auth bypass on KB admin routes.
+Replace return [] with throw KBLoadError in all three kbRuntime loaders — prevents silent empty-KB triage, forces caller to handle DB failures explicitly.
+Fix kbConsistencyMonitor to call getKbCacheStatus() instead of getKbCache() — restores cross-instance drift detection.
+Fix kbConsistencyAudit SQL to join on entity_key instead of entity_id — restores the only KB integrity check.
+
+Needs cross-file review confirmation:
+
+registerPriorLoader() — confirm whether it is called anywhere in server startup outside the reviewed files; if not, diagnosisPriorLoader.ts is entirely dead code.
+getKbCache() — confirm whether this is a recently renamed export or was never implemented; if kbConsistencyMonitor is the only caller, the import failure silently disables drift detection in production.
+kb_population_priors table — confirm whether a migration exists outside shared/schema.ts; if not, bayesianPriorService.ts always returns empty multipliers and population-adjusted priors have never worked.
+safeReloadKbCache call signature — kbWriteService.ts passes traceId to reloadAndRewireKbCache(traceId) but kbRuntime.ts exports reloadAndRewireKbCache() with no parameters; this is a TypeScript error that may be masked by dynamic import.

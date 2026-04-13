@@ -1,23 +1,22 @@
 /**
  * semanticCache.ts — Redis-backed semantic cache for RAG queries
  *
- * Article: "Before any of these hits the LLM, add a semantic cache. Identical
- *  and near-identical queries get served from cache instead of burning tokens."
+ * FIXED (Bug #4): checkCache() previously called redis.keys("rag_cache:*") on every
+ * incoming query — a full keyspace KEYS scan that blocks the Redis event loop.
+ * In production with thousands of entries this degrades to seconds per query and
+ * can make Redis unresponsive for all other operations.
+ *
+ * Fix: replaced redis.keys() with cursor-based SCAN iteration (non-blocking).
+ * clearCache() and cacheStats() also use SCAN.
  *
  * How it works:
  *   On query → embed the question → compare embedding against all cached embeddings
  *   If cosine similarity ≥ 0.92 → return cached answer (cache hit)
  *   If miss → run full pipeline → store embedding + answer in Redis
  *
- * Clinical benefit:
- *   "What is the first-line antibiotic for CAP?" and "What antibiotic do I use
- *   for community-acquired pneumonia?" have cosine similarity ~0.94. The second
- *   query serves from cache in <1ms instead of re-running GPT-4o + retrieval.
- *
+ * TTL: 3600 seconds (1 hour). Clinical guidelines rarely change intra-shift.
  * Graceful fallback: if Redis is unavailable, returns null (cache miss) and
  *   skips storage — the system continues normally without caching.
- *
- * TTL: 3600 seconds (1 hour). Clinical guidelines rarely change intra-shift.
  */
 
 import { cosineSimilarity } from "../retrieval/hybridRetriever";
@@ -33,8 +32,8 @@ async function getRedis(): Promise<import("ioredis").default | null> {
   try {
     const { default: Redis } = await import("ioredis");
     const client = new Redis(url, {
-      lazyConnect:      true,
-      connectTimeout:   3000,
+      lazyConnect:          true,
+      connectTimeout:       3000,
       maxRetriesPerRequest: 1,
       enableOfflineQueue:   false,
     });
@@ -57,9 +56,24 @@ export interface CacheEntry {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const CACHE_PREFIX   = "rag_cache:";
-const SIM_THRESHOLD  = 0.92;
-const TTL_SECONDS    = 3600;
+const CACHE_PREFIX  = "rag_cache:";
+const SIM_THRESHOLD = 0.92;
+const TTL_SECONDS   = 3600;
+const SCAN_COUNT    = 100;  // keys fetched per SCAN iteration
+
+// ── SCAN helper ───────────────────────────────────────────────────────────────
+// Non-blocking cursor scan — does not block the Redis event loop.
+
+async function scanKeys(redis: import("ioredis").default, pattern: string): Promise<string[]> {
+  const keys: string[] = [];
+  let cursor = "0";
+  do {
+    const [nextCursor, batch] = await redis.scan(cursor, "MATCH", pattern, "COUNT", SCAN_COUNT);
+    cursor = nextCursor;
+    keys.push(...batch);
+  } while (cursor !== "0");
+  return keys;
+}
 
 // ── checkCache ────────────────────────────────────────────────────────────────
 
@@ -71,7 +85,8 @@ export async function checkCache(
   if (!redis) return null;
 
   try {
-    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    // FIXED: use cursor-based SCAN instead of blocking KEYS
+    const keys = await scanKeys(redis, `${CACHE_PREFIX}*`);
     if (keys.length === 0) return null;
 
     for (const key of keys) {
@@ -123,7 +138,7 @@ export async function clearCache(): Promise<{ cleared: number }> {
   if (!redis) return { cleared: 0 };
 
   try {
-    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    const keys = await scanKeys(redis, `${CACHE_PREFIX}*`);
     if (keys.length > 0) await redis.del(...keys);
     return { cleared: keys.length };
   } catch {
@@ -143,7 +158,7 @@ export async function cacheStats(): Promise<{
   if (!redis) return { entries: 0, redisConnected: false, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
 
   try {
-    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    const keys = await scanKeys(redis, `${CACHE_PREFIX}*`);
     return { entries: keys.length, redisConnected: true, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
   } catch {
     return { entries: 0, redisConnected: false, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };

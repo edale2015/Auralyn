@@ -1,12 +1,17 @@
 import type { Request, Response, NextFunction } from "express";
 
+// SECURITY FIX: Removed x-kb-role header as an auth source.
+// Any HTTP client could set x-kb-role: kb_admin to gain full KB write access
+// with zero authentication. Role is now derived exclusively from the verified
+// session set by requirePhysician / requireRole middleware.
+
 export function requireKbAdmin(
   req: Request,
   res: Response,
   next: NextFunction
 ): void {
   const role =
-    (req.headers["x-kb-role"] as string | undefined) ||
+    (req as any).physician?.role ||
     (req as any).user?.role ||
     (req as any).actor?.role;
 
@@ -28,7 +33,7 @@ export function requireKbWrite(
   next: NextFunction
 ): void {
   const role =
-    (req.headers["x-kb-role"] as string | undefined) ||
+    (req as any).physician?.role ||
     (req as any).user?.role ||
     (req as any).actor?.role;
 

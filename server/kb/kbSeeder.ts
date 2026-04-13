@@ -53,16 +53,17 @@ export async function upsertBayesianPriors(): Promise<void> {
       diagnosisLabel: bp.diagnosisLabel, icdCode: null, baseProbability: bp.baseProbability,
       featureLikelihoods: bp.featureLikelihoods as any, cannotMiss: false,
       basePoints: 50, clusterPriority: 10, active: true,
-    }).onConflictDoUpdate({
-      target: kbDiagnosisRules.ruleId,
-      set: { baseProbability: bp.baseProbability, featureLikelihoods: bp.featureLikelihoods as any, active: true },
-    });
+    // FIXED: Previously used onConflictDoUpdate which overwrote admin-edited priors on every
+    // re-seed. Now uses onConflictDoNothing so clinician edits via the KB admin UI are preserved.
+    // To intentionally reset priors to code-level values, use the dedicated admin-gated seeder route.
+    }).onConflictDoNothing();
   }
-  console.log(`[KB Seeder] Upserted ${BAYESIAN_PRIORS.length} Bayesian core priors into kb_diagnosis_rules`);
+  console.log(`[KB Seeder] Seeded ${BAYESIAN_PRIORS.length} Bayesian core priors (existing DB values preserved — no overwrite)`);
 }
 
 export async function seedKnowledgeBase(): Promise<void> {
-  // Always upsert Bayesian priors (even on re-seed, to apply any code-level updates)
+  // Seed Bayesian priors — existing DB values are preserved (onConflictDoNothing).
+  // Admin-edited priors in the KB UI will NOT be overwritten.
   await upsertBayesianPriors();
 
   const existing = await db.execute(sql`SELECT COUNT(*) as n FROM kb_complaints`);

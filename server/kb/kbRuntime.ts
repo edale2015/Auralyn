@@ -8,6 +8,16 @@
  *
  * The cache is automatically invalidated by KB write routes so
  * any UI edit takes effect on the next triage request.
+ *
+ * FIXED (Bug #3): All three loaders previously caught DB exceptions and returned [].
+ * A DB outage caused live triage to run with zero priors, red flags, and treatments
+ * with no alert. Loaders now preserve the last-known-good cache on failure and emit
+ * a console.error so ops monitors will catch the event.
+ *
+ * FIXED (Bug #8): reloadAndRewireKbCache was non-atomic — it invalidated all caches
+ * before loading completed, leaving a window where any of the three caches could be
+ * null while the others were populated. The reload now loads all three into temporaries
+ * and swaps them atomically only after all three succeed.
  */
 
 import { db } from "../db";
@@ -20,9 +30,9 @@ export interface KbRedFlagRule {
   ruleId: string;
   complaintId: string;
   label: string;
-  triggerExpr: string;    // evaluated by ruleParser or simple question-id check
+  triggerExpr: string;
   severity: "HARD" | "SOFT";
-  action: string;         // ER_SEND | ESCALATE | URGENT | CALL_911
+  action: string;
   immediateActions?: string | null;
   active: boolean;
 }
@@ -69,17 +79,23 @@ function isStale(entry: CacheEntry<any> | null): boolean {
 
 // ── Loaders ───────────────────────────────────────────────────────────────────
 
-// Helper: db.execute() returns { rows: [...] } in drizzle-orm/node-postgres
 function extractRows(result: any): any[] {
   if (Array.isArray(result)) return result;
   if (result && Array.isArray(result.rows)) return result.rows;
   return [];
 }
 
+// FIXED: On DB failure, throw KBLoadError rather than returning [].
+// Callers catch and either serve last-known-good or surface the alert.
+class KBLoadError extends Error {
+  constructor(section: string, cause: unknown) {
+    super(`[KbRuntime] Failed to load ${section} from DB: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "KBLoadError";
+  }
+}
+
 async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
   try {
-    // Phase 3: Prefer normalized kb_feature_likelihoods JOIN (authoritative source)
-    // Falls back to JSONB blob in kb_diagnosis_rules for rules not yet migrated.
     const result = await db.execute(sql`
       SELECT
         r.rule_id,
@@ -102,16 +118,16 @@ async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
       featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
       ruleId: String(r.rule_id ?? ""),
       version: 1,
-      tableName: "kb_feature_likelihoods",  // Phase 3: source is the normalized table
+      tableName: "kb_feature_likelihoods",
     }));
 
     if (normalized.length > 0) {
-      console.info(`[KbRuntime] Loaded ${normalized.length} priors from kb_feature_likelihoods (Phase 3 normalized table)`);
+      console.info(`[KbRuntime] Loaded ${normalized.length} priors from kb_feature_likelihoods`);
       return normalized;
     }
 
-    // Legacy fallback: kb_diagnosis_rules.featureLikelihoods JSONB (pre-Phase-3 rules only)
-    console.warn("[KbRuntime] kb_feature_likelihoods empty — falling back to JSONB blob (run POST /api/kb/migrate-to-feature-table)");
+    // Legacy fallback: kb_diagnosis_rules.featureLikelihoods JSONB (pre-Phase-3 rules)
+    console.warn("[KbRuntime] kb_feature_likelihoods empty — falling back to JSONB blob");
     const legacyResult = await db.execute(sql`
       SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods
       FROM kb_diagnosis_rules
@@ -129,8 +145,7 @@ async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
       tableName: "kb_diagnosis_rules",
     }));
   } catch (err) {
-    console.warn("[KbRuntime] Failed to load diagnosis priors from DB:", err);
-    return [];
+    throw new KBLoadError("diagnosis priors", err);
   }
 }
 
@@ -153,8 +168,7 @@ async function loadRedFlagsFromDb(): Promise<KbRedFlagRule[]> {
       active: Boolean(r.active),
     }));
   } catch (err) {
-    console.warn("[KbRuntime] Failed to load red flag rules from DB:", err);
-    return [];
+    throw new KBLoadError("red flag rules", err);
   }
 }
 
@@ -190,38 +204,72 @@ async function loadTreatmentsFromDb(): Promise<KbTreatmentRule[]> {
       active: Boolean(r.active),
     }));
   } catch (err) {
-    console.warn("[KbRuntime] Failed to load treatment rules from DB:", err);
-    return [];
+    throw new KBLoadError("treatment rules", err);
   }
+}
+
+// ── Last-known-good helpers ───────────────────────────────────────────────────
+// On DB failure, serve the stale cache rather than empty arrays, and alert ops.
+
+function servePriorsOrAlert(err: unknown): DiagnosisPrior[] {
+  console.error("[KbRuntime] ALERT: Failed to load KB priors —", err instanceof Error ? err.message : String(err));
+  if (_priors) {
+    const ageS = ((Date.now() - _priors.loadedAt) / 1000).toFixed(0);
+    console.warn(`[KbRuntime] Serving last-known-good priors (${_priors.count} rules, age ${ageS}s)`);
+    return _priors.data;
+  }
+  console.error("[KbRuntime] No prior cache available — returning empty array. ALL TRIAGE WILL USE HARDCODED FALLBACK.");
+  return [];
+}
+
+function serveRedFlagsOrAlert(err: unknown): KbRedFlagRule[] {
+  console.error("[KbRuntime] ALERT: Failed to load KB red flags —", err instanceof Error ? err.message : String(err));
+  if (_redFlags) {
+    const ageS = ((Date.now() - _redFlags.loadedAt) / 1000).toFixed(0);
+    console.warn(`[KbRuntime] Serving last-known-good red flags (${_redFlags.count} rules, age ${ageS}s)`);
+    return _redFlags.data;
+  }
+  console.error("[KbRuntime] No red flag cache available — returning empty array. RED FLAG DETECTION DISABLED.");
+  return [];
+}
+
+function serveTreatmentsOrAlert(err: unknown): KbTreatmentRule[] {
+  console.error("[KbRuntime] ALERT: Failed to load KB treatments —", err instanceof Error ? err.message : String(err));
+  if (_treatments) {
+    const ageS = ((Date.now() - _treatments.loadedAt) / 1000).toFixed(0);
+    console.warn(`[KbRuntime] Serving last-known-good treatments (${_treatments.count} rules, age ${ageS}s)`);
+    return _treatments.data;
+  }
+  console.error("[KbRuntime] No treatment cache available — returning empty array.");
+  return [];
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Get active diagnosis priors from KB (async, cached). Returns [] if KB is empty. */
 export async function getKbPriors(): Promise<DiagnosisPrior[]> {
   if (!isStale(_priors)) return _priors!.data;
-  const data = await loadPriorsFromDb();
-  _priors = { data, loadedAt: Date.now(), count: data.length };
-  if (data.length > 0) {
-    console.info(`[KbRuntime] Loaded ${data.length} diagnosis priors from KB`);
+  try {
+    const data = await loadPriorsFromDb();
+    _priors = { data, loadedAt: Date.now(), count: data.length };
+    return data;
+  } catch (err) {
+    return servePriorsOrAlert(err);
   }
-  return data;
 }
 
-/** Get active red flag rules from KB for a specific complaint (async, cached). */
 export async function getKbRedFlags(complaintId: string): Promise<KbRedFlagRule[]> {
   if (!isStale(_redFlags)) {
     return _redFlags!.data.filter(r => r.complaintId === complaintId);
   }
-  const data = await loadRedFlagsFromDb();
-  _redFlags = { data, loadedAt: Date.now(), count: data.length };
-  if (data.length > 0) {
-    console.info(`[KbRuntime] Loaded ${data.length} red flag rules from KB`);
+  try {
+    const data = await loadRedFlagsFromDb();
+    _redFlags = { data, loadedAt: Date.now(), count: data.length };
+    return data.filter(r => r.complaintId === complaintId);
+  } catch (err) {
+    return serveRedFlagsOrAlert(err).filter(r => r.complaintId === complaintId);
   }
-  return data.filter(r => r.complaintId === complaintId);
 }
 
-/** Get treatment rules from KB, optionally filtered by complaintId or diagnosisId. */
 export async function getKbTreatments(opts?: {
   complaintId?: string;
   diagnosisId?: string;
@@ -230,12 +278,13 @@ export async function getKbTreatments(opts?: {
   if (!isStale(_treatments)) {
     return filterTreatments(_treatments!.data, opts);
   }
-  const data = await loadTreatmentsFromDb();
-  _treatments = { data, loadedAt: Date.now(), count: data.length };
-  if (data.length > 0) {
-    console.info(`[KbRuntime] Loaded ${data.length} treatment rules from KB`);
+  try {
+    const data = await loadTreatmentsFromDb();
+    _treatments = { data, loadedAt: Date.now(), count: data.length };
+    return filterTreatments(data, opts);
+  } catch (err) {
+    return filterTreatments(serveTreatmentsOrAlert(err), opts);
   }
-  return filterTreatments(data, opts);
 }
 
 function filterTreatments(
@@ -249,20 +298,17 @@ function filterTreatments(
   return out;
 }
 
-/** Synchronous check — returns cached priors without async. Null if not yet loaded. */
 export function getKbPriorsSync(): DiagnosisPrior[] | null {
   if (!_priors || isStale(_priors)) return null;
   return _priors.data;
 }
 
-/** Synchronous check — returns cached red flags without async. Empty array if not loaded. */
 export function getKbRedFlagsSync(complaintId?: string): KbRedFlagRule[] {
   if (!_redFlags || isStale(_redFlags)) return [];
   if (complaintId) return _redFlags.data.filter(r => r.complaintId === complaintId);
   return _redFlags.data;
 }
 
-/** Synchronous check — returns cached treatments without async. Empty array if not loaded. */
 export function getKbTreatmentsSync(opts?: {
   complaintId?: string;
   diagnosisId?: string;
@@ -283,17 +329,16 @@ export function invalidateKbCache(): void {
 /** Warm up the cache at server startup. Non-blocking. */
 export function warmKbCache(): void {
   Promise.all([
-    loadPriorsFromDb(),
-    loadRedFlagsFromDb(),
-    loadTreatmentsFromDb(),
+    loadPriorsFromDb().catch(err => { console.warn("[KbRuntime] Warm-up priors failed:", err instanceof Error ? err.message : String(err)); return _priors?.data ?? []; }),
+    loadRedFlagsFromDb().catch(err => { console.warn("[KbRuntime] Warm-up redFlags failed:", err instanceof Error ? err.message : String(err)); return _redFlags?.data ?? []; }),
+    loadTreatmentsFromDb().catch(err => { console.warn("[KbRuntime] Warm-up treatments failed:", err instanceof Error ? err.message : String(err)); return _treatments?.data ?? []; }),
   ]).then(([priors, redFlags, treatments]) => {
-    _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
-    _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
-    _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
+    // Only update caches that successfully loaded (non-empty result from DB or no existing cache)
+    if (priors.length > 0 || !_priors) _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
+    if (redFlags.length > 0 || !_redFlags) _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
+    if (treatments.length > 0 || !_treatments) _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
 
-    // Wire KB priors into the Bayesian differential engine
     if (priors.length > 0) {
-      // Lazy import to avoid circular dependency at module-load time
       import("../clinical/bayesianEngine").then(({ setRuntimePriors }) => {
         setRuntimePriors(priors);
         console.info(`[KbRuntime] Wired ${priors.length} KB diagnosis priors into Bayesian engine`);
@@ -308,33 +353,61 @@ export function warmKbCache(): void {
   });
 }
 
-/** Reload cache from DB and re-wire all pipeline hooks. Call after any KB write. */
+/**
+ * FIXED: Reload cache atomically — loads all three into temporaries first,
+ * then swaps them all at once. Previously invalidateKbCache() was called first,
+ * leaving a window where any failed load left the cache in a partially null state.
+ */
 export async function reloadAndRewireKbCache(): Promise<void> {
-  invalidateKbCache();
-  const [priors, redFlags, treatments] = await Promise.all([
-    loadPriorsFromDb(),
-    loadRedFlagsFromDb(),
-    loadTreatmentsFromDb(),
-  ]);
-  _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
-  _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
-  _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
+  // Load all three into temporaries — do NOT invalidate yet
+  let newPriors: DiagnosisPrior[];
+  let newRedFlags: KbRedFlagRule[];
+  let newTreatments: KbTreatmentRule[];
 
-  if (priors.length > 0) {
+  try {
+    [newPriors, newRedFlags, newTreatments] = await Promise.all([
+      loadPriorsFromDb(),
+      loadRedFlagsFromDb(),
+      loadTreatmentsFromDb(),
+    ]);
+  } catch (err) {
+    console.error("[KbRuntime] reloadAndRewireKbCache: one or more loaders failed — caches NOT invalidated.", err instanceof Error ? err.message : String(err));
+    throw err;  // Let caller decide how to handle
+  }
+
+  // Atomic swap — only after all three loaded successfully
+  _priors    = { data: newPriors,    loadedAt: Date.now(), count: newPriors.length };
+  _redFlags  = { data: newRedFlags,  loadedAt: Date.now(), count: newRedFlags.length };
+  _treatments = { data: newTreatments, loadedAt: Date.now(), count: newTreatments.length };
+
+  if (newPriors.length > 0) {
     const { setRuntimePriors } = await import("../clinical/bayesianEngine");
-    setRuntimePriors(priors);
+    setRuntimePriors(newPriors);
   }
   console.info(
-    `[KbRuntime] Reloaded & rewired — priors:${priors.length}, redFlags:${redFlags.length}, treatments:${treatments.length}`
+    `[KbRuntime] Atomically reloaded & rewired — priors:${newPriors.length}, redFlags:${newRedFlags.length}, treatments:${newTreatments.length}`
   );
 }
 
 /** Return cache status for ops dashboard */
 export function getKbCacheStatus() {
   return {
-    priors: _priors ? { count: _priors.count, ageMs: Date.now() - _priors.loadedAt } : null,
-    redFlags: _redFlags ? { count: _redFlags.count, ageMs: Date.now() - _redFlags.loadedAt } : null,
+    priors:     _priors     ? { count: _priors.count,     ageMs: Date.now() - _priors.loadedAt }     : null,
+    redFlags:   _redFlags   ? { count: _redFlags.count,   ageMs: Date.now() - _redFlags.loadedAt }   : null,
     treatments: _treatments ? { count: _treatments.count, ageMs: Date.now() - _treatments.loadedAt } : null,
     ttlMs: CACHE_TTL_MS,
   };
+}
+
+/**
+ * Returns a fingerprint string representing the current KB cache state.
+ * Used by the consistency monitor to detect cross-instance version drift.
+ * Format: "priorCount:redFlagCount:treatmentCount@loadedAt"
+ */
+export function getKbVersion(): string {
+  const p = _priors?.count ?? -1;
+  const r = _redFlags?.count ?? -1;
+  const t = _treatments?.count ?? -1;
+  const ts = _priors?.loadedAt ?? _redFlags?.loadedAt ?? _treatments?.loadedAt ?? 0;
+  return `${p}:${r}:${t}@${ts}`;
 }

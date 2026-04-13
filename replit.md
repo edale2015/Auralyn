@@ -46,6 +46,72 @@ The system incorporates a Multi-Agent Debate Engine where three clinical agents 
 ### System Design Choices
 Data management uses Firebase Firestore, SQLite, and NDJSON-backed stores, with PHI retention policies. Authentication involves password-only, session-based HMAC for physicians and token-based access for patients, with JWT-based role authentication. Security and quality hardening include bcrypt, JWT security, rate limiting, and PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance includes an agent registry, audit agent, incident commander, digital twin, and predictive engine. The Autonomous Operator System is an AI-powered form automation engine. A Template Studio allows visual template editing. The Replay Inspector audits automation runs. A Robotics Control Module manages medical device orchestration. An Autonomous Learning Console provides a unified dashboard for self-testing, self-learning, and governance, including simulation, learning queue, drift monitor, audit trail, versions, and safety modes. The Multi-Patient Command Grid provides a three-pane, hospital-style dashboard with risk-sorted patient grids, clinical details, ICU waveforms, hospital/EMS routing, automated outreach, and physician auto-paging.
 
+## Phase 5 — Code Review Remediation (25 Items) + Independent Review
+
+All 25 code review items from attached review documents are implemented. Plus 3 additional issues discovered during independent review.
+
+### Phase 1 — Security/Auth (Issues #1-8)
+- **requirePhysician.ts** — clinicId enforced in ALL envs (not just prod), role wildcard "*" removed, explicit admin check
+- **rlhfRoutes.ts** — requirePhysician applied globally; "applied" status blocked from callers; reviewer identity from JWT
+- **fhirRoutes.ts** — requirePhysician on all write endpoints; clinicId injected from token (never from body)
+- **patientFlowRoutes.ts** — requirePhysician on all session endpoints; cross-tenant session reads rejected
+- **patientStream.ts (WS)** — JWT auth required on every WebSocket upgrade; tenant-scoped broadcast (no cross-tenant event leakage)
+
+### Phase 2 — Clinical Safety (Issues #12-16)
+- **ehrWriter.ts** — No mock fallback on production EHR failure; physicians see real error, not false success
+- **autonomyGate.ts** — FAIL-CLOSED: missing riskScore or uncertainty → deny autonomy (not coalesce to 0)
+- **conflictResolver.ts** — URGENT_24H + flagged MONITOR are now safety-locked, not just ER_NOW
+- **specEngine.ts** — vm.runInNewContext() sandbox replaces `new Function` (Issue #5 code injection)
+- **kbResolver.ts** — `active = true` filter on ALL rule table queries (not just complaint packs)
+
+### Phase 3 — Data Integrity (Issues #19-21)
+- **kbRepository.ts** — upsertKbEntity wrapped in DB transaction (version insert + store update atomic)
+- **triageCache.ts** — buildTriageCacheKey now requires clinicId + kbVersion (tenant isolation + KB invalidation)
+- **specEngine.ts** — loadDispositionRules returns discriminated union (ok/error), never silently returns []
+
+### Phase 4 — Audit & Monitoring (Issues #22-25)
+- **changeAuditLog.ts** — All events persisted to DB (`audit_logs` table); in-memory is read cache only
+- **externalAuditStore.ts** — Per-record HMAC-SHA256 signing; `verifyAuditRecord()` for tamper detection
+- **ragEvaluator.ts** — passRows query now filters `WHERE pass = true` (was computing total/total = always 1.0)
+- **alertEngine.ts** — SLA breach handler failures logged (no longer silently swallowed)
+- **smartLaunch.ts** — FHIR_ALLOWED_ISSUERS allowlist enforced; PKCE code_verifier validated
+- **fhirClient.ts** — SMART auth failure is now a hard error (no silent unauthenticated fallback)
+
+### Independent Review (3 Additional Issues Discovered)
+1. **clinicalOrchestrator.ts** — `buildTriageCacheKey()` was called with 2 args instead of 4 required; `clinicId` and `kbVersion` now properly passed — cache isolation fix was being bypassed
+2. **alertRules.ts** — `new Function` on user-editable alert expressions replaced with vm sandbox (50ms timeout, numeric-values-only sandbox)
+3. **sequencer.ts** — `new Function` on procedure step conditions replaced with vm sandbox
+
+### New Engines & Routes Added (Phases 3-5)
+**ICU Control Tower** (`server/icu/`):
+- `predictiveEngine.ts` — NEWS2+lactate multi-dimensional risk scoring
+- `patientCommandCenter.ts` — Multi-patient risk ranking
+- `emsRouter.ts` — Bed-capacity + proximity hospital routing
+- `digitalTwin.ts` — Stochastic 6-hour trajectory simulation
+- Route: `GET/POST /api/icu/*` — patients, ranked, simulate, route
+
+**Clinical Validation & SaMD** (`server/validation/`):
+- `clinicalValidationEngine.ts` — Sensitivity/specificity/FNR metrics; 90% ER_NOW threshold
+- `generateSyntheticCases.ts` — Labeled case generator (4 archetypes)
+- `trialSimulator.ts` — Batch trial runner against synthetic cohorts
+- `auditReplay.ts` — Step-by-step reasoning trace reconstruction
+- `driftDetector.ts` — Distributional shift monitoring with configurable thresholds
+- `samdDossierGenerator.ts` — FDA 510(k)-aligned SaMD performance dossier
+- Route: `GET/POST /api/validation/*` — run, dossier, drift, replay
+
+**Network & Payer** (`server/network/`, `server/payer/`, `server/deployment/`):
+- `nationalRoutingEngine.ts` — Haversine-distance + capacity national EMS routing
+- `networkLearningEngine.ts` — Outcome-weighted diagnosis weight updates across network nodes
+- `payerOptimizationEngine.ts` — Approval rate analysis per payer
+- `contractNegotiator.ts` — Data-driven negotiation strategy recommendations
+- `deploymentEngine.ts` — Clinic expansion priority scoring and phase sequencing
+- Route: `GET/POST /api/network/*` — status, route, learn, payer, deploy
+
+**Frontend Pages**:
+- `/icu-control-tower` — Real-time multi-patient risk ranking + digital twin simulation
+- `/validation-dashboard` — FDA SaMD metrics, confusion matrix, dossier preview
+- `/network-control-tower` — Deployment planning + payer optimization UI
+
 ## Security, Safety & Compliance Architecture (12-Fix Hardening)
 
 All 12 critical fixes from Claude's architecture review are implemented:

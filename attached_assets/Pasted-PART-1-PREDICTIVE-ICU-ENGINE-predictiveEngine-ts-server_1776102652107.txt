@@ -1,0 +1,220 @@
+PART 1 — PREDICTIVE ICU ENGINE
+🔥 predictiveEngine.ts
+// server/icu/predictiveEngine.ts
+
+export interface PatientState {
+  id: string;
+  vitals: {
+    hr: number;
+    rr: number;
+    spo2: number;
+    temp: number;
+    sbp: number;
+  };
+  labs?: {
+    lactate?: number;
+    wbc?: number;
+  };
+  symptoms: string[];
+}
+
+export interface RiskPrediction {
+  sepsisRisk: number;
+  shockRisk: number;
+  respiratoryFailureRisk: number;
+  deteriorationScore: number;
+}
+
+export function computeRisk(p: PatientState): RiskPrediction {
+  let sepsis = 0;
+  let shock = 0;
+  let resp = 0;
+
+  // 🧠 Sepsis (NEWS2 + lactate style)
+  if (p.vitals.temp > 38) sepsis += 0.2;
+  if (p.vitals.hr > 110) sepsis += 0.2;
+  if (p.vitals.rr > 22) sepsis += 0.2;
+  if (p.labs?.lactate && p.labs.lactate > 2) sepsis += 0.3;
+
+  // 💀 Shock
+  if (p.vitals.sbp < 90) shock += 0.5;
+  if (p.labs?.lactate && p.labs.lactate > 4) shock += 0.5;
+
+  // 🫁 Respiratory failure
+  if (p.vitals.spo2 < 92) resp += 0.4;
+  if (p.vitals.rr > 28) resp += 0.4;
+
+  const deterioration =
+    sepsis * 0.4 + shock * 0.4 + resp * 0.2;
+
+  return {
+    sepsisRisk: Math.min(sepsis, 1),
+    shockRisk: Math.min(shock, 1),
+    respiratoryFailureRisk: Math.min(resp, 1),
+    deteriorationScore: Math.min(deterioration, 1),
+  };
+}
+📊 PART 2 — MULTI-PATIENT COMMAND ENGINE
+🔥 patientCommandCenter.ts
+// server/icu/patientCommandCenter.ts
+
+import { computeRisk } from "./predictiveEngine";
+
+export function rankPatients(patients: any[]) {
+  return patients
+    .map(p => ({
+      ...p,
+      risk: computeRisk(p),
+    }))
+    .sort(
+      (a, b) =>
+        b.risk.deteriorationScore - a.risk.deteriorationScore
+    );
+}
+🛏 PART 3 — ICU BED ALLOCATION ENGINE
+🔥 icuAllocator.ts
+// server/icu/icuAllocator.ts
+
+interface Bed {
+  id: string;
+  available: boolean;
+}
+
+export function allocateICUBeds(
+  patients: any[],
+  beds: Bed[]
+) {
+  const ranked = [...patients].sort(
+    (a, b) => b.risk.deteriorationScore - a.risk.deteriorationScore
+  );
+
+  const allocations: any[] = [];
+
+  for (const patient of ranked) {
+    const bed = beds.find(b => b.available);
+
+    if (!bed) break;
+
+    bed.available = false;
+
+    allocations.push({
+      patientId: patient.id,
+      bedId: bed.id,
+    });
+  }
+
+  return allocations;
+}
+🚑 PART 4 — EMS ROUTING ENGINE
+🔥 emsRouter.ts
+// server/icu/emsRouter.ts
+
+interface Hospital {
+  id: string;
+  icuBeds: number;
+  distance: number;
+}
+
+export function routePatient(
+  patient: any,
+  hospitals: Hospital[]
+) {
+  return hospitals
+    .sort((a, b) => {
+      // prioritize beds + proximity
+      return (
+        (b.icuBeds - a.icuBeds) * 0.7 +
+        (a.distance - b.distance) * 0.3
+      );
+    })[0];
+}
+🧬 PART 5 — DIGITAL TWIN SIMULATION
+🔥 digitalTwin.ts
+// server/icu/digitalTwin.ts
+
+export function simulatePatient(patient: any) {
+  const timeline = [];
+
+  let state = { ...patient };
+
+  for (let t = 0; t < 6; t++) {
+    state.vitals.hr += Math.random() * 5;
+    state.vitals.sbp -= Math.random() * 3;
+
+    timeline.push({
+      time: t,
+      hr: state.vitals.hr,
+      sbp: state.vitals.sbp,
+    });
+  }
+
+  return timeline;
+}
+🔗 PART 6 — FHIR WRITEBACK
+🔥 fhirService.ts
+// server/integrations/fhirService.ts
+
+export async function writeFHIR(patient: any) {
+  const resource = {
+    resourceType: "Observation",
+    status: "final",
+    subject: { reference: `Patient/${patient.id}` },
+    valueString: JSON.stringify(patient),
+  };
+
+  console.log("📡 FHIR WRITE:", resource);
+
+  return true;
+}
+🎛 PART 7 — CONTROL TOWER (ICU UI)
+🖥 ICUControlTower.tsx
+import { useEffect, useState } from "react";
+
+export default function ICUControlTower() {
+  const [patients, setPatients] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/control/icu")
+      .then(r => r.json())
+      .then(d => setPatients(d));
+  }, []);
+
+  return (
+    <div>
+      <h1>🧠 ICU Command Center</h1>
+
+      {patients.map((p: any) => (
+        <div key={p.id} style={{ border: "2px solid red", margin: 10 }}>
+          <h2>{p.id}</h2>
+          <p>Sepsis: {(p.risk.sepsisRisk * 100).toFixed(0)}%</p>
+          <p>Shock: {(p.risk.shockRisk * 100).toFixed(0)}%</p>
+          <p>Deterioration: {(p.risk.deteriorationScore * 100).toFixed(0)}%</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+🔌 PART 8 — CONTROL TOWER API
+// server/routes/controlTower.routes.ts
+
+import { Router } from "express";
+import { rankPatients } from "../icu/patientCommandCenter";
+
+const router = Router();
+
+router.get("/icu", (_req, res) => {
+  const patients = [
+    {
+      id: "p1",
+      vitals: { hr: 120, rr: 30, spo2: 88, temp: 39, sbp: 85 },
+      symptoms: ["fever", "sob"],
+      labs: { lactate: 3 },
+    },
+  ];
+
+  const ranked = rankPatients(patients);
+
+  res.json(ranked);
+});
+
+export default router;

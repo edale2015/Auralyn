@@ -16,8 +16,10 @@
  * inconsistent responses are being served.
  */
 
-import { getRedisAsync } from "../queue/redis";
-import { getKbCache }    from "./kbRuntime";
+import { getRedisAsync }            from "../queue/redis";
+// FIXED: kbRuntime exports getKbCacheStatus() and getKbVersion(), NOT getKbCache().
+// Using getKbCache() threw a runtime TypeError on every poll cycle, disabling all drift detection.
+import { getKbCacheStatus, getKbVersion } from "./kbRuntime";
 
 const INSTANCE_ID   = process.env.INSTANCE_ID ?? `instance-${Math.random().toString(36).slice(2, 8)}`;
 const VERSION_KEY   = "kb:version:instances";   // Redis hash: instanceId → version:ts
@@ -34,8 +36,7 @@ export async function broadcastKbVersion(): Promise<void> {
     const redis = await getRedisAsync();
     if (!redis || typeof redis.hset !== "function") return;
 
-    const kb      = getKbCache();
-    const version = (kb as any).version ?? "unknown";
+    const version = getKbVersion();
 
     // Write instanceId → JSON(version, ts, instanceId) into a hash
     await redis.hset(VERSION_KEY, INSTANCE_ID, JSON.stringify({
@@ -75,8 +76,7 @@ export interface KbDriftReport {
  * Returns a drift report — caller decides what to alert on.
  */
 export async function checkKbDrift(): Promise<KbDriftReport> {
-  const kb           = getKbCache();
-  const localVersion = (kb as any).version ?? "unknown";
+  const localVersion = getKbVersion();
   const now          = Date.now();
 
   const fallback: KbDriftReport = {
