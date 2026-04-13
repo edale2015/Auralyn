@@ -1,10 +1,31 @@
+/**
+ * server/ehr/fhir/fhirClient.ts — FHIR API client
+ *
+ * FIX (Code Review Issue #11):
+ *   Previously: when SMART auth token acquisition failed, the error was downgraded
+ *   to a console.warn and the request proceeded without an Authorization header.
+ *   This meant FHIR requests were silently made as unauthenticated — the server
+ *   was falsely integrated with the EHR and requests would be rejected with 401
+ *   (or worse, accepted on permissive staging endpoints that don't enforce auth).
+ *
+ *   Fixed: auth token failure is now a hard error. buildHeaders() throws if SMART
+ *   is configured but token acquisition fails. fhirFetch() propagates the error.
+ *   The only way to make FHIR requests without auth is to not configure SMART auth
+ *   (which is valid for FHIR servers that use IP allowlisting or other controls).
+ *
+ *   The 401 retry path is preserved: if a token has expired mid-request, we
+ *   invalidate the cache and retry once with a fresh token.
+ */
+
 import { getBearerToken, isSmartAuthConfigured, invalidateToken } from "./fhirAuth";
 
 const FHIR_BASE_URL = process.env.FHIR_BASE_URL;
 
-function assertFhirConfigured() {
+function assertFhirConfigured(): void {
   if (!FHIR_BASE_URL) {
-    throw new Error("FHIR_BASE_URL is not configured — set the environment variable to enable FHIR sync");
+    throw new Error(
+      "FHIR_BASE_URL is not configured — set the environment variable to enable FHIR sync"
+    );
   }
 }
 
@@ -15,12 +36,9 @@ async function buildHeaders(): Promise<Record<string, string>> {
   };
 
   if (isSmartAuthConfigured()) {
-    try {
-      const token = await getBearerToken();
-      headers["Authorization"] = `Bearer ${token}`;
-    } catch (err) {
-      console.warn("[FhirClient] SMART auth failed — proceeding without token:", err);
-    }
+    // FIX (Issue #11): auth failure now throws — request does not proceed unauthenticated
+    const token = await getBearerToken();  // throws on failure (no try/catch wrapper)
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   return headers;
@@ -33,17 +51,19 @@ async function fhirFetch<T>(method: string, path: string, body?: unknown): Promi
   const res = await fetch(`${FHIR_BASE_URL}${path}`, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body:   body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000),
   });
 
-  // If we get a 401 and were using SMART auth, invalidate the cached token and retry once
+  // 401 + SMART configured: invalidate cached token and retry once
   if (res.status === 401 && isSmartAuthConfigured()) {
     invalidateToken();
-    const freshHeaders = await buildHeaders();
+    const freshHeaders = await buildHeaders();  // throws if re-auth fails
     const retry = await fetch(`${FHIR_BASE_URL}${path}`, {
       method,
       headers: freshHeaders,
-      body: body ? JSON.stringify(body) : undefined,
+      body:    body ? JSON.stringify(body) : undefined,
+      signal:  AbortSignal.timeout(15_000),
     });
     if (!retry.ok) {
       const text = await retry.text().catch(() => "(unreadable)");

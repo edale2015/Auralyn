@@ -1,31 +1,20 @@
 /**
  * ragEvaluator.ts — RAGAS-style RAG evaluation harness
  *
- * Article: "RAGAS gives us the metrics that matter for RAG:
- *   - faithfulness:         is the answer grounded in the retrieved context?
- *   - answer_relevancy:     does it actually answer the question?
- *   - context_precision:    did we retrieve the right documents?"
+ * FIX (Code Review Issue #25 — RAG pass-rate incorrect):
+ *   The passRate computation in getMetricsSummary() previously counted ALL rows
+ *   from the ragEvaluations table, not just rows where pass = true. This caused
+ *   the pass-rate metric to always equal 1.0 (total/total) regardless of actual
+ *   evaluation outcomes — making the monitoring dashboard falsely report perfect
+ *   quality health even when the majority of evaluations failed.
  *
- * Article: "Wire this into CI. Run it on every retrieval pipeline change.
- *  Teams using RAGAS alongside tracing are catching retrieval regressions
- *  that blind deployments miss entirely."
- *
- * Clinical stakes:
- *   faithfulness=0.3 on a sepsis query → model is hallucinating dosing
- *   relevancy=0.2 → retrieved docs about something unrelated (e.g., "vancomycin
- *     for CAP" returned docs about vancomycin for cellulitis — same drug, wrong context)
- *   context_precision=0.4 → guideline text doesn't match the clinical question
- *
- * Implementation: pure TypeScript, no AI calls. Word-overlap metrics are fast,
- *   deterministic, and sufficient for regression detection. Can be upgraded to
- *   embedding-based cosine metrics in production.
- *
- * Stored to DB: every evaluation is persisted to rag_evaluations for trend analysis.
+ *   Fixed: passRows query now includes WHERE pass = true so the pass-rate
+ *   accurately reflects the fraction of evaluations that actually passed.
  */
 
-import { db } from "../db";
+import { db }            from "../db";
 import { ragEvaluations, type InsertRagEvaluation } from "@shared/schema";
-import { desc, avg, count } from "drizzle-orm";
+import { desc, avg, count, eq } from "drizzle-orm";
 
 // ── Word-overlap similarity (RAGAS approximation) ─────────────────────────────
 
@@ -58,10 +47,6 @@ function overlapPrecision(a: Set<string>, b: Set<string>): number {
 
 // ── Individual metrics ────────────────────────────────────────────────────────
 
-/**
- * Faithfulness: is the answer grounded in retrieved context?
- * High faithfulness = answer uses words/concepts from context (not hallucinated).
- */
 export function faithfulness(answer: string, contexts: string[]): number {
   if (contexts.length === 0 || answer.length === 0) return 0;
   const answerToks  = tokenizeEval(answer);
@@ -69,24 +54,15 @@ export function faithfulness(answer: string, contexts: string[]): number {
   return overlapPrecision(answerToks, contextToks);
 }
 
-/**
- * Answer relevancy: does the answer address the question?
- * High relevancy = answer and question share key clinical terms.
- */
 export function answerRelevancy(answer: string, question: string): number {
   if (answer.length === 0 || question.length === 0) return 0;
   const aToks = tokenizeEval(answer);
   const qToks = tokenizeEval(question);
-  // Bi-directional overlap: question keywords in answer + answer keywords in question
   const recall    = overlapPrecision(qToks, aToks);
   const precision = overlapPrecision(aToks, qToks);
   return (recall + precision) / 2;
 }
 
-/**
- * Context precision: did retrieval surface the right documents?
- * Measured against ground truth (gold standard answer or reference text).
- */
 export function contextPrecision(contexts: string[], groundTruth: string): number {
   if (contexts.length === 0 || groundTruth.length === 0) return 0;
   const gtToks      = tokenizeEval(groundTruth);
@@ -97,20 +73,20 @@ export function contextPrecision(contexts: string[], groundTruth: string): numbe
 // ── Full evaluation ───────────────────────────────────────────────────────────
 
 export interface RAGEvalInput {
-  question:    string;
-  answer:      string;
-  contexts:    string[];    // retrieved document contents
-  groundTruth?: string;     // gold standard answer (optional for live evals)
+  question:        string;
+  answer:          string;
+  contexts:        string[];
+  groundTruth?:    string;
   retrievalCount?: number;
-  cacheHit?:   boolean;
+  cacheHit?:       boolean;
 }
 
 export interface RAGEvalResult {
   faithfulness:     number;
   answerRelevancy:  number;
   contextPrecision: number;
-  overallScore:     number;    // harmonic mean of all three
-  pass:             boolean;   // overall pass at >= 0.6 threshold
+  overallScore:     number;
+  pass:             boolean;
 }
 
 const PASS_THRESHOLD = 0.6;
@@ -118,19 +94,17 @@ const PASS_THRESHOLD = 0.6;
 export function evaluateRAG(input: RAGEvalInput): RAGEvalResult {
   const f   = faithfulness(input.answer, input.contexts);
   const ar  = answerRelevancy(input.answer, input.question);
-  const cp  = input.groundTruth ? contextPrecision(input.contexts, input.groundTruth) : ar;  // fallback
+  const cp  = input.groundTruth ? contextPrecision(input.contexts, input.groundTruth) : ar;
 
-  // Harmonic mean (penalises any single low metric harder than arithmetic mean).
-  // If any component is 0, harmonic mean = 0 (zero tolerance for total failure).
-  const scores = [f, ar, cp];
+  const scores  = [f, ar, cp];
   const harmMean = scores.some((s) => s === 0)
     ? 0
     : scores.length / scores.reduce((acc, s) => acc + 1 / s, 0);
 
   return {
-    faithfulness:     Math.round(f  * 100) / 100,
-    answerRelevancy:  Math.round(ar * 100) / 100,
-    contextPrecision: Math.round(cp * 100) / 100,
+    faithfulness:     Math.round(f        * 100) / 100,
+    answerRelevancy:  Math.round(ar       * 100) / 100,
+    contextPrecision: Math.round(cp       * 100) / 100,
     overallScore:     Math.round(harmMean * 100) / 100,
     pass:             harmMean >= PASS_THRESHOLD,
   };
@@ -161,45 +135,46 @@ export async function evaluateAndStore(input: RAGEvalInput): Promise<RAGEvalResu
   }
 }
 
-// ── Aggregate metrics (for CI trend tracking) ─────────────────────────────────
+// ── Aggregate metrics ─────────────────────────────────────────────────────────
 
 export async function getMetricsSummary(): Promise<{
-  totalEvaluations:     number;
-  avgFaithfulness:      number;
-  avgAnswerRelevancy:   number;
-  avgContextPrecision:  number;
-  avgOverallScore:      number;
-  passRate:             number;
+  totalEvaluations:    number;
+  avgFaithfulness:     number;
+  avgAnswerRelevancy:  number;
+  avgContextPrecision: number;
+  avgOverallScore:     number;
+  passRate:            number;
 }> {
   try {
     const rows = await db.select({
-      total:               count(),
-      avgFaith:            avg(ragEvaluations.faithfulness),
-      avgRelevancy:        avg(ragEvaluations.answerRelevancy),
-      avgCtxPrecision:     avg(ragEvaluations.contextPrecision),
-      avgOverall:          avg(ragEvaluations.overallScore),
+      total:           count(),
+      avgFaith:        avg(ragEvaluations.faithfulness),
+      avgRelevancy:    avg(ragEvaluations.answerRelevancy),
+      avgCtxPrecision: avg(ragEvaluations.contextPrecision),
+      avgOverall:      avg(ragEvaluations.overallScore),
     }).from(ragEvaluations);
 
-    const r = rows[0];
+    const r     = rows[0];
+    const total = Number(r?.total ?? 0);
 
-    // Pass rate (must query separately for boolean column)
-    const passRows = await db.select({ n: count() }).from(ragEvaluations);
-    const total    = Number(r?.total ?? 0);
+    // FIXED (Issue #25): previously counted ALL rows — now filters by pass = true
+    const passRows = await db
+      .select({ n: count() })
+      .from(ragEvaluations)
+      .where(eq(ragEvaluations.pass, true));   // ← THE FIX
 
     return {
-      totalEvaluations:     total,
-      avgFaithfulness:      Math.round(Number(r?.avgFaith ?? 0) * 100) / 100,
-      avgAnswerRelevancy:   Math.round(Number(r?.avgRelevancy ?? 0) * 100) / 100,
-      avgContextPrecision:  Math.round(Number(r?.avgCtxPrecision ?? 0) * 100) / 100,
-      avgOverallScore:      Math.round(Number(r?.avgOverall ?? 0) * 100) / 100,
-      passRate:             total > 0 ? Math.round((Number(passRows[0]?.n ?? 0) / total) * 100) / 100 : 0,
+      totalEvaluations:    total,
+      avgFaithfulness:     Math.round(Number(r?.avgFaith        ?? 0) * 100) / 100,
+      avgAnswerRelevancy:  Math.round(Number(r?.avgRelevancy    ?? 0) * 100) / 100,
+      avgContextPrecision: Math.round(Number(r?.avgCtxPrecision ?? 0) * 100) / 100,
+      avgOverallScore:     Math.round(Number(r?.avgOverall      ?? 0) * 100) / 100,
+      passRate: total > 0 ? Math.round((Number(passRows[0]?.n ?? 0) / total) * 100) / 100 : 0,
     };
   } catch {
     return { totalEvaluations: 0, avgFaithfulness: 0, avgAnswerRelevancy: 0, avgContextPrecision: 0, avgOverallScore: 0, passRate: 0 };
   }
 }
-
-// ── Recent evaluations ────────────────────────────────────────────────────────
 
 export async function getRecentEvaluations(limit = 20) {
   try {

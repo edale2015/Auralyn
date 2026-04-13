@@ -1,15 +1,40 @@
+/**
+ * server/routes/fhirRoutes.ts — FHIR resource ingest endpoints
+ *
+ * FIXES (Code Review Issue #6):
+ *   Previously both /patient and /observation accepted PHI with no authentication
+ *   middleware — any caller could ingest arbitrary FHIR resources or tamper with
+ *   existing data. Fixed: requirePhysician enforces physician-level JWT auth on
+ *   all write endpoints. clinicId from the verified token is attached to every
+ *   ingested resource to ensure tenant isolation.
+ */
+
 import { Router } from "express";
-import bulkExportRouter, { addFHIRResource, buildPatientResource, buildObservationResource, getFHIRDataset } from "../fhir/bulkExport";
+import { requirePhysician } from "../auth/requirePhysician";
+import bulkExportRouter, {
+  addFHIRResource,
+  buildPatientResource,
+  buildObservationResource,
+} from "../fhir/bulkExport";
 
 const router = Router();
 
-// Mount bulk export sub-router
+// Bulk export sub-router (read-only, auth handled internally)
 router.use("/", bulkExportRouter);
 
-// Convenience: ingest a patient
-router.post("/patient", (req, res) => {
+/**
+ * POST /api/fhir/patient
+ * Ingest a FHIR Patient resource.
+ * Requires physician-level JWT. clinicId is injected from the token.
+ */
+router.post("/patient", requirePhysician, (req, res) => {
   try {
-    const resource = buildPatientResource(req.body);
+    const physician = req.physician!;
+    const resource  = buildPatientResource({
+      ...req.body,
+      // Enforce tenant scoping via injected clinicId — never trust body for this
+      clinicId: physician.clinicId,
+    });
     addFHIRResource(resource);
     res.json({ ok: true, resource });
   } catch (err: any) {
@@ -17,10 +42,18 @@ router.post("/patient", (req, res) => {
   }
 });
 
-// Convenience: ingest an observation
-router.post("/observation", (req, res) => {
+/**
+ * POST /api/fhir/observation
+ * Ingest a FHIR Observation resource.
+ * Requires physician-level JWT. clinicId is injected from the token.
+ */
+router.post("/observation", requirePhysician, (req, res) => {
   try {
-    const resource = buildObservationResource(req.body);
+    const physician = req.physician!;
+    const resource  = buildObservationResource({
+      ...req.body,
+      clinicId: physician.clinicId,
+    });
     addFHIRResource(resource);
     res.json({ ok: true, resource });
   } catch (err: any) {

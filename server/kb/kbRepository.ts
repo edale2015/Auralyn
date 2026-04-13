@@ -1,3 +1,20 @@
+/**
+ * server/kb/kbRepository.ts — KB entity persistence layer
+ *
+ * FIX (Code Review Issue #19):
+ *   upsertKbEntity previously performed two sequential DB statements on the
+ *   update path: db.insert(kbEntityVersions) then db.update(kbEntityStore).
+ *   If the insert succeeded but the update failed (or vice versa due to a
+ *   connection drop, transaction abort, or application crash), the version
+ *   chain was left permanently corrupted — a version row existed without a
+ *   corresponding current_content update, or the store was updated without
+ *   a version snapshot being written.
+ *
+ *   Fixed: both operations on the update path are wrapped in a db.transaction().
+ *   Either both succeed and are committed, or both are rolled back — no partial
+ *   state is possible. The insert path also wraps both operations for consistency.
+ */
+
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db";
 import {
@@ -11,12 +28,12 @@ import { logger } from "../utils/logger";
 // ── Sources ───────────────────────────────────────────────────────────────────
 
 export async function upsertKbSource(input: {
-  sourceKey: string;
-  sourceType: string;
-  name: string;
-  description?: string;
+  sourceKey:       string;
+  sourceType:      string;
+  name:            string;
+  description?:    string;
   isAuthoritative?: boolean;
-  metadata?: Record<string, unknown>;
+  metadata?:       Record<string, unknown>;
 }): Promise<KbSource> {
   const existing = await db
     .select()
@@ -36,12 +53,12 @@ export async function upsertKbSource(input: {
   const [inserted] = await db
     .insert(kbSources)
     .values({
-      sourceKey: input.sourceKey,
-      sourceType: input.sourceType,
-      name: input.name,
-      description: input.description ?? null,
+      sourceKey:       input.sourceKey,
+      sourceType:      input.sourceType,
+      name:            input.name,
+      description:     input.description ?? null,
       isAuthoritative: input.isAuthoritative ?? false,
-      metadata: input.metadata ?? {},
+      metadata:        input.metadata ?? {},
     } satisfies InsertKbSource)
     .returning();
   return inserted;
@@ -77,57 +94,72 @@ export async function upsertKbEntity(input: KbEntityInput): Promise<KbEntityStor
     .limit(1);
 
   if (existing[0]) {
-    const next = existing[0].version + 1;
+    // ── UPDATE PATH: wrapped in transaction (Issue #19 FIX) ─────────────────
+    // Version insert and store update must both succeed or both roll back.
+    // A crash between the two statements previously left the version chain
+    // in a permanently corrupted state.
+    const updated = await db.transaction(async (tx) => {
+      const next = existing[0].version + 1;
 
-    await db.insert(kbEntityVersions).values({
-      entityId: existing[0].id,
-      version: next,
-      title: input.title,
-      content: input.content,
-      changeSummary: input.changeSummary,
-      changedBy: input.changedBy ?? "system",
-    } satisfies InsertKbEntityVersion);
+      await tx.insert(kbEntityVersions).values({
+        entityId:      existing[0].id,
+        version:       next,
+        title:         input.title,
+        content:       input.content,
+        changeSummary: input.changeSummary,
+        changedBy:     input.changedBy ?? "system",
+      } satisfies InsertKbEntityVersion);
 
-    const [updated] = await db
-      .update(kbEntityStore)
-      .set({
-        title: input.title,
-        currentContent: input.content,
-        tags: input.tags ?? existing[0].tags,
-        version: next,
-        sourceId: sourceId ?? existing[0].sourceId,
-        updatedBy: input.changedBy ?? "system",
-        updatedAt: new Date(),
-      })
-      .where(eq(kbEntityStore.id, existing[0].id))
-      .returning();
+      const [updated] = await tx
+        .update(kbEntityStore)
+        .set({
+          title:          input.title,
+          currentContent: input.content,
+          tags:           input.tags ?? existing[0].tags,
+          version:        next,
+          sourceId:       sourceId ?? existing[0].sourceId,
+          updatedBy:      input.changedBy ?? "system",
+          updatedAt:      new Date(),
+        })
+        .where(eq(kbEntityStore.id, existing[0].id))
+        .returning();
+
+      return updated;
+    });
+
     return updated;
   }
 
-  const [inserted] = await db
-    .insert(kbEntityStore)
-    .values({
-      entityType: input.entityType,
-      entityKey: input.entityKey,
-      title: input.title,
-      status: "active",
-      version: 1,
-      tags: input.tags ?? [],
-      currentContent: input.content,
-      sourceId: sourceId ?? null,
-      createdBy: input.changedBy ?? "system",
-      updatedBy: input.changedBy ?? "system",
-    } satisfies InsertKbEntityStore)
-    .returning();
+  // ── INSERT PATH: wrapped in transaction (Issue #19 FIX) ───────────────────
+  // Store insert and initial version insert must both succeed atomically.
+  const inserted = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(kbEntityStore)
+      .values({
+        entityType:     input.entityType,
+        entityKey:      input.entityKey,
+        title:          input.title,
+        status:         "active",
+        version:        1,
+        tags:           input.tags ?? [],
+        currentContent: input.content,
+        sourceId:       sourceId ?? null,
+        createdBy:      input.changedBy ?? "system",
+        updatedBy:      input.changedBy ?? "system",
+      } satisfies InsertKbEntityStore)
+      .returning();
 
-  await db.insert(kbEntityVersions).values({
-    entityId: inserted.id,
-    version: 1,
-    title: input.title,
-    content: input.content,
-    changeSummary: input.changeSummary ?? "Initial version",
-    changedBy: input.changedBy ?? "system",
-  } satisfies InsertKbEntityVersion);
+    await tx.insert(kbEntityVersions).values({
+      entityId:      inserted.id,
+      version:       1,
+      title:         input.title,
+      content:       input.content,
+      changeSummary: input.changeSummary ?? "Initial version",
+      changedBy:     input.changedBy ?? "system",
+    } satisfies InsertKbEntityVersion);
+
+    return inserted;
+  });
 
   return inserted;
 }
@@ -151,14 +183,14 @@ export async function getKbEntity(
 
 export async function listKbEntities(opts: {
   entityType?: KbEntityType;
-  status?: KbEntityStatus;
-  limit?: number;
-  offset?: number;
+  status?:     KbEntityStatus;
+  limit?:      number;
+  offset?:     number;
 }): Promise<KbEntityStore[]> {
   let q = db.select().from(kbEntityStore);
   const filters = [];
   if (opts.entityType) filters.push(eq(kbEntityStore.entityType, opts.entityType));
-  if (opts.status) filters.push(eq(kbEntityStore.status, opts.status));
+  if (opts.status)     filters.push(eq(kbEntityStore.status, opts.status));
   if (filters.length) {
     const [first, ...rest] = filters;
     q = q.where(rest.length ? and(first, ...rest) : first) as any;

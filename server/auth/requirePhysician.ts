@@ -1,22 +1,26 @@
+/**
+ * server/auth/requirePhysician.ts — Physician-level auth middleware
+ *
+ * FIXES (Code Review Issues #1, #2):
+ *   Issue #1: Token now carries real user identity (id, clinicId) rather than
+ *     a generic "provider" blob.
+ *   Issue #2: Added requireTenant() middleware that enforces clinicId matches
+ *     the authenticated user's clinic — blocking cross-tenant resource access.
+ */
+
 import { Request, Response, NextFunction } from "express";
 import { verifyAccessToken, isTokenExpiredError, isJwtError } from "./unifiedAuth";
 import { rbacService } from "./rbacService";
 import type { AccessTokenPayload } from "./authTypes";
 
-// ── Express request augmentation ──────────────────────────────────────────────
-//
-// req.physician is kept for backward compatibility with routes that read it.
-// New code should use req.user (set by requireAuth middleware) instead.
-//
-// BACKWARD COMPAT: patientQueueRoutes reads `req.physician?.sub` — the token
-// now includes `sub` (same value as `id`) so this field is naturally available.
+// ── Express augmentation ──────────────────────────────────────────────────────
 
 declare global {
   namespace Express {
     interface Request {
       physician?: {
         id:        string;
-        sub:       string;   // same as id — kept for patientQueueRoutes compat
+        sub:       string;
         email?:    string;
         role:      string;
         clinicId?: string;
@@ -26,24 +30,8 @@ declare global {
 }
 
 // ── requirePhysician ──────────────────────────────────────────────────────────
-//
-// FIXES vs original:
-//  1. Token shape: original expected { sub, physician? } — tokens never had these.
-//     signAccessToken produces { id, email, role }. Now delegates to verifyAccessToken.
-//  2. Admin lockout: original checked `decoded.role !== "physician"` — admin was
-//     always blocked (role:"admin" != "physician"). Now uses rbacService.can()
-//     so admin's "*" permission correctly passes clinical:run.
-//  3. Split secret: original read process.env.JWT_SECRET directly; unifiedAuth uses
-//     ENV. If ENV transforms or defaults differently, verification could fail. Now
-//     calls verifyAccessToken() — one path, one secret resolution.
-//  4. Error distinction: original returned "Invalid or expired token" for everything.
-//     Now distinguishes expiry vs forgery for HIPAA §164.312(b) audit clarity.
 
-export function requirePhysician(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function requirePhysician(req: Request, res: Response, next: NextFunction): void {
   const auth = req.headers.authorization;
 
   if (!auth?.startsWith("Bearer ")) {
@@ -57,7 +45,6 @@ export function requirePhysician(
   try {
     decoded = verifyAccessToken(token);
   } catch (err) {
-    // Distinguish expiry from forgery — different audit significance
     if (isTokenExpiredError(err)) {
       res.status(401).json({ error: "Token expired" });
     } else if (isJwtError(err)) {
@@ -68,10 +55,6 @@ export function requirePhysician(
     return;
   }
 
-  // Use RBAC to determine physician-level access rather than hardcoding role strings.
-  // admin has ["*"] which passes can(role, "clinical:run").
-  // physician has ["clinical:run", ...] which also passes.
-  // Any other role correctly returns 403.
   if (!rbacService.can(decoded.role, "clinical:run")) {
     res.status(403).json({ error: "Physician access required" });
     return;
@@ -79,10 +62,84 @@ export function requirePhysician(
 
   req.physician = {
     id:        decoded.id,
-    sub:       decoded.sub ?? decoded.id,   // sub may be absent on old tokens
+    sub:       decoded.sub ?? decoded.id,
     email:     decoded.email,
     role:      decoded.role,
     clinicId:  decoded.clinicId,
   };
   next();
+}
+
+// ── requireRole factory — for non-physician roles ─────────────────────────────
+
+export function requireRole(roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Missing bearer token" });
+      return;
+    }
+
+    let decoded: AccessTokenPayload;
+    try {
+      decoded = verifyAccessToken(auth.slice("Bearer ".length));
+    } catch (err) {
+      res.status(401).json({ error: isTokenExpiredError(err) ? "Token expired" : "Invalid token" });
+      return;
+    }
+
+    if (!roles.includes(decoded.role) && !rbacService.can(decoded.role, "*" as any)) {
+      res.status(403).json({ error: `Role '${decoded.role}' does not have required access` });
+      return;
+    }
+
+    // Attach identity to request so downstream handlers can use it
+    req.physician = {
+      id:       decoded.id,
+      sub:      decoded.sub ?? decoded.id,
+      email:    decoded.email,
+      role:     decoded.role,
+      clinicId: decoded.clinicId,
+    };
+    next();
+  };
+}
+
+// ── requireTenant — cross-tenant access prevention (Issue #2) ─────────────────
+//
+// Verifies that the clinicId in the route/body matches the authenticated user's
+// clinicId. Must be used AFTER requirePhysician or requireRole.
+//
+// Usage:
+//   router.get('/clinic/:clinicId/data',
+//     requirePhysician,
+//     requireTenant('clinicId'),   // param name
+//     handler
+//   )
+
+export function requireTenant(paramName = "clinicId") {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const requestedClinic = req.params[paramName] ?? (req.body as any)?.[paramName];
+    const authedClinic    = req.physician?.clinicId;
+
+    if (!authedClinic) {
+      // Token has no clinicId — cannot enforce tenant isolation
+      // In production this should be a hard reject; currently warn + allow for
+      // backward compat during rollout (flip to reject when all tokens carry clinicId)
+      const isProd = process.env.NODE_ENV === "production";
+      if (isProd) {
+        res.status(403).json({ error: "Token missing clinicId — tenant isolation required" });
+        return;
+      }
+      console.warn("[Auth] requireTenant: token has no clinicId — skipping tenant check (non-production)");
+      return next();
+    }
+
+    if (requestedClinic && requestedClinic !== authedClinic) {
+      res.status(403).json({ error: "Cross-tenant access denied" });
+      return;
+    }
+
+    next();
+  };
 }
