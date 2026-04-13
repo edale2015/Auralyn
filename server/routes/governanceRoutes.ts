@@ -1,83 +1,109 @@
+/**
+ * server/routes/governanceRoutes.ts
+ *
+ * Updated to await all governanceQueue + modelApproval calls now that they
+ * are DB-backed async functions (Batch-1 Finding #1 fix).
+ */
+
 import { Router, Request, Response } from "express";
-import { requireRole } from "../middleware/requireRole";
+import { requireRole }               from "../auth/requirePhysician";
 import {
   listGovernanceQueue,
   addGovernanceItem,
   updateGovernanceStatus,
   getGovernanceStats,
-} from "../governance/governanceQueue";
-import { reviewClinicalChange } from "../governance/governanceReviewEngine";
+}                                    from "../governance/governanceQueue";
+import { reviewClinicalChange }      from "../governance/governanceReviewEngine";
 import { runProtocolRegressionTest } from "../governance/protocolRegressionAgent";
-import { analyzeClinicalRisk } from "../governance/clinicalRiskMonitor";
+import { analyzeClinicalRisk }       from "../governance/clinicalRiskMonitor";
 import { checkKnowledgeConsistency } from "../governance/knowledgeConsistencyEngine";
 import {
   recordPhysicianFeedback,
   listPhysicianFeedback,
   updateFeedbackStatus,
   getFeedbackStats,
-} from "../governance/physicianFeedbackAgent";
+}                                    from "../governance/physicianFeedbackAgent";
 import {
   deployNewVersion,
   rollbackVersion,
   getCurrentVersion,
   listVersions,
   getDeploymentStats,
-} from "../governance/deploymentManager";
+}                                    from "../governance/deploymentManager";
+import {
+  requireApproval,
+  proposeLearningUpdate,
+  applyApprovedUpdate,
+  rejectUpdate,
+  getPendingModelApprovals,
+  getModelApprovalStats,
+}                                    from "../governance/modelApproval";
 
 const router = Router();
 
-router.get("/api/governance/queue", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
-  const status = req.query.status as any;
-  const sheet = req.query.sheet as string | undefined;
-  res.json({
-    items: listGovernanceQueue({ status, sheet }),
-    stats: getGovernanceStats(),
-  });
+router.get("/api/governance/queue", requireRole(["admin", "physician"]), async (req: Request, res: Response) => {
+  try {
+    const status = req.query.status as any;
+    const sheet  = req.query.sheet as string | undefined;
+    const [items, stats] = await Promise.all([
+      listGovernanceQueue({ status, sheet }),
+      getGovernanceStats(),
+    ]);
+    res.json({ items, stats });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
-router.post("/api/governance/submit", requireRole(["admin"]), (req: Request, res: Response) => {
+router.post("/api/governance/submit", requireRole(["admin"]), async (req: Request, res: Response) => {
   const { sheet, change } = req.body;
   if (!sheet) return res.status(400).json({ error: "sheet is required" });
 
-  const review = reviewClinicalChange({ sheet, ...change });
-  const id = `gov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const review = reviewClinicalChange({ sheet, ...change });
+    const id     = `gov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  addGovernanceItem({
-    id,
-    sheet,
-    change: change || {},
-    risk: review.risk,
-    reason: review.reason,
-  });
+    await addGovernanceItem({
+      id, sheet,
+      change: change || {},
+      risk:   review.risk,
+      reason: review.reason,
+    });
 
-  res.json({
-    id,
-    review,
-    autoApprovable: review.autoApprovable,
-  });
+    res.json({ id, review, autoApprovable: review.autoApprovable });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
-router.post("/api/governance/review/:id", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
-  const { id } = req.params;
+router.post("/api/governance/review/:id", requireRole(["admin", "physician"]), async (req: Request, res: Response) => {
+  const { id }     = req.params;
   const { status } = req.body;
 
   if (!["approved", "rejected"].includes(status)) {
     return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
   }
 
-  const updated = updateGovernanceStatus(id, status, req.authUser?.displayName || req.authUser?.email);
-  if (!updated) return res.status(404).json({ error: "Governance item not found" });
-
-  res.json({ ok: true, id, status });
+  try {
+    const updated = await updateGovernanceStatus(id, status, req.physician?.id ?? req.authUser?.displayName);
+    if (!updated) return res.status(404).json({ error: "Governance item not found" });
+    res.json({ ok: true, id, status });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
-router.get("/api/governance/stats", requireRole(["admin"]), (_req: Request, res: Response) => {
-  res.json(getGovernanceStats());
+router.get("/api/governance/stats", requireRole(["admin"]), async (_req: Request, res: Response) => {
+  try {
+    res.json(await getGovernanceStats());
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
 router.get("/api/governance/regression-test", requireRole(["admin"]), (req: Request, res: Response) => {
   try {
-    const max = req.query.max ? parseInt(req.query.max as string, 10) : 50;
+    const max    = req.query.max ? parseInt(req.query.max as string, 10) : 50;
     const result = runProtocolRegressionTest(max);
     res.json(result);
   } catch (err: any) {
@@ -86,15 +112,13 @@ router.get("/api/governance/regression-test", requireRole(["admin"]), (req: Requ
 });
 
 router.post("/api/governance/risk-analysis", requireRole(["admin"]), (req: Request, res: Response) => {
-  const metrics = req.body || {};
-  const alerts = analyzeClinicalRisk(metrics);
+  const alerts = analyzeClinicalRisk(req.body || {});
   res.json({ alerts, alertCount: alerts.length });
 });
 
 router.get("/api/governance/consistency-check", requireRole(["admin"]), (_req: Request, res: Response) => {
   try {
-    const result = checkKnowledgeConsistency();
-    res.json(result);
+    res.json(checkKnowledgeConsistency());
   } catch (err: any) {
     res.status(500).json({ error: err?.message || "Consistency check failed" });
   }
@@ -105,26 +129,21 @@ router.post("/api/governance/feedback", requireRole(["admin", "physician"]), (re
   if (!caseId || !correction) {
     return res.status(400).json({ error: "caseId and correction are required" });
   }
-
   const entry = recordPhysicianFeedback({
     caseId,
-    physician: req.authUser?.displayName || req.authUser?.email || "unknown",
+    physician: req.physician?.id ?? req.authUser?.displayName ?? "unknown",
     correction,
-    category: category || "other",
-    severity: severity || "medium",
+    category:  category  || "other",
+    severity:  severity  || "medium",
   });
-
   res.json(entry);
 });
 
 router.get("/api/governance/feedback", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
-  const status = req.query.status as string | undefined;
+  const status   = req.query.status   as string | undefined;
   const category = req.query.category as string | undefined;
-  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
-  res.json({
-    items: listPhysicianFeedback({ status, category, limit }),
-    stats: getFeedbackStats(),
-  });
+  const limit    = req.query.limit    ? parseInt(req.query.limit as string, 10) : 100;
+  res.json({ items: listPhysicianFeedback({ status, category, limit }), stats: getFeedbackStats() });
 });
 
 router.patch("/api/governance/feedback/:id", requireRole(["admin"]), (req: Request, res: Response) => {
@@ -139,48 +158,55 @@ router.patch("/api/governance/feedback/:id", requireRole(["admin"]), (req: Reque
 
 router.post("/api/governance/deploy", requireRole(["admin"]), (req: Request, res: Response) => {
   const { config, label } = req.body;
-  const version = deployNewVersion(
-    config || {},
-    label,
-    req.authUser?.displayName || req.authUser?.email
-  );
+  const version = deployNewVersion(config || {}, label, req.physician?.id ?? req.authUser?.displayName);
   res.json(version);
 });
 
-import {
-  requireApproval,
-  proposeLearningUpdate,
-  applyApprovedUpdate,
-  rejectUpdate,
-  getPendingModelApprovals,
-  getModelApprovalStats,
-} from "../governance/modelApproval";
+// ── Model approvals ───────────────────────────────────────────────────────────
 
-router.get("/api/governance/model-approvals", requireRole(["admin", "physician"]), (_req: Request, res: Response) => {
-  res.json({ ok: true, pending: getPendingModelApprovals(), stats: getModelApprovalStats() });
+router.get("/api/governance/model-approvals", requireRole(["admin", "physician"]), async (_req: Request, res: Response) => {
+  try {
+    const [pending, stats] = await Promise.all([getPendingModelApprovals(), getModelApprovalStats()]);
+    res.json({ ok: true, pending, stats });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
-router.post("/api/governance/model-approvals/propose", requireRole(["admin"]), (req: Request, res: Response) => {
+router.post("/api/governance/model-approvals/propose", requireRole(["admin"]), async (req: Request, res: Response) => {
   const { packId, oldAccuracy, newAccuracy, source } = req.body;
   if (!packId || oldAccuracy === undefined || newAccuracy === undefined) {
     return res.status(400).json({ error: "packId, oldAccuracy, newAccuracy are required" });
   }
-  const result = proposeLearningUpdate(packId, oldAccuracy, newAccuracy, source ?? "manual");
-  res.json({ ok: true, result });
+  try {
+    const result = await proposeLearningUpdate(packId, oldAccuracy, newAccuracy, source ?? "manual");
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
-router.post("/api/governance/model-approvals/:id/approve", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
-  const { reviewedBy } = req.body;
-  const ok = applyApprovedUpdate(req.params.id, reviewedBy ?? "physician");
-  if (!ok) return res.status(404).json({ error: "Item not found or already resolved" });
-  res.json({ ok: true, applied: req.params.id });
+router.post("/api/governance/model-approvals/:id/approve", requireRole(["admin", "physician"]), async (req: Request, res: Response) => {
+  const reviewedBy = req.physician?.id ?? req.body.reviewedBy ?? "physician";
+  try {
+    const ok = await applyApprovedUpdate(req.params.id, reviewedBy);
+    if (!ok) return res.status(404).json({ error: "Item not found or already resolved" });
+    res.json({ ok: true, applied: req.params.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
-router.post("/api/governance/model-approvals/:id/reject", requireRole(["admin", "physician"]), (req: Request, res: Response) => {
-  const { reviewedBy, reason } = req.body;
-  const ok = rejectUpdate(req.params.id, reviewedBy ?? "physician", reason);
-  if (!ok) return res.status(404).json({ error: "Item not found or already resolved" });
-  res.json({ ok: true, rejected: req.params.id });
+router.post("/api/governance/model-approvals/:id/reject", requireRole(["admin", "physician"]), async (req: Request, res: Response) => {
+  const reviewedBy = req.physician?.id ?? req.body.reviewedBy ?? "physician";
+  const { reason } = req.body;
+  try {
+    const ok = await rejectUpdate(req.params.id, reviewedBy, reason);
+    if (!ok) return res.status(404).json({ error: "Item not found or already resolved" });
+    res.json({ ok: true, rejected: req.params.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message });
+  }
 });
 
 router.post("/api/governance/model-approvals/check", requireRole(["admin"]), (req: Request, res: Response) => {
@@ -193,18 +219,13 @@ router.post("/api/governance/model-approvals/check", requireRole(["admin"]), (re
 router.post("/api/governance/rollback", requireRole(["admin"]), (req: Request, res: Response) => {
   const { versionId } = req.body;
   if (!versionId) return res.status(400).json({ error: "versionId is required" });
-
   const ok = rollbackVersion(versionId);
   if (!ok) return res.status(404).json({ error: "Version not found" });
   res.json({ ok: true, rolledBackTo: versionId });
 });
 
 router.get("/api/governance/versions", requireRole(["admin"]), (_req: Request, res: Response) => {
-  res.json({
-    current: getCurrentVersion(),
-    versions: listVersions(),
-    stats: getDeploymentStats(),
-  });
+  res.json({ current: getCurrentVersion(), versions: listVersions(), stats: getDeploymentStats() });
 });
 
 export default router;

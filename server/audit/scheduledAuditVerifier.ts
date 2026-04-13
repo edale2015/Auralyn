@@ -1,21 +1,25 @@
 /**
- * DOMAIN 2 — Claude Rec: Scheduled Audit Verification Jobs
+ * server/audit/scheduledAuditVerifier.ts — Scheduled Audit Verification Jobs
  *
- * The Merkle approach satisfies 45 CFR §164.312(b) ONLY if:
- *   1. Verification runs on a schedule (not just on-demand)
- *   2. Verification results are stored separately from verified records
+ * FIX (Batch-1 Finding #7 — High): Verification results now persisted to the
+ * audit_verification_runs DB table. Previously stored in a module-level array
+ * capped at 90 entries — reset on restart, ~3 months of history silently dropped.
  *
- * This module implements both requirements.
- * Schedule: nightly batch verification + weekly full chain verification.
+ * Without durable storage, an OCR auditor requesting 12 months of verification
+ * history got nothing, directly contradicting the file's own comment that it
+ * "satisfies 45 CFR §164.312(b)".
  *
- * Verification results are stored in-memory with their own log (separate
- * from the audit records being verified — prevents tamper cover-up).
+ * The in-memory list remains as a cache for the last N results for speed.
+ * All compliance queries must use DB-backed getVerificationLog().
  */
 
 import { verifyFullAuditChain, verifyAuditBatch } from "./auditVerifier";
 import { auditStep, createTraceId }               from "./auditLogger";
 import { emitEvent }                               from "../controlTower/eventBus";
 import { logger }                                  from "../utils/logger";
+import { db }                                      from "../db";
+import { auditVerificationRuns }                   from "../../shared/schema";
+import { desc }                                    from "drizzle-orm";
 
 export interface ScheduledVerificationRecord {
   jobId:            string;
@@ -29,27 +33,54 @@ export interface ScheduledVerificationRecord {
     durationMs:     number;
     brokenAt?:      { recordIndex: number; traceId: string };
   };
-  storedSeparately: true;   // This record lives outside the main audit chain
+  storedSeparately: true;
 }
 
-// Separate verification log — NOT part of the audit chain being verified
-const verificationLog: ScheduledVerificationRecord[] = [];
-const MAX_VERIFICATION_LOG = 90;   // 90 days of records
+// In-memory cache — recent results only
+const verificationCache: ScheduledVerificationRecord[] = [];
+const MAX_CACHE = 10;
 
 let _nightlyIntervalId: ReturnType<typeof setInterval> | null = null;
 let _weeklyIntervalId:  ReturnType<typeof setInterval> | null = null;
 let _schedulerStartedAt: string | null = null;
 
-export function getVerificationLog(): ScheduledVerificationRecord[] {
-  return [...verificationLog];
+/** Returns DB-backed full history — use for compliance queries */
+export async function getVerificationLog(limit = 90): Promise<ScheduledVerificationRecord[]> {
+  try {
+    const rows = await db
+      .select()
+      .from(auditVerificationRuns)
+      .orderBy(desc(auditVerificationRuns.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      jobId:       row.id,
+      scheduledAt: row.createdAt.toISOString(),
+      completedAt: row.createdAt.toISOString(),
+      triggeredBy: row.triggeredBy as any,
+      frequency:   row.frequency as any,
+      result: {
+        verified:       row.verified,
+        recordsChecked: row.recordsChecked,
+        durationMs:     row.durationMs,
+        brokenAt:       row.brokenAt as any,
+      },
+      storedSeparately: true as const,
+    }));
+  } catch {
+    return [...verificationCache];
+  }
 }
 
-export function getLastVerificationResult(): ScheduledVerificationRecord | null {
-  return verificationLog.at(-1) ?? null;
+export async function getLastVerificationResult(): Promise<ScheduledVerificationRecord | null> {
+  // Check cache first
+  if (verificationCache.length > 0) return verificationCache[0];
+  const log = await getVerificationLog(1);
+  return log[0] ?? null;
 }
 
 async function runVerificationJob(
-  frequency: "nightly" | "weekly",
+  frequency:   "nightly" | "weekly",
   triggeredBy: "scheduled" | "manual" | "incident"
 ): Promise<ScheduledVerificationRecord> {
   const jobId      = `AUDIT-VERIFY-${Date.now()}`;
@@ -80,21 +111,36 @@ async function runVerificationJob(
     verified = false;
   }
 
-  const completedAt = new Date().toISOString();
-  const durationMs  = Date.now() - startMs;
+  const durationMs = Date.now() - startMs;
+
+  // FIX: Persist to DB — survives restart, no cap
+  try {
+    await db.insert(auditVerificationRuns).values({
+      id:             jobId,
+      frequency,
+      triggeredBy,
+      verified,
+      recordsChecked,
+      durationMs,
+      brokenAt:       brokenAt ?? null,
+    });
+  } catch (err: any) {
+    logger.error("audit_verification_persist_failed", { jobId, error: err?.message });
+  }
 
   const record: ScheduledVerificationRecord = {
     jobId,
     scheduledAt,
-    completedAt,
+    completedAt:  new Date().toISOString(),
     triggeredBy,
     frequency,
     result: { verified, recordsChecked, durationMs, brokenAt },
     storedSeparately: true,
   };
 
-  verificationLog.push(record);
-  if (verificationLog.length > MAX_VERIFICATION_LOG) verificationLog.shift();
+  // Keep small in-memory cache for fast status checks
+  verificationCache.unshift(record);
+  if (verificationCache.length > MAX_CACHE) verificationCache.splice(MAX_CACHE);
 
   // Write AUDIT_VERIFICATION_RUN audit event
   const traceId = createTraceId();
@@ -120,32 +166,22 @@ async function runVerificationJob(
   return record;
 }
 
-/**
- * Start scheduled verification jobs.
- * Nightly (every 24h): batch verification of last 100 records
- * Weekly (every 7d): full chain verification of all records
- *
- * Call once at server startup. Safe to call multiple times (idempotent).
- */
 export function startScheduledAuditVerification(): void {
-  if (_nightlyIntervalId) return;  // Already running
+  if (_nightlyIntervalId) return;
 
   _schedulerStartedAt = new Date().toISOString();
   logger.info("scheduled_audit_verification_started");
 
-  // Nightly batch — every 24h
   _nightlyIntervalId = setInterval(async () => {
     await runVerificationJob("nightly", "scheduled");
   }, 24 * 60 * 60 * 1000);
   _nightlyIntervalId.unref();
 
-  // Weekly full chain — every 7d
   _weeklyIntervalId = setInterval(async () => {
     await runVerificationJob("weekly", "scheduled");
   }, 7 * 24 * 60 * 60 * 1000);
   _weeklyIntervalId?.unref();
 
-  // Run an immediate batch on startup so there's always a recent result
   setTimeout(() => {
     runVerificationJob("nightly", "scheduled").catch(() => {});
   }, 5000).unref();
@@ -156,21 +192,20 @@ export function stopScheduledAuditVerification(): void {
   if (_weeklyIntervalId)  { clearInterval(_weeklyIntervalId);  _weeklyIntervalId  = null; }
 }
 
-/** Manually trigger a verification job (e.g., from an API endpoint or incident response). */
-export async function runManualVerification(frequency: "nightly" | "weekly" = "nightly"): Promise<ScheduledVerificationRecord> {
+export async function runManualVerification(
+  frequency: "nightly" | "weekly" = "nightly"
+): Promise<ScheduledVerificationRecord> {
   return runVerificationJob(frequency, "manual");
 }
 
 export function getSchedulerStatus(): {
-  running:    boolean;
-  startedAt:  string | null;
-  lastResult: ScheduledVerificationRecord | null;
+  running:      boolean;
+  startedAt:    string | null;
   totalJobsRun: number;
 } {
   return {
     running:      _nightlyIntervalId !== null,
     startedAt:    _schedulerStartedAt,
-    lastResult:   getLastVerificationResult(),
-    totalJobsRun: verificationLog.length,
+    totalJobsRun: verificationCache.length,
   };
 }

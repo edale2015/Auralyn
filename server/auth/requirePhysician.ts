@@ -1,16 +1,18 @@
 /**
  * server/auth/requirePhysician.ts — Physician-level auth middleware
  *
- * FIXES (Code Review Issues #1, #2):
- *   Issue #1: Token now carries real user identity (id, clinicId) rather than
- *     a generic "provider" blob.
- *   Issue #2: Added requireTenant() middleware that enforces clinicId matches
- *     the authenticated user's clinic — blocking cross-tenant resource access.
+ * FIX (Batch-1 Finding #5 — High): requireTenant() now hard-rejects any token
+ * missing clinicId regardless of NODE_ENV. The previous non-production bypass
+ * allowed any staging/CI/dev token without a clinicId to access all clinic data.
+ *
+ * FIX (Batch-1 Finding #9 — High): requireRole() no longer passes "*" as a
+ * Permission to rbacService.can(). Admin check is now an explicit role comparison,
+ * not a wildcard permission lookup that only worked for admins and silently
+ * denied all other valid roles.
  */
 
 import { Request, Response, NextFunction } from "express";
 import { verifyAccessToken, isTokenExpiredError, isJwtError } from "./unifiedAuth";
-import { rbacService } from "./rbacService";
 import type { AccessTokenPayload } from "./authTypes";
 
 // ── Express augmentation ──────────────────────────────────────────────────────
@@ -55,22 +57,27 @@ export function requirePhysician(req: Request, res: Response, next: NextFunction
     return;
   }
 
-  if (!rbacService.can(decoded.role, "clinical:run")) {
+  const PHYSICIAN_ROLES = ["physician", "admin", "nurse_practitioner", "pa"];
+  if (!PHYSICIAN_ROLES.includes(decoded.role)) {
     res.status(403).json({ error: "Physician access required" });
     return;
   }
 
   req.physician = {
-    id:        decoded.id,
-    sub:       decoded.sub ?? decoded.id,
-    email:     decoded.email,
-    role:      decoded.role,
-    clinicId:  decoded.clinicId,
+    id:       decoded.id,
+    sub:      decoded.sub ?? decoded.id,
+    email:    decoded.email,
+    role:     decoded.role,
+    clinicId: decoded.clinicId,
   };
   next();
 }
 
-// ── requireRole factory — for non-physician roles ─────────────────────────────
+// ── requireRole factory ───────────────────────────────────────────────────────
+//
+// FIX (Finding #9): Admin check is now `decoded.role === "admin"` — not
+// rbacService.can(role, "*") which only returned true for admins and silently
+// rejected all other roles that should have passed the role list check.
 
 export function requireRole(roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -88,12 +95,14 @@ export function requireRole(roles: string[]) {
       return;
     }
 
-    if (!roles.includes(decoded.role) && !rbacService.can(decoded.role, "*" as any)) {
+    const isAdmin     = decoded.role === "admin";
+    const roleAllowed = roles.includes(decoded.role);
+
+    if (!roleAllowed && !isAdmin) {
       res.status(403).json({ error: `Role '${decoded.role}' does not have required access` });
       return;
     }
 
-    // Attach identity to request so downstream handlers can use it
     req.physician = {
       id:       decoded.id,
       sub:      decoded.sub ?? decoded.id,
@@ -105,17 +114,11 @@ export function requireRole(roles: string[]) {
   };
 }
 
-// ── requireTenant — cross-tenant access prevention (Issue #2) ─────────────────
+// ── requireTenant — cross-tenant access prevention ───────────────────────────
 //
-// Verifies that the clinicId in the route/body matches the authenticated user's
-// clinicId. Must be used AFTER requirePhysician or requireRole.
-//
-// Usage:
-//   router.get('/clinic/:clinicId/data',
-//     requirePhysician,
-//     requireTenant('clinicId'),   // param name
-//     handler
-//   )
+// FIX (Finding #5): Missing clinicId is now ALWAYS a hard 403 — no bypass
+// for non-production. Previous code did console.warn + next() in non-prod,
+// silently disabling tenant isolation on any staging or CI environment.
 
 export function requireTenant(paramName = "clinicId") {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -123,16 +126,11 @@ export function requireTenant(paramName = "clinicId") {
     const authedClinic    = req.physician?.clinicId;
 
     if (!authedClinic) {
-      // Token has no clinicId — cannot enforce tenant isolation
-      // In production this should be a hard reject; currently warn + allow for
-      // backward compat during rollout (flip to reject when all tokens carry clinicId)
-      const isProd = process.env.NODE_ENV === "production";
-      if (isProd) {
-        res.status(403).json({ error: "Token missing clinicId — tenant isolation required" });
-        return;
-      }
-      console.warn("[Auth] requireTenant: token has no clinicId — skipping tenant check (non-production)");
-      return next();
+      // FIX: Hard reject regardless of NODE_ENV — no backward-compat bypass
+      res.status(403).json({
+        error: "Token missing clinicId — tenant isolation enforced in all environments",
+      });
+      return;
     }
 
     if (requestedClinic && requestedClinic !== authedClinic) {

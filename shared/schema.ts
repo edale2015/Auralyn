@@ -1372,6 +1372,56 @@ export const insertAgentArtifactSchema = createInsertSchema(agentArtifacts).omit
 export type InsertAgentArtifact = z.infer<typeof insertAgentArtifactSchema>;
 export type AgentArtifact = typeof agentArtifacts.$inferSelect;
 
+// ── Batch-1 Remediation: Persist governance, traces, audit-verification ────────
+
+// governance_items — durable record of every governance approval/rejection
+// Replaces in-memory governanceQueue. Required for HIPAA + FDA 21 CFR Part 11.
+export const governanceItems = pgTable("governance_items", {
+  id:         text("id").primaryKey(),
+  sheet:      text("sheet").notNull(),
+  change:     jsonb("change").notNull(),
+  status:     text("status").notNull().default("pending"),  // pending | approved | rejected
+  risk:       text("risk").notNull(),
+  reason:     text("reason"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt:  timestamp("created_at").defaultNow().notNull(),
+});
+export const insertGovernanceItemSchema = createInsertSchema(governanceItems).omit({ createdAt: true });
+export type InsertGovernanceItem = z.infer<typeof insertGovernanceItemSchema>;
+export type GovernanceItem = typeof governanceItems.$inferSelect;
+
+// execution_traces — durable AI reasoning trace for every clinical decision
+// Replaces in-memory 200-cap store. Required for FDA audit + malpractice defense.
+export const executionTraces = pgTable("execution_traces", {
+  id:        text("id").primaryKey(),
+  patientId: text("patient_id"),
+  complaint: text("complaint"),
+  steps:     jsonb("steps").notNull(),
+  totalMs:   integer("total_ms"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  patientIdx:   index("idx_exec_traces_patient").on(t.patientId),
+  createdAtIdx: index("idx_exec_traces_created").on(t.createdAt),
+}));
+export type ExecutionTraceRow = typeof executionTraces.$inferSelect;
+
+// audit_verification_runs — persisted scheduled verification results
+// Replaces in-memory 90-day cap. Required for 45 CFR §164.312(b) compliance.
+export const auditVerificationRuns = pgTable("audit_verification_runs", {
+  id:          text("id").primaryKey(),
+  frequency:   text("frequency").notNull(),         // nightly | weekly
+  triggeredBy: text("triggered_by").notNull(),       // scheduled | manual | incident
+  verified:    boolean("verified").notNull(),
+  recordsChecked: integer("records_checked").notNull(),
+  durationMs:  integer("duration_ms").notNull(),
+  brokenAt:    jsonb("broken_at"),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  createdAtIdx: index("idx_audit_verify_created").on(t.createdAt),
+}));
+export type AuditVerificationRun = typeof auditVerificationRuns.$inferSelect;
+
 // agent_memory_log — persistent agent memory across runs (Batch 59)
 export const agentMemoryLog = pgTable("agent_memory_log", {
   id:         serial("id").primaryKey(),

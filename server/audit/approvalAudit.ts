@@ -1,5 +1,17 @@
-import { db } from "../db";
-import { sql } from "drizzle-orm";
+/**
+ * server/audit/approvalAudit.ts
+ *
+ * FIX (Batch-1 Finding #2 — Critical): logApproval() now routes through auditStep()
+ * instead of raw SQL. This means every physician action:
+ *   1. Goes through the advisory-lock serialization queue
+ *   2. Gets a proper prevHash → hash chain link
+ *   3. Is included in verifyEntireChain() / verifyFullAuditChain()
+ *
+ * Previously: direct db.execute(sql`INSERT INTO audit_logs ...`) with no hash/prevHash,
+ * silently breaking the chain at every physician approval.
+ */
+
+import { auditStep, createTraceId } from "./auditLogger";
 
 export async function logApproval({
   patientId,
@@ -7,31 +19,21 @@ export async function logApproval({
   action,
   overrideData,
 }: {
-  patientId: string;
-  physicianId: string;
-  action: "approve" | "override" | "escalate";
+  patientId:     string;
+  physicianId:   string;
+  action:        "approve" | "override" | "escalate";
   overrideData?: any;
 }): Promise<void> {
-  try {
-    await db.execute(sql`
-      INSERT INTO audit_logs (trace_id, step, input, output, metadata)
-      VALUES (
-        ${patientId},
-        ${"PHYSICIAN_ACTION"},
-        ${JSON.stringify({ action })}::jsonb,
-        ${JSON.stringify(overrideData ?? null)}::jsonb,
-        ${JSON.stringify({ physicianId, timestamp: new Date().toISOString() })}::jsonb
-      )
-    `);
-
-    console.log(JSON.stringify({
-      event: "physician_action",
-      patientId,
+  // FIX: use auditStep() — goes through the advisory lock + hash chain.
+  // If this throws, the caller learns immediately (no silent swallow).
+  await auditStep({
+    traceId:  createTraceId(),
+    step:     "PHYSICIAN_ACTION",
+    input:    { action, patientId },
+    output:   overrideData ?? null,
+    metadata: {
       physicianId,
-      action,
       timestamp: new Date().toISOString(),
-    }));
-  } catch (e: any) {
-    console.error("[ApprovalAudit] Failed to log physician action:", e?.message);
-  }
+    },
+  });
 }

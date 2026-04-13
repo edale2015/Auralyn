@@ -1,0 +1,172 @@
+TOP 10 FINDINGS
+1.
+Issue Title: governanceQueue.ts — Entire governance approval state is in-memory only
+Severity: Critical
+Files: server/governance/governanceQueue.ts
+One-sentence risk: Every governance approval, rejection, and pending review is lost on server restart, meaning a physician approval of a high-risk change leaves no durable record and the queue resets to empty.
+2.
+Issue Title: approvalAudit.ts — Bypasses hash chain entirely, uses raw SQL insert
+Severity: Critical
+Files: server/audit/approvalAudit.ts
+One-sentence risk: Physician approval events are inserted directly via raw SQL without going through auditStep(), so they carry no hash/prevHash and silently break chain integrity at every physician action.
+3.
+Issue Title: modelApproval.ts — applyApprovedUpdate() emits an event but never applies anything
+Severity: Critical
+Files: server/governance/modelApproval.ts
+One-sentence risk: The function that is supposed to apply an approved model change only calls updateGovernanceStatus() and emits an event — no actual model parameter is updated anywhere, making the entire approval workflow theater.
+4.
+Issue Title: clinicalTrace.ts — traceId is String(Date.now()) — millisecond-precision, not unique
+Severity: High
+Files: server/audit/clinicalTrace.ts
+One-sentence risk: Two concurrent clinical decisions within the same millisecond produce identical traceIds, making their records indistinguishable in FDA audit exports and breaking any downstream lookup by traceId.
+5.
+Issue Title: requireTenant() skips tenant check in non-production with a warn+allow
+Severity: High
+Files: server/auth/requirePhysician.ts
+One-sentence risk: Any staging or dev deployment with a misconfigured NODE_ENV silently skips cross-tenant enforcement, allowing any authenticated user to access any clinic's data.
+6.
+Issue Title: traceStore.ts — In-memory only, 200-trace cap, cleared on restart
+Severity: High
+Files: server/audit/traceStore.ts
+One-sentence risk: All agent execution traces are lost on restart and capped at 200 entries, meaning a high-volume urgent care shift produces no durable record of AI reasoning for FDA or malpractice review.
+7.
+Issue Title: scheduledAuditVerifier.ts — Verification log is in-memory, lost on restart
+Severity: High
+Files: server/audit/scheduledAuditVerifier.ts
+One-sentence risk: The verification records that prove audit integrity was checked are stored only in memory — a server restart wipes the evidence that verification ever ran, which directly undermines the 45 CFR §164.312(b) posture the file claims to satisfy.
+8.
+Issue Title: auditVerifier.ts — Merkle batch verification uses DESC order, not chain order
+Severity: High
+Files: server/audit/auditVerifier.ts
+One-sentence risk: verifyAuditBatch() fetches rows in descending ID order and computes a Merkle root, but the chain was written in ascending order — the Merkle root is meaningless as a tamper-detection mechanism because it covers a reversed, non-sequential subset.
+9.
+Issue Title: requireRole in requirePhysician.ts passes "*" as a Permission to rbacService.can()
+Severity: High
+Files: server/auth/requirePhysician.ts, server/auth/rbacService.ts
+One-sentence risk: rbacService.can(role, "*" as any) uses "*" as an action argument — the function checks perms.includes("*") which returns true only for admin, so non-admin roles that should pass a role check are silently rejected, creating invisible access denials.
+10.
+Issue Title: auditRoutes.ts — imports from clinicalChangeAuditLog which is not the persisted audit log
+Severity: Medium
+Files: server/routes/auditRoutes.ts
+One-sentence risk: The admin audit log API reads from a module that may be the in-memory clinical change log rather than the DB-persisted auditLogs table, potentially showing an empty or restarted log to auditors while real records exist in the DB.
+
+FULL FINDINGS
+
+Issue Title: governanceQueue.ts — Entire governance approval state is in-memory only
+Severity: Critical
+Category: Architectural risk / Compliance failure
+Files: server/governance/governanceQueue.ts
+What is wrong: governanceQueue is a module-level array. Every governance item — pending reviews, physician approvals, rejections — lives exclusively in this array. There is no DB write anywhere in the file. updateGovernanceStatus() mutates the in-memory object and returns. On server restart, the entire queue is gone.
+Why it matters: A physician approves a high-risk RED_FLAG_RULES change. The server restarts. The approval never happened. The change either gets re-queued as pending or is silently lost. Under HIPAA and FDA 21 CFR Part 11, governance decisions must be durably recorded with the approver's identity, timestamp, and the pre/post state. An in-memory queue satisfies none of these requirements.
+Evidence from code: const governanceQueue: GovernanceItem[] = []; — no DB import, no persistence call in any of the four exported functions.
+Recommended fix: Replace with a governance_items DB table. Every addGovernanceItem, updateGovernanceStatus call must be an upsert. The in-memory array may remain as a read cache but must never be the source of truth.
+Type: Architectural risk + Compliance failure
+
+Issue Title: approvalAudit.ts — Bypasses hash chain, uses raw SQL insert
+Severity: Critical
+Category: Real defect / Audit integrity
+Files: server/audit/approvalAudit.ts
+What is wrong: logApproval() inserts directly into audit_logs via db.execute(sql\INSERT INTO audit_logs...`)without callingauditStep(). This bypasses the advisory lock, the queue serialization, and the hash chain entirely. The inserted row has no hashorprevHash. Any subsequent call to verifyEntireChain()orverifyFullAuditChain()will encounter a row with null hashes and either break the chain verification or silently skip it. **Why it matters:** Physician approval events are precisely the events that must be most tamper-evidently recorded. A row inserted outside the hash chain can be deleted or modified without breaking the chain — which is the opposite of the security guarantee the chain is supposed to provide. **Evidence from code:**await db.execute(sql`INSERT INTO audit_logs (trace_id, step, input, output, metadata) VALUES...`)— nocomputeChainHash, no prevHash, no advisory lock. **Recommended fix:** Replace with await auditStep({ traceId: patientId, step: "PHYSICIAN_ACTION", input: { action }, output: overrideData ?? null, metadata: { physicianId, timestamp } })`. Remove the raw SQL insert entirely.
+Type: Real defect
+
+Issue Title: modelApproval.ts — applyApprovedUpdate() never actually applies anything
+Severity: Critical
+Category: Misleading implementation
+Files: server/governance/modelApproval.ts
+What is wrong: applyApprovedUpdate() calls updateGovernanceStatus(itemId, "approved", reviewedBy) and emits an ENGINE_STATUS event. There is no code that reads the item.change data and updates any model parameter, threshold, weight, or configuration. The governance workflow completes — status becomes "approved", event is emitted, log message printed — but the underlying model or rule is unchanged.
+Why it matters: The entire learning loop and model improvement pipeline is predicated on this function actually doing something. If it doesn't, every physician approval is theater: the queue fills up, physicians review and approve, and nothing in the clinical system changes. This is also dangerous in the inverse: if a physician rejects a change, nothing changes either — so the lack of application is invisible.
+Evidence from code: const updated = updateGovernanceStatus(itemId, "approved", reviewedBy); — item.change is retrieved but never used to update anything. The function returns updated (a boolean from the status change) not a result of applying the change.
+Recommended fix: After updateGovernanceStatus, read item.change, determine the target (e.g. item.sheet), and call the appropriate service to apply the change. This must be audited with auditStep() capturing before/after state.
+Type: Misleading implementation
+
+Issue Title: clinicalTrace.ts — traceId collision risk from String(Date.now())
+Severity: High
+Category: Real defect
+Files: server/audit/clinicalTrace.ts
+What is wrong: const traceId = String(Date.now()) produces a millisecond Unix timestamp as a string. Two concurrent buildClinicalTrace() calls within the same millisecond — trivially possible in any async environment — produce identical traceIds. The traceHash covers the steps but not the traceId, so the collision is not detected.
+Why it matters: FDA export and legal audit both use traceId as the primary lookup key. Colliding traceIds make two distinct patient encounters indistinguishable. In litigation, this breaks the chain of accountability for a specific decision. In audit tooling, one record silently overwrites another.
+Evidence from code: const traceId = String(Date.now()); — hashSteps does not include traceId in its hash input, so two records with identical traceIds but different content produce different hashes, making the collision undetectable by verifyTrace().
+Recommended fix: Replace with crypto.randomUUID() or a UUIDv4 from the uuid package. If ordering is needed, use \${Date.now()}-\${crypto.randomBytes(4).toString('hex')}.
+Type: Real defect
+
+Issue Title: requireTenant() silently skips in non-production
+Severity: High
+Category: Security risk
+Files: server/auth/requirePhysician.ts
+What is wrong: When authedClinic is undefined (token has no clinicId) and NODE_ENV !== "production", the middleware calls next() with a warning log. This means any staging environment, any CI environment with NODE_ENV=staging, and any developer running locally with a token that lacks clinicId gets full cross-tenant access with no enforcement.
+Why it matters: Staging environments often contain real or near-real patient data for QA purposes. A developer token with no clinicId can access any clinic's records in staging. More critically, NODE_ENV misconfiguration in a production-like environment (a common deployment error) silently disables tenant isolation.
+Evidence from code: if (isProd) { res.status(403)... return; } console.warn(...); return next(); — the non-production path allows the request through unconditionally.
+Recommended fix: Remove the non-production bypass entirely. A missing clinicId should always be a hard 403. If backward compatibility is needed during token migration, use a feature flag with an explicit expiry date, not an implicit NODE_ENV check.
+Type: Architectural risk
+
+Issue Title: traceStore.ts — In-memory only, 200-trace cap, no persistence
+Severity: High
+Category: Architectural risk / Compliance failure
+Files: server/audit/traceStore.ts
+What is wrong: ExecutionTrace records are stored in a module-level array capped at 200 entries. store.unshift(full) adds newest first; store.splice(MAX_TRACES) drops the oldest. There is no DB write, no file write. On restart: empty. After 200 encounters: oldest records gone.
+Why it matters: Agent execution traces are the primary record of AI reasoning for a clinical decision. In an urgent care setting handling 100+ patients per shift, 200 traces covers two hours. A complaint filed six months later has no AI reasoning record to defend against or explain.
+Evidence from code: const store: ExecutionTrace[] = []; at module level. saveTrace() writes only to this array. No import of db or any persistence layer.
+Recommended fix: Persist each trace to a execution_traces DB table on creation. The in-memory array may remain for fast recent-record lookups. Add a getTrace(id) fallback to DB when not found in memory.
+Type: Architectural risk
+
+Issue Title: scheduledAuditVerifier.ts — Verification log is in-memory, defeats its own purpose
+Severity: High
+Category: Compliance failure
+Files: server/audit/scheduledAuditVerifier.ts
+What is wrong: verificationLog is a module-level array capped at 90 entries. The file's own comment states: "Verification results are stored separately from verified records" and "stored in-memory with their own log." On restart, all verification history is lost. The 90-entry cap means after 90 nightly runs (~3 months), the oldest records are silently dropped.
+Why it matters: The file explicitly claims to satisfy 45 CFR §164.312(b) by storing verification results separately. But an in-memory store that resets on every restart does not constitute "stored separately" in any compliance sense. An OCR auditor asking for 12 months of verification history gets: nothing.
+Evidence from code: const verificationLog: ScheduledVerificationRecord[] = []; — storedSeparately: true in the type is a label, not an enforcement mechanism.
+Recommended fix: Write each ScheduledVerificationRecord to a dedicated audit_verification_runs DB table. The in-memory array may cache the last N results. Expose a DB-backed query for compliance exports.
+Type: Compliance failure + Misleading implementation
+
+Issue Title: auditVerifier.ts — Merkle batch verification is order-inverted and semantically broken
+Severity: High
+Category: Real defect
+Files: server/audit/auditVerifier.ts
+What is wrong: verifyAuditBatch() queries orderBy(desc(auditLogs.id)) — newest records first — then computes a Merkle root over those hashes. The audit chain was written in ascending ID order. The Merkle root of a reversed-order batch is a different value than the Merkle root of the same records in chain order. There is also no stored "expected" Merkle root to compare against — the function computes a root and returns it, but never verifies it against anything.
+Why it matters: A Merkle root that isn't stored and compared provides zero tamper detection. Computing a root over randomly-ordered records provides zero chain integrity evidence. The function returns verified: hashes.length === records.length — this is true whenever no hashes are null, completely independent of whether any record was tampered with.
+Evidence from code: .orderBy(desc(auditLogs.id)) — verified: hashes.length === records.length — no comparison to a stored or expected root.
+Recommended fix: Switch to asc(auditLogs.id). Compute the Merkle root and store it in a separate table with the batch range (min_id, max_id, computed_at). On subsequent calls, re-compute and compare against the stored root.
+Type: Real defect
+
+Issue Title: requireRole uses "*" as a Permission action — incorrect semantics
+Severity: High
+Category: Real defect
+Files: server/auth/requirePhysician.ts, server/auth/rbacService.ts
+What is wrong: In requireRole(): !roles.includes(decoded.role) && !rbacService.can(decoded.role, "*" as any). The intent is "allow admins to bypass role checks." But rbacService.can(role, "*") checks whether ROLE_PERMISSIONS[role].includes("*") — which is true only for admin (whose permissions are ["*"]). For a physician trying to access an admin route that lists them in roles, the first condition !roles.includes("physician") is false (they're included), so they pass correctly. But a physician trying to access a route they're NOT listed in fails the first check, then fails the second check (physicians don't have "*" in their perms). This is correct behavior — but the code comment implies "*" is a wildcard permission check, when it's actually checking if the role itself has admin-level wildcard. The behavior is accidentally correct but semantically wrong and fragile.
+Why it matters: A future developer adds "*" to nurse permissions "to simplify things" — suddenly all nurses pass every requireRole check.
+Evidence from code: !rbacService.can(decoded.role, "*" as any) — the as any cast is a suppressed TypeScript error revealing the author knew this was wrong.
+Recommended fix: Replace with an explicit admin check: const isAdmin = rbacService.can(decoded.role, "tenant:manage") or decoded.role === "admin". Remove the "*" action entirely.
+Type: Real defect
+
+Issue Title: auditRoutes.ts — reads from clinicalChangeAuditLog, not the persisted audit table
+Severity: Medium
+Category: Incomplete scaffolding
+Files: server/routes/auditRoutes.ts
+What is wrong: The route imports getAuditHistory and getAuditStats from "../audit/clinicalChangeAuditLog" — a module not present in the reviewed files. The persisted audit log is in auditLogger.ts (writing to auditLogs table). If clinicalChangeAuditLog is another in-memory store (common pattern in this codebase), the admin audit API is reading from a memory store while the real audit trail is in the DB.
+Why it matters: An admin reviewing the audit log for a compliance investigation gets stale or restarted-empty data while the actual records exist in the DB. This creates a false sense of audit coverage.
+Evidence from code: import { getAuditHistory, getAuditStats } from "../audit/clinicalChangeAuditLog" — this module is not in the reviewed batch, suggesting it's a separate (likely in-memory) implementation.
+Recommended fix: Route the admin audit API through getRecentAuditLogs() and verifyEntireChain() from auditLogger.ts which reads from the actual DB. Add pagination.
+Type: Incomplete scaffolding
+
+SUMMARY TABLE
+SeverityCountCritical3High6Medium1Low0
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+governanceQueue.ts in-memory only + approvalAudit.ts bypassing the hash chain is the most dangerous combination. Together they mean: physician approvals are not durably recorded, and when they are recorded (via approvalAudit), they break the tamper-evident chain. A system claiming FDA 21 CFR Part 11 compliance with these two defects has neither durable records nor chain integrity for its most safety-critical events.
+Likely theater/scaffolding:
+modelApproval.applyApprovedUpdate() — emits events and logs messages but applies no actual change. verifyAuditBatch() in auditVerifier.ts — computes a Merkle root over inverted records with no stored expected value to compare against, returning verified: true based solely on non-null hash counts. scheduledAuditVerifier.ts storedSeparately: true field — a label on a struct, not a storage mechanism.
+Highest ROI fixes:
+
+Replace governanceQueue array with DB persistence — one table, four upsert calls, eliminates the most critical compliance gap.
+Replace approvalAudit.logApproval() raw SQL with auditStep() — one-line change, restores chain integrity for physician events.
+Replace clinicalTrace.ts String(Date.now()) with crypto.randomUUID() — one-character fix, eliminates traceId collision.
+Persist verificationLog to DB — adds one DB write per scheduled job, satisfies the 45 CFR §164.312(b) requirement the file claims to meet.
+
+Needs cross-file review confirmation:
+
+auditRoutes.ts → clinicalChangeAuditLog — need to see this file to determine if it's in-memory or DB-backed.
+rlhfService.ts — reviewProposal(), applyProposal() — need to verify these write to DB and call auditStep(), not just mutate in-memory state.
+requireProviderAuth vs requirePhysician — two auth middleware paths attach identity to req.provider and req.physician respectively; downstream handlers that check one and not the other may silently see undefined identity for legitimately authenticated users.
+changeAuditLog.ts / clinicalChangeAuditLog.ts — apparent duplicate of governanceQueue/changeAuditLog pattern; need to confirm there isn't a third in-memory audit store serving the admin routes.

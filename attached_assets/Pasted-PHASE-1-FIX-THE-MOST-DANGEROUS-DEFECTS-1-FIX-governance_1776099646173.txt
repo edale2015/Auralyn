@@ -1,0 +1,260 @@
+PHASE 1 — FIX THE MOST DANGEROUS DEFECTS
+1. 🔥 FIX: governanceQueue → PERSIST TO DATABASE (CRITICAL)
+Problem
+
+In-memory queue = no audit trail = non-compliant
+
+✅ ADD TABLE (Drizzle)
+// shared/schema.ts
+
+export const governanceItems = pgTable("governance_items", {
+  id: text("id").primaryKey(),
+  sheet: text("sheet").notNull(),
+  change: jsonb("change").notNull(),
+  status: text("status").notNull(), // pending | approved | rejected
+  risk: text("risk").notNull(),
+  reason: text("reason"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+✅ REPLACE governanceQueue.ts
+// server/governance/governanceQueue.ts
+
+import { db } from "../db";
+import { governanceItems } from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
+
+export async function addGovernanceItem(item: {
+  id: string;
+  sheet: string;
+  change: any;
+  risk: string;
+  reason?: string;
+}) {
+  await db.insert(governanceItems).values({
+    ...item,
+    status: "pending",
+  });
+}
+
+export async function listGovernanceQueue(filter?: { status?: string }) {
+  return db
+    .select()
+    .from(governanceItems)
+    .where(filter?.status ? eq(governanceItems.status, filter.status) : undefined)
+    .orderBy(desc(governanceItems.createdAt));
+}
+
+export async function updateGovernanceStatus(
+  id: string,
+  status: "approved" | "rejected",
+  reviewedBy: string
+) {
+  await db
+    .update(governanceItems)
+    .set({
+      status,
+      reviewedBy,
+      reviewedAt: new Date(),
+    })
+    .where(eq(governanceItems.id, id));
+
+  return true;
+}
+2. 🔥 FIX: approvalAudit.ts → USE HASH CHAIN (CRITICAL)
+Problem
+
+Bypasses audit chain → destroys integrity
+
+✅ REPLACE WITH:
+// server/audit/approvalAudit.ts
+
+import { auditStep, createTraceId } from "./auditLogger";
+
+export async function logApproval({
+  patientId,
+  physicianId,
+  action,
+  overrideData,
+}: {
+  patientId: string;
+  physicianId: string;
+  action: "approve" | "override" | "escalate";
+  overrideData?: any;
+}) {
+  await auditStep({
+    traceId: createTraceId(),
+    step: "PHYSICIAN_ACTION",
+    input: { action, patientId },
+    output: overrideData ?? null,
+    metadata: {
+      physicianId,
+      timestamp: new Date().toISOString(),
+    },
+  });
+}
+3. 🔥 FIX: modelApproval.ts → ACTUALLY APPLY CHANGES (CRITICAL)
+Problem
+
+Approvals do nothing = entire RLHF system is illusion
+
+✅ ADD APPLY ENGINE
+// server/governance/applyEngine.ts
+
+import { db } from "../db";
+
+export async function applyModelChange(change: any) {
+  const { packId, metricName, newValue } = change;
+
+  if (!packId || !metricName) {
+    throw new Error("Invalid change payload");
+  }
+
+  // Example: update KB model weights
+  await db.execute(`
+    UPDATE model_weights
+    SET value = $1
+    WHERE pack_id = $2 AND metric = $3
+  `, [newValue, packId, metricName]);
+}
+✅ PATCH applyApprovedUpdate
+import { applyModelChange } from "./applyEngine";
+
+export async function applyApprovedUpdate(itemId: string, reviewedBy: string) {
+  const queue = await listGovernanceQueue({ status: "pending" });
+  const item = queue.find((i) => i.id === itemId);
+
+  if (!item) throw new Error("Item not found");
+
+  await applyModelChange(item.change);
+
+  await updateGovernanceStatus(itemId, "approved", reviewedBy);
+
+  return true;
+}
+4. 🔥 FIX: clinicalTrace.ts → UNIQUE TRACE IDS (HIGH)
+import crypto from "crypto";
+
+const traceId = crypto.randomUUID();
+5. 🔥 FIX: TENANT ISOLATION (HIGH)
+Problem
+
+“non-production bypass” = accidental data breach waiting to happen
+
+✅ HARD FAIL ALWAYS
+if (!authedClinic) {
+  return res.status(403).json({
+    error: "Missing clinicId — tenant isolation enforced",
+  });
+}
+
+❌ REMOVE:
+
+if (!isProd) { console.warn(...); return next(); }
+6. 🔥 FIX: TRACE STORAGE → PERSIST (HIGH)
+// shared/schema.ts
+export const executionTraces = pgTable("execution_traces", {
+  id: text("id").primaryKey(),
+  patientId: text("patient_id"),
+  data: jsonb("data"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+// server/audit/traceStore.ts
+import { db } from "../db";
+import { executionTraces } from "@shared/schema";
+
+export async function saveTrace(trace) {
+  const id = crypto.randomUUID();
+
+  await db.insert(executionTraces).values({
+    id,
+    patientId: trace.patientId,
+    data: trace,
+  });
+
+  return { ...trace, id };
+}
+7. 🔥 FIX: SCHEDULED VERIFICATION → STORE RESULTS (HIGH)
+// shared/schema.ts
+export const auditVerificationRuns = pgTable("audit_verification_runs", {
+  id: text("id").primaryKey(),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+await db.insert(auditVerificationRuns).values({
+  id: jobId,
+  result: record,
+});
+8. 🔥 FIX: MERKLE VERIFICATION (HIGH)
+.orderBy(asc(auditLogs.id)) // FIX ORDER
+
+AND store root:
+
+await db.insert(auditMerkleRoots).values({
+  root,
+  startId,
+  endId,
+});
+9. 🔥 FIX: RBAC "*" BUG (HIGH)
+const isAdmin = decoded.role === "admin";
+
+if (!roles.includes(decoded.role) && !isAdmin) {
+  return res.status(403).json({ error: "Forbidden" });
+}
+10. 🔥 FIX: AUDIT ROUTES USING WRONG SOURCE (MEDIUM)
+// server/routes/auditRoutes.ts
+
+import { getRecentAuditLogs } from "../audit/auditLogger";
+
+router.get("/api/audit", requireRole(["admin"]), async (req, res) => {
+  const logs = await getRecentAuditLogs(200);
+  res.json(logs);
+});
+🧠 PHASE 2 — HIGH-IMPACT SYSTEM FIXES (MY ADDITIONS)
+11. 🚨 ADD: HARD GOVERNANCE ENFORCEMENT LAYER
+
+Right now:
+👉 governance exists
+👉 BUT NOTHING ENFORCES IT
+
+✅ ADD GLOBAL GUARD
+export function enforceGovernance(action: string, context: any) {
+  if (context.requiresApproval && !context.approved) {
+    throw new Error(`Blocked by governance: ${action}`);
+  }
+}
+
+Use before:
+
+model updates
+medication rules
+disposition changes
+12. 🚨 ADD: AUDIT FAILURE = SYSTEM FAILURE
+
+Right now:
+❌ auditStep failure is swallowed upstream
+
+✅ FIX
+await auditStep(...).catch(err => {
+  throw new Error("AUDIT FAILURE — aborting clinical decision");
+});
+13. 🚨 ADD: TENANT SCOPING AT DB LEVEL (CRITICAL)
+
+You are currently relying on middleware.
+
+That’s not enough.
+
+✅ ADD TO ALL TABLES:
+clinic_id TEXT NOT NULL
+✅ ENFORCE IN QUERIES:
+.where(eq(table.clinicId, req.provider.clinicId))
+14. 🚨 ADD: IMMUTABLE AUDIT LOCK
+
+Prevent UPDATE/DELETE:
+
+CREATE RULE audit_logs_no_update AS
+ON UPDATE TO audit_logs DO INSTEAD NOTHING;
+
+CREATE RULE audit_logs_no_delete AS
+ON DELETE TO audit_logs DO INSTEAD NOTHING;

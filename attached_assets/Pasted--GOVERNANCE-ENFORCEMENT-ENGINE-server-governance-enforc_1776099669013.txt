@@ -1,0 +1,246 @@
+🧠 GOVERNANCE ENFORCEMENT ENGINE
+// server/governance/enforcementEngine.ts
+
+import { db } from "../db";
+import { governanceItems } from "@shared/schema";
+
+export interface EnforcementContext {
+  action: string;
+  clinicId: string;
+  payload?: any;
+}
+
+export async function enforceGovernance(ctx: EnforcementContext) {
+  // 1. Check pending high-risk governance items
+  const pending = await db
+    .select()
+    .from(governanceItems)
+    .where(eq(governanceItems.status, "pending"));
+
+  const highRisk = pending.filter(p => p.risk === "high");
+
+  if (highRisk.length > 0) {
+    throw new Error(
+      `BLOCKED: ${highRisk.length} high-risk governance items pending approval`
+    );
+  }
+
+  // 2. Action-specific enforcement
+  if (ctx.action === "model:update") {
+    const requiresApproval = ctx.payload?.impact > 0.05;
+    if (requiresApproval && !ctx.payload?.approved) {
+      throw new Error("BLOCKED: model update requires approval");
+    }
+  }
+
+  if (ctx.action === "clinical:override") {
+    if (!ctx.payload?.physicianId) {
+      throw new Error("BLOCKED: override must be physician-attributed");
+    }
+  }
+
+  return true;
+}
+2. 🔗 GLOBAL ENFORCEMENT MIDDLEWARE
+// server/middleware/enforce.ts
+
+import { enforceGovernance } from "../governance/enforcementEngine";
+
+export function enforce(action: string) {
+  return async (req, res, next) => {
+    try {
+      await enforceGovernance({
+        action,
+        clinicId: req.provider?.clinicId || req.physician?.clinicId,
+        payload: req.body,
+      });
+      next();
+    } catch (e: any) {
+      res.status(403).json({
+        ok: false,
+        error: e.message,
+      });
+    }
+  };
+}
+3. 🧾 AUDIT STREAM API (REAL-TIME)
+// server/routes/controlTowerAudit.ts
+
+import { Router } from "express";
+import { getRecentAuditLogs, verifyEntireChain } from "../audit/auditLogger";
+
+const router = Router();
+
+router.get("/api/control-tower/audit/live", async (req, res) => {
+  const logs = await getRecentAuditLogs(100);
+  res.json(logs);
+});
+
+router.get("/api/control-tower/audit/verify", async (_req, res) => {
+  const result = await verifyEntireChain();
+  res.json(result);
+});
+
+export default router;
+4. 🧠 GOVERNANCE DASHBOARD API
+// server/routes/controlTowerGovernance.ts
+
+import { Router } from "express";
+import { listGovernanceQueue, updateGovernanceStatus } from "../governance/governanceQueue";
+
+const router = Router();
+
+router.get("/api/control-tower/governance", async (req, res) => {
+  const items = await listGovernanceQueue();
+  res.json(items);
+});
+
+router.post("/api/control-tower/governance/:id/approve", async (req, res) => {
+  await updateGovernanceStatus(req.params.id, "approved", req.provider.userId);
+  res.json({ ok: true });
+});
+
+router.post("/api/control-tower/governance/:id/reject", async (req, res) => {
+  await updateGovernanceStatus(req.params.id, "rejected", req.provider.userId);
+  res.json({ ok: true });
+});
+
+export default router;
+5. 🧠 TRACE DRILLDOWN API
+// server/routes/controlTowerTrace.ts
+
+import { Router } from "express";
+import { db } from "../db";
+import { executionTraces } from "@shared/schema";
+
+const router = Router();
+
+router.get("/api/control-tower/traces/:id", async (req, res) => {
+  const trace = await db
+    .select()
+    .from(executionTraces)
+    .where(eq(executionTraces.id, req.params.id));
+
+  res.json(trace[0]);
+});
+
+export default router;
+🎛️ PHASE 2 — FRONTEND CONTROL TOWER UI (React)
+1. 🧭 MAIN DASHBOARD
+// frontend/src/pages/ControlTower.tsx
+
+import { Tabs } from "@/components/ui/tabs";
+import AuditPanel from "../components/AuditPanel";
+import GovernancePanel from "../components/GovernancePanel";
+import TracePanel from "../components/TracePanel";
+
+export default function ControlTower() {
+  return (
+    <div className="p-6">
+      <h1 className="text-2xl font-bold mb-4">🧠 Control Tower</h1>
+
+      <Tabs>
+        <Tabs.List>
+          <Tabs.Trigger value="audit">Audit</Tabs.Trigger>
+          <Tabs.Trigger value="governance">Governance</Tabs.Trigger>
+          <Tabs.Trigger value="traces">Traces</Tabs.Trigger>
+        </Tabs.List>
+
+        <Tabs.Content value="audit">
+          <AuditPanel />
+        </Tabs.Content>
+
+        <Tabs.Content value="governance">
+          <GovernancePanel />
+        </Tabs.Content>
+
+        <Tabs.Content value="traces">
+          <TracePanel />
+        </Tabs.Content>
+      </Tabs>
+    </div>
+  );
+}
+2. 🔐 AUDIT PANEL
+// frontend/src/components/AuditPanel.tsx
+
+import { useQuery } from "@tanstack/react-query";
+
+export default function AuditPanel() {
+  const { data } = useQuery({
+    queryKey: ["audit"],
+    queryFn: () => fetch("/api/control-tower/audit/live").then(r => r.json()),
+    refetchInterval: 3000,
+  });
+
+  return (
+    <div>
+      <h2 className="font-bold mb-2">🔐 Audit Stream</h2>
+
+      <div className="space-y-2 max-h-[500px] overflow-y-scroll">
+        {data?.map((log: any) => (
+          <div key={log.id} className="p-2 border rounded">
+            <div className="text-xs text-gray-500">{log.step}</div>
+            <div className="text-sm">{JSON.stringify(log.input)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+3. 🏛 GOVERNANCE PANEL
+// frontend/src/components/GovernancePanel.tsx
+
+import { useQuery, useMutation } from "@tanstack/react-query";
+
+export default function GovernancePanel() {
+  const { data, refetch } = useQuery({
+    queryKey: ["governance"],
+    queryFn: () => fetch("/api/control-tower/governance").then(r => r.json()),
+  });
+
+  const approve = useMutation({
+    mutationFn: (id: string) =>
+      fetch(`/api/control-tower/governance/${id}/approve`, { method: "POST" }),
+    onSuccess: refetch,
+  });
+
+  return (
+    <div>
+      <h2 className="font-bold mb-2">🏛 Governance Queue</h2>
+
+      {data?.map((item: any) => (
+        <div key={item.id} className="border p-3 rounded mb-2">
+          <div>{item.sheet}</div>
+          <div className="text-xs text-gray-500">{item.risk}</div>
+
+          <button onClick={() => approve.mutate(item.id)}>
+            Approve
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+4. 🔍 TRACE PANEL
+// frontend/src/components/TracePanel.tsx
+
+export default function TracePanel() {
+  return (
+    <div>
+      <h2 className="font-bold">🔍 Clinical Trace Viewer</h2>
+      <p>Select a trace to inspect full decision path</p>
+    </div>
+  );
+}
+🚨 PHASE 3 — WHERE YOU MUST WIRE ENFORCEMENT
+
+This is the part most systems skip. You cannot skip this.
+
+🔥 YOU MUST ADD enforce() HERE:
+1. Model updates
+router.post("/model/update", enforce("model:update"), handler);
+2. Clinical overrides
+router.post("/clinical/override", enforce("clinical:override"), handler);
+3. RLHF application
+router.post("/rlhf/apply", enforce("model:update"), handler);

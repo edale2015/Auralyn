@@ -1,22 +1,20 @@
 /**
- * DOMAIN 2 — REC 2.2: Immutable Audit Trail Verification
+ * server/audit/auditVerifier.ts — Immutable Audit Trail Verification
  *
- * The existing hash chain WRITES are correct. This adds READ verification —
- * the ability to prove to FDA/OCR that the audit log was not tampered with
- * since the first record was written.
+ * FIX (Batch-1 Finding #8 — High): verifyAuditBatch() was fetching records in
+ * DESC order and computing a Merkle root, but the chain was written in ASC
+ * order. A reversed Merkle root has no tamper-detection value. Now fixed to
+ * use ASC order (chain order) and the batch range is stored for verification.
  *
- * Without verification, a write-only hash chain does not satisfy
- * 45 CFR §164.312(b) — OCR has explicitly stated that integrity controls
- * must include the ability to verify data has not been altered.
- *
- * MY ADDITION: Batch Merkle root verification for efficient spot-checking
- * of large audit logs without reading every record.
+ * Satisfies: 45 CFR §164.312(b) — audit controls must include ability to
+ * verify data has not been altered. FDA 21 CFR Part 11 — electronic records
+ * integrity with audit trail.
  */
 
-import crypto from "crypto";
-import { db }  from "../db";
+import crypto   from "crypto";
+import { db }   from "../db";
 import { auditLogs } from "../../shared/schema";
-import { asc, desc } from "drizzle-orm";
+import { asc }  from "drizzle-orm";
 import { computeChainHash } from "./hashChain";
 import { logger } from "../utils/logger";
 
@@ -31,20 +29,21 @@ export interface ChainVerificationResult {
 }
 
 export interface MerkleVerificationResult {
-  merkleRoot:       string;
-  verified:         boolean;
-  batchSize:        number;
-  verifiedAt:       string;
+  merkleRoot:  string;
+  verified:    boolean;
+  batchSize:   number;
+  startId?:    number;
+  endId?:      number;
+  verifiedAt:  string;
 }
 
 /**
  * Verifies the full audit chain from genesis to the most recent record.
- * Reads records in order and recomputes each hash — if any record was
- * tampered with, the chain breaks and the first broken link is reported.
+ * Reads records in ascending ID order and recomputes each hash.
  */
 export async function verifyFullAuditChain(): Promise<ChainVerificationResult> {
   const startMs = Date.now();
-  let prevHash = "GENESIS";
+  let prevHash  = "GENESIS";
   let recordsChecked = 0;
 
   try {
@@ -111,11 +110,6 @@ export async function verifyFullAuditChain(): Promise<ChainVerificationResult> {
   }
 }
 
-/**
- * MY ADDITION: Compute a Merkle root over a batch of audit record hashes.
- * Useful for spot-checking large logs efficiently — instead of verifying
- * 10,000 records, verify the Merkle root of batches.
- */
 function computeMerkleRoot(hashes: string[]): string {
   if (hashes.length === 0) return crypto.createHash("sha256").update("empty").digest("hex");
   if (hashes.length === 1) return hashes[0];
@@ -131,23 +125,32 @@ function computeMerkleRoot(hashes: string[]): string {
   return computeMerkleRoot(parents);
 }
 
+/**
+ * FIX (Finding #8): Batch Merkle root now uses ASC order (same as chain write
+ * order). DESC was semantically broken — the root covered a reversed,
+ * non-sequential subset with no tamper-detection value.
+ */
 export async function verifyAuditBatch(
   limit: number = 100
 ): Promise<MerkleVerificationResult> {
   try {
     const records = await db
-      .select({ hash: auditLogs.hash })
+      .select({ id: auditLogs.id, hash: auditLogs.hash })
       .from(auditLogs)
-      .orderBy(desc(auditLogs.id))
+      .orderBy(asc(auditLogs.id))   // FIX: ASC — chain write order
       .limit(limit);
 
-    const hashes = records.map(r => r.hash ?? "").filter(Boolean);
+    const hashes    = records.map(r => r.hash ?? "").filter(Boolean);
     const merkleRoot = computeMerkleRoot(hashes);
+    const startId   = records.at(0)?.id;
+    const endId     = records.at(-1)?.id;
 
     return {
       merkleRoot,
       verified:   hashes.length === records.length,
       batchSize:  records.length,
+      startId,
+      endId,
       verifiedAt: new Date().toISOString(),
     };
   } catch (e: any) {
