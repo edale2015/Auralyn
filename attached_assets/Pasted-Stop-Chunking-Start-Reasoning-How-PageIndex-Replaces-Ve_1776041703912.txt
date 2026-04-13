@@ -1,0 +1,347 @@
+Stop Chunking, Start Reasoning: How PageIndex Replaces Vector Search with LLM-Driven Retrieval
+Pankaj
+Pankaj
+
+Follow
+10 min read
+·
+Apr 4, 2026
+45
+
+
+
+
+
+
+The standard RAG pipeline chunks documents, embeds them and searches by similarity. But similarity is not relevance sometime and for dense professional documents, that gap is where accuracy goes to die.
+
+Press enter or click to view image in full size
+
+From Fragmented Chunks to Intelligent Reasoning,
+Reimagining document retrieval as structured, navigable knowledge.
+The default RAG stack has barely changed in two years. Take a document, split it into chunks, embed each chunk, store the vectors and at query time retrieve the top-k most similar.
+
+It works well enough for blog posts and FAQ pages, but it falls apart on the documents that matter most in enterprise: 200-page SEC filings, regulatory submissions, technical manuals, and legal contracts.
+
+Hit the paywall? No worries, read the full post here for free.
+
+Here is what the standard pipeline looks like in practice, and the exact point where it breaks:
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+
+# Step 1: Chunk the document
+splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=50)
+chunks = splitter.split_documents(documents)
+# Step 2: Embed and store
+vectorstore = Chroma.from_documents(chunks, OpenAIEmbeddings())
+# Step 3: Retrieve by similarity
+results = vectorstore.similarity_search("What is the total value of deferred assets?", k=5)
+This retrieves the five chunks whose embeddings are closest to the query. But “closest” is not “correct”.
+
+The question asks for a total value.
+The most similar chunk might describe how deferred assets increased.
+
+Semantically close, but factually wrong.
+
+For Example:
+
+The actual total lives in Appendix G, referenced on page 77 with the phrase “see Appendix G for detailed statistical tables”. No embedding model connects that cross-reference to the query, because the connection requires reasoning, not similarity.
+
+A financial analyst reading a 10-K does not search for the paragraph that looks most like their question.
+They scan the table of contents, reason about which section likely contains the answer, flip to that section, read it, and follow cross-references.
+
+PageIndex replicates exactly this process.
+
+What PageIndex actually does
+PageIndex replaces the entire chunk-embed-search pipeline with two steps: build a hierarchical tree from the document, then let the LLM reason over that tree to find the answer.
+
+Step 1: Tree construction: PageIndex parses a PDF and generates a JSON tree, a machine-readable table of contents with summaries, page ranges, and nested sub-sections.
+
+Here is what the output looks like for a Federal Reserve annual report:
+
+{
+  "node_id": "0006",
+  "title": "Financial Stability",
+  "start_index": 21,
+  "end_index": 22,
+  "summary": "The Federal Reserve's role in maintaining financial stability...",
+  "sub_nodes": [
+    {
+      "node_id": "0007",
+      "title": "Monitoring Financial Vulnerabilities",
+      "start_index": 22,
+      "end_index": 28,
+      "summary": "The Federal Reserve's monitoring framework..."
+    },
+    {
+      "node_id": "0008",
+      "title": "Domestic and International Cooperation",
+      "start_index": 28,
+      "end_index": 31,
+      "summary": "In 2023, the Federal Reserve collaborated..."
+    }
+  ]
+}
+Each node_id maps directly to raw content: text, images, or tables from the corresponding pages.
+The tree preserves the document's natural hierarchy instead of shredding it into 512-token fragments. No embeddings, no vector database. The index is pure JSON that lives inside the LLM's context window.
+
+The PageIndex team calls this an "in-context index" because the model can directly reference, navigate, and reason over it during inference.
+
+Step 2: Agentic retrieval: When a user asks a question, the LLM reads the tree and follows an iterative loop:
+
+identify sections likely to contain the answer,
+retrieve the raw content for the most promising section,
+extract relevant information, and
+either answer the question or return to the tree and try another section.
+
+This is how the model follows a cross-reference like “see Appendix G”. It reads the cue, navigates the tree to Appendix G, and retrieves the actual data.
+
+Get started: self-hosted
+The fastest path to running PageIndex locally.
+This generates the tree structure from any PDF using the open-source repo.
+
+# Clone and install
+git clone https://github.com/VectifyAI/PageIndex.git
+cd PageIndex
+pip3 install --upgrade -r requirements.txt
+
+# Set your OpenAI API key
+echo "CHATGPT_API_KEY=your_openai_key_here" > .env
+# Generate a tree from any PDF
+python3 run_pageindex.py --pdf_path /path/to/annual-report.pdf
+The default model is gpt-4o-2024-11-20.
+We can customize the behaviour with optional parameters:
+
+python3 run_pageindex.py \
+  --pdf_path /path/to/document.pdf \
+  --model gpt-4o-2024-11-20 \
+  --toc-check-pages 20 \
+  --max-pages-per-node 10 \
+  --max-tokens-per-node 20000 \
+  --if-add-node-id yes \
+  --if-add-node-summary yes \
+  --if-add-doc-description yes
+PageIndex also supports markdown input directly.
+
+This is useful if you have already converted a PDF or want to index structured documentation:
+
+python3 run_pageindex.py --md_path /path/to/document.md
+One note on the markdown path: it uses # heading levels to determine node hierarchy (## = level 2, ### = level 3).
+
+If your markdown was machine-converted from PDF or HTML, the headings are often unreliable.
+For those cases, the PageIndex team recommends using their OCR tool first to produce structure-preserving markdown, then running the tree generator on that output.
+
+The self-hosted path gives you full control over the tree construction. The output is a JSON file you can inspect, modify, and use in any downstream pipeline.
+
+📎 Open-source repo: github.com/VectifyAI/PageIndex (MIT license)
+
+Get started: Python SDK (cloud API)
+For production workloads: submit documents, generate trees, and run reasoning-based QA through the PageIndex API.
+
+pip install -U pageindex
+from pageindex import PageIndexClient
+
+# Initialize (get your API key at dash.pageindex.ai)
+pi_client = PageIndexClient(api_key="YOUR_API_KEY")
+# Submit a document for processing
+result = pi_client.submit_document("./2023-annual-report.pdf")
+doc_id = result["doc_id"]
+# Check processing status
+status = pi_client.get_document(doc_id)["status"]
+if status == "completed":
+    print("Document processed - tree is ready")
+Once the document is processed, you can retrieve the tree structure directly:
+
+# Get the generated tree
+import json
+tree = pi_client.get_tree(doc_id)["result"]
+print(json.dumps(tree, indent=2))  # inspect the hierarchy
+Or skip the tree and go straight to question answering.
+
+The Chat API runs the full agentic retrieval loop under the hood:
+
+# Chat with a single document
+response = pi_client.chat_completions(
+    messages=[{"role": "user", "content": "What is the total value of deferred assets?"}],
+    doc_id="pi-abc123def456"
+)
+print(response["choices"][0]["message"]["content"])
+
+# Chat across multiple documents
+response = pi_client.chat_completions(
+    messages=[{"role": "user", "content": "Compare revenue recognition policies across these filings"}],
+    doc_id=["pi-abc123def456", "pi-abc123ghi789"]
+)
+print(response["choices"][0]["message"]["content"])
+The multi-document chat is particularly powerful for financial analysis: comparing year-over-year filings, cross-referencing disclosures across companies, or identifying changes in accounting policies across periods.
+
+📎 SDK docs: docs.pageindex.ai/quickstart · Developer dashboard: dash.pageindex.ai
+
+Get started: MCP integration
+PageIndex ships an MCP server that exposes its reasoning-based retrieval to any MCP-compatible client, including Claude Desktop, Cursor and other agent frameworks.
+
+This lets you chat with long PDFs directly from your existing tools without hitting context-length limits.
+
+For Claude Desktop, the easiest path is the one-click extension.
+
+Download the .mcpb file from the releases page (github.com/VectifyAI/pageindex-mcp/releases) and double-click to install.
+
+OAuth is handled automatically.
+
+For other MCP clients, add this to your configuration:
+
+{
+  "mcpServers": {
+    "pageindex": {
+      "command": "npx",
+      "args": ["-y", "pageindex-mcp"]
+    }
+  }
+}
+This runs a local MCP server with full PDF upload support.
+
+If you prefer a direct connection without local setup:
+
+{
+  "mcpServers": {
+    "pageindex": {
+      "type": "http",
+      "url": "https://chat.pageindex.ai/mcp"
+    }
+  }
+}
+The local server handles file uploads and authentication automatically. The direct HTTP connection only supports PDFs via URL (no local file uploads). Both options give your agent the same reasoning-based retrieval.
+
+The LLM navigates the tree structure of your documents instead of relying on vector similarity.
+
+📎 MCP server repo: github.com/VectifyAI/pageindex-mcp (84 stars, MIT license) · Setup guide: pageindex.ai/mcp
+
+Why vector search breaks on professional documents
+The problem is not a bad embedding model or wrong chunk size.
+It is five structural limitations in the chunk-embed-search architecture itself.
+
+Query-knowledge space mismatch: The question “What are the company’s debt trends?” expresses intent, not content.
+
+The answer lives in a section titled “Long-Term Obligations and Credit Facilities”, which shares almost no surface-level language with the query.
+
+Embeddings cannot bridge this gap because the connection requires domain reasoning, not cosine similarity.
+
+Similarity is not relevance: In domain-specific documents, many passages share near-identical semantics but differ critically in relevance.
+A 10-K filing might contain dozens of paragraphs about revenue recognition, but only one answers a question about policy changes in FY2023.
+
+Embeddings rank them all roughly equal.
+
+Hard chunking breaks context: Splitting a document into 512-token chunks cuts through sentences, tables, and logical sections.
+
+A table spanning two chunks becomes two meaningless fragments. A paragraph referencing a footnote loses that reference when the footnote lands in a different chunk.
+
+No conversation memory: Each vector query is independent.
+
+If the user asked about “financial assets” in the last turn and now asks “What about liabilities?”, the retriever has no way to know it should look in the same section of the same report.
+
+Cross-references vanish: When a document says “Table 5.3 summarizes income and expenses; see Appendix G for detailed statistical tables,” a vector retriever has no mechanism to follow that reference.
+
+The answer is in Appendix G, but nothing there is semantically similar to the original question.
+
+In the PageIndex team’s own testing, this exact scenario played out: a query about total deferred assets hit a section (pages 75–82) that only reported the increase. Page 77 referenced Appendix G for the total.
+
+The reasoning-based retriever followed the cue. A vector retriever returned the wrong section with high confidence.
+
+How PageIndex differs from RAPTOR
+RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval, Stanford, ICLR 2024) also builds a tree, but the two systems work in fundamentally different ways.
+
+RAPTOR starts with traditional chunking, embeds the chunks, clusters them by semantic similarity using Gaussian Mixture Models, summarizes each cluster and recursively repeats the process to build a tree from the bottom up.
+
+At retrieval time, it still uses vector similarity search across all levels of the tree.
+
+RAPTOR improves what gets indexed, but retrieval remains embedding-based:
+
+# RAPTOR: tree improves the index, but retrieval is still vector-based
+from raptor import RetrievalAugmentation
+
+RA = RetrievalAugmentation()
+RA.add_documents(document_text)
+# Retrieval still uses embeddings under the hood
+answer = RA.answer_question("What are the company's debt trends?")
+PageIndex skips chunking and embedding entirely.
+It parses the document’s inherent structure to build the tree, and at retrieval time the LLM navigates the tree through reasoning.
+
+No vector search at any stage:
+
+# PageIndex: no embeddings, no vector DB. LLM reasons over the tree
+from pageindex import PageIndexClient
+
+pi_client = PageIndexClient(api_key="YOUR_API_KEY")
+result = pi_client.submit_document("./10-K-filing.pdf")
+# Retrieval is reasoning-based: the LLM navigates the tree structure
+response = pi_client.chat_completions(
+    messages=[{"role": "user", "content": "What are the company's debt trends?"}],
+    doc_id=result["doc_id"]
+)
+The practical distinction: RAPTOR still requires a vector database and embedding model.
+PageIndex requires only an LLM and the document.
+RAPTOR finds similar nodes;
+PageIndex decides which node to visit next based on what it is looking for.
+
+📎 RAPTOR: arxiv.org/abs/2401.18059 (Sarthi et al., Stanford, ICLR 2024)
+
+The broader trend: retrieval through reasoning
+PageIndex is part of a larger shift away from embedding-based retrieval.
+
+Chroma’s “Context Rot” study (July 2025) tested 18 state-of-the-art LLMs, including GPT-4.1, Claude 4, Gemini 2.5, and Qwen3.
+
+The study found that model performance degrades significantly as input length grows, even on simple tasks.
+The finding reinforces that “dump everything into a long context window” is not a reliable alternative to good retrieval, and that what goes into the context matters more than how much fits.
+
+Claude Code’s team reached a similar conclusion from a different direction. Boris Cherny, the creator of Claude Code, said in a May 2025 Latent Space podcast interview that early versions used RAG with a local vector database, but they switched to agentic search, letting the model explore using tools like grep and file reads, because it outperformed everything.
+
+The reasons went beyond accuracy: simplicity, no staleness, no security risk from external indexes, and no reliability issues from sync drift.
+
+PageIndex applies the same principle to documents: instead of pre-computing an external similarity index, let the model’s own reasoning handle retrieval.
+The tree structure gives the LLM something to reason over, a structured map of the document that makes navigation efficient without requiring embeddings.
+
+📎 Chroma “Context Rot” report: research.trychroma.com/context-rot · Boris Cherny on Claude Code agentic search: Latent Space podcast
+
+The tradeoffs
+Reasoning-based retrieval is not free, and a fair assessment requires naming the costs.
+
+Token consumption: Tree construction requires multiple LLM calls to parse, summarize and structure the document.
+Agentic retrieval requires multiple reasoning steps per query: reading the tree, selecting a node, extracting content, potentially iterating. A vector search returns results in milliseconds with a single embedding call. PageIndex trades latency and cost for accuracy.
+
+Scale: PageIndex works beautifully for individual documents or small collections, exactly the scenario in financial analysis, legal review, or regulatory compliance.
+
+For searching across thousands of documents, vector databases still have a clear advantage: they can search a million-document corpus in sub-second time, which sequential LLM reasoning cannot match.
+
+LLM dependency: Retrieval quality depends entirely on the underlying model’s reasoning ability. A weaker model navigating the tree will make worse decisions about which sections to visit.
+
+This is a fundamentally different failure mode from vector search, where retrieval quality depends on embedding quality.
+
+Tree construction cost: Building the tree is a one-time cost per document, but it is more expensive than embedding.
+
+For a corpus that changes frequently, the rebuild cost matters.
+
+The honest framing: vector RAG is a fast, cheap approximation that works well enough for simple documents.
+PageIndex is a slower, more expensive, more accurate approach for documents where “well enough” is not good enough.
+
+The two approaches can also complement each other.
+
+A vector search narrows a large corpus to the relevant documents, then PageIndex reasons over those specific documents for precise answers.
+
+Where to start
+Pick one document that matters, whether a 10-K filing, a regulatory submission, or a 100-page technical manual where your current RAG pipeline gives imprecise answers.
+
+If you want full control, clone the open-source repo, generate the tree, and inspect the JSON output.
+Understand the hierarchy before plugging it into any pipeline.
+
+If you want fast results, pip install pageindex, submit the document through the SDK, and use the Chat API.
+The agentic retrieval loop runs server-side, so you get reasoning-based answers without building the infrastructure yourself.
+
+If you want integration with existing tools, add the MCP server to Claude Desktop or Cursor. Upload a PDF that exceeds context limits and ask a question that requires cross-referencing sections.
+That is where you will see the difference.
+
+The standard RAG pipeline is not dead.
+But for the documents that matter most, the ones dense with tables, appendices, cross-references, and regulatory precision requirements, the era of “just chunk it and embed it” is giving way to something more accurate.
+
+The LLM can read the document the way a human expert would, and that turns out to be better than any embedding model can approximate.

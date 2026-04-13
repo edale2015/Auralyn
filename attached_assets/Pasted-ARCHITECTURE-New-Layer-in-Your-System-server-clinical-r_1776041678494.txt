@@ -1,0 +1,273 @@
+ARCHITECTURE
+New Layer in Your System
+/server/clinical_reasoning/
+    pageIndexBuilder.ts
+    reasoningRetriever.ts
+    clinicalDocEngine.ts
+    crossReferenceNavigator.ts
+
+Integrated into:
+
+KB ingestion
+Golden case generator
+RLHF trainer
+Control Tower document panel
+🔧 1. TREE BUILDER (REPLACES CHUNKING)
+/server/clinical_reasoning/pageIndexBuilder.ts
+import fs from "fs";
+import pdfParse from "pdf-parse";
+
+export interface DocNode {
+  node_id: string;
+  title: string;
+  start_page: number;
+  end_page: number;
+  summary: string;
+  children: DocNode[];
+  content?: string;
+}
+
+export class PageIndexBuilder {
+  async buildTreeFromPDF(path: string): Promise<DocNode[]> {
+    const buffer = fs.readFileSync(path);
+    const data = await pdfParse(buffer);
+
+    const pages = data.text.split("\n\n");
+
+    const nodes: DocNode[] = [];
+
+    let currentNode: DocNode | null = null;
+
+    pages.forEach((page, i) => {
+      const titleMatch = page.match(/^[A-Z][A-Za-z\s\-]{5,}/);
+
+      if (titleMatch) {
+        if (currentNode) nodes.push(currentNode);
+
+        currentNode = {
+          node_id: `node_${i}`,
+          title: titleMatch[0],
+          start_page: i,
+          end_page: i,
+          summary: "",
+          children: [],
+          content: page,
+        };
+      } else if (currentNode) {
+        currentNode.end_page = i;
+        currentNode.content += "\n" + page;
+      }
+    });
+
+    if (currentNode) nodes.push(currentNode);
+
+    return nodes;
+  }
+}
+🔍 2. REASONING-BASED RETRIEVAL (CORE MAGIC)
+/server/clinical_reasoning/reasoningRetriever.ts
+import OpenAI from "openai";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export class ReasoningRetriever {
+  async findRelevantNode(tree: any[], query: string) {
+    const prompt = `
+You are a clinical reasoning engine.
+
+Given this document structure:
+${JSON.stringify(tree).slice(0, 15000)}
+
+Question:
+${query}
+
+Step 1: Identify the MOST relevant section title
+Step 2: Return node_id only
+`;
+
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+    });
+
+    const nodeId = res.choices[0].message.content?.trim();
+    return nodeId;
+  }
+
+  async extractAnswer(content: string, query: string) {
+    const prompt = `
+You are a clinical expert.
+
+Answer the question based ONLY on the text below.
+
+TEXT:
+${content}
+
+QUESTION:
+${query}
+
+Return:
+- Answer
+- Supporting evidence
+- Confidence
+`;
+
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    return res.choices[0].message.content;
+  }
+}
+🔁 3. CROSS-REFERENCE FOLLOWER (CRITICAL FOR MEDICINE)
+/server/clinical_reasoning/crossReferenceNavigator.ts
+export class CrossReferenceNavigator {
+  findReferences(text: string): string[] {
+    const refs = text.match(/see (Appendix|Table|Figure|Algorithm)\s?[A-Z0-9]+/gi);
+    return refs || [];
+  }
+
+  resolveReference(tree: any[], ref: string) {
+    return tree.find(node =>
+      node.title.toLowerCase().includes(ref.toLowerCase())
+    );
+  }
+}
+🧠 4. FULL ENGINE
+/server/clinical_reasoning/clinicalDocEngine.ts
+import { PageIndexBuilder } from "./pageIndexBuilder";
+import { ReasoningRetriever } from "./reasoningRetriever";
+import { CrossReferenceNavigator } from "./crossReferenceNavigator";
+
+export class ClinicalDocEngine {
+  builder = new PageIndexBuilder();
+  retriever = new ReasoningRetriever();
+  navigator = new CrossReferenceNavigator();
+
+  async answerFromPDF(pdfPath: string, query: string) {
+    const tree = await this.builder.buildTreeFromPDF(pdfPath);
+
+    let nodeId = await this.retriever.findRelevantNode(tree, query);
+
+    let node = tree.find(n => n.node_id === nodeId);
+
+    if (!node) throw new Error("Node not found");
+
+    let answer = await this.retriever.extractAnswer(node.content, query);
+
+    // Follow cross-references
+    const refs = this.navigator.findReferences(node.content);
+
+    for (const ref of refs) {
+      const refNode = this.navigator.resolveReference(tree, ref);
+
+      if (refNode) {
+        const extra = await this.retriever.extractAnswer(refNode.content, query);
+        answer += "\n\n[Additional Context]\n" + extra;
+      }
+    }
+
+    return answer;
+  }
+}
+🔌 5. API ROUTE (WIRE INTO CONTROL TOWER)
+/server/routes/clinicalDocs.ts
+import express from "express";
+import { ClinicalDocEngine } from "../clinical_reasoning/clinicalDocEngine";
+
+const router = express.Router();
+const engine = new ClinicalDocEngine();
+
+router.post("/query", async (req, res) => {
+  try {
+    const { pdfPath, question } = req.body;
+
+    const answer = await engine.answerFromPDF(pdfPath, question);
+
+    res.json({ answer });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+export default router;
+🧪 6. INTEGRATE INTO YOUR SYSTEM
+Replace in:
+OLD:
+KB ingestion → embeddings → vector DB
+NEW:
+KB ingestion → PageIndex tree → reasoning retrieval
+🔥 7. WHERE THIS PLUGS INTO YOUR SYSTEM
+🔹 Auralyn Medical Stack
+Module	Upgrade
+Knowledge Base	Tree-based indexing
+Decision Engine	Better source accuracy
+Golden Cases	Cross-ref aware generation
+RLHF Trainer	Better ground truth
+Control Tower	Document reasoning panel
+FDA Validation	Traceable reasoning chain
+🧠 8. CONTROL TOWER UI ADDITION
+
+Add panel:
+
+📄 Clinical Document Reasoning Panel
+- Upload PDF
+- View Tree Structure
+- Ask Question
+- See:
+   → Node path
+   → Cross-references followed
+   → Evidence text
+⚡ WHY THIS IS MASSIVE FOR YOU
+
+This directly solves your biggest problem:
+
+“Same patient should not get 10 different treatments”
+
+Because now:
+
+Retrieval is deterministic + structured
+Not fuzzy similarity
+Not hallucinated context
+🧪 9. NEXT LEVEL (HIGHLY RECOMMENDED)
+
+If you want, next I can build:
+
+🔥 1. Multi-document reasoning
+
+Compare:
+
+UpToDate vs CDC vs hospital protocol
+🔥 2. Auto-KB extraction
+
+Convert nodes →:
+
+red flags
+questions
+treatments
+🔥 3. Clinical contradiction detector
+
+Flag:
+
+conflicting guideline recommendations
+🔥 4. FDA traceability layer
+
+Every decision linked to:
+
+node_id → page → source
+🔥 5. Hybrid system (BEST)
+Vector search → pick doc
+PageIndex → precise reasoning
+🧠 Bottom line
+
+You are upgrading from:
+
+“searching words”
+
+to:
+
+“thinking through documents”
+
+And that’s exactly what your system needs.
