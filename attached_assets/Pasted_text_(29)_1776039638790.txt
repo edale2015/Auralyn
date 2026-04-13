@@ -1,0 +1,188 @@
+Last month, one of our team leads built a skill that generated weekly client reports from CRM data.
+No code, just a SKILL.md with the report template and column mapping. Took an afternoon.
+
+It worked beautifully on Tuesday. On Thursday, after a model update none of us noticed, the skill started putting revenue numbers in the wrong columns. No error. No warning. The output looked professional, the formatting was clean and the numbers were silently wrong.
+
+Hit the paywall? No worries, read the full post here for free.
+
+We found out because a client called.
+
+That’s the problem skill-creator’s March 3 update is trying to solve. Not “how do I build a skill” but “how do I know it still works”.
+
+The old workflow was vibes
+If you’ve built skills for Claude Code or Claude.ai, you know the loop.
+
+Write a SKILL.md, test it with a prompt or two, watch it produce something that looks right, ship it.
+
+Anthropic was honest about this in their announcement: “most authors are subject matter experts, not engineers.
+
+They know their workflows but don’t have the tools to tell whether a skill still works with a new model.”
+
+There was no infrastructure to catch regressions. Skills launched in October 2025. Five months of production usage with no testing framework.
+
+What actually shipped: four modes, zero code required
+Skill-creator now operates in four modes, all in natural language.
+
+We don’t write test code.
+
+Create is unchanged: describe the workflow, get a SKILL.md.
+
+Eval is the core addition.
+
+We define test prompts, describe what correct output looks like and skill-creator runs them with the skill loaded.
+
+It reports pass rate, time and token usage:
+
+{
+  "skill_name": "client-report-generator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Generate the weekly client report for Acme Corp using the latest CRM data",
+      "expected_output": "Revenue in correct column, expenses separated, totals match source data",
+      "files": ["acme-crm-export.csv"]
+    }
+  ]
+}
+If that team lead had three test cases checking column placement, Thursday’s model update would have been a failed eval instead of an angry client.
+
+Improve is the sleeper feature.
+It doesn’t just tweak skill instructions.
+It optimizes the frontmatter description that determines whether Claude activates your skill at all.
+
+Here’s why that matters.
+
+I saw this firsthand with a compliance-check skill for PR reviews. It worked perfectly when someone typed “use the PR checklist skill”. But in daily usage, nobody types that.
+
+Engineers just paste a PR link and say, “review this”. The skill never triggered because the frontmatter description said, “PR compliance checklist” and Claude didn’t connect that to “review this PR”.
+
+The Improve mode fixes this.
+
+It splits your test queries 60/40 into training and holdout, runs each query 3 times for a reliable trigger rate, proposes description improvements based on failures and re-evaluates up to 5 iterations.
+
+Anthropic ran this on their own document-creation skills and saw improved trigger accuracy on 5 out of 6.
+
+Benchmark runs your evals as a standardized assessment. Run it after model updates, after editing the skill, or before shipping a new version.
+
+It tracks pass rate, elapsed time and token usage so you can compare versions over time.
+
+The testing is parallel and that matters more than it sounds
+One subtlety that’s easy to miss.
+
+When skill-creator runs your evals, it spawns two independent agents for each test case: one with the skill loaded, one without.
+
+They run simultaneously in clean, isolated contexts.
+
+Why does this matter?
+Because running tests sequentially creates context bleed. If eval #1 produces a long output, that output is sitting in context when eval #2 runs and it can influence the grading.
+
+Parallel execution with isolated contexts means each test is a clean comparison.
+
+Skill-creator also uses a blind comparator agent for A/B testing: it sees two outputs but doesn’t know which came from the skill version.
+
+This prevents the grader from being biased toward whichever output it sees second or whichever it associates with “the improved version”.
+
+Two kinds of skills break in different ways
+Anthropic draws a distinction that changes what you should test for. Two quick examples.
+
+The skill that made itself obsolete: A team built a capability uplift skill for generating Excel files with complex conditional formatting.
+
+When they first built it, Claude would mangle the formatting without help. Six months later, after several model improvements, they ran evals and discovered the base model without their skill passed nearly all the same test cases.
+
+The model had absorbed the techniques their skill was teaching. They retired the skill and saved themselves the maintenance burden.
+
+Capability uplift skills have a natural expiration date. Evals tell you when to stop maintaining them.
+
+The skill that nobody updated: A finance team built an encoded preference skill that generated monthly variance reports following their specific template: header format, section order, sign conventions, footnote style. The skill worked fine for months.
+
+Then the CFO changed the template. The team updated their internal docs but forgot to update the skill.
+
+For three weeks, Claude was generating reports in the old format and analysts were manually reformatting them before sending them out.
+
+Encoded preference skills don’t break because the model changed.
+
+They break because your process changed and the skill didn’t keep up. Evals that check workflow fidelity (did it use the right template? did it follow the steps in order?) catch this drift.
+
+The story Anthropic told about their own skills
+Anthropic shared a case from their own PDF skill. It was supposed to fill non-fillable forms by placing text at exact coordinates.
+
+The failure was subtle: the output looked fine on quick inspection. The text was there, the fields were filled. But the positioning was slightly off, enough that automated downstream systems couldn’t read the values.
+
+They wrote eval cases with non-fillable forms and added assertions for positioning accuracy.
+
+The evals immediately surfaced which forms failed and by how much. The fix they shipped anchors positioning to extracted text coordinates.
+
+Without evals, this would have stayed a mystery bug reported sporadically by users who happened to notice.
+
+The test that surprised everyone
+Here’s a case from Tessl, a third-party skill registry.
+
+A developer built a JavaScript code review skill, wrote eval cases using common JS antipatterns and ran the benchmark. Both configurations, with skill and without skill, scored 100% on every assertion.
+
+The initial reaction: “My skill is useless?” The actual lesson: the test cases were too easy.
+
+The antipatterns were well-known issues that Opus 4.6 catches without guidance. The skill wasn’t useless.
+
+The tests needed to target the cases where the base model actually struggles: subtle architectural issues, project-specific conventions, or context-dependent tradeoffs that the model wouldn’t know without the skill.
+
+Designing good assertions is still a skill in itself.
+
+Skill-creator helps you run them, but deciding what “correct” means for your specific workflow is still on you.
+
+Why this landed now
+Two things give this update more weight than “Anthropic added testing.”
+
+The SKILL.md format has gone cross-platform.
+OpenAI adopted the same format for Codex CLI.
+Cursor, Gemini CLI and others support it.
+Over 1,200 community skills exist in the ecosystem as of March 2026.
+
+When we have a thousand skills and no quality signal, we have a marketplace problem.
+
+Evals are the beginning of a quality layer.
+
+Honest gaps
+No CI/CD integration out of the box: We can wire eval results into a CI system ourselves, but there’s no GitHub Action or built-in hook.
+
+No cross-model testing: If a skill needs to work on both Sonnet and Opus, we run separate benchmarks manually.
+
+No automatic regression alerts: Benchmark tracks metrics but doesn’t notify you when something degrades. You run it on your own schedule.
+
+Getting started
+On Claude.ai or Cowork, skill-creator is already there.
+
+Ask Claude to “evaluate my skill” or “create a skill with test cases”.
+
+On Claude Code, install the plugin:
+
+/plugin install skill-creator@anthropic-agent-skills
+For an existing skill, start with “evaluate my skill”, let skill-creator generate test cases, add known edge cases and run the benchmark.
+
+If the with-skill and without-skill pass rates are identical, your tests are too easy or the skill isn’t adding value.
+
+Then run the trigger optimizer, because a skill that works perfectly but never fires is the same as a skill that doesn’t exist.
+
+What this actually means
+This isn’t a revolution. It’s the addition of basic testing infrastructure to a system that shipped without it.
+
+In traditional software, adding unit tests five months after launch wouldn’t make the news.
+
+But there’s a line in Anthropic’s announcement worth sitting with:
+
+“Evals already describe the ‘what.’ Eventually, that description may be the skill itself.”
+
+Today a SKILL.md is a step-by-step procedure.
+
+If evals get good enough at describing expected output, the model might figure out the “how” on its own. The skill becomes a spec, not instructions.
+
+That’s the long-term bet.
+
+In the short term, the value is simpler: you can know whether your skills work instead of hoping they do.
+
+For anyone whose Thursday output needs to be as reliable as their Tuesday output, that’s reason enough to set up evals this week.
+
+If you’ve run evals on your own skills and found something surprising, I’d love to hear about it.
+
+Claude
+Claude Ai
+Claude S

@@ -2616,6 +2616,11 @@ export async function registerRoutes(
   app.use("/api/deep-agents", deepAgentsRoutes);
   console.log("[DeepAgents] /api/deep-agents/* active (harness, observability, skills, subagents, epe, teams)");
 
+  // ── Batch 56: Eval Engine (Articles 28a, 29) ─────────────────────────────
+  const { default: evalRoutes } = await import("./routes/evalRoutes");
+  app.use("/api/evals", evalRoutes);
+  console.log("[Evals] /api/evals/* active (run, regression, benchmark, trigger-optimize, compare, alerts)");
+
   return httpServer;
 }
 
