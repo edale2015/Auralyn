@@ -2626,6 +2626,11 @@ export async function registerRoutes(
   app.use("/api/clinical-reasoning", clinicalReasoningRoutes);
   console.log("[ClinicalReasoning] /api/clinical-reasoning/* active (index, ask, parse, documents, tree, queries, refs)");
 
+  // ── Batch 58: Hybrid RAG Pipeline (BM25+Vector+RRF, CRAG, Agentic, SemanticCache, RAGAS) ──
+  const { default: retrievalRoutes } = await import("./routes/retrievalRoutes");
+  app.use("/api/retrieval", retrievalRoutes);
+  console.log("[Retrieval] /api/retrieval/* active (query, index, evaluate, documents, cache, eval/summary, health)");
+
   return httpServer;
 }
 

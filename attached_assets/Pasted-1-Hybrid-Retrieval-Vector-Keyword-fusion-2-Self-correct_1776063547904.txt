@@ -1,0 +1,230 @@
+1. Hybrid Retrieval (Vector + Keyword fusion)
+2. Self-correcting RAG (CRAG loop)
+3. Agentic retrieval decisions (adaptive RAG)
+4. Semantic caching (cost + speed)
+5. Evaluation harness (RAGAS-style metrics)
+
+And I’ll wire them into your system:
+
+✔ Control Tower
+✔ KB (Postgres / Feature Models)
+✔ Bayesian engine
+✔ RLHF learning loop
+
+🧠 1. HYBRID RETRIEVAL ENGINE (Production-ready)
+server/retrieval/hybridRetriever.ts
+import { Pool } from "pg"
+import Redis from "ioredis"
+import { cosineSimilarity } from "../utils/vector"
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+const redis = new Redis(process.env.REDIS_URL!)
+
+// BM25-style keyword scoring (simplified)
+function keywordScore(text: string, query: string): number {
+  const words = query.toLowerCase().split(" ")
+  let score = 0
+  for (const w of words) {
+    if (text.toLowerCase().includes(w)) score += 1
+  }
+  return score / words.length
+}
+
+// Vector similarity (your embedding pipeline assumed)
+function vectorScore(vecA: number[], vecB: number[]): number {
+  return cosineSimilarity(vecA, vecB)
+}
+
+// Reciprocal Rank Fusion
+function rrf(rank: number, k = 60) {
+  return 1 / (k + rank)
+}
+
+export async function hybridRetrieve(query: string, embedding: number[]) {
+  const docs = await pool.query(`
+    SELECT id, content, embedding
+    FROM knowledge_documents
+    LIMIT 200
+  `)
+
+  const scored = docs.rows.map((doc: any) => {
+    const bm25 = keywordScore(doc.content, query)
+    const vec = vectorScore(doc.embedding, embedding)
+
+    return {
+      ...doc,
+      hybridScore: 0.5 * bm25 + 0.5 * vec
+    }
+  })
+
+  return scored
+    .sort((a, b) => b.hybridScore - a.hybridScore)
+    .slice(0, 10)
+}
+🔁 2. SELF-CORRECTING RAG (CRAG LOOP)
+server/retrieval/cragEngine.ts
+import { hybridRetrieve } from "./hybridRetriever"
+import { generateLLM } from "../llm/generate"
+import { embed } from "../llm/embed"
+
+export async function cragQuery(question: string) {
+  let query = question
+
+  for (let i = 0; i < 3; i++) {
+    const embedding = await embed(query)
+    const docs = await hybridRetrieve(query, embedding)
+
+    const relevanceScore = await gradeDocuments(query, docs)
+
+    if (relevanceScore > 0.7) {
+      const answer = await generateLLM(question, docs)
+
+      const hallucinationScore = await gradeAnswer(answer, docs)
+
+      if (hallucinationScore > 0.7) {
+        return answer
+      }
+    }
+
+    query = await rewriteQuery(query)
+  }
+
+  return "Unable to find grounded answer"
+}
+Document Grader
+async function gradeDocuments(query: string, docs: any[]) {
+  const prompt = `
+Rate relevance (0-1):
+Query: ${query}
+Docs: ${docs.map(d => d.content).join("\n")}
+  `
+
+  const score = await generateLLM(prompt)
+  return parseFloat(score)
+}
+Hallucination Checker
+async function gradeAnswer(answer: string, docs: any[]) {
+  const prompt = `
+Is this grounded in docs (0-1)?
+Answer: ${answer}
+Docs: ${docs.map(d => d.content).join("\n")}
+  `
+  const score = await generateLLM(prompt)
+  return parseFloat(score)
+}
+🤖 3. AGENTIC RETRIEVAL (Adaptive MCP-style)
+server/agents/retrievalAgent.ts
+import { cragQuery } from "../retrieval/cragEngine"
+
+export async function retrievalAgent(question: string) {
+  // Decide if retrieval is needed
+  const decision = await shouldRetrieve(question)
+
+  if (!decision) {
+    return generateDirectAnswer(question)
+  }
+
+  return cragQuery(question)
+}
+
+async function shouldRetrieve(question: string) {
+  const prompt = `
+Does this require external knowledge? yes/no:
+${question}
+  `
+  const res = await generateLLM(prompt)
+  return res.toLowerCase().includes("yes")
+}
+⚡ 4. SEMANTIC CACHE (Redis)
+server/cache/semanticCache.ts
+import Redis from "ioredis"
+import { cosineSimilarity } from "../utils/vector"
+
+const redis = new Redis(process.env.REDIS_URL!)
+
+const THRESHOLD = 0.92
+
+export async function checkCache(query: string, embedding: number[]) {
+  const keys = await redis.keys("cache:*")
+
+  for (const key of keys) {
+    const cached = JSON.parse(await redis.get(key)!)
+
+    const sim = cosineSimilarity(embedding, cached.embedding)
+
+    if (sim > THRESHOLD) {
+      return cached.response
+    }
+  }
+
+  return null
+}
+
+export async function storeCache(query: string, embedding: number[], response: string) {
+  await redis.set(
+    `cache:${Date.now()}`,
+    JSON.stringify({ query, embedding, response })
+  )
+}
+📊 5. RAG EVALUATION HARNESS (Clinical-grade)
+server/eval/ragEvaluator.ts
+export function evaluateRAG({
+  question,
+  answer,
+  context,
+  groundTruth
+}: {
+  question: string
+  answer: string
+  context: string[]
+  groundTruth: string
+}) {
+  const faithfulness = similarity(answer, context.join(" "))
+  const relevancy = similarity(answer, question)
+  const precision = similarity(context.join(" "), groundTruth)
+
+  return {
+    faithfulness,
+    relevancy,
+    context_precision: precision
+  }
+}
+
+function similarity(a: string, b: string) {
+  const aWords = new Set(a.split(" "))
+  const bWords = new Set(b.split(" "))
+
+  let overlap = 0
+  aWords.forEach(w => {
+    if (bWords.has(w)) overlap++
+  })
+
+  return overlap / Math.max(aWords.size, 1)
+}
+🧬 6. CONTROL TOWER INTEGRATION
+server/api/retrieval.ts
+import express from "express"
+import { retrievalAgent } from "../agents/retrievalAgent"
+import { embed } from "../llm/embed"
+import { checkCache, storeCache } from "../cache/semanticCache"
+
+const router = express.Router()
+
+router.post("/query", async (req, res) => {
+  const { question } = req.body
+
+  const embedding = await embed(question)
+
+  const cached = await checkCache(question, embedding)
+  if (cached) {
+    return res.json({ answer: cached, cached: true })
+  }
+
+  const answer = await retrievalAgent(question)
+
+  await storeCache(question, embedding, answer)
+
+  res.json({ answer, cached: false })
+})
+
+export default router

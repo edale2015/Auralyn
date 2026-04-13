@@ -1322,3 +1322,37 @@ export const clinicalCrossRefLogs = pgTable("clinical_cross_ref_logs", {
 export const insertClinicalCrossRefLogSchema = createInsertSchema(clinicalCrossRefLogs).omit({ id: true, createdAt: true });
 export type InsertClinicalCrossRefLog = z.infer<typeof insertClinicalCrossRefLogSchema>;
 export type ClinicalCrossRefLog = typeof clinicalCrossRefLogs.$inferSelect;
+
+// knowledge_documents — hybrid retrieval knowledge store (BM25 + vector + RRF)
+export const knowledgeDocuments = pgTable("knowledge_documents", {
+  id:        serial("id").primaryKey(),
+  docId:     text("doc_id").notNull().unique(),
+  title:     text("title"),
+  content:   text("content").notNull(),
+  embedding: real("embedding").array(),
+  source:    text("source").notNull().default("manual"),
+  metadata:  jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertKnowledgeDocumentSchema = createInsertSchema(knowledgeDocuments).omit({ id: true, createdAt: true });
+export type InsertKnowledgeDocument = z.infer<typeof insertKnowledgeDocumentSchema>;
+export type KnowledgeDocument = typeof knowledgeDocuments.$inferSelect;
+
+// rag_evaluations — RAGAS-style evaluation results for CI regression tracking
+export const ragEvaluations = pgTable("rag_evaluations", {
+  id:               serial("id").primaryKey(),
+  question:         text("question").notNull(),
+  answer:           text("answer").notNull(),
+  faithfulness:     real("faithfulness"),
+  answerRelevancy:  real("answer_relevancy"),
+  contextPrecision: real("context_precision"),
+  overallScore:     real("overall_score"),
+  pass:             boolean("pass").notNull().default(false),
+  groundTruth:      text("ground_truth"),
+  retrievalCount:   integer("retrieval_count").notNull().default(0),
+  cacheHit:         boolean("cache_hit").notNull().default(false),
+  createdAt:        timestamp("created_at").defaultNow(),
+});
+export const insertRagEvaluationSchema = createInsertSchema(ragEvaluations).omit({ id: true, createdAt: true });
+export type InsertRagEvaluation = z.infer<typeof insertRagEvaluationSchema>;
+export type RagEvaluation = typeof ragEvaluations.$inferSelect;
