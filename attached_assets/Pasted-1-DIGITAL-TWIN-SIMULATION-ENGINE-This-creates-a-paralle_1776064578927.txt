@@ -1,0 +1,181 @@
+1. DIGITAL TWIN SIMULATION ENGINE
+
+This creates a parallel “shadow patient” and runs forward projections.
+
+📁 server/simulation/digitalTwin.ts
+export interface SimulationStep {
+  time: number;
+  vitals: any;
+  risk: number;
+}
+
+export function simulatePatientTrajectory(patient: any, hours = 12): SimulationStep[] {
+  const steps: SimulationStep[] = [];
+
+  let current = { ...patient.vitals };
+
+  for (let t = 1; t <= hours; t++) {
+    // 🔥 Simple physiologic progression model
+    current = {
+      hr: current.hr + Math.random() * 3,
+      sbp: current.sbp - Math.random() * 2,
+      temp: current.temp + Math.random() * 0.2,
+      rr: current.rr + Math.random() * 1,
+      spo2: current.spo2 - Math.random() * 0.5
+    };
+
+    const risk =
+      (current.hr > 110 ? 2 : 0) +
+      (current.sbp < 100 ? 2 : 0) +
+      (current.temp > 38 ? 1 : 0);
+
+    steps.push({
+      time: t,
+      vitals: { ...current },
+      risk
+    });
+  }
+
+  return steps;
+}
+🧠 INTERVENTION SIMULATION (CRITICAL)
+
+Test “what if we treat now vs later”
+
+📁 server/simulation/interventionSimulator.ts
+export function simulateInterventionEffect(patient: any, intervention: string) {
+  const baseline = patient.vitals;
+
+  if (intervention === "IV_fluids") {
+    return {
+      sbp: baseline.sbp + 10,
+      hr: baseline.hr - 5
+    };
+  }
+
+  if (intervention === "antibiotics") {
+    return {
+      temp: baseline.temp - 0.5
+    };
+  }
+
+  return baseline;
+}
+🚑 2. EMS ROUTING ENGINE
+
+This decides where the ambulance should go BEFORE arrival.
+
+📁 server/ems/emsRouter.ts
+interface Hospital {
+  id: string;
+  name: string;
+  icuBedsAvailable: number;
+  distance: number; // minutes
+  load: number; // % capacity
+}
+
+const hospitals: Hospital[] = [
+  { id: "H1", name: "Columbia", icuBedsAvailable: 2, distance: 10, load: 0.7 },
+  { id: "H2", name: "Mount Sinai", icuBedsAvailable: 0, distance: 8, load: 0.9 },
+  { id: "H3", name: "NYU", icuBedsAvailable: 3, distance: 15, load: 0.6 }
+];
+
+export function routeEMS(patient: any) {
+  const candidates = hospitals.filter(h => h.icuBedsAvailable > 0);
+
+  const scored = candidates.map(h => ({
+    ...h,
+    score:
+      (patient.sepsis.level === "HIGH" ? 5 : 2) -
+      h.distance * 0.2 -
+      h.load * 2 +
+      h.icuBedsAvailable * 2
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+
+  return scored[0];
+}
+🏥 3. MULTI-HOSPITAL COORDINATION ENGINE
+
+This manages system-wide flow, not just one patient.
+
+📁 server/hospital/networkCoordinator.ts
+interface HospitalState {
+  id: string;
+  icuCapacity: number;
+  icuOccupied: number;
+}
+
+let hospitalStates: HospitalState[] = [
+  { id: "H1", icuCapacity: 10, icuOccupied: 8 },
+  { id: "H2", icuCapacity: 12, icuOccupied: 12 },
+  { id: "H3", icuCapacity: 8, icuOccupied: 5 }
+];
+
+export function getSystemLoad() {
+  return hospitalStates.map(h => ({
+    id: h.id,
+    load: h.icuOccupied / h.icuCapacity
+  }));
+}
+
+export function rebalancePatients() {
+  const overloaded = hospitalStates.filter(h => h.icuOccupied >= h.icuCapacity);
+  const available = hospitalStates.filter(h => h.icuOccupied < h.icuCapacity);
+
+  return overloaded.map(o => ({
+    from: o.id,
+    to: available[0]?.id,
+    action: "TRANSFER"
+  }));
+}
+🔁 FULL PIPELINE UPGRADE
+📁 server/agents/fullCommandPipeline.ts
+import { runFullPipeline } from "./fullClinicalPipeline";
+import { simulatePatientTrajectory } from "../simulation/digitalTwin";
+import { routeEMS } from "../ems/emsRouter";
+import { allocateICUBed } from "../hospital/icuAllocator";
+
+export async function runCommandPipeline(patient: any) {
+  const clinical = await runFullPipeline(patient);
+
+  // 🧬 Digital twin
+  const simulation = simulatePatientTrajectory(patient, 12);
+
+  // 🚑 EMS routing
+  const ems = routeEMS(clinical);
+
+  // 🛏 ICU allocation
+  const icu = allocateICUBed(clinical);
+
+  return {
+    ...clinical,
+    simulation,
+    ems,
+    icu
+  };
+}
+🌐 FRONTEND VISUALIZATION
+📁 frontend/src/components/SimulationChart.tsx
+import { LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
+
+export function SimulationChart({ data }: any) {
+  return (
+    <LineChart width={300} height={150} data={data}>
+      <XAxis dataKey="time" />
+      <YAxis />
+      <Tooltip />
+      <Line type="monotone" dataKey="risk" />
+    </LineChart>
+  );
+}
+📁 Update PatientCard.tsx
+<SimulationChart data={patient.simulation} />
+
+<div className="mt-2">
+  EMS Destination: {patient.ems?.name}
+</div>
+🚀 WHAT YOU NOW HAVE
+
+This is no longer just a hospital system.

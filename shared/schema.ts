@@ -1356,3 +1356,32 @@ export const ragEvaluations = pgTable("rag_evaluations", {
 export const insertRagEvaluationSchema = createInsertSchema(ragEvaluations).omit({ id: true, createdAt: true });
 export type InsertRagEvaluation = z.infer<typeof insertRagEvaluationSchema>;
 export type RagEvaluation = typeof ragEvaluations.$inferSelect;
+
+// agent_artifacts — typed structured outputs from agent fleet / best-of-N (Batch 59)
+export const agentArtifacts = pgTable("agent_artifacts", {
+  id:        text("id").primaryKey(),            // UUID string (set by app)
+  type:      text("type").notNull(),             // fleet_result | best_of_n_result | ...
+  content:   text("content").notNull(),          // JSON-serialized artifact
+  agentId:   text("agent_id").notNull(),
+  patientId: text("patient_id"),
+  metadata:  jsonb("metadata"),
+  status:    text("status").notNull().default("pending_review"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertAgentArtifactSchema = createInsertSchema(agentArtifacts).omit({ createdAt: true });
+export type InsertAgentArtifact = z.infer<typeof insertAgentArtifactSchema>;
+export type AgentArtifact = typeof agentArtifacts.$inferSelect;
+
+// agent_memory_log — persistent agent memory across runs (Batch 59)
+export const agentMemoryLog = pgTable("agent_memory_log", {
+  id:         serial("id").primaryKey(),
+  agentId:    text("agent_id").notNull(),
+  memoryType: text("memory_type").notNull(),     // clinical_decision | outcome | physician_override | ...
+  content:    text("content").notNull(),
+  importance: real("importance").notNull().default(0.5),
+  context:    jsonb("context"),
+  createdAt:  timestamp("created_at").defaultNow(),
+});
+export const insertAgentMemorySchema = createInsertSchema(agentMemoryLog).omit({ id: true, createdAt: true });
+export type InsertAgentMemory = z.infer<typeof insertAgentMemorySchema>;
+export type AgentMemory = typeof agentMemoryLog.$inferSelect;

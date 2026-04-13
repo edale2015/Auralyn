@@ -1781,3 +1781,32 @@ Architecture: `/server/ai-orchestration/`
 - Critical patient sepsis eval → highRisk=true, prob=100%, SEPSIS_ALERT
 - Digital Twin (HR 138, SpO2 87%) → icuProb=1.00, riskSummary=ICU_IMMINENT
 - EMS route (chest pain, SpO2 88%) → Bellevue, alertLevel=CRITICAL, sepsisFlag=true
+
+## Batch 59 — Agent Fleet Orchestrator, Best-of-N, Artifact Store, Agent Memory
+
+**Implemented (Batch 59):**
+- `server/agents/agentFleetOrchestrator.ts` — parallel agent fleet (Promise.all, N tasks simultaneously), weighted vote-consensus engine, heuristic fallback (no AI key required)
+- `server/agents/bestOfN.ts` — multi-model parallel comparison (gpt-4o/gpt-4o-mini/gpt-4-turbo each with different clinical role framing), meta-analysis (full/partial/divergent agreement, safety flag, confidence range, merged recommendation)
+- `server/artifacts/artifactStore.ts` — typed structured artifact persistence (save/get/list/filter/status update), 9 artifact types, physician review workflow (pending_review → approved/rejected)
+- `server/agents/agentMemory.ts` — persistent agent memory across runs (6 memory types), prompt-ready context block injection, physician override recording (RLHF signal), outcome feedback loop, memory pruning
+- `server/routes/agentFleetRoutes.ts` — 8 API endpoints at `/api/agent-fleet/*`
+
+**New DB Tables (Batch 59):**
+- `agent_artifacts` — typed structured artifact store with physician review status
+- `agent_memory_log` — persistent agent memory with importance scoring
+
+**API (Batch 59):**
+- `POST /api/agent-fleet/run` — run parallel agent fleet (up to 12 concurrent tasks)
+- `POST /api/agent-fleet/best-of-n` — multi-model parallel comparison with meta-analysis
+- `POST /api/agent-fleet/artifacts` — save typed artifact
+- `GET /api/agent-fleet/artifacts` — list artifacts (filter by agentId, patientId, type, status)
+- `GET /api/agent-fleet/artifacts/:id` — get single artifact
+- `PATCH /api/agent-fleet/artifacts/:id/status` — physician review (approve/reject)
+- `POST /api/agent-fleet/memory` — save agent memory entry
+- `GET /api/agent-fleet/memory/:agentId` — get agent memories (filter by type, importance)
+- `POST /api/agent-fleet/memory/:agentId/override` — record physician override (RLHF)
+- `GET /api/agent-fleet/memory/:agentId/context` — get prompt-ready context block
+- `DELETE /api/agent-fleet/memory/:agentId/prune` — prune low-importance memories
+- `GET /api/agent-fleet/health` — module health
+
+**Tests:** 73/73 passing (`tests/unit/batch59.test.ts`)

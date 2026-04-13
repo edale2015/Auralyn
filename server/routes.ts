@@ -2631,6 +2631,11 @@ export async function registerRoutes(
   app.use("/api/retrieval", retrievalRoutes);
   console.log("[Retrieval] /api/retrieval/* active (query, index, evaluate, documents, cache, eval/summary, health)");
 
+  // ── Batch 59: Agent Fleet / Best-of-N / Artifact Store / Agent Memory ────
+  const { default: agentFleetRoutes } = await import("./routes/agentFleetRoutes");
+  app.use("/api/agent-fleet", agentFleetRoutes);
+  console.log("[AgentFleet] /api/agent-fleet/* active (run, best-of-n, artifacts, memory, health)");
+
   return httpServer;
 }
 
