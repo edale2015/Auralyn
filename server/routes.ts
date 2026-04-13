@@ -2611,6 +2611,11 @@ export async function registerRoutes(
   app.use("/api/frameworks", frameworkSuiteRoutes);
   console.log("[Frameworks] /api/frameworks/* active (bmad, speckit, gsd, superpowers, triad)");
 
+  // ── Batch 55: Deep Agents / Skills / Subagents (Articles 27a, 27b, 27c) ──
+  const { default: deepAgentsRoutes } = await import("./routes/deepAgentsRoutes");
+  app.use("/api/deep-agents", deepAgentsRoutes);
+  console.log("[DeepAgents] /api/deep-agents/* active (harness, observability, skills, subagents, epe, teams)");
+
   return httpServer;
 }
 
